@@ -37,6 +37,9 @@ yarn dev
 
 打开 `http://localhost:3000`，用向导最后打印的账号密码登录。
 
+> 不想自己敲命令？仓库根目录有 **`启动忆灵空间.bat`**，双击即可：自检 → 拉起数据库 → 起服务 → 开浏览器。
+> 想让 AI 帮你装？把仓库地址和 [INSTALL-FOR-AI.md](INSTALL-FOR-AI.md) 第 0 节那段话一起发给它。
+
 `yarn setup` 替你做这些事：
 
 - 生成 `.env`，**把三处数据库密码自动对齐**（手改最容易错的地方）
@@ -104,6 +107,7 @@ yarn worker:watch      # 消费队列
 
 **想把它跑起来 / 部署出去**
 
+- [给 AI 的安装说明](INSTALL-FOR-AI.md) — 让 AI 助手照着一台新电脑装好，含失败排查
 - [本地开发与数据迁移](docs/local-development-and-data-migration.md) — 手动步骤、全量校验 `yarn verify:local`、备份恢复
 - [部署与扩展](docs/deployment.md) — 进程模型、HTTPS、监控、日志、Watchdog
 - [QQ 小号部署](docs/qq-onebot-deploy.md)｜[B站 值班集成](docs/bili-desk-integration.md)
@@ -126,7 +130,7 @@ yarn worker:watch      # 消费队列
 
 **QQ 群：大肥鱼养殖基地ovo（1127648581）** — 装不上、跑挂了、想聊实现都在这儿问。群文件里有 Docker Desktop 的安装包备份（官网国内直连经常下不动）。
 
-确定是 bug 或想要功能，开 [issue](https://github.com/is0612/yiling-hub/issues) 更不容易漏。附上 `yarn check:env` 的输出会有帮助——它不含任何密钥，但会带角色名，发之前自己扫一眼。
+确定是 bug 或想要功能，开 [issue](https://github.com/is0612/yiling-space/issues) 更不容易漏。附上 `yarn check:env` 的输出会有帮助——它不含任何密钥，但会带角色名，发之前自己扫一眼。
 
 ## 7. 许可与合规
 
