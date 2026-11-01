@@ -9,7 +9,7 @@ import { runBili } from "../../../../utils/channel-adapter/bili/runner";
  * 返回二维码文件路径（供后续 qr 接口读取）。二维码生成后由前端轮询 status 判断是否扫了。
  */
 
-export const BILI_QR_DIR = join(tmpdir(), "yiling-hub-bili-qr");
+export const BILI_QR_DIR = join(tmpdir(), "yiling-space-bili-qr");
 
 export async function biliQrPath(): Promise<string> {
   await mkdir(BILI_QR_DIR, { recursive: true });

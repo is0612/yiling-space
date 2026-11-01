@@ -1,4 +1,4 @@
-// Yiling Hub data model.
+// Yiling Space data model.
 // This schema is the intended Phase 0 contract. Run Prisma validation and migration
 // generation locally before applying it to any database.
 generator client {

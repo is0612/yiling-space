@@ -5,7 +5,7 @@
 export default defineEventHandler(() => {
   return {
     ok: true,
-    service: "yiling-hub",
+    service: "yiling-space",
     version: "0.1.0",
     time: new Date().toISOString(),
   };

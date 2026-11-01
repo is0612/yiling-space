@@ -1,19 +1,19 @@
-# QQ 小号接入部署清单（SnowLuma + yiling-hub）
+# QQ 小号接入部署清单（SnowLuma + yiling-space）
 
-> 目标：用个人 QQ 小号，让 yiling-hub 里的角色在 QQ 上收发消息、带记忆。
-> 前提：QQ 小号和 yiling-hub 先跑在同一台 Windows 电脑上（`127.0.0.1` 直连），跑通后再考虑上服务器/换设备。
+> 目标：用个人 QQ 小号，让 yiling-space 里的角色在 QQ 上收发消息、带记忆。
+> 前提：QQ 小号和 yiling-space 先跑在同一台 Windows 电脑上（`127.0.0.1` 直连），跑通后再考虑上服务器/换设备。
 
 ## 0. 一句话原理
 
 ```
 QQ 群/好友发消息
    → SnowLuma（挂在你登录的 QQNT 客户端里，把 QQ 操作翻译成 OneBot v11）
-   → OneBot 正向 WebSocket（ws://127.0.0.1:3001）推给 yiling-hub
-   → yiling-hub 的 qq-onebot 适配器 → 角色 + 记忆 → 模型回复
+   → OneBot 正向 WebSocket（ws://127.0.0.1:3001）推给 yiling-space
+   → yiling-space 的 qq-onebot 适配器 → 角色 + 记忆 → 模型回复
    → OneBot HTTP API（http://127.0.0.1:3002）发回 QQ
 ```
 
-SnowLuma 是"传话筒 + 翻译官"，yiling-hub 是"大脑"。两者是各自独立的程序，靠 OneBot v11 通信：
+SnowLuma 是"传话筒 + 翻译官"，yiling-space 是"大脑"。两者是各自独立的程序，靠 OneBot v11 通信：
 **WS 只收，HTTP 只发**，所以两个端口、两个 Token 缺一不可。
 
 ## 1. 装 SnowLuma
@@ -37,7 +37,7 @@ SnowLuma 是"传话筒 + 翻译官"，yiling-hub 是"大脑"。两者是各自�
 ### 1.2 登录小号并挂上注入
 
 1. 先用**官方 QQ 客户端**登录小号（不是面板里扫码），窗口保持开着。
-2. 启动 SnowLuma：双击 `start.bat`，或直接在 yiling-hub「QQ 渠道」页第 2 步点**启动 SnowLuma**（等效于双击，会开一个命令行窗口）。命令行里会打印面板地址、**首次登录用的账号和密码（只打印一次）**。
+2. 启动 SnowLuma：双击 `start.bat`，或直接在 yiling-space「QQ 渠道」页第 2 步点**启动 SnowLuma**（等效于双击，会开一个命令行窗口）。命令行里会打印面板地址、**首次登录用的账号和密码（只打印一次）**。
    页面上那行状态会自己认出安装目录：先看有没有存过，再看 5099 上跑的进程是谁（最准），最后扫一遍下载 / 桌面 / 文档 / Program Files / 各盘根目录下两层。所以用 AI 装到下载文件夹里也能自动认出来，正常情况**不用填路径**。真认不出来（提示「没找到程序」）时，点「换目录」填一次，存进 `.data/snowluma-home.json`。
 3. 打开 `http://127.0.0.1:5099`，用那组账号登录，同意条款后**立刻改密码**。
 4. 看日志：出现 `[Hook] pipe connected` 与 `login detected … UIN=你的小号` 就说明已经自动挂上了。
@@ -47,12 +47,12 @@ SnowLuma 是"传话筒 + 翻译官"，yiling-hub 是"大脑"。两者是各自�
 
 ### 2.1 端口规划（先避开 3000）
 
-yiling-hub 的 dev server 默认占 **3000**，SnowLuma 的 HTTP API 默认也是 3000 —— 同机运行必然撞。
+yiling-space 的 dev server 默认占 **3000**，SnowLuma 的 HTTP API 默认也是 3000 —— 同机运行必然撞。
 
 | 用途 | 端口 | 说明 |
 |---|---|---|
-| OneBot 正向 WebSocket | 3001 | SnowLuma → yiling-hub 推消息，保持默认 |
-| OneBot HTTP API | **3002** | yiling-hub → SnowLuma 发消息，从默认 3000 改到 3002 |
+| OneBot 正向 WebSocket | 3001 | SnowLuma → yiling-space 推消息，保持默认 |
+| OneBot HTTP API | **3002** | yiling-space → SnowLuma 发消息，从默认 3000 改到 3002 |
 
 ### 2.2 面板里点哪里
 
@@ -62,7 +62,7 @@ yiling-hub 的 dev server 默认占 **3000**，SnowLuma 的 HTTP API 默认也�
 3. 右边「节点配置分类」切到 **WS 服务端**：已有端口 3001 的节点（如 `ws-default`）就直接用，别再新建 ——
    两个节点抢同一个端口，后启动的起不来；列表空才「新建」，弹窗默认值（3001、数组、Universal）不用改，「创建节点」。
 4. 再切到 **HTTP API**：已有节点就把端口从默认的 3000 改成 **3002**；没有才「新建」一个端口 3002 的。
-5. 复制这两个节点的令牌（弹窗里授权 Token 旁的复制图标，之后点开节点也能复制）：WS 的填进 yiling-hub 的
+5. 复制这两个节点的令牌（弹窗里授权 Token 旁的复制图标，之后点开节点也能复制）：WS 的填进 yiling-space 的
    「WS Token」，HTTP 的填「HTTP Token」—— **它们是两个不同的值**，最常见的报错就是拿 WS 的 token 去配 HTTP，握手直接 401。
 6. 保存，重启 SnowLuma。
 
@@ -83,9 +83,9 @@ Get-NetTCPConnection -LocalPort 3002 -State Listen
 > 本机开着系统代理时（如 `127.0.0.1:56435` 这类），`127.0.0.1:5099` 可能被代理转走并回 502 ——
 > 把 `127.0.0.1` 加进代理白名单，或用 `curl --noproxy '*'`。端口没监听时也是这个 502，别误判成"面板坏了"。
 
-## 3. 在 yiling-hub 里添加「QQ 小号」
+## 3. 在 yiling-space 里添加「QQ 小号」
 
-1. 启动 yiling-hub（`yarn dev`）。
+1. 启动 yiling-space（`yarn dev`）。
 2. 打开「系统管理 → QQ 渠道」，点右上「添加 QQ 小号」。
 3. 平台固定为 **`qq-onebot`**（这个页面只管 QQ 小号，B站 走「B站值班台」）。
 4. 填表单（新建时可以点「填入默认地址」一键填好两行地址）：
@@ -182,7 +182,7 @@ yarn onebot:run
 ## 5. 验证能收发
 
 1. 用**另一个 QQ 号**（你的主号或朋友的号）给 QQ 小号**发私聊**「你好」。
-2. 角色应该会回复（内容来自 yiling-hub 里配的模型 + 记忆）。
+2. 角色应该会回复（内容来自 yiling-space 里配的模型 + 记忆）。
 3. 如果开了「群聊仅 @ 回复」，去群里 **@ 一下小号**，它才会回。
 
 ## 6. 常见问题
@@ -191,7 +191,7 @@ yarn onebot:run
 |------|------|
 | 收不到消息 | 确认 SnowLuma 已登录、正向 WS 是 3001、`onebot:run` 在跑 |
 | 面板 5099 打不开 / 返回 502 | 先看端口有没有监听（`netstat -ano \| findstr :5099`）；没监听就是 SnowLuma 进程没了，在 QQ 渠道页第 2 步点「启动 SnowLuma」（或重新跑 `start.bat`）。有监听还报 502，是系统代理把 127.0.0.1 也转走了，把本地地址加进白名单 |
-| HTTP 一直失败 | HTTP API 若是默认 3000，会和 yiling-hub dev server 抢；改成 3002 并在渠道里同步 |
+| HTTP 一直失败 | HTTP API 若是默认 3000，会和 yiling-space dev server 抢；改成 3002 并在渠道里同步 |
 | 401 / 握手失败 | WS token 与 HTTP token 填反了；两个框的值不一样 |
 | `onebot-connected` 后仍不回 | 检查角色是否已绑定该渠道；检查角色模型/API Key 是否配好 |
 | SnowLuma 首次连接报 1006 | 已知行为，会自动重连；只要最后出现 `onebot-connected` 就没问题 |
@@ -202,14 +202,14 @@ yarn onebot:run
 | SnowLuma 进程活着但收不到 | 「Hook 退化」已知问题：重启 SnowLuma，仍不行就查它自己的 `logs/` |
 | 登录提示风控/验证 | 换扫码/短信登录，小号养几天再上 |
 | 发消息频繁被吞 | 降低回复频率（QQ 对高频有管控） |
-| 改了 SnowLuma 端口后连不上 | 同步改 yiling-hub 渠道里的 WS/HTTP 地址 |
+| 改了 SnowLuma 端口后连不上 | 同步改 yiling-space 渠道里的 WS/HTTP 地址 |
 
 ## 7. 将来换设备 / 上服务器
 
-当前是「QQ 小号 + yiling-hub 同机 `127.0.0.1` 直连」，跑通后：
+当前是「QQ 小号 + yiling-space 同机 `127.0.0.1` 直连」，跑通后：
 
-- **换设备挂小号**（公司 / 家里 / 笔记本轮换）：在每台电脑都装好 SnowLuma 并登录小号（同一时刻只能一处在线），`onebot:run` 和 yiling-hub 也随设备走。
-- **yiling-hub 上服务器**：QQ 小号继续留在家里/公司电脑，用内网穿透（frp / cpolar / cloudflared）把 `3001`/`3002` 暴露给服务器，然后在服务器 yiling-hub 的渠道里把地址改成穿透后的公网地址。
+- **换设备挂小号**（公司 / 家里 / 笔记本轮换）：在每台电脑都装好 SnowLuma 并登录小号（同一时刻只能一处在线），`onebot:run` 和 yiling-space 也随设备走。
+- **yiling-space 上服务器**：QQ 小号继续留在家里/公司电脑，用内网穿透（frp / cpolar / cloudflared）把 `3001`/`3002` 暴露给服务器，然后在服务器 yiling-space 的渠道里把地址改成穿透后的公网地址。
 
 ## 8. 安全提醒
 

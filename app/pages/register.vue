@@ -65,7 +65,7 @@ async function submit() {
             注册账号
           </div>
           <div class="login-subtitle">
-            忆灵空间 Yiling Hub · 用邮箱创建你的账号
+            忆灵空间 Yiling Space · 用邮箱创建你的账号
           </div>
         </div>
       </div>

@@ -1,4 +1,4 @@
-# Yiling Hub：AI 开发约束
+# Yiling Space：AI 开发约束
 
 在修改代码前，先阅读：
 - `README.md`

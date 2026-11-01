@@ -1,6 +1,6 @@
 # 本地开发与数据迁移规范
 
-本文说明如何在本地开发 Yiling Hub、备份 PostgreSQL 数据，并将项目迁移到新电脑。脚本面向 Windows PowerShell；其他系统可按同样原则实现对应脚本。
+本文说明如何在本地开发 Yiling Space、备份 PostgreSQL 数据，并将项目迁移到新电脑。脚本面向 Windows PowerShell；其他系统可按同样原则实现对应脚本。
 
 > 当前实现状态：Nuxt 管理后台已经接入 PostgreSQL，角色 CRUD、记忆设置、会话录入/对话、快照版本、AI 记忆提炼、长期记忆、持久化任务队列、Scheduler/Worker、原始消息保留清理与审计、管理员登录与服务端会话、多用户（管理员 + 邮箱注册用户）与账号管理、QQ 小号（OneBot v11）与 B站 渠道适配器、以及 Windows 备份/恢复的**真实数据演练**均已有实现和验收。生产部署安全（HTTPS、反向代理、监控告警）见 `docs/deployment.md`，仍需在真实服务器上演练。
 

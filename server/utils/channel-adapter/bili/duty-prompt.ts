@@ -3,7 +3,7 @@
  *
  * ⚠️ 与 bili-desk 的关键差异：bili-desk 的 duty.md 是写给「一个会自己执行命令的 agent」的，
  * 里面全是「你去跑 bili feed recommend」「你去 bili dm send」这类动作指令。
- * yiling-hub 走的是**脚本化流程**（duty-pipeline 负责调命令），模型只负责判断和写话术，
+ * yiling-space 走的是**脚本化流程**（duty-pipeline 负责调命令），模型只负责判断和写话术，
  * 所以这里只保留「我在干什么 + 怎么判断 + 规矩」，不再教模型跑命令。
  *
  * 人设来自角色 basePrompt，札记来自角色长期记忆，都在流水线里注入，不写在这里。

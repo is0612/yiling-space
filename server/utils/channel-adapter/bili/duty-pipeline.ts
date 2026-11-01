@@ -2,7 +2,7 @@
  * B站值班流水线（脚本化）—— 从 bili-desk 的 agent.py run_round 迁移而来。
  *
  * 采用"方案 B（脚本化）"：把"刷一轮"拆成固定步骤，只在「粗筛」「终判」「写评论」时
- * 调用 yiling-hub 的模型，其余步骤直接调 bili CLI。
+ * 调用 yiling-space 的模型，其余步骤直接调 bili CLI。
  *
  * 一轮的步骤（对齐 docs/bili-desk-integration.md 第 5.1 节）：
  *   1. 读判重表（7 天内看过的不再挑）+ 今日额度

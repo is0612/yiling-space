@@ -2,11 +2,11 @@
 
 ## 1. 背景与定位
 
-yiling-hub 要养的是「QQ 小号挂 AI」——即用一个**个人 QQ 号**（仿真群友 / 好友），
+yiling-space 要养的是「QQ 小号挂 AI」——即用一个**个人 QQ 号**（仿真群友 / 好友），
 而不是官方机器人号。
 
 这种形态需要走 **OneBot v11 协议**：通过一个挂载在 QQ 客户端里的第三方网关（如
-SnowLuma），把 QQ 消息转成 OneBot v11 事件推送给 yiling-hub，yiling-hub 再通过 OneBot
+SnowLuma），把 QQ 消息转成 OneBot v11 事件推送给 yiling-space，yiling-space 再通过 OneBot
 HTTP API 把回复发回 QQ。
 
 本方案是 **QQ 的唯一通道**：官方机器人 `qq` 已于 2026-10-27 下线，相关文件（`qq.ts` /
@@ -19,12 +19,12 @@ HTTP API 把回复发回 QQ。
 |--------|------|
 | 与官方机器人的关系 | **取代**：官方机器人渠道已删除，只保留 `qq-onebot` |
 | 平台标识 | **`qq-onebot`**，与已下线的 `qq` 区分，记忆/身份严格隔离 |
-| 协议 | OneBot v11，**正向 WebSocket**（yiling-hub 作为 WS 客户端连网关） |
+| 协议 | OneBot v11，**正向 WebSocket**（yiling-space 作为 WS 客户端连网关） |
 | 网关 | SnowLuma（或任何兼容 OneBot v11 的实现），部署/登录由用户自理 |
-| 大脑 | **yiling-hub 自己的模型 + 记忆**（不复用 qq-bridge 的 DSH） |
+| 大脑 | **yiling-space 自己的模型 + 记忆**（不复用 qq-bridge 的 DSH） |
 
 > 参考项目：`github.com/Derpyu520/qq-bridge`。它用 SnowLuma + OneBot v11 把 QQ 消息桥
-> 接给 DSH。yiling-hub 借鉴其「SnowLuma 作 OneBot 网关」的思路，但大脑换成自己的
+> 接给 DSH。yiling-space 借鉴其「SnowLuma 作 OneBot 网关」的思路，但大脑换成自己的
 > `handleChannelMessage` 流水线（角色人格 + 分层记忆 + 跨平台身份绑定）。
 
 ## 3. 架构
@@ -37,7 +37,7 @@ SnowLuma 网关（用户自行部署、扫码登录 QQ）
    │  OneBot v11 正向 WebSocket（ws://127.0.0.1:3001）
    │  OneBot v11 HTTP API     （http://127.0.0.1:3000）
    ▼
-yiling-hub onebot 适配器（channel-adapter/onebot/）
+yiling-space onebot 适配器（channel-adapter/onebot/）
    │  client.ts     —— WS 连接、心跳、事件解析、断线重连
    │  serve.ts      —— 事件 → 通用流水线 handleChannelMessage
    │  configure.ts  —— 从 DB 加载连接（解密 wsUrl / accessToken）
@@ -56,7 +56,7 @@ yiling-hub onebot 适配器（channel-adapter/onebot/）
 - `MemoryScope.scopeKey = character:{cid}:external:qq-onebot:{qq号}`，与官方 `qq`、
   B站 `bili` 的记忆天然隔离，互不串味。
 - 若同一 QQ 号同时是官方机器人绑定用户 + 小号，仍视为**两个外部身份**，除非管理员
-  在「身份管理」里显式验证绑定到同一个 yiling-hub 用户。
+  在「身份管理」里显式验证绑定到同一个 yiling-space 用户。
 
 ## 5. OneBot v11 事件与字段映射
 
@@ -258,12 +258,12 @@ QQ 是唯一支持表情段的渠道。链路：
 
 ## 10. 与 qq-bridge 的差异
 
-| 维度 | qq-bridge | yiling-hub onebot |
+| 维度 | qq-bridge | yiling-space onebot |
 |------|-----------|-------------------|
-| 大脑 | DSH agent | yiling-hub 角色 + 分层记忆 |
+| 大脑 | DSH agent | yiling-space 角色 + 分层记忆 |
 | 会话模型 | 每个 QQ 会话一个 DSH 会话 | 每个 externalConversationId 一条 Conversation |
 | 记忆 | DSH 自身 | MemoryItem / MemorySnapshot，按身份范围隔离 |
-| 工具 | MCP（发消息/搜网） | 复用 yiling-hub 通用流水线（暂无 MCP 工具） |
+| 工具 | MCP（发消息/搜网） | 复用 yiling-space 通用流水线（暂无 MCP 工具） |
 | 身份 | QQ 号 | ExternalIdentity + 跨平台绑定（可汇聚到同一用户） |
 
 ## 11. 分阶段

@@ -204,7 +204,7 @@ function isActive(item: NavigationItem) {
           <el-icon><SwitchButton /></el-icon>退出登录
         </el-button>
         <div class="sidebar-version">
-          <span>Yiling Hub · 预览版</span><span>v0.1</span>
+          <span>Yiling Space · 预览版</span><span>v0.1</span>
         </div>
       </div>
     </aside>

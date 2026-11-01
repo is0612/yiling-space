@@ -1,5 +1,5 @@
 {
-  "name": "yiling-hub",
+  "name": "yiling-space",
   "version": "0.1.0",
   "description": "多角色 AI 养成空间：角色人设、分层长期记忆、忆泡、日记手账、QQ 小号（OneBot v11）与 B站 值班台。数据存在自己的 PostgreSQL 里。",
   "private": true,
@@ -7,9 +7,9 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/is0612/yiling-hub.git"
+    "url": "git+https://github.com/is0612/yiling-space.git"
   },
-  "homepage": "https://github.com/is0612/yiling-hub#readme",
+  "homepage": "https://github.com/is0612/yiling-space#readme",
   "engines": {
     "node": ">=20.19.0"
   },

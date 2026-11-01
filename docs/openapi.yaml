@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: Yiling Hub API
+  title: Yiling Space API
   version: 0.1.0
   description: |
     忆灵空间（多角色 AI 养成）的初始接口契约。
@@ -4201,10 +4201,10 @@ components:
       description: 角色卡。只包含可以跨机器带走的内容；API Key、表情包图片、会话原文与渠道绑定都不在其中。
       required: [format, formatVersion, character]
       properties:
-        format: { type: string, enum: [yiling-hub.character] }
+        format: { type: string, enum: [yiling-space.character] }
         formatVersion: { type: integer, minimum: 1, maximum: 1 }
         exportedAt: { type: string, format: date-time }
-        exportedBy: { type: string, enum: [yiling-hub] }
+        exportedBy: { type: string, enum: [yiling-space] }
         character:
           type: object
           required: [name]

@@ -71,7 +71,7 @@ const ABOUT_ROWS = [
                 忆灵空间
               </div>
               <div class="about-sub">
-                多角色 AI 养成 · Yiling Hub
+                多角色 AI 养成 · Yiling Space
               </div>
             </div>
           </div>

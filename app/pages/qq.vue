@@ -1114,13 +1114,13 @@ function copyInstallGuide() {
     .map((step, index) => `${index + 1}. ${step.title}：${step.detail}`)
     .join("\n");
   const prompt = [
-    `请一步一步帮我在 Windows 上安装并配置 ${PROXY.name}，让它通过 OneBot v11 连接到本机 yiling-hub。`,
+    `请一步一步帮我在 Windows 上安装并配置 ${PROXY.name}，让它通过 OneBot v11 连接到本机 yiling-space。`,
     "请先询问并检查我电脑上的 QQ 版本、协议端是否已安装和项目运行状态；每次只指导一个阶段，用简单中文说明需要做什么、在哪里操作、完成后如何确认。",
     `官方发布页：${PROXY.repo}`,
     `管理面板：${PROXY.panel}`,
     "配置目标：正向 WebSocket 服务端端口 3001；HTTP API 端口 3002（不要使用 3000）；按协议端要求配置 Token。",
     `面板配置要点：\n${panelSteps}`,
-    "之后指导我在 yiling-hub 的 QQ 渠道添加 QQ 小号，地址使用 ws://127.0.0.1:3001 和 http://127.0.0.1:3002，绑定一个角色，再运行 yarn onebot:run。以出现 onebot-connected 并完成一条收发测试作为验收。",
+    "之后指导我在 yiling-space 的 QQ 渠道添加 QQ 小号，地址使用 ws://127.0.0.1:3001 和 http://127.0.0.1:3002，绑定一个角色，再运行 yarn onebot:run。以出现 onebot-connected 并完成一条收发测试作为验收。",
     "安全要求：只使用上面的官方发布页，不下载来历不明的软件；不要替我登录 QQ、处理扫码/验证码或绕过安全提示；不要要求我把 QQ 密码、验证码、WS/HTTP Token、API Key 发给你。需要输入凭据时告诉我在本机哪个页面自行填写；运行命令、安装软件或修改配置前先解释影响并等我确认。",
   ].join("\n\n");
   return copyText(prompt, "AI 安装教程已复制。");

@@ -1,5 +1,5 @@
 @echo off
-rem One-click launcher for Yiling Hub. Double-click this file.
+rem One-click launcher for Yiling Space. Double-click this file.
 rem All real logic and all Chinese output live in scripts\launch.mjs --
 rem this wrapper stays ASCII-only so the cmd code page can never garble it.
 chcp 65001 >nul

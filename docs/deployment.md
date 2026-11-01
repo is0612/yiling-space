@@ -4,7 +4,7 @@
 
 ## 1. 进程模型
 
-Yiling Hub 由两部分组成：
+Yiling Space 由两部分组成：
 
 - **Web 服务**（Nuxt/Nitro）：`yarn build` 后 `node .output/server/index.mjs`（或 `yarn start`），对外提供页面与 `/api`。
 - **后台进程**（独立运行，与 Web 服务解耦）：

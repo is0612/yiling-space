@@ -65,7 +65,7 @@ async function submit() {
         </div>
         <div>
           <div class="login-title">
-            忆灵空间 Yiling Hub
+            忆灵空间 Yiling Space
           </div>
           <div class="login-subtitle">
             多角色 AI 养成 · 管理员登录

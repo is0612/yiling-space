@@ -99,6 +99,8 @@ const openedGroups = ref<string[]>([]);
 const searchRef = ref<{ focus?: () => void } | null>(null);
 
 // ── 菜单管理：只影响侧栏显示，命令表本身不动 ──────────────
+// localStorage 前缀沿用改名前的 `yiling-hub:`，别跟着品牌改：改了等于把用户
+// 已保存的菜单隐藏项和常用置顶一起丢掉（PIN_KEY 同理）。
 const MENU_KEY = "yiling-hub:bili-menu";
 /**
  * v3：命令表改为读 `bili schema`，新增的命令很多。老配置要合并一次默认隐藏集，

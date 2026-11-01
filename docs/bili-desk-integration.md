@@ -1,12 +1,12 @@
-# bili-desk 迁移进 yiling-hub 方案
+# bili-desk 迁移进 yiling-space 方案
 
 > **状态：方案已落地，迁移脚本已移除。** B站 现在由 `run-bili-adapter.ts` 驱动，记忆直接存进
-> yiling-hub 的长期记忆 / 快照 / 会话，不再使用 bili-desk 那套 `human-world.md`、`seen.md` 文件级记忆。
+> yiling-space 的长期记忆 / 快照 / 会话，不再使用 bili-desk 那套 `human-world.md`、`seen.md` 文件级记忆。
 > 本文保留作为设计记录，第 8 节的迁移脚本已删除。
 
-> 目标：把 bili-desk（AI 角色刷 B站 的后台）的**全部能力**搬进 yiling-hub，之后删除 bili-desk。
-> 定位：yiling-hub 是「基于记忆的多角色 AI 后台」，B站是其第三个渠道（QQ 已实现、微信规划中）。
-> 核心价值：**让 B站 AI 角色读/写 yiling-hub 的记忆系统（长期记忆 + 快照 + 会话），不再用 bili-desk
+> 目标：把 bili-desk（AI 角色刷 B站 的后台）的**全部能力**搬进 yiling-space，之后删除 bili-desk。
+> 定位：yiling-space 是「基于记忆的多角色 AI 后台」，B站是其第三个渠道（QQ 已实现、微信规划中）。
+> 核心价值：**让 B站 AI 角色读/写 yiling-space 的记忆系统（长期记忆 + 快照 + 会话），不再用 bili-desk
 > 的 human-world.md / seen.md 这些文件级朴素记忆。**
 
 ## 1. 现状盘点（bili-desk 有什么）
@@ -18,7 +18,7 @@ bili-desk（同一个作者的旧项目，现已退役）分两层能力：
 | 通用控制台 | 命令目录（8 组，bili-cli 命令 + 参数 + 写操作标记） | `backend/app/catalog.py` | 迁移为 TS 常量 `catalog.ts` |
 | 通用控制台 | bili CLI 执行器（跨进程调用） | `backend/app/runner.py` + `subproc.py` + `netenv.py` | 迁移为 `runner.ts`（Node `child_process`） |
 | 通用控制台 | 扫码登录 | `main.py /api/login` + `media.py` 二维码 | 迁移为 B站渠道登录接口 |
-| 通用控制台 | 数据目录/备份/换人 | `profile.py` + `paths.py` | 复用 yiling-hub 的备份机制（PostgreSQL dump） |
+| 通用控制台 | 数据目录/备份/换人 | `profile.py` + `paths.py` | 复用 yiling-space 的备份机制（PostgreSQL dump） |
 | 通用控制台 | 图片代理（封面/本地图/远程图） | `media.py` | 迁移为只读代理接口 |
 | 自动值班 | 值班章程（步骤 + 规矩） | `duty/duty.md` | 迁移为提示词模板 `duty-prompt.ts` |
 | 自动值班 | 谷时调度器 | `agent.py scheduler_loop` | 迁移为记忆 Worker 式调度 |
@@ -30,19 +30,19 @@ bili-desk（同一个作者的旧项目，现已退役）分两层能力：
 ## 2. 核心思路：换大脑，留手
 
 bili-desk 的「大脑」是 headless dsh 会话，读 AGENTS.md（人设）+ duty.md（章程）+ human-world.md
-（札记）+ seen.md（判重），用 bili 命令刷视频。这套「大脑」与 yiling-hub 高度重叠，且 yiling-hub
+（札记）+ seen.md（判重），用 bili 命令刷视频。这套「大脑」与 yiling-space 高度重叠，且 yiling-space
 更强（版本化、来源追溯、身份隔离、审计）。
 
 **决策：**
 
-- **留** bili-desk 的「手」：bili CLI 执行器 + 命令目录 + 值班章程（这些是 B站 专属的，yiling-hub 没有）。
+- **留** bili-desk 的「手」：bili CLI 执行器 + 命令目录 + 值班章程（这些是 B站 专属的，yiling-space 没有）。
 - **换** bili-desk 的「大脑/记忆/闹钟」：
   - AGENTS.md 人设 → 角色 `basePrompt`
   - human-world.md 札记 → 长期记忆 + 周期快照
   - seen.md 判重 → `BiliSeenVideo` 表
   - out/ 报告 → `BiliRoundReport` 表
-  - headless dsh 会话 → yiling-hub 的模型调用（`chat-reply` + 角色模型配置）
-  - APScheduler → yiling-hub 的持久化调度（复用 memory-scheduler / memory-worker 模式）
+  - headless dsh 会话 → yiling-space 的模型调用（`chat-reply` + 角色模型配置）
+  - APScheduler → yiling-space 的持久化调度（复用 memory-scheduler / memory-worker 模式）
 
 ## 3. 落地结构
 
@@ -171,7 +171,7 @@ model BiliSeenVideo {
 | M3 | 主动值班流水线（脚本化）+ 谷时调度（Scheduler/Worker） | 端到端刷一轮，报告/判重/记忆入库 |
 | M4 | 被动回复（私信/评论 → 通用 pipeline） | `yarn test:bili-channel` |
 | M5 | 工具循环升级（可选）+ 前端「渠道管理 → B站」+ 值班面板 | 全流程可验收 |
-| M6 | 迁移 bili-desk 的 data/（config/seen/out/workspace）→ yiling-hub 数据库；**删除 bili-desk** | 数据不丢，旧项目下线 |
+| M6 | 迁移 bili-desk 的 data/（config/seen/out/workspace）→ yiling-space 数据库；**删除 bili-desk** | 数据不丢，旧项目下线 |
 
 ## 8. 迁移数据（删除 bili-desk 前必做）
 
@@ -186,7 +186,7 @@ bili-desk 的 `data/`（config.json / seen.md / out/ / workspace/AGENTS.md / hum
 
 迁移脚本 `scripts/import-bili-desk.ts` 已移除。它从未产出过数据——库里没有带 bili-desk 标记的记忆，
 `BiliSeenVideo` 最早的记录也晚于适配器上线时间，说明那次迁移没有落库任何东西；而 B站 现在直接走
-yiling-hub 自己的长期记忆，不需要再从旧项目搬。下面的内容保留，作为当时的设计记录。
+yiling-space 自己的长期记忆，不需要再从旧项目搬。下面的内容保留，作为当时的设计记录。
 
 ## 9. 风险与约束
 
@@ -328,7 +328,7 @@ yiling-hub 自己的长期记忆，不需要再从旧项目搬。下面的内容
 
 ## 12. 设定分层：人设 / 口味 / 章程
 
-bili-desk 把这些全塞在一个 `AGENTS.md` 里。搬进 yiling-hub 之后必须拆开，否则同一个角色
+bili-desk 把这些全塞在一个 `AGENTS.md` 里。搬进 yiling-space 之后必须拆开，否则同一个角色
 在聊天页、QQ 群里也会开始「只看米哈游」「鸣潮跳过」，那是错位的。
 
 | 层 | 存在哪 | 管什么 | 会不会外溢 |

@@ -30,6 +30,8 @@
 
 import { createError } from "h3";
 
+// 格式标识沿用改名前的 `yiling-hub.character`：它是角色卡的对外契约，
+// 跟着品牌改成 yiling-space 会让已经导出的卡片导不进来。要换必须同时接受旧值。
 export const CHARACTER_BUNDLE_FORMAT = "yiling-hub.character";
 export const CHARACTER_BUNDLE_VERSION = 1;
 /** 导入包最大字节数：够 4000 条记忆 + 600 篇总结，再大基本是塞了别的东西。 */
@@ -183,7 +185,7 @@ export type CharacterBundle = {
   format: typeof CHARACTER_BUNDLE_FORMAT;
   formatVersion: number;
   exportedAt: string;
-  exportedBy: "yiling-hub";
+  exportedBy: "yiling-space";
   character: CharacterBundleCharacter;
   modelConfig: CharacterBundleModelConfig;
   memorySetting: {
@@ -505,7 +507,7 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
     format: CHARACTER_BUNDLE_FORMAT,
     formatVersion: CHARACTER_BUNDLE_VERSION,
     exportedAt: (input.now ?? new Date()).toISOString(),
-    exportedBy: "yiling-hub",
+    exportedBy: "yiling-space",
     character: {
       name: input.character.name,
       alias: typeof config.alias === "string" ? config.alias.slice(0, CHARACTER_BUNDLE_LIMITS.alias) : "",
@@ -800,7 +802,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     format: CHARACTER_BUNDLE_FORMAT,
     formatVersion: version,
     exportedAt: typeof body.exportedAt === "string" ? body.exportedAt : "",
-    exportedBy: "yiling-hub",
+    exportedBy: "yiling-space",
     character: { name, alias, description, avatarTone, basePrompt, styleExamples, userAddress },
     modelConfig,
     memorySetting,

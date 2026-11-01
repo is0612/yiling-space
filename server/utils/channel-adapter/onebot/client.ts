@@ -1,5 +1,5 @@
 /**
- * OneBot v11 forward-WebSocket client. yiling-hub connects to a third-party QQ gateway
+ * OneBot v11 forward-WebSocket client. yiling-space connects to a third-party QQ gateway
  * (e.g. SnowLuma) as a WS *client* and receives message events, then calls the gateway's
  * HTTP API to send replies.
  *

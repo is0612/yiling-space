@@ -1,6 +1,6 @@
 # B站值班服务器部署清单
 
-> 适用：把 yiling-hub 的 B站 值班从本机搬到 Linux 服务器。
+> 适用：把 yiling-space 的 B站 值班从本机搬到 Linux 服务器。
 > **只跑值班不需要 Web 服务**——`yarn bili:run` 自己就是全部；要看报告、改设置、扫码才需要把 Web 起起来。
 
 ## 0. 先定三件事
@@ -28,8 +28,8 @@ bili --version   # {"ok": true, "data": {"version": "0.6.0"}}
 ## 2. 代码、依赖、数据库
 
 ```bash
-git clone <repo> /srv/yiling-hub
-cd /srv/yiling-hub
+git clone <repo> /srv/yiling-space
+cd /srv/yiling-space
 
 # ⚠️ 不要加 --production：tsx 和 prisma 在 devDependencies，
 #    而 bili:run / db:migrate:deploy 都要用它们
@@ -91,16 +91,16 @@ bili owner set <主人UID>
 
 ```ini
 [Unit]
-Description=yiling-hub bili duty adapter
+Description=yiling-space bili duty adapter
 After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=yiling
-WorkingDirectory=/srv/yiling-hub
+WorkingDirectory=/srv/yiling-space
 Environment=TZ=Asia/Shanghai
-EnvironmentFile=/srv/yiling-hub/.env
+EnvironmentFile=/srv/yiling-space/.env
 ExecStart=/usr/bin/yarn bili:run
 Restart=always
 RestartSec=5
@@ -116,14 +116,14 @@ WantedBy=multi-user.target
 
 ```ini
 [Unit]
-Description=yiling-hub web
+Description=yiling-space web
 After=network-online.target postgresql.service
 
 [Service]
 User=yiling
-WorkingDirectory=/srv/yiling-hub
+WorkingDirectory=/srv/yiling-space
 Environment=TZ=Asia/Shanghai
-EnvironmentFile=/srv/yiling-hub/.env
+EnvironmentFile=/srv/yiling-space/.env
 ExecStart=/usr/bin/node .output/server/index.mjs
 Restart=always
 

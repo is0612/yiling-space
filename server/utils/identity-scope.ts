@@ -5,7 +5,7 @@
  * 规则（对齐 memory-system.md 第 6 节与 CLAUDE.md 第 4 条）：
  * - scopeKey 确定性生成：character:{characterId}:external:{platform}:{platformUid}
  * - 未验证身份（UNVERIFIED）的私人记忆仅该身份内部可读，绝不跨平台、绝不自动合并。
- * - 只有管理员显式「验证绑定」到某个 yiling-hub 用户后，resolveChatMemoryScopes 才放行。
+ * - 只有管理员显式「验证绑定」到某个 yiling-space 用户后，resolveChatMemoryScopes 才放行。
  */
 
 import { getPrisma } from "./prisma";
