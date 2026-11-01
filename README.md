@@ -1,141 +1,183 @@
 # 忆灵空间 · Yiling Space
 
-**一个自己部署的多角色 AI 养成空间。** 角色在 QQ 群、QQ 私聊、B站 值班台、网页工作台四处活动，所有经历写进同一份分层记忆。数据存在你自己的 PostgreSQL 里，模型 Key 加密入库，不经过第三方中转。
+**让 AI 角色拥有自己的经历、记忆与持续成长能力。**
+
+忆灵空间（Yiling Space）是一个可以自行部署的多角色 AI 养成平台。你可以创建不同的 AI 角色，为它们配置独立的人设和模型，让它们通过网页、QQ 等入口与你互动。系统会从对话中提炼重要经历，逐步形成忆泡、周期快照和长期记忆，让角色不再只是一次性的聊天对象。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-4C8DF6)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520.19-3AC36A)](package.json)
 [![Nuxt](https://img.shields.io/badge/Nuxt-4-00DC82)](https://nuxt.com)
 
-> 已经能用的部分：角色档案、四层记忆（原文 / 忆泡 / 快照 / 长期记忆）、AI 对话与记忆检索、日记手账、多用户与管理员、QQ 小号（OneBot v11）、B站 值班台、角色卡导入导出、备份恢复。
-> 公网部署加固（HTTPS、反向代理、监控告警）需要在真实服务器上自行演练，见 [部署与扩展](docs/deployment.md)。
-> **完整功能清单**（13 模块 / 122 接口 / 32 表）见 [功能总表](<docs/忆灵空间 · 功能总表.md>)。
+## 核心能力
 
----
-
-## 1. 5 分钟跑起来
-
-前提：装三样东西。
-
-| 装什么 | 从哪装 |
+| 能力 | 说明 |
 | --- | --- |
-| Node.js **20.19+**（实测 22） | [nodejs.org](https://nodejs.org/) 下 LTS 即可 |
-| Yarn Classic **1.22.x** | `npm i -g yarn@1.22.22` |
-| Docker Desktop | [官方安装说明](https://docs.docker.com/desktop/setup/install/windows-install/) |
+| **多角色管理** | 创建和管理不同 AI 角色，维护各自的人设、模型配置、对话与记忆档案。 |
+| **分层记忆引擎** | 将原始对话整理为忆泡、周期快照和长期记忆，区分具体经历与长期有效的信息。 |
+| **记忆来源追溯** | 记忆条目保留来源关联，支持回看相关原始对话或事件依据。 |
+| **日记与手账** | 将角色经历整理为独立的日记和手账，支持编辑、版本查看与恢复。 |
+| **多渠道互动** | 支持网页工作台、QQ OneBot v11，以及 B站值班台等功能模块。 |
+| **自主部署与数据管理** | 使用自己的 PostgreSQL 数据库；模型凭据加密保存，支持数据备份与恢复。 |
 
-> **两个和 Docker 有关的坑，都是装的时候就要处理：**
->
-> 1. **下不动。** 官网走国外 CDN，几个 G 的安装包国内直连经常半路断掉。开发交流群里放了安装包备份：QQ 群 **大肥鱼养殖基地ovo**（群号 **1127648581**）。
-> 2. **数据默认落在系统盘。** 安装时不会问你放哪，全部塞进 `%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`，而且只增不减。装完先把 **Disk image location** 换到非系统盘，再跑 `yarn setup`——原因和步骤见 [Docker 数据盘默认在系统盘](docs/local-development-and-data-migration.md#32-docker-数据盘默认在系统盘)。
+### 记忆如何形成
 
-没有 Docker 也能用——本机装好 PostgreSQL，向导会问你连接信息。
+`原始对话 → 忆泡（按天整理的事件） → 周期快照（阶段总结） → 长期记忆（持续有效的信息）`
+
+- **原始对话**：保留对话事实，是后续提炼和追溯的依据。
+- **忆泡**：按天整理具体发生的事情，记录事件、时间、参与者和来源。
+- **周期快照**：按角色配置的周期归纳一段时间内的重要经历、事实变化、关系和目标。默认周期为 8 天，可调整。
+- **长期记忆**：维护值得长期保留的事实、偏好、关系和承诺，并支持状态管理。
+
+> 记忆提炼需要配置模型服务，并运行后台调度器与 Worker。聊天页面能打开，不代表后台记忆任务已经启动。
+
+## 快速开始
+
+### 环境要求
+
+| 依赖 | 要求 | 说明 |
+| --- | --- | --- |
+| Node.js | **20.19+**（建议使用 LTS） | 必需 |
+| Yarn Classic | **1.22.x** | 必需；项目使用 Yarn 1 |
+| PostgreSQL | 可连接的数据库 | 必需；可以使用本机安装的 PostgreSQL |
+| Docker Desktop | 可选 | 方便在本机启动 PostgreSQL；不用 Docker 时需要自行准备数据库 |
+
+安装 Yarn Classic：
+
+```bash
+npm install --global yarn@1.22.22
+```
+
+### 安装并启动
+
+在项目根目录执行：
 
 ```bash
 yarn install
-yarn setup      # 交互式；AI / 脚本 / CI 里改用 yarn setup --yes
+yarn setup
 yarn dev
 ```
 
-打开 `http://localhost:3000`，用向导最后打印的账号密码登录。
+打开 [http://localhost:3000](http://localhost:3000)，使用初始化向导最后显示的管理员账号登录。
 
-> 不想自己敲命令？仓库根目录有 **`启动忆灵空间.bat`**，双击即可：自检 → 拉起数据库 → 起服务 → 开浏览器。
-> 想让 AI 帮你装？把仓库地址和 [INSTALL-FOR-AI.md](INSTALL-FOR-AI.md) 第 0 节那段话一起发给它。
+`yarn setup` 会检查运行环境、生成 `.env`、准备 PostgreSQL、应用数据库迁移并创建管理员账号。检测到 Docker 时可以选择使用 Docker 启动本地数据库；也可以连接自己已有的 PostgreSQL。
 
-`yarn setup` 替你做这些事：
+> **安全提醒：** 首次安装建议使用交互式 `yarn setup`，自行设置管理员密码。`yarn setup --yes` 是便于脚本运行的非交互模式，当前默认管理员凭据为 `admin / admin123`，只适合隔离的本机测试。不要将这组默认凭据用于公网或多人部署。
 
-- 生成 `.env`，**把三处数据库密码自动对齐**（手改最容易错的地方）
-- 端口被占用时自动换下一个空闲端口，并同步改连接串
-- 拉起 PostgreSQL 容器，**等它真正就绪**再往下走
-- 应用数据库迁移、创建管理员账号
+Windows 用户也可以双击仓库根目录的 **`启动忆灵空间.bat`**，按提示完成自检、启动数据库和服务。
+
+其他初始化方式：
 
 | 命令 | 用途 |
 | --- | --- |
-| `yarn setup` | 交互式，每项都有默认值，一路回车即可（需要真实终端；AI / 脚本 / CI 里跑会直接报错退出） |
-| `yarn setup --dry-run` | 只检测环境、打印将要做什么，不写文件不动数据库 |
-| `yarn setup --yes` | 完全非交互（随机库密码 + `admin` / `admin123`），AI / 脚本 / 管道里用这个 |
+| `yarn setup` | 交互式初始化，适合首次安装 |
+| `yarn setup --dry-run` | 检查环境并显示执行计划，不写文件、不启动容器 |
+| `yarn setup --yes` | 非交互初始化；默认凭据仅限本机测试，见上方安全提醒 |
+| `yarn check:env` | 只读检查配置、数据库连接、迁移、管理员账号和加密密钥状态 |
 
-重复运行是安全的：检测到已有 `.env` 会问要不要重建，重建前备份成 `.env.bak`。
-不想走向导就按 [手动步骤](docs/local-development-and-data-migration.md#2-首次设置windows) 一步步来。
-
-## 2. 让它开口说话
-
-**跑起来不等于会聊天。** 没配模型时页面能进、能建角色，但 AI 一个字都不会回。二选一：
-
-1. **页面里填（推荐）**：登录 → 角色 →「AI 对话 → 模型参数」→ 填 API Base URL、API Key、模型名 → 点「测试连通性」。Key 用 AES-256-GCM 加密存库，页面不回显原文。
-2. **写进 `.env`**：`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`，作为没单独配置模型时的兜底默认值。
-
-任何 OpenAI 兼容接口都能用（OpenAI、DeepSeek、硅基流动、各类中转）。
-
-> 加密密钥在 `.data/credentials-encryption.key`，已被 Git 忽略。**备份数据库时它必须一起备份**，丢了就得重填所有 Key。
-
-## 3. 出问题先体检
+遇到安装或迁移问题，先运行：
 
 ```bash
 yarn check:env
 ```
 
-只读、不改文件，逐项核对：`.env` 是否为占位符、三处密码/端口对不对得上、数据库连不连得上、迁移跑没跑完、管理员账号在不在、模型 Key 配没配、加密密钥文件丢没丢、**Docker 数据盘在哪个分区/还剩多少**。每处问题都用大白话说明并给出可照做的修复步骤；有阻塞问题时退出码为 1，可以直接挂 CI。
+再参考[本地开发与数据迁移](docs/local-development-and-data-migration.md)中的手动安装和故障排查步骤。
 
-| 症状 | 原因与处理 |
-| --- | --- |
-| `yarn setup` 说端口 5432 被占用 | 本机装过 PostgreSQL 又想用 Docker。向导会自动换端口；手改要同时改 `.env` 的 `POSTGRES_PORT` 和 `DATABASE_URL` 里的端口 |
-| 提示「密码至少 8 位」 | `scripts/seed-dev-user.ts` 的硬性下限，且不能是 `replace_with_` 开头的占位符 |
-| 忘记管理员密码 | 改 `.env` 的 `DEV_OWNER_PASSWORD`，再跑一次 `yarn db:seed:dev`（幂等） |
-| 页面能打开但 AI 不回话 | 没配模型 Key，见上一节 |
-| 迁移报认证失败 | `.env` 里的密码和数据库实际密码不一致，用 `yarn setup` 重建或手动核对三处 |
-| 数据库起不来 | `docker compose ps` 看状态，`docker compose logs db` 看原因 |
-| 想让本地也必须登录 | `.env` 设 `YILING_ALLOW_DEV_OWNER_BYPASS=false`（默认 localhost 免登录，方便调试） |
+## 配置 AI 模型
 
-## 4. 想接 QQ 和 B站
+完成安装后，页面可以正常打开、创建角色，但**没有配置模型时，AI 无法生成回复或执行记忆提炼**。
 
-这两块都要额外进程，不装也不影响网页端正常使用。
+推荐在网页中配置：
 
-| 渠道 | 做什么 | 怎么开 |
-| --- | --- | --- |
-| QQ 小号 | OneBot v11 挂个人号，群聊/私聊收发、按话题参与、限流、群公告 | `yarn onebot:stack`，清单见 [QQ 部署](docs/qq-onebot-deploy.md) |
-| B站 值班 | 自动刷 B站、判重、写日报、札记回写记忆 | 管理员「系统管理 → B站 值班台」，见 [集成说明](docs/bili-desk-integration.md) |
+1. 登录忆灵空间。
+2. 进入「角色」并打开对应角色。
+3. 找到「AI 对话 → 模型参数」。
+4. 填写 API Base URL、API Key 和模型名称。
+5. 点击「测试连通性」。
 
-记忆任务不在 Web 进程里跑定时器，走 PostgreSQL 持久化队列：
+项目支持 OpenAI 兼容接口。你可以使用 OpenAI、DeepSeek、硅基流动或其他兼容服务，也可以填写自己部署的模型服务地址。
+
+也可以在 `.env` 中配置 `LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL`，作为角色未单独配置模型时的默认值。
+
+> **数据与隐私：** 模型请求会发送到你配置的 API 服务地址。记忆提炼可能包含所选聊天片段、角色范围和相关记忆上下文。请先了解模型服务商的数据保留、训练使用和区域处理政策，并在需要时告知相关用户、取得同意。模型 Key 使用 AES-256-GCM 加密保存；加密密钥位于本机被 Git 忽略的 `.data/credentials-encryption.key`。备份数据库时，必须同时安全备份这个密钥文件，否则恢复后已保存的模型 Key 将无法解密。
+
+## 启动记忆引擎
+
+忆灵空间把周期调度与记忆处理放在独立后台进程中，不依赖 Web 服务进程内的定时器。
+
+在两个独立终端中分别运行：
 
 ```bash
-yarn scheduler:watch   # 排期入队，默认每 60 秒一轮
-yarn worker:watch      # 消费队列
+# 检查到期周期，并把记忆任务写入 PostgreSQL 队列
+yarn scheduler:watch
 ```
 
-进程活着 ≠ 任务在走，`yarn watchdog:run` 会判「排期没跑」还是「Worker 没跑」。完整说明见 [部署与扩展 §8–9](docs/deployment.md)。
+```bash
+# 消费队列，调用模型执行忆泡整理、快照和相关记忆任务
+yarn worker:watch
+```
 
-## 5. 文档地图
+两个进程都需要持续运行。生产部署时，建议使用 Docker、systemd、进程管理器或其他守护方式管理它们。进程启动不代表任务一定正常推进，可以使用以下命令检查：
 
-**想把它跑起来 / 部署出去**
+```bash
+yarn watchdog:run
+```
 
-- [给 AI 的安装说明](INSTALL-FOR-AI.md) — 让 AI 助手照着一台新电脑装好，含失败排查
-- [本地开发与数据迁移](docs/local-development-and-data-migration.md) — 手动步骤、全量校验 `yarn verify:local`、备份恢复
-- [部署与扩展](docs/deployment.md) — 进程模型、HTTPS、监控、日志、Watchdog
-- [QQ 小号部署](docs/qq-onebot-deploy.md)｜[B站 值班集成](docs/bili-desk-integration.md)
-- [安全与隐私规范](docs/security.md)
+完整进程模型、监控与部署说明见[部署与扩展](docs/deployment.md)。
 
-**想搞懂它怎么设计的**
+## 可选渠道接入
 
-- [功能总表](<docs/忆灵空间 · 功能总表.md>) — 13 个模块逐项列，带状态标记
-- [记忆系统与周期快照规则](docs/memory-system.md) — 四层记忆的完整定义
-- [日记与手账](docs/journal.md)｜[主动消息](docs/proactive-messaging.md)｜[语音](docs/voice.md)
-- [角色卡导入导出](docs/character-card.md)｜[跨平台身份](docs/cross-platform-identity.md)
-- [数据模型](docs/data-model.md)｜[Prisma Schema](prisma/schema.prisma)｜[OpenAPI 契约](docs/openapi.yaml)
+渠道适配器需要单独配置和启动；不接入这些渠道，也不影响网页端的基本使用。
 
-**想改代码**
+| 渠道 | 能力概览 | 文档 / 入口 |
+| --- | --- | --- |
+| **QQ 小号** | 通过 OneBot v11 接入 QQ 群聊与私聊，支持角色绑定、上下文管理和消息收发。建议使用独立小号，不要直接使用日常主账号测试。 | [QQ 小号部署](docs/qq-onebot-deploy.md) |
+| **B站值班台** | 配置账号和角色后，按值班计划浏览与筛选内容，记录处理结果并生成轮次报告。 | 管理员「系统管理 → B站值班台」；[集成说明](docs/bili-desk-integration.md) |
 
-- [CLAUDE.md](CLAUDE.md) — 代码约束与协作规则
-- [开发阶段与验收标准](docs/development-phases.md)
+QQ 渠道需要额外的 OneBot v11 服务与连接配置，启动命令：
 
-## 6. 交流与反馈
+```bash
+yarn onebot:stack
+```
 
-**QQ 群：大肥鱼养殖基地ovo（1127648581）** — 装不上、跑挂了、想聊实现都在这儿问。群文件里有 Docker Desktop 的安装包备份（官网国内直连经常下不动）。
+B站适配器与值班服务的部署方式见对应集成文档。
 
-确定是 bug 或想要功能，开 [issue](https://github.com/is0612/yiling-space/issues) 更不容易漏。附上 `yarn check:env` 的输出会有帮助——它不含任何密钥，但会带角色名，发之前自己扫一眼。
+## 文档导航
 
-## 7. 许可与合规
+### 安装、使用与部署
 
-[MIT](LICENSE) © 2026 is0612
+- [给 AI 助手的安装说明](INSTALL-FOR-AI.md) — 面向新电脑的安装流程与失败排查。
+- [本地开发与数据迁移](docs/local-development-and-data-migration.md) — 手动安装、数据盘迁移、备份与恢复。
+- [部署与扩展](docs/deployment.md) — 生产进程模型、HTTPS、反向代理、监控、日志和 Watchdog。
+- [QQ 小号部署](docs/qq-onebot-deploy.md) · [B站值班集成](docs/bili-desk-integration.md)。
+- [安全与隐私规范](docs/security.md) — 鉴权、数据隔离、凭据和记忆数据处理。
 
-- 仓库**不包含**任何官方角色素材、图片或语音模型。角色人设、台词、音色均由使用者自行准备。
-- 若你导入的角色来自第三方作品，其版权归原权利人，请在授权范围内使用；本项目的 MIT 许可不覆盖这些内容。
-- 部署给他人使用时：聊天记录和快照属于敏感数据，AI 提炼会把消息片段发送到你配置的模型服务，请先确认供应商的数据条款并取得用户同意。详见 [安全规范 §5](docs/security.md)。
+### 产品功能与技术设计
+
+- [功能总表](<docs/忆灵空间 · 功能总表.md>) — 按模块查看已实现能力与状态。
+- [记忆系统与周期快照规则](docs/memory-system.md) — 四层记忆的职责、来源和运行规则。
+- [日记与手账](docs/journal.md) · [主动消息](docs/proactive-messaging.md) · [语音](docs/voice.md)。
+- [角色卡导入导出](docs/character-card.md) · [跨平台身份](docs/cross-platform-identity.md)。
+- [数据模型](docs/data-model.md) · [Prisma Schema](prisma/schema.prisma) · [OpenAPI 契约](docs/openapi.yaml)。
+
+### 参与开发
+
+- [CLAUDE.md](CLAUDE.md) — 代码约束与协作规则。
+- [开发阶段与验收标准](docs/development-phases.md)。
+- [GitHub Issues](https://github.com/is0612/yiling-space/issues) — 报告问题或提出功能建议。
+
+## 交流与反馈
+
+**QQ 群：大肥鱼养殖基地ovo（1127648581）**
+
+安装遇到问题、希望交流使用方式或讨论实现细节，都欢迎加入。确定是 Bug 或希望增加功能，建议优先提交 [GitHub Issue](https://github.com/is0612/yiling-space/issues)，方便跟踪处理。
+
+提交问题时，可以附上 `yarn check:env` 的输出和 `docker compose ps` 的结果。检查输出不包含密钥，但可能包含角色名等信息，公开前请自行检查并删除不希望披露的内容。
+
+## 许可与合规
+
+本项目采用 [MIT License](LICENSE)，© 2026 is0612。
+
+- 仓库不包含任何官方角色素材、图片或语音模型；角色人设、台词和音色由使用者自行准备。
+- 导入第三方作品的角色内容时，请遵守原权利人的授权与使用规则。项目的 MIT 许可不覆盖这些第三方素材。
+- 聊天记录、忆泡、快照和备份可能包含敏感信息。部署给他人使用前，请明确数据用途、访问范围、保留期限和删除规则，并妥善保护数据库与备份。
+- 公开部署前，请完成 HTTPS、反向代理、数据库访问限制、备份恢复演练和监控告警配置。具体要求见[安全规范](docs/security.md)与[部署文档](docs/deployment.md)。
