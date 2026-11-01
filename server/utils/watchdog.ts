@@ -83,7 +83,10 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 export const WATCHDOG_THRESHOLDS = {
-  /** Worker 的租约是 5 分钟（`memory-worker.ts` 的 LEASE_MS）；超过 3 倍还没续上，就是没人管了。 */
+  /**
+   * Worker 的租约是 5 分钟（`memory-job-lease.ts` 的 `MEMORY_JOB_LEASE_MS`，与 Worker 回收共用）。
+   * 租约**不续期**：过期只说明领走它的进程已经不在了。给到 3 倍宽限，避免刚好卡在边界上误报。
+   */
   stuckLockMs: 15 * MINUTE,
   /** 队列里最老的一条等了这么久还没人认领：Worker 不在，或者它卡在别的地方。 */
   queueBacklogMs: 30 * MINUTE,
@@ -123,7 +126,9 @@ function evaluateMemoryPipeline(now: number, character: WatchdogCharacterFacts):
       code: "task_stuck",
       severity: "err",
       message: `有任务卡在「运行中」，${describeDuration(stuckFor)}没被回收`,
-      detail: "Worker 每 5 分钟续租一次；超过 15 分钟没续上，通常是 Worker 已经退出。任务会在 Worker 重新启动后被认领。",
+      detail: "租约 5 分钟且不续期：过期只说明领走这条任务的进程（Worker，或起它的那次网页请求）已经不在了。"
+        + "回收发生在「下一次有人领取任务」的时候，所以整机没有 Worker 在跑时它会一直卡着 —— "
+        + "启动 yarn worker:watch，或在任务监控里对它点「回收并重新入队」。",
     };
   }
   // 模型没配置时任务留在队列里是设计行为，不能归因到 Worker。

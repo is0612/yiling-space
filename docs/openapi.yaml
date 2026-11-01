@@ -2947,7 +2947,7 @@ paths:
                       required: [id, type, status, attemptCount, maxAttempts, runAt, createdAt, updatedAt, characterId, characterName]
                       properties:
                         id: { type: string, format: uuid }
-                        type: { type: string, enum: [GENERATE_SNAPSHOT, REGENERATE_SNAPSHOT, UPDATE_LONG_TERM_MEMORY, CLEAN_EXPIRED_MESSAGES] }
+                        type: { type: string, enum: [GENERATE_SNAPSHOT, REGENERATE_SNAPSHOT, UPDATE_LONG_TERM_MEMORY, CLEAN_EXPIRED_MESSAGES, EXTRACT_EVENTS, GENERATE_JOURNAL] }
                         status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, SKIPPED, RETRY_WAIT, CANCELLED] }
                         attemptCount: { type: integer }
                         maxAttempts: { type: integer }
@@ -2956,6 +2956,17 @@ paths:
                         periodEnd: { type: string, nullable: true, format: date-time }
                         lastError: { type: string, nullable: true }
                         startedAt: { type: string, nullable: true, format: date-time }
+                        lockedAt:
+                          type: string
+                          nullable: true
+                          format: date-time
+                          description: 租约起点（领取时间）。运行中才有值；超过 5 分钟没交还就算过期。
+                        leaseExpired:
+                          type: boolean
+                          description: |
+                            `status = RUNNING` 且租约已过期（5 分钟）。这表示领走它的进程已经不在了，
+                            没有进程会回收它 —— 回收发生在「下一次领取任务」时，整机没有 Worker 在跑就不会发生。
+                            过期的运行中任务可以用 `/tasks/{taskId}/retry` 放回队列。
                         completedAt: { type: string, nullable: true, format: date-time }
                         createdAt: { type: string, format: date-time }
                         updatedAt: { type: string, format: date-time }
@@ -3039,9 +3050,17 @@ paths:
   /tasks/{taskId}/retry:
     post:
       tags: [Tasks]
-      operationId: requeueSnapshotTask
-      summary: 手动重新排队快照任务（本地开发）
-      description: 仅支持 GENERATE_SNAPSHOT / REGENERATE_SNAPSHOT 类型，且任务当前状态为 FAILED、RETRY_WAIT 或 CANCELLED。会将尝试计数重置为 0，并写入审计日志。
+      operationId: requeueMemoryTask
+      summary: 手动重新入队任务（含回收卡住的运行中任务）
+      description: |
+        支持 GENERATE_SNAPSHOT / REGENERATE_SNAPSHOT / CLEAN_EXPIRED_MESSAGES / GENERATE_JOURNAL / EXTRACT_EVENTS。
+
+        放行两种状态：
+        - 失败面：`FAILED`、`RETRY_WAIT`、`CANCELLED`；
+        - 卡住面：`RUNNING` 且租约已过期（领取超过 5 分钟）。租约没过期的运行中任务一律拒绝 —— 那可能还有进程在写。
+          过期说明领走它的进程（Worker，或起它的那次网页请求）已经退出，任务不会自己回来，只能靠这一步或重启 Worker。
+
+        会把尝试计数重置为 0、清空错误与租约，并写入审计日志（`memory_job.manual_retry`，`recoveredLease` 区分两种来源）。
       parameters:
         - name: taskId
           in: path
@@ -3054,17 +3073,20 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [id, status, runAt]
+                required: [id, status, runAt, recoveredLease]
                 properties:
                   id: { type: string, format: uuid }
                   status: { type: string, enum: [QUEUED] }
                   runAt: { type: string, format: date-time }
+                  recoveredLease:
+                    type: boolean
+                    description: true = 这是「回收卡住的任务」，不是普通重试
         '403':
           description: 该接口仅限本地开发环境
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: 任务类型或当前状态不允许重新排队
+          description: 任务类型、状态或租约不允许重新排队（含「运行中但租约未过期」）
   /tasks/{taskId}/cancel:
     post:
       tags: [Tasks]

@@ -20,6 +20,10 @@ type MemoryTask = {
   periodEnd: string | null;
   lastError: string | null;
   startedAt: string | null;
+  /** 领取时间（租约起点）。运行中才有值。 */
+  lockedAt: string | null;
+  /** 服务端按 5 分钟租约算好的结论：运行中 + 已过期 = 没人在回收它。 */
+  leaseExpired: boolean;
   completedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -66,6 +70,21 @@ const taskActionLoading = ref(false);
 
 const failedCount = computed(() => statusCounts.value.FAILED + statusCounts.value.RETRY_WAIT);
 const hasFilters = computed(() => Boolean(query.value) || statusFilter.value !== "ALL");
+
+/**
+ * 「运行中」不等于「在跑」：租约 5 分钟没人续，就说明领走它的进程已经退出。
+ * 这类任务没人会回收（回收要有人领任务），页面上必须单独指出来，否则只能靠看日志发现。
+ */
+function isStuck(task: MemoryTask) {
+  return task.status === "RUNNING" && task.leaseExpired;
+}
+
+const stuckTasks = computed(() => tasks.value.filter(isStuck));
+/** 卡得最久的那条（列表按创建时间排，不能拿第一条）。 */
+const oldestStuckAt = computed(() => stuckTasks.value
+  .map((task) => task.lockedAt)
+  .filter((value): value is string => Boolean(value))
+  .sort()[0] ?? null);
 
 /** 计数和筛选合成一行：状态分布就是筛选条件，不需要再排一张 KPI。 */
 const statusChips = computed(() => [
@@ -119,12 +138,29 @@ function statusText(status: MemoryTask["status"]) {
   return labels[status];
 }
 
-function tone(status: MemoryTask["status"]) {
-  if (status === "SUCCEEDED") return "pill-green";
-  if (status === "FAILED") return "pill-rose";
-  if (status === "QUEUED" || status === "RETRY_WAIT") return "pill-amber";
-  if (status === "RUNNING") return "pill-blue";
+/** 卡住的运行中任务不写成「运行中」：那个词会让人以为有人正在处理。 */
+function statusLabel(task: MemoryTask) {
+  return isStuck(task) ? "运行中·卡住" : statusText(task.status);
+}
+
+function tone(task: MemoryTask) {
+  if (isStuck(task)) return "pill-rose";
+  if (task.status === "SUCCEEDED") return "pill-green";
+  if (task.status === "FAILED") return "pill-rose";
+  if (task.status === "QUEUED" || task.status === "RETRY_WAIT") return "pill-amber";
+  if (task.status === "RUNNING") return "pill-blue";
   return "pill-gray";
+}
+
+/** 「3 小时前领走」这种人话；精确到分钟就够，卡住是按小时算的。 */
+function sinceText(value: string | null) {
+  if (!value) return "—";
+  const started = new Date(value).getTime();
+  if (Number.isNaN(started)) return "—";
+  const minutes = Math.floor((Date.now() - started) / 60000);
+  if (minutes >= 1440) return `${Math.floor(minutes / 1440)} 天`;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)} 小时`;
+  return `${Math.max(1, minutes)} 分钟`;
 }
 
 function formatDate(value: string | null) {
@@ -177,7 +213,11 @@ function taskIssueTitle(task: MemoryTask) {
 
 function taskStatusHint(task: MemoryTask) {
   if (task.status === "QUEUED") return "任务已进入持久化队列，等待 Worker 执行。";
-  if (task.status === "RUNNING") return "Worker 正在执行该任务。";
+  if (isStuck(task)) {
+    return `领走这条任务的进程已经退出（${sinceText(task.lockedAt)}前领走，租约只有 5 分钟），没有进程会来回收它：`
+      + "回收是「有人领任务时顺带做的」，本机没在跑 Worker 就一直不会发生。点「回收并重新入队」可以立刻放回队列。";
+  }
+  if (task.status === "RUNNING") return "Worker 正在执行该任务（租约 5 分钟，超期没人回收才算卡住）。";
   if (task.status === "SUCCEEDED") return "任务已完成，没有记录错误。";
   if (task.status === "SKIPPED") return "该任务没有需要处理的活动，已按规则跳过。";
   if (task.status === "RETRY_WAIT") return "任务执行未成功，系统会在计划时间再次尝试。";
@@ -257,9 +297,11 @@ async function runWorker() {
 /** 能不能重新入队 / 取消：模板里原来写了两串长条件，页脚那句提示也就跟着对不上了 */
 const canRetry = computed(() => {
   const task = selectedTask.value;
-  return !!task
-    && ["FAILED", "RETRY_WAIT", "CANCELLED"].includes(task.status)
-    && ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "CLEAN_EXPIRED_MESSAGES", "GENERATE_JOURNAL"].includes(task.type);
+  if (!task) return false;
+  // 运行中的任务只在租约过期时放行 —— 没过期就抢，等于和还在写的 Worker 抢同一段数据。
+  const statusOk = ["FAILED", "RETRY_WAIT", "CANCELLED"].includes(task.status) || isStuck(task);
+  return statusOk
+    && ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "CLEAN_EXPIRED_MESSAGES", "GENERATE_JOURNAL", "EXTRACT_EVENTS"].includes(task.type);
 });
 const canCancel = computed(() => !!selectedTask.value && ["QUEUED", "RETRY_WAIT"].includes(selectedTask.value.status));
 
@@ -277,11 +319,14 @@ function getErrorMessage(error: unknown, fallback: string) {
 async function retrySelectedTask() {
   const task = selectedTask.value;
   if (!task || taskActionLoading.value) return;
+  const stuck = isStuck(task);
   try {
     await ElMessageBox.confirm(
-      "系统会清除本次任务的错误状态和尝试计数，并立即重新排队。历史审计记录会保留。",
-      "重新入队任务",
-      { confirmButtonText: "重新入队", cancelButtonText: "取消", type: "warning" },
+      stuck
+        ? `这条任务${sinceText(task.lockedAt)}前被领走后就没人管了，租约早已过期。放回队列会重置尝试计数，接下来由 Worker 重新执行；审计记录会保留。`
+        : "系统会清除本次任务的错误状态和尝试计数，并立即重新排队。历史审计记录会保留。",
+      stuck ? "回收卡住的任务" : "重新入队任务",
+      { confirmButtonText: stuck ? "回收并重新入队" : "重新入队", cancelButtonText: "取消", type: "warning" },
     );
   } catch {
     return;
@@ -292,7 +337,7 @@ async function retrySelectedTask() {
     await $fetch(`/api/tasks/${encodeURIComponent(task.id)}/retry`, { method: "POST" });
     await loadTasks();
     selectedTask.value = tasks.value.find((item) => item.id === task.id) ?? null;
-    ElMessage.success("任务已重新排队。");
+    ElMessage.success(stuck ? "任务已放回队列，等 Worker 跑一次就会执行。" : "任务已重新排队。");
   } catch (error) {
     ElMessage.error(getErrorMessage(error, "任务重新入队失败。"));
   } finally {
@@ -381,6 +426,23 @@ onMounted(() => void loadTasks());
     >
       <el-icon><Warning /></el-icon>
       <span><strong>{{ failedCount }} 项失败或待重试</strong>，点这里只看它们。</span>
+      <el-icon class="go">
+        <ArrowRight />
+      </el-icon>
+    </button>
+
+    <!-- 卡在「运行中」是另一种坏法：没有失败记录、队列里也没积压，只有这一行能看出来 -->
+    <button
+      v-if="stuckTasks.length > 0 && statusFilter !== 'RUNNING'"
+      type="button"
+      class="alert-row"
+      @click="statusFilter = 'RUNNING'"
+    >
+      <el-icon><Warning /></el-icon>
+      <span>
+        <strong>{{ stuckTasks.length }} 条任务卡在「运行中」</strong>，最久的是
+        {{ sinceText(oldestStuckAt) }}前被领走的，没人回收 —— 点这里只看它们。
+      </span>
       <el-icon class="go">
         <ArrowRight />
       </el-icon>
@@ -488,8 +550,9 @@ onMounted(() => void loadTasks());
           <span>
             <span
               class="pill"
-              :class="tone(task.status)"
-            >{{ statusText(task.status) }}</span>
+              :class="tone(task)"
+              :title="isStuck(task) ? `领走它之后就没消息了（${sinceText(task.lockedAt)}），租约已过期` : ''"
+            >{{ statusLabel(task) }}</span>
           </span>
           <span class="num">{{ task.attemptCount }} / {{ task.maxAttempts }}</span>
           <span class="time">{{ formatShort(task.updatedAt) }}</span>
@@ -499,7 +562,8 @@ onMounted(() => void loadTasks());
     </div>
 
     <p class="footer-note">
-      任务由独立 Worker 消费。生成总结与长期记忆会调用服务端配置的模型；重新入队与清理结果都会保留审计记录。
+      任务由独立 Worker 消费（「yarn worker:watch」）——没有它在跑，任务只会停在队列里，卡住的任务也没人回收。
+      生成总结与长期记忆会调用服务端配置的模型；重新入队与清理结果都会保留审计记录。
     </p>
 
     <el-dialog
@@ -512,8 +576,8 @@ onMounted(() => void loadTasks());
           <h3>{{ taskTypeText(selectedTask.type) }}</h3>
           <span
             class="pill"
-            :class="tone(selectedTask.status)"
-          >{{ statusText(selectedTask.status) }}</span>
+            :class="tone(selectedTask)"
+          >{{ statusLabel(selectedTask) }}</span>
         </div>
         <p class="d-sub">
           {{ selectedTask.characterName }}
@@ -537,6 +601,16 @@ onMounted(() => void loadTasks());
           <div>
             <dt>开始时间</dt>
             <dd>{{ formatDate(selectedTask.startedAt) }}</dd>
+          </div>
+          <div v-if="selectedTask.lockedAt">
+            <dt>租约</dt>
+            <dd>
+              {{ formatDate(selectedTask.lockedAt) }}
+              <span
+                v-if="selectedTask.leaseExpired"
+                class="lease-expired"
+              >已过期</span>
+            </dd>
           </div>
           <div>
             <dt>完成时间</dt>
@@ -574,7 +648,9 @@ onMounted(() => void loadTasks());
       <template #footer>
         <div class="d-foot">
           <span class="d-foot-note">
-            {{ canRetry ? "重新入队会清掉错误状态与尝试计数" : canCancel ? "只能取消尚未开始执行的任务" : "" }}
+            {{ canRetry
+              ? (selectedTask && isStuck(selectedTask) ? "回收会把租约过期的那条任务放回队列" : "重新入队会清掉错误状态与尝试计数")
+              : canCancel ? "只能取消尚未开始执行的任务" : "" }}
           </span>
           <span class="d-foot-actions">
             <el-button
@@ -582,7 +658,7 @@ onMounted(() => void loadTasks());
               :loading="taskActionLoading"
               @click="retrySelectedTask"
             >
-              <el-icon><Refresh /></el-icon>重新入队
+              <el-icon><Refresh /></el-icon>{{ selectedTask && isStuck(selectedTask) ? "回收并重新入队" : "重新入队" }}
             </el-button>
             <el-button
               v-if="canCancel"
@@ -671,11 +747,12 @@ onMounted(() => void loadTasks());
   background: var(--surface);
   padding: 4px 8px 6px;
 }
-/* 列宽：任务 1.5、范围 1.4，其余按内容定宽 —— 状态药丸和「1 / 3」不该被拉伸 */
+/* 列宽：任务 1.5、范围 1.4，其余按内容定宽 —— 状态药丸和「1 / 3」不该被拉伸。
+   状态列留 104px：「运行中·卡住」比「运行中」多三个字，压到 92px 就会被挤成两行 */
 .tbl-head,
 .tbl-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.4fr) 92px 60px 96px 20px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.4fr) 104px 60px 96px 20px;
   gap: 12px;
   align-items: center;
 }
@@ -790,6 +867,8 @@ onMounted(() => void loadTasks());
 }
 .d-grid dt { color: var(--dim); font-size: 12px; }
 .d-grid dd { margin: 3px 0 0; color: var(--text-2); font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+/* 租约过期是这一格唯一需要红的信息：它解释「为什么这条任务没人管」 */
+.d-grid dd .lease-expired { margin-left: 6px; color: var(--red); font-size: 12px; font-weight: 700; }
 
 .d-error {
   margin-top: 16px;
@@ -812,7 +891,7 @@ onMounted(() => void loadTasks());
 @media (max-width: 1000px) {
   /* 少掉「最近活动」和箭头，剩下的三列还读得通 */
   .tbl-head,
-  .tbl-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.2fr) 92px 56px; }
+  .tbl-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.2fr) 104px 56px; }
   .tbl-head .time,
   .tbl-row .time,
   .tbl-head span:nth-child(6),

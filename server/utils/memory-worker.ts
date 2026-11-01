@@ -22,8 +22,10 @@ import {
   readSourceMessageIsOwner,
 } from "./conversation-message";
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
+import { MEMORY_JOB_LEASE_MS } from "./memory-job-lease";
 
-const LEASE_MS = 5 * 60 * 1000;
+/** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
+const LEASE_RECOVERABLE_JOB_TYPES = ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "CLEAN_EXPIRED_MESSAGES", "EXTRACT_EVENTS", "GENERATE_JOURNAL"] as const;
 /** 一个周期最多看几个会话：会话再多，也只给最近活跃的这几个分配来源配额。 */
 const MAX_SCOPE_CONVERSATIONS = 12;
 const MAX_SOURCE_MEMORIES = 250;
@@ -555,6 +557,54 @@ async function findBlockingRawMessageJob(
   });
 }
 
+/**
+ * 把租约过期的 RUNNING 任务放回队列；尝试次数用完的直接判失败。
+ *
+ * 这只是「谁领任务谁先擦一遍桌子」，不是一个独立进程 —— 所以**必须有东西在领任务**：
+ * 整机没有 Worker 在跑时，卡住的任务不会自己回来（页面上就是永远「运行中」）。
+ * 那种情况下由任务监控的手动重新入队兜底（`server/api/tasks/[id]/retry.post.ts`）。
+ *
+ * 归还时必须带上 `lockedAt < staleBefore` 这个条件：不然会把刚刚被别的 Worker 领走、
+ * 已经换了新租约的任务也一起打回队列，两个 Worker 就会同时跑同一条。
+ */
+export async function reclaimExpiredMemoryJobs(
+  prisma: PrismaClient,
+  options: { now?: Date; ownerId?: string } = {},
+): Promise<{ recovered: number; failed: number }> {
+  const now = options.now ?? new Date();
+  const staleBefore = new Date(now.getTime() - MEMORY_JOB_LEASE_MS);
+  const staleJobs = await prisma.memoryJob.findMany({
+    where: {
+      type: { in: [...LEASE_RECOVERABLE_JOB_TYPES] },
+      status: "RUNNING",
+      lockedAt: { lt: staleBefore },
+      ...ownerFilter(options.ownerId),
+    },
+    select: { id: true, attemptCount: true, maxAttempts: true },
+    take: 100,
+  });
+  let recovered = 0;
+  let failed = 0;
+  for (const stale of staleJobs) {
+    const exhausted = stale.attemptCount >= stale.maxAttempts;
+    const result = await prisma.memoryJob.updateMany({
+      where: { id: stale.id, status: "RUNNING", lockedAt: { lt: staleBefore } },
+      data: {
+        status: exhausted ? "FAILED" : "RETRY_WAIT",
+        runAt: now,
+        lockedAt: null,
+        lockedBy: null,
+        lastError: "任务执行租约已过期，系统已恢复该任务的队列状态。",
+        completedAt: exhausted ? now : null,
+      },
+    });
+    if (result.count !== 1) continue;
+    if (exhausted) failed += 1;
+    else recovered += 1;
+  }
+  return { recovered, failed };
+}
+
 export async function processNextMemoryJob(
   prisma: PrismaClient,
   options: WorkerOptions = {},
@@ -562,7 +612,6 @@ export async function processNextMemoryJob(
   const now = options.now ?? new Date();
   const workerId = options.workerId ?? `worker-${process.pid}-${randomUUID()}`;
   const ownership = ownerFilter(options.ownerId);
-  const staleBefore = new Date(now.getTime() - LEASE_MS);
 
   // Retention jobs are safe to replay: deleting an already deleted message is a no-op.
   // Foreign keys preserve snapshot/source records while nulling links to expired raw messages.
@@ -849,30 +898,8 @@ export async function processNextMemoryJob(
 
   if (deferredCleanupResult) return deferredCleanupResult;
 
-  const staleJobs = await prisma.memoryJob.findMany({
-    where: {
-      type: { in: ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "CLEAN_EXPIRED_MESSAGES", "EXTRACT_EVENTS", "GENERATE_JOURNAL"] },
-      status: "RUNNING",
-      lockedAt: { lt: staleBefore },
-      ...ownership,
-    },
-    select: { id: true, attemptCount: true, maxAttempts: true },
-    take: 100,
-  });
-  for (const stale of staleJobs) {
-    const exhausted = stale.attemptCount >= stale.maxAttempts;
-    await prisma.memoryJob.updateMany({
-      where: { id: stale.id, status: "RUNNING", lockedAt: { lt: staleBefore } },
-      data: {
-        status: exhausted ? "FAILED" : "RETRY_WAIT",
-        runAt: now,
-        lockedAt: null,
-        lockedBy: null,
-        lastError: "任务执行租约已过期，系统已恢复该任务的队列状态。",
-        completedAt: exhausted ? now : null,
-      },
-    });
-  }
+  // 领取之前先回收：过期租约 = 领走它的进程已经不在了，任务必须回到队列，否则它会一直显示「运行中」。
+  await reclaimExpiredMemoryJobs(prisma, { now, ...(options.ownerId ? { ownerId: options.ownerId } : {}) });
 
   const candidates = await prisma.memoryJob.findMany({
     where: {

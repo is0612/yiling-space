@@ -208,7 +208,8 @@
 - 审核建议可以逐条**采纳**或**忽略**（`POST /characters/{id}/snapshots/{snapshotId}/review`）。采纳调用与 Worker 自动生成完全相同的落库函数 `applyMemoryChange`，因此去重、来源消息、`validFrom`、审计与自动路径一致，只是审计动作前缀为 `memory.review_`；忽略只记录决定，不改动任何记忆。
 - 处置结果存 `memory_reviews`（`snapshotId + changeIndex` 唯一），**不回写快照正文** —— 快照是不可变的审计产物，人的决定单独可查，快照照旧能证明「当时模型提了什么」。
 - 采纳时用数据库里最新的记忆状态做对照，而不是提炼当时的快照：这条记忆可能已被后面的归档改过。若目标记忆已不是 `ACTIVE`，接口返回 409 并提示只能忽略，不会静默失败。证据消息若已被保留期限清理，只丢来源指针，不阻塞采纳。
-- 后台任务可取消 `QUEUED`/`RETRY_WAIT` 状态的任务；支持的快照任务可从 `FAILED`、`RETRY_WAIT` 或 `CANCELLED` 手动重新入队。`RUNNING` 任务不支持强制取消。
+- 后台任务可取消 `QUEUED`/`RETRY_WAIT` 状态的任务；生成快照、重新提炼、清理原始消息、手账与忆泡整理都可在 `FAILED`、`RETRY_WAIT` 或 `CANCELLED` 时手动重新入队。`RUNNING` 任务不支持强制取消。
+- **运行中但租约过期**（领取超过 5 分钟，`server/utils/memory-job-lease.ts`）的任务可以「回收并重新入队」：租约不续期，过期只说明领走它的进程已经退出，任务不会自己回到队列。自动回收发生在「下一次有人领取任务」时（`reclaimExpiredMemoryJobs`），所以整机没有 Worker 在跑时不会自动发生 —— 这正是 2026-11-01 那条卡了 3 小时的忆泡任务。审计动作沿用 `memory_job.manual_retry`，`details.recoveredLease = true` 区分「回收」与「重试」。
 
 ## 9. 对话时检索
 

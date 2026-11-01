@@ -1,5 +1,6 @@
 import { createError, getQuery } from "h3";
 import { requireActorUserId } from "../../utils/auth";
+import { isMemoryJobLeaseExpired } from "../../utils/memory-job-lease";
 import { buildPage, readPageQuery } from "../../utils/pagination";
 import { getPrisma } from "../../utils/prisma";
 
@@ -21,6 +22,7 @@ export default defineEventHandler(async (event) => {
   });
 
   const prisma = getPrisma();
+  const now = new Date();
   const where = {
     memoryScope: { is: { character: { is: { ownerId } } } },
     ...(statusValue ? { status: statusValue as JobStatus } : {}),
@@ -42,6 +44,7 @@ export default defineEventHandler(async (event) => {
         periodEnd: true,
         lastError: true,
         startedAt: true,
+        lockedAt: true,
         completedAt: true,
         createdAt: true,
         updatedAt: true,
@@ -99,6 +102,9 @@ export default defineEventHandler(async (event) => {
         periodEnd: job.periodEnd?.toISOString() ?? null,
         lastError: job.lastError,
         startedAt: job.startedAt?.toISOString() ?? null,
+        lockedAt: job.lockedAt?.toISOString() ?? null,
+        // 运行中 + 租约过期 = 领走它的进程已经不在了，没人会回收它。
+        leaseExpired: job.status === "RUNNING" && isMemoryJobLeaseExpired(job.lockedAt, now),
         completedAt: job.completedAt?.toISOString() ?? null,
         createdAt: job.createdAt.toISOString(),
         updatedAt: job.updatedAt.toISOString(),

@@ -110,6 +110,11 @@ Web 服务与后台进程写标准输出。部署到容器或 systemd 时，由�
 - 跟着 QQ 链路一起起：`yarn onebot:stack`（或双击 `scripts/start-qq.bat`）会在同一窗口里再起一个 `--watch` 实例，日志前缀 `[watchdog]`；它自己崩了不影响 QQ 收发，但会留下 `watchdog-exited` 一行。不想要就设 `YILING_WATCHDOG_DISABLED=1`
 - 验证：`yarn test:watchdog`
 
+**判出「卡在运行中」之后怎么解**：租约 5 分钟且**不续期**（`server/utils/memory-job-lease.ts`），过期只说明领走这条任务的进程已经不在了 —— 可能是 Worker，也可能是一次网页请求（比如在页面上点「立即提取忆泡」，请求被 `yarn dev` 重启打断）。回收发生在「下一次有人领取任务」时（`reclaimExpiredMemoryJobs`），所以**整机没有 Worker 在跑时不会自动回收**，任务会一直显示「运行中」：
+
+- 要它自动走：`yarn worker:watch` 一起来就会立刻把这批过期任务打回队列；
+- 只想解这一条：任务监控里对那条点「回收并重新入队」（`POST /tasks/{taskId}/retry`，运行中但有租约过期的任务才放行，写审计 `memory_job.manual_retry` + `recoveredLease`）。
+
 ## 9. 调度器与 Worker 的启动命令
 
 调度器把到期周期写进 PostgreSQL 任务队列并推进下一周期边界；Worker 消费队列。

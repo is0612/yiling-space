@@ -75,7 +75,10 @@ assert.deepEqual(codes(run({ oldestQueuedAt: ago(2 * HOUR), pendingTaskCount: 1,
 const stuck = run({ stuckLockedAt: ago(40 * MINUTE), pendingTaskCount: 1 });
 assert.deepEqual(codes(stuck), ["task_stuck"]);
 assert.equal(stuck[0]!.severity, "err");
-assert.match(stuck[0]!.detail, /续租/);
+// 租约不续期，所以别写「续租」；要说清楚两件事：5 分钟就过期、怎么解（起 Worker 或手动回收）。
+assert.match(stuck[0]!.detail, /租约 5 分钟/);
+assert.match(stuck[0]!.detail, /回收/);
+assert.match(stuck[0]!.detail, /worker:watch/);
 
 // 刚锁上 3 分钟是正常执行中。
 assert.deepEqual(codes(run({ stuckLockedAt: ago(3 * MINUTE), pendingTaskCount: 1 })), []);
