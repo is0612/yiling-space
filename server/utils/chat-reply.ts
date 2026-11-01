@@ -599,6 +599,14 @@ function systemPrompt(flags: {
     // 接了看图旁路时，图会被换成 [图片：<描述>]。这句只在有描述时才有意义，但多一句不会误导：
     // 没有描述时正文里根本不会出现这种形态。
     "When the token instead reads [图片：...], the text after the colon is what the picture actually shows. React to it as if you had seen the picture; never say you cannot see images.",
+    /**
+     * 语音的两种形态都写在提示词里，而不是只写成功的那个。
+     *
+     * 失败态（`[语音（没转成文字）]`）必须明说「没听到，让人再说一遍」：以前失败留的是
+     * 裸的 `[语音]`，模型把它当成贴纸，自己编「收到了个壳」「听见个响」，用户以为她在装傻。
+     */
+    "When the token reads [语音：...], the text after the colon is what that voice message said. Treat it as something they said out loud.",
+    "When it reads [语音（没转成文字）], the recording did not come through. Briefly ask them to say it again in your own words — once, not a lecture. Never guess what it said and never pretend you heard it.",
   );
   if (withGroupChat) {
     lines.push(

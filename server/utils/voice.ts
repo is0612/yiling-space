@@ -16,8 +16,8 @@
  *   1. **语音是钱**：TTS 按字符计费、ASR 按秒计费，且都不进 token 报表（见下）。
  *      所以打开开关、长度上限、冷却时间都在这一层定死。
  *   2. **url 是外部输入**：语音直链和图片直链一样可以指向内网，下载前过同一套白名单。
- *   3. **失败必须静默降级**：合成失败就发文字，识别失败就保留 `[语音]`，
- *      绝不能让一轮普通聊天变成失败事件。
+ *   3. **失败必须静默降级**：合成失败就发文字，识别失败就把 `[语音]` 换成
+ *      `[语音（没转成文字）]`（见 `VOICE_UNTRANSCRIBED`），绝不能让一轮普通聊天变成失败事件。
  *
  * 关于记账：`model_usages` 是按 token 结算的表，语音按字符/秒计费，塞进去会污染
  * 「未定价 token」统计和金额报表（CLAUDE.md 那条「认不出的模型不许当 0 元」）。
@@ -1000,21 +1000,34 @@ export async function transcribeVoices(
 }
 
 /**
+ * 转写确实失败了，正文里该留下什么。
+ *
+ * 以前失败就原样留 `[语音]`，本意是「降级成没接 ASR 时的样子」。但那是个谎：
+ * 模型看到裸的 `[语音]`，以为对方只是发了个贴纸，于是自己编一段「本宝只收到个壳」
+ * 「就听见个响，字没进来」——用户看到的是她在装傻，其实是她在猜。
+ * 所以失败要**明说**：让模型知道「有语音，没听懂」，她才好老实回一句「没听清，再说一遍」。
+ */
+export const VOICE_UNTRANSCRIBED = "[语音（没转成文字）]";
+
+/**
  * 把转写填回正文里的 `[语音]` 占位符。
  *
  * 用游标而不是从头 indexOf：转写文本里本身可能带 `[语音]` 这几个字时，
  * 从头找会反复替换同一段，最后得到嵌套括号。
+ *
+ * `null` 不是「跳过」，而是「这条转不出来」——填成 `VOICE_UNTRANSCRIBED`。
+ * 只有 `transcripts` 长度覆盖不到的那些 `[语音]`（超过 `MAX_VOICES_PER_TURN`、
+ * 或者压根没尝试转写）才保持原样。
  */
 export function applyVoiceTranscripts(content: string, transcripts: Array<string | null>): string {
   if (!transcripts.length || !content.includes("[语音]")) return content;
   let text = content;
   let cursor = 0;
   for (const transcript of transcripts) {
-    const value = transcript?.trim();
-    if (!value) continue;
     const index = text.indexOf("[语音]", cursor);
     if (index < 0) break;
-    const replacement = `[语音：${value}]`;
+    const value = transcript?.trim();
+    const replacement = value ? `[语音：${value}]` : VOICE_UNTRANSCRIBED;
     text = text.slice(0, index) + replacement + text.slice(index + "[语音]".length);
     cursor = index + replacement.length;
   }

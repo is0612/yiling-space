@@ -559,7 +559,10 @@ async function attachImageDescriptions(
  * 群里的语音仍然只是 `[语音]`。
  *
  * 放在额度检查之后：额度已经超了就别再为听语音多花一次调用。
- * 失败一律吞掉：少一句转写不该让整轮回复变成错误事件。
+ *
+ * 失败不抛错（少一句转写不该让整轮回复变成错误事件），但也不再是「静默」：
+ * 转不出来的那条占位符会换成 `[语音（没转成文字）]`，让模型知道「有语音、没听懂」。
+ * 以前留的是裸的 `[语音]`，模型会把它当贴纸，自己编一句「本宝只收到个壳」糊过去。
  */
 async function attachVoiceTranscripts(
   messages: ChannelTurnMessage[],
@@ -584,15 +587,22 @@ async function attachVoiceTranscripts(
   let remaining = MAX_VOICES_PER_TURN;
   const transcriptsByMessage = new Map<string, Array<string | null>>();
   for (const message of messages) {
+    const voices = message.voices ?? [];
+    if (!voices.length) continue;
+    const refs = voices.filter((voice) => Boolean(voice.url));
+    // 网关没给直链 = 这条音频根本拿不到，等同于「转了但没转出来」。
+    if (!refs.length) {
+      transcriptsByMessage.set(message.externalMessageId, voices.map(() => null));
+      continue;
+    }
     if (remaining <= 0) break;
-    const refs = (message.voices ?? []).filter((voice) => Boolean(voice.url));
-    if (!refs.length) continue;
     const batch = refs.slice(0, remaining);
     remaining -= batch.length;
     try {
       transcriptsByMessage.set(message.externalMessageId, await transcribeVoices(batch, settings));
     } catch {
-      // 转写失败只是少一句文字，`[语音]` 原样保留。
+      // 整批都炸了就按「一条都没转出来」标记，别让调用方以为这轮没有语音。
+      transcriptsByMessage.set(message.externalMessageId, batch.map(() => null));
     }
   }
   if (!transcriptsByMessage.size) return messages;
