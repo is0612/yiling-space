@@ -210,6 +210,16 @@ async function main(): Promise<void> {
   info(`项目目录 ${repoRoot}`);
   if (DRY_RUN) info("当前是 --dry-run：只做检测和提问，不写文件、不启动容器。");
 
+  // 非交互终端（AI 助手、CI、管道）里跑交互向导会卡在 readline 上永不返回：
+  // 没有 TTY 时 rl.question() 既不 resolve 也不 reject，只能等到命令超时被杀。
+  // 所以必须在任何提问之前挡掉，并直接告诉调用方该用哪个参数。
+  if (!NON_INTERACTIVE && !process.stdin.isTTY) {
+    fail(
+      "当前不是交互式终端，向导无法提问（会一直卡在等待输入）。",
+      "非交互请用 yarn setup --yes（随机库密码 + admin/admin123）；只看计划用 yarn setup --dry-run --yes。",
+    );
+  }
+
   // --- 1. 环境 ---
   step("检查运行环境");
   const nodeMajor = Number(process.versions.node.split(".")[0]);

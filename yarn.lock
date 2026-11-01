@@ -2,6 +2,11 @@
 # yarn lockfile v1
 
 
+"@audio/decode-amr@^1.3.1":
+  version "1.3.1"
+  resolved "https://registry.yarnpkg.com/@audio/decode-amr/-/decode-amr-1.3.1.tgz#8e33ca927e9344fbcdee7b62be480ad223c1c83d"
+  integrity sha512-rYwY8HpmAwptaQDeNAoccbzbcYteHmL4s+KWVW8Y+NgJugQFhApsFeqs0ljVmuI2TvOmZRivMJwvg6++MdsUaA==
+
 "@babel/code-frame@^7.27.1", "@babel/code-frame@^7.29.0", "@babel/code-frame@^7.29.7":
   version "7.29.7"
   resolved "https://registry.yarnpkg.com/@babel/code-frame/-/code-frame-7.29.7.tgz#f2fbbfea87c44a21590ec515b778b2c26d8866e7"

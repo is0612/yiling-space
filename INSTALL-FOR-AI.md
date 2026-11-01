@@ -63,14 +63,16 @@ git -c http.curloptResolve=github.com:443:140.82.112.3 clone https://github.com/
 
 ```bash
 cd yiling-space
-yarn install          # 首次约 2–5 分钟，会顺带 prisma generate + nuxt prepare
+yarn install          # 首次约 2–5 分钟，会顺带 nuxt prepare；还没有 .env 时跳过 prisma generate（yarn setup 会补）
 yarn setup            # 交互式向导
 ```
 
 `yarn setup` 会依次问：数据库用 Docker 还是已有实例、端口、管理员账号密码。**全部有默认值，回车即可**。
 
-- 想先看它要做什么：`yarn setup --dry-run`（不写文件、不启动容器）
+- 想先看它要做什么：`yarn setup --dry-run --yes`（不写文件、不启动容器）
 - 想全自动：`yarn setup --yes`（随机库密码 + 管理员 `admin` / `admin123`，装完提醒用户改密码）
+
+> AI 跑向导**一律带 `--yes`**。交互版需要真实终端：在 AI、CI、管道里跑会因为拿不到输入直接报错退出（旧版本会卡在提问上直到超时）。
 
 向导会做四件事，缺一件都不算完成：生成 `.env` 并对齐三处数据库密码 → 端口冲突自动换端口 → 拉起 PostgreSQL 容器并等它真正可连 → 应用迁移 + 建管理员账号。
 

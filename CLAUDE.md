@@ -6,6 +6,14 @@
 - 与当前任务相关的 `docs/` 文档
 - `docs/openapi.yaml`（涉及 API 时）
 - `docs/local-development-and-data-migration.md`（涉及本地环境、数据库或部署时）
+- `INSTALL-FOR-AI.md`（别人让你「在本机装一下」时先读它，按它的步骤走）
+
+## 首次安装（给 AI）
+
+1. 装依赖一律 `yarn install`，**不要用 pnpm / npm 装**：仓库锁的是 `yarn.lock` + `packageManager: yarn@1.22.22`，混装会多出一份 lock，后续 `verify:local` 会各装一套。`postinstall` 会顺带跑 `nuxt prepare` 与 `prisma generate`。
+2. `yarn setup` 是交互向导，**只在真实终端里由用户本人跑**；AI、脚本、CI、管道里必须用 `yarn setup --yes`（随机库密码 + `admin` / `admin123`，装完提醒用户改密码），只看计划用 `yarn setup --dry-run --yes`。非 TTY 下跑交互版会被直接挡下，不会卡在提问上。
+3. 缺 Node 20.19+ / yarn 1.22 / Docker 时停下来让用户自己装，不要提权静默安装 —— 批准策略为 never 时这类命令会被自动拒绝。
+4. 装完跑 `yarn check:env` 并把输出交给用户；没配模型 Key 时页面能开但 AI 一个字不回，别只说「装好了」。
 
 ## 项目约束
 

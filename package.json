@@ -14,7 +14,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "postinstall": "nuxt prepare && prisma generate",
+    "postinstall": "nuxt prepare && node scripts/postinstall.mjs",
     "db:format": "prisma format",
     "db:validate": "prisma validate",
     "db:generate": "prisma generate",

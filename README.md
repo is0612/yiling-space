@@ -31,7 +31,7 @@
 
 ```bash
 yarn install
-yarn setup
+yarn setup      # 交互式；AI / 脚本 / CI 里改用 yarn setup --yes
 yarn dev
 ```
 
@@ -49,9 +49,9 @@ yarn dev
 
 | 命令 | 用途 |
 | --- | --- |
-| `yarn setup` | 交互式，每项都有默认值，一路回车即可 |
+| `yarn setup` | 交互式，每项都有默认值，一路回车即可（需要真实终端；AI / 脚本 / CI 里跑会直接报错退出） |
 | `yarn setup --dry-run` | 只检测环境、打印将要做什么，不写文件不动数据库 |
-| `yarn setup --yes` | 完全非交互（随机库密码 + `admin` / `admin123`） |
+| `yarn setup --yes` | 完全非交互（随机库密码 + `admin` / `admin123`），AI / 脚本 / 管道里用这个 |
 
 重复运行是安全的：检测到已有 `.env` 会问要不要重建，重建前备份成 `.env.bak`。
 不想走向导就按 [手动步骤](docs/local-development-and-data-migration.md#2-首次设置windows) 一步步来。
