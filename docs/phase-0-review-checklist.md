@@ -44,7 +44,7 @@ Phase 0 结束前由开发者与 AI 一起审查本清单。标记为“待本�
 
 ## 最近一次自动化回归
 
-- 2026-10-24，分支 `docs/project-blueprint` 的最新验收提交 [`def511c`](https://github.com/is0612/yiling-hub/commit/def511cc600854a8976deae959d1a221a88631f8) 的 GitHub Actions 全量校验已通过：[查看运行结果](https://github.com/is0612/yiling-hub/actions/runs/40082657343)。
+- 2026-10-24，分支 `docs/project-blueprint` 的最新验收提交（`def511c`）的 GitHub Actions 全量校验通过。项目后来迁到当前仓库，旧仓库已转为私有，那次的提交与运行记录不再对外可访问。
 - CI 检查覆盖 Prisma Schema 与迁移一致性、TypeScript、周期调度单元测试、PostgreSQL 调度/清理集成测试、AI 来源校验、记忆检索、角色模型配置、ESLint、Nuxt 生产构建、OpenAPI lint，以及使用模拟模型执行的本地 API 端到端冒烟测试。
 - 当前清理验收覆盖：精确保留截止边界（等于 cutoff 的消息保留）、真实删除数量与零删除审计、快照/来源/长期记忆保留、旧快照失败保护、保留期延长或撤销授权后的取消、永久保留不排队、同一清理任务的并发 Worker 争抢，以及过期 Worker 租约的重试/失败恢复。
 - 本地开发 API 额外验证了跨源/跨站请求被拒绝、合法同源请求可正常访问；这只属于开发阶段的纵深防御，不替代正式管理员认证与授权。
