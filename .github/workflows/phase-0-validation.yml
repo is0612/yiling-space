@@ -37,6 +37,52 @@ on:
       - ".github/workflows/phase-0-validation.yml"
 
 jobs:
+  # 这条 job 故意不提供 .env / DATABASE_URL：模拟「别人 clone 下来第一次跑」。
+  # 2026-11-01 实测过：postinstall 的 prisma generate 在缺少 DATABASE_URL 时直接抛错，
+  # 让 yarn install 整条失败；而主 validate job 一直带着 DATABASE_URL，永远看不见这个场景。
+  fresh-clone:
+    name: 全新 clone 安装（无 .env / 无 DATABASE_URL）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: 固定 Yarn Classic 版本
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+          yarn --version
+
+      - name: 确认环境里真的没有 .env / DATABASE_URL
+        run: |
+          test ! -f .env
+          if [ -n "${DATABASE_URL:-}" ]; then
+            echo "DATABASE_URL 不该有值，否则测不到全新 clone 的路径"
+            exit 1
+          fi
+
+      - name: 安装依赖
+        run: yarn install --frozen-lockfile
+
+      - name: 校验依赖装上了、Prisma Client 没被假装生成
+        run: |
+          test -d node_modules/nuxt
+          test -x node_modules/.bin/prisma
+          # 没有 .env 时 postinstall 应该跳过 generate，等 yarn setup 再补
+          if [ -d src/generated/prisma ]; then
+            echo "没有 .env 却生成了 Prisma Client，postinstall 的跳过逻辑失效了"
+            exit 1
+          fi
+
+      - name: 非交互向导能跑（不碰数据库，只出计划）
+        run: yarn setup --dry-run --yes
+
   validate:
     runs-on: ubuntu-latest
     services:

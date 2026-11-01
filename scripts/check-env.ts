@@ -422,31 +422,78 @@ function checkDockerDisk(): void {
   }
 }
 
+type ComposeContainer = { name: string; service: string; state: string; status: string };
+
+/**
+ * 本项目的 compose 容器：按「当前目录的 compose 项目」查，而不是按容器名查。
+ *
+ * 同一台机器上可能同时跑几套实例（本机就有线上的 yiling-hub-db 和验证用的
+ * yiling-space-db）。按 `--filter name=yiling-hub-db` 找，会把别人的那套当自己的，
+ * 于是页面显示「容器正在运行（Up 6 hours）」，而 .env 连的其实是另一台。
+ */
+function composeContainers(): ComposeContainer[] {
+  const result = spawnSync("docker", ["compose", "ps", "--all", "--format", "json"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  });
+  if (result.status !== 0) return [];
+  return (result.stdout ?? "")
+    .split(/\r?\n/)
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .flatMap((raw) => {
+      try {
+        const parsed = JSON.parse(raw) as { Name?: string; Service?: string; State?: string; Status?: string };
+        if (!parsed.Name) return [];
+        return [
+          {
+            name: parsed.Name,
+            service: parsed.Service ?? "",
+            state: parsed.State ?? "",
+            status: parsed.Status ?? "",
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function checkDatabaseContainer(env: EnvMap): void {
+  const db = composeContainers().find((container) => container.service === "db");
+  if (db?.state === "running") {
+    line("ok", `数据库容器正在运行（${db.name}，${db.status}）`);
+    return;
+  }
+  if (db) {
+    line("warn", `数据库容器存在但没在跑（${db.name}，${db.status || db.state}）`);
+    fix("docker compose up -d db");
+    return;
+  }
+
+  // 手工 `docker run` 起来、不在 compose 里的实例：按 .env 的端口反查，不按名字猜。
+  const dbPort = (env.get("POSTGRES_PORT") ?? "").trim() || "5432";
+  const byPort =
+    spawnSync("docker", ["ps", "--filter", `publish=${dbPort}`, "--format", "{{.Names}}|{{.Status}}"], {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+    }).stdout?.trim() ?? "";
+  if (byPort) {
+    const [name, status] = byPort.split("|");
+    line("ok", `数据库容器正在运行（${name}，${status}）`);
+    return;
+  }
+
+  line("info", "没有本项目的数据库容器：你在用自己装的 PostgreSQL，或还没启动过");
+}
+
 function checkRuntime(env: EnvMap): void {
   section("运行环境");
 
   const docker = spawnSync("docker", ["info", "--format", "{{.ServerVersion}}"], { encoding: "utf8", shell: process.platform === "win32" });
   if (docker.status === 0) {
-    const status = spawnSync("docker", ["ps", "--filter", "name=yiling-hub-db", "--format", "{{.Status}}"], {
-      encoding: "utf8",
-      shell: process.platform === "win32",
-    });
-    const running = (status.stdout ?? "").trim();
-    if (running) {
-      line("ok", `数据库容器正在运行（${running}）`);
-    } else {
-      const exists = spawnSync("docker", ["ps", "-a", "--filter", "name=yiling-hub-db", "--format", "{{.Status}}"], {
-        encoding: "utf8",
-        shell: process.platform === "win32",
-      });
-      const stopped = (exists.stdout ?? "").trim();
-      if (stopped) {
-        line("warn", `数据库容器存在但没在跑（${stopped}）`);
-        fix("docker compose up -d db");
-      } else {
-        line("info", "没有 yiling-hub-db 容器：你在用自己装的 PostgreSQL，或还没启动过");
-      }
-    }
+    checkDatabaseContainer(env);
   } else {
     line("info", "没有可用的 Docker（用自备 PostgreSQL 时正常）");
   }

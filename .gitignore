@@ -16,6 +16,8 @@ coverage/
 .env
 .env.*
 !.env.example
+# 本机并行验证用的 compose 覆盖：换容器名与数据卷，避免撞上已有的 yiling-hub-db
+docker-compose.override.yml
 
 # local database and backup files
 backups/*
