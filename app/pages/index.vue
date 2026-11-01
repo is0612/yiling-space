@@ -140,9 +140,12 @@ function roleFacts(character: OverviewCharacter) {
     : character.autoSnapshotEnabled
       ? "尚未排期"
       : "自动归档已关闭";
+  const intervalText = character.pendingIntervalDays !== null
+    ? `${character.intervalDays} 天周期（下周期起 ${character.pendingIntervalDays} 天）`
+    : `${character.intervalDays} 天周期`;
   return [
     character.channels.length ? character.channels.join(" / ") : "未接渠道",
-    `${character.intervalDays} 天周期`,
+    intervalText,
     lastText,
     nextText,
   ].join(" · ");
@@ -304,7 +307,9 @@ async function handleRefresh() {
               >{{ singleCharacter.status }}</span>
             </div>
             <div class="hero-facts">
-              {{ singleCharacter.channels.length ? singleCharacter.channels.join(" / ") : "未接渠道" }} · {{ singleCharacter.intervalDays }} 天周期
+              {{ singleCharacter.channels.length ? singleCharacter.channels.join(" / ") : "未接渠道" }} · {{ singleCharacter.intervalDays }} 天周期<template v-if="singleCharacter.pendingIntervalDays !== null">
+                （下周期起 {{ singleCharacter.pendingIntervalDays }} 天）
+              </template>
             </div>
           </div>
           <div class="hero-actions">

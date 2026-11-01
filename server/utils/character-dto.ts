@@ -20,7 +20,10 @@ export type CharacterDto = {
   avatarTone: "purple" | "peach" | "mint" | "blue";
   status: "运行中" | "已暂停" | "未连接";
   channels: string[];
+  /** 正在生效的归档周期。 */
   intervalDays: number;
+  /** 已排期但还没到生效边界的归档周期；null = 没有待生效的改动。 */
+  pendingIntervalDays: number | null;
   nextSnapshot: string;
   memoryCount: number;
   latestSnapshot: string;
@@ -95,6 +98,8 @@ type CharacterRecord = {
   updatedAt: Date;
   memorySetting: {
     snapshotIntervalDays: number;
+    /** 已排期但还没到生效边界的周期；旧数据里可能为空。 */
+    pendingSnapshotIntervalDays: number | null;
     timezone: string;
     nextSnapshotAt: Date | null;
     autoSnapshotEnabled: boolean;
@@ -190,6 +195,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
     status: character.status === "ACTIVE" ? "运行中" : character.status === "PAUSED" ? "已暂停" : "未连接",
     channels: character.channelBindings.map((binding) => binding.connection.displayName),
     intervalDays: setting?.snapshotIntervalDays ?? 8,
+    pendingIntervalDays: setting?.pendingSnapshotIntervalDays ?? null,
     nextSnapshot,
     memoryCount: character.memoryScopes.reduce((total, scope) => total + scope.memoryItems.length, 0),
     latestSnapshot: latestSnapshot ? formatDate(latestSnapshot, setting?.timezone) : "暂无总结",

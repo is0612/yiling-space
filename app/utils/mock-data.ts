@@ -11,6 +11,8 @@ export type Character = {
   status: CharacterStatus;
   channels: string[];
   intervalDays: number;
+  /** 已排期但还没到生效边界的归档周期；null / 缺省 = 没有待生效的改动。 */
+  pendingIntervalDays?: number | null;
   nextSnapshot: string;
   memoryCount: number;
   latestSnapshot: string;

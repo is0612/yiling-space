@@ -19,7 +19,10 @@ export type OverviewCharacter = {
   avatarTone: "purple" | "peach" | "mint" | "blue";
   status: "运行中" | "已暂停" | "未连接";
   channels: string[];
+  /** 正在生效的归档周期。 */
   intervalDays: number;
+  /** 已排期但还没到生效边界的归档周期；null = 没有待生效的改动。 */
+  pendingIntervalDays: number | null;
   autoSnapshotEnabled: boolean;
   nextSnapshotAt: string | null;
   nextSnapshotLabel: string;

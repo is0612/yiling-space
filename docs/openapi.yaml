@@ -2689,7 +2689,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [id, name, avatar, avatarTone, status, channels, intervalDays, autoSnapshotEnabled, nextSnapshotAt, nextSnapshotLabel, latestSnapshotAt, latestSnapshotLabel, latestSnapshotVersion, memoryCount, cycle, cycleMessageCount, cycleMemoryCount, chatModel, chatApiKeyConfigured, failedTaskCount, pendingTaskCount]
+                      required: [id, name, avatar, avatarTone, status, channels, intervalDays, pendingIntervalDays, autoSnapshotEnabled, nextSnapshotAt, nextSnapshotLabel, latestSnapshotAt, latestSnapshotLabel, latestSnapshotVersion, memoryCount, cycle, cycleMessageCount, cycleMemoryCount, chatModel, chatApiKeyConfigured, failedTaskCount, pendingTaskCount]
                       properties:
                         id: { type: string, format: uuid }
                         name: { type: string }
@@ -2698,6 +2698,7 @@ paths:
                         status: { type: string, enum: ["运行中", "已暂停", "未连接"] }
                         channels: { type: array, items: { type: string } }
                         intervalDays: { type: integer, minimum: 1 }
+                        pendingIntervalDays: { type: integer, nullable: true, description: 已排期但尚未到生效边界的归档周期；null = 没有待生效改动 }
                         autoSnapshotEnabled: { type: boolean }
                         nextSnapshotAt: { type: string, nullable: true, format: date-time }
                         nextSnapshotLabel: { type: string, description: "MM-DD HH:mm，或「已暂停」「尚未计划」" }

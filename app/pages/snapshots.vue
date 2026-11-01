@@ -361,7 +361,9 @@ watch(id, () => void loadSnapshots());
         <div class="sb-cell">
           <span class="sb-k">归档周期</span>
           <span class="sb-v">{{ current?.intervalDays ?? "—" }}<small>天</small></span>
-          <span class="sb-f">下一次 {{ current?.nextSnapshot || "尚未计划" }}</span>
+          <span class="sb-f">
+            下一次 {{ current?.nextSnapshot || "尚未计划" }}<template v-if="current?.pendingIntervalDays">，之后改为 {{ current.pendingIntervalDays }} 天</template>
+          </span>
         </div>
         <div class="sb-cell">
           <span class="sb-k">最近生成</span>

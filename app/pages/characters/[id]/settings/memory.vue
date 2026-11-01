@@ -283,6 +283,19 @@ watch(id, () => void loadSettings());
               :max="30"
               :show-tooltip="true"
             />
+            <!-- 输入框里是「目标值」，库里可能还跑着旧周期：只有把两个数都写出来，
+                 才不会被误读成「填了什么就已经生效了」。 -->
+            <div
+              v-if="pendingInterval !== null || safeInterval !== activeInterval"
+              class="interval-state"
+            >
+              <template v-if="pendingInterval !== null">
+                生效中 <strong>{{ activeInterval }}</strong> 天 · {{ savedNextSnapshotLabel }} 归档后改为 <strong>{{ pendingInterval }}</strong> 天
+              </template>
+              <template v-else>
+                生效中 <strong>{{ activeInterval }}</strong> 天 · 保存后改为 <strong>{{ safeInterval }}</strong> 天
+              </template>
+            </div>
             <div class="slider-labels">
               <span>1 天</span><span>15 天</span><span>30 天</span>
             </div>
@@ -471,6 +484,9 @@ watch(id, () => void loadSettings());
 .interval-label{color:var(--brand-strong);font-size:12px;font-weight:700}
 .interval-input{display:flex;align-items:center;gap:10px}
 .interval-input span{color:var(--dim);font-size:12px;font-weight:600}
+/* 生效中 / 待生效：数字弱化说明用同色系，避免在浅粉底上出现第二种强调色 */
+.interval-state{margin-top:12px;color:var(--brand-strong);font-size:12px;line-height:1.7}
+.interval-state strong{font-weight:700}
 .slider-labels{display:flex;justify-content:space-between;margin-top:-6px;color:var(--faint);font-size:12px}
 .quick-days{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
 /* 粉色底上用品牌实色作为选中态，比黑底更协调 */

@@ -196,11 +196,14 @@ const emptyCharacter = computed<Character>(() => ({
   status: "已暂停",
   channels: [],
   intervalDays: 8,
+  pendingIntervalDays: null,
   nextSnapshot: "尚未计划",
   memoryCount: 0,
   latestSnapshot: "暂无总结",
 }));
 const character = computed<Character>(() => currentCharacter.value ?? emptyCharacter.value);
+/** 待生效的归档周期：接口没返 / 旧缓存里是 undefined 都按「没有改动」处理。 */
+const pendingIntervalDays = computed(() => character.value.pendingIntervalDays ?? null);
 const activeFilter = ref("全部记录");
 const channelFilter = ref(SOURCE_ALL);
 const query = ref("");
@@ -1115,9 +1118,17 @@ watch(id, () => {
         </div>
         <div class="sb-cell">
           <span class="sb-k">归档周期</span>
+          <!-- 主数字只放「正在生效」的周期。设置页选「下一个周期」保存后，
+               库里是 active=旧值 + pending=新值，这里再拿新值当主数字就会
+               和实际排期对不上。待生效的改动跟在脚注里说清楚。 -->
           <span class="sb-v">{{ character.intervalDays }}<small>天</small></span>
-          <span class="sb-f">
-            下一次 {{ character.nextSnapshot }} ·
+          <span class="sb-f sb-f-wrap">
+            <template v-if="pendingIntervalDays !== null">
+              下一次 {{ character.nextSnapshot }} 归档，之后改为 {{ pendingIntervalDays }} 天 ·
+            </template>
+            <template v-else>
+              下一次 {{ character.nextSnapshot }} ·
+            </template>
             <button
               type="button"
               class="ms-link"

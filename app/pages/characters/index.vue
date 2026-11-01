@@ -626,7 +626,12 @@ function runCharacterCommand(command: string) {
                   <dt>
                     <el-icon><Calendar /></el-icon>归档周期
                   </dt>
-                  <dd>{{ selected.intervalDays }} 天</dd>
+                  <dd>
+                    {{ selected.intervalDays }} 天<small
+                      v-if="selected.pendingIntervalDays"
+                      class="d-pending"
+                    >（下周期起 {{ selected.pendingIntervalDays }} 天）</small>
+                  </dd>
                 </div>
                 <div class="d-row">
                   <dt>
@@ -873,6 +878,8 @@ function runCharacterCommand(command: string) {
 .chars-a .d-row dt { display: flex; flex: none; align-items: center; gap: var(--sp-2); color: var(--dim); }
 .chars-a .d-row dt .el-icon { color: var(--faint); font-size: 14px; }
 .chars-a .d-row dd { margin: 0; color: var(--text-2); font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+/* 待生效的周期只在脚注里弱化展示，别和「正在生效」的数字抢同一个视觉权重 */
+.chars-a .d-row dd .d-pending { color: var(--faint); font-weight: 400; }
 .chars-a .d-row dd.is-missing { color: var(--rose); }
 
 /* 空态：虚线框和渐变光晕都去掉，跟总览的引导块同一块白砖 */

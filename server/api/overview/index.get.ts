@@ -111,6 +111,7 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
       memorySetting: {
         select: {
           snapshotIntervalDays: true,
+          pendingSnapshotIntervalDays: true,
           timezone: true,
           nextSnapshotAt: true,
           autoSnapshotEnabled: true,
@@ -232,6 +233,7 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
       status: character.status === "ACTIVE" ? "运行中" : character.status === "PAUSED" ? "已暂停" : "未连接",
       channels: character.channelBindings.map((binding) => binding.connection.displayName),
       intervalDays: setting?.snapshotIntervalDays ?? 8,
+      pendingIntervalDays: setting?.pendingSnapshotIntervalDays ?? null,
       autoSnapshotEnabled: setting?.autoSnapshotEnabled ?? false,
       nextSnapshotAt: setting?.nextSnapshotAt?.toISOString() ?? null,
       nextSnapshotLabel: setting?.nextSnapshotAt
