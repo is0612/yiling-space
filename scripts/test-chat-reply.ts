@@ -1,0 +1,779 @@
+import assert from "node:assert/strict";
+import { generateConversationReply, STYLE_EXAMPLES_HEADING } from "../server/utils/chat-reply";
+import { buildChatTimeContext } from "../server/utils/chat-time-context";
+
+const originalFetch = globalThis.fetch;
+const secretApiKey = "sk-test-secret-must-not-appear-in-prompt";
+const privateProviderUrl = "https://private-provider.example/v1";
+let capturedUrl = "";
+let capturedHeaders: Headers | null = null;
+let capturedBody = "";
+
+globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  capturedUrl = String(input);
+  capturedHeaders = new Headers(init?.headers);
+  capturedBody = typeof init?.body === "string" ? init.body : "";
+  return new Response(JSON.stringify({
+    model: "test-chat-model",
+    choices: [{
+      message: {
+        role: "assistant",
+        content: JSON.stringify({
+          reply: "我记得你的偏好。",
+          usedMemoryIds: ["memory-1", "invented-memory"],
+          usedSnapshotIds: ["snapshot-1"],
+          // 忆泡也要回写来源：真实 id 保留、编造的过滤掉。
+          usedEventIds: ["event-1", "invented-event"],
+        }),
+      },
+    }],
+    usage: {
+      prompt_tokens: 12,
+      completion_tokens: 8,
+      total_tokens: 20,
+      // 缓存明细必须一路带到 result.usage：群聊命中率高，丢了它金额会高估三倍。
+      prompt_cache_hit_tokens: 9,
+      prompt_cache_miss_tokens: 3,
+    },
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+
+try {
+  const result = await generateConversationReply({
+    characterName: "测试角色",
+    characterPrompt: "温柔、自然地回复。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    temperature: 0.4,
+    maxTokens: 512,
+    currentMessage: "你还记得我喜欢什么吗？",
+    recentMessages: [{ role: "USER", content: "我喜欢星空。", occurredAt: "2026-10-24T10:00:00.000Z" }],
+    memories: [{
+      id: "memory-1",
+      category: "PREFERENCE",
+      content: "用户喜欢星空。",
+      confidence: 0.95,
+      relevanceScore: 4,
+      scope: "character",
+      occurredAt: "2026-10-24T10:00:00.000Z",
+    }],
+    snapshots: [{
+      id: "snapshot-1",
+      summary: "曾聊到观星。",
+      periodStart: "2026-10-01T00:00:00.000Z",
+      periodEnd: "2026-10-09T00:00:00.000Z",
+      version: 1,
+      relevanceScore: 2,
+      scope: "character",
+    }],
+    events: [{
+      id: "event-1",
+      occurredAt: "2026-10-29T06:00:00.000Z",
+      timeOfDay: "下午",
+      place: "北海",
+      participants: ["小明"],
+      title: "和小明在海边游泳",
+      detail: "下午去银滩游泳。",
+      scope: "character",
+    }],
+    rawMessages: [{
+      id: "raw-1",
+      role: "USER",
+      content: "前天下午我们去银滩游泳了",
+      occurredAt: "2026-10-29T06:00:00.000Z",
+      scope: "character",
+    }],
+    journalLine: { dayKey: "2026-10-31", quote: "今天下午其实有点不开心" },
+  });
+
+  assert.equal(capturedUrl, privateProviderUrl + "/chat/completions");
+  assert.equal(capturedHeaders?.get("authorization"), "Bearer " + secretApiKey);
+  assert(capturedBody.length > 0, "The model request body should be captured for assertions.");
+  assert(!capturedBody.includes(secretApiKey), "The API key must not appear in the request body.");
+  assert(!capturedBody.includes(privateProviderUrl), "The provider URL must not appear in the prompt body.");
+
+  const requestBody = JSON.parse(capturedBody) as {
+    model: string;
+    messages: Array<{ role: string; content: string }>;
+  };
+  assert.equal(requestBody.model, "test-chat-model");
+  const systemMessage = requestBody.messages.find((item) => item.role === "system");
+  assert(systemMessage, "The request must include a system prompt.");
+  // 头部标记必须和版本号同源。以前这里写死 `V16`，每次升版都得手动跟着改 ——
+  // 写死的是「上一次的答案」，不是「两者一致」这件事。改成从返回值推出来比。
+  const versionNumber = result.promptTemplateVersion.match(/-v(\d+)$/u)?.[1] ?? "";
+  assert(versionNumber, "版本号必须带 vN 后缀，否则标记无从推导。");
+  assert(
+    systemMessage.content.includes(`YILING_CONVERSATION_REPLY_V${versionNumber}`),
+    "The system prompt marker must stay in sync with the prompt template version.",
+  );
+  const userMessage = requestBody.messages.find((item) => item.role === "user");
+  assert(userMessage, "The request must include a structured user context.");
+  const promptInput = JSON.parse(userMessage.content) as Record<string, unknown>;
+  const journal = promptInput.journal as { dayKey?: string; quote?: string } | undefined;
+  assert.equal(journal?.dayKey, "2026-10-31", "手账那句要带上是哪一天的");
+  assert.equal(journal?.quote, "今天下午其实有点不开心");
+  assert.match(
+    systemMessage.content,
+    /journal is a sentence you wrote in your own journal/,
+    "手账那句必须写清「是她自己写的」",
+  );
+  assert.match(
+    systemMessage.content,
+    /not something the current user said/,
+    "手账那句不能被她当成对方说的话",
+  );
+  assert.deepEqual(
+    Object.keys(promptInput).sort(),
+    ["characterName", "characterPrompt", "now", "currentMessage", "recentMessages", "memories", "snapshots", "events", "rawMessages", "journal"].sort(),
+    "Only explicit conversation-context fields should be serialized into the prompt.",
+  );
+  // 「现在」必须每轮都带：模型不会算日期，缺了它「前天」只能猜。
+  const promptNow = promptInput.now as Record<string, unknown>;
+  assert.equal(promptNow.timeZone, "Asia/Shanghai", "没传时区时回落默认时区。");
+  assert.match(String(promptNow.local), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, "当地日期时间要是可读格式。");
+  assert.match(String(promptNow.weekday), /^周[一二三四五六日]$/, "星期要写成中文，模型才读得顺。");
+  assert.ok(String(promptNow.utc).endsWith("Z"), "UTC 锚点要带时区标记。");
+  assert(
+    systemMessage.content.includes("now.local"),
+    "系统提示词要解释 now 的字段，否则模型不知道这堆时间是干什么的。",
+  );
+  assert(
+    systemMessage.content.includes("no record of it"),
+    "没有记录时要说清楚，不能编一个听起来合理的故事。",
+  );
+  assert.equal(result.reply, "我记得你的偏好。");
+  const promptMemories = promptInput.memories as Array<Record<string, unknown>>;
+  const promptSnapshots = promptInput.snapshots as Array<Record<string, unknown>>;
+  assert.equal(promptMemories[0]?.scope, "character", "Character-global memory keeps its scope label.");
+  assert.equal(promptMemories[0]?.occurredAt, "2026-10-24T10:00:00.000Z", "记忆要带自己的时间，否则「什么时候」答不出来。");
+  assert.equal(promptSnapshots[0]?.scope, "character", "Character-global snapshot keeps its scope label.");
+  const promptEvents = promptInput.events as Array<Record<string, unknown>>;
+  assert.equal(promptEvents[0]?.occurredAt, "2026-10-29T06:00:00.000Z", "忆泡必须带发生时间，「那天」靠它才答得出。");
+  assert.deepEqual(promptEvents[0]?.participants, ["小明"], "忆泡要带参与者，否则「和谁」答不出来。");
+  assert.equal(promptEvents[0]?.place, "北海", "知道地点就要带上。");
+  const promptRaw = promptInput.rawMessages as Array<Record<string, unknown>>;
+  assert.equal(promptRaw[0]?.occurredAt, "2026-10-29T06:00:00.000Z", "原文兜底也要带时间，否则又被当成「很久以前」。");
+  assert.equal(promptRaw[0]?.scope, "character", "原文同样要带范围标签。");
+  assert(
+    systemMessage.content.includes("rawMessages are the original lines"),
+    "提示词要说明原文是证据而不是结论，冲突时以事件为准。",
+  );
+  assert(!capturedBody.includes("scopeType"), "Internal scope typing must not leak into the prompt.");
+  assert.deepEqual(result.usedMemoryIds, ["memory-1"], "Invented source IDs must be filtered out.");
+  assert.deepEqual(result.usedSnapshotIds, ["snapshot-1"]);
+  assert.deepEqual(result.usedEventIds, ["event-1"], "忆泡来源同样要过白名单：编造的 id 必须被丢掉");
+  assert.equal(result.usage?.totalTokens, 20);
+  assert.equal(result.usage?.cacheHitTokens, 9, "缓存命中要跟着 usage 一起返回，否则记账只能按未命中价估。");
+  assert.equal(result.usage?.cacheMissTokens, 3);
+
+  // ── 相对日期：同一个瞬间，按角色时区渲染成不同当地时间 ──
+  // 模型自己不会算「前天」，换算必须由服务端完成，且必须按角色时区而不是服务器时区。
+  const shanghai = buildChatTimeContext(new Date("2026-10-31T06:55:33Z"), "Asia/Shanghai");
+  assert.equal(shanghai.local, "2026-10-31 14:55:33", "东八区要换算成当地时间。");
+  assert.equal(shanghai.weekday, "周六", "2026-10-31 是周六。");
+  const newYork = buildChatTimeContext(new Date("2026-10-31T06:55:33Z"), "America/New_York");
+  assert.equal(newYork.local, "2026-10-31 02:55:33", "西五区要换算成当地时间，不能直接用服务器时区。");
+  const brokenZone = buildChatTimeContext(new Date("2026-10-31T06:55:33Z"), "Not/AZone");
+  assert.equal(brokenZone.timeZone, "Asia/Shanghai", "坏时区要回落默认，不能把整轮回复打成 500。");
+
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "前天我做了什么？",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    // 注入固定时刻，断言才能稳定（生产不传 = 取服务器时间）。
+    now: new Date("2026-10-31T06:55:33Z"),
+    timeZone: "Asia/Shanghai",
+  });
+  const timedInput = JSON.parse(
+    (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+      .messages.find((item) => item.role === "user")!.content,
+  ) as Record<string, unknown>;
+  const fixedNow = timedInput.now as Record<string, unknown>;
+  assert.equal(fixedNow.local, "2026-10-31 14:55:33", "提示词里的「现在」要按传入的时刻和时区渲染。");
+  assert.equal(fixedNow.timeZone, "Asia/Shanghai");
+
+  // ── 语音条：必须在生成前就告诉模型「这一条会被念出来」──
+  // 不说的话她会回「我只有打字和嘴硬」—— 内容说得通，但她根本不知道自己正在说话，
+  // 于是会写出表情符号、括号动作、@ 某人这些念出来是噪音的东西。
+  assert(
+    !systemMessage.content.includes("spoken voice message"),
+    "默认（打字）不该带语音段，否则每条回复都变得像在念稿。",
+  );
+
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "发个语音",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    voiceReply: true,
+  });
+  const voiceSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(voiceSystem.includes("spoken voice message"), "发语音时要告诉她这一条会被念出来。");
+  assert(voiceSystem.includes("no emoji"), "要明说表情/颜文字/括号动作不能出现在语音里。");
+  assert(
+    voiceSystem.includes("Never mention that this is a voice message"),
+    "必须禁止「我给你发了条语音」这类元信息 —— 语音条里会先念一句废话。",
+  );
+
+  // ── 对话示例：只拼进 characterPrompt 尾部，带边界，且不新增顶层字段 ──
+  // 为什么不能新增字段/不能做成 few-shot 轮次：这个接口要求返回 JSON 信封，
+  // 真给它几轮「用户 / 她」的对话，模型会学着直接吐纯文本，解析就炸。
+  assert(!String(promptInput.characterPrompt).includes("对话示例"), "没填示例时不该出现这一节");
+
+  capturedBody = "";
+  const withExamples = await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」，一只蓝色的大鲸鱼。",
+    styleExamples: "用户：今天好累啊\n鲸鱼娘：欸，你怎么又累了？本鱼都还没开始努力呢。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  assert.equal(withExamples.reply, "我记得你的偏好。");
+  const examplesInput = JSON.parse(
+    (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+      .messages.find((item) => item.role === "user")!.content,
+  ) as Record<string, unknown>;
+  assert.deepEqual(
+    Object.keys(examplesInput).sort(),
+    ["characterName", "characterPrompt", "now", "currentMessage", "recentMessages", "memories", "snapshots"].sort(),
+    "示例必须是 characterPrompt 的一部分，不能另起字段（否则模型输出格式会跑偏）",
+  );
+  const mergedPrompt = String(examplesInput.characterPrompt);
+  assert(mergedPrompt.startsWith("你是「鲸鱼娘」"), "人设要原样排在最前面");
+  assert(mergedPrompt.includes(STYLE_EXAMPLES_HEADING), "示例要单独成节");
+  assert(mergedPrompt.includes("本鱼都还没开始努力呢"), "示例正文要带进提示词");
+  assert.match(mergedPrompt, /别把示例里的内容当成发生过的事/, "要写明只学语气，否则她会把示例当回忆");
+  assert.match(mergedPrompt, /仍然只返回规定的 JSON/, "要写死不改变输出格式");
+
+  // ── 称呼：设了才进 promptInput，系统提示词同步解释这个字段 ──
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    userAddress: "主人",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  const addressedMessages = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> }).messages;
+  const addressedInput = JSON.parse(addressedMessages.find((item) => item.role === "user")!.content) as Record<string, unknown>;
+  assert.equal(addressedInput.userAddress, "主人", "称呼要作为独立字段进提示词");
+  const addressedSystem = addressedMessages.find((item) => item.role === "system")!.content;
+  assert(addressedSystem.includes("userAddress"), "系统提示词要说明这个字段是什么");
+  assert.match(addressedSystem, /not in every sentence/, "要写清是偶尔称呼，不是每句都喊");
+
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    userAddress: "   ",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  const blankMessages = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> }).messages;
+  const blankInput = JSON.parse(blankMessages.find((item) => item.role === "user")!.content) as Record<string, unknown>;
+  assert(!("userAddress" in blankInput), "空白称呼等于没设，不该塞空字段");
+  assert(!blankMessages.find((item) => item.role === "system")!.content.includes("userAddress"), "没设称呼就别加这段说明");
+
+  globalThis.fetch = async (): Promise<Response> => new Response("not-json", {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  await assert.rejects(
+    generateConversationReply({
+      characterName: "测试角色",
+      characterPrompt: "温柔地回复。",
+      model: "test-chat-model",
+      apiKey: secretApiKey,
+      apiBaseUrl: privateProviderUrl,
+      currentMessage: "再试一次",
+      recentMessages: [],
+      memories: [],
+      snapshots: [],
+    }),
+    /LLM_INVALID_RESPONSE: 模型服务没有返回有效的 JSON 响应。/,
+    "Malformed provider JSON should become a safe, predictable model error.",
+  );
+
+  // 模型抽风吐了非 JSON：再要一次就能拿到，不该把整条消息咽掉（QQ 上就是「她没理我」）。
+  const replyOnce = (content: string) => JSON.stringify({
+    choices: [{ message: { content }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  });
+  let calls = 0;
+  const attemptSystems: string[] = [];
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    calls += 1;
+    const system = (JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ role: string; content: string }> })
+      .messages?.find((item) => item.role === "system")?.content ?? "";
+    attemptSystems.push(system);
+    const body = calls === 1
+      ? "抱歉，我刚刚走神了（这不是 JSON）"
+      : replyOnce(JSON.stringify({ reply: "重试后拿到了", usedMemoryIds: [], usedSnapshotIds: [] }));
+    return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const retried = await generateConversationReply({
+    characterName: "测试角色",
+    characterPrompt: "温柔地回复。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  assert.equal(retried.reply, "重试后拿到了", "第一次格式不对，重试后要能正常回。");
+  assert.equal(calls, 2, "只多要一次，不能无限重试。");
+  // 第二次要带上「上次不可用」的补语：同一个提示词原样再问一遍，复现率极高。
+  assert(!attemptSystems[0]!.includes("Your previous answer was unusable"), "第一次不许提前喊话。");
+  assert(attemptSystems[1]!.includes("Your previous answer was unusable"), "重试要明确说上次不可用。");
+
+  // 一直抽风：两次就停手。
+  calls = 0;
+  globalThis.fetch = async (): Promise<Response> => {
+    calls += 1;
+    return new Response("not-json", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  await assert.rejects(
+    generateConversationReply({
+      characterName: "测试角色",
+      characterPrompt: "温柔地回复。",
+      model: "test-chat-model",
+      apiKey: secretApiKey,
+      apiBaseUrl: privateProviderUrl,
+      currentMessage: "还是不行",
+      recentMessages: [],
+      memories: [],
+      snapshots: [],
+    }),
+    /LLM_INVALID_RESPONSE/,
+  );
+  assert.equal(calls, 2, "重试上限是一次。");
+
+  /**
+   * 下面两段是这一页最该有的测试：模型其实答对了，是我们自己解不动。
+   *
+   * `response_format: json_object` 只是请求，不是保证。这条路径上最常见的两种坏输出是
+   * 套 ```json 围栏、前面先写一句「好的，这是结果：」—— 以前这里直接 `JSON.parse`，
+   * 两种都当场判失败，重试一次仍失败就整轮丢掉，表现是「该说的时候她没说话」。
+   * 别的调用点（proactive / B 站卡片 / 粗筛）早就用 `parseJsonLoose` 了，只有这条没上。
+   */
+  calls = 0;
+  globalThis.fetch = async (): Promise<Response> => {
+    calls += 1;
+    return new Response(
+      replyOnce("```json\n" + JSON.stringify({ reply: "围栏里的正文", usedMemoryIds: [], usedSnapshotIds: [] }) + "\n```"),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const fencedResult = await generateConversationReply({
+    characterName: "测试角色",
+    characterPrompt: "温柔地回复。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  assert.equal(fencedResult.reply, "围栏里的正文", "```json 围栏要能解开，这不算模型失败。");
+  assert.equal(calls, 1, "解得开就不该重试 —— 白花一次调用，还多等一轮。");
+
+  calls = 0;
+  globalThis.fetch = async (): Promise<Response> => {
+    calls += 1;
+    return new Response(
+      replyOnce('好的，这是结果：{"reply":"别被数组带偏","faces":[],"usedMemoryIds":[],"usedSnapshotIds":[]}'),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const noisyResult = await generateConversationReply({
+    characterName: "测试角色",
+    characterPrompt: "温柔地回复。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  assert.equal(noisyResult.reply, "别被数组带偏", "前面带一句废话也要能救回来。");
+  assert.equal(calls, 1, "同上，不该重试。");
+
+  // 被 max_tokens 截断是另一回事：JSON 压根没写完，救不回来，但错误里必须说清楚，
+  // 否则看到「不是 JSON」的人会去调提示词，而真正该调的是预算。
+  calls = 0;
+  globalThis.fetch = async (): Promise<Response> => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: '{"reply":"说到一半就没了' }, finish_reason: "length" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  await assert.rejects(
+    generateConversationReply({
+      characterName: "测试角色",
+      characterPrompt: "温柔地回复。",
+      model: "test-chat-model",
+      apiKey: secretApiKey,
+      apiBaseUrl: privateProviderUrl,
+      currentMessage: "在吗",
+      recentMessages: [],
+      memories: [],
+      snapshots: [],
+    }),
+    /finish_reason=length/,
+    "截断要写进错误里：那是调 max_tokens 的事，不是调提示词。",
+  );
+  assert.equal(calls, 2, "截断也照旧重试一次 —— 换个说法可能就装得下。");
+
+  // 真的空 content（不是截断、不是围栏）：错误里必须带 finish_reason。
+  // 线上已经出现过两次「content 是空的」而没有 finish_reason，三种可能
+  // （正常收尾 / 被内容安全过滤 / 服务端空壳）在日志里长得一模一样，只能靠猜。
+  calls = 0;
+  globalThis.fetch = async (): Promise<Response> => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: "" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 0, total_tokens: 10 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  await assert.rejects(
+    generateConversationReply({
+      characterName: "测试角色",
+      characterPrompt: "温柔地回复。",
+      model: "test-chat-model",
+      apiKey: secretApiKey,
+      apiBaseUrl: privateProviderUrl,
+      currentMessage: "在吗",
+      recentMessages: [],
+      memories: [],
+      snapshots: [],
+    }),
+    /content 是空的；finish_reason=stop/,
+    "空 content 要连 finish_reason 一起报，否则分不清是收尾正常还是被过滤。",
+  );
+
+  // 群聊：允许她说「这轮不插嘴」。silent 不是错误，reply 为空是合法的。
+  let silentBody = "";
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    silentBody = typeof init?.body === "string" ? init.body : "";
+    return new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({ action: "silent", reply: "", usedMemoryIds: [], usedSnapshotIds: [] }),
+        },
+      }],
+      usage: { prompt_tokens: 30, completion_tokens: 2, total_tokens: 32 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const silent = await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是群里的一个网友。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "A：今天吃什么\nB：随便",
+    transcript: [
+      { speaker: "A", content: "今天吃什么" },
+      { speaker: "B", content: "随便" },
+    ],
+    allowSilent: true,
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  assert.equal(silent.action, "silent");
+  assert.equal(silent.reply, "", "silent 时正文必须为空，调用方据此什么都不发。");
+  assert.equal(silent.usage?.totalTokens, 32, "不说话也算花了 token，照常记账。");
+  const silentMessages = (JSON.parse(silentBody) as { messages: Array<{ role: string; content: string }> }).messages;
+  const silentSystem = silentMessages.find((item) => item.role === "system")!.content;
+  assert(silentSystem.includes('"silent"'), "群聊提示词必须说明可以返回 silent。");
+  assert(!silentSystem.includes("reply (non-empty string)"), "群聊不能再要求「必须给非空回复」。");
+  const silentInput = JSON.parse(silentMessages.find((item) => item.role === "user")!.content) as Record<string, unknown>;
+  assert.deepEqual(
+    (silentInput.transcript as Array<{ speaker: string }>).map((item) => item.speaker),
+    ["A", "B"],
+    "transcript 要带发言人，模型才知道是谁在说。",
+  );
+
+  // 群聊上下文：背景、锚点、direct 都进提示词；groupDecision 只认白名单。
+  let groupBody = "";
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    groupBody = typeof init?.body === "string" ? init.body : "";
+    return new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            reply: "那面条这回有机会了",
+            usedMemoryIds: [],
+            usedSnapshotIds: [],
+            groupDecision: {
+              relation: "shared_topic",
+              topicAnchorMessageId: "a1",
+              replyToMessageId: "m2",
+              // 点名可以指向背景里的人（这一轮没再说话），号池是「本轮 ∪ 背景」。
+              atMessageId: "h1",
+              evidenceMessageIds: ["m2", "invented"],
+            },
+          }),
+        },
+      }],
+      usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const grouped = await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是群里的一个网友。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "B：火锅\nA：昨天才吃过火锅",
+    transcript: [
+      { id: "m1", member: "member_1", speaker: "A", content: "@self 晚饭吃什么" },
+      { id: "m2", member: "member_2", speaker: "B", content: "火锅" },
+    ],
+    groupChat: true,
+    direct: false,
+    groupBackground: [{ id: "h1", member: "member_1", speaker: "A", content: "周末有空吗" }],
+    groupAnchors: [{ id: "a1", label: "晚饭" }],
+    allowSilent: true,
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  const groupMessages = (JSON.parse(groupBody) as { messages: Array<{ role: string; content: string }> }).messages;
+  const groupSystem = groupMessages.find((item) => item.role === "system")!.content;
+  assert(groupSystem.includes("groupBackground"), "系统提示词要说明背景只看不回。");
+  assert(groupSystem.includes("groupAnchors"), "系统提示词要说明参与过的话题。");
+  assert(groupSystem.includes("policy.direct"), "系统提示词要给出 direct 事实。");
+  const groupInput = JSON.parse(groupMessages.find((item) => item.role === "user")!.content) as Record<string, unknown>;
+  assert.deepEqual(groupInput.policy, { direct: false }, "direct 要以程序事实进提示词。");
+  assert.deepEqual(
+    (groupInput.transcript as Array<{ id: string; member: string }>).map((item) => [item.id, item.member]),
+    [["m1", "member_1"], ["m2", "member_2"]],
+    "transcript 要带消息 id 与成员代号，模型才能引用证据。",
+  );
+  assert.equal((groupInput.groupBackground as Array<{ id: string }>)[0]?.id, "h1");
+  assert.equal((groupInput.groupAnchors as Array<{ id: string }>)[0]?.id, "a1");
+  assert.equal(grouped.groupDecision?.relation, "shared_topic");
+  assert.equal(grouped.groupDecision?.topicAnchorMessageId, "a1", "锚点必须来自本次提供的 groupAnchors。");
+  assert.equal(grouped.groupDecision?.replyToMessageId, "m2", "引用目标必须是本轮 transcript 的 id。");
+  assert.equal(grouped.groupDecision?.atMessageId, "h1", "点名可以指向背景里的人物，不必是这一轮的。");
+
+  /**
+   * 允许沉默 vs 必须回，提示词必须说同一件事。
+   *
+   * 全回模式（和被 @ 的轮次）底下不接受沉默，如果提示词还在说「沉默是常态、
+   * 不要每条都回」，模型就会照提示词沉默，整轮被丢掉 —— 表现就是「说好每条都回，
+   * 结果这条没回」，日志里只有一个 LLM_INVALID_RESPONSE 看得出来。
+   */
+  assert(groupSystem.includes("Staying silent is normal"), "允许沉默时要说清「沉默是常态」。");
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是群里的一个网友。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "都别理她",
+    transcript: [{ id: "m1", member: "member_1", speaker: "A", content: "都别理她" }],
+    groupChat: true,
+    direct: false,
+    allowSilent: false,
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  const mustReplySystem = (JSON.parse(groupBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(mustReplySystem.includes("you must answer"), "必须回的轮次要在提示词里说清楚。");
+  assert(!mustReplySystem.includes("Staying silent is normal"), "必须回的轮次不许再教它「沉默是常态」。");
+  assert(mustReplySystem.includes('action must be "reply"'), "JSON 契约也要跟着换。");
+  assert.deepEqual(grouped.groupDecision?.evidenceMessageIds, ["m2"], "编造的证据 id 要被过滤掉。");
+
+  // 非法 relation / 不存在锚点：整段决策丢掉，但回复照常返回。
+  globalThis.fetch = async (): Promise<Response> => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({
+      reply: "嗯",
+      usedMemoryIds: [],
+      usedSnapshotIds: [],
+      groupDecision: { relation: "made_up", topicAnchorMessageId: "nope", evidenceMessageIds: ["ghost"] },
+    }) } }],
+    usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  const badDecision = await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是群里的一个网友。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "随便聊聊",
+    transcript: [{ id: "m1", member: "member_1", speaker: "A", content: "随便聊聊" }],
+    groupChat: true,
+    groupAnchors: [{ id: "a1", label: "晚饭" }],
+    allowSilent: true,
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  assert.equal(badDecision.reply, "嗯", "决策字段非法不能连累正常回复。");
+  assert.equal(badDecision.groupDecision, undefined, "非法 relation 要整段丢弃。");
+
+  // 合法 relation 但 replyTo / at 编造：回复和关系都保留，只有这两个目标被丢掉。
+  globalThis.fetch = async (): Promise<Response> => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({
+      reply: "来了",
+      usedMemoryIds: [],
+      usedSnapshotIds: [],
+      groupDecision: { relation: "direct", replyToMessageId: "ghost-id", atMessageId: "ghost-at", evidenceMessageIds: [] },
+    }) } }],
+    usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  const badReplyTo = await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是群里的一个网友。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "随便聊聊",
+    transcript: [{ id: "m1", member: "member_1", speaker: "A", content: "随便聊聊" }],
+    groupChat: true,
+    allowSilent: true,
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  assert.equal(badReplyTo.groupDecision?.relation, "direct", "relation 合法时决策要保留。");
+  assert.equal(badReplyTo.groupDecision?.replyToMessageId, undefined, "编造的引用目标要被丢掉。");
+  assert.equal(badReplyTo.groupDecision?.atMessageId, undefined, "编造的点名对象也要被丢掉 —— 否则会 @ 一个不存在的人。");
+
+  /**
+   * 语音轮次：提示词要说清「别填引用和 @」。
+   *
+   * 反过来说是不行的 —— v19 试过让语音轮次「一律填 replyToMessageId」好让语音也带上引用，
+   * 实测 `[回复][语音]` 拼一条发出去后 QQ 客户端只显示引用块、语音条不渲染（2026-11-01 01:02）。
+   * 所以这一轮要让模型直接别给：语音条只发一个 record 段，多一段就发不出来。
+   */
+  let voiceGroupBody = "";
+  globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    voiceGroupBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({
+        reply: "这账谁结啊",
+        usedMemoryIds: [],
+        usedSnapshotIds: [],
+        groupDecision: { relation: "direct", replyToMessageId: "m2", evidenceMessageIds: ["m2"] },
+      }) } }],
+      usage: { prompt_tokens: 20, completion_tokens: 6, total_tokens: 26 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const voiceGroupReply = await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是群里的一个网友。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "B：这账谁结",
+    transcript: [{ id: "m2", member: "member_2", speaker: "B", content: "这账谁结" }],
+    groupChat: true,
+    direct: false,
+    voiceReply: true,
+    allowSilent: true,
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  const voiceGroupSystem = (JSON.parse(voiceGroupBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(
+    voiceGroupSystem.includes("a voice message carries no quote and no @"),
+    "语音轮次要说清「语音条不带引用也不带 @」。",
+  );
+  assert(
+    voiceGroupSystem.includes("Leave replyToMessageId and atMessageId out"),
+    "语音轮次要明确禁止填这两个字段，别让模型白填。",
+  );
+  assert(
+    voiceGroupSystem.includes("say the person's name in the sentence"),
+    "去掉引用之后，要给出替代做法：把名字说进句子里。",
+  );
+  assert(
+    !groupSystem.includes("a voice message carries no quote"),
+    "文字轮次不许出现这段 —— 文字回复照常引用。",
+  );
+  assert(
+    groupSystem.includes("Set replyToMessageId only when the line you are answering"),
+    "文字那条规则不能被语音这段挤掉。",
+  );
+  // 模型不听话、仍旧给了 id 也不影响结果：渠道层对语音轮次无条件丢掉（`pipeline.ts`）。
+  // 这里只确认解析层不吞字段，免得将来误以为「没这个字段所以不用管」。
+  assert.equal(voiceGroupReply.groupDecision?.replyToMessageId, "m2");
+
+  // 被 @ 时必须回：模型返回 silent 也不能被当成「这轮不插嘴」。
+  globalThis.fetch = async (): Promise<Response> => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ action: "silent", reply: "", usedMemoryIds: [], usedSnapshotIds: [] }) } }],
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  await assert.rejects(
+    generateConversationReply({
+      characterName: "鲸鱼娘",
+      characterPrompt: "你是群里的一个网友。",
+      model: "test-chat-model",
+      apiKey: secretApiKey,
+      apiBaseUrl: privateProviderUrl,
+      currentMessage: "@self 在吗",
+      transcript: [{ id: "m1", member: "member_1", speaker: "A", content: "@self 在吗" }],
+      groupChat: true,
+      direct: true,
+      allowSilent: false,
+      recentMessages: [],
+      memories: [],
+      snapshots: [],
+    }),
+    /LLM_INVALID_RESPONSE/,
+    "direct 轮次不能 silent 成功。",
+  );
+
+  console.log("Chat reply tests passed: prompt credential isolation, source ID validation, malformed provider response handling, and one retry for malformed model output.");
+  console.log("对话示例注入：拼进 characterPrompt、带边界、不新增顶层字段 —— 通过");
+  console.log("群聊 silent：允许不说、reply 允许为空、usage 照常记账、transcript 带发言人 —— 通过");
+  console.log("群聊上下文：groupBackground/groupAnchors/policy.direct 进提示词、groupDecision 白名单、被 @ 时不能 silent —— 通过");
+  console.log("语音轮次：提示词要求别填 replyToMessageId/atMessageId（语音条只发一个 record 段）、文字规则不变 —— 通过");
+} finally {
+  globalThis.fetch = originalFetch;
+}

@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: yiling-hub-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yiling_hub}
+      POSTGRES_USER: ${POSTGRES_USER:-yiling_hub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - yiling_postgres_data:/var/lib/postgresql/data
+      # Local-only bind mount used by the backup/restore scripts.
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-yiling_hub} -d ${POSTGRES_DB:-yiling_hub}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  yiling_postgres_data:
+    name: yiling_hub_postgres_data

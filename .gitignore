@@ -1,0 +1,48 @@
+# dependencies and generated output
+node_modules/
+.nuxt/
+.output/
+.data/
+.next/
+out/
+dist/
+build/
+coverage/
+
+# python virtualenv (bili-agent CLI 独立安装在这里)
+.venv/
+
+# local environment and secrets
+.env
+.env.*
+!.env.example
+
+# local database and backup files
+backups/*
+!backups/.gitkeep
+backups/*.sql
+*.dump
+*.backup
+
+# 设计审计截图与原型稿：本地留着看，但不入库——里面有真实聊天记录、QQ 号、群号和用量数据
+design/
+
+# logs and OS/editor files
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# WorkBuddy workspace memory (agent-local notes, not project source)
+# 用 .workbuddy/* 而非 .workbuddy/ ，以便下面可以重新纳入 skills 子目录
+.workbuddy/*
+# 共享给 AI 的 Agent Skills 属于项目资产，需要入库并随仓库分发
+!.workbuddy/skills/
+
+# Prisma local artifacts (keep schema, generated migration SQL, and migrations tracked)
+prisma/*.db
+prisma/*.db-journal
+src/generated/prisma/

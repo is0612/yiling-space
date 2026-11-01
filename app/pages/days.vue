@@ -1,0 +1,524 @@
+<script setup lang="ts">
+import { ElMessage, ElMessageBox } from "element-plus";
+import { type Character } from "~/utils/mock-data";
+
+/**
+ * 忆泡日历：一天一行，点开看那天发生了什么。
+ *
+ * 数据源是 `memory_event_days`（整理进度）+ `memory_events`（当天的忆泡），
+ * 不是从时间线反推的 —— 这样「今天还没整理」也能作为一行出现。
+ */
+await useCharacterListData();
+const { id } = useCharacterSelection("/days");
+
+type DayRow = {
+  dayKey: string;
+  state: "DRAFT" | "FINAL" | null;
+  eventCount: number;
+  extractedAt: string | null;
+};
+type DayEvent = {
+  id: string;
+  occurredAt: string;
+  timeOfDay: string | null;
+  place: string | null;
+  participants: string[];
+  title: string;
+  detail: string;
+  state: "DRAFT" | "FINAL";
+  status: "ACTIVE" | "ARCHIVED";
+  confidence: number | null;
+  scope: "character" | "private";
+};
+type DayMessage = { id: string; role: string; content: string; occurredAt: string };
+type DayMessageGroup = { id: string; title: string; messages: DayMessage[] };
+
+const characters = useCharacterList();
+const currentCharacter = computed<Character | null>(
+  () => characters.value.find((item) => item.id === id.value) ?? null,
+);
+
+const days = ref<DayRow[]>([]);
+const today = ref("");
+/** 按忆泡标题/详情搜索日期；空 = 普通列表。 */
+const searchQuery = ref("");
+const searchActive = computed(() => searchQuery.value.trim().length > 0);
+const loading = ref(false);
+const selected = ref("");
+const detail = ref<{
+  day: DayRow | null;
+  events: DayEvent[];
+  messageGroups: DayMessageGroup[];
+  usage: { calls: number; tokens: number };
+} | null>(null);
+/** 原文总数：按会话分组后要自己加总。 */
+const totalMessages = computed(() => (detail.value?.messageGroups ?? []).reduce((sum, group) => sum + group.messages.length, 0));
+const detailLoading = ref(false);
+const showMessages = ref(false);
+
+/** 隐藏的忆泡单独收起来：默认不占视线，但随时能恢复。 */
+const activeEvents = computed(() => (detail.value?.events ?? []).filter((item) => item.status !== "ARCHIVED"));
+const archivedEvents = computed(() => (detail.value?.events ?? []).filter((item) => item.status === "ARCHIVED"));
+
+const editOpen = ref(false);
+const editSaving = ref(false);
+const editing = ref<DayEvent | null>(null);
+const form = ref({ title: "", detail: "", place: "", participants: "" });
+
+function openEdit(event: DayEvent) {
+  editing.value = event;
+  form.value = {
+    title: event.title,
+    detail: event.detail,
+    place: event.place ?? "",
+    participants: event.participants.join("、"),
+  };
+  editOpen.value = true;
+}
+
+async function saveEdit() {
+  const target = editing.value;
+  if (!target || editSaving.value) return;
+  if (!form.value.title.trim() || !form.value.detail.trim()) {
+    ElMessage.warning("标题和详情都不能为空。");
+    return;
+  }
+  editSaving.value = true;
+  try {
+    // URL 落成 string：模板字面量的字面类型会让 Nuxt 路由类型推导爆栈。
+    const url: string = `/api/characters/${encodeURIComponent(id.value)}/memory-events/${encodeURIComponent(target.id)}`;
+    const participants = form.value.participants
+      .split(/[、,，\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    await $fetch(url, {
+      method: "PATCH",
+      body: {
+        title: form.value.title.trim(),
+        detail: form.value.detail.trim(),
+        place: form.value.place.trim(),
+        participants,
+      },
+    });
+    editOpen.value = false;
+    await loadDetail(selected.value);
+    ElMessage.success("忆泡已更新。");
+  } catch (error) {
+    const message = error && typeof error === "object" && "statusMessage" in error
+      ? String(error.statusMessage)
+      : "保存失败，请检查日志。";
+    ElMessage.error(message);
+  } finally {
+    editSaving.value = false;
+  }
+}
+
+async function setEventStatus(event: DayEvent, status: "ACTIVE" | "ARCHIVED") {
+  try {
+    if (status === "ARCHIVED") {
+      await ElMessageBox.confirm(
+        `「${event.title}」会从时间线上隐藏，但不会真删，之后可以恢复。`,
+        "隐藏这条忆泡",
+        { confirmButtonText: "隐藏", cancelButtonText: "取消", type: "warning" },
+      );
+    }
+    const url: string = `/api/characters/${encodeURIComponent(id.value)}/memory-events/${encodeURIComponent(event.id)}`;
+    await $fetch(url, { method: "PATCH", body: { status } });
+    await loadDetail(selected.value);
+    ElMessage.success(status === "ARCHIVED" ? "已隐藏，可在「已隐藏」里恢复。" : "已恢复。");
+  } catch (error) {
+    // 取消确认框不是错误，别弹红条。
+    if (error === "cancel" || error === "close") return;
+    const message = error && typeof error === "object" && "statusMessage" in error
+      ? String(error.statusMessage)
+      : "操作失败，请检查日志。";
+    ElMessage.error(message);
+  }
+}
+
+function dayLabel(dayKey: string) {
+  if (today.value && dayKey === today.value) return "今天";
+  if (today.value) {
+    const [y, m, d] = today.value.split("-").map(Number);
+    const yesterday = new Date(Date.UTC(y!, m! - 1, d! - 1));
+    const key = `${yesterday.getUTCFullYear()}-${String(yesterday.getUTCMonth() + 1).padStart(2, "0")}-${String(yesterday.getUTCDate()).padStart(2, "0")}`;
+    if (dayKey === key) return "昨天";
+  }
+  const [year, month, date] = dayKey.split("-");
+  return `${Number(month)} 月 ${Number(date)} 日`;
+}
+/** 大数字压缩成 12.3k，避免日期头被一串数字撑开。 */
+function formatTokens(tokens: number) {
+  if (!tokens) return "0";
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+}
+function clockOf(iso: string | null) {  if (!iso) return "";
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+}
+function timeOf(event: DayEvent) {
+  const at = new Date(event.occurredAt);
+  const clock = Number.isNaN(at.getTime())
+    ? ""
+    : `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return [clock, event.timeOfDay].filter(Boolean).join(" · ");
+}
+
+async function loadDays() {
+  if (!id.value) return;
+  loading.value = true;
+  try {
+    const keyword = searchQuery.value.trim();
+    const url: string = `/api/characters/${encodeURIComponent(id.value)}/days${keyword ? `?q=${encodeURIComponent(keyword)}` : ""}`;
+    const result = await $fetch<{ today: string; days: DayRow[] }>(url);
+    days.value = result.days;
+    today.value = result.today;
+    if (!result.days.some((day) => day.dayKey === selected.value)) {
+      selected.value = result.days[0]?.dayKey ?? "";
+    }
+    if (selected.value) await loadDetail(selected.value);
+    else detail.value = null;
+  } catch {
+    days.value = [];
+    detail.value = null;
+    ElMessage.error("忆泡日历读取失败，请检查本地开发服务器日志。");
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadDetail(dayKey: string) {
+  if (!id.value || !dayKey) return;
+  detailLoading.value = true;
+  try {
+    // URL 先落成 string 再传：模板字面量的字面类型会让 Nuxt 的路由类型推导爆栈（TS2321）。
+    const url: string = `/api/characters/${encodeURIComponent(id.value)}/days/${encodeURIComponent(dayKey)}`;
+    detail.value = await $fetch<{
+      day: DayRow | null;
+      events: DayEvent[];
+      messageGroups: DayMessageGroup[];
+      usage: { calls: number; tokens: number };
+    }>(url);
+    showMessages.value = false;
+  } catch {
+    detail.value = null;
+    ElMessage.error("这一天的忆泡读取失败。");
+  } finally {
+    detailLoading.value = false;
+  }
+}
+
+watch(id, () => {
+  selected.value = "";
+  void loadDays();
+});
+watch(selected, (dayKey) => {
+  if (dayKey) void loadDetail(dayKey);
+});
+// 搜索：300ms 防抖，避免每敲一个字就打一次接口。
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+watch(searchQuery, () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    selected.value = "";
+    void loadDays();
+  }, 300);
+});
+
+await loadDays();
+</script>
+
+<template>
+  <div class="page-wrap">
+    <PageHeader
+      eyebrow="工作空间 / 角色记忆"
+      title="忆泡日历"
+      description="一天一行，点开看那天发生了什么。忆泡是整理过的事件，原文是当时的对话。"
+    />
+    <CharacterBar
+      path="/days"
+      empty-text="先创建一个角色，这里才会按天记录她经历过的事。"
+    />
+
+    <div
+      v-if="!currentCharacter"
+      class="card empty-card"
+    >
+      <p class="muted-note">
+        还没有角色。
+      </p>
+    </div>
+
+    <div
+      v-else
+      class="day-layout"
+    >
+      <aside class="card day-list">
+        <div class="day-list-head">
+          <h2>有记录的日子</h2>
+          <span class="muted-note">{{ days.length }} 天</span>
+        </div>
+        <el-input
+          v-model="searchQuery"
+          class="day-search"
+          size="small"
+          placeholder="搜忆泡标题或详情"
+          clearable
+        />
+        <div
+          v-if="searchActive"
+          class="muted-note day-empty"
+        >
+          只列出命中「{{ searchQuery.trim() }}」的日子，数字是命中的条数。
+        </div>
+        <div
+          v-if="loading"
+          class="muted-note day-empty"
+        >
+          正在读取…
+        </div>
+        <div
+          v-else-if="!days.length"
+          class="muted-note day-empty"
+        >
+          还没有整理过任何一天。点「角色记忆」页的「立即整理忆泡」试试。
+        </div>
+        <button
+          v-for="day in days"
+          :key="day.dayKey"
+          type="button"
+          class="day-item"
+          :class="{ active: day.dayKey === selected }"
+          @click="selected = day.dayKey"
+        >
+          <span class="day-item-label">{{ dayLabel(day.dayKey) }}</span>
+          <span class="day-item-meta">
+            {{ day.eventCount }} 条
+            <span v-if="day.state === 'DRAFT'" class="day-item-draft">还在记</span>
+          </span>
+        </button>
+      </aside>
+
+      <section class="card day-detail">
+        <div
+          v-if="detailLoading"
+          class="muted-note"
+        >
+          正在读取这一天…
+        </div>
+        <template v-else-if="detail">
+          <header class="day-detail-head">
+            <h2>{{ dayLabel(detail.day?.dayKey ?? selected) }}</h2>
+            <span class="muted-note">
+              {{ detail.events.length }} 条忆泡
+              <template v-if="detail.day?.extractedAt"> · 上次整理 {{ clockOf(detail.day.extractedAt) }}</template>
+              <template v-if="detail.usage.calls">
+                · 整理 {{ detail.usage.calls }} 次 · {{ formatTokens(detail.usage.tokens) }} tokens
+              </template>
+            </span>
+          </header>
+
+          <div
+            v-if="!activeEvents.length"
+            class="muted-note day-empty"
+          >
+            这一天还没有整理出忆泡。
+          </div>
+          <article
+            v-for="event in activeEvents"
+            :key="event.id"
+            class="event-card"
+          >
+            <div class="event-head">
+              <span class="event-time">{{ timeOf(event) }}</span>
+              <span
+                v-if="event.state === 'DRAFT'"
+                class="event-draft"
+              >还在记</span>
+              <span
+                v-if="event.scope === 'private'"
+                class="event-private"
+              >私人</span>
+            </div>
+            <h3 class="event-title">
+              {{ event.title }}
+            </h3>
+            <p class="event-detail">
+              {{ event.detail }}
+            </p>
+            <div class="event-meta">
+              <span v-if="event.place">地点：{{ event.place }}</span>
+              <span v-if="event.participants.length">相关：{{ event.participants.join("、") }}</span>
+            </div>
+            <div class="event-actions">
+              <button
+                type="button"
+                class="btn-link"
+                @click="openEdit(event)"
+              >
+                编辑
+              </button>
+              <button
+                type="button"
+                class="btn-link"
+                @click="setEventStatus(event, 'ARCHIVED')"
+              >
+                隐藏
+              </button>
+            </div>
+          </article>
+
+          <div
+            v-if="archivedEvents.length"
+            class="day-archived"
+          >
+            <p class="muted-note">
+              已隐藏 {{ archivedEvents.length }} 条
+            </p>
+            <div
+              v-for="event in archivedEvents"
+              :key="event.id"
+              class="archived-line"
+            >
+              <span class="archived-title">{{ event.title }}</span>
+              <button
+                type="button"
+                class="btn-link"
+                @click="setEventStatus(event, 'ACTIVE')"
+              >
+                恢复
+              </button>
+            </div>
+          </div>
+
+          <div class="day-originals">
+            <button
+              type="button"
+              class="btn"
+              @click="showMessages = !showMessages"
+            >
+              {{ showMessages ? "收起原文" : `查看当天原文（${totalMessages} 条）` }}
+            </button>
+            <div
+              v-if="showMessages"
+              class="original-list"
+            >
+              <template
+                v-for="group in detail.messageGroups"
+                :key="group.id"
+              >
+                <p class="original-group">
+                  {{ group.title }}<span class="original-group-n">{{ group.messages.length }} 条</span>
+                </p>
+                <p
+                  v-for="message in group.messages"
+                  :key="message.id"
+                  class="original-line"
+                >
+                  <span class="original-role">{{ message.role === "USER" ? "对方" : message.role === "ASSISTANT" ? "她" : "系统" }}</span>
+                  <span class="original-text">{{ message.content }}</span>
+                </p>
+              </template>
+            </div>
+          </div>
+        </template>
+      </section>
+    </div>
+
+    <el-dialog
+      v-model="editOpen"
+      title="编辑忆泡"
+      width="520px"
+    >
+      <el-form
+        label-width="72px"
+        label-position="left"
+      >
+        <el-form-item label="标题">
+          <el-input
+            v-model="form.title"
+            maxlength="200"
+            show-word-limit
+          />
+        </el-form-item>
+        <el-form-item label="详情">
+          <el-input
+            v-model="form.detail"
+            type="textarea"
+            :rows="4"
+            maxlength="4000"
+            show-word-limit
+          />
+        </el-form-item>
+        <el-form-item label="地点">
+          <el-input
+            v-model="form.place"
+            maxlength="200"
+            placeholder="留空表示不记地点"
+          />
+        </el-form-item>
+        <el-form-item label="人物">
+          <el-input
+            v-model="form.participants"
+            placeholder="用、或逗号分隔，留空表示没有其他人在场"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editOpen = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="editSaving"
+          @click="saveEdit"
+        >
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.day-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 18px; margin-top: 18px; }
+.day-list { padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.day-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.day-list-head h2 { font-size: 14px; font-weight: 600; color: var(--text-2); }
+.day-search { margin: 6px 0 2px; }
+.day-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; }
+.day-item:hover { background: var(--surface-2, #f6f7fb); }
+.day-item.active { background: var(--surface-2, #f6f7fb); border-color: var(--line); }
+.day-item-label { font-size: 13px; color: var(--text-2); }
+.day-item-meta { font-size: 12px; color: var(--faint); display: inline-flex; gap: 6px; align-items: center; }
+.day-item-draft { padding: 1px 6px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 12px; }
+.day-detail { padding: 18px; }
+.day-detail-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.day-detail-head h2 { font-size: 16px; font-weight: 600; color: var(--text-2); }
+.day-empty { padding: 12px 0; }
+.event-card { border-top: 1px solid var(--line); padding: 14px 0; }
+.event-card:first-of-type { border-top: 0; }
+.event-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--faint); }
+.event-draft { padding: 1px 6px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 12px; }
+.event-private { padding: 1px 6px; border-radius: 999px; background: #ede9fe; color: #5b21b6; font-size: 12px; }
+.event-title { font-size: 14px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
+.event-detail { font-size: 13px; color: var(--dim); line-height: 1.8; margin-top: 4px; }
+.event-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--faint); margin-top: 6px; }
+.event-actions { display: flex; gap: 12px; margin-top: 8px; }
+.btn-link { background: none; border: 0; padding: 0; color: var(--dim); font-size: 12px; cursor: pointer; }
+.btn-link:hover { color: var(--text-2); text-decoration: underline; }
+.day-archived { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.archived-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; }
+.archived-title { font-size: 13px; color: var(--faint); }
+.day-originals { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 14px; }
+.original-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.original-group { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.original-group-n { font-weight: 400; color: var(--faint); font-size: 12px; }
+.original-line { display: flex; gap: 8px; font-size: 13px; line-height: 1.7; }
+.original-role { flex: 0 0 auto; color: var(--faint); font-size: 12px; }
+.original-text { color: var(--dim); }
+@media (max-width: 900px) {
+  .day-layout { grid-template-columns: 1fr; }
+}
+</style>

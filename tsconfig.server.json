@@ -1,0 +1,9 @@
+{
+  "extends": "./.nuxt/tsconfig.json",
+  "include": [
+    ".nuxt/nuxt.d.ts",
+    ".nuxt/nuxt.node.d.ts",
+    ".nuxt/nuxt.shared.d.ts",
+    "server/**/*"
+  ]
+}

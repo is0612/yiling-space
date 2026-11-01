@@ -1,0 +1,216 @@
+name: 项目校验
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    paths:
+      - "app/**"
+      - "server/**"
+      - "scripts/**"
+      - "nuxt.config.ts"
+      - "eslint.config.mjs"
+      - "prisma/**"
+      - "prisma.config.ts"
+      - "tsconfig.json"
+      - "docs/openapi.yaml"
+      - "package.json"
+      - "yarn.lock"
+      - ".env.example"
+      - "README.md"
+      - ".github/workflows/phase-0-validation.yml"
+  push:
+    branches: [main, docs/project-blueprint]
+    paths:
+      - "app/**"
+      - "server/**"
+      - "scripts/**"
+      - "nuxt.config.ts"
+      - "eslint.config.mjs"
+      - "prisma/**"
+      - "prisma.config.ts"
+      - "tsconfig.json"
+      - "docs/openapi.yaml"
+      - "package.json"
+      - "yarn.lock"
+      - ".env.example"
+      - "README.md"
+      - ".github/workflows/phase-0-validation.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: yiling_hub
+          POSTGRES_USER: yiling_hub
+          POSTGRES_PASSWORD: phase0_validation_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U yiling_hub -d yiling_hub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://yiling_hub:phase0_validation_only@127.0.0.1:5432/yiling_hub?schema=public
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: 固定 Yarn Classic 版本
+        run: |
+          corepack enable
+          corepack prepare yarn@1.22.22 --activate
+          yarn --version
+
+      - name: 安装依赖
+        run: yarn install --frozen-lockfile
+
+      - name: 校验 Prisma Schema
+        run: yarn run db:validate
+
+      - name: 生成 Prisma Client
+        run: yarn run db:generate
+
+      - name: 应用初始数据库迁移
+        run: yarn run db:migrate:deploy
+
+      - name: 检查迁移与 Schema 一致
+        run: yarn prisma migrate diff --from-config-datasource --to-schema=prisma/schema.prisma --exit-code
+
+      - name: 准备 Nuxt 类型与组件信息
+        run: yarn nuxt prepare
+
+      - name: TypeScript 类型检查
+        run: yarn run typecheck
+
+      - name: 周期记忆调度单元测试
+        run: yarn run test:scheduler
+
+      - name: 数据库调度器并发与幂等集成测试
+        run: yarn run test:scheduler-db
+
+      - name: AI 记忆来源与输出校验测试
+        run: yarn run test:memory-ai
+
+      - name: 记忆提炼请求凭据隔离测试
+        run: yarn run test:memory-ai-request
+
+      - name: 对话记忆检索测试
+        run: yarn run test:memory-retrieval
+
+      - name: 忆泡时间解析与去重逻辑测试
+        run: yarn run test:memory-events
+
+      - name: 忆泡落库、去重与软删除数据库集成测试
+        run: yarn run test:memory-events-db
+
+      - name: 日记与手账逻辑与数据库集成测试
+        run: yarn run test:journal && yarn run test:journal-db
+
+      - name: 日记与手账调度 / Worker 链路测试
+        run: yarn run test:journal-flow-db
+
+      - name: 角色模型参数校验测试
+        run: yarn run test:chat-model-config
+
+      - name: 对话模型提示词凭据隔离测试
+        run: yarn run test:chat-reply
+
+      - name: 私人记忆范围隔离测试
+        run: yarn run test:chat-private-memory
+
+      - name: 私人记忆范围数据库隔离测试
+        run: yarn run test:chat-private-memory-db
+
+      - name: 聊天请求幂等性数据库集成测试
+        run: yarn run test:chat-request-idempotency-db
+
+      - name: 管理员登录与会话鉴权单元测试
+        run: yarn run test:auth
+
+      - name: 会话与登录限流数据库集成测试
+        run: yarn run test:auth-db
+
+      - name: 跨平台身份隔离数据库测试
+        run: yarn run test:identity
+
+      - name: QQ 小号（OneBot）渠道端到端测试
+        run: yarn run test:onebot
+
+      - name: 渠道消息落库 metadata 测试
+        run: yarn run test:channel-message-metadata
+
+      # 其余纯逻辑/数据库测试：以前只在本地 verify:local 里跑，CI 漏了 30 个。
+      # 合成一条，避免 workflow 里堆三十个 step，也避免和 verify:local 漂移。
+      - name: 其余单元与集成测试
+        run: yarn run test:unit-suite
+
+      - name: B站 命令目录与解析层测试
+        run: yarn run test:bili-runner
+
+      - name: B站 视频卡片解析测试
+        run: yarn run test:bili-cards
+
+      - name: B站 值班窗口与判重测试
+        run: yarn run test:bili-duty
+
+      - name: B站 值班模型调用测试
+        run: yarn run test:bili-llm
+
+      - name: B站 数据库集成测试
+        run: yarn run test:bili-db
+
+      - name: ESLint 检查
+        run: yarn run lint
+
+      - name: 初始化 CI 本地开发用户
+        env:
+          DEV_OWNER_ID: 00000000-0000-4000-8000-000000000001
+          DEV_OWNER_USERNAME: ci-local
+          DEV_OWNER_PASSWORD: CI_smoke_test_password_123
+        run: yarn run db:seed:dev
+
+      - name: 验证角色与记忆设置 API 的数据库持久化
+        env:
+          NODE_ENV: development
+          YILING_LOCAL_API_ENABLED: "true"
+          YILING_ALLOW_REGISTRATION: "true"
+          DEV_OWNER_ID: 00000000-0000-4000-8000-000000000001
+          DEV_OWNER_USERNAME: ci-local
+          DEV_OWNER_PASSWORD: CI_smoke_test_password_123
+          SMOKE_BASE_URL: http://127.0.0.1:3000
+          LLM_BASE_URL: http://127.0.0.1:4010/v1
+          LLM_API_KEY: ci-only
+          LLM_MODEL: ci-memory-test
+          LLM_MOCK_PORT: "4010"
+          LLM_MOCK_API_KEY: ci-only
+        run: |
+          node scripts/mock-llm-server.mjs > /tmp/yiling-llm.log 2>&1 &
+          mock_pid=$!
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4010/health > /dev/null; then break; fi
+            sleep 1
+          done
+          if ! curl --fail --silent http://127.0.0.1:4010/health > /dev/null; then
+            cat /tmp/yiling-llm.log
+            exit 1
+          fi
+          yarn run dev --host 127.0.0.1 --port 3000 > /tmp/yiling-nuxt.log 2>&1 &
+          server_pid=$!
+          trap 'status=$?; kill "$server_pid" "$mock_pid" 2>/dev/null || true; if [ "$status" -ne 0 ]; then cat /tmp/yiling-nuxt.log; cat /tmp/yiling-llm.log; fi; exit "$status"' EXIT
+          yarn tsx scripts/smoke-test-local-api.mjs
+
+      - name: Nuxt 生产构建
+        run: yarn run build
+
+      - name: 检查 OpenAPI 契约
+        run: npx --yes @redocly/cli@latest lint --extends=minimal docs/openapi.yaml
