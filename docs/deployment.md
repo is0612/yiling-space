@@ -126,6 +126,8 @@ yarn worker:run        # 单次执行一条任务
 yarn worker:watch      # 常驻消费队列
 ```
 
+Worker 也会跟着 QQ 链路一起起（`yarn onebot:stack` / 双击 `scripts/start-qq.bat`，日志前缀 `[worker]`），和 watchdog 并列——它最容易漏起，漏了只会等 watchdog 报 `worker_stalled`。不想要就设 `YILING_WORKER_DISABLED=1`。
+
 间隔可用 `YILING_MEMORY_SCHEDULER_INTERVAL_MS`（最小 5000）与 `YILING_MEMORY_WORKER_INTERVAL_MS`（最小 1000）调整。
 
 Worker 配置模型后会调用 LLM 对周期对话做结构化总结，验证来源消息 ID，再把快照、长期记忆新增/更新/失效和审计记录放进**同一个数据库事务**。模型未配置时保留队列任务；失败按退避策略重试。

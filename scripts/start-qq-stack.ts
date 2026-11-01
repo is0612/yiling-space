@@ -126,6 +126,29 @@ function startWatchdog(): ChildProcess {
   return child;
 }
 
+/**
+ * 记忆 Worker 也跟着这条链路一起起。
+ *
+ * 它和 watchdog 是同一类后台进程（只看产出、不占端口），却最容易漏起：忘了起时不会
+ * 立刻有人发现，只会等 watchdog 报 `worker_stalled`（队列有活没人认领），而那一刻
+ * 忆泡提炼可能已经停了好几个小时。既然 QQ 链路已经是一个常驻窗口，worker 挂在这里
+ * 最自然 —— 不想让它跟就设 `YILING_WORKER_DISABLED=1`（与 `YILING_WATCHDOG_DISABLED` 对称）。
+ */
+function startWorker(): ChildProcess {
+  const child = spawn(process.execPath, tsxArgs("scripts/run-memory-worker.ts").concat("--watch"), {
+    cwd: REPO_ROOT,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: process.env,
+  });
+  pipeWithPrefix(child.stdout, "worker");
+  pipeWithPrefix(child.stderr, "worker");
+  child.on("error", (error) => log({ event: "worker-spawn-failed", error: error.message }));
+  child.on("exit", (code) => {
+    if (running) log({ event: "worker-exited", code: code ?? "未知" });
+  });
+  return child;
+}
+
 function startAdapter(): ChildProcess {
   const child = spawn(process.execPath, tsxArgs("scripts/run-onebot-adapter.ts"), { cwd: REPO_ROOT, stdio: "inherit" });
   child.on("error", (error) => log({ event: "adapter-spawn-failed", error: error.message }));
@@ -165,11 +188,16 @@ async function main() {
   const watchdog = process.env.YILING_WATCHDOG_DISABLED === "1" ? null : startWatchdog();
   if (!watchdog) log({ event: "watchdog-skipped", reason: "YILING_WATCHDOG_DISABLED=1" });
 
+  // 记忆 Worker 也挂进来（`YILING_WORKER_DISABLED=1` 可以关掉）。
+  const worker = process.env.YILING_WORKER_DISABLED === "1" ? null : startWorker();
+  if (!worker) log({ event: "worker-skipped", reason: "YILING_WORKER_DISABLED=1" });
+
   const adapter = startAdapter();
   const exitCode = await new Promise<number | null>((resolveExit) => {
     adapter.once("exit", (code) => resolveExit(code ?? 0));
   });
   running = false;
+  worker?.kill();
   watchdog?.kill();
   snowluma?.kill();
   process.exitCode = exitCode ?? 0;
