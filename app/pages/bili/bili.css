@@ -398,6 +398,65 @@
 }
 .bd-muted { color: var(--bd-dim); font-size: 12px; }
 
+/* ── 环境提示条：缺 bili CLI 时顶在工作区最上面 ─────────────
+   bili 不是 npm 依赖，装项目时不会带上。缺了它 dashboard 只是「空」，
+   空得和「刚建好还没跑过」一样 —— 所以得有一条自己站出来的说明。 */
+.bd-cli-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  border: 1px solid #f0e3c4;
+  border-left: 3px solid var(--bd-amber);
+  border-radius: var(--bd-radius);
+  background: #fdf8ec;
+  padding: 12px 14px;
+  color: var(--bd-text-2);
+  font-size: 12px;
+  line-height: 1.75;
+  text-wrap: pretty;
+}
+.bd-cli-warn > .el-icon { margin-top: 2px; flex: none; color: var(--bd-amber); font-size: 15px; }
+.bd-cli-warn .t { color: var(--bd-text); font-size: 14px; font-weight: 700; }
+.bd-cli-warn .d { margin-top: 3px; }
+.bd-cli-warn code {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin-top: 7px;
+  border: 1px solid var(--bd-line-strong);
+  border-radius: var(--bd-radius-xs);
+  background: var(--bd-surface);
+  padding: 3px 7px;
+  color: var(--bd-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+.bd-cli-warn .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+/* 这两个动作是并列的（复制 / 重测），都做成浅底 chip：
+   琥珀底上再压一颗实心品牌色按钮，会把「提示」变成「告警」。 */
+.bd-cli-warn .acts .bd-btn {
+  height: 30px;
+  border: 1px solid var(--bd-line-strong);
+  border-radius: var(--bd-radius-sm);
+  background: var(--bd-surface);
+  padding: 0 10px;
+  color: var(--bd-text-2);
+}
+.bd-cli-warn .acts .bd-btn:hover {
+  border-color: var(--bd-amber);
+  color: var(--bd-amber);
+  text-decoration: none;
+}
+/* 已装但读不出版本：一句淡提示，不跟着一起喊 */
+.bd-cli-warn.is-dim {
+  border-color: var(--bd-line);
+  border-left-color: var(--bd-faint);
+  background: var(--bd-surface-2);
+}
+.bd-cli-warn.is-dim > .el-icon { color: var(--bd-faint); }
+
 /* ── 按钮 ─────────────────────────────────────────────── */
 /* 次要动作用文字按钮：无底无框，hover 出下划线。整页只留一个实心主操作。 */
 .bd-btn {

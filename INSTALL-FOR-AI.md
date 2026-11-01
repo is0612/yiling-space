@@ -171,6 +171,18 @@ yarn check:env
 | QQ 小号 | QQ 客户端 + SnowLuma 面板 + 一个不常用的小号 | [QQ 小号部署](docs/qq-onebot-deploy.md) |
 | B站 值班 | `bili` CLI + 账号绑定 | [B站 值班集成](docs/bili-desk-integration.md) |
 
+B站 值班台依赖的 `bili` 是一个独立的 PyPI 包（`bili-agent`），**不在 npm 依赖里，`yarn setup` 不会替你装**。
+要用的话在项目根跑：
+
+```bash
+uv venv .venv && uv pip install --python .venv/Scripts/python.exe bili-agent==0.6.0
+.venv/Scripts/bili.exe --version   # {"ok": true, "data": {"version": "0.6.0"}}
+```
+
+macOS / Linux 把 `Scripts/python.exe` 换成 `bin/python`。没装也不影响其他功能，
+但进「B站值班台」会看到空数据 —— 先跑 `yarn check:env`，里面「B站 值班台（可选）」一节会明确告诉你
+装没装、装在哪、有没有扫码登录。
+
 记忆任务不在 Web 进程里跑定时器，需要另开两个常驻进程：
 
 ```bash

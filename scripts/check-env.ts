@@ -15,6 +15,11 @@ import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
 import { Client } from "pg";
 import { isChatModelConfigured } from "../server/utils/chat-model-config";
+import {
+  biliInstallCommand,
+  probeBiliBin,
+  type BiliBinSource,
+} from "../server/utils/channel-adapter/bili/runner";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_PATH = path.join(repoRoot, ".env");
@@ -524,6 +529,65 @@ function checkRuntime(env: EnvMap): void {
 }
 
 // ---------------------------------------------------------------------------
+// B站 值班台：可选组件。bili CLI 来自 PyPI，不在 npm 依赖里，装项目时不会自动带上，
+// 所以「没装」在这里是常态、不是故障 —— 只提示，不算阻塞项（error）。
+// 反过来，缺了它 B站 页面会一片空白而且说不清原因，才需要这一段自检。
+// ---------------------------------------------------------------------------
+
+const BILI_SOURCE_LABEL: Record<BiliBinSource, string> = {
+  connection: "账号连接里指定的路径",
+  env: "环境变量 BILI_BIN",
+  venv: "项目 .venv",
+  path: "系统 PATH",
+  missing: "未找到",
+};
+
+/** bili CLI 把凭证写在它自己的数据目录：BILI_CLI_HOME，否则 %APPDATA%\bili-cli。 */
+function biliCredentialPath(): string {
+  const home = (process.env.BILI_CLI_HOME ?? process.env.BILI_DESK_HOME ?? "").trim();
+  if (home) return path.join(home, "credential.json");
+  return process.env.APPDATA ? path.join(process.env.APPDATA, "bili-cli", "credential.json") : "";
+}
+
+function checkBiliCli(): void {
+  section("B站 值班台（可选）");
+
+  const probe = probeBiliBin();
+  if (!probe.found) {
+    line("info", "没有找到 bili CLI —— 不用 B站值班台的话，这一项可以直接忽略");
+    line("info", `要用的话在项目根执行：${biliInstallCommand()}`);
+    fix("需要 B站值班台时再装 bili CLI，装完跑 yarn check:env 复查");
+    return;
+  }
+
+  line("ok", `bili CLI：${probe.bin}（来自${BILI_SOURCE_LABEL[probe.source]}）`);
+
+  const version = spawnSync(probe.bin, ["--version"], { encoding: "utf8", timeout: 20_000 });
+  if (version.status !== 0) {
+    const reason = (version.stderr || version.error?.message || "").trim().split("\n")[0];
+    line("warn", `这个文件执行不起来：${reason || `退出码 ${version.status}`}`);
+    fix("确认它是个能直接跑的程序；PyPI 包换过版本就重新装一遍 bili-agent");
+    return;
+  }
+  try {
+    const parsed = JSON.parse((version.stdout ?? "").trim()) as { ok?: boolean; data?: { version?: string } };
+    line("ok", `版本 ${parsed.data?.version ?? "(未提供)"}`);
+  } catch {
+    line("warn", "bili --version 的输出不是 JSON —— 这个路径可能指向了另一个同名程序");
+    fix("检查 BILI_BIN / PATH 里的 bili 是不是 bili-agent 提供的那个");
+  }
+
+  const credential = biliCredentialPath();
+  if (!credential) {
+    line("info", "读不到 APPDATA，跳过登录态检查");
+  } else if (fs.existsSync(credential)) {
+    line("ok", "已扫码登录（凭证在 bili CLI 数据目录）");
+  } else {
+    line("info", "还没扫码登录 —— 进「B站值班台」点主页头像扫码");
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   console.log("忆灵空间 · 环境自检（只读，不会改任何文件）");
@@ -535,6 +599,9 @@ async function main(): Promise<void> {
     if (rawUrl) await checkDatabase(rawUrl, env);
     checkRuntime(env);
   }
+
+  // 与 .env / 数据库无关，配置坏了也照样能查
+  checkBiliCli();
 
   console.log("\n" + "=".repeat(56));
   if (counts.error === 0 && counts.warn === 0) {

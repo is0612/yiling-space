@@ -15,6 +15,7 @@ import net from "node:net";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { biliInstallCommand, probeBiliBin } from "../server/utils/channel-adapter/bili/runner";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_PATH = path.join(repoRoot, ".env");
@@ -236,6 +237,15 @@ async function main(): Promise<void> {
     warn("没有检测到可用的 Docker（未安装，或 Docker Desktop 没启动）。");
   }
 
+  // bili 是 PyPI 上的独立 CLI，只服务「B站值班台」，不在 npm 依赖里、向导也不该替它停下来。
+  // 这里只报告现状，装不装由用户后面自己决定。
+  const bili = probeBiliBin();
+  if (bili.found) {
+    ok(`bili CLI（B站值班台用）${bili.bin}`);
+  } else {
+    info("没装 bili CLI —— 只有「B站值班台」需要它，不影响聊天和记忆");
+  }
+
   // --- 2. 现有配置 ---
   step("检查现有配置");
   let previous: SetupValues | null = null;
@@ -373,6 +383,14 @@ async function main(): Promise<void> {
     console.log("AI 还不会说话——还需要给它填模型 Key（二选一）：");
     console.log("  · 页面里填（推荐）：登录 → 角色 →「AI 对话 → 模型参数」，Key 加密存库");
     console.log("  · 或者写进 .env 的 LLM_API_KEY / LLM_MODEL / LLM_BASE_URL，作为全局默认");
+
+    // 只有没装时才提：装好的人不需要再被告知一遍怎么装
+    if (!bili.found) {
+      console.log("");
+      console.log("想用「B站值班台」再额外装一个 bili CLI（不装不影响上面这些功能）：");
+      console.log(`  ${biliInstallCommand()}`);
+      console.log("装完跑 yarn check:env 复查。详见 docs/bili-desk-integration.md「4.0」");
+    }
   }
   console.log("=".repeat(56) + "\n");
 }

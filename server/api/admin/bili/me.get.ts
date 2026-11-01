@@ -1,5 +1,5 @@
 import { requireAdminActor } from "../../../utils/auth";
-import { biliJson } from "../../../utils/channel-adapter/bili/runner";
+import { biliJson, biliMissingMessage, probeBiliBin } from "../../../utils/channel-adapter/bili/runner";
 import { parseBiliMe, readBiliError } from "../../../utils/channel-adapter/bili/cards";
 
 /**
@@ -11,9 +11,23 @@ import { parseBiliMe, readBiliError } from "../../../utils/channel-adapter/bili/
  *
  * 没登录时 CLI 会以 ok:false 返回（code 通常是 not_logged_in），这里原样透出，
  * 前端据此决定显示「登录 B站」还是用户头像。
+ *
+ * ⚠️ 先探 CLI 在不在，再谈登录态。缺 CLI 时 biliJson 拿到的是 null，往下走会被误判成
+ * 「没读到账号资料」—— 排查方向直接指向登录，而真正的问题是根本没装这个命令。
  */
 export default defineEventHandler(async (event) => {
   await requireAdminActor(event);
+
+  const probe = probeBiliBin();
+  if (!probe.found) {
+    return {
+      ok: false,
+      me: null,
+      cliMissing: true,
+      error: "cli_missing",
+      detail: biliMissingMessage(probe.bin),
+    };
+  }
 
   const json = await biliJson(["me", "show"], { timeoutMs: 30_000 });
   const error = readBiliError(json);
@@ -21,13 +35,14 @@ export default defineEventHandler(async (event) => {
     return {
       ok: false,
       me: null,
+      cliMissing: false,
       error: `${error.code}${error.message ? `：${error.message}` : ""}`,
     };
   }
 
   const me = parseBiliMe(json);
   if (!me) {
-    return { ok: false, me: null, error: "没读到账号资料，确认 bili CLI 已登录。" };
+    return { ok: false, me: null, cliMissing: false, error: "没读到账号资料，确认 bili CLI 已登录。" };
   }
-  return { ok: true, me, error: null };
+  return { ok: true, me, cliMissing: false, error: null };
 });

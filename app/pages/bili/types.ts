@@ -73,3 +73,27 @@ export type BiliMe = {
 
 /** `bili owner show` 的当前主人。 */
 export type BiliOwner = { mid: string; name: string };
+
+/**
+ * bili CLI 的运行环境（`/api/admin/bili/env`）。
+ *
+ * 缺 CLI 和「有 CLI 但没登录」「有 CLI 但没跑过」是三件事，页面上要分开说 ——
+ * 这条数据专门用来区分第一种。
+ */
+export type BiliCliEnv = {
+  installed: boolean;
+  bin: string;
+  source: "connection" | "env" | "venv" | "path" | "missing";
+  version: string | null;
+  /** 装它的一整条命令，横幅里直接复制走。 */
+  installCommand: string;
+};
+
+/** 来源的中文说法，横幅和提示用同一套措辞。 */
+export const BILI_SOURCE_LABEL: Record<BiliCliEnv["source"], string> = {
+  connection: "账号连接里指定的路径",
+  env: "环境变量 BILI_BIN",
+  venv: "项目 .venv",
+  path: "系统 PATH",
+  missing: "未找到",
+};

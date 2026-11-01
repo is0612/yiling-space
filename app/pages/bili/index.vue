@@ -6,6 +6,7 @@ import BiliSidebar from "./BiliSidebar.vue";
 import BiliOverview from "./BiliOverview.vue";
 import BiliHistory from "./BiliHistory.vue";
 import BiliCommand from "./BiliCommand.vue";
+import BiliCliBanner from "./BiliCliBanner.vue";
 import BiliAccountDialog from "./BiliAccountDialog.vue";
 import BiliBindDialog from "./BiliBindDialog.vue";
 import BiliDutyDialog from "./BiliDutyDialog.vue";
@@ -17,6 +18,7 @@ import { provideBiliDashboard } from "./useBiliDashboard";
 import { provideBiliAccounts } from "./useBiliAccounts";
 import { provideBiliMe } from "./useBiliMe";
 import { provideBiliRunner } from "./useBiliRunner";
+import { provideBiliEnv } from "./useBiliEnv";
 import "./bili.css";
 
 /**
@@ -37,9 +39,10 @@ useHead({ title: "B站值班台 · 忆灵空间" });
 // 角色列表：绑定角色时用，与角色管理页共享同一份数据。
 const characters = useCharacterList();
 
-// 创建顺序 = 依赖顺序：dashboard → me（登录后重读 dashboard）→ accounts（改完要重读）→ desk → runner
+// 创建顺序 = 依赖顺序：env（CLI 在不在）→ dashboard → me（登录后重读 dashboard）→ accounts（改完要重读）→ desk → runner
 // ⚠️ 依赖一律从参数传下去，不在 store 里相互 inject：
 //    Vue 的 inject 只往**父组件**的 provides 里找，页面自己 provide 的东西在同一个 setup 里读不到。
+const env = provideBiliEnv();
 const dash = provideBiliDashboard();
 const me = provideBiliMe({ onLoggedIn: () => dash.loadDashboard() });
 const accounts = provideBiliAccounts({ accounts: dash.accounts, reload: dash.loadDashboard });
@@ -79,6 +82,7 @@ const loadDashboard = dash.loadDashboard;
 
 onMounted(() => {
   desk.init();
+  void env.loadEnv();
   void loadDashboard();
   void me.loadMe();
 });
@@ -97,6 +101,7 @@ onBeforeUnmount(desk.dispose);
       <!-- 工作区：概览 / 运行记录 / 命令台 -->
       <main class="bd-work">
         <div class="bd-in">
+          <BiliCliBanner />
           <BiliOverview v-if="view === 'overview'" />
           <BiliHistory v-else-if="view === 'history'" />
           <BiliCommand v-else />
