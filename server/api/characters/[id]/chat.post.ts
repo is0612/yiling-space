@@ -13,7 +13,7 @@ import {
   resolveMemoryItemLimit, resolveMemoryTokenBudget, resolveRecentMessageLimit, resolveSnapshotTokenBudget,
 } from "../../../utils/memory-retrieval";
 import {
-  resolveEventItemLimit, resolveEventTokenBudget, selectEventsForPrompt,
+  resolveEventItemLimit, resolveEventTokenBudget, resolveEventRecentDays, selectEventsForPrompt, selectRecentEvents,
 } from "../../../utils/memory-event-retrieval";
 import {
   resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
@@ -264,6 +264,31 @@ export default defineEventHandler(async (event) => {
     scope: scopeOriginById.get(event.memoryScopeId) ?? "character",
   }));
 
+  /**
+   * 最近几天的忆泡：不看问句，无条件当背景带上。
+   *
+   * 和上面 `events` 是两条路：那条要靠时间或关键词命中，群里没人提问时它一条都不会带；
+   * 这条只按时间取「最近几天我干了什么」，让她不至于对昨天一无所知。默认关（0），
+   * 打开后会多占几百 token，所以做成按角色的开关。
+   */
+  const recentEventDays = resolveEventRecentDays(character.modelConfig);
+  const recentEventSelection = recentEventDays > 0
+    ? selectRecentEvents(eventCandidates, {
+        days: recentEventDays,
+        excludeIds: new Set(events.map((event) => event.id)),
+      })
+    : null;
+  const recentEvents = (recentEventSelection?.items ?? []).map((event) => ({
+    id: event.id,
+    occurredAt: event.occurredAt.toISOString(),
+    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
+    ...(event.place ? { place: event.place } : {}),
+    participants: event.participants,
+    title: event.title,
+    detail: event.detail.slice(0, 600),
+    scope: scopeOriginById.get(event.memoryScopeId) ?? "character",
+  }));
+
   // 忆泡还没覆盖到那一段时，用原始对话兜底 —— 原文一直在库里，只是以前没有检索入口。
   // 只在问句确实指向某一天时才查，避免和最近对话窗口重复。
   let rawMessages: Array<{
@@ -347,6 +372,7 @@ export default defineEventHandler(async (event) => {
       memories,
       snapshots,
       events,
+      ...(recentEvents.length ? { recentEvents } : {}),
       rawMessages,
       timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
       ...(journalLine ? { journalLine } : {}),

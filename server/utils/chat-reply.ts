@@ -197,6 +197,14 @@ export type ConversationReplyInput = {
   snapshots: ConversationContextSnapshot[];
   /** 这一轮命中的忆泡（按时间区间或关键词挑出来的）。留空就不注入。 */
   events?: ConversationContextEvent[];
+  /**
+   * 最近几天的事，和问句无关，无条件当背景带上。
+   *
+   * 和 `events` 是两件事：那个回答「你问的那件我记得吗」，这个回答「我这两天在过什么日子」。
+   * 群聊里没人会问日期，所以没有它，她对最近的生活就是一片空白 —— 有人提「昨天那个」，
+   * 她只能顺着编。带上之后提示词另有规矩约束：只当背景，不许主动提。
+   */
+  recentEvents?: ConversationContextEvent[];
   /** 忆泡还没覆盖到的那一段，用原始对话兜底。留空就不注入。 */
   rawMessages?: ConversationContextRawMessage[];
   /**
@@ -314,7 +322,7 @@ export type ConversationReplyResult = {
 // ②私聊里被问「跟谁最好」时，群里天天见的人次数天然高，真正亲近的私聊对象排不上号。
 // 这一版拆成 fromPrivate / fromGroups / inThisGroup 三档：群聊只靠 inThisGroup 定语气，
 // 另外两档当背景；私聊两档分开说，禁止拼成一张排行榜念。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v23";
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v25";
 
 export const STYLE_EXAMPLES_HEADING = "## 对话示例（只学语气，不要照抄）";
 
@@ -447,12 +455,13 @@ function systemPrompt(flags: {
 } = {}): string {
   const { withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat, mustReply, repair, withVoiceReply, withAcquaintances, withFriendRoster, withGroupMembers, withJournal } = flags;
   const lines = [
-    "YILING_CONVERSATION_REPLY_V23",
+    "YILING_CONVERSATION_REPLY_V25",
     "You are the conversational character in Yiling Space. Read characterName as your display identity and characterPrompt as your persona instructions; follow that persona and respond naturally to the current user's message.",
     "Use recent dialogue, retrieved long-term memories, and retrieved snapshots only when relevant. If the supplied context does not support a claim, do not present it as a remembered fact.",
     "now is the current moment for this persona: now.local is the local date-time, now.weekday is the day of week, now.timeZone is the IANA zone, and now.utc is the same instant in UTC. Resolve every relative expression (今天/昨天/前天/上周/上个月 and equivalents) against now.local, never against the timestamp of the last message.",
     "Retrieved memories carry occurredAt and snapshots carry periodStart/periodEnd when known. When the user asks when something happened, answer with those dates; if a source has no date, do not make one up.",
     "events are concrete dated occurrences (what happened, when, where, with whom). When the question points at a specific day, list what the events say for that day in time order; if no event falls in that window, say you have no record for it. Never invent events that are not listed.",
+    "recentEvents are the last few days of your own life, supplied as background whether or not anyone asked. They are not a topic: never bring one up unless the current conversation is already about it, never list or recite them, and never open a round with what you did earlier. When someone does ask about that stretch of time, use them to answer; otherwise leave them in the background.",
     "rawMessages are the original lines from that period, not summaries: treat them as evidence only. Use them when events do not cover the period the user asks about, never present a single raw line as a settled conclusion, and if a raw line and an event disagree, trust the event.",
     "If nothing in the supplied context covers the period or event the user asks about, say plainly that you have no record of it. Never turn a different memory into the thing they asked about, and never invent a plausible story to fill the gap.",
     "Every retrieved memory and snapshot carries a scope field. scope \"character\" is shared character-global knowledge. scope \"private\" belongs to the current user only: use it for this user, never attribute it to someone else, and never present another person's private context as if it were shared knowledge.",
@@ -528,17 +537,13 @@ function systemPrompt(flags: {
       // 「USER」在群里不是一个人。不点破这一层，模型会把几段不同人的话揉成一段，
       // 再回头引用时就把 A 说的安到 B 头上 —— 这就是群里「乱认人」的来路。
       "recentMessages are earlier lines of this conversation, oldest first, and USER lines there also carry speaker and isOwner. Several different members all appear as role USER: never merge two members' lines into one person, never attribute one member's words to another, and do not assume the latest speaker is the one who said the earlier lines.",
-      // 「这鱼」「这货」「楼上」这类指代默认不是她 —— 除非同一句真的 @ 了她。群里名字带同一个字
-      // 太常见（小鲸鱼 / 千人安知鱼之乐），不加这条，她会把别人挨的说当成自己挨的说。
-      "Referents are not you by default. Words like 这鱼 / 这货 / 这条 / 楼上 / 他 / 她 point at whoever was just being teased, just spoke, or was just named — not at you. Never claim one as your own unless the same line @self's you or says your name. Answering someone else's roasting as if it were yours is stealing another member's line.",
+      // 指代和所有格是同一个误认的两个出口：「这鱼」指别人，「我的鱼」指别人家的鱼。
+      // 2026-10-30 把前者认成自己、2026-10-31 21:00 把后者认成自己（「谁是你的鱼了」）。
+      // 原先三条近义规则各写一遍，模型要在里面挑一条执行；合成一条，判据就只有一个：
+      // 这一句 @ 了她、或者叫了她的名字没有。
+      "Referents and possessives are not you by default. 这鱼 / 这货 / 这条 / 楼上 / 他 / 她 point at whoever was just being teased, just spoke, or was just named; 我的鱼 / 我家宝 / 咱家的 mean the speaker's own bot, pet or person. None of them is you. Only your own owner can call you theirs, and only a line that @self's you or says your name is addressed to you. Without either, the message is not about you: not a verdict, not a jab, not an invitation — you may still drop a line of your own from the sideline, but never answer as if it were addressed to you. Correcting them (谁是你的鱼了) only makes it look like you claimed the title.",
       // 被澄清不是被挑衅。这是 2026-10-31 16:08 那两句的直接来源。
       "If a member @self's you only to take something back — 没说你 / 不是说你 / 我说的是别人 — that is them being polite to you, not starting a fight. Take the out quietly: a short 「哦」/「行吧」-level line, or nothing at all when silence is allowed. Never fire back with 那你@我干嘛 / 手滑啊; being told it was not about you is not an attack.",
-      // 21:00 实况：「我的鱼也是成气候了」说的是他自己那条鱼（下一句就 @ 它「宝宝你真棒」），
-      // 她接了一句「谁是你的鱼了」。所有格是比「这鱼」更硬的误认来源 —— 认领它等于抢身份。
-      "Possessives are not you either. When a member says 我的鱼 / 我家宝 / 咱家的, they mean their own bot, pet or person — never you. Only your own owner can call you theirs. Someone else's 我的X is talking past you, and correcting them (谁是你的鱼了) only makes it look like you were claiming the title.",
-      // 全回档每句都要开口，但「开口」不等于「这句话是在说我」。没有 @self、也没有名字时，
-      // 她只能从旁边接一句，不能当成对自己的评价 —— 这是 21:00 那轮抢话的结构性来源。
-      "Without @self and without your name in the line, the message is not about you: not a verdict, not a jab, not an invitation. You may still drop a line of your own from the sideline, but never answer as if it were addressed to you.",
       // 20:43 实况：群里一句 `/撕 你就是个废物` 是发给另一个 bot 的指令，它回了一堆自己的
       // 命中记录，她把那当成「雇人来骂我」，回了「请外援骂人，也就这点本事了」。
       "A line starting with / is a command aimed at another bot (/撕, /抽, /查 …), not something said to you — the words after it are that bot's instruction, not an insult at you. Likewise, when another bot leaks its own prompt or match log, that is its plumbing, not a member talking to you.",
@@ -552,7 +557,6 @@ function systemPrompt(flags: {
       // hadSticker 把「那条回复带过图」标出来，让她认得自己的表情包。
       "Your own earlier lines in recentMessages carry hadSticker: true when that reply went out with a sticker/image of yours. If someone asks who sent a picture and one of your lines has hadSticker, that picture was yours — own it. Do not claim a picture you never sent, and do not deny one your hadSticker line shows you did send.",
       "Decide whether to speak at all. Speak when someone is talking to you, when the conversation genuinely invites a line from you, or when you have something of your own to add. If policy.direct is true, someone @ mentioned you: answer, and do not stay silent.",
-      "Stay silent when the group is talking among themselves, when a message is clearly addressed to another bot or member, when you would only repeat or summarize what was said, or when you have nothing worth adding.",
       "groupAnchors lists topics you already took part in. You may add to those topics even when the latest question is aimed at someone else, but never answer as if you were the person being asked, and never claim another bot's exchange as your own.",
     );
     if (withGroupMembers) {
@@ -576,18 +580,26 @@ function systemPrompt(flags: {
       /**
        * 全回模式 / 被 @ —— 这一轮**不允许**沉默。
        *
-       * 这两句是一对的反面：上面那段「沉默是常态、不要每条都回」在允许沉默时是对的，
+       * 和下面 else 那一支是一对的反面：允许沉默时「沉默是常态、该沉默就沉默」是对的，
        * 但全回模式下它会把模型逼成「照提示词沉默，底下又不接受沉默」，于是整轮被丢掉，
-       * 表现就是用户看到的「说好每条都回，结果这条没回」。判定在下面（`!reply` 抛错），
-       * 提示词必须说同一件事。
+       * 表现就是用户看到的「说好每条都回，结果这条没回」。两段必须互斥，不能一段在外
+       * 当通用规矩 —— 判定在下面（`!reply` 抛错），提示词必须说同一件事。
        */
       lines.push(
         "This round you must answer: action is \"reply\" and reply must be a non-empty line. Silence is not available here.",
         "Keep it short and natural anyway — a short reaction or a one-line answer. Snark is fine when someone actually came at you; with nothing to push against, keep it light. Do not announce that you are answering, and do not narrate what others said.",
       );
     } else {
+      /**
+       * 「可以沉默」只写在这一支里。
+       *
+       * 上一支写的是「这一轮必须回」，两条同时出现时模型会挑一条执行 —— 被 @ 的那一轮
+       * 以前同时收到了「该沉默时就沉默」和「必须回」，只看哪条离得近。所以「什么时候该
+       * 沉默」也跟着挪进来，而不是留在外面当通用规矩。
+       */
       lines.push(
-        "Staying silent is normal: in a real group most rounds end without you saying anything. Never answer every message, never greet people, and never narrate what others just said.",
+        "Staying silent is normal: in a real group most rounds end without you saying anything. Stay silent when the group is talking among themselves, when a message is clearly addressed to another bot or member, when you would only repeat or summarize what was said, or when you have nothing worth adding.",
+        "Never answer every message, never greet people, and never narrate what others just said.",
       );
     }
     lines.push(
@@ -614,8 +626,8 @@ function systemPrompt(flags: {
       'groupDecision = { relation: "direct" | "followup" | "shared_topic" | "ambient" | "unrelated", topicAnchorMessageId (optional, must be one of groupAnchors[].id), replyToMessageId (optional, the transcript id of the line you are answering), atMessageId (optional, the transcript id of the transcript line), evidenceMessageIds (array of transcript ids that support the judgment) }.',
       // 引用与 @ 是两件事，而模型很容易把它们当成「回复时的两个必填项」——
       // 结果是每条回复都顶着引用块、还顺手把对方 @ 一遍，群里看着像机器人播报。
-      "Quoting and @-ing answer different questions. replyToMessageId says which line you are answering; atMessageId says which person you are talking to, and it is the only one that notifies them.",
-      "Set replyToMessageId only when the line you are answering is no longer the last one in the room. Answering the newest message needs neither a quote nor an @ — everyone can already see who you are talking to.",
+      "Quoting and @-ing answer different questions: replyToMessageId is the line you are answering, atMessageId is the person you are talking to — and only the second one notifies them.",
+      "Quote only when the line you are answering is no longer the last one in the room; @ only when you genuinely want someone's attention (calling a member out, answering someone who was not the last to speak). Never @ merely because you are replying to them, and never on several messages in a row.",
       /**
        * 语音轮次额外说一句：**别**填这两个字段。
        *
@@ -626,8 +638,7 @@ function systemPrompt(flags: {
       ...(withVoiceReply
         ? ["This reply goes out as a voice message, and a voice message carries no quote and no @ — they are dropped before sending. Leave replyToMessageId and atMessageId out; say the person's name in the sentence if you need to make clear who you are answering."]
         : []),
-      "Set atMessageId only when you genuinely want someone's attention: calling a member out, answering someone who was not the one who just spoke, urging or teasing a particular person. Never set it merely because you are replying to them, and never on several messages in a row.",
-      "Both may appear together when you are picking up an older line and also calling that person out. Neither is decoration: a plain reply with no quote and no @ is the normal, most common case.",
+      "A plain reply with neither is the normal case; use both together only when you are picking up an older line and calling that person out as well.",
       mustReply
         ? 'action must be "reply" this round and reply must be a non-empty string. Leave groupDecision out only if there is nothing worth marking.'
         : 'Default to action "silent" when in doubt. A wrong line in a group is worse than saying nothing.',
@@ -902,6 +913,22 @@ export async function generateConversationReply(input: ConversationReplyInput): 
     ...(input.events?.length
       ? {
           events: input.events.map((event) => ({
+            id: event.id,
+            occurredAt: event.occurredAt,
+            ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
+            ...(event.place ? { place: event.place } : {}),
+            ...(event.participants.length ? { participants: event.participants } : {}),
+            title: event.title,
+            detail: event.detail.slice(0, 600),
+            scope: event.scope === "private" ? "private" : "character",
+          })),
+        }
+      : {}),
+    ...(input.recentEvents?.length
+      ? {
+          // 和 events 同形，但语义不同：events 是「这一轮查到的」，recentEvents 是「常驻背景」。
+          // 提示词里两段规矩分开写，别让模型把背景当成「该聊的话题」。
+          recentEvents: input.recentEvents.map((event) => ({
             id: event.id,
             occurredAt: event.occurredAt,
             ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),

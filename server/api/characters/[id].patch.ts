@@ -50,6 +50,8 @@ export default defineEventHandler(async (event) => {
     ["dailyTokenLimit", "每日 token 额度", 100_000_000],
     ["memoryTokenBudget", "记忆 token 预算", 20_000],
     ["snapshotTokenBudget", "快照 token 预算", 20_000],
+    // 近期忆泡：0 = 不带（默认），上限和 resolveEventRecentDays 的夹取保持一致。
+    ["eventRecentDays", "近期忆泡天数", 14],
   ];
   for (const [key, label, max] of numericLimits) {
     const raw = body[key];

@@ -38,6 +38,8 @@ const draftDailyTokenLimit = ref(0);
 const draftMemoryTokenBudget = ref(1800);
 const draftSnapshotTokenBudget = ref(2500);
 const draftRecentMessageLimit = ref(40);
+/** 近期忆泡天数：0 = 不带。默认关，打开后每轮多背几百 token。 */
+const draftEventRecentDays = ref(0);
 
 // ── 语音模型：从「QQ 渠道 → 角色行为」搬过来的 ──
 // 服务商、Key、模型名都属于「模型配置」，跟「她发不发语音」这种行为开关不该混在一个面板里。
@@ -356,6 +358,7 @@ function resetRecommendedGenerationSettings() {
   draftMemoryTokenBudget.value = 1800;
   draftSnapshotTokenBudget.value = 2500;
   draftRecentMessageLimit.value = 40;
+  draftEventRecentDays.value = 0;
   ElMessage.success("已填入日常陪伴推荐参数，点击保存设置后生效。");
 }
 
@@ -382,6 +385,7 @@ async function loadCharacter() {
     draftMemoryTokenBudget.value = data.memoryTokenBudget ?? 1800;
     draftSnapshotTokenBudget.value = data.snapshotTokenBudget ?? 2500;
     draftRecentMessageLimit.value = data.recentMessageLimit ?? 40;
+    draftEventRecentDays.value = data.eventRecentDays ?? 0;
     draftProviderKey.value = providerByBaseUrl(draftChatApiBaseUrl.value)?.key ?? "custom";
     // 语音模型
     draftVoiceProvider.value = data.ttsProvider || "auto";
@@ -426,6 +430,7 @@ async function save(silent = false): Promise<boolean> {
         memoryTokenBudget: draftMemoryTokenBudget.value,
         snapshotTokenBudget: draftSnapshotTokenBudget.value,
         recentMessageLimit: draftRecentMessageLimit.value,
+        eventRecentDays: draftEventRecentDays.value,
         // 语音模型
         voiceApiBaseUrl: draftVoiceApiBaseUrl.value.trim(),
         ttsModel: draftVoiceTtsModel.value.trim(),
@@ -833,6 +838,25 @@ watch(id, () => void loadCharacter());
                     :max="200"
                     :step="10"
                     aria-label="最近对话保留条数"
+                  />
+                </div>
+              </div>
+
+              <div class="knob">
+                <div class="knob-label">
+                  近期忆泡（天）
+                </div>
+                <p class="field-help">
+                  0 = 不带。填 2 表示把最近两天发生的事无条件带进每一轮，和问不问无关——群里没人会问日期，不这么带，她对昨天就是一片空白。代价是每轮多几百 token；提示词里已经写明「只当背景、不主动提」，但调大后仍可能翻旧账。范围 0–14。
+                </p>
+                <div class="knob-ctl">
+                  <el-input-number
+                    v-model="draftEventRecentDays"
+                    class="knob-number"
+                    :min="0"
+                    :max="14"
+                    :step="1"
+                    aria-label="近期忆泡天数"
                   />
                 </div>
               </div>

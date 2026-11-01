@@ -36,6 +36,8 @@ export type Character = {
   snapshotTokenBudget?: number;
   /** 每次回复回看多少条已落库消息；网页对话约等于「轮数 × 2」。 */
   recentMessageLimit?: number;
+  /** 最近几天的忆泡无条件当背景带上；0 = 不带。 */
+  eventRecentDays?: number;
   /** QQ 渠道回复是否附一张表情。 */
   emojiEnabled?: boolean;
   /** 表情额度：多少分钟内最多贴几张（滑动窗口，按每个群 / 私聊分别算）。 */

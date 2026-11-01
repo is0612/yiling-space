@@ -7,7 +7,7 @@ import {
 } from "../server/utils/message-retrieval";
 import { estimateTokens } from "../server/utils/memory-retrieval";
 import { toMemoryTimelineDtos } from "../server/utils/memory-timeline-dto";
-import { parseEventParticipantIdQuery, selectEventsForPrompt } from "../server/utils/memory-event-retrieval";
+import { parseEventParticipantIdQuery, resolveEventRecentDays, selectEventsForPrompt, selectRecentEvents } from "../server/utils/memory-event-retrieval";
 import { isNearDuplicateEvent, longestCommonSubstringLength, makeEventDedupeKey } from "../server/utils/memory-ai";
 
 const TZ = "Asia/Shanghai";
@@ -261,4 +261,28 @@ assert(
   "「主人」是角色词，不算交集 —— 同主语的不同事件不能被吞掉。",
 );
 
-console.log("忆泡测试通过：相对/绝对日期、时段收窄、周起点、空区间、关键词回退、预算保底、幂等键、按天窗口、日期键与小时键、原文兜底与单条截断、时间线状态、近义去重、参与者过滤与取首。");
+// ── 近期忆泡：不看问句，按时间取 ─────────────────────────
+// 和 selectEventsForPrompt 的分工：那个要命中，这个只要「够近」。
+const recentPool = [
+  { id: "e-today", title: "今天下午的", detail: "刚刚", occurredAt: new Date("2026-10-31T13:00:00+08:00"), participants: [], keywords: [] },
+  { id: "e-yesterday", title: "昨天的", detail: "昨天", occurredAt: new Date("2026-10-30T20:00:00+08:00"), participants: [], keywords: [] },
+  { id: "e-two-days", title: "前天的", detail: "前天", occurredAt: new Date("2026-10-29T10:00:00+08:00"), participants: [], keywords: [] },
+  { id: "e-old", title: "上周的", detail: "早了", occurredAt: new Date("2026-10-24T20:00:00+08:00"), participants: [], keywords: [] },
+];
+assert.deepEqual(selectRecentEvents(recentPool, { now, days: 0 }).items, [], "关掉时一条都不带");
+assert.deepEqual(
+  selectRecentEvents(recentPool, { now, days: 2 }).items.map((event) => event.id),
+  ["e-today", "e-yesterday"],
+  "两天窗口内按时间取，最近的排前面",
+);
+assert.deepEqual(
+  selectRecentEvents(recentPool, { now, days: 2, excludeIds: new Set(["e-today"]) }).items.map((event) => event.id),
+  ["e-yesterday"],
+  "这一轮已经按关键词挑中的，不能再出现一次",
+);
+assert.equal(selectRecentEvents(recentPool, { now, days: 2, limit: 1 }).items.length, 1, "条数上限要生效");
+assert.equal(resolveEventRecentDays({ eventRecentDays: 3 }), 3, "按角色配置开几天");
+assert.equal(resolveEventRecentDays({}), 0, "没配就是关");
+assert.equal(resolveEventRecentDays({ eventRecentDays: 99 }), 14, "上限 14 天，别让一句配置把整段历史塞进提示词");
+
+console.log("忆泡测试通过：相对/绝对日期、时段收窄、周起点、空区间、关键词回退、预算保底、幂等键、按天窗口、日期键与小时键、原文兜底与单条截断、时间线状态、近义去重、参与者过滤与取首、近期忆泡。");

@@ -12,6 +12,18 @@ import { parseEventTimeRange, type EventTimeRange } from "./memory-event-time";
 export const EVENT_TOKEN_BUDGET_DEFAULT = 800;
 export const EVENT_LIMIT_DEFAULT = 8;
 
+/**
+ * 近期忆泡：最近几天的「我干了什么」，不靠关键词命中，每轮无条件带上当背景。
+ *
+ * 和 `selectEventsForPrompt` 的分工是两件事：
+ * 那个回答「你问的那件事我记得吗」，这个回答「我这两天在过什么日子」。
+ * 群聊里没人会问日期，可聊着聊着需要知道「昨天约过什么」——所以这一份不看问句。
+ * 默认 0 = 关闭：它是背景，不是所有人都想每轮多背几百 token。
+ */
+export const EVENT_RECENT_DAYS_DEFAULT = 0;
+export const EVENT_RECENT_LIMIT_DEFAULT = 6;
+export const EVENT_RECENT_TOKEN_BUDGET = 600;
+
 export type EventCandidate = {
   id: string;
   title: string;
@@ -233,6 +245,60 @@ export function selectEventsForPrompt<T extends EventCandidate>(  query: string,
 
 function positive(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+}
+
+export type RecentEventSelection<T> = {
+  items: Array<RankedEvent<T>>;
+  usedTokens: number;
+  /** 实际生效的天数；0 表示没开。 */
+  days: number;
+};
+
+/**
+ * 取最近 N 天的事，和问句无关。
+ *
+ * `excludeIds` 用来躲开「这一轮已经按关键词挑中的」——同一件事在一轮里出现两次，
+ * 模型会以为那件事发生了两遍。
+ */
+export function selectRecentEvents<T extends EventCandidate>(
+  events: T[],
+  options: {
+    now?: Date;
+    days?: number;
+    limit?: number;
+    tokenBudget?: number;
+    excludeIds?: Set<string>;
+  } = {},
+): RecentEventSelection<T> {
+  const days = options.days && options.days > 0 ? Math.round(options.days) : EVENT_RECENT_DAYS_DEFAULT;
+  const limit = options.limit && options.limit > 0 ? options.limit : EVENT_RECENT_LIMIT_DEFAULT;
+  const tokenBudget = options.tokenBudget && options.tokenBudget > 0 ? options.tokenBudget : EVENT_RECENT_TOKEN_BUDGET;
+  if (days <= 0) return { items: [], usedTokens: 0, days: 0 };
+
+  const now = options.now ?? new Date();
+  const since = now.getTime() - days * 24 * 60 * 60 * 1000;
+  const excluded = options.excludeIds ?? new Set<string>();
+  const ranked = events
+    .filter((event) => !excluded.has(event.id))
+    .filter((event) => {
+      const at = event.occurredAt.getTime();
+      return at >= since && at <= now.getTime();
+    })
+    // 最近的在前：越新的事越容易被接上话。
+    .sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime())
+    .map((event) => ({ ...event, relevanceScore: 0, tokens: estimateTokens(eventText(event)) }));
+
+  const selected = applyBudget(ranked, tokenBudget, limit);
+  return { items: selected.items, usedTokens: selected.usedTokens, days };
+}
+
+/** 近期忆泡的开关：0（或没配）= 不带。上限 14 天，防止一句配置把整段历史塞进提示词。 */
+export function resolveEventRecentDays(modelConfig: unknown): number {
+  const record = modelConfig && typeof modelConfig === "object" ? modelConfig as Record<string, unknown> : {};
+  const raw = record.eventRecentDays;
+  const days = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(days) || days <= 0) return 0;
+  return Math.min(14, Math.round(days));
 }
 
 /** 忆泡预算单独一份：问「那天发生了什么」时它才是主角，不该和记忆条目抢同一个池子。 */

@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
 import { generateConversationReply, type ConversationContextMessage, type ConversationGroupDecision } from "../chat-reply";
 import { resolveChatTimeZone } from "../chat-time-context";
-import { resolveEventItemLimit, resolveEventTokenBudget, selectEventsForPrompt } from "../memory-event-retrieval";
+import { resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget, selectEventsForPrompt, selectRecentEvents } from "../memory-event-retrieval";
 import { moveConversationEventsToScope } from "../memory-event-move";
 import { resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt } from "../message-retrieval";
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
@@ -1111,6 +1111,30 @@ async function runChannelTurn(input: {
     scope: event.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
   }));
 
+  /**
+   * 最近几天的忆泡：不看问句，无条件当背景带上（开关 `eventRecentDays`，默认关）。
+   *
+   * 群聊里没有人会问「前天我做了什么」，靠命中检索的那一路在闲聊时一条都不带 ——
+   * 有人提「昨天那个」她就只能顺着编。这条按时间取最近几天，和问句无关。
+   */
+  const recentEventDays = resolveEventRecentDays(character.modelConfig);
+  const recentEventSelection = recentEventDays > 0
+    ? selectRecentEvents(eventCandidates, {
+        days: recentEventDays,
+        excludeIds: new Set(events.map((event) => event.id)),
+      })
+    : null;
+  const recentEvents = (recentEventSelection?.items ?? []).map((event) => ({
+    id: event.id,
+    occurredAt: event.occurredAt.toISOString(),
+    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
+    ...(event.place ? { place: event.place } : {}),
+    participants: event.participants,
+    title: event.title,
+    detail: event.detail.slice(0, 600),
+    scope: event.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
+  }));
+
   // 忆泡还没覆盖到那一段时用原文兜底；只在问句指向某一天时才查。
   let rawMessages: Array<{
     id: string;
@@ -1214,6 +1238,7 @@ async function runChannelTurn(input: {
       timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
       ...(journalLine ? { journalLine } : {}),
       events,
+      ...(recentEvents.length ? { recentEvents } : {}),
       rawMessages,
       ...(useTranscript
         ? {

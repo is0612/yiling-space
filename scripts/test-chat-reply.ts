@@ -574,6 +574,14 @@ try {
     groupBackground: [{ id: "h1", member: "member_1", speaker: "A", content: "周末有空吗" }],
     groupAnchors: [{ id: "a1", label: "晚饭" }],
     allowSilent: true,
+    recentEvents: [{
+      id: "e1",
+      occurredAt: "2026-10-30T20:00:00.000Z",
+      participants: ["阿鳍"],
+      title: "约定明晚分锅",
+      detail: "说好拎桶带碗，米归阿深。",
+      scope: "character",
+    }],
     recentMessages: [],
     memories: [],
     snapshots: [],
@@ -596,6 +604,10 @@ try {
   assert.equal(grouped.groupDecision?.topicAnchorMessageId, "a1", "锚点必须来自本次提供的 groupAnchors。");
   assert.equal(grouped.groupDecision?.replyToMessageId, "m2", "引用目标必须是本轮 transcript 的 id。");
   assert.equal(grouped.groupDecision?.atMessageId, "h1", "点名可以指向背景里的人物，不必是这一轮的。");
+  // 近期忆泡是背景，不是话题：提示词必须写明「别主动提」，否则她会每轮翻旧账。
+  assert(groupSystem.includes("recentEvents are the last few days of your own life"), "近期忆泡要说明这是她自己的日子，不是对方说的。");
+  assert(groupSystem.includes("never bring one up unless the current conversation is already about it"), "近期忆泡必须写明「不主动提」。");
+  assert.equal((groupInput.recentEvents as Array<{ id: string }>)[0]?.id, "e1", "近期忆泡要原样进提示词。");
 
   /**
    * 允许沉默 vs 必须回，提示词必须说同一件事。
@@ -624,6 +636,10 @@ try {
     .messages.find((item) => item.role === "system")!.content;
   assert(mustReplySystem.includes("you must answer"), "必须回的轮次要在提示词里说清楚。");
   assert(!mustReplySystem.includes("Staying silent is normal"), "必须回的轮次不许再教它「沉默是常态」。");
+  // 「什么时候该沉默」的清单也只能出现在可以沉默的那一轮：以前它无条件推送，
+  // 被 @ 的轮次同时收到「该沉默时就沉默」和「必须回」，两条规矩打架。
+  assert(groupSystem.includes("Stay silent when"), "允许沉默时要给出「什么时候别开口」的依据。");
+  assert(!mustReplySystem.includes("Stay silent when"), "必须回的轮次不能再给「该沉默就沉默」的清单。");
   assert(mustReplySystem.includes('action must be "reply"'), "JSON 契约也要跟着换。");
   assert.deepEqual(grouped.groupDecision?.evidenceMessageIds, ["m2"], "编造的证据 id 要被过滤掉。");
 
@@ -738,7 +754,7 @@ try {
     "文字轮次不许出现这段 —— 文字回复照常引用。",
   );
   assert(
-    groupSystem.includes("Set replyToMessageId only when the line you are answering"),
+    groupSystem.includes("Quote only when the line you are answering"),
     "文字那条规则不能被语音这段挤掉。",
   );
   // 模型不听话、仍旧给了 id 也不影响结果：渠道层对语音轮次无条件丢掉（`pipeline.ts`）。

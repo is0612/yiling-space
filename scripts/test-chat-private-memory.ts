@@ -122,7 +122,7 @@ try {
     snapshots: [{ id: "snapshot-private", summary: "近期聊过转岗计划。", periodStart: "2026-10-01T00:00:00.000Z", periodEnd: "2026-10-09T00:00:00.000Z", version: 1, relevanceScore: 2, scope: "private" }],
   });
 
-  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v23");
+  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v25");
   assert.deepEqual(result.usedMemoryIds, ["memory-private", "memory-global"]);
 
   const requestBody = JSON.parse(capturedBody) as {
