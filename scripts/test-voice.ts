@@ -32,6 +32,7 @@ import {
   synthesizeSpeechSilk,
   VOICE_COOLDOWN_MS,
   VOICE_TEXT_MAX_CHARS,
+  VOICE_UNTRANSCRIBED,
   voiceToWav,
   wavToSilk,
 } from "../server/utils/voice";
@@ -176,7 +177,12 @@ assert.equal(
   "[语音：第一句]和[语音：第二句]",
   "多条各回各的位置。",
 );
-assert.equal(applyVoiceTranscripts("[语音]", [null]), "[语音]", "转写失败原样保留。");
+// 转不出来时要明说「有语音、没听懂」，不能留裸的 `[语音]`（否则她会对着占位符编一段）。
+assert.equal(
+  applyVoiceTranscripts("[语音]", [null]),
+  VOICE_UNTRANSCRIBED,
+  "转写失败要填明确说明。",
+);
 // 转写文本里带 `[语音]` 时不能反复替换同一段。
 assert.equal(applyVoiceTranscripts("[语音]好", ["他说[语音]"]), "[语音：他说[语音]]好");
 
@@ -405,6 +411,27 @@ assert.equal(
       base_resp: { status_code: 1004, status_msg: "invalid api key" },
     }), { status: 200, headers: { "content-type": "application/json" } });
     assert.equal(await synthesizeSpeechSilk("你好呀", minimaxSettings), null);
+
+    // 1004「token not match group」= Key 和 GroupId 不在同一个账号。MiniMax 的 sk- 账号级 Key
+    // 带上别人的 GroupId 就是这句，去掉 GroupId 就能合成 —— 所以这里要能自己重试成功。
+    const urls: string[] = [];
+    globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("GroupId=")) {
+        return new Response(JSON.stringify({
+          base_resp: { status_code: 1004, status_msg: "token not match group" },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        data: { audio: wav.toString("hex") },
+        base_resp: { status_code: 0 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const retried = await synthesizeSpeechSilk("你好呀", minimaxSettings);
+    assert.ok(retried && retried.length > 0, "去掉 GroupId 重试成功时应当按成功返回。");
+    assert.equal(urls.length, 2, "带 GroupId 失败一次、不带的一次。");
+    assert.ok(!urls[1]!.includes("GroupId="), "重试那次不能还带着 GroupId。");
 
     // audio 不是合法 hex 时也不能硬转，否则发给 QQ 的是一条坏语音。
     globalThis.fetch = async (): Promise<Response> => new Response(JSON.stringify({

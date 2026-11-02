@@ -1021,8 +1021,10 @@ watch(id, () => void loadCharacter());
                   placeholder="留空即可；报 GroupId 不匹配时再填"
                 />
                 <p class="field-help">
-                  新版接口多数情况不需要它。要找的话在 platform.minimaxi.com → 个人信息 → 空间管理 →
-                  个人空间那一行的「管理」，页里叫「空间 ID（GID）」。
+                  新版接口（<code>sk-</code> 开头的账号级 Key）不需要它。填了不属于这把 Key 的空间 ID，
+                  MiniMax 会回 <code>1004 token not match group</code> —— 服务端会自动去掉 GID 再试一次，
+                  但最好是留空。老版 JWT 形式的 Key 才必须填。
+                  要找的话在 platform.minimaxi.com → 个人信息 → 空间管理 → 个人空间那一行的「管理」，页里叫「空间 ID（GID）」。
                 </p>
               </div>
 

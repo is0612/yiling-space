@@ -668,14 +668,17 @@ function readMinimaxError(payload: unknown): string {
   return `code=${String(code)} ${message}`.trim();
 }
 
-async function requestMinimaxWav(text: string, settings: VoiceTtsSettings): Promise<Buffer | null> {
-  let endpoint: URL;
-  try {
-    endpoint = buildMinimaxEndpoint(settings.apiBaseUrl, settings.groupId);
-  } catch {
-    return null;
-  }
-
+/**
+ * 打一次 MiniMax `t2a_v2`。
+ *
+ * 返回 `{ audio }` = 成功（hex 字符串）；`{ failure }` = 200 但业务上失败（余额、音色、GroupId 都走这里）；
+ * `null` = HTTP 层就挂了（网络 / 401），日志已经写过，调用方不用再报。
+ */
+async function callMinimaxTts(
+  endpoint: URL,
+  settings: VoiceTtsSettings,
+  text: string,
+): Promise<{ audio?: string; failure?: string } | null> {
   let payload: unknown;
   try {
     const response = await fetch(endpoint, {
@@ -713,17 +716,71 @@ async function requestMinimaxWav(text: string, settings: VoiceTtsSettings): Prom
   }
 
   const failure = readMinimaxError(payload);
-  if (failure) {
-    // 200 + 业务错误码是常态（余额不足、音色不存在、GroupId 不匹配都走这里）。
-    console.error("[voice] tts 失败：" + failure);
+  if (failure) return { failure };
+
+  const audioHex = readString(asRecord(asRecord(payload).data).audio);
+  if (!audioHex) return { failure: "返回里没有 data.audio" };
+  return { audio: audioHex };
+}
+
+/**
+ * 已经确认「这把 Key 不认这个 GroupId」的组合（baseUrl|groupId）。
+ *
+ * 命中之后直接不带 GroupId 请求，省掉每句语音都先失败一次再重试 —— 那是双倍请求和双倍日志。
+ * 进程内缓存，重启即清：改完配置不用重启也能重新试一次。
+ */
+const groupIdMismatch = new Set<string>();
+
+async function requestMinimaxWav(text: string, settings: VoiceTtsSettings): Promise<Buffer | null> {
+  const mismatchKey = `${settings.apiBaseUrl}|${settings.groupId}`;
+  const knownMismatch = Boolean(settings.groupId) && groupIdMismatch.has(mismatchKey);
+
+  let endpoint: URL;
+  try {
+    endpoint = buildMinimaxEndpoint(settings.apiBaseUrl, knownMismatch ? "" : settings.groupId);
+  } catch {
     return null;
   }
 
-  const audioHex = readString(asRecord(asRecord(payload).data).audio);
-  if (!audioHex) {
-    console.error("[voice] tts 返回里没有 data.audio");
+  let result = await callMinimaxTts(endpoint, settings, text);
+
+  /*
+   * `code=1004 token not match group` = Key 和 GroupId 不是同一个账号（2026-11-02 修）。
+   *
+   * MiniMax 有两种 Key：老的是 JWT，必须带 GroupId；新的是 `sk-` 开头的账号级 Key，
+   * 带上别人的 GroupId 反而会被这句 1004 顶回来。实测：同一把 sk- Key 带 GroupId 报 1004，
+   * 去掉 GroupId 立刻返回正常 wav。与其让人去分辨自己是哪种 Key，这里直接去掉 GroupId 再试一次 ——
+   * 成功就说明「该留空」，日志里也写清楚，下次改配置知道改哪。
+   *
+   * 只认带 group 字样的 1004：同一个错误码也用于「invalid api key」，
+   * 那是 Key 本身不对，去掉 GroupId 再打一次毫无意义。
+   */
+  const failureText = result?.failure ?? "";
+  const groupMismatch = /^code=1004\b/i.test(failureText) && /group/i.test(failureText);
+  if (groupMismatch && settings.groupId && !knownMismatch) {
+    console.warn(
+      `[voice] GroupId ${settings.groupId} 和这把 Key 不匹配（${failureText}），改成不带 GroupId 重试一次`,
+    );
+    const retry = await callMinimaxTts(buildMinimaxEndpoint(settings.apiBaseUrl, ""), settings, text);
+    if (retry?.audio) {
+      groupIdMismatch.add(mismatchKey);
+      console.warn("[voice] 不带 GroupId 合成成功 —— 这把 Key 是账号级的，角色的「GroupId」应该留空（本次进程内不再重试）");
+      result = retry;
+    } else {
+      // 两次都失败：把带 GroupId 那次的原因留着，那才是配置本身的问题
+      console.error("[voice] tts 失败：" + (retry?.failure ?? "不带 GroupId 重试也失败"));
+      return null;
+    }
+  }
+
+  if (!result) return null;
+  if (result.failure) {
+    // 200 + 业务错误码是常态（余额不足、音色不存在、GroupId 不匹配都走这里）。
+    console.error("[voice] tts 失败：" + result.failure);
     return null;
   }
+
+  const audioHex = result.audio ?? "";
   // **MiniMax 给的是 hex 字符串**，不是二进制。直接当 buffer 写会得到一坨乱码。
   if (audioHex.length % 2 !== 0 || /[^0-9a-fA-F]/.test(audioHex)) {
     console.error("[voice] tts 返回的 audio 不是合法 hex（长度 " + audioHex.length + "）");
