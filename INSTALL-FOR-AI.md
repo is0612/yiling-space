@@ -172,7 +172,9 @@ yarn check:env
 | B站 值班 | `bili` CLI + 账号绑定 | [B站 值班集成](docs/bili-desk-integration.md) |
 
 SnowLuma 是第三方程序，需要自己下载解压；**但它的面板密码和两个令牌都不用你手抄**：全新安装时忆灵空间会替你生成面板密码，
-用 `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD` 播种进去并写进「连接设置 → SnowLuma 面板密码」；连接里的 WS/HTTP 令牌空着时，
+用 `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD` 播种进去并写进「连接设置 → SnowLuma 面板密码」——
+同一串密码还会**明写在「QQ 渠道」页的「连接管理」卡片里**（等宽字体那行，可一键复制、可随时改成自己记得住的），
+所以你永远不需要去翻数据库或配置文件找它；连接里的 WS/HTTP 令牌空着时，
 启动器会读面板里同端口的节点、把 `accessToken` 抄回连接设置并落库。只有当那份 SnowLuma 早就初始化过
 （`config/webui.json` 已存在）时才需要你把密码填一次。
 

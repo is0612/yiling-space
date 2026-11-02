@@ -261,6 +261,33 @@ const gateway = computed(() => runtime.value?.gateway ?? null);
 /** 运行时状态没拿到之前不判断断点，否则首帧会先闪一下「全部灰掉」 */
 const runtimeReady = computed(() => runtime.value !== null);
 
+/**
+ * 面板密码：单独取一次，**不跟 runtime 轮询一起走**（明文没必要每几秒传一遍）。
+ *
+ * 为什么非要显示出来：全新安装时这串密码是忆灵空间替 SnowLuma 生成、直接塞进连接凭据的，
+ * 用户从头到尾没打过字。不摆在页面上，他就既不知道密码是什么、也没法换成自己记得住的，
+ * 只能翻数据库 —— 那等于「我们替他改了个他打不开的门锁」。
+ */
+type PanelPasswordInfo = {
+  password: string | null;
+  accountQq: string;
+  panelPort: number;
+  panelUrl: string;
+  snowlumaRunning: boolean;
+};
+const panelPassword = ref<PanelPasswordInfo | null>(null);
+/** 默认摊开：这页在本人电脑上，遮起来反而让「看一眼再复制」多两步。旁边留了「遮住」 */
+const panelPasswordVisible = ref(true);
+
+async function loadPanelPassword() {
+  try {
+    // 只在客户端取：明文密码不该被 SSR 写进页面 HTML（查看源代码就能看到的东西不算「只有管理员可见」）。
+    panelPassword.value = await $fetch<PanelPasswordInfo>("/api/admin/channels/onebot/runtime/panel-password");
+  } catch {
+    panelPassword.value = null;
+  }
+}
+
 const adapterStarting = ref(false);
 const snowlumaStarting = ref(false);
 const homeEditing = ref(false);
@@ -563,8 +590,20 @@ async function startSnowluma() {
   if (snowlumaStarting.value || snowluma.value?.running) return;
   snowlumaStarting.value = true;
   try {
-    const result = await $fetch<{ message: string }>("/api/admin/channels/onebot/runtime/snowluma", { method: "POST" });
+    const result = await $fetch<{ message: string; panelPassword?: string | null }>(
+      "/api/admin/channels/onebot/runtime/snowluma",
+      { method: "POST" },
+    );
     ElMessage.success(result.message);
+    /*
+     * 刚接管的密码当场摊开：它只在这一刻存在于响应里（库里另存一份），
+     * 人要是没看见，下次想知道就得翻凭据。所以先刷新展示块，再单独提一句去哪儿看。
+     */
+    if (result.panelPassword) {
+      panelPasswordVisible.value = true;
+      ElMessage.info(`面板密码：${result.panelPassword}（已显示在上方，可直接复制）`);
+    }
+    void loadPanelPassword();
     // 它要加载 QQ 客户端钩子，比适配器慢，给 40 秒
     snowlumaStarting.value = false;
     const up = await waitForPanel(Date.now() + 40_000);
@@ -581,6 +620,7 @@ async function startSnowluma() {
     if (readStatus(error) === 409) {
       ElMessage.info(readErrorMessage(error, "SnowLuma 已经在运行。"));
       await loadRuntime();
+      void loadPanelPassword();
       // 已经在跑也算「一键」的结果：节点没配对的话适配器照样连不上。
       await provisionPanel(true);
       await attachHook(true);
@@ -681,10 +721,13 @@ async function ensureStack() {
     if (result.action === "started") {
       ElMessage.success(result.message);
       await loadRuntime();
+      // 自动补起也可能顺手接管了面板密码（首次运行时），刷新一下展示块
+      void loadPanelPassword();
     } else if (result.action === "starting") {
       // 服务端还在等 SnowLuma 起来，先给一句话，别让人以为页面没反应
       ElMessage.info(result.message);
       await loadRuntime();
+      void loadPanelPassword();
     }
   } catch {
     // 补不起来不影响看页面：链路带本来就会指出断在哪一段
@@ -697,6 +740,7 @@ watch(error, (value) => {
 
 onMounted(() => {
   void loadRuntime();
+  void loadPanelPassword();
   void ensureStack();
 });
 onBeforeUnmount(() => {
@@ -723,13 +767,13 @@ const PROXY: ProxyGuide = {
   repo: "https://github.com/SnowLuma/SnowLuma/releases",
   panel: "http://127.0.0.1:5099/config",
   steps: [
-    { title: "打开面板并登录", detail: "面板在 127.0.0.1:5099。全新安装时密码由忆灵空间生成、直接写进「连接设置 → SnowLuma 面板密码」，自动配节点和挂 QQ 都用它；你要手动进面板，就把它从连接设置里抄出来登录（在面板里改了密码，记得回来同步）。登录后在左侧选中 QQ 小号。" },
+    { title: "打开面板并登录", detail: "面板在 127.0.0.1:5099，密码明写在上方「连接管理」里那行「面板密码」（点「复制」即可；全新安装时由忆灵空间生成，自动配节点和挂 QQ 都用它）。在面板里改了密码，要回「连接设置 → SnowLuma 面板密码」同步一次。登录后在左侧选中 QQ 小号。" },
     { title: "配置 WebSocket 服务端", detail: "切到「WS 服务端」。已有 3001 节点就直接使用；没有再新建，端口填 3001。" },
     { title: "配置 HTTP API", detail: "切到「HTTP API」。已有节点就把端口改为 3002；没有再新建。不要用 3000。" },
     { title: "分别复制两个 Token", detail: "复制 WS 节点和 HTTP 节点的授权 Token，分别填到 QQ 渠道的对应输入框。" },
     { title: "保存并重启 SnowLuma", detail: "WS 与 HTTP 的 Token 可能不同，不要填反。" },
   ],
-  warn: "面板地址固定为 http://127.0.0.1:5099/config。面板密码只有一处真相：连接设置里那格「SnowLuma 面板密码」——你在面板里改了密码必须回来同步，否则自动配节点 / 自动挂 QQ 会报「面板密码不对」。已有同端口节点时请修改或复用，不要重复创建。",
+  warn: "面板地址固定为 http://127.0.0.1:5099/config。面板密码只有一处真相：连接设置里那格「SnowLuma 面板密码」（上方「连接管理」里那行「面板密码」显示的就是它）——你在面板里改了密码必须回来同步，否则自动配节点 / 自动挂 QQ 会报「面板密码不对」。已有同端口节点时请修改或复用，不要重复创建。",
 };
 
 // ── 添加 / 编辑 ─────────────────────────────────────────────
@@ -1031,6 +1075,8 @@ async function submitConnection(reconnect = false) {
     }
     editVisible.value = false;
     await refresh();
+    // 这一格里可能刚改过面板密码，上方展示块跟它读的是同一份凭据，顺手对齐。
+    void loadPanelPassword();
     if (reconnect) startReloadPolling();
     // 改了地址/Token 之后，面板那边也得跟着改，否则两边对不上、适配器照样连不上。
     // 面板没在跑时 provision 会 409，quiet 模式直接咽下去 —— 保存本身已经成功了。
@@ -1424,6 +1470,58 @@ function copyInstallGuide() {
             rel="noopener noreferrer"
           >面板 <b class="is-mono">{{ PROXY.panel.replace("http://", "") }}</b></a>
         </div>
+        <!-- 面板密码明写在这里：它是忆灵空间装 SnowLuma 时替人生成的，只存在于连接凭据里。
+             不写出来，用户既不知道密码是什么、也没法换成自己记得住的 —— 等于替他换了把打不开的锁。 -->
+        <div
+          v-if="panelPassword?.password"
+          class="admin-pw"
+        >
+          <div class="admin-pw-row">
+            <span class="admin-pw-label">面板密码</span>
+            <code class="admin-pw-value">{{ panelPasswordVisible ? panelPassword.password : "••••••••••••••••" }}</code>
+            <button
+              type="button"
+              class="tlink"
+              @click="copyText(panelPassword?.password ?? '', '面板密码已复制。')"
+            >
+              <el-icon><CopyDocument /></el-icon>复制
+            </button>
+            <button
+              type="button"
+              class="tlink"
+              @click="panelPasswordVisible = !panelPasswordVisible"
+            >
+              {{ panelPasswordVisible ? "遮住" : "显示" }}
+            </button>
+            <button
+              type="button"
+              class="tlink"
+              @click="openPanel"
+            >
+              打开面板登录
+            </button>
+          </div>
+          <p class="admin-pw-note">
+            登录 <code>{{ panelPassword.panelUrl }}</code> 用的就是这一串（<b>不是</b> WS/HTTP Token）。
+            想换成自己记得住的：先在面板里改，再
+            <button
+              type="button"
+              class="admin-pw-link"
+              @click="void openEdit(primaryConnection)"
+            >
+              在连接设置里填回来
+            </button>
+            —— 两边不一致时，自动配节点 / 自动挂 QQ 会报「面板密码不对」。
+          </p>
+        </div>
+        <!-- 读到了但没有值：凭据解不开或那格一直空着。说清楚怎么办，别留一块空白让人猜。 -->
+        <div
+          v-else-if="panelPassword && !panelPassword.password"
+          class="admin-pw"
+        >
+          <span class="admin-pw-label">面板密码</span>
+          <span class="admin-pw-empty">读不出来（连接凭据里没有或解不开），去「连接设置」重填一次。</span>
+        </div>
         <div class="admin-acts">
           <button
             v-if="snowluma?.installed && !snowluma.running"
@@ -1613,6 +1711,12 @@ function copyInstallGuide() {
                   <el-icon><Refresh /></el-icon>重新找一遍
                 </button>
               </div>
+              <p
+                v-if="panelPassword?.password"
+                class="step-note"
+              >
+                面板密码就在上方「连接管理」里，点「复制」粘到面板登录页即可。
+              </p>
               <p
                 v-if="snowluma && !snowluma.installed"
                 class="run-warn"
@@ -1911,6 +2015,7 @@ function copyInstallGuide() {
           </el-form-item>
           <p class="cq-hint">
             全新安装时这一格会被自动填好：忆灵空间替 SnowLuma 生成面板密码并记在这里，人不用手抄。
+            同一串也会明写在「连接管理」里（等宽字体那行，可一键复制），这里改动它会跟着变。
             你在面板里手动改过密码，就要把新的填回来。点「启动 SnowLuma」时后台会用它登录面板，
             把这上面的地址和 Token 对齐到协议端节点里 —— 不用再自己开面板核对，也不会因为忘了密码卡在登录页。
             <strong>面板本身就是登录密码，不是 Token。</strong>
@@ -2441,6 +2546,39 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
 .run-state.is-warn .dot { background: #d79a2b; }
 /* 「自动找到」标：路径不是用户填的就说一声，省得他以为自己填过 */
 .run-tag { margin-left: 2px; border-radius: 999px; background: var(--surface-2); padding: 1px 7px; color: var(--dim); font-size: 12px; }
+/* 面板密码：一条虚线小砖，值用等宽字体、可整段选中。刻意不做成输入框 ——
+   它在这里只是「给你看一眼、复制走」，改密码的入口是下方的「连接设置」。 */
+.admin-pw {
+  margin-top: var(--sp-3);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface-2);
+  padding: 6px 10px;
+}
+.admin-pw-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.admin-pw-label { color: var(--dim); font-size: 12px; }
+.admin-pw-value {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: .2px;
+  user-select: all;
+}
+.admin-pw-note { margin: 4px 0 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
+.admin-pw-empty { margin-left: 8px; color: var(--dim); font-size: 12px; }
+.admin-pw-note code { color: var(--text-2); font-family: var(--mono); }
+.admin-pw-note b { color: var(--text); font-weight: 600; }
+/* 行内文字按钮：看着像链接，但仍是 button —— 键盘能 tab 到，也不会触发跳转 */
+.admin-pw-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--brand-strong);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.admin-pw-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 /* 网关没接上：这不是错误弹窗该干的事，写成一块常驻的说明 */
 .run-warn {
   margin: 10px 0 0;

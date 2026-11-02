@@ -54,5 +54,11 @@ export default defineEventHandler(async (event) => {
     pid: result.pid,
     consoleLog: result.consoleLog,
     panelPasswordSaved: result.panelPasswordSaved,
+    /*
+     * 这次刚播种的密码（只在「全新安装、我们接管了」时非空）。
+     * 以前这里只回一句「写进连接设置了」，人回页面还得自己找那一格 ——
+     * 明明是我们替他生成的，就该当场摊开给他看、能复制。
+     */
+    panelPassword: result.panelPassword ?? null,
   };
 });
