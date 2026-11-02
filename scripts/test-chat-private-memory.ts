@@ -122,7 +122,9 @@ try {
     snapshots: [{ id: "snapshot-private", summary: "近期聊过转岗计划。", periodStart: "2026-10-01T00:00:00.000Z", periodEnd: "2026-10-09T00:00:00.000Z", version: 1, relevanceScore: 2, scope: "private" }],
   });
 
-  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v25");
+  // 不写死版本号：写死的是「上一次的答案」，每次升版都得手动跟着改。
+  // 形状之外的一致性（首行标记与版本号同源）由 scripts/test-chat-reply.ts 负责。
+  assert.match(result.promptTemplateVersion, /^conversation-retrieval-v\d+$/u);
   assert.deepEqual(result.usedMemoryIds, ["memory-private", "memory-global"]);
 
   const requestBody = JSON.parse(capturedBody) as {

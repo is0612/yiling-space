@@ -588,6 +588,11 @@ try {
   });
   const groupMessages = (JSON.parse(groupBody) as { messages: Array<{ role: string; content: string }> }).messages;
   const groupSystem = groupMessages.find((item) => item.role === "system")!.content;
+  // 内部叫法不能进提示词：模型会照着说。2026-11-02 实况，她被问「记得 10-29 吗」
+  // 答「忆泡最早是从 10-30 才有的」—— 答案对，但把机器结构讲给别人听了。
+  // 所以不是「禁止她说这个词」（那样反而要把词写进提示词），而是**提示词里根本不出现**。
+  assert(!groupSystem.includes("忆泡"), "提示词里不许出现内部叫法「忆泡」，她会原样说出来。");
+  assert(!groupSystem.includes("快照"), "「快照」同理：提示词里出现一次，她就会在对话里用。");
   assert(groupSystem.includes("groupBackground"), "系统提示词要说明背景只看不回。");
   assert(groupSystem.includes("groupAnchors"), "系统提示词要说明参与过的话题。");
   assert(groupSystem.includes("policy.direct"), "系统提示词要给出 direct 事实。");
