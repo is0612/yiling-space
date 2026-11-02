@@ -1,6 +1,6 @@
 import { resolveChatModelSettings } from "./chat-model-config";
 import { resolveEmojiFrequency } from "./emoji-frequency";
-import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveRecentMessageLimit } from "./memory-retrieval";
+import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemoryItemLimit, resolveRecentMessageLimit } from "./memory-retrieval";
 import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
@@ -13,6 +13,12 @@ function positiveNumber(value: unknown): number {
 
 export type CharacterDto = {
   id: string;
+  /**
+   * 血缘 id：这个角色最初来自哪一份角色数据。
+   * 导入角色卡时用它认出「本机已有同一个她」，所以合并判断在前端就能做；
+   * 空 = 本机原生角色（导出时才第一次确定）。
+   */
+  originId: string | null;
   name: string;
   alias: string;
   description: string;
@@ -37,6 +43,8 @@ export type CharacterDto = {
   chatModel: string;
   chatTemperature: number;
   chatMaxTokens: number;
+  /** 深度思考开关；默认开（跟随 DeepSeek 平台默认）。只在 DeepSeek 系模型上真正生效。 */
+  chatThinking: boolean;
   chatApiBaseUrl: string;
   chatApiKeyConfigured: boolean;
   chatApiKeySource: "character" | "environment" | "missing";
@@ -45,6 +53,8 @@ export type CharacterDto = {
   /** 每次对话注入的记忆 / 快照 token 预算。 */
   memoryTokenBudget: number;
   snapshotTokenBudget: number;
+  /** 每次注入多少条长期记忆；默认 20（以前写死 12，比预算更早卡住）。 */
+  memoryItemLimit: number;
   /** 每次回复回看多少条已落库消息；桌面端约等于「轮数 × 2」。 */
   recentMessageLimit: number;
   /** 最近几天的忆泡无条件当背景带上；0 = 不带。 */
@@ -88,6 +98,7 @@ export type CharacterDto = {
 
 type CharacterRecord = {
   id: string;
+  originCharacterId?: string | null;
   name: string;
   avatar: string | null;
   basePrompt: string;
@@ -187,6 +198,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
 
   return {
     id: character.id,
+    originId: character.originCharacterId ?? null,
     name: character.name,
     alias: typeof config.alias === "string" ? config.alias : "自定义角色",
     description: typeof config.description === "string" ? config.description : "",
@@ -206,12 +218,15 @@ export function toCharacterDto(input: unknown): CharacterDto {
     chatModel: chatSettings.model,
     chatTemperature: chatSettings.temperature,
     chatMaxTokens: chatSettings.maxTokens,
+    // 默认开（跟随 DeepSeek 平台默认）；只有显式存过 false 才算关。
+    chatThinking: config.chatThinking !== false,
     chatApiBaseUrl: chatSettings.apiBaseUrl,
     chatApiKeyConfigured: chatSettings.apiKeyConfigured,
     chatApiKeySource: chatSettings.apiKeySource,
     dailyTokenLimit: positiveNumber(config.dailyTokenLimit),
     memoryTokenBudget: positiveNumber(config.memoryTokenBudget) || MEMORY_TOKEN_BUDGET_DEFAULT,
     snapshotTokenBudget: positiveNumber(config.snapshotTokenBudget) || SNAPSHOT_TOKEN_BUDGET_DEFAULT,
+    memoryItemLimit: resolveMemoryItemLimit(config),
     recentMessageLimit: resolveRecentMessageLimit(config),
     // 0 = 不带近期忆泡。读的时候也补默认值，页面不用猜「没填是多少」。
     eventRecentDays: resolveEventRecentDays(config),

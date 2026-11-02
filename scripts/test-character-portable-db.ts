@@ -166,8 +166,72 @@ async function main() {
     ],
   });
 
-  await prisma.memorySnapshot.createMany({
+  // 忆泡日历：一天一行进度。日历页读这张表，所以它必须进包。
+  await prisma.memoryEventDay.createMany({
     data: [
+      {
+        memoryScopeId: globalScopeId,
+        dayKey: "2026-10-30",
+        state: "FINAL",
+        eventCount: 4,
+        extractedAt: new Date("2026-10-31T01:00:00Z"),
+      },
+      {
+        memoryScopeId: privateAId,
+        dayKey: "2026-10-29",
+        state: "DRAFT",
+        eventCount: 1,
+      },
+    ],
+  });
+
+  // 日记 / 手账：全局范围一天一条，手账的「今日一句」摘自第 1 版日记。
+  const journalId = randomUUID();
+  await prisma.characterJournal.create({
+    data: {
+      id: journalId,
+      memoryScopeId: globalScopeId,
+      dayKey: "2026-10-30",
+      status: "ACTIVE",
+      diaryState: "GENERATED",
+      handbookState: "GENERATED",
+      diaryDecidedAt: new Date("2026-10-31T02:00:00Z"),
+      handbookDecidedAt: new Date("2026-10-31T02:00:00Z"),
+    },
+  });
+  const diaryRevisionId = randomUUID();
+  await prisma.journalRevision.createMany({
+    data: [
+      {
+        id: diaryRevisionId,
+        journalId,
+        kind: "DIARY",
+        version: 1,
+        title: "海边的风",
+        content: "今天和小明去了海边。",
+        sourceMessageIds: [messageId],
+        revisionType: "AI_GENERATED",
+        promptVersion: "v1",
+        model: "deepseek-chat",
+      },
+      {
+        journalId,
+        kind: "HANDBOOK",
+        version: 1,
+        content: "上午：读了两页书。",
+        thought: "想再去一次。",
+        quote: "今天和小明去了海边。",
+        tags: ["海边"],
+        sourceDiaryRevisionId: diaryRevisionId,
+        sourceMessageIds: [messageId],
+        revisionType: "AI_GENERATED",
+        promptVersion: "v1",
+        model: "deepseek-chat",
+      },
+    ],
+  });
+
+  await prisma.memorySnapshot.createMany({    data: [
       {
         snapshotKey: `auto-snapshot:${globalScopeId}:p1`,
         memoryScopeId: globalScopeId,
@@ -210,8 +274,19 @@ async function main() {
   assert.equal(bundle.counts.memories, 3, "只有角色全局 + 自己的私人记忆进包");
   assert.equal(bundle.counts.privateMemories, 1, "私人记忆要单独计数，导入时要提示");
   assert.equal(bundle.counts.events, 2, "忆泡同样按范围过滤");
+  assert.equal(bundle.counts.eventDays, 2, "忆泡日历的天要跟着走，否则导入后日历是空的");
+  assert.equal(bundle.counts.journals, 1, "日记/手账一天一条");
+  assert.equal(bundle.counts.journalRevisions, 2, "日记与手账各一版都要带走");
   assert.equal(bundle.counts.snapshots, 1, "只带 CURRENT 版本，旧版本不进包");
   assert.equal(bundle.counts.catchphrases, 1, "待确认的梗不进包");
+
+  assert.equal(bundle.journals[0]?.dayKey, "2026-10-30");
+  assert.equal(bundle.journals[0]?.revisions[1]?.quote, "今天和小明去了海边。", "今日一句要带走");
+  assert.equal(
+    bundle.journals[0]?.revisions[1]?.sourceDiaryVersion,
+    1,
+    "今日一句的出处用版本号表达，不用旧机器的 revision id",
+  );
 
   const contents = bundle.memories.map((item) => item.content);
   assert.ok(contents.includes("主人住在杭州"));
@@ -300,6 +375,46 @@ async function main() {
   assert.equal(importedEvent?.sourceMessageId, null, "来源指针必须置空，不能指向别的消息");
   assert.equal(importedEvent?.participants[0], "小明", "参与者照常保留");
 
+  // 忆泡日历：两天的进度行都要落地，状态与整理时间保留
+  const importedDays = await prisma.memoryEventDay.findMany({
+    where: { memoryScopeId: { in: imported.memoryScopes.map((scope) => scope.id) } },
+    orderBy: { dayKey: "asc" },
+  });
+  assert.equal(importedDays.length, 2, "两个记忆范围各一天的进度行都要建");
+  const importedFinalDay = importedDays.find((day) => day.dayKey === "2026-10-30");
+  assert.equal(importedFinalDay?.state, "FINAL", "已收口的天不能变成 DRAFT");
+  assert.equal(importedFinalDay?.eventCount, 4, "当天的忆泡条数保留原值");
+  assert.equal(
+    importedFinalDay?.extractedAt?.toISOString(),
+    "2026-10-31T01:00:00.000Z",
+    "上次整理时间要保住，否则日历页显示「还没整理过」",
+  );
+  assert.equal(importedDays.find((day) => day.dayKey === "2026-10-29")?.state, "DRAFT");
+
+  // 日记 / 手账：正文、版本、今日一句的指向都要回来
+  const importedJournals = await prisma.characterJournal.findMany({
+    where: { memoryScopeId: importedGlobal.id },
+    include: { revisions: { orderBy: { version: "asc" } } },
+  });
+  assert.equal(importedJournals.length, 1, "手账主体要落库");
+  const importedJournal = importedJournals[0];
+  assert.equal(importedJournal?.dayKey, "2026-10-30");
+  assert.equal(importedJournal?.diaryState, "GENERATED", "有正文就必须是 GENERATED，否则会被自动任务重写");
+  assert.equal(importedJournal?.revisions.length, 2);
+  const importedDiary = importedJournal?.revisions.find((revision) => revision.kind === "DIARY");
+  const importedHandbook = importedJournal?.revisions.find((revision) => revision.kind === "HANDBOOK");
+  assert.equal(importedDiary?.content, "今天和小明去了海边。");
+  assert.equal(importedDiary?.version, 1, "版本号原样保留");
+  assert.equal(importedHandbook?.quote, "今天和小明去了海边。");
+  assert.equal(importedHandbook?.thought, "想再去一次。");
+  assert.equal(
+    importedHandbook?.sourceDiaryRevisionId,
+    importedDiary?.id,
+    "今日一句要重新指向本机新建的那一版日记，不能留旧 id",
+  );
+  assert.deepEqual(importedHandbook?.sourceMessageIds, [], "旧机器的原文指针不能跟过来");
+  assert.deepEqual(importedDiary?.sourceMessageIds, []);
+
   // 朋友：关系、计数和记忆都要回来，但身份不能重复建、绑定不能被改写
   const importedFriend = imported.memoryScopes.find((scope) => scope.scopeType === "EXTERNAL_IDENTITY");
   assert.ok(importedFriend, "朋友要建一条 EXTERNAL_IDENTITY 范围");
@@ -327,6 +442,88 @@ async function main() {
   });
   assert.equal(originalMemoryCount, 5, "导入不动原角色（5 条记忆仍在）");
 
+  // ── 2.5 合并：同一个她的另一台机器上的数据 ──────────────────
+  assert.equal(
+    imported.originCharacterId,
+    characterId,
+    "导入要把血缘带过来，否则以后再导回来就认不出是同一个她",
+  );
+
+  // 第一次合并：这份数据本机已经全有了 → 一条都不该新增
+  const reconciled = await importCharacterCard({
+    raw: JSON.parse(serialized),
+    ownerId: ownerA,
+    targetCharacterId: first.characterId,
+  });
+  assert.equal(reconciled.mode, "merge", "指定目标时走合并");
+  assert.equal(reconciled.characterId, first.characterId, "合并进目标角色，不新建");
+  assert.equal(reconciled.added.memories, 0, "重复合并不该长出重复记忆");
+  assert.equal(reconciled.added.events, 0);
+  assert.equal(reconciled.added.journalRevisions, 0);
+  const mergedMemoryCount = await prisma.memoryItem.count({
+    where: {
+      memoryScope: {
+        characterId: first.characterId,
+        scopeType: { in: ["CHARACTER_GLOBAL", "USER_PRIVATE"] },
+      },
+    },
+  });
+  assert.equal(mergedMemoryCount, 3, "合并后条数没变（2 条全局 + 1 条私人）");
+
+  // 让两边「各长一段时间」：本地改写日记、删掉手账，再合并 → 导入的接成新版本
+  const localJournal = await prisma.characterJournal.findFirstOrThrow({
+    where: { memoryScopeId: importedGlobal.id, dayKey: "2026-10-30" },
+    include: { revisions: true },
+  });
+  const localDiary = localJournal.revisions.find((revision) => revision.kind === "DIARY");
+  assert.ok(localDiary, "本地要有日记版本");
+  await prisma.journalRevision.update({
+    where: { id: localDiary.id },
+    data: { content: "本地后来改写过的日记。" },
+  });
+  await prisma.journalRevision.deleteMany({ where: { journalId: localJournal.id, kind: "HANDBOOK" } });
+
+  const merged = await importCharacterCard({
+    raw: JSON.parse(serialized),
+    ownerId: ownerA,
+    targetCharacterId: first.characterId,
+  });
+  assert.equal(merged.added.journalRevisions, 2, "日记与手账各补一版");
+  assert.equal(merged.added.journals, 0, "那一天本来就在，不该再建一条主体");
+
+  const mergedJournal = await prisma.characterJournal.findUniqueOrThrow({
+    where: { id: localJournal.id },
+    include: { revisions: { orderBy: { version: "asc" } } },
+  });
+  const diaries = mergedJournal.revisions.filter((revision) => revision.kind === "DIARY");
+  const handbooks = mergedJournal.revisions.filter((revision) => revision.kind === "HANDBOOK");
+  assert.equal(diaries.length, 2, "本地那版不动，导入的接成第 2 版");
+  assert.equal(diaries[0]?.content, "本地后来改写过的日记。", "本地内容必须原样保住");
+  assert.equal(diaries[1]?.content, "今天和小明去了海边。", "导入的接在后面");
+  assert.equal(diaries[1]?.version, 2, "版本号从本地最大值继续排");
+  assert.equal(handbooks.length, 1, "被删掉的手账重新补进来");
+  assert.equal(handbooks[0]?.version, 1);
+  assert.equal(
+    handbooks[0]?.sourceDiaryRevisionId,
+    diaries[1]?.id,
+    "今日一句要指向导入进来的那一版日记，而不是本地改写的那版",
+  );
+
+  // 同名但不同源：不猜名字，直接拒绝
+  const stranger = await prisma.character.create({
+    data: { id: randomUUID(), ownerId: ownerA, name: "小鱼", basePrompt: "另一个同名角色" },
+  });
+  characterIds.push(stranger.id);
+  await assert.rejects(
+    () => importCharacterCard({
+      raw: JSON.parse(serialized),
+      ownerId: ownerA,
+      targetCharacterId: stranger.id,
+    }),
+    /不是同一份数据来的/,
+    "同名但不同源的角色不能合并",
+  );
+
   // ── 3. 导入到另一个人手上 ─────────────────────────────────
   const forB = await importCharacterCard({ raw: JSON.parse(serialized), ownerId: userB });
   characterIds.push(forB.characterId);
@@ -339,7 +536,7 @@ async function main() {
   assert.equal(bPrivate?.userId, userB, "私人记忆换人后归导入者，不串给导出者");
   assert.ok(bPrivate?.memoryItems.some((item) => item.content === "主人喜欢冰美式"));
 
-  console.log("角色卡数据库测试通过：他人私人记忆不出包、朋友段只收互动过的关系、分享型导出清空朋友、身份复用且不改绑定、导入只新增、来源置空、双人导入归属正确。");
+  console.log("角色卡数据库测试通过：他人私人记忆不出包、朋友段只收互动过的关系、分享型导出清空朋友、身份复用且不改绑定、导入只新增、来源置空、双人导入归属正确、重复合并不长数据、合并追加手账版本并重指向今日一句、同名不同源拒绝合并。");
 }
 
 main()

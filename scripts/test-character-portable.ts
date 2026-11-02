@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   CHARACTER_BUNDLE_FORMAT,
   CHARACTER_BUNDLE_LIMITS,
+  CHARACTER_BUNDLE_VERSION,
+  normalizeBundleOriginId,
   buildCharacterBundle,
   characterBundleFileName,
   computeImportedCharacterName,
@@ -61,6 +63,7 @@ const built = buildCharacterBundle({
     styleExamples: "主人：在吗\n小鱼：在。",
     userAddress: "主人",
     modelConfig: rawConfig,
+    originCharacterId: "11111111-1111-4111-8111-111111111111",
   },
   memorySetting: { snapshotIntervalDays: 8, timezone: "Asia/Shanghai", autoSnapshotEnabled: true },
   scopes: [
@@ -95,6 +98,14 @@ const built = buildCharacterBundle({
           createdAt: new Date("2026-10-08T01:00:00Z"),
         },
       ],
+      eventDays: [
+        {
+          dayKey: "2026-10-30",
+          state: "FINAL",
+          eventCount: 3,
+          extractedAt: new Date("2026-10-31T01:00:00Z"),
+        },
+      ],
     },
     {
       scopeType: "USER_PRIVATE",
@@ -105,6 +116,48 @@ const built = buildCharacterBundle({
     },
   ],
   catchphrases: [{ phrase: "不烧心吗", usage: "吃到辣的", enabled: true, source: "manual" }],
+  journals: [
+    {
+      dayKey: "2026-10-30",
+      status: "ACTIVE",
+      skipReason: null,
+      diaryState: "GENERATED",
+      handbookState: "GENERATED",
+      diaryDecidedAt: new Date("2026-10-31T02:00:00Z"),
+      handbookDecidedAt: new Date("2026-10-31T02:00:00Z"),
+      createdAt: new Date("2026-10-31T02:00:00Z"),
+      revisions: [
+        {
+          kind: "DIARY",
+          version: 1,
+          title: "海边的风",
+          content: "今天和小明去了海边。",
+          thought: null,
+          quote: null,
+          tags: [],
+          revisionType: "AI_GENERATED",
+          promptVersion: "v1",
+          model: "deepseek-chat",
+          sourceDiaryVersion: null,
+          createdAt: new Date("2026-10-31T02:00:00Z"),
+        },
+        {
+          kind: "HANDBOOK",
+          version: 1,
+          title: null,
+          content: "上午：读了两页书。",
+          thought: "想再去一次。",
+          quote: "今天和小明去了海边。",
+          tags: ["海边"],
+          revisionType: "AI_GENERATED",
+          promptVersion: "v1",
+          model: "deepseek-chat",
+          sourceDiaryVersion: 1,
+          createdAt: new Date("2026-10-31T02:00:00Z"),
+        },
+      ],
+    },
+  ],
   friends: [
     {
       platform: "qq-onebot",
@@ -134,13 +187,22 @@ const built = buildCharacterBundle({
 });
 
 assert.equal(built.format, CHARACTER_BUNDLE_FORMAT, "格式标记固定");
-assert.equal(built.formatVersion, 1, "当前格式版本为 1");
+assert.equal(
+  built.origin.characterId,
+  "11111111-1111-4111-8111-111111111111",
+  "血缘 id 必须跟着卡片走，否则没法认人合并",
+);
+assert.equal(built.formatVersion, CHARACTER_BUNDLE_VERSION, "导出用当前格式版本");
+assert.equal(CHARACTER_BUNDLE_VERSION, 2, "加入忆泡日历与日记手账后版本升到 2");
 assert.equal(built.exportedAt, "2026-10-31T13:00:00.000Z", "导出时间用注入的 now，便于测试");
 assert.equal(built.character.name, "小鱼");
 assert.equal(built.counts.memories, 2, "两条记忆（全局 + 私人）");
 assert.equal(built.counts.privateMemories, 1, "其中一条是私人记忆");
 assert.equal(built.counts.events, 1);
+assert.equal(built.counts.eventDays, 1, "忆泡日历的天要单独计数");
 assert.equal(built.counts.snapshots, 1);
+assert.equal(built.counts.journals, 1, "一天一条手账");
+assert.equal(built.counts.journalRevisions, 2, "日记与手账各一版");
 assert.equal(built.counts.catchphrases, 1);
 assert.equal(built.counts.friends, 1, "朋友单独成段");
 assert.equal(built.counts.friendMemories, 1, "朋友名下的记忆单独计数");
@@ -171,6 +233,34 @@ assert.equal(roundTrip.friends[0]?.platformUid, "888888");
 assert.equal(roundTrip.friends[0]?.memories[0]?.content, "小明住在北海");
 assert.equal(roundTrip.friends[0]?.snapshots[0]?.summary, "他们一起去了海边。");
 assert.equal(roundTrip.friends[0]?.knownSince, "2026-09-01T00:00:00.000Z", "认识的时间要保住");
+assert.equal(roundTrip.originId, "11111111-1111-4111-8111-111111111111", "回环后血缘 id 一致");
+assert.equal(roundTrip.eventDays[0]?.dayKey, "2026-10-30", "忆泡日历的天要跟着走");
+assert.equal(roundTrip.eventDays[0]?.eventCount, 3);
+assert.equal(roundTrip.eventDays[0]?.state, "FINAL");
+assert.equal(roundTrip.eventDays[0]?.extractedAt, "2026-10-31T01:00:00.000Z", "整理时间要保住");
+assert.equal(roundTrip.journals.length, 1, "日记/手账要能原样解析回来");
+assert.equal(roundTrip.journals[0]?.dayKey, "2026-10-30");
+assert.equal(roundTrip.journals[0]?.diaryState, "GENERATED");
+assert.equal(roundTrip.journals[0]?.revisions.length, 2);
+assert.equal(roundTrip.journals[0]?.revisions[1]?.quote, "今天和小明去了海边。", "今日一句要保留");
+assert.equal(roundTrip.journals[0]?.revisions[1]?.sourceDiaryVersion, 1, "今日一句的出处按版本号表达");
+assert.equal(
+  JSON.stringify(built).includes("sourceMessageIds"),
+  false,
+  "原文/忆泡的 id 指针一律不进包",
+);
+
+// 老卡（v1）没有这两段：解析出来必须是空数组，而不是报错或 undefined
+const legacy = parseCharacterBundle(minimal());
+assert.equal(legacy.originId, null, "v1 老卡没有血缘信息 → 只能新建");
+// 手改坏的血缘 id 当「没有」处理，不能因此让整张卡导不进来
+assert.equal(normalizeBundleOriginId("not-a-uuid"), null);
+assert.equal(normalizeBundleOriginId("  11111111-1111-4111-8111-111111111111  "), "11111111-1111-4111-8111-111111111111");
+assert.equal(normalizeBundleOriginId(undefined), null);
+assert.deepEqual(legacy.eventDays, [], "v1 老卡没有日历段");
+assert.deepEqual(legacy.journals, [], "v1 老卡没有手账段");
+assert.equal(legacy.counts.eventDays, 0);
+assert.equal(legacy.counts.journals, 0);
 
 // ── 4. 名称去重 ────────────────────────────────────────────
 assert.equal(computeImportedCharacterName("小鱼", []), "小鱼", "不撞名就用原名");
@@ -291,4 +381,4 @@ assert.equal("chatApiKey" in withSecrets.modelConfig, false);
 const fileName = characterBundleFileName('小/鱼: "test"', new Date("2026-10-31T13:11:10Z"));
 assert.match(fileName, /^yiling-character-小_鱼_ _test_-202610311311\.json$/, "文件名要过滤路径分隔符并带时间戳");
 
-console.log("角色卡格式测试通过：密钥剥离、白名单、构建、朋友段、回环、名称去重、非法输入拒绝、时区与分类兜底、文件名。");
+console.log("角色卡格式测试通过：密钥剥离、白名单、构建、朋友段、忆泡日历与日记手账回环、名称去重、非法输入拒绝、时区与分类兜底、文件名。");

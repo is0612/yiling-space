@@ -98,6 +98,7 @@ export default defineEventHandler(async (event) => {
       chatModel: chatSettings.model,
       chatTemperature: chatSettings.temperature,
       chatMaxTokens: chatSettings.maxTokens,
+      chatThinking: chatSettings.thinking,
       chatApiBaseUrl: chatSettings.apiBaseUrl,
       chatApiKeyConfigured: chatSettings.apiKeyConfigured,
       chatApiKeySource: chatSettings.apiKeySource,

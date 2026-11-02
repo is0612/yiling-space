@@ -367,6 +367,7 @@ export default defineEventHandler(async (event) => {
       apiBaseUrl: chatSettings.apiBaseUrl,
       temperature: chatSettings.temperature,
       maxTokens: chatSettings.maxTokens,
+      thinking: chatSettings.thinking,
       currentMessage: message,
       recentMessages,
       memories,

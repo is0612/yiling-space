@@ -4,7 +4,7 @@ import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
 import { encryptApiKey } from "../../utils/credential-encryption";import { requireActorUserId } from "../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../utils/local-api";
-import { RECENT_MESSAGE_LIMIT_MAX, RECENT_MESSAGE_LIMIT_MIN } from "../../utils/memory-retrieval";
+import { MEMORY_ITEM_LIMIT_MAX, MEMORY_ITEM_LIMIT_MIN, RECENT_MESSAGE_LIMIT_MAX, RECENT_MESSAGE_LIMIT_MIN } from "../../utils/memory-retrieval";
 import { getPrisma } from "../../utils/prisma";
 import { readProactivePatch, resolveProactiveSettings } from "../../utils/proactive-settings";
 import { readGroupInitiativePatch, resolveGroupInitiativeSettings } from "../../utils/group-initiative-settings";
@@ -73,6 +73,19 @@ export default defineEventHandler(async (event) => {
       });
     }
     modelConfigPatch.recentMessageLimit = value;
+  }
+
+  // 记忆条数上限：跟回看条数一样，0 不代表「不限」，所以不能塞进上面那个 0 起的循环。
+  // 这一项以前只有读、没有写入口 —— 页面上调预算却不见多记，就是因为 12 条先卡住了。
+  if (body.memoryItemLimit !== undefined) {
+    const value = typeof body.memoryItemLimit === "number" ? body.memoryItemLimit : Number(body.memoryItemLimit);
+    if (!Number.isInteger(value) || value < MEMORY_ITEM_LIMIT_MIN || value > MEMORY_ITEM_LIMIT_MAX) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: `记忆条数上限必须是 ${MEMORY_ITEM_LIMIT_MIN} 到 ${MEMORY_ITEM_LIMIT_MAX} 之间的整数。`,
+      });
+    }
+    modelConfigPatch.memoryItemLimit = value;
   }
 
   if (body.emojiEnabled !== undefined) {

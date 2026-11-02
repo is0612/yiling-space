@@ -14,6 +14,7 @@ import {
   Download,
   Edit,
   Key,
+  MagicStick,
   Odometer,
   Picture,
   Plus,
@@ -219,6 +220,32 @@ async function toggleCharacterStatus(character: Character) {
   }
 }
 
+/**
+ * 深度思考：即点即存的单值开关。
+ *
+ * 不跟「模型设置」那张表单的保存走 —— 为了一个布尔值让人整页提交，
+ * 反而容易把没打算改的温度、上限一起带上去。
+ */
+const thinkingSavingId = ref("");
+
+async function toggleThinking(character: Character | null, next: boolean) {
+  if (!character || thinkingSavingId.value) return;
+  thinkingSavingId.value = character.id;
+  try {
+    const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
+      method: "PATCH",
+      body: { chatThinking: next },
+    });
+    const index = characters.value.findIndex((item) => item.id === character.id);
+    if (index >= 0) characters.value.splice(index, 1, updated);
+    ElMessage.success(next ? "已开启深度思考：她会先想再说，回复会慢一些。" : "已关闭深度思考。");
+  } catch (error) {
+    ElMessage.error(readError(error, "切换深度思考失败，请稍后重试。"));
+  } finally {
+    thinkingSavingId.value = "";
+  }
+}
+
 async function deleteCharacter(character: Character) {
   try {
     await ElMessageBox.confirm(
@@ -272,7 +299,7 @@ async function exportCharacter(character: Character, includeFriends = true) {
     downloadBlob(blob, fileName);
     ElMessage.success(
       includeFriends
-        ? "角色卡已下载：人设、记忆、忆泡、梗、阶段总结和她的朋友。表情包和 API Key 不在包内。"
+        ? "角色卡已下载：人设、记忆、忆泡、忆泡日历、日记手账、梗、阶段总结和她的朋友。表情包和 API Key 不在包内。"
         : "角色卡已下载（不含她的朋友）：适合发给别人。表情包和 API Key 也不在包内。",
     );
   } catch (error) {
@@ -297,9 +324,16 @@ function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** 导入完成：插到列表最前并选中它，人不用回列表里再找一遍 */
+/**
+ * 导入完成：选中它，人不用回列表里再找一遍。
+ *
+ * 合并时这个角色**本来就在列表里**（只是数据变多了），所以按 id 换新而不是再插一个，
+ * 否则列表上会出现两张同名的卡。
+ */
 function onImported(character: Character) {
-  characters.value.unshift(character);
+  const index = characters.value.findIndex((item) => item.id === character.id);
+  if (index >= 0) characters.value.splice(index, 1, character);
+  else characters.value.unshift(character);
   selectedId.value = character.id;
 }
 
@@ -669,6 +703,20 @@ function runCharacterCommand(command: string) {
                 </div>
                 <div class="d-row">
                   <dt>
+                    <el-icon><MagicStick /></el-icon>深度思考
+                  </dt>
+                  <dd class="d-switch">
+                    <el-switch
+                      :model-value="selected.chatThinking === true"
+                      :loading="thinkingSavingId === selected.id"
+                      :disabled="thinkingSavingId !== ''"
+                      size="small"
+                      @change="(value) => toggleThinking(selected, value === true)"
+                    />
+                  </dd>
+                </div>
+                <div class="d-row">
+                  <dt>
                     <el-icon><Key /></el-icon>API Key
                   </dt>
                   <dd :class="{ 'is-missing': !selected.chatApiKeyConfigured }">
@@ -676,6 +724,9 @@ function runCharacterCommand(command: string) {
                   </dd>
                 </div>
               </dl>
+              <p class="d-note">
+                开着先推理再作答（慢一些、思考也计费）；关掉更快更省。仅 DeepSeek 系模型生效。
+              </p>
             </div>
           </aside>
         </div>
@@ -732,6 +783,7 @@ function runCharacterCommand(command: string) {
 
     <CharacterImportDialog
       v-model="importOpen"
+      :characters="characters"
       @imported="onImported"
     />
   </div>
@@ -881,6 +933,9 @@ function runCharacterCommand(command: string) {
 /* 待生效的周期只在脚注里弱化展示，别和「正在生效」的数字抢同一个视觉权重 */
 .chars-a .d-row dd .d-pending { color: var(--faint); font-weight: 400; }
 .chars-a .d-row dd.is-missing { color: var(--rose); }
+/* 开关那一格：dd 默认是右对齐的文本，开关要自己居中 */
+.chars-a .d-row dd.d-switch { display: flex; align-items: center; }
+.chars-a .d-note { margin: var(--sp-2) 0 0; color: var(--faint); font-size: 11px; line-height: 18px; }
 
 /* 空态：虚线框和渐变光晕都去掉，跟总览的引导块同一块白砖 */
 .chars-a .empty-block {
