@@ -82,6 +82,7 @@ export default defineEventHandler(async (event) => {
         category: true,
         content: true,
         status: true,
+        importance: true,
         createdAt: true,
         updatedAt: true,
         memoryScope: { select: { scopeType: true } },

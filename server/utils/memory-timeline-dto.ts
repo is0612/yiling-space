@@ -10,6 +10,12 @@ export type MemoryTimelineEntryDto = {
   tag: string;
   tagTone: "green" | "purple" | "blue" | "amber" | "gray";
   source: string;
+  /**
+   * 记忆条目的重要度（0–1），只有 ACTIVE 的记忆带。
+   *
+   * 页面上不显示的话，排序改动就没法核对 —— 「为什么这条排在前面」只能靠猜。
+   */
+  importance?: number;
 };
 
 /**
@@ -47,6 +53,7 @@ type MemoryRecord = {
   category: "FACT" | "PREFERENCE" | "RELATIONSHIP" | "COMMITMENT" | "GOAL" | "EVENT" | "SUMMARY" | "OTHER";
   content: string;
   status: "ACTIVE" | "SUPERSEDED" | "ARCHIVED" | "INVALIDATED" | "TRASHED";
+  importance: number;
   createdAt: Date;
   updatedAt: Date;
   memoryScope: { scopeType: string };
@@ -154,6 +161,7 @@ export function toMemoryTimelineDtos(input: {
         tag: statusLabel,
         tagTone: memory.status === "ACTIVE" ? "purple" : memory.status === "INVALIDATED" ? "amber" : "gray",
         source: "记忆条目 #" + memory.id.slice(0, 8),
+        ...(memory.status === "ACTIVE" ? { importance: memory.importance } : {}),
       },
     });
   }

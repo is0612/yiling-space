@@ -1375,7 +1375,10 @@ watch(id, () => {
                       <span
                         class="pill"
                         :class="toneFor(entry.tagTone)"
-                      >{{ entry.tag }}</span><span v-if="entry.channel !== entry.tag">{{ entry.channel }}</span><span>{{ entry.source }}</span>
+                      >{{ entry.tag }}</span><span v-if="entry.channel !== entry.tag">{{ entry.channel }}</span><span>{{ entry.source }}</span><span
+                        v-if="entry.type === 'memory' && entry.importance !== undefined"
+                        class="timeline-importance"
+                      >重要度 {{ entry.importance.toFixed(2) }}</span>
                     </div>
                     <!-- 行内只留「编辑 + 更多」：原来 4 个链接常显，其中 2 个破坏性，
                        每行都在喊。状态类操作收进菜单，默认不占视线。 -->
@@ -1942,6 +1945,8 @@ watch(id, () => {
 /* 记忆正文是全页要读的东西，12px 太紧了；跟标题同为 14px，靠字重和明度分层 */
 .timeline-summary{font-size:14px;line-height:1.7}
 .timeline-meta{color:var(--dim)}
+/* 重要度：只在记忆条目上出现。排序改动看不见就没法核对，所以把它摆出来。 */
+.timeline-importance{color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
 
 .load-more{width:100%;margin-top:4px;border:0;border-radius:8px;background:none;padding:12px 0;color:var(--dim);font-size:12px;font-weight:600;cursor:pointer;transition:background .14s var(--ease),color .14s var(--ease)}
 .load-more:hover{background:var(--surface-2);color:var(--brand-strong)}

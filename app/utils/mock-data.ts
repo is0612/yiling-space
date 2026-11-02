@@ -111,6 +111,8 @@ export type TimelineEntry = {
   tag: string;
   tagTone: "green" | "purple" | "blue" | "amber" | "gray";
   source: string;
+  /** 记忆条目的重要度（0–1）；只有还在生效的记忆带。 */
+  importance?: number;
 };
 
 export type SnapshotAnalysis = {
