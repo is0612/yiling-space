@@ -857,6 +857,47 @@ try {
   assert.equal(tempReply.body.user_id, 222, "临时会话回给发起者。");
   assert.equal(tempReply.body.group_id, 777, "临时会话的回复必须带上来源群号，否则协议端拒绝、对方收不到。");
 
+  // ── 主人在群里说的话，即使这一轮没接她，也要落库（storedReason=context）──
+  // 群聊和私聊是两个会话，私聊的最近对话窗口只回看自己那一条。这一句不落库，
+  // 「他刚在群里说的」在私聊里就不存在，她只能回「这边真没接到」。
+  // 用「概率抽签为 0」制造「该挡下」：它排在日上限之后、语义机会那一步，
+  // 是最稳的挡法 —— 日上限按群算，新群第一轮是 0，挡不住。
+  {
+    const ownerRoundConfig = {
+      groupChatMode: "ambient",
+      batchWindowSeconds: 3,
+      mentionWindowSeconds: 1,
+      minGapSeconds: 0,
+      dailyMax: 0,
+      quietStart: "00:00",
+      quietEnd: "00:00",
+      ambientChance: 0,
+    };
+    await prisma.characterChannelBinding.update({ where: { id: bindingId }, data: { config: ownerRoundConfig } });
+    record.bindings[0]!.groupChat = { ...ambientSettings, ambientChance: 0 };
+    record.ownerQq = "222";
+    const before = await userCount(1016);
+    await emitToGroup(1016, 120, "我先在群里说一句", 222, false);
+    await sleep(4000);
+    assert.equal(await assistantCount(1016), 0, "概率抽签为 0，这一轮不该回。");
+    assert.equal(await userCount(1016), before + 1, "主人在群里说的话要落库，私聊才接得上。");
+    const ownerRow = await prisma.message.findFirst({
+      where: {
+        conversation: { is: { channelBindingId: bindingId, externalConversationId: "g:1016" } },
+        metadata: { path: ["storedReason"], equals: "context" },
+      },
+      select: { metadata: true },
+    });
+    assert(ownerRow, "主人发言的轮次要标 storedReason=context（7 天清理档，不当证据类留 30 天）。");
+    assert.equal(
+      (ownerRow.metadata as Record<string, unknown> | null)?.isOwner,
+      true,
+      "落库要带 isOwner，提炼忆泡时才认得出这句是主人说的。",
+    );
+    await prisma.characterChannelBinding.update({ where: { id: bindingId }, data: { config: { ...ambientSettings } } });
+    record.bindings[0]!.groupChat = { ...ambientSettings };
+  }
+
   closeGateway();
 
   console.log("OneBot 渠道端到端测试通过：WS token 鉴权与单次握手、事件接入、CQ 码解析、凭据解密、角色绑定路由、记忆检索、模型回复、表情段发送与表情额度、消息持久化、外部身份 upsert、回发平台与幂等去重、群公告草稿与确认发布、普通成员越权拦截、按群滚动 10 分钟回复上限、群聊统一攒批（mention 档只在被叫到时进管道）、自然接话闸门、按群覆盖群聊模式、引用与 @ 的分工（回上一条不加、接旧句才引用、点名才 @）、别人 @ 别人时不抢话（@all 例外）、围栏 JSON 照常回、戳一戳能叫醒她（戳别人不算）、B站 指令主人专属、临时会话的回复带上来源群号。");

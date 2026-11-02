@@ -1,5 +1,7 @@
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
 import { buildChatTimeContext, CHAT_TIME_ZONE_DEFAULT } from "./chat-time-context";
+// 只引类型：那个模块连着 token 估算，而这个文件要被提示词单测直接 import。
+import type { CrossChannelLine } from "./cross-channel-context";
 // 备注的清洗与截断：库里的数据不一定干净（旧版本、手工 SQL、迁移），
 // 而这里是最不该赌的地方 —— 备注会原样进系统提示词。
 import { aliasesForPrompt } from "./friend-aliases";
@@ -254,6 +256,23 @@ export type ConversationReplyInput = {
   /** 忆泡还没覆盖到的那一段，用原始对话兜底。留空就不注入。 */
   rawMessages?: ConversationContextRawMessage[];
   /**
+   * 他在**别的地方**说过的话 —— 目前只有一种来源：同一个人的 QQ 群发言。
+   *
+   * 为什么需要：群聊和私聊是两个 `Conversation`，`recentMessages` 只回看当前这一条。
+   * 于是他在群里说的，私聊里她一句都接不到，只能回「这边真没接到」
+   * （2026-11-02 实况）。跨窗口旁路把那两小时补回来，忆泡补的是那几天。
+   *
+   * 三条差别必须靠提示词说清，少一条就串台：
+   * 1. 它是**另一个窗口**的记录，不是这段对话的历史；
+   * 2. 那边还有别人在场，这些话是当众说的，而别人的话没有一起带过来；
+   * 3. 所以他提起来时她可以接，但不能说成「你刚才在这儿跟我说过」。
+   */
+  crossChannel?: {
+    /** 来源窗口的名字，只用于提示词说明，如 `QQ 群`。 */
+    label: string;
+    lines: CrossChannelLine[];
+  };
+  /**
    * 昨天手账里「她带走的一句话」。
    *
    * 只在她自己的对话里注入（网页对话、主人私聊）——群聊不传，
@@ -375,7 +394,7 @@ export type ConversationReplyResult = {
 //     告诉模型「你正在说话」，换成文字那一轮提示词一字不提，她的 5 秒语音在历史里
 //     就是一行纯文本 —— 对方说「语音我这边听不了」，她答「本宝本来也只会打字」。
 //     这版把 `metadata.voice` 映射成 recentMessages 的 hadVoice，并写明「别否认自己会说话」。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v29";
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v30";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -531,8 +550,10 @@ function systemPrompt(flags: {
   withGroupMembers?: boolean;
   /** 本轮带了昨天手账的一句（journalLine）。 */
   withJournal?: boolean;
+  /** 本轮带了跨窗口旁路（crossChannel）。没带就别提，否则她会以为自己另有窗口。 */
+  withCrossChannel?: boolean;
 } = {}): string {
-  const { withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat, mustReply, repair, withVoiceReply, withAcquaintances, withFriendRoster, withFriendAliases, withGroupMembers, withJournal } = flags;
+  const { withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat, mustReply, repair, withVoiceReply, withAcquaintances, withFriendRoster, withFriendAliases, withGroupMembers, withJournal, withCrossChannel } = flags;
   const lines = [
     PROMPT_VERSION_MARKER,
     "You are the conversational character in Yiling Space. Read characterName as your display identity and characterPrompt as your persona instructions; follow that persona and respond naturally to the current user's message.",
@@ -633,6 +654,22 @@ function systemPrompt(flags: {
       );
     }
   }
+  /**
+   * 跨窗口旁路：他在别的地方（现在是 QQ 群）说过的话。
+   *
+   * 这段规则的价值全在「分清两个窗口」。不写清的话，模型看到一串 USER 消息，
+   * 会当成这段对话的历史，于是接着上一句往下聊 —— 而对方在私聊窗口里根本没听到
+   * 上一句，只会觉得她答非所问。反过来的错法也一样讨厌：明明是他说过的话，
+   * 她回一句「你什么时候说的」，等于把「我没听见」摆到台面上。
+   */
+  if (withCrossChannel) {
+    lines.push(
+      "crossChannel holds things this same person said in a QQ group a little while ago, together with what you answered there. It is a different window from this one — not earlier lines of this conversation. He knows he said it; this chat never saw it.",
+      "Treat it as something you already know: when he refers to it, follow along and answer normally. Do not ask him to repeat it and do not say you did not receive it.",
+      "It is background, not a script. Do not read it back, do not quote it line by line, and never mention that you have a record of it. Say 刚才在群里 / 你群里说的 the way a person would when the timing matters.",
+      "That room had other people in it, and their lines are not here. Do not assume you caught every reply in that group, do not repeat what other members said, and do not let anything from a private conversation surface because of it.",
+    );
+  }
   if (withGroupChat) {
     // 群聊的核心是「可以不说话」。不把这句话写死，模型会默认每条都得回，
     // 于是抽签放行一次就等于逼她开口一次 —— 那就又退化成「全都回」了。
@@ -668,6 +705,10 @@ function systemPrompt(flags: {
       "Your own earlier lines in recentMessages carry hadSticker: true when that reply went out with a sticker/image of yours. If someone asks who sent a picture and one of your lines has hadSticker, that picture was yours — own it. Do not claim a picture you never sent, and do not deny one your hadSticker line shows you did send.",
       "Decide whether to speak at all. Speak when someone is talking to you, when the conversation genuinely invites a line from you, or when you have something of your own to add. If policy.direct is true, someone @ mentioned you: answer, and do not stay silent.",
       "groupAnchors lists topics you already took part in. You may add to those topics even when the latest question is aimed at someone else, but never answer as if you were the person being asked, and never claim another bot's exchange as your own.",
+      // 私下知道的事不进群。这条原来只挂在熟人卡那段下面，于是只有「这一轮恰好带了熟人卡」
+      // 才生效 —— 而她真正会漏的场合恰恰是记得一个人太多、顺口就说出来了，跟带没带表无关。
+      // 断链路不解决这件事：她在群里本来就会听、会记，能管住的只有「说不说」。
+      "Anything you know from a private conversation stays out of this room: what he told you one-on-one, what he wrote to you in a direct message, and what you two talked about in your own chat window. Do not bring it up, do not hint at it, and if a member asks you to repeat what was said in private, deflect instead of reciting. Knowing who someone is to you, and how the two of you usually talk, is fine to let show; saying what they told you in private is not.",
     );
     if (withGroupMembers) {
       // 归属表：让她能「查」而不是「猜」。这张表是 2026-10-31 21:00 那轮缺的东西 ——
@@ -976,6 +1017,15 @@ export async function generateConversationReply(input: ConversationReplyInput): 
   // 群聊语境由调用方显式声明；退回到「有 transcript 也算」，兼容旧调用。
   const withGroupChat = input.groupChat === true || Boolean(input.transcript?.length);
 
+  /**
+   * 跨窗口旁路只在真有内容时才提。
+   *
+   * 空数组也写一段规则的话，提示词里会多出「你还有别的窗口的记录」，而实际上
+   * 什么都没给 —— 她会以为自己另有来源，被问起时就往那个方向编。
+   */
+  const crossChannelLines = input.crossChannel?.lines ?? [];
+  const withCrossChannel = crossChannelLines.length > 0;
+
   // 熟人名册：三档各自格式化，全空就是 null（那一整段提示词也不写）。
   // 备注的可见范围跟着场景走：群聊只对本群熟人开，私聊两档都开。
   const acquaintancePayload = buildAcquaintancePayload(input.acquaintances ?? null, {
@@ -1054,6 +1104,22 @@ export async function generateConversationReply(input: ConversationReplyInput): 
             ...(item.usage?.trim() ? { usage: item.usage.trim().slice(0, 300) } : {}),
             ...(item.justSaid ? { justSaid: true } : {}),
           })),
+        }
+      : {}),
+    ...(withCrossChannel
+      ? {
+          crossChannel: {
+            from: (input.crossChannel?.label ?? "").trim().slice(0, 40) || "another chat",
+            // 时间正序：模型读对话流向，倒序会把它当成「从新往旧」的一叠记录。
+            // 截断在 cross-channel-context 里做过，这里只补上限，不重复切。
+            lines: crossChannelLines.map((line) => ({
+              role: line.role,
+              ...(line.speaker ? { speaker: line.speaker.slice(0, 80) } : {}),
+              content: line.content.slice(0, 1000),
+              occurredAt: line.occurredAt,
+              group: line.groupLabel,
+            })),
+          },
         }
       : {}),
     recentMessages: input.recentMessages.map((entry) => ({
@@ -1177,6 +1243,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
                 withFriendAliases: hasFriendAliases,
                 withGroupMembers: Boolean(input.groupMembers?.length),
                 withJournal: Boolean(input.journalLine),
+                withCrossChannel,
                 // 第一次的答案没有可用正文时才补这句 —— 不是每次重试都喊，喊多了像责骂。
                 ...(repair ? { repair: true } : {}),
               }),

@@ -1210,16 +1210,25 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
    * 也不知道她上一次开口是什么时候 —— 这两样都要等这一轮安静下来才成立。
    */
   /**
-   * 只落库、不调模型：把「被 @ / 被叫到名字、但这一轮没接」的消息写进会话。
+   * 只落库、不调模型：把「被 @ / 被叫到名字 / 主人说了话、但这一轮没接」的消息写进会话。
    *
    * 为什么需要它：群聊记录原本只等于「她回过话的那几轮」，群里发生但没找她、
    * 或找了但被闸门挡下的事，从来没进过库，自然也就永远成不了忆泡。
-   * 这里只补「冲她来的」那一部分，量小、也不改变任何回复行为。
+   * 这里只补两种：冲她来的，以及**主人说的**。量小、也不改变任何回复行为。
    *
-   * 落库标 `storedReason: "mentioned"`，和正常回复的 `replied` / 判断后沉默的
-   * `silent` 区分开，方便以后按原因做保留策略。
+   * 主人那一轮为什么要存：他被闸门挡下之后往往会到私聊里接着问，而私聊的最近对话
+   * 窗口只回看自己那条会话。不落库的话，「我在群里跟你说的」在私聊里就是凭空消失，
+   * 她只能回「这边真没接到」（2026-11-02 实况）。落库是那条跨窗口旁路的前提。
+   *
+   * 两种原因分开标，不能混：
+   * - `mentioned`：冲她来的，是证据，按角色设置的保留天数走（默认 30 天）；
+   * - `context`：只是「他当时在群里说过这句」，属于上下文，跟 `silent` 一样 7 天清理。
+   * 合用一个标签的话，主人随便聊两句就会在库里留 30 天。
    */
-  const persistMentionedRound = async (items: PendingGroupMessage[]): Promise<void> => {
+  const persistMentionedRound = async (
+    items: PendingGroupMessage[],
+    storedReason: "mentioned" | "context" = "mentioned",
+  ): Promise<void> => {
     const binding = items[0]!.binding;
     const groupEvent = items[0]!.event;
     const prisma = getPrisma();
@@ -1257,9 +1266,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         metadata: {
           source: "channel",
           platform: ONEBOT_PLATFORM,
-          storedReason: "mentioned",
+          storedReason,
           authorOpenId: item.event.userId,
           ...(item.event.displayName ? { authorDisplayName: item.event.displayName } : {}),
+          // 主人说的那句：提炼忆泡时靠它把「主人」和群友分开，别在私聊里读成别人说的。
+          ...(item.isOwner ? { isOwner: true } : {}),
           ...(item.event.poke !== undefined ? { poke: true } : {}),
         },
       })),
@@ -1356,23 +1367,31 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     if (!gate.allowed) {
       // direct / named 一定要一起打：早退时少了这两个，事后分不清是「@ 没认出来」
       // 还是「认出来了但被别的闸拦了」—— 前者换协议端，后者调参数，处理方式完全不同。
-      logGroupRound(groupEvent.groupId, { reason: gate.reason, messages: items.length, direct, named, addressedToOthers, ...(poked ? { poked } : {}) });
-      // 被闸门挡下、但确实是冲她来的（@ 或叫名字）：原文仍要落库。
-      // 她不接话不等于那件事没发生；不存的话「群里发生的事」永远进不了忆泡。
+      // `owner` 同理：分不清「主人那句没落库」是漏了还是这一轮本来就没他说的。
+      const ownerSpoke = items.some((item) => item.isOwner);
+      logGroupRound(groupEvent.groupId, {
+        reason: gate.reason, messages: items.length, direct, named, addressedToOthers,
+        ...(ownerSpoke ? { owner: true } : {}),
+        ...(poked ? { poked } : {}),
+      });
+      // 被闸门挡下、但冲她来（@ 或叫名字）或者**主人在说话**：原文仍要落库。
+      // 她不接话不等于那件事没发生；不存的话「群里发生的事」永远进不了忆泡，
+      // 而且下一句他到私聊里问「我刚才群里说的」，她只能回「这边真没接到」。
       // 只写库、不调模型，所以「闸门不过就不花钱」这条约定没有被破坏。
-      if (direct || named) {
-        await persistMentionedRound(items).catch((error) => {
-          console.error("[onebot] 记录被挡下的点名轮次失败：", error instanceof Error ? error.message : String(error));
+      if (direct || named || ownerSpoke) {
+        await persistMentionedRound(items, direct || named ? "mentioned" : "context").catch((error) => {
+          console.error("[onebot] 记录被挡下的轮次失败：", error instanceof Error ? error.message : String(error));
         });
       }
       return;
     }
     // 群规限流仍然生效：闸门管「该不该接」，这里管「这个群十分钟能说几句」。
     if (await isGroupReplyLimited(binding, groupEvent)) {
-      logGroupRound(groupEvent.groupId, { reason: "group_reply_limit", messages: items.length, direct, named, ...(poked ? { poked } : {}) });
-      // 限流挡下的同样是「冲她来的」轮次，一样按 mentioned 落库。
-      if (direct || named) {
-        await persistMentionedRound(items).catch(() => undefined);
+      const ownerSpoke = items.some((item) => item.isOwner);
+      logGroupRound(groupEvent.groupId, { reason: "group_reply_limit", messages: items.length, direct, named, ...(ownerSpoke ? { owner: true } : {}), ...(poked ? { poked } : {}) });
+      // 限流挡下的同样是「冲她来的」轮次，一样落库；主人说的那句也别丢。
+      if (direct || named || ownerSpoke) {
+        await persistMentionedRound(items, direct || named ? "mentioned" : "context").catch(() => undefined);
       }
       return;
     }

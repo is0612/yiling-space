@@ -790,11 +790,18 @@ export async function processNextMemoryJob(
           : {};
 
         /**
-         * 分层清理：纯上下文行（`storedReason = "silent"`，她看过但没开口的那一轮）
-         * 只保留 7 天，证据类（她回了话 / 被点名）按角色设置的保留天数走。
+         * 分层清理：纯上下文行只保留 7 天，证据类（她回了话 / 被点名）按角色设置的保留天数走。
          *
-         * 上下文行的作用是「让她理解当时在聊什么」，一周之后回顾价值已经很低；
+         * 上下文行有两档，都要算进来：
+         * - `silent`：她看过但没开口的那一轮；
+         * - `context`：主人在群里说的话（这一轮没接她，但私聊里要能接上，见
+         *   `cross-channel-context.ts`）。它只服务「刚才」那两小时，留一个月没有意义，
+         *   而且会跟着群消息量一路涨。
+         *
          * 真正需要留证的是她参与过的那部分。两个窗口都受同一个清理开关约束。
+         *
+         * Prisma 的 JSON 过滤器没有 `in`，两档只能写成 OR —— 别改成对 metadata 取字符串比较，
+         * 那会把整列当作一个字符串去匹配，一条都删不掉（静默失效，只在库里越积越多）。
          */
         const contextRetentionDays = Math.min(CONTEXT_RETENTION_DAYS, latestRetentionDays ?? CONTEXT_RETENTION_DAYS);
         const contextCutoff = new Date(now.getTime() - contextRetentionDays * 24 * 60 * 60 * 1000);
@@ -803,7 +810,10 @@ export async function processNextMemoryJob(
             conversation: { is: { memoryScopeId: candidate.memoryScopeId } },
             ...preservePrivate,
             occurredAt: { lt: contextCutoff },
-            metadata: { path: ["storedReason"], equals: "silent" },
+            OR: [
+              { metadata: { path: ["storedReason"], equals: "silent" } },
+              { metadata: { path: ["storedReason"], equals: "context" } },
+            ],
           },
         });
 

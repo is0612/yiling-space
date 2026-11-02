@@ -860,6 +860,94 @@ try {
   console.log("群聊 silent：允许不说、reply 允许为空、usage 照常记账、transcript 带发言人 —— 通过");
   console.log("群聊上下文：groupBackground/groupAnchors/policy.direct 进提示词、groupDecision 白名单、被 @ 时不能 silent —— 通过");
   console.log("语音轮次：提示词要求别填 replyToMessageId/atMessageId（语音条只发一个 record 段）、文字规则不变 —— 通过");
+
+  // ── 跨窗口旁路（crossChannel）────────────────────────────────────────────
+  // 私聊里补「他刚在群里说过的话」。最容易出的错是把它并进 recentMessages：
+  // 模型会当成这段对话的历史，接着上一句往下聊，而对方根本没在这个窗口里听过上一句。
+  //
+  // 上面「深度思考」那一段把 fetch 换成了只录 thinkingBody 的桩，这里换回来。
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    capturedBody = typeof init?.body === "string" ? init.body : "";
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ reply: "嗯", usedMemoryIds: [], usedSnapshotIds: [] }) } }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "刚才群里那句你听见没",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    crossChannel: {
+      label: "QQ 群",
+      lines: [
+        { id: "x1", role: "USER", speaker: "主人", content: "明天几点出发", occurredAt: "2026-11-02T21:00:00.000Z", groupLabel: "QQ群 123456" },
+        { id: "x2", role: "ASSISTANT", content: "七点吧，你上次不是起不来", occurredAt: "2026-11-02T21:00:20.000Z", groupLabel: "QQ群 123456" },
+      ],
+    },
+  });
+  const crossMessages = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> }).messages;
+  const crossSystem = crossMessages.find((item) => item.role === "system")!.content;
+  const crossInput = JSON.parse(crossMessages.find((item) => item.role === "user")!.content) as Record<string, any>;
+  assert(crossSystem.includes("crossChannel"), "带了跨窗口内容才写这段规则。");
+  assert(crossSystem.includes("different window"), "必须说清它是另一个窗口，不是这段对话的历史。");
+  assert(crossSystem.includes("Do not ask him to repeat it"), "要明确「别再让人重复一遍」—— 那正是用户报的问题。");
+  assert(crossInput.crossChannel, "crossChannel 要作为独立字段进 promptInput。");
+  assert.equal(crossInput.crossChannel.from, "QQ 群", "来源窗口名要带进去。");
+  assert.equal(crossInput.crossChannel.lines.length, 2, "他的发言和她的回应都要带。");
+  assert.equal(crossInput.crossChannel.lines[0].group, "QQ群 123456", "来源群要带进去，她才能说「你群里说的」。");
+  assert.equal(crossInput.crossChannel.lines[0].speaker, "主人", "他的发言要带发言人。");
+  assert.equal(crossInput.crossChannel.lines[1].speaker, undefined, "她自己的回应不该带 speaker。");
+  assert.equal(crossInput.recentMessages.length, 0, "跨窗口内容绝不能并进 recentMessages。");
+
+  // 空数组 = 没内容：整段规则都不写，否则她以为自己另有窗口，被问起时往那个方向编。
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    crossChannel: { label: "QQ 群", lines: [] },
+  });
+  const emptyCrossMessages = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> }).messages;
+  assert(!emptyCrossMessages.find((item) => item.role === "system")!.content.includes("crossChannel"), "没内容就别提这个字段。");
+  const emptyCrossInput = JSON.parse(emptyCrossMessages.find((item) => item.role === "user")!.content) as Record<string, unknown>;
+  assert(!("crossChannel" in emptyCrossInput), "空 lines 不该塞进 promptInput。");
+
+  // ── 群聊的隐私约束不依附熟人卡 ───────────────────────────────────────────
+  // 原先那句 "never bring up anything private in front of the group" 只写在熟人卡分支里，
+  // 于是只有这一轮恰好带了熟人卡才生效。可她真正会漏的场合是「记得一个人太多、顺口就说」，
+  // 跟这一轮带没带表无关。
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "说的啥",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    groupChat: true,
+    transcript: [{ id: "m1", member: "member_1", speaker: "群友甲", content: "她在私聊里跟你说啥了", isOwner: false }],
+  });
+  const privacySystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(privacySystem.includes("stays out of this room"), "没带熟人卡的群聊轮次也要有隐私约束。");
+  assert(privacySystem.includes("deflect instead of reciting"), "群友追问时要说「绕过去」，不能复述私聊内容。");
+  console.log("跨窗口旁路：crossChannel 独立分区、不并进 recentMessages、空内容不写规则、群聊隐私约束不依赖熟人卡 —— 通过");
 } finally {
   globalThis.fetch = originalFetch;
 }

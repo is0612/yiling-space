@@ -116,8 +116,12 @@
 
 清理任务分两档删原文：
 
-- **纯上下文行**（`metadata.storedReason = "silent"`，她看过但没开口的那一轮）：只保留 **7 天**。它的作用只是「理解当时在聊什么」，一周后回顾价值很低；
+- **纯上下文行**（`metadata.storedReason` 为 `silent` 或 `context`）：只保留 **7 天**。它的作用只是「理解当时在聊什么」，一周后回顾价值很低。两档的区别是她看没看见：
+  - `silent`：她看过但没开口的那一轮；
+  - `context`：**主人在群里说的话**，这一轮被闸门挡下（概率/日上限/群规限流），她没看见，但私聊里要能接上（`cross-channel-context.ts`）。它只服务「刚才那两小时」，留一个月没有意义，而且会跟着群消息量一路涨 —— 别把它并进证据类。
 - **证据类**（`replied` / `mentioned`）：按角色设置的保留天数走（新建角色默认 30 天）。
+
+Prisma 的 JSON 过滤器没有 `in`，上面两档写成 `OR` 两个 `equals`（`memory-worker.ts`）。改的时候不要图省事换成字符串比较，那会一条都删不掉，而且静默失效。
 
 上下文窗口取 `min(7, 角色设置)` —— 用户填的数字更小时以用户为准。两档都受同一个清理开关约束（`rawMessageCleanupEnabled` 默认关），审计里额外写 `contextCutoff` / `contextMessages`。
 

@@ -1,6 +1,12 @@
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
 import { generateConversationReply, type ConversationContextMessage, type ConversationGroupDecision } from "../chat-reply";
 import { resolveChatTimeZone } from "../chat-time-context";
+import {
+  CROSS_CHANNEL_WINDOW_MINUTES,
+  selectCrossChannelContext,
+  type CrossChannelCandidate,
+  type CrossChannelLine,
+} from "../cross-channel-context";
 import { resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget, selectEventsForPrompt, selectRecentEvents } from "../memory-event-retrieval";
 import { moveConversationEventsToScope } from "../memory-event-move";
 import { resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt } from "../message-retrieval";
@@ -188,7 +194,14 @@ export type ChannelMessageInput = {
  */
 export function buildStoredMessageMetadata(input: {
   platform: string;
-  storedReason: "replied" | "silent" | "mentioned" | "recorded";
+  /**
+   * 落库原因。清理策略按它分档，所以别随手加值：
+   * - `replied` / `mentioned`：证据类，按角色保留天数走；
+   * - `silent` / `context`：纯上下文行，7 天清理（`context` = 主人在群里说的话，
+   *   这一轮没接她，但私聊里要能接上，见 `cross-channel-context.ts`）；
+   * - `recorded`：私聊预落库，私聊不进清理。
+   */
+  storedReason: "replied" | "silent" | "mentioned" | "recorded" | "context";
   message: {
     authorOpenId: string;
     authorDisplayName?: string;
@@ -502,6 +515,24 @@ function readStoredSpeaker(metadata: unknown): { speaker?: string; isOwner: bool
     ...(name ? { speaker: name } : {}),
     isOwner: record.isOwner === true,
   };
+}
+
+/**
+ * 这条消息是谁发的（平台账号）。跨窗口旁路要拿它认出「这一句是主人自己在群里说的」。
+ *
+ * 不能拿昵称认：群里改名是常事，同名也不同人。账号在同一个平台内稳定。
+ */
+function readStoredAuthorOpenId(metadata: unknown): string {
+  const record = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
+  return typeof record.authorOpenId === "string" ? record.authorOpenId.trim() : "";
+}
+
+/** 会话 key 是 `g:<群号>`；认不出就原样返回，别编一个群名出来。 */
+function groupLabelFromConversationKey(key: string): string {
+  const groupId = /^g:(\d+)$/.exec(key)?.[1];
+  return groupId ? `QQ群 ${groupId}` : key;
 }
 
 /**
@@ -1052,12 +1083,54 @@ async function runChannelTurn(input: {
       ? [globalScope.id, ownerPrivateScopeId, ...(primaryIdentityScopeId ? [primaryIdentityScopeId] : [])]
       : (primaryIdentityScopeId ? [globalScope.id, primaryIdentityScopeId] : [globalScope.id]));
 
+  /**
+   * 他在群里说过的话 —— 跨窗口旁路的取数。
+   *
+   * 为什么需要：群聊和私聊是两个 `Conversation`，`recentStoredMessages` 写死按当前
+   * 会话 id 取。于是他在群里说的，私聊里她一句都接不到，只能回「这边真没接到」。
+   * 记忆层那条路（忆泡/长期记忆）补的是「那几天」，这条补的是「刚才这两小时」。
+   *
+   * 三个限定，缺一条都不能上：
+   * 1. **只在主人私聊时查**（`isOwnerTurn`）。群友不进这条路：他在群里说的话，
+   *    别的群友的私聊里不该出现；主人自己本来就在那个群里，把他自己说过的话
+   *    接回私聊不涉及第三人。
+   * 2. 只查 `g:` 群会话，且只认 `authorOpenId` 等于他本人的那些行 —— 群里第三人
+   *    说的话一个字都不带（这不是「群聊转播」，是「我刚才说的那句你听见没」）。
+   * 3. 她的回应由纯函数按「紧跟在他后面」二次筛（`selectCrossChannelContext`），
+   *    这里先把候选放宽拿全，别在 SQL 里写一半逻辑。
+   */
+  const ownerPlatformUid = isOwnerTurn
+    ? (messages[0]!.authorPlatformUid || messages[0]!.authorOpenId || "").trim()
+    : "";
+  const crossChannelLookup = ownerPlatformUid
+    ? prisma.message.findMany({
+        where: {
+          occurredAt: { gte: new Date(Date.now() - CROSS_CHANNEL_WINDOW_MINUTES * 60_000) },
+          conversation: {
+            characterId: input.characterId,
+            externalConversationId: { startsWith: "g:" },
+          },
+          OR: [
+            { metadata: { path: ["authorOpenId"], equals: ownerPlatformUid } },
+            { role: "ASSISTANT" },
+          ],
+        },
+        // 倒序取最近 200 条：热群两小时能滚过上千条，正序取会把「刚才」整段挤掉。
+        orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+        take: 200,
+        select: {
+          id: true, role: true, content: true, occurredAt: true, metadata: true,
+          conversation: { select: { id: true, externalConversationId: true } },
+        },
+      })
+    : Promise.resolve([]);
+
   // 熟人卡要用的说话人 id 也算在这里，好和记忆检索一起并行（P3）。
   const speakerUids = isGroup
     ? [...new Set(messages.map((message) => (message.authorPlatformUid || message.authorOpenId || "").trim()).filter(Boolean))]
     : [];
-  // 记忆、阶段总结、忆泡、熟人卡、熟客榜五类检索互不依赖，并行查，省四个 RTT。排序与筛选仍在各自原处。
-  const [memoryCandidates, snapshotCandidates, eventCandidates, knownIdentities, acquaintanceRows] = await Promise.all([
+  // 记忆、阶段总结、忆泡、熟人卡、熟客榜、跨窗口六类检索互不依赖，并行查。排序与筛选仍在各自原处。
+  const [memoryCandidates, snapshotCandidates, eventCandidates, knownIdentities, acquaintanceRows, crossChannelRows] = await Promise.all([
     prisma.memoryItem.findMany({
       where: { memoryScopeId: { in: readableScopeIds }, status: "ACTIVE", deletedAt: null },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -1106,7 +1179,30 @@ async function runChannelTurn(input: {
       limit: CLOSE_FRIEND_LIMIT,
       conversationId: isGroup ? existingConversation?.id ?? null : null,
     }).catch(() => null),
+    // 跨窗口旁路失败只应该少一段背景，不能拦住这一轮回复。
+    Promise.resolve(crossChannelLookup).catch(() => []),
   ]);
+  /**
+   * 跨窗口旁路：他在群里说的那几句 + 她当时的回应。
+   *
+   * 它是**另一个窗口**的记录，不是本窗口的历史 —— 所以单独一路传给提示词，
+   * 绝不并进 `recentMessages`。并进去模型会以为自己刚在这个窗口里说过这些，
+   * 下一句就可能接着「刚才」往下说，而这个「刚才」对方根本没听见。
+   */
+  const crossChannel: CrossChannelLine[] = selectCrossChannelContext(
+    crossChannelRows.map((row): CrossChannelCandidate => ({
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      occurredAt: row.occurredAt,
+      conversationId: row.conversation.id,
+      groupLabel: groupLabelFromConversationKey(row.conversation.externalConversationId ?? ""),
+      authorOpenId: readStoredAuthorOpenId(row.metadata),
+      authorDisplayName: readStoredSpeaker(row.metadata).speaker ?? "",
+    })),
+    { now: new Date(), ownerUid: ownerPlatformUid },
+  ).lines;
+
   const memoryRank = rankMemoriesWithBudget(retrievalQuery, memoryCandidates, {
     limit: resolveMemoryItemLimit(character.modelConfig),
     tokenBudget: resolveMemoryTokenBudget(character.modelConfig),
@@ -1202,7 +1298,9 @@ async function runChannelTurn(input: {
       timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
       tokenBudget: resolveRawMessageTokenBudget(character.modelConfig),
       limit: resolveRawMessageLimit(character.modelConfig),
-      excludeIds: new Set(recentStoredMessages.map((message) => message.id)),
+      // 已经通过跨窗口旁路带进来的那几条不要再算一遍：同一句在提示词里出现两次，
+      // 模型会当成两件事，或者以为对方重复说过。
+      excludeIds: new Set([...recentStoredMessages.map((message) => message.id), ...crossChannel.map((line) => line.id)]),
     });
     rawMessages = selected.items.map((message) => ({
       id: message.id,
@@ -1320,6 +1418,8 @@ async function runChannelTurn(input: {
       ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
       ...(acquaintances ? { acquaintances } : {}),
       recentMessages,
+      // 他在群里说的那几句：单独一路，不并进 recentMessages（见上面 crossChannel 的注释）。
+      ...(crossChannel.length ? { crossChannel: { label: "QQ 群", lines: crossChannel } } : {}),
       memories,
       snapshots,
       ...(emojiFaces ? { emojiFaces } : {}),
