@@ -37,7 +37,7 @@ export default defineEventHandler(async (event) => {
   /*
    * 三种收尾，说清楚人还要不要动手：
    * ① 接管了面板密码（全新安装）→ 已经写进连接凭据，人什么都不用填；
-   * ② 没接管、面板也没初始化 → 初始密码只在控制台里，这次接到了文件上，指给人看；
+   * ② 没接管、面板也没初始化 → 初始密码只打印在控制台，这一轮接到了文件上，指给人看；
    * ③ 其余 → 普通启动成功。
    */
   let message = `已把 SnowLuma 拉起来，等它加载完（面板 ${status.panelPort} 起来就算好了）。`;
@@ -45,8 +45,8 @@ export default defineEventHandler(async (event) => {
     message = result.panelPasswordSaved
       ? `已把 SnowLuma 拉起来，面板密码由忆灵空间生成并写进了连接设置（不用手填）。等面板 ${status.panelPort} 应答就会自动配节点、挂 QQ。`
       : `已把 SnowLuma 拉起来，但面板密码没能写进连接设置 —— 密码记在 ${result.consoleLog ?? "SnowLuma 目录的 logs 里"}，登录面板后改掉它，再填进连接设置。`;
-  } else if (result.consoleLog) {
-    message = `已把 SnowLuma 拉起来。面板还没设过密码，初始密码只打印在控制台 —— 这次已接进 ${result.consoleLog}，去里面搜「初始登录凭据」。`;
+  } else if (result.initialPasswordInWindow) {
+    message = `已把 SnowLuma 拉起来。面板还没设过密码 —— 初始密码只打印在刚开的那个窗口里（标题是 ...\\SnowLuma\\node.exe），等它打出「★ WebUI 初始登录凭据」那段就抄下来，登录后立刻改掉。`;
   }
 
   return {

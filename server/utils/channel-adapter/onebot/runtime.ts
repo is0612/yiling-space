@@ -485,14 +485,19 @@ async function hasWebuiConfig(home: string): Promise<boolean> {
  * - 绕开了 cmd 的批处理解析，不再看第三方文件的换行符脸色；
  * - 版本闸门本来就是为了拦 PATH 里的 node，我们用的就是发行包自带的 node.exe，拦不到也不需要。
  *
- * 窗口这边别抱期待：**它会自己弹一个黑窗口，而且关不掉**（2026-11-02 实测）。
- * SnowLuma 是「监管进程 + 应用进程」两层，监管那个用 `spawn(process.execPath, [index.mjs])`
- * 把应用拉起来，而应用进程跑在 High 完整性级别（它自己的日志一直报 `process=High (RID=12288)`）。
- * Windows 给提权进程强制新开控制台，所以 detached / windowsHide / 换个 stdio 都拦不住；
- * 窗口属于提权进程，非提权的我们也无法 ShowWindow 掉（UIPI）。
- * 结论：那个窗口是它的，**不能关**（关掉就等于停掉面板），文档里照实写了。
- * 我们这边仍然 detached + windowsHide：至少我们直接起的那个监管进程不留窗口，
- * 而且 nuxt dev 重启不会带走它。
+ * 窗口这件事（2026-11-02 折腾过一轮，结论如下，别再重复试）：
+ *
+ * SnowLuma 是「监管进程 + 应用进程」两层，应用进程跑在 High 完整性级别（它的日志一直报
+ * `process=High (RID=12288)`）。直接用 spawn（stdio: "ignore"）时，Windows 仍会给应用进程
+ * 新建一个控制台 —— 但它的 stdout 是 NUL，于是**桌面上有个黑窗口，里面却是空的**，
+ * 用户看到会以为出事了。
+ *
+ * 用 `cmd /c start "" <node.exe> <index.mjs>` 就不一样：`start` 建的控制台是**真控制台**，
+ * 应用进程的 stdout 指向它，日志实时刷在窗口里（和双击 start.bat 一样）。
+ * `windowsHide` 只作用于我们那把 cmd，不影响 `start` 开出来的窗口。
+ *
+ * 那个窗口**不能关**（关掉就等于停掉面板）。detached 保留：nuxt dev 重启不影响它；
+ * 停止由 stopSnowluma 收进程树，不靠窗口。
  *
  * **面板密码归我们管（2026-11-02 补）**：全新安装时 SnowLuma 会拿随机密码当面板密码，
  * 只打印一次控制台 —— 而自动配节点/挂 QQ 都必须先登录面板，所以那串密码不进连接凭据，
@@ -500,20 +505,22 @@ async function hasWebuiConfig(home: string): Promise<boolean> {
  * 现在：没有 `config/webui.json` 时我们自己生成一个密码、用 `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD`
  * 播种给它，拿到面板后立刻写回连接凭据 —— 人不用手填任何密码。
  * 只在**已经有连接可写**时才接管（否则密码生成了也没处放，等于把人锁在面板外）；
- * 接管不了的情况（已有 webui.json / 没人可写）退回「抓控制台输出」，密码仍在文件里能查到。
+ * 接管不了的情况（已有 webui.json / 没人可写），那串一次性密码就在新开的窗口里，
+ * 返回值用 `initialPasswordInWindow` 提醒人去看。
  *
- * detached：nuxt dev 重启不影响它；停止由 stopSnowluma 收进程树，不靠窗口。
  */
 export async function launchSnowluma(): Promise<{
   ok: boolean;
   pid?: number;
   message?: string;
-  /** 接住子进程控制台输出的文件（面板未初始化且没接管时才给） */
+  /** 接住子进程控制台输出的文件（只在「播种的密码没能落库」这种兜底场合给） */
   consoleLog?: string;
   /** 这次由我们播种的面板密码（写进连接凭据了；没写成会把密码落到 consoleLog 里） */
   panelPassword?: string;
   /** panelPassword 有没有真的存进连接凭据 */
   panelPasswordSaved?: boolean;
+  /** 面板还没设过密码、这次也没接管：那串一次性密码只在新开的窗口里 */
+  initialPasswordInWindow?: boolean;
 }> {
   if (process.platform !== "win32") {
     return { ok: false, message: "自动启动只做了 Windows 版，请手动双击 SnowLuma 的 start.bat。" };
@@ -528,7 +535,6 @@ export async function launchSnowluma(): Promise<{
   try {
     const entry = await snowlumaEntry(home);
     let consoleLog: string | undefined;
-    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
 
     // 能不能接管面板密码：没写过 webui.json，且（自己指定了密码 或 至少有一条连接可写）
     const presetPassword = process.env.SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD?.trim() || "";
@@ -541,35 +547,34 @@ export async function launchSnowluma(): Promise<{
       }
     }
 
-    if (entry && !seededPassword && !(await panelInitialized(home))) {
-      // 面板还没设过密码：这一次的控制台输出不能丢，初始密码只在那里面。
-      // 每次启动覆盖写，所以文件不会随着长期运行无限长 —— 一旦密码设好，下一次就走 ignore 了。
-      consoleLog = path.join(home, "logs", "launch-console.log");
-      try {
-        await fs.mkdir(path.dirname(consoleLog), { recursive: true });
-        handle = await fs.open(consoleLog, "w");
-      } catch {
-        // 打不开就退回丢弃输出：至少别让「启动」因为写日志失败而失败
-        consoleLog = undefined;
-        handle = undefined;
-      }
-    }
-    const stdio: "ignore" | ["ignore", number, number] = handle ? ["ignore", handle.fd, handle.fd] : "ignore";
+    /*
+     * 用 `cmd /c start "" <node.exe> <index.mjs>`：`start` 会给它开一个**真正的控制台**，
+     * stdout 就指向那个窗口 —— 日志实时刷在里面（用户实测确认有效：页面上点启动后，
+     * 那个标题为 `...\SnowLuma\node.exe` 的窗口里能看到 `[App] SnowLuma starting`、群消息等）。
+     *
+     * 之前直接 spawn（stdio: "ignore"）时窗口虽然也冒出来，但 stdout 是 NUL，是个空窗口 ——
+     * 用户看到空窗口会以为出事了。所以这里换成 start。
+     * `windowsHide` 只作用于我们这把 cmd，不影响 `start` 自己开的那个窗口。
+     */
+    const env = seededPassword
+      ? { ...process.env, SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: seededPassword }
+      : process.env;
     const child = entry
-      ? spawn(entry.exe, [entry.main], {
+      ? spawn("cmd.exe", ["/c", "start", "", entry.exe, entry.main], {
           cwd: home,
           detached: true,
-          stdio,
+          stdio: "ignore",
           windowsHide: true,
-          // 只有「没写过 webui.json」时 SnowLuma 才认这个变量；其余情况带上也不影响。
-          env: seededPassword
-            ? { ...process.env, SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: seededPassword }
-            : process.env,
+          env,
         })
-      : spawn("cmd.exe", ["/c", "start.bat"], { cwd: home, detached: true, stdio: "ignore", windowsHide: false });
+      : spawn("cmd.exe", ["/c", "start", "", path.join(home, "start.bat")], {
+          cwd: home,
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+          env,
+        });
     child.unref();
-    // 子进程拿到的是自己的句柄副本，父进程这边可以立刻关掉，否则 dev server 里会一直挂着这个 fd
-    await handle?.close().catch(() => undefined);
     await rememberLauncher("snowluma", child.pid);
 
     // 播种的密码必须马上落库：它只存在于这一行内存里，丢了人就永远进不去面板。
@@ -594,7 +599,20 @@ export async function launchSnowluma(): Promise<{
       }
     }
 
-    return { ok: true, pid: child.pid, consoleLog, panelPassword: seededPassword, panelPasswordSaved };
+    /*
+     * 没接管、面板也还没设过密码：那串一次性密码只打印在**新开的那个窗口**里。
+     * 有了真控制台就不必再往文件里捞了，但这个事实要带回去，否则「初始密码在哪」又是个谜。
+     */
+    const initialPasswordInWindow = Boolean(entry) && !seededPassword && !(await panelInitialized(home));
+
+    return {
+      ok: true,
+      pid: child.pid,
+      consoleLog,
+      panelPassword: seededPassword,
+      panelPasswordSaved,
+      initialPasswordInWindow,
+    };
   } catch (error) {
     return {
       ok: false,
