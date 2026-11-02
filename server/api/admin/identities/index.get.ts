@@ -121,6 +121,7 @@ export default defineEventHandler(async (event) => {
       ...buildPage([], 0, page, pageSize),
       stats: { total: 0, familiar: 0, recent: 0 },
       sourceCounts: emptySourceCounts,
+      pendingSuggestions: 0,
     };
   }
 
@@ -139,10 +140,16 @@ export default defineEventHandler(async (event) => {
       { platform: { contains: keyword, mode: "insensitive" } },
       ...(platformMatches.length ? [{ platform: { in: platformMatches } }] : []),
     ];
-    pageWhere.externalIdentity = { is: { OR: identityFilters } };
+    // 备注也参与搜索：用户记得住「她怎么叫那人」，未必记得住 QQ 昵称。
+    // `has` 是数组精确元素匹配（不带 insensitivity），输完整的那个叫法才命中 ——
+    // 够用，而且不会把分页口径搅乱。
+    pageWhere.OR = [
+      { externalIdentity: { is: { OR: identityFilters } } },
+      { aliases: { has: keyword } },
+    ];
   }
 
-  const [total, rows, familiar, recent, sourceGroups] = await Promise.all([
+  const [total, rows, familiar, recent, sourceGroups, pendingSuggestions] = await Promise.all([
     prisma.memoryScope.count({ where: pageWhere }),
     prisma.memoryScope.findMany({
       where: pageWhere,
@@ -156,6 +163,7 @@ export default defineEventHandler(async (event) => {
         firstSource: true,
         interactionCount: true,
         lastInteractedAt: true,
+        aliases: true,
         character: { select: { name: true } },
         externalIdentity: {
           select: { id: true, platform: true, platformUid: true, displayName: true, status: true, linkedUserId: true },
@@ -168,6 +176,7 @@ export default defineEventHandler(async (event) => {
       where: { ...baseWhere, lastInteractedAt: { gte: new Date(Date.now() - WEEK_MS) } },
     }),
     prisma.memoryScope.groupBy({ by: ["firstSource"], where: baseWhere, _count: { _all: true } }),
+    prisma.friendAliasSuggestion.count({ where: { status: "PENDING", scope: { characterId: activeCharacterId } } }),
   ]);
 
   const totalForCharacter = countByCharacter.get(activeCharacterId) ?? 0;
@@ -201,6 +210,8 @@ export default defineEventHandler(async (event) => {
           // 认识的时间＝这条关系建立的时间，也就是第一次遇到这个人。
           knownSince: scope.createdAt.toISOString(),
           firstSource: scope.firstSource,
+          // 她私下的叫法。空数组 = 没设过，页面上显示「加备注」。
+          aliases: scope.aliases,
           conversationCount: scope._count.conversations,
         }];
       }),
@@ -214,5 +225,6 @@ export default defineEventHandler(async (event) => {
       private: countFor("PRIVATE"),
       group: countFor("GROUP"),
     },
+    pendingSuggestions,
   };
 });

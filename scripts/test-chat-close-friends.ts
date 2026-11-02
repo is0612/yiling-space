@@ -59,13 +59,20 @@ const base = {
 
 function roster(patch: Partial<Acquaintances> = {}): Acquaintances {
   return {
-    fromPrivate: [{ name: "没有喵i", times: 36, lastSeenAt: new Date("2026-11-01T12:00:00Z"), via: "PRIVATE" }],
+    fromPrivate: [{
+      name: "没有喵i",
+      times: 36,
+      lastSeenAt: new Date("2026-11-01T12:00:00Z"),
+      via: "PRIVATE",
+      aliases: ["喵喵", "小喵"],
+    }],
     fromGroups: [{
       name: "昔涟",
       times: 198,
       lastSeenAt: new Date("2026-10-31T12:00:00Z"),
       via: "GROUP",
       groups: ["鲸鱼观察站"],
+      aliases: ["涟宝"],
     }],
     inThisGroup: [],
     totals: { private: 2, group: 109 },
@@ -93,6 +100,8 @@ assert(!inPrivate.user.includes("\"inThisGroup\""), "没有当前群的时候不
 assert(inPrivate.user.includes("\"inGroups\":[\"鲸鱼观察站\"]"), "跨群榜要标出是哪个群的，否则同名的人分不开。");
 assert(inPrivate.user.includes("\"totals\":{\"private\":2,\"group\":109}"), "总数要带上，榜只有 8 个位置。");
 assert(inPrivate.user.includes("\"lastSeen\":\"11-1\""), "日期要裁成 M-D，整条 ISO 串会被原样念出来。");
+assert(inPrivate.system.includes("aliases are the names you privately use"), "私聊里带了备注，就要说明那是她私下的叫法。");
+assert(inPrivate.user.includes("\"aliases\":[\"喵喵\",\"小喵\"]"), "私聊档的备注要进 payload。");
 
 // ② 群聊：只有 inThisGroup 能定语气，跨群榜只是背景，且一律不许念。
 await generateConversationReply({
@@ -101,7 +110,13 @@ await generateConversationReply({
   direct: true,
   transcript: [{ id: "m1", speaker: "昔涟", content: "@小鲸鱼 你跟谁关系最好", isOwner: false }],
   acquaintances: roster({
-    inThisGroup: [{ name: "昔涟", times: 12, lastSeenAt: new Date("2026-10-31T12:00:00Z"), via: "GROUP" }],
+    inThisGroup: [{
+      name: "昔涟",
+      times: 12,
+      lastSeenAt: new Date("2026-10-31T12:00:00Z"),
+      via: "GROUP",
+      aliases: ["涟涟"],
+    }],
   }),
 });
 
@@ -121,12 +136,20 @@ assert(inGroup.system.includes("never read the roster out to the room"), "群里
 assert(!inGroup.system.includes("Your owner is not part of acquaintances"), "群聊分支不该再讲主人那一段。");
 assert(!inGroup.system.includes("When asked who you are closest to"), "群聊分支不该走「回答问题」那套说法。");
 assert(inGroup.user.includes("\"inThisGroup\""), "群聊里这一屋的熟人要进 payload。");
+assert(inGroup.user.includes("\"aliases\":[\"涟涟\"]"), "本群熟人的备注要带进群聊 —— 她平时就是这么叫的。");
+assert(!inGroup.user.includes("喵喵"), "私聊档的备注不能带进群聊：那是私下给别人的叫法，当众喊出来就是事故。");
+assert(!inGroup.user.includes("涟宝"), "跨群榜的备注同样不能带进这个群。");
+assert(
+  inGroup.system.includes("only appear for people who have spoken in this room"),
+  "群聊里要写清备注只对本群熟人有效，否则她会拿它去叫名单外的人。",
+);
 
 // ③ 不带名册：一个字都不能出现，否则模型会自己编朋友。
 await generateConversationReply({ ...base });
 
 const withoutRoster = readCaptured();
 assert(!withoutRoster.system.includes("acquaintances is your own roster"), "没带名册时系统提示不能提这一段。");
+assert(!withoutRoster.system.includes("aliases are the names you privately use"), "一条备注都没有时不能讲备注规则，否则她会给每个人现编外号。");
 assert(!withoutRoster.user.includes("acquaintances"), "没带名册时 payload 不能有这个字段。");
 
 // ④ payload 形态：空档整段不写、全空返回 null。

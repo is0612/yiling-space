@@ -99,6 +99,14 @@ export type CloseFriend = {
   lastSeenAt: Date | null;
   via: FriendSource | null;
   /**
+   * 她私底下对这个人的叫法（页面上逗号分隔录入的那几个）。
+   *
+   * 和 `name` 不是一回事：`name` 是平台名片/昵称，对方改一次就变一次；
+   * 这里是「她自己怎么叫」，只在私聊和当前群里的熟人面前用。
+   * 进提示词前由 `chat-reply.ts` 再截一次，这里原样带出来就好。
+   */
+  aliases: string[];
+  /**
    * 她跟这个人同处过、而且这个人在里面说过话的群号（按群内发言量排序，最多 2 个）。
    *
    * 只有跨群总榜填这个字段。**它是「按群分」的落地方式**：两个群各有一个「小肥鱼」，
@@ -143,6 +151,7 @@ const FRIEND_SELECT = {
   interactionCount: true,
   lastInteractedAt: true,
   firstSource: true,
+  aliases: true,
   externalIdentity: { select: { displayName: true, platformUid: true } },
 } satisfies Prisma.MemoryScopeSelect;
 
@@ -160,6 +169,7 @@ function friendRowToEntry(row: FriendRow): CloseFriend {
     times: row.interactionCount,
     lastSeenAt: row.lastInteractedAt,
     via: row.firstSource === "PRIVATE" || row.firstSource === "GROUP" ? row.firstSource : null,
+    aliases: row.aliases ?? [],
   };
 }
 

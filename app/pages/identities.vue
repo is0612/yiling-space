@@ -30,6 +30,8 @@ type Friend = {
   knownSince: string;
   firstSource: string | null;
   conversationCount: number;
+  /** 她私底下的叫法。空数组 = 没设过，卡片上显示「＋ 加备注」。 */
+  aliases: string[];
 };
 
 type Character = { id: string; name: string; status: string; friendCount: number };
@@ -47,6 +49,8 @@ type FriendPage = {
   /** 都按这个角色的全部朋友算，不受关键词/来源筛选影响 */
   stats: { total: number; familiar: number; recent: number };
   sourceCounts: { all: number; private: number; group: number };
+  /** 待审备注条数：顶部按钮角标用。 */
+  pendingSuggestions: number;
 };
 
 /** 一页 12 个＝四列三行，正好铺满不剩半行。与接口默认值保持一致。 */
@@ -67,6 +71,7 @@ const total = ref(0);
 const totalPages = ref(1);
 const stats = ref({ total: 0, familiar: 0, recent: 0 });
 const sourceCounts = ref({ all: 0, private: 0, group: 0 });
+const pendingSuggestions = ref(0);
 
 const SORT_OPTIONS: ReadonlyArray<{ value: SortBy; label: string }> = [
   { value: "recent", label: "最近互动" },
@@ -180,6 +185,7 @@ async function load(target = page.value) {
     totalPages.value = response.totalPages;
     stats.value = response.stats;
     sourceCounts.value = response.sourceCounts;
+    pendingSuggestions.value = response.pendingSuggestions ?? 0;
   } catch (error) {
     ElMessage.error(readErrorMessage(error, "无法读取朋友列表。"));
   } finally {
@@ -219,6 +225,119 @@ function onQueryInput() {
   }, 260);
 }
 
+/**
+ * 备注：她私底下怎么叫这个人。
+ *
+ * 编辑放在这张页面上，而不是角色资料里 —— 备注是「按人」的，翻角色资料去改一个人的外号
+ * 得先想起他属于哪个角色。保存走全量替换，返回值是服务端归一化之后的结果
+ * （截断、去重、去本名都在那边做），页面直接拿它渲染，用户看到的和库里永远一致。
+ */
+const editingScopeId = ref("");
+const aliasDraft = ref("");
+const aliasSaving = ref(false);
+
+async function startEdit(friend: Friend) {
+  editingScopeId.value = friend.scopeId;
+  // 回填用全角逗号：这一栏本来就是给人用中文输入法写的。
+  aliasDraft.value = friend.aliases.join("，");
+  await nextTick();
+  document.querySelector<HTMLInputElement>(`[data-alias-input="${friend.scopeId}"]`)?.focus();
+}
+
+function cancelEdit() {
+  editingScopeId.value = "";
+  aliasDraft.value = "";
+}
+
+function applyAliases(scopeId: string, aliases: string[]) {
+  friends.value = friends.value.map((item) => (item.scopeId === scopeId ? { ...item, aliases } : item));
+}
+
+async function saveAliases(friend: Friend, aliases: string | string[], closeEditor = false) {
+  if (aliasSaving.value) return;
+  aliasSaving.value = true;
+  try {
+    const response = await $fetch<{ aliases: string[]; dropped: number }>(
+      `/api/admin/identities/aliases/${friend.scopeId}`,
+      { method: "PATCH", body: { aliases } },
+    );
+    applyAliases(friend.scopeId, response.aliases);
+    if (closeEditor) cancelEdit();
+    if (response.dropped > 0) {
+      ElMessage.info(`有 ${response.dropped} 个重复或超出上限，没有保存。`);
+    }
+  } catch (error) {
+    ElMessage.error(readErrorMessage(error, "备注没保存上。"));
+  } finally {
+    aliasSaving.value = false;
+  }
+}
+
+/** 单个 ×：立刻提交剩下的。删错了重打两个字就行，不值得为此弹一个确认框。 */
+function removeAlias(friend: Friend, alias: string) {
+  void saveAliases(friend, friend.aliases.filter((item) => item !== alias));
+}
+
+/**
+ * 待审备注弹窗：她（在快照提炼时）想给朋友起的叫法，等用户点头。
+ *
+ * 同意 = 写进那个人的 aliases；删掉 = 标记 REJECTED（不删行，唯一约束挡着不再被提回来）。
+ * 裁决后从本地列表移除并刷新角标，不用整页重载。
+ */
+type Suggestion = {
+  id: string;
+  scopeId: string;
+  alias: string;
+  reason: string;
+  friendName: string;
+  platform: string;
+  platformUid: string;
+};
+
+const suggestionDialogOpen = ref(false);
+const suggestions = ref<Suggestion[]>([]);
+const suggestionsLoading = ref(false);
+const resolvingSuggestionId = ref("");
+
+async function openSuggestions() {
+  suggestionDialogOpen.value = true;
+  suggestionsLoading.value = true;
+  try {
+    const response = await $fetch<{ items: Suggestion[] }>("/api/admin/identities/aliases/suggestions", {
+      query: { characterId: activeCharacterId.value || undefined },
+    });
+    suggestions.value = response.items;
+  } catch (error) {
+    ElMessage.error(readErrorMessage(error, "读取待审备注失败。"));
+  } finally {
+    suggestionsLoading.value = false;
+  }
+}
+
+async function resolveSuggestion(suggestion: Suggestion, approve: boolean) {
+  if (resolvingSuggestionId.value) return;
+  resolvingSuggestionId.value = suggestion.id;
+  try {
+    await $fetch(`/api/admin/identities/aliases/suggestions/${suggestion.id}`, {
+      method: "POST",
+      body: { approve },
+    });
+    suggestions.value = suggestions.value.filter((item) => item.id !== suggestion.id);
+    pendingSuggestions.value = Math.max(0, pendingSuggestions.value - 1);
+    // 同意了就把这条叫法即时反映到卡片上，用户不用等下次刷新才知道生效了。
+    if (approve) {
+      const friend = friends.value.find((item) => item.scopeId === suggestion.scopeId);
+      if (friend && !friend.aliases.includes(suggestion.alias)) {
+        applyAliases(suggestion.scopeId, [...friend.aliases, suggestion.alias]);
+      }
+    }
+  } catch (error) {
+    ElMessage.error(readErrorMessage(error, "操作没成功。"));
+  } finally {
+    resolvingSuggestionId.value = "";
+  }
+}
+
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
 });
@@ -234,6 +353,17 @@ onMounted(() => load(1));
       description="她认识的人按角色分开记。私聊发来消息就算认识；群里只记她真的回了谁 —— 没被搭理的发言不会出现在这里。"
     >
       <template #actions>
+        <button
+          type="button"
+          class="btn btn-suggest"
+          @click="openSuggestions"
+        >
+          待审备注
+          <span
+            v-if="pendingSuggestions"
+            class="suggest-badge"
+          >{{ pendingSuggestions }}</span>
+        </button>
         <button
           type="button"
           class="btn"
@@ -294,7 +424,7 @@ onMounted(() => load(1));
           <input
             v-model="query"
             type="search"
-            placeholder="搜昵称或 UID"
+            placeholder="搜昵称、UID 或备注"
             @input="onQueryInput"
           >
         </label>
@@ -400,6 +530,65 @@ onMounted(() => load(1));
             <span class="pill pill-gray">{{ sourceLabel(friend.firstSource) }}</span>
           </div>
 
+          <div class="fr-alias">
+            <span
+              v-for="alias in friend.aliases"
+              :key="alias"
+              class="alias-chip"
+            >
+              {{ alias }}
+              <button
+                type="button"
+                class="alias-x"
+                :title="`删掉「${alias}」`"
+                @click="removeAlias(friend, alias)"
+              >×</button>
+            </span>
+            <button
+              v-if="editingScopeId !== friend.scopeId"
+              type="button"
+              class="alias-add"
+              :title="friend.aliases.length ? '改这些叫法' : '她按心情换着叫对方的名字'"
+              @click="startEdit(friend)"
+            >
+              {{ friend.aliases.length ? "编辑" : "＋ 加备注" }}
+            </button>
+          </div>
+
+          <div
+            v-if="editingScopeId === friend.scopeId"
+            class="alias-editor"
+          >
+            <input
+              v-model="aliasDraft"
+              :data-alias-input="friend.scopeId"
+              type="text"
+              placeholder="用逗号隔开，例如：小鱼干，宝，笨蛋鱼"
+              @keydown.enter.prevent="saveAliases(friend, aliasDraft, true)"
+              @keydown.esc="cancelEdit"
+            >
+            <p class="alias-hint">
+              最多 8 个、每个 12 字。她会在私聊和这个群的熟人面前，按当时的心情挑一个叫。
+            </p>
+            <div class="alias-actions">
+              <button
+                type="button"
+                class="alias-save"
+                :disabled="aliasSaving"
+                @click="saveAliases(friend, aliasDraft, true)"
+              >
+                保存
+              </button>
+              <button
+                type="button"
+                class="alias-cancel"
+                @click="cancelEdit"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+
           <dl class="fr-kv">
             <div>
               <dt>聊过</dt>
@@ -428,6 +617,68 @@ onMounted(() => load(1));
         @update:page="load"
       />
     </template>
+
+    <el-dialog
+      v-model="suggestionDialogOpen"
+      title="待审备注"
+      width="560px"
+      class="suggest-dialog"
+    >
+      <p class="suggest-desc">
+        她回想自己平时怎么叫这些人，想出来的叫法先放在这里。你点头才写进备注，点「不用」就删掉，她不会再提。
+      </p>
+      <div
+        v-if="suggestionsLoading"
+        class="suggest-loading"
+      >
+        正在读取…
+      </div>
+      <div
+        v-else-if="!suggestions.length"
+        class="suggest-empty"
+      >
+        还没有待审的叫法。等她的记忆周期跑一轮，或者聊得多一点，她也许就会想出几个。
+      </div>
+      <ul
+        v-else
+        class="suggest-list"
+      >
+        <li
+          v-for="suggestion in suggestions"
+          :key="suggestion.id"
+          class="suggest-item"
+        >
+          <div class="suggest-main">
+            <span class="suggest-alias">{{ suggestion.alias }}</span>
+            <span class="suggest-for">给「{{ suggestion.friendName }}」</span>
+            <p
+              v-if="suggestion.reason"
+              class="suggest-reason"
+            >
+              {{ suggestion.reason }}
+            </p>
+          </div>
+          <div class="suggest-actions">
+            <button
+              type="button"
+              class="suggest-ok"
+              :disabled="resolvingSuggestionId === suggestion.id"
+              @click="resolveSuggestion(suggestion, true)"
+            >
+              同意
+            </button>
+            <button
+              type="button"
+              class="suggest-no"
+              :disabled="resolvingSuggestionId === suggestion.id"
+              @click="resolveSuggestion(suggestion, false)"
+            >
+              不用
+            </button>
+          </div>
+        </li>
+      </ul>
+    </el-dialog>
   </div>
 </template>
 
@@ -518,6 +769,71 @@ onMounted(() => load(1));
 .fr-id { min-width: 0; flex: 1; }.fr-name { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
 .fr-sub { margin: 2px 0 0; color: var(--dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .fr-sub .sep { margin: 0 5px; color: var(--faint); }
+
+/* 备注：她私底下怎么叫这个人。
+   chips 用 brand-soft 而不是灰 pill —— 「群里认识」是事实标签，这里是可以改的内容。 */
+.fr-alias { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; }
+.alias-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: 6px;
+  background: var(--brand-soft);
+  padding: 1px 3px 1px 8px;
+  color: var(--brand-strong);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+.alias-x { border: 0; background: none; padding: 0 3px; color: var(--brand-strong); opacity: .5; cursor: pointer; font-size: 13px; line-height: 1; }
+.alias-x:hover { opacity: 1; }
+.alias-add { border: 0; background: none; padding: 0 2px; color: var(--dim); font-size: 12px; font-weight: 500; cursor: pointer; }
+.alias-add:hover { color: var(--brand-strong); text-decoration: underline; text-underline-offset: 3px; }
+
+/* 编辑区：浅底一块，不描边不投影，和卡片的白砖分出层级 */
+.alias-editor { margin-top: 9px; border-radius: 8px; background: var(--surface-2); padding: 9px 11px 10px; }
+.alias-editor input { width: 100%; border: 0; background: none; color: var(--text); font-size: 13px; line-height: 1.6; outline: none; }
+.alias-editor input::placeholder { color: var(--faint); }
+.alias-hint { margin: 5px 0 0; color: var(--dim); font-size: 11px; line-height: 1.6; }
+.alias-actions { display: flex; gap: 8px; margin-top: 7px; }
+.alias-actions button { height: 26px; border: 0; border-radius: 6px; padding: 0 11px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.alias-save { background: var(--brand); color: #fff; }
+.alias-save:disabled { opacity: .5; cursor: default; }
+.alias-cancel { background: none; color: var(--dim); }
+.alias-cancel:hover { color: var(--text); }
+
+/* 待审备注入口：按钮 + 角标 */
+.btn-suggest { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.suggest-badge {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--brand);
+  padding: 0 5px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 待审弹窗 */
+.suggest-desc { margin: 0 0 12px; color: var(--dim); font-size: 13px; line-height: 1.7; }
+.suggest-loading, .suggest-empty { padding: 24px 0; color: var(--dim); font-size: 13px; text-align: center; }
+.suggest-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; max-height: 50vh; overflow-y: auto; }
+.suggest-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-radius: 10px; background: var(--surface-2); padding: 12px 14px; }
+.suggest-main { min-width: 0; flex: 1; }
+.suggest-alias { color: var(--text); font-size: 15px; font-weight: 700; }
+.suggest-for { margin-left: 8px; color: var(--dim); font-size: 12px; }
+.suggest-reason { margin: 5px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.6; }
+.suggest-actions { display: flex; flex: none; gap: 8px; align-items: center; }
+.suggest-actions button { height: 28px; border: 0; border-radius: 6px; padding: 0 13px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.suggest-actions button:disabled { opacity: .5; cursor: default; }
+.suggest-ok { background: var(--brand); color: #fff; }
+.suggest-no { background: none; color: var(--dim); }
+.suggest-no:hover { color: var(--text); }
 
 /* 释义行：label 定宽 56px，值紧跟在后 */
 .fr-kv { display: flex; flex-direction: column; gap: 7px; margin: 14px 0 0; border-top: 1px solid var(--surface-3); padding-top: 12px; }
