@@ -174,30 +174,40 @@ model User {
 }
 
 model Character {
-  id               String                    @id @default(uuid()) @db.Uuid
-  ownerId          String                    @db.Uuid
-  name             String                    @db.VarChar(100)
-  avatar           String?
-  basePrompt       String                    @db.Text
+  id                String                    @id @default(uuid()) @db.Uuid
+  ownerId           String                    @db.Uuid
+  name              String                    @db.VarChar(100)
+  avatar            String?
+  basePrompt        String                    @db.Text
   /// 对话示例：只用来对齐语气和用词。聊天与 QQ/B站 被动回复会注入，B站 值班判断不注入。
-  styleExamples    String                    @default("") @db.Text
+  styleExamples     String                    @default("") @db.Text
   /// 角色在这个对话里怎么称呼用户（默认「主人」）。空字符串 = 不特意称呼。
-  userAddress      String                    @default("主人") @db.VarChar(40)
-  modelConfig      Json                      @default("{}") @db.JsonB
-  status           CharacterStatus           @default(ACTIVE)
-  createdAt        DateTime                  @default(now()) @db.Timestamptz(6)
-  updatedAt        DateTime                  @updatedAt @db.Timestamptz(6)
-  owner            User                      @relation("CharacterOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  channelBindings  CharacterChannelBinding[]
-  conversations    Conversation[]
-  memoryScopes     MemoryScope[]
-  memorySetting    CharacterMemorySetting?
-  auditLogs        AuditLog[]                @relation("CharacterAuditLogs")
-  proactiveIntents ProactiveIntent[]
-  stickers         CharacterSticker[]
-  catchphrases     CharacterCatchphrase[]
+  userAddress       String                    @default("主人") @db.VarChar(40)
+  modelConfig       Json                      @default("{}") @db.JsonB
+  /// 角色卡的血缘标记：这个角色最初来自哪一份角色数据（导出时的 `origin.characterId`）。
+  ///
+  /// 存在的理由只有一个 —— **合并**。导入永远是新建一行，新行有自己的 id；如果只认 id，
+  /// 从另一台机器导回来的同一张卡就再也认不出「这是同一个她」，只能并排养出两个。
+  /// 所以第一次导出时把来源角色 id 写进卡片，导入后存在这里；导出时优先用它，
+  /// 血缘因此能跨多跳延续（A → B → C 导来导去仍是同一个 origin）。
+  ///
+  /// 为空 = 本机原生角色（导出时才第一次确定它自己的 id），或来自不带 origin 的老卡。
+  originCharacterId String?                   @db.Uuid
+  status            CharacterStatus           @default(ACTIVE)
+  createdAt         DateTime                  @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                  @updatedAt @db.Timestamptz(6)
+  owner             User                      @relation("CharacterOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  channelBindings   CharacterChannelBinding[]
+  conversations     Conversation[]
+  memoryScopes      MemoryScope[]
+  memorySetting     CharacterMemorySetting?
+  auditLogs         AuditLog[]                @relation("CharacterAuditLogs")
+  proactiveIntents  ProactiveIntent[]
+  stickers          CharacterSticker[]
+  catchphrases      CharacterCatchphrase[]
 
   @@index([ownerId, status])
+  @@index([originCharacterId])
   @@index([updatedAt])
   @@map("characters")
 }
@@ -266,26 +276,34 @@ model ExternalIdentity {
 }
 
 model MemoryScope {
-  id                 String            @id @default(uuid()) @db.Uuid
-  characterId        String            @db.Uuid
+  id                 String             @id @default(uuid()) @db.Uuid
+  characterId        String             @db.Uuid
   scopeType          MemoryScopeType
-  scopeKey           String            @unique @db.VarChar(500)
-  userId             String?           @db.Uuid
-  externalIdentityId String?           @db.Uuid
+  scopeKey           String             @unique @db.VarChar(500)
+  userId             String?            @db.Uuid
+  externalIdentityId String?            @db.Uuid
   /// 以下三个字段只对 EXTERNAL_IDENTITY 范围有意义：这张表同时承担「某角色认识的某个人」
   /// 这条关系 —— `scopeKey` 里带了 characterId，同一个 QQ 号跟两个角色聊过就是两条关系，
   /// 各自记各自的次数和时间，不用再为「朋友」建一张要同步的新表。
   ///
   /// 私聊一进来就 +1；群聊只在她真的回了谁时 +1，不回不算认识。
-  lastInteractedAt   DateTime?         @db.Timestamptz(6)
-  interactionCount   Int               @default(0)
+  lastInteractedAt   DateTime?          @db.Timestamptz(6)
+  interactionCount   Int                @default(0)
   /// PRIVATE / GROUP：第一次是怎么认识的。群聊里认识的人后来私聊，这个值不改。
-  firstSource        String?           @db.VarChar(20)
-  createdAt          DateTime          @default(now()) @db.Timestamptz(6)
-  updatedAt          DateTime          @updatedAt @db.Timestamptz(6)
-  character          Character         @relation(fields: [characterId], references: [id], onDelete: Restrict)
-  user               User?             @relation("MemoryScopeUser", fields: [userId], references: [id], onDelete: SetNull)
-  externalIdentity   ExternalIdentity? @relation(fields: [externalIdentityId], references: [id], onDelete: SetNull)
+  firstSource        String?            @db.VarChar(20)
+  /// 她私下对这个人的叫法（页面上用逗号分隔录入，这里存数组）。
+  ///
+  /// 和 `externalIdentity.displayName` 并存、不覆盖：那张表存平台名片，对方改一次群名片就变一次；
+  /// 这里存「她自己怎么叫」，只在私聊和当前群里的熟人面前用，群里其他人的名单不带。
+  /// 按角色隔离 —— 同一个 QQ 号跟两个角色聊过，两边可以叫得完全不一样。
+  ///
+  /// 上限由 `server/utils/friend-aliases.ts` 归一化时卡住，写入口径只此一处。
+  aliases            String[]           @default([])
+  createdAt          DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @db.Timestamptz(6)
+  character          Character          @relation(fields: [characterId], references: [id], onDelete: Restrict)
+  user               User?              @relation("MemoryScopeUser", fields: [userId], references: [id], onDelete: SetNull)
+  externalIdentity   ExternalIdentity?  @relation(fields: [externalIdentityId], references: [id], onDelete: SetNull)
   conversations      Conversation[]
   memoryItems        MemoryItem[]
   snapshots          MemorySnapshot[]
@@ -293,6 +311,7 @@ model MemoryScope {
   eventDays          MemoryEventDay[]
   jobs               MemoryJob[]
   journals           CharacterJournal[]
+  aliasSuggestions   FriendAliasSuggestion[]
 
   @@index([characterId, scopeType])
   @@index([characterId, interactionCount])
@@ -356,17 +375,17 @@ model Message {
 /// 只记事实：说了几句、昵称、首末时间。**不记任何消息内容**，也不因她回没回而变 ——
 /// 「她在不在这个群」和「她跟这个人熟不熟」是两件事，前者在这里，后者在 `MemoryScope`。
 model GroupMember {
-  id             String   @id @default(uuid()) @db.Uuid
+  id             String       @id @default(uuid()) @db.Uuid
   /// 群会话：`Conversation.externalConversationId = g:<群号>`
-  conversationId String   @db.Uuid
-  characterId    String   @db.Uuid
-  platformUid    String   @db.VarChar(255)
-  displayName    String?  @db.VarChar(255)
-  messageCount   Int      @default(0)
-  firstSpokeAt   DateTime @db.Timestamptz(6)
-  lastSpokeAt    DateTime @db.Timestamptz(6)
-  createdAt      DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+  conversationId String       @db.Uuid
+  characterId    String       @db.Uuid
+  platformUid    String       @db.VarChar(255)
+  displayName    String?      @db.VarChar(255)
+  messageCount   Int          @default(0)
+  firstSpokeAt   DateTime     @db.Timestamptz(6)
+  lastSpokeAt    DateTime     @db.Timestamptz(6)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(6)
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, platformUid])
@@ -545,6 +564,35 @@ model MemoryJob {
   @@map("memory_jobs")
 }
 
+/// 「她想给朋友起的备注」的待审建议：由朋友快照提炼时顺带产出，用户点头后才进 `MemoryScope.aliases`。
+///
+/// 为什么单独一张表而不是直接塞进 aliases：建议需要「状态 + 理由 + 拒绝后不重产」这三件事，
+/// 塞进 aliases 数组会污染真正在用的备注。状态机参考梗语录（`CharacterCatchphrase.status`）：
+/// PENDING → APPROVED（写入 aliases）/ REJECTED（不删，防下个周期又提同一条）。
+///
+/// `scopeId` 是关系行（MemoryScope.id），不是 ExternalIdentity.id —— 备注按「角色 × 人」隔离，
+/// 删角色时随 MemoryScope 级联清掉（scopeId 有外键）。
+model FriendAliasSuggestion {
+  id        String   @id @default(uuid()) @db.Uuid
+  scopeId   String   @db.Uuid
+  /// 候选叫法（归一化后，12 字内）。
+  alias     String   @db.VarChar(40)
+  /// 她为什么这么叫 —— 弹窗上给人看「她凭什么觉得该叫这个」。
+  reason    String   @default("") @db.VarChar(200)
+  /// PENDING / APPROVED / REJECTED
+  status    String   @default("PENDING") @db.VarChar(20)
+  /// 规范化键（小写、去空白）：同一关系下同一叫法只提一次，也靠它挡「换个大小写再提一遍」。
+  aliasKey  String   @db.VarChar(80)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  scope     MemoryScope @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+
+  @@unique([scopeId, aliasKey])
+  @@index([status, createdAt])
+  @@index([scopeId, status])
+  @@map("friend_alias_suggestions")
+}
+
 /// QQ 群公告草稿。管理员在群里让角色拟稿，确认后才发布；草稿有有效期，
 /// 避免几天后一句「确认发布」把过期内容发出去。
 ///
@@ -566,6 +614,49 @@ model OnebotGroupAnnouncement {
 
   @@index([connectionId, groupId, status, createdAt], map: "onebot_group_announcements_connection_group_status_idx")
   @@map("onebot_group_announcements")
+}
+
+/// QQ 空间动作（说说 / 评论）的草稿与发布记录。
+///
+/// 和 `OnebotGroupAnnouncement` 是两个东西：公告是「群里的一个动作」，这条是「她自己
+/// 空间上的一举一动」。分开建表是因为查询完全不同 —— 这里要按天统计「今天发了几条」
+/// 来限流，混在公告表里统计会被别的 kind 污染。
+///
+/// `characterId` 没有外键，删角色时由 server/utils/character-delete.ts 显式清理。
+model OnebotQzoneAction {
+  id             String    @id @default(uuid()) @db.Uuid
+  connectionId   String    @db.Uuid
+  characterId    String?   @db.Uuid
+  /// POST = 发说说，COMMENT = 评论别人的说说
+  kind           String    @db.VarChar(16)
+  /// 说说正文，或评论内容
+  content        String    @db.Text
+  /// 触发方式带来的主题/指令原文，排查「这句是谁让它发的」用
+  topic          String    @db.Text
+  /// 评论目标：说说主人的 QQ 号
+  targetUin      String?   @db.VarChar(64)
+  /// 评论目标：那条说说的 tid
+  targetTid      String?   @db.VarChar(128)
+  /// 目标说说摘要，确认时给人看「你要评论的是这条」
+  targetExcerpt  String?   @db.Text
+  /// 可见范围：1 公开 / 4 好友 / 64 仅自己（QQ 空间的 ugc_right 编码）
+  visible        Int       @default(1)
+  /// 触发者 QQ
+  requestedBy    String    @db.VarChar(64)
+  /// 触发所在会话，回执对得上话
+  conversationKey String?  @db.VarChar(128)
+  /// PENDING / PUBLISHING / PUBLISHED / FAILED / EXPIRED / CANCELLED
+  status         String    @default("PENDING") @db.VarChar(20)
+  error          String?   @db.Text
+  /// 发布成功后拿到的说说 tid；评论为空
+  resultTid      String?   @db.VarChar(128)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  expiresAt      DateTime  @db.Timestamptz(6)
+  publishedAt    DateTime? @db.Timestamptz(6)
+
+  @@index([connectionId, status, createdAt], map: "onebot_qzone_actions_connection_status_idx")
+  @@index([connectionId, kind, publishedAt], map: "onebot_qzone_actions_connection_kind_published_idx")
+  @@map("onebot_qzone_actions")
 }
 
 model AuditLog {
@@ -822,6 +913,10 @@ model CharacterSticker {
   @@unique([characterId, qqEmojiId])
   @@index([characterId, enabled])
   @@index([characterId, deletedAt])
+  /// 自动收图去重：同一个角色下按内容哈希找「这张是不是已经收过」。
+  /// 手写迁移 20261030170000 建过这条索引，但一直没写进 schema，Prisma 7 第一次
+  /// migrate 就把它当成多余索引删了（20261102064605）。补回来，免得下次再被删。
+  @@index([characterId, contentHash])
   @@map("character_stickers")
 }
 
@@ -981,23 +1076,23 @@ enum JournalTextKind {
 /// 和忆泡的分工：忆泡记「那天发生了什么」（事实、只追加）；日记/手账记
 /// 「她怎么过、怎么想」（主观、可修正，每次修改都留版本）。
 model CharacterJournal {
-  id            String              @id @default(uuid()) @db.Uuid
-  memoryScopeId String              @db.Uuid
+  id                String            @id @default(uuid()) @db.Uuid
+  memoryScopeId     String            @db.Uuid
   /// 当地日期（角色时区）：2026-10-31。
-  dayKey        String              @db.VarChar(10)
-  status        JournalStatus       @default(ACTIVE)
+  dayKey            String            @db.VarChar(10)
+  status            JournalStatus     @default(ACTIVE)
   /// SKIPPED 时写一句原因（「没有对话」/「没什么可记的」），页面要能解释为什么没写。
-  skipReason    String?             @db.VarChar(300)
+  skipReason        String?           @db.VarChar(300)
   /// DIARY / HANDBOOK 各自的决策状态；整天状态不能代替它们。
-  diaryState    JournalTextState    @default(PENDING)
-  handbookState JournalTextState    @default(PENDING)
+  diaryState        JournalTextState  @default(PENDING)
+  handbookState     JournalTextState  @default(PENDING)
   /// 上一次对这份文本做出决定的时间；SKIPPED 后只允许评估这天更晚的新对话。
-  diaryDecidedAt    DateTime?       @db.Timestamptz(6)
-  handbookDecidedAt DateTime?       @db.Timestamptz(6)
-  createdAt     DateTime            @default(now()) @db.Timestamptz(6)
-  updatedAt     DateTime            @updatedAt @db.Timestamptz(6)
-  memoryScope   MemoryScope         @relation(fields: [memoryScopeId], references: [id], onDelete: Cascade)
-  revisions     JournalRevision[]
+  diaryDecidedAt    DateTime?         @db.Timestamptz(6)
+  handbookDecidedAt DateTime?         @db.Timestamptz(6)
+  createdAt         DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime          @updatedAt @db.Timestamptz(6)
+  memoryScope       MemoryScope       @relation(fields: [memoryScopeId], references: [id], onDelete: Cascade)
+  revisions         JournalRevision[]
 
   @@unique([memoryScopeId, dayKey])
   @@index([memoryScopeId, dayKey])
@@ -1011,34 +1106,34 @@ model CharacterJournal {
 ///   另外保存 `thought`（今日想法）、`quote`（今日一句）、`tags`（标签）。
 ///   `quote` 必须是某一版日记正文里的连续原文，`sourceDiaryRevisionId` 指向那一版。
 model JournalRevision {
-  id               String              @id @default(uuid()) @db.Uuid
-  journalId        String              @db.Uuid
-  kind             JournalTextKind     @default(DIARY)
-  version          Int
-  title            String?             @db.VarChar(120)
-  content          String              @db.Text
+  id                    String              @id @default(uuid()) @db.Uuid
+  journalId             String              @db.Uuid
+  kind                  JournalTextKind     @default(DIARY)
+  version               Int
+  title                 String?             @db.VarChar(120)
+  content               String              @db.Text
   /// 手账的「今日想法」。日记版本里为空。
-  thought          String?             @db.Text
+  thought               String?             @db.Text
   /// 手账的「今日一句」：某一版日记正文里的连续原文。日记版本里为空。
-  quote            String?             @db.Text
+  quote                 String?             @db.Text
   /// 手账的标签（日记版本里为空）。
-  tags             String[]            @default([])
+  tags                  String[]            @default([])
   /// 手账的「今日一句」取自哪一版日记；日记被重写后仍指向当时那一版，便于追溯。
-  sourceDiaryRevisionId String?       @db.Uuid
+  sourceDiaryRevisionId String?             @db.Uuid
   /// 模型当次引用到的原始消息 id；消息被清理后这里保留指针（历史可查）。
-  sourceMessageIds String[]            @default([])
+  sourceMessageIds      String[]            @default([])
   /// 当次引用到的忆泡 id。
-  sourceEventIds   String[]            @default([])
-  revisionType     JournalRevisionType
+  sourceEventIds        String[]            @default([])
+  revisionType          JournalRevisionType
   /// 生成时的提示词版本，便于回溯「这一版是哪套规则写出来的」。
-  promptVersion    String?             @db.VarChar(80)
-  model            String?             @db.VarChar(120)
+  promptVersion         String?             @db.VarChar(80)
+  model                 String?             @db.VarChar(120)
   /// 人工编辑时记下操作者；自动生成时为空。
-  editedByUserId   String?             @db.Uuid
-  createdAt        DateTime            @default(now()) @db.Timestamptz(6)
-  journal          CharacterJournal    @relation(fields: [journalId], references: [id], onDelete: Cascade)
-  sourceDiaryRevision JournalRevision? @relation("JournalQuoteSource", fields: [sourceDiaryRevisionId], references: [id], onDelete: SetNull)
-  quotedBy         JournalRevision[]   @relation("JournalQuoteSource")
+  editedByUserId        String?             @db.Uuid
+  createdAt             DateTime            @default(now()) @db.Timestamptz(6)
+  journal               CharacterJournal    @relation(fields: [journalId], references: [id], onDelete: Cascade)
+  sourceDiaryRevision   JournalRevision?    @relation("JournalQuoteSource", fields: [sourceDiaryRevisionId], references: [id], onDelete: SetNull)
+  quotedBy              JournalRevision[]   @relation("JournalQuoteSource")
 
   @@unique([journalId, kind, version])
   @@index([journalId, kind, version])

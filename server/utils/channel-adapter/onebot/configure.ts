@@ -16,6 +16,7 @@ import {
   type GroupChatSettings,
 } from "./group-chat";
 import { ONEBOT_PLATFORM } from "./types";
+import { QZONE_DEFAULT_LIMITS } from "./qzone";
 
 export type OnebotBindingRecord = {
   id: string;
@@ -79,6 +80,43 @@ export type OnebotConnectionRecord = {
   replyOnlyWhenMentioned: boolean;
   /** 是否允许群主/管理员让她拟群公告草稿。连接级，默认关闭。 */
   groupAnnouncementEnabled: boolean;
+  /**
+   * 是否允许主人在 QQ 里让她发空间说说、评论别人的说说。连接级，默认关闭。
+   *
+   * 比群公告更要紧的是「谁能触发」：空间是她自己账号上的一举一动，只认主人 QQ；
+   * 群友说「发条说说」一律当闲聊。
+   */
+  qzoneEnabled: boolean;
+  /** 空间动作的日上限与冷却。压得很低是故意的，见 qzone.ts 顶部的风控说明。 */
+  qzoneLimits: {
+    dailyPosts: number;
+    dailyComments: number;
+    commentCooldownMinutes: number;
+  };
+  /**
+   * 「看看空间」要翻谁的说说。留空就退回协议端 `get_friend_list` 的前几个好友。
+   *
+   * 手填名单更可靠：好友列表里可能有几十个人，逐个查等于自己撞风控；
+   * 而她真正会去评论的，通常就那么几个号。
+   */
+  qzoneFriendQqs: string[];
+  /**
+   * 是否让她**主动**想发说说 / 评论朋友说说，想好了来问主人「行吗」。连接级，默认关闭。
+   *
+   * 和 `qzoneEnabled` 是两个开关：`qzoneEnabled` 是「主人下指令她能执行」，
+   * 这个是「没人下指令，她自己想开口」。两个都开，她才会既听命又主动。
+   */
+  qzoneAutoAskEnabled: boolean;
+  /**
+   * 主动问的**固定时间点**（东八区 "HH:MM"）。只有到了这些点、且当天还没问够，才会问。
+   * 空数组 = 不设时间点，也就不主动问（即使 `qzoneAutoAskEnabled` 开着）。
+   *
+   * 为什么不用 `proactive.ts` 那种「安静时段 + 最小间隔」：主动找话可以随时冒一句，
+   * 空间主动问是「要往公共空间写东西」，随机时间问会显得突兀；固定几个点更可控。
+   */
+  qzoneAutoAskTimes: string[];
+  /** 每天最多主动问几次（跨所有时间点）。 */
+  qzoneAutoAskDailyMax: number;
   /** 「刷一轮 B站」的连接级默认值：各 binding 未单独覆盖时生效。 */
   groupBiliRunEnabled: boolean;
   /** 主人 QQ 号；空 = 未设置，群里 B站 指令不生效。连接级。 */
@@ -135,6 +173,78 @@ function readConfig(credentials: string | null, accountKey: string | null): Oneb
     ...(accessToken ? { accessToken } : {}),
     ...(httpToken ? { httpToken } : {}),
   };
+}
+
+/**
+ * 空间动作的配额。默认值故意压得很低（每天 3 条说说 / 8 条评论 / 30 分钟冷却），
+ * 因为这条通道没有官方 API，频率上去了代价是账号被要验证码甚至限制。
+ * 0 表示不限 —— 和群聊限流的语义保持一致，省得两套规则打架。
+ */
+function readQzoneLimits(metadata: Record<string, unknown>): {
+  dailyPosts: number;
+  dailyComments: number;
+  commentCooldownMinutes: number;
+} {
+  const read = (key: string, fallback: number, max: number): number => {
+    const raw = metadata[key];
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return fallback;
+    return Math.min(Math.round(raw), max);
+  };
+  return {
+    dailyPosts: read("qzoneDailyPosts", QZONE_DEFAULT_LIMITS.dailyPosts, 20),
+    dailyComments: read("qzoneDailyComments", QZONE_DEFAULT_LIMITS.dailyComments, 50),
+    commentCooldownMinutes: read(
+      "qzoneCommentCooldownMinutes",
+      QZONE_DEFAULT_LIMITS.commentCooldownMinutes,
+      1_440,
+    ),
+  };
+}
+
+/**
+ * 「看看空间」的名单：接受逗号/空格分隔的字符串，也接受数组。
+ * 去重、去非数字，最多 10 个 —— 更多的话一次「看看空间」要打十几个请求，
+ * 这不是翻得更多，是在给自己招风控。
+ */
+function readQzoneFriendQqs(metadata: Record<string, unknown>): string[] {
+  const raw = metadata.qzoneFriendQqs;
+  const parts = Array.isArray(raw)
+    ? raw.map((item) => String(item))
+    : typeof raw === "string"
+      ? raw.split(/[,，\s]+/u)
+      : [];
+  const uins: string[] = [];
+  for (const part of parts) {
+    const uin = part.trim().replace(/^o/u, "");
+    if (!/^\d{5,15}$/u.test(uin) || uins.includes(uin)) continue;
+    uins.push(uin);
+    if (uins.length >= 10) break;
+  }
+  return uins;
+}
+
+/**
+ * 主动问的时间点：接受逗号分隔的字符串或数组，如 `"12:00,18:30"`。
+ * 只留合法的 "HH:MM"（分钟必须是 0 或 5 的倍数，太碎的分钟会让 tick 很难对上），
+ * 去重并排序。空 = 不设时间点。
+ */
+function readQzoneAutoAskTimes(metadata: Record<string, unknown>): string[] {
+  const raw = metadata.qzoneAutoAskTimes;
+  const parts = Array.isArray(raw)
+    ? raw.map((item) => String(item))
+    : typeof raw === "string"
+      ? raw.split(/[,，\s]+/u)
+      : [];
+  const times = new Set<string>();
+  for (const part of parts) {
+    const matched = part.trim().match(/^(\d{1,2}):(\d{2})$/u);
+    if (!matched) continue;
+    const hour = Number(matched[1]);
+    const minute = Number(matched[2]);
+    if (hour > 23 || minute > 59 || minute % 5 !== 0) continue;
+    times.add(`${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`);
+  }
+  return [...times].sort();
 }
 
 /**
@@ -271,6 +381,16 @@ export async function loadOnebotConnections(
       typeof metadata.replyOnlyWhenMentioned === "boolean" ? metadata.replyOnlyWhenMentioned : true;
     const groupAnnouncementEnabled = metadata.groupAnnouncementEnabled === true;
     const groupBiliRunEnabled = metadata.groupBiliRunEnabled === true;
+    // 空间动作只认主人，所以开关和「有没有填主人 QQ」是一件事的两面：没填主人就等于关。
+    const qzoneEnabled = metadata.qzoneEnabled === true;
+    const qzoneAutoAskEnabled = metadata.qzoneAutoAskEnabled === true;
+    const qzoneAutoAskTimes = readQzoneAutoAskTimes(metadata);
+    const qzoneAutoAskDailyMax = typeof metadata.qzoneAutoAskDailyMax === "number"
+      && Number.isFinite(metadata.qzoneAutoAskDailyMax)
+      ? Math.min(Math.max(Math.round(metadata.qzoneAutoAskDailyMax), 0), 12)
+      : 2;
+    const qzoneLimits = readQzoneLimits(metadata);
+    const qzoneFriendQqs = readQzoneFriendQqs(metadata);
     const ownerQq = typeof metadata.ownerQq === "string" ? metadata.ownerQq.trim() : "";
     const ownerName = typeof metadata.ownerName === "string" ? metadata.ownerName.trim() : "";
     // 小号自己的号：metadata.qqNumber 是页面填的，platformAccountKey 是连接建好后存的同一串。
@@ -300,6 +420,12 @@ export async function loadOnebotConnections(
       replyOnlyWhenMentioned: connectionMentionOnly,
       groupAnnouncementEnabled,
       groupBiliRunEnabled,
+      qzoneEnabled,
+      qzoneLimits,
+      qzoneFriendQqs,
+      qzoneAutoAskEnabled,
+      qzoneAutoAskTimes,
+      qzoneAutoAskDailyMax,
       ownerQq,
       ownerName,
       reloadRequestedAt: typeof metadata.onebotReloadRequestedAt === "string"

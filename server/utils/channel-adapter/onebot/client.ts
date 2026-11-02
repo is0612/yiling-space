@@ -399,11 +399,11 @@ export async function sendOnebotPrivateMessage(
   tempGroupId?: string,
 ): Promise<void> {
   if (!tempGroupId) {
-    await sendOnebotApi(config, "send_private_msg", { user_id: Number(userId), message });
+    await callOnebotAction(config, "send_private_msg", { user_id: Number(userId), message });
     return;
   }
   try {
-    await sendOnebotApi(config, "send_private_msg", {
+    await callOnebotAction(config, "send_private_msg", {
       user_id: Number(userId),
       group_id: Number(tempGroupId),
       message,
@@ -416,7 +416,7 @@ export async function sendOnebotPrivateMessage(
       JSON.stringify({ userId, tempGroupId }),
     );
     try {
-      await sendOnebotApi(config, "send_private_msg", { user_id: Number(userId), message });
+      await callOnebotAction(config, "send_private_msg", { user_id: Number(userId), message });
     } catch (plainError) {
       // 两条都失败时把两边的理由都带上：只有「请先添加对方为好友」能解释为什么发不出去，
       // 只有「no such temp session」能解释为什么带了群号也没用。
@@ -435,7 +435,7 @@ export async function sendOnebotGroupNotice(
   groupId: string,
   content: string,
 ): Promise<void> {
-  await sendOnebotApi(config, "_send_group_notice", {
+  await callOnebotAction(config, "_send_group_notice", {
     group_id: Number(groupId),
     content,
   });
@@ -447,7 +447,7 @@ export async function sendOnebotGroupMessage(
   groupId: string,
   message: OnebotOutgoingMessage,
 ): Promise<void> {
-  await sendOnebotApi(config, "send_group_msg", { group_id: Number(groupId), message });
+  await callOnebotAction(config, "send_group_msg", { group_id: Number(groupId), message });
 }
 
 /**
@@ -473,12 +473,71 @@ export async function sendOnebotCustomFace(
         user_id: Number(target.userId),
         ...(target.tempGroupId ? { group_id: Number(target.tempGroupId) } : {}),
       };
-  const data = await sendOnebotApi(config, "send_custom_face", { ...scope, emoji_id: emojiId });
+  const data = await callOnebotAction(config, "send_custom_face", { ...scope, emoji_id: emojiId });
   const messageId = (data as { message_id?: unknown } | null)?.message_id;
   return { messageId: typeof messageId === "number" ? messageId : null };
 }
 
-async function sendOnebotApi(
+/**
+ * 在她自己的 QQ 空间发一条说说。
+ *
+ * 这是**协议端扩展 action**（OneBot v11 标准里没有空间这个概念），SnowLuma / NapCat
+ * 一系实现里都叫 `send_qzone_msg`，但参数名和返回结构各家可能有出入 ——
+ * 换网关前先跑 `yarn probe:qzone`，别照着这份代码猜。
+ *
+ * `ugcRight` 用的是 QQ 空间自己的编码：1 公开、4 好友可见、64 仅自己。
+ * 传错的话说说会发出去，只是可见范围不对 —— 这种错误在接口返回里看不出来。
+ *
+ * 注意返回值：**拿不到 tid 不等于没发出去**。协议端可能已经发成功、只是响应里没带，
+ * 所以调用方不许在这里重试，先去空间确认。
+ */
+export async function sendOnebotQzonePost(
+  config: OnebotConnectionConfig,
+  input: { content: string; images?: string[]; ugcRight?: number },
+): Promise<{ tid: string | null }> {
+  const data = await callOnebotAction(config, "send_qzone_msg", {
+    content: input.content,
+    ugc_right: input.ugcRight ?? 1,
+    ...(input.images?.length ? { images: input.images } : {}),
+  });
+  const record = data as { tid?: unknown; feedid?: unknown; data?: { tid?: unknown } } | null;
+  const raw = record?.tid ?? record?.feedid ?? record?.data?.tid;
+  return { tid: typeof raw === "string" && raw.trim() ? raw.trim() : null };
+}
+
+/**
+ * 取协议端手里某个域名的 cookie 串。
+ *
+ * 空间网页版的接口全靠 `p_skey` 算 `g_tk`，而 `p_skey` 只有协议端（或浏览器）手里有。
+ * 这里问它要 `qzone.qq.com` 的那份，免得再让用户去浏览器 DevTools 里复制一遍。
+ *
+ * 返回值形状各家不一：字符串、`{ cookies: "..." }`、或 `[{ name, value }]` 数组，
+ * 三种都得认 —— 认不出来就当没拿到，让上层走降级。
+ */
+export async function getOnebotCookies(
+  config: OnebotConnectionConfig,
+  domain: string,
+): Promise<string> {
+  const data = await callOnebotAction(config, "get_cookies", { domain });
+  if (typeof data === "string") return data;
+  const record = data as { cookies?: unknown } | null;
+  if (typeof record?.cookies === "string") return record.cookies;
+  const list = Array.isArray(data) ? data : (record?.cookies as unknown);
+  if (Array.isArray(list)) {
+    return list
+      .map((item) => {
+        const cookie = item as { name?: unknown; value?: unknown } | null;
+        return typeof cookie?.name === "string" && cookie.value !== undefined
+          ? `${cookie.name}=${String(cookie.value)}`
+          : "";
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
+  return "";
+}
+
+export async function callOnebotAction(
   config: OnebotConnectionConfig,
   action: string,
   params: Record<string, unknown>,

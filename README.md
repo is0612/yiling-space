@@ -176,6 +176,7 @@ B站适配器与值班服务的部署方式见对应集成文档。
 - [功能总表](<docs/忆灵空间 · 功能总表.md>) — 按模块查看已实现能力与状态。
 - [记忆系统与周期快照规则](docs/memory-system.md) — 四层记忆的职责、来源和运行规则。
 - [日记与手账](docs/journal.md) · [主动消息](docs/proactive-messaging.md) · [语音](docs/voice.md)。
+- [QQ 空间](docs/qq-qzone.md) — 发说说、看好友动态、评论别人的说说（草稿 + 确认）。
 - [角色卡导入导出](docs/character-card.md) · [跨平台身份](docs/cross-platform-identity.md)。
 - [数据模型](docs/data-model.md) · [Prisma Schema](prisma/schema.prisma) · [OpenAPI 契约](docs/openapi.yaml)。
 

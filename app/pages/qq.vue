@@ -101,6 +101,11 @@ const hasLoadError = computed(() => Boolean(error.value));
  */
 const primaryConnection = computed(() => connections.value[0] ?? null);
 const primaryBinding = computed(() => primaryConnection.value?.bindings[0] ?? null);
+/**
+ * 空间开关是连接级的，但整个设置在弹窗底部，光靠「连接设置」四个字没人猜得到里面还有它。
+ * 主卡片上留一行状态，点开就是那个弹窗。
+ */
+const qzoneEnabled = computed(() => primaryConnection.value?.metadata?.qzoneEnabled === true);
 
 /**
  * 一张卡对应一条绑定（角色 ↔ 号/群）：群号、群聊回复、限流、刷 B站 都是绑定级，
@@ -793,6 +798,11 @@ const form = reactive({
   httpToken: "",
   snowlumaPassword: "",
   groupAnnouncementEnabled: false,
+  qzoneEnabled: false,
+  qzoneAutoAskEnabled: false,
+  qzoneAutoAskTimes: "",
+  qzoneAutoAskDailyMax: 2,
+  qzoneFriendQqs: "",
   ownerQq: "",
   ownerName: "",
 });
@@ -806,6 +816,11 @@ function resetForm() {
   form.httpToken = "";
   form.snowlumaPassword = "";
   form.groupAnnouncementEnabled = false;
+  form.qzoneEnabled = false;
+  form.qzoneAutoAskEnabled = false;
+  form.qzoneAutoAskTimes = "";
+  form.qzoneAutoAskDailyMax = 2;
+  form.qzoneFriendQqs = "";
   form.ownerQq = "";
   form.ownerName = "";
 }
@@ -834,6 +849,14 @@ async function openEdit(connection: QqConnection) {
   form.qqNumber = connection.appId || "";
   form.displayName = connection.appId ? connection.displayName : "";
   form.groupAnnouncementEnabled = connection.metadata?.groupAnnouncementEnabled === true;
+  form.qzoneEnabled = connection.metadata?.qzoneEnabled === true;
+  form.qzoneAutoAskEnabled = connection.metadata?.qzoneAutoAskEnabled === true;
+  const autoAskTimes = connection.metadata?.qzoneAutoAskTimes;
+  form.qzoneAutoAskTimes = Array.isArray(autoAskTimes) ? autoAskTimes.join(",") : (typeof autoAskTimes === "string" ? autoAskTimes : "");
+  form.qzoneAutoAskDailyMax = typeof connection.metadata?.qzoneAutoAskDailyMax === "number" ? connection.metadata.qzoneAutoAskDailyMax : 2;
+  // metadata 里可能是字符串也可能是数组（老数据），统一成输入框能显示的样子。
+  const friendQqs = connection.metadata?.qzoneFriendQqs;
+  form.qzoneFriendQqs = Array.isArray(friendQqs) ? friendQqs.join(",") : (typeof friendQqs === "string" ? friendQqs : "");
   form.ownerQq = typeof connection.metadata?.ownerQq === "string" ? connection.metadata.ownerQq : "";
   form.ownerName = typeof connection.metadata?.ownerName === "string" ? connection.metadata.ownerName : "";
   editVisible.value = true;
@@ -1059,6 +1082,11 @@ async function submitConnection(reconnect = false) {
         httpToken: form.httpToken,
         snowlumaPassword: form.snowlumaPassword,
         groupAnnouncementEnabled: form.groupAnnouncementEnabled,
+        qzoneEnabled: form.qzoneEnabled,
+        qzoneAutoAskEnabled: form.qzoneAutoAskEnabled,
+        qzoneAutoAskTimes: form.qzoneAutoAskTimes.trim(),
+        qzoneAutoAskDailyMax: Number(form.qzoneAutoAskDailyMax) || 0,
+        qzoneFriendQqs: form.qzoneFriendQqs.trim(),
         ownerQq: form.ownerQq.trim(),
         ownerName: form.ownerName.trim(),
       },
@@ -1523,6 +1551,14 @@ function copyInstallGuide() {
           <span class="admin-pw-empty">读不出来（连接凭据里没有或解不开），去「连接设置」重填一次。</span>
         </div>
         <div class="admin-acts">
+          <!-- 空间是连接级开关，藏在弹窗最底部没人找得到，所以在主卡片上留一行状态 + 入口 -->
+          <button
+            type="button"
+            class="tlink qzone-entry"
+            @click="void openEdit(primaryConnection)"
+          >
+            QQ 空间：{{ qzoneEnabled ? "已开启" : "未开启" }}
+          </button>
           <button
             v-if="snowluma?.installed && !snowluma.running"
             type="button"
@@ -2054,6 +2090,74 @@ function copyInstallGuide() {
 
         <div class="cq-sec">
           <div class="cq-sec-h">
+            <span>QQ 空间（可选）</span>
+          </div>
+          <el-form-item class="cq-check">
+            <el-checkbox v-model="form.qzoneEnabled">
+              允许主人让她发说说、评论别人的说说
+            </el-checkbox>
+          </el-form-item>
+          <el-form-item class="cq-check">
+            <el-checkbox v-model="form.qzoneAutoAskEnabled" :disabled="!form.qzoneEnabled">
+              她想发 / 想评论时，主动来问我同不同意
+            </el-checkbox>
+          </el-form-item>
+          <el-form-item label="主动问的时间点（可留空）">
+            <el-input
+              v-model="form.qzoneAutoAskTimes"
+              maxlength="100"
+              placeholder="例如：12:00,18:00,22:00"
+              :disabled="!form.qzoneEnabled || !form.qzoneAutoAskEnabled"
+            />
+          </el-form-item>
+          <el-form-item label="每天最多主动问几次">
+            <el-input-number
+              v-model="form.qzoneAutoAskDailyMax"
+              :min="0"
+              :max="12"
+              :disabled="!form.qzoneEnabled || !form.qzoneAutoAskEnabled"
+            />
+          </el-form-item>
+          <el-form-item label="空间好友 QQ（可留空）">
+            <el-input
+              v-model="form.qzoneFriendQqs"
+              maxlength="200"
+              placeholder="例如：123456,789012"
+            />
+          </el-form-item>
+          <p class="cq-hint">
+            开启后只有<strong>主人 QQ</strong>能触发：私聊或群里 @她 说「发条说说：今天下雨」，
+            她拟好草稿回复你，你回「<strong>确认发说说</strong>」才真的发出去；
+            说「看看空间」会列出最近几条说说（带 QQ 号则只看那个人），
+            再回「评论第 2 条：好可爱」（或「确认评论」）才会发评论。
+          </p>
+          <p class="cq-hint">
+            好友 QQ 留空时，她翻的是协议端好友列表的前几个。空间没有可靠的「一条聚合动态流」，
+            所以是<strong>按人查</strong>：填几个真正会互动的人，比翻整页好友更省事也更安全。
+          </p>
+          <p class="cq-hint">
+            勾选「主动来问」后，她会自己决定想发什么说说、想评论朋友的哪条说说，
+            想好了私信你「我想发一条说说：…，行吗？」—— 你回「行 / 发 / 可以」就发，
+            回「不行 / 算了」就不发，内容永远是她定的，你只点头或摇头。
+            需要常驻进程 <code>yarn proactive:run</code> 在跑。
+          </p>
+          <p class="cq-hint">
+            主动问只在<strong>你设的时间点</strong>发生（比如每天 12:00、22:00 各问一次），
+            到点后 5 分钟内才会触发，错过就等下一次。时间点留空 = 她从不主动问。
+            「每天最多几次」是跨所有时间点的总上限，防止一天问个没完。
+          </p>
+          <p class="cq-warn">
+            <el-icon><Warning /></el-icon>
+            <span>
+              空间没有官方开放接口，走的是网页协议，腾讯服务条款不允许自动化。
+              默认每天最多 3 条说说、8 条评论、评论间隔 30 分钟 —— 压得低是故意的，
+              别为了多发两条把号搭进去。换号后先跑一次 <code>yarn probe:qzone</code> 验证通道。
+            </span>
+          </p>
+        </div>
+
+        <div class="cq-sec">
+          <div class="cq-sec-h">
             <span>群管理（可选）</span>
           </div>
           <el-form-item class="cq-check">
@@ -2073,6 +2177,7 @@ function copyInstallGuide() {
             </span>
           </p>
         </div>
+
       </el-form>
 
       <template #footer>
@@ -2394,6 +2499,17 @@ a.chip.is-link:hover { background: var(--surface-3); }
 a.chip.is-link:hover b { color: var(--brand-strong); }
 .admin-acts { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
 .admin-acts .btn { height: 32px; }
+
+/* 空间入口：既是状态也是入口，靠样式把它和右边那排按钮分开，别让人以为又是个操作 */
+.admin-acts .qzone-entry {
+  margin-right: auto;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.admin-acts .qzone-entry:hover { border-color: var(--brand-line); color: var(--brand-strong); }
 
 /* 骨架：只占位，不描形状 */
 .row.is-skeleton {

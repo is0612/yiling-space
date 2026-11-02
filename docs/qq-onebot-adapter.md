@@ -230,6 +230,21 @@ QQ 是唯一支持表情段的渠道。链路：
 - 默认关闭；主人 QQ 留空时指令不生效。它不会因为群友说“刷B站”就执行。
 - 主人称呼会作为对话上下文写进提示词（只传称呼，不传 QQ 号），让她认得出主人；留空时回退到外部身份/当前群名片。
 
+### 7.6 QQ 空间（发说说 / 评论）
+
+空间不是聊天渠道，但用的还是同一个登录态，所以挂在适配器里而不是单开一个进程。完整设计见
+[`qq-qzone.md`](./qq-qzone.md)，这里只记「为什么长这样」：
+
+- **发说说走协议端扩展** `send_qzone_msg`，**评论走网页 CGI**（`emotion_cgi_re_feeds`）——
+  协议端的空间能力只覆盖「自己发」，评论没有现成 action。
+- 只认**主人 QQ**、每条都要**人工确认**（`确认发说说` / `确认评论`，与公告的「确认发布」分开）。
+- **没有 tid 不代表没发出去**：只在明确「动作不支持」时降级到 CGI，其余失败一律停手。
+- 动态列表只在进程内缓存 10 分钟，不落库 —— 落库会拿一个早已翻页的 tid 去评论。
+- 默认每天 3 条说说 / 8 条评论 / 30 分钟冷却，开关 `qzoneEnabled` 默认关。
+
+指令入口在 `serve.ts` 的 `canUseQzone` 分支，报文解析是 `qzone.ts` 里的三个纯函数
+（`parseQzonePostRequest` / `parseQzoneBrowseRequest` / `parseQzoneCommentRequest`）。
+
 ## 8. 配置字段（存储于 PlatformConnection）
 
 平台标识：`qq-onebot`。`credentialsCiphertext` 内加密 JSON：

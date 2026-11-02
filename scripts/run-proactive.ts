@@ -1,10 +1,11 @@
 import "dotenv/config";
 import { runGroupInitiativeTick } from "../server/utils/group-initiative";
 import { runProactiveTick } from "../server/utils/proactive";
+import { runQzoneAutoTick } from "../server/utils/channel-adapter/onebot/qzone-proactive";
 import { getPrisma } from "../server/utils/prisma";
 
 /**
- * 主动开口的后台 tick：私聊「主动找话」+ 群聊「冷场了自己找话题」。
+ * 主动开口的后台 tick：私聊「主动找话」+ 群聊「冷场了自己找话题」+ 空间「自己想发说说/评论」。
  *
  * 60 秒一轮，每轮只判「现在该不该开口」—— 判定不花 token，真正调模型只发生在闸门放行之后。
  * 不用长定时器（比如 setTimeout 三小时后）：进程重启、系统时钟跳变都会让它失效，
@@ -46,6 +47,16 @@ async function main() {
       }
     } catch (error) {
       log({ event: "group-initiative-error", error: error instanceof Error ? error.message : String(error) });
+    }
+    try {
+      // 空间主动也是独立一条链：她要自己往公共空间写东西，跟「找他聊天」是两码事。
+      const qzoneResults = await runQzoneAutoTick();
+      for (const result of qzoneResults) {
+        if (result.status === "skipped") continue;
+        log({ event: "qzone-auto", ...result });
+      }
+    } catch (error) {
+      log({ event: "qzone-auto-error", error: error instanceof Error ? error.message : String(error) });
     }
     await sleep(INTERVAL_MS);
   }
