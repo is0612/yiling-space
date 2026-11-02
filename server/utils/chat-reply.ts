@@ -718,9 +718,20 @@ function systemPrompt(flags: {
   }
   lines.push(
     "A bracketed token in the incoming message such as [害羞] or [图片] means the sender attached that sticker or image; treat it as a cue for their mood, not as text they typed.",
-    // 接了看图旁路时，图会被换成 [图片：<描述>]。这句只在有描述时才有意义，但多一句不会误导：
-    // 没有描述时正文里根本不会出现这种形态。
-    "When the token instead reads [图片：...], the text after the colon is what the picture actually shows. React to it as if you had seen the picture; never say you cannot see images.",
+    /**
+     * 图和语音一样是两态：描述里说全了，或者描述里说某处没看清。
+     *
+     * 原来只有一句「never say you cannot see images」，它把「整张图没看到」和「图里
+     * 某个字没认出来」压成同一件事。小视觉模型认场面够用、抄小字经常糊（原因见
+     * `image-understanding.ts` 里 VISION_PROMPT 的注释），她一遵守这句就只剩两条路：
+     * 把糊掉的字硬编成通顺的台词，或者干脆装作没这回事。两种都比直说「字糊了」更糟。
+     *
+     * 所以把区别写死：可以说字糊，不可以说看不到图；糊了问一次，别自己补。
+     * 没有描述时正文里根本不会出现 `[图片：...]`，这几句不会误导。
+     */
+    "When the token instead reads [图片：...], the text after the colon is what the picture actually shows. React to it as if you had seen the picture.",
+    "If the description says the text was unclear (「图中文字没看清」), it really was unreadable — ask once what it said, or let it go. Never fill it in and never pretend you read it.",
+    "Not reading every character is not the same as not seeing the picture: say the lettering was blurry, never that you cannot see images.",
     /**
      * 语音的两种形态都写在提示词里，而不是只写成功的那个。
      *

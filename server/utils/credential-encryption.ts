@@ -110,3 +110,25 @@ export function isVoiceApiKeySaved(configValue: unknown): boolean {
   const config = asRecord(configValue);
   return typeof config.voiceApiKeyEncrypted === "string" && config.voiceApiKeyEncrypted.startsWith("v1.");
 }
+
+/**
+ * 图片（看图 / 以后的生图）模型的 Key。
+ *
+ * 和语音同一套理由，甚至更硬：视觉模型几乎必然是**另一家**服务商
+ * （DeepSeek 没有视觉接口，看图得去智谱 / 通义 / OpenAI），
+ * 混用聊天那把 Key 打过去只会拿到 401，而且报错信息完全看不出是这个原因。
+ *
+ * 返回空字符串 = 没配，调用方自己往环境变量、再往聊天 Key 回落。
+ */
+export async function resolveCharacterVisionApiKey(configValue: unknown): Promise<string> {
+  const config = asRecord(configValue);
+  const encrypted = config.visionApiKeyEncrypted;
+  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
+  const decrypted = await decryptApiKey(encrypted);
+  return decrypted.trim();
+}
+
+export function isVisionApiKeySaved(configValue: unknown): boolean {
+  const config = asRecord(configValue);
+  return typeof config.visionApiKeyEncrypted === "string" && config.visionApiKeyEncrypted.startsWith("v1.");
+}

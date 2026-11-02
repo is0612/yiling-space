@@ -1,6 +1,6 @@
-import { createError, getRouterParam } from "h3";
+import { createError, getQuery, getRouterParam } from "h3";
 import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../utils/chat-model-config";
-import { resolveCharacterApiKey } from "../../../../utils/credential-encryption";
+import { resolveCharacterApiKey, resolveCharacterVisionApiKey } from "../../../../utils/credential-encryption";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
@@ -23,6 +23,12 @@ type ModelsResult = {
  *
  * 只能用**已保存**的配置：Key 在服务端加密存放，浏览器拿不到明文，
  * 所以前端必须先保存再调用（和「保存并测试」同一套顺序）。
+ *
+ * `?target=vision` 拉的是**图片页那一家**的清单。理由：视觉模型几乎必然不是聊天那一家
+ * （DeepSeek 没有视觉接口），只认对话配置的话，图片页那个「获取模型」会稳定返回一堆
+ * 聊天模型，选了也读不了图。回落链与 `resolveImageUnderstandingSettings` 保持一致：
+ * 角色单独填的 → 服务端环境变量 → 对话模型那把。唯一区别是这里不需要模型名 ——
+ * 要取的正是模型名。
  */
 export default defineEventHandler(async (event): Promise<ModelsResult> => {
   const ownerId = await requireActorUserId(event);
@@ -33,12 +39,30 @@ export default defineEventHandler(async (event): Promise<ModelsResult> => {
   });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
+  const target = getQuery(event).target === "vision" ? "vision" : "chat";
   const settings = resolveChatModelSettings(character.modelConfig);
-  let apiKey: string;
+  const config = character.modelConfig && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
+    ? character.modelConfig as Record<string, unknown>
+    : {};
+  const configuredVisionBase = typeof config.visionApiBaseUrl === "string" ? config.visionApiBaseUrl.trim() : "";
+  const apiBaseUrl = target === "vision"
+    ? (configuredVisionBase || process.env.VISION_BASE_URL?.trim() || settings.apiBaseUrl)
+    : settings.apiBaseUrl;
+
+  let chatApiKey = "";
   try {
-    apiKey = await resolveCharacterApiKey(character.modelConfig, settings.apiBaseUrl);
+    chatApiKey = await resolveCharacterApiKey(character.modelConfig, settings.apiBaseUrl);
   } catch {
-    return { ok: false, models: [], message: "无法解密当前角色保存的 API Key。请重新输入并保存该 Key。" };
+    // 图片那家单独配了 Key 时，对话 Key 解不开不该妨碍列模型 —— 那两把是分开存的。
+    if (target !== "vision") {
+      return { ok: false, models: [], message: "无法解密当前角色保存的 API Key。请重新输入并保存该 Key。" };
+    }
+  }
+
+  let apiKey = chatApiKey;
+  if (target === "vision") {
+    const visionKey = await resolveCharacterVisionApiKey(character.modelConfig).catch(() => "");
+    apiKey = visionKey || process.env.VISION_API_KEY?.trim() || chatApiKey;
   }
   if (!apiKey) {
     return { ok: false, models: [], message: "尚未填写 API Key。请先填写并保存，再获取模型列表。" };
@@ -46,7 +70,7 @@ export default defineEventHandler(async (event): Promise<ModelsResult> => {
 
   let endpoint: URL;
   try {
-    endpoint = buildModelsEndpoint(settings.apiBaseUrl);
+    endpoint = buildModelsEndpoint(apiBaseUrl);
   } catch (error) {
     return { ok: false, models: [], message: error instanceof Error ? error.message : "API Base URL 无效。" };
   }

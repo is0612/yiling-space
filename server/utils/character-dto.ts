@@ -4,7 +4,7 @@ import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemo
 import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
-import { isVoiceApiKeySaved } from "./credential-encryption";
+import { isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 
 function positiveNumber(value: unknown): number {
@@ -90,6 +90,12 @@ export type CharacterDto = {
   ttsProvider: string;
   /** MiniMax 的 GroupId（查询参数）。 */
   ttsGroupId: string;
+  /** 看图（图片）模型：空 = 回落到环境变量 / 对话模型，所以"没配"是正常状态。 */
+  visionModel: string;
+  /** 看图服务地址；空 = 用环境变量或角色聊天地址。 */
+  visionApiBaseUrl: string;
+  /** 看图 Key 是否已保存（只回显布尔，绝不回显 Key 本身）。 */
+  visionApiKeyConfigured: boolean;
   /** 主动找话设置；未配置过时是默认值（enabled=false）。 */
   proactive: ProactiveSettings;
   /** 群内「冷场了自己找话题」；未配置过时是默认值（enabled=false）。 */
@@ -248,6 +254,9 @@ export function toCharacterDto(input: unknown): CharacterDto {
     asrModel: typeof config.asrModel === "string" ? config.asrModel : "",
     ttsProvider: typeof config.ttsProvider === "string" ? config.ttsProvider : "",
     ttsGroupId: typeof config.ttsGroupId === "string" ? config.ttsGroupId : "",
+    visionModel: typeof config.visionModel === "string" ? config.visionModel : "",
+    visionApiBaseUrl: typeof config.visionApiBaseUrl === "string" ? config.visionApiBaseUrl : "",
+    visionApiKeyConfigured: isVisionApiKeySaved(config),
     proactive: resolveProactiveSettings(config),
     groupInitiative: resolveGroupInitiativeSettings(config),
   };

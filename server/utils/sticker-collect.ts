@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
-import { downloadImage, resolveImageUnderstandingSettings } from "./image-understanding";
+import { downloadImage, resolveVisionSettingsForCharacter } from "./image-understanding";
 import { readModelUsage, recordModelUsage } from "./model-usage";
 import { normalizeStickerImage } from "./sticker-image";
 import {
@@ -117,7 +117,8 @@ export async function labelStickerImage(
   summary: string,
   context: StickerCollectContext,
 ): Promise<StickerLabelResult> {
-  const settings = resolveImageUnderstandingSettings({
+  // 打标和「看图」共用同一套配置（含角色单独配的视觉 Key），只是提示词不同。
+  const settings = await resolveVisionSettingsForCharacter({
     modelConfig: context.modelConfig,
     chatModel: context.chatModel,
     chatApiBaseUrl: context.chatApiBaseUrl,

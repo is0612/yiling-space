@@ -42,6 +42,9 @@ export default defineEventHandler(async (event) => {
   /** 语音 Key 的明文只在这里短暂停留，落库前一定加密；不写日志、不回显。 */
   let voiceApiKeyPlain = "";
   let clearVoiceApiKey = false;
+  /** 图片（看图）模型的 Key：与语音同理，几乎必然是另一家服务商，单独一把。 */
+  let visionApiKeyPlain = "";
+  let clearVisionApiKey = false;
   if (body.alias !== undefined) modelConfigPatch.alias = readTrimmedString(body.alias, "角色标签", 100);
   if (body.description !== undefined) modelConfigPatch.description = readTrimmedString(body.description, "角色简介", 2000);
 
@@ -239,6 +242,55 @@ export default defineEventHandler(async (event) => {
     clearVoiceApiKey = body.clearVoiceApiKey;
   }
 
+  /**
+   * 图片模型：看图（以及以后的生图）用的服务商。
+   *
+   * 为什么必须能单独填 Key：视觉模型几乎必然不是聊天那一家
+   * （DeepSeek 没有视觉接口，gpt-4o-mini 那种“能看但会烧光思考预算”只是兜底），
+   * 拿聊天 Key 去打别家地址只会 401，而且错误信息完全指不到这里。
+   */
+  if (body.visionModel !== undefined) {
+    if (typeof body.visionModel !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "看图模型的名称必须是文本。" });
+    }
+    const value = body.visionModel.trim();
+    if (value.length > 120) throw createError({ statusCode: 400, statusMessage: "看图模型名称不能超过 120 个字符。" });
+    // 空字符串是有效值：表示回落到环境变量 / 对话模型，所以不做「非空」校验。
+    modelConfigPatch.visionModel = value;
+  }
+
+  if (body.visionApiBaseUrl !== undefined) {
+    if (typeof body.visionApiBaseUrl !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "看图服务地址必须是文本。" });
+    }
+    try {
+      modelConfigPatch.visionApiBaseUrl = body.visionApiBaseUrl.trim()
+        ? validateChatApiBaseUrl(body.visionApiBaseUrl)
+        : "";
+    } catch (error) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: error instanceof Error ? error.message : "看图服务地址无效。",
+      });
+    }
+  }
+
+  if (body.visionApiKey !== undefined) {
+    if (typeof body.visionApiKey !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "看图服务的 API Key 必须是文本。" });
+    }
+    const key = body.visionApiKey.trim();
+    if (key.length > 8192) throw createError({ statusCode: 400, statusMessage: "看图 API Key 不能超过 8192 个字符。" });
+    if (key) visionApiKeyPlain = key;
+  }
+
+  if (body.clearVisionApiKey !== undefined) {
+    if (typeof body.clearVisionApiKey !== "boolean") {
+      throw createError({ statusCode: 400, statusMessage: "清除看图 API Key 的参数无效。" });
+    }
+    clearVisionApiKey = body.clearVisionApiKey;
+  }
+
   // 主动找话的设置也挂在 modelConfig 上，但走独立的校验：写入侧宁可报错也不夹取。
   if (body.proactive !== undefined) {
     const current = config.proactive && typeof config.proactive === "object" && !Array.isArray(config.proactive)
@@ -275,7 +327,7 @@ export default defineEventHandler(async (event) => {
   const { chatApiKey, clearApiKey, ...safeSettingsPatch } = settingsPatch;
   Object.assign(modelConfigPatch, safeSettingsPatch);
 
-  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey) {
+  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || visionApiKeyPlain || clearVisionApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
     if (clearApiKey) delete nextConfig.chatApiKeyEncrypted;
     if (chatApiKey) nextConfig.chatApiKeyEncrypted = await encryptApiKey(chatApiKey);
@@ -283,6 +335,9 @@ export default defineEventHandler(async (event) => {
     // 混用一个字段会导致「换语音服务商时把聊天也换掉」。
     if (clearVoiceApiKey) delete nextConfig.voiceApiKeyEncrypted;
     if (voiceApiKeyPlain) nextConfig.voiceApiKeyEncrypted = await encryptApiKey(voiceApiKeyPlain);
+    // 图片模型的 Key 同理再分开一把，三家可以各是各的。
+    if (clearVisionApiKey) delete nextConfig.visionApiKeyEncrypted;
+    if (visionApiKeyPlain) nextConfig.visionApiKeyEncrypted = await encryptApiKey(visionApiKeyPlain);
     data.modelConfig = nextConfig as Prisma.InputJsonObject;
   }
 

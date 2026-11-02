@@ -12,7 +12,7 @@ import { getPrisma } from "../../prisma";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
 import type { OnebotSegment } from "./types";
-import { sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
+import { fillOnebotImageUrls, sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
 import { parseBindingRoutingKeys, type OnebotBindingRecord, type OnebotConnectionRecord } from "./configure";
 import { ONEBOT_FACES, toOnebotFaceSegments } from "./faces";
 import { handleChannelBatch, handleChannelMessage, type ChannelReplySender } from "../pipeline";
@@ -1622,6 +1622,19 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     touchLastEventAt();
     const binding = routeOnebotEventToBinding(record.bindings, event);
     if (!binding) return { status: "ignored", reason: "no_binding" };
+    /**
+     * 图片直链可能不在推送事件里（只有 `file`）：缺就回查一次。
+     *
+     * 放在路由之后、两条路（群聊攒批 / 私聊单条）分叉之前 —— 这里改一次，
+     * 群聊和私聊都拿到补好的直链，不用各写一遍。
+     */
+    if (event.images.length && event.images.some((image) => !image.url)) {
+      const missing = event.images.filter((image) => !image.url).length;
+      event.images = await fillOnebotImageUrls(record.config, event.messageId, event.images);
+      const usable = event.images.filter((image) => image.url).length;
+      // 这行出现就说明「推送事件里没带直链」这个假设成立；补齐失败时它会留在这里当证据。
+      console.warn(`[vision] 事件里的图缺直链 ${missing} 张，回查后可用 ${usable} 张（message=${event.messageId}）`);
+    }
     /**
      * 普通群聊消息走快速通道：直接登记，不排队。
      *

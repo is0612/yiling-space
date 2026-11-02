@@ -157,6 +157,60 @@ try {
     }),
     null,
   );
+  // 单独配的视觉 Key 优先于聊天那把：换一家服务商时，绝不能拿聊天的 Key 打过去（必然 401）。
+  assert.deepEqual(
+    resolveImageUnderstandingSettings({
+      modelConfig: {
+        imageUnderstanding: true,
+        visionModel: "glm-4.6v-flash",
+        visionApiBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+      },
+      chatModel: "deepseek-flash",
+      chatApiBaseUrl: "https://api.deepseek.com",
+      chatApiKey: "deepseek-key",
+      visionApiKey: "zhipu-key",
+    }),
+    { model: "glm-4.6v-flash", apiBaseUrl: "https://open.bigmodel.cn/api/paas/v4", apiKey: "zhipu-key" },
+    "角色单独配的视觉 Key 要盖过聊天 Key。",
+  );
+
+  // 环境变量那把 Key 排在「角色 Key」之后、「聊天 Key」之前。
+  process.env.VISION_API_KEY = "env-vision-key";
+  assert.equal(
+    resolveImageUnderstandingSettings({
+      modelConfig: enabled,
+      chatModel: "deepseek-flash",
+      chatApiBaseUrl: "https://api.example.com/v1",
+      chatApiKey: "chat-key",
+    })?.apiKey,
+    "env-vision-key",
+  );
+  clearVisionEnv();
+
+  // 「测试看图」要能在开关还没打开时验证模型通不通 —— 否则用户得先去 QQ 那边点开关，
+  // 再回来猜刚才那次失败是配置问题还是没生效。
+  assert.equal(
+    resolveImageUnderstandingSettings({
+      modelConfig: { visionModel: "glm-4.6v-flash", visionApiBaseUrl: "https://open.bigmodel.cn/api/paas/v4" },
+      chatModel: "deepseek-flash",
+      chatApiBaseUrl: "https://api.deepseek.com",
+      chatApiKey: "k",
+      visionApiKey: "zhipu-key",
+    }, { requireSwitch: false })?.model,
+    "glm-4.6v-flash",
+    "测试看图不看开关。",
+  );
+  // 但那条豁免只属于测试入口：默认仍然是「没开关就不看图」。
+  assert.equal(
+    resolveImageUnderstandingSettings({
+      modelConfig: { visionModel: "glm-4.6v-flash" },
+      chatModel: "deepseek-flash",
+      chatApiBaseUrl: "https://api.example.com/v1",
+      chatApiKey: "k",
+    }),
+    null,
+    "默认行为不变：开关没打开就不看图。",
+  );
 } finally {
   clearVisionEnv();
   for (const [key, value] of Object.entries(savedEnv)) {

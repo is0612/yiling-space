@@ -15,7 +15,7 @@ import {
   applyImageDescriptions,
   describeImages,
   MAX_IMAGES_PER_TURN,
-  resolveImageUnderstandingSettings,
+  resolveVisionSettingsForCharacter,
   type ChannelImageRef,
 } from "../image-understanding";
 import { CLOSE_FRIEND_LIMIT, listAcquaintances, recordFriendInteraction } from "../friends";
@@ -542,7 +542,8 @@ async function attachImageDescriptions(
   },
 ): Promise<ChannelTurnMessage[]> {
   if (!messages.some((message) => (message.images?.length ?? 0) > 0)) return messages;
-  const settings = resolveImageUnderstandingSettings({
+  // 视觉 Key 可能是这个角色单独配的另一家（智谱 / 通义），所以走会解密的那层入口。
+  const settings = await resolveVisionSettingsForCharacter({
     modelConfig: context.modelConfig,
     chatModel: context.chatModel,
     chatApiBaseUrl: context.apiBaseUrl,

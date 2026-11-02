@@ -80,6 +80,12 @@ export type Character = {
   ttsProvider?: string;
   /** MiniMax 的 GroupId。 */
   ttsGroupId?: string;
+  /** 看图（图片）模型；空 = 回落到环境变量 / 对话模型。 */
+  visionModel?: string;
+  /** 看图服务地址；空 = 用环境变量或角色聊天地址。 */
+  visionApiBaseUrl?: string;
+  /** 看图 Key 是否已保存（只回布尔）。 */
+  visionApiKeyConfigured?: boolean;
   /** 主动找话设置；服务端返回时一定带默认值填充。 */
   proactive?: {
     enabled: boolean;

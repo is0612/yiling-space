@@ -239,6 +239,36 @@ export function resolveOnebotEvent(data: unknown): OnebotResolvedEvent | null {
 }
 
 /**
+ * 补齐图片直链。
+ *
+ * 网关推送的事件里，`image` 段有时只带 `file`、不带 `url` —— 直链要网关额外问一次 QQ，
+ * 能省就省了。而「看图」旁路只认 `url`：空串等于「这条消息没有图」，静默跳过，
+ * 用户看到的就是她只回了句 `[图片]`，配置、Key、模型全都对。
+ *
+ * 同一个 message_id 用 `get_msg` 回查就能拿到完整直链，所以缺的时候补一次。
+ * **只在真缺时发请求**：绝大多数事件本来就带 url，不增加开销。
+ * 补不上就原样返回 —— 看图只是少一句描述，不能挡住回话。
+ */
+export async function fillOnebotImageUrls(
+  config: OnebotConnectionConfig,
+  messageId: string,
+  images: OnebotImageRef[],
+): Promise<OnebotImageRef[]> {
+  if (!images.length || images.every((image) => image.url)) return images;
+  let refetched: OnebotImageRef[];
+  try {
+    const payload = await callOnebotAction(config, "get_msg", { message_id: messageId });
+    refetched = readOnebotImages(payload);
+  } catch {
+    return images;
+  }
+  // 段数对不上就不猜：错位补出来的直链会把 A 图的描述安到 B 图上，比不补更糟。
+  if (refetched.length !== images.length) return images;
+  return images.map((image, index) =>
+    image.url ? image : { ...image, url: refetched[index]?.url ?? "" });
+}
+
+/**
  * 把 WS token 拼进 URL 查询串。
  *
  * OneBot v11 两种带法（`Authorization: Bearer` 头与 `?access_token=` 查询参数）SnowLuma 都认，
