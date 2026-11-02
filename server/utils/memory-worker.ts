@@ -1330,6 +1330,12 @@ export async function processNextMemoryJob(
       const existingItemSignatures = new Set(
         activeItems.map((item) => item.category + ":" + normalizeMemoryText(item.content)),
       );
+      // 近似判重用的底表：同范围里还在生效的条目。判重逻辑在 applyMemoryChange 里。
+      const existingItems = activeItems.map((item) => ({
+        id: item.id,
+        category: item.category,
+        content: item.content,
+      }));
 
       // 模型提出但没通过校验的条数。没有这个数字，人分不清「模型没提」和「提了但不合格」。
       let rejectedChangeCount = 0;
@@ -1403,6 +1409,7 @@ export async function processNextMemoryJob(
             canTarget: (memoryId) => eligibleModelMemoryIds.has(memoryId),
             handledMemoryIds,
             existingItemSignatures,
+            existingItems,
             existingDedupeKeys,
           },
           change,

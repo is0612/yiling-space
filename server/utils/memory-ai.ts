@@ -46,6 +46,14 @@ export type MemoryChange = {
   category: MemoryCategoryValue;
   content: string;
   confidence: number;
+  /**
+   * 这条记忆对她有多重要（0–1）。
+   *
+   * 排序公式里的「重要度」一直是个常数 0.5 —— 因为从来没人写过这个字段，
+   * 于是 `0.55 + 0.45 × importance` 对所有条目一视同仁，排序实际只剩相关度和衰减。
+   * 由提炼时给分；模型没给就按类别兜底（`DEFAULT_MEMORY_IMPORTANCE`），不是两套判据打架。
+   */
+  importance?: number;
   evidenceMessageIds: string[];
   relatedMemoryId?: string;
   changeReason?: string;
@@ -123,7 +131,7 @@ export type MemoryAiInput = {
 };
 
 const MAX_RESPONSE_BYTES = 1_000_000;
-const TEMPLATE_VERSION = "memory-extraction-v3";
+const TEMPLATE_VERSION = "memory-extraction-v4";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -280,6 +288,48 @@ export function longestCommonSubstringLength(left: string, right: string): numbe
   return best;
 }
 
+/**
+ * 两条长期记忆是不是在说同一件事。
+ *
+ * 精确 `dedupeKey` 只认整句相同；这里补的是「同一件事又写了一遍，只是多了半句 / 少了半句」——
+ * 快照重跑时最常见的重复形态。判据刻意保守：类别必须相同，再要求字面高度重合
+ * （一方包含另一方且较短的那条够长，或二元组 Jaccard ≥ 0.62）。
+ *
+ * **它挡不住真正的改写**（「她只会发文字」对「她原本没有语音功能」这种换个说法的）——
+ * 那要语义向量。这里只做确定性判重，宁可漏一条，也不把两件不同的事合成一条。
+ */
+export function isNearDuplicateMemory(
+  left: { category: string; content: string },
+  right: { category: string; content: string },
+): boolean {
+  if (left.category !== right.category) return false;
+  const a = normalizeMemoryContent(left.content);
+  const b = normalizeMemoryContent(right.content);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return Math.min(a.length, b.length) >= 12;
+  return bigramJaccard(a, b) >= 0.62;
+}
+
+function normalizeMemoryContent(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase().replace(/[\\s\\p{P}\\p{S}]+/gu, "");
+}
+
+function bigramJaccard(left: string, right: string): number {
+  const grams = (value: string) => {
+    const chars = Array.from(value);
+    const out = new Set<string>();
+    for (let index = 0; index < chars.length - 1; index += 1) out.add(chars[index]! + chars[index + 1]!);
+    return out;
+  };
+  const a = grams(left);
+  const b = grams(right);
+  if (a.size === 0 || b.size === 0) return 0;
+  let shared = 0;
+  for (const gram of a) if (b.has(gram)) shared += 1;
+  return shared / (a.size + b.size - shared);
+}
+
 export function validateMemoryAiOutput(
   raw: unknown,
   validSourceMessageIds: Iterable<string>,
@@ -368,11 +418,17 @@ export function validateMemoryAiOutput(
 
       const relatedMemoryId = asText(entry.relatedMemoryId, 100);
       if ((action === "UPDATE" || action === "INVALIDATE") && !existingIds.has(relatedMemoryId)) continue;
+      // 0–1，两位小数。越界的截断而不是丢弃 —— 分数只是排序参考，不值得为它废掉整条记忆。
+      const rawImportance = entry.importance;
+      const importance = typeof rawImportance === "number" && Number.isFinite(rawImportance)
+        ? Math.min(1, Math.max(0, Math.round(rawImportance * 100) / 100))
+        : undefined;
       memoryChanges.push({
         action,
         category: category as MemoryCategoryValue,
         content,
         confidence,
+        ...(importance === undefined ? {} : { importance }),
         evidenceMessageIds: ids,
         ...(action !== "ADD" ? { relatedMemoryId } : {}),
         ...(asText(entry.changeReason, 500) ? { changeReason: asText(entry.changeReason, 500) } : {}),
@@ -405,6 +461,8 @@ function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean;
     "当你判断某个对话对象值得她长期记住时，写一条 category=RELATIONSHIP 的记忆，内容包含对方称呼、来源（哪个群或私聊）和这段关系的要点；不要为记不住的泛泛之交写关系记忆。",
     "偏好或事实发生变化时，优先 UPDATE 已提供的相关 active memory；明确不再成立时使用 INVALIDATE；确实新增时使用 ADD。",
     "UPDATE/INVALIDATE 的 relatedMemoryId 必须来自输入的 activeMemories。每条 memoryChanges 必须至少引用一个输入中的 evidenceMessageIds，且来源必须真正支持该结论。",
+    "每条记忆都要给 importance（0–1，两位小数）：0.85 以上是长期成立、会影响她判断的事（身份、底线、稳定关系、明确承诺）；0.5–0.7 是日常事实与偏好；0.3 以下是一次性的临时状态。不要所有条目都给同一个数 —— 排序就是靠它区分轻重，全给 0.5 等于没给。",
+    "写 ADD 之前先扫一遍 activeMemories：如果这一期的证据说明某条已经不成立（改了主意、取消了、被更正、事情已经做完、对方更正了说法），必须单独发一条 INVALIDATE 指回它，而不是只 ADD 一条新的、把旧的留在那里。旧条目不退场，她就会同时相信两件互相矛盾的事。这条和「不要乱删」不冲突：INVALIDATE 只针对有证据推翻的那种，拿不准就不动。",
   ];
   if (options.withPeriodEvents) {
     lines.push(
@@ -445,6 +503,7 @@ function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean;
         category: "FACT|PREFERENCE|RELATIONSHIP|COMMITMENT|GOAL|EVENT|SUMMARY|OTHER",
         content: "简明、可独立理解的记忆",
         confidence: 0.0,
+        importance: 0.7,
         evidenceMessageIds: ["原始消息ID"],
         relatedMemoryId: "UPDATE/INVALIDATE 必填，ADD 省略",
         changeReason: "变化依据"

@@ -1,6 +1,6 @@
 import type { Prisma } from "../../src/generated/prisma/client";
 import {
-  isNearDuplicateEvent, makeEventDedupeKey, makeMemoryDedupeKey,
+  isNearDuplicateEvent, isNearDuplicateMemory, makeEventDedupeKey, makeMemoryDedupeKey,
   type MemoryCategoryValue, type MemoryChange, type MemoryEventDraft,
 } from "./memory-ai";
 import { localDayKey } from "./memory-event-time";
@@ -97,10 +97,41 @@ export type MemoryApplyContext = {
   handledMemoryIds: Set<string>;
   existingItemSignatures: Set<string>;
   existingDedupeKeys: Set<string>;
+  /**
+   * 同范围里**仍在生效**的条目（id + 类别 + 内容），用来挡「换句话又是一条」。
+   *
+   * 和 `existingItemSignatures` 分工：那个是精确签名（整句相同），这个是近似判重
+   * （同类别 + 字面高度重合）。不传就只做精确判重，行为与以前一致。
+   */
+  existingItems?: Array<{ id: string; category: MemoryCategoryValue; content: string }>;
 };
 
 export function normalizeMemoryText(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();}
+
+/**
+ * 模型没给 importance 时的按类别兜底。
+ *
+ * 不是为了「猜得准」，是为了别让所有条目又回到同一个数 —— 那样排序里的重要度项
+ * 又变成固定乘数（改前 16 条全是 0.5，等于没排序）。承诺与关系天然比一次性的状态更该留。
+ */
+export const DEFAULT_MEMORY_IMPORTANCE: Record<MemoryCategoryValue, number> = {
+  COMMITMENT: 0.8,
+  RELATIONSHIP: 0.75,
+  GOAL: 0.7,
+  PREFERENCE: 0.65,
+  FACT: 0.6,
+  EVENT: 0.5,
+  SUMMARY: 0.4,
+  OTHER: 0.4,
+};
+
+function resolveImportance(change: MemoryChange): number {
+  if (typeof change.importance === "number" && Number.isFinite(change.importance)) {
+    return Math.min(1, Math.max(0, change.importance));
+  }
+  return DEFAULT_MEMORY_IMPORTANCE[change.category] ?? 0.5;
+}
 
 type ApplyResult = Record<string, unknown>;
 
@@ -134,18 +165,34 @@ export async function applyMemoryChange(
       };
     }
 
+    // 近似判重：整句不同、说的是同一件事。只对「同类别 + 字面高度重合」生效，
+    // 判据保守（见 isNearDuplicateMemory），宁可漏一条也不合成两件不同的事。
+    const nearDuplicate = ctx.existingItems?.find((item) => isNearDuplicateMemory(item, change));
+    if (nearDuplicate) {
+      return {
+        action: "ADD",
+        result: "DUPLICATE_IGNORED",
+        category: change.category,
+        content: change.content,
+        duplicateOfMemoryId: nearDuplicate.id,
+        evidenceMessageIds: change.evidenceMessageIds,
+      };
+    }
+
     const dedupeKey = makeMemoryDedupeKey(change.category, change.content);
     const keyUsed = ctx.existingDedupeKeys.has(dedupeKey) || Boolean(await tx.memoryItem.findFirst({
       where: { memoryScopeId: ctx.memoryScopeId, dedupeKey },
       select: { id: true },
     }));
     ctx.existingDedupeKeys.add(dedupeKey);
+    const importance = resolveImportance(change);
     const created = await tx.memoryItem.create({
       data: {
         memoryScopeId: ctx.memoryScopeId,
         category: change.category as MemoryCategoryValue,
         content: change.content,
         confidence: change.confidence,
+        importance,
         status: "ACTIVE",
         validFrom,
         sourceMessageId: primaryEvidence.id,
@@ -155,6 +202,7 @@ export async function applyMemoryChange(
       select: { id: true },
     });
     ctx.existingItemSignatures.add(signature);
+    ctx.existingItems?.push({ id: created.id, category: change.category, content: change.content });
     await tx.auditLog.create({
       data: {
         ...auditActor,
@@ -238,6 +286,7 @@ export async function applyMemoryChange(
         category: change.category as MemoryCategoryValue,
         content: change.content,
         confidence: change.confidence,
+        importance: resolveImportance(change),
         status: "ACTIVE",
         validFrom,
         sourceMessageId: primaryEvidence.id,
@@ -247,6 +296,7 @@ export async function applyMemoryChange(
       select: { id: true },
     });
     ctx.existingItemSignatures.add(change.category + ":" + normalizeMemoryText(change.content));
+    ctx.existingItems?.push({ id: created.id, category: change.category, content: change.content });
     await tx.auditLog.create({
       data: {
         ...auditActor,

@@ -135,7 +135,7 @@ export default defineEventHandler(async (event) => {
   // 已存在的同内容记忆要先灌进签名集合，否则采纳会和库里已有条目重复。
   const activeItems = await prisma.memoryItem.findMany({
     where: { memoryScopeId, status: "ACTIVE" },
-    select: { category: true, content: true },
+    select: { id: true, category: true, content: true },
     take: 2000,
   });
   const existingItemSignatures = new Set(
@@ -162,6 +162,7 @@ export default defineEventHandler(async (event) => {
           canTarget: () => true,
           handledMemoryIds: new Set<string>(),
           existingItemSignatures,
+          existingItems: activeItems.map((item) => ({ id: item.id, category: item.category, content: item.content })),
           existingDedupeKeys: new Set<string>(),
         },
         change,
