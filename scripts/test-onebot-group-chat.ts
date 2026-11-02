@@ -7,6 +7,8 @@
 
 import assert from "node:assert/strict";
 import {
+  FOLLOWUP_MIN_GAP_MS,
+  FOLLOWUP_WINDOW_MS,
   GROUP_CHAT_DEFAULTS,
   createGroupChatBuffer,
   evaluateGroupChatGate,
@@ -157,8 +159,66 @@ assert.equal(gate({ now: night, named: true }).reason, "quiet_hours", "名字命
 assert.equal(gate({ spokenToday: GROUP_CHAT_DEFAULTS.dailyMax }).reason, "daily_limit");
 assert.equal(gate({ spokenToday: GROUP_CHAT_DEFAULTS.dailyMax, direct: true }).reason, "daily_limit", "到了当天上限，点名也不回。");
 
+// ── 4b. 接话：她刚说过话，别人接着回 ─────────────────────
+// 旧逻辑只把 lastSpokeAt 当节流用，于是「她开了个头、群友顺着说一句」被算成不相关，
+// 只剩 0.15 的抽签 —— 八成半的接话她根本看不见。主动开口（group-initiative）发的消息
+// 也是 ASSISTANT 消息落进同一个群会话，所以同一个判据能一并覆盖它。
+assert(FOLLOWUP_MIN_GAP_MS < GROUP_CHAT_DEFAULTS.minGapSeconds * 1000, "接话下限必须比常规间隔短，否则这条规则没有意义。");
+assert(FOLLOWUP_WINDOW_MS > FOLLOWUP_MIN_GAP_MS, "窗口要容得下至少一次接话。");
+
+const tenSecondsAgo = new Date(base.now.getTime() - 10 * 1000);
 const justSpoke = new Date(base.now.getTime() - 30 * 1000);
-assert.equal(gate({ lastSpokeAt: justSpoke }).reason, "too_soon", "刚说完 30 秒，别再刷一条。");
+
+assert.equal(
+  gate({ lastSpokeAt: tenSecondsAgo }).reason,
+  "too_soon",
+  "刚说完 10 秒又来一轮：仍要压住，别连发。",
+);
+assert.deepEqual(
+  gate({ lastSpokeAt: justSpoke }),
+  { allowed: true, reason: "continuing", mustReply: false },
+  "她 30 秒前说过话、有人接一句（没 @ 她也没叫她名字）：这是同一段对话的来回，该送进去看一眼。",
+);
+assert.deepEqual(
+  gate({ lastSpokeAt: justSpoke, topicCandidate: false, random: GROUP_CHAT_DEFAULTS.ambientChance }),
+  { allowed: true, reason: "continuing", mustReply: false },
+  "接话不靠抽签：random 等于阈值（非命中）时也要放行。",
+);
+assert.equal(
+  gate({ lastSpokeAt: new Date(base.now.getTime() - 100 * 1000), random: 0.9, addressedToOthers: true }).reason,
+  "not_relevant",
+  "有人 @ 别人办事：她刚说完话也不凑上去，接话窗口不生效。",
+);
+
+// 边界：窗口内算接话，出了窗口退回普通抽签。
+assert.equal(
+  gate({ lastSpokeAt: new Date(base.now.getTime() - FOLLOWUP_WINDOW_MS) }).reason,
+  "continuing",
+  "刚好在窗口边上仍算接话（闭区间，避免浮点误差把边界吃掉）。",
+);
+assert.equal(
+  gate({ lastSpokeAt: new Date(base.now.getTime() - FOLLOWUP_WINDOW_MS - 60 * 1000) }).reason,
+  "not_relevant",
+  "出了窗口 3 分钟以上：话题不相关、抽签也没中，就该潜水。",
+);
+
+// 接话只是「相关性」的弱线索，不能拿去绕过任何硬闸门。
+assert.equal(
+  gate({ now: new Date(night.getTime() - 30 * 1000), lastSpokeAt: new Date(night.getTime() - 60 * 1000) }).reason,
+  "quiet_hours",
+  "接话不能绕过安静时段。",
+);
+assert.equal(
+  gate({ spokenToday: GROUP_CHAT_DEFAULTS.dailyMax, lastSpokeAt: justSpoke }).reason,
+  "daily_limit",
+  "接话不能绕过每日上限。",
+);
+assert.equal(
+  gate({ settings: { ...GROUP_CHAT_DEFAULTS, mode: "mention" }, lastSpokeAt: justSpoke }).reason,
+  "not_cued",
+  "「仅 @ 时回复」是用户对这个群的显式意图，接话也不例外。",
+);
+
 // 回归：2026-10-30 线上，她 10:32:12 回完一句，10:32:48 有人 @ 她，
 // 36 秒 < minGap 90 秒，被判 too_soon 丢掉，人看到的现象就是「@ 了也不回」。
 assert.deepEqual(
@@ -167,14 +227,14 @@ assert.deepEqual(
   "刚说完话又被 @ 了：必须回，间隔不能压过点名。",
 );
 assert.equal(
-  gate({ lastSpokeAt: justSpoke, named: true }).reason,
+  gate({ lastSpokeAt: tenSecondsAgo, named: true }).reason,
   "too_soon",
   "只是正文里叫到名字，仍要受间隔约束 —— 群里同款鱼太多，名字是弱线索。",
 );
 assert.equal(
-  gate({ lastSpokeAt: new Date(base.now.getTime() - 120 * 1000) }).reason,
+  gate({ lastSpokeAt: new Date(base.now.getTime() - 5 * 60 * 1000) }).reason,
   "not_relevant",
-  "间隔够了但话题不相关、抽签也没中，就该潜水。",
+  "错过接话窗口之后，话题不相关、抽签也没中，就该潜水。",
 );
 
 assert.deepEqual(
@@ -289,4 +349,4 @@ const manyGroups = Object.fromEntries(
 );
 assert.equal(Object.keys(readGroupChatModeOverrides(manyGroups)).length, 50);
 
-console.log("群聊自然接话测试通过：配置解析与夹取、别名识别、澄清识别、闸门顺序（模式/安静时段/上限/间隔/direct/名字弱线索/话题候选/抽签）、@ 的是别人时「全都回」也不抢话、被澄清的 @ 允许沉默、mustReply 边界、攒批窗口与合并上限、东八区日界、按群覆盖模式。");
+console.log("群聊自然接话测试通过：配置解析与夹取、别名识别、澄清识别、闸门顺序（模式/安静时段/上限/间隔/direct/名字弱线索/接话窗口/话题候选/抽签）、@ 的是别人时「全都回」也不抢话、被澄清的 @ 允许沉默、mustReply 边界、攒批窗口与合并上限、东八区日界、按群覆盖模式。");

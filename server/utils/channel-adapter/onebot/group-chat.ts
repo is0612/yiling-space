@@ -158,6 +158,27 @@ export function resolveGroupChatSettings(config: unknown, legacyMentionOnly = tr
   };
 }
 
+/**
+ * 她说完话之后这么久之内，群里的话都算「在接她的话」。
+ *
+ * 判据只取 `lastSpokeAt`，理由不是省事，而是它天然覆盖了两条来源：走回复管道的正常接话、
+ * 以及主动开口（`group-initiative` 发的消息同样以 `role: ASSISTANT` 落进同一个群会话）。
+ * 这恰好是最容易漏掉的一类 —— 她开了个头，群友顺着说一句、没有 @ 也没有叫她名字，
+ * 旧逻辑里这叫「不相关」，只剩 `ambientChance` 的抽签，八成半的接话她根本看不见。
+ *
+ * 3 分钟与 `group-context.ts` 的 `topicTtlMs` 同一个尺度：项目里「短期关注」就是这个量级。
+ */
+export const FOLLOWUP_WINDOW_MS = 3 * 60 * 1000;
+
+/**
+ * 接话场景的最短间隔，替代 90 秒的 `minGap`。
+ *
+ * `minGap` 压的是「没人叫她时追着别人聊」；而别人刚回她一句，她再答一句是同一段对话的来回。
+ * 不给豁免的话，`minGap = 90` 会把 30 秒内到达的回应整轮丢掉 —— 那不是「别刷屏」，
+ * 那是「聊到一半突然没了」。仍留 20 秒下限，避免同一秒里连发两条。
+ */
+export const FOLLOWUP_MIN_GAP_MS = 20 * 1000;
+
 /** 群聊里她这一次的提示词版本，用于排查「她为什么没说话」。 */
 export type GroupChatGateInput = {
   settings: GroupChatSettings;
@@ -168,6 +189,12 @@ export type GroupChatGateInput = {
   named: boolean;
   /** 程序从短期话题参与里找到的候选：有人在接着她参与过的话题说。 */
   topicCandidate: boolean;
+  /**
+   * 她上一次在这个群说话的时刻（含主动开口）。
+   *
+   * 两个用途，别只当成节流参数：一是 `minGap` 的间隔判定，二是「这轮是不是在接她的话」
+   * —— 见 `FOLLOWUP_WINDOW_MS`。
+   */
   lastSpokeAt: Date | null;
   /** 今天这个群她已说过的句数。 */
   spokenToday: number;
@@ -206,6 +233,21 @@ export type GroupChatGateResult = {
 export function evaluateGroupChatGate(input: GroupChatGateInput): GroupChatGateResult {
   const { settings, now, direct } = input;
 
+  /**
+   * 这一轮是不是在接她刚说过的话。
+   *
+   * 只看「她上次开口距现在多久」。为什么不算「是不是引用了她那条」：QQ 群里大多数回话
+   * 不引用，拿引用当判据会漏掉绝大多数真实接话；而时间窗的代价是「她说完后三分钟内的
+   * 任何消息都送进去看一眼」—— 这与本文件开头的原则一致：闸门负责「送不送到她眼前」，
+   * 「说不说」交给模型（`mustReply = false`）。
+   *
+   * `addressedToOthers` 为真时不算：那是有人点名找别人办事，她刚说完话也不该凑上去。
+   */
+  const sinceOwnMs = input.lastSpokeAt
+    ? now.getTime() - input.lastSpokeAt.getTime()
+    : Number.POSITIVE_INFINITY;
+  const continuing = !direct && !input.addressedToOthers && sinceOwnMs <= FOLLOWUP_WINDOW_MS;
+
   // 「全都回」是用户显式选的，保持老行为，不再叠任何门槛 —— 只有一条例外：
   // 有人明确 @ 了**别的成员**（没 @ 她、也没叫她的名字）。那是在找人办事，
   // 不是跟她说话；「全都回」的意思是「群里说什么都愿意搭一句」，不是「别人私事也插嘴」。
@@ -230,9 +272,15 @@ export function evaluateGroupChatGate(input: GroupChatGateInput): GroupChatGateR
   // @ 是明确指令，必须豁免：2026-10-30 她 10:32:12 回完一句，10:32:48 有人 @ 她，
   // 36 秒 < 90 秒 → 被判 too_soon 丢掉，人看到的就是「@ 了也不回」。
   // 安静时段早就有 `!direct` 豁免，这里漏了，属实现不一致。
+  //
+  // 接话场景用更短的下限（见 `FOLLOWUP_MIN_GAP_MS`）：别人刚回她一句，她答一句是同一段
+  // 对话的来回，90 秒的「别追着聊」在这里只会表现为「聊到一半突然没了」。
   if (!direct && input.lastSpokeAt && settings.minGapSeconds > 0) {
     const gapMs = now.getTime() - input.lastSpokeAt.getTime();
-    if (gapMs < settings.minGapSeconds * 1000) {
+    const floorMs = continuing
+      ? Math.min(FOLLOWUP_MIN_GAP_MS, settings.minGapSeconds * 1000)
+      : settings.minGapSeconds * 1000;
+    if (gapMs < floorMs) {
       return { allowed: false, reason: "too_soon", mustReply: false };
     }
   }
@@ -244,6 +292,8 @@ export function evaluateGroupChatGate(input: GroupChatGateInput): GroupChatGateR
       : { allowed: true, reason: "direct", mustReply: true };
   }
   if (input.named) return { allowed: true, reason: "named", mustReply: false };
+  // 接着她刚说过的话说：和「叫到名字」同一档的弱线索 —— 送进去看一眼，但允许沉默。
+  if (continuing) return { allowed: true, reason: "continuing", mustReply: false };
   if (input.topicCandidate) return { allowed: true, reason: "topic", mustReply: false };
   if (input.random < settings.ambientChance) return { allowed: true, reason: "chance", mustReply: false };
   return { allowed: false, reason: "not_relevant", mustReply: false };
