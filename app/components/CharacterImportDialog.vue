@@ -25,6 +25,8 @@ type BundleCounts = {
   catchphrases: number;
   friends: number;
   friendMemories: number;
+  /** 朋友们名下的备注（她私底下的叫法）总条数；v2 及更早的卡没有这一段。 */
+  friendAliases?: number;
 };
 
 type BundlePreview = {
@@ -117,6 +119,11 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
     const list = asRecord(friend).memories;
     return total + (Array.isArray(list) ? list.length : 0);
   }, 0);
+  // 备注同样是老卡没有的东西：读不到数就按内容数一遍（缺省是空数组）。
+  const friendAliases = friends.reduce<number>((total, friend) => {
+    const list = asRecord(friend).aliases;
+    return total + (Array.isArray(list) ? list.length : 0);
+  }, 0);
   // 日历天数与版本数：服务端 counts 优先，老卡没写就按内容数一遍。
   const eventDays = typeof declared.eventDays === "number"
     ? declared.eventDays
@@ -135,6 +142,7 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
     catchphrases: typeof declared.catchphrases === "number" ? declared.catchphrases : phrases.length,
     friends: typeof declared.friends === "number" ? declared.friends : friends.length,
     friendMemories: typeof declared.friendMemories === "number" ? declared.friendMemories : friendMemories,
+    friendAliases: typeof declared.friendAliases === "number" ? declared.friendAliases : friendAliases,
   };
 }
 
@@ -173,6 +181,17 @@ function buildPreview(source: Record<string, unknown>): BundlePreview {
     counts: readCounts(source, memories, events, snapshots, phrases, friends),
   };
 }
+
+/**
+ * 朋友段的一句话。有备注才提备注 —— 「0 个备注」只会让人以为哪里丢了东西。
+ * 卡片还没读出来时 preview 为空，模板那一行本来就不渲染，这里给空串兜底。
+ */
+const friendNote = computed(() => {
+  const counts = preview.value?.counts;
+  if (!counts) return "";
+  const aliases = counts.friendAliases ?? 0;
+  return `还带着 ${counts.friends} 位朋友（${counts.friendMemories} 条关于他们的记忆${aliases > 0 ? `、${aliases} 个备注` : ""}）。`;
+});
 
 /** 合并成功后要说清「补进去多少」：条数全为 0 也有意义（本机已经全有了）。 */
 function describeAdded(added: BundleAdded): string {
@@ -455,7 +474,7 @@ function formatExportedAt(value: string | null): string {
         v-if="preview.counts.friends > 0"
         class="friend-note"
       >
-        还带着 {{ preview.counts.friends }} 位朋友（{{ preview.counts.friendMemories }} 条关于他们的记忆）。
+        {{ friendNote }}
         对方的 QQ 号会留在本机；同一个人若已存在，会沿用已有身份，不会重复建。
       </p>
 

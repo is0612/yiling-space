@@ -13,7 +13,7 @@
  *     导入后只剩「今天」一格，忆泡明明在、日子却不在
  *   - 日记 / 手账：她的主观视角（`character_journals` + 全部 `journal_revisions`）
  *   - 阶段总结：只带 CURRENT 版本，来源消息不随包走
- *   - 她的朋友（可选）：认识谁、聊过几次、分别记得他什么
+ *   - 她的朋友（可选）：认识谁、聊过几次、她私底下怎么叫他（备注）、分别记得他什么
  *
  * 朋友这一段的取舍最需要说清楚：**导出者可以关掉它**。换台电脑继续养需要它（否则她
  * 一夜之间忘了整个群），但把卡发给别人时，它同时交出去的是别人的 QQ 号和「她怎么看他们」。
@@ -32,6 +32,7 @@
  */
 
 import { createError } from "h3";
+import { dropAliasesMatchingName, normalizeFriendAliases } from "./friend-aliases";
 
 // 格式标识沿用改名前的 `yiling-hub.character`：它是角色卡的对外契约，
 // 跟着品牌改成 yiling-space 会让已经导出的卡片导不进来。要换必须同时接受旧值。
@@ -39,8 +40,13 @@ export const CHARACTER_BUNDLE_FORMAT = "yiling-hub.character";
 /**
  * 2 = 加入忆泡日历天与日记/手账。这两段是「内容」而不是美化：
  * 老程序读到 v2 卡会明确拒绝，总好过静默把她的日记丢掉。
+ *
+ * 3 = 朋友的备注（`MemoryScope.aliases`）。同样是内容：她怎么叫一个人，
+ * 是她对这段关系的一部分理解，不是可选的展示字段。v3 卡给老程序读会被上面那条
+ * 版本检查拦下 —— 让老程序明说「导不进来」，好过它默默把备注丢掉、导完还像成功。
+ * 反过来 v2 卡照旧能读：`aliases` 缺省为空数组，老卡里本来就没有这东西。
  */
-export const CHARACTER_BUNDLE_VERSION = 2;
+export const CHARACTER_BUNDLE_VERSION = 3;
 /** 导入包最大字节数：够 4000 条记忆 + 600 篇总结 + 1500 篇手账，再大基本是塞了别的东西。 */
 export const CHARACTER_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -251,6 +257,13 @@ export type CharacterBundleFriend = {
   /** QQ 号 / B站 uid。群里认人靠它，所以必须带；这也是分享时最该慎重的字段。 */
   platformUid: string;
   displayName: string;
+  /**
+   * 她私底下对这个人的叫法 —— 页面上「＋ 加备注」录的那几个词。
+   *
+   * 和 `displayName` 不是一回事：那是平台名片，对方改一次群名片就变一次；
+   * 这是她自己的叫法，按角色隔离。缺省/空数组 = 没设过备注（v2 老卡就是这样）。
+   */
+  aliases: string[];
   /** 在哪儿认识的：PRIVATE（私聊）/ GROUP（群里）。空 = 没记过。 */
   firstSource: string | null;
   interactionCount: number;
@@ -277,6 +290,8 @@ export type CharacterBundleCounts = {
   friends: number;
   /** 朋友名下的记忆条数（已计入 memories 之外的单独统计，避免和角色记忆混着数）。 */
   friendMemories: number;
+  /** 朋友们名下的备注（她私底下的叫法）总条数。为 0 时导入预览可以放心说「没有备注」。 */
+  friendAliases: number;
 };
 
 export type CharacterBundle = {
@@ -467,6 +482,7 @@ function buildCounts(bundle: Omit<CharacterBundle, "counts">): CharacterBundleCo
     catchphrases: bundle.catchphrases.length,
     friends: bundle.friends.length,
     friendMemories: bundle.friends.reduce((total, friend) => total + friend.memories.length, 0),
+    friendAliases: bundle.friends.reduce((total, friend) => total + friend.aliases.length, 0),
   };
 }
 
@@ -620,6 +636,8 @@ export type BundleBuildInput = {
     platform: string;
     platformUid: string;
     displayName: string | null;
+    /** 她私底下的叫法。库里是数组，导入端与页面共用 `normalizeFriendAliases` 的口径。 */
+    aliases?: string[] | null;
     firstSource: string | null;
     interactionCount: number;
     lastInteractedAt: Date | null;
@@ -714,17 +732,23 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
     })),
   }));
 
-  const friends: CharacterBundleFriend[] = (input.friends ?? []).map((friend) => ({
-    platform: friend.platform.slice(0, 50),
-    platformUid: friend.platformUid.slice(0, 255),
-    displayName: (friend.displayName ?? "").slice(0, 255),
-    firstSource: friend.firstSource === "PRIVATE" || friend.firstSource === "GROUP" ? friend.firstSource : null,
-    interactionCount: Math.max(0, Math.trunc(friend.interactionCount)),
-    lastInteractedAt: friend.lastInteractedAt ? friend.lastInteractedAt.toISOString() : null,
-    knownSince: friend.knownSince ? friend.knownSince.toISOString() : null,
-    memories: (friend.memoryItems ?? []).map(toBundleMemory),
-    snapshots: (friend.snapshots ?? []).map(toBundleSnapshot),
-  }));
+  const friends: CharacterBundleFriend[] = (input.friends ?? []).map((friend) => {
+    const displayName = (friend.displayName ?? "").slice(0, 255);
+    return {
+      platform: friend.platform.slice(0, 50),
+      platformUid: friend.platformUid.slice(0, 255),
+      displayName,
+      // 备注和页面保存走同一份口径（切分 / 截断 / 去重 / 去掉与本名相同的叫法），
+      // 导出的包里不带脏数据，导入端就不用猜这些词是不是干净的。
+      aliases: dropAliasesMatchingName(normalizeFriendAliases(friend.aliases ?? []).aliases, displayName),
+      firstSource: friend.firstSource === "PRIVATE" || friend.firstSource === "GROUP" ? friend.firstSource : null,
+      interactionCount: Math.max(0, Math.trunc(friend.interactionCount)),
+      lastInteractedAt: friend.lastInteractedAt ? friend.lastInteractedAt.toISOString() : null,
+      knownSince: friend.knownSince ? friend.knownSince.toISOString() : null,
+      memories: (friend.memoryItems ?? []).map(toBundleMemory),
+      snapshots: (friend.snapshots ?? []).map(toBundleSnapshot),
+    };
+  });
 
   const payload: Omit<CharacterBundle, "counts"> = {
     format: CHARACTER_BUNDLE_FORMAT,
@@ -1144,10 +1168,18 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     });
 
     const firstSource = item.firstSource === "PRIVATE" || item.firstSource === "GROUP" ? item.firstSource : null;
+    const displayName = readText(item.displayName, `${label}的昵称`, 255);
+    /**
+     * 备注走「截断」而不是「拒绝」，和页面保存的既有策略一致：一个 13 字的外号
+     * 不该让整张卡导不进来，截成 12 字照样能用。非字符串、空白、与本名相同的都被丢掉。
+     * 缺省（v2 老卡）就是空数组 —— 那时包里根本没有备注，不是「她没给这个人起过名」。
+     */
+    const aliases = dropAliasesMatchingName(normalizeFriendAliases(item.aliases).aliases, displayName);
     return {
       platform,
       platformUid,
-      displayName: readText(item.displayName, `${label}的昵称`, 255),
+      displayName,
+      aliases,
       firstSource,
       interactionCount: Math.round(readNumber(item.interactionCount, `${label}的互动次数`, 0, 1_000_000, 0)),
       lastInteractedAt: readOptionalDate(item.lastInteractedAt, `${label}的最后互动时间`)?.toISOString() ?? null,

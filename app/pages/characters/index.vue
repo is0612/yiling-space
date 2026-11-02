@@ -299,7 +299,7 @@ async function exportCharacter(character: Character, includeFriends = true) {
     downloadBlob(blob, fileName);
     ElMessage.success(
       includeFriends
-        ? "角色卡已下载：人设、记忆、忆泡、忆泡日历、日记手账、梗、阶段总结和她的朋友。表情包和 API Key 不在包内。"
+        ? "角色卡已下载：人设、记忆、忆泡、忆泡日历、日记手账、梗、阶段总结和她的朋友（含备注）。表情包和 API Key 不在包内。"
         : "角色卡已下载（不含她的朋友）：适合发给别人。表情包和 API Key 也不在包内。",
     );
   } catch (error) {

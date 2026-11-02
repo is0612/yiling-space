@@ -97,6 +97,8 @@ async function main() {
         scopeType: "EXTERNAL_IDENTITY",
         scopeKey: `character:${characterId}:external:qq-onebot:888888`,
         externalIdentityId: friendIdentityId,
+        // 备注（她私底下怎么叫他）也是关系的一部分，必须跟着卡走。
+        aliases: ["小鱼干", "阿明"],
         firstSource: "GROUP",
         interactionCount: 7,
         lastInteractedAt: new Date("2026-10-30T10:00:00Z"),
@@ -300,9 +302,11 @@ async function main() {
   // 她的朋友：只有真的互动过的才算
   assert.equal(bundle.counts.friends, 1, "只有 interactionCount > 0 的关系才算朋友");
   assert.equal(bundle.counts.friendMemories, 1);
+  assert.equal(bundle.counts.friendAliases, 2, "备注条数也要如实声明");
   assert.equal(bundle.friends[0]?.platform, "qq-onebot");
   assert.equal(bundle.friends[0]?.platformUid, "888888");
   assert.equal(bundle.friends[0]?.displayName, "小明");
+  assert.deepEqual(bundle.friends[0]?.aliases, ["小鱼干", "阿明"], "她怎么叫他，要跟着卡走");
   assert.equal(bundle.friends[0]?.interactionCount, 7, "聊过几次要带过去");
   assert.equal(bundle.friends[0]?.firstSource, "GROUP", "在哪儿认识的要带过去");
   assert.equal(bundle.friends[0]?.lastInteractedAt, "2026-10-30T10:00:00.000Z");
@@ -421,6 +425,7 @@ async function main() {
   assert.equal(importedFriend?.externalIdentityId, friendIdentityId, "沿用已存在的外部身份，不新建");
   assert.equal(importedFriend?.interactionCount, 7, "聊过几次要保住");
   assert.equal(importedFriend?.firstSource, "GROUP", "在哪儿认识的保住");
+  assert.deepEqual(importedFriend?.aliases, ["小鱼干", "阿明"], "备注不能丢：丢了她就只会喊平台昵称");
   assert.equal(importedFriend?.lastInteractedAt?.toISOString(), "2026-10-30T10:00:00.000Z");
   assert.equal(importedFriend?.memoryItems.length, 1);
   assert.equal(importedFriend?.memoryItems[0]?.content, "小明住在北海，怕冷");
@@ -483,6 +488,13 @@ async function main() {
   });
   await prisma.journalRevision.deleteMany({ where: { journalId: localJournal.id, kind: "HANDBOOK" } });
 
+  // 备注也「各自长了一段时间」：本地新起了一个叫法，合并后应当两边都在、本地在前。
+  assert.ok(importedFriend, "后面要改本地备注，先确认这条关系范围在");
+  await prisma.memoryScope.update({
+    where: { id: importedFriend.id },
+    data: { aliases: ["本地叫法", "小鱼干"] },
+  });
+
   const merged = await importCharacterCard({
     raw: JSON.parse(serialized),
     ownerId: ownerA,
@@ -490,6 +502,16 @@ async function main() {
   });
   assert.equal(merged.added.journalRevisions, 2, "日记与手账各补一版");
   assert.equal(merged.added.journals, 0, "那一天本来就在，不该再建一条主体");
+
+  const mergedFriend = await prisma.memoryScope.findUniqueOrThrow({
+    where: { id: importedFriend.id },
+    select: { aliases: true },
+  });
+  assert.deepEqual(
+    mergedFriend.aliases,
+    ["本地叫法", "小鱼干", "阿明"],
+    "合并时备注取并集：本地叫法在前，导入的补在后面，重复的不重复出现",
+  );
 
   const mergedJournal = await prisma.characterJournal.findUniqueOrThrow({
     where: { id: localJournal.id },

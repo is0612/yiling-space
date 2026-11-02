@@ -4246,7 +4246,7 @@ components:
       required: [format, formatVersion, character]
       properties:
         format: { type: string, enum: [yiling-space.character] }
-        formatVersion: { type: integer, minimum: 1, maximum: 2 }
+        formatVersion: { type: integer, minimum: 1, maximum: 3, description: '1 = 初版；2 = 加忆泡日历与日记手账；3 = 加朋友的备注（aliases）。高于 3 的卡会被拒绝。' }
         exportedAt: { type: string, format: date-time }
         exportedBy: { type: string, enum: [yiling-space] }
         origin:
@@ -4405,6 +4405,11 @@ components:
               platform: { type: string, maxLength: 50, description: '渠道标识，如 qq-onebot / bili' }
               platformUid: { type: string, maxLength: 255, description: '平台账号（QQ 号 / B站 uid）。导入时按它认人：已有身份就沿用，不新建。' }
               displayName: { type: string, maxLength: 255 }
+              aliases:
+                type: array
+                maxItems: 8
+                description: '她私底下对这个人的叫法（页面上的「备注」）。和 displayName 并存：那是平台名片，这是她自己怎么叫。导入时清洗、截断、去重；合并时与本地备注取并集，本地在前。'
+                items: { type: string, maxLength: 12 }
               firstSource: { type: string, nullable: true, enum: [PRIVATE, GROUP, null], description: '在哪儿认识的' }
               interactionCount: { type: integer, minimum: 0 }
               lastInteractedAt: { type: string, format: date-time, nullable: true }
@@ -4452,6 +4457,7 @@ components:
         catchphrases: { type: integer }
         friends: { type: integer, description: 带走的朋友数；`?friends=0` 时为 0 }
         friendMemories: { type: integer, description: 朋友名下的记忆总条数，不含朋友本人以外的角色记忆 }
+        friendAliases: { type: integer, description: 朋友们名下的备注（她私底下的叫法）总条数；v2 及更早的卡没有这一段，按 0 处理 }
     CharacterImportAdded:
       type: object
       description: 本次实际写进库的条数。新建时等于 counts；合并时是新增量，0 表示这份卡里没有新东西（重复合并不会长数据）。

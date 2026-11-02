@@ -25,6 +25,7 @@ import {
   type ParsedCharacterBundle,
 } from "./character-portable";
 import { buildExternalIdentityScopeKey } from "./identity-scope";
+import { normalizeFriendAliases } from "./friend-aliases";
 import { buildUserPrivateScopeKey } from "./memory-scope-access";
 import { getPrisma } from "./prisma";
 
@@ -177,6 +178,7 @@ export async function loadCharacterExportBundle(input: {
         catchphrases: bundle.counts.catchphrases,
         friends: bundle.counts.friends,
         friendMemories: bundle.counts.friendMemories,
+        friendAliases: bundle.counts.friendAliases,
       },
     },
   }).catch(() => undefined);
@@ -316,6 +318,8 @@ async function loadCharacterFriends(characterId: string) {
       firstSource: true,
       interactionCount: true,
       lastInteractedAt: true,
+      /** 她私底下怎么叫这个人。少了它，导入后每个人都会被喊回平台昵称。 */
+      aliases: true,
       externalIdentity: {
         select: { platform: true, platformUid: true, displayName: true },
       },
@@ -357,6 +361,7 @@ async function loadCharacterFriends(characterId: string) {
       platform: identity.platform,
       platformUid: identity.platformUid,
       displayName: identity.displayName,
+      aliases: scope.aliases,
       firstSource: scope.firstSource,
       interactionCount: scope.interactionCount,
       lastInteractedAt: scope.lastInteractedAt,
@@ -1019,6 +1024,9 @@ async function createCharacterFromBundle(input: {
           scopeType: "EXTERNAL_IDENTITY",
           scopeKey: buildExternalIdentityScopeKey(characterId, friend.platform, friend.platformUid),
           externalIdentityId: identity.id,
+          // 备注是「她怎么叫他」，跟着关系走而不是跟着身份走：同一个 QQ 号跟两个角色
+          // 聊过，两边叫法可以完全不一样。
+          aliases: friend.aliases,
           firstSource: friend.firstSource,
           interactionCount: friend.interactionCount,
           lastInteractedAt: friend.lastInteractedAt ? new Date(friend.lastInteractedAt) : null,
@@ -1053,6 +1061,7 @@ async function createCharacterFromBundle(input: {
           catchphrases: bundle.counts.catchphrases,
           friends: bundle.counts.friends,
           friendMemories: bundle.counts.friendMemories,
+          friendAliases: bundle.counts.friendAliases,
         },
       },
     });
@@ -1215,7 +1224,7 @@ async function mergeCharacterCard(input: {
           scopeType: "EXTERNAL_IDENTITY",
           externalIdentityId: identity.id,
         },
-        select: { id: true, firstSource: true, interactionCount: true, lastInteractedAt: true },
+        select: { id: true, firstSource: true, interactionCount: true, lastInteractedAt: true, aliases: true },
       });
 
       const friendScopeId = existingFriendScope?.id ?? randomUUID();
@@ -1227,12 +1236,21 @@ async function mergeCharacterCard(input: {
         )
           ? new Date(friend.lastInteractedAt)
           : existingFriendScope.lastInteractedAt;
+        /**
+         * 备注取并集，本地在前 —— 她在这台机器上亲手起的叫法最该留住，
+         * 导入的叫法只补那些本机没有的。上限（8 个）由 `normalizeFriendAliases` 统一卡。
+         */
+        const mergedAliases = normalizeFriendAliases([
+          ...(existingFriendScope.aliases ?? []),
+          ...friend.aliases,
+        ]).aliases;
         await tx.memoryScope.update({
           where: { id: existingFriendScope.id },
           data: {
             interactionCount: Math.max(existingFriendScope.interactionCount, friend.interactionCount),
             lastInteractedAt,
             firstSource: existingFriendScope.firstSource ?? friend.firstSource,
+            aliases: mergedAliases,
           },
         });
       } else {
@@ -1243,6 +1261,7 @@ async function mergeCharacterCard(input: {
             scopeType: "EXTERNAL_IDENTITY",
             scopeKey: buildExternalIdentityScopeKey(target.id, friend.platform, friend.platformUid),
             externalIdentityId: identity.id,
+            aliases: friend.aliases,
             firstSource: friend.firstSource,
             interactionCount: friend.interactionCount,
             lastInteractedAt: friend.lastInteractedAt ? new Date(friend.lastInteractedAt) : null,

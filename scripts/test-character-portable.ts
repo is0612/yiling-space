@@ -163,6 +163,7 @@ const built = buildCharacterBundle({
       platform: "qq-onebot",
       platformUid: "888888",
       displayName: "小明",
+      aliases: ["小鱼干", "阿明"],
       firstSource: "GROUP",
       interactionCount: 12,
       lastInteractedAt: new Date("2026-10-30T10:00:00Z"),
@@ -193,7 +194,7 @@ assert.equal(
   "血缘 id 必须跟着卡片走，否则没法认人合并",
 );
 assert.equal(built.formatVersion, CHARACTER_BUNDLE_VERSION, "导出用当前格式版本");
-assert.equal(CHARACTER_BUNDLE_VERSION, 2, "加入忆泡日历与日记手账后版本升到 2");
+assert.equal(CHARACTER_BUNDLE_VERSION, 3, "加入朋友备注后版本升到 3（2 = 忆泡日历 + 日记手账）");
 assert.equal(built.exportedAt, "2026-10-31T13:00:00.000Z", "导出时间用注入的 now，便于测试");
 assert.equal(built.character.name, "小鱼");
 assert.equal(built.counts.memories, 2, "两条记忆（全局 + 私人）");
@@ -206,9 +207,11 @@ assert.equal(built.counts.journalRevisions, 2, "日记与手账各一版");
 assert.equal(built.counts.catchphrases, 1);
 assert.equal(built.counts.friends, 1, "朋友单独成段");
 assert.equal(built.counts.friendMemories, 1, "朋友名下的记忆单独计数");
+assert.equal(built.counts.friendAliases, 2, "朋友名下的备注单独计数");
 assert.equal(built.friends[0]?.displayName, "小明");
 assert.equal(built.friends[0]?.interactionCount, 12);
 assert.equal(built.friends[0]?.firstSource, "GROUP", "在哪儿认识的要保留");
+assert.deepEqual(built.friends[0]?.aliases, ["小鱼干", "阿明"], "备注（她怎么叫他）要跟着卡走");
 assert.ok(
   !built.memories.some((item) => item.content === "小明住在北海"),
   "朋友的记忆不能混进角色自己的记忆列表",
@@ -231,6 +234,7 @@ assert.equal(roundTrip.memorySetting.snapshotIntervalDays, 8);
 assert.equal(roundTrip.friends.length, 1, "朋友要能原样解析回来");
 assert.equal(roundTrip.friends[0]?.platformUid, "888888");
 assert.equal(roundTrip.friends[0]?.memories[0]?.content, "小明住在北海");
+assert.deepEqual(roundTrip.friends[0]?.aliases, ["小鱼干", "阿明"], "备注要能原样解析回来");
 assert.equal(roundTrip.friends[0]?.snapshots[0]?.summary, "他们一起去了海边。");
 assert.equal(roundTrip.friends[0]?.knownSince, "2026-09-01T00:00:00.000Z", "认识的时间要保住");
 assert.equal(roundTrip.originId, "11111111-1111-4111-8111-111111111111", "回环后血缘 id 一致");
@@ -368,6 +372,21 @@ const friendLenient = parseCharacterBundle(minimal({
   friends: [{ platform: "qq-onebot", platformUid: "1", firstSource: "WHATEVER" }],
 }));
 assert.equal(friendLenient.friends[0]?.firstSource, null, "不认识的来源标成 null，不当成私聊");
+
+// 备注：老卡没有这一段 → 空数组；脏数据按「清洗 + 截断」处理，不让整张卡导不进来
+assert.deepEqual(friendLenient.friends[0]?.aliases, [], "v2 老卡没有备注段，解析成空数组而不是报错");
+const aliasCleaned = parseCharacterBundle(minimal({
+  friends: [{ platform: "qq-onebot", platformUid: "1", displayName: "小明", aliases: " 小鱼干，阿明；小明 " }],
+}));
+assert.deepEqual(
+  aliasCleaned.friends[0]?.aliases,
+  ["小鱼干", "阿明"],
+  "一整串备注要按分隔符切开，跟本名相同的叫法要剔掉",
+);
+const aliasTooLong = parseCharacterBundle(minimal({
+  friends: [{ platform: "qq-onebot", platformUid: "1", displayName: "x", aliases: ["一".repeat(30)] }],
+}));
+assert.equal(aliasTooLong.friends[0]?.aliases[0]?.length, 12, "超长备注截断，而不是让整张卡导不进来");
 
 // 密钥字段即使塞在包里也会被剥掉
 const withSecrets = parseCharacterBundle(minimal({
