@@ -2,7 +2,7 @@
 import { Promotion, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import type { Character } from "~/utils/mock-data";
-import { MODEL_PROVIDERS, buildModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
+import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
 
 /**
  * 模型设置：从「角色设置」弹窗里搬出来的。
@@ -58,8 +58,21 @@ const draftVoiceGroupId = ref("");
 const fetchedVoiceModels = ref<string[]>([]);
 const fetchingVoiceModels = ref(false);
 const testingVoice = ref(false);
-/** 模型设置两个页签：对话模型 / 语音模型。用 v-show 切换，切换不丢已填的表单 */
-const activeTab = ref<"chat" | "voice">("chat");
+
+// ── 图片模型：看图（以后还要生图）用的那一家 ──
+// 和语音是同一套理由：视觉模型几乎必然不是聊天那一家（DeepSeek 没有视觉接口），
+// 所以地址和 Key 都得能单独存，不能蹭聊天那把。
+// 全部留空时的行为不变：回落到「对话模型」，也就是今天的样子。
+const draftVisionModel = ref("");
+const draftVisionApiBaseUrl = ref("");
+const draftVisionApiKey = ref("");
+const clearVisionApiKey = ref(false);
+const testingVision = ref(false);
+/** 图片页「获取模型」拉回来的清单；换地址就作废（两家清单不通用） */
+const fetchedVisionModels = ref<string[]>([]);
+const fetchingVisionModels = ref(false);
+/** 模型设置三个页签：对话模型 / 语音模型 / 图片模型。用 v-show 切换，切换不丢已填的表单 */
+const activeTab = ref<"chat" | "voice" | "vision">("chat");
 
 /** 本页「获取模型」拉回来的列表；换地址就作废 */
 const fetchedModels = ref<string[]>([]);
@@ -114,6 +127,10 @@ const draftSignature = computed(() => JSON.stringify([
   draftVoiceAsrModel.value.trim(),
   draftVoiceGroupId.value.trim(),
   clearVoiceApiKey.value,
+  // 图片模型：Key 明文同样不进指纹，勾选要进
+  draftVisionModel.value.trim(),
+  draftVisionApiBaseUrl.value.trim(),
+  clearVisionApiKey.value,
 ]));
 const dirty = computed(() => savedSignature.value !== "" && draftSignature.value !== savedSignature.value);
 
@@ -203,6 +220,52 @@ const voiceKeyHint = computed(() => {
   if (voiceKeyConfigured.value) return "此角色已保存语音 Key。留空保持现有 Key，不会回显原文。";
   return "语音模型用的 Key，加密保存、不回传网页；与对话模型那把 Key 分开两把。";
 });
+
+// ── 图片模型的计算属性 ──
+const visionKeyConfigured = computed(() => character.value?.visionApiKeyConfigured === true);
+/** 没填地址时按「对话模型那家」算：占位符与开放平台链接都跟着走 */
+const visionEffectiveBaseUrl = computed(() => draftVisionApiBaseUrl.value.trim() || draftChatApiBaseUrl.value.trim());
+const visionProviderPreset = computed(() => providerByBaseUrl(visionEffectiveBaseUrl.value));
+const visionConsoleUrl = computed(() => visionProviderPreset.value?.consoleUrl ?? "");
+const visionProviderName = computed(() => visionProviderPreset.value?.name ?? "");
+/**
+ * 选项 = 服务商真实清单在前，内置视觉清单兜底。
+ *
+ * 拉回来的 `/models` 不分能不能读图，里面混着聊天模型，所以**不自动选中第一个** ——
+ * 「帮你猜一个」在对话页还行，在这里会让人以为配好了一个读不了图的模型。
+ */
+const visionModelOptions = computed(() => {
+  const catalog = buildVisionModelOptions({ baseUrl: visionEffectiveBaseUrl.value, current: "" });
+  const merged = [...new Set([...fetchedVisionModels.value, ...catalog])];
+  const current = draftVisionModel.value.trim();
+  return current && !merged.includes(current) ? [current, ...merged] : merged;
+});
+const visionKeyPlaceholder = computed(() => {
+  if (visionKeyConfigured.value) return "已加密保存；留空表示保持不变";
+  const name = visionProviderName.value;
+  return name ? `sk-...（${name} 后台复制）` : "sk-...（服务商后台复制）";
+});
+const visionKeyHint = computed(() => {
+  if (visionKeyConfigured.value) return "此角色已保存看图 Key。留空保持现有 Key，不会回显原文。";
+  return "留空 = 用服务端 VISION_API_KEY，再退一步用对话模型那把 Key。换了一家服务商就必须单独填。";
+});
+/** 选服务商时只带地址：视觉模型名各家的叫法差太多，替用户猜一个反而要改 */
+function applyVisionProvider(key: string) {
+  const preset = providerByKey(key);
+  if (!preset?.baseUrl) return;
+  draftVisionApiBaseUrl.value = preset.baseUrl;
+  const model = draftVisionModel.value.trim();
+  // 还填着别家的模型名（比如深度求索的 deepseek-flash）就换成这家的第一个视觉模型
+  const belongsToOther = MODEL_PROVIDERS.some(
+    (provider) => provider.key !== key && provider.models.includes(model),
+  );
+  if (!model || belongsToOther) draftVisionModel.value = preset.visionModels?.[0] ?? "";
+}
+/** 换了看图那一家，上一家拉回来的模型清单立刻作废 —— 别让下拉里留着调不通的名字 */
+watch(draftVisionApiBaseUrl, () => {
+  fetchedVisionModels.value = [];
+});
+const visionProviderKey = computed(() => providerByBaseUrl(draftVisionApiBaseUrl.value)?.key ?? "custom");
 
 /**
  * 语音的开放平台入口：和对话模型那块对齐 —— 用户卡住的点不是「填什么」，而是「去哪拿 Key」。
@@ -311,8 +374,34 @@ async function testVoice() {
   }
 }
 
-const providerLabel = computed(() => currentProvider.value?.name ?? "自定义");
-/** 开放平台入口：跟着当前服务商走；自定义没有固定入口，链接就不出现 */
+/**
+ * 测试看图：服务端会现画一张「上红 / 中绿 / 下蓝」的图，
+ * 答对三种颜色才算真的能看见 —— 只测文本连通性测不出「收到图但没看」。
+ */
+async function testVision() {
+  if (testingVision.value || saving.value || !character.value) return;
+  testingVision.value = true;
+  try {
+    const saved = await save(true);
+    if (!saved) return;
+    const result = await $fetch<{ ok: boolean; message: string; detail?: string; elapsedMs?: number; model?: string }>(
+      `/api/characters/${encodeURIComponent(id.value)}/vision/test-connection`,
+      { method: "POST" },
+    );
+    if (result.ok) {
+      ElMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
+    } else {
+      // 服务商原文跟着一起显示：429 / 403 这类状态码单看没有任何信息量
+      ElMessage.error({ message: result.message + (result.detail ? `｜${result.detail.slice(0, 120)}` : ""), duration: 8000 });
+    }
+  } catch (error) {
+    ElMessage.error(readError(error, "看图测试失败，请检查地址、Key 与模型名。"));
+  } finally {
+    testingVision.value = false;
+  }
+}
+
+const providerLabel = computed(() => currentProvider.value?.name ?? "自定义");/** 开放平台入口：跟着当前服务商走；自定义没有固定入口，链接就不出现 */
 const consoleUrl = computed(() => currentProvider.value?.consoleUrl ?? "");
 const modelOptions = computed(() => buildModelOptions({
   baseUrl: draftChatApiBaseUrl.value,
@@ -362,7 +451,8 @@ function resetRecommendedGenerationSettings() {
   draftSnapshotTokenBudget.value = 2500;
   draftMemoryItemLimit.value = 20;
   draftRecentMessageLimit.value = 40;
-  draftEventRecentDays.value = 0;
+  // 「推荐参数」不碰近期忆泡的开关：那是用户显式打开的记忆功能。被一个「恢复推荐」
+  // 顺手关掉，表现就是「她突然不记得昨天了」，而且完全看不出是在哪一步被关的。
   ElMessage.success("已填入日常陪伴推荐参数，点击保存设置后生效。");
 }
 
@@ -401,6 +491,11 @@ async function loadCharacter() {
     draftVoiceTtsVoice.value = data.ttsVoice ?? "";
     draftVoiceAsrModel.value = data.asrModel ?? "";
     draftVoiceGroupId.value = data.ttsGroupId ?? "";
+    // 图片模型
+    draftVisionModel.value = data.visionModel ?? "";
+    draftVisionApiBaseUrl.value = data.visionApiBaseUrl ?? "";
+    draftVisionApiKey.value = "";
+    clearVisionApiKey.value = false;
     fetchedModels.value = [];
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = data.updatedAt ? new Date(data.updatedAt) : null;
@@ -446,6 +541,11 @@ async function save(silent = false): Promise<boolean> {
         ttsGroupId: draftVoiceGroupId.value.trim(),
         ...(draftVoiceApiKey.value.trim() ? { voiceApiKey: draftVoiceApiKey.value.trim() } : {}),
         ...(clearVoiceApiKey.value ? { clearVoiceApiKey: true } : {}),
+        // 图片模型
+        visionModel: draftVisionModel.value.trim(),
+        visionApiBaseUrl: draftVisionApiBaseUrl.value.trim(),
+        ...(draftVisionApiKey.value.trim() ? { visionApiKey: draftVisionApiKey.value.trim() } : {}),
+        ...(clearVisionApiKey.value ? { clearVisionApiKey: true } : {}),
       },
     });
     character.value = updated;
@@ -453,6 +553,8 @@ async function save(silent = false): Promise<boolean> {
     clearSavedApiKey.value = false;
     draftVoiceApiKey.value = "";
     clearVoiceApiKey.value = false;
+    draftVisionApiKey.value = "";
+    clearVisionApiKey.value = false;
     // 清空 Key 输入框之后才取指纹，否则刚存的这份会一直被当成「未保存」
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = new Date();
@@ -516,6 +618,36 @@ async function fetchModels() {
   }
 }
 
+/**
+ * 图片页的「获取模型」：拉的是**看图那一家**的清单（`?target=vision`）。
+ *
+ * 和对话页那条的区别只有两点：
+ *   1. 不自动选中第一个 —— `/models` 不分能不能读图，第一个多半是聊天模型；
+ *   2. 拉失败时把服务商原文显示出来（429 / 403 光看状态码没有信息量）。
+ */
+async function fetchVisionModels() {
+  if (fetchingVisionModels.value || saving.value || testing.value || testingVision.value || !character.value) return;
+  fetchingVisionModels.value = true;
+  try {
+    const saved = await save(true);
+    if (!saved) return;
+    const result = await $fetch<{ ok: boolean; models: string[]; message: string; unsupported?: boolean }>(
+      `/api/characters/${encodeURIComponent(id.value)}/chat/models?target=vision`,
+    );
+    if (!result.ok) {
+      if (result.unsupported) ElMessage.warning(result.message);
+      else ElMessage.error(result.message);
+      return;
+    }
+    fetchedVisionModels.value = result.models;
+    ElMessage.success(`${result.message}从里面挑一个能读图的。`);
+  } catch (error) {
+    ElMessage.error(readError(error, "获取模型列表失败，请稍后重试。"));
+  } finally {
+    fetchingVisionModels.value = false;
+  }
+}
+
 onMounted(() => void loadCharacter());
 watch(id, () => void loadCharacter());
 </script>
@@ -525,7 +657,7 @@ watch(id, () => void loadCharacter());
     <PageHeader
       :eyebrow="'角色管理 / ' + (character?.name ?? '角色') + ' / 模型设置'"
       title="模型设置"
-      description="决定这个角色用哪家模型对话。配置写入 PostgreSQL，API Key 加密保存、不回传给网页；测试连接与拉取模型都基于已保存的配置。"
+      description="决定这个角色用哪家模型：对话、语音、看图各可以是不同一家。配置写入 PostgreSQL，API Key 加密保存、不回传给网页；测试与拉取都基于已保存的配置。"
       :back-to="backTarget"
       :back-label="backLabel"
     />
@@ -547,7 +679,8 @@ watch(id, () => void loadCharacter());
       class="ms-grid"
     >
       <div class="ms-main">
-        <!-- 两个页签：点击切换。对话模型（连接/模型/生成参数）、语音模型（她发语音、听懂语音用的服务） -->
+        <!-- 三个页签：点击切换。对话模型（连接/模型/生成参数）、语音模型（她发语音、听懂语音用的服务）、
+             图片模型（看图用的那一家，以后生图也挂这里） -->
         <div
           class="model-tabs"
           role="tablist"
@@ -573,6 +706,17 @@ watch(id, () => void loadCharacter());
             @click="activeTab = 'voice'"
           >
             语音模型
+          </button>
+          <button
+            id="model-tab-vision"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === 'vision'"
+            class="model-tab"
+            :class="{ 'is-on': activeTab === 'vision' }"
+            @click="activeTab = 'vision'"
+          >
+            图片模型
           </button>
         </div>
 
@@ -1142,6 +1286,155 @@ watch(id, () => void loadCharacter());
           </section>
         </div>
 
+        <div
+          v-show="activeTab === 'vision'"
+          class="model-pane"
+        >
+          <section class="brick">
+            <div class="brick-head">
+              <div class="brick-head-txt">
+                <div class="brick-heading">
+                  <h2 class="brick-title">
+                    图片服务商
+                  </h2>
+                </div>
+                <p class="brick-desc">
+                  她「看图」时用的那一家，和对话模型可以是两家。四项全留空就是今天的样子：交给对话模型顺便看 ——
+                  但思考型模型会把输出预算全烧在思考上，最后正文为空，你只看到一句「[图片]」。
+                  所以建议单独配一个不思考的视觉模型。开关仍在「QQ 渠道 → 角色行为 → 看群里的图」。
+                </p>
+              </div>
+            </div>
+
+            <div class="fields">
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">服务商</span>
+                  <span class="field-req">可选</span>
+                </div>
+                <el-select
+                  :model-value="visionProviderKey"
+                  class="field-ctl"
+                  aria-label="图片服务商"
+                  @change="applyVisionProvider"
+                >
+                  <el-option
+                    v-for="provider in MODEL_PROVIDERS"
+                    :key="provider.key"
+                    :label="provider.name"
+                    :value="provider.key"
+                  />
+                </el-select>
+                <p class="field-help">
+                  选中会自动填好这家的地址与常用视觉模型；没有列出的选「自定义」，手填即可。
+                </p>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API 地址</span>
+                  <a
+                    v-if="visionConsoleUrl"
+                    class="field-link"
+                    :href="visionConsoleUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    去 {{ visionProviderName }} 开放平台取 Key
+                    <el-icon><TopRight /></el-icon>
+                  </a>
+                </div>
+                <el-input
+                  v-model="draftVisionApiBaseUrl"
+                  maxlength="500"
+                  aria-label="图片 API 地址"
+                  :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型）'"
+                />
+                <p class="field-help">
+                  填 API 根地址，不要追加 /chat/completions。留空即用对话模型那个地址。
+                </p>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API Key</span>
+                  <span
+                    class="pill"
+                    :class="visionKeyConfigured ? 'pill-green' : 'pill-rose'"
+                  >{{ visionKeyConfigured ? "已保存" : "未填写" }}</span>
+                </div>
+                <el-input
+                  v-model="draftVisionApiKey"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  maxlength="8192"
+                  aria-label="图片 API Key"
+                  :placeholder="visionKeyPlaceholder"
+                />
+                <p class="field-help">
+                  {{ visionKeyHint }}
+                </p>
+                <el-checkbox
+                  v-if="visionKeyConfigured"
+                  v-model="clearVisionApiKey"
+                  class="field-check"
+                >
+                  移除此角色单独保存的看图 Key
+                </el-checkbox>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">看图模型</span>
+                </div>
+                <div class="model-row">
+                  <el-select
+                    v-model="draftVisionModel"
+                    class="model-select"
+                    filterable
+                    allow-create
+                    default-first-option
+                    aria-label="看图模型"
+                    :placeholder="'留空 = 用对话模型（' + (draftChatModel || '未填') + '）'"
+                  >
+                    <el-option
+                      v-for="model in visionModelOptions"
+                      :key="model"
+                      :label="model"
+                      :value="model"
+                    />
+                  </el-select>
+                  <el-button
+                    :loading="fetchingVisionModels"
+                    :disabled="saving || testing || testingVision"
+                    @click="fetchVisionModels"
+                  >
+                    <el-icon><Refresh /></el-icon>{{ fetchingVisionModels ? "获取中…" : "获取模型" }}
+                  </el-button>
+                </div>
+                <p class="field-help">
+                  只负责把图读成两三句中文，不需要推理能力。智谱的 <code>glm-4v-flash</code> 免费且不挤，
+                  通义 <code>qwen3-vl-flash</code> 百万 token 一毛五，都够用；<code>glm-4.6v-flash</code> 更新，但晚上常被挤到 429。
+                  「获取模型」拉的是填写地址那一家（留空就是对话那家）的清单，里面混着聊天模型，挑名字里带 <code>vl</code> / <code>vision</code> 的。
+                </p>
+              </div>
+            </div>
+
+            <!-- 看图必须实测：只测文本连通性测不出「收下图但没看」 -->
+            <div class="vision-test-bar">
+              <el-button
+                :loading="testingVision"
+                :disabled="saving"
+                @click="testVision"
+              >
+                <el-icon><Promotion /></el-icon>{{ testingVision ? "测试中…" : "测试看图" }}
+              </el-button>
+              <span class="voice-test-note">会现画一张上红 / 中绿 / 下蓝的图发过去，答对三种颜色才算能用；一次调用，几乎不花钱。</span>
+            </div>
+          </section>
+        </div>
+
         <!-- 吸底操作条：往下滚也能按到主操作 -->
         <div class="act-bar">
           <span
@@ -1186,6 +1479,9 @@ watch(id, () => void loadCharacter());
           </div>
           <div class="metric-row">
             <span>温度 / 上限</span><span class="metric-value">{{ character?.chatTemperature ?? "—" }} · {{ character?.chatMaxTokens ?? "—" }} tokens</span>
+          </div>
+          <div class="metric-row">
+            <span>看图模型</span><span class="metric-value">{{ character?.visionModel || "跟随对话模型" }}</span>
           </div>
           <p class="side-note">
             模型未配置时，对话与自动归档会留在队列里，不会用规则摘要冒充 AI 输出。
@@ -1357,7 +1653,7 @@ watch(id, () => void loadCharacter());
 .model-select { min-width: 0; flex: 1; }
 
 /* 语音的验证条：按钮 + 一句成本提示，与字段区用上边框隔开 */
-.voice-test-bar { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); border-top: 1px solid var(--surface-3); padding-top: var(--sp-4); }
+.voice-test-bar, .vision-test-bar { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); border-top: 1px solid var(--surface-3); padding-top: var(--sp-4); }
 .voice-test-note { flex: 1; color: var(--dim); font-size: 12px; line-height: 1.7; }
 
 /* ── 参数（横排：左边说「调它有什么用」，右边落控件） ── */
