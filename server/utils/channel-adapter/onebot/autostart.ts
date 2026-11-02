@@ -1,7 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadOnebotConnections } from "./configure";
-import { panelListProcesses, panelLoadHook, panelLogin, panelRefreshHook, pickQqProcess, portFromUrl, provisionOnebotNodes } from "./panel";
+import { loadOnebotConnections, requestOnebotReload, updatePrimaryOnebotCredentials } from "./configure";
+import {
+  panelListProcesses,
+  panelLoadHook,
+  panelLogin,
+  panelRefreshHook,
+  pickQqProcess,
+  portFromUrl,
+  provisionOnebotNodes,
+  type PanelFailureReason,
+} from "./panel";
 import {
   launchOnebotAdapter,
   launchSnowluma,
@@ -147,6 +156,12 @@ export type AttachResult = {
   /** already=本来就在听；attached=这次挂上了；failed=没挂上 */
   action: "already" | "attached" | "failed";
   message: string;
+  /**
+   * 失败分类。页面要拿它决定「该不该把面板开给用户」：
+   * 密码类的（没填 / 填错 / 两步验证 / 被锁）人必须进面板，其余（面板里没这个号的进程）
+   * 开面板也解决不了，不如只把原话说明白。
+   */
+  reason?: PanelFailureReason | "no-process" | "load-failed";
 };
 
 export async function attachQqSession(options: {
@@ -167,7 +182,7 @@ export async function attachQqSession(options: {
   }
 
   const login = await panelLogin(options.panelPort, options.password);
-  if (!login.ok) return { ok: false, action: "failed", message: login.message };
+  if (!login.ok) return { ok: false, action: "failed", reason: login.reason, message: login.message };
 
   try {
     const processes = await panelListProcesses(login.session);
@@ -177,6 +192,7 @@ export async function attachQqSession(options: {
       return {
         ok: false,
         action: "failed",
+        reason: "no-process",
         message: processes.length
           ? `面板只看到 QQ ${seen}，没有 ${options.accountQq} —— 先确认这个号在 QQ 客户端里登着。`
           : "面板一个 QQ 进程都没发现，先把 QQ 客户端登上去。",
@@ -185,11 +201,11 @@ export async function attachQqSession(options: {
 
     if (!target.injected) {
       const loaded = await panelLoadHook(login.session, target.pid);
-      if (!loaded.ok) return { ok: false, action: "failed", message: loaded.message };
+      if (!loaded.ok) return { ok: false, action: "failed", reason: "load-failed", message: loaded.message };
     } else if (!target.connected) {
       // 注入过但会话掉了（QQ 重登过）：再 load 会被当成重复挂载，该 refresh
       const refreshed = await panelRefreshHook(login.session, target.pid);
-      if (!refreshed.ok) return { ok: false, action: "failed", message: refreshed.message };
+      if (!refreshed.ok) return { ok: false, action: "failed", reason: "load-failed", message: refreshed.message };
     }
 
     const deadline = Date.now() + (options.waitMs ?? 20_000);
@@ -295,6 +311,7 @@ async function runEnsure(): Promise<EnsureResult> {
 
   // ② 节点。补不上不拦着 —— 适配器起来了页面也会显示「节点没开」，比彻底不动强。
   const snowlumaNow = await readSnowlumaStatus();
+  let tokensAdopted = false;
   if (snowlumaNow.running && primary.accountQq) {
     const provision = await provisionOnebotNodes({
       password: primary.snowlumaPassword,
@@ -309,6 +326,19 @@ async function runEnsure(): Promise<EnsureResult> {
     }).catch(() => null);
 
     if (provision?.ok) {
+      /*
+       * 从面板抄回来的令牌必须落库，否则这一步等于白抄：下面 ④ 启动的适配器
+       * 读的还是库里那份空令牌（发消息 401），下次进来又会再抄一遍。
+       * 「重连」按钮那条路由 provision.post.ts 落库，自动补起这条也得跟上。
+       */
+      if (provision.adopted && (provision.adopted.wsToken || provision.adopted.httpToken)) {
+        const saved = await updatePrimaryOnebotCredentials({
+          accessToken: provision.adopted.wsToken,
+          httpToken: provision.adopted.httpToken,
+        }).catch(() => false);
+        tokensAdopted = saved;
+        if (!saved) steps.push("面板里的令牌没能写进连接设置，去面板 /config 复制那两个 Token 手动填");
+      }
       // 只在真的改过东西时才记一笔，否则每次启动都刷一行噪声
       if (provision.changes.length) steps.push(`对齐节点：${provision.changes.join("；")}`);
     } else if (provision) {
@@ -345,6 +375,14 @@ async function runEnsure(): Promise<EnsureResult> {
     if (!launched.ok) {
       return { action: "partial", reason: "adapter-launch-failed", steps, message: launched.message ?? "适配器启动失败。" };
     }
+  } else if (tokensAdopted) {
+    /*
+     * 适配器早就在跑了，而它内存里那份配置是「空令牌」的 —— 不叫它重连，
+     * 它会一直拿空令牌去发消息（HTTP 401 / WS 握手失败），看起来像「补了也没用」。
+     * 走的是和页面「重连」按钮同一个标记，由适配器自己轮询消费。
+     */
+    steps.push("通知适配器按新令牌重连");
+    await requestOnebotReload(primary.id).catch(() => false);
   }
 
   const ports = {

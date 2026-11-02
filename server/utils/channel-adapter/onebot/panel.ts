@@ -186,6 +186,11 @@ export type ProvisionResult = {
   changes: string[];
   /** 改了但没法保证生效的，比如令牌不一致 */
   warnings: string[];
+  /**
+   * 连接里没填令牌、从面板里抄回来待落库的那几个值。
+   * 这里只读面板不写库，落库由调用方做（configure.ts 的 updatePrimaryOnebotCredentials）。
+   */
+  adopted?: { wsToken?: string; httpToken?: string };
   message: string;
 };
 
@@ -232,11 +237,17 @@ export function alignNode(
         next.accessToken = plan.token;
         changes.push(`${label}令牌改成连接里填的那个`);
       }
-    } else if (current !== plan.token) {
-      warnings.push(plan.token
-        ? `${label}在连接里填的令牌太短（少于 ${MIN_TOKEN_LENGTH} 位），面板不让存，仍用面板原来那个；两边的令牌对不上适配器就连不上。`
-        : `${label}在连接里没填令牌，用的是面板原来那个；如果适配器连不上，把这个令牌填进连接设置。`);
+    } else if (plan.token) {
+      // 太短：面板连整份配置都不收（少于 16 位直接拒），别把人家的令牌改短
+      warnings.push(
+        `${label}在连接里填的令牌太短（少于 ${MIN_TOKEN_LENGTH} 位），面板不让存，仍用面板原来那个；两边的令牌对不上适配器就连不上。`,
+      );
     }
+    /*
+     * 「连接里根本没填令牌」这句以前也在这里报警告，让人自己去面板复制粘贴（2026-11-02 改）。
+     * 面板里现成的那个本来就是能用的令牌，抄回连接设置就行 —— 那件事要数据库，
+     * 由 provisionOnebotNodes 做（见那边的 adopt）。抄不到它才补警告。
+     */
     return next;
   };
 
@@ -322,16 +333,55 @@ export async function provisionOnebotNodes(options: {
       warnings,
     );
 
+    /*
+     * 连接里没填令牌 → 把面板里现成的抄回连接设置（2026-11-02）。
+     *
+     * 以前这里只丢一句「如果适配器连不上，把这个令牌填进连接设置」—— 把「一步到位」断在半路，
+     * 让人回面板复制粘贴一串 43 位的字符串。面板里那个令牌本来就是能用的，抄回来两边就对上了。
+     *
+     * 为什么不反过来「生成一个推给面板」：面板里的令牌可能别的工具在用（比如自己写的机器人脚本），
+     * 换掉它是没必要的破坏；而连接里空着，适配器发消息就不带令牌，HTTP API 直接 401。
+     *
+     * 抄的动作本身要写数据库，所以带出去交给调用方（这里是纯 HTTP 客户端，不碰库）。
+     */
+    const adopted: { wsToken?: string; httpToken?: string } = {};
+    const adoptionNotes: string[] = [];
+    const adopt = (label: string, list: AdapterNode[], plan: NodePlan, key: "wsToken" | "httpToken") => {
+      if (plan.token) return; // 连接里填了，以连接为准
+      const node = list.find((item) => Number(item.port) === plan.port);
+      const token = typeof node?.accessToken === "string" ? node.accessToken : "";
+      if (token) {
+        adopted[key] = token;
+        adoptionNotes.push(`把面板里现成的 ${label} 令牌抄进了连接设置`);
+      } else {
+        // 两边都没有：这只能人来决定填什么
+        warnings.push(`面板里的 ${label} 节点也没有令牌 —— 在连接设置里填一个，否则适配器连不上。`);
+      }
+    };
+    adopt("WS", networks.wsServers, wsPlan, "wsToken");
+    adopt("HTTP", networks.httpServers, httpPlan, "httpToken");
+
     if (!changes.length) {
-      return { ok: true, changes, warnings, message: "面板里的节点和连接设置一致，没动它。" };
+      return {
+        ok: true,
+        adopted,
+        changes: adoptionNotes,
+        warnings,
+        message: adoptionNotes.length
+          ? `${adoptionNotes.join("；")}。节点本来就对，没动它。`
+          : "面板里的节点和连接设置一致，没动它。",
+      };
     }
 
     await writeConfig(login.session, options.uin, { ...config, networks });
     return {
       ok: true,
-      changes,
+      adopted,
+      changes: [...changes, ...adoptionNotes],
       warnings,
-      message: `已按连接设置改好面板节点：${changes.join("、")}。`,
+      message:
+        `已按连接设置改好面板节点：${changes.join("、")}。` +
+        (adoptionNotes.length ? `另外${adoptionNotes.join("；")}。` : ""),
     };
   } catch (error) {
     if (error instanceof PanelRequestError) {

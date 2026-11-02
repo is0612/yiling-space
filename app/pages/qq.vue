@@ -491,10 +491,24 @@ type HookResponse = {
   /** already=本来就在听；attached=这次挂上了；failed=没挂上 */
   action: "already" | "attached" | "failed";
   message: string;
+  /**
+   * 失败分类，服务端给的。页面靠它决定「要不要顺手把面板开给用户」：
+   * 密码类（no-password / bad-password / totp / rate-limited）和「面板拒绝挂载」，
+   * 人只能进面板解决；no-process 开面板也没用（该去 QQ 客户端）。
+   */
+  reason?: string;
   uin?: string;
   wsPort?: number | null;
   reachable?: boolean;
 };
+
+/**
+ * 这些原因都意味着「人得进面板」。
+ *
+ * 挂在模块层而不是写在函数里，是因为判断这段逻辑的是「用户点按钮之后」那条路径 ——
+ * 后台自动补起（打开页面时悄悄挂一次）不会走到这里，那种场合弹浏览器窗口会吓人。
+ */
+const PANEL_NEEDED_REASONS = new Set(["no-password", "bad-password", "totp", "rate-limited", "load-failed"]);
 
 /**
  * 把 QQ 号挂到面板上（注入 hook）。
@@ -506,20 +520,43 @@ type HookResponse = {
  *
  * `quiet` 用在「启动协议端 / 接通链路」里顺带挂的那次：那条流程失败时已经有自己的话要说，
  * 这里再弹一句只会让人不知道先看哪条。
+ *
+ * 返回值从 boolean 改成 `{ ok, message }`：挂不上的原因有四种（没填面板密码、密码不对、
+ * 面板登录被锁、面板里没有这个号的进程），只有调用方把原话带出去，人才知道该改哪一处。
+ * 以前只回 boolean，上层只能写死一句「确认这个号正在 QQ 客户端里登录」，最常见的原因
+ * （**没填面板密码**，连进程列表都读不到）反而被藏起来了 —— 2026-11-02 就是这么被带偏的。
  */
-async function attachHook(quiet = false): Promise<boolean> {
+async function attachHook(quiet = false): Promise<{ ok: boolean; message: string; reason?: string }> {
   try {
     const result = await $fetch<HookResponse>("/api/admin/channels/onebot/runtime/hook", { method: "POST" });
     if (result.ok) {
       if (result.action === "attached" && !quiet) ElMessage.success(result.message);
-      return true;
+      return { ok: true, message: result.message, reason: result.reason };
     }
     if (!quiet) ElMessage.warning(result.message);
-    return false;
+    return { ok: false, message: result.message, reason: result.reason };
   } catch (error) {
-    if (!quiet) ElMessage.warning(readErrorMessage(error, "把 QQ 挂上面板没成功，可以去面板里手动挂一次。"));
-    return false;
+    const message = readErrorMessage(error, "把 QQ 挂上面板没成功，可以去面板里手动挂一次。");
+    if (!quiet) ElMessage.warning(message);
+    return { ok: false, message };
   }
+}
+
+/**
+ * 把 SnowLuma 面板开在浏览器里。
+ *
+ * 只在「用户点了按钮、而且这条链自己修不动」时调用（见 PANEL_NEEDED_REASONS）：
+ * 密码没填 / 填错这类事，人总得进面板把密码拿出来或改掉，替他开一下比让他
+ * 自己在地址栏敲 127.0.0.1:5099 省事。
+ *
+ * `window.open` 在一串 await 之后容易被浏览器当广告拦掉 —— 拦住了就退回把地址说出来，
+ * 不能因为弹窗被拦就让人以为没事发生。
+ */
+function openPanel() {
+  const url = snowluma.value ? `http://127.0.0.1:${snowluma.value.panelPort}` : PROXY.panel;
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) ElMessage.info(`面板地址：${url}（浏览器拦了自动开窗，手动打开一下）`);
+  return url;
 }
 
 async function startSnowluma() {
@@ -532,7 +569,7 @@ async function startSnowluma() {
     snowlumaStarting.value = false;
     const up = await waitForPanel(Date.now() + 40_000);
     if (!up) {
-      ElMessage.warning("40 秒内面板还没应答，看一眼 SnowLuma 的窗口有没有报错。");
+      ElMessage.warning("40 秒内面板还没应答，看一眼 SnowLuma 目录里 runtime.log 的最后几行。");
       return;
     }
     // 面板一起来就把节点对齐：这一步以前要人肉登录面板做，而密码忘了就彻底卡住。
@@ -686,13 +723,13 @@ const PROXY: ProxyGuide = {
   repo: "https://github.com/SnowLuma/SnowLuma/releases",
   panel: "http://127.0.0.1:5099/config",
   steps: [
-    { title: "打开面板并登录", detail: "面板地址通常是上方链接。首次账号和密码在启动 SnowLuma 时打开的黑色终端窗口里；每台设备生成的登录信息不同。登录后先修改密码，再在左侧选中 QQ 小号。" },
+    { title: "打开面板并登录", detail: "面板在 127.0.0.1:5099。全新安装时密码由忆灵空间生成、直接写进「连接设置 → SnowLuma 面板密码」，自动配节点和挂 QQ 都用它；你要手动进面板，就把它从连接设置里抄出来登录（在面板里改了密码，记得回来同步）。登录后在左侧选中 QQ 小号。" },
     { title: "配置 WebSocket 服务端", detail: "切到「WS 服务端」。已有 3001 节点就直接使用；没有再新建，端口填 3001。" },
     { title: "配置 HTTP API", detail: "切到「HTTP API」。已有节点就把端口改为 3002；没有再新建。不要用 3000。" },
     { title: "分别复制两个 Token", detail: "复制 WS 节点和 HTTP 节点的授权 Token，分别填到 QQ 渠道的对应输入框。" },
     { title: "保存并重启 SnowLuma", detail: "WS 与 HTTP 的 Token 可能不同，不要填反。" },
   ],
-  warn: "面板地址通常固定为 http://127.0.0.1:5099/config；启动终端里找的是首次登录账号和密码，不是地址。找不到时，重新启动 SnowLuma 并查看新打开的黑色终端窗口。已有同端口节点时请修改或复用，不要重复创建。",
+  warn: "面板地址固定为 http://127.0.0.1:5099/config。面板密码只有一处真相：连接设置里那格「SnowLuma 面板密码」——你在面板里改了密码必须回来同步，否则自动配节点 / 自动挂 QQ 会报「面板密码不对」。已有同端口节点时请修改或复用，不要重复创建。",
 };
 
 // ── 添加 / 编辑 ─────────────────────────────────────────────
@@ -857,7 +894,7 @@ async function reconnectConnection(connection: QqConnection) {
       }
       connectStep.value = "等 SnowLuma 面板应答（最多 40 秒）…";
       if (!(await waitForPanel(Date.now() + 40_000))) {
-        ElMessage.error("SnowLuma 40 秒内没起来。它挂在 QQ 客户端上 —— 先确认 QQ 已经登录，再看它的窗口有没有报错。");
+        ElMessage.error("SnowLuma 40 秒内没起来。它挂在 QQ 客户端上 —— 先确认 QQ 已经登录，再看 SnowLuma 目录里 runtime.log 的最后几行。");
         return;
       }
     }
@@ -871,8 +908,13 @@ async function reconnectConnection(connection: QqConnection) {
     await loadRuntime();
     if (!gateway.value?.reachable) {
       connectStep.value = "把 QQ 挂到协议端…";
-      if (!(await attachHook(true))) {
-        ElMessage.error("QQ 没挂上面板：3001 上不会有节点。确认这个号正在 QQ 客户端里登录，再去面板手动挂一次。");
+      const hooked = await attachHook(true);
+      if (!hooked.ok) {
+        // 原话照搬服务端的原因：没填面板密码 / 密码不对 / 面板里没有这个号的进程
+        // 三种要改的地方完全不同，写死一句「确认 QQ 已登录」只会把人往错的方向带。
+        ElMessage.error(`QQ 没挂上面板（3001 上不会有节点）：${hooked.message}`);
+        // 密码类 / 面板拒绝挂载：人只能进面板解决，顺手替他开出来
+        if (hooked.reason && PANEL_NEEDED_REASONS.has(hooked.reason)) openPanel();
         return;
       }
     }
@@ -1868,8 +1910,9 @@ function copyInstallGuide() {
             />
           </el-form-item>
           <p class="cq-hint">
-            存下这个密码后，点「启动 SnowLuma」时后台会自动登录面板，把这上面的地址和 Token 对齐到协议端节点里
-            —— 不用再自己开面板核对，也不会因为忘了密码而卡在登录页。
+            全新安装时这一格会被自动填好：忆灵空间替 SnowLuma 生成面板密码并记在这里，人不用手抄。
+            你在面板里手动改过密码，就要把新的填回来。点「启动 SnowLuma」时后台会用它登录面板，
+            把这上面的地址和 Token 对齐到协议端节点里 —— 不用再自己开面板核对，也不会因为忘了密码卡在登录页。
             <strong>面板本身就是登录密码，不是 Token。</strong>
           </p>
           <p class="cq-warn">

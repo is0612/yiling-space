@@ -1,6 +1,6 @@
 import { createError } from "h3";
 import { requireAdminActor } from "../../../../../utils/auth";
-import { loadOnebotConnections } from "../../../../../utils/channel-adapter/onebot/configure";
+import { loadOnebotConnections, updatePrimaryOnebotCredentials } from "../../../../../utils/channel-adapter/onebot/configure";
 import { portFromUrl, provisionOnebotNodes } from "../../../../../utils/channel-adapter/onebot/panel";
 import { readSnowlumaStatus } from "../../../../../utils/channel-adapter/onebot/runtime";
 
@@ -52,9 +52,28 @@ export default defineEventHandler(async (event) => {
     panelPort: status.panelPort,
   });
 
+  /*
+   * 面板里现成的令牌抄回连接设置。
+   *
+   * 连接里空着就是没填 —— 那时适配器发消息不带令牌，HTTP API 直接 401，而人得回面板
+   * 复制一串 43 位字符串。面板里那个令牌本来就能用，抄回来两边自然对上。
+   * 写库失败要说出来（不然页面显示「已抄好」但适配器还是连不上，排查方向全错）。
+   */
+  let warnings = result.warnings;
+  if (result.adopted && (result.adopted.wsToken || result.adopted.httpToken)) {
+    const saved = await updatePrimaryOnebotCredentials({
+      accessToken: result.adopted.wsToken,
+      httpToken: result.adopted.httpToken,
+    }).catch(() => false);
+    if (!saved) {
+      warnings = [...warnings, "面板里的令牌没能写进连接设置，去面板 /config 复制那两个 Token 手动填一下。"];
+    }
+  }
+
   // 没密码是最常见的一种：这时不该 4xx/5xx（前端会当成弹错），而是把话说清楚。
   return {
     ...result,
+    warnings,
     uin: primary.accountQq,
     panelPort: status.panelPort,
     ports: {

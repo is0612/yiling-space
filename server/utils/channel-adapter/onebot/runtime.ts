@@ -1,9 +1,11 @@
 import { execFile, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import net from "node:net";
 import os from "node:os";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getPrisma } from "../../prisma";
+import { hasPrimaryOnebotConnection, savePrimarySnowlumaPassword } from "./configure";
 
 /** Acknowledge the request served by this ready socket without replacing concurrent metadata. */
 export async function markOnebotReloadApplied(connectionId: string, requestedAt: string): Promise<void> {
@@ -412,13 +414,100 @@ export async function readSnowlumaStatus(): Promise<SnowlumaStatus> {
 }
 
 /**
- * 启动 SnowLuma：在它自己的目录里开一个命令行窗口跑 start.bat。
+ * 发行包里的真正入口：自带的 `node.exe` + `index.mjs`。
  *
- * 用它自带的 start.bat 而不是直接 node index.mjs —— 那个脚本里做了版本闸门
- * （官方入口调 PATH 里的 node，本机 v22 会被挡；start.bat 用发行包自带的 node.exe）。
- * 同样 detached：nuxt 重启不影响它，关掉窗口就是停。
+ * 这两个都在才算命中 —— 只认一个就去跑半个，报错反而是莫名其妙的 ENOENT。
+ * 老版本/改过目录结构的发行包不一定是这名字，所以拿不到就退回 start.bat（见下）。
  */
-export async function launchSnowluma(): Promise<{ ok: boolean; pid?: number; message?: string }> {
+async function snowlumaEntry(home: string): Promise<{ exe: string; main: string } | null> {
+  const exe = path.join(home, "node.exe");
+  const main = path.join(home, "index.mjs");
+  const exists = async (file: string): Promise<boolean> => {
+    try {
+      await fs.access(file);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if ((await exists(exe)) && (await exists(main))) return { exe, main };
+  return null;
+}
+
+/**
+ * 面板密码有没有初始化过。`config/webui.json` 里 `mustChangePassword: false` 才算「人已经设过密码」。
+ *
+ * 只关心这一件事，是因为没初始化时面板会把**初始密码只打印到控制台**（SnowLuma 自己的
+ * `logs/snowluma-<date>.log` 里刻意没有那串密码，只剩一句「请立即登录并修改密码」）。
+ * 我们把子进程的 stdio 一丢，那串一次性密码就彻底没了 —— 之后只能靠删 webui.json 重来。
+ */
+async function panelInitialized(home: string): Promise<boolean> {
+  try {
+    const raw = await fs.readFile(path.join(home, "config", "webui.json"), "utf8");
+    const parsed = JSON.parse(raw) as { mustChangePassword?: unknown };
+    return parsed.mustChangePassword === false;
+  } catch {
+    // 没有 webui.json = 全新安装；读坏了 = 下次启动会重新生成。两种都按「没初始化」处理。
+    return false;
+  }
+}
+
+/**
+ * 面板凭据文件在不在。没有它 = SnowLuma 还没写过密码，这时候塞
+ * `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD` 才有效（它只在「没有 webui.json」时认这个变量）。
+ *
+ * 和 `panelInitialized()` 是两个问题：那个问「密码是不是设好了」，这个问「文件在不在」。
+ * 文件在但 `mustChangePassword: true`（播种后一直没改）时，SnowLuma 会自己重新生成随机密码 ——
+ * 那种情况我们接管不了，只能靠控制台输出兜底。
+ */
+async function hasWebuiConfig(home: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(home, "config", "webui.json"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 启动 SnowLuma。
+ *
+ * 早期是 `cmd.exe /c start.bat`，2026-11-02 发现那样**在这条路径上**根本起不来：
+ * 这份 start.bat 被手工改过（注释里写着为什么不用官方的 launcher.bat），存成了
+ * **UTF-8 + 纯 LF 换行**。cmd 解析批处理要求 CRLF，LF + 中文会把它读串行 ——
+ * 实测输出是 `'门挡住…rem' 不是内部或外部命令`、`'.exe' 不是内部或外部命令`，
+ * 也就是 `.\node.exe .\index.mjs` 那一行被切碎，index.mjs 一次都没跑起来，
+ * 面板 5099 永远没人应答，页面上就只是「启动失败 / 40 秒内没应答」。
+ * （同一个文件双击有时能跑：交互式控制台和我们的无控制台 spawn 走的是两条解析路径。
+ *  对照实验：把同一份内容压成 CRLF 再 spawn，2 秒就起来了 —— 差的只是换行符。）
+ *
+ * 所以这里不再经过批处理，直接跑 start.bat 里真正干活的那两行。副作用只有好的：
+ * - 绕开了 cmd 的批处理解析，不再看第三方文件的换行符脸色；
+ * - 版本闸门本来就是为了拦 PATH 里的 node，我们用的就是发行包自带的 node.exe，拦不到也不需要；
+ * - 不再弹一个可有可无的黑窗口：日志照旧落在 `<SnowLuma>/runtime.log`，
+ *   关停走页面上的「停止」（按面板端口找 owner，不依赖窗口）。
+ *
+ * **面板密码归我们管（2026-11-02 补）**：全新安装时 SnowLuma 会拿随机密码当面板密码，
+ * 只打印一次控制台 —— 而自动配节点/挂 QQ 都必须先登录面板，所以那串密码不进连接凭据，
+ * 整条 QQ 链路就永远差一步（「一步到位安装」到这里断掉）。
+ * 现在：没有 `config/webui.json` 时我们自己生成一个密码、用 `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD`
+ * 播种给它，拿到面板后立刻写回连接凭据 —— 人不用手填任何密码。
+ * 只在**已经有连接可写**时才接管（否则密码生成了也没处放，等于把人锁在面板外）；
+ * 接管不了的情况（已有 webui.json / 没人可写）退回「抓控制台输出」，密码仍在文件里能查到。
+ *
+ * detached：nuxt dev 重启不影响它；停止由 stopSnowluma 收进程树，不靠窗口。
+ */
+export async function launchSnowluma(): Promise<{
+  ok: boolean;
+  pid?: number;
+  message?: string;
+  /** 接住子进程控制台输出的文件（面板未初始化且没接管时才给） */
+  consoleLog?: string;
+  /** 这次由我们播种的面板密码（写进连接凭据了；没写成会把密码落到 consoleLog 里） */
+  panelPassword?: string;
+  /** panelPassword 有没有真的存进连接凭据 */
+  panelPasswordSaved?: boolean;
+}> {
   if (process.platform !== "win32") {
     return { ok: false, message: "自动启动只做了 Windows 版，请手动双击 SnowLuma 的 start.bat。" };
   }
@@ -430,15 +519,75 @@ export async function launchSnowluma(): Promise<{ ok: boolean; pid?: number; mes
     };
   }
   try {
-    const child = spawn("cmd.exe", ["/c", "start.bat"], {
-      cwd: home,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: false,
-    });
+    const entry = await snowlumaEntry(home);
+    let consoleLog: string | undefined;
+    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+
+    // 能不能接管面板密码：没写过 webui.json，且（自己指定了密码 或 至少有一条连接可写）
+    const presetPassword = process.env.SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD?.trim() || "";
+    let seededPassword: string | undefined;
+    if (entry && !(await hasWebuiConfig(home))) {
+      if (presetPassword.length >= 8) {
+        seededPassword = presetPassword;
+      } else if (await hasPrimaryOnebotConnection().catch(() => false)) {
+        seededPassword = randomBytes(18).toString("base64url");
+      }
+    }
+
+    if (entry && !seededPassword && !(await panelInitialized(home))) {
+      // 面板还没设过密码：这一次的控制台输出不能丢，初始密码只在那里面。
+      // 每次启动覆盖写，所以文件不会随着长期运行无限长 —— 一旦密码设好，下一次就走 ignore 了。
+      consoleLog = path.join(home, "logs", "launch-console.log");
+      try {
+        await fs.mkdir(path.dirname(consoleLog), { recursive: true });
+        handle = await fs.open(consoleLog, "w");
+      } catch {
+        // 打不开就退回丢弃输出：至少别让「启动」因为写日志失败而失败
+        consoleLog = undefined;
+        handle = undefined;
+      }
+    }
+    const stdio: "ignore" | ["ignore", number, number] = handle ? ["ignore", handle.fd, handle.fd] : "ignore";
+    const child = entry
+      ? spawn(entry.exe, [entry.main], {
+          cwd: home,
+          detached: true,
+          stdio,
+          windowsHide: true,
+          // 只有「没写过 webui.json」时 SnowLuma 才认这个变量；其余情况带上也不影响。
+          env: seededPassword
+            ? { ...process.env, SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: seededPassword }
+            : process.env,
+        })
+      : spawn("cmd.exe", ["/c", "start.bat"], { cwd: home, detached: true, stdio: "ignore", windowsHide: false });
     child.unref();
+    // 子进程拿到的是自己的句柄副本，父进程这边可以立刻关掉，否则 dev server 里会一直挂着这个 fd
+    await handle?.close().catch(() => undefined);
     await rememberLauncher("snowluma", child.pid);
-    return { ok: true, pid: child.pid };
+
+    // 播种的密码必须马上落库：它只存在于这一行内存里，丢了人就永远进不去面板。
+    let panelPasswordSaved: boolean | undefined;
+    if (seededPassword) {
+      panelPasswordSaved = await savePrimarySnowlumaPassword(seededPassword).catch(() => false);
+      if (!panelPasswordSaved) {
+        // 兜底：写不进库就写进控制台日志文件，至少人还找得回来。
+        try {
+          const fallback = path.join(home, "logs", "launch-console.log");
+          await fs.mkdir(path.dirname(fallback), { recursive: true });
+          await fs.appendFile(
+            fallback,
+            `\n[忆灵空间] 面板密码没能写进连接凭据，先记在这里：${seededPassword}\n` +
+              "  （登录 127.0.0.1 面板 → 改密码 → 填进「连接设置 → SnowLuma 面板密码」）\n",
+            "utf8",
+          );
+          consoleLog = fallback;
+        } catch {
+          // 连这个都写不了，只能在返回消息里说；不要让启动本身失败
+        }
+      }
+    }
+
+    return { ok: true, pid: child.pid, consoleLog, panelPassword: seededPassword, panelPasswordSaved };
   } catch (error) {
     return {
       ok: false,

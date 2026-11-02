@@ -6,7 +6,7 @@
  * token 是不同值，故分开存。
  */
 
-import { decryptApiKey } from "../../credential-encryption";
+import { decryptApiKey, encryptApiKey } from "../../credential-encryption";
 import { getPrisma } from "../../prisma";
 import type { OnebotConnectionConfig } from "./client";
 import {
@@ -135,6 +135,92 @@ function readConfig(credentials: string | null, accountKey: string | null): Oneb
     ...(accessToken ? { accessToken } : {}),
     ...(httpToken ? { httpToken } : {}),
   };
+}
+
+/**
+ * 已经有 QQ 连接了吗 —— 决定「能不能接管面板密码」。
+ *
+ * 接管靠的是 spawn 时塞 `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD`（SnowLuma 只在还没有
+ * `config/webui.json` 时认这个变量）。密码是我们生成的，**必须马上有地方存**：
+ * 没有连接可写，就等于把面板密码生成出来又扔掉，人之后彻底登不进去。
+ */
+export async function hasPrimaryOnebotConnection(): Promise<boolean> {
+  const count = await getPrisma().platformConnection.count({
+    where: { platform: ONEBOT_PLATFORM, status: { not: "DISABLED" } },
+  });
+  return count > 0;
+}
+
+/**
+ * 改「主连接」的凭据：只动 patch 里给的字段，其余原样保留。
+ *
+ * 两个用途，都是「别让人手抄」：
+ * - 自动接管的面板密码（`snowlumaPassword`）；
+ * - 连接里没填的令牌，从面板抄回来的（`accessToken` / `httpToken`）——
+ *   不抄的话适配器发消息不带令牌，HTTP API 直接 401。
+ *
+ * 写坏了等于把整条渠道弄断，所以：先解密现有 JSON、合并、再加密写回；解不开就只写这几个字段。
+ * 返回 false = 没有连接可写，调用方自己决定回退。
+ */
+export async function updatePrimaryOnebotCredentials(patch: {
+  snowlumaPassword?: string;
+  accessToken?: string;
+  httpToken?: string;
+}): Promise<boolean> {
+  const entries = Object.entries(patch).filter(([, value]) => typeof value === "string" && value.length > 0);
+  if (!entries.length) return true;
+
+  const prisma = getPrisma();
+  const connection = await prisma.platformConnection.findFirst({
+    where: { platform: ONEBOT_PLATFORM, status: { not: "DISABLED" } },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, credentialsCiphertext: true },
+  });
+  if (!connection) return false;
+
+  let credentials: Record<string, unknown> = {};
+  if (connection.credentialsCiphertext) {
+    try {
+      const plain = await decryptApiKey(Buffer.from(connection.credentialsCiphertext).toString("utf8"));
+      const parsed = JSON.parse(plain) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        credentials = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // 解不开就只写这几个字段；反正这份凭据本来也读不出来了，人得重新填。
+    }
+  }
+
+  for (const [key, value] of entries) credentials[key] = value;
+  const ciphertext = Buffer.from(await encryptApiKey(JSON.stringify(credentials)), "utf8");
+  await prisma.platformConnection.update({
+    where: { id: connection.id },
+    data: { credentialsCiphertext: ciphertext },
+  });
+  return true;
+}
+
+/** 只写面板密码。语义单独留一个名字，调用处一眼能看出在干什么。 */
+export async function savePrimarySnowlumaPassword(password: string): Promise<boolean> {
+  return updatePrimaryOnebotCredentials({ snowlumaPassword: password });
+}
+
+/**
+ * 请运行中的适配器按最新凭据重连一次 —— 和页面「重连」按钮写的是同一个标记，由适配器自己轮询消费。
+ *
+ * 自动补起里用：令牌刚抄进连接、而适配器早就在跑时，它内存里那份还是旧配置。
+ * 不叫它重来一遍，它会一直拿空令牌发消息（HTTP 401 / WS 握手失败），
+ * 人看到的现象是「明明补好了却还是不通」。
+ */
+export async function requestOnebotReload(connectionId: string): Promise<boolean> {
+  const count = await getPrisma().$executeRaw`
+    UPDATE platform_connections
+    SET metadata = COALESCE(metadata, '{}'::jsonb)
+      || jsonb_build_object('onebotReloadRequestedAt', ${new Date().toISOString()}::text),
+      "updatedAt" = NOW()
+    WHERE id = ${connectionId}::uuid AND platform = ${ONEBOT_PLATFORM}::text AND status <> 'DISABLED'
+  `;
+  return count > 0;
 }
 
 /**
