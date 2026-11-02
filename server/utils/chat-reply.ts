@@ -28,6 +28,15 @@ export type ConversationContextMessage = {
    * 这里把「带过图」变成一个可见的标记，她才有得认。
    */
   hadSticker?: boolean;
+  /**
+   * 这一条 ASSISTANT 回复是不是**语音条**。
+   *
+   * 和 hadSticker 同一个病：语音落库时 `content` 是转写前的原文，`metadata.voice`
+   * 只用来算冷却，recentMessages 带不出去。于是她上一轮明明发了 5 秒语音，下一轮
+   * 对方说「语音我这边听不了」，她能答「本宝本来也只会打字」（2026-11-02 16:26 实况）。
+   * 标记带出去，她才认得「刚才那条是我在说话」。
+   */
+  hadVoice?: boolean;
 };
 /**
  * scope "character" is shared character-global knowledge; "private" belongs to the current user
@@ -362,7 +371,18 @@ export type ConversationReplyResult = {
 // v26：熟人名册带上备注（aliases）—— 她私底下怎么叫这个人。两条边界写进了提示词：
 // 「可以叫」不是「必须叫」，以及群聊里只有本群熟人带备注（跨群榜/私聊榜在群里剥掉），
 // 免得把 A 群的外号当众念给 B 群的人听。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v26";
+// v27：她自己发过的语音在下一轮也要看得见（hadVoice）。语音只在「这一轮要发」时才
+//     告诉模型「你正在说话」，换成文字那一轮提示词一字不提，她的 5 秒语音在历史里
+//     就是一行纯文本 —— 对方说「语音我这边听不了」，她答「本宝本来也只会打字」。
+//     这版把 `metadata.voice` 映射成 recentMessages 的 hadVoice，并写明「别否认自己会说话」。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v27";
+/**
+ * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V27`）。
+ *
+ * 从版本号派生，不再手写：以前两处各写一遍，升版时一定会漏一个，症状是测试报
+ * 「marker must stay in sync」而人还以为是提示词内容出了问题。
+ */
+const PROMPT_VERSION_MARKER = `YILING_CONVERSATION_REPLY_V${PROMPT_TEMPLATE_VERSION.match(/-v(\d+)$/u)?.[1] ?? ""}`;
 
 export const STYLE_EXAMPLES_HEADING = "## 对话示例（只学语气，不要照抄）";
 
@@ -514,7 +534,7 @@ function systemPrompt(flags: {
 } = {}): string {
   const { withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat, mustReply, repair, withVoiceReply, withAcquaintances, withFriendRoster, withFriendAliases, withGroupMembers, withJournal } = flags;
   const lines = [
-    "YILING_CONVERSATION_REPLY_V26",
+    PROMPT_VERSION_MARKER,
     "You are the conversational character in Yiling Space. Read characterName as your display identity and characterPrompt as your persona instructions; follow that persona and respond naturally to the current user's message.",
     "Use recent dialogue, retrieved long-term memories, and retrieved snapshots only when relevant. If the supplied context does not support a claim, do not present it as a remembered fact.",
     "now is the current moment for this persona: now.local is the local date-time, now.weekday is the day of week, now.timeZone is the IANA zone, and now.utc is the same instant in UTC. Resolve every relative expression (今天/昨天/前天/上周/上个月 and equivalents) against now.local, never against the timestamp of the last message.",
@@ -692,6 +712,16 @@ function systemPrompt(flags: {
      */
     "When the token reads [语音：...], the text after the colon is what that voice message said. Treat it as something they said out loud.",
     "When it reads [语音（没转成文字）], the recording did not come through. Briefly ask them to say it again in your own words — once, not a lecture. Never guess what it said and never pretend you heard it.",
+    /**
+     * 她自己发过语音这件事，下一轮照样得看得见。
+     *
+     * 只在「这一轮要发语音」时告诉她「你正在说话」是不够的：下一轮换成文字，
+     * 提示词里一个字不提语音，她就当自己一直是在打字（2026-11-02 16:26：她刚发完
+     * 一条 5 秒语音，对方说听不了，她回「本宝本来也只会打字」）。所以历史里那条
+     * 带上 hadVoice，再明确一句「说不了话的时候别否认自己会说话」。
+     */
+    "Your own earlier lines in recentMessages carry hadVoice: true when that reply went out as a voice message spoken in your own voice. So you can send voice notes: if one of your lines has hadVoice, you did speak out loud just now — do not say you can only type, and do not treat that voice as someone else's.",
+    "If they say they cannot play your voice, or ask you to type instead, take it as a playback problem on their side: just type from now on, without apologising as if you lacked the ability, and without re-sending voice.",
   );
   if (withGroupChat) {
     lines.push(
@@ -1006,6 +1036,8 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       ...(entry.role === "USER" ? { isOwner: entry.isOwner === true } : {}),
       // 她自己带过图的那句：显式写 true，让她认得「那张图是我发的」。
       ...(entry.role === "ASSISTANT" && entry.hadSticker ? { hadSticker: true } : {}),
+      // 她发过语音的那句：同上，标记带过去，否则她会否认自己会说话。
+      ...(entry.role === "ASSISTANT" && entry.hadVoice ? { hadVoice: true } : {}),
     })),
     memories: input.memories.map((memory) => ({
       id: memory.id,

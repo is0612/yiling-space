@@ -413,8 +413,11 @@ function readStoredStickerId(metadata: unknown): string | null {
 }
 
 /**
- * 上一条回复是不是语音条。存的是个标记而不是音频本身（音频发完就没了），
- * 只用来算冷却 —— 不要拿它判断「她刚才说了什么」，那是 content 的事。
+ * 上一条回复是不是语音条。存的是个标记而不是音频本身（音频发完就没了）。
+ *
+ * 两处用：① 算语音冷却；② 给 recentMessages 带 `hadVoice`，让她下一轮知道
+ * 「刚才那条是我在说话」—— 不带的话对方说「语音我这边听不了」，她会回
+ * 「本宝本来也只会打字」。不要拿它判断「她刚才说了什么」，那是 content 的事。
  */
 function readStoredVoiceFlag(metadata: unknown): boolean {
   const record = metadata && typeof metadata === "object" && !Array.isArray(metadata)
@@ -999,6 +1002,8 @@ async function runChannelTurn(input: {
       ...(item.role === "USER" ? readStoredSpeaker(item.metadata) : {}),
       // 她自己发过图的回复：标出来，让她认得「那张图是我贴的」。
       ...(item.role === "ASSISTANT" && readStoredStickerFlag(item.metadata) ? { hadSticker: true } : {}),
+      // 她自己发过语音的那条：同理，不带出去她就不知道自己刚才在「说话」。
+      ...(item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata) ? { hadVoice: true } : {}),
     }));
 
   const modelText = (message: ChannelTurnMessage) => message.promptContent ?? message.content;

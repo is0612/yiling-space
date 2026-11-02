@@ -25,7 +25,10 @@ try {
     speaker: { displayName: "群友", isOwner: false, ownerDisplayName: "烟火清凉" },
   });
 
-  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v25");
+  // 不写死版本号：写死的是「上一次的答案」，每次升版都得手动改一遍（这里就跟不上了，
+  // 断言停在 v25 而模板已经 v27）。这里只校验形状；「标记与版本号同源」由
+  // scripts/test-chat-reply.ts 负责。
+  assert.match(result.promptTemplateVersion, /^conversation-retrieval-v\d+$/u);
   const body = JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> };
   const system = body.messages.find((item) => item.role === "system")?.content ?? "";
   const user = body.messages.find((item) => item.role === "user")?.content ?? "";
@@ -70,6 +73,8 @@ try {
     recentMessages: [
       { role: "USER", content: "今天好热", occurredAt: new Date().toISOString(), speaker: "群友甲", isOwner: false },
       { role: "ASSISTANT", content: "热就少穿点", occurredAt: new Date().toISOString(), hadSticker: true },
+      // 她刚发过一条语音，下一轮换成文字。没有 hadVoice 她就当自己一直在打字。
+      { role: "ASSISTANT", content: "语料？本宝手里没这号东西", occurredAt: new Date().toISOString(), hadVoice: true },
     ],
     memories: [],
     snapshots: [],
@@ -106,6 +111,11 @@ try {
   assert(recentSection.includes("\"speaker\":\"群友甲\""), "历史 USER 行必须带发言人。");
   assert(!recentSection.includes("\"speaker\":\"小鲸鱼\""), "她自己说的话不该被当成 USER 带发言人。");
   assert(recentSection.includes("\"hadSticker\":true"), "带过表情包的 ASSISTANT 历史行必须标 hadSticker:true，否则她认不出自己发的图。");
+  // 2026-11-02 16:26：她刚发完 5 秒语音，对方说「语音我这边听不了」，她回「本宝本来也只会打字」。
+  // 语音痕迹只在 metadata，历史里不带出来，她就当自己没说过话。
+  assert(system3.includes("hadVoice"), "系统提示必须解释 hadVoice 是「自己那条是语音」。");
+  assert(system3.includes("do not say you can only type"), "系统提示必须写明：别否认自己会发语音。");
+  assert(recentSection.includes("\"hadVoice\":true"), "发过语音的 ASSISTANT 历史行必须标 hadVoice:true，否则她下一轮否认自己说过话。");
   assert(!system3.includes("groupMembers says who belongs"), "没带归属表时不许提这个字段，否则模型会凭空认亲戚。");
 
   /**
