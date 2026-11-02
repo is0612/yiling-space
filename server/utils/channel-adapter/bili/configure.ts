@@ -72,6 +72,53 @@ export type BiliDutyConfig = {
   autoDynamic: boolean;
   /** 发动态的最低分（0-20）。低于这个分宁可这一天不发。 */
   dynamicMinScore: number;
+
+  // ---- 主人内容（见 owner-watch.ts）----
+  //
+  // 分成「看到」和「动手」两件事，都可以单独开：
+  //   · `ownerFirst` 让主人的投稿进候选最前面，她会像刷别的视频一样认真看完；
+  //   · `ownerWatch` 让她对主人的新投稿点赞/收藏/评论/投币。
+  // 两个默认都关：一个是怕她刷到的世界只剩一个人，一个是怕她对固定的人动手。
+
+  /**
+   * 刷B站时把主人的投稿**排在候选最前面**（`collectCandidates` 的第一个来源）。
+   *
+   * 和 `ownerWatch` 是两件事，可以只开一个：
+   *   - `ownerFirst` = 她「看到」主人的投稿（会认真 watch、写理由、挑中报备）；
+   *   - `ownerWatch` = 她「动手」点赞收藏评论投币。
+   * 两个都开就是「看到 + 互动」都走一遍。
+   *
+   * 强制保留条数上限见 `OWNER_PICK_MAX`（2 条）：主人连发六条也不会占满一整轮，
+   * 那样她刷到的世界只剩一个人 —— 那是关注，不是刷 B站。
+   */
+  ownerFirst: boolean;
+  /**
+   * 是否自动看主人的新内容并互动。默认关。
+   *
+   * 打开后下面四项才生效。只作用于主人 UID（bili CLI 里 `owner set` 记的那个），
+   * 且只作用于**绑定之后新发布**的投稿 —— 不会去翻几十条历史投稿补三连，
+   * 那是最容易被判成机器行为、也最容易把主人的通知栏刷满的做法。
+   */
+  ownerWatch: boolean;
+  /** 对主人的新投稿点赞（`video like`）。 */
+  ownerLike: boolean;
+  /** 对主人的新投稿收藏（`video fav`）。 */
+  ownerFav: boolean;
+  /**
+   * 对主人的新投稿评论（`comment post`）。
+   *
+   * 评论是**公开**的：主人视频下面的其他观众也看得见，所以正文要过 `sanitizePublicText()`。
+   * 仍然默认开 —— 用户要的就是「她真的在我视频底下说话」，只是要过闸。
+   */
+  ownerComment: boolean;
+  /**
+   * 给主人的投稿投币的最低分（0-20，0 = 不投币）。
+   *
+   * 硬币是**真实消耗**且不可退：CLI 的本地限流是每天 5 个，但账号余额可能只有两三个。
+   * 所以这里默认 12（明显偏爱才投），并且每天最多 1 个（`COIN_PER_DAY`）。
+   * 设成 0 就完全不投币。
+   */
+  ownerCoinMinScore: number;
 };
 
 export type BiliConnectionRecord = {
@@ -108,6 +155,14 @@ export const BILI_DUTY_DEFAULTS: BiliDutyConfig = {
   favMinScore: 0,
   autoDynamic: false,
   dynamicMinScore: 15,
+  // 主人内容：两个总开关都关着，子项默认开的理由在类型注释里 ——
+  // 用户打开总开关时是想要「全套」，不是一个一个去勾。
+  ownerFirst: false,
+  ownerWatch: false,
+  ownerLike: true,
+  ownerFav: true,
+  ownerComment: true,
+  ownerCoinMinScore: 12,
 };
 
 /** 口味文本的长度上限：提示词要留预算给视频材料，不能让人写成十万字。 */
@@ -173,6 +228,13 @@ export function parseDutyInput(input: unknown): BiliDutyConfig {
     favMinScore: num(duty.favMinScore, BILI_DUTY_DEFAULTS.favMinScore, 0, 20),
     autoDynamic: bool(duty.autoDynamic, BILI_DUTY_DEFAULTS.autoDynamic),
     dynamicMinScore: num(duty.dynamicMinScore, BILI_DUTY_DEFAULTS.dynamicMinScore, 0, 20),
+    ownerFirst: bool(duty.ownerFirst, BILI_DUTY_DEFAULTS.ownerFirst),
+    ownerWatch: bool(duty.ownerWatch, BILI_DUTY_DEFAULTS.ownerWatch),
+    ownerLike: bool(duty.ownerLike, BILI_DUTY_DEFAULTS.ownerLike),
+    ownerFav: bool(duty.ownerFav, BILI_DUTY_DEFAULTS.ownerFav),
+    ownerComment: bool(duty.ownerComment, BILI_DUTY_DEFAULTS.ownerComment),
+    // 0 = 不投币。上界给 20 是因为分数就是 0-20，写 25 没有意义。
+    ownerCoinMinScore: num(duty.ownerCoinMinScore, BILI_DUTY_DEFAULTS.ownerCoinMinScore, 0, 20),
   };
 }
 

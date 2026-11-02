@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { BiliAccount, BiliOwner } from "./types";
 import { readErrorMessage } from "./utils";
@@ -37,6 +37,30 @@ const form = reactive({
   autoComment: false, commentPerRound: 1, mentionName: "",
   taste: "",
   favMinScore: 0, autoDynamic: false, dynamicMinScore: 15,
+  ownerFirst: false,
+  ownerWatch: false, ownerLike: true, ownerFav: true, ownerComment: true, ownerCoinMinScore: 12,
+});
+
+/**
+ * 底部那条黄条：把这一份设置里所有「会真的写到 B站 上、撤不回来」的动作汇总成一句。
+ *
+ * 以前只判 autoComment / autoDynamic，主人互动加进来以后如果还硬编码两个字段，
+ * 用户开着「对主人评论」也不会看到任何提醒。
+ */
+const writeWarning = computed(() => {
+  const parts: string[] = [];
+  if (form.autoComment) parts.push("公开评论");
+  if (form.autoDynamic) parts.push("发动态");
+  if (form.ownerWatch) {
+    const ownerActs = [
+      form.ownerLike ? "点赞" : "",
+      form.ownerFav ? "收藏" : "",
+      form.ownerComment ? "评论" : "",
+      form.ownerCoinMinScore > 0 ? "投币" : "",
+    ].filter(Boolean);
+    if (ownerActs.length) parts.push(`对主人投稿的${ownerActs.join("/")}`);
+  }
+  return parts.length ? `${parts.join("、")}会以这个 B站 账号的身份真的发出去，发出去撤不回来。` : "";
 });
 
 function fill(account: BiliAccount) {
@@ -60,6 +84,12 @@ function fill(account: BiliAccount) {
   form.favMinScore = duty.favMinScore ?? 0;
   form.autoDynamic = duty.autoDynamic ?? false;
   form.dynamicMinScore = duty.dynamicMinScore ?? 15;
+  form.ownerFirst = duty.ownerFirst ?? false;
+  form.ownerWatch = duty.ownerWatch ?? false;
+  form.ownerLike = duty.ownerLike ?? true;
+  form.ownerFav = duty.ownerFav ?? true;
+  form.ownerComment = duty.ownerComment ?? true;
+  form.ownerCoinMinScore = duty.ownerCoinMinScore ?? 12;
 }
 
 // ── 主人（bili CLI 的 owner） ──────────────────────────────
@@ -158,6 +188,12 @@ async function saveDuty() {
           favMinScore: form.favMinScore,
           autoDynamic: form.autoDynamic,
           dynamicMinScore: form.dynamicMinScore,
+          ownerFirst: form.ownerFirst,
+          ownerWatch: form.ownerWatch,
+          ownerLike: form.ownerLike,
+          ownerFav: form.ownerFav,
+          ownerComment: form.ownerComment,
+          ownerCoinMinScore: form.ownerCoinMinScore,
         },
       },
     });
@@ -526,6 +562,85 @@ watch(
           </el-col>
           <el-col :span="24">
             <div class="bd-form-sec">
+              <h3>主人内容</h3>
+              <span>「看到」和「动手」是两件事，可以只开一个</span>
+            </div>
+          </el-col>
+          <el-col
+            :xs="24"
+            :sm="12"
+          >
+            <el-form-item label="刷B站时优先看主人的投稿">
+              <el-switch v-model="form.ownerFirst" />
+              <p class="bd-form-tip">
+                主人的投稿排在候选最前面，每轮最多强制看 2 条 —— 她会像刷别的视频一样认真看完、
+                写理由，挑中了照样私信告诉你。这条只管「看到」，不点赞不评论。
+              </p>
+            </el-form-item>
+          </el-col>
+          <el-col
+            :xs="24"
+            :sm="12"
+          >
+            <el-form-item label="自动看主人发的并互动">
+              <el-switch v-model="form.ownerWatch" />
+              <p class="bd-form-tip">
+                打开后她才去看主人新发的投稿。只对<strong>打开这个开关之后</strong>主人新发的动手，
+                不会回头给几十条历史投稿补三连 —— 那样最容易被判成机器行为，也会把主人的通知栏刷满。
+              </p>
+            </el-form-item>
+          </el-col>
+          <el-col
+            v-if="form.ownerWatch"
+            :xs="24"
+            :sm="12"
+          >
+            <el-form-item label="点赞">
+              <el-switch v-model="form.ownerLike" />
+            </el-form-item>
+          </el-col>
+          <el-col
+            v-if="form.ownerWatch"
+            :xs="24"
+            :sm="12"
+          >
+            <el-form-item label="收藏">
+              <el-switch v-model="form.ownerFav" />
+            </el-form-item>
+          </el-col>
+          <el-col
+            v-if="form.ownerWatch"
+            :xs="24"
+            :sm="12"
+          >
+            <el-form-item label="评论">
+              <el-switch v-model="form.ownerComment" />
+              <p class="bd-form-tip">
+                评论是公开的，主人视频底下别的观众也看得见。正文会先过脱敏闸（去掉 @、长数字和私下关系的词）。
+              </p>
+            </el-form-item>
+          </el-col>
+          <el-col
+            v-if="form.ownerWatch"
+            :xs="24"
+            :sm="12"
+          >
+            <el-form-item label="投币最低分（0 = 不投币）">
+              <el-input-number
+                v-model="form.ownerCoinMinScore"
+                :min="0"
+                :max="20"
+                controls-position="right"
+                style="width:100%"
+              />
+              <p class="bd-form-tip">
+                硬币不可退，而且账号余额可能只有两三个 —— 所以每天最多投 1 个，
+                分数到这个数才投。设成 0 就完全不投。
+              </p>
+            </el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <div class="bd-form-sec">
               <h3>刷站口味</h3>
               <span>只作用于这个账号的值班，不会影响聊天和 QQ 渠道</span>
             </div>
@@ -560,11 +675,11 @@ watch(
       </el-form>
 
       <el-alert
-        v-if="form.autoComment || form.autoDynamic"
+        v-if="writeWarning"
         type="warning"
         :closable="false"
         show-icon
-        :title="form.autoDynamic ? '公开评论和动态会以该 B站 账号的身份真的发出去。' : '公开评论会以该 B站 账号的身份真的发出去。'"
+        :title="writeWarning"
       />
     </div>
     <template #footer>

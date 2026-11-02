@@ -25,6 +25,7 @@ import { getPrisma } from "../../prisma";
 import { runBili, type BiliRunResult } from "./runner";
 import { buildDutyPrompt, type BiliDutyRoundSettings } from "./duty-prompt";
 import { callBiliModel } from "./llm";
+import { runOwnerWatch, type OwnerWatchOutcome } from "./owner-watch";
 import { recordModelUsage, readDailyQuota, type ModelUsageTokens } from "../../model-usage";
 import { resolveChatModelSettings } from "../../chat-model-config";
 import { resolveCharacterApiKey } from "../../credential-encryption";
@@ -41,6 +42,7 @@ import {
   parseScore,
   parseVerdict,
   parseVideoCards,
+  parseBiliOwner,
   parseWatchedVideo,
   readBiliError,
   sanitizePublicText,
@@ -70,6 +72,11 @@ export type BiliDutyRoundResult = {
     reason: string;
     comment: string;
   }>;
+  /**
+   * 主人内容互动的结果（`owner-watch.ts`）。
+   * 没开 `duty.ownerWatch` 时是 undefined —— 和「开了但本轮没新投稿」区分开。
+   */
+  owner?: OwnerWatchOutcome;
   error?: string;
   /** 过程中值得记一笔的事（风控、限流、命令失败等）。 */
   notes: string[];
@@ -77,6 +84,21 @@ export type BiliDutyRoundResult = {
 
 /** 最多攒多少条候选。 */
 const MAX_CANDIDATES = 25;
+/**
+ * 「主人优先」时一轮最多强制看她主人几条。
+ *
+ * 不设上限的话，主人连发六条就会把这一轮全占了，她刷到的世界只剩一个人 ——
+ * 那是关注，不是刷 B站。2 条足够体现「优先」，又留了位置给推荐流。
+ */
+const OWNER_PICK_MAX = 2;
+/**
+ * 「主人优先」只看最近多少天内发的投稿。
+ *
+ * 不设窗口的话，主人一年没更新时，`user videos --size 6` 会把一年前的六条全拉进来 ——
+ * 她这轮就在「优先看」一堆去年的东西，看着很像 bug。窗口外一条都没有时退回最近 3 条：
+ * 总比什么都不看好，但至少不会把两年前的视频当成今天的候选。
+ */
+const OWNER_FRESH_DAYS = 30;
 /** 一轮最多「看懂」几条 —— watch 会拉字幕甚至触发语音转写，是这里最贵的操作。 */
 const MAX_WATCH_PER_ROUND = 5;
 /** watch 单条的超时：可能要等语音转写。 */
@@ -99,7 +121,7 @@ const DYNAMIC_GAP_MS = 30 * 60 * 1000;
 /** 动态正文字数上限（含链接）。 */
 const DYNAMIC_MAX_CHARS = 200;
 
-type CandidateSource = "feed" | "hot" | "search";
+type CandidateSource = "feed" | "hot" | "search" | "owner";
 
 type Candidate = BiliVideoCard & { source: CandidateSource };
 
@@ -154,15 +176,65 @@ function readLabeledLine(text: string, label: string): string {
   return value === "无" || value === "没有" || value === "-" ? "" : value;
 }
 
+/** 读 bili CLI 里记的主人 UID（没有就返回空串，不造空壳）。 */
+async function readOwnerMid(record: BiliConnectionRecord, notes: string[]): Promise<string> {
+  const result = await runBili(["owner", "show"], biliOptions(record));
+  const error = readBiliError(result.json);
+  if (error) {
+    notes.push(`读主人失败：${error.code}${error.message ? `（${error.message}）` : ""}`);
+    return "";
+  }
+  return parseBiliOwner(result.json)?.mid ?? "";
+}
+
 /**
- * 找候选：推荐流 + 分区热榜 + 关键词搜索。
+ * 把「主人优先」的投稿补进粗筛结果，排在前面。
+ *
+ * 这是整条链路里唯一「模型说别看、代码偏要看」的地方，所以单独抽出来钉测试。
+ * 两条规则：
+ *   1. 主人的投稿一定在里面，不管模型有没有留（`OWNER_PICK_MAX` 封顶）；
+ *   2. 补进来的不能被 `watchLimit` 挤掉 —— 否则额度紧的那一轮，「优先」就失效了。
+ */
+export function mergeOwnerFirst(ownerBvids: string[], modelPicked: string[], watchLimit: number): string[] {
+  const owners = ownerBvids.slice(0, OWNER_PICK_MAX);
+  const merged = [...new Set([...owners, ...modelPicked.filter((bvid) => !owners.includes(bvid))])];
+  return merged.slice(0, Math.max(watchLimit, owners.length));
+}
+
+/**
+ * 从主人的投稿列表里挑出这轮「优先看」的。
+ *
+ * 规则见 `OWNER_FRESH_DAYS`：先按窗口筛，窗口内一条都没有时退回最近 3 条。
+ * 解析不出 `pubdate` 的一律保留 —— 宁可多看一条，也别因为接口字段变了把主人的视频全滤掉。
+ * 导出是为了钉测试：这是唯一会因为「日期格式变了」而静默清空整条路径的地方。
+ */
+export function pickOwnerCandidates<T extends { pubdate: string }>(
+  cards: T[],
+  now = Date.now(),
+): { picked: T[]; fellBack: boolean } {
+  const since = now - OWNER_FRESH_DAYS * 24 * 60 * 60 * 1000;
+  const recent = cards.filter((card) => {
+    const published = card.pubdate ? Date.parse(card.pubdate) : Number.NaN;
+    return Number.isNaN(published) || published >= since;
+  });
+  if (recent.length > 0) return { picked: recent, fellBack: false };
+  return { picked: cards.slice(0, 3), fellBack: cards.length > 0 };
+}
+
+/**
+ * 找候选：主人投稿（可选）+ 推荐流 + 分区热榜 + 关键词搜索。
  * 按 bvid 去重；已看过（7 天内）的不再进来。
+ *
+ * 主人的投稿**先 push**，所以它永远排在候选列表最前面 —— 粗筛阶段模型按顺序读，
+ * 靠前的更容易被留下；再加 `mergeOwnerFirst` 的硬保证，不指望模型听话。
  */
 async function collectCandidates(
   record: BiliConnectionRecord,
   config: BiliDutyConfig,
   seenBvids: Set<string>,
   notes: string[],
+  ownerMid = "",
+  ownerDiag: string[] = [],
 ): Promise<Candidate[]> {
   const options = biliOptions(record);
   const candidates: Candidate[] = [];
@@ -176,6 +248,39 @@ async function collectCandidates(
       candidates.push({ ...card, source });
     }
   };
+
+  // 主人优先：主人的投稿压在候选队首。
+  // 时间窗见 `pickOwnerCandidates`（最近 30 天，一条都没有时退回最近 3 条）——
+  // 不设窗口的话，主人一年没更新时会把去年的六条当成「这轮刷到的」，看着很像 bug。
+  // 「7 天内看过的不再进来」由 seenBvids 管，两层窗口各管各的。
+  if (config.ownerFirst && ownerMid) {
+    const ownerVideos = await runBili(
+      ["user", "videos", ownerMid, "--order", "new", "--size", "6"],
+      options,
+    );
+    const ownerData = readCommandData(ownerVideos, "拉主人的投稿", notes);
+    if (ownerData) {
+      const { picked: cards, fellBack } = pickOwnerCandidates(parseVideoCards(ownerData));
+      if (fellBack) {
+        notes.push(`主人优先：最近 ${OWNER_FRESH_DAYS} 天没有新投稿，退回最近 3 条。`);
+      }
+
+      const before = candidates.length;
+      push(cards, "owner");
+      const added = candidates.length - before;
+      // 诊断单独记一份：brief 档日报不写 notes，出了「怎么没刷到我的视频」这种问题，
+      // 用户只能看到「什么都没发生」，没有任何线索。
+      ownerDiag.push(
+        added > 0
+          ? `主人的投稿进了 ${added} 条候选（最近 ${OWNER_FRESH_DAYS} 天）`
+          : `主人最近的投稿这 7 天里都看过了，这轮不重复看`,
+      );
+    } else {
+      ownerDiag.push("拉主人的投稿失败（原因见过程记录）");
+    }
+  } else if (config.ownerFirst) {
+    ownerDiag.push("读不到主人 UID，这轮没按优先处理");
+  }
 
   const feed = await runBili(["feed", "recommend", "--unseen", "-n", "12"], options);
   const feedData = readCommandData(feed, "feed recommend", notes);
@@ -219,14 +324,24 @@ async function shortlistCandidates(
 ): Promise<string[]> {
   if (candidates.length === 0 || limit <= 0) return [];
 
-  const listing = candidates.map((card, index) => formatCardForModel(card, index)).join("\n");
+  const listing = candidates
+    .map((card, index) => formatCardForModel(card, index, card.source === "owner" ? "主人发的" : undefined))
+    .join("\n");
   const memoryText = model.memoryLines.length ? `我记得这些：\n${model.memoryLines.join("\n")}\n\n` : "";
 
+  const hasOwner = candidates.some((card) => card.source === "owner");
   const prompt = [
     "这是我这轮刷到的候选视频。",
     "",
     `${memoryText}先粗筛一遍：把明显不值得花时间的剔掉，只留最值得细看的，最多 ${limit} 条。`,
     "拿不准的可以留，后面我会真的去看内容再定。",
+    ...(hasOwner
+      ? [
+          "",
+          "标了【主人发的】是我主人自己的投稿。这类优先留 —— 就算你不觉得特别好看，也先留下，" +
+            "我自己看完再定。主人的投稿和别的候选排在一起时，放前面。",
+        ]
+      : []),
     "",
     `只输出一个 JSON 数组，元素是 BV 号，按值得看的程度从高到低排，不要任何别的文字。`,
     `例如：["BV1xx411c7mD"]`,
@@ -304,18 +419,32 @@ async function judgeVideo(
   const material = formatWatchedForModel(watched);
   const memoryText = model.memoryLines.length ? `我记得这些：\n${model.memoryLines.join("\n")}\n\n` : "";
 
+  const isOwnerVideo = candidate.source === "owner";
   const prompt = [
-    `${memoryText}我把这条视频看完了，材料如下：`,
+    isOwnerVideo
+      ? `${memoryText}我把主人发的这条视频看完了，材料如下：`
+      : `${memoryText}我把这条视频看完了，材料如下：`,
     "",
     material,
     "",
     "---",
-    "判断：这条值不值得占主人的注意力？拿不准就跳过，别反复权衡。",
-    "按下面四行回答，一行一个字段，不要用 JSON、不要加别的解释：",
-    "判断：值得  或  判断：跳过",
-    "分数：0 到 20 的整数（四把尺子见章程，不要虚高）",
-    "理由：一句话，30 字内，说清为什么。跳过也要写；口味里规定了写法的（比如只写两个字），按口味写",
-    "评论：如果要公开评论，写一句 60 字内、像自己刷到随口说一句的话；不需要就写「无」",
+    ...(isOwnerVideo
+      ? [
+          "这是主人自己发的，我肯定看完了 —— 不用判断值不值得。",
+          "我要定两件事：看完想说什么，以及我有多喜欢。",
+          "按下面三行回答，一行一个字段，不要用 JSON、不要加别的解释：",
+          "分数：0 到 20 的整数（这是我喜不喜欢，不是好不好；别虚高，也别客气）",
+          "理由：一句话，30 字内，说清我为什么喜欢、哪里打动我",
+          "评论：想在他的评论区说一句就写 60 字内、像我自己说的话；不想说就写「无」",
+        ]
+      : [
+          "判断：这条值不值得占主人的注意力？拿不准就跳过，别反复权衡。",
+          "按下面四行回答，一行一个字段，不要用 JSON、不要加别的解释：",
+          "判断：值得  或  判断：跳过",
+          "分数：0 到 20 的整数（四把尺子见章程，不要虚高）",
+          "理由：一句话，30 字内，说清为什么。跳过也要写；口味里规定了写法的（比如只写两个字），按口味写",
+          "评论：如果要公开评论，写一句 60 字内、像自己刷到随口说一句的话；不需要就写「无」",
+        ]),
   ].join("\n");
 
   let reply = "";
@@ -339,7 +468,9 @@ async function judgeVideo(
   const verdict = parseVerdict(reply);
   const reason = readLabeledLine(reply, "理由").slice(0, 120) || verdict.reason.slice(0, 120);
   const comment = readLabeledLine(reply, "评论").slice(0, COMMENT_MAX_CHARS);
-  return { worth: verdict.worth, reason, comment, score: parseScore(reply) };
+  // 主人发的视频不交给模型判「要不要」：上面提示词已经不问判断了，
+  // 这里再兜一层 —— 模型万一还是写了「跳过」，也不该把它扔掉。
+  return { worth: isOwnerVideo ? true : verdict.worth, reason, comment, score: parseScore(reply) };
 }
 
 /** 组装私信正文：单条用「标题/链接/理由」，多条用编号汇总（都在 500 字内）。 */
@@ -525,12 +656,73 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
   const countedReports = resetAt ? todayReports.filter((report) => report.createdAt >= resetAt) : todayReports;
   const pickedToday = countedReports.reduce((sum, r) => sum + r.pickedCount, 0);
   const remaining = remainingQuota(config, { day: today, picked: pickedToday, windowsRun: [] });
+
+  // 模型准备：主人互动和推荐流两条线都要用，所以提到最前面。
+  // 主人互动**不吃值班额度** —— 今天推荐流已经挑够了（remaining = 0），
+  // 主人发了新视频照样该去看；只有模型 token 额度见底才一起停（打分要花钱）。
+  const modelSettings = resolveChatModelSettings(character.modelConfig);
+  let apiKey = "";
+  try {
+    apiKey = await resolveCharacterApiKey(character.modelConfig, modelSettings.apiBaseUrl);
+  } catch {
+    return { ok: false, ...empty, seenVideos: seenBvids.size, notes, error: "角色 API Key 解密失败" };
+  }
+  if (!apiKey || !modelSettings.model) {
+    return { ok: false, ...empty, seenVideos: seenBvids.size, notes, error: "角色未配置模型" };
+  }
+
+  // 一轮最多 30 次调用，额度见底时连候选都不筛 —— 先停手比筛到一半没钱更安全。
+  const quota = await readDailyQuota(binding.characterId, character.modelConfig);
+  if (quota.exceeded) {
+    notes.push(`今日模型额度已用完（${quota.used} / ${quota.limit} tokens），本轮不刷。`);
+    return { ok: false, ...empty, seenVideos: seenBvids.size, notes, error: "额度已用完" };
+  }
+
+  // 0. 主人内容互动（owner-watch.ts）。独立于推荐流：只对主人的投稿动手。
+  const ownerResult = await runOwnerWatch({
+    record,
+    config,
+    // 传这一轮的 binding，不是连接的第一条 —— 一个连接可以挂多个角色。
+    bindingId: binding.id,
+    characterPrompt: character.basePrompt.slice(0, 12_000),
+    day: today,
+    notes,
+    model: {
+      model: modelSettings.model,
+      apiKey,
+      apiBaseUrl: modelSettings.apiBaseUrl,
+      onUsage: (usage) => {
+        void recordModelUsage({
+          kind: "bili-owner",
+          model: modelSettings.model,
+          usage,
+          characterId: binding.characterId,
+          channelBindingId: binding.id,
+        });
+      },
+    },
+  });
+
   if (remaining <= 0) {
-    return { ok: false, ...empty, picked: pickedToday, seenVideos: seenBvids.size, notes, error: "今天额度已用完" };
+    return {
+      ok: false,
+      ...empty,
+      picked: pickedToday,
+      seenVideos: seenBvids.size,
+      notes,
+      owner: ownerResult ?? undefined,
+      error: "今天额度已用完",
+    };
   }
 
   // 2. 找候选
-  const candidates = await collectCandidates(record, config, seenBvids, notes);
+  // 「主人优先」要读一次 owner；没设主人时按普通推荐流刷，不要因此让整轮失败。
+  const ownerMid = config.ownerFirst ? await readOwnerMid(record, notes) : "";
+  if (config.ownerFirst && !ownerMid) notes.push("主人优先：bili CLI 里还没设主人，这轮按普通推荐流刷。");
+  // 「主人」这条线的诊断，单独攒一份写进日报 —— 不受 reportLevel 影响。
+  const ownerDiag: string[] = [];
+  if (!config.ownerFirst) ownerDiag.push("「刷B站时优先看主人的投稿」没开");
+  const candidates = await collectCandidates(record, config, seenBvids, notes, ownerMid, ownerDiag);
   if (candidates.length === 0) {
     const fatal = notes.some((note) => /auth_expired|not_logged_in|login_pending/.test(note));
     return {
@@ -538,28 +730,12 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
       ...empty,
       seenVideos: seenBvids.size,
       notes,
+      owner: ownerResult ?? undefined,
       error: fatal ? "B站凭证失效，需要重新扫码登录" : "没有新候选",
     };
   }
 
-  // 3. 模型准备（粗筛和终判共用）
-  const modelSettings = resolveChatModelSettings(character.modelConfig);
-  let apiKey = "";
-  try {
-    apiKey = await resolveCharacterApiKey(character.modelConfig, modelSettings.apiBaseUrl);
-  } catch {
-    return { ok: false, ...empty, skipped: candidates.length, seenVideos: seenBvids.size, notes, error: "角色 API Key 解密失败" };
-  }
-  if (!apiKey || !modelSettings.model) {
-    return { ok: false, ...empty, skipped: candidates.length, seenVideos: seenBvids.size, notes, error: "角色未配置模型" };
-  }
-
-  // 一轮最多 30 次调用，额度见底时连候选都不筛 —— 先停手比筛到一半没钱更安全。
-  const quota = await readDailyQuota(binding.characterId, character.modelConfig);
-  if (quota.exceeded) {
-    notes.push(`今日模型额度已用完（${quota.used} / ${quota.limit} tokens），本轮不刷。`);
-    return { ok: false, ...empty, skipped: candidates.length, seenVideos: seenBvids.size, notes, error: "额度已用完" };
-  }
+  // 3. 模型准备已在前面完成，这里只组装提示词。
 
   const settings: BiliDutyRoundSettings = {
     today,
@@ -612,7 +788,16 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
   };
 
   // 4. 粗筛：只对入选的才付出 watch 的代价
-  const shortlist = await shortlistCandidates(candidates, settings.watchLimit, model, notes);
+  const modelShortlist = await shortlistCandidates(candidates, settings.watchLimit, model, notes);
+  // 「主人发的」不交给粗筛决定要不要看：模型没留也补到最前面（最多 OWNER_PICK_MAX 条）。
+  // 提示词里已经请它优先，但那是请求不是契约 —— 主人发的东西她一定看，这条由代码保证。
+  const ownerPicks = candidates
+    .filter((card) => card.source === "owner")
+    .map((card) => card.bvid);
+  if (ownerPicks.length) {
+    notes.push(`主人优先：${Math.min(ownerPicks.length, OWNER_PICK_MAX)} 条主人的投稿直接进细看队列。`);
+  }
+  const shortlist = mergeOwnerFirst(ownerPicks, modelShortlist, settings.watchLimit);
   const byBvid = new Map(candidates.map((card) => [card.bvid, card]));
 
   // 5. 看懂 + 终判
@@ -654,6 +839,12 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
   }
 
   // 6. 投递
+  // 「主人互动」那条线已经对同一条视频做过的事，这里不要再做一遍：
+  // 同一条视频底下出现两条自己的评论、或者同一夹里收两次，都很像刷屏。
+  const ownerTouched = new Map<string, string[]>();
+  for (const item of ownerResult?.items ?? []) ownerTouched.set(item.bvid, item.actions);
+  const ownerDid = (bvid: string, action: string) => (ownerTouched.get(bvid) ?? []).includes(action);
+
   const delivered = { dm: false, comments: 0, fav: 0, dynamic: false };
   if (picked.length > 0) {
     const dmOutcome = await deliverDm(record, config, picked);
@@ -663,7 +854,9 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
     const commentEnabled = config.autoComment && config.dmMode !== "only";
     if (commentEnabled && !dmOutcome.fatal) {
       let fatal = false;
-      const commentTargets = picked.filter((item) => item.comment).slice(0, config.commentPerRound);
+      const commentTargets = picked
+        .filter((item) => item.comment && !ownerDid(item.candidate.bvid, "评论"))
+        .slice(0, config.commentPerRound);
       for (const item of commentTargets) {
         if (fatal) break;
         const outcome = await deliverComment(record, config, item.candidate.bvid, item.comment);
@@ -685,6 +878,8 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
       for (const item of picked) {
         if (favBudget <= 0) break;
         if ((item.score ?? 0) < config.favMinScore) continue;
+        // 主人那条线已经收进收藏夹了，别收第二次。
+        if (ownerDid(item.candidate.bvid, "收藏")) continue;
         // 理由太短说明她自己也没想清楚为什么要留着，那就别占收藏夹。
         if (item.reason.trim().length < FAV_MIN_REASON) {
           notes.push(`《${item.candidate.title.slice(0, 20)}》分数够但理由太短，不收藏。`);
@@ -755,6 +950,38 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
     })
     .join("\n\n");
 
+  // 主人这一段放在日报最前面 —— 那是她这一轮最在意的事，推荐流是「顺带逛的」。
+  //
+  // 即使这一轮什么都没做也要写：`brief` 档不落过程记录，用户看到「没刷到我的视频」
+  // 却翻不到任何原因，只能猜。所以「为什么没进候选 / 为什么没互动」必须单独落一行。
+  const ownerLines: string[] = [];
+  if (!config.ownerWatch) ownerLines.push("互动：没开（「自动看主人发的并互动」）");
+  if (ownerResult) {
+    if (ownerResult.status === "baseline") {
+      ownerLines.push("互动：这轮建立了基线，从下一条主人投稿开始生效");
+    } else if (ownerResult.status === "no-fresh") {
+      ownerLines.push("互动：这 7 天主人没有新发的投稿");
+    } else if (ownerResult.status === "all-done") {
+      ownerLines.push("互动：这几天的新投稿都处理过了");
+    } else if (ownerResult.items.length === 0) {
+      ownerLines.push("互动：这轮没有需要处理的投稿");
+    }
+  }
+  if (ownerDiag.length) ownerLines.push(...ownerDiag);
+  for (const item of ownerResult?.items ?? []) {
+    ownerLines.push(
+      [
+        `### ${item.bvid}`,
+        item.title,
+        item.url,
+        ...(item.score !== null ? [`分数：${item.score}`] : []),
+        `动作：${item.actions.length ? item.actions.join("、") : "（没做，只读过）"}`,
+        ...(item.comment ? [`评论：${item.comment}`] : []),
+      ].join("\n"),
+    );
+  }
+  const ownerBlock = ownerLines.length ? ["--- 主人 ---", ...ownerLines].join("\n\n") : "";
+
   // 过程记录跟着报告一起落库：一条都没挑中时，「为什么」比「没挑中」重要得多。
   // 以前 notes 只在内存里返回、接口也没透出去，页面只剩「本轮没有挑中的视频」，
   // 排查「全跳过」时完全无从下手（2026-10-28 就是这么踩的）。
@@ -768,18 +995,34 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
   const contentToStore = config.reportLevel === "off"
     ? "（日报已关闭，只记录额度与判重）"
     : [
+        ownerBlock,
         reportContent || "（本轮没有挑中的视频）",
         ...(config.reportLevel === "full" ? [skippedBlock, notesBlock] : []),
       ].filter(Boolean).join("\n\n");
 
   // 人格札记：替换掉 bili-desk 的 human-world.md，落成角色长期记忆。
-  // 只在挑中视频时写 —— 「刷了 5 条一条没挑」不值得占用长期记忆，那种情况值班台
-  // 自己的 BiliRoundReport 已经记着了。
-  const journal = picked.length
-    ? `我在 B站 看了 ${watchedCount} 条视频，挑中了 ${picked.length} 条：${picked
+  // 只在挑中视频（或真的对主人的投稿动过手）时写 —— 「刷了 5 条一条没挑」不值得占用长期记忆，
+  // 那种情况值班台自己的 BiliRoundReport 已经记着了。
+  //
+  // 主人那一段单独写：那是她「今天去看过主人发的东西」的事实，比刷到几条视频重要得多，
+  // 而且后续聊天里问「你看到我发的了吗」时，这条记忆就是她答得上来的依据。
+  const ownerJournalItems = (ownerResult?.items ?? []).filter((item) => item.actions.length > 0);
+  const journalParts: string[] = [];
+  if (ownerJournalItems.length) {
+    journalParts.push(
+      `我去看了主人新发的${ownerJournalItems
+        .map((item) => `《${item.title.slice(0, 40)}》`)
+        .join("、")}，依次做了${ownerJournalItems.map((item) => item.actions.join("+")).join("、")}。`,
+    );
+  }
+  if (picked.length) {
+    journalParts.push(
+      `我在 B站 看了 ${watchedCount} 条视频，挑中了 ${picked.length} 条：${picked
         .map((item) => `《${item.candidate.title.slice(0, 40)}》（UP：${item.candidate.author.name || "未知"}）`)
-        .join("、")}`
-    : "";
+        .join("、")}`,
+    );
+  }
+  const journal = journalParts.join("\n");
   // 同一 (binding, day, roundIndex) 重跑时覆盖同一条记忆，不重复堆积
   const journalKey = `bili-duty:${binding.id}:${today}:${roundIndex}`;
 
@@ -854,6 +1097,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
       reason: item.reason,
       comment: item.comment,
     })),
+    owner: ownerResult ?? undefined,
     notes,
   };
 }

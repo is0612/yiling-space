@@ -40,6 +40,15 @@ export type BiliAccount = {
     /** 是否把当天最好的一条发成公开动态。 */
     autoDynamic: boolean;
     dynamicMinScore: number;
+    /** 刷B站时把主人投稿排在候选最前面（只保证「看到」，不代表会互动）。 */
+    ownerFirst: boolean;
+    /** 是否自动看主人的新投稿并互动（点赞/收藏/评论/投币）。 */
+    ownerWatch: boolean;
+    ownerLike: boolean;
+    ownerFav: boolean;
+    ownerComment: boolean;
+    /** 给主人投稿投币的最低分，0 = 不投币。 */
+    ownerCoinMinScore: number;
   };
   nextWindow: "noon" | "night" | null;
   bindings: BiliBinding[];

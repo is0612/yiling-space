@@ -11,6 +11,7 @@ import {
   windowsRunFromTimestamps,
 } from "../server/utils/channel-adapter/bili/duty-scheduler";
 import { buildDutyPrompt } from "../server/utils/channel-adapter/bili/duty-prompt";
+import { mergeOwnerFirst, pickOwnerCandidates } from "../server/utils/channel-adapter/bili/duty-pipeline";
 import {
   BILI_DUTY_DEFAULTS,
   normalizeDmTargetUid,
@@ -262,6 +263,49 @@ async function main() {
   );
   assert.equal(parseDutyInput({ quotaResetAt: "not-a-date" }).quotaResetAt, "");
 
+  // 主人优先：主人发的东西她一定看，不能交给粗筛决定
+  // 模型一条都没留，主人那条照样进（这是「优先」的底线）
+  assert.deepEqual(mergeOwnerFirst(["BVowner"], [], 3), ["BVowner"]);
+  // 排在被模型挑中的前面
+  assert.deepEqual(mergeOwnerFirst(["BVowner"], ["BVx", "BVy"], 3), ["BVowner", "BVx", "BVy"]);
+  // 模型也留了同一条 → 不重复
+  assert.deepEqual(mergeOwnerFirst(["BVowner"], ["BVowner", "BVx"], 3), ["BVowner", "BVx"]);
+  // 主人连发三条，只补 2 条（OWNER_PICK_MAX）—— 不能把一整轮占满
+  assert.deepEqual(mergeOwnerFirst(["BVa", "BVb", "BVc"], [], 5), ["BVa", "BVb"]);
+  // 额度紧到 watchLimit=1 时，主人那两条也不能被挤掉
+  assert.deepEqual(mergeOwnerFirst(["BVa", "BVb"], ["BVx"], 1), ["BVa", "BVb"]);
+
+  // 主人相关开关：两个总开关默认都关，投币门槛默认 12
+  assert.equal(parseDutyInput({}).ownerFirst, false);
+  assert.equal(parseDutyInput({}).ownerWatch, false);
+  assert.equal(parseDutyInput({ ownerFirst: true }).ownerFirst, true);
+  assert.equal(parseDutyInput({ ownerWatch: true }).ownerWatch, true);
+  assert.equal(parseDutyInput({}).ownerCoinMinScore, 12);
+  assert.equal(parseDutyInput({ ownerCoinMinScore: 99 }).ownerCoinMinScore, 20, "投币门槛夹到 0-20");
+  // 只开 ownerFirst 不该把互动那四项带开
+  const firstOnly = parseDutyInput({ ownerFirst: true });
+  assert.equal(firstOnly.ownerWatch, false, "ownerFirst 和 ownerWatch 互不牵连");
+
+  // 主人优先的时间窗：最近 30 天；一条都没有时退回最近 3 条
+  const now = Date.parse("2026-11-02T12:00:00+08:00");
+  const daysAgo = (n: number) => new Date(now - n * 86400000).toISOString();
+  const allFresh = [{ pubdate: daysAgo(1) }, { pubdate: daysAgo(3) }];
+  assert.deepEqual(pickOwnerCandidates(allFresh, now).picked, allFresh, "都在 30 天内 → 全取");
+  assert.equal(pickOwnerCandidates(allFresh, now).fellBack, false);
+  // 混着去年 1 月的：只取窗口内的，不能把去年的当「这轮刷到的」
+  const mixed = [{ pubdate: daysAgo(1) }, { pubdate: "2025-01-19T15:19:21+08:00" }];
+  assert.deepEqual(pickOwnerCandidates(mixed, now).picked, [mixed[0]]);
+  // 全是老的 → 退回最近 3 条，并标记 fellBack（报告里要说明）
+  const allOld = [{ pubdate: daysAgo(400) }, { pubdate: daysAgo(500) }, { pubdate: daysAgo(600) }, { pubdate: daysAgo(700) }];
+  const fallback = pickOwnerCandidates(allOld, now);
+  assert.equal(fallback.picked.length, 3, "兜底只取 3 条，不是全取");
+  assert.equal(fallback.fellBack, true);
+  // 日期解析不出来的一律保留 —— 接口字段一变不能把主人的视频全滤掉
+  assert.deepEqual(pickOwnerCandidates([{ pubdate: "" }], now).picked, [{ pubdate: "" }]);
+  // 空列表就是空，不要造兜底
+  assert.deepEqual(pickOwnerCandidates([], now).picked, []);
+  assert.equal(pickOwnerCandidates([], now).fellBack, false);
+
   console.log("✅ test-bili-duty 全部通过");
   console.log("   谷时窗口判断（含跨午夜）：通过");
   console.log("   跨午夜归一 / 从报告重建窗口标记：通过");
@@ -270,6 +314,8 @@ async function main() {
   console.log("   刷站口味注入（空/有/底线不被顶掉）：通过");
   console.log("   私信收件人（主人 / 指定 UID）与陌生放行：通过");
   console.log("   打分口径 / 收藏与发动态闸门：通过");
+  console.log("   主人优先（模型没留也进 / 上限 2 条 / 不被额度挤掉）：通过");
+  console.log("   主人优先的时间窗（30 天 / 全老退回 3 条 / 空日期保留）：通过");
 }
 
 main().catch((error) => {

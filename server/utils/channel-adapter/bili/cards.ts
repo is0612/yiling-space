@@ -288,9 +288,15 @@ export function formatWatchedForModel(video: BiliWatchedVideo, transcriptChars =
   return lines.join("\n");
 }
 
-/** 列表卡片的紧凑描述（粗筛阶段给模型看）。 */
-export function formatCardForModel(card: BiliVideoCard, index: number): string {
-  const parts = [`${index + 1}. [${card.bvid}] ${card.title}（UP：${card.author.name || "未知"}）`];
+/**
+ * 列表卡片的紧凑描述（粗筛阶段给模型看）。
+ *
+ * `tag` 是给候选标来源的（现在只有「主人发的」用）—— 标在行首而不是塞进 UP 名，
+ * 是因为模型对行首的方括号更敏感，粗筛时不容易被后面的推荐理由冲掉。
+ */
+export function formatCardForModel(card: BiliVideoCard, index: number, tag?: string): string {
+  const prefix = tag ? `【${tag}】` : "";
+  const parts = [`${index + 1}. ${prefix}[${card.bvid}] ${card.title}（UP：${card.author.name || "未知"}）`];
   const meta: string[] = [];
   if (card.duration) meta.push(formatDuration(card.duration));
   if (card.stat.view) meta.push(`播放 ${card.stat.view}`);
