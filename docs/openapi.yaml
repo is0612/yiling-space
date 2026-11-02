@@ -935,7 +935,13 @@ paths:
       tags: [Characters]
       operationId: importCharacterCard
       summary: 导入角色卡
-      description: "总是新建角色：同名只在名称后加「副本」后缀，不合并、不覆盖已有角色。包被当作不可信输入逐字段校验（数量、长度、枚举），模型参数只接受白名单字段，任何密钥字段都不会写入数据库。记忆与忆泡的来源消息指针一律置空 —— 会话原文不随包走。导入后角色的 API Key 需要重新填写，表情包需要重新同步。成功写入 `character.imported` 审计。"
+      description: "默认新建角色：同名只在名称后加「副本」后缀，不覆盖已有角色。带 `target` 时改为把卡并进该角色（合并），前提是两边同一血缘（卡片 `origin.characterId` 与目标对得上），否则 400。合并口径：本地内容一律保留，导入的按内容去重后追加，日记/手账接在本地最大版本号后面成为新版本。包被当作不可信输入逐字段校验（数量、长度、枚举），模型参数只接受白名单字段，任何密钥字段都不会写入数据库。记忆与忆泡的来源消息指针一律置空 —— 会话原文不随包走。导入后角色的 API Key 需要重新填写，表情包需要重新同步。新建写 `character.imported` 审计，合并写 `character.merged`。"
+      parameters:
+        - name: target
+          in: query
+          required: false
+          description: 合并目标角色的 id。只接受同一血缘的角色；不传则新建。
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
@@ -951,7 +957,21 @@ paths:
                 required: [character, counts]
                 properties:
                   character: { $ref: '#/components/schemas/Character' }
+                  mode: { type: string, enum: [new, merge], description: new = 新建角色；merge = 并进 target }
                   counts: { $ref: '#/components/schemas/CharacterCardCounts' }
+                  added: { $ref: '#/components/schemas/CharacterImportAdded' }
+        '200':
+          description: 合并成功（并进已有角色），返回该角色与本次实际新增的条数
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [character, mode, counts, added]
+                properties:
+                  character: { $ref: '#/components/schemas/Character' }
+                  mode: { type: string, enum: [new, merge] }
+                  counts: { $ref: '#/components/schemas/CharacterCardCounts' }
+                  added: { $ref: '#/components/schemas/CharacterImportAdded' }
         '400':
           description: 不是角色卡、格式版本过高或字段非法（`statusMessage` 给出具体是哪一条）
           content:
@@ -960,7 +980,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '413':
-          description: 文件超过 24MB
+          description: 文件超过 32MB
   /characters/{characterId}:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
@@ -1139,13 +1159,14 @@ paths:
                 properties:
                   character:
                     type: object
-                    required: [id, name, chatModel, chatTemperature, chatMaxTokens, chatApiBaseUrl, chatApiKeyConfigured, chatApiKeySource]
+                    required: [id, name, chatModel, chatTemperature, chatMaxTokens, chatThinking, chatApiBaseUrl, chatApiKeyConfigured, chatApiKeySource]
                     properties:
                       id: { type: string, format: uuid }
                       name: { type: string }
                       chatModel: { type: string }
                       chatTemperature: { type: number, minimum: 0, maximum: 2 }
                       chatMaxTokens: { type: integer, minimum: 256, maximum: 8192 }
+                      chatThinking: { type: boolean, description: 深度思考开关，默认开启（跟随 DeepSeek 平台默认）；仅在 DeepSeek 系模型上生效。 }
                       chatApiBaseUrl: { type: string, format: uri }
                       chatApiKeyConfigured: { type: boolean }
                       chatApiKeySource: { type: string, enum: [character, environment, missing] }
@@ -4225,9 +4246,14 @@ components:
       required: [format, formatVersion, character]
       properties:
         format: { type: string, enum: [yiling-space.character] }
-        formatVersion: { type: integer, minimum: 1, maximum: 1 }
+        formatVersion: { type: integer, minimum: 1, maximum: 2 }
         exportedAt: { type: string, format: date-time }
         exportedBy: { type: string, enum: [yiling-space] }
+        origin:
+          type: object
+          description: 血缘：这张卡最初来自哪一份角色数据。导入时用它认出「本机已有同一个她」从而允许合并；空字符串 = 老卡/没有血缘信息，只能新建。
+          properties:
+            characterId: { type: string, description: 来源角色 id（UUID）；不像 UUID 的值导入时会被忽略 }
         character:
           type: object
           required: [name]
@@ -4247,9 +4273,11 @@ components:
             chatModel: { type: string }
             chatTemperature: { type: number, minimum: 0, maximum: 2 }
             chatMaxTokens: { type: integer }
+            chatThinking: { type: boolean }
             chatApiBaseUrl: { type: string }
             memoryTokenBudget: { type: integer }
             snapshotTokenBudget: { type: integer }
+            memoryItemLimit: { type: integer, minimum: 1, maximum: 50, description: 一次注入多少条长期记忆；默认 20。 }
             recentMessageLimit: { type: integer }
         memorySetting:
           type: object
@@ -4291,6 +4319,19 @@ components:
               keywords: { type: array, maxItems: 20, items: { type: string } }
               participants: { type: array, maxItems: 20, items: { type: string } }
               confidence: { type: number, minimum: 0, maximum: 1, nullable: true }
+        eventDays:
+          type: array
+          maxItems: 2000
+          description: 忆泡日历的一天一行（整理进度）。日历页读这张表，所以它必须跟包走；缺省时导入端按忆泡日期反推。
+          items:
+            type: object
+            required: [dayKey]
+            properties:
+              scope: { type: string, enum: [character, private], default: character }
+              dayKey: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+              state: { type: string, enum: [DRAFT, FINAL] }
+              eventCount: { type: integer, minimum: 0 }
+              extractedAt: { type: string, format: date-time, nullable: true, description: 上次整理到哪一刻 }
         snapshots:
           type: array
           maxItems: 600
@@ -4307,6 +4348,41 @@ components:
               structuredContent: { type: object, additionalProperties: true }
               generatedAt: { type: string, format: date-time, nullable: true }
               createdAt: { type: string, format: date-time }
+        journals:
+          type: array
+          maxItems: 1500
+          description: 日记与手账（角色全局范围，一天一条），版本号原样保留；来源消息/忆泡指针不随包走，「今日一句」按版本号重新指向本机新建的日记版本。
+          items:
+            type: object
+            required: [dayKey]
+            properties:
+              dayKey: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+              status: { type: string, enum: [ACTIVE, SKIPPED] }
+              skipReason: { type: string, maxLength: 300, nullable: true }
+              diaryState: { type: string, enum: [PENDING, GENERATED, SKIPPED] }
+              handbookState: { type: string, enum: [PENDING, GENERATED, SKIPPED] }
+              diaryDecidedAt: { type: string, format: date-time, nullable: true }
+              handbookDecidedAt: { type: string, format: date-time, nullable: true }
+              createdAt: { type: string, format: date-time, nullable: true }
+              revisions:
+                type: array
+                maxItems: 40
+                items:
+                  type: object
+                  required: [kind, version, content]
+                  properties:
+                    kind: { type: string, enum: [DIARY, HANDBOOK] }
+                    version: { type: integer, minimum: 1 }
+                    title: { type: string, maxLength: 120 }
+                    content: { type: string, maxLength: 20000 }
+                    thought: { type: string, maxLength: 4000 }
+                    quote: { type: string, maxLength: 2000 }
+                    tags: { type: array, maxItems: 20, items: { type: string } }
+                    revisionType: { type: string, enum: [AI_GENERATED, AI_REWRITE, USER_EDITED, RESTORED] }
+                    promptVersion: { type: string, nullable: true }
+                    model: { type: string, nullable: true }
+                    sourceDiaryVersion: { type: integer, nullable: true, description: 手账「今日一句」摘自第几版日记 }
+                    createdAt: { type: string, format: date-time, nullable: true }
         catchphrases:
           type: array
           maxItems: 400
@@ -4369,10 +4445,26 @@ components:
         memories: { type: integer }
         privateMemories: { type: integer, description: 其中属于导出者本人的私人记忆条数；导入后成为导入者的私人记忆 }
         events: { type: integer }
+        eventDays: { type: integer, description: 忆泡日历里有记录的天数；v1 老卡没有这一段，按 0 处理 }
         snapshots: { type: integer }
+        journals: { type: integer, description: 日记/手账的天数（一天一条） }
+        journalRevisions: { type: integer, description: 日记/手账的历史版本合计 }
         catchphrases: { type: integer }
         friends: { type: integer, description: 带走的朋友数；`?friends=0` 时为 0 }
         friendMemories: { type: integer, description: 朋友名下的记忆总条数，不含朋友本人以外的角色记忆 }
+    CharacterImportAdded:
+      type: object
+      description: 本次实际写进库的条数。新建时等于 counts；合并时是新增量，0 表示这份卡里没有新东西（重复合并不会长数据）。
+      required: [memories, events, eventDays, snapshots, journals, journalRevisions, catchphrases, friends]
+      properties:
+        memories: { type: integer }
+        events: { type: integer }
+        eventDays: { type: integer }
+        snapshots: { type: integer }
+        journals: { type: integer, description: 新建到本机的天数；已有那一天只追加版本，不计在这里 }
+        journalRevisions: { type: integer }
+        catchphrases: { type: integer }
+        friends: { type: integer }
     CharacterPatch:
       type: object
       description: 更新角色时的部分字段；所有字段均为可选。API Key 仅可写入，服务端会加密保存且不会回传。
@@ -4392,6 +4484,7 @@ components:
         chatModel: { type: string, maxLength: 120 }
         chatTemperature: { type: number, minimum: 0, maximum: 2 }
         chatMaxTokens: { type: integer, minimum: 256, maximum: 8192 }
+        chatThinking: { type: boolean, description: 深度思考开关，默认开启（DeepSeek 平台本身就是 enabled，只有显式存 false 才算关）。 }
         proactive: { $ref: '#/components/schemas/ProactiveSettings' }
         groupInitiative: { $ref: '#/components/schemas/GroupInitiativeSettings' }
     Character:
@@ -4401,6 +4494,7 @@ components:
           required: [id, createdAt, updatedAt]
           properties:
             id: { type: string, format: uuid }
+            originId: { type: string, format: uuid, nullable: true, description: 血缘 id：导入角色卡时用来认出「本机已有同一个她」；空 = 本机原生角色 }
             createdAt: { type: string, format: date-time }
             updatedAt: { type: string, format: date-time }
     MemoryItem:

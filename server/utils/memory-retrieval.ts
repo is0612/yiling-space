@@ -191,6 +191,18 @@ export const MEMORY_TOKEN_BUDGET_DEFAULT = 1800;
 export const SNAPSHOT_TOKEN_BUDGET_DEFAULT = 2500;
 export const MEMORY_HALF_LIFE_DAYS_DEFAULT = 30;
 /**
+ * 一次注入多少条长期记忆。
+ *
+ * 12 → 20（2026-11-02）：这个值比 token 预算更早卡住。实测记忆平均 74 字，
+ * 12 条只有 888 token，1800 的预算有一半用不上 —— 人调预算却不见多记，原因就在这里。
+ * 也不能无限加：条数越多每条的注意力越薄，还会把真正相关的那几条挤淡。
+ * 真要记住几千条，靠归档成阶段总结，不是一次全塞进提示词。
+ */
+export const MEMORY_ITEM_LIMIT_DEFAULT = 20;
+/** 写死上下限防手滑：1 条等于没有记忆，超过 50 条基本是在跟上下文窗口赌气。 */
+export const MEMORY_ITEM_LIMIT_MIN = 1;
+export const MEMORY_ITEM_LIMIT_MAX = 50;
+/**
  * 一次回复回看多少条已落库消息。
  *
  * 40 条在桌面端约等于 20 轮问答；群里一轮就有三五条，同样的 40 条只覆盖几轮，
@@ -356,7 +368,7 @@ function positiveNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }
 
-/** 记忆预算从角色 modelConfig 读，缺省 1200 token。 */
+/** 记忆预算从角色 modelConfig 读，缺省 1800 token。 */
 export function resolveMemoryTokenBudget(modelConfig: unknown): number {
   const record = modelConfig && typeof modelConfig === "object" ? modelConfig as Record<string, unknown> : {};
   return positiveNumber(record.memoryTokenBudget) || MEMORY_TOKEN_BUDGET_DEFAULT;
@@ -368,10 +380,18 @@ export function resolveSnapshotTokenBudget(modelConfig: unknown): number {
   return positiveNumber(record.snapshotTokenBudget) || SNAPSHOT_TOKEN_BUDGET_DEFAULT;
 }
 
-/** 记忆注入条数上限（防止一堆短句把提示词塞满）。 */
+/**
+ * 记忆注入条数上限。
+ *
+ * 跟 `resolveRecentMessageLimit` 一样夹一层：写入侧虽然校验过，但渠道和 Worker
+ * 可能不走同一个入口，读的时候不能假设值一定合法。
+ */
 export function resolveMemoryItemLimit(modelConfig: unknown): number {
   const record = modelConfig && typeof modelConfig === "object" ? modelConfig as Record<string, unknown> : {};
-  return positiveNumber(record.memoryItemLimit) || 12;
+  const raw = record.memoryItemLimit;
+  const value = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return MEMORY_ITEM_LIMIT_DEFAULT;
+  return Math.min(MEMORY_ITEM_LIMIT_MAX, Math.max(MEMORY_ITEM_LIMIT_MIN, Math.round(value)));
 }
 
 /**

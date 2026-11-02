@@ -315,10 +315,27 @@ export function resolveVoiceAsrSettings(input: VoiceSettingsInput): VoiceAsrSett
   //
   // 之前这里把 MiniMax 强制归一成 `asr-1.0`，等于写死了模型名、也盖掉了用户填的值 —— 不对。
   // 正确做法和 TTS 的 `ttsModel` 一致：用户配了就用用户的，没配才给服务商默认。
-  // 代价是：用户配置里若残留旧服务商的模型名（比如从硅基流动迁到 MiniMax 时 `asrModel`
-  // 还留着 `FunAudioLLM/SenseVoiceSmall`），得靠用户自己清掉 —— 代码不该替用户猜。
-  const model = configuredModel || (provider === "minimax" ? MINIMAX_ASR_DEFAULT_MODEL : "");
+  let model = configuredModel || (provider === "minimax" ? MINIMAX_ASR_DEFAULT_MODEL : "");
   if (!model) return null;
+
+  /*
+   * 服务商与模型名必须配套：地址已经打到 MiniMax，模型名却还留着硅基流动那套
+   * `FunAudioLLM/SenseVoiceSmall` 时，服务商直接 400 `invalid model ... must be one of
+   * asr-1.0`（2026-11-02 实测）。表现就是「她听不懂语音」，而日志里只有一行 400。
+   *
+   * 这不是「替用户猜」——MiniMax 的识别模型就 `asr-*` 这一族，认出来不是它就没有第二解。
+   * 反过来不兜底，`.env` 里一行换服务商时漏改的残留，就能让**所有角色**的识别静默坏掉：
+   * 页面上早就切 MiniMax 了，谁也不会想到去翻 ASR_MODEL。
+   *
+   * 只拦「明显不属于 MiniMax」的名字：将来出 `asr-2.0` 照样能填进来。
+   */
+  if (provider === "minimax" && !/^asr-/i.test(model)) {
+    console.warn(
+      `[voice] ASR 模型「${model}」不是 MiniMax 的合法模型（只认 ${MINIMAX_ASR_DEFAULT_MODEL} 这一族），`
+      + `本次改用 ${MINIMAX_ASR_DEFAULT_MODEL}；请把 .env 的 VOICE_ASR_MODEL 或页面的识别模型改掉`,
+    );
+    model = MINIMAX_ASR_DEFAULT_MODEL;
+  }
 
   // ASR 地址必须和 provider 一致，否则「MiniMax 的 /speech_to_text 打到硅基流动域名」→ 404。
   //

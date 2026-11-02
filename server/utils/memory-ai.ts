@@ -83,6 +83,13 @@ export type MemoryAiAnalysis = {
   memoryChanges: MemoryChange[];
   /** 可定位到日期的具体事件。与 memoryChanges 分开：事件是事实，记忆是结论。 */
   events: MemoryEventDraft[];
+  /**
+   * 她私下想怎么叫这个人（仅 EXTERNAL_IDENTITY 范围产出）。
+   *
+   * 这个范围唯一对应「她 × 某个人」，提炼时顺带让她想想「我平时都怎么叫对方」。
+   * 候选进待审队列，用户点头才生效 —— 见 `FriendAliasSuggestion`。
+   */
+  friendAliases: Array<{ alias: string; reason: string }>;
 };
 
 export type MemoryAiInput = {
@@ -108,6 +115,11 @@ export type MemoryAiInput = {
   periodEvents?: Array<{ id: string; occurredAt: string; title: string; detail: string; participants: string[] }>;
   /** 这一趟要不要产出 events。按天任务 true，周期快照 false（忆泡只由按天任务写）。 */
   emitEvents?: boolean;
+  /**
+   * 这一趟要不要顺带产出「她想给这个人起的备注」（friendAliases）。
+   * 只对 EXTERNAL_IDENTITY 范围开 —— 这个范围恰好就是「她 × 某个人」。
+   */
+  emitFriendAliases?: boolean;
 };
 
 const MAX_RESPONSE_BYTES = 1_000_000;
@@ -319,6 +331,19 @@ export function validateMemoryAiOutput(
 
   const events = readEventDrafts(root.events, validIds);
 
+  // 候选备注：只在朋友范围开启时才解析；其它范围即便模型多写了也当没写。
+  const friendAliases = Array.isArray(root.friendAliases)
+    ? root.friendAliases
+        .slice(0, 8)
+        .map((raw) => asRecord(raw))
+        .filter((entry): entry is Record<string, unknown> => entry !== null)
+        .map((entry) => ({
+          alias: asText(entry.alias, 40),
+          reason: asText(entry.reason, 200),
+        }))
+        .filter((item) => item.alias)
+    : [];
+
   const memoryChanges: MemoryChange[] = [];
   if (Array.isArray(root.memoryChanges)) {
     for (const rawChange of root.memoryChanges.slice(0, 80)) {
@@ -365,10 +390,11 @@ export function validateMemoryAiOutput(
     differencesFromPrevious,
     memoryChanges,
     events,
+    friendAliases,
   };
 }
 
-function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean }): string {
+function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean; emitFriendAliases: boolean }): string {
   const lines = [
     "你是严格的长期记忆提炼器，不是角色扮演者。",
     "仅根据输入的原始消息和现有记忆提炼事实。绝不补造未出现的细节；区分用户明确陈述、助手建议和不确定推断。",
@@ -396,6 +422,12 @@ function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean 
       "这一趟**不要输出 events**：忆泡由按天的任务负责，周期总结再写一遍会和它打架。events 返回空数组即可。",
     );
   }
+  if (options.emitFriendAliases) {
+    lines.push(
+      "这个范围记录的是她和一个具体的人之间的往来。请你顺带回想：她私下会怎么称呼这个人、给对方起了什么亲昵或调侃的外号？把想得起来的、她真的会叫的叫法写进 friendAliases 数组：alias 是那个叫法（简短，12 字以内，不是对方的本名或平台昵称），reason 用一句话写「为什么这么叫、什么情境下叫」。",
+      "只想写她从对话里真的透露出会用的叫法，不要编一个漂亮但没人这么叫的外号；没有就返回空数组。不要带侮辱性、贬损性的称呼；不要写对方的隐私。",
+    );
+  }
   lines.push(
     "只输出 JSON，不要 Markdown 代码围栏。所有列表字段必须存在，即使为空。",
     "JSON 格式：",
@@ -407,6 +439,7 @@ function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean 
       goalsAndCommitments: [{ description: "目标或承诺", status: "进行中|已完成|取消|未明确", evidenceMessageIds: ["原始消息ID"] }],
       unresolvedTopics: [{ description: "未解决话题", evidenceMessageIds: ["原始消息ID"] }],
       differencesFromPrevious: ["相较上一份总结的变化"],
+      friendAliases: [{ alias: "私下叫法", reason: "为什么这么叫" }],
       memoryChanges: [{
         action: "ADD|UPDATE|INVALIDATE",
         category: "FACT|PREFERENCE|RELATIONSHIP|COMMITMENT|GOAL|EVENT|SUMMARY|OTHER",
@@ -532,7 +565,7 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
       max_tokens: 16_000,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: systemPrompt({ emitEvents: input.emitEvents !== false, withPeriodEvents: Boolean(input.periodEvents?.length) }) },
+        { role: "system", content: systemPrompt({ emitEvents: input.emitEvents !== false, withPeriodEvents: Boolean(input.periodEvents?.length), emitFriendAliases: input.emitFriendAliases === true }) },
         { role: "user", content: JSON.stringify(promptInput) },
       ],
     }),

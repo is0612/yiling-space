@@ -22,6 +22,7 @@ import {
   readSourceMessageIsOwner,
 } from "./conversation-message";
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
+import { normalizeFriendAliases } from "./friend-aliases";
 import { MEMORY_JOB_LEASE_MS } from "./memory-job-lease";
 
 /** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
@@ -1192,6 +1193,8 @@ export async function processNextMemoryJob(
       previousSnapshotSummary: previousSnapshot?.summary ?? null,
       // 忆泡由按天任务负责：快照只读 periodEvents 做总结，不再产出 events。
       emitEvents: false,
+      // 朋友范围顺带产候选备注：这个范围就是「她 × 某个人」，趁提炼顺手让她想「我平时怎么叫对方」。
+      emitFriendAliases: scope.scopeType === "EXTERNAL_IDENTITY",
       ...(periodEvents.length
         ? {
             periodEvents: periodEvents.map((event) => ({
@@ -1330,6 +1333,24 @@ export async function processNextMemoryJob(
 
       // 模型提出但没通过校验的条数。没有这个数字，人分不清「模型没提」和「提了但不合格」。
       let rejectedChangeCount = 0;
+
+      // 候选备注：朋友范围里模型顺带提的「她想给这个人起的叫法」，落待审队列。
+      // 归一化沿用 friend-aliases 的口径（截断/去重），aliasKey 交给唯一约束挡重复。
+      // 用 createMany + skipDuplicates：同一条（含已否掉的 REJECTED）不再重复落库，
+      // 否则用户否掉的外号下个周期又被提回来、弹窗永远清不空。
+      // 失败静默 —— 快照本身已经成功，起外号是搭便车，不该因为它把整份快照判失败。
+      const aliasRows = aiResult.analysis.friendAliases
+        .map((suggestion) => {
+          const normalized = normalizeFriendAliases(suggestion.alias);
+          const alias = normalized.aliases[0];
+          return alias
+            ? { scopeId: job.memoryScopeId, alias, aliasKey: alias.toLowerCase(), reason: suggestion.reason.slice(0, 200), status: "PENDING" }
+            : null;
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null);
+      if (aliasRows.length) {
+        await tx.friendAliasSuggestion.createMany({ data: aliasRows, skipDuplicates: true }).catch(() => undefined);
+      }
 
       // 忆泡不再由快照写：它是按天任务的职责。两套规则各写一遍时，同一天会被判两次，
       // 而且周期快照看不到「今天还在长」的 DRAFT。这里固定为空，模型也不再被要求产出。

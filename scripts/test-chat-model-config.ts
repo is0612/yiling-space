@@ -12,7 +12,11 @@ import { decryptApiKeyWithKey, encryptApiKeyWithKey, resolveCharacterApiKey } fr
 const defaults = resolveChatModelSettings({}, "ci-default-model");
 assert.equal(defaults.model, "ci-default-model");
 assert.equal(defaults.temperature, 0.7);
-assert.equal(defaults.maxTokens, 1800);
+assert.equal(defaults.maxTokens, 4096);
+// 思考跟着 DeepSeek 平台默认走：没配置过就是开，只有显式存过 false 才算关。
+assert.equal(defaults.thinking, true);
+assert.equal(resolveChatModelSettings({ chatThinking: false }).thinking, false);
+assert.equal(resolveChatModelSettings({ chatThinking: true }).thinking, true);
 assert.equal(defaults.apiBaseUrl, "https://api.openai.com/v1");
 assert.equal(defaults.apiKeyConfigured, false);
 assert.equal(defaults.apiKeySource, "missing");
@@ -33,7 +37,7 @@ assert.equal(custom.apiKeySource, "character");
 
 assert.equal(resolveChatModelSettings({ chatModel: "  " }, "env-model").model, "env-model");
 assert.equal(resolveChatModelSettings({ chatTemperature: 9, chatMaxTokens: 3 }, "fallback").temperature, 0.7);
-assert.equal(resolveChatModelSettings({ chatTemperature: 9, chatMaxTokens: 3 }, "fallback").maxTokens, 1800);
+assert.equal(resolveChatModelSettings({ chatTemperature: 9, chatMaxTokens: 3 }, "fallback").maxTokens, 4096);
 
 assert.deepEqual(
   readChatModelSettingsPatch({

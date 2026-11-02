@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {
   estimateTokens,
+  MEMORY_ITEM_LIMIT_DEFAULT,
+  MEMORY_ITEM_LIMIT_MAX,
   MEMORY_TOKEN_BUDGET_DEFAULT,
   rankMemoriesWithBudget,
   rankSnapshotsWithBudget,
@@ -88,8 +90,11 @@ assert.equal(resolveMemoryTokenBudget({}), MEMORY_TOKEN_BUDGET_DEFAULT, "缺省�
 assert.equal(resolveMemoryTokenBudget({ memoryTokenBudget: 3000 }), 3000, "读得到自定义预算。");
 assert.equal(resolveMemoryTokenBudget({ memoryTokenBudget: -1 }), MEMORY_TOKEN_BUDGET_DEFAULT, "非法值回落默认。");
 assert.equal(resolveSnapshotTokenBudget({ snapshotTokenBudget: 500 }), 500, "快照预算独立读取。");
-assert.equal(resolveMemoryItemLimit({}), 12, "条数上限默认 12。");
+assert.equal(resolveMemoryItemLimit({}), MEMORY_ITEM_LIMIT_DEFAULT, "条数上限默认 20（以前是 12，比预算更早卡住）。");
 assert.equal(resolveMemoryItemLimit({ memoryItemLimit: 3 }), 3, "条数上限可配。");
+assert.equal(resolveMemoryItemLimit({ memoryItemLimit: 999 }), MEMORY_ITEM_LIMIT_MAX, "超过上限要夹住。");
+assert.equal(resolveMemoryItemLimit({ memoryItemLimit: 0 }), MEMORY_ITEM_LIMIT_DEFAULT, "0 回退默认，不表示「不限」。");
+assert.equal(resolveMemoryItemLimit({ memoryItemLimit: "abc" }), MEMORY_ITEM_LIMIT_DEFAULT, "非法值回落默认。");
 
 // ── 最近对话窗口 ────────────────────────────────────────────
 assert.equal(resolveRecentMessageLimit({}), RECENT_MESSAGE_LIMIT_DEFAULT, "窗口默认 40 条。");

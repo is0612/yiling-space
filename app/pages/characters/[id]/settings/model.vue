@@ -29,7 +29,7 @@ const fetchingModels = ref(false);
 
 const draftChatModel = ref("");
 const draftChatTemperature = ref(0.7);
-const draftChatMaxTokens = ref(1800);
+const draftChatMaxTokens = ref(4096);
 const draftChatApiBaseUrl = ref("https://api.openai.com/v1");
 const draftChatApiKey = ref("");
 const clearSavedApiKey = ref(false);
@@ -37,6 +37,8 @@ const draftProviderKey = ref("openai");
 const draftDailyTokenLimit = ref(0);
 const draftMemoryTokenBudget = ref(1800);
 const draftSnapshotTokenBudget = ref(2500);
+/** 一次注入多少条长期记忆。这个值以前写死 12，页面上没有入口，调预算却不见多记就是它卡住的。 */
+const draftMemoryItemLimit = ref(20);
 const draftRecentMessageLimit = ref(40);
 /** 近期忆泡天数：0 = 不带。默认关，打开后每轮多背几百 token。 */
 const draftEventRecentDays = ref(0);
@@ -102,6 +104,7 @@ const draftSignature = computed(() => JSON.stringify([
   draftDailyTokenLimit.value,
   draftMemoryTokenBudget.value,
   draftSnapshotTokenBudget.value,
+  draftMemoryItemLimit.value,
   draftRecentMessageLimit.value,
   // 语音模型：Key 的明文不进指纹（留空=不改，没法从明文判断），布尔勾选要进
   draftVoiceProvider.value,
@@ -353,10 +356,11 @@ function applyProvider(key: string) {
 
 function resetRecommendedGenerationSettings() {
   draftChatTemperature.value = 0.8;
-  draftChatMaxTokens.value = 2048;
+  draftChatMaxTokens.value = 4096;
   draftDailyTokenLimit.value = 0;
   draftMemoryTokenBudget.value = 1800;
   draftSnapshotTokenBudget.value = 2500;
+  draftMemoryItemLimit.value = 20;
   draftRecentMessageLimit.value = 40;
   draftEventRecentDays.value = 0;
   ElMessage.success("已填入日常陪伴推荐参数，点击保存设置后生效。");
@@ -377,13 +381,14 @@ async function loadCharacter() {
     character.value = data;
     draftChatModel.value = data.chatModel ?? "";
     draftChatTemperature.value = data.chatTemperature ?? 0.7;
-    draftChatMaxTokens.value = data.chatMaxTokens ?? 1800;
+    draftChatMaxTokens.value = data.chatMaxTokens ?? 4096;
     draftChatApiBaseUrl.value = data.chatApiBaseUrl || "https://api.openai.com/v1";
     draftChatApiKey.value = "";
     clearSavedApiKey.value = false;
     draftDailyTokenLimit.value = data.dailyTokenLimit ?? 0;
     draftMemoryTokenBudget.value = data.memoryTokenBudget ?? 1800;
     draftSnapshotTokenBudget.value = data.snapshotTokenBudget ?? 2500;
+    draftMemoryItemLimit.value = data.memoryItemLimit ?? 20;
     draftRecentMessageLimit.value = data.recentMessageLimit ?? 40;
     draftEventRecentDays.value = data.eventRecentDays ?? 0;
     draftProviderKey.value = providerByBaseUrl(draftChatApiBaseUrl.value)?.key ?? "custom";
@@ -429,6 +434,7 @@ async function save(silent = false): Promise<boolean> {
         dailyTokenLimit: draftDailyTokenLimit.value,
         memoryTokenBudget: draftMemoryTokenBudget.value,
         snapshotTokenBudget: draftSnapshotTokenBudget.value,
+        memoryItemLimit: draftMemoryItemLimit.value,
         recentMessageLimit: draftRecentMessageLimit.value,
         eventRecentDays: draftEventRecentDays.value,
         // 语音模型
@@ -781,7 +787,7 @@ watch(id, () => void loadCharacter());
                   最大输出 Token
                 </div>
                 <p class="field-help">
-                  推荐 2048：给聊天回复和结构化输出留余量。这是单次输出上限，不代表每次都会用满；推理模型若经常截断需另行调高。
+                  推荐 4096：思考 token 也算在这个上限里，给窄了会出现「思考完没正文」。这是单次输出上限，不代表每次都会用满，用多少算多少。
                 </p>
                 <div class="knob-ctl">
                   <el-input-number
@@ -866,7 +872,7 @@ watch(id, () => void loadCharacter());
                   记忆注入预算（token）
                 </div>
                 <p class="field-help">
-                  推荐 1800：约 12 条长期记忆的量，适合持续陪伴。预算并非严格硬上限，首条记忆始终放行；0 回退到系统默认 1800。
+                  推荐 1800：约 20 条长期记忆的量，适合持续陪伴。预算并非严格硬上限，首条记忆始终放行；0 回退到系统默认 1800。
                 </p>
                 <div class="knob-ctl">
                   <el-input-number
@@ -876,6 +882,25 @@ watch(id, () => void loadCharacter());
                     :max="20000"
                     :step="200"
                     aria-label="记忆注入预算"
+                  />
+                </div>
+              </div>
+
+              <div class="knob">
+                <div class="knob-label">
+                  记忆注入条数
+                </div>
+                <p class="field-help">
+                  推荐 20 条。它比预算更早卡住：记忆平均 74 字，12 条才 888 token，1800 的预算有一半用不上。上限 50，再多每条的注意力会被摊薄。
+                </p>
+                <div class="knob-ctl">
+                  <el-input-number
+                    v-model="draftMemoryItemLimit"
+                    class="knob-number"
+                    :min="1"
+                    :max="50"
+                    :step="1"
+                    aria-label="记忆注入条数"
                   />
                 </div>
               </div>

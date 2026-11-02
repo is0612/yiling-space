@@ -5,6 +5,7 @@ export type ChatModelSettingsPatch = {
   chatModel?: string;
   chatTemperature?: number;
   chatMaxTokens?: number;
+  chatThinking?: boolean;
   chatApiBaseUrl?: string;
   chatApiKey?: string;
   clearApiKey?: boolean;
@@ -13,13 +14,22 @@ export type ResolvedChatModelSettings = {
   model: string;
   temperature: number;
   maxTokens: number;
+  /** 深度思考开关：默认开（跟随 DeepSeek 平台默认）。真要发还得模型认，见 chat-reply 的 isThinkingModel。 */
+  thinking: boolean;
   apiBaseUrl: string;
   apiKeyConfigured: boolean;
   apiKeySource: "character" | "environment" | "missing";
 };
 
 const DEFAULT_TEMPERATURE = 0.7;
-const DEFAULT_MAX_TOKENS = 1800;
+/**
+ * 默认输出上限。
+ *
+ * 4096 而不是 1800：DeepSeek 的思考默认是开的，思考 token 也算在 max_tokens 里
+ * （实测一轮 35~2200，提示词越长越高）。1800 在复杂问题上会被思考吃空、正文为空，
+ * 表现成「她这轮没说话」—— 而不给宽的下限省不下钱：max_tokens 只在真用到时计费。
+ */
+const DEFAULT_MAX_TOKENS = 4096;
 const MIN_MAX_TOKENS = 256;
 const MAX_MAX_TOKENS = 8192;
 const MAX_MODEL_LENGTH = 120;
@@ -134,6 +144,10 @@ export function readChatModelSettingsPatch(body: Record<string, unknown>): ChatM
     if (typeof value !== "number" || !Number.isInteger(value) || value < MIN_MAX_TOKENS || value > MAX_MAX_TOKENS) throw new Error("最大输出 Token 必须是 256 到 8192 之间的整数。");
     patch.chatMaxTokens = value;
   }
+  if ("chatThinking" in body) {
+    if (typeof body.chatThinking !== "boolean") throw new Error("深度思考开关必须是布尔值。");
+    patch.chatThinking = body.chatThinking;
+  }
   if ("chatApiBaseUrl" in body) {
     if (typeof body.chatApiBaseUrl !== "string") throw new Error("API Base URL 必须是文本。");
     patch.chatApiBaseUrl = validateChatApiBaseUrl(body.chatApiBaseUrl);
@@ -168,6 +182,14 @@ export function resolveChatModelSettings(
     model: (configuredModel || fallbackModel).slice(0, MAX_MODEL_LENGTH),
     temperature: typeof temperature === "number" && Number.isFinite(temperature) && temperature >= 0 && temperature <= 2 ? Math.round(temperature * 10) / 10 : DEFAULT_TEMPERATURE,
     maxTokens: typeof maxTokens === "number" && Number.isInteger(maxTokens) && maxTokens >= MIN_MAX_TOKENS && maxTokens <= MAX_MAX_TOKENS ? maxTokens : DEFAULT_MAX_TOKENS,
+    /**
+     * 默认开：DeepSeek V4 平台本身就是 enabled，用这套接口的人多半就是冲着思考来的。
+     * 「没配置过」应当跟随平台默认，而不是替人关掉 —— 之前那版默认关，等于悄悄改掉了
+     * 所有存量角色的说话方式。想省延迟 / 费用在角色面板上关掉即可。
+     *
+     * 这里只管回显与配置；真正发不发还过一道 `chat-reply` 的 isThinkingModel。
+     */
+    thinking: config.chatThinking !== false,
     apiBaseUrl,
     apiKeyConfigured: characterKeySaved || environmentKeySaved,
     apiKeySource: characterKeySaved ? "character" : environmentKeySaved ? "environment" : "missing",

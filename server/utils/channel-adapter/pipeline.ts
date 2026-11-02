@@ -34,6 +34,7 @@ import {
   applyVoiceTranscripts,
   canSpeakReply,
   isVoiceRequested,
+  isVoiceTranscribeEnabled,
   MAX_VOICES_PER_TURN,
   planVoiceReply,
   resolveVoiceAsrSettings,
@@ -575,6 +576,17 @@ async function attachVoiceTranscripts(
   },
 ): Promise<ChannelTurnMessage[]> {
   if (!messages.some((message) => (message.voices?.length ?? 0) > 0)) return messages;
+
+  /*
+   * 开关必须先看，不能只看「ASR 配没配」。
+   *
+   * 这里原本漏了这个判断：页面上「听懂语音」明明关着，只要 ASR 模型配得齐，每轮
+   * 还是照常下载、转码、调一次识别（按秒计费）。用户看到的是「我关了它还在花钱」，
+   * 而注释里写的是「没打开 voiceTranscribe 时原样返回」—— 文档与实现打架，
+   * 输的总是用户的钱包。所以以开关为准，ASR 配置只决定「开了之后能不能用」。
+   */
+  if (!isVoiceTranscribeEnabled(context.modelConfig)) return messages;
+
   const settings = resolveVoiceAsrSettings({
     modelConfig: context.modelConfig,
     chatModel: context.chatModel,
@@ -1234,6 +1246,7 @@ async function runChannelTurn(input: {
       apiBaseUrl: chatSettings.apiBaseUrl,
       temperature: chatSettings.temperature,
       maxTokens: chatSettings.maxTokens,
+      thinking: chatSettings.thinking,
       currentMessage,
       timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
       ...(journalLine ? { journalLine } : {}),

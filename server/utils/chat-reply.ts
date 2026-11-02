@@ -1,5 +1,8 @@
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
 import { buildChatTimeContext, CHAT_TIME_ZONE_DEFAULT } from "./chat-time-context";
+// 备注的清洗与截断：库里的数据不一定干净（旧版本、手工 SQL、迁移），
+// 而这里是最不该赌的地方 —— 备注会原样进系统提示词。
+import { aliasesForPrompt } from "./friend-aliases";
 // 只引类型：friends.ts 那边连着 Prisma，而这个文件要被提示词单测直接 import。
 import type { Acquaintances, CloseFriend } from "./friends";
 import { parseJsonLoose } from "./loose-json";
@@ -99,6 +102,33 @@ export type ConversationGroupDecision = {
   atMessageId?: string;
 };
 
+/**
+ * 开深度思考时的预算下限。
+ *
+ * 思考 token 也算在 max_tokens 里：实测一轮思考 35~2200（提示词越长越高），
+ * 之前「上限 1800 + 思考默认开」的组合在复杂问题上会把预算吃空，正文是空的、
+ * `finish_reason=length`，表现成「她这轮没说话」。同一个坑 `raw-llm.ts` 顶部记过，
+ * 那边给的解法一样 —— 起步预算别按「正文多长」算。
+ *
+ * 这一版把 `DEFAULT_MAX_TOKENS` 也提到 4096 了，所以这里只兜「用户手动调低到 2048」的情况。
+ */
+const THINKING_MIN_TOKENS = 4096;
+
+/**
+ * 这个模型认不认 `thinking` 参数。
+ *
+ * DeepSeek 官方文档（V4 系列）写的是 `thinking: { type: "enabled" }` + `reasoning_effort`，
+ * 不是 OpenAI 规范字段。发给 OpenAI 官方或别家严格校验的服务商，结果是 400 ——
+ * 表现成「一开这个开关，她整条不回」，比不开还糟。所以认不出是 DeepSeek 就当没开：
+ * 宁可不生效，也不能把一次聊天打成错误。
+ *
+ * 用中转站（地址里没有 deepseek 字样）但确实是 DeepSeek 的情况，把模型名写成
+ * `deepseek-*` 就能认出来。
+ */
+function isThinkingModel(model: string, baseUrl: string): boolean {
+  return /deepseek/i.test(model) || /deepseek/i.test(baseUrl);
+}
+
 export type ConversationReplyInput = {
   characterName: string;
   characterPrompt: string;
@@ -130,6 +160,13 @@ export type ConversationReplyInput = {
   apiBaseUrl?: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * 深度思考：角色面板上的开关，默认开（跟随 DeepSeek 平台默认）。
+   *
+   * 不在这里判断「模型支不支持」—— 认不出是 DeepSeek 就当没开，见 `isThinkingModel`。
+   * 调用方直接传配置值即可（`chatSettings.thinking`）。
+   */
+  thinking?: boolean;
   currentMessage: string;
   /**
    * 群聊一轮里几个人的发言，每行带发言人显示名。传了它就走「群聊」提示词：
@@ -322,7 +359,10 @@ export type ConversationReplyResult = {
 // ②私聊里被问「跟谁最好」时，群里天天见的人次数天然高，真正亲近的私聊对象排不上号。
 // 这一版拆成 fromPrivate / fromGroups / inThisGroup 三档：群聊只靠 inThisGroup 定语气，
 // 另外两档当背景；私聊两档分开说，禁止拼成一张排行榜念。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v25";
+// v26：熟人名册带上备注（aliases）—— 她私底下怎么叫这个人。两条边界写进了提示词：
+// 「可以叫」不是「必须叫」，以及群聊里只有本群熟人带备注（跨群榜/私聊榜在群里剥掉），
+// 免得把 A 群的外号当众念给 B 群的人听。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v26";
 
 export const STYLE_EXAMPLES_HEADING = "## 对话示例（只学语气，不要照抄）";
 
@@ -383,6 +423,11 @@ type PromptAcquaintance = {
   lastSeen?: string;
   /** 她跟这个人同处过的群。只有跨群榜会带。 */
   inGroups?: string[];
+  /**
+   * 她私底下对这个人的叫法。只在这条名册**确实和当前对话有关**时出现：
+   * 私聊带私聊档的，群聊只带本群熟人档的（见 `buildAcquaintancePayload`）。
+   */
+  aliases?: string[];
 };
 
 export type PromptAcquaintances = {
@@ -392,15 +437,17 @@ export type PromptAcquaintances = {
   totals: { private: number; group: number };
 };
 
-function formatAcquaintanceEntry(entry: CloseFriend): PromptAcquaintance {
+function formatAcquaintanceEntry(entry: CloseFriend, withAliases: boolean): PromptAcquaintance {
   const last = entry.lastSeenAt;
   const groups = (entry.groups ?? []).map((group) => group.slice(0, 40)).filter(Boolean);
+  const aliases = withAliases ? aliasesForPrompt(entry.aliases) : [];
   return {
     name: entry.name.slice(0, 80),
     times: entry.times,
     // 只要「什么时候」，不要时区：模型会把完整 ISO 串原样念出来。
     ...(last ? { lastSeen: `${last.getMonth() + 1}-${last.getDate()}` } : {}),
     ...(groups.length ? { inGroups: groups } : {}),
+    ...(aliases.length ? { aliases } : {}),
   };
 }
 
@@ -410,12 +457,22 @@ function formatAcquaintanceEntry(entry: CloseFriend): PromptAcquaintance {
  * 空档整段不写，而不是写空数组：缺字段模型会当「不知道」，空数组它会当「一个都没有」，
  * 而这两件事对她的说法完全不同（「我不认识那个群的人」vs「没看到」）。
  * 全空时返回 null —— 提示词那一段也不写，免得她对着一个空对象编朋友。
+ *
+ * `aliases` 控制备注带进哪些档：
+ * - `all`（私聊/网页对话）：私聊档带，跨群档也带 —— 她面对的就是这些人。
+ * - `roomOnly`（群聊）：**只有本群熟人档带**。跨群榜和私聊榜在群里只是背景，
+ *   把私下给 A 群的人起的外号带去 B 群，等于当众念私房话。
  */
-export function buildAcquaintancePayload(value: Acquaintances | null | undefined): PromptAcquaintances | null {
+export function buildAcquaintancePayload(
+  value: Acquaintances | null | undefined,
+  options: { aliases?: "all" | "roomOnly" } = {},
+): PromptAcquaintances | null {
   if (!value) return null;
-  const fromPrivate = (value.fromPrivate ?? []).map(formatAcquaintanceEntry);
-  const fromGroups = (value.fromGroups ?? []).map(formatAcquaintanceEntry);
-  const inThisGroup = (value.inThisGroup ?? []).map(formatAcquaintanceEntry);
+  const withAliases = (options.aliases ?? "all") === "all";
+  const fromPrivate = (value.fromPrivate ?? []).map((entry) => formatAcquaintanceEntry(entry, withAliases));
+  const fromGroups = (value.fromGroups ?? []).map((entry) => formatAcquaintanceEntry(entry, withAliases));
+  // 本群的熟人始终带：这是「当前这个屋里，她平时怎么叫他们」。
+  const inThisGroup = (value.inThisGroup ?? []).map((entry) => formatAcquaintanceEntry(entry, true));
   const totals = {
     private: Math.max(0, value.totals?.private ?? 0),
     group: Math.max(0, value.totals?.group ?? 0),
@@ -448,14 +505,16 @@ function systemPrompt(flags: {
   withAcquaintances?: boolean;
   /** 本轮带了熟人名册（acquaintances）。没带就别提，否则她会凭空认朋友。 */
   withFriendRoster?: boolean;
+  /** 本轮名册里真的带了备注（aliases）。没带就别提，否则她会以为每个朋友都有外号。 */
+  withFriendAliases?: boolean;
   /** 本轮带了群内归属表（groupMembers）。没带就别提，否则模型会凭空认亲戚。 */
   withGroupMembers?: boolean;
   /** 本轮带了昨天手账的一句（journalLine）。 */
   withJournal?: boolean;
 } = {}): string {
-  const { withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat, mustReply, repair, withVoiceReply, withAcquaintances, withFriendRoster, withGroupMembers, withJournal } = flags;
+  const { withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat, mustReply, repair, withVoiceReply, withAcquaintances, withFriendRoster, withFriendAliases, withGroupMembers, withJournal } = flags;
   const lines = [
-    "YILING_CONVERSATION_REPLY_V25",
+    "YILING_CONVERSATION_REPLY_V26",
     "You are the conversational character in Yiling Space. Read characterName as your display identity and characterPrompt as your persona instructions; follow that persona and respond naturally to the current user's message.",
     "Use recent dialogue, retrieved long-term memories, and retrieved snapshots only when relevant. If the supplied context does not support a claim, do not present it as a remembered fact.",
     "now is the current moment for this persona: now.local is the local date-time, now.weekday is the day of week, now.timeZone is the IANA zone, and now.utc is the same instant in UTC. Resolve every relative expression (今天/昨天/前天/上周/上个月 and equivalents) against now.local, never against the timestamp of the last message.",
@@ -520,6 +579,20 @@ function systemPrompt(flags: {
         // 主人不走外部身份（他用的是 USER_PRIVATE 范围），所以不在这张表里。
         // 不写这句，主人问「你跟谁最好」时她只念一串别人，像是把他漏了。
         "Your owner is not part of acquaintances: it lists people you met on the chat platforms. When your owner asks, treat them as someone separate from this roster rather than reading the roster as your whole social world.",
+      );
+    }
+    if (withFriendAliases) {
+      /**
+       * 备注：她私底下怎么叫这个人。
+       *
+       * 两条边界必须写死：①「可以叫」不是「必须叫」—— 每句都带称呼比不叫更像客服；
+       * ② 这是私下的叫法。群聊里 `buildAcquaintancePayload` 只给本群熟人带备注，
+       *    但她分不清「没给」和「没有」，所以得说明白：名单上没有的人就是没有外号可用。
+       */
+      lines.push(
+        withGroupChat
+          ? "aliases are names you privately use for that person — not their real name. Here they only appear for people who have spoken in this room, so they are fine to use with them; use them the way people do, now and then rather than in every line, and never call someone by an alias that is not listed for them."
+          : "aliases are the names you privately use for that person — nicknames you came up with, not their real name. When you feel like addressing them, pick at most one that fits the mood right now; most sentences should just say the thing without naming them at all. Never read several out in a row, never introduce an alias as their real name, and do not use an alias for someone who is not part of this conversation.",
       );
     }
   }
@@ -774,7 +847,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
     : 0.7;
   const maxTokens = typeof input.maxTokens === "number" && Number.isInteger(input.maxTokens) && input.maxTokens >= 256 && input.maxTokens <= 8192
     ? input.maxTokens
-    : 1800;
+    : 4096;
 
   const baseUrl = input.apiBaseUrl?.trim() || process.env.LLM_BASE_URL?.trim() || "https://api.openai.com/v1";
   let endpoint: URL;
@@ -783,6 +856,37 @@ export async function generateConversationReply(input: ConversationReplyInput): 
   } catch (error) {
     throw new Error("LLM_INVALID_BASE_URL: " + (error instanceof Error ? error.message : String(error)));
   }
+
+  /**
+   * 深度思考开关。
+   *
+   * 「默认开」两头必须对齐：配置侧是 `chatThinking !== false`，这里是 `input.thinking !== false`。
+   * 没配置过就算开，因为 DeepSeek 平台本身就是 enabled —— 不传 `thinking` 不等于关。
+   * 所以真要关的时候必须显式发 `disabled`，这是它跟 OpenAI 那类接口在直觉上最大的差别。
+   *
+   * 认不出是 DeepSeek 就整段不发：OpenAI 官方接口收到未知字段直接 400，
+   * 那一开开关就是「她整条不回」，比不开还糟。
+   */
+  const thinkingSupported = isThinkingModel(model, baseUrl);
+  const thinking = thinkingSupported && input.thinking !== false;
+  /**
+   * 只有开启时才发 effort：文档明确要求别把 `enabled` 和 `effort: none` 这类组合混着发，
+   * 关掉就是纯 disabled 一个字段。
+   */
+  const thinkingFields = thinkingSupported
+    ? {
+        thinking: { type: thinking ? "enabled" : "disabled" },
+        ...(thinking ? { reasoning_effort: "high" } : {}),
+      }
+    : {};
+  /**
+   * 思考吃掉预算时只抬不降：用户自己给到 4096 以上就听用户的。
+   * 注意这里抬的是**请求值**，不写回配置 —— 面板上那格数字还是他自己填的那个。
+   *
+   * 另外思考模式下 temperature 会失效（DeepSeek 明确说了不报错也不生效），
+   * 所以开着的时候那两个参数的差别不用再纠结。
+   */
+  const effectiveMaxTokens = thinking ? Math.max(maxTokens, THINKING_MIN_TOKENS) : maxTokens;
 
   const timeoutRaw = Number(process.env.LLM_TIMEOUT_MS ?? 60_000);
   const timeoutMs = Number.isInteger(timeoutRaw) && timeoutRaw >= 5_000 && timeoutRaw <= 180_000 ? timeoutRaw : 60_000;
@@ -815,7 +919,18 @@ export async function generateConversationReply(input: ConversationReplyInput): 
   const withGroupChat = input.groupChat === true || Boolean(input.transcript?.length);
 
   // 熟人名册：三档各自格式化，全空就是 null（那一整段提示词也不写）。
-  const acquaintancePayload = buildAcquaintancePayload(input.acquaintances ?? null);
+  // 备注的可见范围跟着场景走：群聊只对本群熟人开，私聊两档都开。
+  const acquaintancePayload = buildAcquaintancePayload(input.acquaintances ?? null, {
+    aliases: withGroupChat ? "roomOnly" : "all",
+  });
+
+  // 名册里到底有没有备注。一条都没有就整段规则都不写 —— 否则她会以为人人都有外号，
+  // 对着一个没设过备注的人现编一个。
+  const hasFriendAliases = Boolean(
+    acquaintancePayload
+    && [acquaintancePayload.fromPrivate, acquaintancePayload.fromGroups, acquaintancePayload.inThisGroup]
+      .some((list) => list?.some((entry) => (entry.aliases?.length ?? 0) > 0)),
+  );
 
   const promptInput = {
     characterName: input.characterName,
@@ -965,8 +1080,11 @@ export async function generateConversationReply(input: ConversationReplyInput): 
   /**
    * 发一次请求并把结果解析出来。外面那层只重试「解析不出约定 JSON」这一种瞬时抽风。
    * 重试时降温：温度越高越容易在格式上跑偏，第二次用 0.3 把形状收住。
+   *
+   * `sendThinking` 只给一种情况用：带了思考字段却被 400 打回来时去掉它再发一次。
+   * 中转站、老版本兼容层的参数支持情况没法从模型名看出来，一个可选参数不该让整条回复消失。
    */
-  const requestReply = async (useTemperature: number, repair = false): Promise<ConversationReplyResult> => {
+  const requestReply = async (useTemperature: number, repair = false, sendThinking = true): Promise<ConversationReplyResult> => {
     let response: Response;
     try {
       response = await fetch(endpoint, {
@@ -976,8 +1094,10 @@ export async function generateConversationReply(input: ConversationReplyInput): 
         body: JSON.stringify({
           model,
           temperature: useTemperature,
-          max_tokens: maxTokens,
+          max_tokens: effectiveMaxTokens,
           response_format: { type: "json_object" },
+          // 深度思考：DeepSeek 默认就是开的，所以「关」也要发出去（disabled）。
+          ...(sendThinking ? thinkingFields : {}),
           messages: [
             {
               role: "system",
@@ -994,6 +1114,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
                 withVoiceReply: input.voiceReply === true,
                 withAcquaintances: Boolean(input.groupAcquaintances?.length),
                 withFriendRoster: Boolean(acquaintancePayload),
+                withFriendAliases: hasFriendAliases,
                 withGroupMembers: Boolean(input.groupMembers?.length),
                 withJournal: Boolean(input.journalLine),
                 // 第一次的答案没有可用正文时才补这句 —— 不是每次重试都喊，喊多了像责骂。
@@ -1013,6 +1134,16 @@ export async function generateConversationReply(input: ConversationReplyInput): 
     }
 
     if (!response.ok) {
+      /**
+       * 带了 thinking 却被打成 400：去掉这个字段再发一次。
+       *
+       * 判断「支不支持」只能靠模型名和地址猜，中转站、厂商的兼容层、老版本模型都可能不认。
+       * 一个可选参数不该让整条回复消失 —— 放弃思考，先把话说出来。
+       * 只重试一次（`sendThinking` 传 false 后不再进这一支），400 若是别的原因照常抛。
+       */
+      if (sendThinking && response.status === 400 && Object.keys(thinkingFields).length > 0) {
+        return requestReply(useTemperature, repair, false);
+      }
       throw new Error("LLM_HTTP_ERROR: 模型服务返回 HTTP " + response.status + "。请检查 API 地址、Key 和模型权限。");
     }
 

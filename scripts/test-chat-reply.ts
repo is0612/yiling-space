@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateConversationReply, STYLE_EXAMPLES_HEADING } from "../server/utils/chat-reply";
+import { generateConversationReply, STYLE_EXAMPLES_HEADING, type ConversationReplyInput } from "../server/utils/chat-reply";
 import { buildChatTimeContext } from "../server/utils/chat-time-context";
 
 const originalFetch = globalThis.fetch;
@@ -784,6 +784,71 @@ try {
     /LLM_INVALID_RESPONSE/,
     "direct 轮次不能 silent 成功。",
   );
+
+  /**
+   * 深度思考开关。三个断言各自对应一种会真出事的情况：
+   *   1. 「默认关」不能靠不发字段 —— DeepSeek 平台的默认值就是 enabled；
+   *   2. 开了要给足预算，否则思考把 max_tokens 吃光、正文是空的；
+   *   3. 不认识的模型一个字段都不许带 —— OpenAI 官方对未知字段是 400，不是忽略。
+   */
+  let thinkingBody = "";
+  globalThis.fetch = async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    thinkingBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ reply: "嗯", usedMemoryIds: [], usedSnapshotIds: [] }) } }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const thinkingBase: Omit<ConversationReplyInput, "model" | "apiBaseUrl"> = {
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是群里的一个网友。",
+    apiKey: secretApiKey,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  };
+
+  // 1) 没配置过：跟随 DeepSeek 平台默认（enabled），预算也按 4096 给。
+  await generateConversationReply({ ...thinkingBase, model: "deepseek-flash", apiBaseUrl: "https://api.deepseek.com/v1" });
+  const thinkingDefault = JSON.parse(thinkingBody) as Record<string, unknown>;
+  assert.deepEqual(thinkingDefault.thinking, { type: "enabled" }, "没配置过要跟随平台默认：开。");
+  assert.equal(thinkingDefault.reasoning_effort, "high", "默认开着就要带思考强度。");
+  assert.equal(thinkingDefault.max_tokens, 4096, "默认上限要撑得住一轮思考（实测 35~2200）。");
+
+  // 2) 显式关：必须发 disabled —— 不发字段等于没关。
+  await generateConversationReply({
+    ...thinkingBase,
+    model: "deepseek-flash",
+    apiBaseUrl: "https://api.deepseek.com/v1",
+    thinking: false,
+  });
+  const thinkingOff = JSON.parse(thinkingBody) as Record<string, unknown>;
+  assert.deepEqual(thinkingOff.thinking, { type: "disabled" }, "关掉要显式发 disabled。");
+  assert.equal(thinkingOff.reasoning_effort, undefined, "关着时别带 effort —— enabled/disabled 与 effort 混发是文档要求避免的组合。");
+
+  // 3) 用户手动把上限调低：开思考时仍要抬回 4096，否则思考把预算吃空、正文为空。
+  await generateConversationReply({
+    ...thinkingBase,
+    model: "deepseek-flash",
+    apiBaseUrl: "https://api.deepseek.com/v1",
+    maxTokens: 1024,
+  });
+  assert.equal(
+    (JSON.parse(thinkingBody) as Record<string, unknown>).max_tokens,
+    4096,
+    "1024 撑不住一轮思考，要抬到 4096。",
+  );
+
+  // 4) 非 DeepSeek：默认也不许带 —— 默认值是开，这一层漏了就是全员 400。
+  await generateConversationReply({
+    ...thinkingBase,
+    model: "gpt-4o-mini",
+    apiBaseUrl: "https://api.openai.com/v1",
+  });
+  const thinkingOther = JSON.parse(thinkingBody) as Record<string, unknown>;
+  assert.equal(thinkingOther.thinking, undefined, "非 DeepSeek 模型不带 thinking —— 那是 400，会让整条回复消失。");
+  assert.equal(thinkingOther.max_tokens, 4096, "非思考模型按默认上限走，不受思考的抬升影响。");
 
   console.log("Chat reply tests passed: prompt credential isolation, source ID validation, malformed provider response handling, and one retry for malformed model output.");
   console.log("对话示例注入：拼进 characterPrompt、带边界、不新增顶层字段 —— 通过");

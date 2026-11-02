@@ -3,6 +3,11 @@ export type TimelineType = "message" | "memory" | "snapshot" | "event" | "memory
 
 export type Character = {
   id: string;
+  /**
+   * 血缘 id：这个角色最初来自哪一份角色数据（导入角色卡时用于认出「同一个她」）。
+   * 空 = 本机原生角色。老接口没有这个字段，所以标可选。
+   */
+  originId?: string | null;
   name: string;
   alias: string;
   description: string;
@@ -28,6 +33,8 @@ export type Character = {
   chatModel?: string;
   chatTemperature?: number;
   chatMaxTokens?: number;
+  /** 深度思考开关；默认开（跟随 DeepSeek 平台默认）。只在 DeepSeek 系模型上真正生效。 */
+  chatThinking?: boolean;
   chatApiBaseUrl?: string;
   chatApiKeyConfigured?: boolean;
   chatApiKeySource?: "character" | "environment" | "missing";
@@ -36,6 +43,8 @@ export type Character = {
   /** 每次对话注入记忆 / 快照的 token 预算。 */
   memoryTokenBudget?: number;
   snapshotTokenBudget?: number;
+  /** 每次注入多少条长期记忆；默认 20。 */
+  memoryItemLimit?: number;
   /** 每次回复回看多少条已落库消息；网页对话约等于「轮数 × 2」。 */
   recentMessageLimit?: number;
   /** 最近几天的忆泡无条件当背景带上；0 = 不带。 */
