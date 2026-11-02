@@ -45,7 +45,9 @@ export async function recordFriendInteraction(input: {
   if (!platformUid) return null;
 
   const prisma = getPrisma();
-  const at = input.at ?? new Date();
+  // 补录/转写链路偶尔会给一个解析失败的日期。`Invalid Date` 进 Prisma 会直接抛，
+  // 调用方 catch 掉之后这轮记账就静默丢了，所以这里退回「现在」。
+  const at = input.at instanceof Date && !Number.isNaN(input.at.getTime()) ? input.at : new Date();
 
   const identity = await prisma.externalIdentity.upsert({
     where: { platform_platformUid: { platform: input.platform, platformUid } },
@@ -70,12 +72,23 @@ export async function recordFriendInteraction(input: {
       where: { id: scope.scopeId, firstSource: null },
       data: { firstSource: input.source },
     }),
+    /**
+     * 「最近一次」只往前推，不是直接覆盖。
+     *
+     * 用 `at`（消息收到时刻）而不是「现在」，所以乱序到达、补录旧消息、语音转写晚了
+     * 半小时的情况都会把时间**往回写** —— 页面上看起来就是「明明刚聊过，最近一次还停在
+     * 两小时前」。`group_members.lastSpokeAt` 早就是这条规矩，这里补齐。
+     */
+    prisma.memoryScope.updateMany({
+      where: {
+        id: scope.scopeId,
+        OR: [{ lastInteractedAt: null }, { lastInteractedAt: { lt: at } }],
+      },
+      data: { lastInteractedAt: at },
+    }),
     prisma.memoryScope.update({
       where: { id: scope.scopeId },
-      data: {
-        interactionCount: { increment: 1 },
-        lastInteractedAt: at,
-      },
+      data: { interactionCount: { increment: 1 } },
     }),
   ]);
 

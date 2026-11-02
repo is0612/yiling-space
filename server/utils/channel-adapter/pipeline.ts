@@ -463,6 +463,30 @@ export function pickQuoteTarget(
 }
 
 /**
+ * 这一轮该记成「跟谁互动过」—— 也就是给她记账的那几条消息。
+ *
+ * 先按她引用 / @ 的 id 在本批里找作者；**找不到就退回本轮最新一条**。
+ *
+ * 为什么必须往回退：引用的可以是本批之外的消息（历史消息、上一轮的尾巴）。按 id 硬匹配
+ * 会一条都不中，于是她明明回了人，关系行却停在几小时前 —— 「她的朋友」页面看起来就像
+ * 统计坏了（2026-11-02 复核时正是这个坑）。退回最新一条是原来的兜底语义：她接的就是那句话。
+ */
+export function pickFriendTargets<T extends { externalMessageId?: string | null }>(
+  messages: readonly T[],
+  ids: { replyToMessageId?: string; atMessageId?: string },
+): T[] {
+  const wanted = new Set(
+    [ids.replyToMessageId, ids.atMessageId].filter((id): id is string => Boolean(id)),
+  );
+  if (wanted.size) {
+    const hit = messages.filter((message) => message.externalMessageId && wanted.has(message.externalMessageId));
+    if (hit.length) return hit;
+  }
+  const latest = messages[messages.length - 1];
+  return latest?.externalMessageId ? [latest] : [];
+}
+
+/**
  * 落库时记下的发言人。
  *
  * 群聊历史全是 `role: "USER"`，谁说的只有 metadata 知道。不把它读出来，
@@ -1523,19 +1547,19 @@ async function runChannelTurn(input: {
      * 就是这句话）。`silent` 走不到这个分支，所以没被搭理的发言不会变成朋友 —— 这正
      * 是「她回过的人才算」的落地位置。
      *
+     * **引用的是本批之外的消息时，退回本轮最新一条**（判定见 `pickFriendTargets`）：
+     * 她引用历史消息、或者上一轮的尾巴时，按 id 匹配会一条都不中，整轮白记 ——
+     * 她明明回了，关系行却停在几小时前（2026-11-02 复核「她的朋友」页面时发现）。
+     *
      * 放在发完之后：朋友簿晚半秒无所谓，不能让记账拖住已经生成的那句话。
      */
     if (isGroup) {
-      const targetedMessageIds = new Set(
-        [quoteTarget, atTarget].filter((id): id is string => Boolean(id)),
-      );
-      const latest = messages.at(-1);
-      if (!targetedMessageIds.size && latest?.externalMessageId) {
-        targetedMessageIds.add(latest.externalMessageId);
-      }
+      const targets = pickFriendTargets(messages, {
+        replyToMessageId: quoteTarget,
+        atMessageId: atTarget,
+      });
       const recordedAuthors = new Set<string>();
-      for (const message of messages) {
-        if (!message.externalMessageId || !targetedMessageIds.has(message.externalMessageId)) continue;
+      for (const message of targets) {
         const platformUid = (message.authorPlatformUid || message.authorOpenId || "").trim();
         if (!platformUid || recordedAuthors.has(platformUid)) continue;
         recordedAuthors.add(platformUid);
