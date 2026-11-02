@@ -11,6 +11,8 @@ import { clockLabelCst, readRecentLines } from "../server/utils/group-initiative
 import {
   buildGroupInitiativeSystemPrompt,
   buildGroupInitiativeUserPrompt,
+  buildGroupJoinSystemPrompt,
+  buildGroupJoinUserPrompt,
 } from "../server/utils/group-initiative-prompt";
 import { createGroupActivityRecorder } from "../server/utils/group-activity";
 
@@ -213,6 +215,53 @@ assert.doesNotMatch(
     groupLabel: "QQ群 1",
     idleMinutes: 61,
     nowLabel: "09:00",
+    recentLines: [],
+    memories: [],
+  }),
+  /我记得的事/,
+  "没有记忆时不要留空段落",
+);
+
+/* ---------- 被叫过去插一句（群里正在聊） ---------- */
+
+// 与冷场起头的关键差异：这里不给「不说」的出口 —— 主人明确要她说一句，沉默等于抗命。
+const joinSystem = buildGroupJoinSystemPrompt("小鱼", "设定".repeat(10), "示例语气");
+assert.match(joinSystem, /不要 @ 任何人/, "群里不许点名");
+assert.match(joinSystem, /40 个字/, "接话比起头稍宽，但仍有长度约束");
+assert.match(joinSystem, /不要寒暄开场/, "插话不能变成公告腔");
+assert.match(joinSystem, /别把别人的对话认成自己的/, "群里多条鱼并存，不能认领别人的对话");
+assert.match(joinSystem, /不要提是谁让你来的/, "不能当众宣布自己是被差遣来的");
+assert.doesNotMatch(joinSystem, /只输出 -/, "被指派时没有「不说」这个选项");
+assert.doesNotMatch(joinSystem, /不想说就/, "同上：起头那套出口不能泄漏到这里");
+
+const joinUser = buildGroupJoinUserPrompt({
+  groupLabel: "QQ群 123456",
+  nowLabel: "21:30",
+  idleMinutes: 2,
+  recentLines: ["阿狸：这游戏更新完更卡了", "小鱼：我这边也是"],
+  memories: ["[PREFERENCE] 他喜欢吃辣"],
+});
+assert.match(joinUser, /最后一条消息是 2 分钟前/, "素材要说明「刚才」有多刚");
+assert.match(joinUser, /21:30/);
+assert.match(joinUser, /小鱼：我这边也是/);
+assert.match(joinUser, /写那句你想插进去的话/, "结尾要明确是一次插话，不是开场");
+
+// 记忆在接话场景里只当背景，给多了她会开始讲自己的事。
+const joinManyMemories = buildGroupJoinUserPrompt({
+  groupLabel: "QQ群 1",
+  nowLabel: "21:30",
+  idleMinutes: 1,
+  recentLines: ["阿狸：在"],
+  memories: ["m1", "m2", "m3", "m4", "m5"],
+});
+assert.match(joinManyMemories, /m3/, "前三条要带");
+assert.doesNotMatch(joinManyMemories, /m4/, "第四条起不进提示词（接话场景最多 3 条）");
+
+assert.doesNotMatch(
+  buildGroupJoinUserPrompt({
+    groupLabel: "QQ群 1",
+    nowLabel: "09:00",
+    idleMinutes: 1,
     recentLines: [],
     memories: [],
   }),
