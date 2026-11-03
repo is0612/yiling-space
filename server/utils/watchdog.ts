@@ -341,7 +341,7 @@ export async function collectWatchdogFindings(
       modelConfigured: isChatModelConfigured(character.modelConfig),
       autoSnapshotEnabled: character.memorySetting?.autoSnapshotEnabled ?? false,
       nextSnapshotAt: character.memorySetting?.nextSnapshotAt ?? null,
-      intervalDays: character.memorySetting?.snapshotIntervalDays ?? 2,
+      intervalDays: character.memorySetting?.snapshotIntervalDays ?? 3,
       latestSnapshotAt,
       pendingTaskCount: bucket.pending,
       failedTaskCount: bucket.failed,

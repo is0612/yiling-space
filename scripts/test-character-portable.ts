@@ -368,7 +368,7 @@ assert.equal(lenient.events[0]?.state, "FINAL", "不认识的状态回落到 FIN
 assert.equal(lenient.snapshots.length, 0, "没有阶段总结时不报错，就是空数组");
 assert.equal(lenient.friends.length, 0, "老角色卡没有 friends 段，解析成空数组而不是报错");
 
-// 归档周期：2026-11-03 上限从 365 收到 8，默认从 8 收到 2。
+// 归档周期：2026-11-03 上限从 365 收到 8，默认从 8 收到 3。
 // 老卡里允许填到 365 的那批值要照旧读得进来，但不能原样落库 —— 否则会出现
 // 「库里 30 天、设置页显示 8 天、一保存就 400」的死角。
 const wideInterval = parseCharacterBundle(minimal({
@@ -377,7 +377,7 @@ const wideInterval = parseCharacterBundle(minimal({
 assert.equal(wideInterval.memorySetting.snapshotIntervalDays, 8, "老卡里的 30 天收口到 8，而不是拒绝整张卡");
 
 const defaultInterval = parseCharacterBundle(minimal({}));
-assert.equal(defaultInterval.memorySetting.snapshotIntervalDays, 2, "卡里没写归档周期时默认 2 天");
+assert.equal(defaultInterval.memorySetting.snapshotIntervalDays, 3, "卡里没写归档周期时默认 3 天");
 
 assert.throws(
   () => parseCharacterBundle(minimal({

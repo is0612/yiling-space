@@ -51,13 +51,13 @@ export const CHARACTER_BUNDLE_VERSION = 3;
 export const CHARACTER_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
- * 归档周期的边界（2026-11-03 从 1–365 收到 1–8，默认 8 → 2）。
+ * 归档周期的边界（2026-11-03 从 1–365 收到 1–8，默认 8 → 3）。
  * 与服务端 `api/characters/[id]/memory-settings/index.patch.ts` 的校验、
  * 前端 `pages/characters/[id]/settings/memory.vue` 的 `INTERVAL_*_DAYS` 必须一致。
  */
 export const MEMORY_INTERVAL_MIN_DAYS = 1;
 export const MEMORY_INTERVAL_MAX_DAYS = 8;
-export const MEMORY_INTERVAL_DEFAULT_DAYS = 2;
+export const MEMORY_INTERVAL_DEFAULT_DAYS = 3;
 /** 老角色包里可能带着过去允许的宽范围：读得进来，但不照搬，见下方 clamp。 */
 const MEMORY_INTERVAL_IMPORT_MAX_DAYS = 365;
 
@@ -785,7 +785,7 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
     },
     modelConfig: stripPortableModelConfig(input.character.modelConfig),
     memorySetting: {
-      snapshotIntervalDays: input.memorySetting?.snapshotIntervalDays ?? 2,
+      snapshotIntervalDays: input.memorySetting?.snapshotIntervalDays ?? 3,
       timezone: input.memorySetting?.timezone ?? "Asia/Shanghai",
       autoSnapshotEnabled: input.memorySetting?.autoSnapshotEnabled ?? false,
     },

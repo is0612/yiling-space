@@ -517,7 +517,7 @@ model MemoryReview {
 model CharacterMemorySetting {
   id                          String                     @id @default(uuid()) @db.Uuid
   characterId                 String                     @unique @db.Uuid
-  snapshotIntervalDays        Int                        @default(2)
+  snapshotIntervalDays        Int                        @default(3)
   pendingSnapshotIntervalDays Int?
   timezone                    String                     @default("Asia/Shanghai") @db.VarChar(100)
   anchorAt                    DateTime                   @default(now()) @db.Timestamptz(6)

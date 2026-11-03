@@ -21,7 +21,7 @@ const route = useRoute();
 const id = computed(() => String(route.params.id || ""));
 const character = ref<Character>({ ...initialCharacters[0]!, id: "", name: "角色加载中" });
 /**
- * 归档间隔的边界：默认 2 天，最多 8 天（2026-11-03 从 1–365 收紧）。
+ * 归档间隔的边界：默认 3 天，最多 8 天（2026-11-03 从 1–365 收紧）。
  *
  * 上限压到 8 天不是为了省事：周期越长，「她记得的事」和「她读到的总结」之间那段
  * 越可能被原文清理掉，而 8 天正好是快照本身的节奏。服务端
@@ -29,7 +29,7 @@ const character = ref<Character>({ ...initialCharacters[0]!, id: "", name: "角�
  */
 const INTERVAL_MIN_DAYS = 1;
 const INTERVAL_MAX_DAYS = 8;
-const INTERVAL_DEFAULT_DAYS = 2;
+const INTERVAL_DEFAULT_DAYS = 3;
 
 const interval = ref(INTERVAL_DEFAULT_DAYS);
 const activeInterval = ref(INTERVAL_DEFAULT_DAYS);
@@ -276,7 +276,7 @@ watch(id, () => void loadSettings());
                 <div class="interval-label">
                   归档间隔
                 </div><p class="form-help">
-                  周期可设为 1–8 天；默认值为 2 天。
+                  周期可设为 1–8 天；默认值为 3 天。
                 </p>
               </div><div class="interval-input">
                 <el-input-number
