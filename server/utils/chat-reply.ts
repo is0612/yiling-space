@@ -416,7 +416,8 @@ export type ConversationReplyResult = {
 //     时只能回「有个群友」，哪怕库里其实记着名字。这一版把名字送到她眼前，并在
 //     提示词里钉住「participants 是真名，别压平成『群友』」和「谁说的以 speaker 为准」。
 //     写入侧同一天在 `memory-ai.ts` 补齐（模板 v5）：没有 speaker，模型写不出名字。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v33";
+// v34：群聊请求在序列化前剔除 private scope；补齐动态 JSON 输出字段契约；justSaid 视为冷却中。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v34";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
