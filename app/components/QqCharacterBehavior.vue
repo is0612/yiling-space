@@ -116,6 +116,13 @@ const props = defineProps<{
   imageUnderstanding: boolean;
   /** 群里的图要不要自动收进她的表情库；角色级开关，默认关。 */
   stickerAutoCollect: boolean;
+  /**
+   * 这个角色单独配的看图模型（「模型设置 → 图片模型」里的那一行）。
+   *
+   * 空字符串 = 没配，看图回落到对话模型。收回图要靠视觉模型起名，
+   * 所以「偷表情包」开的时候需要知道这里空不空 —— 空着就得当场验一下对话模型认不认图。
+   */
+  visionModel?: string;
   /** 群聊之后要不要自动扫一遍群里的梗；角色级开关，默认关。 */
   catchphraseAutoMine: boolean;
   /** 她的回复能不能发成语音条；角色级开关，默认关。 */
@@ -182,6 +189,8 @@ const emojiPerWindow = ref(props.emojiPerWindow ?? 3);
 const savingEmojiRate = ref(false);
 const imageUnderstanding = ref(props.imageUnderstanding);
 const stickerAutoCollect = ref(props.stickerAutoCollect);
+/** 正在验「偷表情包」这条链通不通；不绑到开关的 loading 上，免得开关转十几秒。 */
+const checkingStickerReadiness = ref(false);
 const catchphraseAutoMine = ref(props.catchphraseAutoMine);
 const savingCatchphraseAutoMine = ref(false);
 // 语音开关与概率留在这里（这是「行为」，不是「模型配置」）；服务商、Key、音色在「模型设置 → 语音模型」。
@@ -525,6 +534,56 @@ async function onImageUnderstandingChange(next: string | number | boolean) {
   }
 }
 
+/**
+ * 勾开「偷表情包」之后，确认这条链真能走通 —— 走不通就当场说清楚。
+ *
+ * 收图不是「有图就存」：每张图都要先由视觉模型起名（`labelStickerImage`），
+ * 而「谁来看图」有一条回落链 —— 角色 `visionModel` > `VISION_MODEL` > 对话模型。
+ * 没配「图片模型」的人走的就是对话模型，可对话模型不一定认图：纯文本模型直接 400，
+ * 思考模型（deepseek-flash 这类）会把 200 tokens 全烧在思考上、正文为空。
+ * 两种在服务端都只表现为 `model-failed`，而那条路是**静默**的 ——
+ * 用户看到的只是「勾了，但一张也偷不到」，还查不出为什么。
+ *
+ * 所以这里当场问一次真实结果，用的就是「测试看图」那条路（现画三色图、200 tokens）。
+ * 只在没配图片模型时才问：配了单独的图片模型本身就是推荐姿势，不必每次勾选都多花一次调用。
+ */
+async function checkStickerCollectReadiness(): Promise<void> {
+  if (checkingStickerReadiness.value) return;
+
+  // 「看群里的图」关着：收图的第一步就是把图读成文字，它不开，这个开关开了也一张收不到。
+  // 纯静态事实，不用问模型。
+  if (!props.imageUnderstanding) {
+    ElMessage.warning({
+      message: "偷表情包还不会生效：得把「看群里的图」也打开——收图要先靠它把图读成文字，光开这一个开关什么都不会发生。",
+      duration: 10_000,
+    });
+    return;
+  }
+  // 配了单独的图片模型就不再验：那是用户明确指定的看图那一家，页面上也有「测试看图」。
+  if ((props.visionModel ?? "").trim()) return;
+
+  checkingStickerReadiness.value = true;
+  try {
+    const result = await $fetch<{ ok: boolean; message: string; model?: string }>(
+      `/api/characters/${encodeURIComponent(props.characterId)}/vision/test-connection`,
+      { method: "POST" },
+    );
+    if (result.ok) return;
+    /**
+     * 结论交给探测接口的原文：它分得清「模型名错了 / Key 不对 / 收到图但没看 / 预算被思考吃光」，
+     * 这里只补一句上下文，别自己编一个更笼统的原因盖上去。
+     */
+    ElMessage.warning({
+      message: `偷表情包现在收不到图。当前没配「图片模型」，识图走的是对话模型${result.model ? `（${result.model}）` : ""}：${result.message}`,
+      duration: 12_000,
+    });
+  } catch {
+    // 验不通（服务没起、网络抖）不该反过来吓人：开关本身已经存好了，下次打开还会再验。
+  } finally {
+    checkingStickerReadiness.value = false;
+  }
+}
+
 async function onStickerAutoCollectChange(next: string | number | boolean) {
   if (savingStickerAutoCollect.value) return;
   const value = next === true;
@@ -541,9 +600,12 @@ async function onStickerAutoCollectChange(next: string | number | boolean) {
   } catch (error) {
     stickerAutoCollect.value = !value;
     ElMessage.error(readError(error, "保存失败，请稍后重试。"));
+    return;
   } finally {
     savingStickerAutoCollect.value = false;
   }
+  // 存好了才验：开关本身不该被一次探测拖住，探测结果用提示窗补在后面。
+  if (value) void checkStickerCollectReadiness();
 }
 
 async function onCatchphraseAutoMineChange(next: string | number | boolean) {
