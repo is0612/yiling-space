@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
 import { downloadImage, resolveVisionSettingsForCharacter } from "./image-understanding";
+import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, recordModelUsage } from "./model-usage";
 import { normalizeStickerImage } from "./sticker-image";
 import {
@@ -84,14 +85,21 @@ export type StickerLabelResult =
 /**
  * 解析模型返回的这段 JSON。抽成纯函数是为了能单测 —— 真调模型太贵也太慢，
  * 而这里恰恰是最容易出错的地方（skip 判定、泛称名字、非 JSON）。
+ *
+ * 用宽松解析，不用裸 `JSON.parse`。
+ *
+ * `response_format: json_object` 只是请求、不是保证 —— 视觉模型最常见的两种坏输出是
+ * 套一层 ```json 围栏、或前面先写「好的，这是结果：」，括号里的内容其实全对。
+ * 裸解会把这两种都判成 `model-failed`，表现就是「明明配了图片模型，一张也收不到」，
+ * 而失败那一步是静默的，用户根本查不出原因。
+ * 项目里其它 LLM 出口（chat-reply / proactive / bili / memory-ai）早就走 `parseJsonLoose` 了，
+ * 只有这里漏了 —— CLAUDE.md 里写死的那条「一律走 parseJsonLoose，不许裸 JSON.parse」。
  */
 export function readStickerLabel(content: string): StickerLabelResult {
-  let parsed: { name?: unknown; usage?: unknown; skip?: unknown };
-  try {
-    parsed = JSON.parse(content) as { name?: unknown; usage?: unknown; skip?: unknown };
-  } catch {
-    return { ok: false, reason: "model-failed" };
-  }
+  const parsed = parseJsonLoose(content, { expect: "object" }) as
+    | { name?: unknown; usage?: unknown; skip?: unknown }
+    | null;
+  if (!parsed) return { ok: false, reason: "model-failed" };
   // 模型说「这不是表情包」：聊天截图、长截图、随手拍的照片都落在这里。
   if (parsed.skip === true) return { ok: false, reason: "not-a-sticker" };
   const name = typeof parsed.name === "string" ? parsed.name.trim().slice(0, 60) : "";
@@ -124,12 +132,26 @@ export async function labelStickerImage(
     chatApiBaseUrl: context.chatApiBaseUrl,
     chatApiKey: context.chatApiKey,
   });
-  if (!settings) return { ok: false, reason: "no-vision" };
+  if (!settings) {
+    /**
+     * 打标跟着「看群里的图」走（`resolveVisionSettingsForCharacter` 默认要求开关打开），
+     * 所以这里为空有两种原因：开关没开，或地址/Key 配不全。
+     * 这一条以前完全静默 —— 它是「勾了偷表情包却一张也收不到」最常见的原因，
+     * 配了图片模型的人也会栽在这（模型配好了，开关没开）。
+     */
+    console.warn(
+      `[sticker] 没有可用的视觉配置（character=${context.characterId}）：先确认「看群里的图」开着，再看图片模型的地址与 Key`,
+    );
+    return { ok: false, reason: "no-vision" };
+  }
 
   let endpoint: URL;
   try {
     endpoint = buildChatCompletionsEndpoint(settings.apiBaseUrl);
   } catch {
+    console.warn(
+      `[sticker] 图片模型地址无效（character=${context.characterId} model=${settings.model}）：${settings.apiBaseUrl}`,
+    );
     return { ok: false, reason: "no-vision" };
   }
 
@@ -163,18 +185,59 @@ export async function labelStickerImage(
     ],
   };
 
+  /**
+   * 发一次打标请求。`jsonMode=false` 只用于「服务商不认 response_format」时的重试：
+   * 传 `undefined` 让 JSON.stringify 直接把这个键省掉。
+   */
+  const sendLabel = (jsonMode: boolean): Promise<Response> => fetch(endpoint, {
+    method: "POST",
+    redirect: "error",
+    headers: { authorization: "Bearer " + settings.apiKey, "content-type": "application/json" },
+    body: JSON.stringify(jsonMode ? body : { ...body, response_format: undefined }),
+    signal: AbortSignal.timeout(LABEL_TIMEOUT_MS),
+  });
+
   let payload: unknown;
   try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      redirect: "error",
-      headers: { authorization: "Bearer " + settings.apiKey, "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(LABEL_TIMEOUT_MS),
-    });
-    if (!response.ok) return { ok: false, reason: "model-failed" };
+    let response = await sendLabel(true);
+    if (response.status === 400) {
+      /**
+       * 400 最常见的一种成因：服务商不认 `response_format: json_object`（自建网关、
+       * 老版本 vLLM、部分中转都这样）。「测试看图」不带这个字段，所以
+       * **「测试通过」完全不代表打标能过** —— 这正是「配了图片模型还是偷不到」的隐藏分叉。
+       * 去掉它重试一次：格式本来就有提示词 + `parseJsonLoose` 兜底，围栏和前缀废话都救得回来。
+       */
+      const raw = await response.text().catch(() => "");
+      if (/response_format|json_object|json\s*mode/i.test(raw)) {
+        console.warn(
+          `[sticker] 服务商不认 response_format，去掉后重试（character=${context.characterId} model=${settings.model}）`,
+        );
+        response = await sendLabel(false);
+      } else {
+        console.warn(
+          `[sticker] 打标 HTTP 400（character=${context.characterId} model=${settings.model}）：${raw.replace(/\s+/g, " ").slice(0, 200)}`,
+        );
+        return { ok: false, reason: "model-failed" };
+      }
+    }
+    if (!response.ok) {
+      /**
+       * 状态码与正文必须留痕，这一步以前是完全静默的。
+       *
+       * 401/403 是这把 Key 没有该模型的权限（它和对话 Key 是分开存的，跨服务商只换模型名必踩）；
+       * 404 是模型名或地址写错；429 是限流。这三种在「偷不到」上长得一模一样，只有原文能分清。
+       */
+      const raw = await response.text().catch(() => "");
+      console.warn(
+        `[sticker] 打标 HTTP ${response.status}（character=${context.characterId} model=${settings.model}）：${raw.replace(/\s+/g, " ").slice(0, 200)}`,
+      );
+      return { ok: false, reason: "model-failed" };
+    }
     payload = await response.json();
-  } catch {
+  } catch (error) {
+    console.warn(
+      `[sticker] 打标请求失败（character=${context.characterId} model=${settings.model}）：${error instanceof Error ? error.message : String(error)}`,
+    );
     return { ok: false, reason: "model-failed" };
   }
 
@@ -190,11 +253,33 @@ export async function labelStickerImage(
     }).catch(() => undefined);
   }
 
-  const record = payload as { choices?: Array<{ message?: { content?: unknown } }> } | null;
+  const record = payload as {
+    choices?: Array<{ message?: { content?: unknown }; finish_reason?: string }>;
+  } | null;
   const content = typeof record?.choices?.[0]?.message?.content === "string"
     ? record.choices[0].message.content
     : "";
-  return readStickerLabel(content);
+  if (!content.trim()) {
+    /**
+     * 200 但没有正文：思考模型最典型的表现 —— 200 tokens 先被思考过程吃光，`finish_reason=length`。
+     * 这和「模型配错了」在现象上一模一样（都不收图），解法却完全不同：
+     * 那种要换一个不思考的视觉模型，而不是去翻 Key 和地址。所以把 finish_reason 打出来。
+     */
+    const finishReason = record?.choices?.[0]?.finish_reason ?? "";
+    console.warn(
+      `[sticker] 打标返回空正文（character=${context.characterId} model=${settings.model} finish=${finishReason || "?"}）：${finishReason === "length" ? "输出预算被思考过程吃光了，换一个不思考的视觉模型" : "接口收下了图但没有正文"}`,
+    );
+    return { ok: false, reason: "model-failed" };
+  }
+  const result = readStickerLabel(content);
+  if (!result.ok) {
+    // 起不出名字 / 判成不是表情包：把模型原文截一段出来。只看「没收」分不清是它偷懒回了个
+    // 「表情包」这种泛称，还是它压根没按 JSON 回 —— 两种的修法完全不同。
+    console.warn(
+      `[sticker] 打标未通过（${result.reason}，character=${context.characterId} model=${settings.model}）：${content.replace(/\s+/g, " ").slice(0, 160)}`,
+    );
+  }
+  return result;
 }
 
 /**
@@ -212,12 +297,25 @@ export async function collectSticker(
   let image: { buffer: Buffer; mime: string };
   try {
     image = await downloadImage(candidate.url);
-  } catch {
+  } catch (error) {
+    /**
+     * 下载失败的原因是定值（`IMAGE_TOO_LARGE` / `IMAGE_BLOCKED_HOST` / `IMAGE_HTTP_403` …），
+     * 直链还带 rkey、有时效。出了事只有这行日志能证明是「图根本没拿到」，
+     * 而不是「模型不收」—— 两种在用户那边都是「偷不到」。
+     */
+    console.warn(
+      `[sticker] 下载失败（${error instanceof Error ? error.message : "?"}，character=${context.characterId}）：${candidate.url.slice(0, 100)}`,
+    );
     return null;
   }
 
   const extension = resolveStickerExtension(image.mime);
-  if (!extension) return null;
+  if (!extension) {
+    // QQ 图床偶尔给 `image/jpg` 这种非标准值，而映射表里只有 png/jpeg/gif/webp。
+    // 不收是对的（存下来也发不出去），但要让人看得出是「类型不认」，别和「模型不收」混在一起。
+    console.warn(`[sticker] 不认识的图片类型 ${image.mime}（character=${context.characterId}），跳过`);
+    return null;
+  }
 
   const contentHash = hashOf(image.buffer);
   const { getPrisma } = await import("./prisma");
@@ -227,7 +325,12 @@ export async function collectSticker(
     where: { characterId: context.characterId, contentHash },
     select: { id: true },
   });
-  if (existing) return null;
+  if (existing) {
+    // 群里同一张表情被转来转去很常见，这条不算故障，但也要留痕 ——
+    // 否则「一直在发图却一直没新增」会被误读成收图坏了。
+    console.log(`[sticker] 这张已经收过了（character=${context.characterId} hash=${contentHash.slice(0, 8)}），跳过`);
+    return null;
+  }
 
   /**
    * 缩到宽 200 再存：QQ 按图片原始像素显示，群里偷来的图常常 1000px 以上，
@@ -253,9 +356,7 @@ export async function collectSticker(
    * 长截图、随手拍的照片，收进来只会是噪声。
    */
   if (!label.ok) {
-    if (label.reason === "not-a-sticker") {
-      console.log("[sticker] 跳过：模型判断这张不是表情包（截图 / 长图 / 照片）");
-    }
+    // 原因已经在 `labelStickerImage` 里那行「打标未通过」打过了，这里不重复刷屏。
     return null;
   }
   const name = label.name;
@@ -276,12 +377,16 @@ export async function collectSticker(
         source: "collected",
       },
     });
-  } catch {
+  } catch (error) {
     // 并发下撞了唯一约束或别的写入错误：删掉刚落的文件，当没收下。
     await deleteStickerFile(context.characterId, fileName);
+    console.warn(
+      `[sticker] 入库失败（character=${context.characterId}）：${error instanceof Error ? error.message : String(error)}`,
+    );
     return null;
   }
   invalidateStickerCache(context.characterId);
+  console.log(`[sticker] 收下了「${name}」（character=${context.characterId}）`);
   return toStickerDto(row);
 }
 

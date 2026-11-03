@@ -1425,6 +1425,7 @@ function copyInstallGuide() {
               :emoji-per-window="row.character.emojiPerWindow"
               :image-understanding="row.character.imageUnderstanding === true"
               :sticker-auto-collect="row.character.stickerAutoCollect === true"
+              :vision-model="row.character.visionModel ?? ''"
               :catchphrase-auto-mine="row.character.catchphraseAutoMine === true"
               :voice-enabled="row.character.voiceEnabled === true"
               :voice-transcribe="row.character.voiceTranscribe === true"

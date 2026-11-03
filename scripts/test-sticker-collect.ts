@@ -45,6 +45,26 @@ assert.deepEqual(
   { ok: false, reason: "model-failed" },
   "非 JSON 当成模型失败。",
 );
+/**
+ * 这两种是视觉模型最常见的「其实答对了、只是没包干净」：套 json 围栏、前面垫一句废话。
+ * 以前这里走裸 `JSON.parse`，两种都被判成 `model-failed` —— 现象就是「配了图片模型
+ * 也一张收不到」，而且静默。现在统一走 `parseJsonLoose`（与 chat-reply / proactive 一致）。
+ */
+assert.deepEqual(
+  readStickerLabel('```json\n{"name":"委屈","usage":"想撒娇时"}\n```'),
+  { ok: true, name: "委屈", usage: "想撒娇时" },
+  "套了 json 围栏也要能解。",
+);
+assert.deepEqual(
+  readStickerLabel('好的，这是结果：{"name":"拍桌笑","usage":""}'),
+  { ok: true, name: "拍桌笑", usage: "" },
+  "前面垫了一句废话也要能解。",
+);
+assert.deepEqual(
+  readStickerLabel('```json\n{"skip":true}\n```'),
+  { ok: false, reason: "not-a-sticker" },
+  "围栏里的 skip 判定不能丢。",
+);
 assert.deepEqual(
   readStickerLabel(JSON.stringify({ name: "  委屈  ", usage: "  想撒娇时  " })),
   { ok: true, name: "委屈", usage: "想撒娇时" },

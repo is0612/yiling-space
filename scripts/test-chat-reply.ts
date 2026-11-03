@@ -234,6 +234,30 @@ try {
     "必须禁止「我给你发了条语音」这类元信息 —— 语音条里会先念一句废话。",
   );
 
+  // ── 段标记的说明只在真出现标记时才写 ──
+  // 纯文字轮次里那三行（约 120 tokens）全是废的，还会让她以为自己看见了图。
+  // 判据在代码里（扫 currentMessage / transcript / 背景 / 历史），不交给模型猜。
+  assert(
+    !systemMessage.content.includes("When it reads [图片"),
+    "纯文字轮次不该带「怎么看图」的说明。",
+  );
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "[图片：一只橘猫趴在键盘上]",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  const mediaSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(mediaSystem.includes("When it reads [图片"), "带了图片描述就要说明怎么读这张图。");
+  assert(mediaSystem.includes("When it reads [语音"), "语音转写的读法在同一段里，一起给。");
+
   // ── 对话示例：只拼进 characterPrompt 尾部，带边界，且不新增顶层字段 ──
   // 为什么不能新增字段/不能做成 few-shot 轮次：这个接口要求返回 JSON 信封，
   // 真给它几轮「用户 / 她」的对话，模型会学着直接吐纯文本，解析就炸。
