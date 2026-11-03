@@ -85,6 +85,15 @@ try {
       role: "USER",
       content: "前天下午我们去银滩游泳了",
       occurredAt: "2026-10-29T06:00:00.000Z",
+      speaker: "阿深",
+      scope: "character",
+    }, {
+      id: "raw-2",
+      role: "USER",
+      content: "我真不记得了",
+      occurredAt: "2026-10-29T06:05:00.000Z",
+      speaker: "老陈",
+      isOwner: true,
       scope: "character",
     }],
     journalLine: { dayKey: "2026-10-31", quote: "今天下午其实有点不开心" },
@@ -159,6 +168,16 @@ try {
   const promptRaw = promptInput.rawMessages as Array<Record<string, unknown>>;
   assert.equal(promptRaw[0]?.occurredAt, "2026-10-29T06:00:00.000Z", "原文兜底也要带时间，否则又被当成「很久以前」。");
   assert.equal(promptRaw[0]?.scope, "character", "原文同样要带范围标签。");
+  assert.equal(
+    promptRaw[0]?.speaker,
+    "阿深",
+    "原文兜底必须带发言人：群聊里每一句都是 role=user，没有它就是一句句没有主人的话。",
+  );
+  assert.equal(
+    promptRaw[1]?.isOwner,
+    true,
+    "主人标记要一起带出去，否则她会把主人的话算成群友说的。",
+  );
   assert(
     systemMessage.content.includes("rawMessages are the original lines"),
     "提示词要说明原文是证据而不是结论，冲突时以事件为准。",

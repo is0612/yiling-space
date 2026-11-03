@@ -84,6 +84,15 @@ export type ConversationContextRawMessage = {
   role: string;
   content: string;
   occurredAt: string;
+  /**
+   * 这句话是谁说的。
+   *
+   * 和 `ConversationContextMessage.speaker` 同一个道理：群聊原文全是 `role: user`，
+   * 不带发言人时，她读到的就是一句句没有主人的话 —— 问「那天谁说我什么」只能瞎猜。
+   * 忆泡这条链已经带名字了，兜底原文不能反而更瞎。
+   */
+  speaker?: string;
+  isOwner?: boolean;
   scope: ConversationMemoryScope;
 };
 /**
@@ -402,7 +411,12 @@ export type ConversationReplyResult = {
 //     有数据时才需要的段落改成真正的条件段；行为判据和测试锚点保留。
 //     目标：私聊 system ≤ 900 tokens，群聊全开 ≤ 1.6k。改动后 promptTemplateVersion
 //     与历史对话不可直接比较，统计时按版本分段。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v31";
+// v32：忆泡与原文兜底都带上发言人（2026-11-03）。v31 之前，`events.participants`
+//     常常是「群友」，`rawMessages` 干脆没有 speaker —— 她被问「那天谁跟你说什么」
+//     时只能回「有个群友」，哪怕库里其实记着名字。这一版把名字送到她眼前，并在
+//     提示词里钉住「participants 是真名，别压平成『群友』」和「谁说的以 speaker 为准」。
+//     写入侧同一天在 `memory-ai.ts` 补齐（模板 v5）：没有 speaker，模型写不出名字。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v32";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -606,7 +620,7 @@ function systemPrompt(flags: {
 
   if (withEvents) {
     lines.push(
-      "events are dated occurrences (what, when, where, with whom): for a specific day, list that day's events in time order; never invent one.",
+      "events are dated occurrences (what, when, where, with whom): for a specific day, list that day's events in time order; never invent one. participants holds real display names — when asked who said or did something, use that name instead of flattening it into 群友/某个人; when it is empty or generic, say you only remember it was someone in the group rather than making up a name.",
     );
   }
   if (withRecentEvents) {
@@ -616,7 +630,7 @@ function systemPrompt(flags: {
   }
   if (withRawMessages) {
     lines.push(
-      "rawMessages are the original lines from that period, not summaries: evidence only; if a raw line and an event disagree, trust the event.",
+      "rawMessages are the original lines from that period, not summaries: evidence only; if a raw line and an event disagree, trust the event. Each line carries speaker when known — attribute a quote to that speaker, and treat only isOwner: true as your owner.",
     );
   }
 
@@ -1111,6 +1125,8 @@ export async function generateConversationReply(input: ConversationReplyInput): 
             role: message.role,
             content: message.content.slice(0, 300),
             occurredAt: message.occurredAt,
+            ...(message.speaker ? { speaker: message.speaker.slice(0, 80) } : {}),
+            ...(message.isOwner ? { isOwner: true } : {}),
             scope: message.scope === "private" ? "private" : "character",
           })),
         }

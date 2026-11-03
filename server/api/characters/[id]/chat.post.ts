@@ -13,7 +13,8 @@ import {
   resolveMemoryItemLimit, resolveMemoryTokenBudget, resolveRecentMessageLimit, resolveSnapshotTokenBudget,
 } from "../../../utils/memory-retrieval";
 import {
-  resolveEventItemLimit, resolveEventTokenBudget, resolveEventRecentDays, selectEventsForPrompt, selectRecentEvents,
+  parseEventParticipantQuery, resolveEventItemLimit, resolveEventTokenBudget, resolveEventRecentDays,
+  selectEventsForPrompt, selectRecentEvents,
 } from "../../../utils/memory-event-retrieval";
 import {
   resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
@@ -23,6 +24,8 @@ import { resolveChatMemoryScopes } from "../../../utils/memory-scope-access";
 import { requireActorUserId } from "../../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
+import { readMessageIsOwner, readMessageSpeaker } from "../../../utils/conversation-message";
+import { resolveEventParticipantNames, resolveParticipantAccounts } from "../../../utils/participant-names";
 import { readPreviousJournalLine } from "../../../utils/journal-service";
 
 export default defineEventHandler(async (event) => {
@@ -248,21 +251,21 @@ export default defineEventHandler(async (event) => {
       participantRefs: true,
     },
   });
+  /**
+   * 名字是入口，账号才是身份。
+   *
+   * 问「鱼小妹最近说了什么」时，忆泡里存的可能还是旧名「曦」—— 只比字符串一条都
+   * 查不到。先把名字解析成平台账号，再让检索用 `participantRefs` 兜住改名。
+   * 认不出是谁（或问句里没提人）就不传，退回纯字符串匹配。
+   */
+  const participantName = parseEventParticipantQuery(retrievalQuery);
+  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName) : [];
   const eventSelection = selectEventsForPrompt(retrievalQuery, eventCandidates, {
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
     tokenBudget: resolveEventTokenBudget(character.modelConfig),
     limit: resolveEventItemLimit(character.modelConfig),
+    ...(participantIds.length ? { participantIds } : {}),
   });
-  const events = eventSelection.items.map((event) => ({
-    id: event.id,
-    occurredAt: event.occurredAt.toISOString(),
-    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
-    ...(event.place ? { place: event.place } : {}),
-    participants: event.participants,
-    title: event.title,
-    detail: event.detail.slice(0, 600),
-    scope: scopeOriginById.get(event.memoryScopeId) ?? "character",
-  }));
 
   /**
    * 最近几天的忆泡：不看问句，无条件当背景带上。
@@ -275,15 +278,38 @@ export default defineEventHandler(async (event) => {
   const recentEventSelection = recentEventDays > 0
     ? selectRecentEvents(eventCandidates, {
         days: recentEventDays,
-        excludeIds: new Set(events.map((event) => event.id)),
+        excludeIds: new Set(eventSelection.items.map((event) => event.id)),
       })
     : null;
-  const recentEvents = (recentEventSelection?.items ?? []).map((event) => ({
+  const recentEventItems = recentEventSelection?.items ?? [];
+
+  /**
+   * 名字刷新的唯一入口：忆泡存的是**记那一刻**的名字，群名片随时会改。
+   * 两批一起过一遍，一次查询搞定（见 `participant-names.ts`）。
+   */
+  const participantsByEvent = await resolveEventParticipantNames(
+    prisma,
+    [...eventSelection.items, ...recentEventItems],
+  );
+  const participantsAt = (index: number, fallback: readonly string[]): string[] =>
+    participantsByEvent[index] ?? [...fallback];
+
+  const events = eventSelection.items.map((event, index) => ({
     id: event.id,
     occurredAt: event.occurredAt.toISOString(),
     ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
     ...(event.place ? { place: event.place } : {}),
-    participants: event.participants,
+    participants: participantsAt(index, event.participants),
+    title: event.title,
+    detail: event.detail.slice(0, 600),
+    scope: scopeOriginById.get(event.memoryScopeId) ?? "character",
+  }));
+  const recentEvents = recentEventItems.map((event, index) => ({
+    id: event.id,
+    occurredAt: event.occurredAt.toISOString(),
+    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
+    ...(event.place ? { place: event.place } : {}),
+    participants: participantsAt(eventSelection.items.length + index, event.participants),
     title: event.title,
     detail: event.detail.slice(0, 600),
     scope: scopeOriginById.get(event.memoryScopeId) ?? "character",
@@ -296,6 +322,9 @@ export default defineEventHandler(async (event) => {
     role: string;
     content: string;
     occurredAt: string;
+    /** 群聊原文的发言人与主人标记：不带上，她读到的就是一句句没有主人的话。 */
+    speaker?: string;
+    isOwner?: boolean;
     scope: "character" | "private";
   }> = [];
   if (eventSelection.range) {
@@ -307,7 +336,7 @@ export default defineEventHandler(async (event) => {
       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
       take: 200,
       select: {
-        id: true, role: true, content: true, occurredAt: true,
+        id: true, role: true, content: true, occurredAt: true, metadata: true,
         conversation: { select: { memoryScopeId: true } },
       },
     });
@@ -317,14 +346,20 @@ export default defineEventHandler(async (event) => {
       limit: resolveRawMessageLimit(character.modelConfig),
       excludeIds: new Set(recentStoredMessages.map((message) => message.id)),
     });
-    rawMessages = selected.items.map((message) => ({
-      id: message.id,
-      role: message.role,
-      // 截断由 selectRawMessagesForPrompt 统一负责（含「后面还有 N 字」标记），这里不再切片。
-      content: message.content,
-      occurredAt: message.occurredAt.toISOString(),
-      scope: scopeOriginById.get(message.conversation.memoryScopeId) ?? "character",
-    }));
+    rawMessages = selected.items.map((message) => {
+      const speaker = readMessageSpeaker(message.metadata);
+      return {
+        id: message.id,
+        role: message.role,
+        // 截断由 selectRawMessagesForPrompt 统一负责（含「后面还有 N 字」标记），这里不再切片。
+        content: message.content,
+        occurredAt: message.occurredAt.toISOString(),
+        // 原文兜底也要说清是谁讲的：只给 role，群聊里每一句都是「user」。
+        ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
+        ...(readMessageIsOwner(message.metadata) ? { isOwner: true } : {}),
+        scope: scopeOriginById.get(message.conversation.memoryScopeId) ?? "character",
+      };
+    });
   }
 
   /**

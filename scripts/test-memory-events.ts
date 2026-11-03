@@ -9,6 +9,10 @@ import { estimateTokens } from "../server/utils/memory-retrieval";
 import { toMemoryTimelineDtos } from "../server/utils/memory-timeline-dto";
 import { parseEventParticipantIdQuery, resolveEventRecentDays, selectEventsForPrompt, selectRecentEvents } from "../server/utils/memory-event-retrieval";
 import { isNearDuplicateEvent, longestCommonSubstringLength, makeEventDedupeKey } from "../server/utils/memory-ai";
+import {
+  deriveParticipantRefs, resolveEventParticipants, type MemoryEvidenceMessage,
+} from "../server/utils/memory-change-apply";
+import { applyCurrentParticipantNames, readExternalParticipantRefs } from "../server/utils/participant-names";
 
 const TZ = "Asia/Shanghai";
 // 2026-10-31 是周六，用固定的「现在」做断言，避免测试随日期漂移。
@@ -285,4 +289,185 @@ assert.equal(resolveEventRecentDays({ eventRecentDays: 3 }), 3, "按角色配置
 assert.equal(resolveEventRecentDays({}), 0, "没配就是关");
 assert.equal(resolveEventRecentDays({ eventRecentDays: 99 }), 14, "上限 14 天，别让一句配置把整段历史塞进提示词");
 
-console.log("忆泡测试通过：相对/绝对日期、时段收窄、周起点、空区间、关键词回退、预算保底、幂等键、按天窗口、日期键与小时键、原文兜底与单条截断、时间线状态、近义去重、参与者过滤与取首、近期忆泡。");
+// ── 参与者清洗：泛称换成真名、她自己不算「相关人物」────────────
+// 群聊里模型认不出人时会写「群友」，那条忆泡当场丢掉那个人：卡片上看不出是谁、
+// 按人检索匹配不到、回答只能说「有个群友」。这里用确定性规则补回来。
+const evidenceMsg = (over: Partial<MemoryEvidenceMessage> & { id: string }): MemoryEvidenceMessage => ({
+  occurredAt: new Date("2026-10-31T14:00:00+08:00"),
+  role: "USER",
+  ...over,
+});
+
+// 线上真实那条「答题接龙」：participants = {小鲸鱼i, 群友}，小鲸鱼i 是角色自己。
+assert.deepEqual(
+  resolveEventParticipants(
+    ["小鲸鱼i", "群友"],
+    [evidenceMsg({ id: "a", role: "ASSISTANT" }), evidenceMsg({ id: "b", speaker: "阿深" })],
+    "小鲸鱼i",
+  ),
+  ["阿深"],
+  "她自己不该出现在参与者里，泛称要换成真实昵称",
+);
+
+// 证据里有两个人都说过话：不猜是谁，但泛称要留着 —— 删掉等于把「有别人参与」
+// 改成「没有别人参与」，那是错的。
+assert.deepEqual(
+  resolveEventParticipants(
+    ["群友"],
+    [evidenceMsg({ id: "a", speaker: "阿深" }), evidenceMsg({ id: "b", speaker: "黛蓝" })],
+    "小鲸鱼i",
+  ),
+  ["群友"],
+  "两个候选时不猜，泛称保留（有别人参与这个信息不能丢）",
+);
+
+// 旧忆泡没有来源消息，只能做确定性清洗：剔掉她自己，泛称无从替换就留着。
+assert.deepEqual(
+  resolveEventParticipants(["小鲸鱼i", "群友"], [], "小鲸鱼i"),
+  ["群友"],
+  "没有证据时不猜名字，但泛称保留、她自己剔掉",
+);
+
+// 已经点名一个，泛称只能是剩下的那个。
+assert.deepEqual(
+  resolveEventParticipants(
+    ["阿深", "群友"],
+    [evidenceMsg({ id: "a", speaker: "阿深" }), evidenceMsg({ id: "b", speaker: "黛蓝" })],
+    "小鲸鱼i",
+  ),
+  ["阿深", "黛蓝"],
+  "已点名的保留，泛称补成证据里剩下的那一个",
+);
+
+// 模型漏写参与者，但证据里只有一个人跟她互动。
+assert.deepEqual(
+  resolveEventParticipants(
+    [],
+    [evidenceMsg({ id: "a", role: "ASSISTANT" }), evidenceMsg({ id: "b", speaker: "阿深" })],
+    "小鲸鱼i",
+  ),
+  ["阿深"],
+  "证据里只有一个人时，空参与者也要补上名字",
+);
+
+// 只有她自己在说话：不能凭空冒出一个人。
+assert.deepEqual(
+  resolveEventParticipants([], [evidenceMsg({ id: "a", role: "ASSISTANT" })], "小鲸鱼i"),
+  [],
+  "只有她的消息时不该编出在场的人",
+);
+
+// 主人用「主人」这个称呼，不被昵称覆盖，也照常按人补泛称。
+assert.deepEqual(
+  resolveEventParticipants(
+    ["主人", "群友"],
+    [evidenceMsg({ id: "a", isOwner: true, speaker: "老陈" }), evidenceMsg({ id: "b", speaker: "阿深" })],
+    "小鲸鱼i",
+  ),
+  ["主人", "阿深"],
+  "主人保留称谓，泛称补成主人之外那个人",
+);
+
+// 重复项和空白要被清掉。
+assert.deepEqual(
+  resolveEventParticipants(["阿深", " 阿深 ", "群友", ""], [evidenceMsg({ id: "a", speaker: "阿深" })], "小鲸鱼i"),
+  ["阿深"],
+  "同名去重、空串丢弃",
+);
+
+// 引用要带上当时的叫法：昵称会改，以后回溯「那时他叫什么」不用再回表。
+assert.deepEqual(
+  deriveParticipantRefs([
+    evidenceMsg({ id: "a", role: "ASSISTANT" }),
+    evidenceMsg({ id: "b", speaker: "阿深", authorOpenId: "10001", platform: "qq-onebot" }),
+  ]),
+  [
+    { kind: "self" },
+    { kind: "external", platform: "qq-onebot", externalId: "10001", displayName: "阿深" },
+  ],
+  "外部引用要记住当时的显示名",
+);
+
+// ── 改名：用账号锚点把旧名刷成当前名 ────────────────────────
+// 群名片随时会改（实测 134 个账号里 17 个两天内就改过）。忆泡存的是当时的名字，
+// 注入前必须换成现在的，否则她说出的名字对方不认识。
+const refsOf = (name: string, uid: string) => [{
+  kind: "external", platform: "qq-onebot", externalId: uid, displayName: name,
+}];
+
+assert.deepEqual(
+  applyCurrentParticipantNames(["曦", "鱼长棠"], refsOf("曦", "3633491631"), new Map([["3633491631", "鱼小妹"]])),
+  ["鱼小妹", "鱼长棠"],
+  "改过名的参与者要换成当前叫法",
+);
+
+assert.deepEqual(
+  applyCurrentParticipantNames(["曦"], refsOf("曦", "3633491631"), new Map()),
+  ["曦"],
+  "查不到当前名字时保留旧名，不能变成空",
+);
+
+assert.deepEqual(
+  applyCurrentParticipantNames(["鱼小妹"], refsOf("曦", "3633491631"), new Map([["3633491631", "鱼小妹"]])),
+  ["鱼小妹"],
+  "已经是新名字时不重复处理",
+);
+
+assert.deepEqual(
+  applyCurrentParticipantNames(["小七"], refsOf("鱼小七", "1962605653"), new Map([["1962605653", "鱼小七（Moss）"]])),
+  ["鱼小七（Moss）"],
+  "模型写的是简称时也要认得出是他",
+);
+
+assert.deepEqual(
+  applyCurrentParticipantNames(["曦"], null, new Map([["3633491631", "鱼小妹"]])),
+  ["曦"],
+  "老忆泡没有引用列，无从刷新，保持原样",
+);
+
+assert.deepEqual(
+  applyCurrentParticipantNames(["曦"], [{ kind: "external", externalId: "   " }], new Map()),
+  ["曦"],
+  "结构不完整的引用直接忽略，不猜账号",
+);
+
+assert.equal(
+  readExternalParticipantRefs([
+    { kind: "self" },
+    { kind: "owner" },
+    { kind: "external", platform: "qq-onebot", externalId: "1", displayName: "甲" },
+  ]).length,
+  1,
+  "只取 external 引用：self 和 owner 不是外部账号",
+);
+
+// ── 改名后的按人检索：名字是入口，账号才是身份 ────────────────
+const renamed = [
+  {
+    id: "n1", title: "替曦记下 BLG 八强赛的说法", detail: "八强赛的赛程",
+    occurredAt: new Date("2026-11-02T10:00:00+08:00"), participants: ["曦"], keywords: ["比赛"],
+    participantRefs: [{ kind: "external", platform: "qq-onebot", externalId: "3633491631" }],
+  },
+];
+assert.equal(
+  selectEventsForPrompt("和鱼小妹都聊过什么", renamed, { now, timeZone: TZ }).mode,
+  "keyword",
+  "只比字符串时，改名后的新名字查不到旧忆泡（这正是要修的缺口）",
+);
+const byRenamedAccount = selectEventsForPrompt("和鱼小妹都聊过什么", renamed, {
+  now, timeZone: TZ, participantIds: ["3633491631"],
+});
+assert.equal(byRenamedAccount.mode, "participant", "解析出账号后，新名字也能查到旧名记下的忆泡");
+assert.deepEqual(byRenamedAccount.items.map((item) => item.id), ["n1"]);
+
+const byOldName = selectEventsForPrompt("和曦都聊过什么", renamed, {
+  now, timeZone: TZ, participantIds: ["3633491631"],
+});
+assert.deepEqual(byOldName.items.map((item) => item.id), ["n1"], "名字与账号命中同一条时不能重复出现");
+
+const unrelatedAccount = selectEventsForPrompt("和鱼小妹都聊过什么", renamed, {
+  now, timeZone: TZ, participantIds: ["999999"],
+});
+assert.equal(unrelatedAccount.mode, "keyword", "账号对不上时不能硬凑成按人过滤");
+
+console.log("忆泡测试通过：相对/绝对日期、时段收窄、周起点、空区间、关键词回退、预算保底、幂等键、按天窗口、日期键与小时键、原文兜底与单条截断、时间线状态、近义去重、参与者过滤与取首、近期忆泡、参与者清洗与反查名字、改名刷新、按账号检索。");

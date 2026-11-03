@@ -19,6 +19,7 @@ import {
   conversationOriginLabel,
   readMessageAuthor,
   readMessageMentionTargets,
+  readMessageSpeaker,
   readSourceMessageIsOwner,
 } from "./conversation-message";
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
@@ -81,6 +82,10 @@ type PeriodSourceMessage = {
   /** 发言人账号与平台：忆泡的参与者引用靠它推导，不靠模型写名字。 */
   authorOpenId?: string;
   platform?: string;
+  /** 发言人显示名：忆泡的 `participants` 靠它写对，否则模型只能写「群友」。 */
+  speaker?: string;
+  /** 群内稳定代号（`member_2`）：昵称会改，代号不会。 */
+  member?: string;
 };
 
 /** 会话来源标签（实现在 `conversation-message.ts`，手账链路共用同一套判据）。 */
@@ -117,6 +122,9 @@ async function loadPeriodSourceMessages(
       mentionTargets: readMessageMentionTargets(row.metadata),
       // 发言人账号与平台：忆泡的参与者引用靠它推导。
       ...readMessageAuthor(row.metadata),
+      // 发言人显示名：忆泡的 participants 靠它写对名字。手账链路一直是这么取的，
+      // 忆泡这条漏了，结果群聊事件被记成「群友」。
+      ...readMessageSpeaker(row.metadata),
     }));
   }));
   return selectPeriodSourceMessages(batches.flat(), {
@@ -145,6 +153,9 @@ function toAiMessage(message: PeriodSourceMessage): MemoryAiMessage {
     origin: message.origin,
     isOwner: message.isOwner,
     ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
+    // 谁说的：不传的话模型只能从正文猜，猜不出就写「群友」，那个人当场丢掉。
+    ...(message.speaker ? { speaker: message.speaker } : {}),
+    ...(message.member ? { member: message.member } : {}),
   };
 }
 
@@ -343,6 +354,8 @@ async function runDailyEventJob(
           snapshotId: null,
           timeZone,
           state: finalize ? "FINAL" : "DRAFT",
+          // 她自己的名字要从参与者里剔掉：「和谁」不该把「她自己」算进去。
+          characterName: scope.character.name,
         },
         aiResult.analysis.events,
         messagesById,
