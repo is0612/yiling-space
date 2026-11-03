@@ -50,6 +50,17 @@ export const CHARACTER_BUNDLE_VERSION = 3;
 /** 导入包最大字节数：够 4000 条记忆 + 600 篇总结 + 1500 篇手账，再大基本是塞了别的东西。 */
 export const CHARACTER_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
 
+/**
+ * 归档周期的边界（2026-11-03 从 1–365 收到 1–8，默认 8 → 2）。
+ * 与服务端 `api/characters/[id]/memory-settings/index.patch.ts` 的校验、
+ * 前端 `pages/characters/[id]/settings/memory.vue` 的 `INTERVAL_*_DAYS` 必须一致。
+ */
+export const MEMORY_INTERVAL_MIN_DAYS = 1;
+export const MEMORY_INTERVAL_MAX_DAYS = 8;
+export const MEMORY_INTERVAL_DEFAULT_DAYS = 2;
+/** 老角色包里可能带着过去允许的宽范围：读得进来，但不照搬，见下方 clamp。 */
+const MEMORY_INTERVAL_IMPORT_MAX_DAYS = 365;
+
 export const CHARACTER_BUNDLE_LIMITS = {
   memories: 4000,
   events: 4000,
@@ -864,9 +875,25 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
   const modelConfig = stripPortableModelConfig(body.modelConfig);
   const setting = asRecord(body.memorySetting);
   const timezoneInput = readText(setting.timezone, "时区", 100);
+  /**
+   * 归档周期收口：老卡里的 1–365 照旧读得进来，但落到 1–8 之间。
+   *
+   * 这里刻意**不拒绝**超范围的老卡：拒绝等于「你导不进来」，而卡本身没有任何问题，
+   * 只是当年允许填 30 天。收口则是把周期压到 8，导入后在设置页直接看得见，
+   * 也不会留下「库里 30、界面 8、一保存就 400」的那种死角。
+   */
   const memorySetting = {
-    snapshotIntervalDays: Math.round(
-      readNumber(setting.snapshotIntervalDays, "归档周期", 1, 365, 8),
+    snapshotIntervalDays: Math.min(
+      MEMORY_INTERVAL_MAX_DAYS,
+      Math.round(
+        readNumber(
+          setting.snapshotIntervalDays,
+          "归档周期",
+          MEMORY_INTERVAL_MIN_DAYS,
+          MEMORY_INTERVAL_IMPORT_MAX_DAYS,
+          MEMORY_INTERVAL_DEFAULT_DAYS,
+        ),
+      ),
     ),
     timezone: timezoneInput && isValidTimezone(timezoneInput) ? timezoneInput : "Asia/Shanghai",
     autoSnapshotEnabled: setting.autoSnapshotEnabled === true,
