@@ -315,6 +315,8 @@ export type ConversationReplyInput = {
    * 关键在于它必须在生成**之前**确定：模型要知道自己在「说话」，才会写出口语短句，
    * 也才不会写出「我只有打字」这种自我认知错位的话。生成后若超长，渠道会降级发文字。
    */
+  /** 当前对话/渠道是否已启用且具备发送语音消息的完整能力。 */
+  voiceEnabled?: boolean;
   voiceReply?: boolean;
 };
 export type ConversationReplyResult = {
@@ -419,7 +421,8 @@ export type ConversationReplyResult = {
 // v34：群聊请求在序列化前剔除 private scope；补齐动态 JSON 输出字段契约；justSaid 视为冷却中。
 // v35：明确 memories / snapshots / events / recentEvents / rawMessages 共用 scope 边界，避免把某人的私有经历归到别人身上。
 // v36：区分「事件参与者」与「具体发言/行为者」，避免仅凭 participants 把话或行为安到某个人头上。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v38";
+// v39：语音能力由当前渠道与角色配置动态注入；hadVoice 只证明过去发过语音，不能覆盖当前能力开关。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v39";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -574,6 +577,8 @@ function systemPrompt(flags: {
   mustReply?: boolean;
   /** 上一次的答案没有可用正文，这一轮补一句硬要求。 */
   repair?: boolean;
+  /** 当前对话/渠道是否具备发送语音消息的能力。 */
+  voiceEnabled?: boolean;
   /** 这一条会被念成语音条发给对方。 */
   withVoiceReply?: boolean;
   /** 本轮带了熟人卡（groupAcquaintances）。没带就别提这个字段，否则模型会自己编）。 */
@@ -603,7 +608,7 @@ function systemPrompt(flags: {
 } = {}): string {
   const {
     withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat,
-    mustReply, repair, withVoiceReply, withAcquaintances, withFriendRoster, withFriendAliases,
+    mustReply, repair, voiceEnabled, withVoiceReply, withAcquaintances, withFriendRoster, withFriendAliases,
     withGroupMembers, withJournal, withCrossChannel, withEvents, withRecentEvents, withRawMessages,
     withHadSticker, withHadVoice, withMediaTokens,
   } = flags;
@@ -628,6 +633,10 @@ function systemPrompt(flags: {
     "Follow an unfinished thread when it matters: remember a question, plan or promise only when the supplied context supports it; do not claim something was completed unless the context says so. A follow-up should feel like you remembered, not like a task reminder.",
     "Do not perform friendliness on every turn: avoid forced questions, fake enthusiasm, repeated greetings and unsolicited life updates. Ask a question only when genuinely curious or when it helps the conversation; do not append one by habit. A short reaction, disagreement, joke, follow-up or silence can each be natural.",
     "Reply in the language of the current message unless the persona clearly calls for another; keep it proportionate, not clipped — say enough to sound like yourself, but do not pad the reply.",
+    ...(voiceEnabled === undefined ? [] : [voiceEnabled
+      ? "voiceEnabled is true: you can send voice messages in this current conversation/channel. This is a current capability, not a requirement to use voice on every turn; only voiceReply tells you this particular reply will be sent as audio."
+      : "voiceEnabled is false: you cannot send voice messages in this current conversation/channel right now. If asked, say naturally that you can reply in text here; do not claim you can send a voice message. This does not mean you cannot speak in the ordinary conversational sense."]),
+    "A hadVoice mark only proves that an earlier reply was sent as audio; it does not prove voice sending is enabled now. The current voiceEnabled setting always takes precedence for present capability.",
   ];
 
   if (withEvents) {
@@ -663,7 +672,7 @@ function systemPrompt(flags: {
       // 她自己发过的图/语音，下一轮只靠 metadata 才看得见 —— 不标出来她会否认。
       const marks = [
         ...(withHadSticker ? ["hadSticker: true when that reply had a picture of yours — own it, never claim one you did not send"] : []),
-        ...(withHadVoice ? ["hadVoice: true when it was a spoken voice message: do not say you can only type"] : []),
+        ...(withHadVoice ? ["hadVoice: true means that earlier reply was sent as a voice message; acknowledge that past fact, but use current voiceEnabled to determine whether you can send voice now"] : []),
       ];
       lines.push(`Your own earlier lines carry ${marks.join(", and ")}.`);
     }
@@ -1196,7 +1205,8 @@ export async function generateConversationReply(input: ConversationReplyInput): 
                 // 「这一轮必须说话」的场合（全回模式、被 @）：提示词里那套「沉默是常态」
                 // 就得换成「给一句」。不换的话模型照提示词沉默，而底下又不接受沉默。
                 mustReply: input.allowSilent !== true,
-                withVoiceReply: input.voiceReply === true,
+                voiceEnabled: input.voiceEnabled,
+        withVoiceReply: input.voiceReply === true,
                 withAcquaintances: Boolean(input.groupAcquaintances?.length),
                 withFriendRoster: Boolean(acquaintancePayload),
                 withFriendAliases: hasFriendAliases,
