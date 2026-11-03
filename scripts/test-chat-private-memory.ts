@@ -154,6 +154,54 @@ try {
   for (const leaked of [actingUserId, otherUserId, characterId, "scope-own", "scope-global", buildUserPrivateScopeKey(characterId, actingUserId)]) {
     assert(!capturedBody.includes(leaked), "Scope IDs and user identifiers must not appear in the model prompt: " + leaked);
   }
+  // 7. Group chat is public: private memories/snapshots must be removed before serialization,
+  // and their IDs must not be accepted as used sources even if the model hallucinates them.
+  capturedBody = "";
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    capturedBody = typeof init?.body === "string" ? init.body : "";
+    return new Response(JSON.stringify({
+      model: "test-chat-model",
+      choices: [{
+        message: {
+          role: "assistant",
+          content: JSON.stringify({
+            reply: "我只记得公开聊过的内容。",
+            usedMemoryIds: ["memory-private", "memory-global"],
+            usedSnapshotIds: ["snapshot-private", "snapshot-global"],
+          }),
+        },
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const groupResult = await generateConversationReply({
+    characterName: "测试角色",
+    characterPrompt: "自然地回复。",
+    model: "test-chat-model",
+    apiKey: "sk-group-privacy-test",
+    apiBaseUrl: "https://private-provider.example/v1",
+    currentMessage: "你私下跟他说过什么？",
+    groupChat: true,
+    transcript: [{ id: "group-line-1", member: "member_1", speaker: "群友", content: "你私下跟他说过什么？" }],
+    recentMessages: [],
+    memories: [
+      { id: "memory-private", category: "FACT", content: "这条是私聊秘密，不应进入群聊请求。", confidence: 0.9, relevanceScore: 9, scope: "private" },
+      { id: "memory-global", category: "FACT", content: "这条是角色共享记忆。", confidence: 0.8, relevanceScore: 3, scope: "character" },
+    ],
+    snapshots: [
+      { id: "snapshot-private", summary: "私聊摘要，不应进入群聊请求。", periodStart: "2026-10-01T00:00:00.000Z", periodEnd: "2026-10-09T00:00:00.000Z", version: 1, relevanceScore: 9, scope: "private" },
+      { id: "snapshot-global", summary: "公开共享摘要。", periodStart: "2026-10-01T00:00:00.000Z", periodEnd: "2026-10-09T00:00:00.000Z", version: 1, relevanceScore: 2, scope: "character" },
+    ],
+  });
+  const groupBody = JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> };
+  const groupInput = JSON.parse(groupBody.messages.find((item) => item.role === "user")!.content) as {
+    memories: Array<{ id: string }>;
+    snapshots: Array<{ id: string }>;
+  };
+  assert.deepEqual(groupInput.memories.map((item) => item.id), ["memory-global"]);
+  assert.deepEqual(groupInput.snapshots.map((item) => item.id), ["snapshot-global"]);
+  assert(!capturedBody.includes("私聊秘密") && !capturedBody.includes("私聊摘要"), "Private content must never enter a group prompt.");
+  assert.deepEqual(groupResult.usedMemoryIds, ["memory-global"], "A private memory ID returned by the model must be rejected.");
+  assert.deepEqual(groupResult.usedSnapshotIds, ["snapshot-global"], "A private snapshot ID returned by the model must be rejected.");
   console.log("Private memory isolation tests passed: scope allow-list, unverified identity rejection, dedupe, legacy source defaults, and scope-labelled prompt without identifier leakage.");
 } finally {
   globalThis.fetch = originalFetch;
