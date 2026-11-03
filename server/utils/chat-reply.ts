@@ -418,7 +418,8 @@ export type ConversationReplyResult = {
 //     写入侧同一天在 `memory-ai.ts` 补齐（模板 v5）：没有 speaker，模型写不出名字。
 // v34：群聊请求在序列化前剔除 private scope；补齐动态 JSON 输出字段契约；justSaid 视为冷却中。
 // v35：明确 memories / snapshots / events / recentEvents / rawMessages 共用 scope 边界，避免把某人的私有经历归到别人身上。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v35";
+// v36：区分「事件参与者」与「具体发言/行为者」，避免仅凭 participants 把话或行为安到某个人头上。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v36";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -625,7 +626,7 @@ function systemPrompt(flags: {
 
   if (withEvents) {
     lines.push(
-      "events are dated occurrences (what, when, where, with whom): for a specific day, list that day's events in time order; never invent one. participants holds real display names — when asked who said or did something, use that name instead of flattening it into 群友/某个人; when it is empty or generic, say you only remember it was someone in the group rather than making up a name.",
+      "events are dated occurrences (what, when, where, with whom): for a specific day, list that day's events in time order; never invent one. participants lists people involved, not who said each line or performed each action: attribute a specific quote or action only when detail or rawMessages identifies that person. Otherwise say you remember who was involved but cannot tell who said or did it. Use real display names when explicitly identified; never invent one or flatten a known name into 群友/某个人.",
     );
   }
   if (withRecentEvents) {
