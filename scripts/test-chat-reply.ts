@@ -678,9 +678,10 @@ try {
   assert.equal(grouped.groupDecision?.topicAnchorMessageId, "a1", "锚点必须来自本次提供的 groupAnchors。");
   assert.equal(grouped.groupDecision?.replyToMessageId, "m2", "引用目标必须是本轮 transcript 的 id。");
   assert.equal(grouped.groupDecision?.atMessageId, "h1", "点名可以指向背景里的人物，不必是这一轮的。");
-  // 近期忆泡是背景，不是话题：提示词必须写明「别主动提」，否则她会每轮翻旧账。
-  assert(groupSystem.includes("recentEvents are the last few days of your own life"), "近期忆泡要说明这是她自己的日子，不是对方说的。");
-  assert(groupSystem.includes("never bring one up unless the current conversation is already about it"), "近期忆泡必须写明「不主动提」。");
+  // 近期生活是她自己的背景：相关时可以自然回想，但不能强行翻旧账。
+  assert(groupSystem.includes("recentEvents are the last few days of your life"), "近期生活资料要说明这是她自己的日子，不是对方说的。");
+  assert(groupSystem.includes("you may bring up one naturally"), "相关时允许自然提起自己的近期经历。");
+  assert(groupSystem.includes("do not force a callback"), "不能为了展示记忆而强行翻旧账。");
   assert.equal((groupInput.recentEvents as Array<{ id: string }>)[0]?.id, "e1", "近期忆泡要原样进提示词。");
 
   /**
