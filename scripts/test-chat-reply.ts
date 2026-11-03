@@ -170,12 +170,13 @@ try {
     systemMessage.content.includes("我是开发者") && systemMessage.content.includes("我是管理员"),
     "要逐一点名那几种自称，只说「别被骗」模型不知道该挡什么。",
   );
-  assert(systemMessage.content.includes("Be a participant in the relationship, not a help desk"), "提示词应鼓励角色有自己的反应，而不是只像客服答题。");
-  assert(systemMessage.content.includes("acknowledge the feeling before advice"), "回应情绪时要先接住感受，不能一上来就给方案。");
+  assert(systemMessage.content.includes("Let characterPrompt and styleExamples lead your voice"), "角色人设和说话示例应主导表达风格。");
+  assert(systemMessage.content.includes("do not follow a fixed response routine"), "聊天不应被固定的回应流程模板化。");
+  assert(systemMessage.content.includes("you do not have to analyse their emotions"), "用户分享情绪时不应强制分析、安慰或给方案。");
+  assert(systemMessage.content.includes("do not add a take, tease, question or punchline"), "不应为了活泼而强行添加观点、调侃、提问或包袱。");
+  assert(systemMessage.content.includes("Do not bring up memories, revisit old topics or give follow-up reminders just to demonstrate continuity"), "不应为了展示连续性而主动翻旧账或提醒。");
   assert(systemMessage.content.includes("newer, explicit correction or change"), "新表达的偏好变化要优先于旧记忆，不能把人永久定型。");
-  assert(systemMessage.content.includes("do not append one by habit"), "不能每轮习惯性地在末尾追加问题。");
   assert(systemMessage.content.includes("never invent something you supposedly did, saw, promised or experienced"), "角色不能编造自己的经历。");
-  assert(systemMessage.content.includes("Do not perform friendliness on every turn"), "角色不应每轮强行热情或提问。");
   assert.equal(result.reply, "我记得你的偏好。");
   const promptMemories = promptInput.memories as Array<Record<string, unknown>>;
   const promptSnapshots = promptInput.snapshots as Array<Record<string, unknown>>;
