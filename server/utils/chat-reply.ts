@@ -759,7 +759,7 @@ function systemPrompt(flags: {
   if (withCatchphrases) {
     // 和表情包相反的陷阱：写「偶尔说一句」会被当成默认答案，一句都不说。
     lines.push(
-      "catchphrases are your verbal habits: when the moment matches, say the phrase verbatim — not paraphrased or explained; skip justSaid unless nothing else fits, at most one per reply; add usedCatchphraseIds to your JSON.",
+      "catchphrases are your verbal habits: when the moment matches, say the phrase verbatim — not paraphrased or explained; justSaid means it is cooling down, so do not use it this turn; at most one per reply; add its id to usedCatchphraseIds only when you actually say it.",
     );
   }
   if (withVoiceReply) {
@@ -779,7 +779,7 @@ function systemPrompt(flags: {
   // ⑥ 怎么交卷：JSON 契约。措辞要精确，解析层按它取字段。
   if (withGroupChat) {
     lines.push(
-      'Return only a valid JSON object with: action ("reply" or "silent"), reply (empty when silent), usedMemoryIds, usedSnapshotIds, usedEventIds, optional groupDecision.',
+      `Return only a valid JSON object with: action ("reply" or "silent"), reply (empty when silent), usedMemoryIds, usedSnapshotIds, usedEventIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}, optional groupDecision.`,
       'groupDecision = { relation: "direct" | "followup" | "shared_topic" | "ambient" | "unrelated", topicAnchorMessageId, replyToMessageId, atMessageId, evidenceMessageIds }: anchors from groupAnchors, ids from this round, atMessageId may name someone from groupBackground.',
       "replyToMessageId is the line you answer; atMessageId is who you are talking to. Quote only when the line you are answering is no longer last in the room; @ only when you want attention — never @ just for replying.",
       mustReply
@@ -788,7 +788,7 @@ function systemPrompt(flags: {
     );
   } else {
     lines.push(
-      "Return only a valid JSON object with: reply (non-empty string), usedMemoryIds, usedSnapshotIds, usedEventIds.",
+      `Return only a valid JSON object with: reply (non-empty string), usedMemoryIds, usedSnapshotIds, usedEventIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}.`,
     );
   }
   lines.push(
@@ -928,6 +928,14 @@ export async function generateConversationReply(input: ConversationReplyInput): 
   // 群聊语境由调用方显式声明；退回到「有 transcript 也算」，兼容旧调用。
   const withGroupChat = input.groupChat === true || Boolean(input.transcript?.length);
 
+  // 群聊是公开场景：private scope 的资料不能只靠模型「记得保密」。
+  // 在序列化前直接剔除，避免私聊记忆、快照、事件和原文进入群聊请求。
+  const contextMemories = withGroupChat ? input.memories.filter((item) => item.scope !== "private") : input.memories;
+  const contextSnapshots = withGroupChat ? input.snapshots.filter((item) => item.scope !== "private") : input.snapshots;
+  const contextEvents = withGroupChat ? (input.events ?? []).filter((item) => item.scope !== "private") : (input.events ?? []);
+  const contextRecentEvents = withGroupChat ? (input.recentEvents ?? []).filter((item) => item.scope !== "private") : (input.recentEvents ?? []);
+  const contextRawMessages = withGroupChat ? (input.rawMessages ?? []).filter((item) => item.scope !== "private") : (input.rawMessages ?? []);
+
   /**
    * 跨窗口旁路只在真有内容时才提。
    *
@@ -944,9 +952,9 @@ export async function generateConversationReply(input: ConversationReplyInput): 
    * 该怎么用 —— 哪怕这一轮一个都没带。模型会以为手上另有一份没展开的来源，
    * 被问起时往那个方向编；而且白占预算。
    */
-  const withEvents = Boolean(input.events?.length);
-  const withRecentEvents = Boolean(input.recentEvents?.length);
-  const withRawMessages = Boolean(input.rawMessages?.length);
+  const withEvents = contextEvents.length > 0;
+  const withRecentEvents = contextRecentEvents.length > 0;
+  const withRawMessages = contextRawMessages.length > 0;
   // 她自己带过图/发过语音的那条在历史里；没有这样的行就不解释这两个标记。
   const withHadSticker = input.recentMessages.some((entry) => entry.role === "ASSISTANT" && entry.hadSticker === true);
   const withHadVoice = input.recentMessages.some((entry) => entry.role === "ASSISTANT" && entry.hadVoice === true);
@@ -1073,7 +1081,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       // 她发过语音的那句：同上，标记带过去，否则她会否认自己会说话。
       ...(entry.role === "ASSISTANT" && entry.hadVoice ? { hadVoice: true } : {}),
     })),
-    memories: input.memories.map((memory) => ({
+    memories: contextMemories.map((memory) => ({
       id: memory.id,
       category: memory.category,
       content: memory.content,
@@ -1082,7 +1090,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       scope: memory.scope === "private" ? "private" : "character",
       ...(memory.occurredAt ? { occurredAt: memory.occurredAt } : {}),
     })),
-    snapshots: input.snapshots.map((snapshot) => ({
+    snapshots: contextSnapshots.map((snapshot) => ({
       id: snapshot.id,
       summary: snapshot.summary,
       periodStart: snapshot.periodStart,
@@ -1093,7 +1101,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
     })),
     ...(input.events?.length
       ? {
-          events: input.events.map((event) => ({
+          events: contextEvents.map((event) => ({
             id: event.id,
             occurredAt: event.occurredAt,
             ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
@@ -1109,7 +1117,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       ? {
           // 和 events 同形，但语义不同：events 是「这一轮查到的」，recentEvents 是「常驻背景」。
           // 提示词里两段规矩分开写，别让模型把背景当成「该聊的话题」。
-          recentEvents: input.recentEvents.map((event) => ({
+          recentEvents: contextRecentEvents.map((event) => ({
             id: event.id,
             occurredAt: event.occurredAt,
             ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
@@ -1123,7 +1131,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       : {}),
     ...(input.rawMessages?.length
       ? {
-          rawMessages: input.rawMessages.map((message) => ({
+          rawMessages: contextRawMessages.map((message) => ({
             id: message.id,
             role: message.role,
             content: message.content.slice(0, 300),
@@ -1268,10 +1276,10 @@ export async function generateConversationReply(input: ConversationReplyInput): 
     }
 
     const reply = typeof parsed.reply === "string" ? parsed.reply.trim().slice(0, 12_000) : "";
-    const validMemoryIds = new Set(input.memories.map((memory) => memory.id));
-    const validSnapshotIds = new Set(input.snapshots.map((snapshot) => snapshot.id));
+    const validMemoryIds = new Set(contextMemories.map((memory) => memory.id));
+    const validSnapshotIds = new Set(contextSnapshots.map((snapshot) => snapshot.id));
     // 忆泡也算来源：模型引用了哪几条，回写进 usedSources 才能回答「这句凭哪些事说的」。
-    const validEventIds = new Set((input.events ?? []).map((event) => event.id));
+    const validEventIds = new Set(contextEvents.map((event) => event.id));
     const validFaceIds = new Set(emojiFaces.map((face) => face.id));
     const validStickerIds = new Set(emojiStickers.map((sticker) => sticker.id));
     const validCatchphraseIds = new Set(catchphrases.map((item) => item.id));
