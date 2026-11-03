@@ -9,11 +9,11 @@
  */
 
 import assert from "node:assert/strict";
+import { routeOnebotEventToBinding } from "../server/utils/channel-adapter/onebot/serve";
 import {
   parseBindingRoutingKeys,
-  routeOnebotEventToBinding,
-} from "../server/utils/channel-adapter/onebot/serve";
-import type { OnebotBindingRecord } from "../server/utils/channel-adapter/onebot/configure";
+  type OnebotBindingRecord,
+} from "../server/utils/channel-adapter/onebot/configure";
 import { resolveOnebotEvent, type OnebotResolvedEvent } from "../server/utils/channel-adapter/onebot/client";
 
 function binding(id: string, routingKey: string | null): OnebotBindingRecord {

@@ -14,9 +14,9 @@ import {
   extractPhraseCandidates,
   isPhraseWorthConsidering,
   isCatchphraseAutoMineEnabled,
-  looksLikeSystemMessage,
   normalizePhraseKey,
 } from "../server/utils/catchphrase-mine";
+import { looksLikeSystemMessage } from "../server/utils/system-message";
 
 /**
  * 梗语录回归测试。

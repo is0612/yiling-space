@@ -90,12 +90,6 @@ const NOISE_KEYS = new Set([
 ]);
 
 /**
- * 系统播报判定已抽到 `server/utils/system-message.ts`：落库侧和提示词侧共用一份判据。
- * 这里转出一次，保持捡梗原有调用点和测试的 import 路径不变。
- */
-export { looksLikeSystemMessage };
-
-/**
  * 这句值不值得进候选池。
  *
  * 阈值都偏低是有意的：**这一层只负责砍「明显不是话」的东西**，判断「像不像梗」

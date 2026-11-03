@@ -80,9 +80,6 @@ export type OnebotHandleOutcome =
   | { status: "duplicate" }
   | { status: "ignored"; reason: string };
 
-// 解析函数挪去了 configure.ts（绑定配置的地盘），这里重新导出保持既有引用可用。
-export { parseBindingRoutingKeys };
-
 /**
  * 选择处理此事件的绑定角色：群聊优先匹配 routingKey（支持一个绑定挂多个群号），
  * 否则用默认绑定（routingKey 为空或 "*"）；私聊优先默认绑定，
