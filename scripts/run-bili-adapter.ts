@@ -1,4 +1,7 @@
 import "dotenv/config";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadBiliConnections, type BiliConnectionRecord, type BiliDutyConfig } from "../server/utils/channel-adapter/bili/configure";
 import { runDutyRound } from "../server/utils/channel-adapter/bili/duty-pipeline";
 import {
@@ -17,6 +20,69 @@ const shutdown = () => {
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+/**
+ * 「我在跑」的标记文件，和 server/utils/channel-adapter/bili/runtime.ts 里读的是同一个。
+ *
+ * 两个作用：
+ *   1. 网页上能看出适配器在不在跑 —— 它是唯一会「到点自己刷」的东西，没有它，
+ *      perDay 和 peakValley 配得再对也一轮都不会发生，而页面此前完全看不出来；
+ *   2. 顺手当单实例锁（`docs/B站值班服务器部署清单.md`：两台同时跑会重复刷、重复私信）。
+ * 放在 .data/（已在 .gitignore，也不会被 nuxt 重启清空）。
+ */
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const STATE_FILE = path.join(REPO_ROOT, ".data", "bili-adapter.json");
+
+/** 标记里的 pid 还活着吗。活着返回它，陈旧或读不动返回 null。 */
+async function runningPid(): Promise<number | null> {
+  try {
+    const raw = await fs.readFile(STATE_FILE, "utf8");
+    const parsed = JSON.parse(raw) as { pid?: number };
+    const pid = typeof parsed.pid === "number" ? parsed.pid : null;
+    if (!pid || pid === process.pid) return null;
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 认领标记文件。已经有实例在跑就返回它的 pid，调用方直接退出。
+ *
+ * 用 `flag: "wx"` 抢占（不存在才创建）而不是「先读再写」：两个进程几乎同时启动时，
+ * 先读再写会双双读到空、双双开跑。
+ */
+async function claimRunning(): Promise<number | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await fs.mkdir(path.dirname(STATE_FILE), { recursive: true });
+      await fs.writeFile(
+        STATE_FILE,
+        JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), cwd: REPO_ROOT }),
+        { encoding: "utf8", flag: "wx" },
+      );
+      return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null; // 写不了就照常跑，别把值班卡死
+      const pid = await runningPid();
+      if (pid) return pid;
+      await fs.rm(STATE_FILE, { force: true });
+    }
+  }
+  return null;
+}
+
+/** 退出时清掉标记。别的实例接管了这个文件时不要误删。 */
+async function markStopped() {
+  try {
+    const raw = await fs.readFile(STATE_FILE, "utf8");
+    const parsed = JSON.parse(raw) as { pid?: number };
+    if (parsed.pid === process.pid) await fs.rm(STATE_FILE, { force: true });
+  } catch {
+    // 文件不在或读不动都无所谓
+  }
+}
 
 const SCAN_INTERVAL_MS = Number(process.env.YILING_BILI_DUTY_INTERVAL_MS ?? 60_000);
 
@@ -121,6 +187,13 @@ async function serveConnection(record: BiliConnectionRecord): Promise<void> {
 }
 
 async function main() {
+  const otherPid = await claimRunning();
+  if (otherPid) {
+    log({ event: "bili-adapter-already-running", pid: otherPid, hint: "已有一个实例在跑，本进程退出（两个实例会重复刷、重复私信）。" });
+    await prisma.$disconnect();
+    return;
+  }
+
   log({ event: "bili-adapter-start", intervalMs: SCAN_INTERVAL_MS });
 
   while (running) {
@@ -139,11 +212,13 @@ async function main() {
     await sleep(SCAN_INTERVAL_MS);
   }
 
+  await markStopped();
   await prisma.$disconnect();
 }
 
 main().catch(async (error) => {
   console.error("B站适配器启动失败：", error);
+  await markStopped();
   await prisma.$disconnect();
   process.exit(1);
 });

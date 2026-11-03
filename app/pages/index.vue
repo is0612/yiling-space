@@ -90,27 +90,61 @@ const usageNotes = computed(() => {
   return notes;
 });
 
-const alerts = computed(() => {
+/**
+ * 报警条的一条：说什么 + 点「去处理」应该去哪。
+ *
+ * 以前所有报警都跳 `/tasks`，这对记忆流水线成立，对 B站 值班不成立 ——
+ * 值班停摆的修复点是「B站 值班台」（看适配器在不在跑、自动刷开没开），
+ * 任务监控里什么都没有，于是人点进去只看到一张空表，还以为按钮坏了。
+ */
+type AlertItem = { text: string; to: string; label: string };
+
+const alerts = computed<AlertItem[]>(() => {
   const data = overview.value;
-  if (!data) return [] as string[];
-  const list: string[] = [];
+  if (!data) return [] as AlertItem[];
+  const list: AlertItem[] = [];
+  const taskTarget = isAdmin.value ? "/tasks" : "/characters";
+  const taskLabel = isAdmin.value ? "去处理" : "去角色";
   // 停滞检测排在最前：它说的是「任务根本没被排 / 没被认领 / 没人回收」，
   // 比后面的「有任务失败」「归档逾期」更接近原因。最多列三条，剩下的合并成一句。
   const findings = data.watchdog?.findings ?? [];
   for (const finding of findings.slice(0, 3)) {
-    list.push(`${finding.characterName}：${finding.message}`);
+    // 值班是另一条流水线：它的动作在 B站 值班台，不在任务监控里
+    const duty = finding.code === "duty_silent";
+    list.push({
+      text: `${finding.characterName}：${finding.message}`,
+      to: duty ? "/bili" : taskTarget,
+      label: duty ? "去值班台" : taskLabel,
+    });
   }
-  if (findings.length > 3) list.push(`另有 ${findings.length - 3} 项停滞`);
-  if (data.tasks.failed > 0) list.push(`${data.tasks.failed} 个后台任务失败或等待重试`);
+  if (findings.length > 3) {
+    list.push({ text: `另有 ${findings.length - 3} 项停滞`, to: taskTarget, label: taskLabel });
+  }
+  if (data.tasks.failed > 0) {
+    list.push({ text: `${data.tasks.failed} 个后台任务失败或等待重试`, to: taskTarget, label: taskLabel });
+  }
   const unconfigured = data.characters.filter((item) => !item.chatApiKeyConfigured).length;
-  if (unconfigured > 0) list.push(`${unconfigured} 个角色未配置模型，归档任务会留在队列里不执行`);
+  if (unconfigured > 0) {
+    list.push({
+      text: `${unconfigured} 个角色未配置模型，归档任务会留在队列里不执行`,
+      to: taskTarget,
+      label: taskLabel,
+    });
+  }
   // 已经由停滞检测点名过的角色不再重复说「归档已逾期」：那是一句话的因果两头，说两遍只是变长。
   const flagged = new Set(findings.map((finding) => finding.characterId));
   const missed = data.characters.filter((item) => item.cycle?.missed && !flagged.has(item.id)).length;
-  if (missed > 0) list.push(`${missed} 个角色的归档已逾期`);
+  if (missed > 0) list.push({ text: `${missed} 个角色的归档已逾期`, to: taskTarget, label: taskLabel });
   const disconnected = data.characters.filter((item) => item.status === "未连接").length;
-  if (disconnected > 0) list.push(`${disconnected} 个角色没有可用渠道`);
+  if (disconnected > 0) list.push({ text: `${disconnected} 个角色没有可用渠道`, to: taskTarget, label: taskLabel });
   return list;
+});
+
+/** 报警条右侧的按钮：按目标去重，两个目标就出两个按钮（值班和记忆本来就是两条线）。 */
+const alertRoutes = computed(() => {
+  const routes = new Map<string, string>();
+  for (const alert of alerts.value) if (!routes.has(alert.to)) routes.set(alert.to, alert.label);
+  return [...routes].map(([to, label]) => ({ to, label }));
 });
 
 // 倒计时每 60 秒按本地时间重算一次：首次渲染用服务端 remainingMs，避免 SSR 与浏览器时区差异导致闪烁。
@@ -220,16 +254,18 @@ async function handleRefresh() {
       <div class="alert-body">
         <span
           v-for="alert in alerts"
-          :key="alert"
+          :key="alert.text"
           class="alert-item"
-        >{{ alert }}</span>
+        >{{ alert.text }}</span>
       </div>
       <button
+        v-for="route in alertRoutes"
+        :key="route.to"
         class="card-link"
         type="button"
-        @click="navigateTo(isAdmin ? '/tasks' : '/characters')"
+        @click="navigateTo(route.to)"
       >
-        去处理<el-icon><ArrowRight /></el-icon>
+        {{ route.label }}<el-icon><ArrowRight /></el-icon>
       </button>
     </div>
     <div
@@ -838,9 +874,11 @@ async function handleRefresh() {
    main.css 里 .card / .kpi / .pill / .btn 的 (0,1,0)。
    ══════════════════════════════════════════════════════════════ */
 
-/* 异常条：有问题时整条醒目，没问题时退成一块白砖 */
+/* 异常条：有问题时整条醒目，没问题时退成一块白砖。
+   右边可能有不止一个动作（值班问题去值班台、记忆问题去任务监控），窄屏允许换行。 */
 .ov-a .alert-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-bottom: 14px;

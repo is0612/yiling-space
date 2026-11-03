@@ -66,6 +66,15 @@ export type WatchdogCharacterFacts = {
   duty?: {
     /** 每天轮次上限；0 = 关。 */
     perDay: number;
+    /**
+     * 「峰谷时段自动刷」是否开着。
+     *
+     * 关掉之后 perDay 只是一个上限，没有任何东西会到点自己跑 —— 只能人点「现在跑一轮」。
+     * 这时再报「三天没跑」就是**归因错误**：不是流水线断了，是配置里根本没有自动执行者。
+     * （2026-11-03 实际踩过：perDay=5 但 peakValley=false，总览一直喊值班停摆，
+     * 点「去处理」跳任务监控，那里当然什么都没有可处理的。）
+     */
+    autoDuty: boolean;
     /** 最近一轮报告的生成时间；null = 一轮都没跑过。 */
     lastRoundAt: Date | null;
     /** 最早一条相关绑定的创建时间：从没跑过时用它当起点。 */
@@ -95,8 +104,9 @@ export const WATCHDOG_THRESHOLDS = {
   /** 自动归档开着却这么久没有产出：至少两个周期，且不少于两周。 */
   minSilentDays: 14,
   /**
-   * B站 值班多久没跑算停摆。perDay ≥ 1 就意味着「每天至少一轮」，
+   * B站 值班多久没跑算停摆。perDay ≥ 1 且**开着峰谷自动刷**，就意味着「每天至少一轮」；
    * 但谷时窗口、风控、额度用完都可能合法地空一天，所以给到 3 天再报。
+   * 自动刷关着时根本没有自动执行者，不在这条的判定范围里（见 `evaluateDutySilence`）。
    */
   dutySilentMs: 3 * DAY,
 } as const;
@@ -181,6 +191,8 @@ function evaluateMemoryPipeline(now: number, character: WatchdogCharacterFacts):
 function evaluateDutySilence(now: number, character: WatchdogCharacterFacts): WatchdogFinding | null {
   const duty = character.duty;
   if (!duty || duty.perDay <= 0) return null;
+  // 自动刷关着 = 只能手动跑，没有任何进程会到点触发。「没跑过」在这里是配置，不是故障。
+  if (!duty.autoDuty) return null;
   // 从没跑过时以绑定时间为起点：刚绑上两天的角色不该被指责。
   const anchor = duty.lastRoundAt ?? duty.since;
   const idleFor = now - anchor.getTime();
@@ -316,12 +328,14 @@ export async function collectWatchdogFindings(
   const dutyByCharacter = new Map<string, NonNullable<WatchdogCharacterFacts["duty"]>>();
   for (const binding of biliBindings) {
     const metadata = (binding.connection.metadata ?? {}) as Record<string, unknown>;
-    const perDay = parseDutyInput(metadata.duty).perDay;
-    if (perDay <= 0) continue;
+    const config = parseDutyInput(metadata.duty);
+    if (config.perDay <= 0) continue;
     const lastRoundAt = lastRoundByBinding.get(binding.id) ?? null;
     const previous = dutyByCharacter.get(binding.characterId);
     dutyByCharacter.set(binding.characterId, {
-      perDay: Math.max(perDay, previous?.perDay ?? 0),
+      perDay: Math.max(config.perDay, previous?.perDay ?? 0),
+      // 一个角色挂多个小号时，「会自己跑」取决于有没有**任意一个**开着自动刷
+      autoDuty: config.peakValley || (previous?.autoDuty ?? false),
       lastRoundAt: previous?.lastRoundAt && lastRoundAt
         ? (previous.lastRoundAt > lastRoundAt ? previous.lastRoundAt : lastRoundAt)
         : previous?.lastRoundAt ?? lastRoundAt,

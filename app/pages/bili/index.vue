@@ -7,6 +7,7 @@ import BiliOverview from "./BiliOverview.vue";
 import BiliHistory from "./BiliHistory.vue";
 import BiliCommand from "./BiliCommand.vue";
 import BiliCliBanner from "./BiliCliBanner.vue";
+import BiliDutyBanner from "./BiliDutyBanner.vue";
 import BiliAccountDialog from "./BiliAccountDialog.vue";
 import BiliBindDialog from "./BiliBindDialog.vue";
 import BiliDutyDialog from "./BiliDutyDialog.vue";
@@ -19,6 +20,7 @@ import { provideBiliAccounts } from "./useBiliAccounts";
 import { provideBiliMe } from "./useBiliMe";
 import { provideBiliRunner } from "./useBiliRunner";
 import { provideBiliEnv } from "./useBiliEnv";
+import { provideBiliAdapter } from "./useBiliAdapter";
 import "./bili.css";
 
 /**
@@ -30,6 +32,8 @@ import "./bili.css";
  *   useBiliAccounts  账号弹窗开关 + 解绑 / 删号
  *   useBiliMe        当前扫码登录的账号
  *   useBiliRunner    命令参数 / argv / 执行 / 本次启动的运行记录
+ *   useBiliEnv       bili CLI 在不在
+ *   useBiliAdapter   值班适配器在不在跑（唯一会到点自己刷一轮的东西）
  *
  * 纯函数（时间格式化、报告解析、封面渐变）在 utils.ts，数据类型在 types.ts，样式在 bili.css。
  * 这里不写任何业务逻辑 —— 想加东西先想清楚它属于哪一层。
@@ -43,6 +47,7 @@ const characters = useCharacterList();
 // ⚠️ 依赖一律从参数传下去，不在 store 里相互 inject：
 //    Vue 的 inject 只往**父组件**的 provides 里找，页面自己 provide 的东西在同一个 setup 里读不到。
 const env = provideBiliEnv();
+const adapter = provideBiliAdapter();
 const dash = provideBiliDashboard();
 const me = provideBiliMe({ onLoggedIn: () => dash.loadDashboard() });
 const accounts = provideBiliAccounts({ accounts: dash.accounts, reload: dash.loadDashboard });
@@ -83,6 +88,7 @@ const loadDashboard = dash.loadDashboard;
 onMounted(() => {
   desk.init();
   void env.loadEnv();
+  void adapter.loadAdapter();
   void loadDashboard();
   void me.loadMe();
 });
@@ -102,6 +108,7 @@ onBeforeUnmount(desk.dispose);
       <main class="bd-work">
         <div class="bd-in">
           <BiliCliBanner />
+          <BiliDutyBanner />
           <BiliOverview v-if="view === 'overview'" />
           <BiliHistory v-else-if="view === 'history'" />
           <BiliCommand v-else />

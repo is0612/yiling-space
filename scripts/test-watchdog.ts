@@ -117,30 +117,38 @@ assert.deepEqual(multi.map((finding) => finding.code), ["scheduler_stalled", "wo
 
 // ── 8. B站 值班静默（另一条流水线）────────────────────────
 // 值班是脚本 + CLI 驱动的，和记忆队列完全无关：记忆停着不代表值班没跑。
-const dutyIdle = run({ duty: { perDay: 5, lastRoundAt: ago(5 * DAY), since: ago(30 * DAY) } });
+const dutyIdle = run({ duty: { perDay: 5, autoDuty: true, lastRoundAt: ago(5 * DAY), since: ago(30 * DAY) } });
 assert.deepEqual(codes(dutyIdle), ["duty_silent"]);
 assert.equal(dutyIdle[0]!.severity, "warn", "值班停摆先提示，不是「已经坏了」。");
 assert.match(dutyIdle[0]!.message, /没跑过一轮/);
 
 // 昨天刚跑过：正常，谷时窗口本来就可能空一天。
-assert.deepEqual(codes(run({ duty: { perDay: 5, lastRoundAt: ago(1 * DAY), since: ago(30 * DAY) } })), []);
+assert.deepEqual(codes(run({ duty: { perDay: 5, autoDuty: true, lastRoundAt: ago(1 * DAY), since: ago(30 * DAY) } })), []);
 
 // perDay=0 是「关掉值班」，不是「停摆」。
-assert.deepEqual(codes(run({ duty: { perDay: 0, lastRoundAt: null, since: ago(30 * DAY) } })), []);
+assert.deepEqual(codes(run({ duty: { perDay: 0, autoDuty: true, lastRoundAt: null, since: ago(30 * DAY) } })), []);
+
+// 峰谷自动刷关掉：perDay 还在，但没有任何进程会到点触发 —— 这不是停摆，是配置。
+// 报了也没用：它的修复点在 B站 值班台（打开自动刷），不在任务监控里。
+assert.deepEqual(
+  codes(run({ duty: { perDay: 5, autoDuty: false, lastRoundAt: ago(10 * DAY), since: ago(30 * DAY) } })),
+  [],
+  "自动刷关着时不报「值班停摆」：没有自动执行者，归因到流水线断裂会把人引到错的地方。",
+);
 
 // 刚绑定一天、还没跑过：新设备还在等窗口，不该被指责。
-assert.deepEqual(codes(run({ duty: { perDay: 5, lastRoundAt: null, since: ago(1 * DAY) } })), []);
+assert.deepEqual(codes(run({ duty: { perDay: 5, autoDuty: true, lastRoundAt: null, since: ago(1 * DAY) } })), []);
 
 // 绑定十天一次没跑：适配器/CLI 从没起来过。
-const neverRan = run({ duty: { perDay: 5, lastRoundAt: null, since: ago(10 * DAY) } });
+const neverRan = run({ duty: { perDay: 5, autoDuty: true, lastRoundAt: null, since: ago(10 * DAY) } });
 assert.deepEqual(codes(neverRan), ["duty_silent"]);
 assert.match(neverRan[0]!.message, /一次都没跑过/, "「从没跑过」和「跑过但停了」要说清楚，排查方向不同");
 
 // 两条流水线各报各的：记忆停了不该把值班的问题吞掉。
 const bothPipelines = run({
   nextSnapshotAt: ago(2 * HOUR),
-  duty: { perDay: 5, lastRoundAt: ago(5 * DAY), since: ago(30 * DAY) },
+  duty: { perDay: 5, autoDuty: true, lastRoundAt: ago(5 * DAY), since: ago(30 * DAY) },
 });
 assert.deepEqual(codes(bothPipelines), ["scheduler_stalled", "duty_silent"], "两个独立管线各自一条，不能只报一个。");
 
-console.log("[watchdog] 17 组判定通过");
+console.log("[watchdog] 18 组判定通过");

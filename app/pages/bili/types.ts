@@ -98,6 +98,18 @@ export type BiliCliEnv = {
   installCommand: string;
 };
 
+/**
+ * 值班适配器（`yarn bili:run`）的存活状态。
+ *
+ * 它是「到点自己刷一轮」的唯一执行者：perDay 和 peakValley 只是给它看的规则。
+ * 进程没在跑时，两层开关看起来都开着，却一轮都不会发生。
+ */
+export type BiliAdapterStatus = {
+  running: boolean;
+  pid?: number;
+  startedAt?: string;
+};
+
 /** 来源的中文说法，横幅和提示用同一套措辞。 */
 export const BILI_SOURCE_LABEL: Record<BiliCliEnv["source"], string> = {
   connection: "账号连接里指定的路径",

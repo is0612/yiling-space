@@ -45,6 +45,9 @@ export function windowLabel(window: "noon" | "night" | null) {
 }
 
 export function windowActiveLabel(account: BiliAccount) {
+  // 自动刷关着时 nextWindow 必然是 null（dueWindow 直接返回 null）。
+  // 这时说「当前不在谷时窗口内」是误导：不是「还没到点」，是「没有人在等到点」。
+  if (!account.duty.peakValley) return "自动刷已关 · 只能手动跑";
   return account.nextWindow ? `下次窗口 ${windowLabel(account.nextWindow)}` : "当前不在谷时窗口内";
 }
 

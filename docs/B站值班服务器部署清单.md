@@ -143,6 +143,7 @@ sudo journalctl -u bili-duty -f
 - [ ] `bili auth status` → 已登录、是预期账号
 - [ ] `bili owner show` → 主人 UID 正确
 - [ ] journal 里出现 `{"event":"bili-adapter-start"}`，之后每分钟一条 `bili-duty-idle`（带跳过原因）
+- [ ] `.data/bili-adapter.json` 存在且 pid 是当前进程（网页 `/bili` 顶部的横幅靠它判断适配器死活）
 - [ ] 手动跑一轮（Web 值班台「现在跑一轮」，或 `POST /api/admin/bili/run-round`）
 - [ ] 库里能看到新报告：`select day,"roundIndex","pickedCount","createdAt" from bili_round_reports order by "createdAt" desc limit 1;`
 - [ ] `bili_seen_videos` 有新增行
@@ -161,6 +162,7 @@ sudo journalctl -u bili-duty -f
 | 现象 | 原因 / 处理 |
 | --- | --- |
 | 窗口到了却不跑 | 服务器时区不是 Asia/Shanghai；或 `peakValley=false`；或今日额度已满 |
+| 值班「开着」却几天一轮都没跑 | 三层开关缺一层：`perDay>0`（配额）、`peakValley=true`（自动调度）、**适配器进程在跑**。第三层以前看不出来，现在 `/bili` 顶部会直接说「值班适配器没在跑」，并给出一键启动。`peakValley=false` 时页面会说「峰谷时段自动刷关着」—— 那种情况只有手动点「现在跑一轮」才会跑 |
 | `Cannot find module 'tsx'` | 装了 `--production`，把 devDependencies 装回来 |
 | 模型调用报未配置 Key | `.data/credentials-encryption.key` 没迁 → 网页重填角色 Key |
 | `risk_control` / `captcha_required` | 立刻停手，换网络环境，**不要换方式绕**；海外 IP 尤其容易 |
