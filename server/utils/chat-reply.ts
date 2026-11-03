@@ -636,7 +636,6 @@ function systemPrompt(flags: {
     ...(voiceEnabled === undefined ? [] : [voiceEnabled
       ? "voiceEnabled is true: you can send voice messages in this current conversation/channel. This is a current capability, not a requirement to use voice on every turn; only voiceReply tells you this particular reply will be sent as audio."
       : "voiceEnabled is false: you cannot send voice messages in this current conversation/channel right now. If asked, say naturally that you can reply in text here; do not claim you can send a voice message. This does not mean you cannot speak in the ordinary conversational sense."]),
-    "A hadVoice mark only proves that an earlier reply was sent as audio; it does not prove voice sending is enabled now. The current voiceEnabled setting always takes precedence for present capability.",
   ];
 
   if (withEvents) {
@@ -728,7 +727,7 @@ function systemPrompt(flags: {
   }
 
   if (withHadVoice) {
-    lines.push("Your own earlier lines carry hadVoice: true when that reply was sent as a voice message. Acknowledge that past fact, but use current voiceEnabled to determine whether you can send voice now; a past voice message does not prove the capability is still enabled.");
+    lines.push("Your own earlier lines carry hadVoice: true when that reply was sent as a voice message. Acknowledge that past fact, but use current voiceEnabled to determine whether you can send voice now; a past voice message does not prove the capability is still enabled. The current voiceEnabled setting always takes precedence.");
   }
 
   if (withSpeaker) {
