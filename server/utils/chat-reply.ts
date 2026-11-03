@@ -727,7 +727,7 @@ function systemPrompt(flags: {
   }
 
   if (withHadVoice) {
-    lines.push("Your own earlier lines carry hadVoice: true when that reply was sent as a voice message. Acknowledge that past fact, but use current voiceEnabled to determine whether you can send voice now; a past voice message does not prove the capability is still enabled. The current voiceEnabled setting always takes precedence.");
+    lines.push("Your own earlier lines carry hadVoice: true when an earlier reply was sent as a voice message. Acknowledge that past fact, but use current voiceEnabled to determine whether you can send voice now; a past voice message does not prove the capability is still enabled. The current voiceEnabled setting always takes precedence.");
   }
 
   if (withSpeaker) {
