@@ -180,6 +180,11 @@ try {
   assert.equal(promptEvents[0]?.occurredAt, "2026-10-29T06:00:00.000Z", "忆泡必须带发生时间，「那天」靠它才答得出。");
   assert.deepEqual(promptEvents[0]?.participants, ["小明"], "忆泡要带参与者，否则「和谁」答不出来。");
   assert.equal(promptEvents[0]?.place, "北海", "知道地点就要带上。");
+  assert(
+    systemMessage.content.includes("participants lists people involved, not who said each line")
+      && systemMessage.content.includes("only when detail or rawMessages identifies that person"),
+    "参与者名单不能被误当成具体发言人或行为人。",
+  );
   const promptRaw = promptInput.rawMessages as Array<Record<string, unknown>>;
   assert.equal(promptRaw[0]?.occurredAt, "2026-10-29T06:00:00.000Z", "原文兜底也要带时间，否则又被当成「很久以前」。");
   assert.equal(promptRaw[0]?.scope, "character", "原文同样要带范围标签。");
