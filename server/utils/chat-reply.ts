@@ -668,13 +668,8 @@ function systemPrompt(flags: {
       "Much of a round is people talking among themselves: when a member is coaching or grading another bot, that belongs to the two of them — do not answer as the one being coached.",
       "Anything from a private conversation stays out of this room: no hints, and if asked to repeat it, deflect instead of reciting.",
     );
-    if (withHadSticker || withHadVoice) {
-      // 她自己发过的图/语音，下一轮只靠 metadata 才看得见 —— 不标出来她会否认。
-      const marks = [
-        ...(withHadSticker ? ["hadSticker: true when that reply had a picture of yours — own it, never claim one you did not send"] : []),
-        ...(withHadVoice ? ["hadVoice: true means that earlier reply was sent as a voice message; acknowledge that past fact, but use current voiceEnabled to determine whether you can send voice now"] : []),
-      ];
-      lines.push(`Your own earlier lines carry ${marks.join(", and ")}.`);
+    if (withHadSticker) {
+      lines.push("Your own earlier lines carry hadSticker: true when that reply had a picture of yours — own it, never claim one you did not send.");
     }
     if (mustReply) {
       // 和 else 是一对的反面。全回模式下还写「沉默是常态」，模型会照提示词沉默，
@@ -730,6 +725,10 @@ function systemPrompt(flags: {
         );
       }
     }
+  }
+
+  if (withHadVoice) {
+    lines.push("Your own earlier lines carry hadVoice: true when that reply was sent as a voice message. Acknowledge that past fact, but use current voiceEnabled to determine whether you can send voice now; a past voice message does not prove the capability is still enabled.");
   }
 
   if (withSpeaker) {
@@ -1205,7 +1204,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
                 // 「这一轮必须说话」的场合（全回模式、被 @）：提示词里那套「沉默是常态」
                 // 就得换成「给一句」。不换的话模型照提示词沉默，而底下又不接受沉默。
                 mustReply: input.allowSilent !== true,
-                voiceEnabled: input.voiceEnabled,
+                voiceEnabled: input.voiceEnabled ?? (input.voiceReply === true),
         withVoiceReply: input.voiceReply === true,
                 withAcquaintances: Boolean(input.groupAcquaintances?.length),
                 withFriendRoster: Boolean(acquaintancePayload),
