@@ -232,7 +232,7 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
       avatarTone: resolveAvatarTone(character.name, (character.modelConfig ?? {}) as Record<string, unknown>),
       status: character.status === "ACTIVE" ? "运行中" : character.status === "PAUSED" ? "已暂停" : "未连接",
       channels: character.channelBindings.map((binding) => binding.connection.displayName),
-      intervalDays: setting?.snapshotIntervalDays ?? 8,
+      intervalDays: setting?.snapshotIntervalDays ?? 3,
       pendingIntervalDays: setting?.pendingSnapshotIntervalDays ?? null,
       autoSnapshotEnabled: setting?.autoSnapshotEnabled ?? false,
       nextSnapshotAt: setting?.nextSnapshotAt?.toISOString() ?? null,

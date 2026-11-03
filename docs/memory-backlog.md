@@ -17,6 +17,19 @@
 
 **仍可做**：`participants`（显示名）与 `participantRefs`（身份）还没有交叉校验 —— 模型写的名字对不上账号时，目前以引用为准、名字照显。
 
+## P0 · 参与者显示名清洗（已落地，2026-11-03）
+
+**问题**：抽取时模型看不到发言人。`MemoryAiMessage` 只有 `role` / 正文 / `origin`，群聊里一条 USER 可能是主人、群友甲、群友乙，模型猜不出就写「群友」—— 忆泡当场丢掉那个人。实测 87 条忆泡里 37 条（43%）带泛称，82 条没有 `sourceMessageIds` 可回溯，其中「群友与小鲸鱼i围绕『答对算本事』打趣」那条答题的人已经彻底查不出来。另外模型习惯把角色自己（小鲸鱼i）也写进「相关人物」。
+
+**已完成**：
+- `MemoryAiMessage` 补 `speaker` / `member`，`toAiMessage` 从 `readMessageSpeaker()` 取 —— 手账链路（`journal-service.ts:302`）一直是这么做的，忆泡这条漏了；
+- 提示词加三条硬规矩（不写自己、群聊必须写 speaker 里的名字、分不清就写空数组），`memory-template` 升到 v5；
+- `resolveEventParticipants()` 落库前确定性校正：剔自己、唯一候选时泛称换真名、无候选时保留泛称；清洗排在近似判重之前（否则泛称之间永远有交集，会误吞事件）；
+- `participantRefs` 的 external 项带 `displayName`；
+- 存量 `yarn backfill:participants --apply` 清洗 75 条（剔自己），泛称剩 35 条无证据可补。
+
+**仍可做**：`sourceMessageIds` 为空的旧忆泡补不出名字（没有反查入口）；改名后按旧昵称检索仍靠 `participants`，没走 `displayName`。
+
 ## P1 · 参与者身份引用（原始方案，留档）
 
 **问题**：`MemoryEvent.participants` 是模型抄来的显示名（含 `member_3` 这类代号）。昵称一改就对不上，两个群都叫「群友」会混，查不了「和小明都经历过什么」。

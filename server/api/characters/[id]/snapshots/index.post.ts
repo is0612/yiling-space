@@ -117,7 +117,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const now = new Date();
-  const intervalDays = Math.max(1, character.memorySetting?.snapshotIntervalDays ?? 8);
+  const intervalDays = Math.max(1, character.memorySetting?.snapshotIntervalDays ?? 3);
   const snapshotKey = sourceSnapshot?.snapshotKey ?? ("manual:" + memoryScopeId + ":" + randomUUID());
   const periodStart = sourceSnapshot?.periodStart ?? new Date(now.getTime() - intervalDays * 24 * 60 * 60 * 1000);
   const periodEnd = sourceSnapshot?.periodEnd ?? now;

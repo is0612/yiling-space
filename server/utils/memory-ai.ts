@@ -29,6 +29,17 @@ export type MemoryAiMessage = {
   isOwner?: boolean;
   /** 这条消息 @ 了谁：`self` 是她，`other` 是别人（群里另一个 bot / 别的成员）。 */
   mentionTargets?: string[];
+  /**
+   * 这条是谁说的（渠道显示名）。
+   *
+   * 群聊里一条 USER 可能是主人、群友甲、群友乙。不给这个字段，模型只能从正文猜
+   * 发言人，猜不出就在 participants 里写「群友」—— 忆泡当场丢掉那个人，事后
+   * 按人检索匹配不到，回答只能含糊。手账链路（`journal-ai.ts`）早有这个字段，
+   * 忆泡这条一直漏着。
+   */
+  speaker?: string;
+  /** 群内稳定代号（`member_2`）：昵称会改，代号不会。 */
+  member?: string;
 };
 
 export type MemoryAiExistingItem = {
@@ -131,7 +142,8 @@ export type MemoryAiInput = {
 };
 
 const MAX_RESPONSE_BYTES = 1_000_000;
-const TEMPLATE_VERSION = "memory-extraction-v4";
+/** v5：忆泡抽取补上 `speaker` / `member`，并要求 participants 不写自己、不写泛称。 */
+const TEMPLATE_VERSION = "memory-extraction-v5";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -471,7 +483,9 @@ function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean;
   }
   if (options.emitEvents) {
     lines.push(
-      "另外把这一周期里**能落到某一天**的事写进 events：occurredAt 用消息里的时间（ISO 8601，换算成 UTC 带 Z；只知道哪一天就写当天 00:00:00Z），title 一句话，detail 写清经过，participants 写涉及的人（用消息里的称呼），place 知道才写，keywords 写 3-5 个同义或相关词。寒暄、没有日期的泛泛而谈、群友之间与她无关的闲聊都不要写。每条 events 同样必须引用真实的 evidenceMessageIds。",
+      "另外把这一周期里**能落到某一天**的事写进 events：occurredAt 用消息里的时间（ISO 8601，换算成 UTC 带 Z；只知道哪一天就写当天 00:00:00Z），title 一句话，detail 写清经过，participants 写涉及的人（用消息里的 `speaker` 称呼），place 知道才写，keywords 写 3-5 个同义或相关词。寒暄、没有日期的泛泛而谈、群友之间与她无关的闲聊都不要写。每条 events 同样必须引用真实的 evidenceMessageIds。",
+      "**title 和 detail 里提到具体的人时也写名字**（用 `speaker`），不要写「群友」「群主」「对方」—— 事件正文和 participants 对不上时，她以后只能照着正文说「有个群友」，participants 里的名字白记了。只有确实指代一群人（例如「群里好几个人一起起哄」）时才用泛称。",
+      "**participants 的三条硬规矩**：① 不要把你自己的名字写进去 —— 你是记事的人，不是「相关人物」；② 群聊里必须写 `speaker` 里那个具体的名字，绝对不要写「群友」「群成员」「对方」「有人」这类泛称 —— 泛称等于没记，过后谁都查不出是谁，提问时也匹配不到；③ 某句话分不清是谁说的，就不要写进 participants，写空数组也比写错人好。",
       "existingEvents 是这一天**已经记录过**的事件：不要重复记录，同一件事换个说法也算重复（例如「发布群公告」和「起草并发布公告」是同一件）。只写确实不同的事。但**不要因为它非空就整体返回空数组** —— 它只用来避免重复，这一段里只要还有没记过的事，就必须照常写出来。",
       "群聊里可能同时有好几个 bot 在活动，别人 (@数字) 或直接说的话**不一定是冲她说的**。写 event 前必须先确认对象：只有 role=assistant 的消息（她自己说的）、明确叫她名字的话、@ 指向她的消息，才算「关于她」。如果一条评价/抱怨 @ 的是另一个号码、或者上下文显示在说别人的 bot，就不能写成「群友说她/嫌她/夸她」这类事——那件事的主体不是她。判断不出来时宁可不写，也别记成她的事。这条只适用于 origin 以「QQ群 」开头的消息：私聊和本地对话是两个人面对面说话，对方说的每一句都是对她说的，不要因为「没 @ 她、没叫名字」就跳过私聊事件。",
     );
@@ -567,7 +581,9 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
     timezone: input.timezone,
     scopeType: input.scopeType,
     characterName: input.characterName,
-    messages: input.messages.map(({ id, role, eventType, occurredAt, content, origin, isOwner, mentionTargets }) => ({
+    messages: input.messages.map(({
+      id, role, eventType, occurredAt, content, origin, isOwner, mentionTargets, speaker, member,
+    }) => ({
       id,
       role,
       eventType,
@@ -577,6 +593,9 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
       ...(isOwner ? { isOwner } : {}),
       // 群聊里 @ 的是谁：`other` 表示这句话是冲别人说的，不能记成她的事。
       ...(mentionTargets?.length ? { mentionTargets } : {}),
+      // 发言人：忆泡的 participants 靠它写对名字，而不是靠模型从正文猜。
+      ...(speaker ? { speaker } : {}),
+      ...(member ? { member } : {}),
     })),
     totalMessageCount: input.totalMessageCount,
     omittedMessageCount: input.omittedMessageCount,

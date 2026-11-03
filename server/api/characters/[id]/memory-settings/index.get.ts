@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
     where: { characterId },
     create: {
       characterId,
-      snapshotIntervalDays: 8,
+      snapshotIntervalDays: 3,
       timezone: "Asia/Shanghai",
       anchorAt: new Date(),
       autoSnapshotEnabled: false,

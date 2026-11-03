@@ -41,7 +41,7 @@ export default defineEventHandler(async (event) => {
       },
       memorySetting: {
         create: {
-          snapshotIntervalDays: 8,
+          snapshotIntervalDays: 3,
           timezone: "Asia/Shanghai",
           anchorAt: new Date(),
           autoSnapshotEnabled: false,

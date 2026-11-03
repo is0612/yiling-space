@@ -25,6 +25,13 @@ export type MemoryEvidenceMessage = {
   authorOpenId?: string;
   /** 平台标识（qq-onebot / bili …）。没有就当未知，不参与身份合并。 */
   platform?: string;
+  /**
+   * 发言人显示名（渠道昵称）。
+   *
+   * 两处用它：`deriveParticipantRefs` 给引用带上当时叫法；`resolveEventParticipants`
+   * 把模型写的泛称「群友」换成具体的人。缺了它，忆泡只知道 QQ 号、不知道叫什么。
+   */
+  speaker?: string;
   isOwner?: boolean;
 };
 
@@ -70,13 +77,107 @@ export function deriveParticipantRefs(evidence: MemoryEvidenceMessage[]): Partic
     const externalId = message.authorOpenId?.trim();
     if (!externalId) continue;
     const platform = message.platform?.trim() || "unknown";
+    // 顺手带上当时的叫法：昵称会改，以后要按「这个人当时叫什么」回溯时不用再回表。
+    const displayName = message.speaker?.trim().slice(0, 40);
     push(`external:${platform}:${externalId}`, {
       kind: "external",
       platform,
       externalId,
+      ...(displayName ? { displayName } : {}),
     });
   }
   return refs;
+}
+
+/**
+ * 忆泡参与者里的「泛称」。
+ *
+ * 模型在群聊里认不出人时会写这些词 —— 等于没记名字：卡片上看不出是谁，
+ * 按人检索匹配不到，回答只能说「有个群友」。
+ *
+ * 注意 `memory-ai.ts` 的 `isNearDuplicateEvent` 里有一份用途不同的近似清单
+ * （那边是「不算交集」，这边是「需要被替换」），别合并成一处：改一边会静默影响另一边。
+ */
+export const GENERIC_EVENT_PARTICIPANTS: readonly string[] = [
+  "群友", "群成员", "群员", "群内成员", "群里的人", "群里的", "群友甲", "群友乙",
+  "对方", "有人", "某人", "某个群友", "网友", "成员", "大家",
+];
+
+/** 指代她的自指写法，不该出现在「相关人物」里。 */
+const SELF_PARTICIPANT_WORDS = ["我", "自己", "本人"];
+
+/**
+ * 把忆泡的参与者从「模型抄来的字」校正成「能认出是谁的名字」。
+ *
+ * 三件事，全部确定性，不经过模型：
+ *
+ * 1. **剔除她自己** —— `participants` 的语义是「除了她还有谁」。把她自己列进去，
+ *    问「和你一起答题的是谁」时她会把自己报出来，检索侧按人过滤也会被污染。
+ * 2. **泛称换成真实昵称** —— 只在证据里**恰好剩一个**没被点名的人时才换。
+ *    证据里 A、B 都说过话，但 B 可能只是路过说了句「哈哈」，这时把「群友」
+ *    补成 B 就是错配。**宁可不写，也不要记错人** —— 和 `participantRefs`
+ *    「拿不到账号就跳过」是同一条原则。
+ * 3. **泛称能定位时就退场** —— 证据里的人都已点名，说明「群友」是模型把同一个人
+ *    写了两遍，留着只会让判重误吞和检索误命中。定位不了（或多于一个候选）就保留：
+ *    「当时有别人在」这个信息不能丢。
+ */
+export function resolveEventParticipants(
+  participants: readonly string[],
+  evidence: readonly MemoryEvidenceMessage[],
+  characterName?: string,
+): string[] {
+  const selfNames = new Set<string>(SELF_PARTICIPANT_WORDS);
+  const selfName = characterName?.trim();
+  if (selfName) selfNames.add(selfName);
+
+  // 证据里能点出名字的外部成员（她自己与主人另算，主人用「主人」这个称呼更稳）。
+  const externals: string[] = [];
+  for (const message of evidence) {
+    if (message.role === "ASSISTANT" || message.isOwner) continue;
+    const name = message.speaker?.trim();
+    if (!name || selfNames.has(name)) continue;
+    if (!externals.includes(name)) externals.push(name);
+  }
+
+  const generic = new Set(GENERIC_EVENT_PARTICIPANTS);
+
+  // 先剔掉她自己：这一步不需要证据，纯字符串判断，永远成立。
+  const kept: string[] = [];
+  for (const person of participants) {
+    const name = person.trim();
+    if (!name || selfNames.has(name)) continue;
+    if (!kept.includes(name)) kept.push(name);
+  }
+
+  /**
+   * 证据里点不出任何名字时，泛称**保留**。
+   *
+   * 删掉它是把「有别人参与、只是不知道是谁」改成「没有别人参与」—— 后者是错的，
+   * 而且旧忆泡（`sourceMessageIds` 为空的那批）只能走这条路，清空等于把仅有的
+   * 一点点信息也抹了。泛称至少说明当时有人在。
+   */
+  if (!externals.length) return kept.slice(0, 8);
+
+  const concrete = kept.filter((person) => !generic.has(person));
+  const hasGeneric = kept.length !== concrete.length;
+
+  /**
+   * 只在「剩一个」时替换：证据里 A、B 两个人都说了话，但 B 可能只是路过说了句
+   * 「哈哈」—— 这时把「群友」补成 B 就是错配。宁可不写，也不要记错人。
+   *
+   * 补名的两个入口：① 参与者里有泛称占位（模型写了「群友」）；
+   * ② 剔掉她自己后一个人都不剩（模型漏写）。两条都要求证据里恰好只剩一个
+   * 没被点名的人 —— 后者是「她给群友出了道题」这类单人互动最常见的样子。
+   */
+  const shouldFill = hasGeneric || concrete.length === 0;
+  const unresolved = externals.filter((name) => !concrete.includes(name));
+  if (shouldFill && unresolved.length === 1) return [...concrete, unresolved[0]!].slice(0, 8);
+
+  // 证据里的人都已点名，泛称没有指向对象：多半是模型把同一个人写了名字又写了「群友」。
+  if (hasGeneric && !unresolved.length) return concrete.slice(0, 8);
+
+  // 候选不止一个：泛称留着比乱指一个好，让读者知道「当时还有别人」。
+  return (hasGeneric ? kept : concrete).slice(0, 8);
 }
 
 export type MemoryApplyContext = {
@@ -348,6 +449,11 @@ export async function applyMemoryEvents(
     timeZone: string;
     /** DRAFT = 今天还在长；FINAL = 昨天已收口。 */
     state: "DRAFT" | "FINAL";
+    /**
+     * 角色自己的名字。用来把「她自己」从 `participants` 里剔掉 ——
+     * 那不是「相关人物」，留着会让检索和回答把她也算成在场的人。
+     */
+    characterName?: string;
   },
   drafts: MemoryEventDraft[],
   messagesById: Map<string, MemoryEvidenceMessage>,
@@ -384,6 +490,13 @@ export async function applyMemoryEvents(
       ? evidence.filter((message) => message.conversationId === primaryConversationId)
       : evidence;
 
+    /**
+     * 参与者清洗必须排在判重之前：判重拿 `participants` 算「算不算同一件事」的交集，
+     * 用未清洗的「群友」会让两条本来不同的事互相吞掉（泛称之间永远有交集），
+     * 而清洗后是真名，只有真的同一个人重提才算撞。
+     */
+    const participants = resolveEventParticipants(draft.participants, scopedEvidence, ctx.characterName);
+
     const dedupeKey = makeEventDedupeKey(occurredAt, draft.title);
     const existing = await tx.memoryEvent.findFirst({
       where: { memoryScopeId: ctx.memoryScopeId, dedupeKey },
@@ -406,7 +519,7 @@ export async function applyMemoryEvents(
       dayEvents = rows.map((row) => ({ title: row.title, participants: row.participants }));
       existingEventsByDay.set(dayKey, dayEvents);
     }
-    const duplicated = dayEvents.some((existing) => isNearDuplicateEvent(existing, draft));
+    const duplicated = dayEvents.some((existing) => isNearDuplicateEvent(existing, { title: draft.title, participants }));
     if (duplicated) {
       skipped += 1;
       continue;
@@ -425,7 +538,7 @@ export async function applyMemoryEvents(
           title: draft.title,
           detail: draft.detail,
           keywords: draft.keywords,
-          participants: draft.participants,
+          participants,
           // 结构化引用：从证据消息的作者推导，不靠模型写名字。
           participantRefs: deriveParticipantRefs(scopedEvidence) as unknown as Prisma.InputJsonValue,
           confidence: draft.confidence,
@@ -440,7 +553,7 @@ export async function applyMemoryEvents(
       });
       applied.push({ id: created.id, title: draft.title, occurredAt: occurredAt.toISOString() });
       // 同一批里后面几条也要跟新写的这条比，否则同批内的近义重复挡不住。
-      dayEvents.push({ title: draft.title, participants: draft.participants });
+      dayEvents.push({ title: draft.title, participants });
       await tx.auditLog.create({
         data: {
           actorType: "WORKER",
@@ -451,7 +564,7 @@ export async function applyMemoryEvents(
           details: {
             occurredAt: occurredAt.toISOString(),
             title: draft.title,
-            participants: draft.participants,
+            participants,
             confidence: draft.confidence,
             evidenceMessageIds: draft.evidenceMessageIds,
             snapshotId: ctx.snapshotId,

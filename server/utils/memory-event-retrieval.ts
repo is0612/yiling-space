@@ -57,6 +57,14 @@ export type EventSelectionOptions = {
   timeZone?: string;
   tokenBudget?: number;
   limit?: number;
+  /**
+   * 问句里那个人对应的平台账号（QQ 号）。
+   *
+   * 名字是入口，账号才是身份：群名片改一次，「小明」就变成了「阿鲸」，而忆泡里存的
+   * 还是当时的写法 —— 只比字符串，问新名字一条都查不到。调用方先用
+   * `resolveParticipantAccounts()` 把名字解析成账号，这里再用账号兜住改名。
+   */
+  participantIds?: readonly string[];
 };
 
 function normalize(value: string): string {
@@ -143,21 +151,25 @@ function externalIdsOf(event: EventCandidate): string[] {
  *
  * 只认确定的说法（和/跟/与某人…、某人的事、第一次见某人），认不出就返回 null；
  * 不猜 —— 猜错人比不按人过滤更糟。返回的是显示名片段，和忆泡的 participants 比对。
+ *
+ * 允许单字名字（「曦」）：QQ 群里单字昵称很常见，卡到 2 字等于这个人永远搜不到。
+ * 但单字误命中率高（「和好了一起吃饭」→「好」），所以调用方必须再用账号确认一次
+ * —— 见 `selectEventsForPrompt` 的 `participantIds`。
  */
 export function parseEventParticipantQuery(query: string): string | null {
   const text = query.normalize("NFKC").replace(/\s+/gu, "");
-  const stop = new Set(["我", "你", "她", "他", "它", "我们", "你们", "大家", "自己", "别人"]);
+  const stop = new Set(["我", "你", "她", "他", "它", "我们", "你们", "大家", "自己", "别人", "好", "他"]);
   const patterns = [
-    /(?:第一次|首次|头一回|初次)(?:见|见到|遇到|和|跟|与)?([^\s，。？！,!?]{2,12})/u,
-    /(?:和|跟|与)([^\s，。？！,!?]{2,12}?)(?:的|一起|聊|说|去|见过|见面|吃饭|玩|吵架|经历|事情|那天|那次|约定)/u,
-    /([^\s，。？！,!?]{2,12})的(?:事|经历|回忆|那次|约定)/u,
+    /(?:第一次|首次|头一回|初次)(?:见|见到|遇到|和|跟|与)?([^\s，。？！,!?]{1,12})/u,
+    /(?:和|跟|与)([^\s，。？！,!?]{1,12}?)(?:的|一起|聊|说|去|见过|见面|吃饭|玩|吵架|经历|事情|那天|那次|约定)/u,
+    /([^\s，。？！,!?]{1,12})的(?:事|经历|回忆|那次|约定)/u,
   ];
   for (const pattern of patterns) {
     const name = pattern.exec(text)?.[1]?.trim();
     if (!name) continue;
     // 去掉「小明都」「小明也」这类语气尾巴。
     const cleaned = name.replace(/(?:都|也|还|又|就|们)+$/u, "");
-    if (cleaned.length >= 2 && !stop.has(cleaned)) return cleaned;
+    if (cleaned.length >= 1 && !stop.has(cleaned)) return cleaned;
   }
   return null;
 }
@@ -195,12 +207,28 @@ export function selectEventsForPrompt<T extends EventCandidate>(  query: string,
    * 而不是丢给关键词排序（那样等于让「小明」两个字去和正文比相似度）。
    */
   const participant = parseEventParticipantQuery(query);
-  if (participant) {
+  const wantedIds = new Set(options.participantIds ?? []);
+  /**
+   * 单字名字必须有账号背书才认：「和好了一起吃饭」会解析出「好」，
+   * 万一真有人昵称叫「好」就会错配。没有账号就退回关键词，不按人过滤。
+   */
+  if (participant && (participant.length >= 2 || wantedIds.size > 0)) {
     const wanted = normalize(participant);
-    const matched = events.filter((event) => event.participants.some((person) => {
+    const byName = events.filter((event) => event.participants.some((person) => {
       const name = normalize(person);
       return name.length >= 2 && (name.includes(wanted) || wanted.includes(name));
     }));
+    /**
+     * 账号兜底：问的是「阿鲸」，忆泡里写的是旧名「小花」—— 字符串比不出来，
+     * 但它们是同一个 QQ 号。名字是入口，账号才是身份，两边取并集。
+     * （2026-11-03 实测：134 个账号里 17 个两天内改过名。）
+     */
+    const byAccount = wantedIds.size
+      ? events.filter((event) => externalIdsOf(event).some((id) => wantedIds.has(id)))
+      : [];
+    const matched = [...new Map(
+      [...byName, ...byAccount].map((event) => [event.id, event]),
+    ).values()];
     if (matched.length > 0) {
       const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(query);
       const ordered = [...matched].sort((left, right) => (wantsFirst

@@ -248,7 +248,47 @@ check(
 await prisma.message.delete({ where: { id: groupMessage.id } });
 await prisma.conversation.delete({ where: { id: groupConversation.id } });
 
-console.log("\n[7] 清理");
+console.log("\n[7] 参与者补名：泛称换成真名、她自己不进相关人物");
+// 线上那条「答题接龙」的形状：participants = {角色自己, 群友}，证据里只有一个外部成员。
+// 落库前必须变成真实昵称，否则这条忆泡以后谁都查不出那个人是谁。
+const namedEvidence = new Map([[messageLate.id, {
+  id: messageLate.id,
+  role: "USER" as const,
+  occurredAt: messageLate.occurredAt,
+  conversationId: conversation.id,
+  authorOpenId: "friend-1",
+  platform: "qq-onebot",
+  speaker: "小明",
+}]]);
+await prisma.$transaction((tx) => applyMemoryEvents(
+  tx,
+  {
+    memoryScopeId: scope.id, characterId: character.id, snapshotId: null,
+    timeZone: "Asia/Shanghai", state: "FINAL", characterName: "__忆泡自检__",
+  },
+  [{
+    ...base,
+    occurredAt: messageLate.occurredAt.toISOString(),
+    title: "群里玩了答题接龙",
+    detail: "她出题，群友答对了",
+    participants: ["__忆泡自检__", "群友"],
+    evidenceMessageIds: [messageLate.id],
+  }],
+  namedEvidence,
+));
+const namedEvent = await prisma.memoryEvent.findFirst({
+  where: { memoryScopeId: scope.id, title: "群里玩了答题接龙" },
+});
+check("泛称补成真实昵称", namedEvent?.participants.join("、") === "小明", namedEvent?.participants);
+check("她自己不进相关人物", !(namedEvent?.participants ?? []).includes("__忆泡自检__"), namedEvent?.participants);
+check(
+  "引用同时记住当时的叫法",
+  ((namedEvent?.participantRefs ?? []) as Array<Record<string, unknown>>)
+    .some((ref) => ref.kind === "external" && ref.displayName === "小明"),
+  namedEvent?.participantRefs,
+);
+
+console.log("\n[8] 清理");
 // 顺序不能反：memory_scopes 对 character 是 Restrict，先清范围下的数据再删角色。
 await prisma.memoryEvent.deleteMany({ where: { memoryScopeId: scope.id } });
 await prisma.memoryEventDay.deleteMany({ where: { memoryScopeId: scope.id } });

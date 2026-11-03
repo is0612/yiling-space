@@ -7,9 +7,10 @@ import {
   type CrossChannelCandidate,
   type CrossChannelLine,
 } from "../cross-channel-context";
-import { resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget, selectEventsForPrompt, selectRecentEvents } from "../memory-event-retrieval";
+import { parseEventParticipantQuery, resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget, selectEventsForPrompt, selectRecentEvents } from "../memory-event-retrieval";
 import { moveConversationEventsToScope } from "../memory-event-move";
 import { resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt } from "../message-retrieval";
+import { resolveEventParticipantNames, resolveParticipantAccounts } from "../participant-names";
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
 import { resolveCharacterApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
 import {
@@ -1233,21 +1234,15 @@ async function runChannelTurn(input: {
   }));
 
   // 忆泡和网页对话走同一套选择逻辑：先按日期框住，框不住才退化成关键词。
+  // 名字先解析成账号：群名片改过之后，只有账号还能认出「这是同一个人」。
+  const participantName = parseEventParticipantQuery(retrievalQuery);
+  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName) : [];
   const eventSelection = selectEventsForPrompt(retrievalQuery, eventCandidates, {
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
     tokenBudget: resolveEventTokenBudget(character.modelConfig),
     limit: resolveEventItemLimit(character.modelConfig),
+    ...(participantIds.length ? { participantIds } : {}),
   });
-  const events = eventSelection.items.map((event) => ({
-    id: event.id,
-    occurredAt: event.occurredAt.toISOString(),
-    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
-    ...(event.place ? { place: event.place } : {}),
-    participants: event.participants,
-    title: event.title,
-    detail: event.detail.slice(0, 600),
-    scope: event.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
-  }));
 
   /**
    * 最近几天的忆泡：不看问句，无条件当背景带上（开关 `eventRecentDays`，默认关）。
@@ -1259,15 +1254,38 @@ async function runChannelTurn(input: {
   const recentEventSelection = recentEventDays > 0
     ? selectRecentEvents(eventCandidates, {
         days: recentEventDays,
-        excludeIds: new Set(events.map((event) => event.id)),
+        excludeIds: new Set(eventSelection.items.map((event) => event.id)),
       })
     : null;
-  const recentEvents = (recentEventSelection?.items ?? []).map((event) => ({
+  const recentEventItems = recentEventSelection?.items ?? [];
+
+  /**
+   * 忆泡存的是**记那一刻**的名字，而群名片会改（「曦」→「鱼小妹」）。
+   * 注入前统一换成当前叫法，锚点是 `participantRefs` 里的平台账号。
+   */
+  const participantsByEvent = await resolveEventParticipantNames(
+    prisma,
+    [...eventSelection.items, ...recentEventItems],
+  );
+  const participantsAt = (index: number, fallback: readonly string[]): string[] =>
+    participantsByEvent[index] ?? [...fallback];
+
+  const events = eventSelection.items.map((event, index) => ({
     id: event.id,
     occurredAt: event.occurredAt.toISOString(),
     ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
     ...(event.place ? { place: event.place } : {}),
-    participants: event.participants,
+    participants: participantsAt(index, event.participants),
+    title: event.title,
+    detail: event.detail.slice(0, 600),
+    scope: event.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
+  }));
+  const recentEvents = recentEventItems.map((event, index) => ({
+    id: event.id,
+    occurredAt: event.occurredAt.toISOString(),
+    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
+    ...(event.place ? { place: event.place } : {}),
+    participants: participantsAt(eventSelection.items.length + index, event.participants),
     title: event.title,
     detail: event.detail.slice(0, 600),
     scope: event.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
@@ -1279,6 +1297,9 @@ async function runChannelTurn(input: {
     role: string;
     content: string;
     occurredAt: string;
+    /** 群聊原文的发言人与主人标记：不带上，她读到的就是一句句没有主人的话。 */
+    speaker?: string;
+    isOwner?: boolean;
     scope: "character" | "private";
   }> = [];
   if (eventSelection.range) {
@@ -1290,7 +1311,7 @@ async function runChannelTurn(input: {
       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
       take: 200,
       select: {
-        id: true, role: true, content: true, occurredAt: true,
+        id: true, role: true, content: true, occurredAt: true, metadata: true,
         conversation: { select: { memoryScopeId: true } },
       },
     });
@@ -1302,15 +1323,21 @@ async function runChannelTurn(input: {
       // 模型会当成两件事，或者以为对方重复说过。
       excludeIds: new Set([...recentStoredMessages.map((message) => message.id), ...crossChannel.map((line) => line.id)]),
     });
-    rawMessages = selected.items.map((message) => ({
-      id: message.id,
-      role: message.role,
-      // 截断在 selectRawMessagesForPrompt 里做（并按截断后的长度算预算），这里不要再切一刀：
-      // 两处各有一个上限时，短的那个生效、长的那个没人知道它已经失效了。
-      content: message.content,
-      occurredAt: message.occurredAt.toISOString(),
-      scope: message.conversation.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
-    }));
+    rawMessages = selected.items.map((message) => {
+      const speaker = readStoredSpeaker(message.metadata);
+      return {
+        id: message.id,
+        role: message.role,
+        // 截断在 selectRawMessagesForPrompt 里做（并按截断后的长度算预算），这里不要再切一刀：
+        // 两处各有一个上限时，短的那个生效、长的那个没人知道它已经失效了。
+        content: message.content,
+        occurredAt: message.occurredAt.toISOString(),
+        // 原文兜底也要说清是谁讲的：只给 role，群聊里每一句都是「user」。
+        ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
+        ...(speaker.isOwner ? { isOwner: true } : {}),
+        scope: message.conversation.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
+      };
+    });
   }
 
   // 群聊一轮是「几个人在聊」，不是「某个人在对我说话」：交给 transcript。

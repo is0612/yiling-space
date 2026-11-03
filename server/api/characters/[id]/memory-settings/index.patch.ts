@@ -24,8 +24,15 @@ export default defineEventHandler(async (event) => {
   }
 
   const interval = Number(body.snapshotIntervalDays);
-  if (!Number.isInteger(interval) || interval < 1 || interval > 365) {
-    throw createError({ statusCode: 400, statusMessage: "归档周期必须为 1–365 天的整数。" });
+  /**
+   * 归档周期 1–8 天（2026-11-03 从 1–365 收紧）。
+   *
+   * 上限压到 8：周期越长，「她记得的事」和「她读到的阶段总结」之间那段空窗越大，
+   * 中间那些原文可能已经被保留期清理掉，总结就成了孤证。8 天也正好是原来那个默认值，
+   * 存量角色（库里全是 8）不用迁移数据。
+   */
+  if (!Number.isInteger(interval) || interval < 1 || interval > 8) {
+    throw createError({ statusCode: 400, statusMessage: "归档周期必须为 1–8 天的整数。" });
   }
 
   if (typeof body.timezone !== "string" || body.timezone.length > 100) {
@@ -73,7 +80,7 @@ export default defineEventHandler(async (event) => {
       where: { characterId },
       create: {
         characterId,
-        snapshotIntervalDays: 8,
+        snapshotIntervalDays: 3,
         timezone,
         anchorAt: rawAnchor,
         nextSnapshotAt: null,

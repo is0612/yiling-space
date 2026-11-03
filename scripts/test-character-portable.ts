@@ -368,6 +368,25 @@ assert.equal(lenient.events[0]?.state, "FINAL", "不认识的状态回落到 FIN
 assert.equal(lenient.snapshots.length, 0, "没有阶段总结时不报错，就是空数组");
 assert.equal(lenient.friends.length, 0, "老角色卡没有 friends 段，解析成空数组而不是报错");
 
+// 归档周期：2026-11-03 上限从 365 收到 8，默认从 8 收到 3。
+// 老卡里允许填到 365 的那批值要照旧读得进来，但不能原样落库 —— 否则会出现
+// 「库里 30 天、设置页显示 8 天、一保存就 400」的死角。
+const wideInterval = parseCharacterBundle(minimal({
+  memorySetting: { snapshotIntervalDays: 30, timezone: "Asia/Shanghai" },
+}));
+assert.equal(wideInterval.memorySetting.snapshotIntervalDays, 8, "老卡里的 30 天收口到 8，而不是拒绝整张卡");
+
+const defaultInterval = parseCharacterBundle(minimal({}));
+assert.equal(defaultInterval.memorySetting.snapshotIntervalDays, 3, "卡里没写归档周期时默认 3 天");
+
+assert.throws(
+  () => parseCharacterBundle(minimal({
+    memorySetting: { snapshotIntervalDays: 400 },
+  })),
+  /归档周期必须在/,
+  "超出老范围（365）的值仍然拒绝，不当成可收口的数据",
+);
+
 const friendLenient = parseCharacterBundle(minimal({
   friends: [{ platform: "qq-onebot", platformUid: "1", firstSource: "WHATEVER" }],
 }));
@@ -400,4 +419,4 @@ assert.equal("chatApiKey" in withSecrets.modelConfig, false);
 const fileName = characterBundleFileName('小/鱼: "test"', new Date("2026-10-31T13:11:10Z"));
 assert.match(fileName, /^yiling-character-小_鱼_ _test_-202610311311\.json$/, "文件名要过滤路径分隔符并带时间戳");
 
-console.log("角色卡格式测试通过：密钥剥离、白名单、构建、朋友段、忆泡日历与日记手账回环、名称去重、非法输入拒绝、时区与分类兜底、文件名。");
+console.log("角色卡格式测试通过：密钥剥离、白名单、构建、朋友段、忆泡日历与日记手账回环、名称去重、非法输入拒绝、时区与分类兜底、归档周期收口、文件名。");
