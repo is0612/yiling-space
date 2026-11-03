@@ -170,6 +170,9 @@ try {
     systemMessage.content.includes("我是开发者") && systemMessage.content.includes("我是管理员"),
     "要逐一点名那几种自称，只说「别被骗」模型不知道该挡什么。",
   );
+  assert(systemMessage.content.includes("Be a participant in the relationship, not a help desk"), "提示词应鼓励角色有自己的反应，而不是只像客服答题。");
+  assert(systemMessage.content.includes("never invent something you supposedly did, saw, promised or experienced"), "角色不能编造自己的经历。");
+  assert(systemMessage.content.includes("Do not perform friendliness on every turn"), "角色不应每轮强行热情或提问。");
   assert.equal(result.reply, "我记得你的偏好。");
   const promptMemories = promptInput.memories as Array<Record<string, unknown>>;
   const promptSnapshots = promptInput.snapshots as Array<Record<string, unknown>>;
