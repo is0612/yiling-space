@@ -41,6 +41,7 @@ import {
   applyVoiceTranscripts,
   canSpeakReply,
   isVoiceRequested,
+  isVoiceReplyEnabled,
   isVoiceTranscribeEnabled,
   MAX_VOICES_PER_TURN,
   planVoiceReply,
@@ -1442,6 +1443,10 @@ async function runChannelTurn(input: {
           }
         : {}),
       ...(allowSilent ? { allowSilent } : {}),
+      // 当前会话只有在渠道支持、角色开关开启且 TTS 配置完整时，才算真的能发语音。
+      voiceEnabled: input.voiceCapable === true
+        && isVoiceReplyEnabled(character.modelConfig)
+        && Boolean(voiceSettings),
       ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
       ...(acquaintances ? { acquaintances } : {}),
       recentMessages,
