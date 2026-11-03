@@ -754,7 +754,7 @@ function systemPrompt(flags: {
   }
   if (withStickers) {
     lines.push(
-      "availableStickers lists your own sticker images (id, name, usage): attach at most one via sticker. They are part of how you text — one every few replies is normal; pick by usage, leave it empty if nothing fits, never reuse the previous one.",
+      "availableStickers lists your own sticker images (id, name, usage): attach at most one via sticker. They are part of how you text — one every few replies is normal; pick by usage, leave it empty if nothing fits, and vary your choices rather than repeating the same sticker in consecutive replies when the recent context makes that identifiable.",
     );
   }
   if (withCatchphrases) {
@@ -1100,7 +1100,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       relevanceScore: snapshot.relevanceScore,
       scope: snapshot.scope === "private" ? "private" : "character",
     })),
-    ...(input.events?.length
+    ...(contextEvents.length
       ? {
           events: contextEvents.map((event) => ({
             id: event.id,
@@ -1114,7 +1114,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
           })),
         }
       : {}),
-    ...(input.recentEvents?.length
+    ...(contextRecentEvents.length
       ? {
           // 和 events 同形，但语义不同：events 是「这一轮查到的」，recentEvents 是「常驻背景」。
           // 提示词里两段规矩分开写，别让模型把背景当成「该聊的话题」。
@@ -1130,7 +1130,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
           })),
         }
       : {}),
-    ...(input.rawMessages?.length
+    ...(contextRawMessages.length
       ? {
           rawMessages: contextRawMessages.map((message) => ({
             id: message.id,
