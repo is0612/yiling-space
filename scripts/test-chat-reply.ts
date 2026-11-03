@@ -273,11 +273,51 @@ try {
   const voiceSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
     .messages.find((item) => item.role === "system")!.content;
   assert(voiceSystem.includes("spoken voice message"), "发语音时要告诉她这一条会被念出来。");
+  assert(voiceSystem.includes("voiceEnabled is true"), "启用语音时要明确告诉她当前具备发送语音的能力。");
   assert(voiceSystem.includes("no emoji"), "要明说表情/颜文字/括号动作不能出现在语音里。");
   assert(
     voiceSystem.includes("Never mention that this is a voice message"),
     "必须禁止「我给你发了条语音」这类元信息 —— 语音条里会先念一句废话。",
   );
+
+  // ── 语音能力认知：当前开关优先于历史发言痕迹 ──
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "你刚才不是发过语音吗？",
+    recentMessages: [{ role: "ASSISTANT", content: "你好呀。", occurredAt: "2026-11-03T10:00:00.000Z", hadVoice: true }],
+    memories: [],
+    snapshots: [],
+    voiceEnabled: false,
+  });
+  const disabledVoiceSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(disabledVoiceSystem.includes("voiceEnabled is false"), "未启用语音时要明确告诉她当前不能发送语音。");
+  assert(disabledVoiceSystem.includes("current voiceEnabled setting always takes precedence"), "历史发过语音不能覆盖当前能力开关。");
+  assert(disabledVoiceSystem.includes("earlier reply was sent as a voice message"), "仍要承认历史上确实发过语音。");
+  assert(!disabledVoiceSystem.includes("do not say you can only type"), "不能再用旧规则强迫未启用语音的角色声称能发语音。");
+
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "你能发语音吗？",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    voiceEnabled: true,
+  });
+  const enabledVoiceSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(enabledVoiceSystem.includes("voiceEnabled is true"), "启用语音时要明确告诉她当前可以发送语音。");
+  assert(enabledVoiceSystem.includes("only voiceReply tells you this particular reply"), "能发语音不代表每一轮都必须发语音。");
 
   // ── 段标记的说明只在真出现标记时才写 ──
   // 纯文字轮次里那三行（约 120 tokens）全是废的，还会让她以为自己看见了图。
