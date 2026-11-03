@@ -212,7 +212,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
     avatarTone,
     status: character.status === "ACTIVE" ? "运行中" : character.status === "PAUSED" ? "已暂停" : "未连接",
     channels: character.channelBindings.map((binding) => binding.connection.displayName),
-    intervalDays: setting?.snapshotIntervalDays ?? 8,
+    intervalDays: setting?.snapshotIntervalDays ?? 2,
     pendingIntervalDays: setting?.pendingSnapshotIntervalDays ?? null,
     nextSnapshot,
     memoryCount: character.memoryScopes.reduce((total, scope) => total + scope.memoryItems.length, 0),

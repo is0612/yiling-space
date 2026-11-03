@@ -20,8 +20,19 @@ type MemorySettings = {
 const route = useRoute();
 const id = computed(() => String(route.params.id || ""));
 const character = ref<Character>({ ...initialCharacters[0]!, id: "", name: "角色加载中" });
-const interval = ref(8);
-const activeInterval = ref(8);
+/**
+ * 归档间隔的边界：默认 2 天，最多 8 天（2026-11-03 从 1–365 收紧）。
+ *
+ * 上限压到 8 天不是为了省事：周期越长，「她记得的事」和「她读到的总结」之间那段
+ * 越可能被原文清理掉，而 8 天正好是快照本身的节奏。服务端
+ * `memory-settings/index.patch.ts` 里的校验必须与这里保持一致。
+ */
+const INTERVAL_MIN_DAYS = 1;
+const INTERVAL_MAX_DAYS = 8;
+const INTERVAL_DEFAULT_DAYS = 2;
+
+const interval = ref(INTERVAL_DEFAULT_DAYS);
+const activeInterval = ref(INTERVAL_DEFAULT_DAYS);
 const pendingInterval = ref<number | null>(null);
 const savedAnchorAt = ref<string | null>(null);
 const savedTimezone = ref("Asia/Shanghai");
@@ -36,7 +47,7 @@ const nextSnapshotAt = ref<string | null>(null);
 const effectivePolicy = ref("下一个周期生效");
 const loading = ref(true);
 const saving = ref(false);
-const safeInterval = computed(() => Math.min(365, Math.max(1, Number(interval.value) || 8)));
+const safeInterval = computed(() => Math.min(INTERVAL_MAX_DAYS, Math.max(1, Number(interval.value) || INTERVAL_DEFAULT_DAYS)));
 
 function formatAnchor(iso: string, timeZone: string): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -170,7 +181,7 @@ async function saveSettings() {
 }
 
 function resetSettings() {
-  interval.value = 8;
+  interval.value = INTERVAL_DEFAULT_DAYS;
   timezone.value = "Asia/Shanghai";
   const now = new Date();
   anchor.value = formatAnchor(now.toISOString(), timezone.value);
@@ -265,13 +276,13 @@ watch(id, () => void loadSettings());
                 <div class="interval-label">
                   归档间隔
                 </div><p class="form-help">
-                  周期可设为 1–365 天；默认值为 8 天。
+                  周期可设为 1–8 天；默认值为 2 天。
                 </p>
               </div><div class="interval-input">
                 <el-input-number
                   v-model="interval"
-                  :min="1"
-                  :max="365"
+                  :min="INTERVAL_MIN_DAYS"
+                  :max="INTERVAL_MAX_DAYS"
                   :controls="true"
                   size="large"
                 /><span>天 / 次</span>
@@ -279,8 +290,8 @@ watch(id, () => void loadSettings());
             </div>
             <el-slider
               v-model="interval"
-              :min="1"
-              :max="30"
+              :min="INTERVAL_MIN_DAYS"
+              :max="INTERVAL_MAX_DAYS"
               :show-tooltip="true"
             />
             <!-- 输入框里是「目标值」，库里可能还跑着旧周期：只有把两个数都写出来，
@@ -297,11 +308,11 @@ watch(id, () => void loadSettings());
               </template>
             </div>
             <div class="slider-labels">
-              <span>1 天</span><span>15 天</span><span>30 天</span>
+              <span>1 天</span><span>4 天</span><span>8 天</span>
             </div>
             <div class="quick-days">
               <button
-                v-for="day in [1, 3, 7, 8, 14, 30]"
+                v-for="day in [1, 2, 3, 5, 8]"
                 :key="day"
                 type="button"
                 class="chip"

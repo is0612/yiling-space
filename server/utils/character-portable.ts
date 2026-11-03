@@ -774,7 +774,7 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
     },
     modelConfig: stripPortableModelConfig(input.character.modelConfig),
     memorySetting: {
-      snapshotIntervalDays: input.memorySetting?.snapshotIntervalDays ?? 8,
+      snapshotIntervalDays: input.memorySetting?.snapshotIntervalDays ?? 2,
       timezone: input.memorySetting?.timezone ?? "Asia/Shanghai",
       autoSnapshotEnabled: input.memorySetting?.autoSnapshotEnabled ?? false,
     },
