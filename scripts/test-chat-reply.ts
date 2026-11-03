@@ -1013,6 +1013,33 @@ try {
     .messages.find((item) => item.role === "system")!.content;
   assert(privacySystem.includes("stays out of this room"), "没带熟人卡的群聊轮次也要有隐私约束。");
   assert(privacySystem.includes("deflect instead of reciting"), "群友追问时要说「绕过去」，不能复述私聊内容。");
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "最近有什么开心的事吗？",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    recentEvents: [{
+      id: "recent-event-1",
+      occurredAt: "2026-11-02T10:00:00.000Z",
+      participants: ["主人"],
+      title: "一起看了海边的日落",
+      detail: "那天聊到海边的晚霞，心情很好。",
+      scope: "character",
+    }],
+  });
+  const recentBody = JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> };
+  const recentSystem = recentBody.messages.find((item) => item.role === "system")!.content;
+  const recentInput = JSON.parse(recentBody.messages.find((item) => item.role === "user")!.content) as Record<string, unknown>;
+  assert(recentSystem.includes("you may bring up one naturally"), "近期生活可以在相关时自然提起。");
+  assert(recentSystem.includes("do not force a callback"), "近期生活不能被强行塞进对话。");
+  assert(Array.isArray(recentInput.recentEvents), "近期生活资料必须独立注入。");
+  console.log("近期生活连续性：允许自然回想，不强迫每轮汇报 —— 已加入回归测试");
   console.log("跨窗口旁路：crossChannel 独立分区、不并进 recentMessages、空内容不写规则、群聊隐私约束不依赖熟人卡 —— 通过");
 } finally {
   globalThis.fetch = originalFetch;
