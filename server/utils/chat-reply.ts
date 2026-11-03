@@ -423,7 +423,7 @@ export type ConversationReplyResult = {
 // v36：区分「事件参与者」与「具体发言/行为者」，避免仅凭 participants 把话或行为安到某个人头上。
 // v39：语音能力由当前渠道与角色配置动态注入；hadVoice 只证明过去发过语音，不能覆盖当前能力开关。
 // v40：收回通用情绪回应、观点表达和连续性行为的强引导；让 characterPrompt/styleExamples 主导角色声音，避免每轮套用固定聊天套路。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v40";
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v41";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
