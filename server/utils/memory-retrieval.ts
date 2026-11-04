@@ -18,6 +18,10 @@ const ENGLISH_STOPWORDS = new Set([
 
 // These are query-intent words, not usually the topic the user wants to retrieve.
 const CJK_INTENT_STOPWORDS = [
+  "last", "latest", "first", "year", "month", "week", "yesterday", "today", "tomorrow", "recent",
+    "最近一次", "上一次", "最后一次", "上回", "上次", "第一次", "首次", "最开始", "初次", "头一回",
+  "上上个月", "上个月", "本月", "这个月", "去年", "前年", "今年", "个月前", "上周", "本周", "这周",
+  "大前天", "前天", "昨天", "今天", "明天", "后天", "昨晚", "今晚", "早上", "上午", "中午", "下午", "傍晚", "晚上",
   "我想知道", "我想问", "告诉我", "帮我", "请问", "有没有", "是不是", "为什么",
   "怎么样", "怎么样了", "如何", "怎么", "怎样", "哪个", "哪些", "什么", "用户",
   "角色", "我们", "你们", "他们", "她们", "它们", "之前", "以后", "后来", "目前",
@@ -82,6 +86,14 @@ export function extractRetrievalTerms(query: string): string[] {
 
   // Bound term extraction so unusually long messages cannot trigger unbounded scoring work.
   return [...terms].slice(0, 160);
+}
+
+/** 为数据库原文检索提取主题词，先剔除年月/相对时间/回忆意图词。 */
+export function extractMemoryAssistantSearchTerms(query: string, limit = 20): string[] {
+  const safeLimit = Number.isFinite(limit) ? Math.min(32, Math.max(1, Math.round(limit))) : 20;
+  return extractRetrievalTerms(query)
+    .filter((term) => term.trim().length >= 2 && !/^\\d+$/u.test(term))
+    .slice(0, safeLimit);
 }
 
 function dateValue(value: unknown): number {
