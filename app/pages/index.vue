@@ -65,8 +65,10 @@ const usageRows = computed(() => {
 });
 
 function barHeight(day: OverviewUsageDay, peakTokens: number) {
-  if (day.totalTokens <= 0) return "3px";
-  return `${Math.max(4, Math.round((day.totalTokens / peakTokens) * 30))}px`;
+  if (day.totalTokens <= 0) return "4px";
+  // 取偶数：柱高跟全页其余尺寸保持同一套「不留单数」的规矩
+  const raw = Math.max(4, Math.round((day.totalTokens / peakTokens) * 36));
+  return `${raw - (raw % 2)}px`;
 }
 
 /**
@@ -768,23 +770,23 @@ async function handleRefresh() {
               :key="task.id"
               class="task-row"
             >
+              <div class="task-body">
+                <div class="task-title">
+                  {{ task.typeLabel }}
+                </div>
+                <div class="task-meta">
+                  {{ task.characterName }}
+                </div>
+              </div>
               <span
-                class="task-dot"
+                class="task-pill"
                 :class="{
                   ok: task.status === 'SUCCEEDED',
                   err: task.status === 'FAILED',
                   wait: task.status === 'QUEUED' || task.status === 'RETRY_WAIT',
                   run: task.status === 'RUNNING',
                 }"
-              />
-              <div class="task-body">
-                <div class="task-title">
-                  {{ task.typeLabel }} · {{ task.statusLabel }}
-                </div>
-                <div class="task-meta">
-                  {{ task.characterName }}
-                </div>
-              </div>
+              >{{ task.statusLabel }}</span>
             </div>
             <div
               v-if="!overview.tasks.items.length"
@@ -872,7 +874,28 @@ async function handleRefresh() {
    → L2 卡内 6px 内衬 → L3 行（无底色无分隔）→ L4 异常整行上色
    统一写 `.ov-a .xxx`：把作用域锁在本页，同时靠 (0,3,0) 压过
    main.css 里 .card / .kpi / .pill / .btn 的 (0,1,0)。
+
+   字号收口（2026-11）：正文 16 / 小标题 18 / 注释 14 / 数值 26 / 页面标题 32。
+   间距、圆角、尺寸一律取偶数 —— 唯一保留的单数是分割线的 1px（描边量级，
+   和卡片边框同类，改成 2px 会明显变粗）与药丸的 999 全圆角。
    ══════════════════════════════════════════════════════════════ */
+
+/* 页面头部：只在总览页放大，其余 15 个页面仍走 main.css 的 22/14 */
+.ov-a :deep(.crumb) {
+  gap: 8px;
+  font-size: 14px;
+}
+.ov-a :deep(.page-h) {
+  margin-bottom: 20px;
+}
+.ov-a :deep(.page-h h1) {
+  font-size: 32px;
+  letter-spacing: -.02em;
+}
+.ov-a :deep(.page-h p) {
+  margin-top: 6px;
+  font-size: 16px;
+}
 
 /* 异常条：有问题时整条醒目，没问题时退成一块白砖。
    右边可能有不止一个动作（值班问题去值班台、记忆问题去任务监控），窄屏允许换行。 */
@@ -881,22 +904,22 @@ async function handleRefresh() {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--red-soft);
-  padding: 10px 14px;
-  color: #8e2739;
-  font-size: 12px;
+  padding: 12px 16px;
+  color: var(--red-text);
+  font-size: 16px;
 }
 .ov-a .alert-bar.is-quiet {
   border: 0;
   background: var(--surface);
-  color: var(--dim);
+  color: var(--text-2);
 }
 .ov-a .alert-dot {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   flex: none;
   border-radius: 50%;
   background: var(--red);
@@ -907,7 +930,7 @@ async function handleRefresh() {
 .ov-a .alert-body {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: 4px 16px;
   min-width: 0;
   flex: 1;
 }
@@ -916,13 +939,13 @@ async function handleRefresh() {
 }
 .ov-a .alert-bar .card-link {
   display: inline-flex;
-  min-height: 24px;
+  min-height: 28px;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   flex: none;
 }
 .ov-a .alert-bar .card-link .el-icon {
-  font-size: 12px;
+  font-size: 14px;
 }
 
 /* 空态引导：虚线框去掉，改成一块纯白砖 */
@@ -930,52 +953,52 @@ async function handleRefresh() {
   border: 0;
   border-radius: 10px;
   background: var(--surface);
-  padding: 34px 24px 30px;
+  padding: 36px 24px 32px;
   text-align: center;
 }
 .ov-a .guide-icon {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
   margin: 0 auto 12px;
   place-items: center;
   border-radius: 50%;
   background: var(--brand-soft);
   color: var(--brand);
-  font-size: 22px;
+  font-size: 24px;
 }
 .ov-a .guide h3 {
   margin: 0;
   color: var(--text);
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 600;
 }
 .ov-a .guide-note {
-  max-width: 460px;
+  max-width: 480px;
   margin: 8px auto 0;
   color: var(--dim);
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.7;
 }
 .ov-a .guide-steps {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 10px;
-  margin: 16px 0 20px;
+  gap: 12px;
+  margin: 18px 0 22px;
   padding: 0;
   list-style: none;
 }
 .ov-a .guide-steps li {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   border: 0;
   border-radius: 999px;
   background: var(--surface-3);
-  padding: 6px 12px 6px 7px;
+  padding: 6px 14px 6px 8px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 14px;
 }
 .ov-a .guide-steps li span {
   display: grid;
@@ -985,7 +1008,7 @@ async function handleRefresh() {
   border-radius: 50%;
   background: var(--surface);
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -996,38 +1019,47 @@ async function handleRefresh() {
   padding: 6px;
 }
 
-/* 区块标题 */
-/* 标题行固定 24px：右栏有 .more 时是 24px，只有 .sub 时只剩 h2 的 22.4px（14×1.6），
-   两栏卡片起始位置会差 1.6px。用 min-height 而不是 height：窄屏 .sub 折行时能自然撑开，
-   不会溢出这 24px 压到下面的卡片上。只在本页作用域，不动 main.css 的 .sec-h。 */
+/* 区块标题：18px 深色。标题行固定 28px —— 右栏有 .more 时是 28px，只有 .sub 时
+   也要撑到同一高度，两栏卡片起始位置才齐。用 min-height 而不是 height：
+   窄屏 .sub 折行时能自然撑开，不会溢出压到下面的卡片上。 */
 .ov-a .sec-h {
-  min-height: 24px;
+  min-height: 28px;
+  margin: 22px 0 12px;
+}
+.ov-a .sec-h h2 {
+  color: var(--text);
+  font-size: 18px;
 }
 .ov-a .sec-h .sub {
   color: var(--dim);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 14px;
 }
 .ov-a .sec-h .more {
-  min-height: 24px;
+  min-height: 28px;
+  gap: 4px;
   border-radius: 6px;
-  padding: 0 6px;
-  color: #bf3a63;
+  padding: 0 8px;
+  color: var(--brand-strong);
+  font-size: 14px;
 }
 .ov-a .sec-h .more:hover {
-  text-underline-offset: 3px;
+  text-underline-offset: 4px;
 }
 .ov-a .card-link {
-  color: #bf3a63;
+  color: var(--brand-strong);
+  font-size: 16px;
 }
 
 /* KPI：四块零描边白砖，缝 16px（12px 会让白砖在画布上粘成一整块） */
 .ov-a .kpi-row {
   gap: 16px;
+  margin-bottom: 20px;
 }
 .ov-a .kpi {
   border: 0;
   box-shadow: none;
+  padding: 16px 18px 18px;
 }
 .ov-a .kpi.is-action:hover {
   border-color: transparent;
@@ -1035,17 +1067,28 @@ async function handleRefresh() {
 }
 .ov-a .kpi .k {
   color: var(--text-2);
+  font-size: 14px;
   font-weight: 500;
 }
 .ov-a .kpi .v small {
   color: var(--dim);
+  font-size: 14px;
 }
 .ov-a .kpi .foot {
+  margin-top: 8px;
   color: var(--dim);
+  font-size: 14px;
+}
+.ov-a .kpi .bar {
+  height: 8px;
+  margin-top: 10px;
+  border-radius: 4px;
+}
+.ov-a .kpi .bar i {
+  border-radius: 4px;
 }
 .ov-a .kpi .v.is-overdue {
   color: var(--red);
-  font-size: 22px;
 }
 .ov-a .kpi .v.is-warn {
   color: var(--amber);
@@ -1053,18 +1096,18 @@ async function handleRefresh() {
 
 /* 用量与花费：一行一个角色。柱子只做「自己跟自己比」，所以按各自 7 天的峰值归一化 */
 .ov-a .usage-wrap {
-  margin: 4px 0 22px;
+  margin: 4px 0 24px;
 }
 .ov-a .usage-total {
   margin-left: auto;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .ov-a .usage-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 140px auto;
+  grid-template-columns: minmax(0, 1fr) 160px auto;
   grid-template-areas: "id bars cost";
   gap: 16px;
   align-items: center;
@@ -1079,32 +1122,32 @@ async function handleRefresh() {
   grid-area: id;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .ov-a .usage-name {
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ov-a .usage-sub {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
 .ov-a .usage-bars {
   display: flex;
   grid-area: bars;
-  height: 34px;
+  height: 40px;
   align-items: flex-end;
-  gap: 4px;
+  gap: 6px;
 }
 .ov-a .usage-bars i {
   min-width: 4px;
   flex: 1;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--brand);
   /* 历史日期压淡、今天实色：一眼看出哪根是今天，又不至于七根一样重 */
   opacity: .45;
@@ -1122,19 +1165,20 @@ async function handleRefresh() {
   grid-area: cost;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
+  gap: 4px;
   text-align: right;
 }
 .ov-a .usage-cost b {
   color: var(--text);
-  font-size: 16px;
+  font-size: 26px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
   white-space: nowrap;
 }
 .ov-a .usage-cost span {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1142,35 +1186,35 @@ async function handleRefresh() {
   margin: 4px 0 0;
   padding: 0 12px 4px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.6;
 }
 
 /* 主角卡（单角色）：一张白砖装下角色身份 + 四个时点 + 周期进度 */
 .ov-a .hero {
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--surface);
-  padding: 20px 22px;
-  margin-bottom: 22px;
+  padding: 22px 24px;
+  margin-bottom: 24px;
 }
 /* 异常：只给竖条，不铺整块底 —— 1000px 宽的 hero 铺粉底等于整页报警 */
 .ov-a .hero.is-bad {
   box-shadow: inset 4px 0 0 var(--red);
 }
 .ov-a .hero.is-over {
-  box-shadow: inset 4px 0 0 #8f5c05;
+  box-shadow: inset 4px 0 0 var(--amber);
 }
 .ov-a .hero-head {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
 }
 .ov-a .hero-avatar {
   width: 56px;
   height: 56px;
-  border-radius: 10px;
-  font-size: 22px;
+  border-radius: 12px;
+  font-size: 24px;
 }
 .ov-a .hero-id {
   min-width: 0;
@@ -1184,17 +1228,17 @@ async function handleRefresh() {
 }
 .ov-a .hero-name {
   color: var(--text);
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
-  line-height: 24px;
+  line-height: 28px;
 }
 .ov-a .hero-name:hover {
   color: var(--brand-strong);
 }
 .ov-a .hero-facts {
-  margin-top: 3px;
+  margin-top: 4px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 16px;
 }
 .ov-a .hero-actions {
   display: flex;
@@ -1204,16 +1248,16 @@ async function handleRefresh() {
 }
 .ov-a .hero-actions a {
   display: inline-flex;
-  min-height: 24px;
+  min-height: 28px;
   align-items: center;
   border-radius: 8px;
-  padding: 6px 8px;
+  padding: 6px 10px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 16px;
 }
 .ov-a .hero-actions a:hover {
   background: var(--surface-2);
-  color: #bf3a63;
+  color: var(--brand-strong);
 }
 /* 异常时文字仍抬到 --text-2：白底上只会更清楚，也顺手兜住 role-card 那套配色 */
 .ov-a .hero.is-bad .hero-actions a,
@@ -1223,52 +1267,65 @@ async function handleRefresh() {
   color: var(--text-2);
 }
 .ov-a .hero.is-bad .hero-actions a:hover {
-  color: #bf3a63;
+  color: var(--brand-strong);
 }
+
+/* 四个时点：列与列之间用最淡的 --surface-3 竖线切开。
+   竖线用 ::before 画在 24px 的列缝里，而不是 border-left —— 后者会把内衬算进列宽，
+   四列就不等宽了，数字的左缘会一行比一行靠右。 */
 .ov-a .hero-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-top: 18px;
-  padding-top: 16px;
-  /* 卡内分组线：用最淡的 --surface-3，不是 --line */
+  gap: 24px;
+  margin-top: 20px;
+  padding-top: 18px;
   border-top: 1px solid var(--surface-3);
 }
 .ov-a .stat {
+  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+}
+.ov-a .stat + .stat::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -12px;
+  width: 1px;
+  background: var(--surface-3);
 }
 .ov-a .stat-k {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
 }
 .ov-a .stat-v {
   color: var(--text);
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -.02em;
   line-height: 1.15;
 }
 .ov-a .stat-v small {
-  margin-left: 3px;
+  margin-left: 4px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
 }
 .ov-a .stat-v.is-overdue {
   color: var(--red);
 }
 .ov-a .stat-v.is-warn {
-  color: #8f5c05;
+  color: var(--amber);
 }
 .ov-a .stat-f {
   overflow: hidden;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1280,29 +1337,29 @@ async function handleRefresh() {
 .ov-a .hero-cycle {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 12px;
+  margin-top: 18px;
 }
 .ov-a .hero-track {
-  height: 5px;
+  height: 8px;
   flex: 1;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--surface-3);
 }
 .ov-a .hero-track i {
   display: block;
   height: 100%;
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--brand);
 }
 .ov-a .hero-track i.overdue {
-  background: #8f5c05;
+  background: var(--amber);
 }
 .ov-a .hero-cycle-text {
   flex: none;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 /* 两栏：多角色 = 左列表 + 右（发生 / 任务）上下叠 */
@@ -1310,7 +1367,7 @@ async function handleRefresh() {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
   grid-template-areas: "roles events" "roles tasks";
-  gap: 22px;
+  gap: 24px;
   align-items: start;
 }
 .ov-a .col-roles {
@@ -1355,8 +1412,8 @@ async function handleRefresh() {
 /* 角色行：分隔线去掉，改成行间 4px 缝 + 行内 12px 内衬（净高不变） */
 .ov-a .role-card {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  gap: 11px;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 12px;
   align-items: start;
   border-bottom: 0;
   border-radius: 8px;
@@ -1377,7 +1434,7 @@ async function handleRefresh() {
 }
 /* 逾期只给竖条不给整行底色：浅底是全页唯一的分块信号，一屏铺满会变拼贴 */
 .ov-a .role-card.is-over {
-  box-shadow: inset 4px 0 0 #8f5c05;
+  box-shadow: inset 4px 0 0 var(--amber);
 }
 .ov-a .role-card.is-bad:hover,
 .ov-a .role-card.is-bad:focus-within {
@@ -1387,7 +1444,7 @@ async function handleRefresh() {
 .ov-a .role-card.is-over:focus-within {
   background: var(--surface-2);
 }
-/* #fdecee 底会把 12px 灰压到 4.3:1，只在异常行把信息文字抬到 --text-2 */
+/* #fdecee 底会把灰字压到 4.3:1，只在异常行把信息文字抬到 --text-2 */
 .ov-a .role-card.is-bad .role-facts,
 .ov-a .role-card.is-bad .role-cycle-text,
 .ov-a .role-card.is-bad .role-links a {
@@ -1395,12 +1452,12 @@ async function handleRefresh() {
 }
 /* 上面这条抬字规则特异性高，hover 色要单独补一条才压得住 */
 .ov-a .role-card.is-bad .role-links a:hover {
-  color: #bf3a63;
+  color: var(--brand-strong);
 }
 .ov-a .role-card .avatar {
-  width: 34px;
-  height: 34px;
-  font-size: 14px;
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
 }
 .ov-a .role-body {
   min-width: 0;
@@ -1413,7 +1470,7 @@ async function handleRefresh() {
 }
 .ov-a .role-name {
   color: var(--text);
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 700;
 }
 .ov-a .role-name:hover {
@@ -1422,74 +1479,82 @@ async function handleRefresh() {
 .ov-a .role-facts {
   margin-top: 4px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 16px;
   line-height: 1.5;
 }
 .ov-a .role-cycle {
   display: flex;
   align-items: center;
-  gap: 9px;
-  margin-top: 7px;
+  gap: 10px;
+  margin-top: 8px;
 }
 .ov-a .role-track {
-  height: 5px;
+  height: 8px;
   width: 96px;
   flex: none;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--surface-3);
 }
 /* 纯色，不用渐变：浅底上的渐变显廉价 */
 .ov-a .role-track i {
   display: block;
   height: 100%;
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--brand);
 }
 .ov-a .role-track i.paused {
   background: #d5d9df;
 }
 .ov-a .role-track i.overdue {
-  background: #8f5c05;
+  background: var(--amber);
 }
 .ov-a .role-cycle-text {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
 }
 .ov-a .role-links {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   flex: none;
 }
 .ov-a .role-links a {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   border-radius: var(--radius-xs);
-  padding: 5px 7px;
+  padding: 6px 8px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 16px;
   white-space: nowrap;
   transition: background .14s ease, color .14s ease;
 }
 .ov-a .role-links a:hover {
   background: var(--surface-2);
-  color: #bf3a63;
+  color: var(--brand-strong);
 }
 .ov-a .role-links .el-icon {
-  font-size: 12px;
+  font-size: 14px;
 }
 
-/* 状态药丸：异常实心深底白字，正常软底深字 */
-.ov-a .role-head .pill {
+/* 状态药丸：14px，比正文小一档；异常实心深底白字，正常软底深字 */
+.ov-a .pill {
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 14px;
+}
+.ov-a .role-head .pill,
+.ov-a .hero-name-row .pill {
   border: 0;
 }
-.ov-a .role-head .pill-rose {
+.ov-a .role-head .pill-rose,
+.ov-a .hero-name-row .pill-rose {
   background: var(--red);
   color: #fff;
 }
-.ov-a .role-head .pill-amber {
-  background: #8f5c05;
+.ov-a .role-head .pill-amber,
+.ov-a .hero-name-row .pill-amber {
+  background: var(--amber);
   color: #fff;
 }
 
@@ -1499,11 +1564,11 @@ async function handleRefresh() {
 }
 .ov-a .pill-status.is-green {
   background: var(--green-soft);
-  color: #0b7a54;
+  color: var(--green);
 }
 .ov-a .pill-status.is-amber {
   background: var(--amber-soft);
-  color: #8f5c05;
+  color: var(--amber);
 }
 .ov-a .pill-status.is-gray {
   background: var(--surface-3);
@@ -1514,15 +1579,15 @@ async function handleRefresh() {
 .ov-a .event-row {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
+  gap: 10px;
   border-bottom: 0;
   border-radius: 8px;
   padding: 12px;
 }
 .ov-a .event-dot {
-  width: 6px;
-  height: 6px;
-  margin-top: 6px;
+  width: 8px;
+  height: 8px;
+  margin-top: 8px;
   flex: none;
   border-radius: 50%;
   background: var(--dim);
@@ -1546,53 +1611,34 @@ async function handleRefresh() {
 .ov-a .event-title {
   overflow: hidden;
   color: var(--text-2);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ov-a .event-meta {
   overflow: hidden;
-  margin-top: 2px;
+  margin-top: 4px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ov-a .event-time {
   flex: none;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
 
-/* 最近任务 */
+/* 最近任务：状态从「标题里的尾巴」搬成右侧药丸 —— 一列对齐才好扫 */
 .ov-a .task-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   border-bottom: 0;
   border-radius: 8px;
   padding: 12px;
-}
-.ov-a .task-dot {
-  width: 7px;
-  height: 7px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--dim);
-}
-.ov-a .task-dot.ok {
-  background: var(--green);
-}
-.ov-a .task-dot.err {
-  background: var(--red);
-}
-.ov-a .task-dot.wait {
-  background: var(--amber);
-}
-.ov-a .task-dot.run {
-  background: var(--blue);
 }
 .ov-a .task-body {
   min-width: 0;
@@ -1601,15 +1647,42 @@ async function handleRefresh() {
 .ov-a .task-title {
   overflow: hidden;
   color: var(--text-2);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ov-a .task-meta {
-  margin-top: 2px;
+  margin-top: 4px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
+}
+.ov-a .task-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ov-a .task-pill.ok {
+  background: var(--green-soft);
+  color: var(--green);
+}
+.ov-a .task-pill.err {
+  background: var(--red-soft);
+  color: var(--red-text);
+}
+.ov-a .task-pill.wait {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+.ov-a .task-pill.run {
+  background: var(--blue-soft);
+  color: #3d4dab;
 }
 
 /* 管理员块 */
@@ -1619,15 +1692,15 @@ async function handleRefresh() {
 .ov-a .admin-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 26px;
+  gap: 10px 28px;
   border-bottom: 0;
   padding: 8px;
 }
 .ov-a .admin-cell {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
+  gap: 8px;
+  font-size: 14px;
 }
 .ov-a .admin-label {
   color: var(--dim);
@@ -1638,7 +1711,7 @@ async function handleRefresh() {
   font-variant-numeric: tabular-nums;
 }
 .ov-a .admin-cell b.is-ok {
-  color: #0b7a54;
+  color: var(--green);
 }
 .ov-a .admin-cell b.is-err {
   color: var(--red);
@@ -1648,9 +1721,9 @@ async function handleRefresh() {
 }
 .ov-a .audit-caption {
   margin: 0;
-  padding: 6px 0 2px;
+  padding: 6px 0 4px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 14px;
 }
 .ov-a .audit-row {
   display: flex;
@@ -1658,7 +1731,7 @@ async function handleRefresh() {
   gap: 10px;
   border-radius: 6px;
   padding: 4px 0;
-  font-size: 12px;
+  font-size: 14px;
 }
 .ov-a .audit-action {
   color: var(--text-2);
@@ -1676,34 +1749,43 @@ async function handleRefresh() {
 /* 空态 / 加载态 */
 .ov-a .card-empty {
   color: var(--dim);
+  font-size: 14px;
+}
+.ov-a .card-empty span:first-of-type {
+  font-size: 16px;
 }
 .ov-a .loading-hint {
   padding: 40px 0;
   color: var(--dim);
-  font-size: 14px;
+  font-size: 16px;
   text-align: center;
 }
 
 /* A 的次要按钮是文字按钮：无底无框，hover 才出下划线 */
 .ov-a .btn {
-  height: 36px;
+  height: 38px;
   border: 0;
   background: none;
   box-shadow: none;
-  padding: 0 10px;
+  gap: 8px;
+  padding: 0 12px;
   color: var(--text-2);
+  font-size: 16px;
   font-weight: 600;
   border-radius: 8px;
 }
 .ov-a .btn:hover {
   color: var(--text);
   text-decoration: underline;
-  text-underline-offset: 3px;
+  text-underline-offset: 4px;
+}
+.ov-a .btn .el-icon {
+  font-size: 16px;
 }
 .ov-a .btn.primary {
   background: var(--brand-btn);
   color: #fff;
-  padding: 0 14px;
+  padding: 0 16px;
 }
 .ov-a .btn.primary:hover {
   background: var(--brand-btn-h);
@@ -1722,8 +1804,9 @@ async function handleRefresh() {
   }
 }
 @media (max-width: 720px) {
-  .ov-a .role-card { grid-template-columns: 34px minmax(0, 1fr); }
-  .ov-a .role-links { grid-column: 2; margin-top: 2px; }
+  .ov-a :deep(.page-h h1) { font-size: 26px; }
+  .ov-a .role-card { grid-template-columns: 36px minmax(0, 1fr); }
+  .ov-a .role-links { grid-column: 2; margin-top: 4px; }
   .ov-a .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ov-a .usage-wrap .sec-h { flex-wrap: wrap; }
   .ov-a .usage-total { margin-left: 0; }
@@ -1732,12 +1815,14 @@ async function handleRefresh() {
     grid-template-areas: "id cost" "bars bars";
     row-gap: 8px;
   }
-  .ov-a .usage-bars { height: 30px; }
+  .ov-a .usage-bars { height: 32px; }
   .ov-a .hero { padding: 16px; }
   .ov-a .hero-head { flex-wrap: wrap; }
   .ov-a .hero-actions { width: 100%; flex-wrap: wrap; }
-  .ov-a .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ov-a .hero-cycle { flex-wrap: wrap; gap: 6px; }
+  .ov-a .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 20px; }
+  /* 两列时竖线会落在第二行左边缘外，变成一根悬空的线，直接收掉 */
+  .ov-a .stat + .stat::before { display: none; }
+  .ov-a .hero-cycle { flex-wrap: wrap; gap: 8px; }
   .ov-a .hero-cycle-text { flex: none; }
 }
 </style>
