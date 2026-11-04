@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
-import { extractRetrievalTerms, rankMemoryCandidates, rankSnapshotCandidates } from "../server/utils/memory-retrieval";
+import { extractMemoryAssistantSearchTerms, extractRetrievalTerms, rankMemoryCandidates, rankSnapshotCandidates } from "../server/utils/memory-retrieval";
 
 const query = "用户喜欢科幻电影和太空题材";
 const terms = extractRetrievalTerms(query);
 assert(terms.includes("科幻") && terms.includes("电影"), "Chinese topic bigrams should be extracted for keyword retrieval.");
 assert(terms.includes("科幻电影") && terms.includes("太空题材"), "Short Chinese topic phrases should be kept as high-value signals.");
 assert(!terms.includes("用户") && !terms.includes("喜欢"), "Generic query-intent words should not dilute content matching.");
+
+const deepSearchTerms = extractMemoryAssistantSearchTerms("去年11月我们聊过的太空电影叫什么");
+assert(deepSearchTerms.includes("太空电影"), "Deep-search DB filters should retain the concrete topic phrase.");
+assert(!deepSearchTerms.includes("去年") && !deepSearchTerms.includes("11") &&
+  !deepSearchTerms.includes("什么"), "Deep-search DB filters should exclude time and intent tokens.");
+const englishDeepSearchTerms = extractMemoryAssistantSearchTerms("What did we discuss last year about space travel");
+assert(englishDeepSearchTerms.includes("space") && englishDeepSearchTerms.includes("travel"));
+assert(!englishDeepSearchTerms.includes("last") && !englishDeepSearchTerms.includes("year"));
 
 const englishTerms = extractRetrievalTerms("What did we discuss about science fiction movies");
 assert(englishTerms.includes("science") && englishTerms.includes("fiction") && englishTerms.includes("movies"));
