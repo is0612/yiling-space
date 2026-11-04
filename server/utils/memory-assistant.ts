@@ -379,10 +379,10 @@ export function mergeModelUsage(
 
 class MemoryAssistantRequestError extends Error {
   readonly reason: string;
-  readonly usage?: ModelUsageTokens;
+  readonly usage: ModelUsageTokens | undefined;
   readonly attempts: number;
-  readonly finishReason?: string;
-  readonly httpStatus?: number;
+  readonly finishReason: string | undefined;
+  readonly httpStatus: number | undefined;
 
   constructor(input: {
     reason: string;
