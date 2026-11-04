@@ -581,7 +581,8 @@ async function insertEventDays(
     if (eventCount !== previous.eventCount || extractedAt?.getTime() !== previous.extractedAt?.getTime()) {
       await tx.memoryEventDay.update({
         where: { id: previous.id },
-        data: { eventCount, extractedAt },
+        // 角色卡不携带本机消息游标；时间变化时必须清掉旧 id，安全重读边界。
+        data: { eventCount, extractedAt, extractedMessageId: null },
       });
     }
   }

@@ -5,7 +5,6 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import {
   analyzeMemoryPeriod,
-  isMemoryModelConfigured,
   type MemoryAiMessage,
   type MemoryChange,
 } from "./memory-ai";
@@ -25,6 +24,8 @@ import {
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
 import { normalizeFriendAliases } from "./friend-aliases";
 import { MEMORY_JOB_LEASE_MS } from "./memory-job-lease";
+import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
+import { EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS, loadEventMessageBatch } from "./memory-event-source";
 
 /** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
 const LEASE_RECOVERABLE_JOB_TYPES = ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "CLEAN_EXPIRED_MESSAGES", "EXTRACT_EVENTS", "GENERATE_JOURNAL"] as const;
@@ -40,15 +41,7 @@ const MAX_AI_MESSAGES = 120;
  * 用户的数字更小时以用户为准。
  */
 const CONTEXT_RETENTION_DAYS = 7;
-/**
- * 忆泡按天抽取的分块：每块多少条消息、一次任务最多跑几块。
- *
- * 不沿用 `MAX_AI_MESSAGES`（那是给「一次调用看一个周期」的快照用的）：按天抽取
- * 一晚上就有几百条，只喂 120 条会把中间整段丢掉。8 块 ≈ 960 条/次，超出时按
- * 时间均匀分块（而不是只留最近的），保证整天的内容都有一份代表。
- */
-const EVENT_AI_CHUNK_SIZE = 120;
-const MAX_EVENT_CHUNKS = 8;
+/** 忆泡每次正序消费至多 960 条，积压通过持久化游标续跑，不取样跳过证据。 */
 const MAX_AI_MEMORIES = 80;
 const MIN_MEMORY_CONFIDENCE = 0.65;
 
@@ -166,8 +159,8 @@ function validConfidence(change: MemoryChange): boolean {
 /**
  * 把一天的消息按时间顺序切成若干块。
  *
- * 块数取 `ceil(总数 / size)`，但封顶 `maxChunks`：条数远超上限时按「均匀分段」而不是
- * 「只留最近的」，否则一天的早段永远抽不到。顺序必须保持，模型靠它理解前因后果。
+ * 输入已由正序游标限定为一批，保持顺序并均分为不超过 maxChunks 块；
+ * 剩余消息由下一轮继续，不能在这里对全天取样。
  */
 function splitForEventExtraction<T>(messages: T[], size: number, maxChunks: number): T[][] {
   if (messages.length <= size) return [messages];
@@ -187,7 +180,7 @@ function splitForEventExtraction<T>(messages: T[], size: number, maxChunks: numb
  * 写进 `MemoryEvent`。同一条事件由 `dedupeKey`（范围 + 日期 + 标题）保证只写一次，
  * 补跑或重试都不会重复。
  */
-async function runDailyEventJob(
+export async function runDailyEventJob(
   prisma: PrismaClient,
   job: { id: string; memoryScopeId: string; periodStart: Date; periodEnd: Date; idempotencyKey: string },
   now: Date,
@@ -245,44 +238,43 @@ async function runDailyEventJob(
   const finalize = job.idempotencyKey.startsWith("events-final:");
   const day = await prisma.memoryEventDay.findUnique({
     where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
-    select: { state: true, extractedAt: true },
+    select: { state: true, extractedAt: true, extractedMessageId: true },
   });
   if (day?.state === "FINAL" && !finalize) {
     return finish("SKIPPED", `${dayKey} 的忆泡已经收口。`);
   }
-  // 增量起点：上次抽到哪就从哪继续；收口任务补最后一段。
-  const deltaStart = day?.extractedAt && day.extractedAt.getTime() > job.periodStart.getTime()
-    ? day.extractedAt
-    : job.periodStart;
-
-  const conversations = await prisma.conversation.findMany({
-    where: {
-      memoryScopeId: job.memoryScopeId,
-      // 外部身份范围里可能还挂着历史群会话：私聊忆泡只读 `c:`，别把群聊内容写进某个人的私人时间线。
-      ...(scope.scopeType === "EXTERNAL_IDENTITY"
-        ? { externalConversationId: { startsWith: "c:" } }
-        : {}),
-      messages: { some: { occurredAt: { gte: deltaStart, lt: job.periodEnd } } },
-    },
-    select: { id: true, externalConversationId: true },
+  // 按范围全局正序读取，不能复用快照的「最新消息取样」。时间戳相同用 id 续读。
+  const batch = await loadEventMessageBatch(prisma, {
+    memoryScopeId: job.memoryScopeId,
+    privateOnly: scope.scopeType === "EXTERNAL_IDENTITY",
+    periodStart: job.periodStart,
+    periodEnd: job.periodEnd,
+    progress: day,
   });
-  /**
-   * 忆泡按天抽取要的是**覆盖**，不是「每会话公平取样」：
-   * 快照那套配额（每会话 80 / 全天 250）在一天几百条时会直接把中间整段丢掉
-   * （2026-10-31 实测：一晚上 368 条，只喂进 80 条）。这里放宽到「块数 × 每块条数」，
-   * 再由下面的分块把它拆成多次模型调用。
-   */
-  const messages = await loadPeriodSourceMessages(prisma, conversations, deltaStart, job.periodEnd, {
-    perConversation: EVENT_AI_CHUNK_SIZE * MAX_EVENT_CHUNKS,
-    budget: EVENT_AI_CHUNK_SIZE * MAX_EVENT_CHUNKS,
+  const messages: PeriodSourceMessage[] = batch.messages.map((row) => {
+    const origin = conversationOriginLabel(row.conversation);
+    return {
+      ...row,
+      origin,
+      isOwner: readSourceMessageIsOwner(row.metadata, { origin, role: row.role }),
+      mentionTargets: readMessageMentionTargets(row.metadata),
+      ...readMessageAuthor(row.metadata),
+      ...readMessageSpeaker(row.metadata),
+    };
   });
   if (messages.length === 0) {
     // 没有新消息也要把这一天标成已扫过：收口任务照样要落 FINAL。
     if (finalize) {
-      await prisma.memoryEventDay.upsert({
-        where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
-        create: { memoryScopeId: job.memoryScopeId, dayKey, state: "FINAL", extractedAt: now },
-        update: { state: "FINAL", extractedAt: now },
+      await prisma.$transaction(async (tx) => {
+        const eventCount = await tx.memoryEvent.count({ where: { memoryScopeId: job.memoryScopeId, dayKey } });
+        await tx.memoryEventDay.upsert({
+          where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
+          create: { memoryScopeId: job.memoryScopeId, dayKey, state: "FINAL", eventCount },
+          update: { state: "FINAL", eventCount },
+        });
+        await tx.memoryEvent.updateMany({
+          where: { memoryScopeId: job.memoryScopeId, dayKey }, data: { state: "FINAL" },
+        });
       });
     }
     return finish("SKIPPED", "这一段没有新的对话。");
@@ -300,11 +292,10 @@ async function runDailyEventJob(
    *
    * 以前这里只喂 `selectAiMessages` 的 120 条（最早 60 + 最新 60），一整晚 368 条时
    * 中间两百多条**根本没进模型**（2026-10-31 实测：一个晚上只出 5 条忆泡）。
-   * 现在按时间顺序切块，每块各调一次模型，事件合并后统一落库：
+   * 现在按时间顺序切块，每块各调一次模型，并与进度一起事务落库：
    * 调用次数变多（几分钱），换来的是不再丢中间那一大段。
    */
   const chunks = splitForEventExtraction(messages, EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS);
-  const messagesById = new Map(messages.map((message) => [message.id, message]));
   const knownEvents = existingEvents.map((event) => ({
     occurredAt: event.occurredAt.toISOString(),
     title: event.title,
@@ -346,52 +337,42 @@ async function runDailyEventJob(
        * 前面已经抽出来的那几块全白费（2026-11-01 实测：4 块出 12 条，第 5 块超时 → 0 条落库）。
        * 现在按块提交，重试时靠 dedupeKey / 近义守卫跳过已写入的部分。
        */
-      const result = await prisma.$transaction((tx) => applyMemoryEvents(
-        tx,
-        {
+      const chunkEnd = chunk[chunk.length - 1]!;
+      // 证据产出与游标同事务：失败不推进，重试不会越过未提交的块。
+      const result = await prisma.$transaction(async (tx) => {
+        const applied = await applyMemoryEvents(tx, {
           memoryScopeId: job.memoryScopeId,
           characterId: scope.characterId,
           snapshotId: null,
           timeZone,
-          state: finalize ? "FINAL" : "DRAFT",
-          // 她自己的名字要从参与者里剔掉：「和谁」不该把「她自己」算进去。
+          state: "DRAFT",
           characterName: scope.character.name,
-        },
-        aiResult.analysis.events,
-        messagesById,
-      ));
+        }, aiResult.analysis.events, new Map(chunk.map((message) => [message.id, message])));
+        await tx.memoryEventDay.upsert({
+          where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
+          create: {
+            memoryScopeId: job.memoryScopeId, dayKey, state: "DRAFT",
+            eventCount: applied.applied.length,
+            extractedAt: chunkEnd.occurredAt, extractedMessageId: chunkEnd.id,
+          },
+          update: {
+            state: "DRAFT", eventCount: { increment: applied.applied.length },
+            extractedAt: chunkEnd.occurredAt, extractedMessageId: chunkEnd.id,
+          },
+        });
+        return applied;
+      });
       appliedCount += result.applied.length;
       skippedCount += result.skipped;
       knownEvents.push(...aiResult.analysis.events.map((draft) => ({
         occurredAt: draft.occurredAt,
         title: draft.title,
       })));
-      /**
-       * 每块跑完就把水位推到「这一块的最后一条」。
-       *
-       * 这样后面某块失败进入重试时，下一次从断点继续，而不是把整天重跑一遍
-       * （2026-11-01 实测：6 块里第 5 块 JSON 解析失败，重跑要从第 1 块重新烧 token）。
-       */
-      const chunkEnd = chunk[chunk.length - 1]!.occurredAt;
-      await prisma.memoryEventDay.upsert({
-        where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
-        create: {
-          memoryScopeId: job.memoryScopeId,
-          dayKey,
-          state: finalize ? "FINAL" : "DRAFT",
-          eventCount: result.applied.length,
-          extractedAt: chunkEnd,
-        },
-        update: {
-          eventCount: { increment: result.applied.length },
-          extractedAt: chunkEnd,
-        },
-      });
       // 一行可观测性日志：跑完能看出「这一块喂了多少、模型给了几条、落了几条」，
       // 少了事件时不用猜是没进模型还是模型没写。
       console.log(
         `[events] ${dayKey} 第 ${index + 1}/${chunks.length} 块：`
-        + `输入 ${chunk.length} 条（全天 ${messages.length} 条），`
+        + `输入 ${chunk.length} 条（本批 ${messages.length} 条），`
         + `模型给 ${aiResult.analysis.events.length} 条，落库 ${result.applied.length} 条`,
       );
     }
@@ -419,10 +400,26 @@ async function runDailyEventJob(
    * 的「那天几条」长期错着。
    */
   const totalEvents = await prisma.memoryEvent.count({ where: { memoryScopeId: job.memoryScopeId, dayKey } });
-  await prisma.memoryEventDay.updateMany({
-    where: { memoryScopeId: job.memoryScopeId, dayKey },
-    data: { state: finalize ? "FINAL" : "DRAFT", eventCount: totalEvents },
+  const complete = finalize && !batch.hasMore;
+  await prisma.$transaction(async (tx) => {
+    await tx.memoryEventDay.updateMany({
+      where: { memoryScopeId: job.memoryScopeId, dayKey },
+      data: { state: complete ? "FINAL" : "DRAFT", eventCount: totalEvents },
+    });
+    if (complete) {
+      await tx.memoryEvent.updateMany({
+        where: { memoryScopeId: job.memoryScopeId, dayKey },
+        data: { state: "FINAL" },
+      });
+    }
   });
+  if (batch.hasMore) {
+    // 正常分页不是模型失败，不消耗失败重试额度；让出队列后从已提交的游标续跑。
+    await prisma.memoryJob.update({ where: { id: job.id }, data: { attemptCount: 0 } });
+    return finish("RETRY_WAIT", "本批忆泡已保存，仍有未处理消息，将从游标继续整理。", {
+      runAt: new Date(now.getTime() + 30_000),
+    });
+  }
 
   return finish(
     "SUCCEEDED",
@@ -925,27 +922,8 @@ export async function processNextMemoryJob(
   // 领取之前先回收：过期租约 = 领走它的进程已经不在了，任务必须回到队列，否则它会一直显示「运行中」。
   await reclaimExpiredMemoryJobs(prisma, { now, ...(options.ownerId ? { ownerId: options.ownerId } : {}) });
 
-  const candidates = await prisma.memoryJob.findMany({
-    where: {
-      type: { in: ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "EXTRACT_EVENTS", "GENERATE_JOURNAL"] },
-      status: { in: ["QUEUED", "RETRY_WAIT"] },
-      runAt: { lte: now },
-      ...ownership,
-    },
-    orderBy: [{ runAt: "asc" }, { periodEnd: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    take: 100,
-    select: {
-      id: true,
-      type: true,
-      status: true,
-      attemptCount: true,
-      maxAttempts: true,
-      memoryScope: { select: { character: { select: { modelConfig: true } } } },
-    },
-  });
-
-  const configuredCandidates = candidates.filter((candidate) => isMemoryModelConfigured(candidate.memoryScope.character.modelConfig));
-  if (configuredCandidates.length === 0 && candidates.length > 0) {
+  const { configuredCandidates, hasUnconfiguredCandidates } = await readConfiguredMemoryJobCandidates(prisma, now, ownership);
+  if (configuredCandidates.length === 0 && hasUnconfiguredCandidates) {
     return {
       processed: false,
       message: "待处理阶段总结关联的角色尚未配置模型 API。请打开该角色的 AI 对话 → 模型参数填写 API 地址、Key 和模型名称；任务会保留在队列中。",

@@ -1041,6 +1041,8 @@ model MemoryEventDay {
   eventCount    Int              @default(0)
   /// 上次抽取到哪一刻；下一次只处理这之后的新消息，避免每小时都把一整天重跑一遍。
   extractedAt   DateTime?        @db.Timestamptz(6)
+  /// 与 extractedAt 组成稳定游标；不设外键，来源消息清理后仍可继续扫描。
+  extractedMessageId String?     @db.Uuid
   createdAt     DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime         @updatedAt @db.Timestamptz(6)
   memoryScope   MemoryScope      @relation(fields: [memoryScopeId], references: [id], onDelete: Cascade)

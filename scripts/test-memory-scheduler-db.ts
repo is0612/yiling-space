@@ -154,6 +154,12 @@ try {
     },
     select: { id: true },
   });
+  // Historical event backfill now also queues September evidence. Keep this replay
+  // assertion focused on its snapshot instead of accidentally invoking another job's model.
+  await prisma.memoryJob.updateMany({
+    where: { memoryScopeId: scopeId, type: "EXTRACT_EVENTS" },
+    data: { runAt: new Date(now.getTime() + 60_000) },
+  });
   const workerResult = await processNextMemoryJob(prisma, {
     now,
     ownerId,

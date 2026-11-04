@@ -114,7 +114,7 @@ try {
   check("旧范围当天条数重算为 1", oldDay.eventCount === 1, oldDay);
   const newDay = await prisma.memoryEventDay.findFirstOrThrow({ where: { memoryScopeId: toScopeId, dayKey: "2026-10-31" }, select: { eventCount: true, state: true, extractedAt: true } });
   check("新范围当天条数为 1", newDay.eventCount === 1, newDay);
-  check("新范围继承 FINAL 与整理水位", newDay.state === "FINAL" && newDay.extractedAt?.toISOString() === "2026-11-01T00:00:00.000Z", newDay);
+  check("新范围没有历史进度时保守重读，不能继承其他范围的水位", newDay.state === "DRAFT" && newDay.extractedAt === null, newDay);
 
   console.log("\n[2] 目标范围已有同一件事：旧条目按重复删掉");
   const duplicateSource = await prisma.memoryEvent.create({

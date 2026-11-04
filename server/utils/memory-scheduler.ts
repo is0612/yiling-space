@@ -4,6 +4,7 @@ import { listFriendScopesWithActivity } from "./friends";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_PERIODS_PER_SETTING = 24;
+const MAX_EVENT_BACKFILL_DAYS_PER_SCOPE = 24;
 
 export type DueMemoryPeriod = {
   periodStart: Date;
@@ -270,7 +271,6 @@ export async function enqueueDueMemorySnapshots(
       const timeZone = setting.timezone || "Asia/Shanghai";
       const { dayKey: todayKey, hour } = localDayHour(now, timeZone);
       const todayWindow = resolveDayWindow(todayKey, timeZone);
-      const yesterdayWindow = resolveDailyEventWindow(now, timeZone);
       const recentCutoff = new Date(now.getTime() - 60 * 60_000);
 
       for (const scope of eventScopes) {
@@ -302,25 +302,52 @@ export async function enqueueDueMemorySnapshots(
           report.jobsQueued += created.count;
         }
 
-        // 收口：昨天整天跑完后标成 FINAL，之后不再追加。
-        const hasYesterday = await prisma.message.findFirst({
-          where: {
-            conversation: { is: { memoryScopeId: scope.id, ...conversationFilter } },
-            occurredAt: { gte: yesterdayWindow.start, lt: yesterdayWindow.end },
-          },
-          select: { id: true },
-        });
-        if (!hasYesterday) continue;
+        // 收口 + 停机补排：只找有原文、未 FINAL、也从未排过收口任务的历史日期。
+        // 必须先排除已有任务再 LIMIT；否则最老的 24 天一直占着窗口，后面的日期永远排不到。
+        // 已持久化的任务就是进度（不按状态过滤）：FAILED/CANCELLED 交给人工重试，
+        // 不能用新键偷偷重排。无需另设游标，重启后也能继续，迟到的旧消息也不会漏扫。
+        // SQL 只返回日期、不读消息正文；参数化 scope + character 双重隔离，外部身份只取 c:。
+        const missingDays = await prisma.$queryRaw<Array<{ dayKey: string }>>`
+          WITH message_days AS (
+            SELECT DISTINCT to_char(m."occurredAt" AT TIME ZONE ${timeZone}, 'YYYY-MM-DD') AS "dayKey"
+            FROM "messages" m
+            JOIN "conversations" c ON c.id = m."conversationId"
+            WHERE c."memoryScopeId" = ${scope.id}::uuid
+              AND c."characterId" = ${setting.characterId}::uuid
+              AND (${scope.privateOnly}::boolean = false OR c."externalConversationId" LIKE 'c:%')
+              AND m."occurredAt" < ${todayWindow.start}
+          )
+          SELECT d."dayKey" FROM message_days d
+          WHERE NOT EXISTS (
+            SELECT 1 FROM "memory_event_days" e
+            WHERE e."memoryScopeId" = ${scope.id}::uuid
+              AND e."dayKey" = d."dayKey" AND e.state = 'FINAL'
+          ) AND NOT EXISTS (
+            SELECT 1 FROM "memory_jobs" j
+            WHERE j."memoryScopeId" = ${scope.id}::uuid AND j.type = 'EXTRACT_EVENTS'
+              AND j."idempotencyKey" IN (
+                'events-final:' || ${scope.id} || ':' || d."dayKey",
+                'daily-events:' || ${scope.id} || ':' || d."dayKey"
+              )
+          )
+          ORDER BY d."dayKey" ASC
+          LIMIT ${MAX_EVENT_BACKFILL_DAYS_PER_SCOPE}
+        `;
+        if (missingDays.length === 0) continue;
         const finalized = await prisma.memoryJob.createMany({
-          data: [{
-            memoryScopeId: scope.id,
-            type: "EXTRACT_EVENTS" as const,
-            idempotencyKey: `events-final:${scope.id}:${yesterdayWindow.dayKey}`,
-            periodStart: yesterdayWindow.start,
-            periodEnd: yesterdayWindow.end,
-            status: "QUEUED" as const,
-            runAt: now,
-          }],
+          data: missingDays.map(({ dayKey }) => {
+            const window = resolveDayWindow(dayKey, timeZone);
+            return {
+              memoryScopeId: scope.id,
+              type: "EXTRACT_EVENTS" as const,
+              idempotencyKey: `events-final:${scope.id}:${dayKey}`,
+              periodStart: window.start,
+              periodEnd: window.end,
+              status: "QUEUED" as const,
+              runAt: now,
+            };
+          }),
+          // Unique idempotencyKey also protects concurrent scheduler rounds.
           skipDuplicates: true,
         });
         report.jobsQueued += finalized.count;

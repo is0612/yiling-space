@@ -79,16 +79,17 @@ export async function moveConversationEventsToScope(
       });
     }
     if (newDay) {
-      const extractedAt = [newDay.extractedAt, oldDay?.extractedAt]
-        .filter((value): value is Date => value instanceof Date)
-        .sort((left, right) => right.getTime() - left.getTime())[0] ?? null;
+      // 水位只证明各自原范围的消息已处理，不能取最大时间后套给合并范围。
+      // 任一边未收口（或缺少进度）就从头重读；去重保留已生成的事件。
+      const bothFinal = newDay.state === "FINAL" && oldDay?.state === "FINAL";
       await tx.memoryEventDay.update({
         where: { memoryScopeId_dayKey: { memoryScopeId: input.toScopeId, dayKey } },
         data: {
           eventCount: newCount,
           // 任一边还在长就保持 DRAFT；两边都收口了才算 FINAL。
-          state: newDay.state === "DRAFT" || oldDay?.state === "DRAFT" ? "DRAFT" : "FINAL",
-          extractedAt,
+          state: bothFinal ? "FINAL" : "DRAFT",
+          extractedAt: null,
+          extractedMessageId: null,
         },
       });
     } else if (oldDay) {
@@ -96,9 +97,12 @@ export async function moveConversationEventsToScope(
         data: {
           memoryScopeId: input.toScopeId,
           dayKey,
-          state: oldDay.state,
+          // 目标没有进度不等于没有历史原文，不能继承源范围的 FINAL/水位。
+          // 保守重读整日，已有事件由去重保护。
+          state: "DRAFT",
           eventCount: newCount,
-          extractedAt: oldDay.extractedAt,
+          extractedAt: null,
+          extractedMessageId: null,
         },
       });
     }
