@@ -47,6 +47,7 @@
     "proactive:run": "tsx scripts/run-proactive.ts",
     "bili:run": "tsx scripts/run-bili-adapter.ts",
     "test:memory-retrieval": "tsx scripts/test-memory-retrieval.ts",
+    "test:memory-assistant": "tsx scripts/test-memory-assistant.ts",
     "test:memory-budget": "tsx scripts/test-memory-budget.ts",
     "test:memory-events": "tsx scripts/test-memory-events.ts",
     "test:memory-events-db": "tsx scripts/test-memory-events-db.ts",
