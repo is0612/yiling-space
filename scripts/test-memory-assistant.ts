@@ -324,6 +324,111 @@ try {
   globalThis.fetch = originalFetch;
 }
 
+
+const deepSeekAssistant = {
+  model: "deepseek-flash",
+  apiKey: "deepseek-memory-key-only",
+  apiBaseUrl: "https://api.deepseek.com/v1",
+};
+const diagnosticLogs: unknown[][] = [];
+const originalWarn = console.warn;
+try {
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+    requests.push({ url, body });
+
+    if (url.includes("api.deepseek.com")) {
+      const attempt = requests.filter((item) => item.url.includes("api.deepseek.com")).length;
+      if (attempt === 1) {
+        return new Response(JSON.stringify({
+          model: "deepseek-flash",
+          choices: [{ message: { content: "" }, finish_reason: "length" }],
+          usage: { prompt_tokens: 400, completion_tokens: 2048, total_tokens: 2448 },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        model: "deepseek-flash",
+        choices: [{ message: { content: JSON.stringify({ sourceKeys: ["memory/memory-1"] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 300, completion_tokens: 20, total_tokens: 320 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    const isFinal = requests.filter((item) => item.url.includes("chat.example.com")).length > 1;
+    const reply = isFinal
+      ? { reply: "你之前提到过喜欢《星际穿越》。", usedMemoryIds: ["memory-1"], usedSnapshotIds: [], usedEventIds: [] }
+      : { memoryAssistantQuery: "之前你说过的太空电影是什么？" };
+    return new Response(JSON.stringify({
+      model: "chat-model",
+      choices: [{ message: { content: JSON.stringify(reply) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  console.warn = (...args: unknown[]) => { diagnosticLogs.push(args); };
+
+  const queryOnly = await generateConversationReplyWithMemoryAssistant({
+    chatInput,
+    assistant: deepSeekAssistant,
+    candidates: [],
+    loadCandidates: async () => [candidate],
+  });
+  assert.equal(requests.length, 4, "A query-only first response should proceed through retrieval retry and final chat.");
+  assert.equal(requests[1]?.body.max_tokens, 2_048);
+  assert.equal(requests[2]?.body.max_tokens, 4_096);
+  assert.deepEqual(requests[1]?.body.thinking, { type: "disabled" },
+    "DeepSeek memory lookups should explicitly disable unnecessary reasoning.");
+  assert.deepEqual(requests[2]?.body.thinking, { type: "disabled" });
+  assert.equal(queryOnly.reply, "你之前提到过喜欢《星际穿越》。");
+  assert.equal(queryOnly.memoryAssistantStatus, "success");
+  assert.equal(queryOnly.memoryAssistantAttempts, 2);
+  assert.equal(queryOnly.memoryAssistantUsage?.totalTokens, 2_768,
+    "Usage from the truncated attempt and successful retry should both be counted.");
+  assert.equal(diagnosticLogs.some((entry) => String(entry[0]).includes("retry_truncated")), true);
+  assert.equal(JSON.stringify(diagnosticLogs).includes("之前你说过的太空电影"), false,
+    "Diagnostics must not copy the private search query into logs.");
+} finally {
+  globalThis.fetch = originalFetch;
+  console.warn = originalWarn;
+}
+
+// A query-only first response must still produce a non-empty user-facing reply when lookup fails.
+const failureLogs: unknown[][] = [];
+const warnBeforeFailure = console.warn;
+try {
+  let mainCalls = 0;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    if (url.includes("memory.example.com")) {
+      return new Response("unavailable", { status: 503 });
+    }
+    mainCalls += 1;
+    return new Response(JSON.stringify({
+      model: "chat-model",
+      choices: [{ message: { content: JSON.stringify({ memoryAssistantQuery: "生日是哪一天？" }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 80, completion_tokens: 10, total_tokens: 90 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  console.warn = (...args: unknown[]) => { failureLogs.push(args); };
+  const failedQueryOnly = await generateConversationReplyWithMemoryAssistant({
+    chatInput,
+    assistant,
+    candidates: [],
+    loadCandidates: async () => [candidate],
+  });
+  assert.equal(mainCalls, 1);
+  assert.ok(failedQueryOnly.reply.trim().length > 0, "An empty internal reply must never escape to QQ or the web chat.");
+  assert.equal(failedQueryOnly.memoryAssistantStatus, "failed");
+  assert.equal(failedQueryOnly.memoryAssistantFailureReason, "http_error");
+  assert.equal(failedQueryOnly.memoryAssistantHttpStatus, 503);
+  assert.equal(failureLogs.length > 0, true);
+  assert.equal(JSON.stringify(failureLogs).includes("生日是哪一天"), false,
+    "Failure logs must not include the private search query.");
+} finally {
+  globalThis.fetch = originalFetch;
+  console.warn = warnBeforeFailure;
+}
+
 // Connection test uses the assistant's own endpoint and credential, and accepts a configured assistant before activation.
 const connectionCalls: Array<{ url: string; authorization: string; body: Record<string, unknown> }> = [];
 const originalFetchForConnection = globalThis.fetch;
