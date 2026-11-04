@@ -408,7 +408,9 @@ export default defineEventHandler(async (event) => {
           ? await resolveParticipantAccounts(prisma, searchParticipantName)
           : [];
         // 只有大肥鱼明确请求深度回忆时才读取较广范围的原始消息；每个可访问范围最多取 250 条。
-        const rawRowsByScope = await Promise.all(readableScopeIds.map((scopeId) =>
+        // 网页私聊只查当前用户自己的 private scope；不扫共享 global scope 里的群聊原文。
+        const privateRawScopeIds = readableScopeIds.filter((scopeId) => scopeOriginById.get(scopeId) === "private");
+        const rawRowsByScope = await Promise.all(privateRawScopeIds.map((scopeId) =>
           prisma.message.findMany({
             where: {
               conversation: { memoryScopeId: scopeId },
