@@ -13,14 +13,13 @@ const ENGLISH_STOPWORDS = new Set([
   "liked", "likes", "love", "loved", "loves", "me", "my", "of", "on", "or", "our", "please",
   "previously", "remember", "remembered", "talk", "talked", "tell", "the", "their", "them", "they",
   "this", "that", "to", "told", "was", "we", "what", "when", "where", "which", "who", "why", "with",
-  "you", "your",
+  "you", "your", "last", "latest", "first", "year", "month", "week", "yesterday", "today", "tomorrow", "recent",
 ]);
 
 // These are query-intent words, not usually the topic the user wants to retrieve.
 const CJK_INTENT_STOPWORDS = [
-  "last", "latest", "first", "year", "month", "week", "yesterday", "today", "tomorrow", "recent",
-    "最近一次", "上一次", "最后一次", "上回", "上次", "第一次", "首次", "最开始", "初次", "头一回",
-  "上上个月", "上个月", "本月", "这个月", "去年", "前年", "今年", "个月前", "上周", "本周", "这周",
+  "最近一次", "上一次", "最后一次", "上回", "上次", "第一次", "首次", "最开始", "初次", "头一回",
+  "上上个月", "上个月", "本月", "这个月", "去年", "前年", "今年", "个月前", "上周", "本周", "这周", "月", "年", "的",
   "大前天", "前天", "昨天", "今天", "明天", "后天", "昨晚", "今晚", "早上", "上午", "中午", "下午", "傍晚", "晚上",
   "我想知道", "我想问", "告诉我", "帮我", "请问", "有没有", "是不是", "为什么",
   "怎么样", "怎么样了", "如何", "怎么", "怎样", "哪个", "哪些", "什么", "用户",
