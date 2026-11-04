@@ -1,0 +1,12 @@
+ALTER TABLE "memory_items" ADD COLUMN "originId" UUID;
+UPDATE "memory_items" SET "originId" = "id" WHERE "originId" IS NULL;
+ALTER TABLE "memory_items" ALTER COLUMN "originId" SET NOT NULL;
+CREATE UNIQUE INDEX "memory_items_memoryScopeId_originId_key" ON "memory_items"("memoryScopeId", "originId");
+ALTER TABLE "memory_events" ADD COLUMN "originId" UUID;
+UPDATE "memory_events" SET "originId" = "id" WHERE "originId" IS NULL;
+ALTER TABLE "memory_events" ALTER COLUMN "originId" SET NOT NULL;
+CREATE UNIQUE INDEX "memory_events_memoryScopeId_originId_key" ON "memory_events"("memoryScopeId", "originId");
+ALTER TABLE "memory_snapshots" ADD COLUMN "originId" UUID;
+UPDATE "memory_snapshots" SET "originId" = "id" WHERE "originId" IS NULL;
+ALTER TABLE "memory_snapshots" ALTER COLUMN "originId" SET NOT NULL;
+CREATE UNIQUE INDEX "memory_snapshots_memoryScopeId_originId_key" ON "memory_snapshots"("memoryScopeId", "originId");
