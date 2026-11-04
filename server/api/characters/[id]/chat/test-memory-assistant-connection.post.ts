@@ -1,4 +1,4 @@
-import { getRouterParam } from "h3";
+import { createError, getRouterParam } from "h3";
 import { resolveChatModelSettings } from "../../../../utils/chat-model-config";
 import {
   resolveMemoryAssistantRuntime,
@@ -15,7 +15,7 @@ export default defineEventHandler(async (event) => {
     where: { id: characterId, ownerId },
     select: { id: true, modelConfig: true },
   });
-  if (!character) return { ok: false, message: "角色不存在。" };
+  if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
   const chatSettings = resolveChatModelSettings(character.modelConfig);
   // 测试连接不要求先启用助手，但仍只读取记忆助手自己的模型、地址与加密 Key。
