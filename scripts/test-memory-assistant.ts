@@ -218,11 +218,18 @@ try {
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
 
+  let candidateLoaderCalls = 0;
   const result = await generateConversationReplyWithMemoryAssistant({
     chatInput,
     assistant,
-    candidates: [candidate, rawCandidate],
+    candidates: [],
+    loadCandidates: async (query) => {
+      candidateLoaderCalls += 1;
+      assert.equal(query, "上周讨论的太空电影名称");
+      return [candidate, rawCandidate];
+    },
   });
+  assert.equal(candidateLoaderCalls, 1, "Historical database candidates should load only after the chat model requests a search.");
   assert.equal(calls.length, 3, "A requested search should make one initial chat call, one read-only lookup, and one final chat call.");
   assert.equal(calls[0]?.authorization, "Bearer chat-key-only");
   assert.equal(calls[1]?.authorization, "Bearer memory-key-only",
@@ -273,7 +280,8 @@ try {
   const fallback = await generateConversationReplyWithMemoryAssistant({
     chatInput,
     assistant,
-    candidates: [candidate],
+    candidates: [],
+    loadCandidates: async () => [candidate],
   });
   assert.equal(fallbackCalls.length, 2);
   assert.equal(fallback.reply, "我一时想不起来，得再找找。");
@@ -282,6 +290,7 @@ try {
 
   // No query means one regular chat call; the optional assistant adds no normal-turn request.
   let noQueryCalls = 0;
+  let noQueryLoaderCalls = 0;
   globalThis.fetch = async (): Promise<Response> => {
     noQueryCalls += 1;
     return new Response(JSON.stringify({
@@ -301,9 +310,14 @@ try {
   const ordinary = await generateConversationReplyWithMemoryAssistant({
     chatInput,
     assistant,
-    candidates: [candidate],
+    candidates: [],
+    loadCandidates: async () => {
+      noQueryLoaderCalls += 1;
+      return [candidate];
+    },
   });
   assert.equal(noQueryCalls, 1, "The memory assistant must not add latency or cost when no lookup is requested.");
+  assert.equal(noQueryLoaderCalls, 0, "No broad database scan should run unless a historical search is requested.");
   assert.equal(ordinary.reply, "今天就聊点轻松的吧。");
 } finally {
   globalThis.fetch = originalFetch;
