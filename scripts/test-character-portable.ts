@@ -32,6 +32,9 @@ const rawConfig = {
   // 下面这些都是不该进包的
   chatApiKeyEncrypted: "v1.aaa.bbb.ccc",
   voiceApiKeyEncrypted: "v1.ddd.eee.fff",
+  memoryAssistantApiKeyEncrypted: "v1.ggg.hhh.iii",
+  memoryAssistantModel: "private-memory-model",
+  memoryAssistantEnabled: true,
   chatApiKey: "sk-plain",
   someToken: "abc",
   proactive: { enabled: true, targetQq: "12345" },
@@ -41,6 +44,9 @@ const rawConfig = {
 const stripped = stripPortableModelConfig(rawConfig);
 assert.equal(stripped.chatApiKeyEncrypted, undefined, "加密的聊天 Key 不能进包");
 assert.equal(stripped.voiceApiKeyEncrypted, undefined, "加密的语音 Key 不能进包");
+assert.equal(stripped.memoryAssistantApiKeyEncrypted, undefined, "记忆助手的加密 Key 不能进包");
+assert.equal(stripped.memoryAssistantModel, undefined, "记忆助手的专用模型配置不随角色卡导出");
+assert.equal(stripped.memoryAssistantEnabled, undefined, "导入角色卡时不自动启用记忆助手");
 assert.equal("chatApiKey" in stripped, false, "明文 Key 字段不能进包");
 assert.equal("someToken" in stripped, false, "白名单之外的字段一律不带走");
 assert.equal("proactive" in stripped, false, "依赖本机网关的行为设置不带走");
