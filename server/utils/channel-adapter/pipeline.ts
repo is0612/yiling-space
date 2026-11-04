@@ -14,7 +14,10 @@ import {
 } from "../cross-channel-context";
 import { parseEventParticipantQuery, resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget, selectEventsForPrompt, selectRecentEvents } from "../memory-event-retrieval";
 import { moveConversationEventsToScope } from "../memory-event-move";
-import { resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt } from "../message-retrieval";
+import {
+  resolveRawMessageLimit, resolveRawMessageTokenBudget,
+  selectRawMessagesForMemoryAssistant, selectRawMessagesForPrompt,
+} from "../message-retrieval";
 import { resolveEventParticipantNames, resolveParticipantAccounts } from "../participant-names";
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
 import { resolveCharacterApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
@@ -1396,24 +1399,61 @@ async function runChannelTurn(input: {
   const acquaintances = acquaintanceRows ?? null;
   const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
-  const memoryAssistantCandidates = memoryAssistant
-    ? buildMemoryAssistantCandidates({
-        query: retrievalQuery,
-        memories: memoryCandidates,
-        snapshots: snapshotCandidates,
-        events: eventCandidates,
-        scopeOf: (scopeId) => scopeId === globalScope.id ? "character" : "private",
-        timeZone: chatTimeZone,
-        ...(participantIds.length ? { participantIds } : {}),
-        allowPrivate: !isGroup,
-      })
-    : [];
 
   let generated;
   try {
     generated = await generateConversationReplyWithMemoryAssistant({
       assistant: memoryAssistant,
-      candidates: memoryAssistantCandidates,
+      candidates: [],
+      loadCandidates: async (searchQuery) => {
+        const searchParticipantName = parseEventParticipantQuery(searchQuery);
+        const searchParticipantIds = searchParticipantName
+          ? await resolveParticipantAccounts(prisma, searchParticipantName)
+          : [];
+        // 只有大肥鱼明确请求深度回忆时才读取较广范围的原始消息；每个可访问范围最多取 250 条。
+        const rawRowsByScope = await Promise.all(readableScopeIds.map((scopeId) =>
+          prisma.message.findMany({
+            where: {
+              conversation: { memoryScopeId: scopeId },
+              role: { in: ["USER", "ASSISTANT"] },
+            },
+            orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+            take: 250,
+            select: {
+              id: true, role: true, content: true, occurredAt: true, metadata: true,
+              conversation: { select: { memoryScopeId: true } },
+            },
+          }),
+        ));
+        const assistantRawMessages = rawRowsByScope.flat().map((row) => {
+          const speaker = readStoredSpeaker(row.metadata);
+          return {
+            id: row.id,
+            role: row.role,
+            content: row.content,
+            occurredAt: row.occurredAt,
+            memoryScopeId: row.conversation.memoryScopeId,
+            ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
+            ...(speaker.isOwner ? { isOwner: true } : {}),
+          };
+        });
+        return buildMemoryAssistantCandidates({
+          query: searchQuery,
+          memories: memoryCandidates,
+          snapshots: snapshotCandidates,
+          events: eventCandidates,
+          rawMessages: assistantRawMessages,
+          excludeRawMessageIds: new Set([
+            ...recentStoredMessages.map((item) => item.id),
+            ...crossChannel.map((item) => item.id),
+            ...rawMessages.map((item) => item.id),
+          ]),
+          scopeOf: (scopeId) => scopeId === globalScope.id ? "character" : "private",
+          timeZone: chatTimeZone,
+          ...(searchParticipantIds.length ? { participantIds: searchParticipantIds } : {}),
+          allowPrivate: !isGroup,
+        });
+      },
       chatInput: {
       characterName: character.name,
       characterPrompt: character.basePrompt.slice(0, 12_000),
