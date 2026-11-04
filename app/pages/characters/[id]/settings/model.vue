@@ -416,7 +416,7 @@ async function testVision() {
 
 /** 记忆助手连接测试使用独立凭据；即使尚未开启助手，也可以先验证配置。 */
 async function testMemoryAssistant() {
-  if (testingMemoryAssistant.value || testing.value || testingVision.value || saving.value || !character.value) return;
+  if (testingMemoryAssistant.value || testing.value || testingVision.value || testingVoice.value || saving.value || !character.value) return;
   testingMemoryAssistant.value = true;
   try {
     const saved = await save(true);
@@ -1466,7 +1466,7 @@ watch(id, () => void loadCharacter());
                   </el-select>
                   <el-button
                     :loading="fetchingVisionModels"
-                    :disabled="saving || testing || testingVision"
+                    :disabled="saving || testing || testingVision || testingVoice"
                     @click="fetchVisionModels"
                   >
                     <el-icon><Refresh /></el-icon>{{ fetchingVisionModels ? "获取中…" : "获取模型" }}
@@ -1620,7 +1620,7 @@ watch(id, () => void loadCharacter());
           >{{ saveStateLabel }}</span>
           <el-button
             :loading="testing"
-            :disabled="saving"
+            :disabled="saving || testingMemoryAssistant"
             @click="testConnection"
           >
             {{ testing ? "测试中…" : "保存并测试" }}
@@ -1628,7 +1628,7 @@ watch(id, () => void loadCharacter());
           <el-button
             type="primary"
             :loading="saving"
-            :disabled="testing"
+            :disabled="testing || testingMemoryAssistant"
             @click="save(false)"
           >
             {{ saving ? "保存中…" : "保存设置" }}
