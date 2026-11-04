@@ -424,8 +424,8 @@ function emptyAdded(): CharacterImportAdded {
 /**
  * 写记忆。
  *
- * 传 `existingContents` 就走合并：内容已经在场的跳过。用**内容**而不是 `dedupeKey` 当去重单位，
- * 是因为本地那条可能是模型按当时的规则生成的 key，光比 key 会把同一句话收两遍。
+ * 合并时优先按跨设备 `originId` 识别同一条记忆；旧卡没有 originId 时回退到正文去重。
+ * 本地已有同一身份的记忆即使正文不同也保留本地版本，避免把分叉改写追加成重复项。
  */
 async function insertMemories(
   tx: Tx,
@@ -461,8 +461,7 @@ async function insertMemories(
 }
 
 /**
- * 写忆泡。合并时以「哪一天 + 一句话标题」认同一件事 ——
- * 原文没跟过来，正文和条数都会因为抽取时机不同而有差异，标题才是稳定的事实单位。
+ * 写忆泡。合并优先使用跨设备 originId；旧卡缺少身份时回退到「日期 + 标题」。
  */
 async function insertEvents(
   tx: Tx,
@@ -593,7 +592,7 @@ async function insertEventDays(
  * 写阶段总结。
  *
  * 包里只带 CURRENT 版本，导入后统一记为第 1 版，避免出现「第 3 版但没有 1、2」的断号。
- * 合并时以「周期」认同一篇：同一段两边都总结过就不再写第二份。
+ * 合并优先使用跨设备 originId；旧卡缺少身份时回退到周期起止时间。
  */
 async function insertSnapshots(
   tx: Tx,
@@ -604,6 +603,7 @@ async function insertSnapshots(
   const seen = new Set<string>();
   const data: Array<{
     snapshotKey: string;
+    originId: string;
     memoryScopeId: string;
     kind: "AUTOMATIC" | "MANUAL";
     version: number;
