@@ -311,7 +311,10 @@ async function main(): Promise<void> {
 
     const dbPassword = useDocker
       ? await ask("数据库密码（回车＝随机生成）", previous?.dbPassword || randomPassword())
-      : await askRequired("现有 PostgreSQL 的密码", "自备数据库时密码必须和库里一致，否则迁移会报认证失败。");
+      : DRY_RUN && NON_INTERACTIVE
+        // CI 的 dry-run 只验证向导能生成计划，不会连接数据库；无需伪造或索要真实密码。
+        ? "dry-run-placeholder"
+        : await askRequired("现有 PostgreSQL 的密码", "自备数据库时密码必须和库里一致，否则迁移会报认证失败。");
 
     const adminUsername = await ask("管理员用户名", previous?.adminUsername ?? "admin");
     const adminPassword = await ask("管理员密码（至少 8 位，含字母和数字）", previous?.adminPassword || "admin123");
