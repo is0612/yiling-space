@@ -132,6 +132,30 @@ const firstMeet = selectEventsForPrompt("第一次见到小明是什么时候", 
 assert.equal(firstMeet.mode, "first", "「第一次」要走取首，而不是按相关度排");
 assert.equal(firstMeet.items[0]?.id, "p1", "最早的那次排第一");
 
+const foodHistory = [
+  { id: "food-first", title: "第一次在海边吃烧烤", detail: "和小明一起吃烧烤。", occurredAt: new Date("2026-10-20T10:00:00Z"), participants: ["小明"], keywords: ["烧烤"] },
+  { id: "food-last", title: "后来又去吃烧烤", detail: "这次在市区吃烧烤。", occurredAt: new Date("2026-10-30T12:00:00Z"), participants: ["小明"], keywords: ["烧烤"] },
+];
+const latestFood = selectEventsForPrompt("最近一次吃烧烤是什么时候", foodHistory, { now, timeZone: TZ });
+assert.equal(latestFood.mode, "latest");
+assert.deepEqual(latestFood.items.map((item) => item.id), ["food-last"],
+  "「最近一次」必须优先时间最新，而不是只按关键词相关度。");
+const firstFood = selectEventsForPrompt("第一次吃烧烤是什么时候", foodHistory, { now, timeZone: TZ });
+assert.equal(firstFood.mode, "first");
+assert.deepEqual(firstFood.items.map((item) => item.id), ["food-first"],
+  "不带具体人物的「第一次」也要按最早事件排序。");
+
+const lastYearTopic = [
+  { id: "year-old", title: "去年年初聊过太空电影", detail: "讨论太空电影。", occurredAt: new Date("2025-02-01T10:00:00Z"), participants: [], keywords: ["太空电影"] },
+  { id: "year-new", title: "去年年底又聊太空电影", detail: "继续讨论太空电影。", occurredAt: new Date("2025-12-15T10:00:00Z"), participants: [], keywords: ["太空电影"] },
+  { id: "year-other", title: "去年去公园散步", detail: "和朋友散步。", occurredAt: new Date("2025-06-01T10:00:00Z"), participants: [], keywords: ["散步"] },
+];
+const lastYearRelevant = selectEventsForPrompt("去年我们聊过太空电影", lastYearTopic, {
+  now, timeZone: TZ, limit: 1,
+});
+assert.deepEqual(lastYearRelevant.items.map((item) => item.id), ["year-new"],
+  "宽时间范围应先选主题匹配项，并优先给出最近的相关记录，不能固定取年初。");
+
 const unrelated = selectEventsForPrompt("你还记得烧烤吗", people, { now, timeZone: TZ });
 assert.equal(unrelated.mode, "keyword", "没有明确指向某个人时不能按人过滤");
 
