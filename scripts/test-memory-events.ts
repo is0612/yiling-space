@@ -3,7 +3,7 @@ import {
   localDayHour, localDayKey, parseEventTimeRange, resolveDailyEventWindow, resolveDayWindow, zonedDateTime,
 } from "../server/utils/memory-event-time";
 import {
-  RAW_MESSAGE_MAX_CHARS, RAW_MESSAGE_TOKEN_BUDGET_DEFAULT, selectRawMessagesForPrompt,
+  RAW_MESSAGE_MAX_CHARS, RAW_MESSAGE_TOKEN_BUDGET_DEFAULT, selectRawMessagesForMemoryAssistant, selectRawMessagesForPrompt,
 } from "../server/utils/message-retrieval";
 import { estimateTokens } from "../server/utils/memory-retrieval";
 import { toMemoryTimelineDtos } from "../server/utils/memory-timeline-dto";
@@ -220,6 +220,17 @@ assert.equal(
   0,
   "问句没有时间指向时不该额外查原文 —— 那是最近窗口的活",
 );
+
+const deepSearchRawLines = [
+  { id: "old-film", role: "USER", content: "我们当时聊了太空电影，提到星际穿越。", occurredAt: new Date("2025-04-12T10:00:00Z") },
+  { id: "old-other", role: "USER", content: "去年一起去公园散步。", occurredAt: new Date("2025-08-12T10:00:00Z") },
+  { id: "new-film", role: "USER", content: "今天也聊了太空电影。", occurredAt: new Date("2026-10-31T10:00:00Z") },
+];
+const deepSearchRaw = selectRawMessagesForMemoryAssistant("去年太空电影", deepSearchRawLines, {
+  now, timeZone: TZ,
+});
+assert.deepEqual(deepSearchRaw.map((item) => item.id), ["old-film"],
+  "记忆助手原文检索必须同时遵守明确年份与主题词，不能混入今年记录或无关聊天。");
 
 // ── 单条原文截断：一条长粘贴不能把那天挤没 ──────────────────
 // 不截断时只有两种结局：第一条永远放行（整条进提示词），或者装不下被整条跳过。
