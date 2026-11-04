@@ -310,6 +310,7 @@ export function buildMemoryAssistantCandidates(
     limit: 16,
     tokenBudget: 3_200,
     excludeIds: input.excludeRawMessageIds,
+    timeZone: input.timeZone,
   });
   for (const message of rawMessages) {
     const scope = input.scopeOf(message.memoryScopeId);
