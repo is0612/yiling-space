@@ -4,7 +4,7 @@ import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemo
 import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
-import { isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
+import { isMemoryAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 
 function positiveNumber(value: unknown): number {
@@ -48,6 +48,12 @@ export type CharacterDto = {
   chatApiBaseUrl: string;
   chatApiKeyConfigured: boolean;
   chatApiKeySource: "character" | "environment" | "missing";
+  /** 记忆助手专用模型配置；Key 仅回传是否已保存。 */
+  memoryAssistantEnabled: boolean;
+  memoryAssistantModel: string;
+  memoryAssistantApiBaseUrl: string;
+  memoryAssistantApiKeyConfigured: boolean;
+  memoryAssistantConfigured: boolean;
   /** 每日 token 额度，0 = 不限。 */
   dailyTokenLimit: number;
   /** 每次对话注入的记忆 / 快照 token 预算。 */
@@ -177,6 +183,10 @@ export function toCharacterDto(input: unknown): CharacterDto {
   const character = input as CharacterRecord;
   const config = asConfig(character.modelConfig);
   const chatSettings = resolveChatModelSettings(config);
+  const memoryAssistantModel = typeof config.memoryAssistantModel === "string"
+    ? config.memoryAssistantModel.trim()
+    : "";
+  const memoryAssistantApiKeyConfigured = isMemoryAssistantApiKeySaved(config);
   const avatarTone = resolveAvatarTone(character.name, config);
   const setting = character.memorySetting;
   const snapshots = character.memoryScopes.flatMap((scope) => scope.snapshots.map((snapshot) => snapshot.createdAt));
@@ -229,6 +239,13 @@ export function toCharacterDto(input: unknown): CharacterDto {
     chatApiBaseUrl: chatSettings.apiBaseUrl,
     chatApiKeyConfigured: chatSettings.apiKeyConfigured,
     chatApiKeySource: chatSettings.apiKeySource,
+    memoryAssistantEnabled: config.memoryAssistantEnabled === true,
+    memoryAssistantModel,
+    memoryAssistantApiBaseUrl: typeof config.memoryAssistantApiBaseUrl === "string"
+      ? config.memoryAssistantApiBaseUrl
+      : "",
+    memoryAssistantApiKeyConfigured,
+    memoryAssistantConfigured: Boolean(memoryAssistantModel && memoryAssistantApiKeyConfigured),
     dailyTokenLimit: positiveNumber(config.dailyTokenLimit),
     memoryTokenBudget: positiveNumber(config.memoryTokenBudget) || MEMORY_TOKEN_BUDGET_DEFAULT,
     snapshotTokenBudget: positiveNumber(config.snapshotTokenBudget) || SNAPSHOT_TOKEN_BUDGET_DEFAULT,
