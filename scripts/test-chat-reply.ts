@@ -152,7 +152,7 @@ try {
     "系统提示词要解释 now 的字段，否则模型不知道这堆时间是干什么的。",
   );
   assert(
-    systemMessage.content.includes("no record of it"),
+    systemMessage.content.includes("say you have no record"),
     "没有记录时要说清楚，不能编一个听起来合理的故事。",
   );
   assert(
