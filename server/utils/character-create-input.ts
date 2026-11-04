@@ -1,12 +1,9 @@
-import { createError } from "h3";
+import { readCharacterBody } from "./character-profile-input";
 import { readTrimmedString } from "./local-api";
 
 /** Keep create defaults in one place; an explicit empty address is not a missing field. */
 export function readCharacterCreateInput(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw createError({ statusCode: 400, statusMessage: "角色资料必须是对象。" });
-  }
-  const body = value as Record<string, unknown>;
+  const body = readCharacterBody(value);
   return {
     name: readTrimmedString(body.name, "角色名称", 100, { required: true }),
     alias: readTrimmedString(body.alias, "角色标签", 100) || "新建角色",

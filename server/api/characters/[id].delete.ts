@@ -25,5 +25,6 @@ export default defineEventHandler(async (event) => {
     // 让前端能如实说「连表情包目录一起删了」还是「本来就没有目录」。
     removedStickerDirs: result.removedStickerDirs,
     purged: result.purged,
+    ...(result.cleanupWarning ? { cleanupWarning: result.cleanupWarning } : {}),
   };
 });

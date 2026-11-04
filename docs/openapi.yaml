@@ -1006,6 +1006,7 @@ paths:
     patch:
       tags: [Characters]
       summary: 更新角色
+      description: '请求体必须为对象。资料字段 name/personality/examples/userAddress/alias/description 传入时必须为字符串；缺省不修改，空字符串可清空可选资料，名称不可为空。'
       requestBody:
         required: true
         content:
@@ -1045,6 +1046,9 @@ paths:
 
         故意**不删**：`model_usages`（token 账单不随角色消失）、外部身份（`(platform, platformUid)`
         全局唯一，同一个账号可能同时是几个角色的朋友）。
+
+        删除与必要审计记录在同一事务中提交。提交后若表情包文件清理失败，仍返回成功，
+        并附带 `cleanupWarning`；此时角色已删除，请联系管理员处理残留文件，不要重试删除。
       responses:
         '200':
           description: 删除完成
@@ -1064,7 +1068,10 @@ paths:
                           name: { type: string }
                           removedStickerDirs:
                             type: boolean
-                            description: 是否真的删掉了磁盘上的表情包目录（本来就没有时为 false）
+                            description: 是否完成了磁盘表情包目录删除（本来没有或清理未完成时为 false；后者同时返回 cleanupWarning）
+                          cleanupWarning:
+                            type: string
+                            description: 数据删除已提交但文件清理未完成时的安全提示，不包含内部路径或错误详情
                           purged:
                             type: object
                             description: 三张没有外键的表各删了多少行
@@ -4367,7 +4374,8 @@ components:
               createdAt: { type: string, format: date-time, nullable: true }
               revisions:
                 type: array
-                maxItems: 40
+                description: 每天合计最多80版，DIARY与HANDBOOK各最多40版；整张卡合计最多8000版
+                maxItems: 80
                 items:
                   type: object
                   required: [kind, version, content]

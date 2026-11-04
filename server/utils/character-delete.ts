@@ -44,7 +44,77 @@ export type CharacterDeleteResult = {
   };
   /** 是否真的删掉了磁盘目录（目录本来就不存在时是 false）。 */
   removedStickerDirs: boolean;
+  /** 数据已删除，但磁盘清理未完成；固定安全文案，不包含内部错误。 */
+  cleanupWarning?: string;
 };
+
+const CLEANUP_WARNING = "角色已删除，但表情包文件清理未完成，请联系管理员处理。";
+
+type DeleteAuditDetails = CharacterDeleteResult["purged"] & {
+  name: string;
+  removedStickerDirs: boolean;
+  cleanupWarning?: string;
+};
+type DeleteAuditData = {
+  actorType: "USER";
+  actorId: string;
+  characterId: null;
+  action: string;
+  entityType: string;
+  entityId: string;
+  details: DeleteAuditDetails;
+};
+type DeleteMany = {
+  deleteMany(args: { where: { characterId: string } }): Promise<{ count: number }>;
+};
+/** 只暴露本操作所需的方法，纯 mock 测试不必构造 Prisma Client 或连接数据库。 */
+type CharacterDeleteTransaction = {
+  character: {
+    findFirst(args: { where: { id: string; ownerId: string } }): Promise<{ name: string } | null>;
+    delete(args: { where: { id: string; ownerId: string } }): Promise<unknown>;
+  };
+  conversation: DeleteMany;
+  memoryScope: DeleteMany;
+  chatRequest: DeleteMany;
+  groupActivity: DeleteMany;
+  onebotGroupAnnouncement: DeleteMany;
+  auditLog: { create(args: { data: DeleteAuditData }): Promise<{ id: string }> };
+};
+type CharacterDeleteDatabase = {
+  $transaction<T>(run: (tx: CharacterDeleteTransaction) => Promise<T>): Promise<T>;
+  auditLog: {
+    update(args: { where: { id: string }; data: { details: DeleteAuditDetails } }): Promise<unknown>;
+  };
+};
+type StickerDirectoryDependencies = {
+  stat(target: string): Promise<unknown>;
+  rm(target: string, options: { recursive: true; force: true }): Promise<unknown>;
+  invalidate(characterId: string): void;
+};
+const stickerDirectoryDependencies: StickerDirectoryDependencies = {
+  stat: (target) => fs.stat(target),
+  rm: (target, options) => fs.rm(target, options),
+  invalidate: invalidateStickerCache,
+};
+type CharacterDeleteDependencies = {
+  prisma?: CharacterDeleteDatabase;
+  stickerDirectories?: StickerDirectoryDependencies;
+  warn?: (message: string, metadata: { characterId: string; stage: "sticker-cleanup" | "audit-cleanup-update" }) => void;
+};
+
+function warnSafely(
+  warn: NonNullable<CharacterDeleteDependencies["warn"]>,
+  characterId: string,
+  stage: "sticker-cleanup" | "audit-cleanup-update",
+) {
+  // 不记录原始异常、角色名、路径或凭据。日志设施自身失败也不能让已提交的删除报错。
+  try {
+    warn("[character-delete] 角色删除后的收尾未完成", {
+      characterId: /^[0-9a-f-]{36}$/i.test(characterId) ? characterId : "invalid",
+      stage,
+    });
+  } catch { /* best effort */ }
+}
 
 /**
  * 删角色表情包的整个目录。
@@ -55,7 +125,10 @@ export type CharacterDeleteResult = {
  * 目录名取自库里存的 characterId（服务端生成的 uuid），但还是过一遍 uuid 形状校验 ——
  * 这个函数会 `rm -rf`，路径里混进 `..` 就是灾难。
  */
-export async function removeCharacterStickerDirs(characterId: string): Promise<boolean> {
+export async function removeCharacterStickerDirs(
+  characterId: string,
+  dependencies: StickerDirectoryDependencies = stickerDirectoryDependencies,
+): Promise<boolean> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(characterId)) {
     throw new Error(`拒绝删除非 uuid 目录：${characterId}`);
   }
@@ -68,30 +141,35 @@ export async function removeCharacterStickerDirs(characterId: string): Promise<b
     }
   }
   let removed = false;
-  for (const target of targets) {
-    const existed = await fs
-      .stat(target)
-      .then(() => true)
-      .catch(() => false);
-    if (!existed) continue;
-    await fs.rm(target, { recursive: true, force: true });
-    removed = true;
+  try {
+    for (const target of targets) {
+      const existed = await dependencies.stat(target).then(() => true).catch((error: unknown) => {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+        throw error;
+      });
+      if (!existed) continue;
+      await dependencies.rm(target, { recursive: true, force: true });
+      removed = true;
+    }
+    return removed;
+  } finally {
+    // 即使 stat / rm 失败，已删角色的目录清单也不得继续命中缓存。
+    dependencies.invalidate(characterId);
   }
-  invalidateStickerCache(characterId);
-  return removed;
 }
 
 export async function deleteCharacterCompletely(options: {
   characterId: string;
   ownerId: string;
-}): Promise<CharacterDeleteResult | null> {
-  const prisma = getPrisma();
+}, dependencies: CharacterDeleteDependencies = {}): Promise<CharacterDeleteResult | null> {
+  const prisma: CharacterDeleteDatabase = dependencies.prisma ?? getPrisma();
+  const warn = dependencies.warn ?? console.warn;
   const { characterId, ownerId } = options;
 
-  const existing = await prisma.character.findFirst({ where: { id: characterId, ownerId } });
-  if (!existing) return null;
-
-  const purged = await prisma.$transaction(async (tx) => {
+  const deleted = await prisma.$transaction(async (tx) => {
+    // 所有权检查与删除在同一事务内，最终 delete 也带 ownerId 防止所有权变化。
+    const existing = await tx.character.findFirst({ where: { id: characterId, ownerId } });
+    if (!existing) return null;
     // 1. Restrict 的两张必须先删，否则第 5 步删角色会被外键挡住
     await tx.conversation.deleteMany({ where: { characterId } });
     await tx.memoryScope.deleteMany({ where: { characterId } });
@@ -100,21 +178,15 @@ export async function deleteCharacterCompletely(options: {
     const groupActivities = await tx.groupActivity.deleteMany({ where: { characterId } });
     const announcements = await tx.onebotGroupAnnouncement.deleteMany({ where: { characterId } });
     // 3. 剩下的交给 cascade / SetNull
-    await tx.character.delete({ where: { id: characterId } });
-    return {
+    await tx.character.delete({ where: { id: characterId, ownerId } });
+    const purged = {
       chatRequests: chatRequests.count,
       groupActivities: groupActivities.count,
       announcements: announcements.count,
     };
-  });
-
-  const removedStickerDirs = await removeCharacterStickerDirs(characterId);
-
-  // 删除是唯一不可逆的操作，**必须**留痕：没有这一条，「这个角色什么时候没的」
-  // 事后完全查不到（导入导出都有审计，就这个没有）。`characterId` 只能是 null ——
-  // 角色行已经没了，写 id 会被外键挡住；认出是哪个角色靠 `entityId`。
-  await prisma.auditLog
-    .create({
+    // 核心审计必须和删除一起提交；失败直接抛出，事务回滚且不触碰磁盘。
+    // characterId 已无对应角色行，置 null，靠 entityId 保留目标身份。
+    const audit = await tx.auditLog.create({
       data: {
         actorType: "USER",
         actorId: ownerId,
@@ -122,11 +194,45 @@ export async function deleteCharacterCompletely(options: {
         action: "character.deleted",
         entityType: "Character",
         entityId: characterId,
-        details: { name: existing.name, ...purged, removedStickerDirs },
+        details: { name: existing.name, ...purged, removedStickerDirs: false },
       },
-    })
-    // 审计写不进去不该让删除「报失败」—— 数据其实已经删干净了，报错只会让人重复操作。
-    .catch(() => undefined);
+    });
+    return { name: existing.name, purged, auditId: audit.id };
+  });
+  if (!deleted) return null;
 
-  return { id: characterId, name: existing.name, purged, removedStickerDirs };
+  let removedStickerDirs = false;
+  let cleanupWarning: string | undefined;
+  try {
+    removedStickerDirs = await removeCharacterStickerDirs(characterId, dependencies.stickerDirectories);
+  } catch {
+    // 可能已有一个目录删掉；只要没全部完成就保守返回 false，不能把已提交的删除变成 500。
+    cleanupWarning = CLEANUP_WARNING;
+    warnSafely(warn, characterId, "sticker-cleanup");
+  }
+
+  // 兼容成功路径的审计详情：这里只补充磁盘结果，绝不能取代事务内的核心审计。
+  try {
+    await prisma.auditLog.update({
+      where: { id: deleted.auditId },
+      data: {
+        details: {
+          name: deleted.name,
+          ...deleted.purged,
+          removedStickerDirs,
+          ...(cleanupWarning ? { cleanupWarning } : {}),
+        },
+      },
+    });
+  } catch {
+    warnSafely(warn, characterId, "audit-cleanup-update");
+  }
+
+  return {
+    id: characterId,
+    name: deleted.name,
+    purged: deleted.purged,
+    removedStickerDirs,
+    ...(cleanupWarning ? { cleanupWarning } : {}),
+  };
 }

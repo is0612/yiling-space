@@ -1049,7 +1049,8 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     // 同一种文本的 (kind, version) 必须唯一，否则导入会撞 `(journalId, kind, version)`。
     const revisions: CharacterBundleJournalRevision[] = [];
     const seenVersions = new Set<string>();
-    readArray(item.revisions, `${label}的版本`, CHARACTER_BUNDLE_LIMITS.journalRevisions)
+    const revisionCounts = new Map<BundleJournalTextKind, number>();
+    readArray(item.revisions, `${label}的版本`, CHARACTER_BUNDLE_LIMITS.journalRevisions * JOURNAL_TEXT_KINDS.length)
       .forEach((entry, revisionIndex) => {
         const revision = asRecord(entry);
         const revisionLabel = `${label}第 ${revisionIndex + 1} 版`;
@@ -1057,6 +1058,11 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
         const kind: BundleJournalTextKind = (JOURNAL_TEXT_KINDS as readonly string[]).includes(kindInput)
           ? kindInput as BundleJournalTextKind
           : "DIARY";
+        const kindCount = (revisionCounts.get(kind) ?? 0) + 1;
+        if (kindCount > CHARACTER_BUNDLE_LIMITS.journalRevisions) {
+          bad(`${label}的 ${kind} 版本超过 ${CHARACTER_BUNDLE_LIMITS.journalRevisions} 条。`);
+        }
+        revisionCounts.set(kind, kindCount);
         const version = Math.round(readNumber(revision.version, `${revisionLabel}的版本号`, 1, 100_000, 0));
         if (!version) bad(`${revisionLabel}缺少版本号。`);
         const versionKey = `${kind}:${version}`;

@@ -452,7 +452,9 @@ async function insertMemories(
       status: "ACTIVE",
       validFrom: item.validFrom ? new Date(item.validFrom) : null,
       validTo: item.validTo ? new Date(item.validTo) : null,
-      dedupeKey: item.dedupeKey ?? (existingContents ? mergeKey("merge-memory", content) : null),
+      // 外来 key 属于导出机器的命名空间，不能挤掉本机或同包中不同内容的记忆。
+      // 合并幂等由 originId / 正文判断负责；PostgreSQL 允许多个 NULL。
+      dedupeKey: null,
     });
   }
   if (!rows.length) return 0;
@@ -938,6 +940,7 @@ async function createCharacterFromBundle(input: {
   const globalEventDays = bundle.eventDays.filter((item) => item.scope === "character");
   const privateEventDays = bundle.eventDays.filter((item) => item.scope === "private");
   const globalSnapshots = bundle.snapshots.filter((item) => item.scope === "character");
+  const privateSnapshots = bundle.snapshots.filter((item) => item.scope === "private");
   const added = emptyAdded();
 
   /**
@@ -999,7 +1002,7 @@ async function createCharacterFromBundle(input: {
     added.journals += globalJournalStats.journals;
     added.journalRevisions += globalJournalStats.revisions;
 
-    if (privateMemories.length || privateEvents.length || privateEventDays.length) {
+    if (privateMemories.length || privateEvents.length || privateEventDays.length || privateSnapshots.length) {
       const scopeKey = buildUserPrivateScopeKey(characterId, ownerId);
       const privateScope = await tx.memoryScope.create({
         data: {
@@ -1012,6 +1015,7 @@ async function createCharacterFromBundle(input: {
       });
       added.memories += await insertMemories(tx, privateScope.id, privateMemories);
       added.events += await insertEvents(tx, privateScope.id, privateEvents);
+      added.snapshots += await insertSnapshots(tx, privateScope.id, privateSnapshots, false);
       added.eventDays += await insertEventDays(tx, privateScope.id, privateEventDays, privateEvents, false);
     }
 
@@ -1138,6 +1142,7 @@ async function mergeCharacterCard(input: {
   const globalEventDays = bundle.eventDays.filter((item) => item.scope === "character");
   const privateEventDays = bundle.eventDays.filter((item) => item.scope === "private");
   const globalSnapshots = bundle.snapshots.filter((item) => item.scope === "character");
+  const privateSnapshots = bundle.snapshots.filter((item) => item.scope === "private");
   const added = emptyAdded();
 
   await prisma.$transaction(async (tx) => {
@@ -1183,7 +1188,7 @@ async function mergeCharacterCard(input: {
     added.journals += globalJournalStats.journals;
     added.journalRevisions += globalJournalStats.revisions;
 
-    if (privateMemories.length || privateEvents.length || privateEventDays.length) {
+    if (privateMemories.length || privateEvents.length || privateEventDays.length || privateSnapshots.length) {
       const scopeKey = buildUserPrivateScopeKey(target.id, ownerId);
       const privateScope = await tx.memoryScope.upsert({
         where: { scopeKey },
@@ -1209,6 +1214,7 @@ async function mergeCharacterCard(input: {
         privateEvents,
         await loadEventSignatures(tx, privateScope.id),
       );
+      added.snapshots += await insertSnapshots(tx, privateScope.id, privateSnapshots, true);
       added.eventDays += await insertEventDays(tx, privateScope.id, privateEventDays, privateEvents, true);
     }
 

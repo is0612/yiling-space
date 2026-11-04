@@ -42,11 +42,11 @@ const rawConfig = {
 };
 
 const stripped = stripPortableModelConfig(rawConfig);
-assert.equal(stripped.chatApiKeyEncrypted, undefined, "加密的聊天 Key 不能进包");
-assert.equal(stripped.voiceApiKeyEncrypted, undefined, "加密的语音 Key 不能进包");
-assert.equal(stripped.memoryAssistantApiKeyEncrypted, undefined, "记忆助手的加密 Key 不能进包");
-assert.equal(stripped.memoryAssistantModel, undefined, "记忆助手的专用模型配置不随角色卡导出");
-assert.equal(stripped.memoryAssistantEnabled, undefined, "导入角色卡时不自动启用记忆助手");
+assert.equal(Reflect.get(stripped, "chatApiKeyEncrypted"), undefined, "加密的聊天 Key 不能进包");
+assert.equal(Reflect.get(stripped, "voiceApiKeyEncrypted"), undefined, "加密的语音 Key 不能进包");
+assert.equal(Reflect.get(stripped, "memoryAssistantApiKeyEncrypted"), undefined, "记忆助手的加密 Key 不能进包");
+assert.equal(Reflect.get(stripped, "memoryAssistantModel"), undefined, "记忆助手的专用模型配置不随角色卡导出");
+assert.equal(Reflect.get(stripped, "memoryAssistantEnabled"), undefined, "导入角色卡时不自动启用记忆助手");
 assert.equal("chatApiKey" in stripped, false, "明文 Key 字段不能进包");
 assert.equal("someToken" in stripped, false, "白名单之外的字段一律不带走");
 assert.equal("proactive" in stripped, false, "依赖本机网关的行为设置不带走");
@@ -227,7 +227,7 @@ assert.ok(
 );
 assert.equal(built.memories.filter((item) => item.scope === "private").length, 1, "私人记忆带 scope 标记");
 assert.equal(built.memories[0]?.scope, "character", "全局记忆默认 scope=character");
-assert.equal(built.modelConfig.chatApiKeyEncrypted, undefined, "构建出的包不含密钥字段");
+assert.equal(Reflect.get(built.modelConfig, "chatApiKeyEncrypted"), undefined, "构建出的包不含密钥字段");
 
 // ── 3. 回环：导出 → JSON → 导入解析 ──────────────────────────
 const roundTrip = parseCharacterBundle(JSON.parse(JSON.stringify(built)));
@@ -428,6 +428,38 @@ const withSecrets = parseCharacterBundle(minimal({
 assert.equal(withSecrets.modelConfig.chatModel, "m");
 assert.equal("chatApiKeyEncrypted" in withSecrets.modelConfig, false, "导入时也要剥一次密钥");
 assert.equal("chatApiKey" in withSecrets.modelConfig, false);
+
+// 每天最多日记 40 + 手账 40；必须通过真实 build → parse 回环，而非只测手写 JSON。
+function buildJournalBoundary(diaryCount: number, handbookCount: number) {
+  const revisions = (["DIARY", "HANDBOOK"] as const).flatMap((kind) =>
+    Array.from({ length: kind === "DIARY" ? diaryCount : handbookCount }, (_, index) => ({
+      kind, version: index + 1, title: "边界", content: `${kind}-${index + 1}`,
+      thought: null, quote: null, tags: [], revisionType: "USER_EDITED" as const,
+      promptVersion: null, model: null, sourceDiaryVersion: null, createdAt: new Date("2026-10-30T00:00:00Z"),
+    })),
+  );
+  return buildCharacterBundle({
+    character: { name: "版本边界", basePrompt: "边界测试", styleExamples: "", userAddress: "", modelConfig: {} },
+    scopes: [], catchphrases: [],
+    journals: [{
+      dayKey: "2026-10-30", status: "ACTIVE", skipReason: null,
+      diaryState: "GENERATED", handbookState: "GENERATED", diaryDecidedAt: null,
+      handbookDecidedAt: null, createdAt: new Date("2026-10-30T00:00:00Z"), revisions,
+    }],
+  });
+}
+assert.equal(parseCharacterBundle(buildJournalBoundary(40, 1)).counts.journalRevisions, 41);
+assert.equal(parseCharacterBundle(buildJournalBoundary(40, 40)).counts.journalRevisions, 80);
+assert.throws(() => parseCharacterBundle(buildJournalBoundary(41, 0)), /DIARY 版本超过 40/);
+assert.throws(() => parseCharacterBundle(buildJournalBoundary(0, 41)), /HANDBOOK 版本超过 40/);
+assert.throws(() => parseCharacterBundle(buildJournalBoundary(40, 41)), /版本.*最多|版本.*超过|版本.*不能/);
+const totalBoundary = buildJournalBoundary(40, 40);
+totalBoundary.journals = Array.from({ length: 100 }, (_, index) => ({
+  ...totalBoundary.journals[0]!, dayKey: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
+}));
+assert.equal(parseCharacterBundle(totalBoundary).counts.journalRevisions, 8000);
+totalBoundary.journals.push({ ...totalBoundary.journals[0]!, dayKey: "2027-01-01" });
+assert.throws(() => parseCharacterBundle(totalBoundary), /合计超过 8000/);
 
 // ── 7. 文件名 ──────────────────────────────────────────────
 const fileName = characterBundleFileName('小/鱼: "test"', new Date("2026-10-31T13:11:10Z"));

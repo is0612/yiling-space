@@ -1,7 +1,25 @@
 import assert from "node:assert/strict";
 import { readCharacterCreateInput } from "../server/utils/character-create-input";
+import { readCharacterBody, readCharacterProfilePatch } from "../server/utils/character-profile-input";
 import { characterCopyInput, createCharacterOperationGuard, replaceCharacter } from "../app/utils/character-management";
 import { characterInclude, toCharacterDto } from "../server/utils/character-dto";
+
+for (const value of [null, undefined, [], 42, "text"]) {
+  assert.throws(() => readCharacterBody(value), (error: unknown) => (error as { statusCode?: number }).statusCode === 400);
+}
+assert.deepEqual(readCharacterProfilePatch({}), { data: {}, modelConfig: {} });
+for (const field of ["name", "personality", "examples", "userAddress", "alias", "description"]) {
+  for (const value of [null, 42, {}, [], true]) {
+    assert.throws(() => readCharacterProfilePatch({ [field]: value }),
+      (error: unknown) => (error as { statusCode?: number }).statusCode === 400, `${field} must reject a non-text value`);
+  }
+}
+assert.deepEqual(readCharacterProfilePatch({ name: " Name ", personality: " ", examples: "", userAddress: "", alias: " tag ", description: "" }), {
+  data: { name: "Name", basePrompt: "", styleExamples: "", userAddress: "" }, modelConfig: { alias: "tag", description: "" },
+});
+assert.throws(() => readCharacterProfilePatch({ name: " " }));
+assert.throws(() => readCharacterProfilePatch({ personality: "x".repeat(12001) }));
+assert.deepEqual(readCharacterProfilePatch({ chatThinking: false, examples: undefined }), { data: {}, modelConfig: {} });
 
 const defaults = readCharacterCreateInput({ name: " Test " });
 assert.equal(defaults.name, "Test");

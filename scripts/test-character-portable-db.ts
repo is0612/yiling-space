@@ -578,6 +578,75 @@ async function main() {
   assert.equal(bPrivate?.userId, userB, "私人记忆换人后归导入者，不串给导出者");
   assert.ok(bPrivate?.memoryItems.some((item) => item.content === "主人喜欢冰美式"));
 
+  // 私人阶段总结：summary-only 必须触发建当前导入者的范围，with-memory 也不能漏写。
+  const privateSnapshot = {
+    scope: "private", originId: randomUUID(), kind: "MANUAL",
+    periodStart: "2026-09-01T00:00:00Z", periodEnd: "2026-09-08T00:00:00Z",
+    summary: "只属于主人的阶段总结", structuredContent: { private: true },
+  };
+  const snapshotCard = {
+    ...bundle, memories: [], events: [], eventDays: [], journals: [], friends: [], catchphrases: [],
+    snapshots: [privateSnapshot],
+  };
+  for (const withMemory of [false, true]) {
+    const raw = { ...snapshotCard, memories: withMemory ? [{ scope: "private", content: "配套私人记忆" }] : [] };
+    const result = await importCharacterCard({ raw, ownerId: userB });
+    characterIds.push(result.characterId);
+    assert.equal(result.added.snapshots, 1, "私人阶段总结必须计入实际新增量");
+    const scope = await prisma.memoryScope.findFirstOrThrow({
+      where: { characterId: result.characterId, scopeType: "USER_PRIVATE" },
+      include: { snapshots: { include: { sources: true } }, memoryItems: true },
+    });
+    assert.equal(scope.userId, userB);
+    assert.equal(scope.scopeKey, buildUserPrivateScopeKey(result.characterId, userB));
+    assert.equal(scope.snapshots.length, 1);
+    assert.equal(scope.snapshots[0]?.summary, privateSnapshot.summary);
+    assert.equal(scope.snapshots[0]?.originId, privateSnapshot.originId);
+    assert.equal(scope.snapshots[0]?.version, 1);
+    assert.deepEqual(scope.snapshots[0]?.sources, [], "旧机器来源不可重建");
+    assert.equal(scope.memoryItems.length, withMemory ? 1 : 0);
+    assert.equal(await prisma.memorySnapshot.count({ where: { memoryScope: { characterId: result.characterId, scopeType: "CHARACTER_GLOBAL" } } }), 0);
+    const reexported = await loadCharacterExportBundle({ characterId: result.characterId, ownerId: userB });
+    assert.equal(reexported?.bundle.snapshots[0]?.scope, "private", "私人范围必须保持至再次导出");
+  }
+
+  // 在尚无私人范围的目标上合并 summary-only，然后验证同源/同周期冲突本地保留。
+  const mergeTarget = await importCharacterCard({ raw: { ...snapshotCard, snapshots: [] }, ownerId: userB });
+  characterIds.push(mergeTarget.characterId);
+  const mergePrivate = () => importCharacterCard({ raw: snapshotCard, ownerId: userB, targetCharacterId: mergeTarget.characterId });
+  assert.equal((await mergePrivate()).added.snapshots, 1);
+  const localPrivateSnapshot = await prisma.memorySnapshot.findFirstOrThrow({
+    where: { memoryScope: { characterId: mergeTarget.characterId, scopeType: "USER_PRIVATE", userId: userB } },
+  });
+  await prisma.memorySnapshot.update({ where: { id: localPrivateSnapshot.id }, data: { summary: "本地私人修订" } });
+  assert.equal((await mergePrivate()).added.snapshots, 0);
+  const periodConflict = { ...snapshotCard, snapshots: [{ ...privateSnapshot, originId: randomUUID(), summary: "外来同周期" }] };
+  assert.equal((await importCharacterCard({ raw: periodConflict, ownerId: userB, targetCharacterId: mergeTarget.characterId })).added.snapshots, 0);
+  const newPeriod = { ...snapshotCard, snapshots: [{ ...privateSnapshot, originId: randomUUID(), periodStart: "2026-09-08T00:00:00Z", periodEnd: "2026-09-15T00:00:00Z" }] };
+  assert.equal((await importCharacterCard({ raw: newPeriod, ownerId: userB, targetCharacterId: mergeTarget.characterId })).added.snapshots, 1);
+  assert.equal((await importCharacterCard({ raw: newPeriod, ownerId: userB, targetCharacterId: mergeTarget.characterId })).added.snapshots, 0);
+  assert.equal((await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: localPrivateSnapshot.id } })).summary, "本地私人修订");
+
+  // 同包不同内容共享外来 dedupeKey，以及与本地 key 撞车：一条也不能静默丢失。
+  const collisionMemories = ["外来记忆甲", "外来记忆乙"].map((content) => ({
+    originId: randomUUID(), scope: "character", content, dedupeKey: "shared-key",
+  }));
+  const collisionCard = { ...snapshotCard, snapshots: [], memories: collisionMemories };
+  const collisionNew = await importCharacterCard({ raw: collisionCard, ownerId: userB });
+  characterIds.push(collisionNew.characterId);
+  assert.equal(collisionNew.added.memories, 2, "新建同包 key 冲突不能丢记忆");
+  const collisionScope = await prisma.memoryScope.findFirstOrThrow({ where: { characterId: mergeTarget.characterId, scopeType: "CHARACTER_GLOBAL" } });
+  const localCollision = await prisma.memoryItem.create({ data: {
+    memoryScopeId: collisionScope.id, category: "FACT", content: "本地独有内容", dedupeKey: "shared-key",
+  } });
+  const mergeCollision = () => importCharacterCard({ raw: collisionCard, ownerId: userB, targetCharacterId: mergeTarget.characterId });
+  assert.equal((await mergeCollision()).added.memories, 2, "不同 origin/content 必须追加，不得被本地 key 挤掉");
+  assert.equal((await mergeCollision()).added.memories, 0, "重复合并仍然幂等");
+  const collisionRows = await prisma.memoryItem.findMany({ where: { memoryScopeId: collisionScope.id } });
+  assert.equal(collisionRows.length, 3);
+  assert.equal(collisionRows.find((row) => row.id === localCollision.id)?.dedupeKey, "shared-key", "本地 key 不动");
+  assert.ok(collisionRows.filter((row) => row.id !== localCollision.id).every((row) => row.dedupeKey === null));
+
   console.log("角色卡数据库测试通过：他人私人记忆不出包、朋友段只收互动过的关系、分享型导出清空朋友、身份复用且不改绑定、导入只新增、来源置空、双人导入归属正确、重复合并不长数据、合并追加手账版本并重指向今日一句、同名不同源拒绝合并。");
 }
 

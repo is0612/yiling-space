@@ -276,10 +276,11 @@ async function deleteCharacter(character: Character) {
     return;
   }
   try {
-    await $fetch(`/api/characters/${character.id}`, { method: "DELETE" });
+    const result = await $fetch<{ cleanupWarning?: string }>(`/api/characters/${character.id}`, { method: "DELETE" });
     characters.value = characters.value.filter((c) => c.id !== character.id);
     if (selectedId.value === character.id) selectedId.value = "";
-    ElMessage.success("角色已删除。");
+    if (result.cleanupWarning) ElMessage.warning(result.cleanupWarning);
+    else ElMessage.success("角色已删除。");
   } catch (error) {
     ElMessage.error(readError(error, "删除失败，请稍后重试。"));
   }
