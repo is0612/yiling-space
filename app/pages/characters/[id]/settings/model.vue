@@ -1728,7 +1728,7 @@ watch(id, () => void loadCharacter());
             <div class="vision-test-bar">
               <el-button
                 :loading="testingMemoryAssistant"
-                :disabled="saving || testing || testingVision"
+                :disabled="saving || testing || testingVision || testingVoice || fetchingMemoryAssistantModels"
                 @click="testMemoryAssistant"
               >
                 <el-icon><Promotion /></el-icon>{{ testingMemoryAssistant ? "测试中…" : "保存并测试记忆助手" }}
@@ -1746,7 +1746,7 @@ watch(id, () => void loadCharacter());
           >{{ saveStateLabel }}</span>
           <el-button
             :loading="testing"
-            :disabled="saving || testingMemoryAssistant"
+            :disabled="saving || testingMemoryAssistant || fetchingMemoryAssistantModels"
             @click="testConnection"
           >
             {{ testing ? "测试中…" : "保存并测试" }}
@@ -1754,7 +1754,7 @@ watch(id, () => void loadCharacter());
           <el-button
             type="primary"
             :loading="saving"
-            :disabled="testing || testingMemoryAssistant"
+            :disabled="testing || testingMemoryAssistant || fetchingMemoryAssistantModels"
             @click="save(false)"
           >
             {{ saving ? "保存中…" : "保存设置" }}
