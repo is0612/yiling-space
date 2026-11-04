@@ -234,6 +234,21 @@ const deepSearchRaw = selectRawMessagesForMemoryAssistant("去年太空电影", 
 assert.deepEqual(deepSearchRaw.map((item) => item.id), ["old-film"],
   "记忆助手原文检索必须同时遵守明确年份与主题词，不能混入今年记录或无关聊天。");
 
+const firstRawHistory = [
+  { id: "raw-first", role: "USER", content: "第一次和小明去海边玩。", occurredAt: new Date("2025-01-10T10:00:00Z") },
+  { id: "raw-latest", role: "USER", content: "后来又和小明去海边玩。", occurredAt: new Date("2025-10-10T10:00:00Z") },
+];
+const firstRawEvidence = selectRawMessagesForMemoryAssistant("第一次和小明去海边玩", firstRawHistory, {
+  now, timeZone: TZ, limit: 1,
+});
+assert.equal(firstRawEvidence[0]?.id, "raw-first",
+  "「第一次」检索原文时，相关度相同时必须优先最早消息。");
+const latestRawEvidence = selectRawMessagesForMemoryAssistant("最近一次和小明去海边玩", firstRawHistory, {
+  now, timeZone: TZ, limit: 1,
+});
+assert.equal(latestRawEvidence[0]?.id, "raw-latest",
+  "「最近一次」检索原文时，相关度相同时必须优先最新消息。");
+
 // ── 单条原文截断：一条长粘贴不能把那天挤没 ──────────────────
 // 不截断时只有两种结局：第一条永远放行（整条进提示词），或者装不下被整条跳过。
 const longPaste = "前".repeat(RAW_MESSAGE_MAX_CHARS) + "后".repeat(400) + "关键词在尾巴上";
