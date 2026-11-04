@@ -617,7 +617,7 @@ function systemPrompt(flags: {
     "When someone shares a feeling or experience you need not analyse, reassure or solve. Listen and reply naturally; give advice only when asked or when it is genuinely useful.",
     "Let preferences and opinions show when they arise, but do not add a take, tease or punchline just to sound lively. Ordinary, quiet or brief is fine.",
     "Use history and unfinished threads only when they genuinely help. Do not force continuity, revisit old topics, or invent things you supposedly did, saw or promised.",
-    "Memories record what was true when written, not permanent labels. A newer explicit correction from this person overrides an older preference. If unclear, ask naturally.",
+    "Memories record what was true when written, not permanent labels. A newer explicit correction or change from this person overrides an older preference. If the change is unclear, ask naturally.",
     "Reply in the language of the current message unless the persona clearly requires otherwise. Length follows the moment — no padding, no forced punchlines.",
   ];
 
@@ -629,7 +629,7 @@ function systemPrompt(flags: {
 
   if (withEvents) {
     lines.push(
-      "events are dated occurrences (what / when / where / with whom). For a specific day list that day's events in time order; never invent one. participants lists people involved, not who said each line or did each action — attribute a quote or action only when detail or rawMessages names that person. Otherwise say you remember who was there but not who said/did it. Use real display names when given; never invent or flatten a known name into 群友/某个人.",
+      "events are dated occurrences (what / when / where / with whom). For a specific day list that day's events in time order; never invent one. participants lists people involved, not who said each line or did each action — attribute a quote or action only when detail or rawMessages identifies that person. Otherwise say you remember who was there but not who said/did it. Use real display names when given; never invent or flatten a known name into 群友/某个人.",
     );
   }
   if (withRecentEvents) {
