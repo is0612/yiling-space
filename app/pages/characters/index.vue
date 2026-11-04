@@ -227,6 +227,7 @@ async function toggleCharacterStatus(character: Character) {
  * 反而容易把没打算改的温度、上限一起带上去。
  */
 const thinkingSavingId = ref("");
+const memoryAssistantSavingId = ref("");
 
 async function toggleThinking(character: Character | null, next: boolean) {
   if (!character || thinkingSavingId.value) return;
@@ -243,6 +244,29 @@ async function toggleThinking(character: Character | null, next: boolean) {
     ElMessage.error(readError(error, "切换深度思考失败，请稍后重试。"));
   } finally {
     thinkingSavingId.value = "";
+  }
+}
+
+
+async function toggleMemoryAssistant(character: Character | null, next: boolean) {
+  if (!character || memoryAssistantSavingId.value) return;
+  if (next && !character.memoryAssistantConfigured) {
+    ElMessage.warning("请先到模型设置中填写记忆助手模型名称和独立 API Key。");
+    return;
+  }
+  memoryAssistantSavingId.value = character.id;
+  try {
+    const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
+      method: "PATCH",
+      body: { memoryAssistantEnabled: next },
+    });
+    const index = characters.value.findIndex((item) => item.id === character.id);
+    if (index >= 0) characters.value.splice(index, 1, updated);
+    ElMessage.success(next ? "已为这个角色开启记忆助手。" : "已关闭这个角色的记忆助手。");
+  } catch (error) {
+    ElMessage.error(readError(error, "切换记忆助手失败，请稍后重试。"));
+  } finally {
+    memoryAssistantSavingId.value = "";
   }
 }
 
@@ -680,6 +704,55 @@ function runCharacterCommand(command: string) {
                   <dd>{{ selected.nextSnapshot }}</dd>
                 </div>
               </dl>
+            </div>
+
+            <div class="d-group">
+              <div class="d-group-h">
+                记忆助手
+              </div>
+              <dl class="d-rows">
+                <div class="d-row">
+                  <dt>
+                    <el-icon><MagicStick /></el-icon>启用记忆助手
+                  </dt>
+                  <dd class="d-switch">
+                    <el-switch
+                      :model-value="selected.memoryAssistantEnabled === true"
+                      :loading="memoryAssistantSavingId === selected.id"
+                      :disabled="memoryAssistantSavingId !== '' || (!selected.memoryAssistantConfigured && selected.memoryAssistantEnabled !== true)"
+                      size="small"
+                      @change="(value) => toggleMemoryAssistant(selected, value === true)"
+                    />
+                  </dd>
+                </div>
+                <div class="d-row">
+                  <dt>
+                    <el-icon><Cpu /></el-icon>专用模型
+                  </dt>
+                  <dd :class="{ 'is-missing': !selected.memoryAssistantConfigured }">
+                    {{ selected.memoryAssistantConfigured ? selected.memoryAssistantModel : "未配置" }}
+                  </dd>
+                </div>
+                <div class="d-row">
+                  <dt>
+                    <el-icon><Key /></el-icon>独立 API Key
+                  </dt>
+                  <dd :class="{ 'is-missing': !selected.memoryAssistantApiKeyConfigured }">
+                    {{ selected.memoryAssistantApiKeyConfigured ? "已保存" : "未配置" }}
+                  </dd>
+                </div>
+              </dl>
+              <p class="d-note">
+                记忆助手尚处于配置阶段。启用后才会接入只读记忆检索；不会替大肥鱼回复，也不会直接修改记忆。
+              </p>
+              <el-button
+                link
+                type="primary"
+                size="small"
+                @click="navigateTo(`/characters/${selected.id}/settings/model?from=characters`)"
+              >
+                配置记忆助手模型
+              </el-button>
             </div>
 
             <div class="d-group">
