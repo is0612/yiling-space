@@ -51,6 +51,9 @@ export type CharacterDto = {
   /** 记忆助手专用模型配置；Key 仅回传是否已保存。 */
   memoryAssistantEnabled: boolean;
   memoryAssistantModel: string;
+  memoryAssistantTemperature: number;
+  memoryAssistantMaxInputTokens: number;
+  memoryAssistantMaxOutputTokens: number;
   memoryAssistantApiBaseUrl: string;
   memoryAssistantApiKeyConfigured: boolean;
   memoryAssistantConfigured: boolean;
@@ -241,6 +244,9 @@ export function toCharacterDto(input: unknown): CharacterDto {
     chatApiKeySource: chatSettings.apiKeySource,
     memoryAssistantEnabled: config.memoryAssistantEnabled === true,
     memoryAssistantModel,
+    memoryAssistantTemperature: typeof config.memoryAssistantTemperature === "number" && Number.isFinite(config.memoryAssistantTemperature) ? Math.min(2, Math.max(0, config.memoryAssistantTemperature)) : 0.1,
+    memoryAssistantMaxInputTokens: typeof config.memoryAssistantMaxInputTokens === "number" && Number.isFinite(config.memoryAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.memoryAssistantMaxInputTokens))) : 12_288,
+    memoryAssistantMaxOutputTokens: typeof config.memoryAssistantMaxOutputTokens === "number" && Number.isFinite(config.memoryAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.memoryAssistantMaxOutputTokens))) : 2_048,
     memoryAssistantApiBaseUrl: typeof config.memoryAssistantApiBaseUrl === "string"
       ? config.memoryAssistantApiBaseUrl
       : "",

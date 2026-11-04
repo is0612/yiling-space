@@ -89,6 +89,19 @@ export default defineEventHandler(async (event) => {
     }
     modelConfigPatch.memoryAssistantEnabled = body.memoryAssistantEnabled;
   }
+  const memoryAssistantNumericSettings: Array<[string, string, number, number, boolean]> = [
+    ["memoryAssistantTemperature", "记忆助手温度", 0, 2, false],
+    ["memoryAssistantMaxInputTokens", "记忆助手最大输入 Token", 4_096, 32_768, true],
+    ["memoryAssistantMaxOutputTokens", "记忆助手最大输出 Token", 512, 8_192, true],
+  ];
+  for (const [key, label, min, max, integerOnly] of memoryAssistantNumericSettings) {
+    if (body[key] === undefined) continue;
+    const value = typeof body[key] === "number" ? body[key] as number : Number(body[key]);
+    if (!Number.isFinite(value) || value < min || value > max || (integerOnly && !Number.isInteger(value))) {
+      throw createError({ statusCode: 400, statusMessage: `${label}必须是 ${min} 到 ${max} 之间${integerOnly ? "的整数" : "的数字"}。` });
+    }
+    modelConfigPatch[key] = value;
+  }
 
   // 额度与预算都是 0 = 不限（预算则回落到默认值），所以允许 0。
   const numericLimits: Array<[string, string, number]> = [

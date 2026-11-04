@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {
   buildMemoryAssistantCandidates,
+  estimateMemoryAssistantTokens,
+  fitMemoryAssistantCandidates,
   generateConversationReplyWithMemoryAssistant,
   mergeModelUsage,
   resolveMemoryAssistantRuntime,
@@ -154,6 +156,9 @@ const assistant = {
   model: "memory-model",
   apiKey: "memory-key-only",
   apiBaseUrl: "https://memory.example.com/v1",
+  temperature: 0.1,
+  maxInputTokens: 12_288,
+  maxOutputTokens: 2_048,
 };
 const candidate: MemoryAssistantCandidate = {
   sourceKey: "memory/memory-1",
@@ -237,7 +242,8 @@ try {
   assert.equal(calls[0]?.body.max_tokens, 512, "The main chat model must retain its own configured token limit.");
   assert.equal(calls[1]?.authorization, "Bearer memory-key-only",
     "The memory assistant must use its own credential, never the chat credential.");
-  assert.equal(calls[1]?.body.max_tokens, 2_048, "A non-DeepSeek assistant has its own lookup budget.");
+  assert.equal(calls[1]?.body.max_tokens, 1_638, "The first memory lookup uses 80% of its own output ceiling.");
+  assert.equal(calls[1]?.body.temperature, 0.1, "Memory assistant temperature is independent from chat temperature.");
   assert.equal(calls[1]?.body.thinking, undefined, "Do not send DeepSeek-only thinking fields to other providers.");
   assert.equal(calls[2]?.authorization, "Bearer chat-key-only");
   const finalMessages = calls[2]?.body.messages as Array<{ role: string; content: string }>;
@@ -338,6 +344,9 @@ const deepSeekAssistant = {
   model: "deepseek-flash",
   apiKey: "deepseek-memory-key-only",
   apiBaseUrl: "https://api.deepseek.com/v1",
+  temperature: 0.1,
+  maxInputTokens: 12_288,
+  maxOutputTokens: 2_048,
 };
 const diagnosticLogs: unknown[][] = [];
 const originalWarn = console.warn;
@@ -384,8 +393,9 @@ try {
   });
   assert.equal(requests.length, 4, "A query-only first response should proceed through retrieval retry and final chat.");
   assert.equal(requests[0]?.body.max_tokens, 512, "Chat token settings must not be replaced by memory-assistant limits.");
-  assert.equal(requests[1]?.body.max_tokens, 2_048);
-  assert.equal(requests[2]?.body.max_tokens, 4_096);
+  assert.equal(requests[1]?.body.max_tokens, 1_638);
+  assert.equal(requests[2]?.body.max_tokens, 2_048,
+    "A truncated retry must use the configured ceiling and never exceed it.");
   assert.equal(requests[3]?.body.max_tokens, 512, "The final chat call must keep the chat model's token limit.");
   assert.deepEqual(requests[1]?.body.thinking, { type: "disabled" },
     "DeepSeek memory lookups should explicitly disable unnecessary reasoning.");
@@ -540,4 +550,29 @@ try {
   globalThis.fetch = originalFetchForConnection;
 }
 
-console.log("Memory assistant tests passed: scope isolation, source whitelist, independent credentials, on-demand lookup, connection test, usage accounting, and fail-open fallback.");
+const budgetCandidates: MemoryAssistantCandidate[] = Array.from({ length: 12 }, (_, index) => ({
+  sourceKey: `memory/budget-${index}`,
+  sourceType: "memory" as const,
+  id: `budget-${index}`,
+  scope: "character" as const,
+  relevanceScore: 12 - index,
+  content: "历史资料".repeat(180),
+}));
+const budgetSystemPrompt = "你是只读历史记忆检索助手。";
+const fittedBudgetCandidates = fitMemoryAssistantCandidates(
+  budgetCandidates,
+  "检索某个历史细节",
+  4_096,
+  budgetSystemPrompt,
+);
+const estimatedPayloadTokens = estimateMemoryAssistantTokens(JSON.stringify({
+  query: "检索某个历史细节",
+  candidates: fittedBudgetCandidates,
+})) + estimateMemoryAssistantTokens(budgetSystemPrompt) + 256;
+assert(fittedBudgetCandidates.length > 0);
+assert(fittedBudgetCandidates.length < budgetCandidates.length,
+  "The unified input budget must trim candidates instead of allowing per-category budgets to add up unchecked.");
+assert(estimatedPayloadTokens <= 4_096,
+  "Estimated prompt and candidate payload must stay within the configured input budget.");
+
+console.log("Memory assistant tests passed: scope isolation, source whitelist, independent credentials, on-demand lookup, connection test, usage accounting, input budget, and output ceiling.");
