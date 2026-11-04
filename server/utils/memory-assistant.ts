@@ -55,7 +55,7 @@ function resolveBoundedNumber(value: unknown, fallback: number, min: number, max
 }
 /** 中文按约 1 字符/token、英文按约 4 字符/token估算；用于预算保护，不替代供应商计数。 */
 export function estimateMemoryAssistantTokens(value: string): number {
-  const cjk = (value.match(/[\\u3400-\\u9fff\\uf900-\\ufaff]/g) ?? []).length;
+  const cjk = (value.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
   return Math.ceil((cjk + (value.length - cjk) / 4) * 1.15);
 }
 export function fitMemoryAssistantCandidates(
