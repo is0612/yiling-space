@@ -433,7 +433,8 @@ export type ConversationReplyResult = {
 // v40：收回通用情绪回应、观点表达和连续性行为的强引导；让 characterPrompt/styleExamples 主导角色声音，避免每轮套用固定聊天套路。
 // v42：支持按需请求只读记忆检索，并把实际引用的原始消息 ID 纳入来源白名单。
 // v43：扩大主动检索意图，覆盖角色资料、关系名册、日记/手账与连续追问中的来源提示；避免只识别明确的过往事件问法。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v43";
+// v44：允许记忆检索阶段只返回 memoryAssistantQuery；空 reply 仅供内部检索流程使用，兜底由 wrapper 保证。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v44";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -640,6 +641,7 @@ function systemPrompt(flags: {
       "Treat a follow-up hint as new evidence about where or what to search. If the user says 'you wrote it in your journal', 'check the diary', corrects a date, or names a likely source after your previous answer, search again using the whole conversational context. Do not dismiss the source just because its contents were not included in the initial context.",
       "Before requesting a search, check whether the supplied context already answers the question completely and reliably. If it does, answer without another call. Ordinary small talk, current/general knowledge, advice, opinions and hypothetical questions do not need retrieval unless they explicitly depend on this character's own history.",
       "When needed, add memoryAssistantQuery: a concise search query (max 240 characters) that names the subject, requested fact, likely source (journal / diary / profile / relationship / event / conversation) and date clues. Otherwise omit the field. Never invent a missing fact; after retrieval, distinguish a confirmed record, a partial result and no matching record.",
+      "When you cannot answer reliably until a historical search is completed, you may return an internal lookup request with memoryAssistantQuery and an empty reply string. Do not add filler or guess in that case; the application will retrieve evidence and ask you to produce the final reply. An empty reply is valid only together with a non-empty memoryAssistantQuery.",
     );
   }
   if (withMemoryAssistantEvidence) {
@@ -807,12 +809,14 @@ function systemPrompt(flags: {
       'groupDecision = { relation: "direct" | "followup" | "shared_topic" | "ambient" | "unrelated", topicAnchorMessageId, replyToMessageId, atMessageId, evidenceMessageIds }: anchors from groupAnchors, ids from this round; atMessageId may name someone from groupBackground.',
       "replyToMessageId is the line you answer; atMessageId is who you are talking to. Quote only when the line you are answering is no longer last in the room; @ only when you want attention — never @ just for replying.",
       mustReply
-        ? 'action must be "reply" this round and reply must be a non-empty string.'
+        ? (withMemoryAssistant
+          ? 'action must be "reply" this round; reply must be non-empty unless memoryAssistantQuery is present for an internal lookup request.'
+          : 'action must be "reply" this round and reply must be a non-empty string.')
         : 'Default to "silent" when in doubt: a wrong line in a group is worse than nothing.',
     );
   } else {
     lines.push(
-      `Return only a valid JSON object with: reply (non-empty string), usedMemoryIds, usedSnapshotIds, usedEventIds, usedRawMessageIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}.`,
+      `Return only a valid JSON object with: reply (non-empty string${withMemoryAssistant ? ", may be empty only when memoryAssistantQuery is included for an internal lookup" : ""}), usedMemoryIds, usedSnapshotIds, usedEventIds, usedRawMessageIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}.`,
     );
   }
   lines.push("Cite only ids from the supplied arrays; never invent ids.");
@@ -1359,10 +1363,22 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       return { action: "silent", reply: "", faceIds: [], stickerId: null, ...base, usedCatchphraseIds: [] };
     }
     if (!reply) {
+      // 只给检索请求、不写正文时，允许内部 wrapper 继续执行记忆检索。
+      // wrapper 必须在所有失败/无来源分支补上非空兜底，不能把空 reply 发给用户。
+      if (memoryAssistantQuery.length >= 3) {
+        return {
+          action: "reply",
+          reply: "",
+          faceIds: withStickers ? [] : readIdList(parsed.faces, validFaceIds, 1),
+          stickerId: withStickers ? readStickerId(parsed.sticker, validStickerIds) : null,
+          ...base,
+          memoryAssistantQuery,
+        };
+      }
       /**
-       * 「想沉默但没写 action」是群里最常见的坏输出：模型判断这轮不该插嘴，
+       * 「想沉默但没写 action」是群里最常见的坏输出：
        * 却把 action 留空或直接给个空 reply。以前这算解析失败 —— 重试一次，
-       * 再失败就记一条 `ignored:LLM_INVALID_RESPONSE`，表现是「该说的时候她没说话」，
+       * 再失败就记一条 \`ignored:LLM_INVALID_RESPONSE\`，表现是「该说的时候她没说话」，
        * 而日志里看不出这是她自己选的沉默。
        *
        * 调用方允许沉默时按沉默收下；被 @ 的轮次（allowSilent=false）仍然报错，

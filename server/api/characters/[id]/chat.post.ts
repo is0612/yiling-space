@@ -743,7 +743,7 @@ export default defineEventHandler(async (event) => {
     userId: ownerId,
     conversationId: response.conversationId,
   });
-  if (generated.memoryAssistantUsage && generated.memoryAssistantModel) {
+  if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
     await recordModelUsage({
       kind: "memory-assistant",
       model: generated.memoryAssistantModel,
@@ -751,6 +751,13 @@ export default defineEventHandler(async (event) => {
       characterId,
       userId: ownerId,
       conversationId: response.conversationId,
+      metadata: {
+        status: generated.memoryAssistantStatus,
+        ...(generated.memoryAssistantFailureReason ? { reason: generated.memoryAssistantFailureReason } : {}),
+        ...(typeof generated.memoryAssistantAttempts === "number" ? { attempts: generated.memoryAssistantAttempts } : {}),
+        ...(generated.memoryAssistantFinishReason ? { finishReason: generated.memoryAssistantFinishReason } : {}),
+        ...(typeof generated.memoryAssistantHttpStatus === "number" ? { httpStatus: generated.memoryAssistantHttpStatus } : {}),
+      },
     });
   }
   setResponseStatus(event, 201);

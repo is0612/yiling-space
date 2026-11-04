@@ -178,6 +178,37 @@ try {
   assert(retrievalSystem.includes("friends, teachers, members, groups"), "朋友、教员和组织成员等关系问题必须属于检索范围。");
   assert(retrievalSystem.includes("Treat a follow-up hint as new evidence"), "用户补充记忆来源或纠正日期时应重新检索。");
   assert(retrievalSystem.includes("Ordinary small talk"), "普通闲聊仍然不应触发检索。");
+  assert(retrievalSystem.includes("An empty reply is valid only together with a non-empty memoryAssistantQuery"),
+    "只有携带检索请求时才允许内部空回复。");
+
+  // 主模型可以只提交 memoryAssistantQuery；空回复仅在 wrapper 内部流转，不能被直接交付。
+  const fetchBeforeQueryOnly = globalThis.fetch;
+  try {
+    globalThis.fetch = async (): Promise<Response> => new Response(JSON.stringify({
+      model: "test-chat-model",
+      choices: [{
+        message: { content: JSON.stringify({ memoryAssistantQuery: "查找生日记录", usedMemoryIds: [], usedSnapshotIds: [] }) },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+    const queryOnlyResult = await generateConversationReply({
+      characterName: "鲸鱼娘",
+      characterPrompt: "你是「鲸鱼娘」。",
+      model: "test-chat-model",
+      apiKey: secretApiKey,
+      apiBaseUrl: privateProviderUrl,
+      currentMessage: "你的生日是什么时候？",
+      recentMessages: [],
+      memories: [],
+      snapshots: [],
+      memoryAssistantAvailable: true,
+    });
+    assert.equal(queryOnlyResult.reply, "");
+    assert.equal(queryOnlyResult.memoryAssistantQuery, "查找生日记录");
+  } finally {
+    globalThis.fetch = fetchBeforeQueryOnly;
+  }
 
   capturedBody = "";
   await generateConversationReply({

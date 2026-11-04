@@ -1943,7 +1943,7 @@ async function runChannelTurn(input: {
     channelBindingId: input.bindingId,
     conversationId,
   });
-  if (generated.memoryAssistantUsage && generated.memoryAssistantModel) {
+  if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
     await recordModelUsage({
       kind: "memory-assistant",
       model: generated.memoryAssistantModel,
@@ -1951,6 +1951,13 @@ async function runChannelTurn(input: {
       characterId: input.characterId,
       channelBindingId: input.bindingId,
       conversationId,
+      metadata: {
+        status: generated.memoryAssistantStatus,
+        ...(generated.memoryAssistantFailureReason ? { reason: generated.memoryAssistantFailureReason } : {}),
+        ...(typeof generated.memoryAssistantAttempts === "number" ? { attempts: generated.memoryAssistantAttempts } : {}),
+        ...(generated.memoryAssistantFinishReason ? { finishReason: generated.memoryAssistantFinishReason } : {}),
+        ...(typeof generated.memoryAssistantHttpStatus === "number" ? { httpStatus: generated.memoryAssistantHttpStatus } : {}),
+      },
     });
   }
   const decision = generated.groupDecision ? { groupDecision: generated.groupDecision } : {};

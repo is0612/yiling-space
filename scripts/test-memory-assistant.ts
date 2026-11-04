@@ -144,6 +144,7 @@ const chatInput: ConversationReplyInput = {
   model: "chat-model",
   apiKey: "chat-key-only",
   apiBaseUrl: "https://chat.example.com/v1",
+  maxTokens: 512,
   currentMessage: "我们上周聊的那部太空电影叫什么？",
   recentMessages: [],
   memories: [],
@@ -233,8 +234,11 @@ try {
   assert.equal(candidateLoaderCalls, 1, "Historical database candidates should load only after the chat model requests a search.");
   assert.equal(calls.length, 3, "A requested search should make one initial chat call, one read-only lookup, and one final chat call.");
   assert.equal(calls[0]?.authorization, "Bearer chat-key-only");
+  assert.equal(calls[0]?.body.max_tokens, 512, "The main chat model must retain its own configured token limit.");
   assert.equal(calls[1]?.authorization, "Bearer memory-key-only",
     "The memory assistant must use its own credential, never the chat credential.");
+  assert.equal(calls[1]?.body.max_tokens, 2_048, "A non-DeepSeek assistant has its own lookup budget.");
+  assert.equal(calls[1]?.body.thinking, undefined, "Do not send DeepSeek-only thinking fields to other providers.");
   assert.equal(calls[2]?.authorization, "Bearer chat-key-only");
   const finalMessages = calls[2]?.body.messages as Array<{ role: string; content: string }>;
   assert(finalMessages.some((message) => message.content.includes(candidate.content)),
@@ -285,7 +289,12 @@ try {
     loadCandidates: async () => [candidate],
   });
   assert.equal(fallbackCalls.length, 2);
-  assert.equal(fallback.reply, "我一时想不起来，得再找找。");
+  assert.equal(fallback.reply, "本宝刚才想去翻以前的记录，但这次检索没成功，先不乱告诉你。",
+    "A failed lookup must replace the first-pass waiting reply with an explicit retrieval-failure message.");
+  assert.equal(fallback.memoryAssistantStatus, "failed");
+  assert.equal(fallback.memoryAssistantFailureReason, "http_error");
+  assert.equal(fallback.memoryAssistantAttempts, 1, "HTTP errors must not be retried as if they were malformed model output.");
+  assert.equal(fallback.memoryAssistantHttpStatus, 503);
   assert.equal(fallback.memoryAssistantSources, undefined,
     "An unavailable assistant must not leak unverified sources into the reply.");
 
@@ -322,6 +331,148 @@ try {
   assert.equal(ordinary.reply, "今天就聊点轻松的吧。");
 } finally {
   globalThis.fetch = originalFetch;
+}
+
+
+const deepSeekAssistant = {
+  model: "deepseek-flash",
+  apiKey: "deepseek-memory-key-only",
+  apiBaseUrl: "https://api.deepseek.com/v1",
+};
+const diagnosticLogs: unknown[][] = [];
+const originalWarn = console.warn;
+try {
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+    requests.push({ url, body });
+
+    if (url.includes("api.deepseek.com")) {
+      const attempt = requests.filter((item) => item.url.includes("api.deepseek.com")).length;
+      if (attempt === 1) {
+        return new Response(JSON.stringify({
+          model: "deepseek-flash",
+          choices: [{ message: { content: "" }, finish_reason: "length" }],
+          usage: { prompt_tokens: 400, completion_tokens: 2048, total_tokens: 2448 },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        model: "deepseek-flash",
+        choices: [{ message: { content: JSON.stringify({ sourceKeys: ["memory/memory-1"] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 300, completion_tokens: 20, total_tokens: 320 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    const isFinal = requests.filter((item) => item.url.includes("chat.example.com")).length > 1;
+    const reply = isFinal
+      ? { reply: "你之前提到过喜欢《星际穿越》。", usedMemoryIds: ["memory-1"], usedSnapshotIds: [], usedEventIds: [] }
+      : { memoryAssistantQuery: "之前你说过的太空电影是什么？" };
+    return new Response(JSON.stringify({
+      model: "chat-model",
+      choices: [{ message: { content: JSON.stringify(reply) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  console.warn = (...args: unknown[]) => { diagnosticLogs.push(args); };
+
+  const queryOnly = await generateConversationReplyWithMemoryAssistant({
+    chatInput,
+    assistant: deepSeekAssistant,
+    candidates: [],
+    loadCandidates: async () => [candidate],
+  });
+  assert.equal(requests.length, 4, "A query-only first response should proceed through retrieval retry and final chat.");
+  assert.equal(requests[0]?.body.max_tokens, 512, "Chat token settings must not be replaced by memory-assistant limits.");
+  assert.equal(requests[1]?.body.max_tokens, 2_048);
+  assert.equal(requests[2]?.body.max_tokens, 4_096);
+  assert.equal(requests[3]?.body.max_tokens, 512, "The final chat call must keep the chat model's token limit.");
+  assert.deepEqual(requests[1]?.body.thinking, { type: "disabled" },
+    "DeepSeek memory lookups should explicitly disable unnecessary reasoning.");
+  assert.deepEqual(requests[2]?.body.thinking, { type: "disabled" });
+  assert.equal(queryOnly.reply, "你之前提到过喜欢《星际穿越》。");
+  assert.equal(queryOnly.memoryAssistantStatus, "success");
+  assert.equal(queryOnly.memoryAssistantAttempts, 2);
+  assert.equal(queryOnly.memoryAssistantUsage?.totalTokens, 2_768,
+    "Usage from the truncated attempt and successful retry should both be counted.");
+  assert.equal(diagnosticLogs.some((entry) => String(entry[0]).includes("retry_truncated")), true);
+  assert.equal(JSON.stringify(diagnosticLogs).includes("之前你说过的太空电影"), false,
+    "Diagnostics must not copy the private search query into logs.");
+} finally {
+  globalThis.fetch = originalFetch;
+  console.warn = originalWarn;
+}
+
+// A query-only first response must still produce a non-empty user-facing reply when lookup fails.
+const failureLogs: unknown[][] = [];
+const warnBeforeFailure = console.warn;
+try {
+  let mainCalls = 0;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    if (url.includes("memory.example.com")) {
+      return new Response("unavailable", { status: 503 });
+    }
+    mainCalls += 1;
+    return new Response(JSON.stringify({
+      model: "chat-model",
+      choices: [{ message: { content: JSON.stringify({ memoryAssistantQuery: "生日是哪一天？" }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 80, completion_tokens: 10, total_tokens: 90 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  console.warn = (...args: unknown[]) => { failureLogs.push(args); };
+  const failedQueryOnly = await generateConversationReplyWithMemoryAssistant({
+    chatInput,
+    assistant,
+    candidates: [],
+    loadCandidates: async () => [candidate],
+  });
+  assert.equal(mainCalls, 1);
+  assert.equal(failedQueryOnly.reply, "本宝刚才想去翻以前的记录，但这次检索没成功，先不乱告诉你。",
+    "A failed lookup must replace any first-pass placeholder such as 'let me search' with an honest result.");
+  assert.equal(failedQueryOnly.memoryAssistantStatus, "failed");
+  assert.equal(failedQueryOnly.memoryAssistantFailureReason, "http_error");
+  assert.equal(failedQueryOnly.memoryAssistantHttpStatus, 503);
+  assert.equal(failureLogs.length > 0, true);
+  assert.equal(JSON.stringify(failureLogs).includes("生日是哪一天"), false,
+    "Failure logs must not include the private search query.");
+} finally {
+  globalThis.fetch = originalFetch;
+  console.warn = warnBeforeFailure;
+}
+
+// Empty candidate selection must not leave the user waiting for a lookup that has already ended.
+const noSourceLogs: unknown[][] = [];
+const warnBeforeNoSource = console.warn;
+try {
+  globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+    if (String(input).includes("memory.example.com")) {
+      return new Response(JSON.stringify({
+        model: "memory-model",
+        choices: [{ message: { content: JSON.stringify({ sourceKeys: [] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 40, completion_tokens: 5, total_tokens: 45 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      model: "chat-model",
+      choices: [{ message: { content: JSON.stringify({ reply: "让我去翻翻", memoryAssistantQuery: "查找角色生日", usedMemoryIds: [], usedSnapshotIds: [] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 70, completion_tokens: 10, total_tokens: 80 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  console.warn = (...args: unknown[]) => { noSourceLogs.push(args); };
+  const noSources = await generateConversationReplyWithMemoryAssistant({
+    chatInput,
+    assistant,
+    candidates: [],
+    loadCandidates: async () => [candidate],
+  });
+  assert.equal(noSources.memoryAssistantStatus, "no_sources");
+  assert.equal(noSources.reply, "本宝把目前能查到的记录翻了一遍，没有找到足够可靠的内容，暂时不能确定。");
+  assert.equal(noSources.memoryAssistantUsage?.totalTokens, 45);
+  assert.equal(noSourceLogs.some((entry) => String(entry[0]).includes("no_sources")), true);
+} finally {
+  globalThis.fetch = originalFetch;
+  console.warn = warnBeforeNoSource;
 }
 
 // Connection test uses the assistant's own endpoint and credential, and accepts a configured assistant before activation.
