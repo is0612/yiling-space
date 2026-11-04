@@ -153,6 +153,9 @@ jobs:
       - name: 对话记忆检索测试
         run: yarn run test:memory-retrieval
 
+      - name: 只读记忆助手检索与权限隔离测试
+        run: yarn run test:memory-assistant
+
       - name: 忆泡时间解析与去重逻辑测试
         run: yarn run test:memory-events
 
