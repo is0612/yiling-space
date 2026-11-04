@@ -331,6 +331,8 @@ export type ConversationReplyResult = {
   usedSnapshotIds: string[];
   /** 这一轮实际用到的忆泡 id（按来源白名单校验过）。 */
   usedEventIds: string[];
+  /** 这一轮实际引用的原始对话来源（按本轮 rawMessages 白名单过滤）。 */
+  usedRawMessageIds: string[];
   /** 表情 id（最多 1 个）；没传 emojiFaces 时恒为空。渠道自己决定怎么发。 */
   faceIds: string[];
   /** 选中的表情包 id；没传 emojiStickers 或模型没挑时为空。渠道把它当图片发。 */
@@ -797,7 +799,7 @@ function systemPrompt(flags: {
   // ⑥ Output contract
   if (withGroupChat) {
     lines.push(
-      `Return only a valid JSON object with: action ("reply" or "silent"), reply (empty when silent), usedMemoryIds, usedSnapshotIds, usedEventIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}, optional groupDecision.`,
+      `Return only a valid JSON object with: action ("reply" or "silent"), reply (empty when silent), usedMemoryIds, usedSnapshotIds, usedEventIds, usedRawMessageIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}, optional groupDecision.`,
       'groupDecision = { relation: "direct" | "followup" | "shared_topic" | "ambient" | "unrelated", topicAnchorMessageId, replyToMessageId, atMessageId, evidenceMessageIds }: anchors from groupAnchors, ids from this round; atMessageId may name someone from groupBackground.',
       "replyToMessageId is the line you answer; atMessageId is who you are talking to. Quote only when the line you are answering is no longer last in the room; @ only when you want attention — never @ just for replying.",
       mustReply
@@ -806,7 +808,7 @@ function systemPrompt(flags: {
     );
   } else {
     lines.push(
-      `Return only a valid JSON object with: reply (non-empty string), usedMemoryIds, usedSnapshotIds, usedEventIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}.`,
+      `Return only a valid JSON object with: reply (non-empty string), usedMemoryIds, usedSnapshotIds, usedEventIds, usedRawMessageIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}.`,
     );
   }
   lines.push("Cite only ids from the supplied arrays; never invent ids.");
@@ -1303,6 +1305,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
     const validSnapshotIds = new Set(contextSnapshots.map((snapshot) => snapshot.id));
     // 忆泡也算来源：模型引用了哪几条，回写进 usedSources 才能回答「这句凭哪些事说的」。
     const validEventIds = new Set(contextEvents.map((event) => event.id));
+    const validRawMessageIds = new Set(contextRawMessages.map((message) => message.id));
     const validFaceIds = new Set(emojiFaces.map((face) => face.id));
     const validStickerIds = new Set(emojiStickers.map((sticker) => sticker.id));
     const validCatchphraseIds = new Set(catchphrases.map((item) => item.id));
@@ -1325,6 +1328,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       usedMemoryIds: readIdList(parsed.usedMemoryIds, validMemoryIds),
       usedSnapshotIds: readIdList(parsed.usedSnapshotIds, validSnapshotIds),
       usedEventIds: readIdList(parsed.usedEventIds, validEventIds),
+      usedRawMessageIds: readIdList(parsed.usedRawMessageIds, validRawMessageIds, 20),
       // 只认这一轮清单内的 id：模型偶尔会把上一轮的梗 id 记回来，或者干脆编一个。
       // 认了就会把冷却盖到一个没说过的人头上，下一轮那句反而还能用。
       usedCatchphraseIds: withCatchphrases ? readIdList(parsed.usedCatchphraseIds, validCatchphraseIds, 3) : [],
