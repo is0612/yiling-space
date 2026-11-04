@@ -1411,20 +1411,37 @@ async function runChannelTurn(input: {
           ? await resolveParticipantAccounts(prisma, searchParticipantName)
           : [];
         // 只有大肥鱼明确请求深度回忆时才读取较广范围的原始消息；每个可访问范围最多取 250 条。
-        const rawRowsByScope = await Promise.all(readableScopeIds.map((scopeId) =>
-          prisma.message.findMany({
-            where: {
-              conversation: { memoryScopeId: scopeId },
-              role: { in: ["USER", "ASSISTANT"] },
-            },
-            orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-            take: 250,
-            select: {
-              id: true, role: true, content: true, occurredAt: true, metadata: true,
-              conversation: { select: { memoryScopeId: true } },
-            },
-          }),
-        ));
+        const rawRowsByScope = isGroup
+          // 群聊原文只允许来自当前这个群的历史；不能从共享 global scope 横跨到别的群。
+          ? (existingConversation
+            ? [await prisma.message.findMany({
+                where: {
+                  conversationId: existingConversation.id,
+                  role: { in: ["USER", "ASSISTANT"] },
+                },
+                orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                take: 250,
+                select: {
+                  id: true, role: true, content: true, occurredAt: true, metadata: true,
+                  conversation: { select: { memoryScopeId: true } },
+                },
+              })]
+            : [])
+          // 私聊只查当前说话人的 private scope；不扫共享 global scope 的群聊原文。
+          : await Promise.all(readableScopeIds.filter((scopeId) => scopeId !== globalScope.id).map((scopeId) =>
+              prisma.message.findMany({
+                where: {
+                  conversation: { memoryScopeId: scopeId },
+                  role: { in: ["USER", "ASSISTANT"] },
+                },
+                orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                take: 250,
+                select: {
+                  id: true, role: true, content: true, occurredAt: true, metadata: true,
+                  conversation: { select: { memoryScopeId: true } },
+                },
+              }),
+            ));
         const assistantRawMessages = rawRowsByScope.flat().map((row) => {
           const speaker = readStoredSpeaker(row.metadata);
           return {
