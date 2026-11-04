@@ -76,6 +76,7 @@ export async function loadCharacterExportBundle(input: {
             where: { status: "ACTIVE" },
             orderBy: { createdAt: "asc" },
             select: {
+              originId: true,
               category: true,
               content: true,
               confidence: true,
@@ -89,6 +90,7 @@ export async function loadCharacterExportBundle(input: {
             where: { status: "ACTIVE" },
             orderBy: { occurredAt: "asc" },
             select: {
+              originId: true,
               dayKey: true,
               state: true,
               occurredAt: true,
@@ -106,6 +108,7 @@ export async function loadCharacterExportBundle(input: {
             where: { status: "CURRENT" },
             orderBy: { periodEnd: "asc" },
             select: {
+              originId: true,
               kind: true,
               periodStart: true,
               periodEnd: true,
@@ -432,11 +435,14 @@ async function insertMemories(
   for (const item of items) {
     const content = item.content.trim();
     if (existingContents) {
-      if (existingContents.has(content)) continue;
-      existingContents.add(content);
+      const originKey = item.originId ? `origin:${item.originId}` : null;
+      if ((originKey && existingContents.has(originKey)) || (!originKey && existingContents.has(`content:${content}`))) continue;
+      if (originKey) existingContents.add(originKey);
+      existingContents.add(`content:${content}`);
     }
     rows.push({
       memoryScopeId,
+      originId: item.originId ?? randomUUID(),
       category: item.category,
       content: item.content,
       confidence: item.confidence,
@@ -444,12 +450,12 @@ async function insertMemories(
       status: "ACTIVE",
       validFrom: item.validFrom ? new Date(item.validFrom) : null,
       validTo: item.validTo ? new Date(item.validTo) : null,
-      dedupeKey: existingContents ? mergeKey("merge-memory", content) : item.dedupeKey,
+      dedupeKey: item.dedupeKey ?? (existingContents ? mergeKey("merge-memory", content) : null),
     });
   }
   if (!rows.length) return 0;
-  await tx.memoryItem.createMany({ data: rows, skipDuplicates: true });
-  return rows.length;
+  const result = await tx.memoryItem.createMany({ data: rows, skipDuplicates: true });
+  return result.count;
 }
 
 /**
@@ -464,13 +470,16 @@ async function insertEvents(
 ): Promise<number> {
   const rows: Prisma.MemoryEventCreateManyInput[] = [];
   for (const item of items) {
-    const signature = `${item.dayKey}|${item.title.trim()}`;
+    const signature = `event:${item.dayKey}|${item.title.trim()}`;
+    const originKey = item.originId ? `origin:${item.originId}` : null;
     if (existingSignatures) {
-      if (existingSignatures.has(signature)) continue;
+      if ((originKey && existingSignatures.has(originKey)) || (!originKey && existingSignatures.has(signature))) continue;
+      if (originKey) existingSignatures.add(originKey);
       existingSignatures.add(signature);
     }
     rows.push({
       memoryScopeId,
+      originId: item.originId ?? randomUUID(),
       dayKey: item.dayKey,
       state: item.state,
       occurredAt: new Date(item.occurredAt),
@@ -491,8 +500,8 @@ async function insertEvents(
     });
   }
   if (!rows.length) return 0;
-  await tx.memoryEvent.createMany({ data: rows, skipDuplicates: true });
-  return rows.length;
+  const result = await tx.memoryEvent.createMany({ data: rows, skipDuplicates: true });
+  return result.count;
 }
 
 /**
@@ -609,16 +618,19 @@ async function insertSnapshots(
     ? new Set(
       (await tx.memorySnapshot.findMany({
         where: { memoryScopeId },
-        select: { periodStart: true, periodEnd: true },
-      })).map((row) => `${row.periodStart.toISOString()}|${row.periodEnd.toISOString()}`),
+        select: { originId: true, periodStart: true, periodEnd: true },
+      })).flatMap((row) => [`origin:${row.originId}`, `period:${row.periodStart.toISOString()}|${row.periodEnd.toISOString()}`]),
     )
     : null;
 
   for (const item of items) {
     const period = `${new Date(item.periodStart).toISOString()}|${new Date(item.periodEnd).toISOString()}`;
+    const periodKey = `period:${period}`;
+    const originKey = item.originId ? `origin:${item.originId}` : null;
     if (existingPeriods) {
-      if (existingPeriods.has(period)) continue;
-      existingPeriods.add(period);
+      if ((originKey && existingPeriods.has(originKey)) || (!originKey && existingPeriods.has(periodKey))) continue;
+      if (originKey) existingPeriods.add(originKey);
+      existingPeriods.add(periodKey);
     }
     const key = merge
       ? mergeKey("merge-snapshot", `${memoryScopeId}:${period}`)
@@ -628,6 +640,7 @@ async function insertSnapshots(
     data.push({
       snapshotKey: key,
       memoryScopeId,
+      originId: item.originId ?? randomUUID(),
       kind: item.kind,
       version: 1,
       periodStart: new Date(item.periodStart),
@@ -639,8 +652,9 @@ async function insertSnapshots(
       createdAt: new Date(item.createdAt),
     });
   }
-  if (data.length) await tx.memorySnapshot.createMany({ data: data as never });
-  return data.length;
+  if (!data.length) return 0;
+  const result = await tx.memorySnapshot.createMany({ data: data as never, skipDuplicates: true });
+  return result.count;
 }
 
 /**
@@ -854,18 +868,18 @@ async function insertCatchphrases(
 async function loadMemoryContents(tx: Tx, memoryScopeId: string): Promise<Set<string>> {
   const rows = await tx.memoryItem.findMany({
     where: { memoryScopeId },
-    select: { content: true },
+    select: { originId: true, content: true },
   });
-  return new Set(rows.map((row) => row.content.trim()));
+  return new Set(rows.flatMap((row) => [`origin:${row.originId}`, `content:${row.content.trim()}`]));
 }
 
 /** 合并用：读某个范围已有的忆泡「日期 + 标题」签名。 */
 async function loadEventSignatures(tx: Tx, memoryScopeId: string): Promise<Set<string>> {
   const rows = await tx.memoryEvent.findMany({
     where: { memoryScopeId },
-    select: { dayKey: true, title: true },
+    select: { originId: true, dayKey: true, title: true },
   });
-  return new Set(rows.map((row) => `${row.dayKey}|${row.title.trim()}`));
+  return new Set(rows.flatMap((row) => [`origin:${row.originId}`, `event:${row.dayKey}|${row.title.trim()}`]));
 }
 
 /**
