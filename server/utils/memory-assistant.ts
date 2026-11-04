@@ -97,15 +97,101 @@ export type BuildMemoryAssistantCandidatesInput = {
   allowPrivate?: boolean;
 };
 
+/** 对已保存的独立配置做一次轻量 Chat Completions 连通性测试，不消耗记忆资料。 */
+export async function testMemoryAssistantConnection(
+  config: MemoryAssistantRuntime,
+): Promise<{ ok: boolean; message: string; model?: string; provider?: string; elapsedMs?: number }> {
+  let endpoint: URL;
+  try {
+    endpoint = buildChatCompletionsEndpoint(config.apiBaseUrl);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "API Base URL 无效。" };
+  }
+
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        authorization: "Bearer " + config.apiKey,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        temperature: 0,
+        max_tokens: 16,
+        messages: [
+          { role: "system", content: "YILING_MEMORY_ASSISTANT_CONNECTIVITY_TEST. Reply briefly." },
+          { role: "user", content: "connection test" },
+        ],
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!response.ok) {
+      const message = response.status === 401 || response.status === 403
+        ? "记忆助手 API Key 无效或没有调用权限。"
+        : response.status === 404
+          ? "记忆助手 API 路径或模型不存在，请检查独立 API 地址和模型名称。"
+          : "记忆助手供应商返回 HTTP " + response.status + "。请检查 API 地址、Key 与模型权限。";
+      return { ok: false, message, provider: endpoint.hostname, elapsedMs: Date.now() - startedAt };
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      return {
+        ok: false,
+        message: "记忆助手供应商返回了非 JSON 响应，请确认地址兼容 Chat Completions。",
+        provider: endpoint.hostname,
+        elapsedMs: Date.now() - startedAt,
+      };
+    }
+    const root = payload !== null && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {};
+    const choices = Array.isArray(root.choices) ? root.choices : [];
+    if (!choices.length) {
+      return {
+        ok: false,
+        message: "记忆助手请求已发送，但响应中没有 choices；请确认接口兼容 Chat Completions。",
+        provider: endpoint.hostname,
+        elapsedMs: Date.now() - startedAt,
+      };
+    }
+
+    return {
+      ok: true,
+      message: "记忆助手 API 连接成功，模型已返回响应（" + endpoint.hostname + " / " + config.model + "）。",
+      model: config.model,
+      provider: endpoint.hostname,
+      elapsedMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    return {
+      ok: false,
+      message: timedOut
+        ? "记忆助手连接测试超时（15 秒），请检查网络或供应商状态。"
+        : "无法连接记忆助手 API，请检查独立 API 地址、网络以及本地服务是否启动。",
+      provider: endpoint.hostname,
+      elapsedMs: Date.now() - startedAt,
+    };
+  }
+}
+
 /** 只有角色明确开启、独立模型和独立 Key 都可用时，才返回运行配置。 */
 export async function resolveMemoryAssistantRuntime(
   configValue: unknown,
   fallbackApiBaseUrl: string,
+  options: { requireEnabled?: boolean } = {},
 ): Promise<MemoryAssistantRuntime | null> {
   const config = configValue !== null && typeof configValue === "object" && !Array.isArray(configValue)
     ? configValue as Record<string, unknown>
     : {};
-  if (config.memoryAssistantEnabled !== true) return null;
+  if (options.requireEnabled !== false && config.memoryAssistantEnabled !== true) return null;
 
   const model = typeof config.memoryAssistantModel === "string"
     ? config.memoryAssistantModel.trim().slice(0, 120)
