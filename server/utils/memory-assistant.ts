@@ -139,6 +139,12 @@ export function buildMemoryAssistantCandidates(
   for (const memory of memories) {
     const scope = input.scopeOf(memory.memoryScopeId);
     if (!canRead(scope)) continue;
+    const rawDate = memory.validFrom ?? memory.createdAt;
+    const date = rawDate instanceof Date
+      ? rawDate
+      : typeof rawDate === "string" || typeof rawDate === "number"
+        ? new Date(rawDate)
+        : null;
     candidates.push({
       sourceKey: "memory/" + memory.id,
       sourceType: "memory",
@@ -147,7 +153,7 @@ export function buildMemoryAssistantCandidates(
       relevanceScore: memory.finalScore,
       category: memory.category,
       content: memory.content.slice(0, 520),
-      occurredAt: (memory.validFrom ?? memory.createdAt)?.toString(),
+      ...(date && Number.isFinite(date.getTime()) ? { occurredAt: date.toISOString() } : {}),
     });
   }
 
@@ -321,7 +327,12 @@ async function callMemoryAssistant(
 
 function appendUnique<T extends { id: string }>(base: T[], additions: T[]): T[] {
   const seen = new Set(base.map((item) => item.id));
-  return [...base, ...additions.filter((item) => !seen.has(item.id) && seen.add(item.id))];
+  const unique = additions.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+  return [...base, ...unique];
 }
 
 export type ConversationReplyWithMemoryAssistant = ConversationReplyResult & {
