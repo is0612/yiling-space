@@ -1430,6 +1430,10 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         anchors: groupContext.anchors(contextKey),
         // 谁是谁的人：让她判断「我的鱼」「我家宝」时能查表，而不是猜自己。
         members: groupContext.members(contextKey),
+        // 「谁在跟她说话」的统计要用：@ 的是这个号、叫的是这些名字，才算冲她说的。
+        selfQq: record.accountQq,
+        ownerQq: record.ownerQq,
+        selfNames: [binding.characterName, ...binding.groupChat.aliases],
       },
       sendReply: createReplySender(record.config, groupEvent, {
         // 引用谁就 @ 谁：transcript 里只有 message id，真实 QQ 号留在进程内查。

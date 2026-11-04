@@ -68,6 +68,15 @@ export type MemoryChange = {
   evidenceMessageIds: string[];
   relatedMemoryId?: string;
   changeReason?: string;
+  /**
+   * 这条记忆该写进哪个范围。缺省 / "current" = 当前对话范围；
+   * "character" = 角色全局范围（任何群、私聊都能读到）。
+   *
+   * 只对「关于她本人」的稳定事实有意义（生日、名字、外观、能力、稳定喜好）：
+   * 这些在主人私聊里学到，但群聊也该知道。关于对话对象、对方隐私、只在这个私聊里
+   * 成立的事，一律不加这个字段 —— 由调用方只对主人私聊开放全局写入。
+   */
+  scope?: "current" | "character";
 };
 
 /** 「上午 / 下午」这类模糊时段。只认这几个词，别的当没写。 */
@@ -124,6 +133,21 @@ export type MemoryAiInput = {
   totalMessageCount: number;
   omittedMessageCount: number;
   activeMemories: MemoryAiExistingItem[];
+  /**
+   * 角色全局范围的现有记忆。只有主人私聊（USER_PRIVATE）才会传。
+   *
+   * 传了它，模型才能看到「以前记着不会发语音」这类全局条目，并在证据推翻时
+   * INVALIDATE；也才会知道哪些事该用 `scope: "character"` 写进全局。
+   * 普通群友的私聊不传 —— 不能让一个人的说法覆盖角色全局记忆。
+   */
+  globalMemories?: MemoryAiExistingItem[];
+  /**
+   * 允许把「关于她本人」的 ADD 写进角色全局范围。主人私聊且存在全局范围时为 true。
+   *
+   * 和 `globalMemories` 分开：第一次提炼时全局范围可能一条记忆都没有，
+   * 但「生日写全局」这条规则仍然要生效，不能因为列表为空就退化成只写私聊。
+   */
+  allowGlobalMemory?: boolean;
   previousSnapshotSummary: string | null;
   /**
    * 这一天已经记录过的忆泡（按天任务专用）。
@@ -143,7 +167,8 @@ export type MemoryAiInput = {
 
 const MAX_RESPONSE_BYTES = 1_000_000;
 /** v5：忆泡抽取补上 `speaker` / `member`，并要求 participants 不写自己、不写泛称。 */
-const TEMPLATE_VERSION = "memory-extraction-v5";
+/** v6：主人私聊可见全局记忆，支持 `scope: "character"` 写入与跨范围 INVALIDATE。 */
+const TEMPLATE_VERSION = "memory-extraction-v6";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -346,12 +371,13 @@ export function validateMemoryAiOutput(
   raw: unknown,
   validSourceMessageIds: Iterable<string>,
   existingMemoryIds: Iterable<string>,
+  globalMemoryIds: Iterable<string> = [],
 ): MemoryAiAnalysis {
   const root = asRecord(raw);
   if (!root) throw new Error("LLM_INVALID_JSON: 模型输出必须是 JSON 对象。");
 
   const validIds = new Set(validSourceMessageIds);
-  const existingIds = new Set(existingMemoryIds);
+  const existingIds = new Set([...existingMemoryIds, ...globalMemoryIds]);
   const summary = asText(root.summary, 8000);
   if (!summary) throw new Error("LLM_INVALID_RESPONSE: 模型没有返回有效的阶段总结。");
 
@@ -435,6 +461,8 @@ export function validateMemoryAiOutput(
       const importance = typeof rawImportance === "number" && Number.isFinite(rawImportance)
         ? Math.min(1, Math.max(0, Math.round(rawImportance * 100) / 100))
         : undefined;
+      // 只认 "character"：别的值一律按当前范围处理，不因为模型多写一个字就跨范围写入。
+      const scope = entry.scope === "character" ? "character" as const : undefined;
       memoryChanges.push({
         action,
         category: category as MemoryCategoryValue,
@@ -443,6 +471,7 @@ export function validateMemoryAiOutput(
         ...(importance === undefined ? {} : { importance }),
         evidenceMessageIds: ids,
         ...(action !== "ADD" ? { relatedMemoryId } : {}),
+        ...(scope ? { scope } : {}),
         ...(asText(entry.changeReason, 500) ? { changeReason: asText(entry.changeReason, 500) } : {}),
       });
     }
@@ -462,7 +491,12 @@ export function validateMemoryAiOutput(
   };
 }
 
-function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean; emitFriendAliases: boolean }): string {
+function systemPrompt(options: {
+  emitEvents: boolean;
+  withPeriodEvents: boolean;
+  emitFriendAliases: boolean;
+  withGlobalMemories: boolean;
+}): string {
   const lines = [
     "你是严格的长期记忆提炼器，不是角色扮演者。",
     "仅根据输入的原始消息和现有记忆提炼事实。绝不补造未出现的细节；区分用户明确陈述、助手建议和不确定推断。",
@@ -476,6 +510,13 @@ function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean;
     "每条记忆都要给 importance（0–1，两位小数）：0.85 以上是长期成立、会影响她判断的事（身份、底线、稳定关系、明确承诺）；0.5–0.7 是日常事实与偏好；0.3 以下是一次性的临时状态。不要所有条目都给同一个数 —— 排序就是靠它区分轻重，全给 0.5 等于没给。",
     "写 ADD 之前先扫一遍 activeMemories：如果这一期的证据说明某条已经不成立（改了主意、取消了、被更正、事情已经做完、对方更正了说法），必须单独发一条 INVALIDATE 指回它，而不是只 ADD 一条新的、把旧的留在那里。旧条目不退场，她就会同时相信两件互相矛盾的事。这条和「不要乱删」不冲突：INVALIDATE 只针对有证据推翻的那种，拿不准就不动。",
   ];
+  if (options.withGlobalMemories) {
+    lines.push(
+      "globalMemories 是角色全局记忆（每个群、每个私聊都能读到）；activeMemories 是当前私聊范围。两边的 id 都可以作为 UPDATE/INVALIDATE 的 relatedMemoryId。",
+      "**关于她本人**的稳定事实（生日、名字、外观、能力、稳定喜好、她自己答应过的事）要写进全局：memoryChanges 里加 scope: \"character\"。**关于对话对象**的事实、对方的隐私、只在这个私聊里成立的事，不要加 scope（默认写当前范围）。拿不准时写当前范围，不要为了省事把所有事都标成 character。",
+      "如果这一期的证据说明 globalMemories 里某条已经不成立（例如以前记着「她不会发语音」，现在主人给她开通了；以前没有某个功能，现在有了），必须单独发一条 INVALIDATE 指回那条全局记忆。只 ADD 新的、不废旧的，她在群里就会继续说旧状态 —— 这是实际发生过的错误，不是理论风险。",
+    );
+  }
   if (options.withPeriodEvents) {
     lines.push(
       "periodEvents 是这个周期里**已经整理好的忆泡**（按天任务产出）：它就是「发生过什么」的权威时间线，summary 和 importantEvents 以它为准；messages 只用来提炼偏好、关系、情绪与结论，不要拿零散消息去推翻已有忆泡。",
@@ -520,6 +561,7 @@ function systemPrompt(options: { emitEvents: boolean; withPeriodEvents: boolean;
         importance: 0.7,
         evidenceMessageIds: ["原始消息ID"],
         relatedMemoryId: "UPDATE/INVALIDATE 必填，ADD 省略",
+        scope: "character（仅关于她本人的稳定事实；否则省略）",
         changeReason: "变化依据"
       }],
       events: [{
@@ -602,6 +644,13 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
     activeMemories: input.activeMemories.map(({
       id, category, content, confidence, validFrom, validTo, createdAt,
     }) => ({ id, category, content, confidence, validFrom, validTo, createdAt })),
+    ...(input.globalMemories?.length || input.allowGlobalMemory === true
+      ? {
+          globalMemories: (input.globalMemories ?? []).slice(0, 60).map(({
+            id, category, content, confidence, validFrom, validTo, createdAt,
+          }) => ({ id, category, content, confidence, validFrom, validTo, createdAt })),
+        }
+      : {}),
     previousSnapshotSummary: input.previousSnapshotSummary,
     // 周期内已经整理好的忆泡：快照以它为时间线权威，不再从零散消息重造事件。
     ...(input.periodEvents?.length
@@ -643,7 +692,7 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
       max_tokens: 16_000,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: systemPrompt({ emitEvents: input.emitEvents !== false, withPeriodEvents: Boolean(input.periodEvents?.length), emitFriendAliases: input.emitFriendAliases === true }) },
+        { role: "system", content: systemPrompt({ emitEvents: input.emitEvents !== false, withPeriodEvents: Boolean(input.periodEvents?.length), emitFriendAliases: input.emitFriendAliases === true, withGlobalMemories: Boolean(input.globalMemories?.length) || input.allowGlobalMemory === true }) },
         { role: "user", content: JSON.stringify(promptInput) },
       ],
     }),
@@ -683,7 +732,8 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
 
   const sourceIds = input.messages.map((message) => message.id);
   const existingIds = input.activeMemories.map((memory) => memory.id);
-  const analysis = validateMemoryAiOutput(parsed, sourceIds, existingIds);
+  const globalIds = (input.globalMemories ?? []).map((memory) => memory.id);
+  const analysis = validateMemoryAiOutput(parsed, sourceIds, existingIds, globalIds);
   // 用量统一走 model-usage 的解析，才能带上缓存命中明细（命中价只有未命中价的几十分之一）。
   const usage = readModelUsage(payload);
 

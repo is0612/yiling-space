@@ -33,6 +33,7 @@ import { getPrisma } from "../../../utils/prisma";
 import { readMessageIsOwner, readMessageSpeaker } from "../../../utils/conversation-message";
 import { resolveEventParticipantNames, resolveParticipantAccounts } from "../../../utils/participant-names";
 import { readPreviousJournalLine } from "../../../utils/journal-service";
+import { isSelfFactQuery, loadJournalFacts } from "../../../utils/journal-facts";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
@@ -260,7 +261,7 @@ export default defineEventHandler(async (event) => {
   /**
    * 名字是入口，账号才是身份。
    *
-   * 问「鱼小妹最近说了什么」时，忆泡里存的可能还是旧名「曦」—— 只比字符串一条都
+   * 问「小刚最近说了什么」时，忆泡里存的可能还是旧名「小明」—— 只比字符串一条都
    * 查不到。先把名字解析成平台账号，再让检索用 `participantRefs` 兜住改名。
    * 认不出是谁（或问句里没提人）就不传，退回纯字符串匹配。
    */
@@ -387,6 +388,10 @@ export default defineEventHandler(async (event) => {
     new Date(),
     resolveChatTimeZone(character.memorySetting?.timezone),
   );
+  // 生日、名字、外观这类稳定事实只在手账里；群里问得到，网页对话也该问得到。
+  const journalFacts = isSelfFactQuery(message)
+    ? await loadJournalFacts(prisma, { characterId, query: message }).catch(() => [])
+    : [];
   /**
    * 熟人名册：网页对话里同样要能回答「你跟谁关系最好」。
    *
@@ -589,6 +594,7 @@ export default defineEventHandler(async (event) => {
         rawMessages,
         timeZone,
         ...(journalLine ? { journalLine } : {}),
+        ...(journalFacts.length ? { journalFacts } : {}),
         ...(acquaintances ? { acquaintances } : {}),
         ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
       },

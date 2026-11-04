@@ -475,6 +475,35 @@ try {
   console.warn = warnBeforeNoSource;
 }
 
+// A first-pass answer backed by deterministic context must not be replaced by "no record"
+// just because the long-term-memory tables have nothing (journal facts are not candidates).
+try {
+  globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+    if (String(input).includes("memory.example.com")) {
+      return new Response(JSON.stringify({
+        model: "memory-model",
+        choices: [{ message: { content: JSON.stringify({ sourceKeys: [] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 40, completion_tokens: 5, total_tokens: 45 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      model: "chat-model",
+      choices: [{ message: { content: JSON.stringify({ reply: "10月30号呀。", memoryAssistantQuery: "查找角色生日", usedMemoryIds: [], usedSnapshotIds: [] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 70, completion_tokens: 10, total_tokens: 80 },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const contextAnswered = await generateConversationReplyWithMemoryAssistant({
+    chatInput: { ...chatInput, journalFacts: [{ dayKey: "2026-11-02", text: "今天被定了生日，10月30号" }] },
+    assistant,
+    candidates: [],
+    loadCandidates: async () => [candidate],
+  });
+  assert.equal(contextAnswered.memoryAssistantStatus, "context_answered");
+  assert.equal(contextAnswered.reply, "10月30号呀。", "上下文里已有答案时，不能拿「没找到记录」把它盖掉");
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
 // Connection test uses the assistant's own endpoint and credential, and accepts a configured assistant before activation.
 const connectionCalls: Array<{ url: string; authorization: string; body: Record<string, unknown> }> = [];
 const originalFetchForConnection = globalThis.fetch;

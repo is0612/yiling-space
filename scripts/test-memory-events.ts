@@ -489,38 +489,38 @@ const refsOf = (name: string, uid: string) => [{
 }];
 
 assert.deepEqual(
-  applyCurrentParticipantNames(["曦", "鱼长棠"], refsOf("曦", "3633491631"), new Map([["3633491631", "鱼小妹"]])),
-  ["鱼小妹", "鱼长棠"],
+  applyCurrentParticipantNames(["青", "小明"], refsOf("青", "100001"), new Map([["100001", "小刚"]])),
+  ["小刚", "小明"],
   "改过名的参与者要换成当前叫法",
 );
 
 assert.deepEqual(
-  applyCurrentParticipantNames(["曦"], refsOf("曦", "3633491631"), new Map()),
-  ["曦"],
+  applyCurrentParticipantNames(["青"], refsOf("青", "100001"), new Map()),
+  ["青"],
   "查不到当前名字时保留旧名，不能变成空",
 );
 
 assert.deepEqual(
-  applyCurrentParticipantNames(["鱼小妹"], refsOf("曦", "3633491631"), new Map([["3633491631", "鱼小妹"]])),
-  ["鱼小妹"],
+  applyCurrentParticipantNames(["小刚"], refsOf("青", "100001"), new Map([["100001", "小刚"]])),
+  ["小刚"],
   "已经是新名字时不重复处理",
 );
 
 assert.deepEqual(
-  applyCurrentParticipantNames(["小七"], refsOf("鱼小七", "1962605653"), new Map([["1962605653", "鱼小七（Moss）"]])),
-  ["鱼小七（Moss）"],
+  applyCurrentParticipantNames(["小刚"], refsOf("小刚同学", "100002"), new Map([["100002", "小刚同学（新）"]])),
+  ["小刚同学（新）"],
   "模型写的是简称时也要认得出是他",
 );
 
 assert.deepEqual(
-  applyCurrentParticipantNames(["曦"], null, new Map([["3633491631", "鱼小妹"]])),
-  ["曦"],
+  applyCurrentParticipantNames(["青"], null, new Map([["100001", "小刚"]])),
+  ["青"],
   "老忆泡没有引用列，无从刷新，保持原样",
 );
 
 assert.deepEqual(
-  applyCurrentParticipantNames(["曦"], [{ kind: "external", externalId: "   " }], new Map()),
-  ["曦"],
+  applyCurrentParticipantNames(["青"], [{ kind: "external", externalId: "   " }], new Map()),
+  ["青"],
   "结构不完整的引用直接忽略，不猜账号",
 );
 
@@ -537,28 +537,28 @@ assert.equal(
 // ── 改名后的按人检索：名字是入口，账号才是身份 ────────────────
 const renamed = [
   {
-    id: "n1", title: "替曦记下 BLG 八强赛的说法", detail: "八强赛的赛程",
-    occurredAt: new Date("2026-11-02T10:00:00+08:00"), participants: ["曦"], keywords: ["比赛"],
-    participantRefs: [{ kind: "external", platform: "qq-onebot", externalId: "3633491631" }],
+    id: "n1", title: "替青记下 BLG 八强赛的说法", detail: "八强赛的赛程",
+    occurredAt: new Date("2026-11-02T10:00:00+08:00"), participants: ["青"], keywords: ["比赛"],
+    participantRefs: [{ kind: "external", platform: "qq-onebot", externalId: "100001" }],
   },
 ];
 assert.equal(
-  selectEventsForPrompt("和鱼小妹都聊过什么", renamed, { now, timeZone: TZ }).mode,
+  selectEventsForPrompt("和鱼小刚都聊过什么", renamed, { now, timeZone: TZ }).mode,
   "keyword",
   "只比字符串时，改名后的新名字查不到旧忆泡（这正是要修的缺口）",
 );
-const byRenamedAccount = selectEventsForPrompt("和鱼小妹都聊过什么", renamed, {
-  now, timeZone: TZ, participantIds: ["3633491631"],
+const byRenamedAccount = selectEventsForPrompt("和鱼小刚都聊过什么", renamed, {
+  now, timeZone: TZ, participantIds: ["100001"],
 });
 assert.equal(byRenamedAccount.mode, "participant", "解析出账号后，新名字也能查到旧名记下的忆泡");
 assert.deepEqual(byRenamedAccount.items.map((item) => item.id), ["n1"]);
 
-const byOldName = selectEventsForPrompt("和曦都聊过什么", renamed, {
-  now, timeZone: TZ, participantIds: ["3633491631"],
+const byOldName = selectEventsForPrompt("和青都聊过什么", renamed, {
+  now, timeZone: TZ, participantIds: ["100001"],
 });
 assert.deepEqual(byOldName.items.map((item) => item.id), ["n1"], "名字与账号命中同一条时不能重复出现");
 
-const unrelatedAccount = selectEventsForPrompt("和鱼小妹都聊过什么", renamed, {
+const unrelatedAccount = selectEventsForPrompt("和鱼小刚都聊过什么", renamed, {
   now, timeZone: TZ, participantIds: ["999999"],
 });
 assert.equal(unrelatedAccount.mode, "keyword", "账号对不上时不能硬凑成按人过滤");

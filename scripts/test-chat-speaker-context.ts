@@ -99,7 +99,7 @@ try {
   // 22:01「@群友乙 你在群里也可以学习一下她们的表情包」是主人在教群友乙，
   // 她把自己当成被教的那个，回了「学得像不像啊」「这张算及格」。
   // 「@self 不等于在说她」那条是另一面：@你 也可能是「你帮我跟她说一下」。
-  assert(system3.includes("belongs to the two of them"), "群聊系统提示必须说明「有人在教另一个 bot」这段对话不属于她。");
+  assert(system3.includes("belongs to them"), "群聊系统提示必须说明「有人在教另一个 bot」这段对话不属于她。");
   assert(system3.includes("Being @self does not make the sentence about you"), "群聊系统提示必须写明：被 @ 也可能是拿她当传话筒，主语是第三人。");
   // 她自己发的表情包下一轮不可见：图只在 metadata，recentMessages 只有文字。
   // hadSticker 把它标出来，她才认得出「那张图是我贴的」。

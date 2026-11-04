@@ -1151,6 +1151,44 @@ export async function processNextMemoryJob(
 
     if (!scope) throw new Error("找不到任务关联的记忆范围。");
 
+    /**
+     * 主人私聊：顺带读角色全局记忆。
+     *
+     * 两个用途：① 模型能看到「以前记着不会发语音」这类旧全局事实，在证据推翻时
+     * INVALIDATE 它；② 模型知道哪些事该用 `scope: "character"` 写进全局（生日、
+     * 名字、能力、稳定喜好），群聊才读得到。
+     *
+     * **只对 USER_PRIVATE 开放**：普通群友的私聊（EXTERNAL_IDENTITY）不传，
+     * 不能让一个人的说法覆盖角色全局记忆。
+     */
+    type SnapshotMemoryRow = (typeof activeItems)[number];
+    let globalScope: { id: string } | null = null;
+    let globalItems: SnapshotMemoryRow[] = [];
+    if (scope.scopeType === "USER_PRIVATE") {
+      globalScope = await prisma.memoryScope.findFirst({
+        where: { characterId: scope.characterId, scopeType: "CHARACTER_GLOBAL" },
+        select: { id: true },
+      });
+      if (globalScope) {
+        globalItems = await prisma.memoryItem.findMany({
+          where: {
+            memoryScopeId: globalScope.id,
+            status: "ACTIVE",
+            OR: [
+              { validFrom: { lte: job.periodEnd } },
+              { validFrom: null, createdAt: { lte: job.periodEnd } },
+            ],
+          },
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take: MAX_AI_MEMORIES,
+          select: {
+            id: true, category: true, content: true, confidence: true,
+            validFrom: true, validTo: true, createdAt: true,
+          },
+        });
+      }
+    }
+
     if (messageCount === 0 && memoryActivityCount === 0) {
       await prisma.memoryJob.updateMany({
         where: { id: job.id, status: "RUNNING", lockedBy: workerId },
@@ -1172,6 +1210,15 @@ export async function processNextMemoryJob(
     const aiMessages = selectAiMessages(sourceMessages);
     // activeItems is newest-first, so the model sees the latest memory state.
     const aiMemoryContext = activeItems.slice(0, MAX_AI_MEMORIES).map((item) => ({
+      id: item.id,
+      category: item.category,
+      content: item.content.slice(0, 800),
+      confidence: item.confidence,
+      validFrom: item.validFrom?.toISOString() ?? null,
+      validTo: item.validTo?.toISOString() ?? null,
+      createdAt: item.createdAt.toISOString(),
+    }));
+    const globalAiMemoryContext = globalItems.slice(0, MAX_AI_MEMORIES).map((item) => ({
       id: item.id,
       category: item.category,
       content: item.content.slice(0, 800),
@@ -1213,6 +1260,8 @@ export async function processNextMemoryJob(
       totalMessageCount: messageCount,
       omittedMessageCount: Math.max(0, messageCount - aiMessages.length),
       activeMemories: aiMemoryContext,
+      ...(globalAiMemoryContext.length ? { globalMemories: globalAiMemoryContext } : {}),
+      allowGlobalMemory: Boolean(globalScope),
       previousSnapshotSummary: previousSnapshot?.summary ?? null,
       // 忆泡由按天任务负责：快照只读 periodEvents 做总结，不再产出 events。
       emitEvents: false,
@@ -1347,6 +1396,19 @@ export async function processNextMemoryJob(
       const currentItems = new Map(activeItems.map((item) => [item.id, item]));
       const eligibleModelMemoryIds = new Set(aiMemoryContext.map((item) => item.id));
       const handledMemoryIds = new Set<string>();
+      // 全局范围的对账状态。只有主人私聊才可能有；没传就整段为空。
+      const globalCurrentItems = new Map(globalItems.map((item) => [item.id, item]));
+      const globalEligibleModelMemoryIds = new Set(globalAiMemoryContext.map((item) => item.id));
+      const globalHandledMemoryIds = new Set<string>();
+      const globalExistingDedupeKeys = new Set<string>();
+      const globalExistingItemSignatures = new Set(
+        globalItems.map((item) => item.category + ":" + normalizeMemoryText(item.content)),
+      );
+      const globalExistingItems = globalItems.map((item) => ({
+        id: item.id,
+        category: item.category,
+        content: item.content,
+      }));
       const appliedChanges: Array<Record<string, unknown>> = [];
       const messagesById = new Map(sourceMessages.map((message) => [message.id, message]));
       const existingDedupeKeys = new Set<string>();
@@ -1402,7 +1464,9 @@ export async function processNextMemoryJob(
 
         if (isRegeneration) {
           // relatedMemoryId 已由 memory-ai 校验过属于本轮输入记忆，直接取当期快照里的原文做对照。
-          const relatedItem = change.relatedMemoryId ? currentItems.get(change.relatedMemoryId) ?? null : null;
+          const relatedItem = change.relatedMemoryId
+            ? currentItems.get(change.relatedMemoryId) ?? globalCurrentItems.get(change.relatedMemoryId) ?? null
+            : null;
           appliedChanges.push({
             action: change.action,
             result: "NOT_APPLIED_REGENERATION",
@@ -1434,6 +1498,19 @@ export async function processNextMemoryJob(
             existingItemSignatures,
             existingItems,
             existingDedupeKeys,
+            ...(globalScope
+              ? {
+                  global: {
+                    memoryScopeId: globalScope.id,
+                    resolvePrevious: async (memoryId: string) => globalCurrentItems.get(memoryId) ?? null,
+                    canTarget: (memoryId: string) => globalEligibleModelMemoryIds.has(memoryId),
+                    handledMemoryIds: globalHandledMemoryIds,
+                    existingItemSignatures: globalExistingItemSignatures,
+                    existingItems: globalExistingItems,
+                    existingDedupeKeys: globalExistingDedupeKeys,
+                  },
+                }
+              : {}),
           },
           change,
           evidence,

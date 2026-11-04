@@ -107,6 +107,29 @@ try {
   assert.equal(result.analysis.summary, "本周期测试摘要。");
   assert.equal(result.usage?.totalTokens, 16);
 
+  // 主人私聊：全局记忆要进请求，并明确允许把「关于她本人」的事实写进全局。
+  await analyzeMemoryPeriod({
+    ...input,
+    globalMemories: [{
+      id: "global-1",
+      category: "FACT" as const,
+      content: "她只会发文字，没有语音功能。",
+      confidence: 0.9,
+      validFrom: "2026-10-01T00:00:00.000Z",
+      validTo: null,
+      createdAt: "2026-10-01T00:00:00.000Z",
+    }],
+    allowGlobalMemory: true,
+  });
+  const globalRequestBody = JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> };
+  const globalUserMessage = globalRequestBody.messages.find((message) => message.role === "user");
+  const globalPromptInput = JSON.parse(globalUserMessage!.content) as Record<string, unknown>;
+  assert.ok(Array.isArray(globalPromptInput.globalMemories), "globalMemories 必须进请求体。");
+  assert.equal((globalPromptInput.globalMemories as Array<Record<string, unknown>>)[0]?.id, "global-1");
+  const globalSystemMessage = globalRequestBody.messages.find((message) => message.role === "system");
+  assert.match(globalSystemMessage?.content ?? "", /scope: "character"/u, "系统提示词必须说明如何写进全局。");
+  assert.match(globalSystemMessage?.content ?? "", /INVALIDATE/u, "系统提示词必须说明可以废掉旧的全局记忆。");
+
   // A global environment key must not be silently reused when a per-character
   // provider is selected but the caller did not resolve a matching credential.
   process.env.LLM_API_KEY = "global-fallback-key-must-not-be-used";

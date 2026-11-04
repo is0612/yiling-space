@@ -124,6 +124,7 @@ check(
   (lateEvent?.sourceMessageIds ?? []).includes(messageLate.id) && (lateEvent?.sourceMessageIds ?? []).length === 1,
   lateEvent?.sourceMessageIds,
 );
+check("忆泡记录所属会话（供按群检索）", lateEvent?.conversationId === conversation.id, lateEvent?.conversationId);
 // 参与者引用：从证据消息的作者推导，不是模型写的显示名。
 const lateRefs = (lateEvent?.participantRefs ?? []) as Array<Record<string, unknown>>;
 const earlyRefs = (earlyEvent?.participantRefs ?? []) as Array<Record<string, unknown>>;
@@ -234,6 +235,11 @@ const mixed = await prisma.$transaction((tx) => applyMemoryEvents(
 const mixedEvent = await prisma.memoryEvent.findFirst({ where: { memoryScopeId: scope.id, title: "桌面聊了明天的安排" } });
 const mixedRefs = (mixedEvent?.participantRefs ?? []) as Array<Record<string, unknown>>;
 check("跨会话事件照常落库（不因守卫漏记）", mixed.applied.length === 1, mixed);
+check(
+  "跨会话证据按最早一条所在会话收口到 conversationId",
+  mixedEvent?.conversationId === conversation.id,
+  { expected: conversation.id, actual: mixedEvent?.conversationId },
+);
 check(
   "参与者引用只取最早证据所在会话，不混入群成员",
   mixedRefs.some((ref) => ref.kind === "external" && ref.externalId === "friend-1")

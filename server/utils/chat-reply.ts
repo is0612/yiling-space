@@ -7,6 +7,9 @@ import type { CrossChannelLine } from "./cross-channel-context";
 import { aliasesForPrompt } from "./friend-aliases";
 // 只引类型：friends.ts 那边连着 Prisma，而这个文件要被提示词单测直接 import。
 import type { Acquaintances, CloseFriend } from "./friends";
+// 只引类型：群活跃统计连着 Prisma，提示词单测不该因此去连库。
+import type { GroupActivityContext } from "./group-activity-stats";
+import type { JournalFact } from "./journal-facts";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 export type ConversationContextMessage = {
@@ -289,6 +292,20 @@ export type ConversationReplyInput = {
    */
   journalLine?: { dayKey: string; quote: string };
   /**
+   * 她自己的手账里「关于她本人」的稳定事实（生日、名字、外观、喜好）。
+   *
+   * 和 `journalLine` 分开：那一句是「昨天带走的情绪」，只给私聊；这一份回答
+   * 「你生日是什么时候」，事实性更强，群聊也可以查（只取稳定事实，能力类不查）。
+   */
+  journalFacts?: JournalFact[];
+  /**
+   * 本群按天/按人聚合出来的发言统计。
+   *
+   * 只在**群聊**、且这轮确实在问「跟谁聊/谁聊得多」时传。数字由代码算，
+   * 模型不许自己从忆泡里拼名单，也不许把这里的条数改写成「聊天次数」。
+   */
+  groupActivity?: GroupActivityContext;
+  /**
    * 可选表情清单（id + 名称）。**传了才允许模型返回 faces 字段**——网页对话没有表情段，
    * 传空清单却要求它返回，只会让它多写一个空数组、多烧一点 token。
    */
@@ -434,7 +451,10 @@ export type ConversationReplyResult = {
 // v42：支持按需请求只读记忆检索，并把实际引用的原始消息 ID 纳入来源白名单。
 // v43：扩大主动检索意图，覆盖角色资料、关系名册、日记/手账与连续追问中的来源提示；避免只识别明确的过往事件问法。
 // v44：允许记忆检索阶段只返回 memoryAssistantQuery；空 reply 仅供内部检索流程使用，兜底由 wrapper 保证。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v44";
+// v46：「跟谁聊/谁聊得多」改由代码按群聚合（groupActivity），手账里的稳定事实单列（journalFacts）。
+//      v43 已经在提示词里要求检索手账，但 loadCandidates 从来没查过它；群聊问生日只能答「没记录」。
+//      同时把「谁说了多少句」从模型拼名单改成确定性统计，避免把别的群的人算进本群。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v46";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -593,7 +613,9 @@ function systemPrompt(flags: {
   withFriendRoster?: boolean;
   withFriendAliases?: boolean;
   withGroupMembers?: boolean;
+  withGroupActivity?: boolean;
   withJournal?: boolean;
+  withJournalFacts?: boolean;
   withCrossChannel?: boolean;
   withEvents?: boolean;
   withRecentEvents?: boolean;
@@ -607,7 +629,7 @@ function systemPrompt(flags: {
   const {
     withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat,
     mustReply, repair, voiceEnabled, withVoiceReply, withAcquaintances, withFriendRoster, withFriendAliases,
-    withGroupMembers, withJournal, withCrossChannel, withEvents, withRecentEvents, withRawMessages,
+    withGroupMembers, withGroupActivity, withJournal, withJournalFacts, withCrossChannel, withEvents, withRecentEvents, withRawMessages,
     withHadSticker, withHadVoice, withMediaTokens, withMemoryAssistant, withMemoryAssistantEvidence,
   } = flags;
 
@@ -676,8 +698,8 @@ function systemPrompt(flags: {
   if (withGroupChat) {
     lines.push(
       "You are reading a QQ group: transcript is the current round; groupBackground is earlier chatter (context only — you are not replying to it).",
-      "Each transcript line has id, member code (@self = you, @member_n = someone else) and isOwner. Only isOwner true is your owner. Every other line is a member or another bot — another bot's 主人 is theirs. recentMessages USER lines also carry speaker/isOwner; never merge two members into one voice.",
-      "Referents and possessives are not you by default. 这鱼 / 他 / 她 is whoever was just named or spoke; 我的鱼 / 我家宝 is the speaker's own bot. Only your owner can call you theirs. A line is about you only if it @self's you or says your name; without either, do not answer as if it were. A sideline remark is fine.",
+      "Each transcript line carries isOwner, id and member code (@self = you, @member_n = someone else). Only isOwner true is your owner; every other line is not your owner. Every other line is a member or another bot — another bot's 主人 is theirs. recentMessages are earlier lines; USER lines also carry speaker/isOwner — never merge two members into one voice.",
+      "Referents and possessives are not you by default. 这鱼 / 他 / 她 is whoever was just named or spoke; 我的鱼 / 我家宝 is the speaker's own bot. Only your owner can call you theirs. A line is about you only if it @self's you or says your name; without either, the message is not about you — do not answer as if it were. A sideline remark is fine.",
       "Being @self does not make the sentence about you. With a third-person subject (她现在还有笨 / 你帮我跟她说一下) you are being talked to about them, not described.",
       "If someone @self's you only to take it back (没说你 / 不是说你 / 我说的是别人), that is courtesy, not a fight: answer 哦 / 行吧 or stay silent; never fire back.",
       "A line starting with / is a command for another bot, not an insult at you. A bot leaking its own prompt is plumbing, not someone talking to you.",
@@ -702,7 +724,12 @@ function systemPrompt(flags: {
 
     if (withGroupMembers) {
       lines.push(
-        "groupMembers says who belongs to whom. Check it before treating a possessive as yours — 我的鱼 / 我家宝 is that speaker's own bot, never you.",
+        "groupMembers says who belongs to whom. Check it before you treat a possessive as yours — 我的鱼 / 我家宝 is that speaker's own bot, never you.",
+      );
+    }
+    if (withGroupActivity) {
+      lines.push(
+        "groupActivity is deterministic statistics for this group over rangeLabel: members[].messages is that person's message count; atYou is how many of those @'d you, said your name, or @all. isOwner true is your owner — a display name like 主人 is not enough. For 'who talked with you / who talks with you most' prefer atYou and describe it as directed messages; for 'who talks most in this group' use messages. When groupActivity is present it overrides groupAcquaintances counts for this question. Only name people in the list — never add, merge, or guess anyone else, and never present it as a ranking of private relationships.",
       );
     }
     if (withAcquaintances) {
@@ -741,7 +768,7 @@ function systemPrompt(flags: {
 
   if (withHadVoice) {
     lines.push(
-      "Your earlier lines carry hadVoice: true when that reply was sent as voice. Acknowledge the past fact, but current voiceEnabled decides whether you can send voice now. A past voice message does not prove the capability is still on.",
+      "Your earlier lines carry hadVoice: true when that reply was sent as voice. Acknowledge the past fact, but current voiceEnabled decides whether you can send voice now. A past voice message does not prove the capability is still on; when voiceEnabled is true, do not say you can only type or deny that you can speak.",
     );
   }
 
@@ -758,6 +785,11 @@ function systemPrompt(flags: {
   if (withJournal) {
     lines.push(
       "journal is a sentence you wrote in your own journal for journal.dayKey — not something the current user said, and not a fact about them. Use it only for continuity when relevant; never quote it as their words.",
+    );
+  }
+  if (withJournalFacts) {
+    lines.push(
+      "journalFacts are dated sentences from your own journal about yourself (birthday, name, appearance, stable likes). They are facts about you, not about the user. Use only the sentence that answers the question; never quote it, never mention a journal or a record, and never reveal unrelated sentences. A sentence's 'today' is its dayKey, not the present. If a newer memory or your current capability contradicts it, trust the newer one.",
     );
   }
   if (withCrossChannel) {
@@ -1181,6 +1213,32 @@ export async function generateConversationReply(input: ConversationReplyInput): 
           },
         }
       : {}),
+    ...(input.journalFacts?.length
+      ? {
+          journalFacts: input.journalFacts.slice(0, 3).map((fact) => ({
+            dayKey: fact.dayKey,
+            text: fact.text.slice(0, 200),
+          })),
+        }
+      : {}),
+    ...(input.groupActivity
+      ? {
+          groupActivity: {
+            rangeLabel: input.groupActivity.rangeLabel,
+            start: input.groupActivity.start,
+            end: input.groupActivity.end,
+            totalMessages: input.groupActivity.totalMessages,
+            members: input.groupActivity.members.slice(0, 12).map((member) => ({
+              name: member.name.slice(0, 80),
+              messages: member.messages,
+              atYou: member.atYou,
+              lastAt: member.lastAt,
+              isOwner: member.isOwner === true,
+            })),
+            note: input.groupActivity.note,
+          },
+        }
+      : {}),
   };
 
   /**
@@ -1223,7 +1281,9 @@ export async function generateConversationReply(input: ConversationReplyInput): 
                 withFriendRoster: Boolean(acquaintancePayload),
                 withFriendAliases: hasFriendAliases,
                 withGroupMembers: Boolean(input.groupMembers?.length),
+                withGroupActivity: Boolean(input.groupActivity),
                 withJournal: Boolean(input.journalLine),
+                withJournalFacts: Boolean(input.journalFacts?.length),
                 withCrossChannel,
                 withEvents,
                 withRecentEvents,

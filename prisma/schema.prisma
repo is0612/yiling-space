@@ -337,6 +337,7 @@ model Conversation {
   channelBinding         CharacterChannelBinding? @relation(fields: [channelBindingId], references: [id], onDelete: SetNull)
   messages               Message[]
   groupMembers           GroupMember[]
+  memoryEvents           MemoryEvent[]
 
   @@unique([channelBindingId, externalConversationId])
   @@index([characterId, updatedAt])
@@ -971,6 +972,13 @@ model CharacterCatchphrase {
 model MemoryEvent {
   id               String            @id @default(uuid()) @db.Uuid
   memoryScopeId    String            @db.Uuid
+  /// 这条忆泡归属哪个会话；null = 旧数据（回填前）或跨会话证据无法收口。
+  ///
+  /// 群聊的记忆范围是 CHARACTER_GLOBAL，一个范围里挂着好几个群。只按范围检索时，
+  /// 「昨天在这个群跟谁聊」会把另一个群的 participants 也算进来
+  /// （实况：A 群的两位群友被报成了本群的人）。
+  /// 写入时按证据消息的会话收口（已有逻辑），这里把结果存下来供检索过滤。
+  conversationId   String?           @db.Uuid
   /// 事件发生的当地日期（角色时区）：2026-10-31。「今天/昨天」按它分组。
   dayKey           String            @db.VarChar(10)
   state            MemoryEventState  @default(DRAFT)
@@ -1000,6 +1008,7 @@ model MemoryEvent {
   status           MemoryEventStatus @default(ACTIVE)
   createdAt        DateTime          @default(now()) @db.Timestamptz(6)
   memoryScope      MemoryScope       @relation(fields: [memoryScopeId], references: [id], onDelete: Cascade)
+  conversation     Conversation?     @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   sourceMessage    Message?          @relation("MemoryEventSourceMessage", fields: [sourceMessageId], references: [id], onDelete: SetNull)
   sourceSnapshot   MemorySnapshot?   @relation("MemoryEventSourceSnapshot", fields: [sourceSnapshotId], references: [id], onDelete: SetNull)
 
@@ -1007,6 +1016,7 @@ model MemoryEvent {
   @@index([memoryScopeId, occurredAt])
   @@index([memoryScopeId, status, occurredAt])
   @@index([memoryScopeId, dayKey])
+  @@index([conversationId, occurredAt])
   @@map("memory_events")
 }
 

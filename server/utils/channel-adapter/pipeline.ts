@@ -44,6 +44,8 @@ import {
 } from "../catchphrases";
 import { maybeAutoMineCatchphrases } from "../catchphrase-mine";
 import { readPreviousJournalLine } from "../journal-service";
+import { isSelfFactQuery, loadJournalFacts } from "../journal-facts";
+import { buildGroupActivityContext, isGroupActivityQuery } from "../group-activity-stats";
 import { collectStickersFromTurn } from "../sticker-collect";
 import {
   applyVoiceTranscripts,
@@ -400,6 +402,12 @@ export function buildGroupMemberDeltas(messages: ReadonlyArray<{
   anchors: Array<{ id: string; label: string }>;
   /** 群内归属（「X的Y」「@某人 主人夸我了」学来的）。空数组 = 这轮没学到，不注入。 */
   members?: Array<{ member: string; speaker: string; belongsTo: string; belongsToName: string }>;
+  /** 她自己在这个群的 QQ 号：统计「谁在跟她说话」时只有 @ 这个号才算。 */
+  selfQq?: string;
+  /** 主人的 QQ 号：统计里标出 isOwner，显示名叫「主人」的群友不算。 */
+  ownerQq?: string;
+  /** 她在这个群可能被叫到的名字（角色名 + 绑定别名），统计用。 */
+  selfNames?: string[];
 };
 
 /** 群聊一轮：几秒内几个人说的话，一次看、最多回一次。 */
@@ -1077,6 +1085,32 @@ async function runChannelTurn(input: {
     ? modelText(messages[0]!)
     : messages.map((message) => `${message.authorDisplayName || "群友"}：${modelText(message)}`).join("\n");
 
+  /**
+   * 「这个群里谁跟我聊过」这类问题，名单由代码数出来。
+   *
+   * 只在群聊、且这一轮确实在问人时查：统计要扫一段消息，普通闲聊不该为它付代价。
+   * 失败只少一段背景，不能拦住这轮回复。
+   */
+  const groupActivity = isGroup && existingConversation && input.group && isGroupActivityQuery(currentMessage)
+    ? await buildGroupActivityContext({
+        prisma,
+        conversationId: existingConversation.id,
+        query: currentMessage,
+        timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+        selfQq: input.group.selfQq,
+        ownerQq: input.group.ownerQq,
+        selfNames: input.group.selfNames?.length ? input.group.selfNames : [character.name],
+      }).catch(() => null)
+    : null;
+
+  /**
+   * 生日、名字、外观这类「关于她本人」的稳定事实，手账里才有。
+   * 只在她确实被问到时查，且不查能力类（语音/看图）—— 那些看当前配置，别看旧手账。
+   */
+  const journalFacts = isSelfFactQuery(currentMessage)
+    ? await loadJournalFacts(prisma, { characterId: character.id, query: currentMessage }).catch(() => [])
+    : [];
+
   const retrievalQuery = [
     currentMessage,
     ...recentMessages.filter((item) => item.role === "USER").slice(-2).map((item) => item.content),
@@ -1157,7 +1191,13 @@ async function runChannelTurn(input: {
       select: { id: true, summary: true, periodStart: true, periodEnd: true, version: true, createdAt: true, memoryScopeId: true },
     }),
     prisma.memoryEvent.findMany({
-      where: { memoryScopeId: { in: readableScopeIds }, status: "ACTIVE" },
+      where: {
+        memoryScopeId: { in: readableScopeIds },
+        status: "ACTIVE",
+        // 群聊只取本群发生的事：范围是全局的，不按会话过滤就会把别的群的
+        // participants 算进「这个群」（2026-11-04 实况）。
+        ...(isGroup && existingConversation ? { conversationId: existingConversation.id } : {}),
+      },
       orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       take: 200,
       select: {
@@ -1269,7 +1309,7 @@ async function runChannelTurn(input: {
   const recentEventItems = recentEventSelection?.items ?? [];
 
   /**
-   * 忆泡存的是**记那一刻**的名字，而群名片会改（「曦」→「鱼小妹」）。
+   * 忆泡存的是**记那一刻**的名字，而群名片会改（「小明」→「小刚」）。
    * 注入前统一换成当前叫法，锚点是 `participantRefs` 里的平台账号。
    */
   const participantsByEvent = await resolveEventParticipantNames(
@@ -1465,6 +1505,7 @@ async function runChannelTurn(input: {
                 where: {
                   memoryScopeId: { in: readableScopeIds },
                   status: "ACTIVE",
+                  ...(isGroup && existingConversation ? { conversationId: existingConversation.id } : {}),
                   ...rangeWhere,
                   ...(searchTerms.length
                     ? {
@@ -1492,6 +1533,7 @@ async function runChannelTurn(input: {
               where: {
                 memoryScopeId: { in: readableScopeIds },
                 status: "ACTIVE",
+                ...(isGroup && existingConversation ? { conversationId: existingConversation.id } : {}),
                 ...rangeWhere,
               },
               orderBy: [{ occurredAt: eventOrder }, { id: eventOrder }],
@@ -1614,6 +1656,8 @@ async function runChannelTurn(input: {
         currentMessage,
         timeZone: chatTimeZone,
         ...(journalLine ? { journalLine } : {}),
+        ...(journalFacts.length ? { journalFacts } : {}),
+        ...(groupActivity ? { groupActivity } : {}),
         events,
         ...(recentEvents.length ? { recentEvents } : {}),
         rawMessages,

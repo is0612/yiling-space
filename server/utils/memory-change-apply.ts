@@ -180,8 +180,24 @@ export function resolveEventParticipants(
   return (hasGeneric ? kept : concrete).slice(0, 8);
 }
 
-export type MemoryApplyContext = {
+/**
+ * 一条变更要落到哪个范围。
+ *
+ * 默认是当前范围；主人私聊里学到「关于她自己」的事实，会落到角色全局范围
+ * （`scope: "character"`），这样群聊也读得到 —— 生日、能力、外观不该只存在私聊。
+ * 全局范围由调用方显式传入，外部身份（普通群友）的私聊永远不传，避免污染全局记忆。
+ */
+export type MemoryApplyScope = {
   memoryScopeId: string;
+  resolvePrevious: (memoryId: string) => Promise<{ category: MemoryCategoryValue; content: string } | null>;
+  canTarget: (memoryId: string) => boolean;
+  handledMemoryIds: Set<string>;
+  existingItemSignatures: Set<string>;
+  existingDedupeKeys: Set<string>;
+  existingItems?: Array<{ id: string; category: MemoryCategoryValue; content: string }>;
+};
+
+export type MemoryApplyContext = MemoryApplyScope & {
   characterId: string;
   snapshotId: string;
   actorType: "WORKER" | "USER";
@@ -189,22 +205,13 @@ export type MemoryApplyContext = {
   auditActionPrefix: "memory.ai_" | "memory.review_";
   actorId?: string | null;
   /**
-   * 目标记忆的「当前状态」。Worker 用周期时点的快照，人工采纳用数据库里最新的值 ——
-   * 中间可能有别的归档改过这条记忆，对照的基准不该是旧的。
-   */
-  resolvePrevious: (memoryId: string) => Promise<{ category: MemoryCategoryValue; content: string } | null>;
-  /** 是否允许把变更指向这条记忆（Worker 限制在模型看过的集合内；人工采纳不限制）。 */
-  canTarget: (memoryId: string) => boolean;
-  handledMemoryIds: Set<string>;
-  existingItemSignatures: Set<string>;
-  existingDedupeKeys: Set<string>;
-  /**
-   * 同范围里**仍在生效**的条目（id + 类别 + 内容），用来挡「换句话又是一条」。
+   * 全局范围：只有主人私聊（USER_PRIVATE）才会传。
    *
-   * 和 `existingItemSignatures` 分工：那个是精确签名（整句相同），这个是近似判重
-   * （同类别 + 字面高度重合）。不传就只做精确判重，行为与以前一致。
+   * 传了之后，`scope: "character"` 的 ADD 会写进全局；指向全局条目的
+   * UPDATE/INVALIDATE 也会在全局范围执行。普通群友的私聊不传，防止把
+   * 某个人的说法写成角色全局事实。
    */
-  existingItems?: Array<{ id: string; category: MemoryCategoryValue; content: string }>;
+  global?: MemoryApplyScope;
 };
 
 export function normalizeMemoryText(value: string): string {
@@ -254,9 +261,23 @@ export async function applyMemoryChange(
     ? { actorType: "USER" as const, actorId: ctx.actorId }
     : { actorType: ctx.actorType };
 
+  /**
+   * 这条变更落到哪个范围。
+   *
+   * - ADD 带 `scope: "character"`：写全局（只有主人私聊会带）。
+   * - UPDATE / INVALIDATE 指向全局条目：在全局范围执行。
+   * - 其余：当前范围，保持原行为。
+   */
+  const target: MemoryApplyScope = change.action === "ADD" && change.scope === "character" && ctx.global
+    ? ctx.global
+    : relatedId && ctx.global?.canTarget(relatedId)
+      ? ctx.global
+      : ctx;
+  const targetScope = target === ctx.global ? "character" : "current";
+
   if (change.action === "ADD") {
     const signature = change.category + ":" + normalizeMemoryText(change.content);
-    if (ctx.existingItemSignatures.has(signature)) {
+    if (target.existingItemSignatures.has(signature)) {
       return {
         action: "ADD",
         result: "DUPLICATE_IGNORED",
@@ -268,7 +289,7 @@ export async function applyMemoryChange(
 
     // 近似判重：整句不同、说的是同一件事。只对「同类别 + 字面高度重合」生效，
     // 判据保守（见 isNearDuplicateMemory），宁可漏一条也不合成两件不同的事。
-    const nearDuplicate = ctx.existingItems?.find((item) => isNearDuplicateMemory(item, change));
+    const nearDuplicate = target.existingItems?.find((item) => isNearDuplicateMemory(item, change));
     if (nearDuplicate) {
       return {
         action: "ADD",
@@ -281,15 +302,15 @@ export async function applyMemoryChange(
     }
 
     const dedupeKey = makeMemoryDedupeKey(change.category, change.content);
-    const keyUsed = ctx.existingDedupeKeys.has(dedupeKey) || Boolean(await tx.memoryItem.findFirst({
-      where: { memoryScopeId: ctx.memoryScopeId, dedupeKey },
+    const keyUsed = target.existingDedupeKeys.has(dedupeKey) || Boolean(await tx.memoryItem.findFirst({
+      where: { memoryScopeId: target.memoryScopeId, dedupeKey },
       select: { id: true },
     }));
-    ctx.existingDedupeKeys.add(dedupeKey);
+    target.existingDedupeKeys.add(dedupeKey);
     const importance = resolveImportance(change);
     const created = await tx.memoryItem.create({
       data: {
-        memoryScopeId: ctx.memoryScopeId,
+        memoryScopeId: target.memoryScopeId,
         category: change.category as MemoryCategoryValue,
         content: change.content,
         confidence: change.confidence,
@@ -302,8 +323,8 @@ export async function applyMemoryChange(
       },
       select: { id: true },
     });
-    ctx.existingItemSignatures.add(signature);
-    ctx.existingItems?.push({ id: created.id, category: change.category, content: change.content });
+    target.existingItemSignatures.add(signature);
+    target.existingItems?.push({ id: created.id, category: change.category, content: change.content });
     await tx.auditLog.create({
       data: {
         ...auditActor,
@@ -316,6 +337,7 @@ export async function applyMemoryChange(
           confidence: change.confidence,
           evidenceMessageIds: change.evidenceMessageIds,
           snapshotId: ctx.snapshotId,
+          scope: targetScope,
         },
       },
     });
@@ -330,17 +352,17 @@ export async function applyMemoryChange(
     };
   }
 
-  if (!relatedId || ctx.handledMemoryIds.has(relatedId) || !ctx.canTarget(relatedId)) return null;
-  const previous = await ctx.resolvePrevious(relatedId);
+  if (!relatedId || target.handledMemoryIds.has(relatedId) || !target.canTarget(relatedId)) return null;
+  const previous = await target.resolvePrevious(relatedId);
   if (!previous) return null;
 
   if (change.action === "INVALIDATE") {
     const invalidated = await tx.memoryItem.updateMany({
-      where: { id: relatedId, memoryScopeId: ctx.memoryScopeId, status: "ACTIVE" },
+      where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE" },
       data: { status: "INVALIDATED", validTo: primaryEvidence.occurredAt },
     });
     if (invalidated.count !== 1) return null;
-    ctx.handledMemoryIds.add(relatedId);
+    target.handledMemoryIds.add(relatedId);
     await tx.auditLog.create({
       data: {
         ...auditActor,
@@ -353,6 +375,7 @@ export async function applyMemoryChange(
           confidence: change.confidence,
           evidenceMessageIds: change.evidenceMessageIds,
           snapshotId: ctx.snapshotId,
+          scope: targetScope,
         },
       },
     });
@@ -370,20 +393,20 @@ export async function applyMemoryChange(
     (previous.category !== change.category || normalizeMemoryText(previous.content) !== normalizeMemoryText(change.content))
   ) {
     const superseded = await tx.memoryItem.updateMany({
-      where: { id: relatedId, memoryScopeId: ctx.memoryScopeId, status: "ACTIVE" },
+      where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE" },
       data: { status: "SUPERSEDED", validTo: primaryEvidence.occurredAt },
     });
     if (superseded.count !== 1) return null;
-    ctx.handledMemoryIds.add(relatedId);
+    target.handledMemoryIds.add(relatedId);
     const dedupeKey = makeMemoryDedupeKey(change.category, change.content);
-    const keyUsed = ctx.existingDedupeKeys.has(dedupeKey) || Boolean(await tx.memoryItem.findFirst({
-      where: { memoryScopeId: ctx.memoryScopeId, dedupeKey },
+    const keyUsed = target.existingDedupeKeys.has(dedupeKey) || Boolean(await tx.memoryItem.findFirst({
+      where: { memoryScopeId: target.memoryScopeId, dedupeKey },
       select: { id: true },
     }));
-    ctx.existingDedupeKeys.add(dedupeKey);
+    target.existingDedupeKeys.add(dedupeKey);
     const created = await tx.memoryItem.create({
       data: {
-        memoryScopeId: ctx.memoryScopeId,
+        memoryScopeId: target.memoryScopeId,
         category: change.category as MemoryCategoryValue,
         content: change.content,
         confidence: change.confidence,
@@ -396,8 +419,8 @@ export async function applyMemoryChange(
       },
       select: { id: true },
     });
-    ctx.existingItemSignatures.add(change.category + ":" + normalizeMemoryText(change.content));
-    ctx.existingItems?.push({ id: created.id, category: change.category, content: change.content });
+    target.existingItemSignatures.add(change.category + ":" + normalizeMemoryText(change.content));
+    target.existingItems?.push({ id: created.id, category: change.category, content: change.content });
     await tx.auditLog.create({
       data: {
         ...auditActor,
@@ -412,6 +435,7 @@ export async function applyMemoryChange(
           confidence: change.confidence,
           evidenceMessageIds: change.evidenceMessageIds,
           snapshotId: ctx.snapshotId,
+          scope: targetScope,
         },
       },
     });
@@ -529,6 +553,9 @@ export async function applyMemoryEvents(
       const created = await tx.memoryEvent.create({
         data: {
           memoryScopeId: ctx.memoryScopeId,
+          // 忆泡归属会话：群聊范围是全局的，不存这一列就没法按「这个群」过滤。
+          // 收口规则见上面 primaryConversationId 的注释。
+          conversationId: primaryConversationId ?? null,
           dayKey: localDayKey(occurredAt, ctx.timeZone),
           state: ctx.state,
           occurredAt,

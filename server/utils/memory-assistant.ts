@@ -576,7 +576,7 @@ export type ConversationReplyWithMemoryAssistant = ConversationReplyResult & {
   memoryAssistantUsage?: ModelUsageTokens;
   memoryAssistantModel?: string;
   memoryAssistantSources?: MemoryAssistantCandidate[];
-  memoryAssistantStatus?: "success" | "no_sources" | "failed" | "final_reply_failed";
+  memoryAssistantStatus?: "success" | "no_sources" | "failed" | "final_reply_failed" | "context_answered";
   memoryAssistantFailureReason?: string;
   memoryAssistantAttempts?: number;
   memoryAssistantFinishReason?: string;
@@ -604,6 +604,11 @@ function warnMemoryAssistantFailure(
     finishReason?: string;
     httpStatus?: number;
     durationMs: number;
+    /** 第二轮主模型失败时的诊断字段：来源分布与错误名/消息（不含用户正文）。 */
+    sourceCount?: number;
+    sourceTypeCounts?: Record<string, number>;
+    errorName?: string;
+    errorMessage?: string;
   },
 ): void {
   // 不记录检索问题正文、候选内容、用户 ID 或 API 凭据，避免把私人对话复制进日志。
@@ -627,6 +632,20 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   if (!assistantAvailable || !input.assistant || !memoryAssistantQuery || first.action === "silent") {
     return firstResult;
   }
+
+  /**
+   * 首轮已经拿到确定性上下文（手账里的自述事实、群发言统计），并且给出了一句真话。
+   *
+   * 这时检索没命中、或第二轮生成失败，都**不能再用「没找到记录」把它盖掉** ——
+   * 上下文里明明有答案，只是它不在长期记忆表里。2026-11-04 的生日问题就是这样：
+   * 手账里有「生日 10 月 30 号」，但群聊检索只查 memory/snapshot/event/message，
+   * 查不到手账，于是模型先答对了、又被兜底文案改回「没记录」。
+   */
+  const contextAlreadyAnswers = Boolean(
+    input.chatInput.journalFacts?.length || input.chatInput.groupActivity,
+  ) && firstResult.reply.trim().length > 0
+    // 「让我去翻翻」这类等待话术不算答案：宁可走「没找到记录」，也不能把悬而未决的话交付。
+    && !/^(让我|我去|等我|稍等|我查|我翻|我想想)/u.test(firstResult.reply.trim());
 
   const startedAt = Date.now();
   let candidates = input.candidates;
@@ -657,6 +676,9 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       attempts: 0,
       durationMs: Date.now() - startedAt,
     });
+    if (contextAlreadyAnswers) {
+      return { ...firstResult, memoryAssistantStatus: "context_answered" };
+    }
     return {
       ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_NO_SOURCE_REPLY),
       memoryAssistantModel: input.assistant.model,
@@ -701,6 +723,16 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       ...(retrieval.finishReason ? { finishReason: retrieval.finishReason } : {}),
       durationMs: Date.now() - startedAt,
     });
+    if (contextAlreadyAnswers) {
+      return {
+        ...firstResult,
+        ...(retrieval.usage ? { memoryAssistantUsage: retrieval.usage } : {}),
+        memoryAssistantModel: retrieval.model,
+        memoryAssistantStatus: "context_answered",
+        memoryAssistantAttempts: retrieval.attempts,
+        ...(retrieval.finishReason ? { memoryAssistantFinishReason: retrieval.finishReason } : {}),
+      };
+    }
     return {
       ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_NO_SOURCE_REPLY),
       ...(retrieval.usage ? { memoryAssistantUsage: retrieval.usage } : {}),
@@ -779,15 +811,40 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       memoryAssistantAttempts: retrieval.attempts,
       ...(retrieval.finishReason ? { memoryAssistantFinishReason: retrieval.finishReason } : {}),
     };
-  } catch {
+  } catch (error) {
     // 检索本身已经成功；第二轮主模型失败时回退到第一轮或明确的非空提示。
+    //
+    // 只记「失败」两个字没法查：可能是 JSON 解析、空正文、HTTP 错误或超时。
+    // 这里带上错误名/消息（不含用户正文与密钥）和来源类型分布，下一次一眼能分清
+    // 是「模型输出坏了」还是「请求根本没发出去」。
+    const failure = error instanceof Error
+      ? { name: error.name || "Error", message: error.message || "" }
+      : { name: "Unknown", message: String(error) };
+    const sourceTypeCounts = retrieval.sources.reduce<Record<string, number>>((counts, source) => {
+      counts[source.sourceType] = (counts[source.sourceType] ?? 0) + 1;
+      return counts;
+    }, {});
     warnMemoryAssistantFailure("final_reply_failed", {
       queryLength: memoryAssistantQuery.length,
       candidateCount: candidates.length,
+      sourceCount: retrieval.sources.length,
+      sourceTypeCounts,
+      errorName: failure.name,
+      errorMessage: failure.message.slice(0, 200),
       attempts: retrieval.attempts,
       ...(retrieval.finishReason ? { finishReason: retrieval.finishReason } : {}),
       durationMs: Date.now() - startedAt,
     });
+    if (contextAlreadyAnswers) {
+      return {
+        ...firstResult,
+        ...(retrieval.usage ? { memoryAssistantUsage: retrieval.usage } : {}),
+        memoryAssistantModel: retrieval.model,
+        memoryAssistantStatus: "context_answered",
+        memoryAssistantAttempts: retrieval.attempts,
+        ...(retrieval.finishReason ? { memoryAssistantFinishReason: retrieval.finishReason } : {}),
+      };
+    }
     return {
       ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_FINAL_REPLY_FAILED),
       ...(retrieval.usage ? { memoryAssistantUsage: retrieval.usage } : {}),

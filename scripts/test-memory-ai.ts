@@ -3,6 +3,7 @@ import { isNearDuplicateMemory, validateMemoryAiOutput } from "../server/utils/m
 
 const validIds = ["message-a", "message-b"];
 const activeIds = ["memory-1"];
+const globalIds = ["global-1"];
 const parsed = validateMemoryAiOutput({
   summary: "用户明确表达了对简洁回答的偏好。",
   importantEvents: [{ title: "偏好确认", detail: "用户提出希望简洁回答。", evidenceMessageIds: ["message-a", "fake-id"] }],
@@ -41,20 +42,48 @@ const parsed = validateMemoryAiOutput({
     {
       action: "ADD",
       category: "FACT",
+      content: "关于她自己的稳定事实",
+      confidence: 0.95,
+      importance: 0.8,
+      scope: "character",
+      evidenceMessageIds: ["message-a"],
+    },
+    {
+      action: "ADD",
+      category: "FACT",
+      content: "范围写错的记忆",
+      confidence: 0.95,
+      scope: "global",
+      evidenceMessageIds: ["message-a"],
+    },
+    {
+      action: "INVALIDATE",
+      category: "FACT",
+      content: "旧的全局记忆不再成立",
+      confidence: 0.9,
+      relatedMemoryId: "global-1",
+      evidenceMessageIds: ["message-b"],
+    },
+    {
+      action: "ADD",
+      category: "FACT",
       content: "没有来源的记忆",
       confidence: 0.99,
       evidenceMessageIds: ["not-a-real-message"],
     },
   ],
-}, validIds, activeIds);
+}, validIds, activeIds, globalIds);
 
 assert.equal(parsed.summary, "用户明确表达了对简洁回答的偏好。");
 assert.deepEqual(parsed.importantEvents[0]?.evidenceMessageIds, ["message-a"]);
-assert.equal(parsed.memoryChanges.length, 2, "Invalid or untraceable changes must be rejected.");
+assert.equal(parsed.memoryChanges.length, 5, "Invalid or untraceable changes must be rejected.");
 assert.deepEqual(parsed.memoryChanges[0]?.evidenceMessageIds, ["message-a"]);
 assert.equal(parsed.memoryChanges[1]?.relatedMemoryId, "memory-1");
 assert.equal(parsed.memoryChanges[0]?.importance, 0.9, "模型给的 importance 要原样带出来");
 assert.equal(parsed.memoryChanges[1]?.importance, 1, "越界的 importance 截断到 1，不丢整条");
+assert.equal(parsed.memoryChanges[2]?.scope, "character", "关于她自己的稳定事实可以写全局");
+assert.equal(parsed.memoryChanges[3]?.scope, undefined, "不认识的 scope 一律按当前范围，不许跨范围写入");
+assert.equal(parsed.memoryChanges[4]?.relatedMemoryId, "global-1", "INVALIDATE 可以指向全局记忆");
 
 // ── 近似判重：同类别 + 字面高度重合 ──────────────────────────
 assert.equal(
