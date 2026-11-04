@@ -24,6 +24,7 @@ import {
 import {
   resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
 } from "../../../utils/message-retrieval";
+import { selectRawMessagesForMemoryAssistant } from "../../../utils/message-retrieval";
 import { recordModelUsage, readDailyQuota, toUsageTokens } from "../../../utils/model-usage";
 import { resolveChatMemoryScopes } from "../../../utils/memory-scope-access";
 import { requireActorUserId } from "../../../utils/auth";
@@ -395,24 +396,60 @@ export default defineEventHandler(async (event) => {
   const acquaintances = await listAcquaintances({ characterId, limit: CLOSE_FRIEND_LIMIT }).catch(() => null);
   const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
-  const memoryAssistantCandidates = memoryAssistant
-    ? buildMemoryAssistantCandidates({
-        query: retrievalQuery,
-        memories: memoryCandidates,
-        snapshots: snapshotCandidates,
-        events: eventCandidates,
-        scopeOf: (scopeId) => scopeOriginById.get(scopeId) ?? "character",
-        timeZone,
-        ...(participantIds.length ? { participantIds } : {}),
-        allowPrivate: true,
-      })
-    : [];
 
   let generated;
   try {
     generated = await generateConversationReplyWithMemoryAssistant({
       assistant: memoryAssistant,
-      candidates: memoryAssistantCandidates,
+      candidates: [],
+      loadCandidates: async (searchQuery) => {
+        const searchParticipantName = parseEventParticipantQuery(searchQuery);
+        const searchParticipantIds = searchParticipantName
+          ? await resolveParticipantAccounts(prisma, searchParticipantName)
+          : [];
+        // 只有大肥鱼明确请求深度回忆时才读取较广范围的原始消息；每个可访问范围最多取 250 条。
+        const rawRowsByScope = await Promise.all(readableScopeIds.map((scopeId) =>
+          prisma.message.findMany({
+            where: {
+              conversation: { memoryScopeId: scopeId },
+              role: { in: ["USER", "ASSISTANT"] },
+            },
+            orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+            take: 250,
+            select: {
+              id: true, role: true, content: true, occurredAt: true, metadata: true,
+              conversation: { select: { memoryScopeId: true } },
+            },
+          }),
+        ));
+        const assistantRawMessages = rawRowsByScope.flat().map((row) => {
+          const speaker = readMessageSpeaker(row.metadata);
+          return {
+            id: row.id,
+            role: row.role,
+            content: row.content,
+            occurredAt: row.occurredAt,
+            memoryScopeId: row.conversation.memoryScopeId,
+            ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
+            ...(readMessageIsOwner(row.metadata) ? { isOwner: true } : {}),
+          };
+        });
+        return buildMemoryAssistantCandidates({
+          query: searchQuery,
+          memories: memoryCandidates,
+          snapshots: snapshotCandidates,
+          events: eventCandidates,
+          rawMessages: assistantRawMessages,
+          excludeRawMessageIds: new Set([
+            ...recentStoredMessages.map((item) => item.id),
+            ...rawMessages.map((item) => item.id),
+          ]),
+          scopeOf: (scopeId) => scopeOriginById.get(scopeId) ?? "character",
+          timeZone,
+          ...(searchParticipantIds.length ? { participantIds: searchParticipantIds } : {}),
+          allowPrivate: true,
+        });
+      },
       chatInput: {
       characterName: character.name,
       characterPrompt: character.basePrompt.slice(0, 12_000),
