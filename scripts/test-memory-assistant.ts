@@ -144,6 +144,7 @@ const chatInput: ConversationReplyInput = {
   model: "chat-model",
   apiKey: "chat-key-only",
   apiBaseUrl: "https://chat.example.com/v1",
+  maxTokens: 512,
   currentMessage: "我们上周聊的那部太空电影叫什么？",
   recentMessages: [],
   memories: [],
@@ -233,6 +234,7 @@ try {
   assert.equal(candidateLoaderCalls, 1, "Historical database candidates should load only after the chat model requests a search.");
   assert.equal(calls.length, 3, "A requested search should make one initial chat call, one read-only lookup, and one final chat call.");
   assert.equal(calls[0]?.authorization, "Bearer chat-key-only");
+  assert.equal(calls[0]?.body.max_tokens, 512, "The main chat model must retain its own configured token limit.");
   assert.equal(calls[1]?.authorization, "Bearer memory-key-only",
     "The memory assistant must use its own credential, never the chat credential.");
   assert.equal(calls[2]?.authorization, "Bearer chat-key-only");
@@ -374,8 +376,10 @@ try {
     loadCandidates: async () => [candidate],
   });
   assert.equal(requests.length, 4, "A query-only first response should proceed through retrieval retry and final chat.");
+  assert.equal(requests[0]?.body.max_tokens, 512, "Chat token settings must not be replaced by memory-assistant limits.");
   assert.equal(requests[1]?.body.max_tokens, 2_048);
   assert.equal(requests[2]?.body.max_tokens, 4_096);
+  assert.equal(requests[3]?.body.max_tokens, 512, "The final chat call must keep the chat model's token limit.");
   assert.deepEqual(requests[1]?.body.thinking, { type: "disabled" },
     "DeepSeek memory lookups should explicitly disable unnecessary reasoning.");
   assert.deepEqual(requests[2]?.body.thinking, { type: "disabled" });
