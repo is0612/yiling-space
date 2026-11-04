@@ -129,7 +129,13 @@ export function toUsageTokens(
 
 export async function recordModelUsage(input: ModelUsageInput): Promise<void> {
   const usage = input.usage;
-  if (!usage || usage.totalTokens <= 0) return;
+  const hasMetadata = Boolean(input.metadata && Object.keys(input.metadata).length > 0);
+  // 有些失败请求（HTTP 错误、超时）拿不到 token usage，但仍要留一条 0 token 的诊断记录。
+  // 不带 usage 且没有 metadata 的旧调用保持原行为，不会平白增加空记账行。
+  if ((!usage || usage.totalTokens <= 0) && !hasMetadata) return;
+  const recordedUsage = usage && usage.totalTokens > 0
+    ? usage
+    : { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   try {
     await getPrisma().modelUsage.create({
       data: {
@@ -139,12 +145,12 @@ export async function recordModelUsage(input: ModelUsageInput): Promise<void> {
         userId: input.userId || null,
         conversationId: input.conversationId || null,
         channelBindingId: input.channelBindingId || null,
-        promptTokens: usage.promptTokens,
-        completionTokens: usage.completionTokens,
-        totalTokens: usage.totalTokens,
-        reasoningTokens: usage.reasoningTokens ?? null,
-        cacheHitTokens: usage.cacheHitTokens ?? null,
-        cacheMissTokens: usage.cacheMissTokens ?? null,
+        promptTokens: recordedUsage.promptTokens,
+        completionTokens: recordedUsage.completionTokens,
+        totalTokens: recordedUsage.totalTokens,
+        reasoningTokens: recordedUsage.reasoningTokens ?? null,
+        cacheHitTokens: recordedUsage.cacheHitTokens ?? null,
+        cacheMissTokens: recordedUsage.cacheMissTokens ?? null,
         metadata: input.metadata ?? undefined,
       },
     });
