@@ -132,7 +132,12 @@ export function buildMemoryAssistantCandidates(
   const canRead = (scope: ConversationMemoryScope) => input.allowPrivate !== false || scope === "character";
   const candidates: MemoryAssistantCandidate[] = [];
 
-  const memories = rankMemoriesWithBudget(input.query, input.memories, {
+  // 在排序之前就剔除不可读范围，避免别人的私有内容影响候选排名。
+  const readableMemories = input.memories.filter((memory) => canRead(input.scopeOf(memory.memoryScopeId)));
+  const readableSnapshots = input.snapshots.filter((snapshot) => canRead(input.scopeOf(snapshot.memoryScopeId)));
+  const readableEvents = input.events.filter((event) => canRead(input.scopeOf(event.memoryScopeId)));
+
+  const memories = rankMemoriesWithBudget(input.query, readableMemories, {
     limit: 22,
     tokenBudget: 3_600,
   }).items;
@@ -157,7 +162,7 @@ export function buildMemoryAssistantCandidates(
     });
   }
 
-  const snapshots = rankSnapshotsWithBudget(input.query, input.snapshots, {
+  const snapshots = rankSnapshotsWithBudget(input.query, readableSnapshots, {
     limit: 8,
     tokenBudget: 3_000,
   }).items;
@@ -177,7 +182,7 @@ export function buildMemoryAssistantCandidates(
     });
   }
 
-  const events = selectEventsForPrompt(input.query, input.events, {
+  const events = selectEventsForPrompt(input.query, readableEvents, {
     timeZone: input.timeZone,
     tokenBudget: 2_400,
     limit: 16,
