@@ -331,6 +331,7 @@ async function loadCharacterFriends(characterId: string) {
         orderBy: { createdAt: "asc" },
         take: CHARACTER_BUNDLE_LIMITS.friendMemories,
         select: {
+          originId: true,
           category: true,
           content: true,
           confidence: true,
@@ -345,6 +346,7 @@ async function loadCharacterFriends(characterId: string) {
         orderBy: { periodEnd: "asc" },
         take: CHARACTER_BUNDLE_LIMITS.friendSnapshots,
         select: {
+          originId: true,
           kind: true,
           periodStart: true,
           periodEnd: true,
@@ -436,7 +438,7 @@ async function insertMemories(
     const content = item.content.trim();
     if (existingContents) {
       const originKey = item.originId ? `origin:${item.originId}` : null;
-      if ((originKey && existingContents.has(originKey)) || (!originKey && existingContents.has(`content:${content}`))) continue;
+      if ((originKey && existingContents.has(originKey)) || existingContents.has(`content:${content}`)) continue;
       if (originKey) existingContents.add(originKey);
       existingContents.add(`content:${content}`);
     }
@@ -473,7 +475,7 @@ async function insertEvents(
     const signature = `event:${item.dayKey}|${item.title.trim()}`;
     const originKey = item.originId ? `origin:${item.originId}` : null;
     if (existingSignatures) {
-      if ((originKey && existingSignatures.has(originKey)) || (!originKey && existingSignatures.has(signature))) continue;
+      if ((originKey && existingSignatures.has(originKey)) || existingSignatures.has(signature)) continue;
       if (originKey) existingSignatures.add(originKey);
       existingSignatures.add(signature);
     }
@@ -628,7 +630,7 @@ async function insertSnapshots(
     const periodKey = `period:${period}`;
     const originKey = item.originId ? `origin:${item.originId}` : null;
     if (existingPeriods) {
-      if ((originKey && existingPeriods.has(originKey)) || (!originKey && existingPeriods.has(periodKey))) continue;
+      if ((originKey && existingPeriods.has(originKey)) || existingPeriods.has(periodKey)) continue;
       if (originKey) existingPeriods.add(originKey);
       existingPeriods.add(periodKey);
     }
