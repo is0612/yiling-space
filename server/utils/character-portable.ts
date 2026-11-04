@@ -44,9 +44,9 @@ export const CHARACTER_BUNDLE_FORMAT = "yiling-hub.character";
  * 3 = 朋友的备注（`MemoryScope.aliases`）。同样是内容：她怎么叫一个人，
  * 是她对这段关系的一部分理解，不是可选的展示字段。v3 卡给老程序读会被上面那条
  * 版本检查拦下 —— 让老程序明说「导不进来」，好过它默默把备注丢掉、导完还像成功。
- * 反过来 v2 卡照旧能读：`aliases` 缺省为空数组，老卡里本来就没有这东西。
+ * v4 增加长期记忆、忆泡、阶段总结的跨设备 originId；v1–v3 仍兼容，缺少身份时由导入端补发。
  */
-export const CHARACTER_BUNDLE_VERSION = 3;
+export const CHARACTER_BUNDLE_VERSION = 4;
 /** 导入包最大字节数：够 4000 条记忆 + 600 篇总结 + 1500 篇手账，再大基本是塞了别的东西。 */
 export const CHARACTER_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
 
