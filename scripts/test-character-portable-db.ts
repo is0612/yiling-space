@@ -273,6 +273,9 @@ async function main() {
   const bundle = exported.bundle;
 
   assert.equal(bundle.character.name, "小鱼");
+  assert.ok(bundle.memories.find((item) => item.content === "主人住在杭州")?.originId, "导出必须携带长期记忆血缘 ID");
+  assert.ok(bundle.events.find((item) => item.title === "去海边游泳")?.originId, "导出必须携带忆泡血缘 ID");
+  assert.ok(bundle.snapshots.find((item) => item.summary === "这一段她学会了游泳。")?.originId, "导出必须携带阶段总结血缘 ID");
   assert.equal(bundle.counts.memories, 3, "只有角色全局 + 自己的私人记忆进包");
   assert.equal(bundle.counts.privateMemories, 1, "私人记忆要单独计数，导入时要提示");
   assert.equal(bundle.counts.events, 2, "忆泡同样按范围过滤");
@@ -454,7 +457,12 @@ async function main() {
     "导入要把血缘带过来，否则以后再导回来就认不出是同一个她",
   );
 
-  // 第一次合并：这份数据本机已经全有了 → 一条都不该新增
+  // 模拟两台设备分叉：本地改写同一条记忆，但 originId 不变；合并时必须认出是同一条并保留本地。
+  const localLineageMemory = importedGlobal?.memoryItems.find((item) => item.content === "主人住在杭州");
+  assert.ok(localLineageMemory?.originId, "导入后必须保留源记忆血缘 ID");
+  await prisma.memoryItem.update({ where: { id: localLineageMemory.id }, data: { content: "本机后来修订的住址记忆。" } });
+
+  // 第一次合并：即使正文已在本机改写，也应按 originId 识别为同一条，不新增副本。
   const reconciled = await importCharacterCard({
     raw: JSON.parse(serialized),
     ownerId: ownerA,
@@ -462,7 +470,8 @@ async function main() {
   });
   assert.equal(reconciled.mode, "merge", "指定目标时走合并");
   assert.equal(reconciled.characterId, first.characterId, "合并进目标角色，不新建");
-  assert.equal(reconciled.added.memories, 0, "重复合并不该长出重复记忆");
+  assert.equal(reconciled.added.memories, 0, "同一 originId 即使正文分叉也不该长出重复记忆");
+  assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: localLineageMemory.id } })).content, "本机后来修订的住址记忆。", "合并必须保留本机对同一记忆的修订");
   assert.equal(reconciled.added.events, 0);
   assert.equal(reconciled.added.journalRevisions, 0);
   const mergedMemoryCount = await prisma.memoryItem.count({
