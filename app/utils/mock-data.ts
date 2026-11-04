@@ -41,6 +41,12 @@ export type Character = {
   /** 记忆助手是否启用、模型配置和 Key 保存状态。 */
   memoryAssistantEnabled?: boolean;
   memoryAssistantModel?: string;
+  /** 记忆助手独立采样温度；旧角色缺省为 0.1。 */
+  memoryAssistantTemperature?: number;
+  /** 记忆助手单次检索的估算输入 Token 上限；旧角色缺省为 12288。 */
+  memoryAssistantMaxInputTokens?: number;
+  /** 记忆助手单次检索的最大输出 Token；旧角色缺省为 2048。 */
+  memoryAssistantMaxOutputTokens?: number;
   memoryAssistantApiBaseUrl?: string;
   memoryAssistantApiKeyConfigured?: boolean;
   memoryAssistantConfigured?: boolean;
