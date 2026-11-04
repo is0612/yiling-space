@@ -70,6 +70,9 @@ const clearVisionApiKey = ref(false);
 
 // ── 记忆助手模型：独立地址、模型和 API Key，不借用聊天凭据 ──
 const draftMemoryAssistantModel = ref("");
+const draftMemoryAssistantTemperature = ref(0.1);
+const draftMemoryAssistantMaxInputTokens = ref(12288);
+const draftMemoryAssistantMaxOutputTokens = ref(2048);
 const draftMemoryAssistantApiBaseUrl = ref("");
 const draftMemoryAssistantApiKey = ref("");
 const clearMemoryAssistantApiKey = ref(false);
@@ -144,6 +147,9 @@ const draftSignature = computed(() => JSON.stringify([
   clearVisionApiKey.value,
   // 记忆助手 Key 明文不进指纹（留空=不改），清除勾选要进。
   draftMemoryAssistantModel.value.trim(),
+  draftMemoryAssistantTemperature.value,
+  draftMemoryAssistantMaxInputTokens.value,
+  draftMemoryAssistantMaxOutputTokens.value,
   draftMemoryAssistantApiBaseUrl.value.trim(),
   draftMemoryAssistantApiKey.value.trim(),
   clearMemoryAssistantApiKey.value,
@@ -603,6 +609,9 @@ async function loadCharacter() {
     draftVisionApiKey.value = "";
     clearVisionApiKey.value = false;
     draftMemoryAssistantModel.value = data.memoryAssistantModel ?? "";
+    draftMemoryAssistantTemperature.value = data.memoryAssistantTemperature ?? 0.1;
+    draftMemoryAssistantMaxInputTokens.value = data.memoryAssistantMaxInputTokens ?? 12288;
+    draftMemoryAssistantMaxOutputTokens.value = data.memoryAssistantMaxOutputTokens ?? 2048;
     draftMemoryAssistantApiBaseUrl.value = data.memoryAssistantApiBaseUrl ?? "";
     draftMemoryAssistantProviderKey.value = providerByBaseUrl(
       draftMemoryAssistantApiBaseUrl.value || draftChatApiBaseUrl.value,
@@ -662,6 +671,9 @@ async function save(silent = false): Promise<boolean> {
         ...(clearVisionApiKey.value ? { clearVisionApiKey: true } : {}),
         // 记忆助手模型：独立凭据，Key 留空不改，明确勾选才删除。
         memoryAssistantModel: draftMemoryAssistantModel.value.trim(),
+        memoryAssistantTemperature: draftMemoryAssistantTemperature.value,
+        memoryAssistantMaxInputTokens: draftMemoryAssistantMaxInputTokens.value,
+        memoryAssistantMaxOutputTokens: draftMemoryAssistantMaxOutputTokens.value,
         memoryAssistantApiBaseUrl: draftMemoryAssistantApiBaseUrl.value.trim(),
         ...(draftMemoryAssistantApiKey.value.trim()
           ? { memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim() }
@@ -1698,6 +1710,33 @@ watch(id, () => void loadCharacter());
                     <el-icon><Refresh /></el-icon>{{ fetchingMemoryAssistantModels ? "获取中…" : "获取模型" }}
                   </el-button>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brick">
+            <div class="brick-head"><div class="brick-head-txt">
+              <div class="brick-heading"><h2 class="brick-title">检索参数</h2></div>
+              <p class="brick-desc">只影响记忆助手，不会改变大肥鱼的对话模型参数。输入预算是估算上限，实际 Token 数以模型供应商统计为准。</p>
+            </div></div>
+            <div class="knob-group">
+              <div class="knob">
+                <div class="knob-label">温度</div>
+                <p class="field-help">默认 0.1。较低温度让来源筛选更稳定，范围 0–2。</p>
+                <div class="knob-ctl">
+                  <el-slider v-model="draftMemoryAssistantTemperature" class="knob-slider" :min="0" :max="2" :step="0.1" aria-label="记忆助手温度" />
+                  <el-input-number v-model="draftMemoryAssistantTemperature" class="knob-number narrow" :min="0" :max="2" :step="0.1" :precision="1" :controls="false" aria-label="记忆助手温度数值" />
+                </div>
+              </div>
+              <div class="knob">
+                <div class="knob-label">最大输入 Token</div>
+                <p class="field-help">默认 12288。系统提示词和问题会先预留预算，剩余部分用于候选记忆资料；这是估算上限。范围 4096–32768。</p>
+                <div class="knob-ctl"><el-input-number v-model="draftMemoryAssistantMaxInputTokens" class="knob-number" :min="4096" :max="32768" :step="1024" aria-label="记忆助手最大输入 Token" /></div>
+              </div>
+              <div class="knob">
+                <div class="knob-label">最大输出 Token</div>
+                <p class="field-help">默认 2048。首次请求使用约 80%，若响应被截断再使用完整上限；重试不会超过这里设置的值。范围 512–8192。</p>
+                <div class="knob-ctl"><el-input-number v-model="draftMemoryAssistantMaxOutputTokens" class="knob-number" :min="512" :max="8192" :step="256" aria-label="记忆助手最大输出 Token" /></div>
               </div>
             </div>
           </section>
