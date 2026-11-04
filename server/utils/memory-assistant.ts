@@ -531,11 +531,22 @@ async function callMemoryAssistant(
     }
 
     const parsed = parseJsonLoose(content, { expect: "object" });
+    const parsedRecord = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+    if (!Array.isArray(parsedRecord.sourceKeys)) {
+      throw new MemoryAssistantRequestError({
+        reason: "invalid_output",
+        attempts: attempt,
+        usage: totalUsage,
+        finishReason: lastFinishReason || undefined,
+      });
+    }
     const model = typeof record.model === "string" && record.model.trim()
       ? record.model.trim().slice(0, 200)
       : config.model;
     return {
-      sources: selectMemoryAssistantSources(parsed, candidates),
+      sources: selectMemoryAssistantSources(parsedRecord, candidates),
       model,
       ...(totalUsage ? { usage: totalUsage } : {}),
       attempts: attempt,
