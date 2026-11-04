@@ -9,10 +9,12 @@ import {
 import { selectEventsForPrompt, type EventCandidate } from "./memory-event-retrieval";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
+import { selectRawMessagesForMemoryAssistant, type RawMessageCandidate } from "./message-retrieval";
 import {
   generateConversationReply,
   type ConversationContextEvent,
   type ConversationContextMemory,
+  type ConversationContextRawMessage,
   type ConversationContextSnapshot,
   type ConversationMemoryScope,
   type ConversationReplyInput,
@@ -21,7 +23,7 @@ import {
 
 export type MemoryAssistantCandidate = {
   sourceKey: string;
-  sourceType: "memory" | "snapshot" | "event";
+  sourceType: "memory" | "snapshot" | "event" | "message";
   id: string;
   scope: ConversationMemoryScope;
   relevanceScore: number;
@@ -37,6 +39,9 @@ export type MemoryAssistantCandidate = {
   participants?: string[];
   timeOfDay?: string;
   place?: string;
+  role?: string;
+  speaker?: string;
+  isOwner?: boolean;
 };
 
 export type MemoryAssistantRuntime = {
@@ -73,11 +78,19 @@ type EventCandidateRecord = EventCandidate & {
   memoryScopeId: string;
 };
 
+type MemoryAssistantRawMessageRecord = RawMessageCandidate & {
+  memoryScopeId: string;
+  speaker?: string;
+  isOwner?: boolean;
+};
+
 export type BuildMemoryAssistantCandidatesInput = {
   query: string;
   memories: MemoryCandidateRecord[];
   snapshots: SnapshotCandidateRecord[];
   events: EventCandidateRecord[];
+  rawMessages?: MemoryAssistantRawMessageRecord[];
+  excludeRawMessageIds?: Set<string>;
   scopeOf: (memoryScopeId: string) => ConversationMemoryScope;
   timeZone: string;
   participantIds?: string[];
@@ -136,6 +149,7 @@ export function buildMemoryAssistantCandidates(
   const readableMemories = input.memories.filter((memory) => canRead(input.scopeOf(memory.memoryScopeId)));
   const readableSnapshots = input.snapshots.filter((snapshot) => canRead(input.scopeOf(snapshot.memoryScopeId)));
   const readableEvents = input.events.filter((event) => canRead(input.scopeOf(event.memoryScopeId)));
+  const readableRawMessages = (input.rawMessages ?? []).filter((message) => canRead(input.scopeOf(message.memoryScopeId)));
 
   const memories = rankMemoriesWithBudget(input.query, readableMemories, {
     limit: 22,
@@ -206,7 +220,28 @@ export function buildMemoryAssistantCandidates(
     });
   }
 
-  return candidates.slice(0, 48);
+  const rawMessages = selectRawMessagesForMemoryAssistant(input.query, readableRawMessages, {
+    limit: 16,
+    tokenBudget: 3_200,
+    excludeIds: input.excludeRawMessageIds,
+  });
+  for (const message of rawMessages) {
+    const scope = input.scopeOf(message.memoryScopeId);
+    candidates.push({
+      sourceKey: "message/" + message.id,
+      sourceType: "message",
+      id: message.id,
+      scope,
+      relevanceScore: message.relevanceScore,
+      role: message.role,
+      content: message.content,
+      occurredAt: message.occurredAt.toISOString(),
+      ...(message.speaker ? { speaker: message.speaker.slice(0, 80) } : {}),
+      ...(message.isOwner ? { isOwner: true } : {}),
+    });
+  }
+
+  return candidates.slice(0, 64);
 }
 
 /** 只接受本轮候选列表里的精确 key；模型编造或串用的来源 ID 一律丢弃。 */
@@ -351,11 +386,9 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   chatInput: ConversationReplyInput;
   assistant: MemoryAssistantRuntime | null;
   candidates: MemoryAssistantCandidate[];
+  loadCandidates?: (query: string) => Promise<MemoryAssistantCandidate[]>;
 }): Promise<ConversationReplyWithMemoryAssistant> {
-  const candidates = input.chatInput.groupChat
-    ? input.candidates.filter((candidate) => candidate.scope === "character")
-    : input.candidates;
-  const assistantAvailable = Boolean(input.assistant && candidates.length > 0);
+  const assistantAvailable = Boolean(input.assistant && (input.loadCandidates || input.candidates.length > 0));
 
   const first = await generateConversationReply({
     ...input.chatInput,
@@ -366,6 +399,20 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   if (!assistantAvailable || !input.assistant || !memoryAssistantQuery || first.action === "silent") {
     return firstResult;
   }
+
+  let candidates = input.candidates;
+  if (input.loadCandidates) {
+    try {
+      candidates = await input.loadCandidates(memoryAssistantQuery);
+    } catch {
+      // 追加候选读取失败不能影响原本的聊天回复。
+      return firstResult;
+    }
+  }
+  if (input.chatInput.groupChat) {
+    candidates = candidates.filter((candidate) => candidate.scope === "character");
+  }
+  if (!candidates.length) return firstResult;
 
   let retrieval: Awaited<ReturnType<typeof callMemoryAssistant>>;
   try {
@@ -417,12 +464,25 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       scope: source.scope,
     }));
 
+  const extraRawMessages: ConversationContextRawMessage[] = retrieval.sources
+    .filter((source) => source.sourceType === "message")
+    .map((source) => ({
+      id: source.id,
+      role: source.role ?? "USER",
+      content: source.content ?? "",
+      occurredAt: source.occurredAt ?? "",
+      ...(source.speaker ? { speaker: source.speaker } : {}),
+      ...(source.isOwner ? { isOwner: true } : {}),
+      scope: source.scope,
+    }));
+
   try {
     const final = await generateConversationReply({
       ...input.chatInput,
       memories: appendUnique(input.chatInput.memories, extraMemories),
       snapshots: appendUnique(input.chatInput.snapshots, extraSnapshots),
       events: appendUnique(input.chatInput.events ?? [], extraEvents),
+      rawMessages: appendUnique(input.chatInput.rawMessages ?? [], extraRawMessages),
       memoryAssistantAvailable: false,
       memoryAssistantEvidenceProvided: true,
     });
