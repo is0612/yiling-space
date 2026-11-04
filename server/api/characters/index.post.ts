@@ -2,22 +2,13 @@ import { randomUUID } from "node:crypto";
 import { readBody } from "h3";
 import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { requireActorUserId } from "../../utils/auth";
-import { readTrimmedString } from "../../utils/local-api";
+import { readCharacterCreateInput } from "../../utils/character-create-input";
 import { getPrisma } from "../../utils/prisma";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
-  const body = await readBody<Record<string, unknown>>(event);
-  const name = readTrimmedString(body.name, "角色名称", 100, { required: true });
-  const alias = readTrimmedString(body.alias, "角色标签", 100) || "新建角色";
-  const description = readTrimmedString(body.description, "角色简介", 2000);
-  const personality = readTrimmedString(body.personality, "基础人设", 12000);
-  // 对话示例是可选增量：老客户端不传就当空，不注入提示词（等于迁移前行为）
-  const examples = readTrimmedString(body.examples, "对话示例", 8000);
-  const userAddress = readTrimmedString(body.userAddress, "她对你的称呼", 40) || "主人";
-  const avatarTone = body.avatarTone === "purple" || body.avatarTone === "peach" || body.avatarTone === "blue"
-    ? body.avatarTone
-    : "mint";
+  const { name, alias, description, personality, examples, userAddress, avatarTone } =
+    readCharacterCreateInput(await readBody<unknown>(event));
   const prisma = getPrisma();
 
   const characterId = randomUUID();

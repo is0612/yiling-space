@@ -132,17 +132,17 @@ type CharacterRecord = {
   } | null;
   channelBindings: Array<{ connection: { displayName: string } }>;
   memoryScopes: Array<{
-    memoryItems: Array<{ id: string }>;
+    _count: { memoryItems: number };
     snapshots: Array<{ createdAt: Date }>;
   }>;
 };
 
 export const characterInclude = {
   memorySetting: true,
-  channelBindings: { include: { connection: { select: { displayName: true } } } },
+  channelBindings: { select: { connection: { select: { displayName: true } } } },
   memoryScopes: {
-    include: {
-      memoryItems: { where: { status: "ACTIVE" as const }, select: { id: true } },
+    select: {
+      _count: { select: { memoryItems: { where: { status: "ACTIVE" as const } } } },
       snapshots: {
         where: { status: "CURRENT" as const },
         orderBy: { createdAt: "desc" as const },
@@ -228,7 +228,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
     intervalDays: setting?.snapshotIntervalDays ?? 3,
     pendingIntervalDays: setting?.pendingSnapshotIntervalDays ?? null,
     nextSnapshot,
-    memoryCount: character.memoryScopes.reduce((total, scope) => total + scope.memoryItems.length, 0),
+    memoryCount: character.memoryScopes.reduce((total, scope) => total + scope._count.memoryItems, 0),
     latestSnapshot: latestSnapshot ? formatDate(latestSnapshot, setting?.timezone) : "暂无总结",
     personality: character.basePrompt,
     examples: character.styleExamples ?? "",

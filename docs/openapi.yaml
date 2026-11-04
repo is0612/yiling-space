@@ -909,6 +909,7 @@ paths:
     post:
       tags: [Characters]
       summary: 创建角色
+      description: '请求体必须为对象。userAddress 未提供时默认「主人」，显式空字符串（或仅空白）表示不特意称呼；名称及资料字段按现有长度限制校验。'
       requestBody:
         required: true
         content:

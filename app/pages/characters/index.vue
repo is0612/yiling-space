@@ -27,6 +27,9 @@ import {
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character, CharacterStatus } from "~/utils/mock-data";
+import { characterCopyInput, createCharacterOperationGuard, replaceCharacter } from "~/utils/character-management";
+
+const characterOperations = createCharacterOperationGuard();
 
 /**
  * 上列表 + 下档案：点上面的卡片切换下面看谁。
@@ -167,8 +170,7 @@ function openProfile(character: Character) {
 
 /** 弹窗自己负责提交，这里只把结果回写，避免再发一次请求 */
 function onProfileSaved(updated: Character) {
-  const index = characters.value.findIndex((item) => item.id === updated.id);
-  if (index >= 0) characters.value.splice(index, 1, updated);
+  replaceCharacter(characters.value, updated);
 }
 
 /**
@@ -179,14 +181,7 @@ async function duplicateCharacter(character: Character) {
   try {
     const copy = await $fetch<Character>("/api/characters", {
       method: "POST",
-      body: {
-        name: character.name + " 副本",
-        alias: character.alias,
-        description: character.description,
-        personality: character.personality,
-        userAddress: character.userAddress,
-        avatarTone: character.avatarTone,
-      },
+      body: characterCopyInput(character),
     });
     characters.value.unshift(copy);
     selectedId.value = copy.id;
@@ -212,8 +207,7 @@ async function toggleCharacterStatus(character: Character) {
       method: "PATCH",
       body: { status: pausing ? "已暂停" : "运行中" },
     });
-    const index = characters.value.findIndex((item) => item.id === character.id);
-    if (index >= 0) characters.value.splice(index, 1, updated);
+    replaceCharacter(characters.value, updated);
     ElMessage.success(pausing ? "角色已停用。" : "角色已启用。");
   } catch (error) {
     ElMessage.error(readError(error, pausing ? "停用失败，请稍后重试。" : "启用失败，请稍后重试。"));
@@ -237,8 +231,7 @@ async function toggleThinking(character: Character | null, next: boolean) {
       method: "PATCH",
       body: { chatThinking: next },
     });
-    const index = characters.value.findIndex((item) => item.id === character.id);
-    if (index >= 0) characters.value.splice(index, 1, updated);
+    replaceCharacter(characters.value, updated);
     ElMessage.success(next ? "已开启深度思考：她会先想再说，回复会慢一些。" : "已关闭深度思考。");
   } catch (error) {
     ElMessage.error(readError(error, "切换深度思考失败，请稍后重试。"));
@@ -260,8 +253,7 @@ async function toggleMemoryAssistant(character: Character | null, next: boolean)
       method: "PATCH",
       body: { memoryAssistantEnabled: next },
     });
-    const index = characters.value.findIndex((item) => item.id === character.id);
-    if (index >= 0) characters.value.splice(index, 1, updated);
+    replaceCharacter(characters.value, updated);
     ElMessage.success(next ? "已为这个角色开启记忆助手。" : "已关闭这个角色的记忆助手。");
   } catch (error) {
     ElMessage.error(readError(error, "切换记忆助手失败，请稍后重试。"));
@@ -365,11 +357,13 @@ function onImported(character: Character) {
 function runCharacterCommand(command: string) {
   const character = selected.value;
   if (!character) return;
-  if (command === "export") void exportCharacter(character, true);
-  else if (command === "export-public") void exportCharacter(character, false);
-  else if (command === "duplicate") void duplicateCharacter(character);
-  else if (command === "toggle") void toggleCharacterStatus(character);
-  else if (command === "delete") void deleteCharacter(character);
+  void characterOperations.run(character.id, async () => {
+    if (command === "export") await exportCharacter(character, true);
+    else if (command === "export-public") await exportCharacter(character, false);
+    else if (command === "duplicate") await duplicateCharacter(character);
+    else if (command === "toggle") await toggleCharacterStatus(character);
+    else if (command === "delete") await deleteCharacter(character);
+  });
 }
 </script>
 
