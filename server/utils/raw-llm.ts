@@ -128,7 +128,10 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
         throw new Error("LLM_TIMEOUT: 模型请求超时，请检查 LLM_TIMEOUT_MS 或模型服务状态。");
       }
-      throw new Error("LLM_NETWORK_ERROR: " + (error instanceof Error ? error.message : String(error)));
+      // `fetch failed` 不带信息，真正的现场（ENOTFOUND / ECONNRESET / 证书）在 cause 里，带上它。
+      const cause = (error as { cause?: { code?: string; message?: string } } | null)?.cause;
+      const code = typeof cause?.code === "string" && cause.code ? cause.code : "";
+      throw new Error("LLM_NETWORK_ERROR: " + (error instanceof Error ? error.message : String(error)) + (code ? `（${code}）` : ""));
     }
 
     if (!response.ok) {
@@ -147,11 +150,29 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
     return attempt;
   };
 
-  let attempt = await postOnce(budget);
+  /**
+   * 网络抖动（DNS 超时、连接被掐）隔一秒再连往往就通了，而失败一次的代价是整段产出消失。
+   * 这里只兜网络错误：HTTP 错误重试不会变好，超时重试只会让调用方多等一倍。
+   */
+  const postWithRetry = async (maxTokens: number): Promise<Attempt> => {
+    const delays = [400, 1_200];
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await postOnce(maxTokens);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        const delay = delays[attempt];
+        if (!message.startsWith("LLM_NETWORK_ERROR") || delay === undefined) throw error;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  };
+
+  let attempt = await postWithRetry(budget);
   // 思考型模型被 token 上限截断时，正文整个是空的 —— 翻倍再来一次，别让一整轮白跑。
   if (!attempt.content && attempt.finishReason === "length" && budget < RETRY_CEILING) {
     const retryBudget = Math.min(budget * 3, RETRY_CEILING);
-    const retried = await postOnce(retryBudget);
+    const retried = await postWithRetry(retryBudget);
     if (retried.content) return retried.content.slice(0, 12_000);
     attempt = retried;
   }

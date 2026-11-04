@@ -1239,7 +1239,16 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
         throw new Error("LLM_TIMEOUT: 模型请求超时，请检查 LLM_TIMEOUT_MS 或模型服务状态。");
       }
-      throw new Error("LLM_NETWORK_ERROR: " + (error instanceof Error ? error.message : String(error)));
+      /**
+       * `fetch failed` 这四个字什么都不说：DNS 超时（ENOTFOUND / EAI_AGAIN）、连接被重置
+       * （ECONNRESET / UND_ERR_SOCKET）、证书或代理问题，全会变成同一句。
+       * 真正的现场在 `error.cause` 里 —— 2026-11-04 那次「她突然不说话」，
+       * 系统日志里躺着 `DNS 解析 api.deepseek.com 超时`，而这里只留了一句 fetch failed，
+       * 只能靠事后翻 Windows 事件日志才认出来。带上 code，下次一眼就能分清该改网络还是改代码。
+       */
+      const cause = (error as { cause?: { code?: string; message?: string } } | null)?.cause;
+      const code = typeof cause?.code === "string" && cause.code ? cause.code : "";
+      throw new Error("LLM_NETWORK_ERROR: " + (error instanceof Error ? error.message : String(error)) + (code ? `（${code}）` : ""));
     }
 
     if (!response.ok) {
@@ -1374,19 +1383,36 @@ export async function generateConversationReply(input: ConversationReplyInput): 
 
   /**
    * 模型偶尔会吐一段不是 JSON 的东西（实测 deepseek-flash 约 9 条里 2 条）—— 再来一次就够了。
-   * HTTP 错误 / 超时 / 网络错误不重试：重试只会更慢，而且那些错误本身就该让人看见。
    * 失败那次的用量不记账（只返回成功那次的 usage），省得为了几 token 把接口改复杂。
+   *
+   * 网络错误以前是「不重试，让它暴露出来」。这条规矩错在它假设失败是可见的 ——
+   * 实际上没人看得见：一轮回复直接消失，用户只看到「她不理我」，日志里一行 ignored。
+   * 而 DNS 解析超时、连接被中间设备掐断这类抖动，隔 1 秒再连一次就通了。
+   * 所以改成退避重试两次（400ms / 1200ms）：三次全挂才算真断网，那时候抛出去照样有人看见。
+   *
+   * HTTP 错误、超时仍然不重试：400/401/429 重试不会变好，超时重试只会让用户多等一倍。
    */
   const RETRY_TEMPERATURE = 0.3;
-  let parseError: Error | null = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const NETWORK_RETRY_DELAYS = [400, 1_200];
+  let parseRetried = false;
+  let networkRetries = 0;
+  for (;;) {
     try {
-      return await requestReply(attempt === 0 ? temperature : RETRY_TEMPERATURE, attempt > 0);
+      return await requestReply(parseRetried ? RETRY_TEMPERATURE : temperature, parseRetried);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      if (!message.startsWith("LLM_INVALID_RESPONSE")) throw error;
-      parseError = error instanceof Error ? error : new Error(String(error));
+      if (message.startsWith("LLM_INVALID_RESPONSE")) {
+        if (parseRetried) throw error;
+        parseRetried = true;
+        continue;
+      }
+      if (message.startsWith("LLM_NETWORK_ERROR") && networkRetries < NETWORK_RETRY_DELAYS.length) {
+        const delay = NETWORK_RETRY_DELAYS[networkRetries] ?? 1_200;
+        networkRetries += 1;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
     }
   }
-  throw parseError ?? new Error("LLM_INVALID_RESPONSE: 模型没有返回符合约定的 JSON 对象。");
 }
