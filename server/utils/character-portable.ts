@@ -1163,6 +1163,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
       const memoryLabel = `${label}的第 ${memoryIndex + 1} 条记忆`;
       const categoryInput = typeof memory.category === "string" ? memory.category : "";
       return {
+        originId: normalizeBundleOriginId(memory.originId),
         category: (MEMORY_CATEGORIES as readonly string[]).includes(categoryInput)
           ? categoryInput as BundleMemoryCategory
           : "OTHER",
@@ -1197,6 +1198,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
       const createdAt = readOptionalDate(snapshot.createdAt, `${snapshotLabel}的创建时间`) ?? periodEnd;
       const structured = snapshot.structuredContent;
       return {
+        originId: normalizeBundleOriginId(snapshot.originId),
         kind: (SNAPSHOT_KINDS as readonly string[]).includes(kindInput)
           ? kindInput as BundleSnapshotKind
           : "AUTOMATIC",
