@@ -7,7 +7,7 @@ import {
   resolveChatModelSettings,
   validateChatApiBaseUrl,
 } from "../server/utils/chat-model-config";
-import { decryptApiKeyWithKey, encryptApiKeyWithKey, resolveCharacterApiKey } from "../server/utils/credential-encryption";
+import { decryptApiKeyWithKey, encryptApiKeyWithKey, isMemoryAssistantApiKeySaved, resolveCharacterApiKey, resolveCharacterMemoryAssistantApiKey } from "../server/utils/credential-encryption";
 
 const defaults = resolveChatModelSettings({}, "ci-default-model");
 assert.equal(defaults.model, "ci-default-model");
@@ -109,6 +109,9 @@ const encryptedKey = encryptApiKeyWithKey(plaintextKey, encryptionKey);
 assert.notEqual(encryptedKey, plaintextKey);
 assert.match(encryptedKey, /^v1\./);
 assert.equal(decryptApiKeyWithKey(encryptedKey, encryptionKey), plaintextKey);
+assert.equal(isMemoryAssistantApiKeySaved({}), false);
+assert.equal(isMemoryAssistantApiKeySaved({ memoryAssistantApiKeyEncrypted: encryptedKey }), true);
+assert.equal(isMemoryAssistantApiKeySaved({ memoryAssistantApiKeyEncrypted: plaintextKey }), false);
 assert.throws(() => decryptApiKeyWithKey(encryptedKey, randomBytes(32)), /Unsupported state|authenticate|unable to authenticate/i);
 
 const previousApiKey = process.env.LLM_API_KEY;
@@ -116,6 +119,11 @@ const previousBaseUrl = process.env.LLM_BASE_URL;
 try {
   process.env.LLM_API_KEY = "global-fallback-test-key";
   process.env.LLM_BASE_URL = "https://api.example.com/v1/";
+  assert.equal(
+    await resolveCharacterMemoryAssistantApiKey({}),
+    "",
+    "The memory assistant must never fall back to the chat model's environment API Key.",
+  );
   assert.equal(
     await resolveCharacterApiKey({}, "https://api.example.com/v1"),
     "global-fallback-test-key",
