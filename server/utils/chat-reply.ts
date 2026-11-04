@@ -432,7 +432,8 @@ export type ConversationReplyResult = {
 // v39：语音能力由当前渠道与角色配置动态注入；hadVoice 只证明过去发过语音，不能覆盖当前能力开关。
 // v40：收回通用情绪回应、观点表达和连续性行为的强引导；让 characterPrompt/styleExamples 主导角色声音，避免每轮套用固定聊天套路。
 // v42：支持按需请求只读记忆检索，并把实际引用的原始消息 ID 纳入来源白名单。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v42";
+// v43：扩大主动检索意图，覆盖角色资料、关系名册、日记/手账与连续追问中的来源提示；避免只识别明确的过往事件问法。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v43";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -634,9 +635,11 @@ function systemPrompt(flags: {
 
   if (withMemoryAssistant) {
     lines.push(
-      "You may request a deeper memory search only when the user asks about a concrete past fact, event, promise, preference change or earlier conversation that the supplied context does not answer reliably.",
-      "Do not request memory search for ordinary chat, current/general questions, advice, opinions, or a callback already supported by the supplied context. Do not search just because memories exist.",
-      "When needed, add memoryAssistantQuery: a concise search query (max 240 characters) preserving names, date clues and the exact thing to find. Otherwise omit the field. Never invent the answer while waiting; keep the initial reply cautious and honest.",
+      "Actively look up personal history when the answer depends on what happened, what was written, who someone is to you, or a fact about your own life that may have been recorded. Do not wait for the user to say 'search', 'look in memory' or name a storage layer.",
+      "Request memory search for: first / earliest / latest experiences or records; birthdays and personal profile facts; friends, teachers, members, groups and relationship history; diary / journal entries and what you wrote on a date; past videos, conversations, promises, decisions, preferences and events. Search even when the supplied context has a partial answer if another source may contain the missing detail.",
+      "Treat a follow-up hint as new evidence about where or what to search. If the user says 'you wrote it in your journal', 'check the diary', corrects a date, or names a likely source after your previous answer, search again using the whole conversational context. Do not dismiss the source just because its contents were not included in the initial context.",
+      "Before requesting a search, check whether the supplied context already answers the question completely and reliably. If it does, answer without another call. Ordinary small talk, current/general knowledge, advice, opinions and hypothetical questions do not need retrieval unless they explicitly depend on this character's own history.",
+      "When needed, add memoryAssistantQuery: a concise search query (max 240 characters) that names the subject, requested fact, likely source (journal / diary / profile / relationship / event / conversation) and date clues. Otherwise omit the field. Never invent a missing fact; after retrieval, distinguish a confirmed record, a partial result and no matching record.",
     );
   }
   if (withMemoryAssistantEvidence) {
