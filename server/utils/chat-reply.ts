@@ -318,6 +318,10 @@ export type ConversationReplyInput = {
   /** 当前对话/渠道是否已启用且具备发送语音消息的完整能力。 */
   voiceEnabled?: boolean;
   voiceReply?: boolean;
+  /** 记忆助手已配置并可调用；只有此时模型才可提出历史检索请求。 */
+  memoryAssistantAvailable?: boolean;
+  /** 当前轮已补入记忆助手核验过的来源。 */
+  memoryAssistantEvidenceProvided?: boolean;
 };
 export type ConversationReplyResult = {
   /** silent = 她看了这一轮，决定不说。此时 reply 为空串，调用方什么都不该发。 */
@@ -342,6 +346,8 @@ export type ConversationReplyResult = {
   provider: string;
   promptTemplateVersion: string;
   usage?: ModelUsageTokens;
+  /** 仅内部流程使用；最终聊天回复由调用方负责，不直接展示给用户。 */
+  memoryAssistantQuery?: string;
 };
 
 /**
@@ -423,7 +429,7 @@ export type ConversationReplyResult = {
 // v36：区分「事件参与者」与「具体发言/行为者」，避免仅凭 participants 把话或行为安到某个人头上。
 // v39：语音能力由当前渠道与角色配置动态注入；hadVoice 只证明过去发过语音，不能覆盖当前能力开关。
 // v40：收回通用情绪回应、观点表达和连续性行为的强引导；让 characterPrompt/styleExamples 主导角色声音，避免每轮套用固定聊天套路。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v41";
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v42";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -590,12 +596,14 @@ function systemPrompt(flags: {
   withHadSticker?: boolean;
   withHadVoice?: boolean;
   withMediaTokens?: boolean;
+  withMemoryAssistant?: boolean;
+  withMemoryAssistantEvidence?: boolean;
 } = {}): string {
   const {
     withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat,
     mustReply, repair, voiceEnabled, withVoiceReply, withAcquaintances, withFriendRoster, withFriendAliases,
     withGroupMembers, withJournal, withCrossChannel, withEvents, withRecentEvents, withRawMessages,
-    withHadSticker, withHadVoice, withMediaTokens,
+    withHadSticker, withHadVoice, withMediaTokens, withMemoryAssistant, withMemoryAssistantEvidence,
   } = flags;
 
   const lines: string[] = [
@@ -620,6 +628,19 @@ function systemPrompt(flags: {
     "Memories record what was true when written, not permanent labels. A newer explicit correction or change from this person overrides an older preference. If the change is unclear, ask naturally.",
     "Reply in the language of the current message unless the persona clearly requires otherwise. Length follows the moment — no padding, no forced punchlines.",
   ];
+
+  if (withMemoryAssistant) {
+    lines.push(
+      "You may request a deeper memory search only when the user asks about a concrete past fact, event, promise, preference change or earlier conversation that the supplied context does not answer reliably.",
+      "Do not request memory search for ordinary chat, current/general questions, advice, opinions, or a callback already supported by the supplied context. Do not search just because memories exist.",
+      "When needed, add memoryAssistantQuery: a concise search query (max 240 characters) preserving names, date clues and the exact thing to find. Otherwise omit the field. Never invent the answer while waiting; keep the initial reply cautious and honest.",
+    );
+  }
+  if (withMemoryAssistantEvidence) {
+    lines.push(
+      "Additional historical evidence has been retrieved and appended to memories / snapshots / events. Treat it like other sourced context, respect its scope and dates, and use it only when relevant. Never mention an internal assistant or retrieval process.",
+    );
+  }
 
   if (voiceEnabled !== undefined) {
     lines.push(voiceEnabled
@@ -776,7 +797,7 @@ function systemPrompt(flags: {
   // ⑥ Output contract
   if (withGroupChat) {
     lines.push(
-      `Return only a valid JSON object with: action ("reply" or "silent"), reply (empty when silent), usedMemoryIds, usedSnapshotIds, usedEventIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}, optional groupDecision.`,
+      `Return only a valid JSON object with: action ("reply" or "silent"), reply (empty when silent), usedMemoryIds, usedSnapshotIds, usedEventIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}, optional groupDecision.`,
       'groupDecision = { relation: "direct" | "followup" | "shared_topic" | "ambient" | "unrelated", topicAnchorMessageId, replyToMessageId, atMessageId, evidenceMessageIds }: anchors from groupAnchors, ids from this round; atMessageId may name someone from groupBackground.',
       "replyToMessageId is the line you answer; atMessageId is who you are talking to. Quote only when the line you are answering is no longer last in the room; @ only when you want attention — never @ just for replying.",
       mustReply
@@ -785,7 +806,7 @@ function systemPrompt(flags: {
     );
   } else {
     lines.push(
-      `Return only a valid JSON object with: reply (non-empty string), usedMemoryIds, usedSnapshotIds, usedEventIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}.`,
+      `Return only a valid JSON object with: reply (non-empty string), usedMemoryIds, usedSnapshotIds, usedEventIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}.`,
     );
   }
   lines.push("Cite only ids from the supplied arrays; never invent ids.");
@@ -1040,6 +1061,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
           })),
         }
       : {}),
+    ...(input.memoryAssistantEvidenceProvided ? { memoryAssistantEvidenceProvided: true } : {}),
     ...(withCatchphrases
       ? {
           catchphrases: catchphrases.map((item) => ({
@@ -1199,6 +1221,8 @@ export async function generateConversationReply(input: ConversationReplyInput): 
                 withHadSticker,
                 withHadVoice,
                 withMediaTokens,
+                withMemoryAssistant: input.memoryAssistantAvailable === true,
+                withMemoryAssistantEvidence: input.memoryAssistantEvidenceProvided === true,
                 // 第一次的答案没有可用正文时才补这句 —— 不是每次重试都喊，喊多了像责骂。
                 ...(repair ? { repair: true } : {}),
               }),
@@ -1293,6 +1317,10 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       ? readGroupDecision(parsed.groupDecision, validAnchorIds, validEvidenceIds, validAtIds)
       : undefined;
     const responseModel = typeof payload?.model === "string" ? payload.model : model;
+    const memoryAssistantQuery = input.memoryAssistantAvailable === true
+      && typeof parsed.memoryAssistantQuery === "string"
+      ? parsed.memoryAssistantQuery.trim().slice(0, 240)
+      : "";
     const base = {
       usedMemoryIds: readIdList(parsed.usedMemoryIds, validMemoryIds),
       usedSnapshotIds: readIdList(parsed.usedSnapshotIds, validSnapshotIds),
@@ -1335,6 +1363,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       // 模型偶尔会写个不在清单里的 id（甚至把名字写进来）—— 只认清单内的。
       stickerId: withStickers ? readStickerId(parsed.sticker, validStickerIds) : null,
       ...base,
+      ...(memoryAssistantQuery.length >= 3 ? { memoryAssistantQuery } : {}),
     };
   };
 
