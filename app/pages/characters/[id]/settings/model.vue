@@ -73,6 +73,9 @@ const draftMemoryAssistantModel = ref("");
 const draftMemoryAssistantApiBaseUrl = ref("");
 const draftMemoryAssistantApiKey = ref("");
 const clearMemoryAssistantApiKey = ref(false);
+const draftMemoryAssistantProviderKey = ref("custom");
+const fetchedMemoryAssistantModels = ref<string[]>([]);
+const fetchingMemoryAssistantModels = ref(false);
 const testingVision = ref(false);
 const testingMemoryAssistant = ref(false);
 /** 图片页「获取模型」拉回来的清单；换地址就作废（两家清单不通用） */
@@ -213,6 +216,18 @@ const apiKeyHint = computed(() => {
 });
 
 const currentProvider = computed(() => providerByKey(draftProviderKey.value));
+const memoryAssistantEffectiveBaseUrl = computed(
+  () => draftMemoryAssistantApiBaseUrl.value.trim() || draftChatApiBaseUrl.value.trim(),
+);
+const memoryAssistantProviderPreset = computed(() => providerByKey(draftMemoryAssistantProviderKey.value));
+const memoryAssistantProviderLabel = computed(() => memoryAssistantProviderPreset.value?.name ?? "自定义");
+const memoryAssistantConsoleUrl = computed(() => memoryAssistantProviderPreset.value?.consoleUrl ?? "");
+const memoryAssistantKeyConfigured = computed(() => character.value?.memoryAssistantApiKeyConfigured === true);
+const memoryAssistantModelOptions = computed(() => buildModelOptions({
+  baseUrl: memoryAssistantEffectiveBaseUrl.value,
+  current: draftMemoryAssistantModel.value,
+  fetched: fetchedMemoryAssistantModels.value,
+}));
 
 // ── 语音模型的计算属性 ──
 const voiceKeyConfigured = computed(() => character.value?.voiceApiKeyConfigured === true);
@@ -279,6 +294,32 @@ watch(draftVisionApiBaseUrl, () => {
   fetchedVisionModels.value = [];
 });
 const visionProviderKey = computed(() => providerByBaseUrl(draftVisionApiBaseUrl.value)?.key ?? "custom");
+
+/** 记忆助手与对话模型同用服务商目录，但 API Key 和模型列表请求完全独立。 */
+function applyMemoryAssistantProvider(key: string) {
+  draftMemoryAssistantProviderKey.value = key;
+  const preset = providerByKey(key);
+  if (!preset?.baseUrl) return;
+  draftMemoryAssistantApiBaseUrl.value = preset.baseUrl;
+
+  const model = draftMemoryAssistantModel.value.trim();
+  const belongsToOther = MODEL_PROVIDERS.some(
+    (provider) => provider.key !== key && provider.models.includes(model),
+  );
+  const nextModel = preset.models[0] ?? "";
+  if (nextModel && (!model || belongsToOther)) {
+    draftMemoryAssistantModel.value = nextModel;
+  } else if (belongsToOther) {
+    ElMessage.info(`${preset.name}没有内置模型清单，点「获取模型」拉取后再选。`);
+  }
+  fetchedMemoryAssistantModels.value = [];
+}
+
+/** 改了记忆助手实际使用的地址（包括跟随对话地址时），旧模型列表就失效。 */
+watch(memoryAssistantEffectiveBaseUrl, (value) => {
+  fetchedMemoryAssistantModels.value = [];
+  draftMemoryAssistantProviderKey.value = providerByBaseUrl(value)?.key ?? "custom";
+});
 
 /**
  * 语音的开放平台入口：和对话模型那块对齐 —— 用户卡住的点不是「填什么」，而是「去哪拿 Key」。
@@ -414,9 +455,38 @@ async function testVision() {
   }
 }
 
+/** 记忆助手「获取模型」只读取它自己的已保存 Key；不会复用对话模型凭据。 */
+async function fetchMemoryAssistantModels() {
+  if (fetchingMemoryAssistantModels.value || testingMemoryAssistant.value || testing.value
+    || testingVision.value || testingVoice.value || saving.value || !character.value) return;
+  fetchingMemoryAssistantModels.value = true;
+  try {
+    const saved = await save(true);
+    if (!saved) return;
+    const result = await $fetch<{ ok: boolean; models: string[]; message: string; unsupported?: boolean }>(
+      `/api/characters/${encodeURIComponent(id.value)}/chat/memory-assistant/models`,
+    );
+    if (!result.ok) {
+      if (result.unsupported) ElMessage.warning(result.message);
+      else ElMessage.error(result.message);
+      return;
+    }
+    fetchedMemoryAssistantModels.value = result.models;
+    if (!draftMemoryAssistantModel.value.trim() && result.models.length) {
+      draftMemoryAssistantModel.value = result.models[0] ?? "";
+    }
+    ElMessage.success(result.message);
+  } catch (error) {
+    ElMessage.error(readError(error, "获取记忆助手模型列表失败，请检查独立 API 地址和 Key。"));
+  } finally {
+    fetchingMemoryAssistantModels.value = false;
+  }
+}
+
 /** 记忆助手连接测试使用独立凭据；即使尚未开启助手，也可以先验证配置。 */
 async function testMemoryAssistant() {
-  if (testingMemoryAssistant.value || testing.value || testingVision.value || testingVoice.value || saving.value || !character.value) return;
+  if (testingMemoryAssistant.value || fetchingMemoryAssistantModels.value || testing.value
+    || testingVision.value || testingVoice.value || saving.value || !character.value) return;
   testingMemoryAssistant.value = true;
   try {
     const saved = await save(true);
@@ -534,8 +604,12 @@ async function loadCharacter() {
     clearVisionApiKey.value = false;
     draftMemoryAssistantModel.value = data.memoryAssistantModel ?? "";
     draftMemoryAssistantApiBaseUrl.value = data.memoryAssistantApiBaseUrl ?? "";
+    draftMemoryAssistantProviderKey.value = providerByBaseUrl(
+      draftMemoryAssistantApiBaseUrl.value || draftChatApiBaseUrl.value,
+    )?.key ?? "custom";
     draftMemoryAssistantApiKey.value = "";
     clearMemoryAssistantApiKey.value = false;
+    fetchedMemoryAssistantModels.value = [];
     fetchedModels.value = [];
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = data.updatedAt ? new Date(data.updatedAt) : null;
@@ -1516,8 +1590,41 @@ watch(id, () => void loadCharacter());
             <div class="fields">
               <div class="field">
                 <div class="field-head">
+                  <span class="field-label">服务商</span>
+                </div>
+                <el-select
+                  v-model="draftMemoryAssistantProviderKey"
+                  class="field-ctl"
+                  aria-label="记忆助手服务商"
+                  placeholder="选择服务商，自动填好 API 地址"
+                  @change="applyMemoryAssistantProvider"
+                >
+                  <el-option
+                    v-for="provider in MODEL_PROVIDERS"
+                    :key="provider.key"
+                    :label="provider.name"
+                    :value="provider.key"
+                  />
+                </el-select>
+                <p class="field-help">
+                  选择服务商会自动填入 API 地址和常见模型；没有列出的平台选「自定义」后手动填写。
+                </p>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
                   <span class="field-label">API 地址</span>
                   <span class="field-req">可选</span>
+                  <a
+                    v-if="memoryAssistantConsoleUrl"
+                    class="field-link"
+                    :href="memoryAssistantConsoleUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    去 {{ memoryAssistantProviderLabel }} 开放平台取 Key
+                    <el-icon><TopRight /></el-icon>
+                  </a>
                 </div>
                 <el-input
                   v-model="draftMemoryAssistantApiBaseUrl"
@@ -1532,24 +1639,11 @@ watch(id, () => void loadCharacter());
 
               <div class="field">
                 <div class="field-head">
-                  <span class="field-label">模型名称</span>
-                  <span class="field-req">必填</span>
-                </div>
-                <el-input
-                  v-model="draftMemoryAssistantModel"
-                  maxlength="120"
-                  aria-label="记忆助手模型名称"
-                  placeholder="填写专门用于记忆检索的模型名称"
-                />
-              </div>
-
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">独立 API Key</span>
+                  <span class="field-label">API Key</span>
                   <span
                     class="pill"
-                    :class="character?.memoryAssistantApiKeyConfigured ? 'pill-green' : 'pill-rose'"
-                  >{{ character?.memoryAssistantApiKeyConfigured ? "已保存" : "未填写" }}</span>
+                    :class="memoryAssistantKeyConfigured ? 'pill-green' : 'pill-rose'"
+                  >{{ memoryAssistantKeyConfigured ? "已保存" : "未填写" }}</span>
                 </div>
                 <el-input
                   v-model="draftMemoryAssistantApiKey"
@@ -1558,20 +1652,52 @@ watch(id, () => void loadCharacter());
                   autocomplete="new-password"
                   maxlength="8192"
                   aria-label="记忆助手 API Key"
-                  placeholder="填写记忆助手专用 API Key"
+                  :placeholder="memoryAssistantKeyConfigured ? '已加密保存；留空表示保持不变' : '填写记忆助手专用 API Key'"
                 />
                 <p class="field-help">
-                  使用本机凭据加密密钥进行 AES-256-GCM 加密保存。留空表示不修改已有 Key，不会回传 Key 原文。
+                  使用本机凭据加密密钥进行 AES-256-GCM 加密保存。留空表示不修改已有 Key，不会回传 Key 原文；这里必须使用记忆助手自己的 Key。
                   <template v-if="character?.memoryAssistantEnabled">记忆助手开启中；如需移除 Key 或清空模型，请先到角色管理关闭助手。</template>
                 </p>
                 <el-checkbox
-                  v-if="character?.memoryAssistantApiKeyConfigured"
+                  v-if="memoryAssistantKeyConfigured"
                   v-model="clearMemoryAssistantApiKey"
                   :disabled="character?.memoryAssistantEnabled === true"
                   class="field-check"
                 >
                   移除记忆助手单独保存的 API Key
                 </el-checkbox>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">模型名称</span>
+                  <span class="field-req">必填</span>
+                </div>
+                <div class="model-row">
+                  <el-select
+                    v-model="draftMemoryAssistantModel"
+                    class="model-select"
+                    filterable
+                    allow-create
+                    default-first-option
+                    aria-label="记忆助手模型名称"
+                    placeholder="选择，或直接输入模型名"
+                  >
+                    <el-option
+                      v-for="model in memoryAssistantModelOptions"
+                      :key="model"
+                      :label="model"
+                      :value="model"
+                    />
+                  </el-select>
+                  <el-button
+                    :loading="fetchingMemoryAssistantModels"
+                    :disabled="saving || testing || testingMemoryAssistant || testingVision || testingVoice"
+                    @click="fetchMemoryAssistantModels"
+                  >
+                    <el-icon><Refresh /></el-icon>{{ fetchingMemoryAssistantModels ? "获取中…" : "获取模型" }}
+                  </el-button>
+                </div>
               </div>
             </div>
           </section>
