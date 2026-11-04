@@ -259,13 +259,13 @@ export function parseEventTimeRange(
   }
 
   // 年月优先于「去年 / 上个月」整段范围；完整日期已在上面优先解析。
-  const relativeYearMonth = /(前年|去年|今年)\\s*(\\d{1,2})\\s*月/u.exec(text);
+  const relativeYearMonth = /(前年|去年|今年)\s*(\d{1,2})\s*月/u.exec(text);
   if (relativeYearMonth) {
     const offset = relativeYearMonth[1] === "前年" ? -2 : relativeYearMonth[1] === "去年" ? -1 : 0;
     return monthRange(today.year + offset, Number(relativeYearMonth[2]), timeZone, relativeYearMonth[0]);
   }
 
-  const absoluteYearMonth = /(\\d{4})\\s*年\\s*(\\d{1,2})\\s*月/u.exec(text);
+  const absoluteYearMonth = /(\d{4})\s*年\s*(\d{1,2})\s*月/u.exec(text);
   if (absoluteYearMonth) {
     return monthRange(Number(absoluteYearMonth[1]), Number(absoluteYearMonth[2]), timeZone, absoluteYearMonth[0]);
   }
@@ -276,7 +276,7 @@ export function parseEventTimeRange(
     return yearRange(today.year + offset, timeZone, relativeYear[1]);
   }
 
-  const absoluteYear = /(\\d{4})\\s*年/u.exec(text);
+  const absoluteYear = /(\d{4})\s*年/u.exec(text);
   if (absoluteYear) return yearRange(Number(absoluteYear[1]), timeZone, absoluteYear[0]);
 
   const relativeMonth = /(上上个月|上个月|本月|这个月)/u.exec(text);
@@ -286,7 +286,7 @@ export function parseEventTimeRange(
     return monthRange(target.year, target.month, timeZone, relativeMonth[1]);
   }
 
-  const monthsAgo = /(\\d{1,2})\\s*个月前/u.exec(text);
+  const monthsAgo = /(\d{1,2})\s*个月前/u.exec(text);
   if (monthsAgo) {
     const count = Number(monthsAgo[1]);
     if (count >= 1 && count <= 120) {
