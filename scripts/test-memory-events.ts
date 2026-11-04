@@ -7,7 +7,7 @@ import {
 } from "../server/utils/message-retrieval";
 import { estimateTokens } from "../server/utils/memory-retrieval";
 import { toMemoryTimelineDtos } from "../server/utils/memory-timeline-dto";
-import { parseEventParticipantIdQuery, resolveEventRecentDays, selectEventsForPrompt, selectRecentEvents } from "../server/utils/memory-event-retrieval";
+import { parseEventParticipantIdQuery, parseEventParticipantQuery, resolveEventRecentDays, selectEventsForPrompt, selectRecentEvents } from "../server/utils/memory-event-retrieval";
 import { isNearDuplicateEvent, longestCommonSubstringLength, makeEventDedupeKey } from "../server/utils/memory-ai";
 import {
   deriveParticipantRefs, resolveEventParticipants, type MemoryEvidenceMessage,
@@ -128,6 +128,8 @@ assert.equal(byPerson.mode, "participant", "「和某人」问的是关于这个
 assert.deepEqual(byPerson.items.map((item) => item.id), ["p2", "p1"], "只留小明的事，按时间倒序");
 assert(!byPerson.items.some((item) => item.id === "p3"), "小月的事不能混进来");
 
+assert.equal(parseEventParticipantQuery("第一次见到小明是什么时候"), "小明",
+  "人物提问里的时间尾缀不能被吞进参与者名称。");
 const firstMeet = selectEventsForPrompt("第一次见到小明是什么时候", people, { now, timeZone: TZ });
 assert.equal(firstMeet.mode, "first", "「第一次」要走取首，而不是按相关度排");
 assert.equal(firstMeet.items[0]?.id, "p1", "最早的那次排第一");
