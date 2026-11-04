@@ -132,6 +132,14 @@ jobs:
       - name: 检查迁移与 Schema 一致
         run: yarn prisma migrate diff --from-config-datasource --to-schema=prisma/schema.prisma --exit-code
 
+      # 多个数据库集成测试会创建临时角色；先准备测试用户，不能等到 API 冒烟测试前才 seed。
+      - name: 初始化 CI 本地开发用户
+        env:
+          DEV_OWNER_ID: 00000000-0000-4000-8000-000000000001
+          DEV_OWNER_USERNAME: ci-local
+          DEV_OWNER_PASSWORD: CI_smoke_test_password_123
+        run: yarn run db:seed:dev
+
       - name: 准备 Nuxt 类型与组件信息
         run: yarn nuxt prepare
 
@@ -220,13 +228,6 @@ jobs:
 
       - name: ESLint 检查
         run: yarn run lint
-
-      - name: 初始化 CI 本地开发用户
-        env:
-          DEV_OWNER_ID: 00000000-0000-4000-8000-000000000001
-          DEV_OWNER_USERNAME: ci-local
-          DEV_OWNER_PASSWORD: CI_smoke_test_password_123
-        run: yarn run db:seed:dev
 
       - name: 验证角色与记忆设置 API 的数据库持久化
         env:
