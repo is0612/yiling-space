@@ -418,6 +418,8 @@ model ChatRequest {
 
 model MemoryItem {
   id                String                 @id @default(uuid()) @db.Uuid
+  /// 跨设备稳定身份；导入时保留，数据库主键 id 则在目标设备重新生成。
+  originId          String                 @default(uuid()) @db.Uuid
   memoryScopeId     String                 @db.Uuid
   category          MemoryCategory
   content           String                 @db.Text
@@ -444,6 +446,7 @@ model MemoryItem {
   snapshotSources   MemorySnapshotSource[] @relation("MemoryItemSnapshotSources")
 
   @@unique([memoryScopeId, dedupeKey])
+  @@unique([memoryScopeId, originId])
   @@index([memoryScopeId, status, category])
   @@index([memoryScopeId, status, deletedAt])
   @@index([memoryScopeId, validTo])
@@ -452,6 +455,8 @@ model MemoryItem {
 
 model MemorySnapshot {
   id                 String                 @id @default(uuid()) @db.Uuid
+  /// 跨设备稳定身份；snapshotKey 仍负责本机任务幂等。
+  originId           String                 @default(uuid()) @db.Uuid
   snapshotKey        String                 @db.VarChar(500)
   memoryScopeId      String                 @db.Uuid
   kind               SnapshotKind           @default(AUTOMATIC)
@@ -472,6 +477,7 @@ model MemorySnapshot {
   jobs               MemoryJob[]
 
   @@unique([snapshotKey, version])
+  @@unique([memoryScopeId, originId])
   @@index([memoryScopeId, periodStart, periodEnd])
   @@index([memoryScopeId, status, periodEnd])
   @@map("memory_snapshots")
@@ -971,6 +977,8 @@ model CharacterCatchphrase {
 /// 关键词降级路径，不当成「同一个人」的判据。
 model MemoryEvent {
   id               String            @id @default(uuid()) @db.Uuid
+  /// 跨设备稳定身份；dedupeKey 仍负责本机抽取任务幂等。
+  originId         String            @default(uuid()) @db.Uuid
   memoryScopeId    String            @db.Uuid
   /// 这条忆泡归属哪个会话；null = 旧数据（回填前）或跨会话证据无法收口。
   ///
@@ -1013,6 +1021,7 @@ model MemoryEvent {
   sourceSnapshot   MemorySnapshot?   @relation("MemoryEventSourceSnapshot", fields: [sourceSnapshotId], references: [id], onDelete: SetNull)
 
   @@unique([memoryScopeId, dedupeKey])
+  @@unique([memoryScopeId, originId])
   @@index([memoryScopeId, occurredAt])
   @@index([memoryScopeId, status, occurredAt])
   @@index([memoryScopeId, dayKey])
