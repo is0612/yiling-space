@@ -418,6 +418,7 @@ export default defineEventHandler(async (event) => {
         const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(searchQuery);
         const wantsLatest = /最近一次|上一次|上回|上次|最后一次/u.test(searchQuery);
         const eventOrder = wantsFirst ? "asc" as const : "desc" as const;
+        const rawMessageOrder = wantsFirst ? "asc" as const : "desc" as const;
 
         // 深度检索不再只看最近 200 个忆泡 / 80 篇快照：明确主题和时间范围会额外查历史候选。
         const [targetedMemories, targetedSnapshots, targetedEvents] = await Promise.all([
@@ -518,7 +519,7 @@ export default defineEventHandler(async (event) => {
               ...baseWhere,
               ...(contentMatches.length ? { OR: contentMatches } : {}),
             },
-            orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+            orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
             take: searchRange ? 500 : 350,
             select: {
               id: true, role: true, content: true, occurredAt: true, metadata: true,
@@ -528,7 +529,7 @@ export default defineEventHandler(async (event) => {
           if (!searchRange || !contentMatches.length || matched.length >= 16) return matched;
           const fallback = await prisma.message.findMany({
             where: baseWhere,
-            orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+            orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
             take: 120,
             select: {
               id: true, role: true, content: true, occurredAt: true, metadata: true,
