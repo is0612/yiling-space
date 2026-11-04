@@ -99,6 +99,7 @@ export function selectRawMessagesForMemoryAssistant<T extends RawMessageCandidat
   const tokenBudget = options.tokenBudget && options.tokenBudget > 0 ? options.tokenBudget : 3_200;
   const excluded = options.excludeIds ?? new Set<string>();
   const range = parseEventTimeRange(query, options.now ?? new Date(), options.timeZone ?? "Asia/Shanghai");
+  const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(query);
   const ranked = messages
     .filter((message) => !excluded.has(message.id) && message.content.trim())
     .filter((message) => !range || (
@@ -115,15 +116,19 @@ export function selectRawMessagesForMemoryAssistant<T extends RawMessageCandidat
         : message.content,
     }));
 
+  const chronological = (left: RankedRawMessage<T>, right: RankedRawMessage<T>) =>
+    wantsFirst
+      ? left.occurredAt.getTime() - right.occurredAt.getTime()
+      : right.occurredAt.getTime() - left.occurredAt.getTime();
   const matched = ranked
     .filter((message) => message.relevanceScore > 0)
     .sort((left, right) =>
-      right.relevanceScore - left.relevanceScore || right.occurredAt.getTime() - left.occurredAt.getTime(),
+      right.relevanceScore - left.relevanceScore || chronological(left, right),
     );
-  // 关键词没有命中时也给少量最近原文，让语义助手有机会识别同义表达；不能因此把整段历史全部发送。
+  // 没有关键词命中时也给少量时间方向正确的原文，让语义助手识别同义表达。
   const ordered = matched.length
     ? matched
-    : ranked.sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime()).slice(0, 6);
+    : ranked.sort(chronological).slice(0, 6);
 
   const selected: Array<RankedRawMessage<T>> = [];
   let usedTokens = 0;
