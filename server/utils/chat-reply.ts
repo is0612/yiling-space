@@ -1359,10 +1359,22 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       return { action: "silent", reply: "", faceIds: [], stickerId: null, ...base, usedCatchphraseIds: [] };
     }
     if (!reply) {
+      // 只给检索请求、不写正文时，允许内部 wrapper 继续执行记忆检索。
+      // wrapper 必须在所有失败/无来源分支补上非空兜底，不能把空 reply 发给用户。
+      if (memoryAssistantQuery.length >= 3) {
+        return {
+          action: "reply",
+          reply: "",
+          faceIds: withStickers ? [] : readIdList(parsed.faces, validFaceIds, 1),
+          stickerId: withStickers ? readStickerId(parsed.sticker, validStickerIds) : null,
+          ...base,
+          memoryAssistantQuery,
+        };
+      }
       /**
-       * 「想沉默但没写 action」是群里最常见的坏输出：模型判断这轮不该插嘴，
+       * 「想沉默但没写 action」是群里最常见的坏输出：
        * 却把 action 留空或直接给个空 reply。以前这算解析失败 —— 重试一次，
-       * 再失败就记一条 `ignored:LLM_INVALID_RESPONSE`，表现是「该说的时候她没说话」，
+       * 再失败就记一条 \`ignored:LLM_INVALID_RESPONSE\`，表现是「该说的时候她没说话」，
        * 而日志里看不出这是她自己选的沉默。
        *
        * 调用方允许沉默时按沉默收下；被 @ 的轮次（allowSilent=false）仍然报错，
