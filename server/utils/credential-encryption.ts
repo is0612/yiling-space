@@ -128,6 +128,24 @@ export async function resolveCharacterVisionApiKey(configValue: unknown): Promis
   return decrypted.trim();
 }
 
+/**
+ * 记忆助手使用独立凭据。这里故意不回落到聊天 Key 或环境变量：
+ * 助手可能指向另一家服务商，绝不能把聊天凭据发到另一个 API 地址。
+ */
+export async function resolveCharacterMemoryAssistantApiKey(configValue: unknown): Promise<string> {
+  const config = asRecord(configValue);
+  const encrypted = config.memoryAssistantApiKeyEncrypted;
+  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
+  const decrypted = await decryptApiKey(encrypted);
+  return decrypted.trim();
+}
+
+export function isMemoryAssistantApiKeySaved(configValue: unknown): boolean {
+  const config = asRecord(configValue);
+  return typeof config.memoryAssistantApiKeyEncrypted === "string"
+    && config.memoryAssistantApiKeyEncrypted.startsWith("v1.");
+}
+
 export function isVisionApiKeySaved(configValue: unknown): boolean {
   const config = asRecord(configValue);
   return typeof config.visionApiKeyEncrypted === "string" && config.visionApiKeyEncrypted.startsWith("v1.");
