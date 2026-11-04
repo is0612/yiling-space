@@ -133,7 +133,7 @@ export async function recordModelUsage(input: ModelUsageInput): Promise<void> {
   // 有些失败请求（HTTP 错误、超时）拿不到 token usage，但仍要留一条 0 token 的诊断记录。
   // 不带 usage 且没有 metadata 的旧调用保持原行为，不会平白增加空记账行。
   if ((!usage || usage.totalTokens <= 0) && !hasMetadata) return;
-  const recordedUsage = usage && usage.totalTokens > 0
+  const recordedUsage: ModelUsageTokens = usage && usage.totalTokens > 0
     ? usage
     : { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   try {
