@@ -74,6 +74,7 @@ const draftMemoryAssistantApiBaseUrl = ref("");
 const draftMemoryAssistantApiKey = ref("");
 const clearMemoryAssistantApiKey = ref(false);
 const testingVision = ref(false);
+const testingMemoryAssistant = ref(false);
 /** 图片页「获取模型」拉回来的清单；换地址就作废（两家清单不通用） */
 const fetchedVisionModels = ref<string[]>([]);
 const fetchingVisionModels = ref(false);
@@ -410,6 +411,29 @@ async function testVision() {
     ElMessage.error(readError(error, "看图测试失败，请检查地址、Key 与模型名。"));
   } finally {
     testingVision.value = false;
+  }
+}
+
+/** 记忆助手连接测试使用独立凭据；即使尚未开启助手，也可以先验证配置。 */
+async function testMemoryAssistant() {
+  if (testingMemoryAssistant.value || testing.value || testingVision.value || saving.value || !character.value) return;
+  testingMemoryAssistant.value = true;
+  try {
+    const saved = await save(true);
+    if (!saved) return;
+    const result = await $fetch<{ ok: boolean; message: string; elapsedMs?: number }>(
+      `/api/characters/${encodeURIComponent(id.value)}/chat/test-memory-assistant-connection`,
+      { method: "POST" },
+    );
+    if (result.ok) {
+      ElMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
+    } else {
+      ElMessage.error(result.message || "记忆助手 API 连通性测试失败。");
+    }
+  } catch (error) {
+    ElMessage.error(readError(error, "记忆助手连接测试失败，请检查独立 API 地址、Key 和模型名称。"));
+  } finally {
+    testingMemoryAssistant.value = false;
   }
 }
 
@@ -1484,7 +1508,7 @@ watch(id, () => void loadCharacter());
                 </div>
                 <p class="brick-desc">
                   记忆助手使用独立模型和独立 API Key，负责检索时分析历史材料；不会借用大肥鱼的聊天 Key。
-                  当前阶段先完成配置，启用开关位于「角色管理」的角色档案中。
+                  启用后，大肥鱼会在现有上下文不足以回答具体历史问题时请求它检索；普通聊天不会额外调用。启用开关位于「角色管理」的角色档案中。
                 </p>
               </div>
             </div>
@@ -1571,6 +1595,19 @@ watch(id, () => void loadCharacter());
               <span class="metric-value">
                 {{ draftMemoryAssistantModel.trim() && character?.memoryAssistantApiKeyConfigured ? "已具备启用条件" : "尚未完整配置" }}
               </span>
+            </div>
+          </section>
+
+          <section class="brick">
+            <div class="vision-test-bar">
+              <el-button
+                :loading="testingMemoryAssistant"
+                :disabled="saving || testing || testingVision"
+                @click="testMemoryAssistant"
+              >
+                <el-icon><Promotion /></el-icon>{{ testingMemoryAssistant ? "测试中…" : "保存并测试记忆助手" }}
+              </el-button>
+              <span class="voice-test-note">会使用已保存的独立 API Key 和模型发送一条简短测试请求，不会读取或修改任何记忆。</span>
             </div>
           </section>
         </div>
