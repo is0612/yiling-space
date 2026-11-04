@@ -1485,11 +1485,27 @@ async function runChannelTurn(input: {
             : Promise.resolve([]),
         ]);
 
+        // 主题词没有命中或命中很少时，仍给语义检索器一小批同时间段候选，兼容同义表达。
+        const fallbackEvents = (searchRange || searchTerms.length || wantsFirst || wantsLatest) && targetedEvents.length < 16
+          ? await prisma.memoryEvent.findMany({
+              where: {
+                memoryScopeId: { in: readableScopeIds },
+                status: "ACTIVE",
+                ...rangeWhere,
+              },
+              orderBy: [{ occurredAt: eventOrder }, { id: eventOrder }],
+              take: searchRange ? 500 : 350,
+              select: {
+                id: true, occurredAt: true, timeOfDay: true, place: true, participants: true,
+                keywords: true, title: true, detail: true, memoryScopeId: true, participantRefs: true,
+              },
+            })
+          : [];
         const uniqueById = <T extends { id: string }>(items: T[]): T[] =>
           [...new Map(items.map((item) => [item.id, item])).values()];
         const assistantMemoryCandidates = uniqueById([...memoryCandidates, ...targetedMemories]);
         const assistantSnapshotCandidates = uniqueById([...snapshotCandidates, ...targetedSnapshots]);
-        const assistantEventCandidates = uniqueById([...eventCandidates, ...targetedEvents]);
+        const assistantEventCandidates = uniqueById([...eventCandidates, ...targetedEvents, ...fallbackEvents]);
 
         // 群聊原文只允许来自当前这个群；私聊只查当前说话人的 private scope。
         // 两条路都按主题命中补查旧消息，且绝不跨群 / 跨用户扫描 private 原文。
