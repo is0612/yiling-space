@@ -106,6 +106,7 @@ const KIND_LABELS: Record<string, string> = {
   proactive: "主动找话",
   vision: "群图片识别",
   "sticker-label": "表情包打标",
+  "memory-assistant": "记忆助手",
   other: "其他",
 };
 
