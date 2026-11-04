@@ -1679,6 +1679,7 @@ async function runChannelTurn(input: {
             promptTemplateVersion: generated.promptTemplateVersion,
             usedMemoryIds: generated.usedMemoryIds,
             usedSnapshotIds: generated.usedSnapshotIds,
+            ...(generated.usedRawMessageIds.length ? { usedRawMessageIds: generated.usedRawMessageIds } : {}),
             ...(generated.usedEventIds.length ? { usedEventIds: generated.usedEventIds } : {}),
             ...(generated.usedCatchphraseIds.length ? { usedCatchphraseIds: generated.usedCatchphraseIds } : {}),
             // 表情段不进 content：正文要能原样重放给下一轮模型，混进 [face] 会被当成用户打的字。
