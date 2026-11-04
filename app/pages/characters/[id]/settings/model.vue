@@ -67,12 +67,18 @@ const draftVisionModel = ref("");
 const draftVisionApiBaseUrl = ref("");
 const draftVisionApiKey = ref("");
 const clearVisionApiKey = ref(false);
+
+// ── 记忆助手模型：独立地址、模型和 API Key，不借用聊天凭据 ──
+const draftMemoryAssistantModel = ref("");
+const draftMemoryAssistantApiBaseUrl = ref("");
+const draftMemoryAssistantApiKey = ref("");
+const clearMemoryAssistantApiKey = ref(false);
 const testingVision = ref(false);
 /** 图片页「获取模型」拉回来的清单；换地址就作废（两家清单不通用） */
 const fetchedVisionModels = ref<string[]>([]);
 const fetchingVisionModels = ref(false);
-/** 模型设置三个页签：对话模型 / 语音模型 / 图片模型。用 v-show 切换，切换不丢已填的表单 */
-const activeTab = ref<"chat" | "voice" | "vision">("chat");
+/** 模型设置页签：对话 / 语音 / 图片 / 记忆助手。用 v-show 切换，切换不丢已填表单 */
+const activeTab = ref<"chat" | "voice" | "vision" | "memoryAssistant">("chat");
 
 /** 本页「获取模型」拉回来的列表；换地址就作废 */
 const fetchedModels = ref<string[]>([]);
@@ -131,6 +137,10 @@ const draftSignature = computed(() => JSON.stringify([
   draftVisionModel.value.trim(),
   draftVisionApiBaseUrl.value.trim(),
   clearVisionApiKey.value,
+  // 记忆助手 Key 明文不进指纹（留空=不改），清除勾选要进。
+  draftMemoryAssistantModel.value.trim(),
+  draftMemoryAssistantApiBaseUrl.value.trim(),
+  clearMemoryAssistantApiKey.value,
 ]));
 const dirty = computed(() => savedSignature.value !== "" && draftSignature.value !== savedSignature.value);
 
@@ -496,6 +506,10 @@ async function loadCharacter() {
     draftVisionApiBaseUrl.value = data.visionApiBaseUrl ?? "";
     draftVisionApiKey.value = "";
     clearVisionApiKey.value = false;
+    draftMemoryAssistantModel.value = data.memoryAssistantModel ?? "";
+    draftMemoryAssistantApiBaseUrl.value = data.memoryAssistantApiBaseUrl ?? "";
+    draftMemoryAssistantApiKey.value = "";
+    clearMemoryAssistantApiKey.value = false;
     fetchedModels.value = [];
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = data.updatedAt ? new Date(data.updatedAt) : null;
@@ -546,6 +560,13 @@ async function save(silent = false): Promise<boolean> {
         visionApiBaseUrl: draftVisionApiBaseUrl.value.trim(),
         ...(draftVisionApiKey.value.trim() ? { visionApiKey: draftVisionApiKey.value.trim() } : {}),
         ...(clearVisionApiKey.value ? { clearVisionApiKey: true } : {}),
+        // 记忆助手模型：独立凭据，Key 留空不改，明确勾选才删除。
+        memoryAssistantModel: draftMemoryAssistantModel.value.trim(),
+        memoryAssistantApiBaseUrl: draftMemoryAssistantApiBaseUrl.value.trim(),
+        ...(draftMemoryAssistantApiKey.value.trim()
+          ? { memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim() }
+          : {}),
+        ...(clearMemoryAssistantApiKey.value ? { clearMemoryAssistantApiKey: true } : {}),
       },
     });
     character.value = updated;
@@ -555,6 +576,8 @@ async function save(silent = false): Promise<boolean> {
     clearVoiceApiKey.value = false;
     draftVisionApiKey.value = "";
     clearVisionApiKey.value = false;
+    draftMemoryAssistantApiKey.value = "";
+    clearMemoryAssistantApiKey.value = false;
     // 清空 Key 输入框之后才取指纹，否则刚存的这份会一直被当成「未保存」
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = new Date();
@@ -657,7 +680,7 @@ watch(id, () => void loadCharacter());
     <PageHeader
       :eyebrow="'角色管理 / ' + (character?.name ?? '角色') + ' / 模型设置'"
       title="模型设置"
-      description="决定这个角色用哪家模型：对话、语音、看图各可以是不同一家。配置写入 PostgreSQL，API Key 加密保存、不回传给网页；测试与拉取都基于已保存的配置。"
+      description="决定这个角色使用哪些模型：对话、语音、看图和记忆助手可以分别配置。API Key 加密保存、不回传给网页。"
       :back-to="backTarget"
       :back-label="backLabel"
     />
@@ -679,8 +702,7 @@ watch(id, () => void loadCharacter());
       class="ms-grid"
     >
       <div class="ms-main">
-        <!-- 三个页签：点击切换。对话模型（连接/模型/生成参数）、语音模型（她发语音、听懂语音用的服务）、
-             图片模型（看图用的那一家，以后生图也挂这里） -->
+        <!-- 四个页签：对话、语音、图片、记忆助手。 -->
         <div
           class="model-tabs"
           role="tablist"
@@ -717,6 +739,17 @@ watch(id, () => void loadCharacter());
             @click="activeTab = 'vision'"
           >
             图片模型
+          </button>
+          <button
+            id="model-tab-memory-assistant"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === 'memoryAssistant'"
+            class="model-tab"
+            :class="{ 'is-on': activeTab === 'memoryAssistant' }"
+            @click="activeTab = 'memoryAssistant'"
+          >
+            记忆助手
           </button>
         </div>
 
@@ -1435,6 +1468,109 @@ watch(id, () => void loadCharacter());
           </section>
         </div>
 
+        <div
+          v-show="activeTab === 'memoryAssistant'"
+          class="model-pane"
+        >
+          <section class="brick">
+            <div class="brick-head">
+              <div class="brick-head-txt">
+                <div class="brick-heading">
+                  <h2 class="brick-title">
+                    记忆助手模型
+                  </h2>
+                </div>
+                <p class="brick-desc">
+                  记忆助手使用独立模型和独立 API Key，负责检索时分析历史材料；不会借用大肥鱼的聊天 Key。
+                  当前阶段先完成配置，启用开关位于「角色管理」的角色档案中。
+                </p>
+              </div>
+            </div>
+
+            <div class="fields">
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API 地址</span>
+                  <span class="field-req">可选</span>
+                </div>
+                <el-input
+                  v-model="draftMemoryAssistantApiBaseUrl"
+                  maxlength="500"
+                  aria-label="记忆助手 API 地址"
+                  :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型地址）'"
+                />
+                <p class="field-help">
+                  填 API 根地址，不要追加 /chat/completions。留空时沿用这个角色的对话模型地址。
+                </p>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">模型名称</span>
+                  <span class="field-req">必填</span>
+                </div>
+                <el-input
+                  v-model="draftMemoryAssistantModel"
+                  maxlength="120"
+                  aria-label="记忆助手模型名称"
+                  placeholder="填写专门用于记忆检索的模型名称"
+                />
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">独立 API Key</span>
+                  <span
+                    class="pill"
+                    :class="character?.memoryAssistantApiKeyConfigured ? 'pill-green' : 'pill-rose'"
+                  >{{ character?.memoryAssistantApiKeyConfigured ? "已保存" : "未填写" }}</span>
+                </div>
+                <el-input
+                  v-model="draftMemoryAssistantApiKey"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  maxlength="8192"
+                  aria-label="记忆助手 API Key"
+                  placeholder="填写记忆助手专用 API Key"
+                />
+                <p class="field-help">
+                  使用本机凭据加密密钥进行 AES-256-GCM 加密保存。留空表示不修改已有 Key，不会回传 Key 原文。
+                </p>
+                <el-checkbox
+                  v-if="character?.memoryAssistantApiKeyConfigured"
+                  v-model="clearMemoryAssistantApiKey"
+                  class="field-check"
+                >
+                  移除记忆助手单独保存的 API Key
+                </el-checkbox>
+              </div>
+            </div>
+          </section>
+
+          <section class="brick">
+            <div class="brick-head">
+              <div class="brick-head-txt">
+                <div class="brick-heading">
+                  <h2 class="brick-title">
+                    启用说明
+                  </h2>
+                </div>
+                <p class="brick-desc">
+                  模型配置保存后，还需要到「角色管理」为这个角色打开记忆助手。未配置模型名称或独立 Key 时，开关不可用。
+                  关闭记忆助手不会影响大肥鱼现有的记忆检索和正常聊天。
+                </p>
+              </div>
+            </div>
+            <div class="metric-row">
+              <span>模型配置</span>
+              <span class="metric-value">
+                {{ draftMemoryAssistantModel.trim() && character?.memoryAssistantApiKeyConfigured ? "已具备启用条件" : "尚未完整配置" }}
+              </span>
+            </div>
+          </section>
+        </div>
+
         <!-- 吸底操作条：往下滚也能按到主操作 -->
         <div class="act-bar">
           <span
@@ -1482,6 +1618,9 @@ watch(id, () => void loadCharacter());
           </div>
           <div class="metric-row">
             <span>看图模型</span><span class="metric-value">{{ character?.visionModel || "跟随对话模型" }}</span>
+          </div>
+          <div class="metric-row">
+            <span>记忆助手</span><span class="metric-value">{{ character?.memoryAssistantConfigured ? character.memoryAssistantModel : "未配置" }}</span>
           </div>
           <p class="side-note">
             模型未配置时，对话与自动归档会留在队列里，不会用规则摘要冒充 AI 输出。
@@ -1589,7 +1728,7 @@ watch(id, () => void loadCharacter());
 .ms-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--sp-5); align-items: start; }
 .ms-main { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-4); }
 /* 页签：对话模型 / 语音模型。下划线选中态，与侧栏「当前项」同一套语汇 */
-.model-tabs { display: flex; gap: var(--sp-1); border-bottom: 1px solid var(--line); }
+.model-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); border-bottom: 1px solid var(--line); }
 .model-tab {
   margin-bottom: -1px;
   border: 0;
