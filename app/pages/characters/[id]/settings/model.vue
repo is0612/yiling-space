@@ -140,6 +140,7 @@ const draftSignature = computed(() => JSON.stringify([
   // 记忆助手 Key 明文不进指纹（留空=不改），清除勾选要进。
   draftMemoryAssistantModel.value.trim(),
   draftMemoryAssistantApiBaseUrl.value.trim(),
+  draftMemoryAssistantApiKey.value.trim(),
   clearMemoryAssistantApiKey.value,
 ]));
 const dirty = computed(() => savedSignature.value !== "" && draftSignature.value !== savedSignature.value);
