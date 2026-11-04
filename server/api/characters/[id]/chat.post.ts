@@ -22,9 +22,9 @@ import {
   selectEventsForPrompt, selectRecentEvents,
 } from "../../../utils/memory-event-retrieval";
 import {
-  resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
+  resolveRawMessageLimit, resolveRawMessageTokenBudget,
+  selectRawMessagesForMemoryAssistant, selectRawMessagesForPrompt,
 } from "../../../utils/message-retrieval";
-import { selectRawMessagesForMemoryAssistant } from "../../../utils/message-retrieval";
 import { recordModelUsage, readDailyQuota, toUsageTokens } from "../../../utils/model-usage";
 import { resolveChatMemoryScopes } from "../../../utils/memory-scope-access";
 import { requireActorUserId } from "../../../utils/auth";
@@ -486,6 +486,7 @@ export default defineEventHandler(async (event) => {
   const usedMemoryIds = new Set(generated.usedMemoryIds);
   const usedSnapshotIds = new Set(generated.usedSnapshotIds);
   const usedEventIds = new Set(generated.usedEventIds);
+  const usedRawMessageIds = new Set(generated.usedRawMessageIds);
   const assistantSources = generated.memoryAssistantSources ?? [];
   const allMemorySources = [
     ...memories,
@@ -500,6 +501,18 @@ export default defineEventHandler(async (event) => {
       periodEnd: source.periodEnd ?? "", version: source.version ?? 1, scope: source.scope,
     })),
   ];
+  const allRawMessageSources = [
+    ...rawMessages,
+    ...assistantSources.filter((source) => source.sourceType === "message").map((source) => ({
+      id: source.id,
+      role: source.role ?? "USER",
+      content: source.content ?? "",
+      occurredAt: source.occurredAt ?? "",
+      ...(source.speaker ? { speaker: source.speaker } : {}),
+      ...(source.isOwner ? { isOwner: true } : {}),
+      scope: source.scope,
+    })),
+  ];
   const usedSources = {
     memories: allMemorySources.filter((memory, index, all) => usedMemoryIds.has(memory.id)
       && all.findIndex((candidate) => candidate.id === memory.id) === index)
@@ -510,6 +523,11 @@ export default defineEventHandler(async (event) => {
     // 忆泡：模型回填的 id 已经过来源白名单校验，这里只负责按 id 取出展示信息。
     events: eventCandidates.filter((event) => usedEventIds.has(event.id))
       .map((event) => ({ id: event.id, title: event.title, occurredAt: event.occurredAt, participants: event.participants })),
+    rawMessages: allRawMessageSources.filter((message, index, all) => usedRawMessageIds.has(message.id)
+      && all.findIndex((candidate) => candidate.id === message.id) === index)
+      .map(({ id, role, content, occurredAt, speaker, isOwner, scope }) => ({
+        id, role, content, occurredAt, ...(speaker ? { speaker } : {}), ...(isOwner ? { isOwner } : {}), scope,
+      })),
   };
 
   const now = new Date();
@@ -544,6 +562,7 @@ export default defineEventHandler(async (event) => {
           promptTemplateVersion: generated.promptTemplateVersion,
           usedMemoryIds: generated.usedMemoryIds,
           usedSnapshotIds: generated.usedSnapshotIds,
+          usedRawMessageIds: generated.usedRawMessageIds,
           usedCatchphraseIds: generated.usedCatchphraseIds,
           usedSources,
           usage: generated.usage ?? {},
