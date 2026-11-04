@@ -92,7 +92,7 @@ export function extractRetrievalTerms(query: string): string[] {
 export function extractMemoryAssistantSearchTerms(query: string, limit = 20): string[] {
   const safeLimit = Number.isFinite(limit) ? Math.min(32, Math.max(1, Math.round(limit))) : 20;
   return extractRetrievalTerms(query)
-    .filter((term) => term.trim().length >= 2 && !/^\\d+$/u.test(term))
+    .filter((term) => term.trim().length >= 2 && !/^\d+$/u.test(term))
     .slice(0, safeLimit);
 }
 
