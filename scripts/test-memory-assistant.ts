@@ -5,6 +5,7 @@ import {
   mergeModelUsage,
   resolveMemoryAssistantRuntime,
   selectMemoryAssistantSources,
+  testMemoryAssistantConnection,
   type MemoryAssistantCandidate,
 } from "../server/utils/memory-assistant";
 import type { ConversationReplyInput } from "../server/utils/chat-reply";
@@ -323,4 +324,40 @@ try {
   globalThis.fetch = originalFetch;
 }
 
-console.log("Memory assistant tests passed: scope isolation, source whitelist, independent credentials, on-demand lookup, usage accounting, and fail-open fallback.");
+// Connection test uses the assistant's own endpoint and credential, and accepts a configured assistant before activation.
+const connectionCalls: Array<{ url: string; authorization: string; body: Record<string, unknown> }> = [];
+const originalFetchForConnection = globalThis.fetch;
+try {
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const headers = new Headers(init?.headers);
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : {};
+    connectionCalls.push({
+      url: String(input),
+      authorization: headers.get("authorization") ?? "",
+      body,
+    });
+    return new Response(JSON.stringify({
+      model: "memory-model",
+      choices: [{ message: { content: "ok" } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const connection = await testMemoryAssistantConnection(assistant);
+  assert.equal(connection.ok, true);
+  assert.equal(connection.model, "memory-model");
+  assert.equal(connection.provider, "memory.example.com");
+  assert.equal(connectionCalls.length, 1);
+  assert.equal(connectionCalls[0]?.url, "https://memory.example.com/v1/chat/completions");
+  assert.equal(connectionCalls[0]?.authorization, "Bearer memory-key-only");
+  assert.equal(connectionCalls[0]?.body.model, "memory-model");
+  assert.equal(connectionCalls[0]?.body.max_tokens, 16);
+
+  globalThis.fetch = async (): Promise<Response> =>
+    new Response("unauthorized", { status: 401 });
+  const rejected = await testMemoryAssistantConnection(assistant);
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.message, /API Key 无效/);
+} finally {
+  globalThis.fetch = originalFetchForConnection;
+}
+
+console.log("Memory assistant tests passed: scope isolation, source whitelist, independent credentials, on-demand lookup, connection test, usage accounting, and fail-open fallback.");
