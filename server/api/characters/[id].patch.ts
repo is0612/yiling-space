@@ -2,7 +2,8 @@ import { createError, readBody } from "h3";
 import type { Prisma } from "../../../src/generated/prisma/client";
 import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
-import { encryptApiKey } from "../../utils/credential-encryption";import { requireActorUserId } from "../../utils/auth";
+import { encryptApiKey } from "../../utils/credential-encryption";
+import { requireActorUserId } from "../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../utils/local-api";
 import { MEMORY_ITEM_LIMIT_MAX, MEMORY_ITEM_LIMIT_MIN, RECENT_MESSAGE_LIMIT_MAX, RECENT_MESSAGE_LIMIT_MIN } from "../../utils/memory-retrieval";
 import { getPrisma } from "../../utils/prisma";
@@ -45,8 +46,49 @@ export default defineEventHandler(async (event) => {
   /** 图片（看图）模型的 Key：与语音同理，几乎必然是另一家服务商，单独一把。 */
   let visionApiKeyPlain = "";
   let clearVisionApiKey = false;
+  /** 记忆助手的 Key 与主聊天模型独立保存，不能互相回落。 */
+  let memoryAssistantApiKeyPlain = "";
+  let clearMemoryAssistantApiKey = false;
   if (body.alias !== undefined) modelConfigPatch.alias = readTrimmedString(body.alias, "角色标签", 100);
   if (body.description !== undefined) modelConfigPatch.description = readTrimmedString(body.description, "角色简介", 2000);
+
+  if (body.memoryAssistantModel !== undefined) {
+    modelConfigPatch.memoryAssistantModel = readTrimmedString(body.memoryAssistantModel, "记忆助手模型名称", 120);
+  }
+  if (body.memoryAssistantApiBaseUrl !== undefined) {
+    if (typeof body.memoryAssistantApiBaseUrl !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "记忆助手 API 地址必须是文本。" });
+    }
+    try {
+      const value = body.memoryAssistantApiBaseUrl.trim();
+      modelConfigPatch.memoryAssistantApiBaseUrl = value ? validateChatApiBaseUrl(value) : "";
+    } catch (error) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: error instanceof Error ? error.message : "记忆助手 API 地址无效。",
+      });
+    }
+  }
+  if (body.memoryAssistantApiKey !== undefined) {
+    if (typeof body.memoryAssistantApiKey !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "记忆助手 API Key 必须是文本。" });
+    }
+    const key = body.memoryAssistantApiKey.trim();
+    if (key.length > 8192) throw createError({ statusCode: 400, statusMessage: "记忆助手 API Key 不能超过 8192 个字符。" });
+    if (key) memoryAssistantApiKeyPlain = key;
+  }
+  if (body.clearMemoryAssistantApiKey !== undefined) {
+    if (typeof body.clearMemoryAssistantApiKey !== "boolean") {
+      throw createError({ statusCode: 400, statusMessage: "清除记忆助手 API Key 的参数无效。" });
+    }
+    clearMemoryAssistantApiKey = body.clearMemoryAssistantApiKey;
+  }
+  if (body.memoryAssistantEnabled !== undefined) {
+    if (typeof body.memoryAssistantEnabled !== "boolean") {
+      throw createError({ statusCode: 400, statusMessage: "记忆助手开关必须是布尔值。" });
+    }
+    modelConfigPatch.memoryAssistantEnabled = body.memoryAssistantEnabled;
+  }
 
   // 额度与预算都是 0 = 不限（预算则回落到默认值），所以允许 0。
   const numericLimits: Array<[string, string, number]> = [
@@ -327,7 +369,7 @@ export default defineEventHandler(async (event) => {
   const { chatApiKey, clearApiKey, ...safeSettingsPatch } = settingsPatch;
   Object.assign(modelConfigPatch, safeSettingsPatch);
 
-  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || visionApiKeyPlain || clearVisionApiKey) {
+  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
     if (clearApiKey) delete nextConfig.chatApiKeyEncrypted;
     if (chatApiKey) nextConfig.chatApiKeyEncrypted = await encryptApiKey(chatApiKey);
@@ -338,6 +380,39 @@ export default defineEventHandler(async (event) => {
     // 图片模型的 Key 同理再分开一把，三家可以各是各的。
     if (clearVisionApiKey) delete nextConfig.visionApiKeyEncrypted;
     if (visionApiKeyPlain) nextConfig.visionApiKeyEncrypted = await encryptApiKey(visionApiKeyPlain);
+    if (clearMemoryAssistantApiKey) delete nextConfig.memoryAssistantApiKeyEncrypted;
+    if (memoryAssistantApiKeyPlain) {
+      nextConfig.memoryAssistantApiKeyEncrypted = await encryptApiKey(memoryAssistantApiKeyPlain);
+    }
+
+    // 开启前必须具备独立模型和独立 Key。地址可以留空，默认沿用这个角色的聊天 API 地址。
+    // 即使只是修改其他字段，只要当前助手仍处于开启状态，也会再次验证配置完整性。
+    if (nextConfig.memoryAssistantEnabled === true) {
+      const assistantModel = typeof nextConfig.memoryAssistantModel === "string"
+        ? nextConfig.memoryAssistantModel.trim()
+        : "";
+      const assistantKey = nextConfig.memoryAssistantApiKeyEncrypted;
+      if (!assistantModel) {
+        throw createError({ statusCode: 400, statusMessage: "启用记忆助手前，请先在模型设置中填写记忆助手模型名称。" });
+      }
+      if (typeof assistantKey !== "string" || !assistantKey.startsWith("v1.")) {
+        throw createError({ statusCode: 400, statusMessage: "启用记忆助手前，请先保存记忆助手专用 API Key。" });
+      }
+      const assistantBaseUrl = typeof nextConfig.memoryAssistantApiBaseUrl === "string"
+        && nextConfig.memoryAssistantApiBaseUrl.trim()
+        ? nextConfig.memoryAssistantApiBaseUrl
+        : typeof nextConfig.chatApiBaseUrl === "string" && nextConfig.chatApiBaseUrl.trim()
+          ? nextConfig.chatApiBaseUrl
+          : process.env.LLM_BASE_URL?.trim() || "https://api.openai.com/v1";
+      try {
+        validateChatApiBaseUrl(assistantBaseUrl);
+      } catch (error) {
+        throw createError({
+          statusCode: 400,
+          statusMessage: error instanceof Error ? error.message : "记忆助手 API 地址无效。",
+        });
+      }
+    }
     data.modelConfig = nextConfig as Prisma.InputJsonObject;
   }
 
