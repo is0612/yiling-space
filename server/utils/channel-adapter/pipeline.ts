@@ -15,8 +15,7 @@ import {
 import { parseEventParticipantQuery, resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget, selectEventsForPrompt, selectRecentEvents } from "../memory-event-retrieval";
 import { moveConversationEventsToScope } from "../memory-event-move";
 import {
-  resolveRawMessageLimit, resolveRawMessageTokenBudget,
-  selectRawMessagesForMemoryAssistant, selectRawMessagesForPrompt,
+  resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
 } from "../message-retrieval";
 import { resolveEventParticipantNames, resolveParticipantAccounts } from "../participant-names";
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
