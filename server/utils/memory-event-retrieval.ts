@@ -49,7 +49,7 @@ export type SelectedEvents<T> = {
   usedTokens: number;
   dropped: number;
   /** 这一轮是按什么选出来的：时间区间 / 参与者 / 第一次 / 关键词。 */
-  mode: "range" | "participant" | "first" | "keyword";
+  mode: "range" | "participant" | "first" | "latest" | "keyword";
 };
 
 export type EventSelectionOptions = {
@@ -174,7 +174,8 @@ export function parseEventParticipantQuery(query: string): string | null {
   return null;
 }
 
-export function selectEventsForPrompt<T extends EventCandidate>(  query: string,
+export function selectEventsForPrompt<T extends EventCandidate>(
+  query: string,
   events: T[],
   options: EventSelectionOptions = {},
 ): SelectedEvents<T> {
@@ -183,92 +184,112 @@ export function selectEventsForPrompt<T extends EventCandidate>(  query: string,
   const tokenBudget = options.tokenBudget && options.tokenBudget > 0 ? options.tokenBudget : EVENT_TOKEN_BUDGET_DEFAULT;
   const limit = options.limit && options.limit > 0 ? options.limit : EVENT_LIMIT_DEFAULT;
   const range = parseEventTimeRange(query, now, timeZone);
+  const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(query);
+  const wantsLatest = /最近一次|上一次|上回|上次|最后一次/u.test(query);
+
+  const inRange = (items: T[]) => range
+    ? items.filter((event) => event.occurredAt.getTime() >= range.start.getTime()
+      && event.occurredAt.getTime() < range.end.getTime())
+    : items;
+  const ranked = (items: T[]) => items.map((event) => {
+    const { score, tokens } = scoreByKeywords(query, event);
+    return { ...event, relevanceScore: score, tokens };
+  });
+  const timeOrdered = (items: Array<RankedEvent<T>>, direction: "first" | "latest") =>
+    [...items].sort((left, right) => direction === "first"
+      ? left.occurredAt.getTime() - right.occurredAt.getTime()
+      : right.occurredAt.getTime() - left.occurredAt.getTime());
+
+  // 明确问「第一次 / 上一次」时，不让普通相关度排序盖过时间意图。
+  const timeIntent = wantsFirst ? "first" : wantsLatest ? "latest" : null;
 
   // 先按账号找：问句里出现 5–12 位数字就当平台账号，直接匹配 participantRefs.externalId。
   const participantId = parseEventParticipantIdQuery(query);
   if (participantId) {
-    const byId = events.filter((event) => externalIdsOf(event).includes(participantId));
+    const byId = inRange(events.filter((event) => externalIdsOf(event).includes(participantId)));
     if (byId.length > 0) {
-      const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(query);
-      const ordered = [...byId].sort((left, right) => (wantsFirst
-        ? left.occurredAt.getTime() - right.occurredAt.getTime()
-        : right.occurredAt.getTime() - left.occurredAt.getTime()));
-      const ranked = ordered.map((event) => {
-        const { score, tokens } = scoreByKeywords(query, event);
-        return { ...event, relevanceScore: score, tokens };
-      });
-      return { ...applyBudget(ranked, tokenBudget, limit), range, mode: wantsFirst ? "first" : "participant" };
+      const direction = timeIntent ?? "latest";
+      const ordered = timeOrdered(ranked(byId), direction);
+      return { ...applyBudget(ordered, tokenBudget, limit), range, mode: direction === "first" ? "first" : direction === "latest" && timeIntent ? "latest" : "participant" };
     }
   }
 
   /**
-   * 「关于某个人的事」与「第一次见到某人」这两种问法没有日期、关键词也打不准：
-   * 前者要的是**全部相关事件**，后者要的是**最早那几次**。都按参与者过滤后再按时间取，
-   * 而不是丢给关键词排序（那样等于让「小明」两个字去和正文比相似度）。
+   * 「关于某个人的事」与「第一次见到某人」按参与者过滤。
+   * 昵称负责找到入口，账号负责兜住改名；结果再按时间意图排序。
    */
   const participant = parseEventParticipantQuery(query);
   const wantedIds = new Set(options.participantIds ?? []);
-  /**
-   * 单字名字必须有账号背书才认：「和好了一起吃饭」会解析出「好」，
-   * 万一真有人昵称叫「好」就会错配。没有账号就退回关键词，不按人过滤。
-   */
   if (participant && (participant.length >= 2 || wantedIds.size > 0)) {
     const wanted = normalize(participant);
     const byName = events.filter((event) => event.participants.some((person) => {
       const name = normalize(person);
       return name.length >= 2 && (name.includes(wanted) || wanted.includes(name));
     }));
-    /**
-     * 账号兜底：问的是「阿鲸」，忆泡里写的是旧名「小花」—— 字符串比不出来，
-     * 但它们是同一个 QQ 号。名字是入口，账号才是身份，两边取并集。
-     * （2026-11-03 实测：134 个账号里 17 个两天内改过名。）
-     */
     const byAccount = wantedIds.size
       ? events.filter((event) => externalIdsOf(event).some((id) => wantedIds.has(id)))
       : [];
-    const matched = [...new Map(
+    const matched = inRange([...new Map(
       [...byName, ...byAccount].map((event) => [event.id, event]),
-    ).values()];
+    ).values()]);
     if (matched.length > 0) {
-      const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(query);
-      const ordered = [...matched].sort((left, right) => (wantsFirst
-        ? left.occurredAt.getTime() - right.occurredAt.getTime()
-        : right.occurredAt.getTime() - left.occurredAt.getTime()));
-      const ranked = ordered.map((event) => {
-        const { score, tokens } = scoreByKeywords(query, event);
-        return { ...event, relevanceScore: score, tokens };
-      });
-      return { ...applyBudget(ranked, tokenBudget, limit), range, mode: wantsFirst ? "first" : "participant" };
+      const direction = timeIntent ?? "latest";
+      const ordered = timeOrdered(ranked(matched), direction);
+      return {
+        ...applyBudget(ordered, tokenBudget, limit),
+        range,
+        mode: direction === "first" ? "first" : timeIntent === "latest" ? "latest" : "participant",
+      };
     }
   }
 
-  let ranked: Array<RankedEvent<T>>;
-  if (range) {
-    // 「那天」问的是清单：按发生时间正序，关键词只影响同一天内的先后。
-    const inRange = events
-      .filter((event) => event.occurredAt.getTime() >= range.start.getTime() && event.occurredAt.getTime() < range.end.getTime())
-      .map((event) => {
-        const { score, tokens } = scoreByKeywords(query, event);
-        return { ...event, relevanceScore: score, tokens };
-      })
-      .sort((left, right) =>
-        left.occurredAt.getTime() - right.occurredAt.getTime() || right.relevanceScore - left.relevanceScore,
-      );
-    const selected = applyBudget(inRange, tokenBudget, limit);
-    return { ...selected, range, mode: "range" };
+  let candidates = ranked(inRange(events));
+  if (timeIntent) {
+    // 有主题词时先筛主题，再按时间取首/末；没有主题命中就只按时间，不编造筛选条件。
+    const matching = candidates.filter((event) => event.relevanceScore > 0);
+    if (matching.length) candidates = matching;
+    const ordered = timeOrdered(candidates, timeIntent);
+    const selected = applyBudget(ordered, tokenBudget, limit);
+    return {
+      ...selected,
+      items: [...selected.items].sort((left, right) => left.occurredAt.getTime() - right.occurredAt.getTime()),
+      range,
+      mode: timeIntent,
+    };
   }
 
-  ranked = events
-    .map((event) => {
-      const { score, tokens } = scoreByKeywords(query, event);
-      return { ...event, relevanceScore: score, tokens };
-    })
-    // 没有日期指向时，只保留真的匹配上的；不匹配的不该为了凑数进来。
+  if (range) {
+    // 短区间（一天/两天）是时间线，按发生时间正序；月/年等宽区间先选相关事件，
+    // 没有关键词命中时取区间内最近的几件事，避免总是把年初的记录塞给用户。
+    const broadRange = range.end.getTime() - range.start.getTime() > 2 * 24 * 60 * 60 * 1000;
+    if (broadRange) {
+      const matching = candidates.filter((event) => event.relevanceScore > 0);
+      const ordered = matching.length
+        ? [...matching].sort((left, right) =>
+            right.relevanceScore - left.relevanceScore || right.occurredAt.getTime() - left.occurredAt.getTime(),
+          )
+        : timeOrdered(candidates, "latest");
+      const selected = applyBudget(ordered, tokenBudget, limit);
+      return {
+        ...selected,
+        items: [...selected.items].sort((left, right) => left.occurredAt.getTime() - right.occurredAt.getTime()),
+        range,
+        mode: "range",
+      };
+    }
+
+    const ordered = [...candidates].sort((left, right) =>
+      left.occurredAt.getTime() - right.occurredAt.getTime() || right.relevanceScore - left.relevanceScore,
+    );
+    return { ...applyBudget(ordered, tokenBudget, limit), range, mode: "range" };
+  }
+
+  candidates = candidates
     .filter((event) => event.relevanceScore > 0)
     .sort((left, right) =>
       right.relevanceScore - left.relevanceScore || right.occurredAt.getTime() - left.occurredAt.getTime(),
     );
-  return { ...applyBudget(ranked, tokenBudget, limit), range: null, mode: "keyword" };
+  return { ...applyBudget(candidates, tokenBudget, limit), range: null, mode: "keyword" };
 }
 
 function positive(value: unknown): number {
