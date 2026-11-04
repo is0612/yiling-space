@@ -202,6 +202,8 @@ export function selectEventsForPrompt<T extends EventCandidate>(
 
   // 明确问「第一次 / 上一次」时，不让普通相关度排序盖过时间意图。
   const timeIntent = wantsFirst ? "first" : wantsLatest ? "latest" : null;
+  // 单数时间问题只给最匹配的一次；普通人物回顾仍保留调用方指定的多条上限。
+  const selectionLimit = timeIntent ? 1 : limit;
 
   // 先按账号找：问句里出现 5–12 位数字就当平台账号，直接匹配 participantRefs.externalId。
   const participantId = parseEventParticipantIdQuery(query);
@@ -210,7 +212,7 @@ export function selectEventsForPrompt<T extends EventCandidate>(
     if (byId.length > 0) {
       const direction = timeIntent ?? "latest";
       const ordered = timeOrdered(ranked(byId), direction);
-      return { ...applyBudget(ordered, tokenBudget, limit), range, mode: direction === "first" ? "first" : direction === "latest" && timeIntent ? "latest" : "participant" };
+      return { ...applyBudget(ordered, tokenBudget, selectionLimit), range, mode: direction === "first" ? "first" : direction === "latest" && timeIntent ? "latest" : "participant" };
     }
   }
 
@@ -236,7 +238,7 @@ export function selectEventsForPrompt<T extends EventCandidate>(
       const direction = timeIntent ?? "latest";
       const ordered = timeOrdered(ranked(matched), direction);
       return {
-        ...applyBudget(ordered, tokenBudget, limit),
+        ...applyBudget(ordered, tokenBudget, selectionLimit),
         range,
         mode: direction === "first" ? "first" : timeIntent === "latest" ? "latest" : "participant",
       };
@@ -249,7 +251,7 @@ export function selectEventsForPrompt<T extends EventCandidate>(
     const matching = candidates.filter((event) => event.relevanceScore > 0);
     if (matching.length) candidates = matching;
     const ordered = timeOrdered(candidates, timeIntent);
-    const selected = applyBudget(ordered, tokenBudget, limit);
+    const selected = applyBudget(ordered, tokenBudget, selectionLimit);
     return {
       ...selected,
       items: [...selected.items].sort((left, right) => left.occurredAt.getTime() - right.occurredAt.getTime()),
@@ -269,7 +271,7 @@ export function selectEventsForPrompt<T extends EventCandidate>(
             right.relevanceScore - left.relevanceScore || right.occurredAt.getTime() - left.occurredAt.getTime(),
           )
         : timeOrdered(candidates, "latest");
-      const selected = applyBudget(ordered, tokenBudget, limit);
+      const selected = applyBudget(ordered, tokenBudget, selectionLimit);
       return {
         ...selected,
         items: [...selected.items].sort((left, right) => left.occurredAt.getTime() - right.occurredAt.getTime()),
@@ -281,7 +283,7 @@ export function selectEventsForPrompt<T extends EventCandidate>(
     const ordered = [...candidates].sort((left, right) =>
       left.occurredAt.getTime() - right.occurredAt.getTime() || right.relevanceScore - left.relevanceScore,
     );
-    return { ...applyBudget(ordered, tokenBudget, limit), range, mode: "range" };
+    return { ...applyBudget(ordered, tokenBudget, selectionLimit), range, mode: "range" };
   }
 
   candidates = candidates
@@ -289,7 +291,7 @@ export function selectEventsForPrompt<T extends EventCandidate>(
     .sort((left, right) =>
       right.relevanceScore - left.relevanceScore || right.occurredAt.getTime() - left.occurredAt.getTime(),
     );
-  return { ...applyBudget(candidates, tokenBudget, limit), range: null, mode: "keyword" };
+  return { ...applyBudget(candidates, tokenBudget, selectionLimit), range: null, mode: "keyword" };
 }
 
 function positive(value: unknown): number {
