@@ -248,6 +248,16 @@ const latestRawEvidence = selectRawMessagesForMemoryAssistant("最近一次和�
 });
 assert.equal(latestRawEvidence[0]?.id, "raw-latest",
   "「最近一次」检索原文时，相关度相同时必须优先最新消息。");
+const semanticFallbackRawHistory = [
+  { id: "semantic-old", role: "USER", content: "那阵子我们一起玩了好几款游戏。", occurredAt: new Date("2025-06-10T10:00:00Z") },
+  { id: "semantic-recent", role: "USER", content: "后来我们又聊了新的旅行计划。", occurredAt: new Date("2026-09-10T10:00:00Z") },
+];
+const semanticFallbackRaw = selectRawMessagesForMemoryAssistant("回忆一下我们那个夏天", semanticFallbackRawHistory, {
+  now, timeZone: TZ,
+});
+assert.deepEqual(semanticFallbackRaw.map((item) => item.id), ["semantic-old", "semantic-recent"],
+  "没有直接关键词命中时，原文选择器应保留有限的近期候选，供语义检索器识别近义表达。");
+
 
 // ── 单条原文截断：一条长粘贴不能把那天挤没 ──────────────────
 // 不截断时只有两种结局：第一条永远放行（整条进提示词），或者装不下被整条跳过。
