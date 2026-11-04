@@ -1,8 +1,8 @@
 /**
  * 忆泡参与者的「当前叫法」。
  *
- * 库里 `participants` 存的是**记那一刻**的名字（「曦」），而 QQ 群名片随时会改 ——
- * 实测 134 个账号里 17 个两天内就改过（2026-11-03：「小花」→「阿鲸」、「曦」→「鱼小妹」）。
+ * 库里 `participants` 存的是**记那一刻**的名字（「旧名」），而 QQ 群名片随时会改 ——
+ * 实测 134 个账号里 17 个两天内就改过（有人两天内从「小明」改成「小刚」）。
  * 历史记录不改写（那是当时的事实），但**注入提示词时要换成现在的名字**：否则她说出的
  * 名字对方未必认识，按名字检索也会漏。
  *
@@ -10,8 +10,8 @@
  * 名字只是展示层，改一百次也不影响「这是同一个人」。
  *
  * 为什么不直接用 `external_identities.displayName`：那张表只在「她真的回过这个人」时
- * 才刷新（见 `friends.ts` 的 `recordFriendInteraction`）。实测「曦」那条 identity 停在
- * 03:59，而他在 04:06 之后的消息里已经叫「鱼小妹」了。原始消息的 `metadata` 才是
+ * 才刷新（见 `friends.ts` 的 `recordFriendInteraction`）。实测某条 identity 停在
+ * 03:59，而他在 04:06 之后的消息里已经用了新名字。原始消息的 `metadata` 才是
  * 每个时间点都准的来源。
  */
 
@@ -56,7 +56,7 @@ export function readExternalParticipantRefs(value: unknown): ExternalParticipant
 /**
  * 把 `participants` 里的旧名字换成本人名册里的当前名字。
  *
- * 匹配顺序：先精确相等，再「包含」（模型偶尔写「小七」而引用里是「鱼小七」）。
+ * 匹配顺序：先精确相等，再「包含」（模型偶尔写「小刚」而引用里是「小刚同学」）。
  * 只换认得出的那几项，认不出的原样保留 —— 换错名字比留着旧名更糟，
  * 和参与者清洗那边「多于一个候选就不猜」是同一条原则。
  */
@@ -79,7 +79,7 @@ export function applyCurrentParticipantNames(
   const result: string[] = [];
   for (const person of participants) {
     const exact = renames.find((entry) => entry.was === person);
-    // 包含匹配只用于 2 字以上的名字，否则「曦」会命中「晨曦」这种无关项。
+    // 包含匹配只用于 2 字以上的名字，否则「青」会命中「青衫」这种无关项。
     const loose = exact ?? renames.find((entry) =>
       entry.was.length >= 2 && (person.includes(entry.was) || entry.was.includes(person)),
     );
@@ -142,8 +142,8 @@ export async function resolveEventParticipantNames(
 /**
  * 问句里那个人 → 平台账号。
  *
- * 这是「名字只是入口、账号才是身份」的入口那一半：用户问「鱼小妹最近说了什么」，
- * 忆泡里存的却是旧名「曦」。只比字符串查不到，先把名字换成账号，再用账号去
+ * 这是「名字只是入口、账号才是身份」的入口那一半：用户问「小刚最近说了什么」，
+ * 忆泡里存的却是旧名「小明」。只比字符串查不到，先把名字换成账号，再用账号去
  * 检索 `participantRefs` —— 改多少次名都还认得是同一个人。
  *
  * 两个来源：
@@ -163,7 +163,7 @@ export async function resolveParticipantAccounts(
 
   /**
    * 两个字以上才做模糊匹配；单字只比精确相等。
-   * 「曦」搜「晨曦」是错配，而群里单字昵称并不少见，不能一刀切拒绝。
+   * 「青」搜「青衫」是错配，而群里单字昵称并不少见，不能一刀切拒绝。
    */
   const escaped = wanted.replace(/[\\%_]/gu, (char) => `\\${char}`);
   const fuzzy = wanted.length >= 2
