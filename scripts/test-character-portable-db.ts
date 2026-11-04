@@ -461,6 +461,12 @@ async function main() {
   const localLineageMemory = importedGlobal?.memoryItems.find((item) => item.content === "主人住在杭州");
   assert.ok(localLineageMemory?.originId, "导入后必须保留源记忆血缘 ID");
   await prisma.memoryItem.update({ where: { id: localLineageMemory.id }, data: { content: "本机后来修订的住址记忆。" } });
+  const localLineageEvent = importedGlobal?.events[0];
+  const localLineageSnapshot = importedGlobal?.snapshots[0];
+  assert.ok(localLineageEvent?.originId, "导入后必须保留忆泡血缘 ID");
+  assert.ok(localLineageSnapshot?.originId, "导入后必须保留阶段总结血缘 ID");
+  await prisma.memoryEvent.update({ where: { id: localLineageEvent.id }, data: { title: "本机重新整理过的事件标题。" } });
+  await prisma.memorySnapshot.update({ where: { id: localLineageSnapshot.id }, data: { summary: "本机后来修订的阶段总结。" } });
 
   // 第一次合并：即使正文已在本机改写，也应按 originId 识别为同一条，不新增副本。
   const reconciled = await importCharacterCard({
@@ -472,6 +478,8 @@ async function main() {
   assert.equal(reconciled.characterId, first.characterId, "合并进目标角色，不新建");
   assert.equal(reconciled.added.memories, 0, "同一 originId 即使正文分叉也不该长出重复记忆");
   assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: localLineageMemory.id } })).content, "本机后来修订的住址记忆。", "合并必须保留本机对同一记忆的修订");
+  assert.equal((await prisma.memoryEvent.findUniqueOrThrow({ where: { id: localLineageEvent.id } })).title, "本机重新整理过的事件标题。", "合并必须保留本机对同一忆泡的修订");
+  assert.equal((await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: localLineageSnapshot.id } })).summary, "本机后来修订的阶段总结。", "合并必须保留本机对同一阶段总结的修订");
   assert.equal(reconciled.added.events, 0);
   assert.equal(reconciled.added.journalRevisions, 0);
   const mergedMemoryCount = await prisma.memoryItem.count({
