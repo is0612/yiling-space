@@ -1,5 +1,10 @@
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
-import { generateConversationReply, type ConversationContextMessage, type ConversationGroupDecision } from "../chat-reply";
+import { type ConversationContextMessage, type ConversationGroupDecision } from "../chat-reply";
+import {
+  buildMemoryAssistantCandidates,
+  generateConversationReplyWithMemoryAssistant,
+  resolveMemoryAssistantRuntime,
+} from "../memory-assistant";
 import { resolveChatTimeZone } from "../chat-time-context";
 import {
   CROSS_CHANNEL_WINDOW_MINUTES,
@@ -1389,10 +1394,27 @@ async function runChannelTurn(input: {
    * 格式化（日期裁成 M-D、名字截断）在 `chat-reply` 里统一做，这里原样传过去。
    */
   const acquaintances = acquaintanceRows ?? null;
+  const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
+  const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
+  const memoryAssistantCandidates = memoryAssistant
+    ? buildMemoryAssistantCandidates({
+        query: retrievalQuery,
+        memories: memoryCandidates,
+        snapshots: snapshotCandidates,
+        events: eventCandidates,
+        scopeOf: (scopeId) => scopeId === globalScope.id ? "character" : "private",
+        timeZone: chatTimeZone,
+        ...(participantIds.length ? { participantIds } : {}),
+        allowPrivate: !isGroup,
+      })
+    : [];
 
   let generated;
   try {
-    generated = await generateConversationReply({
+    generated = await generateConversationReplyWithMemoryAssistant({
+      assistant: memoryAssistant,
+      candidates: memoryAssistantCandidates,
+      chatInput: {
       characterName: character.name,
       characterPrompt: character.basePrompt.slice(0, 12_000),
       ...(!useTranscript && messages[0]!.speaker ? { speaker: messages[0]!.speaker } : {}),
@@ -1404,7 +1426,7 @@ async function runChannelTurn(input: {
       maxTokens: chatSettings.maxTokens,
       thinking: chatSettings.thinking,
       currentMessage,
-      timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+      timeZone: chatTimeZone,
       ...(journalLine ? { journalLine } : {}),
       events,
       ...(recentEvents.length ? { recentEvents } : {}),
@@ -1459,6 +1481,7 @@ async function runChannelTurn(input: {
       // 告诉她「这一条会被念出来」：语气、长度、不要表情符号都靠这一段。
       ...(voicePlanned ? { voiceReply: true } : {}),
       ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
+      },
     });
   } catch (error) {
     return { status: "ignored", reason: (error instanceof Error ? error.message : "model_error").slice(0, 200) };
@@ -1733,6 +1756,16 @@ async function runChannelTurn(input: {
     channelBindingId: input.bindingId,
     conversationId,
   });
+  if (generated.memoryAssistantUsage && generated.memoryAssistantModel) {
+    await recordModelUsage({
+      kind: "memory-assistant",
+      model: generated.memoryAssistantModel,
+      usage: toUsageTokens(generated.memoryAssistantUsage),
+      characterId: input.characterId,
+      channelBindingId: input.bindingId,
+      conversationId,
+    });
+  }
   const decision = generated.groupDecision ? { groupDecision: generated.groupDecision } : {};
   return generated.action === "silent"
     ? { status: "silent", conversationId, ...decision }
