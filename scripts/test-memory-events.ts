@@ -48,6 +48,37 @@ assert.equal(yesterdayAfternoon.end.getTime(), startOf(2026, 10, 30, 18).getTime
 expectDay(parseEventTimeRange("2026-10-25 那天", now, TZ), 2026, 10, 25);
 expectDay(parseEventTimeRange("10月25日", now, TZ), 2026, 10, 25);
 
+// ── 年 / 月范围：整月、整年使用角色时区的自然边界 ──────────────
+const lastMonth = parseEventTimeRange("上个月我们聊了什么", now, TZ);
+assert(lastMonth);
+assert.equal(lastMonth.start.getTime(), startOf(2026, 9, 1).getTime());
+assert.equal(lastMonth.end.getTime(), startOf(2026, 10, 1).getTime());
+
+const twoMonthsAgo = parseEventTimeRange("2个月前的事", now, TZ);
+assert(twoMonthsAgo);
+assert.equal(twoMonthsAgo.start.getTime(), startOf(2026, 8, 1).getTime());
+assert.equal(twoMonthsAgo.end.getTime(), startOf(2026, 9, 1).getTime());
+
+const lastYear = parseEventTimeRange("去年发生的事", now, TZ);
+assert(lastYear);
+assert.equal(lastYear.start.getTime(), startOf(2025, 1, 1).getTime());
+assert.equal(lastYear.end.getTime(), startOf(2026, 1, 1).getTime());
+
+const lastYearMonth = parseEventTimeRange("去年10月我们聊了什么", now, TZ);
+assert(lastYearMonth);
+assert.equal(lastYearMonth.start.getTime(), startOf(2025, 10, 1).getTime());
+assert.equal(lastYearMonth.end.getTime(), startOf(2025, 11, 1).getTime());
+
+const absoluteYearMonth = parseEventTimeRange("2025年11月的约定", now, TZ);
+assert(absoluteYearMonth);
+assert.equal(absoluteYearMonth.start.getTime(), startOf(2025, 11, 1).getTime());
+assert.equal(absoluteYearMonth.end.getTime(), startOf(2025, 12, 1).getTime());
+
+const absoluteYear = parseEventTimeRange("2024年我们认识多久了", now, TZ);
+assert(absoluteYear);
+assert.equal(absoluteYear.start.getTime(), startOf(2024, 1, 1).getTime());
+assert.equal(absoluteYear.end.getTime(), startOf(2025, 1, 1).getTime());
+
 // ── 星期：以周一为一周起点 ──────────────────────────────────
 expectDay(parseEventTimeRange("上周三", now, TZ), 2026, 10, 21);
 expectDay(parseEventTimeRange("本周三", now, TZ), 2026, 10, 28);
