@@ -230,7 +230,7 @@ const thinkingSavingId = ref("");
 const memoryAssistantSavingId = ref("");
 
 async function toggleThinking(character: Character | null, next: boolean) {
-  if (!character || thinkingSavingId.value) return;
+  if (!character || thinkingSavingId.value || memoryAssistantSavingId.value) return;
   thinkingSavingId.value = character.id;
   try {
     const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
@@ -249,7 +249,7 @@ async function toggleThinking(character: Character | null, next: boolean) {
 
 
 async function toggleMemoryAssistant(character: Character | null, next: boolean) {
-  if (!character || memoryAssistantSavingId.value) return;
+  if (!character || memoryAssistantSavingId.value || thinkingSavingId.value) return;
   if (next && !character.memoryAssistantConfigured) {
     ElMessage.warning("请先到模型设置中填写记忆助手模型名称和独立 API Key。");
     return;
@@ -719,7 +719,7 @@ function runCharacterCommand(command: string) {
                     <el-switch
                       :model-value="selected.memoryAssistantEnabled === true"
                       :loading="memoryAssistantSavingId === selected.id"
-                      :disabled="memoryAssistantSavingId !== '' || (!selected.memoryAssistantConfigured && selected.memoryAssistantEnabled !== true)"
+                      :disabled="memoryAssistantSavingId !== '' || thinkingSavingId !== '' || (!selected.memoryAssistantConfigured && selected.memoryAssistantEnabled !== true)"
                       size="small"
                       @change="(value) => toggleMemoryAssistant(selected, value === true)"
                     />
@@ -782,7 +782,7 @@ function runCharacterCommand(command: string) {
                     <el-switch
                       :model-value="selected.chatThinking === true"
                       :loading="thinkingSavingId === selected.id"
-                      :disabled="thinkingSavingId !== ''"
+                      :disabled="thinkingSavingId !== '' || memoryAssistantSavingId !== ''"
                       size="small"
                       @change="(value) => toggleThinking(selected, value === true)"
                     />
