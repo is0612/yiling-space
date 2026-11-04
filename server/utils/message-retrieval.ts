@@ -91,13 +91,20 @@ export function selectRawMessagesForMemoryAssistant<T extends RawMessageCandidat
     limit?: number;
     tokenBudget?: number;
     excludeIds?: Set<string>;
+    now?: Date;
+    timeZone?: string;
   } = {},
 ): Array<RankedRawMessage<T>> {
   const limit = options.limit && options.limit > 0 ? Math.min(Math.round(options.limit), 24) : 16;
   const tokenBudget = options.tokenBudget && options.tokenBudget > 0 ? options.tokenBudget : 3_200;
   const excluded = options.excludeIds ?? new Set<string>();
+  const range = parseEventTimeRange(query, options.now ?? new Date(), options.timeZone ?? "Asia/Shanghai");
   const ranked = messages
     .filter((message) => !excluded.has(message.id) && message.content.trim())
+    .filter((message) => !range || (
+      message.occurredAt.getTime() >= range.start.getTime()
+      && message.occurredAt.getTime() < range.end.getTime()
+    ))
     .map((message) => ({
       ...message,
       relevanceScore: scoreOf(query, message.content),
