@@ -1472,72 +1472,72 @@ async function runChannelTurn(input: {
         });
       },
       chatInput: {
-      characterName: character.name,
-      characterPrompt: character.basePrompt.slice(0, 12_000),
-      ...(!useTranscript && messages[0]!.speaker ? { speaker: messages[0]!.speaker } : {}),
-      styleExamples: (character.styleExamples ?? "").slice(0, 8000),
-      model: chatSettings.model,
-      apiKey,
-      apiBaseUrl: chatSettings.apiBaseUrl,
-      temperature: chatSettings.temperature,
-      maxTokens: chatSettings.maxTokens,
-      thinking: chatSettings.thinking,
-      currentMessage,
-      timeZone: chatTimeZone,
-      ...(journalLine ? { journalLine } : {}),
-      events,
-      ...(recentEvents.length ? { recentEvents } : {}),
-      rawMessages,
-      ...(useTranscript
-        ? {
-            transcript: messages.map((message) => ({
-              id: message.externalMessageId,
-              ...(message.member ? { member: message.member } : {}),
-              speaker: message.authorDisplayName ?? "",
-              content: message.promptContent ?? message.content,
-              // 谁是主人必须逐行带：顶层 speaker 在群聊路径下不会传（一轮里好几个人说话），
-              // 漏掉这一行，模型只能从「谁说话口吻像主人」里猜，结果就是对谁都喊主人。
-              isOwner: message.speaker?.isOwner === true,
-              ...(message.occurredAt ? { occurredAt: message.occurredAt.toISOString() } : {}),
-            })),
-          }
-        : {}),
-      ...(input.group
-        ? {
-            groupChat: true,
-            direct: input.group.direct,
-            ...(backgroundLines.length
-              ? {
-                  groupBackground: backgroundLines.map((line) => ({
-                    id: line.id,
-                    member: line.member,
-                    speaker: line.speaker,
-                    content: line.text,
-                    occurredAt: new Date(line.at).toISOString(),
-                  })),
-                }
-              : {}),
-            ...(input.group.anchors.length ? { groupAnchors: input.group.anchors } : {}),
-            ...(input.group.members?.length ? { groupMembers: input.group.members } : {}),
-          }
-        : {}),
-      ...(allowSilent ? { allowSilent } : {}),
-      // 当前会话只有在渠道支持、角色开关开启且 TTS 配置完整时，才算真的能发语音。
-      voiceEnabled: input.voiceCapable === true
-        && isVoiceReplyEnabled(character.modelConfig)
-        && Boolean(voiceSettings),
-      ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
-      ...(acquaintances ? { acquaintances } : {}),
-      recentMessages,
-      // 他在群里说的那几句：单独一路，不并进 recentMessages（见上面 crossChannel 的注释）。
-      ...(crossChannel.length ? { crossChannel: { label: "QQ 群", lines: crossChannel } } : {}),
-      memories,
-      snapshots,
-      ...(emojiFaces ? { emojiFaces } : {}),
-      ...(stickerCatalog?.length ? { emojiStickers: stickerCatalog } : {}),
-      // 告诉她「这一条会被念出来」：语气、长度、不要表情符号都靠这一段。
-      ...(voicePlanned ? { voiceReply: true } : {}),
-      ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
+        characterName: character.name,
+        characterPrompt: character.basePrompt.slice(0, 12_000),
+        ...(!useTranscript && messages[0]!.speaker ? { speaker: messages[0]!.speaker } : {}),
+        styleExamples: (character.styleExamples ?? "").slice(0, 8000),
+        model: chatSettings.model,
+        apiKey,
+        apiBaseUrl: chatSettings.apiBaseUrl,
+        temperature: chatSettings.temperature,
+        maxTokens: chatSettings.maxTokens,
+        thinking: chatSettings.thinking,
+        currentMessage,
+        timeZone: chatTimeZone,
+        ...(journalLine ? { journalLine } : {}),
+        events,
+        ...(recentEvents.length ? { recentEvents } : {}),
+        rawMessages,
+        ...(useTranscript
+          ? {
+              transcript: messages.map((message) => ({
+                id: message.externalMessageId,
+                ...(message.member ? { member: message.member } : {}),
+                speaker: message.authorDisplayName ?? "",
+                content: message.promptContent ?? message.content,
+                // 谁是主人必须逐行带：顶层 speaker 在群聊路径下不会传（一轮里好几个人说话），
+                // 漏掉这一行，模型只能从「谁说话口吻像主人」里猜，结果就是对谁都喊主人。
+                isOwner: message.speaker?.isOwner === true,
+                ...(message.occurredAt ? { occurredAt: message.occurredAt.toISOString() } : {}),
+              })),
+            }
+          : {}),
+        ...(input.group
+          ? {
+              groupChat: true,
+              direct: input.group.direct,
+              ...(backgroundLines.length
+                ? {
+                    groupBackground: backgroundLines.map((line) => ({
+                      id: line.id,
+                      member: line.member,
+                      speaker: line.speaker,
+                      content: line.text,
+                      occurredAt: new Date(line.at).toISOString(),
+                    })),
+                  }
+                : {}),
+              ...(input.group.anchors.length ? { groupAnchors: input.group.anchors } : {}),
+              ...(input.group.members?.length ? { groupMembers: input.group.members } : {}),
+            }
+          : {}),
+        ...(allowSilent ? { allowSilent } : {}),
+        // 当前会话只有在渠道支持、角色开关开启且 TTS 配置完整时，才算真的能发语音。
+        voiceEnabled: input.voiceCapable === true
+          && isVoiceReplyEnabled(character.modelConfig)
+          && Boolean(voiceSettings),
+        ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
+        ...(acquaintances ? { acquaintances } : {}),
+        recentMessages,
+        // 他在群里说的那几句：单独一路，不并进 recentMessages（见上面 crossChannel 的注释）。
+        ...(crossChannel.length ? { crossChannel: { label: "QQ 群", lines: crossChannel } } : {}),
+        memories,
+        snapshots,
+        ...(emojiFaces ? { emojiFaces } : {}),
+        ...(stickerCatalog?.length ? { emojiStickers: stickerCatalog } : {}),
+        // 告诉她「这一条会被念出来」：语气、长度、不要表情符号都靠这一段。
+        ...(voicePlanned ? { voiceReply: true } : {}),
+        ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
       },
     });
   } catch (error) {
