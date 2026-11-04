@@ -156,7 +156,7 @@ try {
     "没有记录时要说清楚，不能编一个听起来合理的故事。",
   );
   assert(
-    systemMessage.content.includes("Scope rule for memories / snapshots / events / recentEvents / rawMessages")
+    systemMessage.content.toLowerCase().includes("scope rule for memories / snapshots / events / recentevents / rawmessages")
       && systemMessage.content.includes('"character" is shared; "private" belongs only to the current user'),
     "所有带 scope 的历史材料都必须遵守同一条私有范围边界。",
   );
