@@ -22,8 +22,7 @@ import {
   selectEventsForPrompt, selectRecentEvents,
 } from "../../../utils/memory-event-retrieval";
 import {
-  resolveRawMessageLimit, resolveRawMessageTokenBudget,
-  selectRawMessagesForMemoryAssistant, selectRawMessagesForPrompt,
+  resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
 } from "../../../utils/message-retrieval";
 import { recordModelUsage, readDailyQuota, toUsageTokens } from "../../../utils/model-usage";
 import { resolveChatMemoryScopes } from "../../../utils/memory-scope-access";
