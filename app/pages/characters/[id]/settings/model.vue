@@ -1537,10 +1537,12 @@ watch(id, () => void loadCharacter());
                 />
                 <p class="field-help">
                   使用本机凭据加密密钥进行 AES-256-GCM 加密保存。留空表示不修改已有 Key，不会回传 Key 原文。
+                  <template v-if="character?.memoryAssistantEnabled">记忆助手开启中；如需移除 Key 或清空模型，请先到角色管理关闭助手。</template>
                 </p>
                 <el-checkbox
                   v-if="character?.memoryAssistantApiKeyConfigured"
                   v-model="clearMemoryAssistantApiKey"
+                  :disabled="character?.memoryAssistantEnabled === true"
                   class="field-check"
                 >
                   移除记忆助手单独保存的 API Key
