@@ -289,7 +289,12 @@ try {
     loadCandidates: async () => [candidate],
   });
   assert.equal(fallbackCalls.length, 2);
-  assert.equal(fallback.reply, "我一时想不起来，得再找找。");
+  assert.equal(fallback.reply, "本宝刚才想去翻以前的记录，但这次检索没成功，先不乱告诉你。",
+    "A failed lookup must replace the first-pass waiting reply with an explicit retrieval-failure message.");
+  assert.equal(fallback.memoryAssistantStatus, "failed");
+  assert.equal(fallback.memoryAssistantFailureReason, "http_error");
+  assert.equal(fallback.memoryAssistantAttempts, 1, "HTTP errors must not be retried as if they were malformed model output.");
+  assert.equal(fallback.memoryAssistantHttpStatus, 503);
   assert.equal(fallback.memoryAssistantSources, undefined,
     "An unavailable assistant must not leak unverified sources into the reply.");
 
