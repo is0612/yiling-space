@@ -1248,7 +1248,23 @@ export async function generateConversationReply(input: ConversationReplyInput): 
    * `sendThinking` 只给一种情况用：带了思考字段却被 400 打回来时去掉它再发一次。
    * 中转站、老版本兼容层的参数支持情况没法从模型名看出来，一个可选参数不该让整条回复消失。
    */
-  const requestReply = async (useTemperature: number, repair = false, sendThinking = true): Promise<ConversationReplyResult> => {
+  const requestReply = async (
+    useTemperature: number,
+    repair = false,
+    sendThinking = true,
+    /**
+     * 重试时强制关思考。
+     *
+     * 2026-11-04 实况：私聊「在吗」连着两次整轮没回，日志是
+     * `content 是空的；finish_reason=stop`。把真实请求原样重放 4 次，
+     * 思考开着 **2 次只回了 17~24 个空格**，temperature 0.8 / 0.3 都一样；
+     * 关掉思考 8 次全部正常出 JSON。所以空正文不是网络也不是提示词，
+     * 是思考模式下 JSON 模式偶发退化成空白。
+     *
+     * 关思考只能显式发 `disabled`（不传 = 平台默认开），所以这里不是省略字段。
+     */
+    forceThinkingOff = false,
+  ): Promise<ConversationReplyResult> => {
     let response: Response;
     try {
       response = await fetch(endpoint, {
@@ -1261,7 +1277,11 @@ export async function generateConversationReply(input: ConversationReplyInput): 
           max_tokens: effectiveMaxTokens,
           response_format: { type: "json_object" },
           // 深度思考：DeepSeek 默认就是开的，所以「关」也要发出去（disabled）。
-          ...(sendThinking ? thinkingFields : {}),
+          ...(sendThinking
+            ? (forceThinkingOff && thinkingSupported
+              ? { thinking: { type: "disabled" } }
+              : thinkingFields)
+            : {}),
           messages: [
             {
               role: "system",
@@ -1477,7 +1497,16 @@ export async function generateConversationReply(input: ConversationReplyInput): 
   let networkRetries = 0;
   for (;;) {
     try {
-      return await requestReply(parseRetried ? RETRY_TEMPERATURE : temperature, parseRetried);
+      /**
+       * 重试那一次顺手关掉思考：空正文是思考模式下的退化，原样再问一遍复现率极高
+       * （实测开着 50% 空、关掉 0% 空），所以光降温不够。
+       */
+      return await requestReply(
+        parseRetried ? RETRY_TEMPERATURE : temperature,
+        parseRetried,
+        true,
+        parseRetried,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (message.startsWith("LLM_INVALID_RESPONSE")) {

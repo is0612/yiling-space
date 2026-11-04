@@ -566,6 +566,39 @@ try {
   assert.equal(calls, 2, "重试上限是一次。");
 
   /**
+   * 思考模式下的「空白正文」：2026-11-04 私聊连着两次整轮不回，
+   * 重放真实请求 4 次里有 2 次只回了 17~24 个空格（finish_reason=stop）。
+   * 关掉思考 8 次全部正常，所以重试那一次必须显式发 `thinking: disabled` ——
+   * DeepSeek 不传这个字段等于默认开，省略字段救不了。
+   */
+  calls = 0;
+  const retryBodies: Array<{ thinking?: { type?: string }; reasoning_effort?: unknown }> = [];
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    calls += 1;
+    retryBodies.push(JSON.parse(String(init?.body ?? "{}")) as { thinking?: { type?: string }; reasoning_effort?: unknown });
+    const content = calls === 1
+      ? " ".repeat(24)
+      : JSON.stringify({ reply: "关掉思考就能说", usedMemoryIds: [], usedSnapshotIds: [] });
+    return new Response(replyOnce(content), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const rescued = await generateConversationReply({
+    characterName: "测试角色",
+    characterPrompt: "温柔地回复。",
+    model: "deepseek-chat",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "在吗",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+  });
+  assert.equal(rescued.reply, "关掉思考就能说", "空白正文重试后要能正常回。");
+  assert.equal(calls, 2, "空白正文也只多要一次。");
+  assert.equal(retryBodies[0]?.thinking?.type, "enabled", "第一次照常开思考。");
+  assert.equal(retryBodies[1]?.thinking?.type, "disabled", "重试要显式关掉思考。");
+  assert.equal(retryBodies[1]?.reasoning_effort, undefined, "关思考时不许再带 reasoning_effort。");
+
+  /**
    * 下面两段是这一页最该有的测试：模型其实答对了，是我们自己解不动。
    *
    * `response_format: json_object` 只是请求，不是保证。这条路径上最常见的两种坏输出是
