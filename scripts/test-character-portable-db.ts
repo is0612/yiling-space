@@ -367,6 +367,9 @@ async function main() {
   assert.ok(importedPrivate, "有私人记忆时要建私人范围");
   assert.equal(importedPrivate?.userId, ownerA, "私人记忆归属导入者");
   assert.equal(importedGlobal?.memoryItems.length, 2);
+  assert.equal(importedGlobal?.memoryItems.find((item) => item.content === "主人住在杭州")?.originId, bundle.memories.find((item) => item.content === "主人住在杭州")?.originId, "导入必须原样保留长期记忆血缘 ID");
+  assert.equal(importedGlobal?.events[0]?.originId, bundle.events.find((item) => item.title === "去海边游泳")?.originId, "导入必须原样保留忆泡血缘 ID");
+  assert.equal(importedGlobal?.snapshots[0]?.originId, bundle.snapshots.find((item) => item.summary === "这一段她学会了游泳。")?.originId, "导入必须原样保留阶段总结血缘 ID");
   assert.equal(importedPrivate?.memoryItems.length, 1);
   assert.equal(importedGlobal?.events.length, 1);
   assert.equal(importedGlobal?.snapshots.length, 1);
