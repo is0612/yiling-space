@@ -1421,6 +1421,7 @@ async function runChannelTurn(input: {
         const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(searchQuery);
         const wantsLatest = /最近一次|上一次|上回|上次|最后一次/u.test(searchQuery);
         const eventOrder = wantsFirst ? "asc" as const : "desc" as const;
+        const rawMessageOrder = wantsFirst ? "asc" as const : "desc" as const;
 
         // 深度检索按主题和时间补查旧记忆，不再只局限于聊天前置阶段的 300 条记录。
         const [targetedMemories, targetedSnapshots, targetedEvents] = await Promise.all([
@@ -1519,7 +1520,7 @@ async function runChannelTurn(input: {
                 };
                 const matched = await prisma.message.findMany({
                   where: { ...baseWhere, ...(contentMatches.length ? { OR: contentMatches } : {}) },
-                  orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                  orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
                   take: searchRange ? 500 : 350,
                   select: {
                     id: true, role: true, content: true, occurredAt: true, metadata: true,
@@ -1529,7 +1530,7 @@ async function runChannelTurn(input: {
                 if (!searchRange || !contentMatches.length || matched.length >= 16) return matched;
                 const fallback = await prisma.message.findMany({
                   where: baseWhere,
-                  orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                  orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
                   take: 120,
                   select: {
                     id: true, role: true, content: true, occurredAt: true, metadata: true,
@@ -1547,7 +1548,7 @@ async function runChannelTurn(input: {
               };
               const matched = await prisma.message.findMany({
                 where: { ...baseWhere, ...(contentMatches.length ? { OR: contentMatches } : {}) },
-                orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
                 take: searchRange ? 500 : 350,
                 select: {
                   id: true, role: true, content: true, occurredAt: true, metadata: true,
@@ -1557,7 +1558,7 @@ async function runChannelTurn(input: {
               if (!searchRange || !contentMatches.length || matched.length >= 16) return matched;
               const fallback = await prisma.message.findMany({
                 where: baseWhere,
-                orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
                 take: 120,
                 select: {
                   id: true, role: true, content: true, occurredAt: true, metadata: true,
