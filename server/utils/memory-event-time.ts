@@ -272,8 +272,9 @@ export function parseEventTimeRange(
 
   const relativeYear = /(前年|去年|今年)/u.exec(text);
   if (relativeYear) {
-    const offset = relativeYear[1] === "前年" ? -2 : relativeYear[1] === "去年" ? -1 : 0;
-    return yearRange(today.year + offset, timeZone, relativeYear[1]);
+    const yearWord = relativeYear[1] ?? "";
+    const offset = yearWord === "前年" ? -2 : yearWord === "去年" ? -1 : 0;
+    return yearRange(today.year + offset, timeZone, yearWord);
   }
 
   const absoluteYear = /(\d{4})\s*年/u.exec(text);
@@ -281,9 +282,10 @@ export function parseEventTimeRange(
 
   const relativeMonth = /(上上个月|上个月|本月|这个月)/u.exec(text);
   if (relativeMonth) {
-    const offset = relativeMonth[1] === "上上个月" ? -2 : relativeMonth[1] === "上个月" ? -1 : 0;
+    const monthWord = relativeMonth[1] ?? "";
+    const offset = monthWord === "上上个月" ? -2 : monthWord === "上个月" ? -1 : 0;
     const target = addLocalMonths(today, offset);
-    return monthRange(target.year, target.month, timeZone, relativeMonth[1]);
+    return monthRange(target.year, target.month, timeZone, monthWord);
   }
 
   const monthsAgo = /(\d{1,2})\s*个月前/u.exec(text);
