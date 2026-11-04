@@ -572,14 +572,16 @@ export type ConversationReplyWithMemoryAssistant = ConversationReplyResult & {
   memoryAssistantHttpStatus?: number;
 };
 
-const MEMORY_ASSISTANT_FALLBACK_REPLY = "本宝刚才想去翻以前的记录，不过这次没能确认下来，等本宝再找找。";
+const MEMORY_ASSISTANT_FAILED_REPLY = "本宝刚才想去翻以前的记录，但这次检索没成功，先不乱告诉你。";
+const MEMORY_ASSISTANT_NO_SOURCE_REPLY = "本宝把目前能查到的记录翻了一遍，没有找到足够可靠的内容，暂时不能确定。";
+const MEMORY_ASSISTANT_FINAL_REPLY_FAILED = "本宝找到了相关记录，但这次没能把它整理成可靠的回答，先不乱说。";
 
-function ensureMemoryAssistantFallbackReply(
+function withMemoryAssistantFallbackReply(
   result: ConversationReplyResult,
+  reply: string,
 ): ConversationReplyResult {
-  return result.reply.trim()
-    ? result
-    : { ...result, reply: MEMORY_ASSISTANT_FALLBACK_REPLY };
+  // 首轮内容可能只是「我去翻翻」之类的等待话术。检索已经结束，不能把它原样交付成悬而未决的回复。
+  return { ...result, reply };
 }
 
 function warnMemoryAssistantFailure(
@@ -626,7 +628,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
         durationMs: Date.now() - startedAt,
       });
       return {
-        ...ensureMemoryAssistantFallbackReply(firstResult),
+        ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_FAILED_REPLY),
         memoryAssistantModel: input.assistant.model,
         memoryAssistantStatus: "failed",
         memoryAssistantFailureReason: "candidate_load_failed",
@@ -645,7 +647,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       durationMs: Date.now() - startedAt,
     });
     return {
-      ...ensureMemoryAssistantFallbackReply(firstResult),
+      ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_NO_SOURCE_REPLY),
       memoryAssistantModel: input.assistant.model,
       memoryAssistantStatus: "no_sources",
       memoryAssistantFailureReason: "empty_candidates",
@@ -669,7 +671,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       durationMs: Date.now() - startedAt,
     });
     return {
-      ...ensureMemoryAssistantFallbackReply(firstResult),
+      ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_FAILED_REPLY),
       memoryAssistantModel: input.assistant.model,
       memoryAssistantStatus: "failed",
       memoryAssistantFailureReason: failure.reason,
@@ -689,7 +691,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       durationMs: Date.now() - startedAt,
     });
     return {
-      ...ensureMemoryAssistantFallbackReply(firstResult),
+      ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_NO_SOURCE_REPLY),
       ...(retrieval.usage ? { memoryAssistantUsage: retrieval.usage } : {}),
       memoryAssistantModel: retrieval.model,
       memoryAssistantStatus: "no_sources",
@@ -776,7 +778,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       durationMs: Date.now() - startedAt,
     });
     return {
-      ...ensureMemoryAssistantFallbackReply(firstResult),
+      ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_FINAL_REPLY_FAILED),
       ...(retrieval.usage ? { memoryAssistantUsage: retrieval.usage } : {}),
       memoryAssistantModel: retrieval.model,
       memoryAssistantStatus: "final_reply_failed",
