@@ -44,11 +44,36 @@ export type MemoryAssistantCandidate = {
   isOwner?: boolean;
 };
 
+export const MEMORY_ASSISTANT_DEFAULTS = { temperature: 0.1, maxInputTokens: 12_288, maxOutputTokens: 2_048 } as const;
 export type MemoryAssistantRuntime = {
-  model: string;
-  apiKey: string;
-  apiBaseUrl: string;
+  model: string; apiKey: string; apiBaseUrl: string;
+  temperature: number; maxInputTokens: number; maxOutputTokens: number;
 };
+function resolveBoundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+/** 中文按约 1 字符/token、英文按约 4 字符/token估算；用于预算保护，不替代供应商计数。 */
+export function estimateMemoryAssistantTokens(value: string): number {
+  const cjk = (value.match(/[\\u3400-\\u9fff\\uf900-\\ufaff]/g) ?? []).length;
+  return Math.ceil((cjk + (value.length - cjk) / 4) * 1.15);
+}
+export function fitMemoryAssistantCandidates(
+  candidates: readonly MemoryAssistantCandidate[], query: string, maxInputTokens: number, systemPrompt: string,
+): MemoryAssistantCandidate[] {
+  const reserve = estimateMemoryAssistantTokens(systemPrompt + JSON.stringify({ query: query.slice(0, 240), candidates: [] })) + 256;
+  const budget = Math.max(0, maxInputTokens - reserve);
+  const ranked = [...candidates].sort((a, b) => b.relevanceScore - a.relevanceScore);
+  const selected = new Set<string>();
+  let used = 0;
+  for (const candidate of ranked) {
+    const cost = estimateMemoryAssistantTokens(JSON.stringify(candidate));
+    if (used + cost > budget) continue;
+    selected.add(candidate.sourceKey);
+    used += cost;
+  }
+  return candidates.filter(candidate => selected.has(candidate.sourceKey));
+}
 
 type MemoryCandidateRecord = {
   id: string;
@@ -218,7 +243,12 @@ export async function resolveMemoryAssistantRuntime(
     return null;
   }
   if (!apiKey) return null;
-  return { model, apiKey, apiBaseUrl };
+  return {
+    model, apiKey, apiBaseUrl,
+    temperature: resolveBoundedNumber(config.memoryAssistantTemperature, MEMORY_ASSISTANT_DEFAULTS.temperature, 0, 2),
+    maxInputTokens: Math.round(resolveBoundedNumber(config.memoryAssistantMaxInputTokens, MEMORY_ASSISTANT_DEFAULTS.maxInputTokens, 4_096, 32_768)),
+    maxOutputTokens: Math.round(resolveBoundedNumber(config.memoryAssistantMaxOutputTokens, MEMORY_ASSISTANT_DEFAULTS.maxOutputTokens, 512, 8_192)),
+  };
 }
 
 /**
@@ -423,10 +453,9 @@ async function callMemoryAssistant(
     '只输出 JSON：{"sourceKeys":["memory/…","snapshot/…","event/…","message/…"]}。',
     "你没有数据库写入能力，禁止提出或执行记忆新增、修改、删除。",
   ].join("\n");
-  const userPrompt = JSON.stringify({
-    query: query.slice(0, 240),
-    candidates,
-  });
+  const boundedCandidates = fitMemoryAssistantCandidates(candidates, query, config.maxInputTokens, systemPrompt);
+  if (!boundedCandidates.length) throw new MemoryAssistantRequestError({ reason: "input_budget_exhausted", attempts: 0 });
+  const userPrompt = JSON.stringify({ query: query.slice(0, 240), candidates: boundedCandidates });
 
   let totalUsage: ModelUsageTokens | undefined;
   let lastFinishReason = "";
@@ -442,9 +471,9 @@ async function callMemoryAssistant(
         },
         body: JSON.stringify({
           model: config.model,
-          temperature: 0.1,
-          // 第一次给足常规结构化输出预算；仅在供应商明确报告 length 时才扩大预算重试。
-          max_tokens: attempt === 1 ? 2_048 : 4_096,
+          temperature: config.temperature,
+          // 首轮使用 80% 预算，遇到 length 时用满配置上限；重试绝不突破用户设置。
+          max_tokens: attempt === 1 ? Math.max(256, Math.floor(config.maxOutputTokens * 0.8)) : config.maxOutputTokens,
           // DeepSeek 默认可能把预算消耗在思考 token 上。这里只做白名单筛选，不需要思维链。
           ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
           messages: [
@@ -506,7 +535,7 @@ async function callMemoryAssistant(
         console.warn("[memory-assistant] retry_truncated", {
           attempt,
           nextAttempt: attempt + 1,
-          candidateCount: candidates.length,
+          candidateCount: boundedCandidates.length,
           queryLength: query.length,
           finishReason: lastFinishReason,
           durationMs: Date.now() - startedAt,
@@ -546,7 +575,7 @@ async function callMemoryAssistant(
       ? record.model.trim().slice(0, 200)
       : config.model;
     return {
-      sources: selectMemoryAssistantSources(parsedRecord, candidates),
+      sources: selectMemoryAssistantSources(parsedRecord, boundedCandidates),
       model,
       ...(totalUsage ? { usage: totalUsage } : {}),
       attempts: attempt,
