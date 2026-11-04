@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createError, getRouterParam, readBody, setResponseStatus } from "h3";
-import { generateConversationReply, type ConversationContextMessage } from "../../../utils/chat-reply";
+import { type ConversationContextMessage } from "../../../utils/chat-reply";
+import {
+  buildMemoryAssistantCandidates,
+  generateConversationReplyWithMemoryAssistant,
+  resolveMemoryAssistantRuntime,
+} from "../../../utils/memory-assistant";
 import {
   loadCatchphraseCatalog, markCatchphrasesUsed, pickCatchphraseCatalog, toCatchphrasePromptEntries,
 } from "../../../utils/catchphrases";
@@ -388,10 +393,27 @@ export default defineEventHandler(async (event) => {
    * 读失败就当没有 —— 一张关系表读不动，不该让整条回复失败。
    */
   const acquaintances = await listAcquaintances({ characterId, limit: CLOSE_FRIEND_LIMIT }).catch(() => null);
+  const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
+  const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
+  const memoryAssistantCandidates = memoryAssistant
+    ? buildMemoryAssistantCandidates({
+        query: retrievalQuery,
+        memories: memoryCandidates,
+        snapshots: snapshotCandidates,
+        events: eventCandidates,
+        scopeOf: (scopeId) => scopeOriginById.get(scopeId) ?? "character",
+        timeZone,
+        ...(participantIds.length ? { participantIds } : {}),
+        allowPrivate: true,
+      })
+    : [];
 
   let generated;
   try {
-    generated = await generateConversationReply({
+    generated = await generateConversationReplyWithMemoryAssistant({
+      assistant: memoryAssistant,
+      candidates: memoryAssistantCandidates,
+      chatInput: {
       characterName: character.name,
       characterPrompt: character.basePrompt.slice(0, 12_000),
       styleExamples: (character.styleExamples ?? "").slice(0, 8000),
@@ -410,10 +432,11 @@ export default defineEventHandler(async (event) => {
       events,
       ...(recentEvents.length ? { recentEvents } : {}),
       rawMessages,
-      timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+      timeZone,
       ...(journalLine ? { journalLine } : {}),
       ...(acquaintances ? { acquaintances } : {}),
       ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
+      },
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : "模型调用失败。";
@@ -426,10 +449,26 @@ export default defineEventHandler(async (event) => {
   const usedMemoryIds = new Set(generated.usedMemoryIds);
   const usedSnapshotIds = new Set(generated.usedSnapshotIds);
   const usedEventIds = new Set(generated.usedEventIds);
+  const assistantSources = generated.memoryAssistantSources ?? [];
+  const allMemorySources = [
+    ...memories,
+    ...assistantSources.filter((source) => source.sourceType === "memory").map((source) => ({
+      id: source.id, category: source.category ?? "FACT", content: source.content ?? "", scope: source.scope,
+    })),
+  ];
+  const allSnapshotSources = [
+    ...snapshots,
+    ...assistantSources.filter((source) => source.sourceType === "snapshot").map((source) => ({
+      id: source.id, summary: source.summary ?? "", periodStart: source.periodStart ?? "",
+      periodEnd: source.periodEnd ?? "", version: source.version ?? 1, scope: source.scope,
+    })),
+  ];
   const usedSources = {
-    memories: memories.filter((memory) => usedMemoryIds.has(memory.id))
+    memories: allMemorySources.filter((memory, index, all) => usedMemoryIds.has(memory.id)
+      && all.findIndex((candidate) => candidate.id === memory.id) === index)
       .map(({ id, category, content, scope }) => ({ id, category, content, scope })),
-    snapshots: snapshots.filter((snapshot) => usedSnapshotIds.has(snapshot.id))
+    snapshots: allSnapshotSources.filter((snapshot, index, all) => usedSnapshotIds.has(snapshot.id)
+      && all.findIndex((candidate) => candidate.id === snapshot.id) === index)
       .map(({ id, summary, periodStart, periodEnd, version, scope }) => ({ id, summary, periodStart, periodEnd, version, scope })),
     // 忆泡：模型回填的 id 已经过来源白名单校验，这里只负责按 id 取出展示信息。
     events: eventCandidates.filter((event) => usedEventIds.has(event.id))
@@ -530,6 +569,16 @@ export default defineEventHandler(async (event) => {
     userId: ownerId,
     conversationId: response.conversationId,
   });
+  if (generated.memoryAssistantUsage && generated.memoryAssistantModel) {
+    await recordModelUsage({
+      kind: "memory-assistant",
+      model: generated.memoryAssistantModel,
+      usage: toUsageTokens(generated.memoryAssistantUsage),
+      characterId,
+      userId: ownerId,
+      conversationId: response.conversationId,
+    });
+  }
   setResponseStatus(event, 201);
   return response;
   } catch (error) {
