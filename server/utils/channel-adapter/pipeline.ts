@@ -1527,11 +1527,13 @@ async function runChannelTurn(input: {
                     conversation: { select: { memoryScopeId: true } },
                   },
                 });
-                if (!searchRange || !contentMatches.length || matched.length >= 16) return matched;
+                // 主题词命中不足时补一小批原文，让语义检索器能识别近义表达。
+                // 无日期的泛问句最多补最近 40 条；明确时间范围仍可补 120 条。
+                if ((!searchRange && !contentMatches.length) || matched.length >= 16) return matched;
                 const fallback = await prisma.message.findMany({
                   where: baseWhere,
                   orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-                  take: 120,
+                  take: searchRange ? 120 : 40,
                   select: {
                     id: true, role: true, content: true, occurredAt: true, metadata: true,
                     conversation: { select: { memoryScopeId: true } },
@@ -1555,11 +1557,13 @@ async function runChannelTurn(input: {
                   conversation: { select: { memoryScopeId: true } },
                 },
               });
-              if (!searchRange || !contentMatches.length || matched.length >= 16) return matched;
+              // 主题词命中不足时补一小批原文，让语义检索器能识别近义表达。
+              // 无日期的泛问句最多补最近 40 条；明确时间范围仍可补 120 条。
+              if ((!searchRange && !contentMatches.length) || matched.length >= 16) return matched;
               const fallback = await prisma.message.findMany({
                 where: baseWhere,
                 orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-                take: 120,
+                take: searchRange ? 120 : 40,
                 select: {
                   id: true, role: true, content: true, occurredAt: true, metadata: true,
                   conversation: { select: { memoryScopeId: true } },
