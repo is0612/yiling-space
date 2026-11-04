@@ -155,6 +155,46 @@ try {
     systemMessage.content.includes("say you have no record"),
     "没有记录时要说清楚，不能编一个听起来合理的故事。",
   );
+
+  // 记忆助手触发策略：角色资料、关系、日记与连续追问提示都必须进入主动检索判断。
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "你的生日是什么时候？",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    memoryAssistantAvailable: true,
+  });
+  const retrievalSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(retrievalSystem.includes("Actively look up personal history"), "历史资料问题应主动考虑检索，不能只等用户明确要求查记忆。");
+  assert(retrievalSystem.includes("birthdays and personal profile facts"), "生日等角色个人资料必须属于检索范围。");
+  assert(retrievalSystem.includes("diary / journal entries"), "日记和手账必须属于检索范围。");
+  assert(retrievalSystem.includes("friends, teachers, members, groups"), "朋友、教员和组织成员等关系问题必须属于检索范围。");
+  assert(retrievalSystem.includes("Treat a follow-up hint as new evidence"), "用户补充记忆来源或纠正日期时应重新检索。");
+  assert(retrievalSystem.includes("Ordinary small talk"), "普通闲聊仍然不应触发检索。");
+
+  capturedBody = "";
+  await generateConversationReply({
+    characterName: "鲸鱼娘",
+    characterPrompt: "你是「鲸鱼娘」。",
+    model: "test-chat-model",
+    apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl,
+    currentMessage: "你的生日是什么时候？",
+    recentMessages: [],
+    memories: [],
+    snapshots: [],
+    memoryAssistantAvailable: false,
+  });
+  const noAssistantSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert(!noAssistantSystem.includes("Actively look up personal history"), "记忆助手未启用时不能提示模型请求检索。");
   assert(
     systemMessage.content.toLowerCase().includes("scope rule for memories / snapshots / events / recentevents / rawmessages")
       && systemMessage.content.includes('"character" is shared; "private" belongs only to the current user'),
