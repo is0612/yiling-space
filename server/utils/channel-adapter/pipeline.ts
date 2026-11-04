@@ -6,6 +6,7 @@ import {
   resolveMemoryAssistantRuntime,
 } from "../memory-assistant";
 import { resolveChatTimeZone } from "../chat-time-context";
+import { parseEventTimeRange } from "../memory-event-time";
 import {
   CROSS_CHANNEL_WINDOW_MINUTES,
   selectCrossChannelContext,
@@ -21,7 +22,7 @@ import { resolveEventParticipantNames, resolveParticipantAccounts } from "../par
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
 import { resolveCharacterApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
 import {
-  rankMemoriesWithBudget, rankSnapshotsWithBudget,
+  extractMemoryAssistantSearchTerms, rankMemoriesWithBudget, rankSnapshotsWithBudget,
   resolveMemoryItemLimit, resolveMemoryTokenBudget, resolveRecentMessageLimit, resolveSnapshotTokenBudget,
 } from "../memory-retrieval";
 import { recordModelUsage, readDailyQuota, toUsageTokens } from "../model-usage";
@@ -1409,38 +1410,146 @@ async function runChannelTurn(input: {
         const searchParticipantIds = searchParticipantName
           ? await resolveParticipantAccounts(prisma, searchParticipantName)
           : [];
-        // 只有大肥鱼明确请求深度回忆时才读取较广范围的原始消息；每个可访问范围最多取 250 条。
+        const searchRange = parseEventTimeRange(searchQuery, new Date(), chatTimeZone);
+        const searchTerms = extractMemoryAssistantSearchTerms(searchQuery, 20);
+        const contentMatches = searchTerms.map((term) => ({
+          content: { contains: term, mode: "insensitive" as const },
+        }));
+        const rangeWhere = searchRange
+          ? { occurredAt: { gte: searchRange.start, lt: searchRange.end } }
+          : {};
+        const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(searchQuery);
+        const wantsLatest = /最近一次|上一次|上回|上次|最后一次/u.test(searchQuery);
+        const eventOrder = wantsFirst ? "asc" as const : "desc" as const;
+
+        // 深度检索按主题和时间补查旧记忆，不再只局限于聊天前置阶段的 300 条记录。
+        const [targetedMemories, targetedSnapshots, targetedEvents] = await Promise.all([
+          searchTerms.length
+            ? prisma.memoryItem.findMany({
+                where: {
+                  memoryScopeId: { in: readableScopeIds },
+                  status: "ACTIVE",
+                  deletedAt: null,
+                  OR: searchTerms.map((term) => ({ content: { contains: term, mode: "insensitive" as const } })),
+                },
+                orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+                take: 180,
+                select: {
+                  id: true, category: true, content: true, confidence: true, updatedAt: true, createdAt: true,
+                  validFrom: true, memoryScopeId: true, importance: true, lastRecalledAt: true, recallCount: true,
+                },
+              })
+            : Promise.resolve([]),
+          searchRange || searchTerms.length
+            ? prisma.memorySnapshot.findMany({
+                where: {
+                  memoryScopeId: { in: readableScopeIds },
+                  status: "CURRENT",
+                  ...(searchRange
+                    ? { periodStart: { lt: searchRange.end }, periodEnd: { gte: searchRange.start } }
+                    : {}),
+                  ...(searchTerms.length
+                    ? { OR: searchTerms.map((term) => ({ summary: { contains: term, mode: "insensitive" as const } })) }
+                    : {}),
+                },
+                orderBy: [{ periodEnd: "desc" }, { version: "desc" }],
+                take: 120,
+                select: {
+                  id: true, summary: true, periodStart: true, periodEnd: true, version: true, createdAt: true, memoryScopeId: true,
+                },
+              })
+            : Promise.resolve([]),
+          searchRange || searchTerms.length || wantsFirst || wantsLatest
+            ? prisma.memoryEvent.findMany({
+                where: {
+                  memoryScopeId: { in: readableScopeIds },
+                  status: "ACTIVE",
+                  ...rangeWhere,
+                  ...(searchTerms.length
+                    ? {
+                        OR: searchTerms.flatMap((term) => [
+                          { title: { contains: term, mode: "insensitive" as const } },
+                          { detail: { contains: term, mode: "insensitive" as const } },
+                          { keywords: { has: term } },
+                        ]),
+                      }
+                    : {}),
+                },
+                orderBy: [{ occurredAt: eventOrder }, { id: eventOrder }],
+                take: searchRange ? 500 : 350,
+                select: {
+                  id: true, occurredAt: true, timeOfDay: true, place: true, participants: true,
+                  keywords: true, title: true, detail: true, memoryScopeId: true, participantRefs: true,
+                },
+              })
+            : Promise.resolve([]),
+        ]);
+
+        const uniqueById = <T extends { id: string }>(items: T[]): T[] =>
+          [...new Map(items.map((item) => [item.id, item])).values()];
+        const assistantMemoryCandidates = uniqueById([...memoryCandidates, ...targetedMemories]);
+        const assistantSnapshotCandidates = uniqueById([...snapshotCandidates, ...targetedSnapshots]);
+        const assistantEventCandidates = uniqueById([...eventCandidates, ...targetedEvents]);
+
+        // 群聊原文只允许来自当前这个群；私聊只查当前说话人的 private scope。
+        // 两条路都按主题命中补查旧消息，且绝不跨群 / 跨用户扫描 private 原文。
         const rawRowsByScope = isGroup
-          // 群聊原文只允许来自当前这个群的历史；不能从共享 global scope 横跨到别的群。
           ? (existingConversation
-            ? [await prisma.message.findMany({
-                where: {
+            ? [await (async () => {
+                const baseWhere = {
                   conversationId: existingConversation.id,
-                  role: { in: ["USER", "ASSISTANT"] },
-                },
-                orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-                take: 250,
-                select: {
-                  id: true, role: true, content: true, occurredAt: true, metadata: true,
-                  conversation: { select: { memoryScopeId: true } },
-                },
-              })]
+                  role: { in: ["USER", "ASSISTANT"] as Array<"USER" | "ASSISTANT"> },
+                  ...rangeWhere,
+                };
+                const matched = await prisma.message.findMany({
+                  where: { ...baseWhere, ...(contentMatches.length ? { OR: contentMatches } : {}) },
+                  orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                  take: searchRange ? 500 : 350,
+                  select: {
+                    id: true, role: true, content: true, occurredAt: true, metadata: true,
+                    conversation: { select: { memoryScopeId: true } },
+                  },
+                });
+                if (!searchRange || !contentMatches.length || matched.length >= 16) return matched;
+                const fallback = await prisma.message.findMany({
+                  where: baseWhere,
+                  orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                  take: 120,
+                  select: {
+                    id: true, role: true, content: true, occurredAt: true, metadata: true,
+                    conversation: { select: { memoryScopeId: true } },
+                  },
+                });
+                return uniqueById([...matched, ...fallback]);
+              })()]
             : [])
-          // 私聊只查当前说话人的 private scope；不扫共享 global scope 的群聊原文。
-          : await Promise.all(readableScopeIds.filter((scopeId) => scopeId !== globalScope.id).map((scopeId) =>
-              prisma.message.findMany({
-                where: {
-                  conversation: { memoryScopeId: scopeId },
-                  role: { in: ["USER", "ASSISTANT"] },
-                },
+          : await Promise.all(readableScopeIds.filter((scopeId) => scopeId !== globalScope.id).map(async (scopeId) => {
+              const baseWhere = {
+                conversation: { memoryScopeId: scopeId },
+                role: { in: ["USER", "ASSISTANT"] as Array<"USER" | "ASSISTANT"> },
+                ...rangeWhere,
+              };
+              const matched = await prisma.message.findMany({
+                where: { ...baseWhere, ...(contentMatches.length ? { OR: contentMatches } : {}) },
                 orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-                take: 250,
+                take: searchRange ? 500 : 350,
                 select: {
                   id: true, role: true, content: true, occurredAt: true, metadata: true,
                   conversation: { select: { memoryScopeId: true } },
                 },
-              }),
-            ));
+              });
+              if (!searchRange || !contentMatches.length || matched.length >= 16) return matched;
+              const fallback = await prisma.message.findMany({
+                where: baseWhere,
+                orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+                take: 120,
+                select: {
+                  id: true, role: true, content: true, occurredAt: true, metadata: true,
+                  conversation: { select: { memoryScopeId: true } },
+                },
+              });
+              return uniqueById([...matched, ...fallback]);
+            }));
         const assistantRawMessages = rawRowsByScope.flat().map((row) => {
           const speaker = readStoredSpeaker(row.metadata);
           return {
@@ -1455,9 +1564,9 @@ async function runChannelTurn(input: {
         });
         return buildMemoryAssistantCandidates({
           query: searchQuery,
-          memories: memoryCandidates,
-          snapshots: snapshotCandidates,
-          events: eventCandidates,
+          memories: assistantMemoryCandidates,
+          snapshots: assistantSnapshotCandidates,
+          events: assistantEventCandidates,
           rawMessages: assistantRawMessages,
           excludeRawMessageIds: new Set([
             ...recentStoredMessages.map((item) => item.id),
