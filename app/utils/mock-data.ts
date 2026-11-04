@@ -38,6 +38,12 @@ export type Character = {
   chatApiBaseUrl?: string;
   chatApiKeyConfigured?: boolean;
   chatApiKeySource?: "character" | "environment" | "missing";
+  /** 记忆助手是否启用、模型配置和 Key 保存状态。 */
+  memoryAssistantEnabled?: boolean;
+  memoryAssistantModel?: string;
+  memoryAssistantApiBaseUrl?: string;
+  memoryAssistantApiKeyConfigured?: boolean;
+  memoryAssistantConfigured?: boolean;
   /** 每日 token 额度，0 = 不限。 */
   dailyTokenLimit?: number;
   /** 每次对话注入记忆 / 快照的 token 预算。 */
