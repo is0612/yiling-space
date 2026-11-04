@@ -29,6 +29,9 @@ backups/*.sql
 # 设计审计截图与原型稿：本地留着看，但不入库——里面有真实聊天记录、QQ 号、群号和用量数据
 design/
 
+# 本地临时文件（群聊导出、临时 SQL、转录稿等），只在本地用，不入库
+.tmp/
+
 # logs and OS/editor files
 *.log
 npm-debug.log*
