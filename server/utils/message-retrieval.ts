@@ -79,6 +79,58 @@ function clipContent(content: string): { content: string; truncated: boolean } {
  * 每条只取前 `RAW_MESSAGE_MAX_CHARS` 字（超出明确标注还有多少字没展开），
  * 这样一条长粘贴不会撑爆预算，也不会把同一天的其它几句挤掉。
  */
+
+/**
+ * 记忆助手的原文候选检索：不强制要求问句带日期，在当前可访问范围里按关键词挑原始消息。
+ * 这里只给内部检索助手看候选；最终是否把某条原文交回聊天模型，仍要经过 sourceKey 白名单。
+ */
+export function selectRawMessagesForMemoryAssistant<T extends RawMessageCandidate>(
+  query: string,
+  messages: T[],
+  options: {
+    limit?: number;
+    tokenBudget?: number;
+    excludeIds?: Set<string>;
+  } = {},
+): Array<RankedRawMessage<T>> {
+  const limit = options.limit && options.limit > 0 ? Math.min(Math.round(options.limit), 24) : 16;
+  const tokenBudget = options.tokenBudget && options.tokenBudget > 0 ? options.tokenBudget : 3_200;
+  const excluded = options.excludeIds ?? new Set<string>();
+  const ranked = messages
+    .filter((message) => !excluded.has(message.id) && message.content.trim())
+    .map((message) => ({
+      ...message,
+      relevanceScore: scoreOf(query, message.content),
+      tokens: estimateTokens(Array.from(message.content).slice(0, 360).join("")),
+      truncated: Array.from(message.content).length > 360,
+      content: Array.from(message.content).length > 360
+        ? Array.from(message.content).slice(0, 360).join("") + "…"
+        : message.content,
+    }));
+
+  const matched = ranked
+    .filter((message) => message.relevanceScore > 0)
+    .sort((left, right) =>
+      right.relevanceScore - left.relevanceScore || right.occurredAt.getTime() - left.occurredAt.getTime(),
+    );
+  // 关键词没有命中时也给少量最近原文，让语义助手有机会识别同义表达；不能因此把整段历史全部发送。
+  const ordered = matched.length
+    ? matched
+    : ranked.sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime()).slice(0, 6);
+
+  const selected: Array<RankedRawMessage<T>> = [];
+  let usedTokens = 0;
+  for (const item of ordered) {
+    if (selected.length >= limit) break;
+    if (usedTokens + item.tokens > tokenBudget && selected.length > 0) continue;
+    usedTokens += item.tokens;
+    selected.push(item);
+  }
+  return selected.sort((left, right) =>
+    left.occurredAt.getTime() - right.occurredAt.getTime(),
+  );
+}
+
 export function selectRawMessagesForPrompt<T extends RawMessageCandidate>(
   query: string,
   messages: T[],
