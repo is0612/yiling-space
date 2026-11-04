@@ -177,10 +177,11 @@ const built = buildCharacterBundle({
       lastInteractedAt: new Date("2026-10-30T10:00:00Z"),
       knownSince: new Date("2026-09-01T00:00:00Z"),
       memoryItems: [
-        { category: "FACT", content: "小明住在北海", confidence: 0.8, importance: 0.6, validFrom: null, validTo: null, dedupeKey: "f1" },
+        { originId: "55555555-5555-4555-8555-555555555555", category: "FACT", content: "小明住在北海", confidence: 0.8, importance: 0.6, validFrom: null, validTo: null, dedupeKey: "f1" },
       ],
       snapshots: [
         {
+          originId: "66666666-6666-4666-8666-666666666666",
           kind: "AUTOMATIC",
           periodStart: new Date("2026-10-25T00:00:00Z"),
           periodEnd: new Date("2026-10-26T00:00:00Z"),
@@ -242,6 +243,8 @@ assert.equal(roundTrip.memorySetting.snapshotIntervalDays, 8);
 assert.equal(roundTrip.friends.length, 1, "朋友要能原样解析回来");
 assert.equal(roundTrip.friends[0]?.platformUid, "888888");
 assert.equal(roundTrip.friends[0]?.memories[0]?.content, "小明住在北海");
+assert.equal(roundTrip.friends[0]?.memories[0]?.originId, "55555555-5555-4555-8555-555555555555", "朋友记忆血缘 ID 回环保留");
+assert.equal(roundTrip.friends[0]?.snapshots[0]?.originId, "66666666-6666-4666-8666-666666666666", "朋友阶段总结血缘 ID 回环保留");
 assert.deepEqual(roundTrip.friends[0]?.aliases, ["小鱼干", "阿明"], "备注要能原样解析回来");
 assert.equal(roundTrip.friends[0]?.snapshots[0]?.summary, "他们一起去了海边。");
 assert.equal(roundTrip.friends[0]?.knownSince, "2026-09-01T00:00:00.000Z", "认识的时间要保住");
