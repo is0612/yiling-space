@@ -159,6 +159,8 @@ export type CharacterBundleModelConfig = {
 
 export type CharacterBundleMemory = {
   scope: BundleScopeKind;
+  /** 跨设备稳定身份；老格式卡片没有该字段。 */
+  originId: string | null;
   category: BundleMemoryCategory;
   content: string;
   confidence: number | null;
@@ -170,6 +172,8 @@ export type CharacterBundleMemory = {
 
 export type CharacterBundleEvent = {
   scope: BundleScopeKind;
+  /** 跨设备稳定身份；老格式卡片没有该字段。 */
+  originId: string | null;
   dayKey: string;
   state: BundleEventState;
   occurredAt: string;
@@ -185,6 +189,8 @@ export type CharacterBundleEvent = {
 
 export type CharacterBundleSnapshot = {
   scope: BundleScopeKind;
+  /** 跨设备稳定身份；老格式卡片没有该字段。 */
+  originId: string | null;
   kind: BundleSnapshotKind;
   periodStart: string;
   periodEnd: string;
@@ -515,6 +521,7 @@ export function computeImportedCharacterName(name: string, existingNames: readon
 }
 
 type MemorySource = {
+  originId?: string;
   category: string;
   content: string;
   confidence: number | null;
@@ -525,6 +532,7 @@ type MemorySource = {
 };
 
 type SnapshotSource = {
+  originId?: string;
   kind: string;
   periodStart: Date;
   periodEnd: Date;
@@ -536,6 +544,7 @@ type SnapshotSource = {
 
 function toBundleMemory(item: MemorySource): CharacterBundleMemoryBody {
   return {
+    originId: item.originId ?? null,
     category: (MEMORY_CATEGORIES as readonly string[]).includes(item.category)
       ? item.category as BundleMemoryCategory
       : "OTHER",
@@ -550,6 +559,7 @@ function toBundleMemory(item: MemorySource): CharacterBundleMemoryBody {
 
 function toBundleSnapshot(snapshot: SnapshotSource): CharacterBundleSnapshotBody {
   return {
+    originId: snapshot.originId ?? null,
     kind: (SNAPSHOT_KINDS as readonly string[]).includes(snapshot.kind)
       ? snapshot.kind as BundleSnapshotKind
       : "AUTOMATIC",
@@ -611,6 +621,7 @@ export type BundleBuildInput = {
     userId?: string | null;
     memoryItems?: MemorySource[];
     events?: Array<{
+      originId?: string;
       dayKey: string;
       state: string;
       occurredAt: Date;
@@ -679,6 +690,7 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
     for (const event of scope.events ?? []) {
       events.push({
         scope: kind,
+        originId: event.originId ?? null,
         dayKey: event.dayKey,
         state: (EVENT_STATES as readonly string[]).includes(event.state) ? event.state as BundleEventState : "FINAL",
         occurredAt: event.occurredAt.toISOString(),
@@ -909,6 +921,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     const categoryInput = typeof item.category === "string" ? item.category : "";
     return {
       scope: readScope(item.scope),
+      originId: normalizeBundleOriginId(item.originId),
       category: (MEMORY_CATEGORIES as readonly string[]).includes(categoryInput)
         ? categoryInput as BundleMemoryCategory
         : "OTHER",
@@ -938,6 +951,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     const place = readText(item.place, `${label}的地点`, CHARACTER_BUNDLE_LIMITS.eventPlace);
     return {
       scope: readScope(item.scope),
+      originId: normalizeBundleOriginId(item.originId),
       dayKey: readDayKey(item.dayKey, `${label}的日期`),
       state: (EVENT_STATES as readonly string[]).includes(stateInput) ? stateInput as BundleEventState : "FINAL",
       occurredAt: occurredAt.toISOString(),
@@ -971,6 +985,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     const structured = item.structuredContent;
     return {
       scope: readScope(item.scope),
+      originId: normalizeBundleOriginId(item.originId),
       kind: (SNAPSHOT_KINDS as readonly string[]).includes(kindInput) ? kindInput as BundleSnapshotKind : "AUTOMATIC",
       periodStart: periodStart.toISOString(),
       periodEnd: periodEnd.toISOString(),
