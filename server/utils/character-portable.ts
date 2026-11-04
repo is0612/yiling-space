@@ -22,7 +22,7 @@
  * 那是站内用户与外部身份的验证结果，换人导入不该跟过去。
  *
  * 明确不带：
- *   - API Key（`chatApiKeyEncrypted` / `voiceApiKeyEncrypted`）—— 换机器本来就得重填，
+ *   - API Key（`chatApiKeyEncrypted` / `voiceApiKeyEncrypted` / `memoryAssistantApiKeyEncrypted`）—— 换机器本来就得重填，
  *     而且带出去等于把凭据交给任何拿到这个 json 的人
  *   - 表情包图片：图在 `.data/stickers/<id>/`，换机器后从 QQ 收藏夹重新同步即可
  *   - 会话原文、渠道绑定、任务队列、用量与审计：与具体机器/账号绑定
