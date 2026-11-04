@@ -200,7 +200,7 @@ assert.equal(
   "血缘 id 必须跟着卡片走，否则没法认人合并",
 );
 assert.equal(built.formatVersion, CHARACTER_BUNDLE_VERSION, "导出用当前格式版本");
-assert.equal(CHARACTER_BUNDLE_VERSION, 3, "加入朋友备注后版本升到 3（2 = 忆泡日历 + 日记手账）");
+assert.equal(CHARACTER_BUNDLE_VERSION, 4, "v4 增加记忆、忆泡、阶段总结的跨设备血缘 ID");
 assert.equal(built.exportedAt, "2026-10-31T13:00:00.000Z", "导出时间用注入的 now，便于测试");
 assert.equal(built.character.name, "小鱼");
 assert.equal(built.counts.memories, 2, "两条记忆（全局 + 私人）");
@@ -243,7 +243,8 @@ assert.equal(roundTrip.friends[0]?.memories[0]?.content, "小明住在北海");
 assert.deepEqual(roundTrip.friends[0]?.aliases, ["小鱼干", "阿明"], "备注要能原样解析回来");
 assert.equal(roundTrip.friends[0]?.snapshots[0]?.summary, "他们一起去了海边。");
 assert.equal(roundTrip.friends[0]?.knownSince, "2026-09-01T00:00:00.000Z", "认识的时间要保住");
-assert.equal(roundTrip.originId, "11111111-1111-4111-8111-111111111111", "回环后血缘 id 一致");
+assert.equal(roundTrip.originId, "11111111-1111-4111-8111-111111111111", "回环后角色血缘 id 一致");
+assert.equal(roundTrip.memories[0]?.originId, null, "纯逻辑旧式构建未提供记忆血缘时保持 null");
 assert.equal(roundTrip.eventDays[0]?.dayKey, "2026-10-30", "忆泡日历的天要跟着走");
 assert.equal(roundTrip.eventDays[0]?.eventCount, 3);
 assert.equal(roundTrip.eventDays[0]?.state, "FINAL");
