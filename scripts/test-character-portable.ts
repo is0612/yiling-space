@@ -76,10 +76,11 @@ const built = buildCharacterBundle({
     {
       scopeType: "CHARACTER_GLOBAL",
       memoryItems: [
-        { category: "FACT", content: "主人住在杭州", confidence: 0.9, importance: 0.7, validFrom: new Date("2026-01-01T00:00:00Z"), validTo: null, dedupeKey: "d1" },
+        { originId: "22222222-2222-4222-8222-222222222222", category: "FACT", content: "主人住在杭州", confidence: 0.9, importance: 0.7, validFrom: new Date("2026-01-01T00:00:00Z"), validTo: null, dedupeKey: "d1" },
       ],
       events: [
         {
+          originId: "33333333-3333-4333-8333-333333333333",
           dayKey: "2026-10-30",
           state: "FINAL",
           occurredAt: new Date("2026-10-30T12:00:00Z"),
@@ -95,6 +96,7 @@ const built = buildCharacterBundle({
       ],
       snapshots: [
         {
+          originId: "44444444-4444-4444-8444-444444444444",
           kind: "AUTOMATIC",
           periodStart: new Date("2026-10-01T00:00:00Z"),
           periodEnd: new Date("2026-10-08T00:00:00Z"),
@@ -244,7 +246,9 @@ assert.deepEqual(roundTrip.friends[0]?.aliases, ["小鱼干", "阿明"], "备注
 assert.equal(roundTrip.friends[0]?.snapshots[0]?.summary, "他们一起去了海边。");
 assert.equal(roundTrip.friends[0]?.knownSince, "2026-09-01T00:00:00.000Z", "认识的时间要保住");
 assert.equal(roundTrip.originId, "11111111-1111-4111-8111-111111111111", "回环后角色血缘 id 一致");
-assert.equal(roundTrip.memories[0]?.originId, null, "纯逻辑旧式构建未提供记忆血缘时保持 null");
+assert.equal(roundTrip.memories[0]?.originId, "22222222-2222-4222-8222-222222222222", "长期记忆血缘 ID 回环保留");
+assert.equal(roundTrip.events[0]?.originId, "33333333-3333-4333-8333-333333333333", "忆泡血缘 ID 回环保留");
+assert.equal(roundTrip.snapshots[0]?.originId, "44444444-4444-4444-8444-444444444444", "阶段总结血缘 ID 回环保留");
 assert.equal(roundTrip.eventDays[0]?.dayKey, "2026-10-30", "忆泡日历的天要跟着走");
 assert.equal(roundTrip.eventDays[0]?.eventCount, 3);
 assert.equal(roundTrip.eventDays[0]?.state, "FINAL");
