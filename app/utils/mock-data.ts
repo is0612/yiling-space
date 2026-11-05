@@ -173,8 +173,6 @@ export type Snapshot = {
   number: number;
   /** 自动归档「第 N 份」，手动存档「存档」；缺省时由 kind 推导 */
   label?: string;
-  /** 覆盖的记忆范围：角色全局 / 主人私聊 / QQ群 389834620 … */
-  scopeLabel?: string;
   version: number;
   date: string;
   range: string;

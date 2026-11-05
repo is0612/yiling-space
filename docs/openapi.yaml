@@ -2404,10 +2404,8 @@ paths:
       description: |
         本地开发功能。给「没起调度器、但想现在就跑一次自动归档」用。
 
-        行为和周期任务一致：**每个记忆范围各排一条** `GENERATE_SNAPSHOT` —— 角色全局、
-        主人私人，以及本周期有动静的每个 `EXTERNAL_IDENTITY`（群聊和群友私聊都挂在这里；
-        只看前两个范围会让群聊永远进不了阶段总结）。排完当场驱动 Worker（不要求另开
-        `yarn worker:watch`），单次请求最多占用 4 分钟，跑不完的留在队列里由 `pending` 报告。
+        行为与周期任务一致：为全局范围与主人私人范围各排一条 `GENERATE_SNAPSHOT`，
+        排完当场驱动一次 Worker（不要求另开 `yarn worker:watch`）。
 
         周期是**首尾相接**的：起点取上一份自动总结的 `periodEnd`（没有则 `now - interval`），
         终点是 `now`。同周期幂等键沿用 `auto-snapshot:{scopeId}:{start}:{end}`，
@@ -4616,9 +4614,6 @@ components:
         label:
           type: string
           description: 列表与详情用的标题；自动归档为「第 N 份」，手动存档为「存档」
-        scopeLabel:
-          type: string
-          description: 这份总结覆盖的记忆范围：角色全局 / 主人私聊 / QQ群 389834620 / QQ私聊 1702978014
         kind: { type: string, enum: [automatic, manual] }
         version: { type: integer, minimum: 1 }
         periodStart: { type: string, format: date-time }
