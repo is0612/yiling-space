@@ -69,3 +69,13 @@ export function buildPrivateScopeRawMessageWhere(
     ...(range ? { occurredAt: { gte: range.start, lt: range.end } } : {}),
   };
 }
+
+/** 人物名称明确但账号消歧失败时，时间线问题仍必须隔离普通私聊原文。 */
+export function shouldUseOnlyTargetGroupRawRows(input: {
+  isGroup: boolean;
+  isOwnerTurn: boolean;
+  participantName: string | null;
+  wantsTimeline: boolean;
+}): boolean {
+  return !input.isGroup && input.isOwnerTurn && Boolean(input.participantName) && input.wantsTimeline;
+}

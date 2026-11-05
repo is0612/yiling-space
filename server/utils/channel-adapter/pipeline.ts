@@ -26,6 +26,7 @@ import {
   buildOwnerTimelineGroupRawMessageWhere,
   buildPrivateScopeRawMessageWhere,
   resolveOwnerTimelineGroupScopeIds,
+  shouldUseOnlyTargetGroupRawRows,
 } from "../owner-timeline-retrieval";
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
 import { resolveCharacterApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
@@ -1688,8 +1689,12 @@ async function runChannelTurn(input: {
               },
             })
           : [];
-        const ownerTimelineQuery = !isGroup && isOwnerTurn && searchParticipantIds.length > 0
-          && (wantsFirst || wantsLatest);
+        const ownerTimelineQuery = shouldUseOnlyTargetGroupRawRows({
+          isGroup,
+          isOwnerTurn,
+          participantName: searchParticipantName ?? null,
+          wantsTimeline: wantsFirst || wantsLatest,
+        });
         const rawRowsForAssistant = ownerTimelineQuery
           ? ownerGroupRawRows
           : [...rawRowsByScope.flat(), ...ownerGroupRawRows];

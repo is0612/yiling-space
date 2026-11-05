@@ -5,6 +5,7 @@ import {
   buildPrivateScopeRawMessageWhere,
   resolveOwnerTimelineGroupScopeIds,
   selectUnambiguousParticipantAccounts,
+  shouldUseOnlyTargetGroupRawRows,
 } from "../server/utils/owner-timeline-retrieval";
 
 assert.equal(parseEventParticipantQuery("我第一次和昔涟互动是哪一天"), "昔涟",
@@ -39,6 +40,15 @@ assert.deepEqual(resolveOwnerTimelineGroupScopeIds({
 assert.deepEqual(resolveOwnerTimelineGroupScopeIds({
   isOwnerTurn: false, globalScopeId: "global", ownerIdentityScopeId: "friend-identity",
 }), ["global"], "普通好友不能获得身份范围中的历史群消息。");
+assert.equal(shouldUseOnlyTargetGroupRawRows({
+  isGroup: false, isOwnerTurn: true, participantName: "小七", wantsTimeline: true,
+}), true, "人物账号有歧义时也不能退回主人全部私聊原文。");
+assert.equal(shouldUseOnlyTargetGroupRawRows({
+  isGroup: false, isOwnerTurn: true, participantName: null, wantsTimeline: true,
+}), false, "没有识别出人物时不能触发人物时间线专用检索。");
+assert.equal(shouldUseOnlyTargetGroupRawRows({
+  isGroup: true, isOwnerTurn: false, participantName: "小七", wantsTimeline: true,
+}), false, "群聊不能套用主人私聊的目标人物过滤策略。");
 
 const range = { start: new Date("2026-10-01T00:00:00.000Z"), end: new Date("2026-11-01T00:00:00.000Z") };
 const ownerWhere = buildOwnerTimelineGroupRawMessageWhere({
