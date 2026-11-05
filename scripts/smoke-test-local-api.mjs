@@ -447,9 +447,9 @@ const apiTest = await request(`/api/characters/${created.id}/chat/test-connectio
 assert(apiTest.ok === true && apiTest.provider === "127.0.0.1", "API connection test should use the saved URL and decrypted API Key.");
 
 const initialSettings = await request(`/api/characters/${created.id}/memory-settings`);
-assert(initialSettings.snapshotIntervalDays === 8 && initialSettings.activeSnapshotIntervalDays === 8 && initialSettings.pendingSnapshotIntervalDays === null, "New character should get an 8-day default interval with no pending change.");
+assert(initialSettings.snapshotIntervalDays === 3 && initialSettings.activeSnapshotIntervalDays === 3 && initialSettings.pendingSnapshotIntervalDays === null, "New character should get a 3-day default interval with no pending change.");
 assert(initialSettings.changePolicy === "NEXT_CYCLE", "New character should use NEXT_CYCLE by default.");
-assert(initialSettings.rawMessageRetentionDays === 0, "New characters should preserve raw messages permanently until the user opts into cleanup.");
+assert(initialSettings.rawMessageRetentionDays === 30, "New characters should default to a 30-day raw-message retention period.");
 assert(initialSettings.rawMessageCleanupEnabled === false, "New characters should require an explicit cleanup opt-in.");
 
 const schedulerAnchorAt = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
