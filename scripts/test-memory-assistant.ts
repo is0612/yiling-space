@@ -13,6 +13,7 @@ import {
 } from "../server/utils/memory-assistant";
 import type { TurnDetailPatch } from "../server/utils/model-turn-detail";
 import type { ConversationReplyInput } from "../server/utils/chat-reply";
+import { selectRawMessagesForMemoryAssistant } from "../server/utils/message-retrieval";
 
 const now = new Date("2026-11-04T10:00:00.000Z");
 const scopeOf = (scopeId: string) => scopeId === "global" ? "character" as const : "private" as const;
@@ -110,6 +111,16 @@ assert(buildDeterministicTimelineMemoryQuery("最近一次和昔涟聊天是什�
   "Latest-interaction questions must also trigger a timeline lookup.");
 assert.equal(buildDeterministicTimelineMemoryQuery("今天晚饭吃什么"), null,
   "Ordinary questions must not trigger a timeline lookup.");
+
+const timelineRawMessages = selectRawMessagesForMemoryAssistant(
+  "查找与小七最早的一次互动，用户原问题：第一次跟小七说话是哪天",
+  [
+    { id: "timeline-later", role: "USER", speaker: "小七", content: "小七第一次来这里。", occurredAt: new Date("2026-10-20T12:00:00.000Z") },
+    { id: "timeline-first", role: "USER", speaker: "小七", content: "早上好。", occurredAt: new Date("2026-10-01T12:00:00.000Z") },
+  ],
+);
+assert.equal(timelineRawMessages[0]?.id, "timeline-first",
+  "Named-person first-interaction retrieval must rank by speaker identity and chronology, not later keyword density.");
 
 assert(candidates.some((item) => item.sourceKey === "memory/memory-public"));
 assert(candidates.some((item) => item.sourceKey === "snapshot/snapshot-public"));
