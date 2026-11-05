@@ -100,6 +100,7 @@ export function selectRawMessagesForMemoryAssistant<T extends RawMessageCandidat
   const excluded = options.excludeIds ?? new Set<string>();
   const range = parseEventTimeRange(query, options.now ?? new Date(), options.timeZone ?? "Asia/Shanghai");
   const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(query);
+  const wantsLatest = /最近一次|最后一次|最新一次|最近|最后/u.test(query);
   const ranked = messages
     .filter((message) => !excluded.has(message.id) && message.content.trim())
     .filter((message) => !range || (
