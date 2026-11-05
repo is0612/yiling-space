@@ -7,8 +7,7 @@
  * 1. **覆盖**：桌面对话（`channelBindingId = null`）与主人 QQ 私聊（`USER_PRIVATE`）
  *    都要被按天任务整理；群友私聊（`EXTERNAL_IDENTITY`）按设计不排。
  * 2. **参与者引用**：私聊忆泡只该有 `self` + 对方（桌面 = `owner`，主人 QQ = `owner`），
- *    不能出现群成员。模型偶尔会把跨会话的消息写成一条事件，这里用假模型故意造一条，
- *    验证写入侧按「最早证据所在会话」收口。
+ *    不能出现群成员。模型请求必须按会话隔离，桌面与群聊分别提取且来源完整保留。
  * 3. **群聊规则不误伤**：模型造一条证据只来自桌面私聊的事件，它必须照常落库。
  *
  * 模型用本机假服务（不花钱、不依赖 .env 的 Key）。跑完把临时角色与数据删干净。
@@ -26,6 +25,7 @@ import { processNextMemoryJob } from "../server/utils/memory-worker";
 const prisma = getPrisma();
 const NAME = "__私聊忆泡回归__";
 const API_KEY = "ci-private-events-key";
+const modelRequests: string[][] = [];
 let failures = 0;
 function check(name: string, condition: boolean, extra?: unknown) {
   if (condition) {
@@ -90,6 +90,7 @@ const server = http.createServer(async (request, response) => {
     ? payload.messages.find((message: { role?: string }) => message?.role === "user")
     : undefined;
   const input = JSON.parse(userMessage?.content ?? "{}");
+  modelRequests.push((Array.isArray(input.messages) ? input.messages : []).map((message: { id: string }) => message.id));
   const analysis = {
     summary: "假模型已整理这一段对话。",
     importantEvents: [],
@@ -321,20 +322,22 @@ try {
   check("群聊忆泡照常带群成员引用",
     hasRef(groupEvent, "external"), refsOf(groupEvent));
 
-  console.log("\n[4] 跨会话证据按「最早证据所在会话」收口");
-  const mixedEvent = eventInScope(globalScope.id, "跨会话拼出来的事");
-  check("跨会话事件仍然落库（不因守卫漏记）", Boolean(mixedEvent), events.map((event) => event.title));
-  check("跨会话事件不混入群成员",
-    Boolean(mixedEvent) && !(mixedEvent!.participantRefs as Array<Record<string, unknown>>).some((ref) => ref.kind === "external"),
-    mixedEvent?.participantRefs);
-  check("跨会话事件的来源只保留最早所在会话",
-    Boolean(mixedEvent) && mixedEvent!.sourceMessageIds.length === 1,
-    mixedEvent?.sourceMessageIds);
-  const mixedSource = mixedEvent
-    ? await prisma.message.findFirst({ where: { id: mixedEvent.sourceMessageIds[0]! }, select: { conversationId: true } })
-    : null;
-  check("跨会话事件的来源确实落在桌面会话",
-    mixedSource?.conversationId === desktopConversationId, { mixedSource, desktopConversationId, groupConversationId });
+  console.log("\n[4] 模型请求按会话隔离，桌面与群聊事件独立保存完整证据");
+  const sourceRows = await prisma.message.findMany({
+    where: { conversation: { characterId } }, select: { id: true, conversationId: true },
+  });
+  const conversationByMessage = new Map(sourceRows.map((message) => [message.id, message.conversationId]));
+  check("每次模型请求只包含一个会话", modelRequests.length === 4 && modelRequests.every((ids) =>
+    ids.length > 0 && ids.every((id) => conversationByMessage.has(id))
+      && new Set(ids.map((id) => conversationByMessage.get(id))).size === 1), modelRequests);
+  check("不产出跨会话合并事件", !eventInScope(globalScope.id, "跨会话拼出来的事"), events.map((event) => event.title));
+  for (const [name, event, conversationId] of [
+    ["桌面", desktopEvent, desktopConversationId], ["群聊", groupEvent, groupConversationId],
+  ] as const) {
+    const expected = sourceRows.filter((message) => message.conversationId === conversationId).map((message) => message.id).sort();
+    check(`${name}事件完整保留本会话所有来源`, Boolean(event)
+      && JSON.stringify([...event!.sourceMessageIds].sort()) === JSON.stringify(expected), event?.sourceMessageIds);
+  }
 
   console.log("\n[5] 当天进度落 FINAL");
   const days = await prisma.memoryEventDay.findMany({
@@ -363,6 +366,6 @@ try {
 }
 
 console.log(failures === 0
-  ? "\n私聊忆泡回归通过：桌面 / 主人 / 群友私聊覆盖、参与者引用、跨会话收口、FINAL 进度、清理。"
+  ? "\n私聊忆泡回归通过：桌面 / 主人 / 群友私聊覆盖、参与者引用、分会话模型请求与完整来源、FINAL 进度、清理。"
   : `\n私聊忆泡回归有 ${failures} 项失败。`);
 process.exit(failures === 0 ? 0 : 1);

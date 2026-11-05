@@ -7,8 +7,10 @@
  */
 // 先加载 .env：直接 `yarn test:memory-events-db` 时没有外层 export，必须自己读。
 import "dotenv/config";
+import assert from "node:assert/strict";
 import { getPrisma } from "../server/utils/prisma";
 import { applyMemoryEvents } from "../server/utils/memory-change-apply";
+import { makeEventDedupeKey } from "../server/utils/memory-ai";
 import { toMemoryTimelineDtos } from "../server/utils/memory-timeline-dto";
 
 const prisma = getPrisma();
@@ -155,7 +157,7 @@ const near = await prisma.$transaction((tx) => applyMemoryEvents(
   [{ ...base, occurredAt: messageLate.occurredAt.toISOString(), title: "和小明一起在海边游泳玩水", detail: "换个说法", evidenceMessageIds: [messageLate.id] }],
   evidence,
 ));
-check("公共子串 ≥6 的换说法被挡住", near.applied.length === 0 && near.skipped === 1, near);
+check("改写标题保守保留，不凭公共子串吞事实", near.applied.length === 1 && near.skipped === 0, near);
 
 console.log("\n[4] 只撞人名的短标题");
 const shortSame = await prisma.$transaction((tx) => applyMemoryEvents(
@@ -164,7 +166,7 @@ const shortSame = await prisma.$transaction((tx) => applyMemoryEvents(
   [{ ...base, occurredAt: messageLate.occurredAt.toISOString(), title: "和小明在银滩的事", detail: "同一天同一个人", evidenceMessageIds: [messageLate.id] }],
   evidence,
 ));
-check("同一天 + 同一参与人 + 3 字以上重合 → 判重", shortSame.applied.length === 0, shortSame);
+check("同一天同一人不同标题仍保留", shortSame.applied.length === 1, shortSame);
 const shortOther = await prisma.$transaction((tx) => applyMemoryEvents(
   tx,
   { memoryScopeId: scope.id, characterId: character.id, snapshotId: null, timeZone: "Asia/Shanghai", state: "FINAL" },
@@ -192,7 +194,7 @@ const timeline = toMemoryTimelineDtos(
 );
 check("时间线只含 ACTIVE 的忆泡", timeline.every((entry) => entry.type === "memoryEvent" && entry.title !== "和小明在海边游泳"), timeline.map((entry) => entry.title));
 
-console.log("\n[6] 跨会话证据按最早证据所在会话收口");
+console.log("\n[6] 跨会话证据显式拒绝并回滚整批");
 // 按天任务会把桌面对话和群聊放进同一次模型调用；模型偶尔会把两段不相干的对话写成
 // 一条事件。参与者引用若照单全收，私聊事件就会带上群成员。
 const groupConversation = await prisma.conversation.create({
@@ -220,10 +222,16 @@ const mixedEvidence = new Map([
     platform: "qq-onebot",
   }],
 ]);
-const mixed = await prisma.$transaction((tx) => applyMemoryEvents(
+await assert.rejects(prisma.$transaction((tx) => applyMemoryEvents(
   tx,
   { memoryScopeId: scope.id, characterId: character.id, snapshotId: null, timeZone: "Asia/Shanghai", state: "FINAL" },
   [{
+    ...base,
+    occurredAt: messageLate.occurredAt.toISOString(),
+    title: "混合来源失败前的有效事件",
+    detail: "整批失败时这条也应回滚",
+    evidenceMessageIds: [messageLate.id],
+  }, {
     ...base,
     occurredAt: messageLate.occurredAt.toISOString(),
     title: "桌面聊了明天的安排",
@@ -231,26 +239,10 @@ const mixed = await prisma.$transaction((tx) => applyMemoryEvents(
     evidenceMessageIds: [messageLate.id, groupMessage.id],
   }],
   mixedEvidence,
-));
+)), /EVENT_MIXED_CONVERSATION_EVIDENCE/);
 const mixedEvent = await prisma.memoryEvent.findFirst({ where: { memoryScopeId: scope.id, title: "桌面聊了明天的安排" } });
-const mixedRefs = (mixedEvent?.participantRefs ?? []) as Array<Record<string, unknown>>;
-check("跨会话事件照常落库（不因守卫漏记）", mixed.applied.length === 1, mixed);
-check(
-  "跨会话证据按最早一条所在会话收口到 conversationId",
-  mixedEvent?.conversationId === conversation.id,
-  { expected: conversation.id, actual: mixedEvent?.conversationId },
-);
-check(
-  "参与者引用只取最早证据所在会话，不混入群成员",
-  mixedRefs.some((ref) => ref.kind === "external" && ref.externalId === "friend-1")
-    && !mixedRefs.some((ref) => ref.kind === "external" && ref.externalId === "group-1"),
-  mixedRefs,
-);
-check(
-  "来源消息也只保留最早证据所在会话",
-  mixedEvent?.sourceMessageIds.length === 1 && mixedEvent.sourceMessageIds[0] === messageLate.id,
-  mixedEvent?.sourceMessageIds,
-);
+check("跨会话证据显式拒绝，事务不落部分事件", mixedEvent === null, mixedEvent);
+check("同事务前一条有效事件也回滚", await prisma.memoryEvent.count({ where: { memoryScopeId: scope.id, title: "混合来源失败前的有效事件" } }) === 0);
 await prisma.message.delete({ where: { id: groupMessage.id } });
 await prisma.conversation.delete({ where: { id: groupConversation.id } });
 
@@ -294,7 +286,45 @@ check(
   namedEvent?.participantRefs,
 );
 
-console.log("\n[8] 清理");
+console.log("\n[8] 本地日期、会话隔离与旧 UTC 键兼容");
+const collisionTitle = "主人提醒明天提交报告";
+const collisionAt = new Date("2026-11-01T10:00:00+08:00");
+const collisionNextAt = new Date("2026-11-02T01:00:00+08:00");
+const otherConversation = await prisma.conversation.create({
+  data: { characterId: character.id, memoryScopeId: scope.id, title: "自检另一群" },
+  select: { id: true },
+});
+const applyCollision = (at: Date, conversationId: string, title = collisionTitle) =>
+  prisma.$transaction((tx) => applyMemoryEvents(tx,
+    { memoryScopeId: scope.id, characterId: character.id, snapshotId: null, timeZone: "Asia/Shanghai", state: "FINAL" },
+    [{ ...base, participants: ["主人", "小明"], occurredAt: at.toISOString(), title, detail: title, evidenceMessageIds: [messageLate.id] }],
+    new Map([[messageLate.id, { id: messageLate.id, occurredAt: at, conversationId }]]),
+  ));
+const collisionFirst = await applyCollision(collisionAt, conversation.id);
+const collisionNext = await applyCollision(collisionNextAt, conversation.id);
+const collisionOther = await applyCollision(collisionAt, otherConversation.id);
+check("跨本地日期同标题均落库", collisionFirst.applied.length === 1 && collisionNext.applied.length === 1, { collisionFirst, collisionNext });
+check("不同群同标题均落库", collisionOther.applied.length === 1, collisionOther);
+const distinctFact = await applyCollision(collisionAt, conversation.id, "主人提醒明天参加体检");
+check("同会话同人通用前缀不同事项不吞", distinctFact.applied.length === 1, distinctFact);
+const exactRepeat = await applyCollision(collisionAt, conversation.id);
+check("v2 精确重跑幂等", exactRepeat.applied.length === 0 && exactRepeat.skipped === 1, exactRepeat);
+await prisma.memoryEvent.update({
+  where: { id: collisionFirst.applied[0]!.id },
+  data: { dedupeKey: makeEventDedupeKey(collisionAt, collisionTitle) },
+});
+const legacyRepeat = await applyCollision(collisionAt, conversation.id, collisionTitle + "！");
+check("旧 key 同本地日同会话规范化标题重跑幂等", legacyRepeat.applied.length === 0 && legacyRepeat.skipped === 1, legacyRepeat);
+// 删除新行后再试，确保真正命中旧 UTC 碰撞而非已有 v2 行。
+await prisma.memoryEvent.deleteMany({ where: { id: { in: [collisionNext.applied[0]!.id, collisionOther.applied[0]!.id] } } });
+const legacyNext = await applyCollision(collisionNextAt, conversation.id);
+const legacyOther = await applyCollision(collisionAt, otherConversation.id);
+check("旧 UTC 键碰撞不吞次日本地日期", legacyNext.applied.length === 1, legacyNext);
+check("旧 key 不跨会话吞同标题", legacyOther.applied.length === 1, legacyOther);
+await prisma.memoryEvent.deleteMany({ where: { conversationId: otherConversation.id } });
+await prisma.conversation.delete({ where: { id: otherConversation.id } });
+
+console.log("\n[9] 清理");
 // 顺序不能反：memory_scopes 对 character 是 Restrict，先清范围下的数据再删角色。
 await prisma.memoryEvent.deleteMany({ where: { memoryScopeId: scope.id } });
 await prisma.memoryEventDay.deleteMany({ where: { memoryScopeId: scope.id } });
@@ -304,5 +334,5 @@ await prisma.memoryScope.delete({ where: { id: scope.id } });
 await prisma.character.delete({ where: { id: character.id } });
 check("临时角色与事件清理干净", (await prisma.memoryEvent.count({ where: { memoryScopeId: scope.id } })) === 0);
 
-console.log(failures === 0 ? "\n第二遍检测通过：跨零点归属、精确去重、近义去重、短标题兜底、软删除过滤、跨会话收口、清理。" : `\n第二遍检测有 ${failures} 项失败。`);
+console.log(failures === 0 ? "\n第二遍检测通过：跨零点归属、本地日与会话隔离、精确与旧键去重、不同事项保留、软删除过滤、混合来源回滚、清理。" : `\n第二遍检测有 ${failures} 项失败。`);
 process.exit(failures === 0 ? 0 : 1);

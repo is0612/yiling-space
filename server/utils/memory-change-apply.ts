@@ -252,10 +252,16 @@ export async function applyMemoryChange(
   ctx: MemoryApplyContext,
   change: MemoryChange,
   evidence: MemoryEvidenceMessage[],
+  options?: { reviewEvidenceFallbackAt: Date },
 ): Promise<ApplyResult | null> {
-  if (evidence.length === 0) return null;
-  const primaryEvidence = [...evidence].sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime())[0]!;
-  const validFrom = primaryEvidence.occurredAt;
+  // Only an explicit human review may apply an already validated historical suggestion
+  // after retention removed its messages. Worker callers must still supply evidence.
+  const fallbackAt = ctx.actorType === "USER" && ctx.auditActionPrefix === "memory.review_" && change.evidenceMessageIds.length > 0
+    ? options?.reviewEvidenceFallbackAt
+    : undefined;
+  const primaryEvidence = [...evidence].sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime())[0];
+  const validFrom = primaryEvidence?.occurredAt ?? fallbackAt;
+  if (!validFrom || !Number.isFinite(validFrom.getTime())) return null;
   const relatedId = change.relatedMemoryId;
   const auditActor = ctx.actorType === "USER" && ctx.actorId
     ? { actorType: "USER" as const, actorId: ctx.actorId }
@@ -275,9 +281,19 @@ export async function applyMemoryChange(
       : ctx;
   const targetScope = target === ctx.global ? "character" : "current";
 
+  // Serialize automatic and manual changes to this scope, then consult current rows.
+  // Context collections were loaded before the transaction and can be stale in either
+  // direction (another writer added a row, or an old signature is now trashed).
+  await tx.$queryRaw`SELECT id FROM memory_scopes WHERE id = ${target.memoryScopeId}::uuid FOR UPDATE`;
+
   if (change.action === "ADD") {
     const signature = change.category + ":" + normalizeMemoryText(change.content);
-    if (target.existingItemSignatures.has(signature)) {
+    const activeItems = await tx.memoryItem.findMany({
+      where: { memoryScopeId: target.memoryScopeId, status: "ACTIVE", category: change.category as MemoryCategoryValue },
+      select: { id: true, category: true, content: true },
+    });
+    const exactDuplicate = activeItems.find((item) => normalizeMemoryText(item.content) === normalizeMemoryText(change.content));
+    if (exactDuplicate) {
       return {
         action: "ADD",
         result: "DUPLICATE_IGNORED",
@@ -289,7 +305,7 @@ export async function applyMemoryChange(
 
     // 近似判重：整句不同、说的是同一件事。只对「同类别 + 字面高度重合」生效，
     // 判据保守（见 isNearDuplicateMemory），宁可漏一条也不合成两件不同的事。
-    const nearDuplicate = target.existingItems?.find((item) => isNearDuplicateMemory(item, change));
+    const nearDuplicate = activeItems.find((item) => isNearDuplicateMemory(item, change));
     if (nearDuplicate) {
       return {
         action: "ADD",
@@ -317,7 +333,7 @@ export async function applyMemoryChange(
         importance,
         status: "ACTIVE",
         validFrom,
-        sourceMessageId: primaryEvidence.id,
+        sourceMessageId: primaryEvidence?.id ?? null,
         sourceSnapshotId: ctx.snapshotId,
         dedupeKey: keyUsed ? null : dedupeKey,
       },
@@ -353,13 +369,16 @@ export async function applyMemoryChange(
   }
 
   if (!relatedId || target.handledMemoryIds.has(relatedId) || !target.canTarget(relatedId)) return null;
-  const previous = await target.resolvePrevious(relatedId);
+  const previous = await tx.memoryItem.findFirst({
+    where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE" },
+    select: { category: true, content: true },
+  });
   if (!previous) return null;
 
   if (change.action === "INVALIDATE") {
     const invalidated = await tx.memoryItem.updateMany({
       where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE" },
-      data: { status: "INVALIDATED", validTo: primaryEvidence.occurredAt },
+      data: { status: "INVALIDATED", validTo: validFrom },
     });
     if (invalidated.count !== 1) return null;
     target.handledMemoryIds.add(relatedId);
@@ -394,7 +413,7 @@ export async function applyMemoryChange(
   ) {
     const superseded = await tx.memoryItem.updateMany({
       where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE" },
-      data: { status: "SUPERSEDED", validTo: primaryEvidence.occurredAt },
+      data: { status: "SUPERSEDED", validTo: validFrom },
     });
     if (superseded.count !== 1) return null;
     target.handledMemoryIds.add(relatedId);
@@ -413,7 +432,7 @@ export async function applyMemoryChange(
         importance: resolveImportance(change),
         status: "ACTIVE",
         validFrom,
-        sourceMessageId: primaryEvidence.id,
+        sourceMessageId: primaryEvidence?.id ?? null,
         sourceSnapshotId: ctx.snapshotId,
         dedupeKey: keyUsed ? null : dedupeKey,
       },
@@ -485,7 +504,7 @@ export async function applyMemoryEvents(
   const applied: Array<{ id: string; title: string; occurredAt: string }> = [];
   let skipped = 0;
   // 按天缓存已有事件：一次任务里同一天会有多条草稿，别每条都回表查一遍。
-  const existingEventsByDay = new Map<string, Array<{ title: string; participants: string[] }>>();
+  const existingEventsByDay = new Map<string, Array<{ title: string; participants: string[]; conversationId: string | null }>>();
 
   for (const draft of drafts) {
     const evidence = draft.evidenceMessageIds
@@ -498,21 +517,14 @@ export async function applyMemoryEvents(
       continue;
     }
 
-    /**
-     * 一条忆泡只归属一个会话。
-     *
-     * 按天抽取会把同一天里的几个会话（桌面、私聊、群聊）放进同一次模型调用 —— 这是
-     * 为了覆盖，不是为了合并。模型偶尔会把两段不相干的对话写成一条事件，证据也跨会话；
-     * 参与者引用若照单全收，「私聊里发生的事」就会带上群成员，检索时会被读成
-     * 「那天群里也参与了」。
-     *
-     * 以**最早一条证据所在的会话**为准收口：引用与来源都只取这段。没有 `conversationId`
-     * 的旧调用方式（手工构造证据）保持原样，不因为这条守卫丢消息。
-     */
+    // Extraction runs per conversation. Reject mixed evidence rather than trimming
+    // its sources while retaining a merged title/detail; the enclosing chunk rolls back.
+    const conversationIds = new Set(evidence.map((message) => message.conversationId).filter(Boolean));
+    if (conversationIds.size > 1) {
+      throw new Error("EVENT_MIXED_CONVERSATION_EVIDENCE: 忆泡证据跨会话，当前块需重新整理。");
+    }
     const primaryConversationId = evidence[0]!.conversationId;
-    const scopedEvidence = primaryConversationId
-      ? evidence.filter((message) => message.conversationId === primaryConversationId)
-      : evidence;
+    const scopedEvidence = evidence;
 
     /**
      * 参与者清洗必须排在判重之前：判重拿 `participants` 算「算不算同一件事」的交集，
@@ -521,7 +533,9 @@ export async function applyMemoryEvents(
      */
     const participants = resolveEventParticipants(draft.participants, scopedEvidence, ctx.characterName);
 
-    const dedupeKey = makeEventDedupeKey(occurredAt, draft.title);
+    const dayKey = localDayKey(occurredAt, ctx.timeZone);
+    const conversationId = primaryConversationId ?? null;
+    const dedupeKey = makeEventDedupeKey(occurredAt, draft.title, { dayKey, conversationId });
     const existing = await tx.memoryEvent.findFirst({
       where: { memoryScopeId: ctx.memoryScopeId, dedupeKey },
       select: { id: true },
@@ -531,19 +545,19 @@ export async function applyMemoryEvents(
       continue;
     }
 
-    // 近义重复：同一天里已有标题与它高度重合（连续 6 个字以上相同），当作同一件事。
-    // 精确 dedupeKey 只认完全相同的标题，而模型重跑时很爱换个说法。
-    const dayKey = localDayKey(occurredAt, ctx.timeZone);
+    // 兼容旧键：按本地日 + 会话 + 规范化整标题查重，不认旧 UTC 键碰撞。
+    // 公共前缀和相同参与人不足以证明同一事实，改写标题宁可保留。
     let dayEvents = existingEventsByDay.get(dayKey);
     if (!dayEvents) {
       const rows = await tx.memoryEvent.findMany({
         where: { memoryScopeId: ctx.memoryScopeId, dayKey },
-        select: { title: true, participants: true },
+        select: { title: true, participants: true, conversationId: true },
       });
-      dayEvents = rows.map((row) => ({ title: row.title, participants: row.participants }));
+      dayEvents = rows;
       existingEventsByDay.set(dayKey, dayEvents);
     }
-    const duplicated = dayEvents.some((existing) => isNearDuplicateEvent(existing, { title: draft.title, participants }));
+    const duplicated = dayEvents.some((existing) => existing.conversationId === conversationId
+      && isNearDuplicateEvent(existing, { title: draft.title, participants }));
     if (duplicated) {
       skipped += 1;
       continue;
@@ -580,7 +594,7 @@ export async function applyMemoryEvents(
       });
       applied.push({ id: created.id, title: draft.title, occurredAt: occurredAt.toISOString() });
       // 同一批里后面几条也要跟新写的这条比，否则同批内的近义重复挡不住。
-      dayEvents.push({ title: draft.title, participants });
+      dayEvents.push({ title: draft.title, participants, conversationId });
       await tx.auditLog.create({
         data: {
           actorType: "WORKER",
@@ -598,8 +612,10 @@ export async function applyMemoryEvents(
           },
         },
       });
-    } catch {
-      // 唯一约束竞争：另一个任务刚写了同一件事。跳过即可，不算失败。
+    } catch (error) {
+      // Only an actual unique-key race is a duplicate. Storage/audit failures must
+      // roll back the chunk so its source cursor cannot advance past lost events.
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "P2002") throw error;
       skipped += 1;
     }
   }

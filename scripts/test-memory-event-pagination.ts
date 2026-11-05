@@ -26,6 +26,8 @@ function fixture(count: number, sameTime = false) {
   let failTransactionAt = 0;
   let transactions = 0;
   const jobs: Array<Record<string, unknown>> = [];
+  let leaseRow = { status: "RUNNING", lockedBy: "pagination:claim-1" as string | null };
+  let claims = 1;
   const queries: Array<Record<string, unknown>> = [];
   const eventStates: string[] = [];
   const mock = {
@@ -33,6 +35,8 @@ function fixture(count: number, sameTime = false) {
       name: "Test", modelConfig: {}, memorySetting: { timezone: "UTC" },
     } }) },
     message: { findMany: async (query: { where: ReturnType<typeof eventMessageWhere>; take: number; orderBy: unknown }) => {
+      // 取材新增的历史上下文查询独立于待消费正序批次；本用例不提供上下文。
+      if (JSON.stringify(query.orderBy).includes("desc")) return [];
       queries.push(query);
       assert.deepEqual(query.orderBy, [{ occurredAt: "asc" }, { id: "asc" }]);
       assert.equal(query.take, EVENT_MESSAGE_BATCH_SIZE + 1);
@@ -55,7 +59,16 @@ function fixture(count: number, sameTime = false) {
     },
     memoryEvent: { findMany: async () => [], count: async () => 0,
       updateMany: async (query: { data: { state: string } }) => { eventStates.push(query.data.state); return { count: 0 }; } },
-    memoryJob: { update: async (query: { data: Record<string, unknown> }) => { jobs.push(query.data); } },
+    memoryJob: {
+      findFirst: async () => leaseRow.status === "RUNNING" && leaseRow.lockedBy ? { lockedBy: leaseRow.lockedBy } : null,
+      updateMany: async (query: { where: { id: string; status: string; lockedBy: string }; data: Record<string, unknown> }) => {
+        assert.equal(query.where.id, "job");
+        if (query.where.status !== leaseRow.status || query.where.lockedBy !== leaseRow.lockedBy) return { count: 0 };
+        jobs.push(query.data);
+        leaseRow = { ...leaseRow, ...query.data };
+        return { count: 1 };
+      },
+    },
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
       transactions++;
       if (failTransactionAt === transactions) throw new Error("mock transaction failure");
@@ -65,6 +78,7 @@ function fixture(count: number, sameTime = false) {
   return {
     prisma: mock as unknown as PrismaClient, rows, jobs, queries, eventStates,
     progress: () => progress,
+    reclaim: () => { leaseRow = { status: "RUNNING", lockedBy: `pagination:claim-${++claims}` }; },
     setProgress: (value: Progress) => { progress = value; },
     failAt: (value: number) => { failTransactionAt = value; },
   };
@@ -99,10 +113,11 @@ try {
     const f = fixture(961, sameTime);
     const first = await runDailyEventJob(f.prisma, job, end);
     assert.equal(first.processed && first.status, "RETRY_WAIT");
-    assert.equal(f.progress()?.state, "DRAFT", "partial final extraction must not prematurely close the day");
+    assert.equal(f.progress()?.state, "DRAFT", `partial final extraction must not prematurely close the day: ${JSON.stringify(first)}`);
     assert.equal(f.progress()?.extractedMessageId, id(960));
     assert.deepEqual(seen, f.rows.slice(0, 960).map((row) => row.id));
     assert(f.jobs.some((data) => data.attemptCount === 0), "normal pagination must not exhaust model-failure retries");
+    f.reclaim();
     const second = await runDailyEventJob(f.prisma, job, new Date(end.getTime() + 60_000));
     assert.equal(second.processed && second.status, "SUCCEEDED");
     assert.equal(f.progress()?.state, "FINAL");
@@ -113,6 +128,7 @@ try {
   await runDailyEventJob(hourly.prisma, { ...job, idempotencyKey: "events-hour:scope:2026-11-01:10" }, end);
   assert.equal(hourly.progress()?.state, "DRAFT");
   const seenBeforeFinal = seen.length;
+  hourly.reclaim();
   const emptyFinal = await runDailyEventJob(hourly.prisma, job, end);
   assert.equal(emptyFinal.processed && emptyFinal.status, "SKIPPED");
   assert.equal(hourly.progress()?.state, "FINAL");
@@ -129,6 +145,7 @@ try {
   const committed = failing.progress()!.extractedMessageId;
   seen.length = 0;
   failing.failAt(0);
+  failing.reclaim();
   await runDailyEventJob(failing.prisma, job, end);
   assert.equal(seen[0], id(Number(committed!.slice(-12)) + 1));
   assert.equal(failing.progress()?.state, "FINAL");

@@ -4,6 +4,42 @@ export const EVENT_AI_CHUNK_SIZE = 120;
 export const MAX_EVENT_CHUNKS = 8;
 export const EVENT_MESSAGE_BATCH_SIZE = EVENT_AI_CHUNK_SIZE * MAX_EVENT_CHUNKS;
 
+/** Preserve the global chunk boundary; only model requests are split by conversation. */
+export function groupEventMessagesByConversation<T extends { conversationId: string }>(messages: T[]): T[][] {
+  const groups = new Map<string, T[]>();
+  for (const message of messages) {
+    const group = groups.get(message.conversationId) ?? [];
+    group.push(message);
+    groups.set(message.conversationId, group);
+  }
+  return [...groups.values()];
+}
+
+/** Context never advances the evidence cursor and cannot cross the period or conversation. */
+export async function loadEventContextMessages(
+  prisma: Pick<PrismaClient, "message">,
+  input: { conversationId: string; periodStart: Date; periodEnd: Date; first: { occurredAt: Date; id: string } },
+) {
+  const rows = await prisma.message.findMany({
+    where: {
+      conversationId: input.conversationId,
+      occurredAt: { gte: input.periodStart, lt: input.periodEnd },
+      OR: [
+        { occurredAt: { lt: input.first.occurredAt } },
+        { occurredAt: input.first.occurredAt, id: { lt: input.first.id } },
+      ],
+    },
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    take: 6,
+    select: {
+      id: true, role: true, eventType: true, content: true, occurredAt: true, metadata: true,
+      conversationId: true,
+      conversation: { select: { externalConversationId: true } },
+    },
+  });
+  return rows.reverse();
+}
+
 export type EventExtractionProgress = {
   extractedAt: Date | null;
   extractedMessageId?: string | null;

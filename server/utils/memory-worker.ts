@@ -23,9 +23,9 @@ import {
 } from "./conversation-message";
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
 import { normalizeFriendAliases } from "./friend-aliases";
-import { MEMORY_JOB_LEASE_MS } from "./memory-job-lease";
+import { MEMORY_JOB_LEASE_MS, lockMemoryJobLease, memoryJobLeaseWhere, MemoryJobLeaseLostError, type MemoryJobLease } from "./memory-job-lease";
 import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
-import { EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS, loadEventMessageBatch } from "./memory-event-source";
+import { EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
 import { rawMessageCleanupDependencyCutoff } from "./memory-event-cleanup";
 
 /** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
@@ -52,6 +52,7 @@ export type MemoryWorkerResult =
 
 type WorkerOptions = {
   ownerId?: string;
+  jobId?: string;
   workerId?: string;
   now?: Date;
 };
@@ -143,7 +144,7 @@ function toAiMessage(message: PeriodSourceMessage): MemoryAiMessage {
     role: message.role,
     eventType: message.eventType,
     occurredAt: message.occurredAt.toISOString(),
-    content: message.content.slice(0, 1200),
+    content: message.content,
     origin: message.origin,
     isOwner: message.isOwner,
     ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
@@ -185,14 +186,23 @@ export async function runDailyEventJob(
   prisma: PrismaClient,
   job: { id: string; memoryScopeId: string; periodStart: Date; periodEnd: Date; idempotencyKey: string },
   now: Date,
+  claimToken?: string,
 ): Promise<MemoryWorkerResult> {
+  // 兼容直接调用的 DB 测试：只捕获当前 RUNNING 的实际 token，不允许无租约写入。
+  const current = claimToken ? null : await prisma.memoryJob.findFirst({
+    where: { id: job.id, status: "RUNNING", lockedBy: { not: null } },
+    select: { lockedBy: true },
+  });
+  const token = claimToken ?? current?.lockedBy;
+  if (!token) throw new MemoryJobLeaseLostError();
+  const lease: MemoryJobLease = { jobId: job.id, claimToken: token };
   const finish = async (
     status: "SUCCEEDED" | "SKIPPED" | "RETRY_WAIT" | "FAILED",
     message: string,
     extra: { runAt?: Date } = {},
   ): Promise<MemoryWorkerResult> => {
-    await prisma.memoryJob.update({
-      where: { id: job.id },
+    const finished = await prisma.memoryJob.updateMany({
+      where: memoryJobLeaseWhere(lease),
       data: {
         status,
         completedAt: status === "RETRY_WAIT" ? null : now,
@@ -202,6 +212,7 @@ export async function runDailyEventJob(
         ...(extra.runAt ? { runAt: extra.runAt } : {}),
       },
     });
+    if (finished.count !== 1) throw new MemoryJobLeaseLostError();
     return { processed: true, jobId: job.id, status, message };
   };
 
@@ -267,6 +278,7 @@ export async function runDailyEventJob(
     // 没有新消息也要把这一天标成已扫过：收口任务照样要落 FINAL。
     if (finalize) {
       await prisma.$transaction(async (tx) => {
+        await lockMemoryJobLease(tx, lease);
         const eventCount = await tx.memoryEvent.count({ where: { memoryScopeId: job.memoryScopeId, dayKey } });
         await tx.memoryEventDay.upsert({
           where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
@@ -281,56 +293,77 @@ export async function runDailyEventJob(
     return finish("SKIPPED", "这一段没有新的对话。");
   }
 
-  // 这一天已经记过的事件：进提示词让模型自己避开，重跑不会把同一件事换个说法再写一遍。
-  const existingEvents = await prisma.memoryEvent.findMany({
-    where: { memoryScopeId: job.memoryScopeId, dayKey, status: "ACTIVE" },
-    orderBy: { occurredAt: "asc" },
-    take: 40,
-    select: { occurredAt: true, title: true },
-  });
+  // 已落库事件按会话查询；其它会话的事实不能进入本会话的模型请求。
+  const knownEventsByConversation = new Map<string, Array<{ occurredAt: string; title: string }>>();
   /**
    * 分块抽取。
    *
    * 以前这里只喂 `selectAiMessages` 的 120 条（最早 60 + 最新 60），一整晚 368 条时
    * 中间两百多条**根本没进模型**（2026-10-31 实测：一个晚上只出 5 条忆泡）。
-   * 现在按时间顺序切块，每块各调一次模型，并与进度一起事务落库：
-   * 调用次数变多（几分钱），换来的是不再丢中间那一大段。
+   * 按全局时间顺序切块，再在原块内按会话分别调用模型，避免事件正文混合来源。
+   * 原块内全部请求成功后才把事件与原块游标同事务提交，保持全局覆盖。
    */
   const chunks = splitForEventExtraction(messages, EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS);
-  const knownEvents = existingEvents.map((event) => ({
-    occurredAt: event.occurredAt.toISOString(),
-    title: event.title,
-  }));
+
   let appliedCount = 0;
   let skippedCount = 0;
   try {
     for (const [index, chunk] of chunks.entries()) {
-      const aiResult = await analyzeMemoryPeriod({
-        apiKey,
-        apiBaseUrl: chatSettings.apiBaseUrl,
-        model: chatSettings.model,
-        periodStart: job.periodStart.toISOString(),
-        periodEnd: job.periodEnd.toISOString(),
-        timezone: scope.character.memorySetting?.timezone ?? "Asia/Shanghai",
-        scopeType: scope.scopeType,
-        characterName: scope.character.name,
-        messages: chunk.map(toAiMessage),
-        totalMessageCount: messages.length,
-        omittedMessageCount: Math.max(0, messages.length - chunk.length),
-        // 这一趟只要事件：不用长期记忆做 UPDATE 对照，省一半输入。
-        activeMemories: [],
-        previousSnapshotSummary: null,
-        // 已经记过的 + 本次前面几块刚提到的事件，一起让它避开。
-        ...(knownEvents.length ? { existingEvents: knownEvents } : {}),
-      });
-      await recordModelUsage({
-        // 单独记成 events：忆泡整理和 8 天快照是两条开销，混在 snapshot 里就分不清
-        // 「这天花了多少是整理忆泡花的」。
-        kind: "events",
-        model: chatSettings.model,
-        usage: toUsageTokens(aiResult.usage),
-        characterId: scope.characterId,
-      });
+      const groups = groupEventMessagesByConversation(chunk);
+      const results: Array<{
+        conversationId: string;
+        events: Awaited<ReturnType<typeof analyzeMemoryPeriod>>["analysis"]["events"];
+        evidence: PeriodSourceMessage[];
+      }> = [];
+      for (const group of groups) {
+        const conversationId = group[0]!.conversationId;
+        let knownEvents = knownEventsByConversation.get(conversationId);
+        if (!knownEvents) {
+          const existing = await prisma.memoryEvent.findMany({
+            where: { memoryScopeId: job.memoryScopeId, dayKey, status: "ACTIVE", conversationId },
+            orderBy: { occurredAt: "asc" },
+            take: 40,
+            select: { occurredAt: true, title: true },
+          });
+          knownEvents = existing.map((event) => ({ occurredAt: event.occurredAt.toISOString(), title: event.title }));
+          knownEventsByConversation.set(conversationId, knownEvents);
+        }
+        const contextRows = await loadEventContextMessages(prisma, {
+          conversationId, periodStart: job.periodStart, periodEnd: job.periodEnd, first: group[0]!,
+        });
+        const contextMessages: PeriodSourceMessage[] = contextRows.map((row) => {
+          const origin = conversationOriginLabel(row.conversation);
+          return {
+            ...row, origin,
+            isOwner: readSourceMessageIsOwner(row.metadata, { origin, role: row.role }),
+            mentionTargets: readMessageMentionTargets(row.metadata),
+            ...readMessageAuthor(row.metadata),
+            ...readMessageSpeaker(row.metadata),
+          };
+        });
+        const aiResult = await analyzeMemoryPeriod({
+          apiKey,
+          apiBaseUrl: chatSettings.apiBaseUrl,
+          model: chatSettings.model,
+          periodStart: job.periodStart.toISOString(),
+          periodEnd: job.periodEnd.toISOString(),
+          timezone: timeZone,
+          scopeType: scope.scopeType,
+          characterName: scope.character.name,
+          messages: group.map(toAiMessage),
+          contextMessages: contextMessages.map(toAiMessage),
+          totalMessageCount: messages.length,
+          omittedMessageCount: Math.max(0, messages.length - group.length),
+          activeMemories: [],
+          previousSnapshotSummary: null,
+          ...(knownEvents.length ? { existingEvents: knownEvents } : {}),
+        });
+        await recordModelUsage({
+          kind: "events", model: chatSettings.model,
+          usage: toUsageTokens(aiResult.usage), characterId: scope.characterId,
+        });
+        results.push({ conversationId, events: aiResult.analysis.events, evidence: [...contextMessages, ...group] });
+      }
       /**
        * 每块立刻落库，而不是攒到最后一起写。
        *
@@ -341,14 +374,20 @@ export async function runDailyEventJob(
       const chunkEnd = chunk[chunk.length - 1]!;
       // 证据产出与游标同事务：失败不推进，重试不会越过未提交的块。
       const result = await prisma.$transaction(async (tx) => {
-        const applied = await applyMemoryEvents(tx, {
-          memoryScopeId: job.memoryScopeId,
-          characterId: scope.characterId,
-          snapshotId: null,
-          timeZone,
-          state: "DRAFT",
-          characterName: scope.character.name,
-        }, aiResult.analysis.events, new Map(chunk.map((message) => [message.id, message])));
+        await lockMemoryJobLease(tx, lease);
+        const applied = { applied: [] as Array<{ id: string; title: string; occurredAt: string; conversationId: string }>, skipped: 0 };
+        for (const group of results) {
+          const saved = await applyMemoryEvents(tx, {
+            memoryScopeId: job.memoryScopeId,
+            characterId: scope.characterId,
+            snapshotId: null,
+            timeZone,
+            state: "DRAFT",
+            characterName: scope.character.name,
+          }, group.events, new Map(group.evidence.map((message) => [message.id, message])));
+          applied.applied.push(...saved.applied.map((event) => ({ ...event, conversationId: group.conversationId })));
+          applied.skipped += saved.skipped;
+        }
         await tx.memoryEventDay.upsert({
           where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
           create: {
@@ -365,22 +404,22 @@ export async function runDailyEventJob(
       });
       appliedCount += result.applied.length;
       skippedCount += result.skipped;
-      knownEvents.push(...aiResult.analysis.events.map((draft) => ({
-        occurredAt: draft.occurredAt,
-        title: draft.title,
-      })));
+      // 仅把事务实际写入的事件作为已知事实；被校验/去重丢掉的草稿不可污染后块。
+      for (const event of result.applied) {
+        knownEventsByConversation.get(event.conversationId)!.push({ occurredAt: event.occurredAt, title: event.title });
+      }
       // 一行可观测性日志：跑完能看出「这一块喂了多少、模型给了几条、落了几条」，
       // 少了事件时不用猜是没进模型还是模型没写。
       console.log(
         `[events] ${dayKey} 第 ${index + 1}/${chunks.length} 块：`
         + `输入 ${chunk.length} 条（本批 ${messages.length} 条），`
-        + `模型给 ${aiResult.analysis.events.length} 条，落库 ${result.applied.length} 条`,
+        + `${groups.length} 个会话请求，模型给 ${results.reduce((sum, group) => sum + group.events.length, 0)} 条，落库 ${result.applied.length} 条`,
       );
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    await prisma.memoryJob.update({
-      where: { id: job.id },
+    const finished = await prisma.memoryJob.updateMany({
+      where: memoryJobLeaseWhere(lease),
       data: {
         status: "RETRY_WAIT",
         completedAt: null,
@@ -390,6 +429,7 @@ export async function runDailyEventJob(
         runAt: new Date(now.getTime() + 5 * 60_000),
       },
     });
+    if (finished.count !== 1) throw new MemoryJobLeaseLostError();
     return { processed: true, jobId: job.id, status: "RETRY_WAIT", message: detail.slice(0, 300) };
   }
 
@@ -400,9 +440,10 @@ export async function runDailyEventJob(
    * （2026-11-01 实测：实际 29 条，进度行还写着 17）。这里以 count 为准，别让页面上
    * 的「那天几条」长期错着。
    */
-  const totalEvents = await prisma.memoryEvent.count({ where: { memoryScopeId: job.memoryScopeId, dayKey } });
   const complete = finalize && !batch.hasMore;
   await prisma.$transaction(async (tx) => {
+    await lockMemoryJobLease(tx, lease);
+    const totalEvents = await tx.memoryEvent.count({ where: { memoryScopeId: job.memoryScopeId, dayKey } });
     await tx.memoryEventDay.updateMany({
       where: { memoryScopeId: job.memoryScopeId, dayKey },
       data: { state: complete ? "FINAL" : "DRAFT", eventCount: totalEvents },
@@ -416,7 +457,8 @@ export async function runDailyEventJob(
   });
   if (batch.hasMore) {
     // 正常分页不是模型失败，不消耗失败重试额度；让出队列后从已提交的游标续跑。
-    await prisma.memoryJob.update({ where: { id: job.id }, data: { attemptCount: 0 } });
+    const reset = await prisma.memoryJob.updateMany({ where: memoryJobLeaseWhere(lease), data: { attemptCount: 0 } });
+    if (reset.count !== 1) throw new MemoryJobLeaseLostError();
     return finish("RETRY_WAIT", "本批忆泡已保存，仍有未处理消息，将从游标继续整理。", {
       runAt: new Date(now.getTime() + 30_000),
     });
@@ -446,14 +488,16 @@ async function runJournalJob(
     journalTarget?: string | null;
   },
   now: Date,
+  claimToken: string,
 ): Promise<MemoryWorkerResult> {
+  const lease: MemoryJobLease = { jobId: job.id, claimToken };
   const finish = async (
     status: "SUCCEEDED" | "SKIPPED" | "RETRY_WAIT" | "FAILED",
     message: string,
     extra: { runAt?: Date } = {},
   ): Promise<MemoryWorkerResult> => {
-    await prisma.memoryJob.update({
-      where: { id: job.id },
+    const finished = await prisma.memoryJob.updateMany({
+      where: memoryJobLeaseWhere(lease),
       data: {
         status,
         completedAt: status === "RETRY_WAIT" ? null : now,
@@ -463,6 +507,7 @@ async function runJournalJob(
         ...(extra.runAt ? { runAt: extra.runAt } : {}),
       },
     });
+    if (finished.count !== 1) throw new MemoryJobLeaseLostError();
     return { processed: true, jobId: job.id, status, message };
   };
 
@@ -485,6 +530,7 @@ async function runJournalJob(
       dayKey,
       target,
       mode: "auto",
+      jobLease: lease,
     }, prisma);
     switch (outcome.status) {
       case "created": {
@@ -513,8 +559,8 @@ async function runJournalJob(
     });
     const exhausted = Boolean(latest && latest.attemptCount >= latest.maxAttempts);
     const retryDelayMs = Math.min(60 * 60_000, 30_000 * (2 ** Math.max(0, (latest?.attemptCount ?? 1) - 1)));
-    await prisma.memoryJob.updateMany({
-      where: { id: job.id, status: "RUNNING" },
+    const failed = await prisma.memoryJob.updateMany({
+      where: memoryJobLeaseWhere(lease),
       data: {
         status: exhausted ? "FAILED" : "RETRY_WAIT",
         completedAt: exhausted ? now : null,
@@ -524,6 +570,7 @@ async function runJournalJob(
         runAt: exhausted ? now : new Date(now.getTime() + retryDelayMs),
       },
     });
+    if (failed.count !== 1) throw new MemoryJobLeaseLostError();
     return {
       processed: true,
       jobId: job.id,
@@ -592,7 +639,7 @@ export async function reclaimExpiredMemoryJobs(
       lockedAt: { lt: staleBefore },
       ...ownerFilter(options.ownerId),
     },
-    select: { id: true, attemptCount: true, maxAttempts: true },
+    select: { id: true, attemptCount: true, maxAttempts: true, lockedBy: true },
     take: 100,
   });
   let recovered = 0;
@@ -600,7 +647,7 @@ export async function reclaimExpiredMemoryJobs(
   for (const stale of staleJobs) {
     const exhausted = stale.attemptCount >= stale.maxAttempts;
     const result = await prisma.memoryJob.updateMany({
-      where: { id: stale.id, status: "RUNNING", lockedAt: { lt: staleBefore } },
+      where: { id: stale.id, status: "RUNNING", lockedBy: stale.lockedBy, lockedAt: { lt: staleBefore } },
       data: {
         status: exhausted ? "FAILED" : "RETRY_WAIT",
         runAt: now,
@@ -623,7 +670,7 @@ export async function processNextMemoryJob(
 ): Promise<MemoryWorkerResult> {
   const now = options.now ?? new Date();
   const workerId = options.workerId ?? `worker-${process.pid}-${randomUUID()}`;
-  const ownership = ownerFilter(options.ownerId);
+  const ownership = { ...ownerFilter(options.ownerId), ...(options.jobId ? { id: options.jobId } : {}) };
 
   // Retention jobs are safe to replay: deleting an already deleted message is a no-op.
   // Foreign keys preserve snapshot/source records while nulling links to expired raw messages.
@@ -660,9 +707,10 @@ export async function processNextMemoryJob(
       });
       continue;
     }
+    const claimToken = `${workerId}:${randomUUID()}`;
     const claim = await prisma.memoryJob.updateMany({
       where: { id: candidate.id, status: candidate.status, runAt: { lte: now } },
-      data: { status: "RUNNING", attemptCount: { increment: 1 }, lockedAt: now, lockedBy: workerId, startedAt: now, lastError: null },
+      data: { status: "RUNNING", attemptCount: { increment: 1 }, lockedAt: now, lockedBy: claimToken, startedAt: now, lastError: null },
     });
     if (claim.count !== 1) continue;
 
@@ -684,7 +732,7 @@ export async function processNextMemoryJob(
     });
     if (!scope) {
       await prisma.memoryJob.updateMany({
-        where: { id: candidate.id, status: "RUNNING", lockedBy: workerId },
+        where: { id: candidate.id, status: "RUNNING", lockedBy: claimToken },
         data: { status: "FAILED", completedAt: now, lockedAt: null, lockedBy: null, lastError: "找不到清理任务关联的记忆范围。" },
       });
       return { processed: true, jobId: candidate.id, status: "FAILED", message: "找不到清理任务关联的记忆范围。" };
@@ -700,7 +748,7 @@ export async function processNextMemoryJob(
         ? "当前角色尚未明确授权原始消息自动清理，或已选择永久保留；该旧任务已取消，未删除原始消息。"
         : "原始消息保留期限已放宽，当前任务的截止范围比最新策略更激进；该旧任务已取消，未删除原始消息。";
       const cancelled = await prisma.memoryJob.updateMany({
-        where: { id: candidate.id, status: "RUNNING", lockedBy: workerId },
+        where: { id: candidate.id, status: "RUNNING", lockedBy: claimToken },
         data: {
           status: "CANCELLED",
           attemptCount: { decrement: 1 },
@@ -730,7 +778,7 @@ export async function processNextMemoryJob(
     );
     if (pendingDependency) {
       const deferred = await prisma.memoryJob.updateMany({
-        where: { id: candidate.id, status: "RUNNING", lockedBy: workerId },
+        where: { id: candidate.id, status: "RUNNING", lockedBy: claimToken },
         data: {
           status: "RETRY_WAIT",
           // This is a dependency wait, not a failed cleanup attempt.
@@ -752,8 +800,10 @@ export async function processNextMemoryJob(
       // Keep the deletion, job completion, and audit record in one transaction.
       // Lock/verify ownership first so a stale or displaced worker cannot delete content.
       const deletedCount = await prisma.$transaction(async (tx) => {
+        // 表锁必须先于 job/policy 行锁，避免两个清理事务同时升级表锁死锁。
+        await tx.$executeRawUnsafe('LOCK TABLE "memory_jobs" IN EXCLUSIVE MODE');
         const claim = await tx.memoryJob.updateMany({
-          where: { id: candidate.id, status: "RUNNING", lockedBy: workerId },
+          where: { id: candidate.id, status: "RUNNING", lockedBy: claimToken },
           data: { lastError: null },
         });
         if (claim.count !== 1) {
@@ -779,9 +829,7 @@ export async function processNextMemoryJob(
         if (!latestCutoff || candidate.periodEnd!.getTime() > latestCutoff.getTime()) {
           throw new Error("CLEANUP_POLICY_CHANGED");
         }
-        // 检查与删除之间仍可能有任务被重新入队；不可逆删除前再确认一次。
-        // 先锁住任务表：插入/更新任务的事务会等到清理提交，避免「刚检查完又插进来」。
-        await tx.$executeRawUnsafe('LOCK TABLE "memory_jobs" IN EXCLUSIVE MODE');
+        // 入口已锁任务表：插入/更新任务等待清理提交，避免检查之后又插入依赖任务。
         const dependencyCutoff = rawMessageCleanupDependencyCutoff({
           periodEnd: candidate.periodEnd!,
           now,
@@ -847,10 +895,11 @@ export async function processNextMemoryJob(
             occurredAt: { lt: candidate.periodEnd! },
           },
         });
-        await tx.memoryJob.update({
-          where: { id: candidate.id },
+        const finished = await tx.memoryJob.updateMany({
+          where: { id: candidate.id, status: "RUNNING", lockedBy: claimToken },
           data: { status: "SUCCEEDED", completedAt: now, lockedAt: null, lockedBy: null, lastError: null },
         });
+        if (finished.count !== 1) throw new MemoryJobLeaseLostError();
         await tx.auditLog.create({
           data: {
             actorType: "WORKER",
@@ -868,7 +917,7 @@ export async function processNextMemoryJob(
       if (error instanceof Error && error.message === "CLEANUP_POLICY_CHANGED") {
         const message = "清理策略已变更或尚未授权；该任务已取消，未删除原始消息。";
         const cancelled = await prisma.memoryJob.updateMany({
-          where: { id: candidate.id, status: "RUNNING", lockedBy: workerId },
+          where: { id: candidate.id, status: "RUNNING", lockedBy: claimToken },
           data: {
             status: "CANCELLED",
             attemptCount: { decrement: 1 },
@@ -887,7 +936,7 @@ export async function processNextMemoryJob(
       if (error instanceof Error && error.message === "CLEANUP_DEPENDENCY_APPEARED") {
         const message = "清理前出现新的归档/忆泡/手账任务，已延后，未删除原始消息。";
         const deferred = await prisma.memoryJob.updateMany({
-          where: { id: candidate.id, status: "RUNNING", lockedBy: workerId },
+          where: { id: candidate.id, status: "RUNNING", lockedBy: claimToken },
           data: {
             status: "RETRY_WAIT",
             attemptCount: { decrement: 1 },
@@ -909,7 +958,7 @@ export async function processNextMemoryJob(
       const status: "FAILED" | "RETRY_WAIT" = exhausted ? "FAILED" : "RETRY_WAIT";
       const retryDelayMs = Math.min(60 * 60 * 1000, 30_000 * (2 ** Math.max(0, attemptCount - 1)));
       await prisma.memoryJob.updateMany({
-        where: { id: candidate.id, status: "RUNNING", lockedBy: workerId },
+        where: { id: candidate.id, status: "RUNNING", lockedBy: claimToken },
         data: {
           status,
           runAt: exhausted ? now : new Date(now.getTime() + retryDelayMs),
@@ -944,6 +993,7 @@ export async function processNextMemoryJob(
   }
 
   let claimedJobId = "";
+  let claimedToken = "";
   for (const candidate of configuredCandidates) {
     if (candidate.attemptCount >= candidate.maxAttempts) {
       await prisma.memoryJob.updateMany({
@@ -959,24 +1009,28 @@ export async function processNextMemoryJob(
       continue;
     }
 
+    const claimToken = `${workerId}:${randomUUID()}`;
     const claim = await prisma.memoryJob.updateMany({
       where: { id: candidate.id, status: candidate.status, runAt: { lte: now } },
       data: {
         status: "RUNNING",
         attemptCount: { increment: 1 },
         lockedAt: now,
-        lockedBy: workerId,
+        lockedBy: claimToken,
         startedAt: now,
         lastError: null,
       },
     });
     if (claim.count === 1) {
       claimedJobId = candidate.id;
+      // 同一进程再次领取同一任务也必须换 token。
+      claimedToken = claimToken;
       break;
     }
   }
 
   if (!claimedJobId) return { processed: false, message: "当前没有可领取的周期归档任务。" };
+  const claimToken = claimedToken;
 
   try {
     const job = await prisma.memoryJob.findUnique({
@@ -996,7 +1050,7 @@ export async function processNextMemoryJob(
         attemptCount: true,
       },
     });
-    if (!job || job.status !== "RUNNING" || job.lockedBy !== workerId) {
+    if (!job || job.status !== "RUNNING" || job.lockedBy !== claimToken) {
       throw new Error("任务已不属于当前 Worker，拒绝继续执行。");
     }
     if (!job.periodStart || !job.periodEnd || job.periodStart >= job.periodEnd) {
@@ -1011,7 +1065,7 @@ export async function processNextMemoryJob(
         periodStart: job.periodStart,
         periodEnd: job.periodEnd,
         idempotencyKey: job.idempotencyKey,
-      }, now);
+      }, now, claimToken);
     }
 
     // 手账也是按天的独立流水线：只写 character_journals，不碰忆泡/长期记忆。
@@ -1022,7 +1076,7 @@ export async function processNextMemoryJob(
         idempotencyKey: job.idempotencyKey,
         journalDayKey: job.journalDayKey,
         journalTarget: job.journalTarget,
-      }, now);
+      }, now, claimToken);
     }
 
     const isRegeneration = job.type === "REGENERATE_SNAPSHOT";
@@ -1051,10 +1105,11 @@ export async function processNextMemoryJob(
         select: { id: true },
       });
       if (priorSnapshot) {
-        await prisma.memoryJob.updateMany({
-          where: { id: job.id, status: "RUNNING", lockedBy: workerId },
+        const finished = await prisma.memoryJob.updateMany({
+          where: { id: job.id, status: "RUNNING", lockedBy: claimToken },
           data: { status: "SUCCEEDED", snapshotId: priorSnapshot.id, completedAt: now, lockedAt: null, lockedBy: null, lastError: null },
         });
+        if (finished.count !== 1) throw new MemoryJobLeaseLostError();
         return { processed: true, jobId: job.id, status: "SUCCEEDED", snapshotId: priorSnapshot.id, message: "检测到相同周期已有总结，已复用历史结果。" };
       }
     }
@@ -1181,8 +1236,8 @@ export async function processNextMemoryJob(
     }
 
     if (messageCount === 0 && memoryActivityCount === 0) {
-      await prisma.memoryJob.updateMany({
-        where: { id: job.id, status: "RUNNING", lockedBy: workerId },
+      const finished = await prisma.memoryJob.updateMany({
+        where: { id: job.id, status: "RUNNING", lockedBy: claimToken },
         data: {
           status: "SKIPPED",
           completedAt: now,
@@ -1191,6 +1246,7 @@ export async function processNextMemoryJob(
           lockedBy: null,
         },
       });
+      if (finished.count !== 1) throw new MemoryJobLeaseLostError();
       return { processed: true, jobId: job.id, status: "SKIPPED", message: "周期内无已保存活动，已跳过总结生成。" };
     }
 
@@ -1280,12 +1336,10 @@ export async function processNextMemoryJob(
     });
 
     const outcome = await prisma.$transaction(async (tx) => {
-      const latestJob = await tx.memoryJob.findUnique({
-        where: { id: job.id },
-        select: { status: true, lockedBy: true },
-      });
-      if (latestJob?.status !== "RUNNING" || latestJob.lockedBy !== workerId) {
-        throw new Error("任务租约已失效；拒绝提交模型结果。");
+      await lockMemoryJobLease(tx, { jobId: job.id, claimToken });
+      // applyMemoryChange 会锁范围行；跨主人私聊/全局写入先按固定顺序锁，避免反序死锁。
+      for (const scopeId of [...new Set([job.memoryScopeId, ...(globalScope ? [globalScope.id] : [])])].sort()) {
+        await tx.$queryRaw`SELECT id FROM "memory_scopes" WHERE id = ${scopeId}::uuid FOR UPDATE`;
       }
 
       if (!isRegeneration) {
@@ -1295,10 +1349,11 @@ export async function processNextMemoryJob(
           select: { id: true },
         });
         if (racedSnapshot) {
-          await tx.memoryJob.update({
-            where: { id: job.id },
+          const finished = await tx.memoryJob.updateMany({
+            where: { id: job.id, status: "RUNNING", lockedBy: claimToken },
             data: { status: "SUCCEEDED", snapshotId: racedSnapshot.id, completedAt: now, lockedAt: null, lockedBy: null, lastError: null },
           });
+          if (finished.count !== 1) throw new MemoryJobLeaseLostError();
           return { status: "SUCCEEDED" as const, snapshotId: racedSnapshot.id, message: "同一周期已由其他执行完成，复用已有总结。" };
         }
       }
@@ -1528,8 +1583,8 @@ export async function processNextMemoryJob(
         });
       }
 
-      await tx.memoryJob.update({
-        where: { id: job.id },
+      const finished = await tx.memoryJob.updateMany({
+        where: { id: job.id, status: "RUNNING", lockedBy: claimToken },
         data: {
           status: "SUCCEEDED",
           snapshotId: snapshot.id,
@@ -1539,6 +1594,7 @@ export async function processNextMemoryJob(
           lastError: null,
         },
       });
+      if (finished.count !== 1) throw new MemoryJobLeaseLostError();
       return {
         status: "SUCCEEDED" as const,
         snapshotId: snapshot.id,
@@ -1555,14 +1611,14 @@ export async function processNextMemoryJob(
       where: { id: claimedJobId },
       select: { attemptCount: true, maxAttempts: true, lockedBy: true, status: true },
     });
-    if (!latest || latest.status !== "RUNNING" || latest.lockedBy !== workerId) {
+    if (!latest || latest.status !== "RUNNING" || latest.lockedBy !== claimToken) {
       return { processed: true, jobId: claimedJobId, status: "FAILED", message: "任务执行失败或租约已被其他 Worker 接管。" };
     }
     const exhausted = latest.attemptCount >= latest.maxAttempts;
     const retryDelayMs = Math.min(60 * 60 * 1000, 30_000 * (2 ** Math.max(0, latest.attemptCount - 1)));
     const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000);
     await prisma.memoryJob.updateMany({
-      where: { id: claimedJobId, status: "RUNNING", lockedBy: workerId },
+      where: { id: claimedJobId, status: "RUNNING", lockedBy: claimToken },
       data: {
         status: exhausted ? "FAILED" : "RETRY_WAIT",
         runAt: exhausted ? failedAt : new Date(failedAt.getTime() + retryDelayMs),

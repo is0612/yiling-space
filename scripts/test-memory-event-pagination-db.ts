@@ -40,7 +40,7 @@ try {
   })) });
   const job = await prisma.memoryJob.create({ data: {
     memoryScopeId: scopeId, type: "EXTRACT_EVENTS", idempotencyKey: `events-final:${scopeId}:2026-11-01`,
-    periodStart: start, periodEnd: end, status: "RUNNING", attemptCount: 1,
+    periodStart: start, periodEnd: end, status: "RUNNING", attemptCount: 1, lockedBy: `pagination:${randomUUID()}`, lockedAt: end,
   } });
   const input = { ...job, periodStart: start, periodEnd: end };
   const first = await runDailyEventJob(prisma, input, end);
@@ -49,6 +49,7 @@ try {
   assert.equal(progress.state, "DRAFT");
   assert.equal(progress.extractedMessageId, ids[959]);
   assert.deepEqual(seen, ids.slice(0, 960));
+  await prisma.memoryJob.update({ where: { id: job.id }, data: { status: "RUNNING", lockedBy: `pagination:${randomUUID()}`, lockedAt: new Date(end.getTime() + 60_000) } });
   const second = await runDailyEventJob(prisma, input, new Date(end.getTime() + 60_000));
   assert.equal(second.processed && second.status, "SUCCEEDED");
   assert.deepEqual(seen, ids);

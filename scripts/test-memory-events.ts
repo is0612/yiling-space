@@ -10,7 +10,7 @@ import { toMemoryTimelineDtos } from "../server/utils/memory-timeline-dto";
 import { parseEventParticipantIdQuery, parseEventParticipantQuery, resolveEventRecentDays, selectEventsForPrompt, selectRecentEvents } from "../server/utils/memory-event-retrieval";
 import { isNearDuplicateEvent, longestCommonSubstringLength, makeEventDedupeKey } from "../server/utils/memory-ai";
 import {
-  deriveParticipantRefs, resolveEventParticipants, type MemoryEvidenceMessage,
+  applyMemoryEvents, deriveParticipantRefs, resolveEventParticipants, type MemoryApplyTx, type MemoryEvidenceMessage,
 } from "../server/utils/memory-change-apply";
 import { applyCurrentParticipantNames, readExternalParticipantRefs } from "../server/utils/participant-names";
 
@@ -318,7 +318,7 @@ assert.equal(timeline[0]?.channel, "长期记忆", "角色全局范围的忆泡�
 assert.equal(timeline[1]?.tag, "已收口");
 assert.equal(timeline[1]?.channel, "私人记忆", "私人范围的忆泡要标成私人记忆");
 
-// ── 近义重复：同一件事换个说法也要能被挡住 ────────────────
+// ── 公共子串工具保留，但判重只认规范化完整标题 ────────────
 assert(
   longestCommonSubstringLength("为新建QQ群1127611457发布群公告", "为新群起草并发布群公告") >= 5,
   "「发布群公告」这段公共子串要能识别出来。",
@@ -331,17 +331,17 @@ assert(
   longestCommonSubstringLength("主人问她会不会搞黄色被拒", "今天下午去游泳") < 4,
   "不相干的事件不能被误判成重复。",
 );
-// 已知边界：只有人名重合（3 字）的短标题，要靠参与人交集才能判重。
+// 人名与参与人重合也不能证明同一事实。
 assert(
   longestCommonSubstringLength("群友叫她小肥鱼，她坚持叫小鲸鱼i", "被叫「小肥鱼」后纠正称呼") < 6,
   "短标题只按字数挡不住 —— 所以还要看参与人。",
 );
 assert(
-  isNearDuplicateEvent(
+  !isNearDuplicateEvent(
     { title: "群友叫她小肥鱼，她坚持叫小鲸鱼i", participants: ["群友", "小鲸鱼i"] },
     { title: "被叫「小肥鱼」后纠正称呼", participants: ["群友", "小鲸鱼i"] },
   ),
-  "3 字重合 + 共同参与人 → 判为同一件事。",
+  "人名重合且共同参与人仍不足以证明同一事实，保守保留。",
 );
 assert(
   !isNearDuplicateEvent(
@@ -357,6 +357,88 @@ assert(
   ),
   "「主人」是角色词，不算交集 —— 同主语的不同事件不能被吞掉。",
 );
+
+// ── 确定性漏记回归：纯内存事务，不连接数据库、不调用模型 ─────
+const firstLocalDay = new Date("2026-11-01T10:00:00+08:00");
+const nextLocalDay = new Date("2026-11-02T01:00:00+08:00");
+const collisionTitle = "主人提醒明天提交报告";
+assert.equal(makeEventDedupeKey(firstLocalDay, collisionTitle), makeEventDedupeKey(nextLocalDay, collisionTitle), "保留两参旧 UTC 键兼容行为");
+const v2Key = (at: Date, conversationId: string | null, title = collisionTitle) =>
+  makeEventDedupeKey(at, title, { dayKey: localDayKey(at, TZ), conversationId });
+assert.notEqual(v2Key(firstLocalDay, "group-a"), v2Key(nextLocalDay, "group-a"), "v2 不跨本地日碰撞");
+assert.notEqual(v2Key(firstLocalDay, "group-a"), v2Key(firstLocalDay, "group-b"), "v2 隔离不同群");
+assert.equal(v2Key(firstLocalDay, "group-a"), v2Key(firstLocalDay, "group-a", "主人 提醒明天提交报告！"), "v2 规范化整标题");
+assert(!isNearDuplicateEvent(
+  { title: collisionTitle, participants: ["主人", "小明"] },
+  { title: "主人提醒明天参加体检", participants: ["主人", "小明"] },
+), "六字公共前缀与同人不能吞掉不同事项");
+assert(isNearDuplicateEvent(
+  { title: "提交Ａ报告！", participants: [] },
+  { title: "提交a报告", participants: [] },
+), "完整标题规范化相同才判重");
+
+type FakeEvent = { id: string; memoryScopeId: string; dedupeKey: string; dayKey: string; conversationId: string | null; title: string; participants: string[] };
+const stored: FakeEvent[] = [];
+const fakeTx = {
+  memoryEvent: {
+    findFirst: async ({ where }: { where: { memoryScopeId: string; dedupeKey: string } }) =>
+      stored.find((row) => row.memoryScopeId === where.memoryScopeId && row.dedupeKey === where.dedupeKey) ?? null,
+    findMany: async ({ where }: { where: { memoryScopeId: string; dayKey: string } }) =>
+      stored.filter((row) => row.memoryScopeId === where.memoryScopeId && row.dayKey === where.dayKey),
+    create: async ({ data }: { data: Omit<FakeEvent, "id"> }) => {
+      const row = { ...data, id: `fake-${stored.length}` };
+      stored.push(row);
+      return { id: row.id };
+    },
+  },
+  auditLog: { create: async () => ({}) },
+} as unknown as MemoryApplyTx;
+const applyContext = { memoryScopeId: "scope", characterId: "character", snapshotId: null, timeZone: TZ, state: "FINAL" as const };
+const applyDraft = async (at: Date, conversationId: string, title = collisionTitle) => {
+  const message = { id: `message-${conversationId}`, occurredAt: at, conversationId };
+  return applyMemoryEvents(fakeTx, applyContext, [{
+    occurredAt: at.toISOString(), precision: "exact", title, detail: title,
+    keywords: [], participants: ["主人", "小明"], confidence: 0.9, evidenceMessageIds: [message.id],
+  }], new Map([[message.id, message]]));
+};
+assert.equal((await applyDraft(firstLocalDay, "group-a")).applied.length, 1);
+assert.equal((await applyDraft(nextLocalDay, "group-a")).applied.length, 1, "同 UTC 日跨本地日期同标题都保留");
+assert.equal((await applyDraft(firstLocalDay, "group-b")).applied.length, 1, "同范围不同群同标题都保留");
+assert.equal((await applyDraft(firstLocalDay, "group-a", "主人提醒明天参加体检")).applied.length, 1, "同会话同人通用前缀不同事项都保留");
+assert.equal((await applyDraft(firstLocalDay, "group-a")).skipped, 1, "正常 v2 精确重跑幂等");
+stored[0]!.dedupeKey = makeEventDedupeKey(firstLocalDay, collisionTitle);
+assert.equal((await applyDraft(firstLocalDay, "group-a", "主人提醒明天提交报告！")).skipped, 1, "旧 key 按本地日/会话/规范化整标题去重");
+// 只留旧行：旧 UTC 键碰撞绝不能挡住其他本地日或会话。
+stored.splice(1);
+assert.equal((await applyDraft(nextLocalDay, "group-a")).applied.length, 1, "旧 UTC 键碰撞不吞次日本地日");
+assert.equal((await applyDraft(firstLocalDay, "group-b")).applied.length, 1, "旧 key 不跨会话吞同标题");
+
+// 存储失败必须让调用方失败，不能当作判重跳过并推进抽取游标。
+const failingMessage = { id: "storage-evidence", occurredAt: firstLocalDay, conversationId: "storage-test" };
+const failingDraft = {
+  occurredAt: firstLocalDay.toISOString(), precision: "exact" as const,
+  title: "测试存储错误传播", detail: "测试存储错误传播", keywords: [], participants: [],
+  confidence: 0.9, evidenceMessageIds: [failingMessage.id],
+};
+for (const stage of ["event", "audit"] as const) {
+  const failure = new Error(`${stage} storage unavailable`);
+  const tx = {
+    memoryEvent: {
+      findFirst: async () => null,
+      findMany: async () => [],
+      create: async () => {
+        if (stage === "event") throw failure;
+        return { id: "created-before-audit-failure" };
+      },
+    },
+    auditLog: { create: async () => { throw failure; } },
+  } as unknown as MemoryApplyTx;
+  await assert.rejects(
+    applyMemoryEvents(tx, applyContext, [failingDraft], new Map([[failingMessage.id, failingMessage]])),
+    (error: unknown) => error === failure,
+    `${stage} 写入失败必须原样向上抛出，不能返回 skipped`,
+  );
+}
 
 // ── 近期忆泡：不看问句，按时间取 ─────────────────────────
 // 和 selectEventsForPrompt 的分工：那个要命中，这个只要「够近」。

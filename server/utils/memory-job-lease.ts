@@ -1,8 +1,8 @@
 /**
  * 任务租约：`memory_jobs.lockedAt` 记「这条任务是什么时候被领走的」。
  *
- * 租约**不会续期** —— 领取者跑完就把锁清掉，所以超过 5 分钟还是 RUNNING，只说明领走它的那个进程
- * 已经不在了（Worker 崩了、`yarn dev` 重启、浏览器把请求关了），不代表任务做完了。
+ * 租约**不会续期** —— 领取者跑完就把锁清掉。超过 5 分钟仍 RUNNING 时，领取者可能失联，
+ * 也可能还在等待长模型调用；此时允许回收，旧执行者随后提交必须被领取 token 拒绝。
  *
  * 回收也不是一个独立进程：**每一次领取都会顺带回收过期任务**（`memory-worker.ts` 的
  * `reclaimExpiredMemoryJobs`）。这句话的反面就是 2026-11-01 实际踩到的那个坑 ——
@@ -11,7 +11,32 @@
  * Worker 自动回收。
  */
 
+import type { Prisma } from "../../src/generated/prisma/client";
+
 export const MEMORY_JOB_LEASE_MS = 5 * 60 * 1000;
+
+/** 每次领取独立的 fencing token；不能用进程级 workerId 判断执行权。 */
+export type MemoryJobLease = { jobId: string; claimToken: string };
+
+export class MemoryJobLeaseLostError extends Error {
+  constructor() {
+    super("任务租约已失效；拒绝提交旧执行者的结果。");
+    this.name = "MemoryJobLeaseLostError";
+  }
+}
+
+export function memoryJobLeaseWhere(lease: MemoryJobLease) {
+  return { id: lease.jobId, status: "RUNNING" as const, lockedBy: lease.claimToken };
+}
+
+/** 必须是产物事务的第一步：条件 UPDATE 同时校验 token 和持有行锁直到提交。 */
+export async function lockMemoryJobLease(tx: Prisma.TransactionClient, lease: MemoryJobLease): Promise<void> {
+  const locked = await tx.memoryJob.updateMany({
+    where: memoryJobLeaseWhere(lease),
+    data: { lastError: null },
+  });
+  if (locked.count !== 1) throw new MemoryJobLeaseLostError();
+}
 
 /** 运行中任务的租约是否已过期。`lockedAt` 为空 = 说不清谁在执行，按过期处理。 */
 export function isMemoryJobLeaseExpired(lockedAt: Date | null | undefined, now: Date = new Date()): boolean {

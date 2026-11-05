@@ -17,6 +17,7 @@
 
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { resolveChatModelSettings } from "./chat-model-config";
+import { lockMemoryJobLease, type MemoryJobLease } from "./memory-job-lease";
 import { resolveCharacterApiKey } from "./credential-encryption";
 import { readDailyQuota, recordModelUsage } from "./model-usage";
 import {
@@ -378,8 +379,10 @@ async function markKindSkipped(
   dayKey: string,
   kind: JournalTextKind,
   reason: string,
+  jobLease?: MemoryJobLease,
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    if (jobLease) await lockMemoryJobLease(tx, jobLease);
     const journal = await tx.characterJournal.upsert({
       where: { memoryScopeId_dayKey: { memoryScopeId: globalScopeId, dayKey } },
       create: { memoryScopeId: globalScopeId, dayKey, status: "ACTIVE" },
@@ -419,8 +422,10 @@ async function markDaySkipped(
   globalScopeId: string,
   dayKey: string,
   reason: string,
+  jobLease?: MemoryJobLease,
 ): Promise<string> {
   const journal = await prisma.$transaction(async (tx) => {
+    if (jobLease) await lockMemoryJobLease(tx, jobLease);
     const row = await tx.characterJournal.upsert({
       where: { memoryScopeId_dayKey: { memoryScopeId: globalScopeId, dayKey } },
       create: { memoryScopeId: globalScopeId, dayKey, status: "SKIPPED" },
@@ -520,9 +525,12 @@ export async function persistRevision(
     actorUserId?: string | null;
     /** 本次生成开始时间：regenerate 时用来识别「生成期间被人工改过」。 */
     startedAt?: Date;
+    jobLease?: MemoryJobLease;
   },
 ): Promise<{ revision: JournalRevisionRow; reused: boolean; manualSuperseded?: boolean }> {
   return retryOnVersionConflict(() => prisma.$transaction(async (tx) => {
+    // 先 job 后 journal：所有任务产物保持相同锁顺序，页面手动生成没有 job 租约。
+    if (input.jobLease) await lockMemoryJobLease(tx, input.jobLease);
     const journal = await tx.characterJournal.upsert({
       where: { memoryScopeId_dayKey: { memoryScopeId: input.globalScopeId, dayKey: input.dayKey } },
       create: { memoryScopeId: input.globalScopeId, dayKey: input.dayKey, status: "ACTIVE" },
@@ -619,6 +627,7 @@ export async function generateJournalForDay(
     dayKey: string;
     mode: JournalGenerationMode;
     target?: JournalGenerationTarget;
+    jobLease?: MemoryJobLease;
     now?: Date;
     actorUserId?: string | null;
   },
@@ -661,7 +670,7 @@ export async function generateJournalForDay(
     if (latest.DIARY || latest.HANDBOOK) {
       return { status: "skipped", journalId: existing?.id, reason: "这一天没有新的对话或忆泡" };
     }
-    const journalId = await markDaySkipped(prisma, globalScopeId, input.dayKey, "这一天没有对话或忆泡");
+    const journalId = await markDaySkipped(prisma, globalScopeId, input.dayKey, "这一天没有对话或忆泡", input.jobLease);
     return { status: "skipped", journalId, reason: "这一天没有对话或忆泡" };
   }
 
@@ -728,6 +737,7 @@ export async function generateJournalForDay(
         promptVersion: result.promptVersion,
         actorUserId: input.actorUserId,
         startedAt: generationStartedAt,
+        jobLease: input.jobLease,
       });
       // reused：并发期间别的请求已经写好这一份，这次不新增版本。
       if (!reused) created.DIARY = revision;
@@ -737,7 +747,7 @@ export async function generateJournalForDay(
       const reason = result.entry.reason;
       skipReasons.push(`日记：${reason}`);
       skippedKinds.push("DIARY");
-      await markKindSkipped(prisma, globalScopeId, input.dayKey, "DIARY", reason);
+      await markKindSkipped(prisma, globalScopeId, input.dayKey, "DIARY", reason, input.jobLease);
     }
   }
 
@@ -773,6 +783,7 @@ export async function generateJournalForDay(
         promptVersion: result.promptVersion,
         actorUserId: input.actorUserId,
         startedAt: generationStartedAt,
+        jobLease: input.jobLease,
       });
       if (!reused) created.HANDBOOK = revision;
       if (manualSuperseded) manualSupersededReason = "生成期间你手动改过手账，已保留人工版本。";
@@ -782,7 +793,7 @@ export async function generateJournalForDay(
       const reason = result.entry.reason;
       skipReasons.push(`手账：${reason}`);
       skippedKinds.push("HANDBOOK");
-      await markKindSkipped(prisma, globalScopeId, input.dayKey, "HANDBOOK", reason);
+      await markKindSkipped(prisma, globalScopeId, input.dayKey, "HANDBOOK", reason, input.jobLease);
     }
   }
 
@@ -803,7 +814,7 @@ export async function generateJournalForDay(
     // markKindSkipped 已经按份写过状态；这里不要再用 markDaySkipped 把另一份
     // 没评估过的文本一起标成 SKIPPED，否则它会被误当成「已经决定不写」。
     if (!finalJournal && !finalLatest.DIARY && !finalLatest.HANDBOOK) {
-      const journalId = await markDaySkipped(prisma, globalScopeId, input.dayKey, reason);
+      const journalId = await markDaySkipped(prisma, globalScopeId, input.dayKey, reason, input.jobLease);
       return { status: "skipped", journalId, reason };
     }
     return {
@@ -819,7 +830,7 @@ export async function generateJournalForDay(
       reason: manualSupersededReason ?? reason,
     };
   }
-  const journalId = await markDaySkipped(prisma, globalScopeId, input.dayKey, reason);
+  const journalId = await markDaySkipped(prisma, globalScopeId, input.dayKey, reason, input.jobLease);
   return { status: "skipped", journalId, reason };
 }
 

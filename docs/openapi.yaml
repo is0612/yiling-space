@@ -1907,7 +1907,8 @@ paths:
       tags: [Memories]
       operationId: extractCharacterMemoryEvents
       summary: 立即整理忆泡（昨天收口 + 今天增量）
-      description: 手动触发。把「昨天（FINAL 收口）」与「今天（DRAFT 增量）」两段写进任务队列，并当场尝试执行。范围与调度器一致：角色全局范围 + 角色主人的私人范围（主人 QQ 私聊），同一段按 `events-final:{scopeId}:{dayKey}` / `events-hour:{scopeId}:{dayKey}:{hour}` 幂等，同一天不会因重复点击而被整理两遍。角色没有全局记忆范围时返回 409；模型未配置时任务留在队列，`processed` 会说明原因。
+      description: >-
+        手动触发昨天收口与今天增量，范围与调度器一致（角色全局、主人私人、非主人外部身份的 c: 私聊）。复用 events-final/events-hour 幂等任务；等待或重试中的任务可唤醒，已成功或跳过的小时任务在进度游标后有新消息时可再次入队，只处理新增内容。已完成的昨天收口不重开，运行中、失败或取消任务不会自动抢占或复活。仅当场尝试执行本次目标任务，不代跑其他角色的任务。没有全局范围返回 409；模型未配置时任务留在队列。
       responses:
         '200':
           description: 排队与执行结果
@@ -1919,16 +1920,16 @@ paths:
                 properties:
                   queued:
                     type: array
-                    description: 本次真正新排进队列的段（例如「昨天收口」「今天增量」；主人私聊段会带「（主人私聊）」后缀）
+                    description: 本次新建、复用或唤醒并尝试执行的段（例如昨天收口、今天增量；私聊段带对应后缀）
                     items: { type: string }
                   processed:
                     type: array
-                    description: 当场执行的结果；为空表示没有可执行的 worker（任务仍在队列里）
+                    description: 当场尝试执行本次目标任务的结果；为空时可能已完成、已被其他执行者领取或尚不可执行
                     items:
                       type: object
                       required: [status, message]
                       properties:
-                        status: { type: string, enum: [SUCCEEDED, SKIPPED, RETRY_WAIT, FAILED] }
+                        status: { type: string, enum: [SUCCEEDED, SKIPPED, RETRY_WAIT, FAILED, CANCELLED] }
                         message: { type: string }
                   windows:
                     type: array
@@ -2712,6 +2713,9 @@ paths:
         只处理 `result = NOT_APPLIED_REGENERATION` 且尚未处置过的条目。
         采纳复用与周期任务相同的落库逻辑（去重、来源消息、审计），
         忽略只记录决定、不改动任何记忆。处置结果存在 memory_reviews，不回写快照。
+        采纳按事务内当前 ACTIVE 记忆去重；不同建议并发采纳同内容不会重复新建。
+        已校验并保存的建议在原文被清理后仍可采纳，来源指针为空；有效起点回落到快照周期开始。
+        同一建议的并发或重复处置返回 409。
       requestBody:
         required: true
         content:
@@ -3309,8 +3313,8 @@ paths:
                         leaseExpired:
                           type: boolean
                           description: |
-                            `status = RUNNING` 且租约已过期（5 分钟）。这表示领走它的进程已经不在了，
-                            没有进程会回收它 —— 回收发生在「下一次领取任务」时，整机没有 Worker 在跑就不会发生。
+                            `status = RUNNING` 且领取超过 5 分钟，可回收但不代表原执行者一定已退出。
+                            回收发生在下一次领取任务时，整机没有 Worker 在跑就不会发生；回收后旧领取身份不能再提交产物或覆盖任务状态。
                             过期的运行中任务可以用 `/tasks/{taskId}/retry` 放回队列。
                         completedAt: { type: string, nullable: true, format: date-time }
                         createdAt: { type: string, format: date-time }

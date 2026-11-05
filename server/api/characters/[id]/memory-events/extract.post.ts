@@ -1,4 +1,5 @@
-import { createError, getRouterParam } from "h3";
+import { createError, defineEventHandler, getRouterParam } from "h3";
+import { queueManualMemoryEvents } from "../../../../utils/memory-events-manual-queue";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
@@ -18,10 +19,11 @@ import { moveConversationEventsToScope } from "../../../../utils/memory-event-mo
  * ② 当场把刚排的任务跑掉，不用另开 worker 进程。
  *
  * 为什么要走队列而不是直接调抽取函数：任务表本来就是唯一的执行入口，
- * 手动触发和定时触发必须共用同一套幂等键（`events-final:` / `events-hour:`），
- * 否则同一天会被整理两遍。
+ * 手动触发和定时触发共用幂等键（`events-final:` / `events-hour:`）。等待中的任务
+ * 直接唤醒；小时任务完成后出现新消息才复用重排，进度由当天消息游标保证。
  */
-export default defineEventHandler(async (event) => {
+export function createManualMemoryEventsHandler(processJob = processNextMemoryJob) {
+  return defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
   const characterId = requireUuid(getRouterParam(event, "id") ?? "", "角色");
   const prisma = getPrisma();
@@ -131,47 +133,29 @@ export default defineEventHandler(async (event) => {
   ];
 
   const queued: string[] = [];
-  let queuedCount = 0;
+  const jobIds: string[] = [];
   for (const scope of scopes) {
     for (const window of windows) {
-      const hasMessages = await prisma.message.findFirst({
-        where: {
-          conversation: {
-            is: {
-              memoryScopeId: scope.id,
-              ...(scope.privateOnly ? { externalConversationId: { startsWith: "c:" } } : {}),
-            },
-          },
-          occurredAt: { gte: window.start, lt: window.end },
-        },
-        select: { id: true },
+      const jobId = await queueManualMemoryEvents(prisma, {
+        memoryScopeId: scope.id, privateOnly: scope.privateOnly,
+        dayKey: window.dayKey.slice(0, 10),
+        idempotencyKey: `${window.suffix}${scope.id}:${window.dayKey}`,
+        periodStart: window.start, periodEnd: window.end,
+        hourly: window.suffix === "events-hour:", now,
       });
-      if (!hasMessages) continue;
-      const created = await prisma.memoryJob.createMany({
-        data: [{
-          memoryScopeId: scope.id,
-          type: "EXTRACT_EVENTS" as const,
-          idempotencyKey: `${window.suffix}${scope.id}:${window.dayKey}`,
-          periodStart: window.start,
-          periodEnd: window.end,
-          status: "QUEUED" as const,
-          runAt: now,
-        }],
-        skipDuplicates: true,
-      });
-      if (created.count > 0) {
-        queuedCount += created.count;
+      if (jobId) {
+        jobIds.push(jobId);
         queued.push(window.label + scope.label);
       }
     }
   }
 
-  // 当场执行刚排的任务（全局与主人私聊各两段）。如果另有 worker 在跑，它可能先领走 ——
-  // 那时这里返回「已排队」也算正常。
+  // Only attempt this request's targets. A concurrent worker may already own one;
+  // skip that target without consuming an unrelated job or abandoning later scopes.
   const processed: Array<{ status: string; message: string }> = [];
-  for (let index = 0; index < queuedCount; index += 1) {
-    const result = await processNextMemoryJob(prisma, { ownerId });
-    if (!result.processed) break;
+  for (const jobId of jobIds) {
+    const result = await processJob(prisma, { ownerId, jobId });
+    if (!result.processed) continue;
     processed.push({ status: result.status, message: result.message });
   }
 
@@ -180,4 +164,7 @@ export default defineEventHandler(async (event) => {
     processed,
     windows: windows.map((window) => ({ label: window.label, start: window.start.toISOString(), end: window.end.toISOString() })),
   };
-});
+  });
+}
+
+export default createManualMemoryEventsHandler();

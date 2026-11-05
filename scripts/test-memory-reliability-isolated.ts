@@ -37,7 +37,7 @@ try {
   for (const script of [
     "test-memory-scheduler-db.ts", "test-memory-events-db.ts", "test-private-chat-events-db.ts",
     "test-memory-event-move-db.ts", "test-owner-private-scope-db.ts", "test-chat-private-memory-db.ts",
-    "test-character-portable-db.ts", "test-memory-event-pagination-db.ts", "test-memory-item-lifecycle-db.ts", "test-memory-cleanup-dependency-db.ts", "test-private-chat-pagination-db.ts",
+    "test-character-portable-db.ts", "test-memory-event-pagination-db.ts", "test-memory-item-lifecycle-db.ts", "test-memory-cleanup-dependency-db.ts", "test-private-chat-pagination-db.ts", "test-event-extraction-quality-db.ts", "test-memory-events-manual-queue-db.ts", "test-snapshot-review-db.ts", "test-memory-job-fencing-db.ts",
   ]) run("node_modules/tsx/dist/cli.mjs", [`scripts/${script}`]);
   console.log("Isolated memory database checks passed; business database was not used for tests.");
 } finally {

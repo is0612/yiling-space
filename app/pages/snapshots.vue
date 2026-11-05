@@ -34,6 +34,36 @@ const creating = ref(false);
 const aiArchiving = ref(false);
 const regeneratingId = ref<string | null>(null);
 const aiRegeneratingId = ref<string | null>(null);
+let listRequest = 0;
+let characterEpoch = 0;
+let detailVersion = 0;
+const operationTokens = new Map<string, symbol>();
+
+/** 确认框属于打开时的角色和版本；切走再切回来也不能复活旧操作。 */
+function captureOperation(name: string) {
+  const token = Symbol(name);
+  operationTokens.set(name, token);
+  return { name, token, characterId: id.value, epoch: characterEpoch, version: detailVersion, snapshot: detail.value };
+}
+function operationActive(context: ReturnType<typeof captureOperation>) {
+  return operationTokens.get(context.name) === context.token
+    && context.epoch === characterEpoch && context.characterId === id.value;
+}
+function operationCurrent(context: ReturnType<typeof captureOperation>) {
+  return operationActive(context) && context.version === detailVersion && context.snapshot === detail.value;
+}
+function resetCharacterPage() {
+  characterEpoch++;
+  listRequest++;
+  operationTokens.clear();
+  items.value = [];
+  applyDetail(null);
+  creating.value = false;
+  aiArchiving.value = false;
+  regeneratingId.value = null;
+  aiRegeneratingId.value = null;
+  reviewingKey.value = "";
+}
 
 const statusOptions = ["全部版本状态", "当前版本", "已被替代"];
 const kindItems = computed(() => showManual.value ? items.value : items.value.filter((item) => item.kind !== "MANUAL"));
@@ -85,6 +115,7 @@ function titleOf(snapshot: Snapshot) {
  * 否则整张详情卡只剩两行字，右边空一大片。
  */
 function applyDetail(next: Snapshot | null) {
+  detailVersion++;
   detail.value = next;
   sourcesOpen.value = Boolean(next) && !next?.analysis;
   sourcePage.value = 1;
@@ -108,29 +139,37 @@ watch([sourceTotal, sourcePageSize], () => {
   if (sourcePage.value > maxPage) sourcePage.value = maxPage;
 });
 
-async function loadSnapshots(selectedId?: string) {
-  if (!id.value) {
+async function loadSnapshots(selectedId?: string, stillCurrent: () => boolean = () => true) {
+  const characterId = id.value;
+  const request = ++listRequest;
+  const version = detailVersion;
+  const isCurrent = () => request === listRequest && characterId === id.value && stillCurrent();
+  if (!characterId) {
     items.value = [];
-    detail.value = null;
+    applyDetail(null);
     loading.value = false;
     return;
   }
   loading.value = true;
   try {
-    const result = await $fetch<Snapshot[]>(`/api/characters/${encodeURIComponent(id.value)}/snapshots`);
+    const result = await $fetch<Snapshot[]>(`/api/characters/${encodeURIComponent(characterId)}/snapshots`);
+    if (!isCurrent()) return;
     items.value = result;
     /**
      * 默认选中「列表里看得见的第一条」。以前直接取 result[0]：
      * 存档被收起时，右栏却在展示一份列表里找不到的存档，读起来像串了页。
      */
     const visible = showManual.value ? result : result.filter((item) => item.kind !== "MANUAL");
-    applyDetail((selectedId ? result.find((item) => item.id === selectedId) : undefined) || visible[0] || result[0] || null);
+    const keepId = detailVersion === version ? selectedId : detail.value?.id;
+    applyDetail((keepId ? result.find((item) => item.id === keepId) : undefined) || visible[0] || result[0] || null);
+    return true;
   } catch {
+    if (!isCurrent()) return;
     items.value = [];
-    detail.value = null;
+    applyDetail(null);
     ElMessage.error("阶段总结加载失败，请确认本地数据库已迁移。");
   } finally {
-    loading.value = false;
+    if (request === listRequest && characterId === id.value) loading.value = false;
   }
 }
 
@@ -233,33 +272,35 @@ function confirmAccept(item: MemoryChangeRow) {
 const reviewingKey = ref("");
 
 async function reviewChange(changeIndex: number, decision: "ACCEPT" | "IGNORE", item: MemoryChangeRow) {
-  if (!detail.value || reviewingKey.value) return;
-  if (decision === "ACCEPT" && !(await confirmAccept(item))) return;
-
+  if (!id.value || !detail.value || reviewingKey.value || !reviewPending(item)
+    || detail.value.analysis?.memoryChangesApplied[changeIndex] !== item) return;
+  const context = captureOperation("review");
+  const characterId = context.characterId;
   const snapshotId = detail.value.id;
   const key = changeIndex + ":" + decision;
   reviewingKey.value = key;
   try {
+    if (decision === "ACCEPT" && !(await confirmAccept(item))) return;
+    if (!operationCurrent(context) || detail.value?.analysis?.memoryChangesApplied[changeIndex] !== item || !reviewPending(item)) return;
     const result = await $fetch<{ outcome: string | null }>(
-      `/api/characters/${encodeURIComponent(id.value)}/snapshots/${encodeURIComponent(snapshotId)}/review`,
+      `/api/characters/${encodeURIComponent(characterId)}/snapshots/${encodeURIComponent(snapshotId)}/review`,
       { method: "POST", body: { changeIndex, decision } },
     );
+    if (!operationCurrent(context)) return;
     ElMessage.success(reviewResultMessage(decision, result.outcome));
     // 刷新后保持原来选中哪一份、以及来源消息是开还是收。
     const keepSources = sourcesOpen.value;
-    await loadSnapshots(snapshotId);
-    sourcesOpen.value = keepSources;
+    if (await loadSnapshots(snapshotId, () => operationCurrent(context)) && operationActive(context)) sourcesOpen.value = keepSources;
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    if (operationCurrent(context)) ElMessage.error(errorMessage(error));
   } finally {
-    reviewingKey.value = "";
+    if (operationActive(context)) reviewingKey.value = "";
   }
 }
 
 async function switchCharacter(nextId: string) {
   if (!nextId || nextId === id.value) return;
-  items.value = [];
-  detail.value = null;
+  resetCharacterPage();
 }
 
 /**
@@ -269,6 +310,9 @@ async function switchCharacter(nextId: string) {
  * 服务端走的是和自动归档完全相同的队列与幂等键，所以不会多出一份重复总结。
  */
 async function runAiArchive() {
+  if (!id.value || aiArchiving.value) return;
+  const context = captureOperation("archive");
+  const characterId = context.characterId;
   const days = current.value?.intervalDays ?? 3;
   try {
     await ElMessageBox.confirm(
@@ -280,6 +324,7 @@ async function runAiArchive() {
     return;
   }
 
+  if (!operationCurrent(context)) return;
   aiArchiving.value = true;
   try {
     const result = await $fetch<{
@@ -288,9 +333,10 @@ async function runAiArchive() {
       processed: Array<{ status: string; message: string }>;
       pending: number;
       advancedTo: string | null;
-    }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots/generate`, { method: "POST" });
+    }>(`/api/characters/${encodeURIComponent(characterId)}/snapshots/generate`, { method: "POST" });
 
-    await loadSnapshots();
+    if (!operationCurrent(context)) return;
+    if (!(await loadSnapshots(undefined, () => operationCurrent(context))) || !operationActive(context)) return;
 
     const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
     const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
@@ -307,13 +353,16 @@ async function runAiArchive() {
       ElMessage.info("任务已排队，但没有可执行的 worker；启动 worker 后会继续处理。");
     }
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    if (operationCurrent(context)) ElMessage.error(errorMessage(error));
   } finally {
-    aiArchiving.value = false;
+    if (operationActive(context)) aiArchiving.value = false;
   }
 }
 
 async function createSnapshot() {
+  if (!id.value || creating.value) return;
+  const context = captureOperation("create");
+  const characterId = context.characterId;
   try {
     await ElMessageBox.confirm(
       "只把当下这一刻拍成快照：当前周期内的消息来源 + 全部生效中的长期记忆。不调用模型，也不会触发或替代自动归档。自动归档由调度器在周期结束时排任务、调模型提炼。",
@@ -324,21 +373,27 @@ async function createSnapshot() {
     return;
   }
 
+  if (!operationCurrent(context)) return;
   creating.value = true;
   try {
-    const result = await $fetch<{ id: string }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots`, { method: "POST" });
+    const result = await $fetch<{ id: string }>(`/api/characters/${encodeURIComponent(characterId)}/snapshots`, { method: "POST" });
+    if (!operationCurrent(context)) return;
     // 刚存的那份如果被默认收起，用户会以为没存上
     showManual.value = true;
-    await loadSnapshots(result.id);
+    if (!(await loadSnapshots(result.id, () => operationCurrent(context))) || !operationActive(context)) return;
     ElMessage.success("已存档到 PostgreSQL，关联了周期内可用的消息来源；没有调用模型。");
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    if (operationCurrent(context)) ElMessage.error(errorMessage(error));
   } finally {
-    creating.value = false;
+    if (operationActive(context)) creating.value = false;
   }
 }
 
 async function regenerateWithAi(snapshot: Snapshot) {
+  if (!id.value || detail.value !== snapshot || aiRegeneratingId.value) return;
+  const context = captureOperation("aiRegenerate");
+  const characterId = context.characterId;
+  const snapshotId = snapshot.id;
   try {
     await ElMessageBox.confirm(
       "系统会对这份自动归档覆盖的历史周期重新调用模型，并创建同一阶段总结档案的新版本。旧版本会保留；为避免历史重放改写当前长期记忆，本次提出的长期记忆变化只展示供审核，不会自动应用。",
@@ -349,25 +404,31 @@ async function regenerateWithAi(snapshot: Snapshot) {
     return;
   }
 
-  aiRegeneratingId.value = snapshot.id;
+  if (!operationCurrent(context)) return;
+  aiRegeneratingId.value = snapshotId;
   try {
     const result = await $fetch<{ jobId: string; status: string; duplicate: boolean }>(
-      `/api/characters/${encodeURIComponent(id.value)}/snapshots`,
-      { method: "POST", body: { snapshotId: snapshot.id, mode: "ai" } },
+      `/api/characters/${encodeURIComponent(characterId)}/snapshots`,
+      { method: "POST", body: { snapshotId, mode: "ai" } },
     );
+    if (!operationCurrent(context)) return;
     ElMessage.success(
       result.duplicate
         ? "这份阶段总结已有等待中的 AI 重新提炼任务，无需重复排队。"
         : "AI 重新提炼任务已排队。请到“后台任务”运行 Worker，并查看新生成的总结版本。",
     );
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    if (operationCurrent(context)) ElMessage.error(errorMessage(error));
   } finally {
-    aiRegeneratingId.value = null;
+    if (operationActive(context)) aiRegeneratingId.value = null;
   }
 }
 
 async function regenerate(snapshot: Snapshot) {
+  if (!id.value || detail.value !== snapshot || regeneratingId.value) return;
+  const context = captureOperation("regenerate");
+  const characterId = context.characterId;
+  const snapshotId = snapshot.id;
   try {
     await ElMessageBox.confirm(
       `为「${titleOf(snapshot)}」创建新版本？旧版本会保留，并标记为已被替代。`,
@@ -378,23 +439,28 @@ async function regenerate(snapshot: Snapshot) {
     return;
   }
 
-  regeneratingId.value = snapshot.id;
+  if (!operationCurrent(context)) return;
+  regeneratingId.value = snapshotId;
   try {
-    const result = await $fetch<{ id: string }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots`, {
+    const result = await $fetch<{ id: string }>(`/api/characters/${encodeURIComponent(characterId)}/snapshots`, {
       method: "POST",
-      body: { snapshotId: snapshot.id },
+      body: { snapshotId },
     });
-    await loadSnapshots(result.id);
+    if (!operationCurrent(context)) return;
+    if (!(await loadSnapshots(result.id, () => operationCurrent(context))) || !operationActive(context)) return;
     ElMessage.success("新版本已写入数据库，旧版本仍保留。");
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    if (operationCurrent(context)) ElMessage.error(errorMessage(error));
   } finally {
-    regeneratingId.value = null;
+    if (operationActive(context)) regeneratingId.value = null;
   }
 }
 
 onMounted(() => void loadSnapshots());
-watch(id, () => void loadSnapshots());
+watch(id, () => {
+  resetCharacterPage();
+  void loadSnapshots();
+}, { flush: "sync" });
 </script>
 
 <template>

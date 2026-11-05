@@ -1,8 +1,8 @@
-import { createError, getRouterParam, readBody } from "h3";
+import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
-import { applyMemoryChange, normalizeMemoryText } from "../../../../../utils/memory-change-apply";
+import { applyMemoryChange } from "../../../../../utils/memory-change-apply";
 import type { MemoryCategoryValue, MemoryChange } from "../../../../../utils/memory-ai";
 
 type ReviewBody = {
@@ -61,6 +61,7 @@ export default defineEventHandler(async (event) => {
     select: {
       id: true,
       kind: true,
+      periodStart: true,
       structuredContent: true,
       reviews: { select: { changeIndex: true, decision: true } },
     },
@@ -89,27 +90,47 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  if (decision === "IGNORE") {
-    await prisma.$transaction(async (tx) => {
-      await tx.memoryReview.create({
-        data: { snapshotId, changeIndex, decision: "IGNORED", decidedByUserId: ownerId },
-      });
-      await tx.auditLog.create({
-        data: {
-          actorType: "USER",
-          actorId: ownerId,
-          characterId,
-          action: "snapshot.review_ignored",
-          entityType: "MemorySnapshot",
-          entityId: snapshotId,
-          details: {
-            changeIndex,
-            action: typeof target.action === "string" ? target.action : null,
-            content: typeof target.content === "string" ? target.content : null,
-          },
-        },
-      });
+  const lockReview = async (tx: import("../../../../../utils/memory-change-apply").MemoryApplyTx) => {
+    await tx.$queryRaw`SELECT id FROM memory_snapshots WHERE id = ${snapshotId}::uuid FOR UPDATE`;
+    const reviewed = await tx.memoryReview.findUnique({
+      where: { snapshotId_changeIndex: { snapshotId, changeIndex } },
+      select: { id: true },
     });
+    if (reviewed) throw createError({ statusCode: 409, statusMessage: "这条建议刚刚已被处理，请刷新后再看。" });
+  };
+  const rethrowReviewError = (error: unknown): never => {
+    if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+      throw createError({ statusCode: 409, statusMessage: "这条建议刚刚已被处理，请刷新后再看。" });
+    }
+    throw error;
+  };
+
+  if (decision === "IGNORE") {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await lockReview(tx);
+        await tx.memoryReview.create({
+          data: { snapshotId, changeIndex, decision: "IGNORED", decidedByUserId: ownerId },
+        });
+        await tx.auditLog.create({
+          data: {
+            actorType: "USER",
+            actorId: ownerId,
+            characterId,
+            action: "snapshot.review_ignored",
+            entityType: "MemorySnapshot",
+            entityId: snapshotId,
+            details: {
+              changeIndex,
+              action: typeof target.action === "string" ? target.action : null,
+              content: typeof target.content === "string" ? target.content : null,
+            },
+          },
+        });
+      });
+    } catch (error) {
+      rethrowReviewError(error);
+    }
     return { snapshotId, changeIndex, decision: "IGNORED" as const, memoryItemId: null, outcome: null };
   }
 
@@ -122,29 +143,21 @@ export default defineEventHandler(async (event) => {
       ? target.evidenceMessageIds.filter((id): id is string => typeof id === "string")
       : [],
     ...(typeof target.supersededMemoryId === "string" ? { relatedMemoryId: target.supersededMemoryId } : {}),
+    ...(typeof target.importance === "number" ? { importance: target.importance } : {}),
+    ...(typeof target.changeReason === "string" ? { changeReason: target.changeReason } : {}),
+    ...(target.scope === "character" || target.scope === "current" ? { scope: target.scope } : {}),
   };
-
-  // 证据消息可能已经被保留期限清理掉；取不到就只丢来源指针，不阻塞采纳。
-  const evidence = change.evidenceMessageIds.length
-    ? await prisma.message.findMany({
-        where: { id: { in: change.evidenceMessageIds } },
-        select: { id: true, occurredAt: true },
-      })
-    : [];
-
-  // 已存在的同内容记忆要先灌进签名集合，否则采纳会和库里已有条目重复。
-  const activeItems = await prisma.memoryItem.findMany({
-    where: { memoryScopeId, status: "ACTIVE" },
-    select: { id: true, category: true, content: true },
-    take: 2000,
-  });
-  const existingItemSignatures = new Set(
-    activeItems.map((item) => item.category + ":" + normalizeMemoryText(item.content)),
-  );
 
   let outcome: Record<string, unknown> | null = null;
   try {
     outcome = await prisma.$transaction(async (tx) => {
+      await lockReview(tx);
+      // Keep live evidence in this transaction. Historical IDs remain in the
+      // immutable snapshot and audit even if retention removed their messages.
+      const evidence = await tx.message.findMany({
+        where: { id: { in: change.evidenceMessageIds }, conversation: { memoryScopeId } },
+        select: { id: true, occurredAt: true },
+      });
       const applied = await applyMemoryChange(
         tx,
         {
@@ -161,12 +174,14 @@ export default defineEventHandler(async (event) => {
           }),
           canTarget: () => true,
           handledMemoryIds: new Set<string>(),
-          existingItemSignatures,
-          existingItems: activeItems.map((item) => ({ id: item.id, category: item.category, content: item.content })),
+          existingItemSignatures: new Set<string>(),
           existingDedupeKeys: new Set<string>(),
         },
         change,
         evidence,
+        // MemorySnapshotSource has no occurredAt field; periodStart is the
+        // deterministic historical time available after source cleanup.
+        { reviewEvidenceFallbackAt: snapshot.periodStart },
       );
       if (!applied) return null;
 
@@ -206,11 +221,7 @@ export default defineEventHandler(async (event) => {
       return applied;
     });
   } catch (error) {
-    // 并发双击时唯一索引会先报错：整笔事务回滚，记忆不会被改两次。
-    if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
-      throw createError({ statusCode: 409, statusMessage: "这条建议刚刚已被处理，请刷新后再看。" });
-    }
-    throw error;
+    rethrowReviewError(error);
   }
 
   if (!outcome) {
