@@ -109,6 +109,7 @@
     "test:onebot": "tsx scripts/test-onebot-adapter.ts",
     "test:onebot-multigroup": "tsx scripts/test-onebot-multigroup.ts",
     "test:onebot-faces": "tsx scripts/test-onebot-faces.ts",
+    "test:onebot-red-packet-diagnostics": "tsx scripts/test-onebot-red-packet-diagnostics.ts",
     "test:stickers": "tsx scripts/test-stickers.ts",
     "test:sticker-collect": "tsx scripts/test-sticker-collect.ts",
     "test:sticker-image": "tsx scripts/test-sticker-image.ts",
