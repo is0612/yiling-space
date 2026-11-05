@@ -1316,7 +1316,7 @@ async function runChannelTurn(input: {
   // 忆泡和网页对话走同一套选择逻辑：先按日期框住，框不住才退化成关键词。
   // 名字先解析成账号：群名片改过之后，只有账号还能认出「这是同一个人」。
   const participantName = parseEventParticipantQuery(retrievalQuery);
-  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName) : [];
+  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName, { characterId: input.characterId, platform: input.platform }) : [];
   const eventSelection = selectEventsForPrompt(retrievalQuery, eventCandidates, {
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
     tokenBudget: resolveEventTokenBudget(character.modelConfig),
@@ -1503,7 +1503,7 @@ async function runChannelTurn(input: {
         // 人物名只从主人原始问题解析一次；不从记忆助手模板查询串反向解析。
         const searchParticipantName = lookupOptions?.participantName ?? parseEventParticipantQuery(currentMessage);
         const searchParticipantIds = searchParticipantName
-          ? await resolveParticipantAccounts(prisma, searchParticipantName)
+          ? await resolveParticipantAccounts(prisma, searchParticipantName, { characterId: input.characterId, platform: input.platform })
           : [];
         const searchRange = parseEventTimeRange(searchQuery, new Date(), chatTimeZone);
         const searchTerms = extractMemoryAssistantSearchTerms(searchQuery, 20);
