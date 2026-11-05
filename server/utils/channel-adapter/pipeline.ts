@@ -17,7 +17,7 @@ import {
   type CrossChannelLine,
 } from "../cross-channel-context";
 import { parseEventParticipantQuery, resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget, selectEventsForPrompt, selectRecentEvents } from "../memory-event-retrieval";
-import { moveConversationEventsToScope } from "../memory-event-move";
+import { rehomeConversationScope } from "../memory-event-move";
 import {
   resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
 } from "../message-retrieval";
@@ -263,6 +263,27 @@ export function resolveOwnerPrivateScopeRepair(input: {
 }): string | null {
   if (!input.isOwnerTurn || !input.ownerPrivateScopeId) return null;
   return input.currentScopeId === input.ownerPrivateScopeId ? null : input.ownerPrivateScopeId;
+}
+
+/**
+ * 群会话要不要归位到角色全局范围。
+ *
+ * 会话按 `(binding, externalConversationId)` 唯一、找到就复用，而「群聊挂全局」是后来
+ * 才定的规则：更早建出来的群会话仍挂在当初那个 `EXTERNAL_IDENTITY` 上。后果比私聊更隐蔽 ——
+ * - 群聊写进去的消息落在外部身份范围里，按天忆泡只排全局与私聊范围，这些消息一辈子不被整理；
+ * - 群聊的检索范围是 `[global]`，于是她在群里查不到这个群自己说过的话；
+ * - 聊天记录列表上一切正常，只有「她怎么什么都不记得」这一个症状。
+ *
+ * 只认一个方向：群 → 全局。反向（全局 → 某个人）没有任何正当场景，猜错就是把群聊
+ * 塞进别人私聊。私聊的归位由 `resolveOwnerPrivateScopeRepair` 单独负责。
+ */
+export function resolveGroupScopeRepair(input: {
+  isGroup: boolean;
+  globalScopeId: string;
+  currentScopeId: string;
+}): string | null {
+  if (!input.isGroup) return null;
+  return input.currentScopeId === input.globalScopeId ? null : input.globalScopeId;
 }
 
 /**
@@ -1796,28 +1817,42 @@ async function runChannelTurn(input: {
   const conversationId = await prisma.$transaction(async (tx) => {
     let conversation = existingConversation;
     /**
-     * 主人私聊的会话可能比「主人专属范围」这个功能更早建出来 —— 那时它还挂在这个 QQ 的
-     * EXTERNAL_IDENTITY 范围下。会话按 `(binding, externalConversationId)` 唯一，找到就复用，
-     * 不迁移的话：之后主人说的每一句仍旧落在外人范围里，既不排忆泡、也进不了主人私人记忆，
-     * 而且从页面上完全看不出来。这里在主人发言时把会话归位。
+     * 已有会话可能要换记忆范围。两条路，方向都是单向的：
+     *
+     * - 群聊 → 角色全局（`resolveGroupScopeRepair`）：新建时写 global，但历史会话可能还挂在
+     *   建群那一刻的外部身份范围下。不修则群消息永不进忆泡、她在群里也查不到自己的话。
+     * - 主人私聊 → 主人专属范围（`resolveOwnerPrivateScopeRepair`）：会话按
+     *   `(binding, externalConversationId)` 唯一、找到就复用，早于该功能建出来的会话仍挂在
+     *   这个 QQ 的 EXTERNAL_IDENTITY 上，之后主人说的每一句都落在外面。
+     *
+     * 两个都返回 null 表示不用动。私聊的预落库（`recordPrivateTurnMessages`）只处理主人
+     * 范围那一半，群聊不走那条路，所以群聊的归位只能落在下面这个事务里。
      */
     if (conversation) {
-      const repairScopeId = resolveOwnerPrivateScopeRepair({
+      const repairScopeId = resolveGroupScopeRepair({
+        isGroup,
+        globalScopeId: globalScope.id,
+        currentScopeId: conversation.memoryScopeId,
+      }) ?? resolveOwnerPrivateScopeRepair({
         isOwnerTurn,
         ownerPrivateScopeId,
         currentScopeId: conversation.memoryScopeId,
       });
       if (repairScopeId) {
-        // 旧范围里已经整理出的忆泡跟着会话走：否则主人私聊读不到，归位后还会重复提一遍。
-        await moveConversationEventsToScope(tx, {
+        // 旧范围里已经整理出的忆泡跟着会话走：否则新范围读不到，归位后还会重复提一遍。
+        const moved = await rehomeConversationScope(tx, {
           conversationId: conversation.id,
           fromScopeId: conversation.memoryScopeId,
           toScopeId: repairScopeId,
         });
-        await tx.conversation.update({
-          where: { id: conversation.id },
-          data: { memoryScopeId: repairScopeId },
-        });
+        if (isGroup && (moved.moved || moved.merged)) {
+          console.log("[scope] 群会话归位到全局范围 " + JSON.stringify({
+            conversationId: conversation.id,
+            moved: moved.moved,
+            merged: moved.merged,
+            days: moved.days,
+          }));
+        }
         conversation = { ...conversation, memoryScopeId: repairScopeId };
       }
     } else {

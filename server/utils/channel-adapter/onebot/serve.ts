@@ -1250,7 +1250,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         status: "ACTIVE",
         metadata: { platform: ONEBOT_PLATFORM, kind: "group", groupId: groupEvent.groupId },
       },
-      update: {},
+      update: {
+        // 群会话恒挂角色全局范围。老会话可能是「群聊挂全局」这条规则定下来之前建的，
+        // 还挂在某个外部身份范围下 —— 那里不排忆泡，写进去的群消息等于不存在。
+        memoryScopeId: scope.id,
+      },
       select: { id: true },
     });
     await prisma.message.createMany({

@@ -110,3 +110,22 @@ export async function moveConversationEventsToScope(
 
   return { moved, merged, days: affectedDays.size };
 }
+
+/**
+ * 会话换范围：先把忆泡与当天进度搬过去，再改 `Conversation.memoryScopeId`。
+ *
+ * 两件事必须绑在一起。只改 scope 的话，旧范围里已经整理出的忆泡留在原地 —— 新范围
+ * 读不到，或者反过来把同一件事再提一遍；只搬忆泡不改 scope 则下一轮又搬一次。
+ * 调用方（渠道 pipeline 的群/私聊归位、手工整理脚本）都从这里走，避免各写一半。
+ */
+export async function rehomeConversationScope(
+  tx: MemoryTransaction,
+  input: { conversationId: string; fromScopeId: string; toScopeId: string },
+): Promise<{ moved: number; merged: number; days: number }> {
+  const stats = await moveConversationEventsToScope(tx, input);
+  await tx.conversation.update({
+    where: { id: input.conversationId },
+    data: { memoryScopeId: input.toScopeId },
+  });
+  return stats;
+}

@@ -217,7 +217,11 @@ export async function recordAnnouncementExchange(input: {
           status: "ACTIVE",
           metadata: { platform: ONEBOT_PLATFORM },
         },
-        update: {},
+        update: {
+          // 群里只有一份记忆：早于「群聊挂全局」建的会话会被这里顺手归位，
+          // 否则公告写进旧的外部身份范围，永远不进忆泡。
+          memoryScopeId: scope.id,
+        },
         select: { id: true },
       });
       const now = new Date();

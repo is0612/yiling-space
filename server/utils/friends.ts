@@ -335,8 +335,10 @@ export async function listFriendScopesWithActivity(input: {
   characterId: string;
   since: Date;
   until: Date;
+  /** 事务内调用时传入 tx：朋友范围跟周期游标必须在同一个事务里提交，否则游标先走、朋友任务漏排。 */
+  client?: Prisma.TransactionClient;
 }): Promise<string[]> {
-  const prisma = getPrisma();
+  const prisma = input.client ?? getPrisma();
   const scopes = await prisma.memoryScope.findMany({
     where: {
       characterId: input.characterId,

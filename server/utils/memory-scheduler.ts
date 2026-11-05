@@ -537,7 +537,51 @@ export async function enqueueDueMemorySnapshots(
           skipDuplicates: true,
         });
 
-        // Compare-and-set protects the period cursor when schedulers run concurrently.
+        /**
+         * 主人私聊与朋友范围必须和周期游标在**同一个事务**里入队。
+         *
+         * 以前它们在事务提交之后才补排：只要进程在「游标已推进」和「补排」之间退出，
+         * 下一轮就会从新游标反推周期，这些范围的那段时间永久没有任务，也不会自动追补。
+         */
+        const companionPeriods = built.periods;
+        const ownerPeriods = ownerPrivateScopeId
+          ? companionPeriods.map((period) => ({
+              memoryScopeId: ownerPrivateScopeId,
+              type: "GENERATE_SNAPSHOT" as const,
+              idempotencyKey: `auto-snapshot:${ownerPrivateScopeId}:${period.periodStart.toISOString()}:${period.periodEnd.toISOString()}`,
+              periodStart: period.periodStart,
+              periodEnd: period.periodEnd,
+              status: "QUEUED" as const,
+              runAt: now,
+            }))
+          : [];
+        const ownerResult = ownerPeriods.length
+          ? await tx.memoryJob.createMany({ data: ownerPeriods, skipDuplicates: true })
+          : { count: 0 };
+
+        // 只排本周期有会话的朋友范围（见 `listFriendScopesWithActivity`），并且有数量上限。
+        const first = companionPeriods[0]!;
+        const last = companionPeriods[companionPeriods.length - 1]!;
+        const friendScopeIds = await listFriendScopesWithActivity({
+          characterId: setting.characterId,
+          since: first.periodStart,
+          until: last.periodEnd,
+          client: tx,
+        });
+        const friendPeriods = friendScopeIds.flatMap((scopeId) => companionPeriods.map((period) => ({
+          memoryScopeId: scopeId,
+          type: "GENERATE_SNAPSHOT" as const,
+          idempotencyKey: `auto-snapshot:${scopeId}:${period.periodStart.toISOString()}:${period.periodEnd.toISOString()}`,
+          periodStart: period.periodStart,
+          periodEnd: period.periodEnd,
+          status: "QUEUED" as const,
+          runAt: now,
+        })));
+        const friendResult = friendPeriods.length
+          ? await tx.memoryJob.createMany({ data: friendPeriods, skipDuplicates: true })
+          : { count: 0 };
+
+        // 比较并设置：并发调度时只允许一个执行者推进周期游标。
         const updateResult = await tx.characterMemorySetting.updateMany({
           where: {
             characterId: latest.characterId,
@@ -558,7 +602,7 @@ export async function enqueueDueMemorySnapshots(
         }
 
         return {
-          jobsQueued: createResult.count,
+          jobsQueued: createResult.count + ownerResult.count + friendResult.count,
           periodsConsidered: built.periods.length,
           advanced: true,
           initialized: latest.nextSnapshotAt === null,
@@ -574,54 +618,6 @@ export async function enqueueDueMemorySnapshots(
       if (result.initialized) report.settingsInitialized += 1;
       if (result.notDue) report.settingsNotDue += 1;
       if (result.stillDue) report.settingsStillDue += 1;
-
-      // 主人专属范围跟随全局周期补排快照。幂等键含 scope id，与全局不冲突；
-      // 只有全局真推进了周期（advanced）才补，避免重复。
-      if (ownerPrivateScopeId && result.advanced && result.periods.length) {
-        const ownerPeriods = result.periods.map((period) => ({
-          memoryScopeId: ownerPrivateScopeId,
-          type: "GENERATE_SNAPSHOT" as const,
-          idempotencyKey: `auto-snapshot:${ownerPrivateScopeId}:${period.periodStart.toISOString()}:${period.periodEnd.toISOString()}`,
-          periodStart: period.periodStart,
-          periodEnd: period.periodEnd,
-          status: "QUEUED" as const,
-          runAt: now,
-        }));
-        const ownerResult = await prisma.memoryJob.createMany({ data: ownerPeriods, skipDuplicates: true });
-        report.jobsQueued += ownerResult.count;
-      }
-
-      /**
-       * 朋友范围跟着同一个周期补排快照。
-       *
-       * 以前这里只有「全局」和「主人私人」两种范围，`EXTERNAL_IDENTITY` 从不入队 ——
-       * 结果是身份行建了一堆，记忆条数是 0，绑过去也读不到任何东西。补上这一环，
-       * 「跟某个人聊过的细节」才第一次真的存在。
-       *
-       * 只排本周期有会话的（见 `listFriendScopesWithActivity`），并且有数量上限。
-       */
-      if (result.advanced && result.periods.length) {
-        const first = result.periods[0]!;
-        const last = result.periods[result.periods.length - 1]!;
-        const friendScopeIds = await listFriendScopesWithActivity({
-          characterId: setting.characterId,
-          since: first.periodStart,
-          until: last.periodEnd,
-        }).catch(() => []);
-        if (friendScopeIds.length) {
-          const friendPeriods = friendScopeIds.flatMap((scopeId) => result.periods.map((period) => ({
-            memoryScopeId: scopeId,
-            type: "GENERATE_SNAPSHOT" as const,
-            idempotencyKey: `auto-snapshot:${scopeId}:${period.periodStart.toISOString()}:${period.periodEnd.toISOString()}`,
-            periodStart: period.periodStart,
-            periodEnd: period.periodEnd,
-            status: "QUEUED" as const,
-            runAt: now,
-          })));
-          const friendResult = await prisma.memoryJob.createMany({ data: friendPeriods, skipDuplicates: true });
-          report.jobsQueued += friendResult.count;
-        }
-      }
     } catch (error) {
       if (error instanceof Error && error.message === "MEMORY_SCHEDULER_RACE") continue;
       throw error;

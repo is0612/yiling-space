@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  buildGroupMemberDeltas, buildStoredMessageMetadata, resolveOwnerPrivateScopeRepair,
+  buildGroupMemberDeltas, buildStoredMessageMetadata, resolveGroupScopeRepair, resolveOwnerPrivateScopeRepair,
 } from "../server/utils/channel-adapter/pipeline";
 import { readSourceMessageIsOwner } from "../server/utils/conversation-message";
 
@@ -152,4 +152,23 @@ assert.equal(
   "没有主人私人范围时什么都不做。",
 );
 
-console.log("渠道消息 metadata 测试通过：无 @ / @ 别人 / @ 她与 @全体 / mentioned / 主人 / 系统播报 / 语音 / 群成员归属聚合 / 提炼主人判定 / 主人私聊归位。");
+// ── 群会话归位到全局范围 ───────────────────────────────────────────────────
+// 群会话挂在 EXTERNAL_IDENTITY 上时，按天忆泡不排（只排全局与私聊范围），她在群里也
+// 查不到自己的话。旧会话只会在她下次开口时被顺手修好，所以这个判据必须稳。
+assert.equal(
+  resolveGroupScopeRepair({ isGroup: true, globalScopeId: "global-scope", currentScopeId: "external-scope" }),
+  "global-scope",
+  "群消息进来时，挂在外部身份范围上的老群会话要迁到角色全局范围。",
+);
+assert.equal(
+  resolveGroupScopeRepair({ isGroup: true, globalScopeId: "global-scope", currentScopeId: "global-scope" }),
+  null,
+  "已经在全局范围里就不用再写。",
+);
+assert.equal(
+  resolveGroupScopeRepair({ isGroup: false, globalScopeId: "global-scope", currentScopeId: "external-scope" }),
+  null,
+  "私聊不参与这条归位 —— 私聊该在谁的范围里由主人私聊那段决定。",
+);
+
+console.log("渠道消息 metadata 测试通过：无 @ / @ 别人 / @ 她与 @全体 / mentioned / 主人 / 系统播报 / 语音 / 群成员归属聚合 / 提炼主人判定 / 主人私聊归位 / 群会话归位。");

@@ -137,9 +137,19 @@ async function ensureGroupConversation(input: {
   const prisma = getPrisma();
   const existing = await prisma.conversation.findFirst({
     where: { channelBindingId: input.bindingId, externalConversationId: input.externalConversationId },
-    select: { id: true },
+    select: { id: true, memoryScopeId: true },
   });
-  if (existing) return existing.id;
+  if (existing) {
+    // 复用的会话可能是「群聊挂全局」定下来之前建的，还挂在某个外部身份范围下。
+    // 主动发言落的消息必须和 pipeline 写在同一个范围，否则这个群在记忆里会裂成两份。
+    if (existing.memoryScopeId !== input.scopeId) {
+      await prisma.conversation.update({
+        where: { id: existing.id },
+        data: { memoryScopeId: input.scopeId },
+      });
+    }
+    return existing.id;
+  }
   const created = await prisma.conversation.create({
     data: {
       characterId: input.characterId,
