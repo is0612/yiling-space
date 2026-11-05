@@ -382,7 +382,7 @@ const archivedMemory = await request(`/api/memories/${createdMemory.id}`, {
 });
 assert(archivedMemory.status === "ARCHIVED", "Memory should support the archived status.");
 const archivedTimeline = await request(`/api/characters/${created.id}/timeline`);
-assert(archivedTimeline.some((entry) => entry.id === `memory:${createdMemory.id}` && entry.tag === "已归档"), "Archived memory should remain in the timeline with its status.");
+assert(archivedTimeline.entries.some((entry) => entry.id === `memory:${createdMemory.id}` && entry.tag === "已归档"), "Archived memory should remain in the timeline with its status.");
 const invalidatedMemory = await request(`/api/memories/${createdMemory.id}`, {
   method: "PATCH",
   body: { status: "invalidated" },
@@ -410,9 +410,9 @@ assert(importedConversation.messageCount === 3, "Transcript import must persist 
 assert(importedConversation.timestampsEstimated === true, "Plain transcript imports must disclose estimated timestamps.");
 
 const importedTimeline = await request(`/api/characters/${created.id}/timeline`);
-assert(importedTimeline.length === 4, "The timeline should include one memory and all three imported messages.");
-assert(importedTimeline.some((entry) => entry.id === `memory:${createdMemory.id}` && entry.title === "事实记忆" && entry.summary.includes(`CI 已修改记忆 ${unique}`)), "Timeline must show the updated memory content and category.");
-assert(importedTimeline.filter((entry) => entry.type === "message").length === 3, "Timeline must include all imported conversation messages.");
+assert(importedTimeline.entries.length === 4, "The timeline should include one memory and all three imported messages.");
+assert(importedTimeline.entries.some((entry) => entry.id === `memory:${createdMemory.id}` && entry.title === "事实记忆" && entry.summary.includes(`CI 已修改记忆 ${unique}`)), "Timeline must show the updated memory content and category.");
+assert(importedTimeline.entries.filter((entry) => entry.type === "message").length === 3, "Timeline must include all imported conversation messages.");
 assert(importedTimeline.some((entry) => entry.summary.includes(`角色回复 ${unique}`)), "Timeline must include imported assistant content.");
 
 const edited = await request(`/api/characters/${created.id}`, {
