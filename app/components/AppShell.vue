@@ -7,6 +7,7 @@ import {
   ChatDotRound,
   ChatLineRound,
   DataBoard,
+  Refresh,
   Setting,
   SwitchButton,
   User,
@@ -16,6 +17,7 @@ import {
   Notebook,
   Reading,
 } from "@element-plus/icons-vue";
+import { readTopbarHeading, type TopbarHeading } from "~/utils/topbar";
 
 const route = useRoute();
 const { displayName, logout, isLocalDevIdentity, isAdmin } = useAuthSession();
@@ -24,6 +26,23 @@ const avatarLetter = computed(() => (displayName.value || "管").slice(0, 1));
 const roleLabel = computed(() =>
   isLocalDevIdentity.value ? "本地开发身份" : isAdmin.value ? "已登录管理员" : "已登录用户",
 );
+
+/**
+ * 页面标题放顶栏：路由解析时就能拿到，服务端首屏直接带出来，不会先闪一下再归位。
+ * 没声明的页面（还没搬过来的）左侧留空，右侧那组用户信息照旧贴右。
+ */
+const heading = computed<TopbarHeading | null>(() => readTopbarHeading(route.meta));
+
+const refreshing = ref(false);
+async function handleTopbarRefresh() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  try {
+    await refreshNuxtData();
+  } finally {
+    refreshing.value = false;
+  }
+}
 
 async function handleLogout() {
   if (loggingOut.value) return;
@@ -211,7 +230,25 @@ function isActive(item: NavigationItem) {
 
     <div class="app-main">
       <header class="topbar">
+        <div
+          v-if="heading"
+          class="topbar-head"
+        >
+          <h1>{{ heading.title }}</h1>
+          <p v-if="heading.description">
+            {{ heading.description }}
+          </p>
+        </div>
         <div class="topbar-right">
+          <button
+            v-if="heading?.refreshable"
+            class="topbar-refresh"
+            type="button"
+            :disabled="refreshing"
+            @click="handleTopbarRefresh"
+          >
+            <el-icon><Refresh /></el-icon>{{ refreshing ? "刷新中" : "刷新" }}
+          </button>
           <span class="env-indicator"><span class="env-dot" />{{ isLocalDevIdentity ? "本地开发" : "已登录" }}</span>
           <div class="user-pill">
             <el-avatar :size="30">
