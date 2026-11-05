@@ -828,16 +828,16 @@ function formatSourceTime(value: string) {
     : value;
 }
 /**
- * 和阶段总结页的「生成阶段总结」是同一个动作（同一个 POST），所以名词、确认文案保持一致。
- * 以前这里叫「手动归档」且没有二次确认 —— 误点一次就多一份归档版本。
+ * 和阶段总结页的「手动存档」是同一个动作（同一个 POST），所以名词、确认文案保持一致。
+ * 以前这里叫「手动归档」且没有二次确认 —— 名字像「立刻启动自动归档」，误点一次就多一份版本。
  */
 async function manualSnapshot() {
   if (snapshotCreating.value) return;
   try {
     await ElMessageBox.confirm(
-      "生成一份手动归档，保存当前时间范围内的消息来源与长期记忆。手动归档不会调用模型；自动周期任务会在配置模型后执行 AI 提炼。是否继续？",
-      "生成阶段总结",
-      { confirmButtonText: "确认归档", cancelButtonText: "取消", type: "info" },
+      "只把当下这一刻拍成快照：当前周期内的消息来源 + 全部生效中的长期记忆。不调用模型，也不会触发或替代自动归档。自动归档由调度器在周期结束时排任务、调模型提炼。",
+      "手动存档（不调用模型）",
+      { confirmButtonText: "存档", cancelButtonText: "取消", type: "info" },
     );
   } catch {
     return;
@@ -847,7 +847,7 @@ async function manualSnapshot() {
   try {
     await $fetch(`/api/characters/${encodeURIComponent(id.value)}/snapshots`, { method: "POST" });
     await Promise.all([loadSnapshots(), loadTimeline()]);
-    ElMessage.success("已归档。已关联周期内的消息/事件与长期记忆来源；尚未调用大模型生成总结。");
+    ElMessage.success("已存档。已关联周期内的消息/事件与长期记忆来源；没有调用模型。");
   } catch (error) {
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
@@ -855,6 +855,57 @@ async function manualSnapshot() {
     ElMessage.error(message);
   } finally {
     snapshotCreating.value = false;
+  }
+}
+
+/**
+ * 立即 AI 归档：手动触发「自动归档」跑一次。
+ *
+ * 本地没起调度器时，周期任务永远不会自己来；这个入口走的是和自动归档同一套队列与幂等键，
+ * 所以它不会另造一份总结，只是把「现在」当成周期边界跑一遍。
+ */
+const aiArchiving = ref(false);
+async function runAiArchive() {
+  if (aiArchiving.value) return;
+  try {
+    await ElMessageBox.confirm(
+      "现在就跑一次自动归档：调模型提炼最近一个周期的对话，生成阶段总结，并按结果新增 / 更新长期记忆。会产生模型调用费用。",
+      "立即 AI 归档",
+      { confirmButtonText: "开始归档", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
+
+  aiArchiving.value = true;
+  try {
+    const result = await $fetch<{
+      queued: string[];
+      skipped: string[];
+      processed: Array<{ status: string; message: string }>;
+      advancedTo: string | null;
+    }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots/generate`, { method: "POST" });
+
+    await Promise.all([loadSnapshots(), loadTimeline()]);
+
+    const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
+    const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
+    if (failed) {
+      ElMessage.warning(failed.message);
+    } else if (ok.length) {
+      ElMessage.success(ok.map((item) => item.message).join("；"));
+    } else if (result.skipped.length) {
+      ElMessage.info(result.skipped.join("；"));
+    } else {
+      ElMessage.info("任务已排队，但没有可执行的 worker；启动 worker 后会继续处理。");
+    }
+  } catch (error) {
+    const message = error && typeof error === "object" && "statusMessage" in error
+      ? String(error.statusMessage)
+      : "归档失败，请检查模型配置与数据库连接。";
+    ElMessage.error(message);
+  } finally {
+    aiArchiving.value = false;
   }
 }
 
@@ -1056,7 +1107,7 @@ watch(id, () => {
     <PageHeader
       eyebrow="工作空间 / 角色记忆"
       title="角色记忆"
-      description="先在上面选一个角色，下面是它的对话、阶段总结与长期记忆。启用自动归档后，周期任务会自动提炼事实与偏好。"
+      description="先在上面选一个角色，下面是它的对话、阶段总结与长期记忆。「立即 AI 归档」现在就调模型跑一次自动归档；「手动存档」只留一份不调模型的快照。"
     >
       <template #actions>
         <button
@@ -1093,10 +1144,19 @@ watch(id, () => {
         <button
           type="button"
           class="btn primary"
+          :disabled="aiArchiving || !id"
+          title="等同于自动归档跑一次：排队、调模型、当场执行"
+          @click="runAiArchive"
+        >
+          <el-icon><MagicStick /></el-icon>{{ aiArchiving ? "归档中…" : "立即 AI 归档" }}
+        </button>
+        <button
+          type="button"
+          class="btn"
           :disabled="snapshotCreating"
           @click="manualSnapshot"
         >
-          <el-icon><MagicStick /></el-icon>{{ snapshotCreating ? "生成中…" : "生成阶段总结" }}
+          <el-icon><Files /></el-icon>{{ snapshotCreating ? "存档中…" : "手动存档（不调模型）" }}
         </button>
       </template>
     </PageHeader>
@@ -1482,7 +1542,7 @@ watch(id, () => {
               class="snap-row"
             >
               <span class="snap-top">
-                <span>第 {{ snapshot.number }} 份阶段总结</span>
+                <span>{{ snapshot.kind === "MANUAL" ? "手动存档" : "第 " + snapshot.number + " 份阶段总结" }}</span>
                 <span class="muted-note">v{{ snapshot.version }}</span>
               </span>
               <span class="snap-sum">{{ snapshot.summary }}</span>

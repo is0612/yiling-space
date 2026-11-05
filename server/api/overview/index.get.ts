@@ -126,6 +126,8 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
           id: true,
           memoryItems: { where: { status: "ACTIVE" }, select: { createdAt: true } },
           snapshots: {
+            // 「最近总结」只认自动归档：手动存档没有 AI 内容，挂在总览上会读成「刚总结过」
+            where: { kind: "AUTOMATIC" },
             orderBy: [{ createdAt: "desc" }, { version: "desc" }],
             take: 1,
             select: { createdAt: true, version: true },

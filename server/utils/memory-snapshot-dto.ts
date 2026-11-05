@@ -2,7 +2,10 @@ import type { SnapshotAnalysis } from "../../app/utils/mock-data";
 
 export type MemorySnapshotDto = {
   id: string;
+  /** 自动归档的序号；手动存档恒为 0，不进「第 N 份」序列 */
   number: number;
+  /** 列表与详情的标题：自动归档「第 N 份」，手动存档「存档」 */
+  label: string;
   version: number;
   date: string;
   range: string;
@@ -222,10 +225,19 @@ export function toMemorySnapshotDtos(
   timeZone = "Asia/Shanghai",
 ): MemorySnapshotDto[] {
   const chronological = [...records].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  /**
+   * 「第 N 份」只数自动归档。
+   *
+   * 手动存档以前也占序号：点几次「存档」就凭空多出第 1、3、5 份，AI 总结被挤到第 2、4 份，
+   * 读起来像「归档了五次、其中三次没内容」。存档不是一份总结，不进这个序列。
+   */
   const sequenceByKey = new Map<string, number>();
+  let automaticCount = 0;
   for (const record of chronological) {
+    if (record.kind !== "AUTOMATIC") continue;
     if (!sequenceByKey.has(record.snapshotKey)) {
-      sequenceByKey.set(record.snapshotKey, sequenceByKey.size + 1);
+      automaticCount += 1;
+      sequenceByKey.set(record.snapshotKey, automaticCount);
     }
   }
 
@@ -241,9 +253,11 @@ export function toMemorySnapshotDtos(
       const reviewRejected = typeof rejectedRaw === "number" && Number.isFinite(rejectedRaw)
         ? Math.max(0, Math.floor(rejectedRaw))
         : 0;
+      const number = record.kind === "AUTOMATIC" ? (sequenceByKey.get(record.snapshotKey) ?? 1) : 0;
       return {
         id: record.id,
-        number: sequenceByKey.get(record.snapshotKey) ?? 1,
+        number,
+        label: number > 0 ? `第 ${number} 份` : "存档",
         version: record.version,
         date: formatDate(record.createdAt, timeZone, true),
         range: formatDate(record.periodStart, timeZone) + " — " + formatDate(record.periodEnd, timeZone),

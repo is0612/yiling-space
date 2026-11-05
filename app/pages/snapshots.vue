@@ -18,6 +18,8 @@ const items = ref<Snapshot[]>([]);
 const loading = ref(true);
 const query = ref("");
 const statusFilter = ref("全部版本状态");
+/** 手动存档默认收起：它不是总结，混在列表里只会把 AI 总结挤下去 */
+const showManual = ref(false);
 const detail = ref<Snapshot | null>(null);
 /** 来源消息默认收起：这是一页要读总结的页面，6 条原文常驻会把提炼结果挤到看不见 */
 const sourcesOpen = ref(false);
@@ -29,16 +31,20 @@ const sourcePage = ref(1);
 const sourcePageSize = ref(10);
 const sourceListEl = ref<HTMLElement | null>(null);
 const creating = ref(false);
+const aiArchiving = ref(false);
 const regeneratingId = ref<string | null>(null);
 const aiRegeneratingId = ref<string | null>(null);
 
 const statusOptions = ["全部版本状态", "当前版本", "已被替代"];
-const filtered = computed(() => items.value.filter((item) => {
-  const queryMatches = !query.value || `${item.summary} ${item.range} 第 ${item.number} 份`.toLowerCase().includes(query.value.toLowerCase());
+const kindItems = computed(() => showManual.value ? items.value : items.value.filter((item) => item.kind !== "MANUAL"));
+const filtered = computed(() => kindItems.value.filter((item) => {
+  const queryMatches = !query.value || `${item.summary} ${item.range} ${titleOf(item)}`.toLowerCase().includes(query.value.toLowerCase());
   const statusMatches = statusFilter.value === "全部版本状态" || item.status === statusFilter.value;
   return queryMatches && statusMatches;
 }));
 const totalMessages = computed(() => items.value.reduce((sum, item) => sum + item.messages, 0));
+const autoCount = computed(() => items.value.filter((item) => item.kind !== "MANUAL").length);
+const manualCount = computed(() => items.value.length - autoCount.value);
 const hasFilters = computed(() => Boolean(query.value) || statusFilter.value !== "全部版本状态");
 
 const sourceTotal = computed(() => detail.value?.sourceMessages?.length || 0);
@@ -55,7 +61,7 @@ const sourceRange = computed(() => {
 });
 
 function countFor(status: string) {
-  return status === "全部版本状态" ? items.value.length : items.value.filter((item) => item.status === status).length;
+  return status === "全部版本状态" ? kindItems.value.length : kindItems.value.filter((item) => item.status === status).length;
 }
 function resetFilters() {
   query.value = "";
@@ -63,6 +69,14 @@ function resetFilters() {
 }
 function statusTone(status: Snapshot["status"]) {
   return status === "当前版本" ? "pill-green" : "pill-gray";
+}
+/** 两种归档的可见标签：AUTOMATIC 是模型提炼出的总结，MANUAL 只是一份快照 */
+function kindLabel(kind: Snapshot["kind"]) {
+  return kind === "AUTOMATIC" ? "AI 总结" : "仅存档";
+}
+/** 标题：自动归档数「第 N 份」，手动存档不占序号，只写「存档」 */
+function titleOf(snapshot: Snapshot) {
+  return snapshot.label || (snapshot.kind === "MANUAL" ? "存档" : "第 " + snapshot.number + " 份");
 }
 
 /**
@@ -79,6 +93,13 @@ function applyDetail(next: Snapshot | null) {
 /** 换页后回到列表顶部：一页 10 条也有近千像素，停在原地会以为没翻动 */
 watch(sourcePage, (next) => {
   if (next > 1) sourceListEl.value?.scrollIntoView({ block: "start", behavior: "smooth" });
+});
+
+/** 收起存档时，右栏不能还停在刚被收起的那个存档上 */
+watch(showManual, (on) => {
+  if (on || detail.value?.kind !== "MANUAL") return;
+  const next = filtered.value[0];
+  if (next) applyDetail(next);
 });
 
 /** 换页大小、或重新拉取后条数变少时，别停在已经不存在的页码上 */
@@ -98,7 +119,12 @@ async function loadSnapshots(selectedId?: string) {
   try {
     const result = await $fetch<Snapshot[]>(`/api/characters/${encodeURIComponent(id.value)}/snapshots`);
     items.value = result;
-    applyDetail((selectedId ? result.find((item) => item.id === selectedId) : undefined) || result[0] || null);
+    /**
+     * 默认选中「列表里看得见的第一条」。以前直接取 result[0]：
+     * 存档被收起时，右栏却在展示一份列表里找不到的存档，读起来像串了页。
+     */
+    const visible = showManual.value ? result : result.filter((item) => item.kind !== "MANUAL");
+    applyDetail((selectedId ? result.find((item) => item.id === selectedId) : undefined) || visible[0] || result[0] || null);
   } catch {
     items.value = [];
     detail.value = null;
@@ -236,12 +262,59 @@ async function switchCharacter(nextId: string) {
   detail.value = null;
 }
 
+/**
+ * 立即归档一次：手动触发「自动归档」。
+ *
+ * 本地没起调度器时周期任务永远不会自己来，这个按钮就是「现在跑一次」。
+ * 服务端走的是和自动归档完全相同的队列与幂等键，所以不会多出一份重复总结。
+ */
+async function runAiArchive() {
+  const days = current.value?.intervalDays ?? 3;
+  try {
+    await ElMessageBox.confirm(
+      `现在就跑一次自动归档：调模型提炼最近 ${days} 天的对话，生成一份阶段总结，并按结果新增 / 更新长期记忆。会产生模型调用费用。`,
+      "立即 AI 归档",
+      { confirmButtonText: "开始归档", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
+
+  aiArchiving.value = true;
+  try {
+    const result = await $fetch<{
+      queued: string[];
+      skipped: string[];
+      processed: Array<{ status: string; message: string }>;
+      advancedTo: string | null;
+    }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots/generate`, { method: "POST" });
+
+    await loadSnapshots();
+
+    const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
+    const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
+    if (failed) {
+      ElMessage.warning(failed.message);
+    } else if (ok.length) {
+      ElMessage.success(ok.map((item) => item.message).join("；"));
+    } else if (result.skipped.length) {
+      ElMessage.info(result.skipped.join("；"));
+    } else {
+      ElMessage.info("任务已排队，但没有可执行的 worker；启动 worker 后会继续处理。");
+    }
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  } finally {
+    aiArchiving.value = false;
+  }
+}
+
 async function createSnapshot() {
   try {
     await ElMessageBox.confirm(
-      "生成一份手动归档，保存当前时间范围内的消息来源与长期记忆。手动归档不会调用模型；自动周期任务会在配置模型后执行 AI 提炼。是否继续？",
-      "生成阶段总结",
-      { confirmButtonText: "确认归档", cancelButtonText: "取消", type: "info" },
+      "只把当下这一刻拍成快照：当前周期内的消息来源 + 全部生效中的长期记忆。不调用模型，也不会触发或替代自动归档。自动归档由调度器在周期结束时排任务、调模型提炼。",
+      "手动存档（不调用模型）",
+      { confirmButtonText: "存档", cancelButtonText: "取消", type: "info" },
     );
   } catch {
     return;
@@ -250,8 +323,10 @@ async function createSnapshot() {
   creating.value = true;
   try {
     const result = await $fetch<{ id: string }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots`, { method: "POST" });
+    // 刚存的那份如果被默认收起，用户会以为没存上
+    showManual.value = true;
     await loadSnapshots(result.id);
-    ElMessage.success("手动已归档到 PostgreSQL，并关联周期内可用的消息来源。");
+    ElMessage.success("已存档到 PostgreSQL，关联了周期内可用的消息来源；没有调用模型。");
   } catch (error) {
     ElMessage.error(errorMessage(error));
   } finally {
@@ -291,7 +366,7 @@ async function regenerateWithAi(snapshot: Snapshot) {
 async function regenerate(snapshot: Snapshot) {
   try {
     await ElMessageBox.confirm(
-      "为第 " + snapshot.number + " 份阶段总结创建新版本？旧版本会保留，并标记为已被替代。",
+      `为「${titleOf(snapshot)}」创建新版本？旧版本会保留，并标记为已被替代。`,
       "重新生成阶段总结",
       { confirmButtonText: "创建新版本", cancelButtonText: "取消", type: "info" },
     );
@@ -323,16 +398,26 @@ watch(id, () => void loadSnapshots());
     <PageHeader
       eyebrow="工作空间 / 阶段总结"
       title="阶段总结"
-      description="自动归档会调用模型提炼对话、事实与偏好；手动归档只保留当下记录。每份总结都能追溯到原始消息。"
+      description="自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；本地没起调度器时，点「立即 AI 归档」手动跑一次。手动存档：只把当下这一刻拍成快照，不调模型。"
     >
       <template #actions>
         <button
           type="button"
-          class="btn primary"
+          class="btn"
           :disabled="creating || !id"
+          title="只保存当下记录，不调用模型"
           @click="createSnapshot"
         >
-          <el-icon><MagicStick /></el-icon>{{ creating ? "生成中…" : "生成阶段总结" }}
+          <el-icon><Files /></el-icon>{{ creating ? "存档中…" : "手动存档（不调模型）" }}
+        </button>
+        <button
+          type="button"
+          class="btn primary"
+          :disabled="aiArchiving || !id"
+          title="等同于自动归档跑一次：排队、调模型、当场执行"
+          @click="runAiArchive"
+        >
+          <el-icon><MagicStick /></el-icon>{{ aiArchiving ? "归档中…" : "立即 AI 归档" }}
         </button>
       </template>
     </PageHeader>
@@ -350,8 +435,8 @@ watch(id, () => void loadSnapshots());
       <div class="card stat-band">
         <div class="sb-cell">
           <span class="sb-k">历史归档</span>
-          <span class="sb-v">{{ items.length }}<small>份</small></span>
-          <span class="sb-f">历史版本都保留，不会被覆盖</span>
+          <span class="sb-v">{{ autoCount }}<small>份</small></span>
+          <span class="sb-f">{{ manualCount ? `另有 ${manualCount} 份手动存档，不计入序号` : "历史版本都保留，不会被覆盖" }}</span>
         </div>
         <div class="sb-cell">
           <span class="sb-k">覆盖消息</span>
@@ -389,6 +474,16 @@ watch(id, () => void loadSnapshots());
                 @click="statusFilter = option"
               >
                 {{ option === "全部版本状态" ? "全部" : option }}<span class="n">{{ countFor(option) }}</span>
+              </button>
+              <button
+                v-if="manualCount"
+                type="button"
+                class="chip manual-chip"
+                :class="{ on: showManual }"
+                :title="showManual ? '当前显示手动存档' : '手动存档不调模型，默认收起'"
+                @click="showManual = !showManual"
+              >
+                <el-icon><Files /></el-icon>手动存档<span class="n">{{ manualCount }}</span>
               </button>
             </div>
             <div class="list-tools">
@@ -430,8 +525,13 @@ watch(id, () => void loadSnapshots());
                   @click="selectDetail(snapshot)"
                 >
                   <span class="snap-row-top">
-                    <span class="snap-row-title">第 {{ snapshot.number }} 份 <span class="snap-row-ver">v{{ snapshot.version }}</span></span>
+                    <span class="snap-row-title">{{ titleOf(snapshot) }} <span class="snap-row-ver">v{{ snapshot.version }}</span></span>
                     <span class="snap-row-tags">
+                      <!-- 「自动」和「手动」差着一个模型调用，不标出来就只能靠 summary 猜 -->
+                      <span
+                        class="pill"
+                        :class="snapshot.kind === 'AUTOMATIC' ? 'pill-purple' : 'pill-gray'"
+                      >{{ kindLabel(snapshot.kind) }}</span>
                       <span
                         v-if="pendingReviewCount(snapshot)"
                         class="pill pill-amber"
@@ -444,14 +544,16 @@ watch(id, () => void loadSnapshots());
                   </span>
                   <span class="snap-row-sum">{{ snapshot.summary }}</span>
                   <span class="snap-row-meta">
-                    <el-icon><Calendar /></el-icon>{{ snapshot.date.slice(5, 16) }} · {{ snapshot.messages }} 条消息 · {{ snapshot.events }} 个事件
+                    <el-icon><Calendar /></el-icon>{{ snapshot.date.slice(5, 16) }} ·
+                    <template v-if="snapshot.messages || snapshot.events">{{ snapshot.messages }} 条消息 · {{ snapshot.events }} 个事件</template>
+                    <template v-else>这个周期没有可归档的内容</template>
                   </span>
                 </button>
                 <p
                   v-if="!filtered.length"
                   class="list-empty"
                 >
-                  {{ hasFilters ? "没有符合条件的阶段总结，换个词或把筛选切回全部。" : "还没有归档过。点右上角「生成阶段总结」可以手动归档当前周期。" }}
+                  {{ hasFilters ? "没有符合条件的阶段总结，换个词或把筛选切回全部。" : manualCount && !showManual ? `这里还没有 AI 总结。另有 ${manualCount} 份手动存档被收起，点上面的「手动存档」可以展开。` : "还没有归档过。点「立即 AI 归档」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。" }}
                 </p>
               </template>
             </div>
@@ -466,11 +568,17 @@ watch(id, () => void loadSnapshots());
           <div class="card detail-card">
             <template v-if="detail">
               <header class="d-head">
-                <h2>第 {{ detail.number }} 份阶段总结</h2>
-                <span
-                  class="pill"
-                  :class="statusTone(detail.status)"
-                >{{ detail.status }}</span>
+                <h2>{{ detail.kind === "MANUAL" ? "存档 · " + detail.date.slice(5, 16) : titleOf(detail) + "阶段总结" }}</h2>
+                <span class="d-head-tags">
+                  <span
+                    class="pill"
+                    :class="detail.kind === 'AUTOMATIC' ? 'pill-purple' : 'pill-gray'"
+                  >{{ kindLabel(detail.kind) }}</span>
+                  <span
+                    class="pill"
+                    :class="statusTone(detail.status)"
+                  >{{ detail.status }}</span>
+                </span>
               </header>
               <!-- 四个数字收成一行：原来四行「标签 …… 值」各带一条分隔线，占了 120px -->
               <p class="d-meta">
@@ -644,7 +752,7 @@ watch(id, () => void loadSnapshots());
                 class="d-note"
               >
                 <el-icon><Files /></el-icon>
-                这是一份手动或旧版总结，保存的是结构化记录；自动归档的 AI 提炼结果会显示在这里。
+                {{ detail.kind === "MANUAL" ? "这是一份手动存档：只保存了当时的消息来源与长期记忆副本，没有 AI 提炼结果。要 AI 总结这段时间，用自动归档。" : "这是一份旧版总结，保存的是结构化记录；AI 提炼结果会显示在这里。" }}
               </p>
 
               <section class="d-sec">
@@ -789,6 +897,12 @@ watch(id, () => void loadSnapshots());
 /* ── 左：归档时间线 ─────────────────────────────────── */
 .list-card{padding:12px 10px 8px}
 .list-tools{display:flex;align-items:center;gap:8px;padding:0 4px}
+/* 存档开关放右侧、弱化：它是一层过滤，不是第三种版本状态 */
+.manual-chip{margin-left:auto;gap:5px;height:26px;padding:0 10px;color:var(--dim)}
+.manual-chip .el-icon{font-size:12px}
+/* 它和「全部 / 当前版本 / 已被替代」不是一个维度：开启时用品牌浅底，
+   不要继承 .chip.on 的深色底（深底 + 弱文字 = 看起来是个空胶囊）。 */
+.manual-chip.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-strong)}
 .list-search{min-width:0;flex:1}
 .reset-link{border:0;border-radius:6px;background:none;padding:2px 4px;color:var(--brand-strong);font-size:12px;font-weight:600;cursor:pointer}
 .reset-link:hover{text-decoration:underline}
@@ -811,6 +925,7 @@ watch(id, () => void loadSnapshots());
 /* ── 右：详情 ──────────────────────────────────────── */
 .detail-card{padding:18px 20px 16px}
 .d-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.d-head-tags{display:flex;align-items:center;gap:6px;flex:none}
 .d-head h2{margin:0;color:var(--text);font-size:18px;font-weight:700;line-height:1.4}
 .d-meta{margin:6px 0 0;color:var(--dim);font-size:12px;line-height:1.7}
 /* 摘要是这页要读的东西：15px / 1.9，字号只比标题小一档 */

@@ -175,7 +175,7 @@ export function toMemoryTimelineDtos(input: {
       entry: {
         id: "snapshot:" + snapshot.id,
         type: "snapshot",
-        title: "第 " + snapshot.number + " 份阶段总结 · v" + snapshot.version,
+        title: (snapshot.kind === "MANUAL" ? "手动存档" : "第 " + snapshot.number + " 份阶段总结") + " · v" + snapshot.version,
         summary: snapshot.summary,
         time: snapshot.date,
         channel: "全部渠道",

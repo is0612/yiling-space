@@ -171,6 +171,8 @@ export type SnapshotSourceMessage = {
 export type Snapshot = {
   id: string;
   number: number;
+  /** 自动归档「第 N 份」，手动存档「存档」；缺省时由 kind 推导 */
+  label?: string;
   version: number;
   date: string;
   range: string;
@@ -308,6 +310,7 @@ export const initialSnapshots: Snapshot[] = [
   {
     id: "snap-12",
     number: 12,
+    label: "第 12 份",
     version: 1,
     date: "2026-10-21 09:00",
     range: "10 月 13 日 — 10 月 21 日",
@@ -320,6 +323,7 @@ export const initialSnapshots: Snapshot[] = [
   {
     id: "snap-11",
     number: 11,
+    label: "第 11 份",
     version: 2,
     date: "2026-10-13 09:02",
     range: "10 月 5 日 — 10 月 13 日",
@@ -332,6 +336,7 @@ export const initialSnapshots: Snapshot[] = [
   {
     id: "snap-10",
     number: 10,
+    label: "第 10 份",
     version: 1,
     date: "2026-10-05 09:00",
     range: "9 月 27 日 — 10 月 5 日",

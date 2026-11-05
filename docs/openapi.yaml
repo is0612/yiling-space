@@ -2394,6 +2394,58 @@ paths:
           description: 该快照不能以当前模式重新生成
         '503':
           description: 模型未配置
+  /characters/{characterId}/snapshots/generate:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+    post:
+      tags: [Snapshots]
+      operationId: generateSnapshotNow
+      summary: 立即归档一次（手动触发自动归档）
+      description: |
+        本地开发功能。给「没起调度器、但想现在就跑一次自动归档」用。
+
+        行为与周期任务一致：为全局范围与主人私人范围各排一条 `GENERATE_SNAPSHOT`，
+        幂等键沿用调度器格式 `auto-snapshot:{scopeId}:{start}:{end}`，同周期重复调用只会复用已有总结。
+        排完当场驱动一次 Worker（不要求另开 `yarn worker:watch`）。
+        周期取 `[now - snapshotIntervalDays, now)`；只有真的产出总结时才把 `nextSnapshotAt`
+        推进到 `now + snapshotIntervalDays`，全部 SKIPPED 时保持原计划。
+      responses:
+        '200':
+          description: 已尝试归档；处理结果逐条返回
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queued, skipped, processed, advancedTo, intervalDays]
+                properties:
+                  queued:
+                    type: array
+                    items: { type: string }
+                    description: 已排队的范围说明
+                  skipped:
+                    type: array
+                    items: { type: string }
+                    description: 周期内没有对话、因此没有排队的范围
+                  processed:
+                    type: array
+                    items:
+                      type: object
+                      required: [status, message]
+                      properties:
+                        status: { type: string, enum: [SUCCEEDED, SKIPPED, RETRY_WAIT, FAILED, CANCELLED] }
+                        message: { type: string }
+                  advancedTo:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    description: 成功产出后新的下一次归档时间；没有成功时为空，原计划不变
+                  intervalDays: { type: integer, minimum: 1, maximum: 8 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 角色还没有全局记忆范围
   /characters/{characterId}/snapshots/{snapshotId}/review:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
@@ -4550,6 +4602,12 @@ components:
         id: { type: string, format: uuid }
         snapshotKey: { type: string }
         scopeId: { type: string, format: uuid }
+        number:
+          type: integer
+          description: 自动归档的「第 N 份」序号；手动存档恒为 0，不占这个序列
+        label:
+          type: string
+          description: 列表与详情用的标题；自动归档为「第 N 份」，手动存档为「存档」
         kind: { type: string, enum: [automatic, manual] }
         version: { type: integer, minimum: 1 }
         periodStart: { type: string, format: date-time }

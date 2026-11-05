@@ -124,7 +124,7 @@ async function saveSettings() {
   if (retentionBecomesMoreDestructive) {
     const archiveWarning = autoSnapshot.value
       ? ""
-      : "\n\n注意：当前自动归档处于关闭状态，历史原文可能没有对应的阶段总结。";
+      : "\n\n注意：当前自动生成处于关闭状态，历史原文可能没有对应的阶段总结，忆泡也不会自动整理。";
     try {
       await ElMessageBox.confirm(
         `此设置会允许系统在下一次调度后排队删除超过 ${nextRetention} 天的原始消息。原文删除不可恢复；已有阶段总结、长期记忆和来源追溯记录会保留。${archiveWarning}\n\n确认启用该保留期限吗？`,
@@ -248,7 +248,7 @@ watch(id, () => void loadSettings());
     <PageHeader
       :eyebrow="'角色管理 / ' + character.name + ' / 记忆设置'"
       title="记忆周期设置"
-      description="控制角色多久归档一次阶段记忆。设置保存到 PostgreSQL，由 Scheduler 生成到期任务，再由 Worker 调用角色模型完成 AI 提炼。"
+      description="控制角色多久归档一次阶段记忆，以及要不要自动整理忆泡。设置保存到 PostgreSQL，由 Scheduler 生成到期任务，再由 Worker 调用角色模型完成 AI 提炼。"
       :back-to="'/memory?c=' + character.id"
       back-label="返回角色记忆"
     />
@@ -264,7 +264,7 @@ watch(id, () => void loadSettings());
               <div class="form-title">
                 自动归档规则 <span class="pill pill-purple">核心设置</span>
               </div><p class="section-description">
-                每完成一个周期，就为这个记忆范围生成阶段总结。
+                每完成一个周期，就为这个记忆范围生成阶段总结；忆泡按天整理，不等这个周期。
               </p>
             </div><el-icon class="section-icon">
               <Calendar />
@@ -394,9 +394,10 @@ watch(id, () => void loadSettings());
           </el-form>
           <el-divider />
           <div class="toggle-row">
-            <div>
-              <strong>自动生成阶段总结</strong><p class="form-help">
-                关闭后保留历史归档，停止自动生成新的阶段总结。
+            <div class="toggle-copy">
+              <strong>自动生成阶段总结与忆泡</strong><p class="form-help">
+                这一项同时管两件事：按周期生成阶段总结，按天整理忆泡。关闭后旧归档与旧忆泡全部保留，
+                阶段总结不再自动生成，忆泡只在角色记忆页手动点「立即整理忆泡」时生成；日记与手账不受影响。
               </p>
             </div><el-switch v-model="autoSnapshot" />
           </div>
@@ -440,6 +441,9 @@ watch(id, () => void loadSettings());
           <div class="rule-item">
             <span class="rule-number">03</span><div><strong>时区影响计划时间</strong><p>计划会基于角色设定的时区和启用锚点计算。</p></div>
           </div>
+          <div class="rule-item">
+            <span class="rule-number">04</span><div><strong>忆泡按天整理</strong><p>忆泡整理的是「昨天发生了什么」，不等归档周期；它和阶段总结共用下面那个「自动生成」开关，关掉后只能手动点「立即整理忆泡」。</p></div>
+          </div>
         </section>
         <section class="surface panel side-panel">
           <div class="card-head">
@@ -459,7 +463,7 @@ watch(id, () => void loadSettings());
             <span>执行状态</span><span
               class="pill"
               :class="autoSnapshot ? 'pill-green' : 'pill-gray'"
-            >{{ autoSnapshot ? '自动归档开启' : '自动归档已暂停' }}</span>
+            >{{ autoSnapshot ? '自动生成开启' : '自动生成已暂停' }}</span>
           </div>
           <div class="metric-row">
             <span>生效策略</span><span class="metric-value">{{ effectivePolicy }}</span>
@@ -504,8 +508,12 @@ watch(id, () => void loadSettings());
 .quick-days .chip.on{border-color:var(--brand-btn);background:var(--brand-btn);color:#fff}
 
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 18px}
-.toggle-row{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:8px 0}
+/* 开关说明现在是多行（同时管阶段总结与忆泡），居中会把开关吊在半空，改成顶对齐；
+   .toggle-copy 给文字块吃掉剩余宽度，长句才换行而不是把开关挤出去。 */
+.toggle-row{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;padding:8px 0}
 .toggle-row strong{color:var(--text-2);font-size:14px;font-weight:600}
+.toggle-copy{flex:1;min-width:0}
+.toggle-row .el-switch{flex:0 0 auto;margin-top:1px}
 .form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
 
 .settings-side{display:flex;flex-direction:column;gap:16px}
