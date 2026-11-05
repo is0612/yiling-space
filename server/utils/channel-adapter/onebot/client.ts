@@ -94,6 +94,64 @@ function isMessageEvent(data: unknown): boolean {
 }
 
 /**
+ * 仅返回红包事件的脱敏结构摘要，不输出 QQ 号、消息 ID、文本内容、URL 或原始 payload。
+ * 用于确认 OneBot 实际下发的 segment 类型和字段名；不执行任何领取或发送动作。
+ */
+export type OnebotRedPacketDiagnostic = {
+  messageType: "private" | "group" | "unknown";
+  matchedBy: string[];
+  segmentTypes: string[];
+  candidateSegments: Array<{ type: string; dataKeys: string[] }>;
+};
+
+const RED_PACKET_TEXT_MARKER = /(?:\\[?QQ红包\\]?|red[_-]?packet|redpacket|hongbao|lucky[_-]?money)/i;
+const RED_PACKET_SEGMENT_MARKER = /(?:red[_-]?packet|redpacket|redbag|hongbao|lucky[_-]?money)/i;
+
+/** 普通消息返回 null；命中红包标记时只返回结构元数据。 */
+export function inspectOnebotRedPacketEvent(data: unknown): OnebotRedPacketDiagnostic | null {
+  if (!data || typeof data !== "object") return null;
+  const record = data as { message_type?: unknown; message?: unknown; raw_message?: unknown };
+  const segments = Array.isArray(record.message)
+    ? record.message.filter((item): item is OnebotSegment => Boolean(item) && typeof item === "object")
+    : [];
+  const matchedBy = new Set<string>();
+  const candidateSegments: Array<{ type: string; dataKeys: string[] }> = [];
+
+  if (typeof record.message === "string" && RED_PACKET_TEXT_MARKER.test(record.message)) matchedBy.add("message_text");
+  if (typeof record.raw_message === "string" && RED_PACKET_TEXT_MARKER.test(record.raw_message)) matchedBy.add("raw_message_marker");
+
+  for (const segment of segments) {
+    const type = typeof segment.type === "string" ? segment.type.slice(0, 48) : "unknown";
+    const segmentData = segment.data && typeof segment.data === "object" ? segment.data : {};
+    const dataKeys = Object.keys(segmentData).slice(0, 20)
+      .map((key) => key.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40))
+      .filter(Boolean);
+    let candidate = RED_PACKET_SEGMENT_MARKER.test(type);
+    if (candidate) matchedBy.add("segment_type");
+    for (const value of Object.values(segmentData)) {
+      if (typeof value === "string" && RED_PACKET_TEXT_MARKER.test(value)) {
+        candidate = true;
+        matchedBy.add("segment_data_marker");
+      }
+    }
+    if (candidate && candidateSegments.length < 12) candidateSegments.push({ type, dataKeys });
+  }
+
+  if (!matchedBy.size) return null;
+  const messageType = record.message_type === "private" || record.message_type === "group"
+    ? record.message_type
+    : "unknown";
+  return {
+    messageType,
+    matchedBy: [...matchedBy],
+    segmentTypes: segments.slice(0, 20).map((segment) =>
+      typeof segment.type === "string" ? segment.type.slice(0, 48) : "unknown",
+    ),
+    candidateSegments,
+  };
+}
+
+/**
  * 戳一戳的正文。
  *
  * 用「动作」而不是「一句话」的写法：模型看到 `member_3: （戳了戳你）` 会当成一个动作，
@@ -363,6 +421,11 @@ export function connectOnebot(
       const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf8");
       const payload = safeJson(text);
       if (!payload || typeof payload !== "object") return;
+      const redPacketDiagnostic = inspectOnebotRedPacketEvent(payload);
+      if (redPacketDiagnostic) {
+        // 只打印脱敏后的结构摘要，绝不打印原始事件或字段值。
+        console.info("[onebot] QQ 红包事件结构诊断", JSON.stringify(redPacketDiagnostic));
+      }
       // 消息走原来的解析；戳一戳（notice）翻译成一条合成事件后走同一条路。
       const resolved = isMessageEvent(payload) ? resolveOnebotEvent(payload) : resolveOnebotPokeEvent(payload);
       if (!resolved) return;
