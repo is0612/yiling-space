@@ -1,4 +1,4 @@
-import { createError, getRouterParam, readBody } from "h3";
+import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import { requireActorUserId } from "../../utils/auth";
 import { requireUuid, readTrimmedString } from "../../utils/local-api";
 import { getPrisma } from "../../utils/prisma";
@@ -47,31 +47,41 @@ export default defineEventHandler(async (event) => {
   }
 
   const prisma = getPrisma();
-  const existing = await prisma.memoryItem.findFirst({
-    where: {
-      id: memoryId,
-      memoryScope: { is: { character: { is: { ownerId } } } },
-    },
-    select: { id: true, status: true },
-  });
-  if (!existing) {
-    throw createError({ statusCode: 404, statusMessage: "长期记忆不存在。" });
-  }
-  if (existing.status === "TRASHED") {
-    throw createError({ statusCode: 409, statusMessage: "该记忆已在回收站，请先恢复后再编辑。" });
-  }
+  return prisma.$transaction(async (tx) => {
+    // Lock only an owned item; re-read after waiting so decisions use committed state.
+    await tx.$queryRaw`
+      SELECT m.id FROM memory_items m
+      JOIN memory_scopes s ON s.id = m."memoryScopeId"
+      JOIN characters c ON c.id = s."characterId"
+      WHERE m.id = ${memoryId}::uuid AND c."ownerId" = ${ownerId}::uuid
+      FOR UPDATE OF m
+    `;
+    const existing = await tx.memoryItem.findFirst({
+      where: {
+        id: memoryId,
+        memoryScope: { is: { character: { is: { ownerId } } } },
+      },
+      select: { id: true, status: true },
+    });
+    if (!existing) {
+      throw createError({ statusCode: 404, statusMessage: "长期记忆不存在。" });
+    }
+    if (existing.status === "TRASHED") {
+      throw createError({ statusCode: 409, statusMessage: "该记忆已在回收站，请先恢复后再编辑。" });
+    }
 
-  return prisma.memoryItem.update({
-    where: { id: memoryId },
-    data,
-    select: {
-      id: true,
-      category: true,
-      content: true,
-      status: true,
-      confidence: true,
-      createdAt: true,
-      updatedAt: true,
-    },
+    return tx.memoryItem.update({
+      where: { id: memoryId },
+      data,
+      select: {
+        id: true,
+        category: true,
+        content: true,
+        status: true,
+        confidence: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
   });
 });

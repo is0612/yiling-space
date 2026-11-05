@@ -135,6 +135,7 @@ type PrivateChatMessage = {
   author: string | null;
   isOwner: boolean;
 };
+type PrivateChatCursor = { before: string; beforeId: string } | null;
 const groupChatOpen = ref(false);
 const groupChatLoading = ref(false);
 const groupChatError = ref("");
@@ -151,6 +152,7 @@ const privateChatChats = ref<PrivateChatChat[]>([]);
 const privateChatMessages = ref<PrivateChatMessage[]>([]);
 const privateChatSelectedId = ref("");
 const privateChatHasMore = ref(false);
+const privateChatNextCursor = ref<PrivateChatCursor>(null);
 const selectedPrivateChat = computed(() => privateChatChats.value.find((chat) => chat.conversationId === privateChatSelectedId.value) ?? null);
 /**
  * 统计带用服务端的全量计数，不用「已载入条数」——
@@ -359,25 +361,30 @@ type TimelineResponse = {
   today: string;
 };
 
-async function loadTimeline() {
+let timelineRequestSeq = 0;
+async function loadTimeline(targetCharacterId = id.value) {
+  const seq = ++timelineRequestSeq;
+  if (targetCharacterId !== id.value) return;
   timelineLoading.value = true;
   try {
     // kinds 只取记忆、总结与忆泡：额度全给记忆（400 条），消息不再抢窗口
     const result = await $fetch<TimelineResponse>(
-      `/api/characters/${encodeURIComponent(id.value)}/timeline?kinds=memory,snapshot,memoryEvent&limit=400`,
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/timeline?kinds=memory,snapshot,memoryEvent&limit=400`,
     );
+    if (seq !== timelineRequestSeq || targetCharacterId !== id.value) return;
     timelineEntries.value = result.entries;
     timelineCounts.value = result.counts;
     timelineDays.value = Object.fromEntries(result.days.map((day) => [day.dayKey, day]));
     todayKey.value = result.today;
   } catch {
+    if (seq !== timelineRequestSeq || targetCharacterId !== id.value) return;
     timelineEntries.value = [];
     timelineCounts.value = { message: 0, event: 0, memory: 0, snapshot: 0, memoryEvent: 0 };
     timelineDays.value = {};
     todayKey.value = "";
     ElMessage.error("记忆时间线读取失败，请检查本地开发服务器日志。");
   } finally {
-    timelineLoading.value = false;
+    if (seq === timelineRequestSeq) timelineLoading.value = false;
   }
 }
 
@@ -434,7 +441,9 @@ function memoryScopeLabel(scopeType: string) {
   return MEMORY_SCOPE_LABELS[scopeType] ?? "长期记忆";
 }
 
+let searchRequestSeq = 0;
 function resetSearch() {
+  searchRequestSeq += 1;
   searchRows.value = [];
   searchTotal.value = 0;
   searchCursor.value = null;
@@ -444,21 +453,26 @@ function resetSearch() {
 async function runSearch(reset: boolean) {
   if (!isSearching.value) return;
   if (!reset && !searchCursor.value) return;
+  const seq = ++searchRequestSeq;
+  const targetCharacterId = id.value;
+  const targetQuery = query.value.trim();
   searchLoading.value = true;
   try {
-    const params = new URLSearchParams({ limit: "30", q: query.value.trim() });
+    const params = new URLSearchParams({ limit: "30", q: targetQuery });
     if (!reset && searchCursor.value) params.set("cursor", searchCursor.value);
     const result = await $fetch<{ items: MemoryRow[]; total: number; nextCursor: string | null }>(
-      `/api/characters/${encodeURIComponent(id.value)}/memories?${params.toString()}`,
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/memories?${params.toString()}`,
     );
+    if (seq !== searchRequestSeq || targetCharacterId !== id.value || targetQuery !== query.value.trim()) return;
     searchRows.value = reset ? result.items : [...searchRows.value, ...result.items];
     searchTotal.value = result.total;
     searchCursor.value = result.nextCursor;
   } catch {
+    if (seq !== searchRequestSeq || targetCharacterId !== id.value || targetQuery !== query.value.trim()) return;
     if (reset) resetSearch();
     ElMessage.error("记忆检索失败，请检查本地开发服务器日志。");
   } finally {
-    searchLoading.value = false;
+    if (seq === searchRequestSeq) searchLoading.value = false;
   }
 }
 
@@ -466,37 +480,54 @@ async function runSearch(reset: boolean) {
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 watch(query, () => {
   if (searchTimer) clearTimeout(searchTimer);
-  if (!isSearching.value) {
-    resetSearch();
-    return;
-  }
+  resetSearch();
+  if (!isSearching.value) return;
   searchTimer = setTimeout(() => void runSearch(true), 300);
 });
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
+  characterLoadSeq += 1;
+  timelineRequestSeq += 1;
+  snapshotRequestSeq += 1;
+  searchRequestSeq += 1;
+  recycleBinRequestSeq += 1;
+  memoryDetailRequestSeq += 1;
+  groupChatRequestSeq += 1;
+  privateChatRequestSeq += 1;
 });
 
-async function loadSnapshots() {
+let snapshotRequestSeq = 0;
+async function loadSnapshots(targetCharacterId = id.value) {
+  const seq = ++snapshotRequestSeq;
+  if (targetCharacterId !== id.value) return;
   try {
-    snapshots.value = await $fetch<Snapshot[]>(`/api/characters/${encodeURIComponent(id.value)}/snapshots`);
+    const result = await $fetch<Snapshot[]>(`/api/characters/${encodeURIComponent(targetCharacterId)}/snapshots`);
+    if (seq === snapshotRequestSeq && targetCharacterId === id.value) snapshots.value = result;
   } catch {
+    if (seq !== snapshotRequestSeq || targetCharacterId !== id.value) return;
     snapshots.value = [];
     ElMessage.error("阶段总结加载失败，请确认本地数据库已迁移。");
   }
 }
 
+let characterLoadSeq = 0;
 async function loadCharacter() {
+  const requestedCharacterId = id.value;
+  const seq = ++characterLoadSeq;
   // 角色列表为空 / 还没解析出 id 时不要发请求，否则会打出无意义的 404 提示
-  if (!id.value) {
+  if (!requestedCharacterId) {
     currentCharacter.value = null;
     snapshots.value = [];
     timelineEntries.value = [];
     return;
   }
   try {
-    currentCharacter.value = await $fetch<Character>(`/api/characters/${encodeURIComponent(id.value)}`);
-    await Promise.all([loadSnapshots(), loadTimeline()]);
+    const result = await $fetch<Character>(`/api/characters/${encodeURIComponent(requestedCharacterId)}`);
+    if (seq !== characterLoadSeq || requestedCharacterId !== id.value) return;
+    currentCharacter.value = result;
+    await Promise.all([loadSnapshots(requestedCharacterId), loadTimeline(requestedCharacterId)]);
   } catch {
+    if (seq !== characterLoadSeq || requestedCharacterId !== id.value) return;
     currentCharacter.value = null;
     snapshots.value = [];
     timelineEntries.value = [];
@@ -541,27 +572,34 @@ async function saveMemory() {
  * 打开某条记忆的详情（内容 + 来源）。
  * 时间线行和检索结果都走这里：时间线行的 id 是 `memory:<uuid>`，检索结果直接就是 uuid。
  */
+let memoryDetailRequestSeq = 0;
 async function openMemoryDetail(memoryId: string) {
   if (!memoryId) return;
+  const seq = ++memoryDetailRequestSeq;
+  const targetCharacterId = id.value;
   editingMemoryId.value = memoryId;
   editingMemorySource.value = null;
   editingMemorySnapshot.value = null;
   memoryEditDialogOpen.value = true;
+  draftEditMemoryContent.value = "";
+  draftEditMemoryCategory.value = "FACT";
   memoryEditLoading.value = true;
   try {
     const memory = await $fetch<MemoryDetail>(`/api/memories/${encodeURIComponent(memoryId)}`);
+    if (seq !== memoryDetailRequestSeq || targetCharacterId !== id.value || editingMemoryId.value !== memoryId) return;
     draftEditMemoryCategory.value = memory.category;
     draftEditMemoryContent.value = memory.content;
     editingMemorySource.value = memory.sourceMessage;
     editingMemorySnapshot.value = memory.sourceSnapshot;
   } catch (error) {
+    if (seq !== memoryDetailRequestSeq || targetCharacterId !== id.value || editingMemoryId.value !== memoryId) return;
     memoryEditDialogOpen.value = false;
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
       : error instanceof Error ? error.message : "读取长期记忆失败。";
     ElMessage.error(message);
   } finally {
-    memoryEditLoading.value = false;
+    if (seq === memoryDetailRequestSeq) memoryEditLoading.value = false;
   }
 }
 
@@ -592,25 +630,30 @@ function formatPeriod(start: string, end: string) {
 }
 
 async function saveEditedMemory() {
-  if (memoryEditSaving.value || !editingMemoryId.value) return;
+  if (memoryEditSaving.value || memoryEditLoading.value || !editingMemoryId.value) return;
   if (!draftEditMemoryContent.value.trim()) {
     ElMessage.warning("记忆内容不能为空。");
     return;
   }
 
+  const targetCharacterId = id.value;
+  const targetMemoryId = editingMemoryId.value;
+  const detailSeq = memoryDetailRequestSeq;
   memoryEditSaving.value = true;
   try {
-    await $fetch(`/api/memories/${encodeURIComponent(editingMemoryId.value)}`, {
+    await $fetch(`/api/memories/${encodeURIComponent(targetMemoryId)}`, {
       method: "PATCH",
       body: {
         category: draftEditMemoryCategory.value,
         content: draftEditMemoryContent.value.trim(),
       },
     });
+    if (targetCharacterId !== id.value || targetMemoryId !== editingMemoryId.value || detailSeq !== memoryDetailRequestSeq) return;
     memoryEditDialogOpen.value = false;
     await loadCharacter();
     ElMessage.success("长期记忆已更新。已有阶段总结会保留生成时的历史内容。");
   } catch (error) {
+    if (targetCharacterId !== id.value || targetMemoryId !== editingMemoryId.value || detailSeq !== memoryDetailRequestSeq) return;
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
       : error instanceof Error ? error.message : "更新长期记忆失败。";
@@ -674,17 +717,22 @@ function formatRecycleDate(value: string | null) {
     : new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-async function loadRecycleBin() {
+let recycleBinRequestSeq = 0;
+async function loadRecycleBin(targetCharacterId = id.value) {
+  const seq = ++recycleBinRequestSeq;
+  if (targetCharacterId !== id.value) return;
   recycleBinLoading.value = true;
   try {
-    recycleBinEntries.value = await $fetch<RecycleBinEntry[]>(
-      `/api/characters/${encodeURIComponent(id.value)}/memories/trash`,
+    const result = await $fetch<RecycleBinEntry[]>(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/memories/trash`,
     );
+    if (seq === recycleBinRequestSeq && targetCharacterId === id.value) recycleBinEntries.value = result;
   } catch {
+    if (seq !== recycleBinRequestSeq || targetCharacterId !== id.value) return;
     recycleBinEntries.value = [];
     ElMessage.error("回收站加载失败，请检查本地开发服务器日志。");
   } finally {
-    recycleBinLoading.value = false;
+    if (seq === recycleBinRequestSeq) recycleBinLoading.value = false;
   }
 }
 
@@ -952,8 +1000,11 @@ async function runEventExtraction() {
 /**
  * 群聊记录一次只取一个群的消息，切换群时重拉；不传 conversationId 时服务端回最近活跃的那个群。
  */
+let groupChatRequestSeq = 0;
 async function loadGroupChats(conversationId?: string) {
-  if (!id.value) return;
+  const seq = ++groupChatRequestSeq;
+  const targetCharacterId = id.value;
+  if (!targetCharacterId) return;
   groupChatLoading.value = true;
   groupChatError.value = "";
   try {
@@ -964,16 +1015,18 @@ async function loadGroupChats(conversationId?: string) {
     }>(`/api/characters/${encodeURIComponent(id.value)}/group-chats`, {
       query: conversationId ? { conversationId } : {},
     });
+    if (seq !== groupChatRequestSeq || targetCharacterId !== id.value) return;
     groupChatGroups.value = result.groups;
     groupChatSelectedId.value = result.selectedConversationId ?? "";
     groupChatMessages.value = result.messages;
   } catch {
+    if (seq !== groupChatRequestSeq || targetCharacterId !== id.value) return;
     groupChatGroups.value = [];
     groupChatMessages.value = [];
     groupChatSelectedId.value = "";
     groupChatError.value = "群聊记录读取失败，请检查本地开发服务器日志。";
   } finally {
-    groupChatLoading.value = false;
+    if (seq === groupChatRequestSeq) groupChatLoading.value = false;
   }
 }
 
@@ -1016,6 +1069,7 @@ async function loadPrivateChats(conversationId?: string) {
       selectedConversationId: string | null;
       messages: PrivateChatMessage[];
       hasMore: boolean;
+      nextCursor: PrivateChatCursor;
     }>(`/api/characters/${encodeURIComponent(id.value)}/private-chats`, {
       query: conversationId ? { conversationId } : {},
     });
@@ -1024,6 +1078,7 @@ async function loadPrivateChats(conversationId?: string) {
     privateChatSelectedId.value = result.selectedConversationId ?? "";
     privateChatMessages.value = result.messages;
     privateChatHasMore.value = result.hasMore;
+    privateChatNextCursor.value = result.nextCursor;
   } catch {
     if (seq !== privateChatRequestSeq) return;
     privateChatChats.value = [];
@@ -1055,11 +1110,13 @@ async function loadOlderPrivateChat() {
   if (!oldest) return;
   privateChatLoadingMore.value = true;
   try {
+    const cursor = privateChatNextCursor.value ?? { before: oldest.occurredAt, beforeId: oldest.id };
     const result = await $fetch<{
       messages: PrivateChatMessage[];
       hasMore: boolean;
+      nextCursor: PrivateChatCursor;
     }>(`/api/characters/${encodeURIComponent(id.value)}/private-chats`, {
-      query: { conversationId, before: oldest.occurredAt },
+      query: { conversationId, ...cursor },
     });
     // 切了人或者重新载入过：这一页已经不属于当前聊天窗，丢掉。
     if (seq !== privateChatRequestSeq || privateChatSelectedId.value !== conversationId) return;
@@ -1069,6 +1126,7 @@ async function loadOlderPrivateChat() {
       ...privateChatMessages.value,
     ];
     privateChatHasMore.value = result.hasMore;
+    privateChatNextCursor.value = result.nextCursor;
   } catch {
     if (seq === privateChatRequestSeq && privateChatSelectedId.value === conversationId) {
       ElMessage.error("更早的私聊记录读取失败，请稍后重试。");
@@ -1090,8 +1148,32 @@ function privateChatSpeaker(message: PrivateChatMessage) {
 
 onMounted(() => void loadCharacter());
 watch(id, () => {
-  // 换角色时两个记录抽屉都必须关掉，否则会停在上一只鱼的记录上。
+  // Invalidate every in-flight read and discard data tied to the previous character.
+  characterLoadSeq += 1;
+  timelineRequestSeq += 1;
+  snapshotRequestSeq += 1;
+  recycleBinRequestSeq += 1;
+  memoryDetailRequestSeq += 1;
   privateChatRequestSeq += 1;
+  groupChatRequestSeq += 1;
+  currentCharacter.value = null;
+  snapshots.value = [];
+  timelineEntries.value = [];
+  timelineCounts.value = { message: 0, event: 0, memory: 0, snapshot: 0, memoryEvent: 0 };
+  timelineDays.value = {};
+  resetSearch();
+  recycleBinEntries.value = [];
+  recycleBinOpen.value = false;
+  recycleBinLoading.value = false;
+  memoryDialogOpen.value = false;
+  memoryEditDialogOpen.value = false;
+  memoryEditLoading.value = false;
+  editingMemoryId.value = "";
+  draftEditMemoryContent.value = "";
+  channelFilter.value = SOURCE_ALL;
+  if (searchTimer) clearTimeout(searchTimer);
+  if (isSearching.value) void runSearch(true);
+  // 换角色时两个记录抽屉都必须关掉，否则会停在上一只鱼的记录上。
   groupChatOpen.value = false;
   groupChatGroups.value = [];
   groupChatMessages.value = [];
@@ -1101,6 +1183,7 @@ watch(id, () => {
   privateChatMessages.value = [];
   privateChatSelectedId.value = "";
   privateChatHasMore.value = false;
+  privateChatNextCursor.value = null;
   privateChatLoadingMore.value = false;
   void loadCharacter();
 });

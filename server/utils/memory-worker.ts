@@ -26,6 +26,7 @@ import { normalizeFriendAliases } from "./friend-aliases";
 import { MEMORY_JOB_LEASE_MS } from "./memory-job-lease";
 import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
 import { EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS, loadEventMessageBatch } from "./memory-event-source";
+import { rawMessageCleanupDependencyCutoff } from "./memory-event-cleanup";
 
 /** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
 const LEASE_RECOVERABLE_JOB_TYPES = ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "CLEAN_EXPIRED_MESSAGES", "EXTRACT_EVENTS", "GENERATE_JOURNAL"] as const;
@@ -715,10 +716,16 @@ export async function processNextMemoryJob(
       continue;
     }
 
+    const cleanupDependencyCutoff = rawMessageCleanupDependencyCutoff({
+      periodEnd: candidate.periodEnd,
+      now,
+      retentionDays: currentRetentionDays!,
+      contextRetentionDays: CONTEXT_RETENTION_DAYS,
+    });
     const pendingDependency = await findBlockingRawMessageJob(
       prisma,
       candidate.memoryScopeId,
-      candidate.periodEnd,
+      cleanupDependencyCutoff,
       now,
     );
     if (pendingDependency) {
@@ -775,7 +782,13 @@ export async function processNextMemoryJob(
         // 检查与删除之间仍可能有任务被重新入队；不可逆删除前再确认一次。
         // 先锁住任务表：插入/更新任务的事务会等到清理提交，避免「刚检查完又插进来」。
         await tx.$executeRawUnsafe('LOCK TABLE "memory_jobs" IN EXCLUSIVE MODE');
-        const dependency = await findBlockingRawMessageJob(tx, candidate.memoryScopeId, candidate.periodEnd!, now);
+        const dependencyCutoff = rawMessageCleanupDependencyCutoff({
+          periodEnd: candidate.periodEnd!,
+          now,
+          retentionDays: latestRetentionDays!,
+          contextRetentionDays: CONTEXT_RETENTION_DAYS,
+        });
+        const dependency = await findBlockingRawMessageJob(tx, candidate.memoryScopeId, dependencyCutoff, now);
         if (dependency) {
           throw new Error("CLEANUP_DEPENDENCY_APPEARED");
         }

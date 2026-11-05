@@ -1777,7 +1777,7 @@ paths:
       tags: [Memories]
       operationId: listCharacterPrivateChats
       summary: 获取角色在 QQ 私聊里的聊天记录
-      description: 私聊会话按 `c:<QQ号>` 存在 `conversations` + `messages` 里，但记忆页时间线只取长期记忆与阶段总结，原文不进这条流。本接口按 QQ 号单独列出私聊：`chats` 是私聊列表（最多 50 个，按最后发言排序），`messages` 是选中私聊的一页往来消息（默认最近 200 条，`before` 往前翻）。只返回当前用户拥有的角色；桌面本地对话不在这条路径（走 `/chat`）。私聊不进原文清理，因此可以一直往前翻。
+      description: 私聊会话按 `c:<QQ号>` 存在 `conversations` + `messages` 里，但记忆页时间线只取长期记忆与阶段总结，原文不进这条流。本接口按 QQ 号单独列出私聊：`chats` 是私聊列表（最多 50 个，按最后发言排序），`messages` 是选中私聊的一页往来消息（默认最近 200 条，基于 `(occurredAt,id)` 复合游标往前翻，避免同时间戳漏项）。只返回当前用户拥有的角色；桌面本地对话不在这条路径（走 `/chat`）。私聊不进原文清理，因此可以一直往前翻。
       parameters:
         - name: conversationId
           in: query
@@ -1785,8 +1785,12 @@ paths:
           schema: { type: string, format: uuid }
         - name: before
           in: query
-          description: 游标：只返回该时间之前的消息（传上一页最早一条的 occurredAt）。
+          description: 复合游标时间部分；与 beforeId 同时提供可保证同时间戳不漏消息。兼容旧客户端只传 before，但旧模式只返回严格早于此时间的消息。
           schema: { type: string, format: date-time }
+        - name: beforeId
+          in: query
+          description: 复合游标消息 ID 部分；与 before 一起传上一页最早消息的 occurredAt 和 id。
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: 私聊列表与选中私聊的一页消息
@@ -1794,7 +1798,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [chats, selectedConversationId, messages, hasMore, totals]
+                required: [chats, selectedConversationId, messages, hasMore, nextCursor, totals]
                 properties:
                   chats:
                     type: array
@@ -1822,7 +1826,14 @@ paths:
                         occurredAt: { type: string, format: date-time }
                         author: { type: string, nullable: true, description: 对方昵称；她自己的消息为 null。 }
                         isOwner: { type: boolean, description: 这条是不是角色主人发的。 }
-                  hasMore: { type: boolean, description: 是否还有更早的消息（用 before 继续翻）。 }
+                  hasMore: { type: boolean, description: 是否还有更早的消息。 }
+                  nextCursor:
+                    type: object
+                    nullable: true
+                    required: [before, beforeId]
+                    properties:
+                      before: { type: string, format: date-time }
+                      beforeId: { type: string, format: uuid }
                   totals:
                     type: object
                     required: [chats, messages]
@@ -1830,7 +1841,7 @@ paths:
                       chats: { type: integer }
                       messages: { type: integer }
         '400':
-          description: before 不是合法时间
+          description: before 不是合法时间，或只提供了 beforeId
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -2250,6 +2261,8 @@ paths:
           description: 该接口仅限本地开发环境
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: 记忆已在回收站或状态在当前操作期间发生改变
     delete:
       tags: [Memories]
       operationId: permanentlyDeleteTrashedMemory

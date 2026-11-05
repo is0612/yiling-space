@@ -1,4 +1,4 @@
-import { createError, getRouterParam } from "h3";
+import { createError, defineEventHandler, getRouterParam } from "h3";
 import { requireActorUserId } from "../../utils/auth";
 import { requireUuid } from "../../utils/local-api";
 import { getPrisma } from "../../utils/prisma";
@@ -9,6 +9,14 @@ export default defineEventHandler(async (event) => {
   const prisma = getPrisma();
 
   const result = await prisma.$transaction(async (tx) => {
+    // Hold the item lock through state validation, reference counting and deletion.
+    await tx.$queryRaw`
+      SELECT m.id FROM memory_items m
+      JOIN memory_scopes s ON s.id = m."memoryScopeId"
+      JOIN characters c ON c.id = s."characterId"
+      WHERE m.id = ${memoryId}::uuid AND c."ownerId" = ${ownerId}::uuid
+      FOR UPDATE OF m
+    `;
     const existing = await tx.memoryItem.findFirst({
       where: {
         id: memoryId,

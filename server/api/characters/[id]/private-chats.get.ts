@@ -1,7 +1,8 @@
-import { createError, getQuery, getRouterParam } from "h3";
+import { createError, defineEventHandler, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../utils/auth";
 import { requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
+import { nextPrivateChatCursor, privateChatCursorWhere, readPrivateChatCursor } from "../../../utils/private-chat-cursor";
 
 /**
  * 她跟每个人私聊了什么。
@@ -12,7 +13,7 @@ import { getPrisma } from "../../../utils/prisma";
  *
  * 只认 `c:<QQ号>` 的会话键；桌面本地对话走 `/chat`，混进来会重复。
  * 私聊列表最多 50 个（按最后发言排序；实际很少会有人私聊她）。
- * 消息按游标分页：默认最近 200 条，`before` 传上一页最早的时间继续往前翻，
+ * 消息按时间戳 + 消息 ID 复合游标分页：时间戳相同时也能完整翻页，
  * 不做「只显示最近 N 条」的硬截断 —— 私聊记录的意义就是能翻到底。
  */
 
@@ -54,10 +55,19 @@ export default defineEventHandler(async (event) => {
   const requestedId = typeof query.conversationId === "string" && query.conversationId.trim()
     ? requireUuid(query.conversationId, "会话")
     : null;
-  const beforeRaw = typeof query.before === "string" ? query.before.trim() : "";
-  const before = beforeRaw ? new Date(beforeRaw) : null;
-  if (before && Number.isNaN(before.getTime())) {
-    throw createError({ statusCode: 400, statusMessage: "before 必须是时间。" });
+  // Keep timestamp-only pagination for older clients; current clients use both keys.
+  let cursor;
+  let legacyBefore: Date | null = null;
+  try {
+    if (typeof query.before === "string" && query.beforeId === undefined) {
+      legacyBefore = new Date(query.before);
+      if (!query.before.trim() || !Number.isFinite(legacyBefore.getTime())) throw new Error("Invalid timestamp");
+    } else {
+      cursor = readPrivateChatCursor(query.before, query.beforeId);
+      if (cursor) cursor.id = requireUuid(cursor.id, "消息游标");
+    }
+  } catch {
+    throw createError({ statusCode: 400, statusMessage: "before 必须是有效时间，beforeId 需与 before 一同提供。" });
   }
 
   const conversations = await prisma.conversation.findMany({
@@ -101,7 +111,7 @@ export default defineEventHandler(async (event) => {
     rows = await prisma.message.findMany({
       where: {
         conversationId: selected.conversationId,
-        ...(before ? { occurredAt: { lt: before } } : {}),
+        ...(cursor ? privateChatCursorWhere(cursor) : legacyBefore ? { occurredAt: { lt: legacyBefore } } : {}),
       },
       orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       take: MESSAGE_PAGE_SIZE,
@@ -109,6 +119,10 @@ export default defineEventHandler(async (event) => {
     });
     rows.reverse();
   }
+
+  const nextCursor = rows.length === MESSAGE_PAGE_SIZE
+    ? nextPrivateChatCursor(rows[0])
+    : null;
 
   return {
     chats,
@@ -122,6 +136,7 @@ export default defineEventHandler(async (event) => {
       isOwner: readBooleanField(message.metadata, "isOwner"),
     })),
     hasMore: rows.length === MESSAGE_PAGE_SIZE,
+    nextCursor,
     totals: {
       chats: chats.length,
       messages: chats.reduce((sum, chat) => sum + chat.messageCount, 0),
