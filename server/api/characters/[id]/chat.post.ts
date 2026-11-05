@@ -283,7 +283,7 @@ export default defineEventHandler(async (event) => {
    * 认不出是谁（或问句里没提人）就不传，退回纯字符串匹配。
    */
   const participantName = parseEventParticipantQuery(retrievalQuery);
-  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName) : [];
+  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName, { characterId, platform: "web" }) : [];
   const eventSelection = selectEventsForPrompt(retrievalQuery, eventCandidates, {
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
     tokenBudget: resolveEventTokenBudget(character.modelConfig),
@@ -431,7 +431,7 @@ export default defineEventHandler(async (event) => {
       loadCandidates: async (searchQuery) => {
         const searchParticipantName = parseEventParticipantQuery(searchQuery);
         const searchParticipantIds = searchParticipantName
-          ? await resolveParticipantAccounts(prisma, searchParticipantName)
+          ? await resolveParticipantAccounts(prisma, searchParticipantName, { characterId, platform: "web" })
           : [];
         const searchRange = parseEventTimeRange(searchQuery, new Date(), timeZone);
         const searchTerms = extractMemoryAssistantSearchTerms(searchQuery, 20);
