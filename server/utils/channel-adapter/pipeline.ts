@@ -1661,7 +1661,36 @@ async function runChannelTurn(input: {
               });
               return uniqueById([...matched, ...fallback]);
             }));
-        const assistantRawMessages = rawRowsByScope.flat().map((row) => {
+        // 主人私聊可以回看角色全局范围中「指定熟人自己发过的群消息」：
+        // 仅在明确识别到人物账号时启用，只取该人物的 USER 原文，不把整群聊天搬进私聊。
+        // 普通好友私聊仍然只能检索当前用户自己的 private scope。
+        const ownerGroupRawRows = !isGroup && isOwnerTurn && searchParticipantIds.length
+          ? await prisma.message.findMany({
+              where: {
+                conversation: {
+                  memoryScopeId: globalScope.id,
+                  externalConversationId: { startsWith: "g:" },
+                },
+                role: "USER",
+                AND: [
+                  { metadata: { path: ["platform"], equals: input.platform } },
+                  {
+                    OR: searchParticipantIds.map((platformUid) => ({
+                      metadata: { path: ["authorOpenId"], equals: platformUid },
+                    })),
+                  },
+                ],
+                ...rangeWhere,
+              },
+              orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
+              take: searchRange ? 500 : 500,
+              select: {
+                id: true, role: true, content: true, occurredAt: true, metadata: true,
+                conversation: { select: { memoryScopeId: true } },
+              },
+            })
+          : [];
+        const assistantRawMessages = [...rawRowsByScope.flat(), ...ownerGroupRawRows].map((row) => {
           const speaker = readStoredSpeaker(row.metadata);
           return {
             id: row.id,
