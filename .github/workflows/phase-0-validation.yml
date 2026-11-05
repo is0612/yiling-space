@@ -146,6 +146,11 @@ jobs:
       - name: TypeScript 类型检查
         run: yarn run typecheck
 
+      # 仓库是公开的：docs/ 与根目录 .md 里不该出现真实号码（见 docs/security.md §6）。
+      # 昵称黑名单在 .data/privacy-denylist.txt，CI 里没有这个文件，所以这里只查号码。
+      - name: 隐私门禁
+        run: yarn run check:privacy
+
       - name: 周期记忆调度单元测试
         run: yarn run test:scheduler
 

@@ -34,6 +34,7 @@ design/
 
 # 个人调研笔记与原始聊天记录（某个群的发言整理、外部工具的使用笔记）：放 .data/notes/，只在本地。
 # docs/ 只放工程与产品文档——聊天记录、别人的昵称、真实群号不要写进仓库。
+# 这条规矩由 `yarn check:privacy` 执行（scripts/check-privacy.mjs），不再只是注释。
 .data/notes/
 
 # logs and OS/editor files
