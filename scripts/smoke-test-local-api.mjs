@@ -413,7 +413,7 @@ const importedTimeline = await request(`/api/characters/${created.id}/timeline`)
 assert(importedTimeline.entries.length === 4, "The timeline should include one memory and all three imported messages.");
 assert(importedTimeline.entries.some((entry) => entry.id === `memory:${createdMemory.id}` && entry.title === "事实记忆" && entry.summary.includes(`CI 已修改记忆 ${unique}`)), "Timeline must show the updated memory content and category.");
 assert(importedTimeline.entries.filter((entry) => entry.type === "message").length === 3, "Timeline must include all imported conversation messages.");
-assert(importedTimeline.some((entry) => entry.summary.includes(`角色回复 ${unique}`)), "Timeline must include imported assistant content.");
+assert(importedTimeline.entries.some((entry) => entry.summary.includes(`角色回复 ${unique}`)), "Timeline must include imported assistant content.");
 
 const edited = await request(`/api/characters/${created.id}`, {
   method: "PATCH",
@@ -616,9 +616,9 @@ assert(snapshotHistory.some((snapshot) => snapshot.id === createdSnapshot.id && 
 assert(snapshotHistory.some((snapshot) => snapshot.id === regeneratedSnapshot.id && snapshot.version === 2 && snapshot.status === "当前版本"), "The regenerated version must be current and increment to version 2.");
 
 const timelineAfterSnapshots = await request(`/api/characters/${created.id}/timeline`);
-assert(Array.isArray(timelineAfterSnapshots) && timelineAfterSnapshots.length === 6, "The real timeline should include the saved memory, three messages, and both snapshot versions.");
-assert(timelineAfterSnapshots.some((entry) => entry.id === `snapshot:${createdSnapshot.id}` && entry.type === "snapshot" && entry.tag === "已被替代"), "The timeline should show superseded snapshot versions.");
-assert(timelineAfterSnapshots.some((entry) => entry.id === `snapshot:${regeneratedSnapshot.id}` && entry.type === "snapshot" && entry.tag === "当前版本"), "The timeline should show the current snapshot version.");
+assert(Array.isArray(timelineAfterSnapshots.entries) && timelineAfterSnapshots.entries.length === 6, "The real timeline should include the saved memory, three messages, and both snapshot versions.");
+assert(timelineAfterSnapshots.entries.some((entry) => entry.id === `snapshot:${createdSnapshot.id}` && entry.type === "snapshot" && entry.tag === "已被替代"), "The timeline should show superseded snapshot versions.");
+assert(timelineAfterSnapshots.entries.some((entry) => entry.id === `snapshot:${regeneratedSnapshot.id}` && entry.type === "snapshot" && entry.tag === "当前版本"), "The timeline should show the current snapshot version.");
 
 const trashedMemory = await request(`/api/memories/${createdMemory.id}/trash`, { method: "POST" });
 assert(trashedMemory.status === "TRASHED" && trashedMemory.statusBeforeTrash === "ACTIVE", "Moving a memory to trash should retain its prior status.");
@@ -626,13 +626,13 @@ assert(typeof trashedMemory.deletedAt === "string", "Trashed memory should recor
 const trashList = await request(`/api/characters/${created.id}/memories/trash`);
 assert(trashList.some((memory) => memory.id === createdMemory.id && memory.content === `CI 已修改记忆 ${unique}`), "Recycle-bin API should return the soft-deleted memory.");
 const timelineWithoutTrashedMemory = await request(`/api/characters/${created.id}/timeline`);
-assert(!timelineWithoutTrashedMemory.some((entry) => entry.id === `memory:${createdMemory.id}`), "Trashed memories must not appear in the active timeline.");
-assert(timelineWithoutTrashedMemory.length === 5, "Moving a memory to trash should preserve messages and both snapshot versions.");
+assert(!timelineWithoutTrashedMemory.entries.some((entry) => entry.id === `memory:${createdMemory.id}`), "Trashed memories must not appear in the active timeline.");
+assert(timelineWithoutTrashedMemory.entries.length === 5, "Moving a memory to trash should preserve messages and both snapshot versions.");
 
 const restoredFromTrash = await request(`/api/memories/${createdMemory.id}/restore`, { method: "POST" });
 assert(restoredFromTrash.status === "ACTIVE" && restoredFromTrash.statusBeforeTrash === null && restoredFromTrash.deletedAt === null, "Restoring a memory should return it to its prior status and clear trash metadata.");
 assert((await request(`/api/characters/${created.id}/memories/trash`)).every((memory) => memory.id !== createdMemory.id), "Restored memory should disappear from the recycle bin.");
-assert((await request(`/api/characters/${created.id}/timeline`)).some((entry) => entry.id === `memory:${createdMemory.id}`), "Restored memory should return to the timeline.");
+assert((await request(`/api/characters/${created.id}/timeline`)).entries.some((entry) => entry.id === `memory:${createdMemory.id}`), "Restored memory should return to the timeline.");
 
 await request(`/api/memories/${createdMemory.id}/trash`, { method: "POST" });
 const permanentDelete = await request(`/api/memories/${createdMemory.id}`, { method: "DELETE" });
@@ -641,7 +641,7 @@ assert(permanentDelete.snapshotsPreserved === true && permanentDelete.preservedS
 const finalTrashList = await request(`/api/characters/${created.id}/memories/trash`);
 assert(finalTrashList.every((memory) => memory.id !== createdMemory.id), "Permanently deleted memory should no longer exist in the recycle bin.");
 const timelineAfterPermanentDelete = await request(`/api/characters/${created.id}/timeline`);
-assert(!timelineAfterPermanentDelete.some((entry) => entry.id === `memory:${createdMemory.id}`), "Permanently deleted memory should not appear in the timeline.");
+assert(!timelineAfterPermanentDelete.entries.some((entry) => entry.id === `memory:${createdMemory.id}`), "Permanently deleted memory should not appear in the timeline.");
 const snapshotsAfterPermanentDelete = await request(`/api/characters/${created.id}/snapshots`);
 assert(snapshotsAfterPermanentDelete.length === 2, "Permanent deletion must not rewrite or remove existing snapshot versions.");
 const missingMemoryResponse = await fetch(new URL(`/api/memories/${createdMemory.id}`, baseUrl));
