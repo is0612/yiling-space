@@ -177,9 +177,14 @@ function findPrismaClient() {
 const HAS_NUXT = Boolean(PKG.dependencies?.nuxt ?? PKG.devDependencies?.nuxt);
 
 /* ---------- yarn ---------- */
-/** Windows 上 yarn / npm 是 .cmd 垫片，必须过 shell 才起得来。 */
+/**
+ * Windows 上 yarn / npm 是 .cmd 垫片，必须过 shell 才起得来。
+ * shell:true 时把参数拼成一条命令串再交给 shell —— Node 24 起把「args 数组 + shell」
+ * 视为不安全用法并抛 DEP0190 警告（截图里那行黄字就是它），拼串就干净了。
+ */
 function commandOutput(cmd, args) {
-  const res = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", shell: true, timeout: 30_000 });
+  const line = [cmd, ...args].join(" ");
+  const res = spawnSync(line, { cwd: ROOT, encoding: "utf8", shell: true, timeout: 30_000 });
   if (res.error || res.status !== 0) return null;
   return `${res.stdout || ""}`.trim();
 }
@@ -271,6 +276,107 @@ function ensureDeps(yarnCmd) {
   }
 }
 
+/* ---------- Docker ---------- */
+/** 拉起引擎总共肯等多久。Docker Desktop 冷启动 + WSL 后端实测常见 40~90 秒，慢盘会更久。 */
+const DOCKER_WAIT_MS = Number(process.env.LAUNCH_DOCKER_WAIT_MS || 0) || 180_000;
+
+/** 引擎在跑吗（CLI 在但 Desktop 没启动时，docker info 会失败）。 */
+function dockerDaemonUp() {
+  const res = spawnSync("docker", ["info"], { cwd: ROOT, stdio: "ignore", timeout: 20_000 });
+  return res.status === 0;
+}
+
+/** Docker Desktop 4.37+ 自带 `docker desktop start`，同步等到引擎可用，比拉 GUI 进程稳。 */
+function supportsDockerDesktopCli() {
+  const help = commandOutput("docker", ["desktop", "--help"]);
+  return Boolean(help && /\bstart\b/.test(help));
+}
+
+/**
+ * 找 Docker Desktop 的启动入口（老版本没有 desktop 子命令时的兜底）。
+ * Windows 装法有几种（Program Files / 用户目录 / winget），挨个探；都探不到就交给
+ * 开始菜单的 App Execution Alias，由 shell 去解析。
+ */
+function dockerStarter() {
+  if (process.platform === "win32") {
+    const roots = [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.LOCALAPPDATA]
+      .filter(Boolean);
+    const rels = [
+      ["Docker", "Docker", "Docker Desktop.exe"],
+      ["Docker", "Docker Desktop.exe"],
+      ["Programs", "Docker", "Docker", "Docker Desktop.exe"],
+      ["Docker Desktop", "Docker Desktop.exe"],
+    ];
+    for (const root of roots) {
+      for (const rel of rels) {
+        const exe = path.join(root, ...rel);
+        if (existsSync(exe)) return { cmd: exe, args: [], shell: false };
+      }
+    }
+    return { cmd: "Docker Desktop.exe", args: [], shell: true };
+  }
+  if (process.platform === "darwin") return { cmd: "open", args: ["-a", "Docker"], shell: false };
+  return { cmd: "systemctl", args: ["start", "docker"], shell: false };
+}
+
+/** 在给定预算内轮询到引擎就绪。 */
+async function waitDockerDaemon(budgetMs) {
+  const startedAt = Date.now();
+  let nextNotice = 15_000;
+  while (Date.now() - startedAt < budgetMs) {
+    await sleep(2000);
+    if (dockerDaemonUp()) {
+      ok(`Docker 引擎已就绪（等了 ${Math.round((Date.now() - startedAt) / 1000)} 秒）`);
+      return true;
+    }
+    const elapsed = Date.now() - startedAt;
+    if (elapsed >= nextNotice) {
+      console.log(dim(`      引擎还在起，继续等…（已 ${Math.round(elapsed / 1000)} 秒）`));
+      nextNotice += 15_000;
+    }
+  }
+  return false;
+}
+
+/** 拉起引擎并等到可用。返回 true 表示现在可以敲 docker 命令了。 */
+async function ensureDockerDaemon() {
+  if (dockerDaemonUp()) return true;
+
+  const t0 = Date.now();
+  const remaining = () => Math.max(0, DOCKER_WAIT_MS - (Date.now() - t0));
+
+  // 首选官方 CLI：它会自己把 Desktop 拉起来并同步等引擎，进度也由它打印。
+  if (supportsDockerDesktopCli()) {
+    const budget = Math.max(60, Math.round(remaining() / 1000));
+    console.log(dim(`      正在启动 Docker Desktop，最多等 ${budget} 秒…`));
+    spawnSync(`docker desktop start --timeout ${budget}`, {
+      cwd: ROOT,
+      stdio: "inherit",
+      shell: true,
+      timeout: (budget + 20) * 1000,
+    });
+    if (dockerDaemonUp()) {
+      ok(`Docker 引擎已就绪（等了 ${Math.round((Date.now() - t0) / 1000)} 秒）`);
+      return true;
+    }
+    if (remaining() < 15_000) return false;
+    warn("docker desktop start 没成功，换直接拉起 Docker Desktop 再等一次");
+  }
+
+  // 兜底：直接起 GUI 进程，然后自己轮询引擎。
+  const starter = dockerStarter();
+  console.log(dim(`      正在启动 Docker Desktop（${starter.cmd}）…`));
+  try {
+    const child = spawn(starter.cmd, starter.args, { detached: true, stdio: "ignore", shell: starter.shell });
+    child.on("error", () => {}); // 起不来交给轮询统一报错
+    child.unref();
+  } catch {
+    warn("启动 Docker Desktop 失败");
+    return false;
+  }
+  return waitDockerDaemon(remaining());
+}
+
 /* ---------- 数据库 ---------- */
 async function ensureDatabase(env) {
   const db = parseDatabase(env);
@@ -282,18 +388,37 @@ async function ensureDatabase(env) {
   }
 
   const container = detectDbContainer();
-  warn(`连不上，尝试拉起 Docker 容器 ${container}`);
-  if (!hasCommand("docker", ["info"])) {
+  warn(`连不上，先把数据库拉起来（容器 ${container}）`);
+
+  // 1. 连 docker 命令都没有 —— 只能靠用户装，或者改用本机 PostgreSQL。
+  if (!hasCommand("docker", ["--version"])) {
     throw new Error(
       [
-        "Docker 没装、或者装好但没启动。三选一：",
-        "  1. 启动 Docker Desktop，再双击一次这个文件",
+        "这台机器上没有 docker 命令。三选一：",
+        "  1. 装 Docker Desktop（https://www.docker.com/products/docker-desktop/），装完双击一次这个文件",
         "  2. 本机自装的 PostgreSQL 开着服务，把 .env 的 POSTGRES_PORT 改成它的端口",
         "  3. 从零重来：yarn setup",
       ].join("\n"),
     );
   }
 
+  // 2. 装是装了，多半只是 Desktop 没启动 —— 自己拉起来，别让用户去开。
+  if (!(await ensureDockerDaemon())) {
+    throw new Error(
+      [
+        "Docker 引擎没能自动起来。常见原因按概率排：",
+        "  · Docker Desktop 卡在登录 / 更新 / 接受协议弹窗上 —— 托盘点开图标看完它想让你点什么",
+        "  · WSL2 后端没就绪 —— 看 `docker desktop status` 的输出，或在设置里点 Troubleshoot → Restart",
+        "  · 虚拟化被关掉了 —— 任务管理器 → 性能 → CPU 里的「虚拟化」要是已启用",
+        "查完还是不行，三选一：",
+        "  1. 手动启动 Docker Desktop，等它变绿，再双击一次这个文件（之后就不用管了）",
+        "  2. 本机自装的 PostgreSQL 开着服务，把 .env 的 POSTGRES_PORT 改成它的端口",
+        "  3. 从零重来：yarn setup",
+      ].join("\n"),
+    );
+  }
+
+  // 3. 引擎在跑，把容器起来：先试已有容器（快、保留数据卷），没有再 compose up。
   const started =
     spawnSync("docker", ["start", container], { cwd: ROOT, stdio: "ignore" }).status === 0 ||
     spawnSync("docker", ["compose", "up", "-d", "db"], { cwd: ROOT, stdio: "ignore" }).status === 0;
@@ -303,13 +428,13 @@ async function ensureDatabase(env) {
     );
   }
 
-  if (await waitPort(db.host, db.port, 60_000)) {
+  if (await waitPort(db.host, db.port, 90_000)) {
     ok("数据库已就绪");
     return;
   }
   throw new Error(
     [
-      "等了 60 秒端口还没通。多半是密码不一致或容器在重启：",
+      "等了 90 秒端口还没通。多半是密码不一致或容器在重启：",
       "  docker compose logs db",
       "密码对不上时最省事的做法是重跑 yarn setup（会问要不要重建 .env，重建前备份成 .env.bak）。",
     ].join("\n"),
