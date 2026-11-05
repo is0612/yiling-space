@@ -1,6 +1,9 @@
-import { createError, readBody } from "h3";
+// `defineEventHandler` 从 h3 显式引入：Nitro 会自动注入，但脚本化测试直接 import 这个
+// 处理器时没有那层自动导入（和 `memory-events/extract.post.ts` 的写法保持一致）。
+import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
+import { cancelPendingAutoGenerationJobs } from "../../../../utils/memory-auto-generation";
 import { getPrisma } from "../../../../utils/prisma";
 
 const allowedRetentionDays = new Set([0, 30, 90, 180]);
@@ -72,6 +75,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: "周期启用锚点无效。" });
   }
 
+  const now = new Date();
   const settings = await prisma.$transaction(async (tx) => {
     // Ensure a row exists, then lock it before deciding whether an interval change
     // should be immediate or deferred. This serializes settings changes with the
@@ -123,7 +127,7 @@ export default defineEventHandler(async (event) => {
       nextSnapshotAt = existing.nextSnapshotAt ?? addDays(existing.anchorAt, existing.snapshotIntervalDays);
     }
 
-    return tx.characterMemorySetting.update({
+    const saved = await tx.characterMemorySetting.update({
       where: { characterId },
       data: {
         snapshotIntervalDays: activeIntervalDays,
@@ -137,19 +141,53 @@ export default defineEventHandler(async (event) => {
         rawMessageCleanupEnabled,
       },
     });
+
+    /**
+     * 关掉「自动生成阶段总结与忆泡」时，把已经排队但还没跑的自动任务一起作废。
+     *
+     * 只把 `nextSnapshotAt` 置空是不够的：那只是停掉调度器的下一次排期，
+     * 队列里的 `QUEUED` / `RETRY_WAIT` 任务照样会被 Worker 领走并且跑完 ——
+     * 关掉之后页面上还会冒出新的忆泡（见 `memory-auto-generation.ts` 的说明）。
+     */
+    const cancelled = autoSnapshotEnabled
+      ? { count: 0, types: [] as string[] }
+      : await cancelPendingAutoGenerationJobs(tx, { characterId, now });
+
+    // 开关本身没有独立的审计入口，这里补一条：以后能回答「什么时候关的、当时清掉了什么」。
+    if (!autoSnapshotEnabled) {
+      await tx.auditLog.create({
+        data: {
+          actorType: "USER",
+          actorId: ownerId,
+          characterId,
+          action: "memory.auto_generation_disabled",
+          entityType: "Character",
+          entityId: characterId,
+          details: {
+            autoSnapshotEnabled: false,
+            cancelledPendingJobs: cancelled.count,
+            cancelledJobTypes: cancelled.types,
+          },
+        },
+      });
+    }
+
+    return { saved, cancelled };
   });
 
   return {
-    snapshotIntervalDays: settings.pendingSnapshotIntervalDays ?? settings.snapshotIntervalDays,
-    activeSnapshotIntervalDays: settings.snapshotIntervalDays,
-    pendingSnapshotIntervalDays: settings.pendingSnapshotIntervalDays,
-    timezone: settings.timezone,
-    anchorAt: settings.anchorAt.toISOString(),
-    rawMessageRetentionDays: settings.rawMessageRetentionDays ?? 0,
-    rawMessageCleanupEnabled: settings.rawMessageCleanupEnabled,
-    autoSnapshotEnabled: settings.autoSnapshotEnabled,
-    changePolicy: settings.changePolicy,
-    nextSnapshotAt: settings.nextSnapshotAt?.toISOString() ?? null,
-    updatedAt: settings.updatedAt.toISOString(),
+    snapshotIntervalDays: settings.saved.pendingSnapshotIntervalDays ?? settings.saved.snapshotIntervalDays,
+    activeSnapshotIntervalDays: settings.saved.snapshotIntervalDays,
+    pendingSnapshotIntervalDays: settings.saved.pendingSnapshotIntervalDays,
+    timezone: settings.saved.timezone,
+    anchorAt: settings.saved.anchorAt.toISOString(),
+    rawMessageRetentionDays: settings.saved.rawMessageRetentionDays ?? 0,
+    rawMessageCleanupEnabled: settings.saved.rawMessageCleanupEnabled,
+    autoSnapshotEnabled: settings.saved.autoSnapshotEnabled,
+    changePolicy: settings.saved.changePolicy,
+    nextSnapshotAt: settings.saved.nextSnapshotAt?.toISOString() ?? null,
+    updatedAt: settings.saved.updatedAt.toISOString(),
+    /** 这次保存顺带作废了多少条排队中的阶段总结 / 忆泡任务。 */
+    cancelledPendingJobs: settings.cancelled.count,
   };
 });

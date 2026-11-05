@@ -10,6 +10,7 @@ import type { Acquaintances, CloseFriend } from "./friends";
 // 只引类型：群活跃统计连着 Prisma，提示词单测不该因此去连库。
 import type { GroupActivityContext } from "./group-activity-stats";
 import type { JournalFact } from "./journal-facts";
+import { DEFAULT_LLM_TIMEOUT_MS, readConfiguredLlmTimeoutMs } from "./llm-timeout";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 export type ConversationContextMessage = {
@@ -978,8 +979,11 @@ export async function generateConversationReply(input: ConversationReplyInput): 
    */
   const effectiveMaxTokens = thinking ? Math.max(maxTokens, THINKING_MIN_TOKENS) : maxTokens;
 
-  const timeoutRaw = Number(process.env.LLM_TIMEOUT_MS ?? 60_000);
-  const timeoutMs = Number.isInteger(timeoutRaw) && timeoutRaw >= 5_000 && timeoutRaw <= 180_000 ? timeoutRaw : 60_000;
+  /**
+   * 聊天用 `LLM_CHAT_TIMEOUT_MS`，不再和忆泡任务共用一个值 ——
+   * 那边一块要等上百条消息，这里只是一句回复，混在一起只能二选一地牺牲。
+   */
+  const timeoutMs = readConfiguredLlmTimeoutMs("chat") ?? DEFAULT_LLM_TIMEOUT_MS.chat;
 
   const emojiFaces = input.emojiFaces ?? [];
   // 表情包优先：有素材库就只给素材库。两套清单同时进提示词，模型会在「官方脸」和
@@ -1344,7 +1348,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       });
     } catch (error) {
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-        throw new Error("LLM_TIMEOUT: 模型请求超时，请检查 LLM_TIMEOUT_MS 或模型服务状态。");
+        throw new Error("LLM_TIMEOUT: 模型请求超时，请检查 LLM_CHAT_TIMEOUT_MS 或模型服务状态。");
       }
       /**
        * `fetch failed` 这四个字什么都不说：DNS 超时（ENOTFOUND / EAI_AGAIN）、连接被重置

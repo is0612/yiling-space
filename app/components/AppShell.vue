@@ -266,6 +266,8 @@ function isActive(item: NavigationItem) {
         </div>
       </header>
       <main><slot /></main>
+      <!-- 记忆任务的进度挂在壳上：任务在服务端跑，切页面不该让它「消失」。 -->
+      <MemoryProgressPanel />
     </div>
   </div>
 </template>

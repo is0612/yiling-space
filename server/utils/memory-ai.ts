@@ -1,4 +1,5 @@
 import { buildChatCompletionsEndpoint, isChatModelConfigured } from "./chat-model-config";
+import { DEFAULT_LLM_TIMEOUT_MS, readConfiguredLlmTimeoutMs } from "./llm-timeout";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 import { createHash } from "node:crypto";
@@ -617,10 +618,8 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
   // 记忆提炼的输入比单轮对话大得多（一个周期上百条消息 + 现有记忆），思考型模型
   // 在 60 秒默认值下会超时；分块抽取后每块一百多条、又要顺序跑好几次，120 秒也踩过线
   // （2026-11-01 第 5 块超时，前 4 块白跑）。后台任务优先正确性，默认给满 180 秒。
-  const timeoutRaw = Number(process.env.LLM_TIMEOUT_MS ?? 180_000);
-  const timeoutMs = Number.isInteger(timeoutRaw) && timeoutRaw >= 5_000 && timeoutRaw <= 180_000
-    ? timeoutRaw
-    : 180_000;
+  // 走 `LLM_JOB_TIMEOUT_MS`，不再借聊天那个值 —— 2026-11-05 共用 60 秒，每块都 abort。
+  const timeoutMs = readConfiguredLlmTimeoutMs("job") ?? DEFAULT_LLM_TIMEOUT_MS.job;
   // Keep connection settings out of the user prompt. Project fields explicitly so
   // extra runtime properties on nested objects cannot accidentally be serialized.
   const promptInput = {

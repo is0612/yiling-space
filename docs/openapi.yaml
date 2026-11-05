@@ -1062,6 +1062,67 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: 仅管理员可访问
+  /memory-progress:
+    get:
+      tags: [Memories]
+      operationId: listMemoryProgress
+      summary: 正在跑的记忆任务（忆泡整理 / 阶段总结）
+      description: |
+        右下角进度面板轮询的数据源。状态来源是 `memory_jobs` 行本身，不是某个 HTTP 请求，
+        所以切页面、刷新都不影响「任务在跑」这件事被看见。
+
+        两类任务的口径不同：`EXTRACT_EVENTS` 是分块提交的，`done/total` 是**真实**进度
+        （游标之前的消息算已完成），可画确定进度条；`GENERATE_SNAPSHOT` 是一次整段模型调用，
+        中间没有可观测态，`done/total` 恒为 `null`，前端只画不确定进度条。
+
+        只返回当前账号名下的任务；刚结束（90 秒内）的任务会保留，面板才显示得出「完成 / 失败」。
+      responses:
+        '200':
+          description: 进行中的任务，运行中在前
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs, checkedAt]
+                properties:
+                  checkedAt: { type: string, format: date-time }
+                  jobs:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, type, status, characterId, characterName, label, done, total, eventCount, startedAt, updatedAt, leaseExpired, lastError]
+                      properties:
+                        id: { type: string, format: uuid }
+                        type:
+                          type: string
+                          enum: [GENERATE_SNAPSHOT, EXTRACT_EVENTS]
+                        status:
+                          type: string
+                          enum: [QUEUED, RUNNING, RETRY_WAIT, SUCCEEDED, SKIPPED, FAILED, CANCELLED]
+                        characterId: { type: string, format: uuid }
+                        characterName: { type: string }
+                        label:
+                          type: string
+                          description: 给人看的段名，例如「忆泡整理 · 11/05 增量」「阶段总结 · 11/05 — 11/06」
+                        done:
+                          type: integer
+                          nullable: true
+                          description: 已处理消息数；`null` 表示算不出比例（阶段总结、排队中）
+                        total:
+                          type: integer
+                          nullable: true
+                        eventCount:
+                          type: integer
+                          nullable: true
+                          description: 这一段已写入的忆泡条数；阶段总结没有这个概念
+                        startedAt: { type: string, format: date-time, nullable: true }
+                        updatedAt: { type: string, format: date-time }
+                        leaseExpired:
+                          type: boolean
+                          description: 运行中但租约（5 分钟）已过期，领走它的进程可能不在了
+                        lastError: { type: string, nullable: true }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /characters:
     get:
       tags: [Characters]
@@ -1908,7 +1969,7 @@ paths:
       operationId: extractCharacterMemoryEvents
       summary: 立即整理忆泡（昨天收口 + 今天增量）
       description: >-
-        手动触发昨天收口与今天增量，范围与调度器一致（角色全局、主人私人、非主人外部身份的 c: 私聊）。复用 events-final/events-hour 幂等任务；等待或重试中的任务可唤醒，已成功或跳过的小时任务在进度游标后有新消息时可再次入队，只处理新增内容。已完成的昨天收口不重开，运行中、失败或取消任务不会自动抢占或复活。仅当场尝试执行本次目标任务，不代跑其他角色的任务。没有全局范围返回 409；模型未配置时任务留在队列。
+        手动触发昨天收口与今天增量，范围与调度器一致（角色全局、主人私人、非主人外部身份的 c: 私聊）。复用 events-final/events-hour 幂等任务；等待或重试中的任务可唤醒，失败（FAILED）与已取消（CANCELLED）的那一条会被重新排队并清零 attemptCount 再跑一次（手动点击就是人工重试，调度器本身不会复活它们），已成功或跳过的小时任务在进度游标后有新消息时可再次入队，只处理新增内容。已完成的昨天收口不重开，运行中的任务不会被抢占（但租约过期超过 5 分钟的「卡住」任务会被这次点击接管重跑，判定与任务监控的重新入队共用同一个常量）。仅当场尝试执行本次目标任务，不代跑其他角色的任务。没有全局范围返回 409；模型未配置时任务留在队列。
       responses:
         '200':
           description: 排队与执行结果
@@ -1931,6 +1992,13 @@ paths:
                       properties:
                         status: { type: string, enum: [SUCCEEDED, SKIPPED, RETRY_WAIT, FAILED, CANCELLED] }
                         message: { type: string }
+                  notice:
+                    type: string
+                    enum: [queued, running, no-new-messages]
+                    description: 给页面判断空结果的原因。queued 表示有段被排上；running 表示这一段正被 Worker 执行、本轮没抢；no-new-messages 表示确实没有可整理的新对话。
+                  processing:
+                    type: boolean
+                    description: 执行超过了请求内的等待窗口（约 3.5 秒），已经转到后台继续跑；`processed` 此时为空，进度改看 `/memory-progress`。真值不表示失败，也不表示任务丢了。
                   windows:
                     type: array
                     items:
@@ -2697,6 +2765,9 @@ paths:
                     nullable: true
                     description: 成功产出后新的下一次归档时间；没有成功时为空，原计划不变
                   intervalDays: { type: integer, minimum: 1, maximum: 8 }
+                  processing:
+                    type: boolean
+                    description: 执行超过了请求内的等待窗口（约 3.5 秒），已经转到后台继续跑；此时 `processed` 为空、`advancedTo` 为 `null`，进度改看 `/memory-progress`。
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -4937,6 +5008,10 @@ components:
           default: false
           description: 是否允许后台清理超过保留期限的原始消息
         autoSnapshotEnabled: { type: boolean, default: true }
+        cancelledPendingJobs:
+          type: integer
+          readOnly: true
+          description: 仅 PATCH 返回。本次保存把自动生成切到关闭时，被一并作废的排队中 `GENERATE_SNAPSHOT` / `EXTRACT_EVENTS` 任务数；打开或本来就没排队时为 0。
         changePolicy:
           type: string
           enum: [NEXT_CYCLE, IMMEDIATE_RECALC]

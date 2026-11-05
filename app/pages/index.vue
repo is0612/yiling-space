@@ -162,205 +162,208 @@ async function handleRefresh() {
 
 <template>
   <div class="page-wrap ov-a">
-    <div
-      v-if="alerts.length"
-      class="alert-bar"
-      role="status"
-    >
-      <span class="alert-dot" />
-      <div class="alert-body">
-        <span
-          v-for="alert in alerts"
-          :key="alert.text"
-          class="alert-item"
-        >{{ alert.text }}</span>
-      </div>
-      <button
-        v-for="route in alertRoutes"
-        :key="route.to"
-        class="card-link"
-        type="button"
-        @click="navigateTo(route.to)"
+    <!-- 内容栏：靠左收窄，右边那截留白就是角色的位置 -->
+    <div class="ov-stage">
+      <div
+        v-if="alerts.length"
+        class="alert-bar"
+        role="status"
       >
-        {{ route.label }}<el-icon><ArrowRight /></el-icon>
-      </button>
-    </div>
-    <div
-      v-else-if="characters.length"
-      class="alert-bar is-quiet"
-      role="status"
-    >
-      <span class="alert-dot is-ok" />
-      <span>{{ copyState() }}</span>
-    </div>
-
-    <!-- 空状态：还没建角色时，总览应该告诉人第一步做什么 -->
-    <div
-      v-if="overview && !characters.length"
-      class="guide"
-    >
-      <div class="guide-icon">
-        <el-icon><User /></el-icon>
-      </div>
-      <h3>还没有角色</h3>
-      <p class="guide-note">
-        忆灵空间把「对话 → 阶段总结 → 长期记忆」串成一条线。建一个角色，配好模型，就能开始积累记忆。
-      </p>
-      <ol class="guide-steps">
-        <li><span>1</span>新建角色，填人设</li>
-        <li><span>2</span>在模型设置里填模型 API</li>
-        <li><span>3</span>开始对话，到周期结束时自动归档</li>
-      </ol>
-      <button
-        class="btn primary lg"
-        type="button"
-        @click="navigateTo('/characters')"
-      >
-        去建第一个角色
-      </button>
-    </div>
-
-    <template v-else-if="overview">
-      <!-- 一张卡一个角色：单角色就是一屏一张，多角色就把它竖着叠起来 -->
-      <section
-        v-for="card in heroCards"
-        :key="card.character.id"
-        class="hero"
-        :class="{ 'is-bad': card.urgency <= 1, 'is-over': card.urgency === 2 }"
-      >
-        <div class="hero-head">
-          <div
-            class="avatar hero-avatar"
-            :class="'avatar-' + card.character.avatarTone"
-          >
-            {{ card.character.avatar }}
-          </div>
-          <div class="hero-id">
-            <div class="hero-name-row">
-              <NuxtLink
-                class="hero-name"
-                :to="`/memory?c=${card.character.id}`"
-              >
-                {{ card.character.name }}
-              </NuxtLink>
-              <span
-                v-if="!card.character.chatApiKeyConfigured"
-                class="pill pill-rose"
-              >模型未配置</span>
-              <span
-                v-else-if="card.character.failedTaskCount > 0"
-                class="pill pill-rose"
-              >{{ card.character.failedTaskCount }} 个任务失败</span>
-              <span
-                v-else-if="card.character.cycle?.missed"
-                class="pill pill-amber"
-              >归档逾期</span>
-              <span
-                class="pill"
-                :class="statusTone(card.character.status)"
-              >{{ card.character.status }}</span>
-            </div>
-            <div class="hero-facts">
-              {{ card.character.channels.length ? card.character.channels.join(" / ") : "未接渠道" }} · {{ card.character.intervalDays }} 天周期<template v-if="card.character.pendingIntervalDays !== null">
-                （下周期起 {{ card.character.pendingIntervalDays }} 天）
-              </template>
-            </div>
-          </div>
+        <span class="alert-dot" />
+        <div class="alert-body">
+          <span
+            v-for="alert in alerts"
+            :key="alert.text"
+            class="alert-item"
+          >{{ alert.text }}</span>
         </div>
-
-        <!-- 五个时点：归档、周期、任务、花费，全部取这个角色自己的账 -->
-        <div class="hero-stats">
-          <div class="stat">
-            <span class="stat-k">距下次归档</span>
-            <span
-              class="stat-v"
-              :class="{ 'is-overdue': card.countdown?.tone === 'overdue', 'is-warn': card.countdown?.tone === 'warn' }"
-            >
-              <template v-if="card.countdown">
-                {{ card.countdown.value }}<small>{{ card.countdown.unit }}</small>
-              </template>
-              <template v-else>
-                —
-              </template>
-            </span>
-            <span class="stat-f">{{ card.character.nextSnapshotAt ? card.character.nextSnapshotLabel : "没有开启自动归档" }}</span>
-          </div>
-          <div class="stat">
-            <span class="stat-k">本周期消息</span>
-            <span class="stat-v">
-              {{ card.character.cycleMessageCount }}<small>条</small>
-            </span>
-            <span class="stat-f">{{ card.character.cycle ? `第 ${card.character.cycle.dayIndex}/${card.character.cycle.totalDays} 天` : "暂无进行中的周期" }}</span>
-          </div>
-          <div class="stat">
-            <span class="stat-k">上次归档</span>
-            <span class="stat-v">
-              {{ card.character.latestSnapshotVersion ? card.character.latestSnapshotLabel : "—" }}<small v-if="card.character.latestSnapshotVersion">v{{ card.character.latestSnapshotVersion }}</small>
-            </span>
-            <span class="stat-f">{{ card.character.latestSnapshotVersion ? `已归档 ${card.character.latestSnapshotVersion} 次` : "还没有归档过" }}</span>
-          </div>
-          <div class="stat">
-            <span class="stat-k">待处理任务</span>
-            <span class="stat-v">
-              {{ card.character.pendingTaskCount }}<small>项</small>
-            </span>
-            <span class="stat-f">
-              <template v-if="card.character.failedTaskCount > 0">
-                <em class="is-err">{{ card.character.failedTaskCount }} 个失败待处理</em>
-              </template>
-              <template v-else>
-                暂无异常
-              </template>
-            </span>
-          </div>
-          <div class="stat">
-            <span class="stat-k">今日花费</span>
-            <span class="stat-v">{{ card.cost ? formatCny(card.cost.today.costCny) : "—" }}</span>
-            <span class="stat-f">{{ card.cost ? `近 7 天 ${formatCny(card.cost.windowCostCny)}` : "还没有模型调用" }}</span>
-          </div>
-        </div>
-
-        <!-- 本周期进度 -->
-        <div
-          v-if="card.character.cycle"
-          class="hero-cycle"
-        >
-          <div
-            class="hero-track"
-            role="progressbar"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            :aria-valuenow="card.percent"
-            :aria-label="`${card.character.name} 第 ${card.character.cycle?.dayIndex}/${card.character.cycle?.totalDays} 天`"
-          >
-            <i
-              :class="{ overdue: card.character.cycle?.missed }"
-              :style="{ width: card.percent + '%' }"
-            />
-          </div>
-          <span class="hero-cycle-text">
-            第 {{ card.character.cycle.dayIndex }}/{{ card.character.cycle.totalDays }} 天 · 本周期 {{ card.character.cycleMessageCount }} 条消息
-          </span>
-        </div>
-      </section>
-    </template>
-
-    <div
-      v-else
-      class="loading-hint"
-    >
-      <template v-if="pending">
-        正在读取工作台数据…
-      </template>
-      <template v-else>
-        工作台数据暂时读不到，<button
+        <button
+          v-for="route in alertRoutes"
+          :key="route.to"
           class="card-link"
           type="button"
-          @click="handleRefresh"
+          @click="navigateTo(route.to)"
         >
-          重试
+          {{ route.label }}<el-icon><ArrowRight /></el-icon>
         </button>
+      </div>
+      <div
+        v-else-if="characters.length"
+        class="alert-bar is-quiet"
+        role="status"
+      >
+        <span class="alert-dot is-ok" />
+        <span>{{ copyState() }}</span>
+      </div>
+
+      <!-- 空状态：还没建角色时，总览应该告诉人第一步做什么 -->
+      <div
+        v-if="overview && !characters.length"
+        class="guide"
+      >
+        <div class="guide-icon">
+          <el-icon><User /></el-icon>
+        </div>
+        <h3>还没有角色</h3>
+        <p class="guide-note">
+          忆灵空间把「对话 → 阶段总结 → 长期记忆」串成一条线。建一个角色，配好模型，就能开始积累记忆。
+        </p>
+        <ol class="guide-steps">
+          <li><span>1</span>新建角色，填人设</li>
+          <li><span>2</span>在模型设置里填模型 API</li>
+          <li><span>3</span>开始对话，到周期结束时自动归档</li>
+        </ol>
+        <button
+          class="btn primary lg"
+          type="button"
+          @click="navigateTo('/characters')"
+        >
+          去建第一个角色
+        </button>
+      </div>
+
+      <template v-else-if="overview">
+        <!-- 一张卡一个角色：单角色就是一屏一张，多角色就把它竖着叠起来 -->
+        <section
+          v-for="card in heroCards"
+          :key="card.character.id"
+          class="hero"
+          :class="{ 'is-bad': card.urgency <= 1, 'is-over': card.urgency === 2 }"
+        >
+          <div class="hero-head">
+            <div
+              class="avatar hero-avatar"
+              :class="'avatar-' + card.character.avatarTone"
+            >
+              {{ card.character.avatar }}
+            </div>
+            <div class="hero-id">
+              <div class="hero-name-row">
+                <NuxtLink
+                  class="hero-name"
+                  :to="`/memory?c=${card.character.id}`"
+                >
+                  {{ card.character.name }}
+                </NuxtLink>
+                <span
+                  v-if="!card.character.chatApiKeyConfigured"
+                  class="pill pill-rose"
+                >模型未配置</span>
+                <span
+                  v-else-if="card.character.failedTaskCount > 0"
+                  class="pill pill-rose"
+                >{{ card.character.failedTaskCount }} 个任务失败</span>
+                <span
+                  v-else-if="card.character.cycle?.missed"
+                  class="pill pill-amber"
+                >归档逾期</span>
+                <span
+                  class="pill"
+                  :class="statusTone(card.character.status)"
+                >{{ card.character.status }}</span>
+              </div>
+              <div class="hero-facts">
+                {{ card.character.channels.length ? card.character.channels.join(" / ") : "未接渠道" }} · {{ card.character.intervalDays }} 天周期<template v-if="card.character.pendingIntervalDays !== null">
+                  （下周期起 {{ card.character.pendingIntervalDays }} 天）
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- 五个时点：归档、周期、任务、花费，全部取这个角色自己的账 -->
+          <div class="hero-stats">
+            <div class="stat">
+              <span class="stat-k">距下次归档</span>
+              <span
+                class="stat-v"
+                :class="{ 'is-overdue': card.countdown?.tone === 'overdue', 'is-warn': card.countdown?.tone === 'warn' }"
+              >
+                <template v-if="card.countdown">
+                  {{ card.countdown.value }}<small>{{ card.countdown.unit }}</small>
+                </template>
+                <template v-else>
+                  —
+                </template>
+              </span>
+              <span class="stat-f">{{ card.character.nextSnapshotAt ? card.character.nextSnapshotLabel : "没有开启自动归档" }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-k">本周期消息</span>
+              <span class="stat-v">
+                {{ card.character.cycleMessageCount }}<small>条</small>
+              </span>
+              <span class="stat-f">{{ card.character.cycle ? `第 ${card.character.cycle.dayIndex}/${card.character.cycle.totalDays} 天` : "暂无进行中的周期" }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-k">上次归档</span>
+              <span class="stat-v">
+                {{ card.character.latestSnapshotVersion ? card.character.latestSnapshotLabel : "—" }}<small v-if="card.character.latestSnapshotVersion">v{{ card.character.latestSnapshotVersion }}</small>
+              </span>
+              <span class="stat-f">{{ card.character.latestSnapshotVersion ? `已归档 ${card.character.latestSnapshotVersion} 次` : "还没有归档过" }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-k">待处理任务</span>
+              <span class="stat-v">
+                {{ card.character.pendingTaskCount }}<small>项</small>
+              </span>
+              <span class="stat-f">
+                <template v-if="card.character.failedTaskCount > 0">
+                  <em class="is-err">{{ card.character.failedTaskCount }} 个失败待处理</em>
+                </template>
+                <template v-else>
+                  暂无异常
+                </template>
+              </span>
+            </div>
+            <div class="stat">
+              <span class="stat-k">今日花费</span>
+              <span class="stat-v">{{ card.cost ? formatCny(card.cost.today.costCny) : "—" }}</span>
+              <span class="stat-f">{{ card.cost ? `近 7 天 ${formatCny(card.cost.windowCostCny)}` : "还没有模型调用" }}</span>
+            </div>
+          </div>
+
+          <!-- 本周期进度 -->
+          <div
+            v-if="card.character.cycle"
+            class="hero-cycle"
+          >
+            <div
+              class="hero-track"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-valuenow="card.percent"
+              :aria-label="`${card.character.name} 第 ${card.character.cycle?.dayIndex}/${card.character.cycle?.totalDays} 天`"
+            >
+              <i
+                :class="{ overdue: card.character.cycle?.missed }"
+                :style="{ width: card.percent + '%' }"
+              />
+            </div>
+            <span class="hero-cycle-text">
+              第 {{ card.character.cycle.dayIndex }}/{{ card.character.cycle.totalDays }} 天 · 本周期 {{ card.character.cycleMessageCount }} 条消息
+            </span>
+          </div>
+        </section>
       </template>
+
+      <div
+        v-else
+        class="loading-hint"
+      >
+        <template v-if="pending">
+          正在读取工作台数据…
+        </template>
+        <template v-else>
+          工作台数据暂时读不到，<button
+            class="card-link"
+            type="button"
+            @click="handleRefresh"
+          >
+            重试
+          </button>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -378,6 +381,17 @@ async function handleRefresh() {
    间距、圆角、尺寸一律取偶数 —— 唯一保留的单数是分割线的 1px（描边量级，
    和卡片边框同类，改成 2px 会明显变粗）与药丸的 999 全圆角。
    ══════════════════════════════════════════════════════════════ */
+
+/* ══ 内容栏 ══════════════════════════════════════════════════════
+   背景图挂在 .app-main 上（见本文件末尾那段不带 scoped 的样式），这里只管
+   让内容靠左收窄 —— 卡片一旦铺满整页，右边那个角色就被压在底下了。
+   36vw 是量出来的：图里角色的左缘落在 40% 处，内容超过这条线就会压到人身上。 */
+.ov-a .ov-stage {
+  width: min(720px, 36vw);
+  min-width: 0;
+  /* 容器查询的锚点 —— 卡片里的五格换几列，看的是卡片自己多宽，不是视口 */
+  container-type: inline-size;
+}
 
 /* 异常条：有问题时整条醒目，没问题时退成一块白砖。
    右边可能有不止一个动作（值班问题去值班台、记忆问题去任务监控），窄屏允许换行。 */
@@ -735,5 +749,64 @@ async function handleRefresh() {
   .ov-a .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 20px; }
   .ov-a .hero-cycle { flex-wrap: wrap; gap: 8px; }
   .ov-a .hero-cycle-text { flex: none; }
+}
+
+/* 再窄下去卡片就只剩 480px 了，撑不起五个数字：背景收掉，内容重新铺满 */
+@media (max-width: 1240px) {
+  .ov-a .ov-stage { width: 100%; }
+}
+
+/* 卡片被角色挤窄之后，五格自己会挤成一团。
+   这里用 @container 而不是 @media —— 决定卡片多宽的是右边留了多少，
+   不是屏幕多大；1920 的屏配上大角色，卡片一样可能只有 700px。
+   拆成 6 栏、前三个各占 2 栏、后两个各占 3 栏，正好排成 3+2 两行且不留空位。 */
+@container (max-width: 760px) {
+  .ov-a .hero-stats {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    row-gap: 20px;
+  }
+  .ov-a .stat { grid-column: span 2; }
+  .ov-a .stat:nth-child(4),
+  .ov-a .stat:nth-child(5) { grid-column: span 3; }
+  .ov-a .stat + .stat::before { display: none; }
+}
+@container (max-width: 480px) {
+  .ov-a .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ov-a .stat,
+  .ov-a .stat:nth-child(4),
+  .ov-a .stat:nth-child(5) { grid-column: span 1; }
+}
+</style>
+
+<style>
+/* 不 scoped：背景得挂在 AppShell 的 .app-main 上，够不到就成不了背景。
+   用 :has(.ov-a) 锁在总览页 —— 别的页面没有 .ov-a，不会白带一张图。
+   fixed 让角色钉在视口右下角，翻页时不跟着滚。
+   换图：文件丢进 public/overview/，改下面这行 url（图变了记得同步 --ov-h 的除数）。 */
+.app-main:has(.ov-a) {
+  /* 1600 是封顶值。64vw 是比例闸门：1440 屏只放到 921，超过这个比例
+     角色就会一路往左滑，最后钻到卡片底下。要让 1600 真正生效，
+     得等视口宽过 2500 —— 或者用下面那条 ≥1900 的断点把它顶上去。 */
+  --ov-w: min(1600px, 64vw);
+  --ov-h: calc(var(--ov-w) / 1.7768); /* 1672 / 941，图片自己的宽高比 */
+  background-image:
+    linear-gradient(to bottom, var(--bg) 0, transparent 10%),
+    linear-gradient(to right, var(--bg) 0, transparent 16%),
+    url("/overview/overview-bg.jpg");
+  background-repeat: no-repeat;
+  /* 三层同尺寸同位：上面两层渐变就正好糊在图片的上缘和左缘，
+     把那两条直角边吃掉，看起来才像是画在页面上的 */
+  background-size: var(--ov-w) var(--ov-h);
+  background-position: right bottom;
+  background-attachment: fixed;
+}
+/* 1920 这一类宽屏：图放到满 1600，卡片相应收到 33vw 让位。
+   再窄就不行了 —— 1600 的图在 1440 屏上会顶到左边，人被卡片盖住。 */
+@media (min-width: 1900px) {
+  .app-main:has(.ov-a) { --ov-w: 1600px; }
+  .ov-a .ov-stage { width: min(720px, 33vw); }
+}
+@media (max-width: 1240px) {
+  .app-main:has(.ov-a) { background-image: none; }
 }
 </style>

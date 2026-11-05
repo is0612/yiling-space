@@ -30,8 +30,8 @@ type DayEvent = {
   confidence: number | null;
   scope: "character" | "private";
 };
-type DayMessage = { id: string; role: string; content: string; occurredAt: string };
-type DayMessageGroup = { id: string; title: string; messages: DayMessage[] };
+type DayMessage = { id: string; role: string; content: string; occurredAt: string; author: string | null; member: string | null };
+type DayMessageGroup = { id: string; title: string; total: number; messages: DayMessage[] };
 
 const characters = useCharacterList();
 const currentCharacter = computed<Character | null>(
@@ -51,8 +51,32 @@ const detail = ref<{
   messageGroups: DayMessageGroup[];
   usage: { calls: number; tokens: number };
 } | null>(null);
-/** 原文总数：按会话分组后要自己加总。 */
-const totalMessages = computed(() => (detail.value?.messageGroups ?? []).reduce((sum, group) => sum + group.messages.length, 0));
+/** 原文总数：按会话分组后要自己加总。用当天真实条数，不是「载进来的条数」。 */
+const totalMessages = computed(() => (detail.value?.messageGroups ?? []).reduce((sum, group) => sum + (group.total ?? group.messages.length), 0));
+/**
+ * 原文里这句话是谁说的。
+ *
+ * 以前一律写「对方 / 她」：群里一屋子人全被揉成同一个「对方」，事后对不上是哪位群友。
+ * 现在优先用消息里的昵称，昵称缺失退回群内代号（`member_2` 这种，改昵称也不会变），
+ * 两样都没有才用「对方」兜底。她自己按角色名显示。
+ */
+function speakerOf(message: DayMessage) {
+  if (message.role === "ASSISTANT") return currentCharacter.value?.name || "她";
+  if (message.role !== "USER") return "系统";
+  return message.author || message.member || "对方";
+}
+/**
+ * 组标题上的条数。
+ *
+ * 每个会话只载当天最近 200 条（聊得多的群一天上千条），所以要说清「这是最近的一部分」，
+ * 否则用户会以为那天只说了这么几句。
+ */
+function originalCountLabel(group: DayMessageGroup) {
+  const total = group.total ?? group.messages.length;
+  return total > group.messages.length
+    ? `最近 ${group.messages.length} / ${total} 条`
+    : `${group.messages.length} 条`;
+}
 const detailLoading = ref(false);
 const showMessages = ref(false);
 
@@ -409,14 +433,14 @@ await loadDays();
                 :key="group.id"
               >
                 <p class="original-group">
-                  {{ group.title }}<span class="original-group-n">{{ group.messages.length }} 条</span>
+                  {{ group.title }}<span class="original-group-n">{{ originalCountLabel(group) }}</span>
                 </p>
                 <p
                   v-for="message in group.messages"
                   :key="message.id"
                   class="original-line"
                 >
-                  <span class="original-role">{{ message.role === "USER" ? "对方" : message.role === "ASSISTANT" ? "她" : "系统" }}</span>
+                  <span class="original-role">{{ speakerOf(message) }}</span>
                   <span class="original-text">{{ message.content }}</span>
                 </p>
               </template>
@@ -516,7 +540,8 @@ await loadDays();
 .original-group { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
 .original-group-n { font-weight: 400; color: var(--faint); font-size: 12px; }
 .original-line { display: flex; gap: 8px; font-size: 13px; line-height: 1.7; }
-.original-role { flex: 0 0 auto; color: var(--faint); font-size: 12px; }
+/* 定宽而不是自适应：昵称长短不一时，正文那列才不会左右跳。 */
+.original-role { flex: 0 0 6.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 12px; }
 .original-text { color: var(--dim); }
 @media (max-width: 900px) {
   .day-layout { grid-template-columns: 1fr; }

@@ -46,7 +46,7 @@
 
 ## 当前仓库状态
 
-开发分支已包含 PostgreSQL 持久化的角色/记忆设置、对话录入、周期调度与独立 Worker。Worker 通过服务端 OpenAI-compatible Chat Completions API 对周期消息生成结构化总结，校验来源消息 ID，再以事务方式保存快照、长期记忆变更和审计日志。模型参数位于服务端 `.env`：`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、可选的 `LLM_TIMEOUT_MS`。
+开发分支已包含 PostgreSQL 持久化的角色/记忆设置、对话录入、周期调度与独立 Worker。Worker 通过服务端 OpenAI-compatible Chat Completions API 对周期消息生成结构化总结，校验来源消息 ID，再以事务方式保存快照、长期记忆变更和审计日志。模型参数位于服务端 `.env`：`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、可选的 `LLM_CHAT_TIMEOUT_MS`（聊天，默认 60 秒）与 `LLM_JOB_TIMEOUT_MS`（忆泡/快照/日记等后台任务，默认 180 秒）；旧版共用的 `LLM_TIMEOUT_MS` 仍作兜底。
 
 Worker 当前消费 `GENERATE_SNAPSHOT` 与 `REGENERATE_SNAPSHOT`。AI 重新提炼会在同一逻辑快照下创建新版本并保留旧版本；为了避免重放历史周期意外改写当前长期记忆，重新提炼提出的记忆变化只作为审核建议，不自动应用。任务监控支持取消等待中的任务，以及对支持的快照任务手动重新入队，操作会写入审计日志。**任务租约是 5 分钟且不续期**（`server/utils/memory-job-lease.ts`，任务监控、手动重新入队、Worker 回收共用这一个数）：过期只说明领走这条任务的进程已经退出，可能是 Worker，也可能是一次网页请求（在页面上点「立即提取忆泡」被 `yarn dev` 重启打断）。回收不是独立进程，而是**每次领取任务时顺带做的**（`reclaimExpiredMemoryJobs`），所以整机没有 `yarn worker:watch` 在跑时卡住的任务不会自己回来 —— 2026-11-01 实际有一条忆泡任务卡了 3 小时、页面一直写「运行中」。现在任务监控把「运行中 + 租约过期」标成「运行中·卡住」并在顶部提醒，详情里可以「回收并重新入队」（`POST /tasks/{id}/retry`，只放行租约过期的运行中任务；审计 `memory_job.manual_retry` 带 `recoveredLease`）；**不要再退回「运行中一律不许重试」**。总览页顶部的「停滞检测」回答的是另一类问题：进程都活着、状态全绿，但排期没排、任务没人认领、卡在运行中没人回收。判定在 `server/utils/watchdog.ts`（纯函数 + 只读取数，不新增表），常驻脚本 `yarn watchdog:run`（`--watch` 每 5 分钟），输出 JSON 行、有 err 时单次运行退出码为 1。五类结论：记忆流水线四项 `task_stuck` / `worker_stalled` / `scheduler_stalled` / `snapshot_silent`（每个角色只报最上游那一条；模型未配置时不报 `worker_stalled`，留在队列是设计行为，页面已有「未配置模型」），外加 `duty_silent`（B站 值班开着但 3 天没跑过一轮 —— **这是另一条流水线**，记忆停着不代表值班没跑，所以它单独一条、可以和记忆类同时出现；判据是 `bili_round_reports` 的最近一轮，从没跑过时以绑定创建时间为起点；`perDay=0` 视为关闭不报，**`peakValley=false`（峰谷自动刷关着）也不报** —— 那时没有自动执行者，「没跑过」是配置不是故障，报出来只会把人指向任务监控，那里没有可处理的项；这一层改由 B站 页顶部的适配器横幅说明）。
 

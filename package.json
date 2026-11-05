@@ -56,6 +56,8 @@
     "test:snapshot-review-db": "tsx scripts/test-snapshot-review-db.ts",
     "test:snapshot-generate-db": "tsx scripts/test-snapshot-generate-db.ts",
     "test:memory-scheduler-atomic-db": "tsx scripts/test-memory-scheduler-atomic-db.ts",
+    "test:memory-settings-db": "tsx scripts/test-memory-settings-db.ts",
+    "test:memory-progress-db": "tsx scripts/test-memory-progress-db.ts",
     "test:memory-job-fencing-db": "tsx scripts/test-memory-job-fencing-db.ts",
     "worker:run": "tsx scripts/run-memory-worker.ts",
     "worker:watch": "tsx scripts/run-memory-worker.ts --watch",

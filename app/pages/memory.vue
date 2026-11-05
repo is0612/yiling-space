@@ -220,30 +220,23 @@ const filterOptions = [
   { label: "阶段总结", type: "snapshot" as TimelineType },
 ];
 /**
- * 同一天内的排序：忆泡在前、记忆与总结在后。
+ * 排序：最新在最前，直接沿用服务端给的顺序。
  *
- * 忆泡是「那天发生了什么」的骨架，记忆是从里面提炼的结论 —— 先看骨架再看出处，
- * 比按秒混排好读得多。跨天仍然是时间倒序，这样日期头才能连续。
+ * `/timeline` 已经按真实时间戳倒序取回（忆泡看 occurredAt、记忆看 updatedAt、
+ * 总结看 createdAt），跨天与同一天都是准确的。这里只筛选、不重排：
+ * 以前默认「同一天里忆泡整类排在记忆前面」，于是 09:00 的忆泡压在 23:00 刚更新过的
+ * 记忆上方，看着就不像时间线；而 `time` 是给人看的字符串（记忆 `2026/11/05 14:20`、
+ * 总结 `2026-11-05`），拿它比大小等于按格式排、不是按时间排。
  */
-const TYPE_ORDER: Record<string, number> = { memoryEvent: 0, memory: 1, snapshot: 2, message: 3, event: 4 };
 const filteredEntries = computed(() => {
   const type = filterOptions.find((option) => option.label === activeFilter.value)?.type;
-  const list = timelineEntries.value.filter((entry) => {
+  return timelineEntries.value.filter((entry) => {
     const typeMatches = !type || entry.type === type;
     const sourceMatches = channelFilter.value === SOURCE_ALL
       || entry.channel === SOURCE_WILDCARD
       || entry.channel === channelFilter.value;
     const textMatches = !query.value || `${entry.title} ${entry.summary} ${entry.source}`.toLowerCase().includes(query.value.toLowerCase());
     return typeMatches && sourceMatches && textMatches;
-  });
-  return [...list].sort((left, right) => {
-    const dayLeft = dayKeyOf(left);
-    const dayRight = dayKeyOf(right);
-    if (dayLeft !== dayRight) return dayRight.localeCompare(dayLeft);
-    const rankLeft = TYPE_ORDER[left.type] ?? 9;
-    const rankRight = TYPE_ORDER[right.type] ?? 9;
-    if (rankLeft !== rankRight) return rankLeft - rankRight;
-    return right.time.localeCompare(left.time);
   });
 });
 
@@ -933,13 +926,18 @@ async function runAiArchive() {
       processed: Array<{ status: string; message: string }>;
       pending: number;
       advancedTo: string | null;
+      /** 执行超过请求里的等待窗口，已转后台；进度看右下角面板。 */
+      processing?: boolean;
     }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots/generate`, { method: "POST" });
 
+    void refreshMemoryProgress();
     await Promise.all([loadSnapshots(), loadTimeline()]);
 
     const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
     const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
-    if (failed) {
+    if (result.processing) {
+      ElMessage.info("已开始归档，进度在右下角；切页面、刷新都不会中断。");
+    } else if (failed) {
       // 失败时周期边界不会推进，这段数据下次还能补上，所以要说清楚去重试而不是重来
       ElMessage.warning(`${failed.message}（这次没有推进周期，去「后台任务」点重试即可）`);
     } else if (result.pending > 0) {
@@ -962,10 +960,24 @@ async function runAiArchive() {
 }
 
 /**
+ * 归档/整理转到后台跑完之后，把列表刷一遍。
+ *
+ * 面板轮询一直在跑（它读的是任务行），这里只是接住「某个任务刚结束」这个信号：
+ * 不刷新的话，页面上的阶段总结和忆泡会停在点击那一刻，看起来像没生效。
+ */
+const { lastFinished } = useMemoryProgress();
+watch(lastFinished, (job) => {
+  if (!job || job.characterId !== id.value) return;
+  void loadSnapshots();
+  void loadTimeline();
+});
+
+/**
  * 立即整理忆泡：昨天收口 + 今天增量。
  *
- * 调度器每小时才跑一次，用户点按钮时不该等；服务端会把两段任务排进队列并当场执行。
- * 模型没配好时任务会留在队列，这里把服务端的说明原样透出来，别自己编一个「成功」。
+ * 调度器每小时才跑一次，用户点按钮时不该等；服务端会排任务并当场开始执行。
+ * 超过几秒还没跑完就先回响应、执行留在后台，所以这里要能接住 `processing`：
+ * 结果由右下角面板展示，而不是这一句 toast。
  */
 const eventExtracting = ref(false);
 async function runEventExtraction() {
@@ -975,11 +987,29 @@ async function runEventExtraction() {
     const result = await $fetch<{
       queued: string[];
       processed: Array<{ status: string; message: string }>;
+      /** 没排任何任务时的原因：上一次还在跑，还是确实没有新对话。 */
+      notice?: "queued" | "running" | "no-new-messages";
+      /** 执行超过请求里的等待窗口，已转后台；进度看右下角面板。 */
+      processing?: boolean;
     }>(`/api/characters/${encodeURIComponent(id.value)}/memory-events/extract`, { method: "POST" });
+    void refreshMemoryProgress();
     await loadTimeline();
     const failed = result.processed.find((item) => item.status !== "SUCCEEDED" && item.status !== "SKIPPED");
-    if (result.queued.length === 0) {
-      ElMessage.info("昨天和今天都还没有对话，没什么可整理的。");
+    if (result.processing) {
+      /**
+       * 服务端只等了几秒就把请求放回来了，执行还在后台跑。
+       * 这里不要再说「已排队但没有 worker」—— 那是另一回事。
+       */
+      ElMessage.info(`已开始整理 ${result.queued.length} 段，进度在右下角；切页面、刷新都不会中断。`);
+    } else if (result.queued.length === 0) {
+      /**
+       * 之前这里一律说「昨天和今天还没有对话」。可实际上「上次还在跑」也会走到这一支，
+       * 而上一次失败时更冤 —— 对话明明在，用户却被告知没什么可整理的。
+       * 失败/取消现在会直接重排并当场重跑，走到这里只剩两种真实原因。
+       */
+      ElMessage.info(result.notice === "running"
+        ? "上一次整理正在跑，等它结束再点一次。"
+        : "昨天和今天没有可整理的新对话：已经整理过的不会重复跑一遍。");
     } else if (failed) {
       ElMessage.warning(failed.message);
     } else if (result.processed.length === 0) {

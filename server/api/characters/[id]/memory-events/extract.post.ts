@@ -1,4 +1,5 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
+import { INLINE_MEMORY_WORK_MS, waitBriefly } from "../../../../utils/background-run";
 import { queueManualMemoryEvents } from "../../../../utils/memory-events-manual-queue";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
@@ -152,16 +153,55 @@ export function createManualMemoryEventsHandler(processJob = processNextMemoryJo
 
   // Only attempt this request's targets. A concurrent worker may already own one;
   // skip that target without consuming an unrelated job or abandoning later scopes.
-  const processed: Array<{ status: string; message: string }> = [];
-  for (const jobId of jobIds) {
-    const result = await processJob(prisma, { ownerId, jobId });
-    if (!result.processed) continue;
-    processed.push({ status: result.status, message: result.message });
+  /**
+   * 当场执行，但只等一小会儿（见 `background-run.ts`）。
+   *
+   * 忆泡是逐块调模型的，一段几分钟很常见。把整个执行绑在这个请求上，页面只能干转圈，
+   * 切走还看不到结果；现在超过等待窗口就先把响应发回去，执行继续在后台跑完，
+   * 进度由 `/api/memory-progress` 那条面板从数据库里读。
+   */
+  const execution = (async () => {
+    const done: Array<{ status: string; message: string }> = [];
+    for (const jobId of jobIds) {
+      const result = await processJob(prisma, { ownerId, jobId });
+      if (result.processed) done.push({ status: result.status, message: result.message });
+    }
+    return done;
+  })();
+  const waited = await waitBriefly(execution, INLINE_MEMORY_WORK_MS);
+  if (waited.timedOut) {
+    // 响应已经发出去了：这里必须接住后台异常，否则会变成未捕获的 Promise 拒绝。
+    void execution.catch(() => undefined);
+  } else if ("failed" in waited) {
+    throw waited.error;
+  }
+  const processed = waited.timedOut ? [] : waited.value;
+
+  /**
+   * 一条都没排，不等于「没有对话」。
+   *
+   * 上一次整理还在跑的时候，`queueManualMemoryEvents` 也会回 null（不能跟 Worker 抢）；
+   * 页面要是只说「没什么可整理的」，用户就会以为自己的对话丢了。这里把原因说清楚。
+   */
+  let notice: "queued" | "running" | "no-new-messages" = "queued";
+  if (queued.length === 0) {
+    const running = await prisma.memoryJob.findFirst({
+      where: {
+        memoryScopeId: { in: scopes.map((scope) => scope.id) },
+        type: "EXTRACT_EVENTS",
+        status: "RUNNING",
+      },
+      select: { id: true },
+    });
+    notice = running ? "running" : "no-new-messages";
   }
 
   return {
     queued,
     processed,
+    notice,
+    /** 执行超过了请求里的等待窗口，已经转到后台继续跑；前端改看进度面板。 */
+    processing: waited.timedOut,
     windows: windows.map((window) => ({ label: window.label, start: window.start.toISOString(), end: window.end.toISOString() })),
   };
   });

@@ -3,6 +3,7 @@ import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
 import { resolveDayWindow } from "../../../../utils/memory-event-time";
+import { readMessageSpeaker } from "../../../../utils/conversation-message";
 
 /**
  * 某一天的忆泡 + 当天原文。
@@ -68,44 +69,76 @@ export default defineEventHandler(async (event) => {
   });
 
   const window = resolveDayWindow(dayKey, timeZone);
-  const messages = await prisma.message.findMany({
+  /**
+   * 原文按会话分组，每组取「当天最近的 N 条」。
+   *
+   * 以前是全局升序取 300 条：聊得多的那天（单群一天能有两千条）300 条只够覆盖到
+   * 凌晨 —— 2026-11-05 实测截在 00:48，晚上的对话一条都看不到，「查看原文」等于白点。
+   * 现在每个会话各取最近的，先保证能看到最近发生的事；`total` 带回当天真实条数，
+   * 页面据此说明「只显示最近 N 条」。
+   */
+  const PER_CONVERSATION_TAKE = 200;
+  const conversationTotals = await prisma.message.groupBy({
+    by: ["conversationId"],
     where: {
       conversation: { is: { characterId } },
       occurredAt: { gte: window.start, lt: window.end },
     },
-    orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-    take: 300,
-    select: {
-      id: true,
-      role: true,
-      content: true,
-      occurredAt: true,
-      conversation: { select: { id: true, title: true, externalConversationId: true } },
-    },
+    _count: { _all: true },
   });
 
-  /**
-   * 原文按会话分组：同一天可能同时在几个群里说话，混成一条流水线后很难对齐
-   * ——「这句是群里说的还是私聊说的」全靠猜。群聊标题写「QQ群 <群号>」，私聊是会话标题。
-   */
-  const groups = new Map<string, { id: string; title: string; messages: Array<{ id: string; role: string; content: string; occurredAt: string }> }>();
-  for (const message of messages) {
-    const key = message.conversation.id;
-    const group = groups.get(key) ?? {
-      id: key,
-      title: message.conversation.title
-        || (message.conversation.externalConversationId?.startsWith("g:")
-          ? `QQ群 ${message.conversation.externalConversationId.slice(2)}`
-          : "私聊"),
-      messages: [],
-    };
-    group.messages.push({
-      id: message.id,
-      role: message.role,
-      content: message.content.slice(0, 500),
-      occurredAt: message.occurredAt.toISOString(),
+  const groups = new Map<string, {
+    id: string;
+    title: string;
+    total: number;
+    firstAt: number;
+    messages: Array<{ id: string; role: string; content: string; occurredAt: string; author: string | null; member: string | null }>;
+  }>();
+
+  for (const row of conversationTotals) {
+    const rows = await prisma.message.findMany({
+      where: {
+        conversationId: row.conversationId,
+        occurredAt: { gte: window.start, lt: window.end },
+      },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+      take: PER_CONVERSATION_TAKE,
+      select: {
+        id: true,
+        role: true,
+        content: true,
+        occurredAt: true,
+        metadata: true,
+        conversation: { select: { id: true, title: true, externalConversationId: true } },
+      },
     });
-    groups.set(key, group);
+    const newest = rows[0];
+    if (!newest) continue;
+    const group = {
+      id: row.conversationId,
+      title: newest.conversation.title
+        || (newest.conversation.externalConversationId?.startsWith("g:")
+          ? `QQ群 ${newest.conversation.externalConversationId.slice(2)}`
+          : "私聊"),
+      total: row._count._all,
+      firstAt: rows[rows.length - 1]!.occurredAt.getTime(),
+      /**
+       * 发言人：群聊里一条 USER 可能就是不同的人，只标「对方」等于把一屋子人揉成一个人。
+       * `member` 是群内稳定代号，昵称缺失时至少还能区分「不是同一个人」。
+       */
+      messages: [...rows].reverse().map((message) => {
+        const speaker = readMessageSpeaker(message.metadata);
+        return {
+          id: message.id,
+          role: message.role,
+          content: message.content.slice(0, 500),
+          occurredAt: message.occurredAt.toISOString(),
+          author: speaker.speaker ?? null,
+          member: speaker.member ?? null,
+        };
+      }),
+    };
+    groups.set(row.conversationId, group);
   }
 
   // 那天整理忆泡花了多少：单独记成 kind=events，和 8 天快照的开销分开。
@@ -133,7 +166,10 @@ export default defineEventHandler(async (event) => {
       sourceMessageIds: entry.sourceMessageIds,
       scope: entry.memoryScope.scopeType === "USER_PRIVATE" ? "private" : "character",
     })),
-    messageGroups: [...groups.values()],
+    // 会话按「当天第一次开口」排序，读起来和一天的时间走向一致。
+    messageGroups: [...groups.values()]
+      .sort((left, right) => left.firstAt - right.firstAt)
+      .map(({ firstAt: _firstAt, ...group }) => group),
     usage: { calls: usage._count._all, tokens: usage._sum.totalTokens ?? 0 },
   };
 });

@@ -27,6 +27,7 @@
  */
 
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
+import { readConfiguredLlmTimeoutMs } from "./llm-timeout";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 
 export type RawModelCall = {
@@ -98,9 +99,13 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
     throw new Error("LLM_INVALID_BASE_URL: " + (error instanceof Error ? error.message : String(error)));
   }
 
-  const timeoutRaw = Number(process.env.LLM_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
-  const timeoutMs = Number.isInteger(timeoutRaw) && timeoutRaw >= 5_000 && timeoutRaw <= 180_000
-    ? Math.max(timeoutRaw, input.timeoutMs ?? 0)
+  /**
+   * 裸文本调用都发生在后台（B站值班、主动消息、日记、群话题），按「后台任务」取超时；
+   * 调用方还能用 `input.timeoutMs` 要求更长，两者取大。
+   */
+  const configuredTimeoutMs = readConfiguredLlmTimeoutMs("job");
+  const timeoutMs = configuredTimeoutMs !== null
+    ? Math.max(configuredTimeoutMs, input.timeoutMs ?? 0)
     : input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   const temperature = typeof input.temperature === "number" ? input.temperature : 0.3;
@@ -126,7 +131,7 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
       });
     } catch (error) {
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-        throw new Error("LLM_TIMEOUT: 模型请求超时，请检查 LLM_TIMEOUT_MS 或模型服务状态。");
+        throw new Error("LLM_TIMEOUT: 模型请求超时，请检查 LLM_JOB_TIMEOUT_MS 或模型服务状态。");
       }
       // `fetch failed` 不带信息，真正的现场（ENOTFOUND / ECONNRESET / 证书）在 cause 里，带上它。
       const cause = (error as { cause?: { code?: string; message?: string } } | null)?.cause;

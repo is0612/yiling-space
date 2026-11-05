@@ -122,7 +122,7 @@ async function generate(characterId: string) {
   assert.equal(response.status, 200, text);
   return JSON.parse(text) as {
     queued: string[]; skipped: string[]; processed: Array<{ status: string; message: string }>;
-    pending: number; advancedTo: string | null;
+    pending: number; advancedTo: string | null; processing: boolean;
   };
 }
 
@@ -271,6 +271,52 @@ try {
     assert.equal(jobs, 1, `AI 重新提炼只能排一条任务，实际 ${jobs} 条`);
     delete process.env.LLM_API_KEY;
     delete process.env.LLM_MODEL;
+  }
+
+  /**
+   * D. 模型调用超过请求内的等待窗口，请求先回、任务照旧跑完。
+   *
+   * 进度条要能画，前提是「按钮按下去了」和「活儿干完了」不再绑在同一个请求里：
+   * 请求超时就返回 `processing: true`，页面立刻能拿到响应并开始轮询；后台继续跑。
+   * 最容易写错的是超时分支把执行丢掉了 —— 那样就是把任务改成「点了没反应」。
+   */
+  {
+    const archivedEnd = new Date("2026-11-01T00:00:00Z");
+    const { characterId, scopeId } = await fixture({
+      archivedEnd,
+      messages: [new Date("2026-11-02T00:00:00Z")],
+      nextSnapshotAt: archivedEnd,
+    });
+
+    let release!: () => void;
+    gate = { wait: new Promise<void>((resolve) => { release = resolve; }), release: () => release() };
+    const slow = await generate(characterId);
+    assert.equal(slow.processing, true, "模型还没回来，请求应当先返回并告诉页面「还在跑」");
+    assert.equal(slow.processed.length, 0);
+    assert.equal(slow.pending, 1);
+    assert.equal(slow.advancedTo, null, "没跑完就不能推进边界");
+
+    gate!.release();
+    gate = null;
+
+    const deadline = Date.now() + 20_000;
+    let finished: { status: string } | null = null;
+    while (Date.now() < deadline) {
+      const current = await prisma.memoryJob.findFirst({
+        where: { memoryScopeId: scopeId, type: "GENERATE_SNAPSHOT" },
+        select: { status: true },
+      });
+      if (current && current.status !== "RUNNING" && current.status !== "QUEUED") {
+        finished = current;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(finished?.status, "SUCCEEDED", "请求超时只是不再等，后台必须继续把任务跑完");
+    const archived = await prisma.memorySnapshot.count({
+      where: { memoryScopeId: scopeId, kind: "AUTOMATIC", periodStart: archivedEnd, status: "CURRENT" },
+    });
+    assert.equal(archived, 1, "后台接手后仍然要落一份归档");
   }
 
   console.log("Snapshot generate DB regression passed: reused retry keeps the cycle contiguous, targeted worker, no overlapping concurrent periods, single AI regeneration per logical snapshot.");} finally {

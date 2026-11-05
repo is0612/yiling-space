@@ -15,6 +15,8 @@ type MemorySettings = {
   changePolicy: "NEXT_CYCLE" | "IMMEDIATE_RECALC";
   nextSnapshotAt: string | null;
   updatedAt: string;
+  /** 保存为「关闭」时，服务端顺带作废的排队任务数（只读返回）。 */
+  cancelledPendingJobs?: number;
 };
 
 const route = useRoute();
@@ -169,7 +171,10 @@ async function saveSettings() {
     autoSnapshot.value = saved.autoSnapshotEnabled;
     anchor.value = formatAnchor(saved.anchorAt, saved.timezone);
     effectivePolicy.value = saved.changePolicy === "IMMEDIATE_RECALC" ? "立即重算" : "下一个周期生效";
-    ElMessage.success("记忆周期设置已保存到本地数据库。");
+    const cancelled = saved.cancelledPendingJobs ?? 0;
+    ElMessage.success(cancelled > 0
+      ? `记忆周期设置已保存。自动生成已关闭，顺带作废了 ${cancelled} 条排队中的阶段总结 / 忆泡任务。`
+      : "记忆周期设置已保存到本地数据库。");
   } catch (error) {
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
@@ -398,6 +403,7 @@ watch(id, () => void loadSettings());
               <strong>自动生成阶段总结与忆泡</strong><p class="form-help">
                 这一项同时管两件事：按周期生成阶段总结，按天整理忆泡。关闭后旧归档与旧忆泡全部保留，
                 阶段总结不再自动生成，忆泡只在角色记忆页手动点「立即整理忆泡」时生成；日记与手账不受影响。
+                保存为关闭时，已经排队但还没开始的那类任务会一并作废（正在跑的那一次会跑完）。
               </p>
             </div><el-switch v-model="autoSnapshot" />
           </div>

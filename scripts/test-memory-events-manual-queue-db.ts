@@ -90,10 +90,33 @@ try {
     assert.equal(woken.status, "QUEUED");
     assert.equal(woken.runAt.getTime(), now.getTime());
   }
-  for (const status of ["RUNNING", "FAILED", "CANCELLED"] as const) {
-    const before = await prisma.memoryJob.update({ where: { id: job.id }, data: { status, lockedBy: "other-worker", lockedAt: now } });
-    assert.equal(await queueManualMemoryEvents(prisma, input), null);
-    assert.deepEqual(await prisma.memoryJob.findUnique({ where: { id: job.id } }), before);
+  // 运行中：不能抢 Worker 已经领走的任务。
+  const runningJob = await prisma.memoryJob.update({
+    where: { id: job.id },
+    data: { status: "RUNNING", lockedBy: "other-worker", lockedAt: now },
+  });
+  assert.equal(await queueManualMemoryEvents(prisma, input), null);
+  assert.deepEqual(await prisma.memoryJob.findUnique({ where: { id: job.id } }), runningJob);
+  /**
+   * 失败 / 已取消：手点「立即整理忆泡」就是人工重试。
+   *
+   * 以前这两种状态会被当成「没得整理」，页面回一句「昨天和今天都还没有对话」——
+   * 对话明明在，只是上一次没跑成。重跑时还要把上次的痕迹清干净，
+   * 否则 attemptCount 已到上限，重排一次也立刻再判失败。
+   */
+  for (const status of ["FAILED", "CANCELLED"] as const) {
+    await prisma.memoryJob.update({
+      where: { id: job.id },
+      data: { status, attemptCount: 3, lastError: "synthetic timeout", startedAt: now, completedAt: now },
+    });
+    assert.equal(await queueManualMemoryEvents(prisma, input), job.id, `${status} 的任务要能被手动整理重新排起来。`);
+    const retried = await prisma.memoryJob.findUniqueOrThrow({ where: { id: job.id } });
+    assert.equal(retried.status, "QUEUED");
+    assert.equal(retried.attemptCount, 0, "重试要把 attemptCount 清零，否则预算已经用光。");
+    assert.equal(retried.lastError, null);
+    assert.equal(retried.startedAt, null);
+    assert.equal(retried.completedAt, null);
+    assert.equal(retried.runAt.getTime(), now.getTime());
   }
   await prisma.memoryJob.update({ where: { id: job.id }, data: { status: "SUCCEEDED" } });
   assert.equal(await queueManualMemoryEvents(prisma, { ...input, hourly: false }), null, "successful final jobs retain scheduler idempotency");
@@ -140,7 +163,60 @@ try {
   assert.ok(concurrent.some((id) => id === concurrentJob.id));
   assert.ok(concurrent.every((id) => id === null || id === concurrentJob.id));
   assert.equal(await prisma.memoryJob.count({ where: { idempotencyKey: concurrentInput.idempotencyKey } }), 1);
-  console.log("Manual memory queue passed: real h3 auth/handler, DB queue reuse, cursor increment, state/updatedAt CAS, exact worker target; no model calls.");
+
+  // ── 端到端：失败之后点按钮，页面不该再收到「没什么可整理的」 ──────────────
+  await prisma.memoryJob.update({
+    where: { id: job.id },
+    data: { status: "FAILED", attemptCount: 3, lastError: "synthetic timeout" },
+  });
+  const retriedByClick = await request();
+  assert.equal(retriedByClick.body.queued.length, 1, "上一次失败的那一段要能被按钮重新排起来。");
+  assert.equal(retriedByClick.body.notice, "queued");
+  assert.equal((await prisma.memoryJob.findUniqueOrThrow({ where: { id: job.id } })).status, "QUEUED");
+
+  // 还在跑：不能抢 Worker，但页面要说清是「正在整理」而不是「没有对话」。
+  await prisma.memoryJob.update({
+    where: { id: job.id },
+    data: { status: "RUNNING", lockedBy: "worker-a", lockedAt: now },
+  });
+  const whileRunning = await request();
+  assert.equal(whileRunning.body.queued.length, 0);
+  assert.equal(whileRunning.body.notice, "running");
+
+  /**
+   * 卡住的「运行中」：领走它的进程已经不在了（租约过期），这时按钮必须能接管。
+   * 和任务监控的重新入队共用同一个 5 分钟，否则页面标「卡住」、按钮说「正在整理」。
+   */
+  await prisma.memoryJob.update({
+    where: { id: job.id },
+    data: {
+      status: "RUNNING",
+      lockedBy: "dead-worker",
+      lockedAt: new Date(now.getTime() - 10 * 60 * 1000),
+      attemptCount: 3,
+      lastError: "worker vanished",
+    },
+  });
+  assert.equal(await queueManualMemoryEvents(prisma, input), job.id, "租约过期的运行中任务要能被按钮接管。");
+  const reclaimed = await prisma.memoryJob.findUniqueOrThrow({ where: { id: job.id } });
+  assert.equal(reclaimed.status, "QUEUED");
+  assert.equal(reclaimed.lockedAt, null);
+  assert.equal(reclaimed.lockedBy, null);
+  assert.equal(reclaimed.attemptCount, 0, "接管重跑要重新给满次数。");
+  assert.equal(reclaimed.lastError, null);
+
+  // 整理完且没有新消息：这时才该说「没有可整理的新对话」。
+  await prisma.memoryJob.update({ where: { id: job.id }, data: { status: "SUCCEEDED" } });
+  await prisma.memoryEventDay.upsert({
+    where: { memoryScopeId_dayKey: { memoryScopeId: scopeId, dayKey } },
+    create: { memoryScopeId: scopeId, dayKey, extractedAt: occurredAt, extractedMessageId: ids[1] },
+    update: { extractedAt: occurredAt, extractedMessageId: ids[1] },
+  });
+  const nothingNew = await request();
+  assert.equal(nothingNew.body.queued.length, 0);
+  assert.equal(nothingNew.body.notice, "no-new-messages");
+
+  console.log("Manual memory queue passed: real h3 auth/handler, DB queue reuse, cursor increment, state/updatedAt CAS, exact worker target, failed/cancelled retry, stale-lease takeover and running/no-new notices; no model calls.");
 } finally {
   if (server.listening) await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   await prisma.$disconnect();

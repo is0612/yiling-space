@@ -333,14 +333,20 @@ async function runAiArchive() {
       processed: Array<{ status: string; message: string }>;
       pending: number;
       advancedTo: string | null;
+      /** 执行超过请求里的等待窗口，已转后台；进度看右下角面板。 */
+      processing?: boolean;
     }>(`/api/characters/${encodeURIComponent(characterId)}/snapshots/generate`, { method: "POST" });
 
     if (!operationCurrent(context)) return;
+    void refreshMemoryProgress();
     if (!(await loadSnapshots(undefined, () => operationCurrent(context))) || !operationActive(context)) return;
 
     const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
     const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
-    if (failed) {
+    if (result.processing) {
+      // 模型还在跑：不要用「没有 worker」这种话误导，进度在右下角。
+      ElMessage.info("已开始归档，进度在右下角；切页面、刷新都不会中断。");
+    } else if (failed) {
       // 失败时周期边界不会推进，这段数据下次还能补上，所以要说清楚去重试而不是重来
       ElMessage.warning(`${failed.message}（这次没有推进周期，去「后台任务」点重试即可）`);
     } else if (result.pending > 0) {
@@ -358,6 +364,18 @@ async function runAiArchive() {
     if (operationActive(context)) aiArchiving.value = false;
   }
 }
+
+/**
+ * 归档在后台跑完之后刷新列表。
+ *
+ * 面板轮询跟的是任务行，这里接住「刚结束」这个信号；不刷新的话页面会停在你点的那一刻，
+ * 看起来像什么都没发生。
+ */
+const { lastFinished } = useMemoryProgress();
+watch(lastFinished, (job) => {
+  if (!job || job.characterId !== id.value) return;
+  void loadSnapshots();
+});
 
 async function createSnapshot() {
   if (!id.value || creating.value) return;

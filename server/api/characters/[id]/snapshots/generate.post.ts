@@ -1,5 +1,6 @@
 import { createError, defineEventHandler, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
+import { INLINE_MEMORY_WORK_MS, waitBriefly } from "../../../../utils/background-run";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
 import { processNextMemoryJob } from "../../../../utils/memory-worker";
@@ -196,64 +197,96 @@ export default defineEventHandler(async (event) => {
   }
 
   if (targetIds.length === 0) {
-    return { queued, skipped, processed: [], pending: 0, advancedTo: null, intervalDays };
+    return { queued, skipped, jobIds: [], processed: [], pending: 0, advancedTo: null, intervalDays, processing: false };
   }
-
-  const processed: Array<{ status: string; message: string }> = [];
-  // 只执行本次的目标任务：不传 jobId 时 worker 取的是「队列里下一条」，
-  // 同角色还排着忆泡/清理任务，会把别人的结果混进本次报告。
-  for (const jobId of targetIds) {
-    const result = await processNextMemoryJob(prisma, { ownerId, jobId });
-    if (result.processed) processed.push({ status: result.status, message: result.message });
-  }
-
-  const targets = await prisma.memoryJob.findMany({
-    where: { id: { in: targetIds } },
-    select: { id: true, status: true, snapshotId: true },
-  });
-  // 仍在队列或运行中的都算未完成，不能因为另一条成功就推进计划。
-  const pending = targets.filter((job) => job.status === "QUEUED" || job.status === "RUNNING" || job.status === "RETRY_WAIT");
 
   /**
-   * 计划边界按**实际归档到的结束时间**推进，不用请求的 `now + 间隔`。
+   * 「这一次归档」的完整动作：执行目标任务，然后决定要不要推进周期边界。
    *
-   * 复用一条旧的 RETRY_WAIT 任务时，它只覆盖到 `periodEnd` 那一天；若拿 now 推进，
-   * 中间 `[periodEnd, now)` 会被下一轮反推时永久跳过。以最新自动归档的 periodEnd
-   * 为准，剩下的缺口下一次点击（或调度器）会从那里接着补。
+   * 两件事必须在同一个后台任务里：推进边界的前提是**全部成功**，如果响应先回去、
+   * 执行留在后台，边界推进也得跟着留在后台，否则那段周期下次会被重新跑一遍。
    */
-  const globalArchived = await prisma.memorySnapshot.findFirst({
-    where: { memoryScopeId: globalScopeId, kind: "AUTOMATIC" },
-    orderBy: [{ periodEnd: "desc" }, { createdAt: "desc" }],
-    select: { periodEnd: true },
-  });
-  const allSucceeded = pending.length === 0 && processed.length > 0
-    && processed.every((item) => item.status === "SUCCEEDED" || item.status === "SKIPPED");
-  const desired = allSucceeded && globalArchived
-    ? new Date(globalArchived.periodEnd.getTime() + intervalDays * DAY_MS)
-    : null;
-
-  let advancedTo: Date | null = null;
-  if (desired) {
-    // 只向前推进，并且用 CAS 避免和服务端调度器互相覆盖。
-    const current = await prisma.characterMemorySetting.findUnique({
-      where: { characterId },
-      select: { nextSnapshotAt: true },
-    });
-    if (current && (!current.nextSnapshotAt || current.nextSnapshotAt.getTime() < desired.getTime())) {
-      const updated = await prisma.characterMemorySetting.updateMany({
-        where: { characterId, nextSnapshotAt: current.nextSnapshotAt },
-        data: { nextSnapshotAt: desired },
-      });
-      if (updated.count === 1) advancedTo = desired;
+  const execution = (async () => {
+    const done: Array<{ status: string; message: string }> = [];
+    // 只执行本次的目标任务：不传 jobId 时 worker 取的是「队列里下一条」，
+    // 同角色还排着忆泡/清理任务，会把别人的结果混进本次报告。
+    for (const jobId of targetIds) {
+      const result = await processNextMemoryJob(prisma, { ownerId, jobId });
+      if (result.processed) done.push({ status: result.status, message: result.message });
     }
+
+    const targets = await prisma.memoryJob.findMany({
+      where: { id: { in: targetIds } },
+      select: { id: true, status: true, snapshotId: true },
+    });
+    // 仍在队列或运行中的都算未完成，不能因为另一条成功就推进计划。
+    const pending = targets.filter((job) => job.status === "QUEUED" || job.status === "RUNNING" || job.status === "RETRY_WAIT");
+
+    /**
+     * 计划边界按**实际归档到的结束时间**推进，不用请求的 `now + 间隔`。
+     *
+     * 复用一条旧的 RETRY_WAIT 任务时，它只覆盖到 `periodEnd` 那一天；若拿 now 推进，
+     * 中间 `[periodEnd, now)` 会被下一轮反推时永久跳过。以最新自动归档的 periodEnd
+     * 为准，剩下的缺口下一次点击（或调度器）会从那里接着补。
+     */
+    const globalArchived = await prisma.memorySnapshot.findFirst({
+      where: { memoryScopeId: globalScopeId, kind: "AUTOMATIC" },
+      orderBy: [{ periodEnd: "desc" }, { createdAt: "desc" }],
+      select: { periodEnd: true },
+    });
+    const allSucceeded = pending.length === 0 && done.length > 0
+      && done.every((item) => item.status === "SUCCEEDED" || item.status === "SKIPPED");
+    const desired = allSucceeded && globalArchived
+      ? new Date(globalArchived.periodEnd.getTime() + intervalDays * DAY_MS)
+      : null;
+
+    let advancedTo: Date | null = null;
+    if (desired) {
+      // 只向前推进，并且用 CAS 避免和服务端调度器互相覆盖。
+      const current = await prisma.characterMemorySetting.findUnique({
+        where: { characterId },
+        select: { nextSnapshotAt: true },
+      });
+      if (current && (!current.nextSnapshotAt || current.nextSnapshotAt.getTime() < desired.getTime())) {
+        const updated = await prisma.characterMemorySetting.updateMany({
+          where: { characterId, nextSnapshotAt: current.nextSnapshotAt },
+          data: { nextSnapshotAt: desired },
+        });
+        if (updated.count === 1) advancedTo = desired;
+      }
+    }
+    return { processed: done, pending: pending.length, advancedTo };
+  })();
+
+  /**
+   * 只等一小会儿（见 `background-run.ts`）：归档是一次整段模型调用，几十秒很常见。
+   * 超过窗口就先把「已经排了什么」回给页面，执行留在后台跑完 —— 切页面不会中断，
+   * 进度看右下角那块面板（它读的是任务行，不是这个请求）。
+   */
+  const waited = await waitBriefly(execution, INLINE_MEMORY_WORK_MS);
+  if (waited.timedOut) {
+    void execution.catch(() => undefined);
+    return {
+      queued,
+      skipped,
+      jobIds: targetIds,
+      processed: [],
+      pending: targetIds.length,
+      advancedTo: null,
+      intervalDays,
+      processing: true,
+    };
   }
+  if ("failed" in waited) throw waited.error;
 
   return {
     queued,
     skipped,
-    processed,
-    pending: pending.length,
-    advancedTo: advancedTo ? advancedTo.toISOString() : null,
+    jobIds: targetIds,
+    processed: waited.value.processed,
+    pending: waited.value.pending,
+    advancedTo: waited.value.advancedTo ? waited.value.advancedTo.toISOString() : null,
     intervalDays,
+    processing: false,
   };
 });
