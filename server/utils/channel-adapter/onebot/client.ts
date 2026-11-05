@@ -104,7 +104,7 @@ export type OnebotRedPacketDiagnostic = {
   candidateSegments: Array<{ type: string; dataKeys: string[] }>;
 };
 
-const RED_PACKET_TEXT_MARKER = /(?:\\[?QQ红包\\]?|red[_-]?packet|redpacket|hongbao|lucky[_-]?money)/i;
+const RED_PACKET_TEXT_MARKER = /(?:QQ红包|red[_-]?packet|redpacket|hongbao|lucky[_-]?money)/i;
 const RED_PACKET_SEGMENT_MARKER = /(?:red[_-]?packet|redpacket|redbag|hongbao|lucky[_-]?money)/i;
 
 /** 普通消息返回 null；命中红包标记时只返回结构元数据。 */
