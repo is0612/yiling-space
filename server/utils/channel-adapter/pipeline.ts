@@ -1683,7 +1683,7 @@ async function runChannelTurn(input: {
                 ...rangeWhere,
               },
               orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-              take: searchRange ? 500 : 500,
+              take: 500,
               select: {
                 id: true, role: true, content: true, occurredAt: true, metadata: true,
                 conversation: { select: { memoryScopeId: true } },
