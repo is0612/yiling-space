@@ -1690,7 +1690,12 @@ async function runChannelTurn(input: {
               },
             })
           : [];
-        const assistantRawMessages = [...rawRowsByScope.flat(), ...ownerGroupRawRows].map((row) => {
+        const ownerTimelineQuery = !isGroup && isOwnerTurn && searchParticipantIds.length > 0
+          && (wantsFirst || wantsLatest);
+        const rawRowsForAssistant = ownerTimelineQuery
+          ? ownerGroupRawRows
+          : [...rawRowsByScope.flat(), ...ownerGroupRawRows];
+        const assistantRawMessages = rawRowsForAssistant.map((row) => {
           const speaker = readStoredSpeaker(row.metadata);
           return {
             id: row.id,
