@@ -1137,8 +1137,8 @@ paths:
       operationId: getCharacterChatHistory
       summary: 获取角色 AI 会话列表和历史消息
       description: >-
-        本地开发功能。只返回当前角色全局记忆范围里**桌面端自己的会话**（`channelBindingId` 为空），
-        QQ 等渠道的会话不会出现在这里；会话本身仍归属角色全局范围，但每次回复可以检索当前用户自己的私人记忆。
+        本地开发功能。只返回当前角色全局记忆范围里**桌面端自己的会话**（`channelBindingId` 和 `externalConversationId` 均为空），
+        QQ 等渠道的会话（包括解绑后绑定字段被置空、但保留外部会话编号的历史记录）不会出现在这里；会话本身仍归属角色全局范围，但每次回复可以检索当前用户自己的私人记忆。
         `conversationId` 指向的会话查不到时（已删除、已归档或属于渠道）不报错，回落到列表第一条并在
         `selectedConversationId` 里返回实际选中的会话 —— 前端据此把 URL 上的过期 id 换掉。
       parameters:
@@ -1204,7 +1204,11 @@ paths:
       tags: [Characters]
       operationId: sendCharacterChatMessage
       summary: 向 AI 角色发送消息并保存对话
-      description: 本地开发功能。按当前消息检索匹配的角色全局长期记忆和快照，并合并当前开发用户自己的私人记忆范围；其他人的私人记忆、未验证外部身份的范围和未知范围类型一律不参与检索。模型返回的来源 ID 会通过候选白名单过滤。推荐在网页的角色模型参数中配置 API Base URL、API Key 和模型名称；服务端环境变量可作为默认回退配置。
+      description: >-
+        按当前消息检索角色全局记忆和当前用户自己的私人记忆；其他人的私人记忆、未验证外部身份和未知范围不参与检索。模型来源 ID 通过候选白名单校验。
+        只向 ACTIVE 桌面会话写入，落库事务内重新校验，期间归档或删除则返回 409。
+        requestKey 绑定消息和目标会话；完成请求重放返回 200，不重复调用模型或落库。已删除会话对应请求保留失效标记并清空缓存响应，重放返回 409；归档会话的已完成请求仍可重放。
+        推荐在角色模型参数中配置 API 地址、Key 和模型名称；环境变量作为默认回退。
       requestBody:
         required: true
         content:
@@ -1212,6 +1216,10 @@ paths:
             schema:
               $ref: '#/components/schemas/ChatMessageInput'
       responses:
+        '200':
+          description: 已完成幂等请求的缓存重放，响应字段与 201 相同
+        '409':
+          description: 相同请求处理中、请求标识用于不同输入、会话已删除或归档无法写入，或请求缓存目标已失效
         '201':
           description: 已保存用户消息、模型回复和来源引用
           content:
@@ -1351,16 +1359,19 @@ paths:
     patch:
       tags: [Characters]
       operationId: setCharacterChatConversationStatus
-      summary: 归档或恢复角色会话
-      description: 本地开发功能。归档只改变会话状态，不删除对话消息或模型来源记录，并写入审计日志。
+      summary: 重命名、归档或恢复角色会话
+      description: 本地开发功能。支持修改标题或状态，至少提供一项；归档只改变会话状态，不删除对话消息或模型来源记录。标题和状态变更分别写入审计日志。
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [status]
+              anyOf:
+                - required: [status]
+                - required: [title]
               properties:
+                title: { type: string, minLength: 1, maxLength: 255 }
                 status: { type: string, enum: [ACTIVE, ARCHIVED] }
       responses:
         '200':
@@ -1388,7 +1399,7 @@ paths:
         本地开发功能。硬删除会话及其全部消息，无法恢复，并写入审计日志（`CONVERSATION_DELETED`）。
         **记忆不受影响**：记忆条目与快照挂在记忆范围下、不隶属会话，`MemoryItem.sourceMessageId` 与
         `MemorySnapshotSource.messageId` 都是 `onDelete: SetNull`，删消息只会清空「来源是哪条消息」的指针。
-        只处理桌面端对话（`channelBindingId` 为空），QQ 等渠道会话由渠道侧管理，从这里删会 404。
+        只处理桌面端对话（`channelBindingId` 和 `externalConversationId` 均为空），QQ 等渠道会话由渠道侧管理，从这里删会 404。
         响应里的 `retainedMemories` / `retainedSnapshotSources` 是删除后仍保留在记忆侧的条数，用于向用户说明。
         `retainedMemories` 只数「直接引用本会话消息」的条目，**不包含**经由快照再派生出来的记忆
         （那类条目 `sourceMessageId` 本来就是空的），所以它是下限而非全量。
@@ -4134,6 +4145,10 @@ components:
       required: [message]
       properties:
         conversationId: { type: string, format: uuid }
+        requestKey:
+          type: string
+          format: uuid
+          description: 可选幂等标识；网络失败重试应沿用，同一标识不可用于不同消息或目标会话。
         message: { type: string, minLength: 1, maxLength: 8000 }
     ChatMessage:
       type: object

@@ -2,6 +2,7 @@ import { createError, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import { desktopConversationWhere, tombstoneDesktopConversationRequests } from "../../../../utils/desktop-conversation";
 
 /**
  * 删除一段桌面端 AI 对话。
@@ -34,7 +35,7 @@ export default defineEventHandler(async (event) => {
 
   // channelBindingId: null 与前几个接口同一套边界：QQ 等渠道的记录只在渠道侧处理。
   const conversation = await prisma.conversation.findFirst({
-    where: { id: conversationId, characterId, memoryScopeId, channelBindingId: null },
+    where: desktopConversationWhere({ id: conversationId, characterId, memoryScopeId }),
     select: { id: true, title: true, status: true, _count: { select: { messages: true } } },
   });
   if (!conversation) throw createError({ statusCode: 404, statusMessage: "会话不存在或不属于当前角色。" });
@@ -51,6 +52,9 @@ export default defineEventHandler(async (event) => {
   ]);
 
   await prisma.$transaction(async (tx) => {
+    // Serialize against the chat commit guard before clearing cached responses.
+    await tx.conversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
+    await tombstoneDesktopConversationRequests(tx, conversation.id);
     await tx.conversation.delete({ where: { id: conversation.id } });
     await tx.auditLog.create({
       data: {

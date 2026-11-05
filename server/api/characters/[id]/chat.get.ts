@@ -4,6 +4,7 @@ import { resolveChatModelSettings } from "../../../utils/chat-model-config";
 import { requireActorUserId } from "../../../utils/auth";
 import { requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
+import { desktopConversationWhere } from "../../../utils/desktop-conversation";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
@@ -41,12 +42,11 @@ export default defineEventHandler(async (event) => {
   const memoryScopeId = character.memoryScopes[0]?.id;
   if (!memoryScopeId) throw createError({ statusCode: 409, statusMessage: "该角色尚未建立全局记忆范围，请重新保存角色档案。" });
 
-  // 桌面端 AI 对话只认 channelBindingId 为空的会话：带绑定的是 QQ 等外部渠道的记录，
-  // 它们可能和本角色共用同一个 CHARACTER_GLOBAL scope，不过滤就会混进这里的会话列表。
-  const conversationWhere = {
+  // 解绑会把 channelBindingId 置空，但 externalConversationId 保留渠道身份；
+  // 两者都为空才是桌面会话，避免共用全局范围的渠道记录混进列表。
+  const conversationWhere = desktopConversationWhere({
     characterId,
     memoryScopeId,
-    channelBindingId: null,
     status: conversationStatus,
     ...(searchTerm ? {
       OR: [
@@ -54,7 +54,7 @@ export default defineEventHandler(async (event) => {
         { messages: { some: { content: { contains: searchTerm, mode: "insensitive" as const } } } },
       ],
     } : {}),
-  };
+  });
   const conversations = await prisma.conversation.findMany({
     where: conversationWhere,
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -70,7 +70,7 @@ export default defineEventHandler(async (event) => {
    */
   const selectedConversation = (conversationId
     ? await prisma.conversation.findFirst({
-        where: { id: conversationId, characterId, memoryScopeId, channelBindingId: null, status: conversationStatus },
+        where: desktopConversationWhere({ id: conversationId, characterId, memoryScopeId, status: conversationStatus }),
         select: { id: true, title: true, lastMessageAt: true, updatedAt: true, _count: { select: { messages: true } } },
       })
     : null) ?? conversations[0] ?? null;

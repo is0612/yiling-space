@@ -3,6 +3,7 @@ import { readStoredChatSources } from "../../../../utils/chat-sources";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import { desktopConversationWhere } from "../../../../utils/desktop-conversation";
 
 function readPageNumber(value: unknown, fallback: number, maximum: number, label: string): number {
   if (value === undefined) return fallback;
@@ -37,7 +38,7 @@ export default defineEventHandler(async (event) => {
   if (!memoryScopeId) throw createError({ statusCode: 409, statusMessage: "该角色尚未建立全局记忆范围。" });
 
   const conversation = await prisma.conversation.findFirst({
-    where: { id: conversationId, characterId, memoryScopeId, channelBindingId: null },
+    where: desktopConversationWhere({ id: conversationId, characterId, memoryScopeId }),
     select: { id: true, title: true, status: true },
   });
   if (!conversation) throw createError({ statusCode: 404, statusMessage: "会话不存在或不属于当前角色。" });

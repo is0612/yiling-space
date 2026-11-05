@@ -87,12 +87,12 @@ await generateConversationReply({
 });
 
 const inPrivate = readCaptured();
-assert(inPrivate.system.includes("acquaintances is your own roster"), "系统提示必须解释熟人名册是什么。");
+assert(inPrivate.system.includes("acquaintances is your roster of people you actually talk with"), "系统提示必须解释熟人名册是什么。");
 assert(
-  inPrivate.system.includes("keep fromPrivate and fromGroups apart"),
+  inPrivate.system.includes("Keep fromPrivate and fromGroups separate"),
   "私聊里两档必须分开说，否则她只会念群里的高频名字。",
 );
-assert(inPrivate.system.includes("Your owner is not part of acquaintances"), "主人不走外部身份，提示里要说明他不在这张册子里。");
+assert(inPrivate.system.includes("Your owner is not in acquaintances"), "主人不走外部身份，提示里要说明他不在这张册子里。");
 assert(!inPrivate.system.includes("inThisGroup is the only part"), "私聊分支不该讲「这屋里谁在」。");
 assert(inPrivate.user.includes("\"fromPrivate\""), "私聊的熟人要进 payload。");
 assert(inPrivate.user.includes("\"fromGroups\""), "群里的熟人也要进 payload。");
@@ -122,25 +122,25 @@ await generateConversationReply({
 
 const inGroup = readCaptured();
 assert(
-  inGroup.system.includes("inThisGroup is the only part of the roster"),
+  inGroup.system.includes("inThisGroup is the only part that tells you who is in this room"),
   "群聊里必须点明只有 inThisGroup 能说明「这屋里谁跟我熟」。",
 );
 assert(
-  inGroup.system.includes("not member lists of this group"),
+  inGroup.system.includes("not this group's member list"),
   "跨群榜不是本群成员表，不写这句她会拿别群熟人当屋里的人。",
 );
-assert(inGroup.system.includes("groupAcquaintances first"), "两张表打架时要以熟人卡为准，不然她会对聊过很多次的人说没见过。");
+assert(inGroup.system.includes("read groupAcquaintances then inThisGroup"), "定语气前必须先读熟人卡，再读本群名册，避免忽略已有交往记录。");
 assert(inGroup.system.includes("barely know"), "两张表都没记录的人要明确「基本不认识」，否则她会对生人自来熟。");
-assert(inGroup.system.includes("inGroups is what keeps them apart"), "同名不同群的两个人要能分开。");
-assert(inGroup.system.includes("never read the roster out to the room"), "群里必须禁止把名册念给一屋子人。");
-assert(!inGroup.system.includes("Your owner is not part of acquaintances"), "群聊分支不该再讲主人那一段。");
+assert(inGroup.system.includes("inGroups keeps them apart"), "同名不同群的两个人要能分开。");
+assert(inGroup.system.includes("Never recite counts or read the roster aloud"), "群里必须禁止把名册念给一屋子人。");
+assert(!inGroup.system.includes("Your owner is not in acquaintances"), "群聊分支不该再讲主人那一段。");
 assert(!inGroup.system.includes("When asked who you are closest to"), "群聊分支不该走「回答问题」那套说法。");
 assert(inGroup.user.includes("\"inThisGroup\""), "群聊里这一屋的熟人要进 payload。");
 assert(inGroup.user.includes("\"aliases\":[\"涟涟\"]"), "本群熟人的备注要带进群聊 —— 她平时就是这么叫的。");
 assert(!inGroup.user.includes("喵喵"), "私聊档的备注不能带进群聊：那是私下给别人的叫法，当众喊出来就是事故。");
 assert(!inGroup.user.includes("涟宝"), "跨群榜的备注同样不能带进这个群。");
 assert(
-  inGroup.system.includes("only appear for people who have spoken in this room"),
+  inGroup.system.includes("They appear only for people who have spoken in this room"),
   "群聊里要写清备注只对本群熟人有效，否则她会拿它去叫名单外的人。",
 );
 
@@ -148,7 +148,7 @@ assert(
 await generateConversationReply({ ...base });
 
 const withoutRoster = readCaptured();
-assert(!withoutRoster.system.includes("acquaintances is your own roster"), "没带名册时系统提示不能提这一段。");
+assert(!withoutRoster.system.includes("acquaintances is your roster"), "没带名册时系统提示不能提这一段。");
 assert(!withoutRoster.system.includes("aliases are the names you privately use"), "一条备注都没有时不能讲备注规则，否则她会给每个人现编外号。");
 assert(!withoutRoster.user.includes("acquaintances"), "没带名册时 payload 不能有这个字段。");
 

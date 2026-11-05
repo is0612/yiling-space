@@ -1,7 +1,8 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ArrowDown, CopyDocument, Cpu, Plus, Promotion, Search, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character } from "~/utils/mock-data";
+import { createChatSessionState } from "~/utils/chat-session-state";
 
 type ChatCharacter = {
   id: string;
@@ -85,6 +86,7 @@ const pendingRequestKey = ref<string | null>(null);
 const pendingRequestContent = ref<string | null>(null);
 const pendingRequestConversationId = ref<string | null>(null);
 const exporting = ref(false);
+const chatSessionState = createChatSessionState();
 const messagePanel = ref<HTMLElement | null>(null);
 const activeConversation = computed(() => conversations.value.find((item) => item.id === conversationId.value) ?? null);
 /** 角色给你的称呼：空 = 没设，不显示这句提示 */
@@ -133,7 +135,27 @@ function openModelSettings() {
 }
 
 /** 换角色等于换一整套会话：清干净再拉，别让上一个角色的会话/草稿串过来 */
+function requestContext(overrides: Partial<{
+  characterId: string;
+  conversationId: string | null;
+  view: "ACTIVE" | "ARCHIVED";
+  search: string;
+}> = {}) {
+  return {
+    characterId: overrides.characterId ?? id.value,
+    conversationId: overrides.conversationId === undefined ? conversationId.value : overrides.conversationId,
+    view: overrides.view ?? conversationView.value,
+    search: overrides.search ?? conversationSearch.value,
+  };
+}
+
 function resetForCharacter() {
+  chatSessionState.invalidate();
+  loading.value = false;
+  sending.value = false;
+  pendingRequestKey.value = null;
+  pendingRequestContent.value = null;
+  pendingRequestConversationId.value = null;
   conversations.value = [];
   conversationId.value = null;
   messages.value = [];
@@ -152,12 +174,11 @@ async function switchCharacter(nextId: string) {
   resetForCharacter();
 }
 
-async function loadCharacter() {
-  if (!id.value) {
-    character.value = null;
-    return;
-  }
-  character.value = await $fetch<ChatCharacter>("/api/characters/" + encodeURIComponent(id.value));
+async function loadCharacter(ticket: ReturnType<typeof chatSessionState.begin>) {
+  const targetCharacterId = ticket.context.characterId;
+  if (!targetCharacterId) return;
+  const result = await $fetch<ChatCharacter>("/api/characters/" + encodeURIComponent(targetCharacterId));
+  if (chatSessionState.isCurrent(ticket, requestContext())) character.value = result;
 }
 
 async function copyMessage(content: string) {
@@ -171,6 +192,7 @@ async function copyMessage(content: string) {
 
 async function renameConversation(item: ConversationSummary) {
   if (sending.value) return;
+  const characterId = id.value;
   let title: string;
   try {
     const result = await ElMessageBox.prompt("输入新的会话标题（最多 255 个字符）。", "重命名会话", {
@@ -187,12 +209,13 @@ async function renameConversation(item: ConversationSummary) {
   } catch {
     return;
   }
-  if (!title || title === item.title) return;
+  if (!title || title === item.title || id.value !== characterId) return;
   try {
     const updated = await $fetch<{ id: string; title: string; status: "ACTIVE" | "ARCHIVED"; updatedAt: string }>(
-      "/api/characters/" + encodeURIComponent(id.value) + "/chat/" + encodeURIComponent(item.id),
+      "/api/characters/" + encodeURIComponent(characterId) + "/chat/" + encodeURIComponent(item.id),
       { method: "PATCH", body: { title } },
     );
+    if (id.value !== characterId) return;
     conversations.value = conversations.value.map((entry) => entry.id === updated.id
       ? { ...entry, title: updated.title, updatedAt: updated.updatedAt }
       : entry);
@@ -202,12 +225,14 @@ async function renameConversation(item: ConversationSummary) {
   }
 }
 
-async function loadHistory(requestedId?: string | null) {
-  if (!id.value) return;
-  const params = new URLSearchParams({ status: conversationView.value });
+async function loadHistory(ticket: ReturnType<typeof chatSessionState.begin>, requestedId?: string | null) {
+  const context = ticket.context;
+  if (!context.characterId) return;
+  const params = new URLSearchParams({ status: context.view });
   if (requestedId) params.set("conversationId", requestedId);
-  if (conversationSearch.value) params.set("q", conversationSearch.value);
-  const data = await $fetch<ChatHistoryResponse>("/api/characters/" + encodeURIComponent(id.value) + "/chat?" + params.toString());
+  if (context.search) params.set("q", context.search);
+  const data = await $fetch<ChatHistoryResponse>("/api/characters/" + encodeURIComponent(context.characterId) + "/chat?" + params.toString());
+  if (!chatSessionState.isCurrent(ticket, requestContext())) return;
   modelConfigured.value = data.modelConfigured;
   conversations.value = data.conversations;
   conversationId.value = data.selectedConversationId;
@@ -218,15 +243,20 @@ async function loadHistory(requestedId?: string | null) {
 
 async function reload() {
   if (!id.value) return;
-  loading.value = true;
   conversationView.value = route.query.view === "archived" ? "ARCHIVED" : "ACTIVE";
   conversationSearch.value = typeof route.query.q === "string" ? route.query.q.trim().slice(0, 120) : "";
   conversationSearchDraft.value = conversationSearch.value;
+  const ticket = chatSessionState.begin(requestContext({
+    characterId: id.value,
+    conversationId: typeof route.query.conversationId === "string" ? route.query.conversationId : null,
+  }));
+  loading.value = true;
   try {
     await Promise.all([
-      loadCharacter(),
-      loadHistory(typeof route.query.conversationId === "string" ? route.query.conversationId : null),
+      loadCharacter(ticket),
+      loadHistory(ticket, ticket.context.conversationId),
     ]);
+    if (!chatSessionState.isCurrent(ticket, requestContext())) return;
     const selectedId = conversationId.value;
     if (selectedId && route.query.conversationId !== selectedId) {
       await navigateTo({ path: route.path, query: { ...route.query, conversationId: selectedId } }, { replace: true });
@@ -237,22 +267,27 @@ async function reload() {
       await navigateTo({ path: route.path, query: nextQuery }, { replace: true });
     }
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, "读取角色对话失败，请检查本地数据库和开发服务器。"));
+    if (chatSessionState.isCurrent(ticket, requestContext())) {
+      ElMessage.error(getErrorMessage(error, "读取角色对话失败，请检查本地数据库和开发服务器。"));
+    }
   } finally {
-    loading.value = false;
+    if (chatSessionState.isCurrent(ticket, requestContext())) loading.value = false;
   }
 }
 
 async function openConversation(item: ConversationSummary) {
   if (sending.value || item.id === conversationId.value) return;
+  const characterId = id.value;
+  const ticket = chatSessionState.begin(requestContext({ characterId, conversationId: item.id }));
   loading.value = true;
   try {
-    await loadHistory(item.id);
+    await loadHistory(ticket, item.id);
+    if (!chatSessionState.isCurrent(ticket, requestContext())) return;
     await navigateTo({ path: route.path, query: { ...route.query, conversationId: item.id } });
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, "读取会话失败。"));
+    if (chatSessionState.isCurrent(ticket, requestContext())) ElMessage.error(getErrorMessage(error, "读取会话失败。"));
   } finally {
-    loading.value = false;
+    if (chatSessionState.isCurrent(ticket, requestContext())) loading.value = false;
   }
 }
 
@@ -265,41 +300,53 @@ async function startNewConversation() {
   messages.value = [];
   expandedSources.value = [];
   draft.value = "";
+  pendingRequestKey.value = null;
+  pendingRequestContent.value = null;
+  pendingRequestConversationId.value = null;
+  const ticket = chatSessionState.begin(requestContext({ conversationId: null, view: "ACTIVE", search: "" }));
   const nextQuery = { ...route.query };
   delete nextQuery.conversationId;
   delete nextQuery.q;
   delete nextQuery.view;
   await navigateTo({ path: route.path, query: nextQuery });
-  await loadHistory(null);
+  if (!chatSessionState.isCurrent(ticket, requestContext())) return;
+  await loadHistory(ticket, null);
+  if (!chatSessionState.isCurrent(ticket, requestContext())) return;
   conversationId.value = null;
   messages.value = [];
 }
 
 async function changeConversationView(status: "ACTIVE" | "ARCHIVED") {
   if (sending.value || status === conversationView.value) return;
+  const characterId = id.value;
   const nextQuery = { ...route.query };
   delete nextQuery.conversationId;
   if (status === "ARCHIVED") nextQuery.view = "archived";
   else delete nextQuery.view;
   conversationView.value = status;
   await navigateTo({ path: route.path, query: nextQuery }, { replace: true });
+  if (id.value !== characterId) return;
   await reload();
 }
 
 async function searchConversations() {
   if (sending.value) return;
+  const characterId = id.value;
   const term = conversationSearchDraft.value.trim().slice(0, 120);
   const nextQuery = { ...route.query };
   delete nextQuery.conversationId;
   if (term) nextQuery.q = term;
   else delete nextQuery.q;
   await navigateTo({ path: route.path, query: nextQuery }, { replace: true });
+  if (id.value !== characterId) return;
   await reload();
 }
 
 async function toggleConversationStatus(item: ConversationSummary) {
   if (sending.value) return;
-  const nextStatus = conversationView.value === "ACTIVE" ? "ARCHIVED" : "ACTIVE";
+  const characterId = id.value;
+  const sourceView = conversationView.value;
+  const nextStatus = sourceView === "ACTIVE" ? "ARCHIVED" : "ACTIVE";
   if (nextStatus === "ARCHIVED") {
     try {
       await ElMessageBox.confirm(
@@ -312,18 +359,20 @@ async function toggleConversationStatus(item: ConversationSummary) {
     }
   }
 
+  if (id.value !== characterId) return;
   try {
-    await $fetch("/api/characters/" + encodeURIComponent(id.value) + "/chat/" + encodeURIComponent(item.id), {
+    await $fetch("/api/characters/" + encodeURIComponent(characterId) + "/chat/" + encodeURIComponent(item.id), {
       method: "PATCH",
       body: { status: nextStatus },
     });
+    if (id.value !== characterId || conversationView.value !== sourceView) return;
     ElMessage.success(nextStatus === "ARCHIVED" ? "会话已归档，消息和来源记录均已保留。" : "会话已恢复。");
     const nextQuery = { ...route.query };
     delete nextQuery.conversationId;
     await navigateTo({ path: route.path, query: nextQuery }, { replace: true });
-    await reload();
+    if (id.value === characterId && conversationView.value === sourceView) await reload();
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, "更新会话状态失败。"));
+    if (id.value === characterId) ElMessage.error(getErrorMessage(error, "更新会话状态失败。"));
   }
 }
 
@@ -335,6 +384,8 @@ async function toggleConversationStatus(item: ConversationSummary) {
  */
 async function deleteConversation(item: ConversationSummary) {
   if (sending.value) return;
+  const characterId = id.value;
+  const sourceView = conversationView.value;
   const count = item.messageCount ? `这 ${item.messageCount} 条消息` : "会话内容";
   try {
     await ElMessageBox.confirm(
@@ -346,6 +397,7 @@ async function deleteConversation(item: ConversationSummary) {
     return;
   }
 
+  if (id.value !== characterId || conversationView.value !== sourceView) return;
   const wasSelected = item.id === conversationId.value;
   try {
     const result = await $fetch<{
@@ -353,9 +405,10 @@ async function deleteConversation(item: ConversationSummary) {
       retainedMemories: number;
       retainedSnapshotSources: number;
     }>(
-      "/api/characters/" + encodeURIComponent(id.value) + "/chat/" + encodeURIComponent(item.id),
+      "/api/characters/" + encodeURIComponent(characterId) + "/chat/" + encodeURIComponent(item.id),
       { method: "DELETE" },
     );
+    if (id.value !== characterId || conversationView.value !== sourceView) return;
     // 有可能一条长期记忆都没有、但快照已经总结过这段（实测库里就是这样），
     // 所以只按 retainedMemories 拼文案的话，人删完什么都看不到，反而会担心记忆没了。
     const kept = result.retainedMemories
@@ -370,9 +423,9 @@ async function deleteConversation(item: ConversationSummary) {
       delete nextQuery.conversationId;
       await navigateTo({ path: route.path, query: nextQuery }, { replace: true });
     }
-    await reload();
+    if (id.value === characterId && conversationView.value === sourceView) await reload();
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, "删除会话失败。"));
+    if (id.value === characterId) ElMessage.error(getErrorMessage(error, "删除会话失败。"));
   }
 }
 
@@ -391,7 +444,7 @@ async function runConversationCommand(item: ConversationSummary | null, command:
     await deleteConversation(item);
     return;
   }
-  if (command === "export") await exportConversation();
+  if (command === "export") await exportConversation(item);
 }
 
 function toggleSources(messageId: string) {
@@ -404,16 +457,24 @@ function sourcesOpen(messageId: string) {
   return expandedSources.value.includes(messageId);
 }
 
-async function exportConversation() {
-  const exportConversationId = conversationId.value;
-  if (!exportConversationId || !messages.value.length || exporting.value) return;
+async function exportConversation(item: ConversationSummary | null = activeConversation.value) {
+  const exportCharacterId = id.value;
+  const exportConversationId = item?.id ?? conversationId.value;
+  const exportTitle = item?.title ?? activeConversation.value?.title ?? "对话记录";
+  const exportCharacterName = character.value?.id === exportCharacterId
+    ? character.value.name
+    : current.value?.name ?? "未知角色";
+  const exportModelName = character.value?.id === exportCharacterId
+    ? character.value.chatModel
+    : "未知模型";
+  if (!exportCharacterId || !exportConversationId || exporting.value) return;
   exporting.value = true;
   try {
     const exportMessages: ChatMessage[] = [];
     let expectedTotal = 0;
     for (let page = 1; ; page += 1) {
       const result = await $fetch<ChatExportPage>(
-        "/api/characters/" + encodeURIComponent(id.value) + "/chat/" + encodeURIComponent(exportConversationId) +
+        "/api/characters/" + encodeURIComponent(exportCharacterId) + "/chat/" + encodeURIComponent(exportConversationId) +
           "?page=" + page + "&pageSize=200",
       );
       if (page === 1) expectedTotal = result.total;
@@ -426,11 +487,12 @@ async function exportConversation() {
       return;
     }
 
-    const title = activeConversation.value?.title || "对话记录";
+    const title = exportTitle;
     const lines = [
       "# " + title,
       "",
-      "- 角色：" + (character.value?.name || "未知角色"),
+      "- 角色：" + exportCharacterName,
+      "- 模型：" + exportModelName,
       "- 导出时间：" + new Date().toISOString(),
       "- 消息数量：" + exportMessages.length,
       "",
@@ -439,7 +501,7 @@ async function exportConversation() {
     ];
 
     for (const message of exportMessages) {
-      lines.push("## " + (message.role === "USER" ? "用户" : (character.value?.name || "角色")));
+      lines.push("## " + (message.role === "USER" ? "用户" : exportCharacterName));
       lines.push("");
       lines.push("发生时间：" + message.occurredAt);
       lines.push("");
@@ -520,14 +582,18 @@ async function sendMessage() {
     pendingRequestConversationId.value = conversationId.value;
   }
   const requestKey = pendingRequestKey.value;
+  const targetConversationId = conversationId.value;
+  const ticket = chatSessionState.begin(requestContext());
+  const characterId = ticket.context.characterId;
   sending.value = true;
   draft.value = "";
   await scrollToLatest();
   try {
-    const result = await $fetch<ChatSendResponse>("/api/characters/" + encodeURIComponent(id.value) + "/chat", {
+    const result = await $fetch<ChatSendResponse>("/api/characters/" + encodeURIComponent(characterId) + "/chat", {
       method: "POST",
-      body: { requestKey, message: content, ...(conversationId.value ? { conversationId: conversationId.value } : {}) },
+      body: { requestKey, message: content, ...(targetConversationId ? { conversationId: targetConversationId } : {}) },
     });
+    if (!chatSessionState.isCurrent(ticket, requestContext())) return;
     pendingRequestKey.value = null;
     pendingRequestContent.value = null;
     pendingRequestConversationId.value = null;
@@ -549,10 +615,12 @@ async function sendMessage() {
     await navigateTo({ path: route.path, query: { ...route.query, conversationId: result.conversationId } }, { replace: true });
     await scrollToLatest();
   } catch (error) {
-    draft.value = content;
-    ElMessage.error(getErrorMessage(error, "模型回复失败，请检查模型配置或服务端日志。"));
+    if (chatSessionState.isCurrent(ticket, requestContext())) {
+      draft.value = content;
+      ElMessage.error(getErrorMessage(error, "模型回复失败，请检查模型配置或服务端日志。"));
+    }
   } finally {
-    sending.value = false;
+    if (chatSessionState.isCurrent(ticket, requestContext())) sending.value = false;
   }
 }
 
@@ -685,6 +753,12 @@ watch(id, (next, previous) => {
                   </el-dropdown-item>
                   <el-dropdown-item command="status">
                     {{ conversationView === "ACTIVE" ? "归档" : "恢复" }}
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    command="export"
+                    :disabled="exporting"
+                  >
+                    {{ exporting ? "导出中…" : "导出 Markdown" }}
                   </el-dropdown-item>
                   <el-dropdown-item
                     command="delete"

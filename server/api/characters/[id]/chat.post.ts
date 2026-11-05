@@ -30,6 +30,7 @@ import { resolveChatMemoryScopes } from "../../../utils/memory-scope-access";
 import { requireActorUserId } from "../../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
+import { desktopConversationWhere, DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR, lockActiveDesktopConversationForWrite, throwDeletedDesktopConversationRequest, validateDesktopConversationReplay } from "../../../utils/desktop-conversation";
 import { readMessageIsOwner, readMessageSpeaker } from "../../../utils/conversation-message";
 import { resolveEventParticipantNames, resolveParticipantAccounts } from "../../../utils/participant-names";
 import { readPreviousJournalLine } from "../../../utils/journal-service";
@@ -96,7 +97,14 @@ export default defineEventHandler(async (event) => {
   if (chatRequest && chatRequest.requestHash !== requestHash) {
     throw createError({ statusCode: 409, statusMessage: "该请求标识已用于不同的消息内容，请重新发送以生成新的请求标识。" });
   }
+  if (chatRequest?.lastError === DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR) {
+    throwDeletedDesktopConversationRequest();
+  }
   if (chatRequest?.status === "COMPLETED" && chatRequest.response) {
+    await validateDesktopConversationReplay(prisma, {
+      conversationId: chatRequest.conversationId, characterId,
+      memoryScopeId: character.memoryScopes.find((scope) => scope.scopeType === "CHARACTER_GLOBAL")?.id ?? null,
+    });
     setResponseStatus(event, 200);
     return chatRequest.response;
   }
@@ -104,6 +112,7 @@ export default defineEventHandler(async (event) => {
     const claimed = await prisma.chatRequest.updateMany({
       where: {
         id: chatRequest.id,
+        AND: [{ OR: [{ lastError: null }, { lastError: { not: DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR } }] }],
         OR: [
           { status: "FAILED" },
           { status: "PROCESSING", updatedAt: { lt: staleBefore } },
@@ -128,7 +137,14 @@ export default defineEventHandler(async (event) => {
         if (concurrentRequest && concurrentRequest.requestHash !== requestHash) {
           throw createError({ statusCode: 409, statusMessage: "该请求标识已用于不同的消息内容，请重新发送以生成新的请求标识。" });
         }
+        if (concurrentRequest?.lastError === DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR) {
+          throwDeletedDesktopConversationRequest();
+        }
         if (concurrentRequest?.status === "COMPLETED" && concurrentRequest.response) {
+          await validateDesktopConversationReplay(prisma, {
+            conversationId: concurrentRequest.conversationId, characterId,
+            memoryScopeId: character.memoryScopes.find((scope) => scope.scopeType === "CHARACTER_GLOBAL")?.id ?? null,
+          });
           setResponseStatus(event, 200);
           return concurrentRequest.response;
         }
@@ -170,7 +186,7 @@ export default defineEventHandler(async (event) => {
   const existingConversation = requestedConversationId
     ? await prisma.conversation.findFirst({
         // channelBindingId: null —— 桌面端对话不能往 QQ 等外部渠道的会话里写消息。
-        where: { id: requestedConversationId, characterId, memoryScopeId, channelBindingId: null, status: "ACTIVE" },
+        where: desktopConversationWhere({ id: requestedConversationId, characterId, memoryScopeId, status: "ACTIVE" }),
         select: { id: true, title: true },
       })
     : null;
@@ -663,6 +679,9 @@ export default defineEventHandler(async (event) => {
       data: { characterId, memoryScopeId, title, status: "ACTIVE", metadata: { createdFrom: "yiling-chat-ui" } },
       select: { id: true, title: true },
     });
+    await lockActiveDesktopConversationForWrite(tx, {
+      id: conversation.id, characterId, memoryScopeId, lastMessageAt: assistantAt,
+    });
     const userMessage = await tx.message.create({
       data: {
         conversationId: conversation.id,
@@ -694,7 +713,6 @@ export default defineEventHandler(async (event) => {
       },
       select: { id: true, role: true, content: true, occurredAt: true },
     });
-    await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: assistantAt } });
 
     const saved = {
       conversationId: conversation.id,
