@@ -2405,10 +2405,13 @@ paths:
         本地开发功能。给「没起调度器、但想现在就跑一次自动归档」用。
 
         行为与周期任务一致：为全局范围与主人私人范围各排一条 `GENERATE_SNAPSHOT`，
-        幂等键沿用调度器格式 `auto-snapshot:{scopeId}:{start}:{end}`，同周期重复调用只会复用已有总结。
         排完当场驱动一次 Worker（不要求另开 `yarn worker:watch`）。
-        周期取 `[now - snapshotIntervalDays, now)`；只有真的产出总结时才把 `nextSnapshotAt`
-        推进到 `now + snapshotIntervalDays`，全部 SKIPPED 时保持原计划。
+
+        周期是**首尾相接**的：起点取上一份自动总结的 `periodEnd`（没有则 `now - interval`），
+        终点是 `now`。同周期幂等键沿用 `auto-snapshot:{scopeId}:{start}:{end}`，
+        并且：该范围已有在途任务时复用它（过时的直接作废），刚归档过（1 小时内）不再调用模型。
+        只有本次排的任务全部成功才把 `nextSnapshotAt` 推进到 `now + interval`；
+        有失败或仍在队列时保持原计划，这段数据下次还能补上。
       responses:
         '200':
           description: 已尝试归档；处理结果逐条返回
@@ -2416,7 +2419,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [queued, skipped, processed, advancedTo, intervalDays]
+                required: [queued, skipped, processed, pending, advancedTo, intervalDays]
                 properties:
                   queued:
                     type: array
@@ -2434,6 +2437,9 @@ paths:
                       properties:
                         status: { type: string, enum: [SUCCEEDED, SKIPPED, RETRY_WAIT, FAILED, CANCELLED] }
                         message: { type: string }
+                  pending:
+                    type: integer
+                    description: 本次排的任务里仍在队列中的数量（模型超时、没有 worker 等）
                   advancedTo:
                     type: string
                     format: date-time

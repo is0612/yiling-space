@@ -883,6 +883,7 @@ async function runAiArchive() {
       queued: string[];
       skipped: string[];
       processed: Array<{ status: string; message: string }>;
+      pending: number;
       advancedTo: string | null;
     }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots/generate`, { method: "POST" });
 
@@ -891,7 +892,10 @@ async function runAiArchive() {
     const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
     const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
     if (failed) {
-      ElMessage.warning(failed.message);
+      // 失败时周期边界不会推进，这段数据下次还能补上，所以要说清楚去重试而不是重来
+      ElMessage.warning(`${failed.message}（这次没有推进周期，去「后台任务」点重试即可）`);
+    } else if (result.pending > 0) {
+      ElMessage.warning(`还有 ${result.pending} 个归档任务在队列里没跑完，去「后台任务」看一下。`);
     } else if (ok.length) {
       ElMessage.success(ok.map((item) => item.message).join("；"));
     } else if (result.skipped.length) {
