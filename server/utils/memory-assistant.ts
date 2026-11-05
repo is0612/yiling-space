@@ -7,7 +7,7 @@ import {
   rankMemoriesWithBudget,
   rankSnapshotsWithBudget,
 } from "./memory-retrieval";
-import { selectEventsForPrompt, type EventCandidate } from "./memory-event-retrieval";
+import { parseEventParticipantQuery, selectEventsForPrompt, type EventCandidate } from "./memory-event-retrieval";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 import { selectRawMessagesForMemoryAssistant, type RawMessageCandidate } from "./message-retrieval";
@@ -658,6 +658,23 @@ function warnMemoryAssistantFailure(
   console.warn("[memory-assistant] lookup_" + reason, details);
 }
 
+/**
+ * Named-person timeline questions are deterministic retrieval intents.
+ * Do not rely solely on the chat model remembering to emit memoryAssistantQuery:
+ * otherwise a plausible guess can bypass the separately billed memory assistant.
+ */
+export function buildDeterministicTimelineMemoryQuery(message: string): string | null {
+  const normalized = message.normalize("NFKC").replace(/\\s+/gu, "");
+  const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(normalized);
+  const wantsLatest = /最近一次|上一次|上回|上次|最后一次/u.test(normalized);
+  const asksInteraction = /说话|聊天|交流|互动|联系|见面|认识|接触/u.test(normalized);
+  if ((!wantsFirst && !wantsLatest) || !asksInteraction) return null;
+  const participant = parseEventParticipantQuery(normalized);
+  if (!participant) return null;
+  const direction = wantsFirst ? "最早" : "最近";
+  return `查找与「${participant}」${direction}的一次互动，优先查找原始聊天消息并核对发言人和时间。用户原问题：${message.trim().slice(0, 160)}`.slice(0, 240);
+}
+
 export async function generateConversationReplyWithMemoryAssistant(input: {
   chatInput: ConversationReplyInput;
   assistant: MemoryAssistantRuntime | null;
@@ -675,7 +692,12 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
     memoryAssistantAvailable: assistantAvailable,
     memoryAssistantEvidenceProvided: false,
   });
-  const { memoryAssistantQuery, ...firstResult } = first;
+  const { memoryAssistantQuery: modelMemoryAssistantQuery, ...firstResult } = first;
+  const deterministicQuery = !modelMemoryAssistantQuery
+    ? buildDeterministicTimelineMemoryQuery(input.chatInput.currentMessage)
+    : null;
+  const memoryAssistantQuery = modelMemoryAssistantQuery || deterministicQuery || "";
+  const forcedTimelineLookup = Boolean(deterministicQuery);
   if (!assistantAvailable || !input.assistant || !memoryAssistantQuery || first.action === "silent") {
     report({ status: !input.assistant ? "not_enabled" : first.action === "silent" ? "not_needed" : !assistantAvailable ? "no_sources" : "not_needed",
       ...(memoryAssistantQuery && first.action !== "silent" ? { query: memoryAssistantQuery } : {}) });
@@ -690,7 +712,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
    * 手账里有「生日 10 月 30 号」，但群聊检索只查 memory/snapshot/event/message，
    * 查不到手账，于是模型先答对了、又被兜底文案改回「没记录」。
    */
-  const contextAlreadyAnswers = Boolean(
+  const contextAlreadyAnswers = !forcedTimelineLookup && Boolean(
     input.chatInput.journalFacts?.length || input.chatInput.groupActivity,
   ) && firstResult.reply.trim().length > 0
     // 「让我去翻翻」这类等待话术不算答案：宁可走「没找到记录」，也不能把悬而未决的话交付。
