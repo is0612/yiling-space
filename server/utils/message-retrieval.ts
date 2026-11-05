@@ -108,7 +108,8 @@ export function selectRawMessagesForMemoryAssistant<T extends RawMessageCandidat
     ))
     .map((message) => ({
       ...message,
-      relevanceScore: scoreOf(query, message.content),
+      // 人物时间线检索必须把发言人也纳入相关度；对方没在正文里自称名字很正常。
+      relevanceScore: scoreOf(query, message.content + ("speaker" in message && typeof message.speaker === "string" ? " " + message.speaker : "")),
       tokens: estimateTokens(Array.from(message.content).slice(0, 360).join("")),
       truncated: Array.from(message.content).length > 360,
       content: Array.from(message.content).length > 360
@@ -123,7 +124,10 @@ export function selectRawMessagesForMemoryAssistant<T extends RawMessageCandidat
   const matched = ranked
     .filter((message) => message.relevanceScore > 0)
     .sort((left, right) =>
-      right.relevanceScore - left.relevanceScore || chronological(left, right),
+      // 明确问首次/最近一次时，时间顺序优先于正文词频；相关度只作同一时刻的次级排序。
+      (wantsFirst || wantsLatest)
+        ? chronological(left, right) || right.relevanceScore - left.relevanceScore
+        : right.relevanceScore - left.relevanceScore || chronological(left, right),
     );
   // 没有关键词命中时也给少量时间方向正确的原文，让语义助手识别同义表达。
   const ordered = matched.length
