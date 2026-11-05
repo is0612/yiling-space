@@ -25,6 +25,7 @@ import {
   type OnebotSegment,
   type OnebotVoiceRef,
 } from "./types";
+import { inspectOnebotRedPacket } from "./red-packet-diagnostics";
 
 /** 出站消息：纯文本，或段数组（表情、图片、@）。 */
 export type OnebotOutgoingMessage = string | OnebotSegment[];
@@ -363,6 +364,11 @@ export function connectOnebot(
       const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf8");
       const payload = safeJson(text);
       if (!payload || typeof payload !== "object") return;
+      // 红包只做结构诊断：不记录消息正文、QQ 号、凭据或完整原始事件。
+      const redPacketDiagnostic = inspectOnebotRedPacket(payload);
+      if (redPacketDiagnostic) {
+        console.info("[onebot] 检测到疑似 QQ 红包事件", redPacketDiagnostic);
+      }
       // 消息走原来的解析；戳一戳（notice）翻译成一条合成事件后走同一条路。
       const resolved = isMessageEvent(payload) ? resolveOnebotEvent(payload) : resolveOnebotPokeEvent(payload);
       if (!resolved) return;
