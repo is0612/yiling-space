@@ -10,7 +10,7 @@
  * hook 没挂上），3001/3002 一个都不 listen，适配器只能一直刷 `code=1006`。
  * 所以除了节点，这里还负责「找到这个号对应的 QQ 进程 → 把 hook 挂进去」。
  *
- * 接口来自 SnowLuma v2.2.1 的 index.mjs（未混淆，可直接读）：
+ * 接口来自 SnowLuma v2.4.0 的 index.mjs（未混淆，可直接读；v2.2.1 → v2.4.0 这几个端点没变）：
  *   POST /api/login        { password }                → { success, token, mustChangePassword }
  *   GET  /api/config/:uin                              → { config }
  *   POST /api/config/:uin  <整个 config>                → { success, saved, applied }

@@ -255,3 +255,33 @@ yarn onebot:run
 - 用**小号**，非官方协议有封号风险，别用主号、别给 bot 号充值、别存重要数据。
 - OneBot 端口**只走本机/局域网**，不要映射到公网（未加密 + 未鉴权，暴露等于交出 QQ 控制权）。
 - 私聊场景风险低于群聊，群聊建议开启「仅 @ 回复」降低频率。
+
+## 9. 升级 SnowLuma
+
+**一个版本一个目录**（`...\snowluma\v2.2.1`、`...\snowluma\v2.4.0`），回退只要把指针改回去 —— 所以升级一律「**复制**数据到新目录」，不要在旧目录上原地解压覆盖。
+
+```text
+1. 停掉协议端（页面上「停止 SnowLuma」，任务管理器确认没有 snowluma 的 node 进程）
+2. 新版 zip 解压到 ...\snowluma\v2.4.0
+3. 旧版的 config\ 和 data\ 整个复制到新目录（进程停着才复制）
+4. 复制旧版的 start.bat 过去，或者自己建一个（见下）
+5. .data\snowluma-home.json 的 home 改成新目录（或在页面「换目录」里填一次）
+6. 启动，日志里应依次出现 WebUI listening / [Hook] login detected / pipe connected / [OneBot] session started
+```
+
+几个必须知道的点：
+
+- **发行包里没有 `start.bat`**（只有 `launcher.bat`，它过 Node 版本闸门）。忆灵空间靠「目录里有 start.bat」认安装目录，也靠它决定能不能启动，所以新目录必须有 —— 内容就四行，**存成 CRLF**：
+
+  ```bat
+  @echo off
+  cd /d %~dp0
+  ".\node.exe" index.mjs
+  pause
+  ```
+
+- `data\<QQ号>\messages.db{,-wal}` 是它自己的消息库，**进程没停就复制会拿到半截 WAL**。停稳再复制，两边文件大小应完全一致。
+- 升级别只起不停：两个实例会抢 5099（后起的日志里会有 `port 5099 is in use, using 5100 instead`），更糟的是抢同一个 `messages.db`。
+- 面板 API（`/api/login`、`/api/config/:uin`、`/api/processes`、`/api/processes/:pid/load`、`x-snowluma-token`）从 v2.2.1 到 v2.4.0 没变，自动配节点与自动挂 QQ 不用改代码。
+- 端口、令牌、面板密码都在 `config\` 里，跟着目录一起搬；`webui.json` 也在，所以面板密码不变。
+- 出问题回退：把 `.data\snowluma-home.json` 改回旧目录、停掉新实例再启动即可，旧目录里的库还是升级前的样子。
