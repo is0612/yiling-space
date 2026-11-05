@@ -390,7 +390,7 @@ function handbookBase(overrides: Record<string, unknown> = {}) {
     model: "test-model",
     dayKey: "2026-10-31",
     timezone: "Asia/Shanghai",
-    characterName: "小鲸鱼i",
+    characterName: "阿汐",
     basePrompt: "test persona",
     messages: [
       { id: "m1", role: "USER", occurredAt: "2026-10-31T10:00:00.000Z", content: "我昨天去旅行了。", speaker: "群友A" },

@@ -31,11 +31,11 @@ for (const statement of [
 
 // ── 群内称呼 ──────────────────────────────────────────────
 assert.deepEqual(
-  parseSelfNames({ characterName: "小鲸鱼i", groupAliases: "小鲸鱼，小鲸鱼i" }),
-  ["小鲸鱼i", "小鲸鱼"],
+  parseSelfNames({ characterName: "阿汐", groupAliases: "小汐，阿汐" }),
+  ["阿汐", "小汐"],
   "角色名与绑定别名都要算进去，且去重",
 );
-assert.deepEqual(parseSelfNames({ characterName: "小鲸鱼i" }), ["小鲸鱼i"]);
+assert.deepEqual(parseSelfNames({ characterName: "阿汐" }), ["阿汐"]);
 
 // ── 聚合：只数 USER、@ 她/叫名字才记 atYou ─────────────────
 const rows = [
@@ -50,7 +50,7 @@ const rows = [
     metadata: { authorOpenId: "1001", authorDisplayName: "昔涟" },
   },
   {
-    content: "小鲸鱼在吗",
+    content: "小汐在吗",
     occurredAt: new Date("2026-11-03T01:10:00Z"),
     metadata: { authorOpenId: "1002", authorDisplayName: "白夜" },
   },
@@ -76,7 +76,7 @@ const activity = await buildGroupActivityContext({
   now: new Date("2026-11-04T01:00:00Z"),
   timeZone: "Asia/Shanghai",
   selfQq: "100000",
-  selfNames: ["小鲸鱼i", "小鲸鱼"],
+  selfNames: ["阿汐", "小汐"],
 });
 assert.ok(activity, "有消息时应返回统计");
 assert.equal(activity!.rangeLabel, "昨天");

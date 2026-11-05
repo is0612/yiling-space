@@ -66,7 +66,7 @@ export function parseSelfNames(input: {
     if (trimmed && trimmed.length >= 2) names.add(trimmed);
   };
   add(input.characterName);
-  // 绑定里的别名是「小鲸鱼，小鲸鱼i」这种逗号/顿号分隔的字符串。
+  // 绑定里的别名是「小夏，夏夏」这种逗号/顿号分隔的字符串。
   for (const part of (input.groupAliases ?? "").split(/[,，、;；\s]+/u)) add(part);
   return [...names];
 }

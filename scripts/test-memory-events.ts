@@ -119,7 +119,7 @@ assert.equal(noMatch.items.length, 0, "对不上的内容不能硬塞进上下�
 
 // ── 参与者过滤 / 取首聚合（P2）──────────────────────────────
 const people = [
-  { id: "p1", title: "和小明在银滩游泳", detail: "下午去的", occurredAt: new Date("2026-10-20T06:00:00Z"), participants: ["小明", "小鲸鱼i"], keywords: ["游泳"] },
+  { id: "p1", title: "和小明在银滩游泳", detail: "下午去的", occurredAt: new Date("2026-10-20T06:00:00Z"), participants: ["小明", "阿汐"], keywords: ["游泳"] },
   { id: "p2", title: "和小明吃饭", detail: "晚上", occurredAt: new Date("2026-10-25T10:00:00Z"), participants: ["小明"], keywords: ["吃饭"] },
   { id: "p3", title: "和小月跑步", detail: "早上", occurredAt: new Date("2026-10-22T00:00:00Z"), participants: ["小月"], keywords: ["跑步"] },
 ];
@@ -333,20 +333,20 @@ assert(
 );
 // 人名与参与人重合也不能证明同一事实。
 assert(
-  longestCommonSubstringLength("群友叫她小肥鱼，她坚持叫小鲸鱼i", "被叫「小肥鱼」后纠正称呼") < 6,
+  longestCommonSubstringLength("群友叫她小胖鱼，她坚持叫阿汐", "被叫「小胖鱼」后纠正称呼") < 6,
   "短标题只按字数挡不住 —— 所以还要看参与人。",
 );
 assert(
   !isNearDuplicateEvent(
-    { title: "群友叫她小肥鱼，她坚持叫小鲸鱼i", participants: ["群友", "小鲸鱼i"] },
-    { title: "被叫「小肥鱼」后纠正称呼", participants: ["群友", "小鲸鱼i"] },
+    { title: "群友叫她小胖鱼，她坚持叫阿汐", participants: ["群友", "阿汐"] },
+    { title: "被叫「小胖鱼」后纠正称呼", participants: ["群友", "阿汐"] },
   ),
   "人名重合且共同参与人仍不足以证明同一事实，保守保留。",
 );
 assert(
   !isNearDuplicateEvent(
-    { title: "群友叫她小肥鱼，她坚持叫小鲸鱼i", participants: ["群友"] },
-    { title: "被叫「小肥鱼」后纠正称呼", participants: ["小明"] },
+    { title: "群友叫她小胖鱼，她坚持叫阿汐", participants: ["群友"] },
+    { title: "被叫「小胖鱼」后纠正称呼", participants: ["小明"] },
   ),
   "只有 3 字重合、参与人不同 → 不能判重。",
 );
@@ -473,12 +473,12 @@ const evidenceMsg = (over: Partial<MemoryEvidenceMessage> & { id: string }): Mem
   ...over,
 });
 
-// 线上真实那条「答题接龙」：participants = {小鲸鱼i, 群友}，小鲸鱼i 是角色自己。
+// 线上真实那条「答题接龙」：participants = {阿汐, 群友}，阿汐 是角色自己。
 assert.deepEqual(
   resolveEventParticipants(
-    ["小鲸鱼i", "群友"],
+    ["阿汐", "群友"],
     [evidenceMsg({ id: "a", role: "ASSISTANT" }), evidenceMsg({ id: "b", speaker: "阿深" })],
-    "小鲸鱼i",
+    "阿汐",
   ),
   ["阿深"],
   "她自己不该出现在参与者里，泛称要换成真实昵称",
@@ -490,7 +490,7 @@ assert.deepEqual(
   resolveEventParticipants(
     ["群友"],
     [evidenceMsg({ id: "a", speaker: "阿深" }), evidenceMsg({ id: "b", speaker: "黛蓝" })],
-    "小鲸鱼i",
+    "阿汐",
   ),
   ["群友"],
   "两个候选时不猜，泛称保留（有别人参与这个信息不能丢）",
@@ -498,7 +498,7 @@ assert.deepEqual(
 
 // 旧忆泡没有来源消息，只能做确定性清洗：剔掉她自己，泛称无从替换就留着。
 assert.deepEqual(
-  resolveEventParticipants(["小鲸鱼i", "群友"], [], "小鲸鱼i"),
+  resolveEventParticipants(["阿汐", "群友"], [], "阿汐"),
   ["群友"],
   "没有证据时不猜名字，但泛称保留、她自己剔掉",
 );
@@ -508,7 +508,7 @@ assert.deepEqual(
   resolveEventParticipants(
     ["阿深", "群友"],
     [evidenceMsg({ id: "a", speaker: "阿深" }), evidenceMsg({ id: "b", speaker: "黛蓝" })],
-    "小鲸鱼i",
+    "阿汐",
   ),
   ["阿深", "黛蓝"],
   "已点名的保留，泛称补成证据里剩下的那一个",
@@ -519,7 +519,7 @@ assert.deepEqual(
   resolveEventParticipants(
     [],
     [evidenceMsg({ id: "a", role: "ASSISTANT" }), evidenceMsg({ id: "b", speaker: "阿深" })],
-    "小鲸鱼i",
+    "阿汐",
   ),
   ["阿深"],
   "证据里只有一个人时，空参与者也要补上名字",
@@ -527,7 +527,7 @@ assert.deepEqual(
 
 // 只有她自己在说话：不能凭空冒出一个人。
 assert.deepEqual(
-  resolveEventParticipants([], [evidenceMsg({ id: "a", role: "ASSISTANT" })], "小鲸鱼i"),
+  resolveEventParticipants([], [evidenceMsg({ id: "a", role: "ASSISTANT" })], "阿汐"),
   [],
   "只有她的消息时不该编出在场的人",
 );
@@ -537,7 +537,7 @@ assert.deepEqual(
   resolveEventParticipants(
     ["主人", "群友"],
     [evidenceMsg({ id: "a", isOwner: true, speaker: "老陈" }), evidenceMsg({ id: "b", speaker: "阿深" })],
-    "小鲸鱼i",
+    "阿汐",
   ),
   ["主人", "阿深"],
   "主人保留称谓，泛称补成主人之外那个人",
@@ -545,7 +545,7 @@ assert.deepEqual(
 
 // 重复项和空白要被清掉。
 assert.deepEqual(
-  resolveEventParticipants(["阿深", " 阿深 ", "群友", ""], [evidenceMsg({ id: "a", speaker: "阿深" })], "小鲸鱼i"),
+  resolveEventParticipants(["阿深", " 阿深 ", "群友", ""], [evidenceMsg({ id: "a", speaker: "阿深" })], "阿汐"),
   ["阿深"],
   "同名去重、空串丢弃",
 );

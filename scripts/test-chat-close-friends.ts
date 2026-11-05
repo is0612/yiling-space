@@ -5,11 +5,11 @@ import type { Acquaintances } from "../server/utils/friends";
 /**
  * 熟人名册（acquaintances）进提示词。
  *
- * 起因：2026-11-01 12:20 有人问「你跟谁关系最好」，她答「跟小肥鱼呗」—— 那是群里另一个
+ * 起因：2026-11-01 12:20 有人问「你跟谁关系最好」，她答「跟小胖鱼呗」—— 那是群里另一个
  * bot 的昵称，不是任何关系记录。她原本对「自己认识谁」零信息。
  *
  * v23 之前是一张扁平总榜，两个问题：
- * - 群里分不清是哪个群的熟人，A 群的小肥鱼会被当成 B 群那个人；
+ * - 群里分不清是哪个群的熟人，A 群的小胖鱼会被当成 B 群那个人；
  * - 私聊里被问「跟谁最好」时，群里天天见的人次数天然高，私聊的亲近对象排不上号。
  *
  * 所以现在是三档：fromPrivate / fromGroups / inThisGroup。这个测试盯四件事：
@@ -46,7 +46,7 @@ function readCaptured() {
 }
 
 const base = {
-  characterName: "小鲸鱼",
+  characterName: "小汐",
   characterPrompt: "你是一条嘴硬心软的鲸鱼。",
   model: "test-chat-model",
   apiKey: "sk-close-friends-test",
@@ -108,7 +108,7 @@ await generateConversationReply({
   ...base,
   groupChat: true,
   direct: true,
-  transcript: [{ id: "m1", speaker: "昔涟", content: "@小鲸鱼 你跟谁关系最好", isOwner: false }],
+  transcript: [{ id: "m1", speaker: "昔涟", content: "@小汐 你跟谁关系最好", isOwner: false }],
   acquaintances: roster({
     inThisGroup: [{
       name: "昔涟",

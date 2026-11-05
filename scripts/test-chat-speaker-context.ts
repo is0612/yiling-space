@@ -13,7 +13,7 @@ globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promis
 
 try {
   const result = await generateConversationReply({
-    characterName: "小鲸鱼",
+    characterName: "小汐",
     characterPrompt: "你是一条嘴硬心软的鲸鱼。",
     model: "test-chat-model",
     apiKey: "sk-speaker-test",
@@ -39,7 +39,7 @@ try {
   assert(!system.includes("10000002") && !user.includes("10000002"), "提示词不能带平台账号 ID。");
 
   await generateConversationReply({
-    characterName: "小鲸鱼",
+    characterName: "小汐",
     characterPrompt: "你是一条嘴硬心软的鲸鱼。",
     model: "test-chat-model",
     apiKey: "sk-speaker-test",
@@ -57,7 +57,7 @@ try {
   // 群聊：一轮里好几个人说话，主人身份必须挂在**每一行**上。
   // 顶层 speaker 在群聊路径下不传，只给顶层就等于没有身份信息（对谁都喊主人的根因）。
   await generateConversationReply({
-    characterName: "小鲸鱼",
+    characterName: "小汐",
     characterPrompt: "你是一条嘴硬心软的鲸鱼。",
     model: "test-chat-model",
     apiKey: "sk-speaker-test",
@@ -109,7 +109,7 @@ try {
   // 历史消息：USER 行不能只剩 role + content，否则 20 条历史分不清谁是谁。
   const recentSection = body3.messages.length ? user3.slice(user3.indexOf("\"recentMessages\"")) : "";
   assert(recentSection.includes("\"speaker\":\"群友甲\""), "历史 USER 行必须带发言人。");
-  assert(!recentSection.includes("\"speaker\":\"小鲸鱼\""), "她自己说的话不该被当成 USER 带发言人。");
+  assert(!recentSection.includes("\"speaker\":\"小汐\""), "她自己说的话不该被当成 USER 带发言人。");
   assert(recentSection.includes("\"hadSticker\":true"), "带过表情包的 ASSISTANT 历史行必须标 hadSticker:true，否则她认不出自己发的图。");
   // 2026-11-02 16:26：她刚发完 5 秒语音，对方说「语音我这边听不了」，她回「本宝本来也只会打字」。
   // 语音痕迹只在 metadata，历史里不带出来，她就当自己没说过话。
@@ -123,7 +123,7 @@ try {
    * v15 只给了「所有格不是你」这条规矩，她无处可比；v16 把表摆进来，让她查。
    */
   await generateConversationReply({
-    characterName: "小鲸鱼",
+    characterName: "小汐",
     characterPrompt: "你是一条嘴硬心软的鲸鱼。",
     model: "test-chat-model",
     apiKey: "sk-speaker-test",

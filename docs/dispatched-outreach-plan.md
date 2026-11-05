@@ -182,7 +182,7 @@ const lastSpokeAt = lastAssistant?.occurredAt ?? null;
 - **群**：纯数字 5~12 位，`isGroupId()` 已有。
 - **人**：昵称 → `ExternalIdentity.displayName` 或她自己给人起的叫法（`FriendAliasSuggestion`）。
 - **歧义**：命中多于一个人 → **停下来问主人**，不许自己挑。系统早就知道群昵称会重名
-  （`friends.ts` 的 `groups` 字段就是为"A 群的小肥鱼 / B 群的小肥鱼"设的）。
+  （`friends.ts` 的 `groups` 字段就是为「A 群的小胖鱼 / B 群的小胖鱼」设的）。
 - **群名**：不支持，因为全项目没有 `get_group_info` / `get_group_list`。这是另一件事。
 
 ---

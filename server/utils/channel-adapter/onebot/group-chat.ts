@@ -103,7 +103,7 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
   return Math.max(min, Math.min(Math.round(value), max));
 }
 
-/** 别名接受数组或「小鱼,大傻鱼 小鲸鱼」这种手填串：两种都常见，没必要让一种报错。 */
+/** 别名接受数组或「小夏,夏夏 阿夏」这种手填串：两种都常见，没必要让一种报错。 */
 function readAliases(value: unknown): string[] {
   const raw = Array.isArray(value)
     ? value

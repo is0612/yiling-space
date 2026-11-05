@@ -45,13 +45,13 @@ assert.equal(sanitizeAnnouncement("a".repeat(800)).length, 500);
 
 // 提示词：带标记（供模拟模型识别），并要求只输出正文；不包含任何凭据字段。
 const system = buildAnnouncementSystemPrompt({
-  characterName: "小鲸鱼",
+  characterName: "小汐",
   characterPrompt: "你是一条爱聊天的鲸鱼。",
   styleExamples: "说话简短。",
 });
 assert(system.includes("YILING_GROUP_ANNOUNCEMENT_V1"));
 assert(system.includes("只输出公告正文"));
-assert(system.includes("小鲸鱼"));
+assert(system.includes("小汐"));
 assert(!system.includes("apiKey"));
 const user = buildAnnouncementUserPrompt({ topic: "周末活动", recentContext: "群成员：周六有空吗" });
 assert(user.includes("周末活动"));

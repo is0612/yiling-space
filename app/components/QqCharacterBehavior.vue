@@ -891,7 +891,7 @@ async function tryGroupOnce() {
           <span class="beh-label">群里怎么叫她</span>
           <el-input
             v-model="bind.groupAliases"
-            placeholder="小鱼，大傻鱼，小鲸鱼"
+            placeholder="小夏，夏夏，阿夏"
           />
           <em>逗号分隔。没 @ 但叫到这些名字，她会看一眼再决定：群里同名的鱼可能不止一条。</em>
         </div>

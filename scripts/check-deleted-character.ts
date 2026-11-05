@@ -2,7 +2,7 @@
  * 排查「某个角色删掉之后，还有没有留着她的数据」。
  *
  * 用法：
- *   tsx scripts/check-deleted-character.ts 小鲸鱼i        # 按名字找
+ *   tsx scripts/check-deleted-character.ts 阿汐        # 按名字找
  *   tsx scripts/check-deleted-character.ts 2013b2f2-...   # 直接给 id
  *
  * 名字未必还能查到 —— 角色行都没了，`characters` 表里当然搜不到。
