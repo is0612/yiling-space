@@ -50,6 +50,18 @@ export type Character = {
   memoryAssistantApiBaseUrl?: string;
   memoryAssistantApiKeyConfigured?: boolean;
   memoryAssistantConfigured?: boolean;
+  /** 语境助手是否启用、模型配置和 Key 保存状态。 */
+  contextAssistantEnabled?: boolean;
+  contextAssistantModel?: string;
+  /** 语境助手独立采样温度；旧角色缺省为 0.1。 */
+  contextAssistantTemperature?: number;
+  /** 语境助手单次检索的估算输入 Token 上限；旧角色缺省为 16384。 */
+  contextAssistantMaxInputTokens?: number;
+  /** 语境助手单次检索的最大输出 Token；旧角色缺省为 2048。 */
+  contextAssistantMaxOutputTokens?: number;
+  contextAssistantApiBaseUrl?: string;
+  contextAssistantApiKeyConfigured?: boolean;
+  contextAssistantConfigured?: boolean;
   /** 每日 token 额度，0 = 不限。 */
   dailyTokenLimit?: number;
   /** 每次对话注入记忆 / 快照的 token 预算。 */

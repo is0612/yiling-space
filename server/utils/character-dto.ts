@@ -4,7 +4,7 @@ import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemo
 import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
-import { isMemoryAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
+import { isContextAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 
 function positiveNumber(value: unknown): number {
@@ -57,6 +57,14 @@ export type CharacterDto = {
   memoryAssistantApiBaseUrl: string;
   memoryAssistantApiKeyConfigured: boolean;
   memoryAssistantConfigured: boolean;
+  contextAssistantEnabled: boolean;
+  contextAssistantModel: string;
+  contextAssistantTemperature: number;
+  contextAssistantMaxInputTokens: number;
+  contextAssistantMaxOutputTokens: number;
+  contextAssistantApiBaseUrl: string;
+  contextAssistantApiKeyConfigured: boolean;
+  contextAssistantConfigured: boolean;
   /** 每日 token 额度，0 = 不限。 */
   dailyTokenLimit: number;
   /** 每次对话注入的记忆 / 快照 token 预算。 */
@@ -190,6 +198,10 @@ export function toCharacterDto(input: unknown): CharacterDto {
     ? config.memoryAssistantModel.trim()
     : "";
   const memoryAssistantApiKeyConfigured = isMemoryAssistantApiKeySaved(config);
+  const contextAssistantModel = typeof config.contextAssistantModel === "string"
+    ? config.contextAssistantModel.trim()
+    : "";
+  const contextAssistantApiKeyConfigured = isContextAssistantApiKeySaved(config);
   const avatarTone = resolveAvatarTone(character.name, config);
   const setting = character.memorySetting;
   const snapshots = character.memoryScopes.flatMap((scope) => scope.snapshots.map((snapshot) => snapshot.createdAt));
@@ -252,6 +264,16 @@ export function toCharacterDto(input: unknown): CharacterDto {
       : "",
     memoryAssistantApiKeyConfigured,
     memoryAssistantConfigured: Boolean(memoryAssistantModel && memoryAssistantApiKeyConfigured),
+    contextAssistantEnabled: config.contextAssistantEnabled === true,
+    contextAssistantModel,
+    contextAssistantTemperature: typeof config.contextAssistantTemperature === "number" && Number.isFinite(config.contextAssistantTemperature) ? Math.min(2, Math.max(0, config.contextAssistantTemperature)) : 0.1,
+    contextAssistantMaxInputTokens: typeof config.contextAssistantMaxInputTokens === "number" && Number.isFinite(config.contextAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.contextAssistantMaxInputTokens))) : 16_384,
+    contextAssistantMaxOutputTokens: typeof config.contextAssistantMaxOutputTokens === "number" && Number.isFinite(config.contextAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.contextAssistantMaxOutputTokens))) : 2_048,
+    contextAssistantApiBaseUrl: typeof config.contextAssistantApiBaseUrl === "string"
+      ? config.contextAssistantApiBaseUrl
+      : "",
+    contextAssistantApiKeyConfigured,
+    contextAssistantConfigured: Boolean(contextAssistantModel && contextAssistantApiKeyConfigured),
     dailyTokenLimit: positiveNumber(config.dailyTokenLimit),
     memoryTokenBudget: positiveNumber(config.memoryTokenBudget) || MEMORY_TOKEN_BUDGET_DEFAULT,
     snapshotTokenBudget: positiveNumber(config.snapshotTokenBudget) || SNAPSHOT_TOKEN_BUDGET_DEFAULT,

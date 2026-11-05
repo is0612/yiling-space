@@ -2,10 +2,11 @@ import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client"
 import { type ConversationContextMessage, type ConversationGroupDecision } from "../chat-reply";
 import {
   buildMemoryAssistantCandidates,
-  generateConversationReplyWithMemoryAssistant,
   resolveMemoryAssistantRuntime,
 } from "../memory-assistant";
 import { resolveChatTimeZone } from "../chat-time-context";
+import { resolveContextAssistantRuntime } from "../context-assistant";
+import { generateGroupContextReply } from "../group-context-reply";
 import { parseEventTimeRange } from "../memory-event-time";
 import {
   CROSS_CHANNEL_WINDOW_MINUTES,
@@ -399,6 +400,7 @@ export function buildGroupMemberDeltas(messages: ReadonlyArray<{
 /** 群聊这一轮的上下文：本轮是否 @ 她、之前几句、她参与过的话题。 */export type ChannelGroupTurnContext = {
   direct: boolean;
   background: Array<{ id: string; at: number; member: string; speaker: string; text: string }>;
+  analysisBackground?: Array<{ id: string; at: number; member: string; speaker: string; text: string }>;
   anchors: Array<{ id: string; label: string }>;
   /** 群内归属（「X的Y」「@某人 主人夸我了」学来的）。空数组 = 这轮没学到，不注入。 */
   members?: Array<{ member: string; speaker: string; belongsTo: string; belongsToName: string }>;
@@ -1441,9 +1443,26 @@ async function runChannelTurn(input: {
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
   let generated;
+  const generationStartedAt = Date.now();
   try {
-    generated = await generateConversationReplyWithMemoryAssistant({
+    generated = await generateGroupContextReply({
       assistant: memoryAssistant,
+      contextAssistant: isGroup ? await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl) : null,
+      analysisBackground: input.group?.analysisBackground?.map(line => ({
+        id: line.id, member: line.member, speaker: line.speaker, content: line.text,
+        occurredAt: new Date(line.at).toISOString(),
+      })),
+      recordAssistantUsage: async (entry) => {
+        await recordModelUsage({
+          kind: entry.kind,
+          model: entry.model,
+          usage: toUsageTokens(entry.usage),
+          characterId: input.characterId,
+          channelBindingId: input.bindingId,
+          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+          metadata: { status: entry.status },
+        });
+      },
       candidates: [],
       loadCandidates: async (searchQuery) => {
         const searchParticipantName = parseEventParticipantQuery(searchQuery);
@@ -1714,9 +1733,15 @@ async function runChannelTurn(input: {
       },
     });
   } catch (error) {
+    await recordModelUsage({
+      kind: "channel", model: chatSettings.model, characterId: input.characterId,
+      channelBindingId: input.bindingId,
+      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt },
+    });
     return { status: "ignored", reason: (error instanceof Error ? error.message : "model_error").slice(0, 200) };
   }
 
+  const generationDurationMs = Date.now() - generationStartedAt;
   const now = new Date();
   const assistantAt = new Date(now.getTime() + 1);
   const groupId = isGroup ? readGroupIdFromConversationKey(input.externalConversationId) : null;
@@ -1986,6 +2011,7 @@ async function runChannelTurn(input: {
     characterId: input.characterId,
     channelBindingId: input.bindingId,
     conversationId,
+    metadata: { status: "success", action: generated.action, durationMs: generationDurationMs },
   });
   if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
     await recordModelUsage({

@@ -222,9 +222,10 @@ async function toggleCharacterStatus(character: Character) {
  */
 const thinkingSavingId = ref("");
 const memoryAssistantSavingId = ref("");
+const contextAssistantSavingId = ref("");
 
 async function toggleThinking(character: Character | null, next: boolean) {
-  if (!character || thinkingSavingId.value || memoryAssistantSavingId.value) return;
+  if (!character || thinkingSavingId.value || memoryAssistantSavingId.value || contextAssistantSavingId.value) return;
   thinkingSavingId.value = character.id;
   try {
     const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
@@ -242,7 +243,7 @@ async function toggleThinking(character: Character | null, next: boolean) {
 
 
 async function toggleMemoryAssistant(character: Character | null, next: boolean) {
-  if (!character || memoryAssistantSavingId.value || thinkingSavingId.value) return;
+  if (!character || memoryAssistantSavingId.value || thinkingSavingId.value || contextAssistantSavingId.value) return;
   if (next && !character.memoryAssistantConfigured) {
     ElMessage.warning("请先到模型设置中填写记忆助手模型名称和独立 API Key。");
     return;
@@ -259,6 +260,27 @@ async function toggleMemoryAssistant(character: Character | null, next: boolean)
     ElMessage.error(readError(error, "切换记忆助手失败，请稍后重试。"));
   } finally {
     memoryAssistantSavingId.value = "";
+  }
+}
+
+async function toggleContextAssistant(character: Character | null, next: boolean) {
+  if (!character || contextAssistantSavingId.value || memoryAssistantSavingId.value || thinkingSavingId.value) return;
+  if (next && !character.contextAssistantConfigured) {
+    ElMessage.warning("请先到模型设置中填写语境助手模型名称和独立 API Key。");
+    return;
+  }
+  contextAssistantSavingId.value = character.id;
+  try {
+    const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
+      method: "PATCH",
+      body: { contextAssistantEnabled: next },
+    });
+    replaceCharacter(characters.value, updated);
+    ElMessage.success(next ? "已为这个角色开启语境助手。" : "已关闭这个角色的语境助手。");
+  } catch (error) {
+    ElMessage.error(readError(error, "切换语境助手失败，请稍后重试。"));
+  } finally {
+    contextAssistantSavingId.value = "";
   }
 }
 
@@ -703,6 +725,59 @@ function runCharacterCommand(command: string) {
 
             <div class="d-group">
               <div class="d-group-h">
+                语境助手
+              </div>
+              <dl class="d-rows">
+                <div class="d-row">
+                  <dt>
+                    <el-icon><MagicStick /></el-icon>启用语境助手
+                  </dt>
+                  <dd class="d-switch">
+                    <el-switch
+                      :model-value="selected.contextAssistantEnabled === true"
+                      :loading="contextAssistantSavingId === selected.id"
+                      :disabled="contextAssistantSavingId !== '' || memoryAssistantSavingId !== '' || thinkingSavingId !== '' || (!selected.contextAssistantConfigured && selected.contextAssistantEnabled !== true)"
+                      aria-label="启用语境助手"
+                      size="small"
+                      @change="(value) => toggleContextAssistant(selected, value === true)"
+                    />
+                  </dd>
+                </div>
+                <div class="d-row">
+                  <dt>
+                    <el-icon><Cpu /></el-icon>专用模型
+                  </dt>
+                  <dd :class="{ 'is-missing': !selected.contextAssistantConfigured }">
+                    {{ selected.contextAssistantConfigured ? selected.contextAssistantModel : "未配置" }}
+                  </dd>
+                </div>
+                <div class="d-row">
+                  <dt>
+                    <el-icon><Key /></el-icon>独立 API Key
+                  </dt>
+                  <dd :class="{ 'is-missing': !selected.contextAssistantApiKeyConfigured }">
+                    {{ selected.contextAssistantApiKeyConfigured ? "已保存" : "未配置" }}
+                  </dd>
+                </div>
+              </dl>
+              <p class="d-note">
+                帮她理清群聊里的人物、话题与指向，需要时请求已启用的记忆助手查找往事，再由她决定回应或旁听。开启后会增加模型调用；分析失败时沿用原有流程。
+                <template v-if="!selected.contextAssistantConfigured">
+                  请先到模型设置中填写专用模型和独立 API Key。
+                </template>
+              </p>
+              <el-button
+                link
+                type="primary"
+                size="small"
+                @click="navigateTo(`/characters/${selected.id}/settings/model?from=characters`)"
+              >
+                配置语境助手模型
+              </el-button>
+            </div>
+
+            <div class="d-group">
+              <div class="d-group-h">
                 记忆助手
               </div>
               <dl class="d-rows">
@@ -714,7 +789,7 @@ function runCharacterCommand(command: string) {
                     <el-switch
                       :model-value="selected.memoryAssistantEnabled === true"
                       :loading="memoryAssistantSavingId === selected.id"
-                      :disabled="memoryAssistantSavingId !== '' || thinkingSavingId !== '' || (!selected.memoryAssistantConfigured && selected.memoryAssistantEnabled !== true)"
+                      :disabled="memoryAssistantSavingId !== '' || thinkingSavingId !== '' || contextAssistantSavingId !== '' || (!selected.memoryAssistantConfigured && selected.memoryAssistantEnabled !== true)"
                       size="small"
                       @change="(value) => toggleMemoryAssistant(selected, value === true)"
                     />
@@ -777,7 +852,7 @@ function runCharacterCommand(command: string) {
                     <el-switch
                       :model-value="selected.chatThinking === true"
                       :loading="thinkingSavingId === selected.id"
-                      :disabled="thinkingSavingId !== '' || memoryAssistantSavingId !== ''"
+                      :disabled="thinkingSavingId !== '' || memoryAssistantSavingId !== '' || contextAssistantSavingId !== ''"
                       size="small"
                       @change="(value) => toggleThinking(selected, value === true)"
                     />

@@ -146,6 +146,20 @@ export function isMemoryAssistantApiKeySaved(configValue: unknown): boolean {
     && config.memoryAssistantApiKeyEncrypted.startsWith("v1.");
 }
 
+/** 语境助手凭据独立保存，不回落聊天、记忆助手或环境变量 Key。 */
+export async function resolveCharacterContextAssistantApiKey(configValue: unknown): Promise<string> {
+  const config = asRecord(configValue);
+  const encrypted = config.contextAssistantApiKeyEncrypted;
+  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
+  return (await decryptApiKey(encrypted)).trim();
+}
+
+export function isContextAssistantApiKeySaved(configValue: unknown): boolean {
+  const config = asRecord(configValue);
+  return typeof config.contextAssistantApiKeyEncrypted === "string"
+    && config.contextAssistantApiKeyEncrypted.startsWith("v1.");
+}
+
 export function isVisionApiKeySaved(configValue: unknown): boolean {
   const config = asRecord(configValue);
   return typeof config.visionApiKeyEncrypted === "string" && config.visionApiKeyEncrypted.startsWith("v1.");

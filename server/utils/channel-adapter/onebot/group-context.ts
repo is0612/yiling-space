@@ -274,14 +274,14 @@ export class GroupContext {
   }
 
   /** 本轮之外、仍在窗口内的背景，按时间正序；超预算时从最旧的开始丢。 */
-  background(key: string, excludeIds: readonly string[]): GroupBackgroundLine[] {
+  background(key: string, excludeIds: readonly string[], limits?: { windowMs: number; maxMessages: number; maxChars: number }): GroupBackgroundLine[] {
     const state = this.state(key);
     const now = this.now();
     const excluded = new Set(excludeIds);
     const lines: GroupBackgroundLine[] = [];
-    for (const message of state.messages) {
+    for (const message of state.messages.slice(-(limits?.maxMessages ?? this.maxMessages))) {
       if (excluded.has(message.messageId)) continue;
-      if (now - message.at > this.windowMs) continue;
+      if (now - message.at > (limits?.windowMs ?? this.windowMs)) continue;
       lines.push({
         id: message.messageId,
         at: message.at,
@@ -292,7 +292,7 @@ export class GroupContext {
     }
     // 从最旧的开始丢，直到总量进预算；至少保留最后一条。
     let total = lines.reduce((sum, line) => sum + line.text.length, 0);
-    while (total > this.maxChars && lines.length > 1) {
+    while ((total > (limits?.maxChars ?? this.maxChars) || lines.length > (limits?.maxMessages ?? this.maxMessages)) && lines.length > 1) {
       const dropped = lines.shift();
       total -= dropped?.text.length ?? 0;
     }
@@ -408,9 +408,11 @@ export class GroupContext {
 
   private prune(state: ConversationState): void {
     const now = this.now();
-    state.messages = state.messages.filter((message) => now - message.at <= this.windowMs);
-    if (state.messages.length > this.maxMessages) {
-      state.messages.splice(0, state.messages.length - this.maxMessages);
+    // 语境助手需要更早的教学/引用前因；普通 background() 仍按默认 5 分钟/40 条裁剪。
+    state.messages = state.messages.filter((message) => now - message.at <= Math.max(this.windowMs, 15 * 60_000));
+    const retained = Math.max(this.maxMessages, 120);
+    if (state.messages.length > retained) {
+      state.messages.splice(0, state.messages.length - retained);
     }
   }
 

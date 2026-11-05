@@ -836,7 +836,11 @@ try {
    * 不要每条都回」，模型就会照提示词沉默，整轮被丢掉 —— 表现就是「说好每条都回，
    * 结果这条没回」，日志里只有一个 LLM_INVALID_RESPONSE 看得出来。
    */
-  assert(groupSystem.includes("Staying silent is normal"), "允许沉默时要说清「沉默是常态」。");
+  assert(groupSystem.includes("Join naturally when"), "自然接话应允许有内容时参与开放话题。");
+  assert(groupSystem.includes("do not impose an additional quota of silence"), "频率交给代码，不再让模型另压一层沉默配额。");
+  assert(groupSystem.includes("observing or uncertain does not forbid"), "语境助手的听者判断不能变成禁止自然搭话。");
+  assert(!groupSystem.includes("Most rounds end without you speaking"));
+  assert(!groupSystem.includes('Default to "silent" when in doubt'));
   await generateConversationReply({
     characterName: "鲸鱼娘",
     characterPrompt: "你是群里的一个网友。",
@@ -855,7 +859,7 @@ try {
   const mustReplySystem = (JSON.parse(groupBody) as { messages: Array<{ role: string; content: string }> })
     .messages.find((item) => item.role === "system")!.content;
   assert(mustReplySystem.includes("you must answer"), "必须回的轮次要在提示词里说清楚。");
-  assert(!mustReplySystem.includes("Staying silent is normal"), "必须回的轮次不许再教它「沉默是常态」。");
+  assert(!mustReplySystem.includes("Join naturally when"), "必须回的轮次使用明确回复策略，不混入可选参与策略。");
   // 「什么时候该沉默」的清单也只能出现在可以沉默的那一轮：以前它无条件推送，
   // 被 @ 的轮次同时收到「该沉默时就沉默」和「必须回」，两条规矩打架。
   assert(groupSystem.includes("Stay silent when"), "允许沉默时要给出「什么时候别开口」的依据。");

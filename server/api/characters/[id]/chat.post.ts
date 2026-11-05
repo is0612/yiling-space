@@ -419,6 +419,7 @@ export default defineEventHandler(async (event) => {
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
   let generated;
+  const generationStartedAt = Date.now();
   try {
     generated = await generateConversationReplyWithMemoryAssistant({
       assistant: memoryAssistant,
@@ -616,6 +617,10 @@ export default defineEventHandler(async (event) => {
       },
     });
   } catch (error) {
+    await recordModelUsage({
+      kind: "chat", model: chatSettings.model, characterId, userId: ownerId,
+      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt },
+    });
     const detail = error instanceof Error ? error.message : "模型调用失败。";
     throw createError({
       statusCode: detail.startsWith("LLM_NOT_CONFIGURED") ? 503 : 502,
@@ -623,6 +628,7 @@ export default defineEventHandler(async (event) => {
     });
   }
 
+  const generationDurationMs = Date.now() - generationStartedAt;
   const usedMemoryIds = new Set(generated.usedMemoryIds);
   const usedSnapshotIds = new Set(generated.usedSnapshotIds);
   const usedEventIds = new Set(generated.usedEventIds);
@@ -766,6 +772,7 @@ export default defineEventHandler(async (event) => {
     characterId,
     userId: ownerId,
     conversationId: response.conversationId,
+    metadata: { status: "success", durationMs: generationDurationMs },
   });
   if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
     await recordModelUsage({

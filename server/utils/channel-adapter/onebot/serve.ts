@@ -1427,6 +1427,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       group: {
         direct,
         background: groupContext.background(contextKey, currentIds),
+        analysisBackground: groupContext.background(contextKey, currentIds, { windowMs: 15 * 60_000, maxMessages: 120, maxChars: 24_000 }),
         anchors: groupContext.anchors(contextKey),
         // 谁是谁的人：让她判断「我的鱼」「我家宝」时能查表，而不是猜自己。
         members: groupContext.members(contextKey),

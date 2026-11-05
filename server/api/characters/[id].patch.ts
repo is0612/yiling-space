@@ -4,6 +4,7 @@ import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { readCharacterBody, readCharacterProfilePatch } from "../../utils/character-profile-input";
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
 import { encryptApiKey } from "../../utils/credential-encryption";
+import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
 import { requireActorUserId } from "../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../utils/local-api";
 import { MEMORY_ITEM_LIMIT_MAX, MEMORY_ITEM_LIMIT_MIN, RECENT_MESSAGE_LIMIT_MAX, RECENT_MESSAGE_LIMIT_MIN } from "../../utils/memory-retrieval";
@@ -35,7 +36,13 @@ export default defineEventHandler(async (event) => {
     data.status = statusMap[body.status];
   }
 
-  const modelConfigPatch: Record<string, unknown> = { ...profile.modelConfig };
+  let contextAssistantPatch;
+  try {
+    contextAssistantPatch = readContextAssistantSettingsPatch(body);
+  } catch (error) {
+    throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "语境助手配置无效。" });
+  }
+  const modelConfigPatch: Record<string, unknown> = { ...profile.modelConfig, ...contextAssistantPatch.config };
   /** 语音 Key 的明文只在这里短暂停留，落库前一定加密；不写日志、不回显。 */
   let voiceApiKeyPlain = "";
   let clearVoiceApiKey = false;
@@ -376,7 +383,7 @@ export default defineEventHandler(async (event) => {
   const { chatApiKey, clearApiKey, ...safeSettingsPatch } = settingsPatch;
   Object.assign(modelConfigPatch, safeSettingsPatch);
 
-  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey) {
+  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
     if (clearApiKey) delete nextConfig.chatApiKeyEncrypted;
     if (chatApiKey) nextConfig.chatApiKeyEncrypted = await encryptApiKey(chatApiKey);
@@ -419,6 +426,13 @@ export default defineEventHandler(async (event) => {
           statusMessage: error instanceof Error ? error.message : "记忆助手 API 地址无效。",
         });
       }
+    }
+    if (contextAssistantPatch.clearApiKey) delete nextConfig.contextAssistantApiKeyEncrypted;
+    if (contextAssistantPatch.apiKey) nextConfig.contextAssistantApiKeyEncrypted = await encryptApiKey(contextAssistantPatch.apiKey);
+    try {
+      validateContextAssistantEnabledConfig(nextConfig);
+    } catch (error) {
+      throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "语境助手配置无效。" });
     }
     data.modelConfig = nextConfig as Prisma.InputJsonObject;
   }

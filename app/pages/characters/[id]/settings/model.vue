@@ -79,13 +79,25 @@ const clearMemoryAssistantApiKey = ref(false);
 const draftMemoryAssistantProviderKey = ref("custom");
 const fetchedMemoryAssistantModels = ref<string[]>([]);
 const fetchingMemoryAssistantModels = ref(false);
+const draftContextAssistantModel = ref("");
+const draftContextAssistantTemperature = ref(0.1);
+const draftContextAssistantMaxInputTokens = ref(16384);
+const draftContextAssistantMaxOutputTokens = ref(2048);
+const draftContextAssistantApiBaseUrl = ref("");
+const draftContextAssistantApiKey = ref("");
+const clearContextAssistantApiKey = ref(false);
+const draftContextAssistantProviderKey = ref("custom");
+const fetchedContextAssistantModels = ref<string[]>([]);
+const fetchingContextAssistantModels = ref(false);
 const testingVision = ref(false);
 const testingMemoryAssistant = ref(false);
+const testingContextAssistant = ref(false);
+const draftContextAssistantEnabled = ref(false);
 /** 图片页「获取模型」拉回来的清单；换地址就作废（两家清单不通用） */
 const fetchedVisionModels = ref<string[]>([]);
 const fetchingVisionModels = ref(false);
 /** 模型设置页签：对话 / 语音 / 图片 / 记忆助手。用 v-show 切换，切换不丢已填表单 */
-const activeTab = ref<"chat" | "voice" | "vision" | "memoryAssistant">("chat");
+const activeTab = ref<"chat" | "voice" | "vision" | "memoryAssistant" | "contextAssistant">("chat");
 
 /** 本页「获取模型」拉回来的列表；换地址就作废 */
 const fetchedModels = ref<string[]>([]);
@@ -101,6 +113,7 @@ type DailyUsage = {
 };
 const dailyUsage = ref<DailyUsage | null>(null);
 const loadingUsage = ref(false);
+const modelCallLogsOpen = ref(false);
 
 const KIND_LABELS: Record<string, string> = {
   chat: "AI 对话",
@@ -114,6 +127,7 @@ const KIND_LABELS: Record<string, string> = {
   vision: "群图片识别",
   "sticker-label": "表情包打标",
   "memory-assistant": "记忆助手",
+  "context-assistant": "语境助手",
   other: "其他",
 };
 
@@ -153,6 +167,14 @@ const draftSignature = computed(() => JSON.stringify([
   draftMemoryAssistantApiBaseUrl.value.trim(),
   draftMemoryAssistantApiKey.value.trim(),
   clearMemoryAssistantApiKey.value,
+  draftContextAssistantEnabled.value,
+  draftContextAssistantModel.value.trim(),
+  draftContextAssistantTemperature.value,
+  draftContextAssistantMaxInputTokens.value,
+  draftContextAssistantMaxOutputTokens.value,
+  draftContextAssistantApiBaseUrl.value.trim(),
+  draftContextAssistantApiKey.value.trim(),
+  clearContextAssistantApiKey.value,
 ]));
 const dirty = computed(() => savedSignature.value !== "" && draftSignature.value !== savedSignature.value);
 
@@ -233,6 +255,19 @@ const memoryAssistantModelOptions = computed(() => buildModelOptions({
   baseUrl: memoryAssistantEffectiveBaseUrl.value,
   current: draftMemoryAssistantModel.value,
   fetched: fetchedMemoryAssistantModels.value,
+}));
+
+const contextAssistantEffectiveBaseUrl = computed(
+  () => draftContextAssistantApiBaseUrl.value.trim() || draftChatApiBaseUrl.value.trim(),
+);
+const contextAssistantProviderPreset = computed(() => providerByKey(draftContextAssistantProviderKey.value));
+const contextAssistantProviderLabel = computed(() => contextAssistantProviderPreset.value?.name ?? "自定义");
+const contextAssistantConsoleUrl = computed(() => contextAssistantProviderPreset.value?.consoleUrl ?? "");
+const contextAssistantKeyConfigured = computed(() => character.value?.contextAssistantApiKeyConfigured === true);
+const contextAssistantModelOptions = computed(() => buildModelOptions({
+  baseUrl: contextAssistantEffectiveBaseUrl.value,
+  current: draftContextAssistantModel.value,
+  fetched: fetchedContextAssistantModels.value,
 }));
 
 // ── 语音模型的计算属性 ──
@@ -325,6 +360,30 @@ function applyMemoryAssistantProvider(key: string) {
 watch(memoryAssistantEffectiveBaseUrl, (value) => {
   fetchedMemoryAssistantModels.value = [];
   draftMemoryAssistantProviderKey.value = providerByBaseUrl(value)?.key ?? "custom";
+});
+function applyContextAssistantProvider(key: string) {
+  draftContextAssistantProviderKey.value = key;
+  const preset = providerByKey(key);
+  if (!preset?.baseUrl) return;
+  draftContextAssistantApiBaseUrl.value = preset.baseUrl;
+
+  const model = draftContextAssistantModel.value.trim();
+  const belongsToOther = MODEL_PROVIDERS.some(
+    (provider) => provider.key !== key && provider.models.includes(model),
+  );
+  const nextModel = preset.models[0] ?? "";
+  if (nextModel && (!model || belongsToOther)) {
+    draftContextAssistantModel.value = nextModel;
+  } else if (belongsToOther) {
+    ElMessage.info(`${preset.name}没有内置模型清单，点「获取模型」拉取后再选。`);
+  }
+  fetchedContextAssistantModels.value = [];
+}
+
+/** 改了语境助手实际使用的地址（包括跟随对话地址时），旧模型列表就失效。 */
+watch(contextAssistantEffectiveBaseUrl, (value) => {
+  fetchedContextAssistantModels.value = [];
+  draftContextAssistantProviderKey.value = providerByBaseUrl(value)?.key ?? "custom";
 });
 
 /**
@@ -512,6 +571,56 @@ async function testMemoryAssistant() {
     testingMemoryAssistant.value = false;
   }
 }
+async function fetchContextAssistantModels() {
+  if (fetchingContextAssistantModels.value || testingContextAssistant.value || testing.value
+    || testingVision.value || testingVoice.value || saving.value || !character.value) return;
+  fetchingContextAssistantModels.value = true;
+  try {
+    const saved = await save(true);
+    if (!saved) return;
+    const result = await $fetch<{ ok: boolean; models: string[]; message: string; unsupported?: boolean }>(
+      `/api/characters/${encodeURIComponent(id.value)}/chat/context-assistant/models`,
+    );
+    if (!result.ok) {
+      if (result.unsupported) ElMessage.warning(result.message);
+      else ElMessage.error(result.message);
+      return;
+    }
+    fetchedContextAssistantModels.value = result.models;
+    if (!draftContextAssistantModel.value.trim() && result.models.length) {
+      draftContextAssistantModel.value = result.models[0] ?? "";
+    }
+    ElMessage.success(result.message);
+  } catch (error) {
+    ElMessage.error(readError(error, "获取语境助手模型列表失败，请检查独立 API 地址和 Key。"));
+  } finally {
+    fetchingContextAssistantModels.value = false;
+  }
+}
+
+/** 语境助手连接测试使用独立凭据；即使尚未开启助手，也可以先验证配置。 */
+async function testContextAssistant() {
+  if (testingContextAssistant.value || fetchingContextAssistantModels.value || testing.value
+    || testingVision.value || testingVoice.value || saving.value || !character.value) return;
+  testingContextAssistant.value = true;
+  try {
+    const saved = await save(true);
+    if (!saved) return;
+    const result = await $fetch<{ ok: boolean; message: string; elapsedMs?: number }>(
+      `/api/characters/${encodeURIComponent(id.value)}/chat/test-context-assistant-connection`,
+      { method: "POST" },
+    );
+    if (result.ok) {
+      ElMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
+    } else {
+      ElMessage.error(result.message || "语境助手 API 连通性测试失败。");
+    }
+  } catch (error) {
+    ElMessage.error(readError(error, "语境助手连接测试失败，请检查独立 API 地址、Key 和模型名称。"));
+  } finally {
+    testingContextAssistant.value = false;
+  }
+}
 
 const providerLabel = computed(() => currentProvider.value?.name ?? "自定义");/** 开放平台入口：跟着当前服务商走；自定义没有固定入口，链接就不出现 */
 const consoleUrl = computed(() => currentProvider.value?.consoleUrl ?? "");
@@ -619,6 +728,18 @@ async function loadCharacter() {
     draftMemoryAssistantApiKey.value = "";
     clearMemoryAssistantApiKey.value = false;
     fetchedMemoryAssistantModels.value = [];
+    draftContextAssistantEnabled.value = data.contextAssistantEnabled === true;
+    draftContextAssistantModel.value = data.contextAssistantModel ?? "";
+    draftContextAssistantTemperature.value = data.contextAssistantTemperature ?? 0.1;
+    draftContextAssistantMaxInputTokens.value = data.contextAssistantMaxInputTokens ?? 16384;
+    draftContextAssistantMaxOutputTokens.value = data.contextAssistantMaxOutputTokens ?? 2048;
+    draftContextAssistantApiBaseUrl.value = data.contextAssistantApiBaseUrl ?? "";
+    draftContextAssistantProviderKey.value = providerByBaseUrl(
+      draftContextAssistantApiBaseUrl.value || draftChatApiBaseUrl.value,
+    )?.key ?? "custom";
+    draftContextAssistantApiKey.value = "";
+    clearContextAssistantApiKey.value = false;
+    fetchedContextAssistantModels.value = [];
     fetchedModels.value = [];
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = data.updatedAt ? new Date(data.updatedAt) : null;
@@ -679,6 +800,16 @@ async function save(silent = false): Promise<boolean> {
           ? { memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim() }
           : {}),
         ...(clearMemoryAssistantApiKey.value ? { clearMemoryAssistantApiKey: true } : {}),
+        contextAssistantEnabled: draftContextAssistantEnabled.value,
+        contextAssistantModel: draftContextAssistantModel.value.trim(),
+        contextAssistantTemperature: draftContextAssistantTemperature.value,
+        contextAssistantMaxInputTokens: draftContextAssistantMaxInputTokens.value,
+        contextAssistantMaxOutputTokens: draftContextAssistantMaxOutputTokens.value,
+        contextAssistantApiBaseUrl: draftContextAssistantApiBaseUrl.value.trim(),
+        ...(draftContextAssistantApiKey.value.trim()
+          ? { contextAssistantApiKey: draftContextAssistantApiKey.value.trim() }
+          : {}),
+        ...(clearContextAssistantApiKey.value ? { clearContextAssistantApiKey: true } : {}),
       },
     });
     character.value = updated;
@@ -690,6 +821,8 @@ async function save(silent = false): Promise<boolean> {
     clearVisionApiKey.value = false;
     draftMemoryAssistantApiKey.value = "";
     clearMemoryAssistantApiKey.value = false;
+    draftContextAssistantApiKey.value = "";
+    clearContextAssistantApiKey.value = false;
     // 清空 Key 输入框之后才取指纹，否则刚存的这份会一直被当成「未保存」
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = new Date();
@@ -792,9 +925,22 @@ watch(id, () => void loadCharacter());
     <PageHeader
       :eyebrow="'角色管理 / ' + (character?.name ?? '角色') + ' / 模型设置'"
       title="模型设置"
-      description="决定这个角色使用哪些模型：对话、语音、看图和记忆助手可以分别配置。API Key 加密保存、不回传给网页。"
+      description="决定这个角色使用哪些模型：对话、语音、看图、记忆助手和语境助手可以分别配置。API Key 加密保存、不回传给网页。"
       :back-to="backTarget"
       :back-label="backLabel"
+    >
+      <template #actions>
+        <el-button
+          :disabled="!character"
+          @click="modelCallLogsOpen = true"
+        >
+          调用日志
+        </el-button>
+      </template>
+    </PageHeader>
+    <ModelCallLogsDialog
+      v-model="modelCallLogsOpen"
+      :character-id="id"
     />
 
     <div
@@ -862,6 +1008,16 @@ watch(id, () => void loadCharacter());
             @click="activeTab = 'memoryAssistant'"
           >
             记忆助手
+          </button>          <button
+            id="model-tab-context-assistant"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === 'contextAssistant'"
+            class="model-tab"
+            :class="{ 'is-on': activeTab === 'contextAssistant' }"
+            @click="activeTab = 'contextAssistant'"
+          >
+            语境助手
           </button>
         </div>
 
@@ -1776,6 +1932,261 @@ watch(id, () => void loadCharacter());
             </div>
           </section>
         </div>
+        <div
+          v-show="activeTab === 'contextAssistant'"
+          class="model-pane"
+        >
+          <section class="brick">
+            <div class="brick-head">
+              <div class="brick-head-txt">
+                <div class="brick-heading">
+                  <h2 class="brick-title">
+                    语境助手模型
+                  </h2>
+                </div>
+                <p class="brick-desc">
+                  语境助手使用独立模型和独立 API Key，整理当前对话语境，帮助角色理解指代和对话对象。默认关闭；开启后会额外调用语境助手。
+                </p>
+              </div>
+            </div>
+
+            <div class="fields">
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">服务商</span>
+                </div>
+                <el-select
+                  v-model="draftContextAssistantProviderKey"
+                  class="field-ctl"
+                  aria-label="语境助手服务商"
+                  placeholder="选择服务商，自动填好 API 地址"
+                  @change="applyContextAssistantProvider"
+                >
+                  <el-option
+                    v-for="provider in MODEL_PROVIDERS"
+                    :key="provider.key"
+                    :label="provider.name"
+                    :value="provider.key"
+                  />
+                </el-select>
+                <p class="field-help">
+                  选择服务商会自动填入 API 地址和常见模型；没有列出的平台选「自定义」后手动填写。
+                </p>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API 地址</span>
+                  <span class="field-req">可选</span>
+                  <a
+                    v-if="contextAssistantConsoleUrl"
+                    class="field-link"
+                    :href="contextAssistantConsoleUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    去 {{ contextAssistantProviderLabel }} 开放平台取 Key
+                    <el-icon><TopRight /></el-icon>
+                  </a>
+                </div>
+                <el-input
+                  v-model="draftContextAssistantApiBaseUrl"
+                  maxlength="500"
+                  aria-label="语境助手 API 地址"
+                  :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型地址）'"
+                />
+                <p class="field-help">
+                  填 API 根地址，不要追加 /chat/completions。留空时沿用这个角色的对话模型地址。
+                </p>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API Key</span>
+                  <span
+                    class="pill"
+                    :class="contextAssistantKeyConfigured ? 'pill-green' : 'pill-rose'"
+                  >{{ contextAssistantKeyConfigured ? "已保存" : "未填写" }}</span>
+                </div>
+                <el-input
+                  v-model="draftContextAssistantApiKey"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  maxlength="8192"
+                  aria-label="语境助手 API Key"
+                  :placeholder="contextAssistantKeyConfigured ? '已加密保存；留空表示保持不变' : '填写语境助手专用 API Key'"
+                />
+                <p class="field-help">
+                  使用本机凭据加密密钥进行 AES-256-GCM 加密保存。留空表示不修改已有 Key，不会回传 Key 原文；这里必须使用语境助手自己的 Key。
+                  <template v-if="draftContextAssistantEnabled">
+                    移除 Key 或清空模型前，请先关闭下方语境助手开关。
+                  </template>
+                </p>
+                <el-checkbox
+                  v-if="contextAssistantKeyConfigured"
+                  v-model="clearContextAssistantApiKey"
+                  :disabled="draftContextAssistantEnabled"
+                  class="field-check"
+                >
+                  移除语境助手单独保存的 API Key
+                </el-checkbox>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">模型名称</span>
+                  <span class="field-req">必填</span>
+                </div>
+                <div class="model-row">
+                  <el-select
+                    v-model="draftContextAssistantModel"
+                    class="model-select"
+                    filterable
+                    allow-create
+                    default-first-option
+                    aria-label="语境助手模型名称"
+                    placeholder="选择，或直接输入模型名"
+                  >
+                    <el-option
+                      v-for="model in contextAssistantModelOptions"
+                      :key="model"
+                      :label="model"
+                      :value="model"
+                    />
+                  </el-select>
+                  <el-button
+                    :loading="fetchingContextAssistantModels"
+                    :disabled="saving || testing || testingContextAssistant || testingVision || testingVoice"
+                    @click="fetchContextAssistantModels"
+                  >
+                    <el-icon><Refresh /></el-icon>{{ fetchingContextAssistantModels ? "获取中…" : "获取模型" }}
+                  </el-button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brick">
+            <div class="brick-head">
+              <div class="brick-head-txt">
+                <div class="brick-heading">
+                  <h2 class="brick-title">
+                    语境整理参数
+                  </h2>
+                </div>
+                <p class="brick-desc">
+                  只影响语境助手，不会改变角色的对话模型参数。输入预算是估算上限，实际 Token 数以模型供应商统计为准。
+                </p>
+              </div>
+            </div>
+            <div class="knob-group">
+              <div class="knob">
+                <div class="knob-label">
+                  温度
+                </div>
+                <p class="field-help">
+                  默认 0.1。较低温度让语境整理更稳定，范围 0–2。
+                </p>
+                <div class="knob-ctl">
+                  <el-slider
+                    v-model="draftContextAssistantTemperature"
+                    class="knob-slider"
+                    :min="0"
+                    :max="2"
+                    :step="0.1"
+                    aria-label="语境助手温度"
+                  />
+                  <el-input-number
+                    v-model="draftContextAssistantTemperature"
+                    class="knob-number narrow"
+                    :min="0"
+                    :max="2"
+                    :step="0.1"
+                    :precision="1"
+                    :controls="false"
+                    aria-label="语境助手温度数值"
+                  />
+                </div>
+              </div>
+              <div class="knob">
+                <div class="knob-label">
+                  最大输入 Token
+                </div>
+                <p class="field-help">
+                  默认 16384。系统提示词和当前对话材料共用此估算输入预算。范围 4096–32768。
+                </p>
+                <div class="knob-ctl">
+                  <el-input-number
+                    v-model="draftContextAssistantMaxInputTokens"
+                    class="knob-number"
+                    :min="4096"
+                    :max="32768"
+                    :step="1024"
+                    aria-label="语境助手最大输入 Token"
+                  />
+                </div>
+              </div>
+              <div class="knob">
+                <div class="knob-label">
+                  最大输出 Token
+                </div>
+                <p class="field-help">
+                  默认 2048。语境助手输出的最大 Token 数。范围 512–8192。
+                </p>
+                <div class="knob-ctl">
+                  <el-input-number
+                    v-model="draftContextAssistantMaxOutputTokens"
+                    class="knob-number"
+                    :min="512"
+                    :max="8192"
+                    :step="256"
+                    aria-label="语境助手最大输出 Token"
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brick">
+            <div class="brick-head">
+              <div class="brick-head-txt">
+                <div class="brick-heading">
+                  <h2 class="brick-title">
+                    启用说明
+                  </h2>
+                </div>
+                <p class="brick-desc">
+                  保存独立模型名称和 API Key 后，可在这里启用语境助手。开关与本页配置一起保存。
+                </p>
+              </div>
+            </div>
+            <div class="metric-row">
+              <span>模型配置</span>
+              <span class="metric-value">
+                {{ draftContextAssistantModel.trim() && character?.contextAssistantApiKeyConfigured ? "已具备启用条件" : "尚未完整配置" }}
+                <el-switch
+                  v-model="draftContextAssistantEnabled"
+                  aria-label="启用语境助手"
+                  :disabled="saving || (!draftContextAssistantEnabled && (!draftContextAssistantModel.trim() || !(draftContextAssistantApiKey.trim() || (contextAssistantKeyConfigured && !clearContextAssistantApiKey))))"
+                />
+              </span>
+            </div>
+          </section>
+
+          <section class="brick">
+            <div class="vision-test-bar">
+              <el-button
+                :loading="testingContextAssistant"
+                :disabled="saving || testing || testingVision || testingVoice || fetchingContextAssistantModels"
+                @click="testContextAssistant"
+              >
+                <el-icon><Promotion /></el-icon>{{ testingContextAssistant ? "测试中…" : "保存并测试语境助手" }}
+              </el-button>
+              <span class="voice-test-note">会使用已保存的独立 API Key 和模型发送一条简短测试请求，不会读取或修改任何对话和记忆。</span>
+            </div>
+          </section>
+        </div>
 
         <!-- 吸底操作条：往下滚也能按到主操作 -->
         <div class="act-bar">
@@ -1785,7 +2196,7 @@ watch(id, () => void loadCharacter());
           >{{ saveStateLabel }}</span>
           <el-button
             :loading="testing"
-            :disabled="saving || testingMemoryAssistant || fetchingMemoryAssistantModels"
+            :disabled="saving || testingMemoryAssistant || fetchingMemoryAssistantModels || testingContextAssistant || fetchingContextAssistantModels"
             @click="testConnection"
           >
             {{ testing ? "测试中…" : "保存并测试" }}
@@ -1793,7 +2204,7 @@ watch(id, () => void loadCharacter());
           <el-button
             type="primary"
             :loading="saving"
-            :disabled="testing || testingMemoryAssistant || fetchingMemoryAssistantModels"
+            :disabled="testing || testingMemoryAssistant || fetchingMemoryAssistantModels || testingContextAssistant || fetchingContextAssistantModels"
             @click="save(false)"
           >
             {{ saving ? "保存中…" : "保存设置" }}

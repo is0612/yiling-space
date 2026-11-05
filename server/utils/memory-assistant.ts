@@ -431,7 +431,7 @@ class MemoryAssistantRequestError extends Error {
   }
 }
 
-async function callMemoryAssistant(
+export async function callMemoryAssistant(
   config: MemoryAssistantRuntime,
   query: string,
   candidates: readonly MemoryAssistantCandidate[],

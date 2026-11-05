@@ -23,6 +23,102 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /characters/{characterId}/usage/logs:
+    get:
+      tags: [Characters]
+      summary: 读取角色的模型操作用量记录
+      description: |
+        仅角色所有者可读，未登录返回 401；他人角色与不存在的角色统一返回 404。
+        ModelUsage 是应用操作用量，部分重试已合并，不能当作逐次供应商或 Key 调用日志；没有 Key 指纹。
+        status 只识别 metadata.status：success/no_sources/context_answered 为操作成功，
+        failed/final_reply_failed 为操作失败，其余 unknown；正 token 不推断成功。
+        no_sources/context_answered 不保证实际调用供应商；成功也不代表渠道发送成功。
+        totalTokens > 0 才标 usageReported=true；零 token 诊断记录代表用量缺失，不代表免费。
+        每条金额复用记录时间与缓存价目；缺缓存明细按未命中估算，可能偏高；未知模型或缺用量返回 null。
+        summary 只聚合所选筛选下的记录数、token、状态和用量缺失数，不返回窗口花费汇总。
+        models/kinds 独立于 kind/model 筛选，按角色与日期取各最多 200 个不同值，字典序排列。
+        返回显式白名单字段，reason/finishReason 仅接受小写机器码，不返回原始 metadata、错误文本、提示词或凭据。
+        分页稳定排序 createdAt DESC, id DESC。并发新增时分页及聚合可能变化。
+      parameters:
+        - name: characterId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: days
+          in: query
+          description: 含今天的东八区自然日，从首日零点到明日零点（左闭右开）。
+          schema: { type: integer, enum: [1, 7, 30], default: 7 }
+        - name: kind
+          in: query
+          schema:
+            type: string
+            enum: [chat, channel, snapshot, events, journal, bili-screening, bili-judge, bili-owner, proactive, vision, sticker-label, catchphrase-mine, memory-assistant, context-assistant, other]
+        - name: model
+          in: query
+          description: 精确匹配已记录模型名，不能为空白。
+          schema: { type: string, minLength: 1, maxLength: 120 }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, enum: [20, 50], default: 20 }
+      responses:
+        '200':
+          description: 当前页及完整筛选窗口的数据库聚合
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, pageSize, total, summary, models, kinds, note]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 50
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, createdAt, kind, model, status, promptTokens, completionTokens, totalTokens, reasoningTokens, cacheHitTokens, cacheMissTokens, usageReported, attempts, durationMs, finishReason, httpStatus, reason, costCny]
+                      properties:
+                        id: { type: string, format: uuid }
+                        createdAt: { type: string, format: date-time }
+                        kind: { type: string }
+                        model: { type: string }
+                        status: { type: string, enum: [success, failed, unknown] }
+                        promptTokens: { type: integer }
+                        completionTokens: { type: integer }
+                        totalTokens: { type: integer }
+                        reasoningTokens: { type: integer, nullable: true }
+                        cacheHitTokens: { type: integer, nullable: true }
+                        cacheMissTokens: { type: integer, nullable: true }
+                        usageReported: { type: boolean }
+                        attempts: { type: integer, minimum: 0, maximum: 10000, nullable: true }
+                        durationMs: { type: integer, minimum: 0, maximum: 3600000, nullable: true }
+                        finishReason: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$', nullable: true }
+                        httpStatus: { type: integer, minimum: 100, maximum: 599, nullable: true }
+                        reason: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$', nullable: true }
+                        costCny: { type: number, nullable: true }
+                  page: { type: integer, minimum: 1 }
+                  pageSize: { type: integer, enum: [20, 50] }
+                  total: { type: integer, minimum: 0 }
+                  summary:
+                    type: object
+                    required: [records, totalTokens, failed, unknown, usageMissingRecords]
+                    properties:
+                      records: { type: integer, minimum: 0 }
+                      totalTokens: { type: integer }
+                      failed: { type: integer, minimum: 0 }
+                      unknown: { type: integer, minimum: 0 }
+                      usageMissingRecords: { type: integer, minimum: 0 }
+                  models: { type: array, maxItems: 200, items: { type: string } }
+                  kinds: { type: array, maxItems: 200, items: { type: string } }
+                  note: { type: string }
+        '400':
+          description: 日期、筛选或分页参数无效（不接受重复参数数组）
+        '401':
+          description: 未登录
+        '404':
+          description: 角色不存在或不属于当前用户
   /auth/session:
     get:
       tags: [Auth]
@@ -1256,6 +1352,52 @@ paths:
           description: 模型调用失败或返回格式无效
         '503':
           description: 模型尚未配置
+  /characters/{characterId}/chat/context-assistant/models:
+    get:
+      tags: [Characters]
+      summary: 获取语境助手独立服务商模型清单
+      description: 仅使用已保存的语境助手独立 Key。地址留空跟随聊天地址；无需先启用助手或填写模型名。最多返回 200 个去重模型。
+      parameters:
+        - $ref: '#/components/parameters/CharacterId'
+      responses:
+        '200':
+          description: 模型列表或可展示的失败原因；unsupported 只用于上游 404/405/501
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, models, message]
+                properties:
+                  ok: { type: boolean }
+                  models: { type: array, items: { type: string }, maxItems: 200 }
+                  message: { type: string }
+                  unsupported: { type: boolean }
+                  provider: { type: string }
+        '401': { description: 未登录 }
+        '404': { description: 角色不存在或不属于当前用户 }
+  /characters/{characterId}/chat/test-context-assistant-connection:
+    post:
+      tags: [Characters]
+      summary: 测试语境助手独立模型连接
+      description: 使用已保存的语境助手模型和独立 Key 发送简短 Chat Completions 请求，不要求启用助手，不读取或修改对话与记忆。
+      parameters:
+        - $ref: '#/components/parameters/CharacterId'
+      responses:
+        '200':
+          description: 连通测试结果（模型配置缺失也返回 ok=false）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, message]
+                properties:
+                  ok: { type: boolean }
+                  message: { type: string }
+                  model: { type: string }
+                  provider: { type: string }
+                  elapsedMs: { type: integer }
+        '401': { description: 未登录 }
+        '404': { description: 角色不存在或不属于当前用户 }
   /characters/{characterId}/chat/models:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
@@ -4566,7 +4708,21 @@ components:
         journalRevisions: { type: integer }
         catchphrases: { type: integer }
         friends: { type: integer }
+    ContextAssistantSettings:
+      type: object
+      description: 语境助手独立模型配置；默认关闭。地址留空跟随聊天地址，API Key 永不回落聊天或记忆助手凭据。
+      properties:
+        contextAssistantEnabled: { type: boolean, default: false }
+        contextAssistantModel: { type: string, maxLength: 120 }
+        contextAssistantTemperature: { type: number, minimum: 0, maximum: 2, default: 0.1 }
+        contextAssistantMaxInputTokens: { type: integer, minimum: 4096, maximum: 32768, default: 16384 }
+        contextAssistantMaxOutputTokens: { type: integer, minimum: 512, maximum: 8192, default: 2048 }
+        contextAssistantApiBaseUrl: { type: string, maxLength: 500, description: 留空跟随角色聊天 API 地址 }
+        contextAssistantApiKeyConfigured: { type: boolean, readOnly: true }
+        contextAssistantConfigured: { type: boolean, readOnly: true, description: 已保存独立模型名称与加密 Key }
     CharacterPatch:
+      allOf:
+        - $ref: '#/components/schemas/ContextAssistantSettings'
       type: object
       description: 更新角色时的部分字段；所有字段均为可选。API Key 仅可写入，服务端会加密保存且不会回传。
       properties:
@@ -4582,6 +4738,8 @@ components:
         chatApiBaseUrl: { type: string, maxLength: 500 }
         chatApiKey: { type: string, maxLength: 8192, writeOnly: true }
         clearApiKey: { type: boolean }
+        contextAssistantApiKey: { type: string, maxLength: 8192, writeOnly: true, description: 独立 Key 加密保存；空字符串保持已有值 }
+        clearContextAssistantApiKey: { type: boolean, description: 清除独立 Key；助手仍启用时必须同时关闭助手或提供新 Key }
         chatModel: { type: string, maxLength: 120 }
         chatTemperature: { type: number, minimum: 0, maximum: 2 }
         chatMaxTokens: { type: integer, minimum: 256, maximum: 8192 }
@@ -4590,6 +4748,7 @@ components:
         groupInitiative: { $ref: '#/components/schemas/GroupInitiativeSettings' }
     Character:
       allOf:
+        - $ref: '#/components/schemas/ContextAssistantSettings'
         - $ref: '#/components/schemas/CharacterInput'
         - type: object
           required: [id, createdAt, updatedAt]

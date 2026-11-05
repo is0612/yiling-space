@@ -276,4 +276,16 @@ assert.equal(
   "没说过话的人查不到，不许误判。",
 );
 
+// 语境助手的大窗口不改变普通角色背景，也不串群；超过15分钟仍会被清理。
+const extended = createGroupContext({ now: () => now });
+extended.remember("analysis", facts({ messageId: "teaching", senderQq: "111", at: now - minutes(10), text: "我在教另一个人，拿她举例" }));
+extended.remember("analysis", facts({ messageId: "expired", senderQq: "111", at: now - minutes(16), text: "太早了" }));
+assert.deepEqual(extended.background("analysis", []), []);
+assert.deepEqual(extended.background("analysis", [], { windowMs: minutes(15), maxMessages: 120, maxChars: 24000 }).map(line => line.id), ["teaching"]);
+assert.deepEqual(extended.background("other-group", [], { windowMs: minutes(15), maxMessages: 120, maxChars: 24000 }), []);
+assert.deepEqual(extended.background("analysis", ["teaching"], { windowMs: minutes(15), maxMessages: 120, maxChars: 24000 }), []);
+for (let i = 0; i < 140; i++) extended.remember("busy", facts({ messageId: `busy-${i}`, senderQq: "111", text: "短句" }));
+assert.equal(extended.background("busy", []).length, 40);
+assert.equal(extended.background("busy", [], { windowMs: minutes(15), maxMessages: 120, maxChars: 24000 }).length, 120);
+
 console.log("群聊上下文测试通过：成员代号、@ 代号化、背景预算、话题建立/候选/过期/续期上限、并行话题淘汰、@ 与引用解析、原始 @ QQ、群内归属（自述优先于群名片、查不到人就不上表）、@ 别人之后的续话窗口。");
