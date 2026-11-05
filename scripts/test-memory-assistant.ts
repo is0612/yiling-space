@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  buildDeterministicTimelineMemoryQuery,
   buildMemoryAssistantCandidates,
   estimateMemoryAssistantTokens,
   fitMemoryAssistantCandidates,
@@ -101,6 +102,14 @@ const candidates = buildMemoryAssistantCandidates({
     },
   ],
 });
+
+const firstInteractionQuery = buildDeterministicTimelineMemoryQuery("你记得第一次跟小七说话是哪天吗");
+assert(firstInteractionQuery?.includes("小七"), "A named-person first-interaction question must become a deterministic lookup.");
+assert(firstInteractionQuery?.includes("第一次跟小七说话"), "The original question must remain available to the retrieval assistant.");
+assert(buildDeterministicTimelineMemoryQuery("最近一次和昔涟聊天是什么时候")?.includes("昔涟"),
+  "Latest-interaction questions must also trigger a timeline lookup.");
+assert.equal(buildDeterministicTimelineMemoryQuery("今天晚饭吃什么"), null,
+  "Ordinary questions must not trigger a timeline lookup.");
 
 assert(candidates.some((item) => item.sourceKey === "memory/memory-public"));
 assert(candidates.some((item) => item.sourceKey === "snapshot/snapshot-public"));
@@ -349,6 +358,48 @@ try {
   assert.equal(noQueryLoaderCalls, 0, "No broad database scan should run unless a historical search is requested.");
   assert.equal(ordinary.reply, "今天就聊点轻松的吧。");
   assert.equal(details.at(-1)?.memory?.status, "not_needed");
+
+  // A named-person timeline question must still invoke the independent assistant
+  // when the main model forgets to emit memoryAssistantQuery.
+  const automaticCalls: string[] = [];
+  let automaticChatCalls = 0;
+  globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input);
+    automaticCalls.push(url);
+    if (url.includes("memory.example.com")) {
+      return Response.json({
+        choices: [{ message: { content: JSON.stringify({ sourceKeys: ["message/message-1"] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 30, completion_tokens: 5, total_tokens: 35 },
+      });
+    }
+    automaticChatCalls += 1;
+    const content = automaticChatCalls === 1
+      ? { reply: "我记得好像是十月底。", usedMemoryIds: [], usedSnapshotIds: [], usedEventIds: [] }
+      : { reply: "查到的最早记录是 10 月 30 日。", usedMemoryIds: [], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: ["message-1"] };
+    return Response.json({
+      model: "chat-model",
+      choices: [{ message: { content: JSON.stringify(content) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 80, completion_tokens: 10, total_tokens: 90 },
+    });
+  };
+  const automaticDetail: TurnDetailPatch[] = [];
+  const automatic = await generateConversationReplyWithMemoryAssistant({
+    chatInput: { ...chatInput, currentMessage: "你记得第一次跟小七说话是哪天吗" },
+    assistant,
+    candidates: [],
+    onTurnDetail: detail => { automaticDetail.push(detail); },
+    loadCandidates: async query => {
+      assert(query.includes("小七"));
+      return [rawCandidate];
+    },
+  });
+  assert.equal(automatic.reply, "查到的最早记录是 10 月 30 日。");
+  assert.equal(automaticCalls.filter(url => url.includes("memory.example.com")).length, 1,
+    "The deterministic timeline guard must cause a real request using the independent memory API.");
+  assert.equal(automaticChatCalls, 2, "The main model must compose its final answer after evidence retrieval.");
+  assert.equal(automaticDetail[0]?.memory?.status, "success");
+  assert(automaticDetail[0]?.memory?.query?.includes("小七"));
+
   await generateConversationReplyWithMemoryAssistant({ chatInput, assistant: null, candidates: [], onTurnDetail });
   assert.equal(details.at(-1)?.memory?.status, "not_enabled");
   await generateConversationReplyWithMemoryAssistant({ chatInput, assistant, candidates: [], onTurnDetail });
