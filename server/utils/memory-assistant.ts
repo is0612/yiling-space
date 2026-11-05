@@ -667,7 +667,7 @@ export function buildDeterministicTimelineMemoryQuery(message: string): string |
   const normalized = message.normalize("NFKC").replace(/\s+/gu, "");
   const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(normalized);
   const wantsLatest = /最近一次|上一次|上回|上次|最后一次/u.test(normalized);
-  const asksInteraction = /说话|聊天|交流|互动|联系|见面|认识|接触/u.test(normalized);
+  const asksInteraction = /说话|聊天|交流|互动|联系|见面|见到|见过|遇到|认识|接触/u.test(normalized);
   if ((!wantsFirst && !wantsLatest) || !asksInteraction) return null;
   const participant = parseEventParticipantQuery(normalized);
   if (!participant) return null;

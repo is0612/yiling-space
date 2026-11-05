@@ -1498,7 +1498,7 @@ async function runChannelTurn(input: {
         });
       },
       candidates: [],
-      loadCandidates: async (searchQuery, lookupOptions) => {
+      loadCandidates: async (searchQuery: string, lookupOptions?: { participantName?: string; deterministicTimeline: boolean }) => {
         // 人物名只从主人原始问题解析一次；不从记忆助手模板查询串反向解析。
         const searchParticipantName = lookupOptions?.participantName ?? parseEventParticipantQuery(currentMessage);
         const searchParticipantIds = searchParticipantName

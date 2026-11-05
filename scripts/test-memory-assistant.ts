@@ -111,6 +111,10 @@ assert(buildDeterministicTimelineMemoryQuery("最近一次和昔涟聊天是什�
   "Latest-interaction questions must also trigger a timeline lookup.");
 assert.equal(buildDeterministicTimelineMemoryQuery("今天晚饭吃什么"), null,
   "Ordinary questions must not trigger a timeline lookup.");
+assert(buildDeterministicTimelineMemoryQuery("你第一次见到小七是什么时候")?.includes("小七"),
+  "The explicit 见到 wording must trigger a named-person timeline lookup.");
+assert.equal(buildDeterministicTimelineMemoryQuery("我们第一次见面是什么时候"), null,
+  "An unnamed first-meeting question must not trigger a lookup.");
 
 const timelineRawMessages = selectRawMessagesForMemoryAssistant(
   "查找与小七最早的一次互动，用户原问题：第一次跟小七说话是哪天",
@@ -399,8 +403,10 @@ try {
     assistant,
     candidates: [],
     onTurnDetail: detail => { automaticDetail.push(detail); },
-    loadCandidates: async query => {
+    loadCandidates: async (query, options) => {
       assert(query.includes("小七"));
+      assert.equal(options?.participantName, "小七", "The participant must come from the original user message, not be parsed from the generated query template.");
+      assert.equal(options?.deterministicTimeline, true);
       return [rawCandidate];
     },
   });
