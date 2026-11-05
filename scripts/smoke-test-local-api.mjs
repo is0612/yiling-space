@@ -360,7 +360,7 @@ const loaded = await request(`/api/characters/${created.id}`);
 assert(loaded.name === created.name, "GET by id did not return the new character.");
 
 const initialTimeline = await request(`/api/characters/${created.id}/timeline`);
-assert(Array.isArray(initialTimeline) && initialTimeline.length === 0, "A new character should have an empty real timeline.");
+assert(Array.isArray(initialTimeline.entries) && initialTimeline.entries.length === 0, "A new character should have an empty real timeline.");
 
 const memoryContent = `CI 长期记忆 ${unique}：用户偏好简洁回答。`;
 const createdMemory = await request(`/api/characters/${created.id}/memories`, {
