@@ -6,6 +6,8 @@ export type MemorySnapshotDto = {
   number: number;
   /** 列表与详情的标题：自动归档「第 N 份」，手动存档「存档」 */
   label: string;
+  /** 这份总结覆盖的是哪个记忆范围：角色全局 / 主人私聊 / QQ群 389834620 … */
+  scopeLabel?: string;
   version: number;
   date: string;
   range: string;
@@ -39,6 +41,7 @@ type SnapshotReview = {
 
 type SnapshotRecord = {
   id: string;
+  scopeLabel?: string;
   snapshotKey: string;
   version: number;
   kind: "AUTOMATIC" | "MANUAL";
@@ -258,6 +261,7 @@ export function toMemorySnapshotDtos(
         id: record.id,
         number,
         label: number > 0 ? `第 ${number} 份` : "存档",
+        ...(record.scopeLabel ? { scopeLabel: record.scopeLabel } : {}),
         version: record.version,
         date: formatDate(record.createdAt, timeZone, true),
         range: formatDate(record.periodStart, timeZone) + " — " + formatDate(record.periodEnd, timeZone),

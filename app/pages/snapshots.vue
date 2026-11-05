@@ -36,16 +36,27 @@ const regeneratingId = ref<string | null>(null);
 const aiRegeneratingId = ref<string | null>(null);
 
 const statusOptions = ["全部版本状态", "当前版本", "已被替代"];
-const kindItems = computed(() => showManual.value ? items.value : items.value.filter((item) => item.kind !== "MANUAL"));
+/** 范围筛选：一份总结只覆盖一个记忆范围，群聊与全局不能混着读 */
+const scopeFilter = ref("全部范围");
+const scopeOptions = computed(() => [
+  "全部范围",
+  ...new Set(items.value.map((item) => item.scopeLabel || "角色全局")),
+]);
+const kindItems = computed(() => {
+  const byKind = showManual.value ? items.value : items.value.filter((item) => item.kind !== "MANUAL");
+  return scopeFilter.value === "全部范围"
+    ? byKind
+    : byKind.filter((item) => (item.scopeLabel || "角色全局") === scopeFilter.value);
+});
 const filtered = computed(() => kindItems.value.filter((item) => {
-  const queryMatches = !query.value || `${item.summary} ${item.range} ${titleOf(item)}`.toLowerCase().includes(query.value.toLowerCase());
+  const queryMatches = !query.value || `${item.summary} ${item.range} ${titleOf(item)} ${item.scopeLabel ?? ""}`.toLowerCase().includes(query.value.toLowerCase());
   const statusMatches = statusFilter.value === "全部版本状态" || item.status === statusFilter.value;
   return queryMatches && statusMatches;
 }));
 const totalMessages = computed(() => items.value.reduce((sum, item) => sum + item.messages, 0));
 const autoCount = computed(() => items.value.filter((item) => item.kind !== "MANUAL").length);
 const manualCount = computed(() => items.value.length - autoCount.value);
-const hasFilters = computed(() => Boolean(query.value) || statusFilter.value !== "全部版本状态");
+const hasFilters = computed(() => Boolean(query.value) || statusFilter.value !== "全部版本状态" || scopeFilter.value !== "全部范围");
 
 const sourceTotal = computed(() => detail.value?.sourceMessages?.length || 0);
 const pagedSources = computed(() => {
@@ -66,6 +77,7 @@ function countFor(status: string) {
 function resetFilters() {
   query.value = "";
   statusFilter.value = "全部版本状态";
+  scopeFilter.value = "全部范围";
 }
 function statusTone(status: Snapshot["status"]) {
   return status === "当前版本" ? "pill-green" : "pill-gray";
@@ -491,6 +503,20 @@ watch(id, () => void loadSnapshots());
               </button>
             </div>
             <div class="list-tools">
+              <el-select
+                v-if="scopeOptions.length > 2"
+                v-model="scopeFilter"
+                class="scope-select"
+                size="small"
+                placeholder="全部范围"
+              >
+                <el-option
+                  v-for="option in scopeOptions"
+                  :key="option"
+                  :label="option"
+                  :value="option"
+                />
+              </el-select>
               <el-input
                 v-model="query"
                 clearable
@@ -548,6 +574,7 @@ watch(id, () => void loadSnapshots());
                   </span>
                   <span class="snap-row-sum">{{ snapshot.summary }}</span>
                   <span class="snap-row-meta">
+                    <span class="scope-tag">{{ snapshot.scopeLabel || "角色全局" }}</span>
                     <el-icon><Calendar /></el-icon>{{ snapshot.date.slice(5, 16) }} ·
                     <template v-if="snapshot.messages || snapshot.events">{{ snapshot.messages }} 条消息 · {{ snapshot.events }} 个事件</template>
                     <template v-else>这个周期没有可归档的内容</template>
@@ -574,6 +601,7 @@ watch(id, () => void loadSnapshots());
               <header class="d-head">
                 <h2>{{ detail.kind === "MANUAL" ? "存档 · " + detail.date.slice(5, 16) : titleOf(detail) + "阶段总结" }}</h2>
                 <span class="d-head-tags">
+                  <span class="scope-tag">{{ detail.scopeLabel || "角色全局" }}</span>
                   <span
                     class="pill"
                     :class="detail.kind === 'AUTOMATIC' ? 'pill-purple' : 'pill-gray'"
@@ -908,6 +936,9 @@ watch(id, () => void loadSnapshots());
    不要继承 .chip.on 的深色底（深底 + 弱文字 = 看起来是个空胶囊）。 */
 .manual-chip.on{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-strong)}
 .list-search{min-width:0;flex:1}
+.scope-select{width:132px;flex:none}
+/* 范围是个弱标签：它解释「这份总结覆盖谁」，不该和状态药丸抢颜色 */
+.scope-tag{border-radius:4px;background:var(--surface-3);padding:1px 6px;color:var(--text-2);font-size:11px;line-height:1.6;white-space:nowrap}
 .reset-link{border:0;border-radius:6px;background:none;padding:2px 4px;color:var(--brand-strong);font-size:12px;font-weight:600;cursor:pointer}
 .reset-link:hover{text-decoration:underline}
 /* 左栏列表自己滚，别让几十份归档把右栏详情推到视口外 */

@@ -3,6 +3,8 @@ import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
 import { processNextMemoryJob } from "../../../../utils/memory-worker";
+import { listFriendScopesWithActivity } from "../../../../utils/friends";
+import { describeMemoryScope } from "../../../../utils/memory-scope-label";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /**
@@ -79,9 +81,40 @@ export default defineEventHandler(async (event) => {
   const intervalDays = Math.min(8, Math.max(1, character.memorySetting?.snapshotIntervalDays ?? 3));
   const now = new Date();
 
+  /**
+   * 范围 = 全局 + 主人私人 + **每个这一周期有动静的 EXTERNAL_IDENTITY 范围**。
+   *
+   * 以前只跑前两个，结果群聊（它们挂在某个外部身份范围下，主人自己 QQ 上的群也是）
+   * 永远进不了阶段总结：库里 16000 条群消息，一份总结都没有。调度器的自动路径本来
+   * 就用 `listFriendScopesWithActivity` 带上了朋友范围，手动入口必须一致。
+   */
+  const activitySince = new Date(now.getTime() - intervalDays * DAY_MS);
+  const friendScopeIds = await listFriendScopesWithActivity({
+    characterId,
+    since: activitySince,
+    until: now,
+  }).catch(() => []);
+
+  const friendScopes = friendScopeIds.length
+    ? await prisma.memoryScope.findMany({
+        where: { id: { in: friendScopeIds.filter((scopeId) => scopeId !== ownerPrivateScopeId) } },
+        select: {
+          id: true,
+          scopeType: true,
+          scopeKey: true,
+          conversations: {
+            orderBy: { lastMessageAt: "desc" },
+            take: 3,
+            select: { externalConversationId: true, title: true },
+          },
+        },
+      })
+    : [];
+
   const scopes = [
     { id: globalScopeId, label: "" },
     ...(ownerPrivateScopeId ? [{ id: ownerPrivateScopeId, label: "（主人私聊）" }] : []),
+    ...friendScopes.map((scope) => ({ id: scope.id, label: "（" + describeMemoryScope(scope) + "）" })),
   ];
 
   const queued: string[] = [];
@@ -217,8 +250,14 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // 队列里可能还有别的任务，多给几次机会；认到全部自己的任务就停。
+  /**
+   * 队列里可能还有别的任务，多给几次机会；认到全部自己的任务就停。
+   * 再加一道时间预算：一次点击可能覆盖好几个范围，每个模型调用最长 3 分钟，
+   * 不能让浏览器一直挂着 —— 超过预算就停下，剩下的留在队列里并如实报告。
+   */
+  const deadline = Date.now() + 240_000;
   for (let index = 0; index < pending.size + 8 && pending.size > 0; index += 1) {
+    if (Date.now() > deadline) break;
     const result = await processNextMemoryJob(prisma, { ownerId });
     if (!result.processed) break;
     if (!pending.has(result.jobId)) continue;
