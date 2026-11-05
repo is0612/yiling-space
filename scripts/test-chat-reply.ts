@@ -137,6 +137,16 @@ try {
     /not something the current user said/,
     "手账那句不能被她当成对方说的话",
   );
+  assert.match(
+    systemMessage.content,
+    /distinguish that person's latest message from a mutual exchange/,
+    "时间线回答必须区分目标人物单方面发言与双方互动。",
+  );
+  assert.match(
+    systemMessage.content,
+    /do not infer that the owner and person never interacted or never had a private chat/,
+    "只检索到单方群聊记录时，不能推断双方从未互动或从未私聊。",
+  );
   assert.deepEqual(
     Object.keys(promptInput).sort(),
     ["characterName", "characterPrompt", "now", "currentMessage", "recentMessages", "memories", "snapshots", "events", "rawMessages", "journal"].sort(),
