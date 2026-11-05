@@ -467,7 +467,7 @@ export type ConversationReplyResult = {
 // v47：可选语境助手提供带来源的局面说明；角色仍可核对原话并自主沉默。
 // v48：自然接话按内容决定，不再把「多数沉默」当发言配额；旁观不等于禁止搭话。
 // v49：可选 responseExplanation 只说明面向用户的回复/沉默决定，不输出隐藏推理。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v49";
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v50";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
