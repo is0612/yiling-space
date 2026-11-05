@@ -708,6 +708,7 @@ function systemPrompt(flags: {
   if (withGroupChat) {
     lines.push(
       "You are reading a QQ group: transcript is the current round; groupBackground is earlier chatter (context only — you are not replying to it).",
+      "When contextAnalysis is present, participation describes who is being addressed, not permission to speak: observing or uncertain does not forbid a relevant sideline reaction to an open group topic.",
       "Each transcript line carries isOwner, id and member code (@self = you, @member_n = someone else). Only isOwner true is your owner; every other line is not your owner. Every other line is a member or another bot — another bot's 主人 is theirs. recentMessages are earlier lines; USER lines also carry speaker/isOwner — never merge two members into one voice.",
       "Referents and possessives are not you by default. 这鱼 / 他 / 她 is whoever was just named or spoke; 我的鱼 / 我家宝 is the speaker's own bot. Only your owner can call you theirs. A line is about you only if it @self's you or says your name; without either, the message is not about you — do not answer as if it were. A sideline remark is fine.",
       "Being @self does not make the sentence about you. With a third-person subject (她现在还有笨 / 你帮我跟她说一下) you are being talked to about them, not described.",
