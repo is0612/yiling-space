@@ -1,4 +1,4 @@
-import { createError, getRouterParam } from "h3";
+import { createError, defineEventHandler, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
@@ -86,167 +86,173 @@ export default defineEventHandler(async (event) => {
 
   const queued: string[] = [];
   const skipped: string[] = [];
-  const keys: string[] = [];
-  const reusedIds: string[] = [];
+  const targetIds: string[] = [];
 
   for (const scope of scopes) {
-    // ① 已有在途任务：直接用它，不再新建。RETRY_WAIT 的任务手动触发时提到「现在」，
-    //    否则用户点了按钮却什么都不发生（runAt 可能还在半小时后）。
-    const active = await prisma.memoryJob.findFirst({
-      where: {
-        memoryScopeId: scope.id,
-        type: "GENERATE_SNAPSHOT",
-        status: { in: ["QUEUED", "RUNNING", "RETRY_WAIT"] },
-      },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, status: true, periodEnd: true },
-    });
-    if (active) {
-      /**
-       * 在途任务可能已经过时：上一版按 `[now-间隔, now]` 建的任务，如果之后已经有一份
-       * 覆盖到更晚时间的成功总结，再把它跑完只会多出一份重复总结。这种直接作废，
-       * 走下面正常的周期计算。
-       */
-      const newer = active.periodEnd
-        ? await prisma.memorySnapshot.findFirst({
-            where: { memoryScopeId: scope.id, kind: "AUTOMATIC", periodEnd: { gte: active.periodEnd } },
-            select: { id: true },
-          })
-        : null;
-      if (!active.periodEnd || newer) {
-        if (active.status !== "RUNNING") {
-          await prisma.memoryJob.update({
-            where: { id: active.id },
-            data: {
-              status: "CANCELLED",
-              completedAt: now,
-              lastError: "该周期已有更晚的成功总结，本次任务作废。",
-            },
-          });
+    const planned = await prisma.$transaction(async (tx) => {
+      // 计划互斥：与手动版本、Worker 提交共用范围行的锁。两个请求各算一份周期时，
+      // 幂等键里的 `now` 毫秒不同，`skipDuplicates` 挡不住重叠 —— 必须让排期本身串行。
+      await tx.$queryRaw`SELECT id FROM "memory_scopes" WHERE id = ${scope.id}::uuid FOR UPDATE`;
+
+      // ① 在途任务按周期最早的接着跑，不能因为「后面已有更新的总结」就作废它：
+      //    中间那段没有归档过，作废等于永久跳过。只有该周期确实已被完整覆盖才作废。
+      const active = await tx.memoryJob.findFirst({
+        where: {
+          memoryScopeId: scope.id,
+          type: "GENERATE_SNAPSHOT",
+          status: { in: ["QUEUED", "RUNNING", "RETRY_WAIT"] },
+        },
+        orderBy: [{ periodStart: "asc" }, { createdAt: "asc" }],
+        select: { id: true, status: true, periodStart: true, periodEnd: true },
+      });
+      if (active?.periodStart && active.periodEnd) {
+        const covered = await tx.memorySnapshot.findFirst({
+          where: {
+            memoryScopeId: scope.id,
+            kind: "AUTOMATIC",
+            periodStart: { lte: active.periodStart },
+            periodEnd: { gte: active.periodEnd },
+          },
+          select: { id: true },
+        });
+        if (!covered) {
+          // RETRY_WAIT 的手动触发要提到「现在」，否则用户点了按钮却什么都不发生。
+          if (active.status !== "RUNNING") {
+            await tx.memoryJob.updateMany({ where: { id: active.id, status: active.status }, data: { runAt: now } });
+          }
+          return { action: "reuse" as const, id: active.id };
         }
-        skipped.push(`有一条过时的归档任务已作废${scope.label}`);
-      } else {
-        if (active.status !== "RUNNING") {
-          await prisma.memoryJob.update({ where: { id: active.id }, data: { runAt: now } });
+        if (active.status === "RUNNING") {
+          return { action: "skip" as const, message: `该周期已有归档覆盖，正在运行的任务不会重复排队${scope.label}` };
         }
-        reusedIds.push(active.id);
-        queued.push(`接着跑上次没完成的归档${scope.label}`);
-        continue;
+        await tx.memoryJob.updateMany({
+          where: { id: active.id, status: active.status },
+          data: {
+            status: "CANCELLED",
+            completedAt: now,
+            lastError: `该周期（${clock(active.periodStart, timeZone)} 起）已有归档覆盖，本次任务作废。`,
+          },
+        });
       }
-    }
 
-    // ② 周期起点 = 上一份自动归档的结束点，首尾相接。
-    const latest = await prisma.memorySnapshot.findFirst({
-      where: { memoryScopeId: scope.id, kind: "AUTOMATIC" },
-      orderBy: [{ periodEnd: "desc" }, { createdAt: "desc" }],
-      select: { periodEnd: true },
+      // ② 周期起点 = 上一份自动归档的结束点，首尾相接。
+      const latest = await tx.memorySnapshot.findFirst({
+        where: { memoryScopeId: scope.id, kind: "AUTOMATIC" },
+        orderBy: [{ periodEnd: "desc" }, { createdAt: "desc" }],
+        select: { periodEnd: true },
+      });
+      const periodStart = latest?.periodEnd ?? new Date(now.getTime() - intervalDays * DAY_MS);
+      const periodEnd = now;
+
+      if (periodStart.getTime() >= periodEnd.getTime()) {
+        return { action: "skip" as const, message: `当前周期还没走到可归档的时间${scope.label}` };
+      }
+
+      // ③ 冷却：刚归档过就别再花一次模型钱。
+      if (now.getTime() - periodStart.getTime() < COOLDOWN_MS) {
+        return { action: "skip" as const, message: `刚在 ${clock(periodStart, timeZone)} 归档过，没有重复调用模型${scope.label}` };
+      }
+
+      const hasMessages = await tx.message.findFirst({
+        where: {
+          conversation: { is: { memoryScopeId: scope.id } },
+          occurredAt: { gte: periodStart, lt: periodEnd },
+        },
+        select: { id: true },
+      });
+      if (!hasMessages) {
+        return { action: "skip" as const, message: `${clock(periodStart, timeZone)} 之后没有对话${scope.label}` };
+      }
+
+      const key = `auto-snapshot:${scope.id}:${periodStart.toISOString()}:${periodEnd.toISOString()}`;
+      await tx.memoryJob.createMany({
+        data: [{
+          memoryScopeId: scope.id,
+          type: "GENERATE_SNAPSHOT",
+          idempotencyKey: key,
+          periodStart,
+          periodEnd,
+          status: "QUEUED",
+          runAt: now,
+          maxAttempts: 3,
+        }],
+        skipDuplicates: true,
+      });
+      // 认回这一条（可能是本次新建的，也可能是同周期的旧任务）：只认它，不认别人的。
+      const created = await tx.memoryJob.findFirst({
+        where: { memoryScopeId: scope.id, type: "GENERATE_SNAPSHOT", idempotencyKey: key },
+        select: { id: true },
+      });
+      if (!created) return { action: "skip" as const, message: `归档任务排队失败${scope.label}` };
+      return { action: "queued" as const, id: created.id, message: `归档 ${clock(periodStart, timeZone)} 之后的对话${scope.label}` };
     });
-    const periodStart = latest?.periodEnd ?? new Date(now.getTime() - intervalDays * DAY_MS);
-    const periodEnd = now;
 
-    if (periodStart.getTime() >= periodEnd.getTime()) {
-      skipped.push(`当前周期还没走到可归档的时间${scope.label}`);
+    if (planned.action === "skip") {
+      skipped.push(planned.message);
       continue;
     }
-
-    // ③ 冷却：刚归档过就别再花一次模型钱。
-    if (now.getTime() - periodStart.getTime() < COOLDOWN_MS) {
-      skipped.push(`刚在 ${clock(periodStart, timeZone)} 归档过，没有重复调用模型${scope.label}`);
-      continue;
-    }
-
-    const hasMessages = await prisma.message.findFirst({
-      where: {
-        conversation: { is: { memoryScopeId: scope.id } },
-        occurredAt: { gte: periodStart, lt: periodEnd },
-      },
-      select: { id: true },
-    });
-    if (!hasMessages) {
-      skipped.push(`${clock(periodStart, timeZone)} 之后没有对话${scope.label}`);
-      continue;
-    }
-
-    const key = `auto-snapshot:${scope.id}:${periodStart.toISOString()}:${periodEnd.toISOString()}`;
-    const created = await prisma.memoryJob.createMany({
-      data: [{
-        memoryScopeId: scope.id,
-        type: "GENERATE_SNAPSHOT",
-        idempotencyKey: key,
-        periodStart,
-        periodEnd,
-        status: "QUEUED",
-        runAt: now,
-        maxAttempts: 3,
-      }],
-      skipDuplicates: true,
-    });
-    keys.push(key);
-    if (created.count > 0) {
-      queued.push(`归档 ${clock(periodStart, timeZone)} 之后的对话${scope.label}`);
-    }
+    queued.push(planned.action === "reuse" ? `接着跑上次没完成的归档${scope.label}` : planned.message);
+    targetIds.push(planned.id);
   }
 
-  if (keys.length === 0 && reusedIds.length === 0) {
+  if (targetIds.length === 0) {
     return { queued, skipped, processed: [], pending: 0, advancedTo: null, intervalDays };
   }
 
-  /**
-   * 按幂等键把刚排的任务认回来：`processNextMemoryJob` 取的是「队列里下一条」，
-   * 不保证就是这一条（同角色可能还有忆泡、清理任务在排）。只有认回自己的任务才算结果，
-   * 顺手跑掉的别人的任务不进报告 —— 上一版把一条无关的超时任务混进了「本次结果」。
-   */
+  const processed: Array<{ status: string; message: string }> = [];
+  // 只执行本次的目标任务：不传 jobId 时 worker 取的是「队列里下一条」，
+  // 同角色还排着忆泡/清理任务，会把别人的结果混进本次报告。
+  for (const jobId of targetIds) {
+    const result = await processNextMemoryJob(prisma, { ownerId, jobId });
+    if (result.processed) processed.push({ status: result.status, message: result.message });
+  }
+
   const targets = await prisma.memoryJob.findMany({
-    where: {
-      OR: [
-        ...(keys.length ? [{ idempotencyKey: { in: keys } }] : []),
-        ...(reusedIds.length ? [{ id: { in: reusedIds } }] : []),
-      ],
-    },
+    where: { id: { in: targetIds } },
     select: { id: true, status: true, snapshotId: true },
   });
-
-  const processed: Array<{ status: string; message: string }> = [];
-  const pending = new Set(
-    targets.filter((job) => job.status === "QUEUED" || job.status === "RETRY_WAIT").map((job) => job.id),
-  );
-  // 同一周期已有总结时 worker 会直接复用，这里提前说清楚，别让用户以为又跑了一次模型。
-  for (const job of targets) {
-    if (job.status === "SUCCEEDED" && job.snapshotId) {
-      processed.push({ status: "SUCCEEDED", message: "该周期已有总结，直接复用，没有重复调用模型。" });
-    }
-  }
-
-  // 队列里可能还有别的任务，多给几次机会；认到全部自己的任务就停。
-  for (let index = 0; index < pending.size + 8 && pending.size > 0; index += 1) {
-    const result = await processNextMemoryJob(prisma, { ownerId });
-    if (!result.processed) break;
-    if (!pending.has(result.jobId)) continue;
-    processed.push({ status: result.status, message: result.message });
-    pending.delete(result.jobId);
-  }
+  // 仍在队列或运行中的都算未完成，不能因为另一条成功就推进计划。
+  const pending = targets.filter((job) => job.status === "QUEUED" || job.status === "RUNNING" || job.status === "RETRY_WAIT");
 
   /**
-   * 只有这一次排的全部任务都成功，才把周期边界推到 now + 间隔。
-   * 有 RETRY_WAIT / FAILED 就保持原计划，让这段数据还能被下一次补上。
+   * 计划边界按**实际归档到的结束时间**推进，不用请求的 `now + 间隔`。
+   *
+   * 复用一条旧的 RETRY_WAIT 任务时，它只覆盖到 `periodEnd` 那一天；若拿 now 推进，
+   * 中间 `[periodEnd, now)` 会被下一轮反推时永久跳过。以最新自动归档的 periodEnd
+   * 为准，剩下的缺口下一次点击（或调度器）会从那里接着补。
    */
-  const succeeded = processed.some((item) => item.status === "SUCCEEDED");
-  const hasFailure = processed.some((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
-  const advancedTo = succeeded && !hasFailure && pending.size === 0
-    ? new Date(now.getTime() + intervalDays * DAY_MS)
+  const globalArchived = await prisma.memorySnapshot.findFirst({
+    where: { memoryScopeId: globalScopeId, kind: "AUTOMATIC" },
+    orderBy: [{ periodEnd: "desc" }, { createdAt: "desc" }],
+    select: { periodEnd: true },
+  });
+  const allSucceeded = pending.length === 0 && processed.length > 0
+    && processed.every((item) => item.status === "SUCCEEDED" || item.status === "SKIPPED");
+  const desired = allSucceeded && globalArchived
+    ? new Date(globalArchived.periodEnd.getTime() + intervalDays * DAY_MS)
     : null;
-  if (advancedTo) {
-    await prisma.characterMemorySetting.updateMany({
+
+  let advancedTo: Date | null = null;
+  if (desired) {
+    // 只向前推进，并且用 CAS 避免和服务端调度器互相覆盖。
+    const current = await prisma.characterMemorySetting.findUnique({
       where: { characterId },
-      data: { nextSnapshotAt: advancedTo },
+      select: { nextSnapshotAt: true },
     });
+    if (current && (!current.nextSnapshotAt || current.nextSnapshotAt.getTime() < desired.getTime())) {
+      const updated = await prisma.characterMemorySetting.updateMany({
+        where: { characterId, nextSnapshotAt: current.nextSnapshotAt },
+        data: { nextSnapshotAt: desired },
+      });
+      if (updated.count === 1) advancedTo = desired;
+    }
   }
 
   return {
     queued,
     skipped,
     processed,
-    pending: pending.size,
+    pending: pending.length,
     advancedTo: advancedTo ? advancedTo.toISOString() : null,
     intervalDays,
   };

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createError, getRouterParam, readBody } from "h3";
+import { createError, defineEventHandler, getRouterParam, readBody, setResponseStatus } from "h3";
 import { isMemoryModelConfigured } from "../../../../utils/memory-ai";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
@@ -72,18 +72,21 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 503, statusMessage: "尚未配置 AI 模型。请先在服务端 .env 填写 LLM_API_KEY 和 LLM_MODEL。" });
     }
 
-    const activeJob = await prisma.memoryJob.findFirst({
-      where: { memoryScopeId, snapshotId: sourceSnapshot.id, type: "REGENERATE_SNAPSHOT", status: { in: ["QUEUED", "RUNNING", "RETRY_WAIT"] } },
-      orderBy: [{ createdAt: "desc" }],
-      select: { id: true, status: true },
-    });
-    if (activeJob) {
-      setResponseStatus(event, 202);
-      return { id: activeJob.id, jobId: activeJob.id, status: activeJob.status, snapshotId: sourceSnapshot.id, queued: true, duplicate: true };
-    }
-
     const now = new Date();
-    const queuedJob = await prisma.$transaction(async (tx) => {
+    const queued = await prisma.$transaction(async (tx) => {
+      // 与版本写入共用范围锁：旧版与新版属于同一逻辑快照，不能同时重复排队。
+      await tx.$queryRaw`SELECT id FROM "memory_scopes" WHERE id = ${memoryScopeId}::uuid FOR UPDATE`;
+      const activeJob = await tx.memoryJob.findFirst({
+        where: {
+          memoryScopeId,
+          snapshot: { is: { snapshotKey: sourceSnapshot.snapshotKey } },
+          type: "REGENERATE_SNAPSHOT",
+          status: { in: ["QUEUED", "RUNNING", "RETRY_WAIT"] },
+        },
+        orderBy: [{ createdAt: "desc" }],
+        select: { id: true, status: true },
+      });
+      if (activeJob) return { job: activeJob, duplicate: true };
       const job = await tx.memoryJob.create({
         data: {
           memoryScopeId,
@@ -109,11 +112,11 @@ export default defineEventHandler(async (event) => {
           details: { jobId: job.id, sourceVersion: sourceSnapshot.version, periodStart: sourceSnapshot.periodStart.toISOString(), periodEnd: sourceSnapshot.periodEnd.toISOString() },
         },
       });
-      return job;
+      return { job, duplicate: false };
     });
 
     setResponseStatus(event, 202);
-    return { id: queuedJob.id, jobId: queuedJob.id, status: queuedJob.status, snapshotId: sourceSnapshot.id, queued: true, duplicate: false };
+    return { id: queued.job.id, jobId: queued.job.id, status: queued.job.status, snapshotId: sourceSnapshot.id, queued: true, duplicate: queued.duplicate };
   }
 
   const now = new Date();
@@ -139,7 +142,7 @@ export default defineEventHandler(async (event) => {
   const sourceMessages = await prisma.message.findMany({
     where: {
       conversation: { is: { characterId, memoryScopeId } },
-      occurredAt: { gte: periodStart, lte: periodEnd },
+      occurredAt: { gte: periodStart, lt: periodEnd },
     },
     orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
     take: 250,
@@ -168,6 +171,8 @@ export default defineEventHandler(async (event) => {
   };
 
   const snapshot = await prisma.$transaction(async (tx) => {
+    // Worker 也先锁范围，再读版本号；手动版本必须参加同一串行协议。
+    await tx.$queryRaw`SELECT id FROM "memory_scopes" WHERE id = ${memoryScopeId}::uuid FOR UPDATE`;
     const latest = await tx.memorySnapshot.findFirst({
       where: { memoryScopeId, snapshotKey },
       orderBy: { version: "desc" },
