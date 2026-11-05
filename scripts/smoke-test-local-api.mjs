@@ -266,8 +266,9 @@ try {
   await forbiddenAudit.arrayBuffer();
 
   // The administrator can list accounts and see only identity and statistics.
-  const adminList = await (await fetch(new URL("/api/admin/users", baseUrl), { headers: { cookie: adminCookie } })).json();
-  const listedUser = adminList.users.find((entry) => entry.id === registeredUserId);
+  const adminList = await (await fetch(new URL("/api/admin/users?page=1&pageSize=100", baseUrl), { headers: { cookie: adminCookie } })).json();
+  assert(Array.isArray(adminList.items), "The administrator account list must use the paginated items response.");
+  const listedUser = adminList.items.find((entry) => entry.id === registeredUserId);
   assert(listedUser, "The administrator list must include the newly registered user.");
   assert(listedUser.role === "USER", "The registered user must be listed with role USER.");
   assert(listedUser.email === userEmail, "The registered user must be listed under their email.");
