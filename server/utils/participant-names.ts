@@ -156,6 +156,7 @@ export async function resolveEventParticipantNames(
 export async function resolveParticipantAccounts(
   prisma: PrismaClient,
   name: string,
+  context: { characterId: string; platform: string },
 ): Promise<string[]> {
   const wanted = name.trim();
   if (!wanted) return [];
@@ -163,9 +164,13 @@ export async function resolveParticipantAccounts(
   const [exactDisplayNames, byAlias] = await Promise.all([
     prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
       SELECT DISTINCT metadata->>'authorOpenId' AS uid
-      FROM messages
-      WHERE COALESCE(metadata->>'authorOpenId', '') <> ''
-        AND metadata->>'authorDisplayName' = ${wanted}
+      FROM messages m
+      JOIN conversations c ON c.id = m."conversationId"
+      JOIN memory_scopes s ON s.id = c."memoryScopeId"
+      WHERE s."characterId" = ${context.characterId}::uuid
+        AND m.metadata->>'platform' = ${context.platform}
+        AND COALESCE(m.metadata->>'authorOpenId', '') <> ''
+        AND m.metadata->>'authorDisplayName' = ${wanted}
       LIMIT 3
     `),
     // 她私下的叫法不在消息 metadata 里，存在 scope 上；别名必须精确匹配。
@@ -173,7 +178,9 @@ export async function resolveParticipantAccounts(
       SELECT DISTINCT ei."platformUid" AS uid
       FROM memory_scopes s
       JOIN external_identities ei ON ei.id = s."externalIdentityId"
-      WHERE ${wanted} = ANY(s.aliases)
+      WHERE s."characterId" = ${context.characterId}::uuid
+        AND ei.platform = ${context.platform}
+        AND ${wanted} = ANY(s.aliases)
       LIMIT 3
     `),
   ]);
@@ -190,9 +197,13 @@ export async function resolveParticipantAccounts(
   const escaped = wanted.replace(/[\\%_]/gu, (char) => `\\${char}`);
   const fuzzyDisplayNames = await prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
     SELECT DISTINCT metadata->>'authorOpenId' AS uid
-    FROM messages
-    WHERE COALESCE(metadata->>'authorOpenId', '') <> ''
-      AND metadata->>'authorDisplayName' LIKE ${`%${escaped}%`}
+    FROM messages m
+    JOIN conversations c ON c.id = m."conversationId"
+    JOIN memory_scopes s ON s.id = c."memoryScopeId"
+    WHERE s."characterId" = ${context.characterId}::uuid
+      AND m.metadata->>'platform' = ${context.platform}
+      AND COALESCE(m.metadata->>'authorOpenId', '') <> ''
+      AND m.metadata->>'authorDisplayName' LIKE ${`%${escaped}%`}
     LIMIT 2
   `);
   return selectUnambiguousParticipantAccounts({
