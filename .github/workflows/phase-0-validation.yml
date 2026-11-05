@@ -216,6 +216,12 @@ jobs:
       - name: 其余单元与集成测试
         run: yarn run test:unit-suite
 
+      # 三个 runner 各自建一个一次性数据库、跑完即删，跑的是 23 个连库子测试
+      # （含几个没有独立 npm 命令的 -db 文件）。它们以前两边都没接线，
+      # 2026-11-05 梳理时补上：这些测试写好了却没人跑，等于没写。
+      - name: 一次性数据库隔离测试
+        run: yarn run test:isolated
+
       - name: B站 命令目录与解析层测试
         run: yarn run test:bili-runner
 
