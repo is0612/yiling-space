@@ -22,6 +22,11 @@ import {
   resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
 } from "../message-retrieval";
 import { resolveEventParticipantNames, resolveParticipantAccounts } from "../participant-names";
+import {
+  buildOwnerTimelineGroupRawMessageWhere,
+  buildPrivateScopeRawMessageWhere,
+  resolveOwnerTimelineGroupScopeIds,
+} from "../owner-timeline-retrieval";
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
 import { resolveCharacterApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
 import {
@@ -1493,8 +1498,9 @@ async function runChannelTurn(input: {
         });
       },
       candidates: [],
-      loadCandidates: async (searchQuery) => {
-        const searchParticipantName = parseEventParticipantQuery(searchQuery);
+      loadCandidates: async (searchQuery, lookupOptions) => {
+        // 人物名只从主人原始问题解析一次；不从记忆助手模板查询串反向解析。
+        const searchParticipantName = lookupOptions?.participantName ?? parseEventParticipantQuery(currentMessage);
         const searchParticipantIds = searchParticipantName
           ? await resolveParticipantAccounts(prisma, searchParticipantName)
           : [];
@@ -1633,11 +1639,7 @@ async function runChannelTurn(input: {
               })()]
             : [])
           : await Promise.all(readableScopeIds.filter((scopeId) => scopeId !== globalScope.id).map(async (scopeId) => {
-              const baseWhere = {
-                conversation: { memoryScopeId: scopeId },
-                role: { in: ["USER", "ASSISTANT"] as Array<"USER" | "ASSISTANT"> },
-                ...rangeWhere,
-              };
+              const baseWhere = buildPrivateScopeRawMessageWhere(scopeId, searchRange);
               const matched = await prisma.message.findMany({
                 where: { ...baseWhere, ...(contentMatches.length ? { OR: contentMatches } : {}) },
                 orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
@@ -1664,24 +1666,20 @@ async function runChannelTurn(input: {
         // 主人私聊可以回看角色全局范围中「指定熟人自己发过的群消息」：
         // 仅在明确识别到人物账号时启用，只取该人物的 USER 原文，不把整群聊天搬进私聊。
         // 普通好友私聊仍然只能检索当前用户自己的 private scope。
+        const ownerTimelineScopeIds = resolveOwnerTimelineGroupScopeIds({
+          isOwnerTurn,
+          globalScopeId: globalScope.id,
+          // 旧群会话可能仍挂在主人自己的 EXTERNAL_IDENTITY；普通好友不会获得这个额外范围。
+          ownerIdentityScopeId: primaryIdentityScopeId,
+        });
         const ownerGroupRawRows = !isGroup && isOwnerTurn && searchParticipantIds.length
           ? await prisma.message.findMany({
-              where: {
-                conversation: {
-                  memoryScopeId: globalScope.id,
-                  externalConversationId: { startsWith: "g:" },
-                },
-                role: "USER",
-                AND: [
-                  { metadata: { path: ["platform"], equals: input.platform } },
-                  {
-                    OR: searchParticipantIds.map((platformUid) => ({
-                      metadata: { path: ["authorOpenId"], equals: platformUid },
-                    })),
-                  },
-                ],
-                ...rangeWhere,
-              },
+              where: buildOwnerTimelineGroupRawMessageWhere({
+                memoryScopeIds: ownerTimelineScopeIds,
+                platform: input.platform,
+                participantIds: searchParticipantIds,
+                range: searchRange,
+              }),
               orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
               take: 500,
               select: {
@@ -2091,6 +2089,37 @@ async function runChannelTurn(input: {
   }
 
   if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
+    let memoryDiagnostics: {
+      queryLength?: number;
+      candidateCount?: number;
+      sourceCount: number;
+      memorySourceCount: number;
+      snapshotSourceCount: number;
+      eventSourceCount: number;
+      messageSourceCount: number;
+    } = {
+      sourceCount: 0, memorySourceCount: 0, snapshotSourceCount: 0,
+      eventSourceCount: 0, messageSourceCount: 0,
+    };
+    try {
+      const detail = JSON.parse(turnDetail.serialize()) as {
+        memory?: { query?: unknown; candidateCount?: unknown; sources?: Array<{ type?: unknown }> };
+      };
+      const memory = detail.memory ?? {};
+      const sources = Array.isArray(memory.sources) ? memory.sources : [];
+      const count = (type: string) => sources.filter((source) => source.type === type).length;
+      memoryDiagnostics = {
+        ...(typeof memory.query === "string" ? { queryLength: memory.query.length } : {}),
+        ...(typeof memory.candidateCount === "number" ? { candidateCount: memory.candidateCount } : {}),
+        sourceCount: sources.length,
+        memorySourceCount: count("memory"),
+        snapshotSourceCount: count("snapshot"),
+        eventSourceCount: count("event"),
+        messageSourceCount: count("message"),
+      };
+    } catch {
+      // 诊断序列化失败不能影响回复或用量记账。
+    }
     await recordModelUsage({
       kind: "memory-assistant",
       model: generated.memoryAssistantModel,
@@ -2101,6 +2130,7 @@ async function runChannelTurn(input: {
       metadata: {
         status: generated.memoryAssistantStatus,
         turnId,
+        ...memoryDiagnostics,
         ...(generated.memoryAssistantFailureReason ? { reason: generated.memoryAssistantFailureReason } : {}),
         ...(typeof generated.memoryAssistantAttempts === "number" ? { attempts: generated.memoryAssistantAttempts } : {}),
         ...(generated.memoryAssistantFinishReason ? { finishReason: generated.memoryAssistantFinishReason } : {}),

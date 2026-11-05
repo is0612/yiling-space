@@ -17,6 +17,7 @@
 
 import { Prisma } from "../../src/generated/prisma/client";
 import type { PrismaClient } from "../../src/generated/prisma/client";
+import { selectUnambiguousParticipantAccounts } from "./owner-timeline-retrieval";
 
 type ParticipantRefLike = {
   kind?: unknown;
@@ -159,34 +160,42 @@ export async function resolveParticipantAccounts(
   const wanted = name.trim();
   if (!wanted) return [];
 
-  const ids = new Set<string>();
+  const [exactDisplayNames, byAlias] = await Promise.all([
+    prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
+      SELECT DISTINCT metadata->>'authorOpenId' AS uid
+      FROM messages
+      WHERE COALESCE(metadata->>'authorOpenId', '') <> ''
+        AND metadata->>'authorDisplayName' = ${wanted}
+      LIMIT 3
+    `),
+    // 她私下的叫法不在消息 metadata 里，存在 scope 上；别名必须精确匹配。
+    prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
+      SELECT DISTINCT ei."platformUid" AS uid
+      FROM memory_scopes s
+      JOIN external_identities ei ON ei.id = s."externalIdentityId"
+      WHERE ${wanted} = ANY(s.aliases)
+      LIMIT 3
+    `),
+  ]);
 
-  /**
-   * 两个字以上才做模糊匹配；单字只比精确相等。
-   * 「青」搜「青衫」是错配，而群里单字昵称并不少见，不能一刀切拒绝。
-   */
+  const exactIds = selectUnambiguousParticipantAccounts({
+    exactDisplayNameIds: exactDisplayNames.map((row) => row.uid),
+    aliasIds: byAlias.map((row) => row.uid),
+  });
+  if (exactIds.length) return exactIds;
+
+  // 只有精确昵称与别名均无命中，才退回包含匹配；最多取两个不同账号用于判断歧义。
+  // 两个及以上账号一律返回空，调用方不得把模糊昵称当成其中任意一个人。
+  if (wanted.length < 2) return [];
   const escaped = wanted.replace(/[\\%_]/gu, (char) => `\\${char}`);
-  const fuzzy = wanted.length >= 2
-    ? Prisma.sql`OR metadata->>'authorDisplayName' LIKE ${`%${escaped}%`}`
-    : Prisma.empty;
-  const byDisplayName = await prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
+  const fuzzyDisplayNames = await prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
     SELECT DISTINCT metadata->>'authorOpenId' AS uid
     FROM messages
     WHERE COALESCE(metadata->>'authorOpenId', '') <> ''
-      AND (metadata->>'authorDisplayName' = ${wanted} ${fuzzy})
-    LIMIT 20
+      AND metadata->>'authorDisplayName' LIKE ${`%${escaped}%`}
+    LIMIT 2
   `);
-  for (const row of byDisplayName) if (row.uid) ids.add(row.uid);
-
-  // 她私下的叫法不在消息 metadata 里，存在 scope 上。
-  const byAlias = await prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
-    SELECT DISTINCT ei."platformUid" AS uid
-    FROM memory_scopes s
-    JOIN external_identities ei ON ei.id = s."externalIdentityId"
-    WHERE ${wanted} = ANY(s.aliases)
-    LIMIT 20
-  `);
-  for (const row of byAlias) if (row.uid) ids.add(row.uid);
-
-  return [...ids];
+  return selectUnambiguousParticipantAccounts({
+    fuzzyDisplayNameIds: fuzzyDisplayNames.map((row) => row.uid),
+  });
 }

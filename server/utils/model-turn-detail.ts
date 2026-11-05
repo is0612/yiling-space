@@ -2,7 +2,7 @@ export type TurnEvidence = { id?: string; member?: string; speaker?: string; con
 export type TurnSource = { id: string; type: "memory" | "snapshot" | "event" | "message"; scope: "character" | "private"; title?: string; content: string; occurredAt?: string };
 export type TurnDetailPatch = {
   context?: { status: "not_enabled" | "not_applicable" | "success" | "failed"; summary?: string; participation?: "invited" | "observing" | "uncertain"; uncertainty?: string; evidence?: TurnEvidence[] };
-  memory?: { status: "not_needed" | "not_enabled" | "no_sources" | "failed" | "success"; query?: string; sources?: TurnSource[] };
+  memory?: { status: "not_needed" | "not_enabled" | "no_sources" | "failed" | "success"; query?: string; candidateCount?: number; sources?: TurnSource[] };
   response?: { action: "reply" | "silent"; reply: string; explanation?: string };
 };
 export type ModelTurnDetail = {
@@ -44,7 +44,10 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
     },
     memory: {
       status: ["not_needed", "not_enabled", "no_sources", "failed", "success"].includes(String(memory.status)) ? memory.status as ModelTurnDetail["memory"]["status"] : "not_needed",
-      query: text(memory.query, 240), sources,
+      query: text(memory.query, 240),
+      candidateCount: typeof memory.candidateCount === "number" && Number.isFinite(memory.candidateCount)
+        ? Math.min(10_000, Math.max(0, Math.round(memory.candidateCount))) : undefined,
+      sources,
     },
     response: {
       status: response.status === "success" ? "success" : "failed",

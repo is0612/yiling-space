@@ -679,7 +679,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   chatInput: ConversationReplyInput;
   assistant: MemoryAssistantRuntime | null;
   candidates: MemoryAssistantCandidate[];
-  loadCandidates?: (query: string) => Promise<MemoryAssistantCandidate[]>;
+  loadCandidates?: (query: string, options?: { participantName?: string; deterministicTimeline: boolean }) => Promise<MemoryAssistantCandidate[]>;
   onTurnDetail?: (detail: TurnDetailPatch) => void;
 }): Promise<ConversationReplyWithMemoryAssistant> {
   const report = (memory: NonNullable<TurnDetailPatch["memory"]>) => {
@@ -722,9 +722,14 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   let candidates = input.candidates;
   if (input.loadCandidates) {
     try {
-      candidates = await input.loadCandidates(memoryAssistantQuery);
+      // 人物名只从主人原始问题解析一次；不能从记忆助手生成的模板查询串反向解析。
+      const participantName = parseEventParticipantQuery(input.chatInput.currentMessage);
+      candidates = await input.loadCandidates(memoryAssistantQuery, {
+        ...(participantName ? { participantName } : {}),
+        deterministicTimeline: forcedTimelineLookup,
+      });
     } catch {
-      report({ status: "failed", query: memoryAssistantQuery });
+      report({ status: "failed", query: memoryAssistantQuery, candidateCount: 0 });
       warnMemoryAssistantFailure("candidate_load_failed", {
         queryLength: memoryAssistantQuery.length,
         durationMs: Date.now() - startedAt,
@@ -742,7 +747,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
     candidates = candidates.filter((candidate) => candidate.scope === "character");
   }
   if (!candidates.length) {
-    report({ status: "no_sources", query: memoryAssistantQuery, sources: [] });
+    report({ status: "no_sources", query: memoryAssistantQuery, candidateCount: 0, sources: [] });
     warnMemoryAssistantFailure("empty_candidates", {
       queryLength: memoryAssistantQuery.length,
       candidateCount: 0,
@@ -765,7 +770,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   try {
     retrieval = await callMemoryAssistant(input.assistant, memoryAssistantQuery, candidates);
   } catch (error) {
-    report({ status: "failed", query: memoryAssistantQuery });
+    report({ status: "failed", query: memoryAssistantQuery, candidateCount: candidates.length });
     const failure = error instanceof MemoryAssistantRequestError
       ? error
       : new MemoryAssistantRequestError({ reason: "request_failed", attempts: 1 });
@@ -790,7 +795,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   }
 
   report({ status: retrieval.sources.length ? "success" : "no_sources", query: memoryAssistantQuery,
-    sources: retrieval.sources.map(memoryAssistantTurnSource) });
+    candidateCount: candidates.length, sources: retrieval.sources.map(memoryAssistantTurnSource) });
   if (!retrieval.sources.length) {
     warnMemoryAssistantFailure("no_sources", {
       queryLength: memoryAssistantQuery.length,
