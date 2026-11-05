@@ -4,9 +4,9 @@ import { inspectOnebotRedPacketEvent } from "../server/utils/channel-adapter/one
 const textEvent = {
   post_type: "message",
   message_type: "group",
-  user_id: 546280821,
-  group_id: 1130761608,
-  message_id: -157919501,
+  user_id: 101,
+  group_id: 202,
+  message_id: -303,
   message: [{ type: "text", data: { text: "[QQ红包]请使用新版手机QQ查收红包。" } }],
   raw_message: "[QQ红包]请使用新版手机QQ查收红包。",
 };
