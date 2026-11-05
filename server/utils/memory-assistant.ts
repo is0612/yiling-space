@@ -1,3 +1,4 @@
+import type { TurnDetailPatch, TurnSource } from "./model-turn-detail";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import {
   resolveCharacterMemoryAssistantApiKey,
@@ -43,6 +44,18 @@ export type MemoryAssistantCandidate = {
   speaker?: string;
   isOwner?: boolean;
 };
+
+/** Only call with candidates selected and verified by callMemoryAssistant. */
+export function memoryAssistantTurnSource(source: MemoryAssistantCandidate): TurnSource {
+  return {
+    id: source.id,
+    type: source.sourceType,
+    scope: source.scope,
+    ...(source.title ? { title: source.title } : {}),
+    content: source.content ?? source.detail ?? source.summary ?? "",
+    ...(source.occurredAt ?? source.periodStart ? { occurredAt: source.occurredAt ?? source.periodStart } : {}),
+  };
+}
 
 export const MEMORY_ASSISTANT_DEFAULTS = { temperature: 0.1, maxInputTokens: 12_288, maxOutputTokens: 2_048 } as const;
 export type MemoryAssistantRuntime = {
@@ -621,7 +634,8 @@ function withMemoryAssistantFallbackReply(
   reply: string,
 ): ConversationReplyResult {
   // 首轮内容可能只是「我去翻翻」之类的等待话术。检索已经结束，不能把它原样交付成悬而未决的回复。
-  return { ...result, reply };
+  const { responseExplanation: _explanation, ...rest } = result;
+  return { ...rest, reply };
 }
 
 function warnMemoryAssistantFailure(
@@ -649,7 +663,11 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   assistant: MemoryAssistantRuntime | null;
   candidates: MemoryAssistantCandidate[];
   loadCandidates?: (query: string) => Promise<MemoryAssistantCandidate[]>;
+  onTurnDetail?: (detail: TurnDetailPatch) => void;
 }): Promise<ConversationReplyWithMemoryAssistant> {
+  const report = (memory: NonNullable<TurnDetailPatch["memory"]>) => {
+    try { input.onTurnDetail?.({ memory }); } catch { /* Diagnostics never affect generation. */ }
+  };
   const assistantAvailable = Boolean(input.assistant && (input.loadCandidates || input.candidates.length > 0));
 
   const first = await generateConversationReply({
@@ -659,6 +677,8 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   });
   const { memoryAssistantQuery, ...firstResult } = first;
   if (!assistantAvailable || !input.assistant || !memoryAssistantQuery || first.action === "silent") {
+    report({ status: !input.assistant ? "not_enabled" : first.action === "silent" ? "not_needed" : !assistantAvailable ? "no_sources" : "not_needed",
+      ...(memoryAssistantQuery && first.action !== "silent" ? { query: memoryAssistantQuery } : {}) });
     return firstResult;
   }
 
@@ -682,6 +702,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
     try {
       candidates = await input.loadCandidates(memoryAssistantQuery);
     } catch {
+      report({ status: "failed", query: memoryAssistantQuery });
       warnMemoryAssistantFailure("candidate_load_failed", {
         queryLength: memoryAssistantQuery.length,
         durationMs: Date.now() - startedAt,
@@ -699,6 +720,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
     candidates = candidates.filter((candidate) => candidate.scope === "character");
   }
   if (!candidates.length) {
+    report({ status: "no_sources", query: memoryAssistantQuery, sources: [] });
     warnMemoryAssistantFailure("empty_candidates", {
       queryLength: memoryAssistantQuery.length,
       candidateCount: 0,
@@ -721,6 +743,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   try {
     retrieval = await callMemoryAssistant(input.assistant, memoryAssistantQuery, candidates);
   } catch (error) {
+    report({ status: "failed", query: memoryAssistantQuery });
     const failure = error instanceof MemoryAssistantRequestError
       ? error
       : new MemoryAssistantRequestError({ reason: "request_failed", attempts: 1 });
@@ -744,6 +767,8 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
     };
   }
 
+  report({ status: retrieval.sources.length ? "success" : "no_sources", query: memoryAssistantQuery,
+    sources: retrieval.sources.map(memoryAssistantTurnSource) });
   if (!retrieval.sources.length) {
     warnMemoryAssistantFailure("no_sources", {
       queryLength: memoryAssistantQuery.length,

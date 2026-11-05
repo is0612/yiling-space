@@ -57,6 +57,7 @@
     "test:memory-retrieval": "tsx scripts/test-memory-retrieval.ts",
     "test:memory-assistant": "tsx scripts/test-memory-assistant.ts",
     "test:model-call-logs": "tsx scripts/test-model-call-logs.ts",
+    "test:model-turn-detail": "tsx scripts/test-model-turn-detail.ts",
     "test:context-assistant": "tsx scripts/test-context-assistant.ts && tsx scripts/test-group-context-reply.ts",
     "test:memory-budget": "tsx scripts/test-memory-budget.ts",
     "test:memory-context": "tsx scripts/test-memory-context.ts",

@@ -3,6 +3,7 @@ import type { Prisma } from "../../src/generated/prisma/client";
 import { estimateUsageCostCny, resolveModelPrice } from "./model-pricing";
 import { getPrisma } from "./prisma";
 import { usageDayWindow } from "./model-usage";
+import { readModelTurnId } from "./model-turn-detail";
 
 export const MODEL_CALL_LOG_KINDS = ["chat", "channel", "snapshot", "events", "journal", "bili-screening", "bili-judge", "bili-owner", "proactive", "vision", "sticker-label", "catchphrase-mine", "memory-assistant", "context-assistant", "other"] as const;
 const SUCCESS_STATUSES = ["success", "no_sources", "context_answered"] as const;
@@ -66,6 +67,7 @@ export function toModelCallLogItem(row: ModelCallLogRow) {
   const usageReported = row.totalTokens > 0;
   return {
     id: row.id, createdAt: row.createdAt.toISOString(), kind: row.kind, model: row.model,
+    turnId: readModelTurnId(metadata), hasTurnDetail: readModelTurnId(metadata) !== null,
     status: modelCallLogStatus(metadata), promptTokens: row.promptTokens, completionTokens: row.completionTokens,
     totalTokens: row.totalTokens, reasoningTokens: row.reasoningTokens,
     cacheHitTokens: row.cacheHitTokens, cacheMissTokens: row.cacheMissTokens, usageReported,

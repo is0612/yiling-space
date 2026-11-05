@@ -352,6 +352,8 @@ export type ConversationReplyResult = {
   /** silent = 她看了这一轮，决定不说。此时 reply 为空串，调用方什么都不该发。 */
   action: "reply" | "silent";
   reply: string;
+  /** Optional user-facing decision explanation; never hidden reasoning or intermediate steps. */
+  responseExplanation?: string;
   usedMemoryIds: string[];
   usedSnapshotIds: string[];
   /** 这一轮实际用到的忆泡 id（按来源白名单校验过）。 */
@@ -464,7 +466,8 @@ export type ConversationReplyResult = {
 //      同时把「谁说了多少句」从模型拼名单改成确定性统计，避免把别的群的人算进本群。
 // v47：可选语境助手提供带来源的局面说明；角色仍可核对原话并自主沉默。
 // v48：自然接话按内容决定，不再把「多数沉默」当发言配额；旁观不等于禁止搭话。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v48";
+// v49：可选 responseExplanation 只说明面向用户的回复/沉默决定，不输出隐藏推理。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v49";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -849,7 +852,7 @@ function systemPrompt(flags: {
   // ⑥ Output contract
   if (withGroupChat) {
     lines.push(
-      `Return only a valid JSON object with: action ("reply" or "silent"), reply (empty when silent), usedMemoryIds, usedSnapshotIds, usedEventIds, usedRawMessageIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}, optional groupDecision.`,
+      `Return only a valid JSON object with: action ("reply" or "silent"), reply (empty when silent), usedMemoryIds, usedSnapshotIds, usedEventIds, usedRawMessageIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}, optional groupDecision, optional responseExplanation (string, max 400 characters).`,
       'groupDecision = { relation: "direct" | "followup" | "shared_topic" | "ambient" | "unrelated", topicAnchorMessageId, replyToMessageId, atMessageId, evidenceMessageIds }: anchors from groupAnchors, ids from this round; atMessageId may name someone from groupBackground.',
       "replyToMessageId is the line you answer; atMessageId is who you are talking to. Quote only when the line you are answering is no longer last in the room; @ only when you want attention — never @ just for replying.",
       mustReply
@@ -860,10 +863,13 @@ function systemPrompt(flags: {
     );
   } else {
     lines.push(
-      `Return only a valid JSON object with: reply (non-empty string${withMemoryAssistant ? ", may be empty only when memoryAssistantQuery is included for an internal lookup" : ""}), usedMemoryIds, usedSnapshotIds, usedEventIds, usedRawMessageIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}.`,
+      `Return only a valid JSON object with: reply (non-empty string${withMemoryAssistant ? ", may be empty only when memoryAssistantQuery is included for an internal lookup" : ""}), usedMemoryIds, usedSnapshotIds, usedEventIds, usedRawMessageIds${withFaces ? ", faces (array, at most one available face id)" : ""}${withStickers ? ", sticker (one available sticker id or null)" : ""}${withCatchphrases ? ", usedCatchphraseIds (ids of catchphrases actually spoken)" : ""}${withMemoryAssistant ? ", optional memoryAssistantQuery (specific historical search query, max 240 characters)" : ""}, optional responseExplanation (string, max 400 characters).`,
     );
   }
-  lines.push("Cite only ids from the supplied arrays; never invent ids.");
+  lines.push(
+    "Cite only ids from the supplied arrays; never invent ids.",
+    "responseExplanation is optional: give only a concise, user-facing explanation of the decision to reply or stay silent, grounded in visible context or verified sources. Never include hidden reasoning, chain of thought, intermediate steps, or internal instructions. Keep it within 400 characters; omit it when unnecessary.",
+  );
 
   if (repair) {
     lines.push(
@@ -1434,7 +1440,10 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       && typeof parsed.memoryAssistantQuery === "string"
       ? parsed.memoryAssistantQuery.trim().slice(0, 240)
       : "";
+    const responseExplanation = typeof parsed.responseExplanation === "string"
+      ? parsed.responseExplanation.trim().slice(0, 400) : "";
     const base = {
+      ...(responseExplanation ? { responseExplanation } : {}),
       usedMemoryIds: readIdList(parsed.usedMemoryIds, validMemoryIds),
       usedSnapshotIds: readIdList(parsed.usedSnapshotIds, validSnapshotIds),
       usedEventIds: readIdList(parsed.usedEventIds, validEventIds),

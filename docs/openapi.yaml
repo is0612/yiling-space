@@ -78,7 +78,7 @@ paths:
                     items:
                       type: object
                       additionalProperties: false
-                      required: [id, createdAt, kind, model, status, promptTokens, completionTokens, totalTokens, reasoningTokens, cacheHitTokens, cacheMissTokens, usageReported, attempts, durationMs, finishReason, httpStatus, reason, costCny]
+                      required: [id, createdAt, kind, model, status, promptTokens, completionTokens, totalTokens, reasoningTokens, cacheHitTokens, cacheMissTokens, usageReported, attempts, durationMs, finishReason, httpStatus, reason, costCny, turnId, hasTurnDetail]
                       properties:
                         id: { type: string, format: uuid }
                         createdAt: { type: string, format: date-time }
@@ -98,6 +98,8 @@ paths:
                         httpStatus: { type: integer, minimum: 100, maximum: 599, nullable: true }
                         reason: { type: string, pattern: '^[a-z][a-z0-9_]{0,63}$', nullable: true }
                         costCny: { type: number, nullable: true }
+                        turnId: { type: string, format: uuid, nullable: true }
+                        hasTurnDetail: { type: boolean, description: 带轮次关联；详情写入失败时详情接口仍可能返回404。 }
                   page: { type: integer, minimum: 1 }
                   pageSize: { type: integer, enum: [20, 50] }
                   total: { type: integer, minimum: 0 }
@@ -119,6 +121,95 @@ paths:
           description: 未登录
         '404':
           description: 角色不存在或不属于当前用户
+  /characters/{characterId}/usage/logs/{logId}/turn:
+    get:
+      tags: [Characters]
+      summary: 查看模型日志关联的本轮消息、语境分析、记忆证据与回应说明
+      description: |
+        仅角色所有者可读；角色、日志与轮次查询始终按同一角色隔离。他人或不存在统一404。
+        新轮次共享 turnId，详情仅存于chat/channel主记录；旧日志不回填，详情未保存返回404。
+        详情是有界结构化摘要，不返回完整提示词、凭据、原始模型响应或内部思考。
+        本轮群消息只保留入模的成员代号化文本；群聊详情不包含私人记忆来源。
+        私聊详情仅对当前角色主人开放，不提供给群聊模型或群消息发送链路。
+        回应说明是模型可选提供的简短用户可见说明，缺失时不编造。success仅表示模型阶段完成，不代表发送成功。
+      parameters:
+        - name: characterId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: logId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 由关联主记录读取的有界详情
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [turnId, createdAt, detail]
+                properties:
+                  turnId: { type: string, format: uuid }
+                  createdAt: { type: string, format: date-time }
+                  detail:
+                    type: object
+                    required: [version, groupChat, messages, context, memory, response]
+                    properties:
+                      version: { type: integer, enum: [1] }
+                      groupChat: { type: boolean }
+                      messages:
+                        type: array
+                        maxItems: 20
+                        items: &turnEvidence
+                          type: object
+                          required: [content]
+                          properties:
+                            id: { type: string, maxLength: 120 }
+                            member: { type: string, maxLength: 80 }
+                            speaker: { type: string, maxLength: 80 }
+                            content: { type: string, maxLength: 1200 }
+                            occurredAt: { type: string, maxLength: 40 }
+                      context:
+                        type: object
+                        required: [status]
+                        properties:
+                          status: { type: string, enum: [not_enabled, not_applicable, success, failed] }
+                          summary: { type: string, maxLength: 1600 }
+                          participation: { type: string, enum: [invited, observing, uncertain] }
+                          uncertainty: { type: string, maxLength: 400 }
+                          evidence: { type: array, maxItems: 12, items: *turnEvidence }
+                      memory:
+                        type: object
+                        required: [status]
+                        properties:
+                          status: { type: string, enum: [not_needed, not_enabled, no_sources, failed, success] }
+                          query: { type: string, maxLength: 240 }
+                          sources:
+                            type: array
+                            maxItems: 8
+                            items:
+                              type: object
+                              required: [id, type, scope, content]
+                              properties:
+                                id: { type: string, maxLength: 120 }
+                                type: { type: string, enum: [memory, snapshot, event, message] }
+                                scope: { type: string, enum: [character, private] }
+                                title: { type: string, maxLength: 160 }
+                                content: { type: string, maxLength: 1600 }
+                                occurredAt: { type: string, maxLength: 40 }
+                      response:
+                        type: object
+                        required: [status]
+                        properties:
+                          status: { type: string, enum: [success, failed] }
+                          action: { type: string, enum: [reply, silent] }
+                          reply: { type: string, maxLength: 4000 }
+                          explanation: { type: string, maxLength: 400 }
+        '401':
+          description: 未登录
+        '404':
+          description: 角色或日志不存在、不属于当前用户，或历史详情未保存
   /auth/session:
     get:
       tags: [Auth]

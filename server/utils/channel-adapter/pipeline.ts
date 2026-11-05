@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
 import { type ConversationContextMessage, type ConversationGroupDecision } from "../chat-reply";
 import {
@@ -1442,11 +1444,17 @@ async function runChannelTurn(input: {
   const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
+  const turnId = randomUUID();
+  const turnDetail = createModelTurnDetail(isGroup, messages.map(item => ({
+    id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
+    content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
+  })));
   let generated;
   const generationStartedAt = Date.now();
   try {
     generated = await generateGroupContextReply({
       assistant: memoryAssistant,
+      onTurnDetail: turnDetail.update,
       contextAssistant: isGroup ? await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl) : null,
       analysisBackground: input.group?.analysisBackground?.map(line => ({
         id: line.id, member: line.member, speaker: line.speaker, content: line.text,
@@ -1460,7 +1468,7 @@ async function runChannelTurn(input: {
           characterId: input.characterId,
           channelBindingId: input.bindingId,
           ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-          metadata: { status: entry.status },
+          metadata: { status: entry.status, turnId },
         });
       },
       candidates: [],
@@ -1736,12 +1744,20 @@ async function runChannelTurn(input: {
     await recordModelUsage({
       kind: "channel", model: chatSettings.model, characterId: input.characterId,
       channelBindingId: input.bindingId,
-      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt },
+      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize() },
     });
     return { status: "ignored", reason: (error instanceof Error ? error.message : "model_error").slice(0, 200) };
   }
 
+  turnDetail.update({ response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation } });
   const generationDurationMs = Date.now() - generationStartedAt;
+  // 在落消息/发送前保存模型阶段结果，渠道发送失败也能从助手日志打开本轮详情。
+  await recordModelUsage({
+    kind: "channel", model: chatSettings.model, usage: toUsageTokens(generated.usage),
+    characterId: input.characterId, channelBindingId: input.bindingId,
+    ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+    metadata: { status: "success", action: generated.action, durationMs: generationDurationMs, turnId, turnDetail: turnDetail.serialize() },
+  });
   const now = new Date();
   const assistantAt = new Date(now.getTime() + 1);
   const groupId = isGroup ? readGroupIdFromConversationKey(input.externalConversationId) : null;
@@ -2004,15 +2020,7 @@ async function runChannelTurn(input: {
       data: { lastRecalledAt: new Date(), recallCount: { increment: 1 } },
     }).catch(() => undefined);
   }
-  await recordModelUsage({
-    kind: "channel",
-    model: chatSettings.model,
-    usage: toUsageTokens(generated.usage),
-    characterId: input.characterId,
-    channelBindingId: input.bindingId,
-    conversationId,
-    metadata: { status: "success", action: generated.action, durationMs: generationDurationMs },
-  });
+
   if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
     await recordModelUsage({
       kind: "memory-assistant",
@@ -2023,6 +2031,7 @@ async function runChannelTurn(input: {
       conversationId,
       metadata: {
         status: generated.memoryAssistantStatus,
+        turnId,
         ...(generated.memoryAssistantFailureReason ? { reason: generated.memoryAssistantFailureReason } : {}),
         ...(typeof generated.memoryAssistantAttempts === "number" ? { attempts: generated.memoryAssistantAttempts } : {}),
         ...(generated.memoryAssistantFinishReason ? { finishReason: generated.memoryAssistantFinishReason } : {}),

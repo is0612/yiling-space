@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createError, getRouterParam, readBody, setResponseStatus } from "h3";
 import { type ConversationContextMessage } from "../../../utils/chat-reply";
+import { createModelTurnDetail } from "../../../utils/model-turn-detail";
 import {
   buildMemoryAssistantCandidates,
   generateConversationReplyWithMemoryAssistant,
@@ -418,11 +419,14 @@ export default defineEventHandler(async (event) => {
   const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
+  const turnId = randomUUID();
+  const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }]);
   let generated;
   const generationStartedAt = Date.now();
   try {
     generated = await generateConversationReplyWithMemoryAssistant({
       assistant: memoryAssistant,
+      onTurnDetail: turnDetail.update,
       candidates: [],
       loadCandidates: async (searchQuery) => {
         const searchParticipantName = parseEventParticipantQuery(searchQuery);
@@ -619,7 +623,7 @@ export default defineEventHandler(async (event) => {
   } catch (error) {
     await recordModelUsage({
       kind: "chat", model: chatSettings.model, characterId, userId: ownerId,
-      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt },
+      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize() },
     });
     const detail = error instanceof Error ? error.message : "模型调用失败。";
     throw createError({
@@ -628,7 +632,13 @@ export default defineEventHandler(async (event) => {
     });
   }
 
+  turnDetail.update({ response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation } });
   const generationDurationMs = Date.now() - generationStartedAt;
+  await recordModelUsage({
+    kind: "chat", model: generated.model, usage: toUsageTokens(generated.usage), characterId, userId: ownerId,
+    ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+    metadata: { status: "success", durationMs: generationDurationMs, turnId, turnDetail: turnDetail.serialize() },
+  });
   const usedMemoryIds = new Set(generated.usedMemoryIds);
   const usedSnapshotIds = new Set(generated.usedSnapshotIds);
   const usedEventIds = new Set(generated.usedEventIds);
@@ -765,15 +775,7 @@ export default defineEventHandler(async (event) => {
   // 写失败静默 —— 回复已经落在库里了，这时候抛错只会让用户以为没发出去。
   await markCatchphrasesUsed(characterId, generated.usedCatchphraseIds);
 
-  await recordModelUsage({
-    kind: "chat",
-    model: generated.model,
-    usage: toUsageTokens(generated.usage),
-    characterId,
-    userId: ownerId,
-    conversationId: response.conversationId,
-    metadata: { status: "success", durationMs: generationDurationMs },
-  });
+
   if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
     await recordModelUsage({
       kind: "memory-assistant",
@@ -784,6 +786,7 @@ export default defineEventHandler(async (event) => {
       conversationId: response.conversationId,
       metadata: {
         status: generated.memoryAssistantStatus,
+        turnId,
         ...(generated.memoryAssistantFailureReason ? { reason: generated.memoryAssistantFailureReason } : {}),
         ...(typeof generated.memoryAssistantAttempts === "number" ? { attempts: generated.memoryAssistantAttempts } : {}),
         ...(generated.memoryAssistantFinishReason ? { finishReason: generated.memoryAssistantFinishReason } : {}),

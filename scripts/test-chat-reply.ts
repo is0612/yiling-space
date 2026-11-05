@@ -99,6 +99,7 @@ try {
     journalLine: { dayKey: "2026-10-31", quote: "今天下午其实有点不开心" },
   });
 
+  assert.equal(result.responseExplanation, undefined, "Older model responses need no explanation field.");
   assert.equal(capturedUrl, privateProviderUrl + "/chat/completions");
   assert.equal(capturedHeaders?.get("authorization"), "Bearer " + secretApiKey);
   assert(capturedBody.length > 0, "The model request body should be captured for assertions.");
@@ -1194,6 +1195,31 @@ try {
   assert(Array.isArray(recentInput.recentEvents), "近期生活资料必须独立注入。");
   console.log("近期生活连续性：允许自然回想，不强迫每轮汇报 —— 已加入回归测试");
   console.log("跨窗口旁路：crossChannel 独立分区、不并进 recentMessages、空内容不写规则、群聊隐私约束不依赖熟人卡 —— 通过");
+  assert(recentSystem.includes("optional responseExplanation"));
+  assert(recentSystem.includes("user-facing explanation"));
+  assert(recentSystem.includes("Never include hidden reasoning"));
+  const explanationInput: ConversationReplyInput = {
+    characterName: "测试角色", characterPrompt: "自然回复", model: "test-chat-model", apiKey: secretApiKey,
+    apiBaseUrl: privateProviderUrl, currentMessage: "你好", recentMessages: [], memories: [], snapshots: [],
+  };
+  let explanationCalls = 0;
+  for (const value of ["  找到相关记录。  ", "字".repeat(500), 42, {}, "   "]) {
+    globalThis.fetch = async () => {
+      explanationCalls += 1;
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ reply: "你好", responseExplanation: value }) } }] });
+    };
+    const explained = await generateConversationReply(explanationInput);
+    assert.equal(explained.responseExplanation, typeof value === "string" && value.trim() ? value.trim().slice(0, 400) : undefined);
+  }
+  assert.equal(explanationCalls, 5, "Optional explanations never add model requests or repair retries.");
+  globalThis.fetch = async () => Response.json({ choices: [{ message: {
+    content: JSON.stringify({ action: "silent", reply: "", responseExplanation: "这段对话正在询问另一位成员。" }),
+    reasoning_content: "HIDDEN_REASONING_MUST_NOT_BE_EXPOSED",
+  } }] });
+  const explainedSilent = await generateConversationReply({ ...explanationInput, groupChat: true, allowSilent: true });
+  assert.equal(explainedSilent.action, "silent");
+  assert.equal(explainedSilent.responseExplanation, "这段对话正在询问另一位成员。");
+  assert(!JSON.stringify(explainedSilent).includes("HIDDEN_REASONING"));
 } finally {
   globalThis.fetch = originalFetch;
 }

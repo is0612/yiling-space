@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Refresh } from "@element-plus/icons-vue";
+import ModelTurnDetail, { type ModelTurnDetailResponse } from "./ModelTurnDetail.vue";
 
 type CallLog = {
   id: string;
+  turnId: string | null;
+  hasTurnDetail: boolean;
   createdAt: string;
   kind: string;
   model: string;
@@ -48,6 +51,64 @@ const loading = ref(false);
 const errorMessage = ref("");
 let requestSequence = 0;
 let controller: AbortController | undefined;
+const detailOpened = ref(false);
+const selectedLog = ref<{ id: string; turnId: string } | null>(null);
+const turnDetail = ref<ModelTurnDetailResponse | null>(null);
+const detailLoading = ref(false);
+const detailError = ref("");
+const detailMissing = ref(false);
+let detailSequence = 0;
+let detailController: AbortController | undefined;
+const detailKey = computed(() => JSON.stringify([
+  opened.value, detailOpened.value, props.characterId, selectedLog.value?.id, selectedLog.value?.turnId,
+]));
+
+function clearTurnDetail() {
+  detailSequence++;
+  detailController?.abort();
+  turnDetail.value = null;
+  detailLoading.value = false;
+  detailError.value = "";
+  detailMissing.value = false;
+}
+function closeTurnDetail() {
+  detailOpened.value = false;
+  selectedLog.value = null;
+  clearTurnDetail();
+}
+function openTurnDetail(row: CallLog) {
+  if (!opened.value || !props.characterId || !row.turnId) return;
+  selectedLog.value = { id: row.id, turnId: row.turnId };
+  detailOpened.value = true;
+}
+async function loadTurnDetail() {
+  if (!opened.value || !detailOpened.value || !props.characterId || !selectedLog.value) return;
+  clearTurnDetail();
+  const sequence = ++detailSequence;
+  const key = detailKey.value;
+  const selection = selectedLog.value;
+  detailController = new AbortController();
+  detailLoading.value = true;
+  try {
+    const response = await $fetch<ModelTurnDetailResponse>(`/api/characters/${encodeURIComponent(props.characterId)}/usage/logs/${encodeURIComponent(selection.id)}/turn`, {
+      signal: detailController.signal,
+    });
+    if (sequence !== detailSequence || key !== detailKey.value) return;
+    if (response.turnId !== selection.turnId || response.detail.version !== 1) {
+      detailError.value = "本轮详情暂时不可用，请刷新后重试。";
+      return;
+    }
+    turnDetail.value = response;
+  } catch (error: unknown) {
+    if (sequence !== detailSequence || key !== detailKey.value) return;
+    const status = error && typeof error === "object" && "statusCode" in error ? error.statusCode : undefined;
+    detailMissing.value = status === 404;
+    // Only show fixed messages: API/provider errors can include sensitive request data.
+    detailError.value = status === 404 ? "历史记录未保存详情，或本轮详情已不可用。" : "暂时读不到本轮详情，请稍后重试。";
+  } finally {
+    if (sequence === detailSequence && key === detailKey.value) detailLoading.value = false;
+  }
+}
 
 const kindLabels: Record<string, string> = {
   chat: "网页对话", channel: "QQ 回复", snapshot: "阶段总结", events: "忆泡整理",
@@ -134,6 +195,13 @@ async function loadLogs() {
   }
 }
 
+watch([() => props.characterId, opened], () => {
+  closeTurnDetail();
+}, { flush: "sync" });
+watch(detailKey, () => {
+  clearTurnDetail();
+  if (opened.value && detailOpened.value && selectedLog.value) void loadTurnDetail();
+}, { flush: "sync" });
 watch(() => props.characterId, () => {
   controller?.abort();
   requestSequence++;
@@ -158,6 +226,7 @@ watch(requestKey, () => {
   }
 }, { immediate: true });
 onBeforeUnmount(() => {
+  clearTurnDetail();
   requestSequence++;
   controller?.abort();
 });
@@ -378,6 +447,29 @@ onBeforeUnmount(() => {
               {{ formatCost(row as CallLog) }}
             </template>
           </el-table-column>
+          <el-table-column
+            label="本轮详情"
+            width="190"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                v-if="row.turnId != null"
+                link
+                type="primary"
+                @click="openTurnDetail(row as CallLog)"
+              >
+                查看本轮详情
+              </el-button>
+              <el-button
+                v-else
+                link
+                disabled
+              >
+                历史记录未保存详情
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
       <el-pagination
@@ -392,9 +484,60 @@ onBeforeUnmount(() => {
       />
     </div>
   </el-dialog>
+  <el-dialog
+    v-model="detailOpened"
+    title="本轮详情"
+    width="min(900px, calc(100vw - 32px))"
+    top="5vh"
+    append-to-body
+    @close="closeTurnDetail"
+  >
+    <div
+      v-loading="detailLoading"
+      class="turn-detail-body"
+      :aria-busy="detailLoading"
+      aria-live="polite"
+    >
+      <p v-if="detailLoading">
+        正在读取本轮详情…
+      </p>
+      <el-alert
+        v-else-if="detailError"
+        :title="detailError"
+        :type="detailMissing ? 'info' : 'error'"
+        :closable="false"
+        show-icon
+      >
+        <el-button
+          v-if="!detailMissing"
+          link
+          type="primary"
+          @click="loadTurnDetail"
+        >
+          重试
+        </el-button>
+      </el-alert>
+      <ModelTurnDetail
+        v-else-if="turnDetail"
+        :result="turnDetail"
+      />
+    </div>
+    <template #footer>
+      <el-button @click="closeTurnDetail">
+        返回调用日志
+      </el-button>
+      <el-button
+        type="primary"
+        @click="opened = false"
+      >
+        关闭
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
+.turn-detail-body { min-height: 150px; max-height: 70vh; overflow-y: auto; font-size: 14px; }
 .call-logs { display: flex; flex-direction: column; gap: 16px; color: var(--text-2); font-size: 14px; }
 .log-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .log-filter { display: flex; flex: 1; min-width: 150px; flex-direction: column; gap: 6px; font-size: 12px; }

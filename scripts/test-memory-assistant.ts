@@ -10,6 +10,7 @@ import {
   testMemoryAssistantConnection,
   type MemoryAssistantCandidate,
 } from "../server/utils/memory-assistant";
+import type { TurnDetailPatch } from "../server/utils/model-turn-detail";
 import type { ConversationReplyInput } from "../server/utils/chat-reply";
 
 const now = new Date("2026-11-04T10:00:00.000Z");
@@ -225,17 +226,24 @@ try {
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
 
+  const details: TurnDetailPatch[] = [];
+  const onTurnDetail = (detail: TurnDetailPatch) => { details.push(detail); };
   let candidateLoaderCalls = 0;
   const result = await generateConversationReplyWithMemoryAssistant({
     chatInput,
     assistant,
     candidates: [],
+    onTurnDetail,
     loadCandidates: async (query) => {
       candidateLoaderCalls += 1;
       assert.equal(query, "上周讨论的太空电影名称");
       return [candidate, rawCandidate];
     },
   });
+  assert.equal(details[0]?.memory?.status, "success");
+  assert.deepEqual(details[0]?.memory?.sources?.map(source => [source.id, source.type, source.content, source.occurredAt]),
+    [[candidate.id, "memory", candidate.content, candidate.occurredAt], [rawCandidate.id, "message", rawCandidate.content, rawCandidate.occurredAt]]);
+  assert.equal(details[0]?.memory?.query, "上周讨论的太空电影名称");
   assert.equal(candidateLoaderCalls, 1, "Historical database candidates should load only after the chat model requests a search.");
   assert.equal(calls.length, 3, "A requested search should make one initial chat call, one read-only lookup, and one final chat call.");
   assert.equal(calls[0]?.authorization, "Bearer chat-key-only");
@@ -278,6 +286,7 @@ try {
       choices: [{
         message: { content: JSON.stringify({
           reply: "我一时想不起来，得再找找。",
+          responseExplanation: "准备查询历史记录。",
           memoryAssistantQuery: "上周讨论的太空电影名称",
           usedMemoryIds: [],
           usedSnapshotIds: [],
@@ -289,14 +298,17 @@ try {
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
   const fallback = await generateConversationReplyWithMemoryAssistant({
+    onTurnDetail,
     chatInput,
     assistant,
     candidates: [],
     loadCandidates: async () => [candidate],
   });
+  assert.equal(details.at(-1)?.memory?.status, "failed");
   assert.equal(fallbackCalls.length, 2);
   assert.equal(fallback.reply, "本宝刚才想去翻以前的记录，但这次检索没成功，先不乱告诉你。",
     "A failed lookup must replace the first-pass waiting reply with an explicit retrieval-failure message.");
+  assert.equal(fallback.responseExplanation, undefined, "Fallback text must not retain an explanation of the discarded waiting reply.");
   assert.equal(fallback.memoryAssistantStatus, "failed");
   assert.equal(fallback.memoryAssistantFailureReason, "http_error");
   assert.equal(fallback.memoryAssistantAttempts, 1, "HTTP errors must not be retried as if they were malformed model output.");
@@ -324,6 +336,7 @@ try {
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
   const ordinary = await generateConversationReplyWithMemoryAssistant({
+    onTurnDetail,
     chatInput,
     assistant,
     candidates: [],
@@ -335,6 +348,34 @@ try {
   assert.equal(noQueryCalls, 1, "The memory assistant must not add latency or cost when no lookup is requested.");
   assert.equal(noQueryLoaderCalls, 0, "No broad database scan should run unless a historical search is requested.");
   assert.equal(ordinary.reply, "今天就聊点轻松的吧。");
+  assert.equal(details.at(-1)?.memory?.status, "not_needed");
+  await generateConversationReplyWithMemoryAssistant({ chatInput, assistant: null, candidates: [], onTurnDetail });
+  assert.equal(details.at(-1)?.memory?.status, "not_enabled");
+  await generateConversationReplyWithMemoryAssistant({ chatInput, assistant, candidates: [], onTurnDetail });
+  assert.equal(details.at(-1)?.memory?.status, "no_sources");
+  await generateConversationReplyWithMemoryAssistant({ chatInput, assistant, candidates: [candidate],
+    onTurnDetail: () => { throw new Error("diagnostic unavailable"); } });
+
+  globalThis.fetch = async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+    reply: "让我去翻翻", memoryAssistantQuery: "上周电影", usedMemoryIds: [], usedSnapshotIds: [],
+  }) } }] });
+  await generateConversationReplyWithMemoryAssistant({ chatInput, assistant, candidates: [], onTurnDetail,
+    loadCandidates: async () => [] });
+  assert.equal(details.at(-1)?.memory?.status, "no_sources");
+  assert.deepEqual(details.at(-1)?.memory?.sources, []);
+  await generateConversationReplyWithMemoryAssistant({ chatInput, assistant, candidates: [], onTurnDetail,
+    loadCandidates: async () => { throw new Error("candidate load unavailable"); } });
+  assert.equal(details.at(-1)?.memory?.status, "failed");
+
+  globalThis.fetch = async () => Response.json({ choices: [{ message: { content: JSON.stringify({
+    action: "silent", reply: "", memoryAssistantQuery: "上周电影", usedMemoryIds: [], usedSnapshotIds: [],
+  }) } }] });
+  const silent = await generateConversationReplyWithMemoryAssistant({
+    chatInput: { ...chatInput, groupChat: true, allowSilent: true }, assistant, candidates: [candidate], onTurnDetail,
+    loadCandidates: async () => { throw new Error("silent turns must not retrieve"); },
+  });
+  assert.equal(silent.action, "silent");
+  assert.deepEqual(details.at(-1)?.memory, { status: "not_needed" });
 } finally {
   globalThis.fetch = originalFetch;
 }

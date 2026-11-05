@@ -1,7 +1,9 @@
+import type { TurnDetailPatch } from "./model-turn-detail";
 import { generateConversationReply, type ConversationReplyInput } from "./chat-reply";
 import { analyzeGroupContext, ContextAssistantError, type ContextAnalysis } from "./context-assistant";
 import {
   callMemoryAssistant,
+  memoryAssistantTurnSource,
   generateConversationReplyWithMemoryAssistant,
   type MemoryAssistantCandidate,
   type MemoryAssistantRuntime,
@@ -15,6 +17,7 @@ export async function generateGroupContextReply(input: {
   assistant: MemoryAssistantRuntime | null;
   contextAssistant?: MemoryAssistantRuntime | null;
   candidates: MemoryAssistantCandidate[];
+  onTurnDetail?: (detail: TurnDetailPatch) => void;
   analysisBackground?: ConversationReplyInput["groupBackground"];
   loadCandidates?: (query: string) => Promise<MemoryAssistantCandidate[]>;
   recordAssistantUsage: (entry: {
@@ -24,7 +27,11 @@ export async function generateGroupContextReply(input: {
     status: string;
   }) => Promise<void>;
 }): Promise<ConversationReplyWithMemoryAssistant> {
+  const report = (detail: TurnDetailPatch) => {
+    try { input.onTurnDetail?.(detail); } catch { /* Diagnostics never affect generation. */ }
+  };
   if (!input.contextAssistant || !input.chatInput.groupChat) {
+    report({ context: { status: input.chatInput.groupChat ? "not_enabled" : "not_applicable" } });
     return generateConversationReplyWithMemoryAssistant(input);
   }
   const record = async (entry: Parameters<typeof input.recordAssistantUsage>[0]) => {
@@ -40,12 +47,30 @@ export async function generateGroupContextReply(input: {
     analysis = result.analysis;
     await record({ kind: "context-assistant", model: input.contextAssistant.model, usage: result.usage, status: "success" });
   } catch (error) {
+    report({ context: { status: "failed" } });
     await record({
       kind: "context-assistant", model: input.contextAssistant.model,
       ...(error instanceof ContextAssistantError ? { usage: error.usage } : {}), status: "failed",
     });
     return generateConversationReplyWithMemoryAssistant(input);
   }
+
+  const evidenceIds = new Set(analysis.evidenceMessageIds);
+  const seenEvidence = new Set<string>();
+  const evidence = [...(input.chatInput.transcript ?? []), ...(input.analysisBackground ?? input.chatInput.groupBackground ?? [])]
+    .filter(line => {
+      if (!line.id || !evidenceIds.has(line.id) || seenEvidence.has(line.id)) return false;
+      seenEvidence.add(line.id);
+      return true;
+    }).slice(0, 12).map(line => ({
+      id: line.id,
+      ...(line.member ? { member: line.member } : {}),
+      ...(line.speaker ? { speaker: line.speaker } : {}),
+      content: line.content.slice(0, 600),
+      ...(line.occurredAt ? { occurredAt: line.occurredAt } : {}),
+    }));
+  report({ context: { status: "success", summary: analysis.summary, participation: analysis.participation,
+    ...(analysis.uncertainty ? { uncertainty: analysis.uncertainty } : {}), evidence } });
 
   let sources: MemoryAssistantCandidate[] = [];
   let memoryStatus: NonNullable<ConversationReplyInput["contextAnalysis"]>["memoryStatus"];
@@ -74,7 +99,10 @@ export async function generateGroupContextReply(input: {
     }
   }
 
-  const evidenceIds = new Set(analysis.evidenceMessageIds);
+  report({ memory: { status: !analysis.memoryQuery ? "not_needed" : !input.assistant ? "not_enabled"
+    : memoryStatus === "failed" ? "failed" : sources.length ? "success" : "no_sources",
+    ...(analysis.memoryQuery ? { query: analysis.memoryQuery } : {}), sources: sources.map(memoryAssistantTurnSource) } });
+
   const original = input.chatInput;
   // 大背景留给分析器，角色拿到本轮原话、被引用证据和少量最近互动。
   const background = (input.analysisBackground ?? original.groupBackground ?? [])
