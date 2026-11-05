@@ -2604,7 +2604,7 @@ paths:
                 mode:
                   type: string
                   enum: [ai]
-                  description: 仅设置为 ai 时调用模型并排入 REGENERATE_SNAPSHOT 任务；模型未配置时返回 503。
+                  description: 仅设置为 ai 时调用模型并排入 REGENERATE_SNAPSHOT 任务；模型未配置时返回 503。同一逻辑快照（含它的历史版本）同时只允许一条在途重新提炼任务，重复提交返回同一条任务并带 duplicate=true。
               additionalProperties: false
       responses:
         '200':
@@ -2656,9 +2656,13 @@ paths:
 
         周期是**首尾相接**的：起点取上一份自动总结的 `periodEnd`（没有则 `now - interval`），
         终点是 `now`。同周期幂等键沿用 `auto-snapshot:{scopeId}:{start}:{end}`，
-        并且：该范围已有在途任务时复用它（过时的直接作废），刚归档过（1 小时内）不再调用模型。
-        只有本次排的任务全部成功才把 `nextSnapshotAt` 推进到 `now + interval`；
-        有失败或仍在队列时保持原计划，这段数据下次还能补上。
+        并且：该范围已有在途任务时复用**周期最早**的那一条（只有它覆盖的区间已被一份自动总结完整覆盖时才作废，
+        不能因为「后面有更新的总结」就丢掉中间那段）；刚归档过（1 小时内）不再调用模型。
+        排期在范围行的锁内完成，两个并发请求不会各排一份重叠周期；执行只针对本次目标任务，
+        不会顺手消费队列里别的任务。
+        只有本次任务全部成功才推进 `nextSnapshotAt`，且按**实际归档到的 `periodEnd` + 间隔**推进
+        （不是请求时刻），否则复用旧任务时会跳过还没归档的时间段；有失败或仍在队列时保持原计划，
+        这段数据下次还能补上。
       responses:
         '200':
           description: 已尝试归档；处理结果逐条返回

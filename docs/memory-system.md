@@ -205,7 +205,7 @@ Prisma 的 JSON 过滤器没有 `in`，上面两档写成 `OR` 两个 `equals`�
 
 - `CharacterMemorySetting.nextSnapshotAt` 表示下一个待处理的周期结束边界；启用自动快照但缺少边界的设置，会根据 `anchorAt + snapshotIntervalDays` 自动修复并在日志中报告。
 - 调度器会检查启用/禁用设置、缺失边界与未到期设置。若 `jobsQueued=0`，请先查看 `settingsDisabled`、`settingsNotDue`、`settingsWithoutNextSnapshotAt` 和 `missingGlobalScope`，不要默认判断为代码故障。
-- 当周期到期，调度器把每段周期写入 `MemoryJob` 队列并推进下一边界；稳定幂等键与数据库唯一约束防止重复排队。每次最多补处理 24 个周期（可由调用参数覆盖），剩余逾期周期在后续扫描补齐。
+- 当周期到期，调度器把每段周期写入 `MemoryJob` 队列并推进下一边界；稳定幂等键与数据库唯一约束防止重复排队。每次最多补处理 24 个周期（可由调用参数覆盖），剩余逾期周期在后续扫描补齐。全局、主人私聊与朋友范围的任务和周期游标在**同一个事务**里提交：补排失败时游标不前进，下一轮仍从原边界重算，不会出现「游标走了、某个范围永久没排」。
 - 手动运行 `yarn scheduler:run`，或单独运行 `yarn scheduler:watch`（默认每 60 秒扫描；`YILING_MEMORY_SCHEDULER_INTERVAL_MS` 可调整，最小 5 秒）。
 - Worker 的模型调用在数据库事务外执行，避免长耗时 HTTP 请求占用事务；只有在模型返回通过验证、快照和记忆变化都持久化后任务才标记为成功。
 - AI 通过服务端 OpenAI-compatible Chat Completions 接口调用。配置 `LLM_BASE_URL`（默认 `https://api.openai.com/v1`）、`LLM_API_KEY`、`LLM_MODEL` 和可选的 `LLM_TIMEOUT_MS`。密钥不能以 `NEXT_PUBLIC_*` 命名，也不能写入仓库或日志。
@@ -228,7 +228,8 @@ Prisma 的 JSON 过滤器没有 `in`，上面两档写成 `OR` 两个 `equals`�
 
 ## 8.1 快照重新提炼与任务操作
 
-- 自动 AI 快照可以提交 `REGENERATE_SNAPSHOT` 任务；Worker 在同一 `snapshotKey` 下创建递增版本、将旧的当前版本标记为 `SUPERSEDED`，并保存审计日志。
+- 自动 AI 快照可以提交 `REGENERATE_SNAPSHOT` 任务；Worker 在同一 `snapshotKey` 下创建递增版本、将旧的当前版本标记为 `SUPERSEDED`，并保存审计日志。同一逻辑快照（含它的历史版本）同时只允许一条在途重新提炼任务：在途检查在范围行锁内完成，连点两次或两个标签页只会得到同一条任务（响应 `duplicate: true`）。
+- 手动版本（普通模式）也在同一把范围锁内读最大版本号再写新版本，与 Worker 的版本提交串行，不会出现两条同版本号的 `CURRENT`。
 - 为避免历史周期重放覆盖当前状态，重新提炼提出的长期记忆变化会写入新快照供审核，但不会自动修改当前 `MemoryItem`。
 - 审核清单与正常生成走同一套门槛：低于 `MIN_MEMORY_CONFIDENCE`、或拿不出本周期真实来源消息的条目不会进入清单，只在 `memoryChangesRejected` 里计数（页面上显示为「另 N 条未通过来源校验」），避免把零校验的脏数据摆到最需要人判断的位置。
 - `UPDATE` / `INVALIDATE` 类的审核条目除 `supersededMemoryId` 外还带 `supersededCategory` 与 `supersededContent`（被指向记忆在提炼当时的原文），否则「更新成什么」没有对照组。证据 ID 只保留本周期真实存在、能回溯到来源列表的那些。
@@ -236,6 +237,7 @@ Prisma 的 JSON 过滤器没有 `in`，上面两档写成 `OR` 两个 `equals`�
 - 处置结果存 `memory_reviews`（`snapshotId + changeIndex` 唯一），**不回写快照正文** —— 快照是不可变的审计产物，人的决定单独可查，快照照旧能证明「当时模型提了什么」。
 - 采纳时用数据库里最新的记忆状态做对照，而不是提炼当时的快照：这条记忆可能已被后面的归档改过。若目标记忆已不是 `ACTIVE`，接口返回 409 并提示只能忽略，不会静默失败。证据消息若已被保留期限清理，只丢来源指针，不阻塞采纳。
 - 后台任务可取消 `QUEUED`/`RETRY_WAIT` 状态的任务；生成快照、重新提炼、清理原始消息、手账与忆泡整理都可在 `FAILED`、`RETRY_WAIT` 或 `CANCELLED` 时手动重新入队。`RUNNING` 任务不支持强制取消。
+- **立即归档**（`POST /characters/{id}/snapshots/generate`）复用该范围**周期最早**的在途任务，不因为「后面已有更新的总结」就把它作废 —— 那会把中间那段永久跳过；只有它覆盖的区间确实已被一份自动总结完整覆盖时才作废。排期在范围行锁内完成，两个并发请求不会各排一份重叠周期；执行只传本次的 `jobId`，不顺手消费队列里的忆泡/清理任务。成功推进 `nextSnapshotAt` 时按**实际归档到的 `periodEnd` + 间隔**计算，而不是请求时刻：复用一条旧的 `RETRY_WAIT` 任务时它只归档到自己的结束点，剩余缺口由下一次点击或调度器接着补。
 - **运行中但租约过期**（领取超过 5 分钟，`server/utils/memory-job-lease.ts`）的任务可以「回收并重新入队」：租约不续期；超时可能是执行者失联，也可能是长调用仍在运行，回收后旧 token 会被 fencing，拒绝其产物和状态写入。任务不会自己回到队列。自动回收发生在「下一次有人领取任务」时（`reclaimExpiredMemoryJobs`），所以整机没有 Worker 在跑时不会自动发生 —— 这正是 2026-11-01 那条卡了 3 小时的忆泡任务。审计动作沿用 `memory_job.manual_retry`，`details.recoveredLease = true` 区分「回收」与「重试」。
 
 ## 9. 对话时检索
