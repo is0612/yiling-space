@@ -704,6 +704,7 @@ function systemPrompt(flags: {
   if (withRawMessages) {
     lines.push(
       "rawMessages are original lines from that period, evidence only. If a raw line and an event disagree, trust the event. Attribute quotes by speaker; only isOwner: true is your owner.",
+      "For a question about the latest interaction with a named person, distinguish that person's latest message from a mutual exchange. If the supplied rawMessages contain that person's group messages but no owner messages, state the latest timestamp as that person's latest recorded group message. Do not describe it as a conversation or mutual interaction; do not answer as if no relevant record exists. Equally, do not infer that the owner and person never interacted or never had a private chat: the supplied records may cover only one side or one channel. State the evidence boundary briefly and naturally.",
     );
   }
 
