@@ -246,6 +246,40 @@ async function restoreConfirmationCannotCrossDay() {
   page.finish();
 }
 
+async function roleSwitchFromLaterPageKeepsFreshSelection() {
+  const page = harness();
+  page.set("page", 2);
+  const oldPage = page.take("/api/characters/role-a/journals");
+  oldPage.resolve({
+    ...listResult(DAY_A),
+    page: 2,
+    total: 21,
+    totalPages: 2,
+    hasMore: true,
+  });
+  await flushMicrotasks();
+
+  page.call("selectDay", DAY_A);
+  const oldDetail = page.take(`/api/characters/role-a/journals/${DAY_A}`);
+  oldDetail.resolve(detailResult(DAY_A));
+  await flushMicrotasks();
+
+  page.set("id", "role-b");
+  const newList = page.take("/api/characters/role-b/journals");
+  assert.equal(newList.options?.query?.page, 1, "切角色后应回到第一页");
+  assert.equal(page.requests.length, 0, "角色切换不能再被 page watcher 重复请求");
+  newList.resolve(listResult(DAY_B));
+  await flushMicrotasks();
+
+  const newDetail = page.take(`/api/characters/role-b/journals/${DAY_B}`);
+  newDetail.resolve(detailResult(DAY_B));
+  await flushMicrotasks();
+  assert.equal(page.read("selectedDay"), DAY_B);
+  assert.equal(page.read("detailCharacterId"), "role-b");
+  assert.equal(page.read<{ dayKey: string }>("detail").dayKey, DAY_B);
+  page.finish();
+}
+
 async function monthFilterResetsPaginationAndSelection() {
   const page = harness();
   page.set("page", 2);
@@ -299,6 +333,7 @@ for (const test of [
   regenerateConfirmationCannotCrossRole,
   editUsesCapturedRoleAndDoesNotRefreshNewRole,
   restoreConfirmationCannotCrossDay,
+  roleSwitchFromLaterPageKeepsFreshSelection,
   monthFilterResetsPaginationAndSelection,
   unmountInvalidatesListRequest,
 ]) {
