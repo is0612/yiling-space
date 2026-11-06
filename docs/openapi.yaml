@@ -1849,7 +1849,7 @@ paths:
       tags: [Memories]
       operationId: listCharacterMemoryDays
       summary: 列出角色有忆泡的日子
-      description: 数据源是 `memory_event_days`（一天一行，带整理进度），不是从忆泡反推的 —— 「今天还没整理」的日子也会出现。按日期倒序，最多 90 天；返回角色配置的 IANA 时区。传 `q` 时改成按忆泡标题/详情/参与者搜索，返回**命中的日期**，`eventCount` 是命中条数而非当天全部条数。
+      description: 数据源是 `memory_event_days`（一天一行，带整理进度），不是从忆泡反推的 —— 「今天还没整理」的日子也会出现。按日期倒序，最多返回 90 天；返回角色配置的 IANA 时区。普通列表超过 90 天时 `truncated=true`。传 `q` 时按忆泡标题/详情/参与者搜索，最多检查最近 300 条命中忆泡，返回**命中的日期**，`eventCount` 是命中条数而非当天全部条数；超过上限时 `truncated=true`。
       parameters:
         - name: q
           in: query
@@ -1862,10 +1862,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [today, timeZone, days]
+                required: [today, timeZone, days, truncated]
                 properties:
                   today: { type: string, example: "2026-10-31", description: 角色时区里的今天 }
                   timeZone: { type: string, example: "Asia/Shanghai", description: 角色配置的 IANA 时区 }
+                  truncated: { type: boolean, description: true 表示日期列表或搜索命中超过当前返回上限 }
                   days:
                     type: array
                     items:
