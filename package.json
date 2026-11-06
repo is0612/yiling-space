@@ -102,6 +102,7 @@
     "test:friend-alias-suggestions": "tsx scripts/test-friend-alias-suggestions.ts",
     "test:friend-targets": "tsx scripts/test-friend-targets.ts",
     "test:friend-relation-db": "tsx scripts/test-friend-relation-db.ts",
+    "test:friend-delete-db": "tsx scripts/test-friend-delete-db.ts",
     "test:chat-private-memory-db": "tsx scripts/test-chat-private-memory-db.ts",
     "test:chat-request-idempotency-db": "tsx scripts/test-chat-request-idempotency-db.ts",
     "test:chat-conversation-delete-db": "tsx scripts/test-chat-conversation-delete-db.ts",

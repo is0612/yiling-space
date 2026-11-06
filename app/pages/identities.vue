@@ -12,7 +12,7 @@
  * 页面每次只拿一页，统计带和来源计数由接口按「这个角色的全部朋友」另算，
  * 不会因为翻了页或筛了来源就变形。
  */
-import { Refresh, Search, User } from "@element-plus/icons-vue";
+import { Delete, Refresh, Search, User } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
@@ -173,6 +173,8 @@ const sourceOptions = computed<Array<{ value: "ALL" | "PRIVATE" | "GROUP"; label
 
 async function load(target = page.value) {
   loading.value = true;
+  // 换角色 / 换筛选 / 翻页之后，之前勾的人可能已经不在这一页上了，先清空勾选。
+  selectedIds.value = [];
   try {
     const response = await $fetch<FriendPage>("/api/admin/identities", {
       query: {
@@ -243,32 +245,197 @@ function onQueryInput() {
 const editingScopeId = ref("");
 const aliasDraft = ref("");
 const aliasSaving = ref(false);
-const friendSettingsSavingScopeId = ref("");
 
-async function saveFriendSettings(friend: Friend) {
-  if (friendSettingsSavingScopeId.value) return;
-  friendSettingsSavingScopeId.value = friend.scopeId;
+/**
+ * 身份与交流：点一下就是最终决定，没有「保存设置」那一步。
+ *
+ * 两个维度各三个选项，用单选框而不是下拉 —— 只有三个值，下拉要点两下、还得读一遍才知道有哪些选择；
+ * 平铺出来一眼看全，点完立刻生效。选项说明放 title 里，不占版面。
+ * 行首不再挂「身份 / 交流」两个字：选项自己说明得清，省下的横向空间给按钮。
+ * 读屏用 aria-label 补回分组名。
+ */
+const IDENTITY_KIND_OPTIONS: ReadonlyArray<{ value: Friend["identityKind"]; label: string; hint: string }> = [
+  { value: "UNKNOWN", label: "未知", hint: "还没判断过：按默认规则处理" },
+  { value: "HUMAN", label: "真人", hint: "确认是真人：她正常接话" },
+  { value: "AI", label: "AI", hint: "确认是 AI：她默认不接话" },
+];
+
+const CHAT_POLICY_OPTIONS: ReadonlyArray<{ value: Friend["friendChatPolicy"]; label: string; hint: string }> = [
+  { value: "DEFAULT", label: "默认", hint: "默认规则：真人正常回，AI 默认不回" },
+  { value: "ALLOW", label: "允许交流", hint: "这个角色一定接这个人的话" },
+  { value: "BLOCK", label: "禁止交流", hint: "这个角色不理这个人" },
+];
+
+/** 每张卡片的保存状态：saving 显示「保存中」，saved 显示「已保存」并在 1.6 秒后自己消失。 */
+type SaveState = "saving" | "saved";
+const saveStates = ref<Record<string, SaveState>>({});
+const saveTokens = new Map<string, number>();
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function markSaveState(scopeId: string, state: SaveState | null) {
+  const existing = saveTimers.get(scopeId);
+  if (existing) {
+    clearTimeout(existing);
+    saveTimers.delete(scopeId);
+  }
+  const next = { ...saveStates.value };
+  if (state) next[scopeId] = state;
+  else delete next[scopeId];
+  saveStates.value = next;
+  if (state === "saved") {
+    saveTimers.set(scopeId, setTimeout(() => markSaveState(scopeId, null), 1600));
+  }
+}
+
+function saveStateLabel(scopeId: string) {
+  const state = saveStates.value[scopeId];
+  if (state === "saving") return "保存中…";
+  if (state === "saved") return "已保存";
+  return "";
+}
+
+/**
+ * 改一个字段就 PATCH 一次，带序号防乱序：连点两下时只认最后一次的响应，
+ * 否则先发的请求后回来，会把界面上新的选择又改回旧值。
+ */
+async function patchFriend(friend: Friend, patch: { identityKind?: Friend["identityKind"]; friendChatPolicy?: Friend["friendChatPolicy"] }) {
+  const scopeId = friend.scopeId;
+  const token = (saveTokens.get(scopeId) ?? 0) + 1;
+  saveTokens.set(scopeId, token);
+  markSaveState(scopeId, "saving");
   try {
     const response = await $fetch<{
       identityKind: Friend["identityKind"];
       identityKindSource: Friend["identityKindSource"];
       friendChatPolicy: Friend["friendChatPolicy"];
-    }>(`/api/admin/identities/${friend.scopeId}`, {
-      method: "PATCH",
-      body: {
-        identityKind: friend.identityKind,
-        friendChatPolicy: friend.friendChatPolicy,
-      },
-    });
-    friends.value = friends.value.map((item) => item.scopeId === friend.scopeId
-      ? { ...item, ...response }
-      : item);
-    ElMessage.success("身份与交流权限已保存。");
+    }>(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
+    if (saveTokens.get(scopeId) !== token) return;
+    friends.value = friends.value.map((item) => (item.scopeId === scopeId ? { ...item, ...response } : item));
+    markSaveState(scopeId, "saved");
   } catch (error) {
-    ElMessage.error(readErrorMessage(error, "身份与交流权限没保存上。"));
+    if (saveTokens.get(scopeId) !== token) return;
+    markSaveState(scopeId, null);
+    ElMessage.error(readErrorMessage(error, "没保存上，已恢复成服务端的设置。"));
     await load(page.value);
+  }
+}
+
+function setIdentityKind(friend: Friend, kind: Friend["identityKind"]) {
+  if (friend.identityKind === kind) return;
+  // 先改本地再发请求：单选框必须立刻有反馈，等服务端回来再动会像卡了一下。
+  friend.identityKind = kind;
+  // 手动选过就是人工确认，服务端也会这么写，先把标记对上来。
+  friend.identityKindSource = "MANUAL";
+  void patchFriend(friend, { identityKind: kind });
+}
+
+function setChatPolicy(friend: Friend, policy: Friend["friendChatPolicy"]) {
+  if (friend.friendChatPolicy === policy) return;
+  friend.friendChatPolicy = policy;
+  void patchFriend(friend, { friendChatPolicy: policy });
+}
+
+/**
+ * 多选：给「很少聊的那几个人」准备的一次性清理。
+ *
+ * 不在卡片上常驻勾选框 —— 平时这张页面是「看人」的，勾选框会让每张卡都像待办事项。
+ * 点页头的「多选」才进这个模式：卡片变可选、身份/交流暂时不可改（避免一边选一边写）。
+ */
+const selecting = ref(false);
+const selectedIds = ref<string[]>([]);
+
+const selectedFriends = computed(() =>
+  friends.value.filter((friend) => selectedIds.value.includes(friend.scopeId)),
+);
+
+const allSelected = computed(
+  () => friends.value.length > 0 && selectedIds.value.length === friends.value.length,
+);
+
+function isPicked(friend: Friend) {
+  return selectedIds.value.includes(friend.scopeId);
+}
+
+function toggleSelect(friend: Friend) {
+  selectedIds.value = isPicked(friend)
+    ? selectedIds.value.filter((id) => id !== friend.scopeId)
+    : [...selectedIds.value, friend.scopeId];
+}
+
+function toggleSelectAll() {
+  selectedIds.value = allSelected.value ? [] : friends.value.map((friend) => friend.scopeId);
+}
+
+function exitSelecting() {
+  selecting.value = false;
+  selectedIds.value = [];
+}
+
+function toggleSelecting() {
+  if (selecting.value) exitSelecting();
+  else selecting.value = true;
+}
+
+/**
+ * 删朋友：把这条关系和它名下的对话、忆泡、阶段总结、长期记忆一起删掉。
+ *
+ * 不是「隐藏」—— 对方下次再来会重新建一条空关系，从 0 开始计数。
+ * 所以先在弹窗里把要连带删掉的数量摆出来（这些数字列表里就有，不用再多打一次接口）。
+ * 单个删除和批量删除共用这一个弹窗：`deleteTargets` 里几个就是几个。
+ */
+const deleteTargets = ref<Friend[]>([]);
+const deleteDialogOpen = ref(false);
+const deleteSubmitting = ref(false);
+
+const deleteIsBatch = computed(() => deleteTargets.value.length > 1);
+const deleteSingle = computed(() => (deleteTargets.value.length === 1 ? deleteTargets.value[0]! : null));
+const deleteConversationTotal = computed(
+  () => deleteTargets.value.reduce((sum, friend) => sum + friend.conversationCount, 0),
+);
+const deleteAliasTotal = computed(
+  () => deleteTargets.value.reduce((sum, friend) => sum + friend.aliases.length, 0),
+);
+
+function askDelete(friend: Friend) {
+  deleteTargets.value = [friend];
+  deleteDialogOpen.value = true;
+}
+
+function askBatchDelete() {
+  if (!selectedFriends.value.length) return;
+  deleteTargets.value = [...selectedFriends.value];
+  deleteDialogOpen.value = true;
+}
+
+async function confirmDelete() {
+  const targets = deleteTargets.value;
+  if (!targets.length || deleteSubmitting.value) return;
+  deleteSubmitting.value = true;
+  try {
+    if (targets.length === 1) {
+      const only = targets[0]!;
+      await $fetch(`/api/admin/identities/${only.scopeId}`, { method: "DELETE" });
+      ElMessage.success(`已删掉和「${only.displayName || only.platformUid}」的关系。`);
+    } else {
+      const response = await $fetch<{ deleted: number; failed: number }>(
+        "/api/admin/identities/batch-delete",
+        { method: "POST", body: { scopeIds: targets.map((friend) => friend.scopeId) } },
+      );
+      if (response.failed > 0) {
+        ElMessage.warning(`删掉 ${response.deleted} 个，还有 ${response.failed} 个没删掉，刷新后重试。`);
+      } else {
+        ElMessage.success(`已删掉 ${response.deleted} 个朋友关系。`);
+      }
+    }
+    deleteDialogOpen.value = false;
+    exitSelecting();
+    // 这一页删空了就往前翻一页，不然会停在空页上。
+    const remaining = friends.value.length - targets.length;
+    await load(remaining > 0 ? page.value : Math.max(1, page.value - 1));
+  } catch (error) {
+    ElMessage.error(readErrorMessage(error, "没删掉，稍后重试。"));
   } finally {
-    friendSettingsSavingScopeId.value = "";
+    deleteSubmitting.value = false;
   }
 }
 
@@ -376,6 +543,8 @@ async function resolveSuggestion(suggestion: Suggestion, approve: boolean) {
 
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
+  for (const timer of saveTimers.values()) clearTimeout(timer);
+  saveTimers.clear();
 });
 
 onMounted(() => load(1));
@@ -388,6 +557,14 @@ onMounted(() => load(1));
       description="私聊来访、群里见过的人都会记录下来。可以手动标记真人 / AI，并按角色决定她是否与对方交流。"
     >
       <template #actions>
+        <button
+          type="button"
+          class="btn btn-select-mode"
+          :class="{ 'is-on': selecting }"
+          @click="toggleSelecting"
+        >
+          {{ selecting ? "退出多选" : "多选" }}
+        </button>
         <button
           type="button"
           class="btn btn-suggest"
@@ -496,6 +673,29 @@ onMounted(() => load(1));
       </div>
 
       <div
+        v-if="selecting"
+        class="sel-bar"
+      >
+        <span class="sel-count">已选 <b>{{ selectedIds.length }}</b> 人</span>
+        <button
+          type="button"
+          class="sel-link"
+          @click="toggleSelectAll"
+        >
+          {{ allSelected ? "取消全选" : "全选本页" }}
+        </button>
+        <span class="sel-note">多选时卡片上的身份 / 交流暂时不能改</span>
+        <button
+          type="button"
+          class="sel-del"
+          :disabled="!selectedIds.length"
+          @click="askBatchDelete"
+        >
+          删除所选
+        </button>
+      </div>
+
+      <div
         v-if="stats.total"
         class="band"
       >
@@ -538,8 +738,19 @@ onMounted(() => load(1));
           v-for="friend in friends"
           :key="friend.scopeId"
           class="friend-card"
+          :class="{ 'is-selecting': selecting, 'is-picked': selecting && isPicked(friend) }"
+          @click="selecting && toggleSelect(friend)"
         >
           <div class="fr-head">
+            <input
+              v-if="selecting"
+              class="fr-check"
+              type="checkbox"
+              :checked="isPicked(friend)"
+              :aria-label="`选中 ${friend.displayName || friend.platformUid}`"
+              @click.stop
+              @change="toggleSelect(friend)"
+            >
             <img
               v-if="avatarUrl(friend) && !brokenAvatars[friend.scopeId]"
               class="fr-avatar is-photo"
@@ -562,7 +773,19 @@ onMounted(() => load(1));
                 {{ platformLabel(friend.platform) }}<span class="sep">·</span>{{ friend.platformUid }}
               </p>
             </div>
-            <span class="pill pill-gray">{{ friend.interactionCount > 0 ? sourceLabel(friend.firstSource) : "群里见过" }}</span>
+            <div class="fr-head-actions">
+              <span class="pill pill-gray">{{ friend.interactionCount > 0 ? sourceLabel(friend.firstSource) : "群里见过" }}</span>
+              <button
+                v-if="!selecting"
+                type="button"
+                class="fr-del"
+                :title="`删掉「${friend.displayName || friend.platformUid}」这条朋友关系和她的相关记忆`"
+                aria-label="删除朋友"
+                @click="askDelete(friend)"
+              >
+                <el-icon><Delete /></el-icon>
+              </button>
+            </div>
           </div>
 
           <div class="fr-alias">
@@ -624,35 +847,60 @@ onMounted(() => load(1));
             </div>
           </div>
 
-          <div class="friend-controls">
-            <div class="friend-control-row">
-              <label :for="`friend-kind-${friend.scopeId}`">身份</label>
-              <select :id="`friend-kind-${friend.scopeId}`" v-model="friend.identityKind" class="friend-control-select">
-                <option value="UNKNOWN">未知</option>
-                <option value="HUMAN">真人</option>
-                <option value="AI">AI 鱼</option>
-              </select>
-              <span v-if="friend.identityKindSource === 'MANUAL'" class="friend-control-note">人工确认</span>
-            </div>
-            <div class="friend-control-row">
-              <label :for="`friend-policy-${friend.scopeId}`">交流</label>
-              <select :id="`friend-policy-${friend.scopeId}`" v-model="friend.friendChatPolicy" class="friend-control-select">
-                <option value="DEFAULT">默认规则（AI 默认不回）</option>
-                <option value="ALLOW">允许交流</option>
-                <option value="BLOCK">禁止交流</option>
-              </select>
-            </div>
-            <div class="friend-control-actions">
-              <span>身份类型目前由你手动确认，对同一平台账号生效；交流权限只对当前角色生效。</span>
-              <button
-                type="button"
-                class="alias-save"
-                :disabled="friendSettingsSavingScopeId === friend.scopeId"
-                @click="saveFriendSettings(friend)"
+          <div
+            class="friend-controls"
+            :class="{ 'is-locked': selecting }"
+          >
+            <div
+              class="friend-opts"
+              role="radiogroup"
+              aria-label="身份"
+            >
+              <label
+                v-for="option in IDENTITY_KIND_OPTIONS"
+                :key="option.value"
+                class="friend-opt"
+                :class="{ 'is-on': friend.identityKind === option.value }"
+                :title="option.hint"
               >
-                {{ friendSettingsSavingScopeId === friend.scopeId ? "保存中…" : "保存设置" }}
-              </button>
+                <input
+                  type="radio"
+                  :name="`friend-kind-${friend.scopeId}`"
+                  :value="option.value"
+                  :checked="friend.identityKind === option.value"
+                  @change="setIdentityKind(friend, option.value)"
+                >
+                {{ option.label }}
+              </label>
             </div>
+            <div
+              class="friend-opts"
+              role="radiogroup"
+              aria-label="交流权限"
+            >
+              <label
+                v-for="option in CHAT_POLICY_OPTIONS"
+                :key="option.value"
+                class="friend-opt"
+                :class="{
+                  'is-on': friend.friendChatPolicy === option.value,
+                  'is-block': option.value === 'BLOCK',
+                }"
+                :title="option.hint"
+              >
+                <input
+                  type="radio"
+                  :name="`friend-policy-${friend.scopeId}`"
+                  :value="option.value"
+                  :checked="friend.friendChatPolicy === option.value"
+                  @change="setChatPolicy(friend, option.value)"
+                >
+                {{ option.label }}
+              </label>
+            </div>
+            <p class="friend-save-state">
+              {{ saveStateLabel(friend.scopeId) }}
+            </p>
           </div>
 
           <dl class="fr-kv">
@@ -745,6 +993,88 @@ onMounted(() => load(1));
         </li>
       </ul>
     </el-dialog>
+
+    <el-dialog
+      v-model="deleteDialogOpen"
+      :title="deleteIsBatch ? `删掉选中的 ${deleteTargets.length} 个朋友？` : '删掉这个朋友？'"
+      width="460px"
+      class="friend-del-dialog"
+    >
+      <template v-if="deleteTargets.length">
+        <div
+          v-if="deleteSingle"
+          class="del-who"
+        >
+          <span class="del-avatar">{{ initialOf(deleteSingle) }}</span>
+          <span class="del-id">
+            <b>{{ deleteSingle.displayName || deleteSingle.platformUid }}</b>
+            <span>{{ platformLabel(deleteSingle.platform) }} · {{ deleteSingle.platformUid }} · 跟「{{ deleteSingle.characterName }}」</span>
+          </span>
+        </div>
+        <ul
+          v-else
+          class="del-names"
+        >
+          <li
+            v-for="friend in deleteTargets.slice(0, 8)"
+            :key="friend.scopeId"
+          >
+            {{ friend.displayName || friend.platformUid }}
+          </li>
+          <li
+            v-if="deleteTargets.length > 8"
+            class="del-names-more"
+          >
+            还有 {{ deleteTargets.length - 8 }} 人
+          </li>
+        </ul>
+
+        <p class="del-desc">
+          删掉之后不能撤销，会一起带走：
+        </p>
+        <ul class="del-list">
+          <li>{{ deleteIsBatch ? "这些朋友关系本身" : "这条朋友关系本身" }}（在哪认识的、聊过几次）</li>
+          <li v-if="deleteConversationTotal">
+            {{ deleteConversationTotal }} 段对话，以及对话里的聊天记录
+          </li>
+          <!-- 忆泡 / 阶段总结 / 长期记忆都是从那几段私聊里提炼出来的，没有会话就没有它们要删 -->
+          <li v-if="deleteConversationTotal">
+            {{ deleteIsBatch ? "这些关系" : "这段关系" }}里攒下的忆泡、阶段总结和长期记忆
+          </li>
+          <li v-if="deleteAliasTotal">
+            她给对方起的备注（{{ deleteSingle ? deleteSingle.aliases.join("、") : `${deleteAliasTotal} 条` }}）
+          </li>
+        </ul>
+        <!-- 只在群里见过的人没有单独会话，conversationCount 就是 0，也是「清名单」时最常见的那种。
+             直接把「0 段对话」摆出来会让人以为「没什么可删的，你确定要点吗」，所以这里只说清原因。 -->
+        <p
+          v-if="!deleteConversationTotal"
+          class="del-note"
+        >
+          {{ deleteIsBatch ? "选中的这些人" : "这个人" }}只在群里出现过、没单独聊过天，所以没有对话和记忆要删。
+        </p>
+        <p class="del-note">
+          平台账号本身不删 —— 同一个号跟别的角色聊过的话，那边不受影响。{{ deleteIsBatch ? "这些人" : "对方" }}下次再来，会重新建一条空关系，从 0 开始算。
+        </p>
+      </template>
+      <template #footer>
+        <button
+          type="button"
+          class="del-cancel"
+          @click="deleteDialogOpen = false"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          class="del-ok"
+          :disabled="deleteSubmitting"
+          @click="confirmDelete"
+        >
+          {{ deleteSubmitting ? "删除中…" : deleteIsBatch ? `删除 ${deleteTargets.length} 人` : "删除" }}
+        </button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -818,6 +1148,8 @@ onMounted(() => load(1));
 .friend-card.is-skeleton { gap: 10px; padding-bottom: 18px; }
 
 .fr-head { display: flex; align-items: flex-start; gap: 11px; }
+/* 来源标签 + 删除：两个都是「右上角的小东西」，贴在一起，别让 gap 11 把它们撑开 */
+.fr-head-actions { display: flex; flex: none; align-items: center; gap: 2px; }
 .fr-avatar {
   display: grid;
   width: 40px;
@@ -870,6 +1202,9 @@ onMounted(() => load(1));
 
 /* 待审备注入口：按钮 + 角标 */
 .btn-suggest { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+/* 多选开关：开着的时候要能一眼看出「现在点卡片是选人，不是看人」 */
+.fr-a .btn-select-mode.is-on { background: var(--brand-soft); color: var(--brand-strong); }
+.fr-a .btn-select-mode.is-on:hover { text-decoration: none; }
 .suggest-badge {
   display: inline-grid;
   min-width: 18px;
@@ -901,7 +1236,9 @@ onMounted(() => load(1));
 .suggest-no { background: none; color: var(--dim); }
 .suggest-no:hover { color: var(--text); }
 
-/* 身份与交流权限：身份是平台账号属性，交流政策是当前角色的关系属性。 */
+/* 身份与交流权限：三个值平铺成单选，点一下就是最终决定，没有保存按钮。
+   身份是平台账号属性，交流政策是当前角色的关系属性 —— 所以只有下面这行提示说清范围，
+   每个选项的说明放在 title 里，不占版面。 */
 .friend-controls {
   display: grid;
   gap: 8px;
@@ -909,23 +1246,155 @@ onMounted(() => load(1));
   border-top: 1px solid var(--surface-3);
   padding-top: 12px;
 }
-.friend-control-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.friend-control-row label { flex: 0 0 38px; color: var(--dim); font-size: 12px; }
-.friend-control-select {
-  min-width: 0;
-  max-width: 100%;
-  border: 1px solid var(--surface-3);
-  border-radius: 7px;
-  background: var(--surface);
-  padding: 6px 9px;
+/* 多选时整块锁住：只改选择，不改设置。用透明度 + 断掉指针，比直接 v-if 掉更稳 —— 卡片高度不会跳。 */
+.friend-controls.is-locked { pointer-events: none; opacity: .45; }
+.friend-opts { display: flex; min-width: 0; flex-wrap: wrap; gap: 4px; }
+.friend-opt {
+  position: relative;
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  padding: 0 10px;
   color: var(--text-2);
-  font: inherit;
   font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .14s var(--ease), color .14s var(--ease);
 }
-.friend-control-note { color: var(--brand-strong); font-size: 11px; }
-.friend-control-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.friend-control-actions > span { min-width: 0; color: var(--dim); font-size: 11px; line-height: 1.5; }
-.friend-control-actions .alias-save { flex: none; }
+.friend-opt:hover { background: var(--surface-3); }
+/* 原生 radio 藏起来但保留键盘可达：用 1px + opacity 而不是 display:none，
+   Tab 和方向键仍然能选中，读屏也能念出「身份 / 真人」。 */
+.friend-opt input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.friend-opt:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
+.friend-opt.is-on { background: var(--brand-soft); color: var(--brand-strong); }
+/* 禁止交流是「关掉」的动作，选中时走红色，跟允许 / 默认区分开 */
+.friend-opt.is-block.is-on { background: var(--red-soft); color: var(--red-text); }
+/* 保存状态：固定占一行高度，出现/消失时卡片不会跳一下 */
+.friend-save-state { min-height: 14px; margin: 0; color: var(--dim); font-size: 12px; line-height: 14px; text-align: right; }
+
+/* 多选：勾选框只在多选模式出现，卡片整块可点 */
+.fr-check {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+.friend-card.is-selecting { cursor: pointer; }
+.friend-card.is-picked { outline: 2px solid var(--brand); outline-offset: -2px; }
+/* 多选时备注也别改：链接类按钮停掉指针，chips 本身只是显示 */
+.friend-card.is-selecting .alias-add,
+.friend-card.is-selecting .alias-x { pointer-events: none; }
+
+/* 多选工具条：跟统计带同一块白砖的调子，只在多选模式出现 */
+.sel-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: var(--sp-4);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 10px 16px;
+}
+.sel-count { color: var(--text-2); font-size: 14px; font-weight: 600; }
+.sel-count b { color: var(--brand-strong); font-variant-numeric: tabular-nums; }
+.sel-link { border: 0; background: none; padding: 0; color: var(--brand-strong); font-size: 14px; font-weight: 600; cursor: pointer; }
+.sel-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.sel-note { margin-right: auto; color: var(--dim); font-size: 12px; }
+.sel-del {
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--red);
+  padding: 0 14px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sel-del:disabled { background: var(--surface-3); color: var(--dim); cursor: default; }
+
+/* 删朋友：平时隐身，指到卡片上才显形（触屏没有 hover，就常显） */.fr-del {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  padding: 0;
+  color: var(--faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .14s var(--ease), background .14s var(--ease), color .14s var(--ease);
+}
+.fr-del .el-icon { font-size: 14px; }
+.friend-card:hover .fr-del, .friend-card:focus-within .fr-del { opacity: 1; }
+.fr-del:hover { background: var(--red-soft); color: var(--red-text); }
+.fr-del:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; opacity: 1; }
+@media (hover: none) {
+  .fr-del { opacity: 1; }
+}
+
+/* 删朋友弹窗：先摆清楚删的是谁、连带走什么，再给红色按钮 */
+.del-who { display: flex; align-items: center; gap: 10px; border-radius: var(--radius-sm); background: var(--surface-2); padding: 10px 12px; }
+.del-avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+  font-size: 14px;
+  font-weight: 700;
+}
+.del-id { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.del-id b { color: var(--text); font-size: 14px; font-weight: 700; }
+.del-id span { color: var(--dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.del-desc { margin: 14px 0 6px; color: var(--text-2); font-size: 14px; }
+.del-list { margin: 0; padding-left: 18px; color: var(--dim); font-size: 14px; line-height: 1.8; }
+/* 批量删除：把要删的人名先列出来，比「N 个人」更有实感 */
+.del-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.del-names li {
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  padding: 3px 9px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.del-names .del-names-more { background: none; color: var(--dim); font-weight: 500; }
+.del-note { margin: 12px 0 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
+.del-cancel, .del-ok {
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.del-cancel { background: none; color: var(--dim); }
+.del-cancel:hover { color: var(--text); }
+.del-ok { margin-left: 8px; background: var(--red); color: #fff; }
+.del-ok:disabled { cursor: default; opacity: .6; }
 
 /* 释义行：label 定宽 56px，值紧跟在后 */
 .fr-kv { display: flex; flex-direction: column; gap: 7px; margin: 14px 0 0; border-top: 1px solid var(--surface-3); padding-top: 12px; }
