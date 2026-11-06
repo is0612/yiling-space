@@ -964,6 +964,55 @@ try {
     record.bindings[0]!.groupChat = { ...ambientSettings };
   }
 
+  // ── 静默档：有人让她闭嘴之后，这个群十分钟内不接话，但消息照常落库 ──
+  {
+    const groupId = 1018;
+    const muteConfig = {
+      groupChatMode: "all",
+      batchWindowSeconds: 1,
+      mentionWindowSeconds: 1,
+      minGapSeconds: 0,
+      dailyMax: 0,
+      quietStart: "00:00",
+      quietEnd: "00:00",
+      ambientChance: 1,
+    };
+    await prisma.characterChannelBinding.update({ where: { id: bindingId }, data: { config: muteConfig } });
+    record.bindings[0]!.groupChat = {
+      ...ambientSettings,
+      mode: "all",
+      batchWindowSeconds: 1,
+      mentionWindowSeconds: 1,
+    };
+    const previousOwnerQq = record.ownerQq;
+    record.ownerQq = "222";
+
+    // 1) 主人 @ 她说「闭嘴」：命令本身不该换来一句回复。
+    await emitToGroup(groupId, 130, "闭嘴", 222, true);
+    await sleep(2500);
+    assert.equal(await assistantCount(groupId), 0, "静默指令本身不能触发回复。");
+
+    // 2) 静默期内再 @ 她：direct 不能顶掉静默，这才是这一档存在的意义。
+    const beforeMuted = await userCount(groupId);
+    await emitToGroup(groupId, 131, "出来说话", 222, true);
+    await sleep(2500);
+    assert.equal(await assistantCount(groupId), 0, "静默期内被 @ 也不能开口。");
+    assert.equal(await userCount(groupId), beforeMuted + 1, "静默期内的消息仍要落库：只听不说。");
+
+    // 3) 主人说「可以说了」解除，之后恢复正常接话。
+    await emitToGroup(groupId, 132, "可以说了", 222, true);
+    await sleep(2500);
+    await emitToGroup(groupId, 133, "现在呢", 555, false);
+    await waitFor(async () => (await assistantCount(groupId)) >= 1);
+
+    record.ownerQq = previousOwnerQq;
+    await prisma.characterChannelBinding.update({
+      where: { id: bindingId },
+      data: { config: { ...ambientSettings } },
+    });
+    record.bindings[0]!.groupChat = { ...ambientSettings };
+  }
+
   closeGateway();
 
   console.log("OneBot 渠道端到端测试通过：WS token 鉴权与单次握手、事件接入、CQ 码解析、凭据解密、角色绑定路由、记忆检索、模型回复、表情段发送与表情额度、消息持久化、外部身份 upsert、回发平台与幂等去重、群公告草稿与确认发布、普通成员越权拦截、按群滚动 10 分钟回复上限、群聊统一攒批（mention 档只在被叫到时进管道）、自然接话闸门、按群覆盖群聊模式、引用与 @ 的分工（回上一条不加、接旧句才引用、点名才 @）、别人 @ 别人时不抢话（@all 例外）、围栏 JSON 照常回、戳一戳能叫醒她（戳别人不算）、B站 指令主人专属、临时会话的回复带上来源群号。");

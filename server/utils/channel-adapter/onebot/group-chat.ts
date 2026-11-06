@@ -214,6 +214,14 @@ export type GroupChatGateInput = {
    * 见下方 `isClarificationMessage`。
    */
   clarificationOnly?: boolean;
+  /**
+   * 这个群正处于「静默档」：有人明确让她闭嘴，还没到期。
+   *
+   * 与 `direct` 的关系是**覆盖**，不是叠加：被点名也不许开口。静默是群里的人
+   * 手动拉下的闸，优先级高于一切自动判据 —— 否则「@ 她」会立刻把静默顶掉，
+   * 而这恰恰是最常见的施压方式。状态由 `group-mute.ts` 维护，闸门只读不写。
+   */
+  muted?: boolean;
 };
 
 export type GroupChatGateResult = {
@@ -232,6 +240,18 @@ export type GroupChatGateResult = {
  */
 export function evaluateGroupChatGate(input: GroupChatGateInput): GroupChatGateResult {
   const { settings, now, direct } = input;
+
+  /**
+   * 静默档必须排第一。
+   *
+   * 排在 `all` 档之前、排在 `direct` 之前：这两条都是「为什么她应该说话」的理由，
+   * 而静默是「群里已经说了让她别说」。谁后算谁赢，所以先算的那个必须是静默。
+   * 2026-11-02 三次实测里，两次是 `direct` 把她推出来的 —— 用户看到的就是
+   * 「都让她闭嘴了还 @ 一下就回」。
+   */
+  if (input.muted) {
+    return { allowed: false, reason: "muted", mustReply: false };
+  }
 
   /**
    * 这一轮是不是在接她刚说过的话。

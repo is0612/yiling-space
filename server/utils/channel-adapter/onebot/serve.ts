@@ -29,6 +29,7 @@ import {
   mentionsCharacterName,
 } from "./group-chat";
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
+import { GROUP_MUTE_MS, createGroupMuteStore, isQuietRequest, isResumeRequest } from "./group-mute";
 import { createGroupActivityRecorder } from "../../group-activity";
 import { ONEBOT_PLATFORM, readOnebotMentionQqs, readOnebotMentionTargets, readOnebotReplyToId } from "./types";
 import {
@@ -1140,6 +1141,13 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
   /** 连接内的短期群聊上下文：背景、成员代号、话题参与。按绑定+群隔离。 */
   const groupContext = createGroupContext({ selfQq: record.accountQq });
   /**
+   * 静默档：有人明确让她闭嘴之后，这个群十分钟内不接话。
+   *
+   * 状态放内存、按「绑定 + 群」存：十分钟的临时状态，重启丢了最多多回两句；
+   * 写库要为每群维护一行状态加清理任务，不划算。
+   */
+  const groupMute = createGroupMuteStore();
+  /**
    * 群活跃度落库（节流）。和 `groupContext` 的分工：那边是给这一轮模型看的短期背景，
    * 这边是给**另一个进程**的主动找话题判断「这个群多久没动静」用的。
    * 被闸门丢掉的消息也要记 —— 群里正热闹却被判成冷场，是这套功能最糟的失败方式。
@@ -1353,6 +1361,13 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
 
     const now = new Date();
     const lastSpokeAt = lastAssistant?.occurredAt ?? null;
+    /**
+     * 这个群是否在静默期。
+     *
+     * 在 `flushGroupRound` 里读、不在入队时读：静默是「这一轮要不要开口」的问题，
+     * 而入队那一刻还不知道这一轮结束时静默是否已经解除。读的是内存状态，不额外查库。
+     */
+    const muted = groupMute.isMuted(contextKey);
     const gate = evaluateGroupChatGate({
       settings,
       now,
@@ -1363,6 +1378,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       clarificationOnly,
       lastSpokeAt,
       spokenToday,
+      muted,
       random: Math.random(),
     });
     if (!gate.allowed) {
@@ -1372,6 +1388,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       const ownerSpoke = items.some((item) => item.isOwner);
       logGroupRound(groupEvent.groupId, {
         reason: gate.reason, messages: items.length, direct, named, addressedToOthers,
+        ...(muted ? { muted: true } : {}),
         ...(ownerSpoke ? { owner: true } : {}),
         ...(poked ? { poked } : {}),
       });
@@ -1379,7 +1396,10 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       // 她不接话不等于那件事没发生；不存的话「群里发生的事」永远进不了忆泡，
       // 而且下一句他到私聊里问「我刚才群里说的」，她只能回「这边真没接到」。
       // 只写库、不调模型，所以「闸门不过就不花钱」这条约定没有被破坏。
-      if (direct || named || ownerSpoke) {
+      //
+      // 静默期是例外：这十分钟里她本来就该「只听不说」，只存冲她来的那几句，
+      // 等于十分钟的记忆是断的；全量落库不会有回复开销，也不会打扰任何人。
+      if (muted || direct || named || ownerSpoke) {
         await persistMentionedRound(items, direct || named ? "mentioned" : "context").catch((error) => {
           console.error("[onebot] 记录被挡下的轮次失败：", error instanceof Error ? error.message : String(error));
         });
@@ -1575,6 +1595,38 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     }
 
     if (!event.content) return { status: "ignored", reason: "missing_fields" };
+
+    /**
+     * 静默档的开关。
+     *
+     * 谁能按：群主 / 管理员 / 主人。普通群友喊「闭嘴」不生效 —— 一句玩笑让人消失十分钟，
+     * 比多回一句难解释得多。
+     *
+     * 怎么算「冲她说的」：真实 @、叫到名字，或这一条就是刚才那轮的接话。最后一条这里
+     * 拿不到（要看她上次开口的时刻，在 flush 里才查），所以留到一条都不满足时不触发，
+     * **宁可漏一次，不要误伤**：用户真在意时会再 @ 一次。
+     *
+     * 触发之后**不让这条消息就此消失**：它照常进攒批，在 flush 里被 `muted` 挡下，
+     * 只落库、不调模型 —— 这就是「只听不说」。
+     */
+    if (isGroupMessage && (direct || named)) {
+      const canCommandMute = event.userId === record.ownerQq || event.senderRole !== "member";
+      if (canCommandMute) {
+        if (groupMute.isMuted(contextKey)) {
+          if (isResumeRequest(event.content)) {
+            groupMute.unmute(contextKey);
+            logGroupRound(event.groupId!, { reason: "mute_off" });
+          }
+        } else if (isQuietRequest(event.content)) {
+          groupMute.mute(contextKey);
+          logGroupRound(event.groupId!, {
+            reason: "mute_on",
+            seconds: GROUP_MUTE_MS / 1000,
+            byOwner: event.userId === record.ownerQq,
+          });
+        }
+      }
+    }
 
     // 普通主人上下文不能借 mention 旁路触发群公告指令。
     if (!ownerContextOnly && canManageAnnouncement) {

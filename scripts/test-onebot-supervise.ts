@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import type { OnebotHandlers } from "../server/utils/channel-adapter/onebot/client";
+import type { OnebotHandlers, OnebotResolvedEvent } from "../server/utils/channel-adapter/onebot/client";
 import type { OnebotConnectionRecord } from "../server/utils/channel-adapter/onebot/configure";
-import { onebotBackoffMs, superviseOnebotConnection } from "../server/utils/channel-adapter/onebot/supervise";
+import { describeHandlerError, onebotBackoffMs, superviseOnebotConnection } from "../server/utils/channel-adapter/onebot/supervise";
 
 const record: OnebotConnectionRecord = {
   id: "conn-test",
@@ -130,4 +130,58 @@ assert.equal(onebotBackoffMs(99), 30_000);
   assert.equal(connected, 1, "ready 只应记录一次。");
 }
 
-console.log("OneBot 守护循环测试通过：连上不重复连、断开才重连、失败退避重试、关闭码上报。");
+// 4. 某条消息处理失败：留痕、不重连、不把直链里的 rkey 抄进日志。
+{
+  const logEntries: Record<string, unknown>[] = [];
+  const handlers: OnebotHandlers[] = [];
+  let connectCalls = 0;
+  let stop = false;
+
+  const loop = superviseOnebotConnection({
+    record,
+    handleEvent: () => Promise.reject(new Error(
+      "IMAGE_HTTP_403 https://multimedia.nt.qq.com.cn/download?appid=1407&rkey=CAMSsecretkeyvalue&fileid=abc",
+    )),
+    log: (entry) => logEntries.push(entry),
+    connect: (_config, incoming) => {
+      connectCalls += 1;
+      handlers.push(incoming);
+      return Promise.resolve(() => {});
+    },
+    sleep: () => delay(5),
+    shouldStop: () => stop,
+  });
+
+  await delay(50);
+  handlers[0]!.onStatus?.("ready");
+  await handlers[0]!.onMessage?.({ messageType: "private" } as unknown as OnebotResolvedEvent);
+
+  assert.equal(connectCalls, 1, "一条消息处理失败不该把整条连接拆掉重连。");
+  assert.equal(
+    logEntries.filter((entry) => entry.event === "onebot-error").length,
+    0,
+    "处理失败不能上报成连接错误 —— 那正是「一条不回、整条掉线」的来源。",
+  );
+  const failed = logEntries.find((entry) => entry.event === "onebot-message-failed");
+  assert(failed, "处理失败必须留痕，否则又回到静默不回。");
+  assert.equal(failed!.messageType, "private", "要能看出是哪一类消息失败的。");
+  const reason = String(failed!.reason);
+  assert(reason.includes("multimedia.nt.qq.com.cn"), "主机名要留着，不然不知道该找谁。");
+  assert(!reason.includes("rkey"), "直链里的 rkey 不能进日志。");
+  assert(!reason.includes("CAMSsecretkeyvalue"), "凭据片段不能进日志。");
+
+  stop = true;
+  handlers[0]!.onStatus?.("disconnected", "code=1006");
+  await loop;
+}
+
+// 5. 脱敏本身：QQ 号、Bearer、key= 都要被吞掉，长度有上限。
+{
+  const reason = describeHandlerError(new Error("request failed for 123456789: Bearer sk-abcdef, apiKey=deadbeef"));
+  assert(!/\d{6,}/.test(reason), "6 位以上的数字串（QQ 号/群号/消息 id）不进日志。");
+  assert(!reason.includes("sk-abcdef") && !reason.includes("deadbeef"), "凭据不进日志。");
+  assert(reason.length <= 200, "日志行要有长度上限。");
+  assert.equal(describeHandlerError(undefined), "unknown", "不是 Error 也要给个词，不能空着。");
+}
+
+console.log("OneBot 守护循环测试通过：连上不重复连、断开才重连、失败退避重试、关闭码上报、处理失败不断连且脱敏。");

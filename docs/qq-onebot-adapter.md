@@ -178,10 +178,11 @@ OneBot v11 的 `message` 字段是**分段数组**（CQ 码），例如：
 2. **攒批**：按 `bindingId + conversationKey` 缓冲，被 @ 或叫到名字用 `mentionWindowSeconds`（4 秒），
    `all` 档最多 3 秒，其余用 `batchWindowSeconds`（12 秒）；从第一条起最多等 45 秒。
 3. **闸门**（`evaluateGroupChatGate`，纯函数，不花 token，顺序不能改）：
-   `all` → `mention` 档只放 direct/named/topic → 安静时段（只挡非 direct）→ 每日上限 →
-   最短间隔 → direct → named → 话题候选 → `ambientChance` 抽签。
-   只有真实 @（at 段 QQ 是她）与 `all` 档 `mustReply = true`；名字命中、话题候选、抽签
+   静默档（该群在静默期就直接拦，优先级高于 direct）→ `all` → `mention` 档只放 direct/named/topic →
+   安静时段（只挡非 direct）→ 每日上限 → 最短间隔 → direct → named → 话题候选 → `ambientChance` 抽签。
+   只有真实 @（at 段 QQ 是她）与 `all` 档会置 `mustReply = true`；名字命中、话题候选、抽签
    都允许模型沉默，也不绕过安静时段；群规限流、日上限、最短间隔对 direct 同样生效。
+   静默期内一律不放行，`mustReply` 必为 false —— 群里已经说了「别说」，@ 也不能把它顶掉。
 4. **模型决定**：过闸门只是「值得看一眼」。`generateConversationReply` 收
    `transcript`（本轮，带消息 id 与 member）+ `groupBackground`（只看不回）+
    `groupAnchors`（参与过的话题）+ `policy.direct`；一次调用同时返回回复与可选的
@@ -190,6 +191,8 @@ OneBot v11 的 `message` 字段是**分段数组**（CQ 码），例如：
    发言频率由代码的抽签与限流控制，提示词不再要求「大多数轮次沉默」：有贴切的反应、玩笑、观点或追问时可自然参与开放话题，无需被 @；语境助手的 `observing/uncertain` 是听者判断，不是禁止搭话。仍不替其他成员回答、不冒认别人对话，没有合适内容时保持沉默。
 
 未启用语境助手或分析失败时，被 @ 的轮次沿用 `allowSilent: false`。启用且分析成功后，角色可核对原话自行回应或沉默：真实 @ 可能属于引用、示范、教学，不自动当成新命令。
+
+**静默档**（`group-mute.ts`）：群主 / 管理员 / 主人 @ 她或叫到名字说「闭嘴 / 别说话 / 别插嘴 / 先别接 / 安静点」，这个群静默 10 分钟。期间零输出，但消息照常进短期上下文、照常落库（只听不说），@ 她也不解除；主人说「可以说了 / 能开口了 / 别憋着了」或到期后自动恢复。判据是**整句匹配**，不是「句子里出现闭嘴」——「他刚才让我闭嘴」这类转述不能把她静默十分钟。状态按「绑定 + 群」存内存，重启丢失属预期降级。
 
 **语境助手**（`context-assistant.ts` / `group-context-reply.ts`）：角色管理 → 模型设置单独配置，默认关闭。独立模型、Key、温度、输入/输出预算；Key 加密且不借用聊天或记忆助手凭据，地址留空可跟随对话模型。分析器只读本群公开消息、成员代号和关系线索，不收人设全文、Key、私人记忆。底层缓存扩为最近 15 分钟/120 条，普通回复背景仍裁为 5 分钟/40 条/6000 字符；分析背景最多 24000 字符，并再受配置输入预算限制。缓存按绑定和群隔离、进程重启清空。
 
@@ -204,7 +207,7 @@ OneBot v11 的 `message` 字段是**分段数组**（CQ 码），例如：
 参数都在绑定的 `config` 里：`groupChatMode` / `batchWindowSeconds` / `mentionWindowSeconds` /
 `minGapSeconds` / `dailyMax` / `quietStart` / `quietEnd` / `ambientChance` / `groupAliases`。
 默认值见 `GROUP_CHAT_DEFAULTS`（自然档：间隔 90 秒、每天 60 句、无关闲聊 15%、23:30-07:30 安静）。
-回归测试：`yarn test:onebot-group-chat`（闸门与攒批）、`yarn test:onebot-group-context`（上下文与话题）。
+回归测试：`yarn test:onebot-group-chat`（闸门与攒批）、`yarn test:onebot-group-context`（上下文与话题）、`yarn test:group-mute`（静默档判据与时序）。
 
 ### 7.2 表情
 
