@@ -38,6 +38,26 @@ export function toTimeKey(date: Date): string {
 }
 
 /**
+ * 当前时刻是否落在已启用的值班窗口内。
+ *
+ * 手动触发若发生在谷时窗口内，也应占用该窗口状态；否则手动值班因无候选提前返回后，
+ * 定时器仍会误以为窗口尚未跑过，再启动一轮。
+ */
+export function scheduledWindowAt(
+  now: Date,
+  config: BiliDutyConfig,
+): { businessDay: string; windowKey: BiliWindowKey } | null {
+  if (!config.peakValley) return null;
+  const time = toTimeKey(now);
+  for (const key of ["noon", "night"] as const) {
+    if (config[key] && inWindow(time, key)) {
+      return { businessDay: windowDayKey(now, key), windowKey: key };
+    }
+  }
+  return null;
+}
+
+/**
  * 窗口所属的「业务日」。
  *
  * 夜间窗口跨午夜（18:00–09:00），所以当晚 18:30 和次日 02:00 是**同一个夜**。
