@@ -72,7 +72,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: "没有需要修改的字段。" });
   }
 
-  const updated = await prisma.memoryEvent.update({
+  const updated = await prisma.$transaction(async (tx) => {
+    const updated = await tx.memoryEvent.update({
     where: { id: eventId },
     data,
     select: {
@@ -89,8 +90,7 @@ export default defineEventHandler(async (event) => {
       memoryScope: { select: { scopeType: true } },
     },
   });
-
-  await prisma.auditLog.create({
+    await tx.auditLog.create({
     data: {
       actorType: "USER",
       actorId: ownerId,
@@ -107,6 +107,8 @@ export default defineEventHandler(async (event) => {
         changed: Object.keys(data),
       },
     },
+  });
+    return updated;
   });
 
   return {
