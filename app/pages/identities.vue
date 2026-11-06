@@ -381,7 +381,7 @@ onMounted(() => load(1));
     <PageHeader
       eyebrow="角色 / 人际"
       title="她的朋友"
-      description="她认识的人按角色分开记。可以纠正对方是真人还是 AI，也可以单独决定她要不要和这个对象交流。"
+      description="私聊来访、群里见过的人都会记录下来。可以手动标记真人 / AI，并按角色决定她是否与对方交流。"
     >
       <template #actions>
         <button
@@ -498,7 +498,7 @@ onMounted(() => load(1));
         <div class="band-cell">
           <span class="band-k">{{ currentCharacter?.name ?? "她" }}认识的人</span>
           <span class="band-v">{{ stats.total }}<small>个</small></span>
-          <span class="band-f">有过一来一往的都算</span>
+          <span class="band-f">私聊来访或在群里发过言的人都会出现</span>
         </div>
         <div class="band-cell">
           <span class="band-k">聊过两次以上</span>
@@ -517,12 +517,12 @@ onMounted(() => load(1));
         class="empty-block"
       >
         <span class="empty-icon"><el-icon><User /></el-icon></span>
-        <h3>{{ stats.total ? "没有找到这个人" : "还没有朋友" }}</h3>
+        <h3>{{ stats.total ? "没有找到这个人" : "还没遇到人" }}</h3>
         <p v-if="stats.total">
           换个关键词，或者把来源切回「全部」。
         </p>
         <p v-else>
-          有人在 QQ 上私聊她，或者她在群里回了谁，这里就会出现那个人。
+          有人私聊她或在群里发言后，就会出现在这里；即使还没互动，也能先设置身份和交流权限。
         </p>
       </div>
 
@@ -558,7 +558,7 @@ onMounted(() => load(1));
                 {{ platformLabel(friend.platform) }}<span class="sep">·</span>{{ friend.platformUid }}
               </p>
             </div>
-            <span class="pill pill-gray">{{ sourceLabel(friend.firstSource) }}</span>
+            <span class="pill pill-gray">{{ friend.interactionCount > 0 ? sourceLabel(friend.firstSource) : "群里见过" }}</span>
           </div>
 
           <div class="fr-alias">
