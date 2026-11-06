@@ -51,6 +51,12 @@ async function cleanup(): Promise<void> {
       })).map((row) => row.id)
     : [];
 
+  if (characterIds.length) {
+    await prisma.auditLog.deleteMany({ where: { characterId: { in: characterIds } } });
+  }
+  if (createdUserIds.length) {
+    await prisma.auditLog.deleteMany({ where: { actorId: { in: createdUserIds } } });
+  }
   if (scopeIds.length) {
     await prisma.memoryJob.deleteMany({ where: { memoryScopeId: { in: scopeIds } } });
     await prisma.characterJournal.deleteMany({ where: { memoryScopeId: { in: scopeIds } } });
@@ -206,6 +212,11 @@ async function main() {
   assert.equal(diary.revision.kind, "DIARY");
   assert.equal(diary.revision.version, 1);
   assert.equal(diary.revision.revisionType, "USER_EDITED");
+  assert.equal(
+    await prisma.auditLog.count({ where: { actorId: ownerId, characterId, action: "journal.edited", entityType: "JournalRevision", entityId: diary.revision.id } }),
+    1,
+    "人工编辑的版本与审计日志应在同一事务中恰好写入一次",
+  );
 
   // 3. 人工写手账：第 1 版 HANDBOOK，一句引用第 1 版日记
   const handbook = await saveJournalEdit({
@@ -285,6 +296,11 @@ async function main() {
   assert.equal(restored.revision.kind, "DIARY");
   assert.equal(restored.revision.version, 3);
   assert.equal(restored.revision.revisionType, "RESTORED");
+  assert.equal(
+    await prisma.auditLog.count({ where: { actorId: ownerId, characterId, action: "journal.restored", entityType: "JournalRevision", entityId: restored.revision.id } }),
+    1,
+    "恢复版本与审计日志应在同一事务中恰好写入一次",
+  );
   const handbookStill = await prisma.journalRevision.findFirst({
     where: { journalId: diary.revision.journalId, kind: "HANDBOOK" },
     orderBy: { version: "desc" },
