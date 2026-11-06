@@ -246,6 +246,41 @@ async function restoreConfirmationCannotCrossDay() {
   page.finish();
 }
 
+async function monthFilterResetsPaginationAndSelection() {
+  const page = harness();
+  page.set("page", 2);
+  const secondPage = page.take("/api/characters/role-a/journals");
+  assert.equal(secondPage.options?.query?.page, 2);
+  secondPage.resolve({
+    ...listResult("2026-10-20"),
+    page: 2,
+    total: 21,
+    totalPages: 2,
+    hasMore: true,
+  });
+  await flushMicrotasks();
+
+  page.call("selectDay", "2026-10-20");
+  const oldDetail = page.take("/api/characters/role-a/journals/2026-10-20");
+  oldDetail.resolve(detailResult("2026-10-20"));
+  await flushMicrotasks();
+  assert.equal(page.read("selectedDay"), "2026-10-20");
+
+  page.set("month", "2026-11");
+  const filtered = page.take("/api/characters/role-a/journals");
+  assert.equal(filtered.options?.query?.page, 1, "切换月份必须回到第一页");
+  assert.equal(filtered.options?.query?.month, "2026-11");
+  filtered.resolve(listResult(DAY_B));
+  await flushMicrotasks();
+
+  const newDetail = page.take(`/api/characters/role-a/journals/${DAY_B}`);
+  newDetail.resolve(detailResult(DAY_B));
+  await flushMicrotasks();
+  assert.equal(page.read("selectedDay"), DAY_B, "月份过滤后应自动选中该月份最新的一天");
+  assert.equal(page.read<{ dayKey: string }>("detail").dayKey, DAY_B);
+  page.finish();
+}
+
 async function unmountInvalidatesListRequest() {
   const page = harness();
   const pending = page.call("loadList");
