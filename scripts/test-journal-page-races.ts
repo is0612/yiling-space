@@ -183,7 +183,7 @@ async function staleHistoryAfterRoleSwitch() {
   page.set("selectedDay", DAY_A);
   page.set("detailCharacterId", "role-a");
   const oldLoad = page.call("openHistory", "DIARY");
-  const oldRequest = page.take(`/api/characters/role-a/journals/${DAY_A}/revisions?kind=DIARY`);
+  const oldRequest = page.take(`/api/characters/role-a/journals/${DAY_A}/revisions`);
   page.set("id", "role-b");
   const newList = page.take("/api/characters/role-b/journals");
   oldRequest.resolve({ items: [revision()] });
@@ -239,10 +239,10 @@ async function restoreConfirmationCannotCrossDay() {
   page.set("historyTarget", { characterId: "role-a", dayKey: DAY_A, kind: "DIARY" });
   const pending = page.call("restoreRevision", 1);
   await flushMicrotasks();
-  page.set("selectedDay", DAY_B);
+  page.set("historyTarget", { characterId: "role-a", dayKey: DAY_B, kind: "DIARY" });
   page.confirm();
   await pending;
-  assert.equal(page.requests.length, 0, "restore confirmation must be invalidated after changing day");
+  assert.equal(page.requests.length, 0, "restore confirmation must be invalidated after the history target changes");
   page.finish();
 }
 
