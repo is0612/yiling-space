@@ -45,6 +45,23 @@ enum ExternalIdentityStatus {
   REVOKED
 }
 
+enum ExternalIdentityKind {
+  UNKNOWN
+  HUMAN
+  AI
+}
+
+enum ExternalIdentityKindSource {
+  AUTO
+  MANUAL
+}
+
+enum FriendChatPolicy {
+  DEFAULT
+  ALLOW
+  BLOCK
+}
+
 enum ConversationStatus {
   ACTIVE
   ARCHIVED
@@ -263,6 +280,10 @@ model ExternalIdentity {
   linkedUserId String?                @db.Uuid
   connectionId String?                @db.Uuid
   status       ExternalIdentityStatus @default(UNVERIFIED)
+  /// 对方是真人、AI，还是暂时无法判断。与账号验证状态 status 完全独立。
+  kind         ExternalIdentityKind @default(UNKNOWN)
+  /// 手动纠正的分类优先；未来自动识别只能更新 AUTO，不能覆盖 MANUAL。
+  kindSource   ExternalIdentityKindSource @default(AUTO)
   verifiedAt   DateTime?              @db.Timestamptz(6)
   metadata     Json?                  @db.JsonB
   createdAt    DateTime               @default(now()) @db.Timestamptz(6)
@@ -301,6 +322,8 @@ model MemoryScope {
   ///
   /// 上限由 `server/utils/friend-aliases.ts` 归一化时卡住，写入口径只此一处。
   aliases            String[]           @default([])
+  /// DEFAULT：真人/未知正常，AI 默认不接话；ALLOW / BLOCK 是这个角色自己的明确选择。
+  friendChatPolicy   FriendChatPolicy   @default(DEFAULT)
   createdAt          DateTime           @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime           @updatedAt @db.Timestamptz(6)
   character          Character          @relation(fields: [characterId], references: [id], onDelete: Restrict)
@@ -331,6 +354,8 @@ model Conversation {
   title                  String?                  @db.VarChar(255)
   status                 ConversationStatus       @default(ACTIVE)
   metadata               Json?                    @db.JsonB
+  /// 连续只包含 AI 发言的群聊轮数；真人参与时清零，达到阈值后暂停 AI-to-AI 对话。
+  consecutiveAiRounds    Int                      @default(0)
   lastMessageAt          DateTime?                @db.Timestamptz(6)
   createdAt              DateTime                 @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime                 @updatedAt @db.Timestamptz(6)
