@@ -1620,23 +1620,68 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     // 对群消息总是解析（哪怕正文为空），remember 仍只记有正文的。
     const receivedAt = Date.now();
     const facts = isGroupMessage ? factsOf(event, receivedAt) : null;
-    // 先进短期上下文：哪怕这条后面被闸门丢掉，它也是下一轮的背景。
+    let speakerKind: "UNKNOWN" | "HUMAN" | "AI" = isOwnerEvent ? "HUMAN" : "UNKNOWN";
+    let speakerPolicy: "DEFAULT" | "ALLOW" | "BLOCK" = isOwnerEvent ? "ALLOW" : "DEFAULT";
+
+    if (isGroupMessage && event.userId.trim()) {
+      const identity = await getPrisma().externalIdentity.findUnique({
+        where: {
+          platform_platformUid: {
+            platform: ONEBOT_PLATFORM,
+            platformUid: event.userId.trim(),
+          },
+        },
+        select: {
+          kind: true,
+          memoryScopes: {
+            where: { characterId: binding.characterId, scopeType: "EXTERNAL_IDENTITY" },
+            take: 1,
+            select: { friendChatPolicy: true },
+          },
+        },
+      });
+      if (!isOwnerEvent && identity) {
+        speakerKind = identity.kind;
+        speakerPolicy = identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT";
+      }
+
+      // 只统计群里发生了什么；屏蔽只影响她看见的语境和是否回复。
+      if (event.content) {
+        groupActivity.record({
+          bindingId: binding.id,
+          characterId: binding.characterId,
+          conversationId: event.conversationKey,
+          groupId: event.groupId,
+          at: receivedAt,
+          speaker: event.displayName,
+          text: event.content,
+        });
+      }
+
+      // 真人重新参与就解除 bot-to-bot 连聊保护。放进同一会话队列，保证先于这一条消息的 flush。
+      if (speakerKind === "HUMAN") {
+        void enqueueConversation(contextKey, async () => {
+          await getPrisma().conversation.updateMany({
+            where: {
+              channelBindingId: binding.id,
+              externalConversationId: event.conversationKey,
+            },
+            data: { consecutiveAiRounds: 0 },
+          });
+        }).catch((error) => {
+          console.error("[onebot] 重置连续 AI 对话计数失败：", error instanceof Error ? error.message : String(error));
+        });
+      }
+
+      // 先在入口过滤：被禁止的 AI 连短期群聊上下文也不污染，更不会进入提示词背景。
+      if (shouldBlockFriendSpeaker(speakerKind, speakerPolicy)) {
+        return { status: "ignored", reason: "friend_policy_blocked" };
+      }
+    }
+
+    // 先进短期上下文：只记允许参与的发言；后续被闸门拒绝的消息仍可作为背景。
     if (isGroupMessage && event.content && facts) {
       groupContext.remember(contextKey, facts);
-      /**
-       * 同时记进群活跃度。放在这里（而不是 `flushGroupRound`）是因为 mention 档下
-       * 没被叫到的消息根本进不了攒批 —— 那些消息恰恰是「群里在聊、只是没叫她」的证据，
-       * 漏掉它们，一个热闹的群会被判成冷场。
-       */
-      groupActivity.record({
-        bindingId: binding.id,
-        characterId: binding.characterId,
-        conversationId: event.conversationKey,
-        groupId: event.groupId,
-        at: receivedAt,
-        speaker: event.displayName,
-        text: event.content,
-      });
     }
 
     // 只计算一次话题候选，避免主人上下文旁路和 mention 闸门使用不同判断。
