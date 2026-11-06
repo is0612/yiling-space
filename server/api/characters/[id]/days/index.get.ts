@@ -50,14 +50,34 @@ export default defineEventHandler(async (event) => {
     const counts = new Map<string, number>();
     for (const item of matched) counts.set(item.dayKey, (counts.get(item.dayKey) ?? 0) + 1);
     const dayKeys = [...counts.keys()].sort((left, right) => right.localeCompare(left));
+    const progressWhere = {
+      memoryScope: { is: { characterId } },
+      dayKey: { in: dayKeys },
+    };
+    const [progressRows, draftRows] = dayKeys.length
+      ? await Promise.all([
+        prisma.memoryEventDay.groupBy({
+          by: ["dayKey"],
+          where: progressWhere,
+          _max: { extractedAt: true },
+        }),
+        prisma.memoryEventDay.findMany({
+          where: { ...progressWhere, state: "DRAFT" },
+          select: { dayKey: true },
+        }),
+      ])
+      : [[], []];
+    const progressByDay = new Map(progressRows.map((row) => [row.dayKey, row._max.extractedAt]));
+    const draftDays = new Set(draftRows.map((row) => row.dayKey));
     const rows = dayKeys.map((dayKey) => ({
       dayKey,
-      state: "DRAFT" as const,
+      // 搜索结果也展示真实进度；没有进度行时保持 null，不把已完成日期误标成「还在记」。
+      state: !progressByDay.has(dayKey) ? null : draftDays.has(dayKey) ? "DRAFT" as const : "FINAL" as const,
       // 这里的条数是「命中的条数」，不是当天全部条数。
       eventCount: counts.get(dayKey) ?? 0,
-      extractedAt: null,
+      extractedAt: progressByDay.get(dayKey)?.toISOString() ?? null,
     }));
-    return { today, days: rows, query };
+    return { today, timeZone, days: rows, query };
   }
 
   /**
@@ -104,5 +124,5 @@ export default defineEventHandler(async (event) => {
     rows.unshift({ dayKey: today, state: "DRAFT", eventCount: 0, extractedAt: null });
   }
 
-  return { today, days: rows, query: "" };
+  return { today, timeZone, days: rows, query: "" };
 });
