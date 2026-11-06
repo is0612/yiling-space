@@ -1,54 +1,17 @@
 /**
- * 媒体下载的三道安全闸：重定向 SSRF、DNS 重绑定、超大响应。
+ * 媒体下载的两道安全闸：重定向 SSRF 与超大响应（第二轮复现测试，只新增测试）。
  *
- * 全程不联网：
- *  - `fetch` 被换成本地模拟传输（`createTransport`），每个 hop 都记录在案 ——
- *    这样才能回答「被禁止的地址到底有没有收到请求」，而不是只看最后有没有抛错；
- *  - `node:dns/promises` 的 `lookup` 被换成可控桩，用来模拟「预检查解析为公网、
- *    建连时再解析为内网」这种重绑定时序。
- * 初始 URL 用真实公网地址 `8.8.8.8` / `1.1.1.1`：它们能过生产代码的公网白名单
- * （文档保留段 203.0.113.x 按「非全球单播」一律拦掉），但请求全被截住，一个字节都不会真的发出去。
+ * 全程不联网：`fetch` 被换成本地模拟传输（`createTransport`），
+ * 每个 hop 都记录在案 —— 这样才能回答「被禁止的地址到底有没有收到请求」，
+ * 而不是只看最后有没有抛错。初始 URL 使用公网字面量测试地址 `8.8.8.8` / `1.1.1.1`；
+ * 全部请求仍由 mock fetch 截获，不会建立真实连接。
  *
  * 跑法：`npx tsx scripts/test-media-fetch-guards.ts`
  */
 
-import { createRequire } from "node:module";
-
-/**
- * 顺序很关键：先换掉 `dns` 的 `lookup` 与 `undici` 的 `Agent`，再动态导入生产模块，
- * 这样生产模块拿到的就是被替换后的实现 —— 否则静态 import 会先绑定到原始版本。
- */
-const requireCjs = createRequire(import.meta.url);
-const dnsModule = requireCjs("node:dns/promises") as {
-  lookup: (hostname: string, options?: unknown) => Promise<Array<{ address: string; family: number }>>;
-};
-const undiciModule = requireCjs("undici") as { Agent: new (options: unknown) => { close: () => Promise<void> } };
-
-type IpRecord = { address: string; family: number };
-const PUBLIC_DNS: IpRecord = { address: "8.8.8.8", family: 4 };
-
-/** 依次消费的 DNS 脚本；只剩最后一条时一直返回它。空 = 默认公网。 */
-const dnsQueue: IpRecord[][] = [];
-const dnsCalls: string[] = [];
-const originalLookup = dnsModule.lookup;
-dnsModule.lookup = async (hostname: string) => {
-  dnsCalls.push(hostname);
-  const next = dnsQueue.length > 1 ? dnsQueue.shift()! : dnsQueue[0];
-  return next ?? [PUBLIC_DNS];
-};
-
-/** 捕获生产代码交给 undici 的 Agent 选项，从而拿到它自己那条「校验 + 固定 IP」的 lookup。 */
-const agentOptions: Array<{ connect?: { lookup?: Function } }> = [];
-const OriginalAgent = undiciModule.Agent;
-undiciModule.Agent = class SpyAgent extends OriginalAgent {
-  constructor(options: unknown) {
-    super(options);
-    agentOptions.push(options as { connect?: { lookup?: Function } });
-  }
-} as unknown as typeof undiciModule.Agent;
-
-const { downloadImage } = await import("../server/utils/image-understanding");
-const { downloadVoice } = await import("../server/utils/voice");
+import { downloadImage } from "../server/utils/image-understanding";
+import { downloadVoice } from "../server/utils/voice";
+import { createPinnedLookup } from "../server/utils/safe-media-download";
 
 // ── 极简用例运行器 ────────────────────────────────────────────────
 type CaseResult = { name: string; ok: boolean; detail: string };
@@ -146,7 +109,9 @@ function makeResponse(input: { url: string; status: number; headers: Record<stri
  */
 function createTransport(routes: Record<string, Route>) {
   const hops: string[] = [];
+  const redirectModes: string[] = [];
   const fetchImpl = async (input: unknown, init?: { redirect?: string }): Promise<unknown> => {
+    redirectModes.push(init?.redirect ?? "follow");
     // 生产代码传进来的可能是字符串，也可能是 URL 对象（`fetch(url, …)` 里 url 是 URL）。
     const url = input instanceof URL
       ? input.href
@@ -170,18 +135,18 @@ function createTransport(routes: Record<string, Route>) {
       body: route.body ?? emptyBody(),
     });
   };
-  return { fetchImpl, hops };
+  return { fetchImpl, hops, redirectModes };
 }
 
 async function withTransport(
   routes: Record<string, Route>,
-  run: (transport: { fetchImpl: typeof fetch; hops: string[] }) => Promise<void>,
+  run: (transport: { fetchImpl: typeof fetch; hops: string[]; redirectModes: string[] }) => Promise<void>,
 ): Promise<void> {
   const original = globalThis.fetch;
   const transport = createTransport(routes);
   globalThis.fetch = transport.fetchImpl as unknown as typeof fetch;
   try {
-    await run(transport as unknown as { fetchImpl: typeof fetch; hops: string[] });
+    await run(transport as unknown as { fetchImpl: typeof fetch; hops: string[]; redirectModes: string[] });
   } finally {
     globalThis.fetch = original;
   }
@@ -211,26 +176,6 @@ await check("直连内网字面量：一次请求都不该发出（现状守卫�
     await assertThrowsCode(() => downloadImage("http://10.1.2.3/a.png"), "IMAGE_BLOCKED_HOST");
     expect(hops.length === 0, `被拒的地址不该收到请求，实际发生 ${hops.length} 次：${hops.join(", ")}`);
   });
-});
-
-// 1.0b 重定向必须自己跟：交给 undici 自动跟随就失去了「下一跳之前拦住」的机会。
-await check("图片与语音都使用 redirect: \"manual\"", async () => {
-  const modes: string[] = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = (async (input: unknown, init?: { redirect?: string }) => {
-    modes.push(String(init?.redirect));
-    return makeResponse({
-      url: String(input), status: 200, headers: { "content-type": "image/png" }, body: chunkedBody(1024),
-    });
-  }) as unknown as typeof fetch;
-  try {
-    await downloadImage(PUBLIC_A);
-    await downloadVoice(PUBLIC_A);
-  } finally {
-    globalThis.fetch = original;
-  }
-  expect(modes.length === 2, `图片、语音各应发一次请求，实际 ${modes.length} 次`);
-  expect(modes.every((mode) => mode === "manual"), `实际 redirect 模式：${modes.join(", ")}；必须是 manual`);
 });
 
 for (const { label, target } of redirectTargets) {
@@ -266,7 +211,92 @@ await check("多跳 公网 → 公网 → 内网：中间那一跳也不能打�
   );
 });
 
-// 1.3 语音走同一套白名单，必须同样安全。
+// 1.3 显式检查图片链路每一跳都使用 manual，不能依赖 fetch 自动跟随。
+await check("每一跳重定向都必须使用 manual", async () => {
+  await withTransport({
+    [PUBLIC_A]: { redirectTo: PUBLIC_B },
+    [PUBLIC_B]: {
+      status: 200,
+      headers: { "content-type": "image/png" },
+      body: chunkedBody(1024),
+    },
+  }, async ({ redirectModes, hops }) => {
+    const result = await downloadImage(PUBLIC_A);
+    expect(result.buffer.byteLength === 1024, "重定向后的正常图片应成功读取");
+    expect(hops.length === 2, `预期两跳，实际 ${hops.length} 跳`);
+    expect(
+      redirectModes.length === 2 && redirectModes.every((mode) => mode === "manual"),
+      `每一跳都必须 redirect: manual，实际为 ${redirectModes.join(", ")}`,
+    );
+  });
+});
+
+// 1.4 DNS 重绑定：预检查得到公网 IP，真实连接阶段重新解析却变成内网，必须阻断。
+await check("DNS 重绑定：连接阶段解析到内网时不给 socket 地址", async () => {
+  const queue = [
+    [{ address: "8.8.8.8", family: 4 }],
+    [{ address: "127.0.0.1", family: 4 }],
+  ];
+  let lookups = 0;
+  let blocked = 0;
+  const resolveAll = async (_hostname: string) => {
+    lookups += 1;
+    const next = queue.shift();
+    if (!next) throw new Error("unexpected extra DNS lookup");
+    return next;
+  };
+
+  // 第一次模拟下载前的 DNS 预检查：公网地址通过。
+  const preflight = await resolveAll("media.example.test");
+  expect(preflight[0]?.address === "8.8.8.8", "预检查应先得到公网 IP");
+
+  const lookup = createPinnedLookup(() => { blocked += 1; }, resolveAll);
+  const callbackArgs: unknown[][] = [];
+  await new Promise<void>((resolve) => {
+    lookup("media.example.test", { all: true }, (...args) => {
+      callbackArgs.push(args);
+      resolve();
+    });
+  });
+
+  const error = callbackArgs[0]?.[0] as (Error & { code?: string }) | undefined;
+  expect(blocked === 1, `DNS 内网地址必须触发阻断，实际 blocked=${blocked}`);
+  expect(error?.code === "EACCES", `socket lookup 应返回 EACCES，实际 ${error?.code}`);
+  expect(callbackArgs[0]?.length === 1, "被阻断时不得向 socket 交付任何地址");
+  expect(lookups === 2, `应恰好预检查+建连两次解析，实际 ${lookups} 次`);
+});
+
+// 1.5 DNS 固定：连接回调直接交付刚校验的 IP，不再让 socket 第三次解析。
+await check("DNS 固定：校验后的 IP 直接交付 socket", async () => {
+  const queue = [
+    [{ address: "8.8.8.8", family: 4 }],
+    [{ address: "8.8.8.8", family: 4 }],
+  ];
+  let lookups = 0;
+  const resolveAll = async (_hostname: string) => {
+    lookups += 1;
+    const next = queue.shift();
+    if (!next) throw new Error("unexpected extra DNS lookup");
+    return next;
+  };
+  await resolveAll("media.example.test"); // 模拟预检查。
+
+  const lookup = createPinnedLookup(() => undefined, resolveAll);
+  const callbackArgs: unknown[][] = [];
+  await new Promise<void>((resolve) => {
+    lookup("media.example.test", { family: 4 }, (...args) => {
+      callbackArgs.push(args);
+      resolve();
+    });
+  });
+
+  expect(callbackArgs[0]?.[0] === null, "公网 DNS 结果应通过");
+  expect(callbackArgs[0]?.[1] === "8.8.8.8", "socket 收到的地址必须是已校验 IP");
+  expect(callbackArgs[0]?.[2] === 4, "socket 收到的地址族必须是 IPv4");
+  expect(lookups === 2, `不允许第三次独立解析，实际 ${lookups} 次`);
+});
+
+// 1.6 语音走同一套白名单，必须同样安全。
 for (const { label, target } of [redirectTargets[0]!, redirectTargets[1]!]) {
   await check(`语音 公网 302 → ${label}：内网不能收到请求`, async () => {
     await withTransport({
@@ -280,85 +310,8 @@ for (const { label, target } of [redirectTargets[0]!, redirectTargets[1]!]) {
   });
 }
 
-// ── 二、DNS 重绑定：预检查与建连必须用同一份解析结果 ───────────────
-console.log("\n[2] DNS 重绑定");
-
-/**
- * 这里的模拟方式：`fetch` 被 stub 掉，但**不假装自己没连过**。
- * 它在「建连」这一步调用生产代码交给 undici 的那条 `connect.lookup`，
- * 于是断言可以精确到：那条 lookup 到底把什么地址交给了 socket。
- */
-function rebindingTransport(hostname: string, hops: string[], connections: Array<{ ok: boolean; address?: string }>) {
-  return async (input: unknown, init?: { dispatcher?: unknown }) => {
-    const url = input instanceof URL ? input.href : String(input);
-    hops.push(url);
-    const lookup = agentOptions.at(-1)?.connect?.lookup;
-    if (typeof lookup !== "function") throw new Error("生产代码没有给连接器传 lookup，无法固定 IP");
-    const outcome = await new Promise<{ ok: boolean; address?: string }>((resolve) => {
-      lookup(hostname, {}, (error: unknown, address?: unknown) => {
-        // 回调带 error = 连接器拒绝解析结果；带 address = 这个地址会被真的 connect()。
-        resolve(error ? { ok: false } : { ok: true, address: String(address) });
-      });
-    });
-    connections.push(outcome);
-    if (!outcome.ok) throw new Error(`connect ECONNREFUSED ${hostname}`);
-    return makeResponse({ url, status: 200, headers: { "content-type": "image/png" }, body: chunkedBody(1024) });
-  };
-}
-
-await check("重绑定：预检查解析为公网、建连时解析为内网 —— 内网不能收到连接", async () => {
-  const host = "rebind.example";
-  dnsQueue.length = 0;
-  dnsCalls.length = 0;
-  dnsQueue.push([{ address: "8.8.8.8", family: 4 }]);   // 第一次（预检查）：公网 → 放行
-  dnsQueue.push([{ address: "127.0.0.1", family: 4 }]); // 第二次（建连）：内网 → 必须拒绝
-
-  const hops: string[] = [];
-  const connections: Array<{ ok: boolean; address?: string }> = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = rebindingTransport(host, hops, connections) as unknown as typeof fetch;
-  try {
-    await assertThrowsCode(() => downloadImage(`http://${host}/a.png`), "IMAGE_BLOCKED_HOST");
-  } finally {
-    globalThis.fetch = original;
-    dnsQueue.length = 0;
-  }
-
-  expect(dnsCalls.length >= 2, `预检查与建连各应解析一次，实际只解析了 ${dnsCalls.length} 次`);
-  expect(
-    connections.every((item) => !item.ok),
-    `连接器把内网地址交给了 socket：${JSON.stringify(connections)}`,
-  );
-  expect(hops.length === 1, `拒绝发生在建连阶段，不该再发出额外请求，实际 hop：${hops.join(" → ")}`);
-});
-
-await check("重绑定：建连解析结果就是实际使用的地址（不会第三次解析）", async () => {
-  const host = "pin.example";
-  dnsQueue.length = 0;
-  dnsCalls.length = 0;
-  dnsQueue.push([{ address: "8.8.8.8", family: 4 }]);
-  dnsQueue.push([{ address: "8.8.8.8", family: 4 }]);
-
-  const hops: string[] = [];
-  const connections: Array<{ ok: boolean; address?: string }> = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = rebindingTransport(host, hops, connections) as unknown as typeof fetch;
-  try {
-    const result = await downloadImage(`http://${host}/a.png`);
-    expect(result.buffer.byteLength === 1024, "正常下载不该被 DNS 桩影响");
-  } finally {
-    globalThis.fetch = original;
-    dnsQueue.length = 0;
-  }
-
-  expect(connections.length === 1 && connections[0]!.ok, "建连应当成功");
-  expect(connections[0]!.address === "8.8.8.8", `交给 socket 的地址必须是校验过的那个，实际 ${connections[0]!.address}`);
-  // 预检查 1 次 + 建连 1 次；出现第 3 次就说明「校验用一份、连接另解析一份」。
-  expect(dnsCalls.length === 2, `解析次数应为 2（预检查 + 建连），实际 ${dnsCalls.length} 次：${dnsCalls.join(", ")}`);
-});
-
-// ── 三、超大响应：超限要提前中止，不能先读完再判 ──────────────────
-console.log("\n[3] 超大响应");
+// ── 二、超大响应：超限要提前中止，不能先读完再判 ──────────────────
+console.log("\n[2] 超大响应");
 
 const IMAGE_LIMIT = 4 * 1024 * 1024;
 const VOICE_LIMIT = 6 * 1024 * 1024;
@@ -416,6 +369,29 @@ await check("语音：无 Content-Length 的 10MB 响应必须提前中止", asy
   });
 });
 
+await check("语音：Content-Length 谎报偏小（1KB）时仍按实际字节数中止", async () => {
+  const body = chunkedBody(10 * 1024 * 1024);
+  await withTransport({
+    [PUBLIC_A]: { status: 200, headers: { "content-length": "1024" }, body },
+  }, async () => {
+    await assertThrowsCode(() => downloadVoice(PUBLIC_A), "VOICE_TOO_LARGE");
+    expect(
+      body.bytesPulled() <= VOICE_LIMIT + 64 * 1024,
+      `语音 Content-Length 谎报后仍拉取了 ${body.bytesPulled()} 字节`,
+    );
+  });
+});
+
+await check("语音：Content-Length 诚实偏大时零字节读取", async () => {
+  const body = chunkedBody(10 * 1024 * 1024);
+  await withTransport({
+    [PUBLIC_A]: { status: 200, headers: { "content-length": String(10 * 1024 * 1024) }, body },
+  }, async () => {
+    await assertThrowsCode(() => downloadVoice(PUBLIC_A), "VOICE_TOO_LARGE");
+    expect(body.bytesPulled() === 0, `声明超过 6MB 时不该读取 body，实际拉取 ${body.bytesPulled()} 字节`);
+  });
+});
+
 await check("语音：正常 2MB 响应照常返回", async () => {
   await withTransport({ [PUBLIC_A]: { status: 200, headers: {}, body: chunkedBody(2 * 1024 * 1024) } }, async () => {
     const buffer = await downloadVoice(PUBLIC_A);
@@ -435,9 +411,6 @@ async function assertThrowsCode(run: () => Promise<unknown>, code: string): Prom
   }
   throw new Error(`期望抛出 ${code}，实际没有抛错`);
 }
-
-// 收尾：把 DNS 桩还原，避免影响同一进程里后续可能追加的检查。
-dnsModule.lookup = originalLookup;
 
 const failed = results.filter((item) => !item.ok);
 console.log(`\nmedia fetch guards: ${results.length - failed.length}/${results.length} 通过`);

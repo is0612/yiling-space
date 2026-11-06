@@ -311,16 +311,22 @@ export async function describeImages(
  * 用游标而不是从头 indexOf：描述文本里本身可能包含 `[图片]` 这几个字，
  * 从头找会把后一段又替换一遍，最后得到嵌套的括号。
  */
-export function applyImageDescriptions(content: string, descriptions: Array<string | null>): string {
+export function applyImageDescriptions(content: string, descriptions: Array<string | null | undefined>): string {
   if (!descriptions.length || !content.includes("[图片]")) return content;
   let text = content;
   let cursor = 0;
   for (const description of descriptions) {
-    const value = description?.trim();
-    if (!value) continue;
+    // 每个结果都消费一个原始图片占位符。undefined 表示因本轮识别上限未处理，
+    // 保留裸 [图片]；null 表示尝试过但无法读取，必须明确标记。
     const index = text.indexOf("[图片]", cursor);
     if (index < 0) break;
-    const replacement = `[图片：${value}]`;
+    if (description === undefined) {
+      cursor = index + "[图片]".length;
+      continue;
+    }
+
+    const value = description?.trim();
+    const replacement = value ? `[图片：${value}]` : "[图片：无法读取]";
     text = text.slice(0, index) + replacement + text.slice(index + "[图片]".length);
     cursor = index + replacement.length;
   }

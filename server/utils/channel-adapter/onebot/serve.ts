@@ -1558,24 +1558,32 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       });
     }
 
+    // 只计算一次话题候选，避免主人上下文旁路和 mention 闸门使用不同判断。
+    const topicCandidate = isGroupMessage && groupChatMode === "mention"
+      && groupContext.topicCandidate(contextKey, facts ? [facts] : []);
+    // 主人在 mention 档的普通发言只进入攒批，供 flush 在不回复时保存为 context；
+    // 它不因此获得公告、空间或 B 站指令的免 @ 权限。
+    const ownerContextOnly = isGroupMessage && groupChatMode === "mention"
+      && isOwnerEvent && !direct && !named && !topicCandidate;
+
     // 「仅 @ 时回复」是对整个群聊的开关，指令类消息也受它约束（保持老行为）。
-    // 名字命中与已参与话题算「可以看一眼」，交给后面的闸门与模型判断。
+    // 主人普通发言是唯一例外：先进攒批，后续闸门仍决定不回复、只落库。
     if (isGroupMessage && groupChatMode === "mention") {
-      if (!direct && !named && !groupContext.topicCandidate(contextKey, facts ? [facts] : [])) {
+      if (!direct && !named && !topicCandidate && !isOwnerEvent) {
         return { status: "ignored", reason: "not_mentioned" };
       }
     }
 
     if (!event.content) return { status: "ignored", reason: "missing_fields" };
 
-    // 拟稿请求必须先 @ 她，否则管理员在群里正常聊到「群公告」也会被当成指令。
-    if (canManageAnnouncement) {
+    // 普通主人上下文不能借 mention 旁路触发群公告指令。
+    if (!ownerContextOnly && canManageAnnouncement) {
       const request = parseAnnouncementRequest(event.content);
       if (request) return handleAnnouncementDraft(record, event, binding, request.topic, sendReply);
     }
 
     // 空间指令放在闸门之后、攒批之前：它们是「一件事」，不该被当成一轮群聊去接话。
-    if (canUseQzone) {
+    if (!ownerContextOnly && canUseQzone) {
       const postRequest = parseQzonePostRequest(event.content);
       if (postRequest) return handleQzonePostDraft(record, event, binding, postRequest.topic, sendReply);
       const browseRequest = parseQzoneBrowseRequest(event.content);
@@ -1589,7 +1597,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     }
 
     // B站 指令只认主人：群友发同一句话直接忽略，不进入普通聊天，避免她答应别人。
-    if (binding.groupBiliRunEnabled && event.messageType === "group" && isBiliRunCommand(event.content)) {
+    if (!ownerContextOnly && binding.groupBiliRunEnabled && event.messageType === "group" && isBiliRunCommand(event.content)) {
       if (!record.ownerQq || event.userId !== record.ownerQq) {
         return { status: "ignored", reason: "bili_run_not_owner" };
       }
@@ -1602,7 +1610,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       groupChatBuffer.push(
         contextKey,
         // 群消息到这里 facts 必已解析（上面 isGroupMessage 分支统一构造）。
-        { event, binding, at: receivedAt, direct, named, isOwner: Boolean(record.ownerQq) && event.userId === record.ownerQq, facts: facts! },
+        { event, binding, at: receivedAt, direct, named, isOwner: isOwnerEvent, facts: facts! },
         groupChatWindowMs(groupChat, direct || named),
       );
       // 带上 poke 标记：日志里「为什么这一轮是 direct」要能看出是被人戳醒的，不是被 @ 的。

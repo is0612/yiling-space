@@ -183,9 +183,23 @@ export async function assertPublicMediaHost(hostname: string): Promise<void> {
   }
 }
 
-function createPinnedLookup(onBlocked: () => void): never {
-  return ((hostname: string, options: { all?: boolean; family?: number }, callback: (...args: unknown[]) => void) => {
-    void lookup(hostname, { all: true, verbatim: true }).then((records) => {
+type ResolveMediaHost = (hostname: string) => Promise<IpRecord[]>;
+type PinnedLookup = (
+  hostname: string,
+  options: { all?: boolean; family?: number },
+  callback: (...args: unknown[]) => void,
+) => void;
+
+export function createPinnedLookup(
+  onBlocked: () => void,
+  resolveAll: ResolveMediaHost = (hostname) => lookup(hostname, { all: true, verbatim: true }),
+): PinnedLookup {
+  return ((
+    hostname: string,
+    options: { all?: boolean; family?: number },
+    callback: (...args: unknown[]) => void,
+  ) => {
+    void resolveAll(hostname).then((records) => {
       if (!records.length || records.some((entry) => !isPublicAddress(entry.address, entry.family))) {
         onBlocked();
         const error = Object.assign(new Error("MEDIA_BLOCKED_HOST"), { code: "EACCES" });
@@ -208,7 +222,7 @@ function createPinnedLookup(onBlocked: () => void): never {
     }).catch((error: unknown) => {
       callback(error instanceof Error ? error : new Error("MEDIA_DNS_FAILED"));
     });
-  }) as never;
+  }) as PinnedLookup;
 }
 
 async function cancelBody(response: Response | undefined): Promise<void> {

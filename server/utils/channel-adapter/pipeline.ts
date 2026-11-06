@@ -44,6 +44,7 @@ import {
 } from "../image-understanding";
 import { CLOSE_FRIEND_LIMIT, listAcquaintances, recordFriendInteraction } from "../friends";
 import { isEmojiBudgetSpent, resolveEmojiFrequency } from "../emoji-frequency";
+import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
@@ -632,24 +633,46 @@ async function attachImageDescriptions(
   if (!settings) return messages;
 
   let remaining = MAX_IMAGES_PER_TURN;
-  const descriptionsByMessage = new Map<string, Array<string | null>>();
+  const descriptionsByMessage = new Map<string, Array<string | null | undefined>>();
   for (const message of messages) {
     if (remaining <= 0) break;
-    const refs = (message.images ?? []).filter((image) => Boolean(image.url));
+    const refs = message.images ?? [];
     if (!refs.length) continue;
-    const batch = refs.slice(0, remaining);
-    remaining -= batch.length;
-    try {
+
+    // 只对有 URL 的媒体发起视觉请求，但保留它们在原始图片数组里的序号。
+    // 不能先 filter 再按结果顺序回填，否则前面的无 URL 图片会让后续描述错位。
+    const targetIndexes: number[] = [];
+    for (let index = 0; index < refs.length && targetIndexes.length < remaining; index += 1) {
+      if (refs[index]?.url) targetIndexes.push(index);
+    }
+    if (!targetIndexes.length) {
+      // 这一条消息里的图片都没有可下载直链：不发起模型请求，但逐个标成无法读取。
       descriptionsByMessage.set(
         message.externalMessageId,
-        await describeImages(batch, settings, {
-          characterId: context.characterId,
-          channelBindingId: context.bindingId,
-        }),
+        refs.map(() => null),
       );
+      continue;
+    }
+
+    const batch = targetIndexes.map((index) => refs[index]!);
+    remaining -= batch.length;
+    let batchDescriptions: Array<string | null>;
+    try {
+      batchDescriptions = await describeImages(batch, settings, {
+        characterId: context.characterId,
+        channelBindingId: context.bindingId,
+      });
     } catch {
       // 看图失败只是少一句描述，`[图片]` 原样保留。
+      batchDescriptions = batch.map(() => null);
     }
+
+    const aligned = alignMediaResults(refs.length, targetIndexes, batchDescriptions, undefined);
+    // 没有直链的图片是明确的读取失败；有直链但本轮额度未覆盖的图片保持原占位符。
+    refs.forEach((image, index) => {
+      if (!image.url) aligned[index] = null;
+    });
+    descriptionsByMessage.set(message.externalMessageId, aligned);
   }
   if (!descriptionsByMessage.size) return messages;
 
@@ -705,25 +728,40 @@ async function attachVoiceTranscripts(
   if (!settings) return messages;
 
   let remaining = MAX_VOICES_PER_TURN;
-  const transcriptsByMessage = new Map<string, Array<string | null>>();
+  const transcriptsByMessage = new Map<string, Array<string | null | undefined>>();
   for (const message of messages) {
     const voices = message.voices ?? [];
     if (!voices.length) continue;
-    const refs = voices.filter((voice) => Boolean(voice.url));
+
+    // 与图片相同：只请求有 URL 的语音，但回填必须使用原始语音数组序号。
+    const targetIndexes = voices
+      .map((voice, index) => (voice.url ? index : -1))
+      .filter((index) => index >= 0);
     // 网关没给直链 = 这条音频根本拿不到，等同于「转了但没转出来」。
-    if (!refs.length) {
+    if (!targetIndexes.length) {
       transcriptsByMessage.set(message.externalMessageId, voices.map(() => null));
       continue;
     }
     if (remaining <= 0) break;
-    const batch = refs.slice(0, remaining);
+
+    const selectedIndexes = targetIndexes.slice(0, remaining);
+    const batch = selectedIndexes.map((index) => voices[index]!);
     remaining -= batch.length;
+
+    let batchTranscripts: Array<string | null>;
     try {
-      transcriptsByMessage.set(message.externalMessageId, await transcribeVoices(batch, settings));
+      batchTranscripts = await transcribeVoices(batch, settings);
     } catch {
       // 整批都炸了就按「一条都没转出来」标记，别让调用方以为这轮没有语音。
-      transcriptsByMessage.set(message.externalMessageId, batch.map(() => null));
+      batchTranscripts = batch.map(() => null);
     }
+
+    const aligned = alignMediaResults(voices.length, selectedIndexes, batchTranscripts, undefined);
+    // 没有直链的语音明确标记为无法转写；超出每轮 ASR 上限的语音保留原占位符。
+    voices.forEach((voice, index) => {
+      if (!voice.url) aligned[index] = null;
+    });
+    transcriptsByMessage.set(message.externalMessageId, aligned);
   }
   if (!transcriptsByMessage.size) return messages;
 
