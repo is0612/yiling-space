@@ -21,6 +21,7 @@ import {
   mentionsCharacterName,
   shouldBlockFriendSpeaker,
   shouldPauseAiOnlyRound,
+  nextConsecutiveAiRounds,
   MAX_CONSECUTIVE_AI_ROUNDS,
   readGroupChatModeOverrides,
   resolveGroupChatSettings,
@@ -368,6 +369,15 @@ assert.equal(isAiOnlyGroupRound(["AI", "AI"]), true);
 assert.equal(isAiOnlyGroupRound(["AI", "UNKNOWN"]), false, "未知身份不冒充已确认 AI。");
 assert.equal(isAiOnlyGroupRound(["AI", "HUMAN"]), false, "真人参与会打断连续 AI 轮次。");
 assert.equal(isAiOnlyGroupRound([]), false, "空批次不能计数。");
+assert.equal(nextConsecutiveAiRounds(2, ["AI"]), 3, "纯 AI 轮次应递增连续计数。");
+assert.equal(nextConsecutiveAiRounds(2, ["AI", "AI"]), 3);
+assert.equal(nextConsecutiveAiRounds(2, ["HUMAN"]), 0, "真人参与应清零连续计数。");
+assert.equal(nextConsecutiveAiRounds(2, ["HUMAN", "AI"]), 0, "真人参与的混合轮次也应清零。");
+assert.equal(nextConsecutiveAiRounds(2, ["UNKNOWN"]), 2, "未知身份不能冒充真人清零。");
+assert.equal(nextConsecutiveAiRounds(2, ["AI", "UNKNOWN"]), 2, "混入未知身份时既不误计 AI，也不清空已有保护。");
+assert.equal(nextConsecutiveAiRounds(2, []), 2, "空轮次不能改变计数。");
+assert.equal(nextConsecutiveAiRounds(-5, ["UNKNOWN"]), 0, "历史异常负数按零处理。");
+assert.equal(nextConsecutiveAiRounds(Number.NaN, ["AI"]), 1, "异常计数按零开始。");
 assert.equal(MAX_CONSECUTIVE_AI_ROUNDS, 3);
 assert.equal(shouldPauseAiOnlyRound(0), false);
 assert.equal(shouldPauseAiOnlyRound(2), false);
