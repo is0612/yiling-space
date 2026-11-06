@@ -6,6 +6,12 @@ import { PrismaClient } from "../src/generated/prisma/client";
 import { loadBiliConnections, BILI_DUTY_DEFAULTS } from "../server/utils/channel-adapter/bili/configure";
 import { acquireBiliDutyLease, BiliDutyLeaseLostError } from "../server/utils/channel-adapter/bili/bili-duty-lease";
 import { runDutyRound } from "../server/utils/channel-adapter/bili/duty-pipeline";
+import {
+  completeBiliDutyWindowRun,
+  failBiliDutyWindowRun,
+  readBiliDutyWindowRunMarks,
+  startBiliDutyWindowRun,
+} from "../server/utils/channel-adapter/bili/bili-duty-window-run";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("缺少 DATABASE_URL，B站 渠道数据库测试无法运行。");
@@ -143,6 +149,89 @@ async function main() {
   assert.equal(await takeoverLease.release(), true, "当前持有者应能正常释放租约。");
   assert.equal(await prisma.biliDutyLease.findUnique({ where: { bindingId } }), null, "释放后租约行应删除。");
 
+  // 0b. 调度窗口尝试与日报分离：没日报的无候选轮次也必须消耗本窗口，不能每分钟重跑。
+  const noonWindow = { businessDay: "2026-11-06", windowKey: "noon" as const };
+  const abandonedWindowLease = await acquireBiliDutyLease(prisma, bindingId);
+  assert(abandonedWindowLease, "测试需要取得窗口尝试的执行锁。");
+  await startBiliDutyWindowRun(prisma, bindingId, noonWindow, abandonedWindowLease.token);
+  assert.deepEqual(
+    await readBiliDutyWindowRunMarks(prisma, bindingId, new Date("2026-11-05T00:00:00Z")),
+    ["2026-11-06:noon"],
+    "窗口一开始就要持久化；即使进程异常中断留下 RUNNING，也不能被每分钟重复触发。",
+  );
+  // 模拟进程结束时没机会写 completed：释放锁但保留 RUNNING 窗口记录。
+  assert.equal(await abandonedWindowLease.release(), true);
+
+  // 新持有者可显式接手该窗口记录；旧 token 不得把新执行者的状态写成完成。
+  const currentWindowLease = await acquireBiliDutyLease(contenderPrisma, bindingId);
+  assert(currentWindowLease, "过期窗口需要由新的锁持有者接管测试。");
+  await startBiliDutyWindowRun(contenderPrisma, bindingId, noonWindow, currentWindowLease.token);
+  assert.equal(
+    await completeBiliDutyWindowRun(prisma, bindingId, noonWindow, abandonedWindowLease.token, null),
+    false,
+    "旧 token 不能把接管后的窗口尝试标记为完成。",
+  );
+  const currentWindowRow = await prisma.biliDutyWindowRun.findUniqueOrThrow({
+    where: {
+      bindingId_businessDay_windowKey: {
+        bindingId,
+        businessDay: noonWindow.businessDay,
+        windowKey: noonWindow.windowKey,
+      },
+    },
+  });
+  assert.equal(currentWindowRow.leaseToken, currentWindowLease.token);
+  assert.equal(currentWindowRow.attemptCount, 2, "显式接管同一窗口时尝试次数必须累加。");
+  assert.equal(
+    await completeBiliDutyWindowRun(prisma, bindingId, noonWindow, currentWindowLease.token, "没有新候选"),
+    true,
+    "无候选是一个已完成的调度结果，应写入窗口状态。",
+  );
+  const completedWindowRow = await prisma.biliDutyWindowRun.findUniqueOrThrow({
+    where: {
+      bindingId_businessDay_windowKey: {
+        bindingId,
+        businessDay: noonWindow.businessDay,
+        windowKey: noonWindow.windowKey,
+      },
+    },
+  });
+  assert.equal(completedWindowRow.status, "COMPLETED");
+  assert.equal(completedWindowRow.lastError, "没有新候选");
+  assert.deepEqual(
+    await readBiliDutyWindowRunMarks(prisma, bindingId, new Date("2026-11-05T00:00:00Z")),
+    ["2026-11-06:noon"],
+    "完成结果即使没有生成日报，也仍要阻止本窗口重复触发。",
+  );
+  assert.equal(await currentWindowLease.release(), true);
+
+  // 异常也要留下窗口尝试，不能因为没生成日报就下一分钟再次执行未知副作用。
+  const nightWindow = { businessDay: "2026-11-06", windowKey: "night" as const };
+  const failedWindowLease = await acquireBiliDutyLease(prisma, bindingId);
+  assert(failedWindowLease);
+  await startBiliDutyWindowRun(prisma, bindingId, nightWindow, failedWindowLease.token);
+  assert.equal(
+    await failBiliDutyWindowRun(prisma, bindingId, nightWindow, failedWindowLease.token, new Error("模拟中断")),
+    true,
+  );
+  const failedWindowRow = await prisma.biliDutyWindowRun.findUniqueOrThrow({
+    where: {
+      bindingId_businessDay_windowKey: {
+        bindingId,
+        businessDay: nightWindow.businessDay,
+        windowKey: nightWindow.windowKey,
+      },
+    },
+  });
+  assert.equal(failedWindowRow.status, "FAILED");
+  assert.equal(failedWindowRow.lastError, "模拟中断");
+  assert.deepEqual(
+    (await readBiliDutyWindowRunMarks(prisma, bindingId, new Date("2026-11-05T00:00:00Z"))).sort(),
+    ["2026-11-06:night", "2026-11-06:noon"],
+    "完成、失败和异常中断都应被调度器识别为已经尝试的窗口。",
+  );
+  assert.equal(await failedWindowLease.release(), true);
+
   // 1. BiliSeenVideo 写入 + 唯一约束幂等（同 binding 同 bvid 第二次 upsert 不新增）
   const seen = await prisma.biliSeenVideo.create({
     data: { bindingId, bvid: "BV1TEST000000001", title: "测试视频", author: "测试UP", result: "picked", reason: "值得" },
@@ -230,6 +319,7 @@ async function main() {
   console.log(`   值班配置解析（覆盖 + 默认）：通过`);
   console.log(`   札记写入 / 查询 / 软删除：通过`);
   console.log("   B站值班数据库锁（并发唯一认领 / 过期接管 / token fencing / 正确释放）：通过");
+  console.log("   B站调度窗口尝试（无日报完成 / 进程中断防重 / token fencing / 异常状态）：通过");
 }
 
 // 清理一律走同一条路径：成功和失败都跑，不再有两套容易漂移的逻辑。
