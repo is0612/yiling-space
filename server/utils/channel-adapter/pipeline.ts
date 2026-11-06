@@ -723,21 +723,35 @@ async function attachVoiceTranscripts(
   for (const message of messages) {
     const voices = message.voices ?? [];
     if (!voices.length) continue;
-    const refs = voices.filter((voice) => Boolean(voice.url));
+
+    // 与图片相同：只请求有 URL 的语音，但回填必须使用原始语音数组序号。
+    const targetIndexes = voices
+      .map((voice, index) => (voice.url ? index : -1))
+      .filter((index) => index >= 0);
     // 网关没给直链 = 这条音频根本拿不到，等同于「转了但没转出来」。
-    if (!refs.length) {
+    if (!targetIndexes.length) {
       transcriptsByMessage.set(message.externalMessageId, voices.map(() => null));
       continue;
     }
     if (remaining <= 0) break;
-    const batch = refs.slice(0, remaining);
+
+    const selectedIndexes = targetIndexes.slice(0, remaining);
+    const batch = selectedIndexes.map((index) => voices[index]!);
     remaining -= batch.length;
+
+    let batchTranscripts: Array<string | null>;
     try {
-      transcriptsByMessage.set(message.externalMessageId, await transcribeVoices(batch, settings));
+      batchTranscripts = await transcribeVoices(batch, settings);
     } catch {
       // 整批都炸了就按「一条都没转出来」标记，别让调用方以为这轮没有语音。
-      transcriptsByMessage.set(message.externalMessageId, batch.map(() => null));
+      batchTranscripts = batch.map(() => null);
     }
+
+    const aligned = Array.from({ length: voices.length }, () => null as string | null);
+    selectedIndexes.forEach((originalIndex, resultIndex) => {
+      aligned[originalIndex] = batchTranscripts[resultIndex] ?? null;
+    });
+    transcriptsByMessage.set(message.externalMessageId, aligned);
   }
   if (!transcriptsByMessage.size) return messages;
 
