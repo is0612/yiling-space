@@ -450,6 +450,8 @@ export type ChannelBatchInput = {
   eventType: string;
   externalConversationId: string;
   messages: ChannelTurnMessage[];
+  /** 原始群成员观察。被身份策略过滤的消息不进入模型/聊天记录，但成员名单仍能看到说话者。 */
+  memberObservations?: ChannelTurnMessage[];
   faceCatalog?: ReadonlyArray<{ id: string; name: string }>;
   stickerCatalog?: ReadonlyArray<StickerCatalogEntry>;
   /** 允许模型说「这轮不插嘴」。被 @ 时传 false —— 点名了还不回比乱回更糟。 */
@@ -788,6 +790,8 @@ async function runChannelTurn(input: {
   eventType: string;
   externalConversationId: string;
   messages: ChannelTurnMessage[];
+  /** 原始群成员观察。被身份策略过滤的内容不落库，只用于更新群成员名单。 */
+  memberObservations?: ChannelTurnMessage[];
   faceCatalog?: ReadonlyArray<{ id: string; name: string }>;
   stickerCatalog?: ReadonlyArray<StickerCatalogEntry>;
   /** 允许模型说「这轮我不插嘴」。只有群聊批处理会传。 */
@@ -1981,7 +1985,7 @@ async function runChannelTurn(input: {
      * 对同一个群里天天见的其他人无从判断。
      */
     if (isGroup) {
-      for (const member of buildGroupMemberDeltas(messages)) {
+      for (const member of buildGroupMemberDeltas(input.memberObservations ?? messages)) {
         await tx.groupMember.upsert({
           where: {
             conversationId_platformUid: { conversationId: conversation.id, platformUid: member.platformUid },
@@ -2229,6 +2233,7 @@ export async function handleChannelBatch(input: ChannelBatchInput): Promise<Chan
     eventType: input.eventType,
     externalConversationId: input.externalConversationId,
     messages: input.messages,
+    ...(input.memberObservations ? { memberObservations: input.memberObservations } : {}),
     ...(input.faceCatalog ? { faceCatalog: input.faceCatalog } : {}),
     ...(input.stickerCatalog?.length ? { stickerCatalog: input.stickerCatalog } : {}),
     ...(input.group ? { group: input.group } : {}),
