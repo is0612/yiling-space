@@ -1212,6 +1212,8 @@ async function runChannelTurn(input: {
     ? await buildGroupActivityContext({
         prisma,
         conversationId: existingConversation.id,
+        characterId: input.characterId,
+        platform: input.platform,
         query: currentMessage,
         timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
         selfQq: input.group.selfQq,
