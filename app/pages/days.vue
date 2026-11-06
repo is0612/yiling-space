@@ -117,12 +117,16 @@ async function saveEdit() {
     ElMessage.warning("标题和详情都不能为空。");
     return;
   }
+  const targetCharacterId = id.value;
+  const targetDayKey = selected.value;
+  if (!targetCharacterId || !targetDayKey) return;
+  const seq = ++editSaveSeq;
   editSaving.value = true;
   try {
-    // URL 落成 string：模板字面量的字面类型会让 Nuxt 路由类型推导爆栈。
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/memory-events/${encodeURIComponent(target.id)}`;
+    // 固定本次编辑的角色与日期，避免等待请求期间切换角色后刷新错页面。
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/memory-events/${encodeURIComponent(target.id)}`;
     const participants = form.value.participants
-      .split(/[、,，\s]+/)
+      .split(/[、,，\\s]+/)
       .map((item) => item.trim())
       .filter(Boolean);
     await $fetch(url, {
@@ -134,20 +138,25 @@ async function saveEdit() {
         participants,
       },
     });
+    if (seq !== editSaveSeq || targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     editOpen.value = false;
-    await loadDetail(selected.value);
+    await loadDetail(targetDayKey, targetCharacterId);
     ElMessage.success("忆泡已更新。");
   } catch (error) {
+    if (seq !== editSaveSeq || targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
       : "保存失败，请检查日志。";
     ElMessage.error(message);
   } finally {
-    editSaving.value = false;
+    if (seq === editSaveSeq) editSaving.value = false;
   }
 }
 
 async function setEventStatus(event: DayEvent, status: "ACTIVE" | "ARCHIVED") {
+  const targetCharacterId = id.value;
+  const targetDayKey = selected.value;
+  if (!targetCharacterId || !targetDayKey) return;
   try {
     if (status === "ARCHIVED") {
       await ElMessageBox.confirm(
@@ -156,13 +165,16 @@ async function setEventStatus(event: DayEvent, status: "ACTIVE" | "ARCHIVED") {
         { confirmButtonText: "隐藏", cancelButtonText: "取消", type: "warning" },
       );
     }
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/memory-events/${encodeURIComponent(event.id)}`;
+    // 确认框打开期间可能切换角色或日期；这种情况下取消旧页面的后续操作。
+    if (targetCharacterId !== id.value || targetDayKey !== selected.value) return;
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/memory-events/${encodeURIComponent(event.id)}`;
     await $fetch(url, { method: "PATCH", body: { status } });
-    await loadDetail(selected.value);
+    if (targetCharacterId !== id.value || targetDayKey !== selected.value) return;
+    await loadDetail(targetDayKey, targetCharacterId);
     ElMessage.success(status === "ARCHIVED" ? "已隐藏，可在「已隐藏」里恢复。" : "已恢复。");
   } catch (error) {
-    // 取消确认框不是错误，别弹红条。
-    if (error === "cancel" || error === "close") return;
+    // 取消确认框或切换页面不是操作失败，不弹红条。
+    if (error === "cancel" || error === "close" || targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
       : "操作失败，请检查日志。";
