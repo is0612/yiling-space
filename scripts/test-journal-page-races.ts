@@ -6,7 +6,7 @@ import ts from "typescript";
 
 /** Run the actual journal.vue script with deferred network and confirmation promises. */
 const sfc = readFileSync(new URL("../app/pages/journal.vue", import.meta.url), "utf8");
-const match = sfc.match(/<script\\b[^>]*>([\\s\\S]*?)<\\/script>/);
+const match = sfc.match(/<script\b[^>]*>([\s\S]*?)<\/script>/);
 assert.ok(match, "journal.vue must contain a script block");
 const source = ts.createSourceFile("journal-page.ts", match[1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const statements = source.statements.filter((node) => !ts.isImportDeclaration(node)
@@ -17,10 +17,10 @@ const names = statements.flatMap((node) => {
   }
   return ts.isFunctionDeclaration(node) && node.name ? [node.name.text] : [];
 });
-const program = `${statements.map((node) => node.getText(source)).join("\\n")}
+const program = `${statements.map((node) => node.getText(source)).join("\n")}
 return { id, ${names.join(", ")} };
 `;
-const compiled = ts.transpileModule(`(function () {\\n${program}\\n})()`, {
+const compiled = ts.transpileModule(`(function () {\n${program}\n})()`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   reportDiagnostics: true,
 });
