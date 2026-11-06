@@ -107,6 +107,14 @@ const WATCH_TIMEOUT_MS = 10 * 60 * 1000;
 const DM_MAX_CHARS = 480;
 /** 评论文本上限（CLI 没有硬限，但像真人随口说一句）。 */
 const COMMENT_MAX_CHARS = 120;
+
+/**
+ * 普通值班流评论是公开内容：必须在最终长度截断前复用公开脱敏闸。
+ * 与动态、主人投稿评论走同一个规则；脱敏后为空时调用方不得执行 CLI 写操作。
+ */
+export function preparePublicComment(text: string): string {
+  return sanitizePublicText(text).slice(0, COMMENT_MAX_CHARS);
+}
 /**
  * 收藏每天最多几条。CLI 只限了 5 秒/次、60 次/小时，管不住「一天收三十个视频」——
  * 收藏是「我想留着」，收了三十个等于没收藏。
@@ -541,8 +549,14 @@ async function deliverComment(
   bvid: string,
   text: string,
 ): Promise<DeliveryOutcome> {
-  const trimmed = text.trim().slice(0, COMMENT_MAX_CHARS);
-  if (!trimmed) return { sent: false, fatal: false };
+  const trimmed = preparePublicComment(text);
+  if (!trimmed) {
+    return {
+      sent: false,
+      fatal: false,
+      ...(text.trim() ? { note: `评论 ${bvid} 经公开发布脱敏后为空，已跳过。` } : {}),
+    };
+  }
 
   const args = ["comment", "post", bvid];
   const outcome = await withTempText(trimmed, async (path) => {
