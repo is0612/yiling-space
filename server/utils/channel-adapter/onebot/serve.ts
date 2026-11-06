@@ -1288,10 +1288,27 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     const originalItems = items;
     const binding = items[0]!.binding;
     const groupEvent = items[0]!.event;
+    const contextKey = `${binding.id}:${groupEvent.conversationKey}`;
     const prisma = getPrisma();
+    const originalIds = originalItems.map((item) => item.event.messageId);
+    const backgroundLines = groupContext.background(contextKey, originalIds);
+    const analysisBackgroundLines = groupContext.background(contextKey, originalIds, {
+      windowMs: 15 * 60_000,
+      maxMessages: 120,
+      maxChars: 24_000,
+    });
+    // 重新检查缓冲前已进入短期上下文的历史发言：用户可能刚刚把某条鱼改成「禁止交流」。
+    const contextUidByMessageId = new Map<string, string>();
+    for (const line of [...backgroundLines, ...analysisBackgroundLines]) {
+      const uid = groupContext.senderOf(contextKey, line.id, 15 * 60_000);
+      if (uid) contextUidByMessageId.set(line.id, uid);
+    }
 
     // 冲模型之前按平台账号身份过滤。身份是全局属性，交流权限从当前角色的关系范围读取。
-    const authorUids = [...new Set(originalItems.map((item) => item.event.userId.trim()).filter(Boolean))];
+    const authorUids = [...new Set([
+      ...originalItems.map((item) => item.event.userId.trim()),
+      ...contextUidByMessageId.values(),
+    ].filter(Boolean))];
     const identities = authorUids.length
       ? await prisma.externalIdentity.findMany({
           where: { platform: ONEBOT_PLATFORM, platformUid: { in: authorUids } },
@@ -1313,17 +1330,29 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
       },
     ] as const));
+    const isBlockedUid = (uid: string) => {
+      if (record.ownerQq && uid === record.ownerQq) return false;
+      const identity = identityByUid.get(uid);
+      return shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
+    };
     const kindFor = (item: PendingGroupMessage) => item.isOwner
       ? "HUMAN" as const
       : identityByUid.get(item.event.userId)?.kind ?? "UNKNOWN" as const;
     const policyFor = (item: PendingGroupMessage) => item.isOwner
       ? "ALLOW" as const
       : identityByUid.get(item.event.userId)?.policy ?? "DEFAULT" as const;
+    const blockedSpeakerUids = new Set(authorUids.filter(isBlockedUid));
     const blockedMessageIds = new Set(
       originalItems
         .filter((item) => shouldBlockFriendSpeaker(kindFor(item), policyFor(item)))
         .map((item) => item.event.messageId),
     );
+    const blockedContextMessageIds = new Set(
+      [...contextUidByMessageId.entries()]
+        .filter(([, uid]) => isBlockedUid(uid))
+        .map(([messageId]) => messageId),
+    );
+    const excludedContextIds = new Set([...blockedMessageIds, ...blockedContextMessageIds]);
     items = originalItems.filter((item) => !blockedMessageIds.has(item.event.messageId));
     if (!items.length) {
       logGroupRound(groupEvent.groupId, {
@@ -1339,14 +1368,13 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
 
     // 按群解析：同一个绑定挂了好几个群时，每个群可以有自己的那一档。
     const settings = groupChatForGroup(binding.groupChat, binding.groupChatModes, groupEvent.groupId);
-    const contextKey = `${binding.id}:${groupEvent.conversationKey}`;
     const direct = items.some((item) => item.direct);
     const named = items.some((item) => item.named);
     // 这一轮是不是被「戳一戳」叫醒的。只在为真时打，避免每行日志多一个 false。
     const poked = items.some((item) => item.event.poke !== undefined);
     // 入队时已解析好，直接用，不再重复解 CQ 码。
     const facts = items.map((item) => item.facts);
-    const topicCandidate = groupContext.topicCandidate(contextKey, facts);
+    const topicCandidate = groupContext.topicCandidate(contextKey, facts, blockedSpeakerUids);
     /**
      * 这一批有没有「@ 的是别人」。
      *
@@ -1503,11 +1531,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       allowSilent: !gate.mustReply,
       group: {
         direct,
-        background: groupContext.background(contextKey, currentIds).filter((line) => !blockedMessageIds.has(line.id)),
-        analysisBackground: groupContext.background(contextKey, currentIds, { windowMs: 15 * 60_000, maxMessages: 120, maxChars: 24_000 }).filter((line) => !blockedMessageIds.has(line.id)),
-        anchors: groupContext.anchors(contextKey),
+        background: backgroundLines.filter((line) => !excludedContextIds.has(line.id)),
+        analysisBackground: analysisBackgroundLines.filter((line) => !excludedContextIds.has(line.id)),
+        anchors: groupContext.anchors(contextKey, excludedContextIds),
         // 谁是谁的人：让她判断「我的鱼」「我家宝」时能查表，而不是猜自己。
-        members: groupContext.members(contextKey),
+        members: groupContext.members(contextKey, blockedSpeakerUids),
         // 「谁在跟她说话」的统计要用：@ 的是这个号、叫的是这些名字，才算冲她说的。
         selfQq: record.accountQq,
         ownerQq: record.ownerQq,
@@ -1515,7 +1543,10 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       },
       sendReply: createReplySender(record.config, groupEvent, {
         // 引用谁就 @ 谁：transcript 里只有 message id，真实 QQ 号留在进程内查。
-        resolveAtQq: (messageId) => groupContext.senderOf(contextKey, messageId),
+        resolveAtQq: (messageId) => {
+          const uid = groupContext.senderOf(contextKey, messageId, 15 * 60_000);
+          return uid && !blockedSpeakerUids.has(uid) ? uid : null;
+        },
         selfQq: record.accountQq,
       }),
     });
