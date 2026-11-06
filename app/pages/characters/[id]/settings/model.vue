@@ -38,7 +38,6 @@ const draftChatTemperature = ref(0.7);
 const draftChatMaxTokens = ref(4096);
 const draftChatApiBaseUrl = ref("https://api.openai.com/v1");
 const draftChatApiKey = ref("");
-const clearSavedApiKey = ref(false);
 const draftProviderKey = ref("openai");
 const draftDailyTokenLimit = ref(0);
 const draftMemoryTokenBudget = ref(1800);
@@ -54,7 +53,6 @@ const draftEventRecentDays = ref(0);
 // 这里的保存走同一个 PATCH 接口，跟上面对话模型一起「保存设置」。
 const draftVoiceProvider = ref("auto");
 const draftVoiceApiKey = ref("");
-const clearVoiceApiKey = ref(false);
 const draftVoiceApiBaseUrl = ref("");
 const draftVoiceTtsModel = ref("");
 const draftVoiceTtsVoice = ref("");
@@ -70,7 +68,6 @@ const draftVoiceInstructions = ref("");
 const draftAsrProvider = ref("auto");
 const draftAsrApiBaseUrl = ref("");
 const draftAsrApiKey = ref("");
-const clearAsrApiKey = ref(false);
 /** 点过「同语音合成」：保存时让服务端把合成那把 Key 复制到识别（Key 不回传网页，只能服务端抄）。 */
 const syncAsrFromVoice = ref(false);
 /** 语音模型下拉里「获取模型」拉回来的清单 */
@@ -85,7 +82,6 @@ const testingVoice = ref(false);
 const draftVisionModel = ref("");
 const draftVisionApiBaseUrl = ref("");
 const draftVisionApiKey = ref("");
-const clearVisionApiKey = ref(false);
 
 // ── 记忆助手模型：独立地址、模型和 API Key，不借用聊天凭据 ──
 const draftMemoryAssistantModel = ref("");
@@ -94,7 +90,6 @@ const draftMemoryAssistantMaxInputTokens = ref(12288);
 const draftMemoryAssistantMaxOutputTokens = ref(2048);
 const draftMemoryAssistantApiBaseUrl = ref("");
 const draftMemoryAssistantApiKey = ref("");
-const clearMemoryAssistantApiKey = ref(false);
 const draftMemoryAssistantProviderKey = ref("custom");
 const fetchedMemoryAssistantModels = ref<string[]>([]);
 const fetchingMemoryAssistantModels = ref(false);
@@ -104,7 +99,6 @@ const draftContextAssistantMaxInputTokens = ref(16384);
 const draftContextAssistantMaxOutputTokens = ref(2048);
 const draftContextAssistantApiBaseUrl = ref("");
 const draftContextAssistantApiKey = ref("");
-const clearContextAssistantApiKey = ref(false);
 const draftContextAssistantProviderKey = ref("custom");
 const fetchedContextAssistantModels = ref<string[]>([]);
 const fetchingContextAssistantModels = ref(false);
@@ -151,8 +145,11 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 /**
- * 表单指纹。值 + 「移除 Key」的勾选都要进串：只比有没有填 Key，
- * 会漏掉「勾了移除但还没保存」这一种改动。
+ * 表单指纹：只收「能看出改过没改过」的值。
+ *
+ * 各把 Key 的明文也进串（聊天、记忆助手、语境助手这几处是整串比），但语音 / 识别 / 图片
+ * 那几把按「留空＝不改」的口径处理，只比有没有填，不进指纹 —— 明文进串会让
+ * 「粘贴后又删掉」被当成改动。
  */
 const draftSignature = computed(() => JSON.stringify([
   draftChatModel.value.trim(),
@@ -160,13 +157,12 @@ const draftSignature = computed(() => JSON.stringify([
   draftChatMaxTokens.value,
   draftChatApiBaseUrl.value.trim(),
   draftChatApiKey.value.trim(),
-  clearSavedApiKey.value,
   draftDailyTokenLimit.value,
   draftMemoryTokenBudget.value,
   draftSnapshotTokenBudget.value,
   draftMemoryItemLimit.value,
   draftRecentMessageLimit.value,
-  // 语音模型：Key 的明文不进指纹（留空=不改，没法从明文判断），布尔勾选要进
+  // 语音模型：Key 的明文不进指纹（留空=不改，没法从明文判断）
   draftVoiceProvider.value,
   draftVoiceApiBaseUrl.value.trim(),
   draftVoiceTtsModel.value.trim(),
@@ -177,21 +173,17 @@ const draftSignature = computed(() => JSON.stringify([
   draftVoiceInstructions.value.trim(),
   draftAsrProvider.value,
   draftAsrApiBaseUrl.value.trim(),
-  clearAsrApiKey.value,
   syncAsrFromVoice.value,
-  clearVoiceApiKey.value,
-  // 图片模型：Key 明文同样不进指纹，勾选要进
+  // 图片模型：Key 明文同样不进指纹
   draftVisionModel.value.trim(),
   draftVisionApiBaseUrl.value.trim(),
-  clearVisionApiKey.value,
-  // 记忆助手 Key 明文不进指纹（留空=不改），清除勾选要进。
+  // 记忆助手 Key 明文不进指纹（留空=不改）。
   draftMemoryAssistantModel.value.trim(),
   draftMemoryAssistantTemperature.value,
   draftMemoryAssistantMaxInputTokens.value,
   draftMemoryAssistantMaxOutputTokens.value,
   draftMemoryAssistantApiBaseUrl.value.trim(),
   draftMemoryAssistantApiKey.value.trim(),
-  clearMemoryAssistantApiKey.value,
   draftContextAssistantEnabled.value,
   draftContextAssistantModel.value.trim(),
   draftContextAssistantTemperature.value,
@@ -199,7 +191,6 @@ const draftSignature = computed(() => JSON.stringify([
   draftContextAssistantMaxOutputTokens.value,
   draftContextAssistantApiBaseUrl.value.trim(),
   draftContextAssistantApiKey.value.trim(),
-  clearContextAssistantApiKey.value,
 ]));
 const dirty = computed(() => savedSignature.value !== "" && draftSignature.value !== savedSignature.value);
 
@@ -262,7 +253,6 @@ const backLabel = computed(() => {
  */
 const API_KEY_SAVED_PLACEHOLDER = "已加密保存；留空表示保持不变";
 const API_KEY_EMPTY_PLACEHOLDER = "填写 API Key";
-const API_KEY_CLEAR_LABEL = "清除已保存的 Key";
 const API_KEY_HELP =
   "使用本机凭据加密密钥进行 AES-256-GCM 加密保存；留空表示不修改已有 Key，不会回传原文。";
 
@@ -493,7 +483,6 @@ function useSameAsVoice() {
   draftAsrProvider.value = provider;
   draftAsrApiBaseUrl.value = draftVoiceApiBaseUrl.value.trim();
   draftAsrApiKey.value = "";
-  clearAsrApiKey.value = false;
   syncAsrFromVoice.value = true;
   // 识别模型不能抄合成的（breeze-tts-2 拿去做识别只会 400），按服务商给默认
   const next = applyAsrProviderPreset({ baseUrl: draftAsrApiBaseUrl.value, model: "" }, provider);
@@ -751,7 +740,6 @@ async function loadCharacter() {
     draftChatMaxTokens.value = data.chatMaxTokens ?? 4096;
     draftChatApiBaseUrl.value = data.chatApiBaseUrl || "https://api.openai.com/v1";
     draftChatApiKey.value = "";
-    clearSavedApiKey.value = false;
     draftDailyTokenLimit.value = data.dailyTokenLimit ?? 0;
     draftMemoryTokenBudget.value = data.memoryTokenBudget ?? 1800;
     draftSnapshotTokenBudget.value = data.snapshotTokenBudget ?? 2500;
@@ -762,7 +750,6 @@ async function loadCharacter() {
     // 语音模型
     draftVoiceProvider.value = data.ttsProvider || "auto";
     draftVoiceApiKey.value = "";
-    clearVoiceApiKey.value = false;
     draftVoiceApiBaseUrl.value = data.voiceApiBaseUrl ?? "";
     draftVoiceTtsModel.value = data.ttsModel ?? "";
     draftVoiceTtsVoice.value = data.ttsVoice ?? "";
@@ -773,13 +760,11 @@ async function loadCharacter() {
     draftAsrProvider.value = data.asrProvider || "auto";
     draftAsrApiBaseUrl.value = data.asrApiBaseUrl ?? "";
     draftAsrApiKey.value = "";
-    clearAsrApiKey.value = false;
     syncAsrFromVoice.value = false;
     // 图片模型
     draftVisionModel.value = data.visionModel ?? "";
     draftVisionApiBaseUrl.value = data.visionApiBaseUrl ?? "";
     draftVisionApiKey.value = "";
-    clearVisionApiKey.value = false;
     draftMemoryAssistantModel.value = data.memoryAssistantModel ?? "";
     draftMemoryAssistantTemperature.value = data.memoryAssistantTemperature ?? 0.1;
     draftMemoryAssistantMaxInputTokens.value = data.memoryAssistantMaxInputTokens ?? 12288;
@@ -789,7 +774,6 @@ async function loadCharacter() {
       draftMemoryAssistantApiBaseUrl.value || draftChatApiBaseUrl.value,
     )?.key ?? "custom";
     draftMemoryAssistantApiKey.value = "";
-    clearMemoryAssistantApiKey.value = false;
     fetchedMemoryAssistantModels.value = [];
     draftContextAssistantEnabled.value = data.contextAssistantEnabled === true;
     draftContextAssistantModel.value = data.contextAssistantModel ?? "";
@@ -801,7 +785,6 @@ async function loadCharacter() {
       draftContextAssistantApiBaseUrl.value || draftChatApiBaseUrl.value,
     )?.key ?? "custom";
     draftContextAssistantApiKey.value = "";
-    clearContextAssistantApiKey.value = false;
     fetchedContextAssistantModels.value = [];
     fetchedModels.value = [];
     savedSignature.value = draftSignature.value;
@@ -831,8 +814,9 @@ async function save(silent = false): Promise<boolean> {
         chatTemperature: draftChatTemperature.value,
         chatMaxTokens: draftChatMaxTokens.value,
         chatApiBaseUrl: draftChatApiBaseUrl.value.trim(),
+        // 不再发 clearApiKey：清除入口已下线（2026-11-07），已有 Key 只能被新的覆盖。
+        // 服务端仍接受这个字段（脚本和迁移在用），页面不传就是「不动」。
         chatApiKey: draftChatApiKey.value,
-        clearApiKey: clearSavedApiKey.value && !draftChatApiKey.value.trim(),
         dailyTokenLimit: draftDailyTokenLimit.value,
         memoryTokenBudget: draftMemoryTokenBudget.value,
         snapshotTokenBudget: draftSnapshotTokenBudget.value,
@@ -851,15 +835,12 @@ async function save(silent = false): Promise<boolean> {
         asrProvider: draftAsrProvider.value === "auto" ? "" : draftAsrProvider.value,
         asrApiBaseUrl: draftAsrApiBaseUrl.value.trim(),
         ...(draftAsrApiKey.value.trim() ? { asrApiKey: draftAsrApiKey.value.trim() } : {}),
-        ...(clearAsrApiKey.value ? { clearAsrApiKey: true } : {}),
         ...(syncAsrFromVoice.value ? { syncAsrFromVoice: true } : {}),
         ...(draftVoiceApiKey.value.trim() ? { voiceApiKey: draftVoiceApiKey.value.trim() } : {}),
-        ...(clearVoiceApiKey.value ? { clearVoiceApiKey: true } : {}),
         // 图片模型
         visionModel: draftVisionModel.value.trim(),
         visionApiBaseUrl: draftVisionApiBaseUrl.value.trim(),
         ...(draftVisionApiKey.value.trim() ? { visionApiKey: draftVisionApiKey.value.trim() } : {}),
-        ...(clearVisionApiKey.value ? { clearVisionApiKey: true } : {}),
         // 记忆助手模型：独立凭据，Key 留空不改，明确勾选才删除。
         memoryAssistantModel: draftMemoryAssistantModel.value.trim(),
         memoryAssistantTemperature: draftMemoryAssistantTemperature.value,
@@ -869,7 +850,6 @@ async function save(silent = false): Promise<boolean> {
         ...(draftMemoryAssistantApiKey.value.trim()
           ? { memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim() }
           : {}),
-        ...(clearMemoryAssistantApiKey.value ? { clearMemoryAssistantApiKey: true } : {}),
         contextAssistantEnabled: draftContextAssistantEnabled.value,
         contextAssistantModel: draftContextAssistantModel.value.trim(),
         contextAssistantTemperature: draftContextAssistantTemperature.value,
@@ -879,20 +859,14 @@ async function save(silent = false): Promise<boolean> {
         ...(draftContextAssistantApiKey.value.trim()
           ? { contextAssistantApiKey: draftContextAssistantApiKey.value.trim() }
           : {}),
-        ...(clearContextAssistantApiKey.value ? { clearContextAssistantApiKey: true } : {}),
       },
     });
     character.value = updated;
     draftChatApiKey.value = "";
-    clearSavedApiKey.value = false;
     draftVoiceApiKey.value = "";
-    clearVoiceApiKey.value = false;
     draftVisionApiKey.value = "";
-    clearVisionApiKey.value = false;
     draftMemoryAssistantApiKey.value = "";
-    clearMemoryAssistantApiKey.value = false;
     draftContextAssistantApiKey.value = "";
-    clearContextAssistantApiKey.value = false;
     // 清空 Key 输入框之后才取指纹，否则刚存的这份会一直被当成「未保存」
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = new Date();
@@ -1158,22 +1132,11 @@ watch(id, () => void loadCharacter());
                     :class="apiKeySource === 'missing' ? 'pill-rose' : 'pill-green'"
                   >{{ apiKeySource === "character" ? "已保存" : apiKeySource === "environment" ? "服务端默认" : "未填写" }}</span>
                 </div>
-                <el-input
+                <ApiKeyInput
                   v-model="draftChatApiKey"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  maxlength="8192"
                   aria-label="API Key"
                   :placeholder="apiKeyPlaceholder"
                 />
-                <el-checkbox
-                  v-if="apiKeySource === 'character'"
-                  v-model="clearSavedApiKey"
-                  class="field-check"
-                >
-                  {{ API_KEY_CLEAR_LABEL }}
-                </el-checkbox>
               </div>
 
               <!-- 模型和「服务商 / 地址 / Key」本来是同一件事：连接通不通取决于这四项配套。
@@ -1502,22 +1465,11 @@ watch(id, () => void loadCharacter());
                     :class="voiceKeyConfigured ? 'pill-green' : 'pill-rose'"
                   >{{ voiceKeyConfigured ? "已保存" : "未填写" }}</span>
                 </div>
-                <el-input
+                <ApiKeyInput
                   v-model="draftVoiceApiKey"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  maxlength="8192"
                   aria-label="语音 API Key"
                   :placeholder="voiceKeyPlaceholder"
                 />
-                <el-checkbox
-                  v-if="voiceKeyConfigured"
-                  v-model="clearVoiceApiKey"
-                  class="field-check"
-                >
-                  {{ API_KEY_CLEAR_LABEL }}
-                </el-checkbox>
               </div>
 
               <div
@@ -1701,22 +1653,11 @@ watch(id, () => void loadCharacter());
                     :class="asrKeyConfigured || syncAsrFromVoice ? 'pill-green' : 'pill-rose'"
                   >{{ syncAsrFromVoice ? "保存后同步" : asrKeyConfigured ? "已保存" : "未填写" }}</span>
                 </div>
-                <el-input
+                <ApiKeyInput
                   v-model="draftAsrApiKey"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  maxlength="8192"
                   aria-label="识别 API Key"
                   :placeholder="asrKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : API_KEY_EMPTY_PLACEHOLDER"
                 />
-                <el-checkbox
-                  v-if="asrKeyConfigured"
-                  v-model="clearAsrApiKey"
-                  class="field-check"
-                >
-                  {{ API_KEY_CLEAR_LABEL }}
-                </el-checkbox>
               </div>
 
               <div class="field">
@@ -1799,22 +1740,11 @@ watch(id, () => void loadCharacter());
                     :class="visionKeyConfigured ? 'pill-green' : 'pill-rose'"
                   >{{ visionKeyConfigured ? "已保存" : "未填写" }}</span>
                 </div>
-                <el-input
+                <ApiKeyInput
                   v-model="draftVisionApiKey"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  maxlength="8192"
                   aria-label="图片 API Key"
                   :placeholder="visionKeyPlaceholder"
                 />
-                <el-checkbox
-                  v-if="visionKeyConfigured"
-                  v-model="clearVisionApiKey"
-                  class="field-check"
-                >
-                  {{ API_KEY_CLEAR_LABEL }}
-                </el-checkbox>
               </div>
 
               <div class="field">
@@ -1928,23 +1858,11 @@ watch(id, () => void loadCharacter());
                     :class="memoryAssistantKeyConfigured ? 'pill-green' : 'pill-rose'"
                   >{{ memoryAssistantKeyConfigured ? "已保存" : "未填写" }}</span>
                 </div>
-                <el-input
+                <ApiKeyInput
                   v-model="draftMemoryAssistantApiKey"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  maxlength="8192"
                   aria-label="记忆助手 API Key"
                   :placeholder="memoryAssistantKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : '填写记忆助手专用 API Key'"
                 />
-                <el-checkbox
-                  v-if="memoryAssistantKeyConfigured"
-                  v-model="clearMemoryAssistantApiKey"
-                  :disabled="character?.memoryAssistantEnabled === true"
-                  class="field-check"
-                >
-                  {{ API_KEY_CLEAR_LABEL }}
-                </el-checkbox>
               </div>
 
               <div class="field">
@@ -2107,23 +2025,11 @@ watch(id, () => void loadCharacter());
                     :class="contextAssistantKeyConfigured ? 'pill-green' : 'pill-rose'"
                   >{{ contextAssistantKeyConfigured ? "已保存" : "未填写" }}</span>
                 </div>
-                <el-input
+                <ApiKeyInput
                   v-model="draftContextAssistantApiKey"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  maxlength="8192"
                   aria-label="语境助手 API Key"
                   :placeholder="contextAssistantKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : '填写语境助手专用 API Key'"
                 />
-                <el-checkbox
-                  v-if="contextAssistantKeyConfigured"
-                  v-model="clearContextAssistantApiKey"
-                  :disabled="draftContextAssistantEnabled"
-                  class="field-check"
-                >
-                  {{ API_KEY_CLEAR_LABEL }}
-                </el-checkbox>
               </div>
 
               <div class="field">
@@ -2450,6 +2356,7 @@ watch(id, () => void loadCharacter());
 
 .brick-head { display: flex; align-items: flex-start; gap: var(--sp-4); }
 .brick-desc { max-width: 44em; margin: var(--sp-1) 0 0; color: var(--dim); font-size: 12px; line-height: 1.65; }
+/* 行宽用 em 不用 ch：中文一个字也是 1em，62ch 只够放 ~31 个汉字 */
 .ms-a .field-help { max-width: 44em; margin: 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
 .knob .field-help { grid-area: help; }
 .brick-head-txt { min-width: 0; flex: 1; }
@@ -2480,9 +2387,6 @@ watch(id, () => void loadCharacter());
 .field-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .field-link .el-icon { font-size: 13px; }
 .field-ctl { width: 100%; }
-/* main.css 的 .form-help 落在 --faint 上，那是装饰色；说明文字要读得清，改 --dim */
-/* 行宽用 em 不用 ch：中文一个字的宽度也是 1em，62ch 只够放 ~31 个汉字 */
-.field-check { align-self: flex-start; height: 20px; }
 
 /* 模型下拉 + 「获取模型」同行：select 吃掉剩余宽度，按钮不吃 */
 .model-row { display: flex; width: 100%; align-items: center; gap: var(--sp-2); }
