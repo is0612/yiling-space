@@ -51,7 +51,7 @@
 - 重写：`POST .../regenerate` 带 `target`（`DIARY` / `HANDBOOK` / `BOTH`），每份各自追加 `AI_REWRITE` 版本。
 - 恢复：`POST .../restore` 带 `kind` + `version`，复制成新的 `RESTORED` 版本。
 - 历史：`GET .../revisions?kind=DIARY|HANDBOOK`。
-- 自动任务永远不会覆盖已有文本；人工操作写审计：`journal.generated` / `journal.edited` / `journal.regenerated` / `journal.restored`。
+- 自动任务永远不会覆盖已有文本；用户触发的生成、编辑、重写、恢复分别写审计：`journal.generated` / `journal.edited` / `journal.regenerated` / `journal.restored`。审计记录与对应版本、当天主体状态在同一个数据库事务里提交：审计失败时版本也回滚，避免接口报错但正文已经改变；后台自动任务没有用户操作者，不伪造 USER 审计。
 
 ## 次日注入
 
