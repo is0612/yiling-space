@@ -12,6 +12,7 @@ if (!connectionString) throw new Error("缺少 DATABASE_URL，B站 渠道数据�
 
 const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
+(globalThis as Record<string, unknown>).__yilingPrisma = prisma;
 const contenderPrisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 
 /**
