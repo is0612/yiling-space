@@ -27,6 +27,10 @@ import {
   groupChatWindowMs,
   isClarificationMessage,
   mentionsCharacterName,
+  isAiOnlyGroupRound,
+  shouldBlockFriendSpeaker,
+  shouldPauseAiOnlyRound,
+  MAX_CONSECUTIVE_AI_ROUNDS,
 } from "./group-chat";
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
 import { createGroupActivityRecorder } from "../../group-activity";
@@ -1281,8 +1285,58 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
   };
 
   const flushGroupRound = async (items: PendingGroupMessage[]): Promise<void> => {
+    const originalItems = items;
     const binding = items[0]!.binding;
     const groupEvent = items[0]!.event;
+    const prisma = getPrisma();
+
+    // 冲模型之前按平台账号身份过滤。身份是全局属性，交流权限从当前角色的关系范围读取。
+    const authorUids = [...new Set(originalItems.map((item) => item.event.userId.trim()).filter(Boolean))];
+    const identities = authorUids.length
+      ? await prisma.externalIdentity.findMany({
+          where: { platform: ONEBOT_PLATFORM, platformUid: { in: authorUids } },
+          select: {
+            platformUid: true,
+            kind: true,
+            memoryScopes: {
+              where: { characterId: binding.characterId, scopeType: "EXTERNAL_IDENTITY" },
+              take: 1,
+              select: { friendChatPolicy: true },
+            },
+          },
+        })
+      : [];
+    const identityByUid = new Map(identities.map((identity) => [
+      identity.platformUid,
+      {
+        kind: identity.kind,
+        policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
+      },
+    ] as const));
+    const kindFor = (item: PendingGroupMessage) => item.isOwner
+      ? "HUMAN" as const
+      : identityByUid.get(item.event.userId)?.kind ?? "UNKNOWN" as const;
+    const policyFor = (item: PendingGroupMessage) => item.isOwner
+      ? "ALLOW" as const
+      : identityByUid.get(item.event.userId)?.policy ?? "DEFAULT" as const;
+    const blockedMessageIds = new Set(
+      originalItems
+        .filter((item) => shouldBlockFriendSpeaker(kindFor(item), policyFor(item)))
+        .map((item) => item.event.messageId),
+    );
+    items = originalItems.filter((item) => !blockedMessageIds.has(item.event.messageId));
+    if (!items.length) {
+      logGroupRound(groupEvent.groupId, {
+        reason: "friend_policy_blocked",
+        messages: originalItems.length,
+        blocked: blockedMessageIds.size,
+        direct: false,
+        named: false,
+      });
+      return;
+    }
+    const aiOnlyRound = isAiOnlyGroupRound(items.map(kindFor));
+
     // 按群解析：同一个绑定挂了好几个群时，每个群可以有自己的那一档。
     const settings = groupChatForGroup(binding.groupChat, binding.groupChatModes, groupEvent.groupId);
     const contextKey = `${binding.id}:${groupEvent.conversationKey}`;
@@ -1328,12 +1382,22 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         .filter((item) => item.direct)
         .every((item) => item.event.poke === undefined && isClarificationMessage(item.event.content));
 
-    const prisma = getPrisma();
     // lastEventAt 已挪到事件入口统一更新（含 mention 档早退），这里不再重复写。
     const conversation = await prisma.conversation.findFirst({
       where: { channelBindingId: binding.id, externalConversationId: groupEvent.conversationKey },
-      select: { id: true },
+      select: { id: true, consecutiveAiRounds: true },
     });
+    if (aiOnlyRound && shouldPauseAiOnlyRound(conversation?.consecutiveAiRounds ?? 0)) {
+      logGroupRound(groupEvent.groupId, {
+        reason: "ai_dialogue_limit",
+        messages: items.length,
+        direct,
+        named,
+        consecutiveAiRounds: conversation?.consecutiveAiRounds ?? 0,
+        maxConsecutiveAiRounds: MAX_CONSECUTIVE_AI_ROUNDS,
+      });
+      return;
+    }
     const lastAssistant = conversation
       ? await prisma.message.findFirst({
           where: { conversationId: conversation.id, role: "ASSISTANT" },
@@ -1421,6 +1485,15 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         ...(item.event.voices.length ? { voices: item.event.voices } : {}),
         occurredAt: new Date(item.at),
       })),
+      // 被身份策略过滤的消息不进模型/消息正文，但仍只登记为群成员，不记录内容。
+      memberObservations: originalItems.map((item) => ({
+        externalMessageId: item.event.messageId,
+        authorOpenId: item.event.userId,
+        authorPlatformUid: item.event.userId,
+        ...(item.event.displayName ? { authorDisplayName: item.event.displayName } : {}),
+        content: item.event.content,
+        occurredAt: new Date(item.at),
+      })),
       faceCatalog: ONEBOT_FACES,
       // 她自己的表情包：清单非空时优先于内置表情（空清单 = 这个角色还没传过图）。
       stickerCatalog: await loadStickerCatalog(binding.characterId),
@@ -1430,8 +1503,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       allowSilent: !gate.mustReply,
       group: {
         direct,
-        background: groupContext.background(contextKey, currentIds),
-        analysisBackground: groupContext.background(contextKey, currentIds, { windowMs: 15 * 60_000, maxMessages: 120, maxChars: 24_000 }),
+        background: groupContext.background(contextKey, currentIds).filter((line) => !blockedMessageIds.has(line.id)),
+        analysisBackground: groupContext.background(contextKey, currentIds, { windowMs: 15 * 60_000, maxMessages: 120, maxChars: 24_000 }).filter((line) => !blockedMessageIds.has(line.id)),
         anchors: groupContext.anchors(contextKey),
         // 谁是谁的人：让她判断「我的鱼」「我家宝」时能查表，而不是猜自己。
         members: groupContext.members(contextKey),
@@ -1447,6 +1520,14 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       }),
     });
 
+    if (result.status === "replied" || result.status === "silent") {
+      await prisma.conversation.updateMany({
+        where: { channelBindingId: binding.id, externalConversationId: groupEvent.conversationKey },
+        data: { consecutiveAiRounds: aiOnlyRound ? (conversation?.consecutiveAiRounds ?? 0) + 1 : 0 },
+      }).catch((error) => {
+        console.error("[onebot] 更新连续 AI 对话计数失败：", error instanceof Error ? error.message : String(error));
+      });
+    }
     if (result.status === "replied") {
       groupContext.recordReply(contextKey, facts, { source: direct ? "mention" : "ambient" });
       groupActivity.spoke({
