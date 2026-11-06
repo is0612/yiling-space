@@ -52,7 +52,13 @@ export const GROUP_CHAT_DEFAULTS: GroupChatSettings = {
 
 const MODES: readonly GroupChatMode[] = ["mention", "ambient", "all"];
 
-export { isAiOnlyGroupRound, MAX_CONSECUTIVE_AI_ROUNDS, shouldBlockFriendSpeaker, shouldPauseAiOnlyRound } from "../../friend-chat-policy";
+export {
+  isAiOnlyGroupRound,
+  MAX_CONSECUTIVE_AI_ROUNDS,
+  nextConsecutiveAiRounds,
+  shouldBlockFriendSpeaker,
+  shouldPauseAiOnlyRound,
+} from "../../friend-chat-policy";
 export type { FriendChatPolicy, FriendIdentityKind } from "../../friend-chat-policy";
 
 /**
