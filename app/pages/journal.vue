@@ -112,6 +112,7 @@ const editTarget = ref<{ characterId: string; dayKey: string } | null>(null);
 const historyTarget = ref<{ characterId: string; dayKey: string; kind: JournalKind } | null>(null);
 
 // 每种异步操作独立序号：旧角色/旧日期/旧弹窗的响应不能覆盖当前页面。
+let suppressNextPageReload = false;
 let listRequestSeq = 0;
 let detailRequestSeq = 0;
 let historyRequestSeq = 0;
@@ -486,7 +487,11 @@ watch(id, () => {
   selectedDay.value = "";
   detail.value = null;
   detailCharacterId.value = "";
-  page.value = 1;
+  if (page.value !== 1) {
+    // 角色切换本身会重新加载列表；阻止 page watcher 再用 keepSelection=true 覆盖它。
+    suppressNextPageReload = true;
+    page.value = 1;
+  }
   writeDay.value = "";
   writeDayTouched.value = false;
   revisions.value = [];
@@ -503,9 +508,24 @@ watch(id, () => {
   detailLoading.value = false;
   void loadList(false, id.value);
 });
-watch([page, month], () => {
-  page.value = Math.max(1, page.value);
+watch(page, () => {
+  if (suppressNextPageReload) {
+    suppressNextPageReload = false;
+    return;
+  }
+  if (page.value < 1) {
+    page.value = 1;
+    return;
+  }
   void loadList(true, id.value);
+});
+watch(month, () => {
+  // 月份过滤改变后，页码与选中日期都应重新定位到该月份的最新一条。
+  if (page.value !== 1) {
+    suppressNextPageReload = true;
+    page.value = 1;
+  }
+  void loadList(false, id.value);
 });
 onBeforeUnmount(() => {
   listRequestSeq += 1;
