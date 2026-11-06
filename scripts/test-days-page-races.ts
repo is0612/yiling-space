@@ -169,7 +169,7 @@ async function staleSelectedDay() {
   assert.equal(page.read("detailLoading"), true);
   current.resolve(detailResult("2026-11-05"));
   await flushMicrotasks();
-  assert.equal(page.read("detail").day.dayKey, "2026-11-05");
+  assert.equal(page.read<{ day: { dayKey: string } }>("detail").day.dayKey, "2026-11-05");
   assert.equal(page.read("detailLoading"), false);
   page.finish();
 }
