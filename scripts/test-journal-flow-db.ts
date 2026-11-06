@@ -638,7 +638,6 @@ async function main() {
         actorUserId: flowOwnerId,
       }, prisma);
       assert.equal(restored.ok, true, "模型生成期间应能恢复旧版");
-      if (!restored.ok) throw new Error(restored.message);
 
       gate.resolve();
       const outcome = await regenerated;
