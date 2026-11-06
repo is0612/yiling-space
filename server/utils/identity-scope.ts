@@ -27,16 +27,17 @@ export async function ensureExternalIdentityScope(
     where: { scopeKey },
     select: { id: true },
   });
-  if (existing) return { scopeId: existing.id, created: false };
-
-  const created = await prisma.memoryScope.create({
-    data: {
+  // 通过唯一 scopeKey 原子 upsert：同一个新人同时在两个群发言时，不因并发创建撞唯一键。
+  const scope = await prisma.memoryScope.upsert({
+    where: { scopeKey },
+    create: {
       characterId,
       scopeType: "EXTERNAL_IDENTITY",
       scopeKey,
       externalIdentityId,
     },
+    update: {},
     select: { id: true },
   });
-  return { scopeId: created.id, created: true };
+  return { scopeId: scope.id, created: !existing };
 }
