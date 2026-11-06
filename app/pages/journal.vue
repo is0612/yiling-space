@@ -258,6 +258,12 @@ async function loadList(keepSelection = false, targetCharacterId = id.value): Pr
   }
 }
 
+function selectDay(dayKey: string): void {
+  if (!dayKey || dayKey === selectedDay.value) return;
+  selectedDay.value = dayKey;
+  void loadDetail(dayKey, id.value);
+}
+
 async function loadDetail(dayKey: string, targetCharacterId = id.value): Promise<void> {
   const seq = ++detailRequestSeq;
   if (!targetCharacterId || !dayKey) {
@@ -501,15 +507,6 @@ watch([page, month], () => {
   page.value = Math.max(1, page.value);
   void loadList(true, id.value);
 });
-watch(selectedDay, (dayKey) => {
-  if (dayKey) void loadDetail(dayKey, id.value);
-  else {
-    detailRequestSeq += 1;
-    detail.value = null;
-    detailCharacterId.value = "";
-    detailLoading.value = false;
-  }
-});
 onBeforeUnmount(() => {
   listRequestSeq += 1;
   detailRequestSeq += 1;
@@ -597,7 +594,7 @@ await loadList();
             type="button"
             class="journal-item"
             :class="{ active: item.dayKey === selectedDay }"
-            @click="selectedDay = item.dayKey"
+            @click="selectDay(item.dayKey)"
           >
             <span class="journal-item-top">
               <span class="journal-item-day">{{ dayLabel(item.dayKey) }}</span>
