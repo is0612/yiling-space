@@ -33,6 +33,12 @@ import { parseJsonLoose } from "../../loose-json";
 import type { BiliConnectionRecord, BiliDutyConfig } from "./configure";
 import { biliOptions } from "./configure";
 import { acquireBiliDutyLease } from "./bili-duty-lease";
+import {
+  completeBiliDutyWindowRun,
+  failBiliDutyWindowRun,
+  startBiliDutyWindowRun,
+  type BiliScheduledWindow,
+} from "./bili-duty-window-run";
 import { remainingQuota, toDayKey } from "./duty-scheduler";
 import {
   extractBvids,
@@ -640,7 +646,11 @@ async function postDynamic(
  * 注意：这里 bili CLI 的"找候选/看懂/投递"是真实跨进程调用；模型判断是真实模型调用。
  * 在没有配置 bili CLI / 模型 / 凭证的环境下，本函数会返回明确的错误，而不是假装成功。
  */
-export async function runDutyRound(record: BiliConnectionRecord, binding: { id: string; characterId: string }): Promise<BiliDutyRoundResult> {
+export async function runDutyRound(
+  record: BiliConnectionRecord,
+  binding: { id: string; characterId: string },
+  scheduledWindow?: BiliScheduledWindow,
+): Promise<BiliDutyRoundResult> {
   const prisma = getPrisma();
   const lease = await acquireBiliDutyLease(prisma, binding.id);
   if (!lease) {
@@ -657,8 +667,45 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
     };
   }
 
+  let windowRunStarted = false;
   try {
-    return await runDutyRoundLocked(record, binding, lease.assertOwned);
+    if (scheduledWindow) {
+      // 必须在锁内、任何模型/CLI/外部动作之前先记本窗口已尝试。
+      await startBiliDutyWindowRun(prisma, binding.id, scheduledWindow, lease.token);
+      windowRunStarted = true;
+    }
+
+    const result = await runDutyRoundLocked(record, binding, lease.assertOwned);
+    if (scheduledWindow && windowRunStarted) {
+      await lease.assertOwned();
+      const updated = await completeBiliDutyWindowRun(
+        prisma,
+        binding.id,
+        scheduledWindow,
+        lease.token,
+        result.error ?? null,
+      );
+      if (!updated) {
+        console.warn("[bili] 本轮结果未能写回窗口记录（租约可能已被接管）。", binding.id);
+      }
+    }
+    return result;
+  } catch (error) {
+    if (scheduledWindow && windowRunStarted) {
+      try {
+        await lease.assertOwned();
+        const updated = await failBiliDutyWindowRun(prisma, binding.id, scheduledWindow, lease.token, error);
+        if (!updated) {
+          console.warn("[bili] 本轮异常未能写回窗口记录（租约可能已被接管）。", binding.id);
+        }
+      } catch (markError) {
+        console.error(
+          "[bili] 记录值班窗口异常状态失败；窗口开始记录仍会阻止自动重复执行。",
+          markError instanceof Error ? markError.message : String(markError),
+        );
+      }
+    }
+    throw error;
   } finally {
     await lease.release().catch((error: unknown) => {
       console.error("[bili] 释放值班执行租约失败；它会在过期后自动回收。", error instanceof Error ? error.message : String(error));
