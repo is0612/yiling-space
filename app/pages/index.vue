@@ -158,10 +158,81 @@ function copyState() {
 async function handleRefresh() {
   await refresh();
 }
+
+/* ══ 背景动态壁纸 ══════════════════════════════════════════════════
+   静态图（.ov-a::before）先出来顶住首屏，视频解码出首帧再淡入盖上去；
+   视频 404 / 自动播放被拦 / 用户开了「减少动态效果」，就一直是静态图。
+   装饰层只能更差或更好，不能影响任何数据和可读性。
+
+   素材：public/overview/overview-wallpaper.mp4
+   1600×918 · H.264 · 60fps · 无音轨 · 10s 无缝循环（首尾帧几乎重合）。
+   换视频只要覆盖这个文件，别改尺寸 —— 槽位由 --ov-w / --ov-h 定。 */
+const wallpaperVideo = ref<HTMLVideoElement | null>(null);
+const wallpaperArmed = ref(false); // 是否值得去下载（没开减少动态效果）
+const wallpaperOn = ref(false); // 首帧已经画上去了，可以淡入
+
+function playWallpaper() {
+  void wallpaperVideo.value?.play().catch(() => {
+    // 自动播放被策略拦下：留在静态图上，不重试也不再打扰用户
+  });
+}
+
+// 切到后台就停 —— 一张看不在眼里的壁纸没理由继续吃 GPU
+function onWallpaperVisibility() {
+  if (!wallpaperArmed.value) return;
+  if (document.hidden) wallpaperVideo.value?.pause();
+  else playWallpaper();
+}
+
+onMounted(() => {
+  // 动效是装饰不是功能，不该硬塞给会晕动的人
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  // 和 CSS 里那条 (max-width: 1240px) 同一条线：窄屏根本不显示壁纸，
+  // 别为了一张看不见的图去下 4 MB
+  if (window.matchMedia?.("(max-width: 1240px)").matches) return;
+
+  // 首屏要抢的是接口和字体，这几 MB 的背景等浏览器闲下来再拉
+  const arm = () => { wallpaperArmed.value = true; };
+  if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(arm, { timeout: 2500 });
+  else window.setTimeout(arm, 1200);
+
+  document.addEventListener("visibilitychange", onWallpaperVisibility);
+});
+
+watch(wallpaperArmed, async (armed) => {
+  if (!armed) return;
+  // 元素是 v-if 挂上来的，等它进了 DOM 才有 play() 可调
+  await nextTick();
+  playWallpaper();
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("visibilitychange", onWallpaperVisibility);
+});
 </script>
 
 <template>
   <div class="page-wrap ov-a">
+    <!-- 动态壁纸层：铺满 .ov-a 自己那块（也就是 main），和挂在 .ov-a 上的
+         静态兜底图同一个盒子、同一套 cover 规则。摆在内容之前，层级压在
+         .ov-stage 底下，纯装饰，不接指针事件。 -->
+    <div
+      v-if="wallpaperArmed"
+      class="ov-media"
+      aria-hidden="true"
+    >
+      <video
+        ref="wallpaperVideo"
+        class="ov-media-video"
+        :class="{ 'is-on': wallpaperOn }"
+        src="/overview/overview-wallpaper.mp4"
+        muted
+        loop
+        playsinline
+        preload="auto"
+        @playing="wallpaperOn = true"
+      />
+    </div>
     <!-- 内容栏：靠左收窄，右边那截留白就是角色的位置 -->
     <div class="ov-stage">
       <div
@@ -371,7 +442,7 @@ async function handleRefresh() {
 <style scoped>
 /* ══════════════════════════════════════════════════════════════
    A · 色块平铺 —— 一张白台面，只有异常才上色
-   L0 画布（main.css 的 --bg 不动）→ L1 白卡 #fff（零描边零阴影）
+   L0 画布（main.css 的 --bg 不动）→ L1 纸面 --paper（.88 白，见下）
    → L2 卡内 6px 内衬 → L3 行（无底色无分隔）→ L4 异常整行上色
    统一写 `.ov-a .xxx`：把作用域锁在本页，同时靠 (0,3,0) 压过
    main.css 里 .pill / .btn 的 (0,1,0)。
@@ -383,14 +454,79 @@ async function handleRefresh() {
    ══════════════════════════════════════════════════════════════ */
 
 /* ══ 内容栏 ══════════════════════════════════════════════════════
-   背景图挂在 .app-main 上（见本文件末尾那段不带 scoped 的样式），这里只管
-   让内容靠左收窄 —— 卡片一旦铺满整页，右边那个角色就被压在底下了。
-   36vw 是量出来的：图里角色的左缘落在 40% 处，内容超过这条线就会压到人身上。 */
+   背景分两层：静态兜底图直接挂在 .ov-a 的 background 上、动态壁纸挂在
+   .ov-media，两张都只铺 main 这一块、压在内容底下（见下方「壁纸层」那段）。
+   这里只管让内容靠左收窄 —— 卡片一旦铺满整页，右边那个角色就被压在底下了。
+   36vw 是量出来的：壁纸右对齐以后，角色的左缘（头发和筷子）落在 43% 附近，
+   卡片超过这条线就会压到她身上。几个尺寸逐个截图对过，脸始终在线右侧。 */
 .ov-a .ov-stage {
   width: min(720px, 36vw);
   min-width: 0;
   /* 容器查询的锚点 —— 卡片里的五格换几列，看的是卡片自己多宽，不是视口 */
   container-type: inline-size;
+  /* 壁纸层是 z-index:0 的 fixed 元素，内容得自己抬一层才压得住它。
+     container-type 本身已经建了层叠上下文，这里只是把顺序写明白。 */
+  position: relative;
+  z-index: 1;
+}
+
+/* ══ 壁纸层 ══════════════════════════════════════════════════════
+   壁纸只活在 main 里 —— 挂在页面根节点 .ov-a 上，不挂在视口上，所以侧栏和
+   顶栏底下不会再有图。main 本身没有高度（它只有内容那么高），所以这里给它
+   一个「至少一屏」的下限：100vh 减掉顶栏那 56px，否则会凭空多出一条滚动条。
+
+   固定右上角 + cover，两条行为是刻意设计的，别改成 center 或 bottom：
+   · 窗口变窄（16:9 → 16:10 → 4:3）：高度被下限钉着，图比窗口宽，cover 只能
+     从**左边**裁 —— 裁掉窗帘和海，角色好好地留在右边缘。
+   · 窗口变矮：宽度成为瓶颈，图比窗口高，从**下面**裁 —— 裁掉桌子和腿，
+     头和脸留在最上面。
+   一句话：右边那个角色永远在，窗口再矮也先保住她的脸。
+
+   换图：public/overview/overview-bg.jpg（动态版是同目录的
+   overview-wallpaper.mp4，两者都必须是 16:9 —— 裁切算法一样，淡入才不错位）。 */
+.ov-a {
+  position: relative;
+  min-height: calc(100vh - var(--topbar-h));
+  background: url("/overview/overview-bg.jpg") right top / cover no-repeat;
+
+  /* 纸面：.88 白，用在压在这张画上的所有卡片。
+     故意不用 backdrop-filter —— 背后是 60fps 的视频，毛玻璃每帧都要重算一次
+     高斯模糊，等于拿 GPU 换一点氛围；而且压到 .55 透明时，12px 的 --faint
+     灰字（"昨天 ¥4.10"这种）会糊在浅色海面上。0.88 是层次和可读性之间
+     的一个点，渲染成本为零。 */
+  --paper: rgba(255, 255, 255, .88);
+}
+
+/* 视频层：铺满 .ov-a 自己那块（含内边距），用同一套 cover 参数；
+   静态图在它下面兜底，所以视频没下、没播、被拦，画面都是完整的。 */
+.ov-a .ov-media {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ov-a .ov-media-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: right top;
+  /* 从 0 开始淡入：解码出首帧那一刻静态图正好在下面，接得住 */
+  opacity: 0;
+  transition: opacity 600ms ease;
+}
+.ov-a .ov-media-video.is-on { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-a .ov-media-video { transition: none; }
+}
+
+/* 窄到这个份上就别放壁纸了：内容已经占满整屏，图只会变成一层噪点。
+   和 JS 里那段 1240 的判断是同一条线，改一处得改两处。 */
+@media (max-width: 1240px) {
+  .ov-a { background-image: none; }
+  .ov-a .ov-media { display: none; }
 }
 
 /* 异常条：有问题时整条醒目，没问题时退成一块白砖。
@@ -410,7 +546,7 @@ async function handleRefresh() {
 }
 .ov-a .alert-bar.is-quiet {
   border: 0;
-  background: var(--surface);
+  background: var(--paper);
   color: var(--text-2);
 }
 .ov-a .alert-dot {
@@ -444,11 +580,12 @@ async function handleRefresh() {
   font-size: 14px;
 }
 
-/* 空态引导：虚线框去掉，改成一块纯白砖 */
+/* 空态引导：虚线框去掉，改成一块纸面 —— 和卡片同一种材质 */
 .ov-a .guide {
   border: 0;
   border-radius: 10px;
-  background: var(--surface);
+  background: var(--paper);
+  box-shadow: var(--sh-1);
   padding: 36px 24px 32px;
   text-align: center;
 }
@@ -513,20 +650,24 @@ async function handleRefresh() {
   font-size: 16px;
 }
 
-/* 主角卡：一个角色一张白砖，装下身份 + 五个时点 + 周期进度 */
+/* 主角卡：一个角色一张纸，装下身份 + 五个时点 + 周期进度 */
 .ov-a .hero {
   border: 0;
   border-radius: 12px;
-  background: var(--surface);
+  background: var(--paper);
+  /* 加一层最轻的投影（复用 main.css 的 --sh-1）：卡片压在插画上，
+     不给一点分离会跟背后的白色窗帘糊在一起。 */
+  box-shadow: var(--sh-1);
   padding: 22px 24px;
   margin-bottom: 24px;
 }
-/* 异常：只给竖条，不铺整块底 —— 1000px 宽的 hero 铺粉底等于整页报警 */
+/* 异常：只给竖条，不铺整块底 —— 1000px 宽的 hero 铺粉底等于整页报警。
+   竖条和上面的投影要一起写，box-shadow 是整条覆盖不是叠加。 */
 .ov-a .hero.is-bad {
-  box-shadow: inset 4px 0 0 var(--red);
+  box-shadow: inset 4px 0 0 var(--red), var(--sh-1);
 }
 .ov-a .hero.is-over {
-  box-shadow: inset 4px 0 0 var(--amber);
+  box-shadow: inset 4px 0 0 var(--amber), var(--sh-1);
 }
 .ov-a .hero-head {
   display: flex;
@@ -775,38 +916,5 @@ async function handleRefresh() {
   .ov-a .stat,
   .ov-a .stat:nth-child(4),
   .ov-a .stat:nth-child(5) { grid-column: span 1; }
-}
-</style>
-
-<style>
-/* 不 scoped：背景得挂在 AppShell 的 .app-main 上，够不到就成不了背景。
-   用 :has(.ov-a) 锁在总览页 —— 别的页面没有 .ov-a，不会白带一张图。
-   fixed 让角色钉在视口右下角，翻页时不跟着滚。
-   换图：文件丢进 public/overview/，改下面这行 url（图变了记得同步 --ov-h 的除数）。 */
-.app-main:has(.ov-a) {
-  /* 1600 是封顶值。64vw 是比例闸门：1440 屏只放到 921，超过这个比例
-     角色就会一路往左滑，最后钻到卡片底下。要让 1600 真正生效，
-     得等视口宽过 2500 —— 或者用下面那条 ≥1900 的断点把它顶上去。 */
-  --ov-w: min(1600px, 64vw);
-  --ov-h: calc(var(--ov-w) / 1.7768); /* 1672 / 941，图片自己的宽高比 */
-  background-image:
-    linear-gradient(to bottom, var(--bg) 0, transparent 10%),
-    linear-gradient(to right, var(--bg) 0, transparent 16%),
-    url("/overview/overview-bg.jpg");
-  background-repeat: no-repeat;
-  /* 三层同尺寸同位：上面两层渐变就正好糊在图片的上缘和左缘，
-     把那两条直角边吃掉，看起来才像是画在页面上的 */
-  background-size: var(--ov-w) var(--ov-h);
-  background-position: right bottom;
-  background-attachment: fixed;
-}
-/* 1920 这一类宽屏：图放到满 1600，卡片相应收到 33vw 让位。
-   再窄就不行了 —— 1600 的图在 1440 屏上会顶到左边，人被卡片盖住。 */
-@media (min-width: 1900px) {
-  .app-main:has(.ov-a) { --ov-w: 1600px; }
-  .ov-a .ov-stage { width: min(720px, 33vw); }
-}
-@media (max-width: 1240px) {
-  .app-main:has(.ov-a) { background-image: none; }
 }
 </style>
