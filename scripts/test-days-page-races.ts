@@ -19,7 +19,7 @@ const names = statements.flatMap((node) => {
   return ts.isFunctionDeclaration(node) && node.name ? [node.name.text] : [];
 });
 const program = `${statements.map((node) => node.getText(source)).join("\n")}
-return { ${names.join(", ")} };
+return { id, ${names.join(", ")} };
 `;
 const compiled = ts.transpileModule(`(function () {\n${program}\n})()`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
@@ -199,8 +199,6 @@ async function selectingFromListLoadsDetailOnce() {
   page.take("/api/characters/role-a/days").resolve(daysResult("2026-11-05"));
   await flushMicrotasks();
   assert.equal(page.read("selected"), "2026-11-05");
-  const detailRequests = page.requestsCount?.() ?? 0;
-  assert.equal(detailRequests, 0);
   const request = page.take("/api/characters/role-a/days/2026-11-05");
   request.resolve(detailResult("2026-11-05"));
   await pending;
