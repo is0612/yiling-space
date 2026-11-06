@@ -1559,7 +1559,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     }
 
     // 只计算一次话题候选，避免主人上下文旁路和 mention 闸门使用不同判断。
-    const topicCandidate = isGroupMessage
+    const topicCandidate = isGroupMessage && groupChatMode === "mention"
       && groupContext.topicCandidate(contextKey, facts ? [facts] : []);
     // 主人在 mention 档的普通发言只进入攒批，供 flush 在不回复时保存为 context；
     // 它不因此获得公告、空间或 B 站指令的免 @ 权限。
