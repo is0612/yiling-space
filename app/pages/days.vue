@@ -40,6 +40,7 @@ const currentCharacter = computed<Character | null>(
 );
 
 const days = ref<DayRow[]>([]);
+const daysTruncated = ref(false);
 const today = ref("");
 const timeZone = ref("Asia/Shanghai");
 /** 按忆泡标题/详情搜索日期；空 = 普通列表。 */
@@ -213,10 +214,11 @@ async function loadDays(targetCharacterId = id.value) {
   loading.value = true;
   try {
     const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/days${keyword ? `?q=${encodeURIComponent(keyword)}` : ""}`;
-    const result = await $fetch<{ today: string; timeZone: string; days: DayRow[] }>(url);
+    const result = await $fetch<{ today: string; timeZone: string; days: DayRow[]; truncated: boolean }>(url);
     if (seq !== daysRequestSeq || targetCharacterId !== id.value || keyword !== searchQuery.value.trim()) return;
 
     days.value = result.days;
+    daysTruncated.value = result.truncated;
     today.value = result.today;
     timeZone.value = result.timeZone || "Asia/Shanghai";
 
@@ -237,6 +239,7 @@ async function loadDays(targetCharacterId = id.value) {
   } catch {
     if (seq !== daysRequestSeq || targetCharacterId !== id.value || keyword !== searchQuery.value.trim()) return;
     days.value = [];
+    daysTruncated.value = false;
     detail.value = null;
     ElMessage.error("忆泡日历读取失败，请检查本地开发服务器日志。");
   } finally {
@@ -280,6 +283,7 @@ watch(id, () => {
   editSaveSeq += 1;
   selected.value = "";
   days.value = [];
+  daysTruncated.value = false;
   today.value = "";
   timeZone.value = "Asia/Shanghai";
   detail.value = null;
@@ -307,6 +311,7 @@ watch(searchQuery, () => {
   daysRequestSeq += 1;
   detailRequestSeq += 1;
   days.value = [];
+  daysTruncated.value = false;
   selected.value = "";
   detail.value = null;
   detailLoading.value = false;
@@ -368,6 +373,12 @@ await loadDays();
           class="muted-note day-empty"
         >
           只列出命中「{{ searchQuery.trim() }}」的日子，数字是命中的条数。
+        </div>
+        <div
+          v-if="daysTruncated"
+          class="muted-note day-empty"
+        >
+          {{ searchActive ? "匹配记录较多：搜索仅检查最近 300 条命中忆泡，可能遗漏更早的日期，请缩小关键词范围。" : "这里只显示最近 90 个有记录的日期；更早的日期可以通过关键词搜索定位。" }}
         </div>
         <div
           v-if="loading"
