@@ -18,10 +18,11 @@
 
 
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
-import { downloadSafeMedia } from "./safe-media-download";
-export { assertFetchableImageUrl, assertPublicHost } from "./safe-media-download";
 import { resolveCharacterVisionApiKey } from "./credential-encryption";
 import { readModelUsage, recordModelUsage } from "./model-usage";
+import { downloadSafeMedia } from "./safe-media-download";
+
+export { assertFetchableImageUrl, assertPublicHost } from "./safe-media-download";
 
 /** 一轮最多看几张。图片描述按张计费，群里一轮三张已经够说明问题了。 */
 export const MAX_IMAGES_PER_TURN = 3;
