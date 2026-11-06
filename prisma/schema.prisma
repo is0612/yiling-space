@@ -247,6 +247,7 @@ model CharacterChannelBinding {
   biliRoundReports BiliRoundReport[]
   biliSeenVideos   BiliSeenVideo[]
   biliActions      BiliAction[]
+  biliDutyLease    BiliDutyLease?
 
   @@unique([characterId, connectionId])
   @@index([status])
@@ -847,6 +848,22 @@ model BiliAction {
   @@index([bindingId, day, kind])
   @@index([bindingId, createdAt])
   @@map("bili_actions")
+}
+
+/// B站某个角色绑定当前值班轮次的数据库租约。
+///
+/// 手动入口和定时适配器最终都进入 runDutyRound，因此按 binding 唯一认领；
+/// expiresAt 配合定时续租处理进程崩溃，token 则阻止旧执行者续租或释放新租约。
+model BiliDutyLease {
+  bindingId String                  @id @db.Uuid
+  token     String                  @db.Uuid
+  expiresAt DateTime                @db.Timestamptz(6)
+  createdAt DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
+  binding   CharacterChannelBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("bili_duty_leases")
 }
 
 /// 每次模型调用的 token 记账。
