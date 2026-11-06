@@ -17,7 +17,11 @@ import {
   groupChatWindowMs,
   isClarificationMessage,
   isGroupId,
+  isAiOnlyGroupRound,
   mentionsCharacterName,
+  shouldBlockFriendSpeaker,
+  shouldPauseAiOnlyRound,
+  MAX_CONSECUTIVE_AI_ROUNDS,
   readGroupChatModeOverrides,
   resolveGroupChatSettings,
   type GroupChatGateInput,
@@ -348,5 +352,26 @@ const manyGroups = Object.fromEntries(
   Array.from({ length: 60 }, (_, index) => [String(100000000 + index), "all" as const]),
 );
 assert.equal(Object.keys(readGroupChatModeOverrides(manyGroups)).length, 50);
+
+// ── 8. 朋友身份与 AI 对话保护 ──────────────────────────
+assert.equal(shouldBlockFriendSpeaker("AI", "DEFAULT"), true, "AI 默认不接话。");
+assert.equal(shouldBlockFriendSpeaker("AI", "ALLOW"), false, "明确允许的 AI 朋友可以交流。");
+assert.equal(shouldBlockFriendSpeaker("AI", "BLOCK"), true, "明确禁止优先阻止 AI。");
+assert.equal(shouldBlockFriendSpeaker("HUMAN", "DEFAULT"), false, "真人默认正常交流。");
+assert.equal(shouldBlockFriendSpeaker("HUMAN", "BLOCK"), true, "禁止规则同样适用于真人。");
+assert.equal(shouldBlockFriendSpeaker("UNKNOWN", "DEFAULT"), false, "未知身份保留旧行为。");
+assert.equal(shouldBlockFriendSpeaker("UNKNOWN", "BLOCK"), true, "未知对象也可以被手动禁止。");
+assert.equal(shouldBlockFriendSpeaker("UNKNOWN", "ALLOW"), false, "允许规则不依赖自动分类。");
+
+assert.equal(isAiOnlyGroupRound(["AI"]), true);
+assert.equal(isAiOnlyGroupRound(["AI", "AI"]), true);
+assert.equal(isAiOnlyGroupRound(["AI", "UNKNOWN"]), false, "未知身份不冒充已确认 AI。");
+assert.equal(isAiOnlyGroupRound(["AI", "HUMAN"]), false, "真人参与会打断连续 AI 轮次。");
+assert.equal(isAiOnlyGroupRound([]), false, "空批次不能计数。");
+assert.equal(MAX_CONSECUTIVE_AI_ROUNDS, 3);
+assert.equal(shouldPauseAiOnlyRound(0), false);
+assert.equal(shouldPauseAiOnlyRound(2), false);
+assert.equal(shouldPauseAiOnlyRound(3), true, "连续三轮 AI 后暂停下一轮。");
+assert.equal(shouldPauseAiOnlyRound(10), true);
 
 console.log("群聊自然接话测试通过：配置解析与夹取、别名识别、澄清识别、闸门顺序（模式/安静时段/上限/间隔/direct/名字弱线索/接话窗口/话题候选/抽签）、@ 的是别人时「全都回」也不抢话、被澄清的 @ 允许沉默、mustReply 边界、攒批窗口与合并上限、东八区日界、按群覆盖模式。");
