@@ -4915,6 +4915,14 @@ components:
         chatApiBaseUrl: { type: string, maxLength: 500 }
         chatApiKey: { type: string, maxLength: 8192, writeOnly: true }
         clearApiKey: { type: boolean }
+        # 语音：合成与识别两套配置，Key 分开两把（Breeze 只做合成）
+        ttsProvider: { type: string, enum: ['', openai, minimax, breeze], description: 语音合成服务商；空 = 按地址自动判断 }
+        ttsInstructions: { type: string, maxLength: 400, description: Breeze 的语气指令（软糯/气声这类）；其他服务商忽略 }
+        asrProvider: { type: string, enum: ['', openai, minimax], description: 语音识别服务商；空 = 按地址自动判断。Breeze 只有合成，不在其中 }
+        asrApiBaseUrl: { type: string, maxLength: 500, description: 识别专用地址；留空 = 用 VOICE_ASR_BASE_URL 或语音合成地址 }
+        asrApiKey: { type: string, maxLength: 8192, writeOnly: true, description: 识别专用 Key，加密保存、不回传；留空保持已有值 }
+        clearAsrApiKey: { type: boolean, description: 清除识别专用 Key }
+        syncAsrFromVoice: { type: boolean, description: true = 服务端把语音合成的 Key 复制一份给识别（Key 不经过浏览器） }
         contextAssistantApiKey: { type: string, maxLength: 8192, writeOnly: true, description: 独立 Key 加密保存；空字符串保持已有值 }
         clearContextAssistantApiKey: { type: boolean, description: 清除独立 Key；助手仍启用时必须同时关闭助手或提供新 Key }
         chatModel: { type: string, maxLength: 120 }

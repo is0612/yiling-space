@@ -218,10 +218,53 @@ GroupId 输入框的显示条件是「显式选了 MiniMax **或**地址里含 m
 价格参考（2026-10）：Turbo $10 / 100 万字符，HD $20；中文一个汉字按 2 个字符算，
 约 1.4 元/万汉字。一天 100 条、每条 20 字，一个月不到 10 块。
 
-**合成换成 MiniMax 后，识别不会跟着搬**：ASR 地址固定取 `.env` 的 `VOICE_ASR_BASE_URL`
-（其次才是页面上的「服务地址」）。MiniMax 没有 `/audio/transcriptions`，两边一起改的结果是
-「语音能发了、但突然听不懂话」，而页面上开关都还开着，看不出任何异常。
-所以推荐组合是：合成走 MiniMax，识别留在硅基流动。
+**合成换成 MiniMax 后，识别不会跟着搬**：识别有独立的一套配置（服务商 / 地址 / Key / 模型），
+见下面的「识别是另一套配置」。合成、识别不是同一家时**不会**复用同一把 Key —— 拿 B 家的 Key
+去打 A 家只会拿到 401，而报错里只会写「鉴权失败」。
+
+### 换成 Breeze：音色克隆 + 语气指令
+
+Breeze（BreezeBlue）是第三条合成分支，和前两家最不一样的地方是**语气可以写出来**：
+
+```
+POST https://api.breeze.blue/v1/text-to-speech/{voice_id}?output_format=wav
+xi-api-key: <开发者后台建的 Key>        ← 不是 Bearer
+{
+  "text": "今天群里怎么这么安静，都去哪儿了呀？",
+  "model_id": "breeze-tts-2",
+  "language_code": "zh",
+  "instructions": "声音软软的、轻轻的，带一点气声，说话有点黏，语气温柔，像在耳边轻声说话",
+  "voice_settings": { "speed": 1.0 }
+}
+```
+
+| | 说明 |
+| --- | --- |
+| 音色 | **必须先在 Breeze 工作台克隆一个**，拿到 `voc_` 开头的 id；它没有内置音色，留空就不发语音 |
+| 语气指令 | `instructions` 用一句人话描述「她怎么说」。**只说语气**（软、轻、黏、笑、气声），写「语速偏快」「句尾上扬」会被推回播音腔 |
+| 语速 | `voice_settings.speed` 是**档位不是旋钮**：同一组参数生成两次会差 10~15%，别拿它做精确对齐 |
+| 输出 | 原生 24k 单声道 wav，正好对上 silk |
+| 价格 | $30 / 100 万字符（中文一个字算 2 个字符），免费档每天 400 积分 ≈ 2000 汉字 |
+
+三个必须知道的坑：
+
+1. **Cloudflare 按 UA 拦**：不带浏览器 UA 直接 `403 error code: 1010`，报错里完全看不出是 UA 问题。
+2. **失败时返回的是 JSON 不是音频**：拿到字节后必须验 `RIFF` 头，否则会把 `{"detail":…}` 喂给 silk，
+   报一个跟语音毫无关系的错。
+3. **克隆需要被克隆者的同意**：平台条款写的是 speaker consent，商用前自己把关。
+
+### 识别是另一套配置
+
+识别（ASR）和合成完全独立，页面「语音识别」区块四个字段：服务商 / API 地址 / API Key / 识别模型。
+
+| 服务商 | 端点 | 模型 |
+| --- | --- | --- |
+| MiniMax | `POST /speech_to_text` | `asr-1.0`（只认 `asr-*` 这一族） |
+| OpenAI 兼容 | `POST /audio/transcriptions` | 硅基流动 `FunAudioLLM/SenseVoiceSmall`、OpenAI `whisper-1` |
+
+Key 的取值顺序：**识别专用 Key > `VOICE_ASR_API_KEY` > 合成那把（仅当同一家）> 聊天 Key**。
+「同一家」这个条件是必须的：合成在 Breeze、识别在 MiniMax 时，共用同一把 Key 只会 401。
+同一家（比如都用硅基流动）时点「同语音合成」即可，Key 由服务端复制一份，不经过浏览器。
 
 ## 代价
 
