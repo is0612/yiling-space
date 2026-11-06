@@ -33,7 +33,7 @@ import {
 } from "silk-wasm";
 
 import { validateChatApiBaseUrl } from "./chat-model-config";
-import { assertFetchableImageUrl, assertPublicHost } from "./image-understanding";
+import { downloadSafeMedia } from "./safe-media-download";
 
 /** 这条回复最多合成多少字。再长就该用文字说：没人愿意听 40 秒的语音条。 */
 export const VOICE_TEXT_MAX_CHARS = 60;
@@ -916,34 +916,12 @@ export type ChannelVoiceRef = {
  * 不另写一套 —— 两套白名单迟早会有一套漏掉某个私网段。
  */
 export async function downloadVoice(rawUrl: string): Promise<Buffer> {
-  const url = assertFetchableImageUrl(rawUrl);
-  await assertPublicHost(url.hostname);
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-    });
-  } catch {
-    throw new Error("VOICE_DOWNLOAD_FAILED");
-  }
-  if (!response.ok) throw new Error("VOICE_HTTP_" + response.status);
-
-  // 重定向后可能换了 host，最终地址要再过一遍。
-  try {
-    await assertPublicHost(new URL(response.url).hostname);
-  } catch {
-    throw new Error("VOICE_BLOCKED_HOST");
-  }
-
-  const declaredLength = Number(response.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_VOICE_BYTES) throw new Error("VOICE_TOO_LARGE");
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.byteLength > MAX_VOICE_BYTES) throw new Error("VOICE_TOO_LARGE");
-  if (!buffer.length) throw new Error("VOICE_EMPTY");
-  return buffer;
+  const result = await downloadSafeMedia(rawUrl, {
+    prefix: "VOICE",
+    maxBytes: MAX_VOICE_BYTES,
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+  });
+  return result.buffer;
 }
 
 /**
