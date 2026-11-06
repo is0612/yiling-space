@@ -302,15 +302,29 @@ export class GroupContext {
   }
 
   /** 有活跃话题、且这轮里有人是参与者（或引用锚点）时，值得看一眼。 */
-  topicCandidate(key: string, facts: readonly GroupMessageFacts[]): boolean {
+  topicCandidate(
+    key: string,
+    facts: readonly GroupMessageFacts[],
+    excludedSenders: ReadonlySet<string> = new Set(),
+  ): boolean {
     const state = this.state(key);
     const now = this.now();
-    const active = state.topics.filter((topic) => now < topic.expiresAt);
+    const excludedCodes = new Set(
+      [...state.memberCodes.entries()]
+        .filter(([qq]) => excludedSenders.has(qq))
+        .map(([, code]) => code),
+    );
+    const active = state.topics.filter((topic) => {
+      if (now >= topic.expiresAt) return false;
+      const anchor = state.messages.find((message) => message.messageId === topic.anchorMessageId);
+      if (anchor && excludedSenders.has(anchor.senderQq)) return false;
+      return topic.participants.some((member) => !excludedCodes.has(member));
+    });
     if (!active.length) return false;
     const senders = new Set(facts.map((fact) => this.memberCode(key, fact.senderQq)));
     const replies = new Set(facts.map((fact) => fact.replyToMessageId).filter(Boolean));
     return active.some((topic) =>
-      topic.participants.some((member) => senders.has(member))
+      topic.participants.some((member) => !excludedCodes.has(member) && senders.has(member))
       || (topic.anchorMessageId && replies.has(topic.anchorMessageId)),
     );
   }
