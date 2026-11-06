@@ -154,7 +154,7 @@ async function staleRoleDays() {
   const currentResponse = page.take("/api/characters/role-b/days");
   oldResponse.resolve(daysResult("2026-11-04"));
   await old;
-  assert.deepEqual(page.read("days"), []);
+  assert.equal((page.read<unknown[]>("days")).length, 0, "过期请求/卸载后不能留下旧日期");
   assert.equal(page.read("loading"), true);
   currentResponse.resolve(daysResult("2026-11-05", "America/Los_Angeles"));
   await flushMicrotasks();
@@ -192,7 +192,7 @@ async function searchInvalidatesBeforeDebounce() {
   page.set("searchQuery", "新关键词");
   old.resolve(daysResult("2026-11-01"));
   await flushMicrotasks();
-  assert.deepEqual(page.read("days"), []);
+  assert.equal((page.read<unknown[]>("days")).length, 0, "过期请求/卸载后不能留下旧日期");
   assert.equal(page.read("loading"), true);
   page.tickSearch();
   page.take("/api/characters/role-a/days", "新关键词").resolve(daysResult("2026-11-05"));
@@ -223,7 +223,7 @@ async function unmountInvalidatesRequests() {
   page.unmount();
   response.resolve(daysResult("2026-11-05"));
   await pending;
-  assert.deepEqual(page.read("days"), []);
+  assert.equal((page.read<unknown[]>("days")).length, 0, "过期请求/卸载后不能留下旧日期");
   page.finish();
 }
 
