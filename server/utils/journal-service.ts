@@ -523,6 +523,7 @@ export async function persistRevision(
     model: string;
     promptVersion: string;
     actorUserId?: string | null;
+    characterId?: string;
     /** 本次生成开始时间：regenerate 时用来识别「生成期间被人工改过」。 */
     startedAt?: Date;
     jobLease?: MemoryJobLease;
@@ -607,6 +608,25 @@ export async function persistRevision(
       where: { id: journal.id },
       data: { status: "ACTIVE", skipReason: null, ...generatedStateData(input.kind, new Date()) },
     });
+    if (input.actorUserId && input.characterId) {
+      await tx.auditLog.create({
+        data: {
+          actorType: "USER",
+          actorId: input.actorUserId,
+          characterId: input.characterId,
+          action: input.mode === "regenerate" ? "journal.regenerated" : "journal.generated",
+          entityType: "CharacterJournal",
+          entityId: journal.id,
+          details: {
+            dayKey: input.dayKey,
+            target: input.kind,
+            texts: [input.kind],
+            revisionId: revision.id,
+            version: revision.version,
+          },
+        },
+      });
+    }
     return { revision, reused: false };
   }));
 }
@@ -726,6 +746,7 @@ export async function generateJournalForDay(
     if (result.entry.action === "CREATE") {
       const { revision, reused, manualSuperseded } = await persistRevision(prisma, {
         globalScopeId,
+        characterId: character.id,
         dayKey: input.dayKey,
         kind: "DIARY",
         mode: input.mode,
@@ -769,6 +790,7 @@ export async function generateJournalForDay(
     if (result.entry.action === "CREATE") {
       const { revision, reused, manualSuperseded } = await persistRevision(prisma, {
         globalScopeId,
+        characterId: character.id,
         dayKey: input.dayKey,
         kind: "HANDBOOK",
         mode: input.mode,
@@ -946,6 +968,17 @@ export async function saveJournalEdit(
       where: { id: journal.id },
       data: { status: "ACTIVE", skipReason: null, ...generatedStateData(input.kind, new Date()) },
     });
+    await tx.auditLog.create({
+      data: {
+        actorType: "USER",
+        actorId: input.actorUserId,
+        characterId: input.characterId,
+        action: "journal.edited",
+        entityType: "JournalRevision",
+        entityId: created.id,
+        details: { dayKey: input.dayKey, kind: input.kind, version: created.version },
+      },
+    });
     return created;
   }));
   return { ok: true, revision };
@@ -1003,6 +1036,17 @@ export async function restoreJournalRevision(
     await tx.characterJournal.update({
       where: { id: journal.id },
       data: { status: "ACTIVE", skipReason: null, ...generatedStateData(input.kind, new Date()) },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorType: "USER",
+        actorId: input.actorUserId,
+        characterId: input.characterId,
+        action: "journal.restored",
+        entityType: "JournalRevision",
+        entityId: created.id,
+        details: { dayKey: input.dayKey, kind: input.kind, restoredFrom: source.version, version: created.version },
+      },
     });
     return created;
   }));
