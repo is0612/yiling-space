@@ -84,7 +84,10 @@ try {
     data: { kind: "AI", kindSource: "MANUAL" },
   });
   await prisma.memoryScope.updateMany({
-    where: { characterId, externalIdentity: { platform, platformUid: seenOnlyUid } },
+    where: {
+      characterId,
+      externalIdentity: { is: { platform: PLATFORM, platformUid: seenOnlyUid } },
+    },
     data: { friendChatPolicy: "BLOCK" },
   });
   const seenAgain = await ensureGroupMemberIdentity({
