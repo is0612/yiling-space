@@ -5,6 +5,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { loadBiliConnections, BILI_DUTY_DEFAULTS } from "../server/utils/channel-adapter/bili/configure";
 import { acquireBiliDutyLease, BiliDutyLeaseLostError } from "../server/utils/channel-adapter/bili/bili-duty-lease";
+import { runDutyRound } from "../server/utils/channel-adapter/bili/duty-pipeline";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("缺少 DATABASE_URL，B站 渠道数据库测试无法运行。");
@@ -174,6 +175,15 @@ async function main() {
   assert.equal(record?.duty.dmMode, "both");
   assert.equal(record?.duty.autoComment, BILI_DUTY_DEFAULTS.autoComment); // 未配置的用默认值
   assert.equal(record?.bindings.length, 1);
+
+  // 高层入口在抢锁失败时必须直接返回，不能先读取模型配置或启动 bili CLI。
+  const heldForRound = await acquireBiliDutyLease(contenderPrisma, bindingId);
+  assert(heldForRound, "测试需要先持有该 binding 的租约。");
+  const skippedRound = await runDutyRound(record!, { id: bindingId, characterId });
+  assert.equal(skippedRound.ok, false);
+  assert.equal(skippedRound.error, "已有值班轮次正在执行", "手动/定时共用的入口必须识别数据库锁冲突。");
+  assert.equal(skippedRound.picked, 0);
+  assert.equal(await heldForRound.release(), true, "测试结束后释放模拟占用的租约。");
 
   // 4. 默认值正确性
   assert.equal(BILI_DUTY_DEFAULTS.perDay, 5);
