@@ -8,8 +8,12 @@ export function alignMediaResults<T>(
   sourceLength: number,
   targetIndexes: readonly number[],
   results: readonly (T | null | undefined)[],
-): Array<T | null> {
-  const aligned = Array.from({ length: Math.max(0, Math.trunc(sourceLength)) }, () => null as T | null);
+  unselectedValue: T | null | undefined = null,
+): Array<T | null | undefined> {
+  const aligned = Array.from(
+    { length: Math.max(0, Math.trunc(sourceLength)) },
+    () => unselectedValue,
+  );
 
   for (let resultIndex = 0; resultIndex < targetIndexes.length; resultIndex += 1) {
     const sourceIndex = targetIndexes[resultIndex];
