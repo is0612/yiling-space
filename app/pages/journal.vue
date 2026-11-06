@@ -288,49 +288,60 @@ async function loadDetail(dayKey: string, targetCharacterId = id.value): Promise
 
 
 async function writeDayNow(target: JournalKind | "BOTH" = "BOTH"): Promise<void> {
-  if (!id.value || !writeDay.value) return;
+  const targetCharacterId = id.value;
+  const dayKey = writeDay.value;
+  if (!targetCharacterId || !dayKey || writing.value) return;
+  const seq = ++writeRequestSeq;
+  const selectionAtStart = selectedDay.value;
   writing.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/journals`;
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals`;
     const result = await requestFetch<{ status: string; reason?: string }>(url, {
       method: "POST",
-      body: { dayKey: writeDay.value, target },
+      body: { dayKey, target },
     });
+    if (seq !== writeRequestSeq || targetCharacterId !== id.value) return;
     if (result.status === "created") ElMessage.success("写好了。");
     else ElMessage.info(result.reason || "这一天她没写。");
-    selectedDay.value = writeDay.value;
-    page.value = 1;
-    await loadList(true);
+    if (selectedDay.value === selectionAtStart) {
+      selectedDay.value = dayKey;
+      page.value = 1;
+    }
+    await loadList(true, targetCharacterId);
   } catch (error) {
-    ElMessage.error(readError(error));
+    if (seq === writeRequestSeq && targetCharacterId === id.value) ElMessage.error(readError(error));
   } finally {
-    writing.value = false;
+    if (seq === writeRequestSeq) writing.value = false;
   }
 }
 
 async function writeCurrent(kind: JournalKind): Promise<void> {
+  const targetCharacterId = id.value;
   const dayKey = selectedDay.value;
-  if (!id.value || !dayKey) return;
+  if (!targetCharacterId || !dayKey || writing.value) return;
+  const seq = ++writeRequestSeq;
   writing.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/journals`;
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals`;
     const result = await requestFetch<{ status: string; reason?: string }>(url, {
       method: "POST",
       body: { dayKey, target: kind },
     });
+    if (seq !== writeRequestSeq || targetCharacterId !== id.value) return;
     if (result.status === "created") ElMessage.success(`${kindLabel(kind)}写好了。`);
     else ElMessage.info(result.reason || `这一天她没写${kindLabel(kind)}。`);
-    await loadList(true);
+    await loadList(true, targetCharacterId);
   } catch (error) {
-    ElMessage.error(readError(error));
+    if (seq === writeRequestSeq && targetCharacterId === id.value) ElMessage.error(readError(error));
   } finally {
-    writing.value = false;
+    if (seq === writeRequestSeq) writing.value = false;
   }
 }
 
 async function regenerate(kind: JournalKind): Promise<void> {
+  const targetCharacterId = id.value;
   const dayKey = selectedDay.value;
-  if (!id.value || !dayKey) return;
+  if (!targetCharacterId || !dayKey || regenerating.value) return;
   try {
     await ElMessageBox.confirm(
       `会重新读这一天的对话，写一个新的${kindLabel(kind)}版本；现在这一版仍保留在「历史版本」里。另一份不会动。`,
@@ -340,27 +351,32 @@ async function regenerate(kind: JournalKind): Promise<void> {
   } catch {
     return;
   }
+  // 确认框等待期间可能切换角色或日期，不能把旧页面的确认带到新角色。
+  if (targetCharacterId !== id.value || dayKey !== selectedDay.value) return;
+  const seq = ++regenerateRequestSeq;
   regenerating.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/journals/${encodeURIComponent(dayKey)}/regenerate`;
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals/${encodeURIComponent(dayKey)}/regenerate`;
     const result = await requestFetch<{ status: string; reason?: string }>(url, {
       method: "POST",
       body: { target: kind },
     });
+    if (seq !== regenerateRequestSeq || targetCharacterId !== id.value) return;
     if (result.status === "created") ElMessage.success(`${kindLabel(kind)}重写好了。`);
     else ElMessage.info(result.reason || `这一天她没写${kindLabel(kind)}。`);
-    await loadList(true);
+    await loadList(true, targetCharacterId);
   } catch (error) {
-    ElMessage.error(readError(error));
+    if (seq === regenerateRequestSeq && targetCharacterId === id.value) ElMessage.error(readError(error));
   } finally {
-    regenerating.value = false;
+    if (seq === regenerateRequestSeq) regenerating.value = false;
   }
 }
 
 function openEdit(kind: JournalKind): void {
   const revision = kind === "DIARY" ? detail.value?.diary : detail.value?.handbook;
-  if (!revision) return;
+  if (!revision || !detail.value || detailCharacterId.value !== id.value || detail.value.dayKey !== selectedDay.value) return;
   editKind.value = kind;
+  editTarget.value = { characterId: id.value, dayKey: detail.value.dayKey };
   form.title = revision.title ?? "";
   form.content = revision.content;
   form.thought = revision.thought ?? "";
@@ -370,54 +386,61 @@ function openEdit(kind: JournalKind): void {
 }
 
 async function saveEdit(): Promise<void> {
-  const dayKey = detail.value?.dayKey || selectedDay.value;
-  if (!id.value || !dayKey) return;
+  const target = editTarget.value;
+  if (!target || target.characterId !== id.value || editSaving.value) return;
+  const seq = ++editRequestSeq;
+  const payload = {
+    kind: editKind.value,
+    title: form.title,
+    content: form.content,
+    thought: form.thought,
+    quote: form.quote,
+    tags: form.tags.split(/[、,，]/u).map((tag) => tag.trim()).filter(Boolean),
+  };
   editSaving.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/journals/${encodeURIComponent(dayKey)}`;
-    await requestFetch(url, {
-      method: "PATCH",
-      body: {
-        kind: editKind.value,
-        title: form.title,
-        content: form.content,
-        thought: form.thought,
-        quote: form.quote,
-        tags: form.tags.split(/[、,，]/u).map((tag) => tag.trim()).filter(Boolean),
-      },
-    });
+    const url: string = `/api/characters/${encodeURIComponent(target.characterId)}/journals/${encodeURIComponent(target.dayKey)}`;
+    await requestFetch(url, { method: "PATCH", body: payload });
+    if (seq !== editRequestSeq || target.characterId !== id.value || editTarget.value?.dayKey !== target.dayKey) return;
     editOpen.value = false;
+    editTarget.value = null;
     ElMessage.success("保存好了，旧版本还在历史里。");
-    await loadList(true);
+    await loadList(true, target.characterId);
   } catch (error) {
-    ElMessage.error(readError(error));
+    if (seq === editRequestSeq && target.characterId === id.value) ElMessage.error(readError(error));
   } finally {
-    editSaving.value = false;
+    if (seq === editRequestSeq) editSaving.value = false;
   }
 }
 
 async function openHistory(kind: JournalKind): Promise<void> {
+  const targetCharacterId = id.value;
   const dayKey = selectedDay.value;
-  if (!id.value || !dayKey) return;
+  if (!targetCharacterId || !dayKey || detailCharacterId.value !== targetCharacterId) return;
+  const seq = ++historyRequestSeq;
   historyKind.value = kind;
+  historyTarget.value = { characterId: targetCharacterId, dayKey, kind };
   historyOpen.value = true;
   historyLoading.value = true;
+  revisions.value = [];
   try {
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/journals/${encodeURIComponent(dayKey)}/revisions`;
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals/${encodeURIComponent(dayKey)}/revisions`;
     const result = await requestFetch<{ items: JournalRevision[] }>(url, { query: { kind } });
+    if (seq !== historyRequestSeq || targetCharacterId !== id.value || historyTarget.value?.dayKey !== dayKey || historyTarget.value?.kind !== kind) return;
     revisions.value = result.items;
   } catch (error) {
+    if (seq !== historyRequestSeq || targetCharacterId !== id.value) return;
     revisions.value = [];
     ElMessage.error(readError(error));
   } finally {
-    historyLoading.value = false;
+    if (seq === historyRequestSeq) historyLoading.value = false;
   }
 }
 
 async function restoreRevision(version: number): Promise<void> {
-  const dayKey = selectedDay.value;
-  if (!id.value || !dayKey) return;
-  const kind = historyKind.value;
+  const target = historyTarget.value;
+  if (!target || target.characterId !== id.value || restoring.value) return;
+  const { characterId: targetCharacterId, dayKey, kind } = target;
   try {
     await ElMessageBox.confirm(
       `会把${kindLabel(kind)}换成第 ${version} 版，并记成一个新版本；后面的版本不会消失。另一份不会动。`,
@@ -427,38 +450,74 @@ async function restoreRevision(version: number): Promise<void> {
   } catch {
     return;
   }
+  if (targetCharacterId !== id.value || historyTarget.value?.dayKey !== dayKey || historyTarget.value?.kind !== kind) return;
+  const seq = ++restoreRequestSeq;
   restoring.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/journals/${encodeURIComponent(dayKey)}/restore`;
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals/${encodeURIComponent(dayKey)}/restore`;
     await requestFetch(url, { method: "POST", body: { kind, version } });
+    if (seq !== restoreRequestSeq || targetCharacterId !== id.value) return;
     ElMessage.success("恢复好了，历史里还能看到原来的版本。");
-    await openHistory(kind);
-    await loadList(true);
+    if (selectedDay.value === dayKey) await openHistory(kind);
+    await loadList(true, targetCharacterId);
   } catch (error) {
-    ElMessage.error(readError(error));
+    if (seq === restoreRequestSeq && targetCharacterId === id.value) ElMessage.error(readError(error));
   } finally {
-    restoring.value = false;
+    if (seq === restoreRequestSeq) restoring.value = false;
   }
 }
 
 watch(id, () => {
+  // 角色切换立即作废旧请求与旧弹窗，避免旧角色的日记/历史留在新角色页面。
+  listRequestSeq += 1;
+  detailRequestSeq += 1;
+  historyRequestSeq += 1;
+  writeRequestSeq += 1;
+  regenerateRequestSeq += 1;
+  editRequestSeq += 1;
+  restoreRequestSeq += 1;
   items.value = [];
   selectedDay.value = "";
   detail.value = null;
+  detailCharacterId.value = "";
   page.value = 1;
   writeDay.value = "";
   writeDayTouched.value = false;
-  void loadList();
+  revisions.value = [];
+  historyTarget.value = null;
+  historyOpen.value = false;
+  historyLoading.value = false;
+  editTarget.value = null;
+  editOpen.value = false;
+  editSaving.value = false;
+  writing.value = false;
+  regenerating.value = false;
+  restoring.value = false;
+  loading.value = false;
+  detailLoading.value = false;
+  void loadList(false, id.value);
 });
-watch(page, () => {
-  void loadList(true);
-});
-watch(month, () => {
-  page.value = 1;
-  void loadList(true);
+watch([page, month], () => {
+  page.value = Math.max(1, page.value);
+  void loadList(true, id.value);
 });
 watch(selectedDay, (dayKey) => {
-  if (dayKey) void loadDetail(dayKey);
+  if (dayKey) void loadDetail(dayKey, id.value);
+  else {
+    detailRequestSeq += 1;
+    detail.value = null;
+    detailCharacterId.value = "";
+    detailLoading.value = false;
+  }
+});
+onBeforeUnmount(() => {
+  listRequestSeq += 1;
+  detailRequestSeq += 1;
+  historyRequestSeq += 1;
+  writeRequestSeq += 1;
+  regenerateRequestSeq += 1;
+  editRequestSeq += 1;
+  restoreRequestSeq += 1;
 });
 
 await loadList();
