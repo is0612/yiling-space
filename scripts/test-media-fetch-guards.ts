@@ -3,8 +3,8 @@
  *
  * 全程不联网：`fetch` 被换成本地模拟传输（`createTransport`），
  * 每个 hop 都记录在案 —— 这样才能回答「被禁止的地址到底有没有收到请求」，
- * 而不是只看最后有没有抛错。初始 URL 一律用文档保留段 `203.0.113.x`
- * （TEST-NET-3），它既不是私网也不会真的被访问。
+ * 而不是只看最后有没有抛错。初始 URL 使用公网字面量测试地址 `8.8.8.8` / `1.1.1.1`；
+ * 全部请求仍由 mock fetch 截获，不会建立真实连接。
  *
  * 跑法：`npx tsx scripts/test-media-fetch-guards.ts`
  */
@@ -154,8 +154,8 @@ const isInternal = (url: string) => {
   return /^(127\.|10\.|192\.168\.|169\.254\.)/.test(host) || host === "::1" || host === "localhost";
 };
 
-const PUBLIC_A = "http://203.0.113.10/a.png";
-const PUBLIC_B = "http://203.0.113.20/b.png";
+const PUBLIC_A = "http://8.8.8.8/a.png";
+const PUBLIC_B = "http://1.1.1.1/b.png";
 
 // ── 一、重定向 SSRF：被禁止的目标不能收到请求 ─────────────────────
 console.log("\n[1] 重定向 SSRF");
