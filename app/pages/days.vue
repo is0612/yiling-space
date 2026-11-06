@@ -3,6 +3,11 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character } from "~/utils/mock-data";
 import { formatDayClock } from "~/utils/day-time";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "忆泡日历" },
+});
+
 /**
  * 忆泡日历：一天一行，点开看那天发生了什么。
  *
@@ -337,7 +342,6 @@ await loadDays();
   <div class="page-wrap">
     <PageHeader
       eyebrow="工作空间 / 角色记忆"
-      title="忆泡日历"
       description="一天一行，点开看那天发生了什么。忆泡是整理过的事件，原文是当时的对话。"
     />
     <CharacterBar

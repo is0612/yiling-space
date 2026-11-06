@@ -3,6 +3,11 @@ import { ArrowRight, ArrowDown, Collection, Files, Search, MagicStick, Delete, L
 import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character, type Snapshot, type TimelineEntry, type TimelineType } from "~/utils/mock-data";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "角色记忆" },
+});
+
 type MemoryCategory = "FACT" | "PREFERENCE" | "RELATIONSHIP" | "COMMITMENT" | "GOAL" | "EVENT" | "SUMMARY" | "OTHER";
 type MemoryDetail = {
   id: string;
@@ -1223,7 +1228,6 @@ watch(id, () => {
   <div class="page-wrap">
     <PageHeader
       eyebrow="工作空间 / 角色记忆"
-      title="角色记忆"
       description="先在上面选一个角色，下面是它的对话、阶段总结与长期记忆。「立即 AI 归档」现在就调模型跑一次自动归档；「手动存档」只留一份不调模型的快照。"
     >
       <template #actions>

@@ -2,6 +2,11 @@
 import { Delete, EditPen, MagicStick, Picture } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "表情包" },
+});
+
 /**
  * 表情包：她自己的图。
  *
@@ -606,7 +611,6 @@ onMounted(load);
   <div class="page-wrap">
     <PageHeader
       :eyebrow="'角色管理 / ' + (characterName || '角色') + ' / 表情包'"
-      title="表情包"
       :description="pageDescription"
       :back-to="'/characters?c=' + id"
       back-label="返回角色列表"

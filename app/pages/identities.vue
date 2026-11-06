@@ -15,6 +15,11 @@
 import { Refresh, Search, User } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "她的朋友" },
+});
+
 type Friend = {
   scopeId: string;
   characterId: string;
@@ -380,7 +385,6 @@ onMounted(() => load(1));
   <div class="page-wrap fr-a">
     <PageHeader
       eyebrow="角色 / 人际"
-      title="她的朋友"
       description="私聊来访、群里见过的人都会记录下来。可以手动标记真人 / AI，并按角色决定她是否与对方交流。"
     >
       <template #actions>

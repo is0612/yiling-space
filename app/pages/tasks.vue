@@ -9,6 +9,11 @@
 import { ArrowRight, Cpu, Files, MagicStick, Refresh, Search, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "后台任务" },
+});
+
 type MemoryTask = {
   id: string;
   type: "GENERATE_SNAPSHOT" | "REGENERATE_SNAPSHOT" | "UPDATE_LONG_TERM_MEMORY" | "CLEAN_EXPIRED_MESSAGES" | "EXTRACT_EVENTS" | "GENERATE_JOURNAL";
@@ -378,7 +383,6 @@ onMounted(() => void loadTasks());
   <div class="page-wrap tasks-a">
     <PageHeader
       eyebrow="系统管理 / 任务监控"
-      title="后台任务"
       description="持久化任务队列：扫描到期周期、手动跑一次 Worker，处理失败与待重试的任务。"
     >
       <template #actions>

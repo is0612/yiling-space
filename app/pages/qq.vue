@@ -25,6 +25,11 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import type { ChainActionKind } from "~/utils/qq-channel";
 import type { Character } from "~/utils/mock-data";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "QQ 渠道" },
+});
+
 useHead({ title: "QQ 渠道 · 忆灵空间" });
 
 type GroupChatSettings = {
@@ -1247,7 +1252,6 @@ function copyInstallGuide() {
   <div class="page-wrap qq-a">
     <PageHeader
       eyebrow="系统管理 / QQ 渠道"
-      title="QQ 渠道"
       :description="lede"
     >
       <!-- 空态时页头不给主操作：同一个动作在屏幕上出现两次会分散注意力 -->

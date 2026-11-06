@@ -3,6 +3,11 @@ import { Calendar, InfoFilled, RefreshLeft, Lock, Select } from "@element-plus/i
 import { ElMessage, ElMessageBox } from "element-plus";
 import { initialCharacters, type Character } from "~/utils/mock-data";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "记忆周期设置" },
+});
+
 type MemorySettings = {
   snapshotIntervalDays: number;
   activeSnapshotIntervalDays: number;
@@ -252,7 +257,6 @@ watch(id, () => void loadSettings());
   <div class="page-wrap">
     <PageHeader
       :eyebrow="'角色管理 / ' + character.name + ' / 记忆设置'"
-      title="记忆周期设置"
       description="控制角色多久归档一次阶段记忆，以及要不要自动整理忆泡。设置保存到 PostgreSQL，由 Scheduler 生成到期任务，再由 Worker 调用角色模型完成 AI 提炼。"
       :back-to="'/memory?c=' + character.id"
       back-label="返回角色记忆"

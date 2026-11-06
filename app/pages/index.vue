@@ -9,7 +9,6 @@ import { characterUrgency, describeCountdown, formatCny, type OverviewCharacter,
 definePageMeta({
   topbar: {
     title: "工作台",
-    description: "异常、进度和花费，一屏看完。",
     refreshable: true,
   },
 });

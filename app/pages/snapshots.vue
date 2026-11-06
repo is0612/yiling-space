@@ -3,6 +3,11 @@ import { ArrowDown, Calendar, Files, MagicStick, Refresh, Search } from "@elemen
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character, Snapshot, SnapshotAnalysis, SnapshotSourceMessage } from "~/utils/mock-data";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "阶段总结" },
+});
+
 const characters = useCharacterList();
 await useCharacterListData();
 
@@ -485,7 +490,6 @@ watch(id, () => {
   <div class="page-wrap">
     <PageHeader
       eyebrow="工作空间 / 阶段总结"
-      title="阶段总结"
       description="自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；本地没起调度器时，点「立即 AI 归档」手动跑一次。手动存档：只把当下这一刻拍成快照，不调模型。"
     >
       <template #actions>

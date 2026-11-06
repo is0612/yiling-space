@@ -2,6 +2,11 @@
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character } from "~/utils/mock-data";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "日记与手账" },
+});
+
 /**
  * 日记 / 手账：同一天的两份独立文本。
  *
@@ -544,7 +549,6 @@ await loadList();
   <div class="page-wrap">
     <PageHeader
       eyebrow="工作空间 / 日记与手账"
-      title="日记与手账"
       description="同一天的两份独立文本：日记是第一人称叙事，手账是结构化记录；各自版本、各自编辑。"
     />
     <CharacterBar

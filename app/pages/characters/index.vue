@@ -28,6 +28,11 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character, CharacterStatus } from "~/utils/mock-data";
 import { characterCopyInput, createCharacterOperationGuard, replaceCharacter } from "~/utils/character-management";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "你的 AI 角色" },
+});
+
 const characterOperations = createCharacterOperationGuard();
 
 /**
@@ -393,7 +398,6 @@ function runCharacterCommand(command: string) {
   <div class="page-wrap chars-a">
     <PageHeader
       eyebrow="工作空间 / 角色管理"
-      title="你的 AI 角色"
       description="集中管理不同的人设、模型配置与记忆周期。每个角色都拥有独立的经历和记忆。"
     >
       <template #actions>

@@ -149,16 +149,6 @@ function isActive(item: NavigationItem) {
             </div>
           </div>
         </NuxtLink>
-        <div class="workspace-pill">
-          <div class="workspace-copy">
-            <div class="workspace-name">
-              个人工作空间
-            </div>
-            <div class="workspace-note">
-              本地演示环境
-            </div>
-          </div>
-        </div>
       </div>
 
       <nav
@@ -226,9 +216,6 @@ function isActive(item: NavigationItem) {
           class="topbar-head"
         >
           <h1>{{ heading.title }}</h1>
-          <p v-if="heading.description">
-            {{ heading.description }}
-          </p>
         </div>
         <div class="topbar-right">
           <button

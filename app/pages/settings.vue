@@ -6,6 +6,12 @@
  * 原来「运行状态」那两张卡里三行全是「未接入 / 规划中」，占一整块却什么也做不了 ——
  * 收成右侧一列状态行，一眼看出哪项接上了、哪项还空着。
  */
+
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "系统设置" },
+});
+
 const STATUS_ROWS = [
   { label: "管理员登录与密码", note: "已接入真实数据库", live: true },
   { label: "数据库连接检测", note: "未接入", live: false },
@@ -25,7 +31,6 @@ const ABOUT_ROWS = [
   <div class="page-wrap set-a">
     <PageHeader
       eyebrow="系统管理 / 系统设置"
-      title="系统设置"
       description="管理员密码与登录设备，以及各模块的接入状态。"
     />
 

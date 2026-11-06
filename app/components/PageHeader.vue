@@ -3,7 +3,10 @@ import { computed } from "vue";
 import { ArrowLeft } from "@element-plus/icons-vue";
 
 /**
- * 页面标题行 —— 对齐 bili-desk 的 .crumb + .page-h。
+ * 页面页头 —— 对齐 bili-desk 的 .crumb + .page-h。
+ * 标题本身不在这里：h1 归顶栏（AppShell 读 route.meta.topbar），页面用 definePageMeta 声明。
+ * 这个组件只负责 crumb、一行说明，以及右侧动作。
+ *
  * eyebrow 用「A / B」的写法，自动拆成面包屑，最后一段加粗。
  *
  * backTo / backLabel：返回入口放在标题左上角，不再塞进 #actions。
@@ -11,7 +14,6 @@ import { ArrowLeft } from "@element-plus/icons-vue";
  */
 const props = defineProps<{
   eyebrow?: string;
-  title: string;
   description?: string;
   backTo?: string;
   backLabel?: string;
@@ -48,10 +50,15 @@ const crumbs = computed(() =>
       </template>
     </div>
 
-    <div class="page-h">
+    <div
+      v-if="description || $slots.actions"
+      class="page-h"
+    >
       <div>
-        <h1>{{ title }}</h1>
-        <p v-if="description">
+        <p
+          v-if="description"
+          class="ph-lede"
+        >
           {{ description }}
         </p>
       </div>

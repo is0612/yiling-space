@@ -2,6 +2,11 @@
 import { Delete, EditPen, MagicStick } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "梗语录" },
+});
+
 /**
  * 梗语录：她会**原样说出来**的那几句口头禅（「xxx 不烧心吗」）。
  *
@@ -290,7 +295,6 @@ onMounted(load);
   <div class="page-wrap">
     <PageHeader
       :eyebrow="'角色管理 / ' + (characterName || '角色') + ' / 梗语录'"
-      title="梗语录"
       description="她会原样说出来的几句口头禅。时机对上了就说，对不上就不说 —— 所以有时候几轮不出现是正常的。"
       :back-to="'/characters?c=' + id"
       back-label="返回角色列表"

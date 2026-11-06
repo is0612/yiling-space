@@ -199,20 +199,7 @@ button, input, textarea, select { font: inherit; }
 .brand-title span { color: var(--faint); font-weight: 500; letter-spacing: normal; }
 .brand-subtitle { margin-top: 2px; color: var(--faint); font-size: 12px; letter-spacing: .06em; }
 
-/* 工作空间 pill：一行就够，别做成卡片 */
-.workspace-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  padding: 6px 9px;
-}
-.workspace-glyph { display: none; }
-.workspace-copy { min-width: 0; flex: 1; }
-.workspace-name { color: var(--text-2); font-size: 12px; font-weight: 600; }
-.workspace-note { margin-top: 1px; color: var(--faint); font-size: 12px; }
+/* 工作空间 pill 已下线：侧栏顶部只留品牌块，给导航让出高度 */
 
 /* 导航 */
 .sidebar-nav { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 1px; overflow-y: auto; margin: 6px -4px 0; padding: 0 4px; }
@@ -307,9 +294,8 @@ button, input, textarea, select { font: inherit; }
   padding: 0 18px;
 }
 .topbar-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-/* 页面标题：顶栏左侧。标题 18 / 说明 14 —— 顶栏只有 56px，再大就撑破；
-   说明行单行省略，长描述不会把顶栏顶高。 */
-.topbar-head { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+/* 页面标题：顶栏左侧，只有一行。标题 18 —— 顶栏只有 56px，再大就撑破。 */
+.topbar-head { min-width: 0; flex: 1; display: flex; align-items: center; }
 .topbar-head h1 {
   margin: 0;
   overflow: hidden;
@@ -318,15 +304,6 @@ button, input, textarea, select { font: inherit; }
   font-weight: 700;
   letter-spacing: -.01em;
   line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.topbar-head p {
-  margin: 0;
-  overflow: hidden;
-  color: var(--dim);
-  font-size: 14px;
-  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -392,12 +369,11 @@ button, input, textarea, select { font: inherit; }
 .crumb { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; color: var(--faint); font-size: 12px; }
 .crumb b { color: var(--text-2); font-weight: 500; }
 
-/* 页面标题行（bili-desk 的 .page-h） */
+/* 页面说明行（标题已经搬到顶栏，正文这里是 crumb + 一行说明 + 右侧动作） */
 .page-h { display: flex; align-items: flex-end; gap: 14px; margin-bottom: 18px; }
-/* 左侧标题块可收缩，右侧按钮组按内容取宽，避免按钮文字被压成两行 */
+/* 左侧说明可收缩，右侧按钮组按内容取宽，避免按钮文字被压成两行 */
 .page-h > :first-child:not(.ph-r) { min-width: 0; flex: 1; }
-.page-h h1 { margin: 0; color: var(--text); font-size: 22px; font-weight: 700; line-height: 1.25; letter-spacing: -.015em; }
-.page-h p { margin: 5px 0 0; color: var(--dim); font-size: 14px; }
+.ph-lede { margin: 0; color: var(--dim); font-size: 14px; }
 .page-h .ph-r { display: flex; align-items: center; gap: 8px; margin-left: auto; padding-bottom: 2px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 
 /* 区块标题行（bili-desk 的 .sec-h） */
@@ -968,10 +944,9 @@ button, input, textarea, select { font: inherit; }
 @media (max-width: 900px) {
   .app-grid { grid-template-columns: 78px minmax(0, 1fr); }
   .sidebar { width: 78px; padding: 12px 8px; }
-  .brand-wordmark, .workspace-copy, .sidebar-section, .sidebar-label, .nav-count, .sidebar-bottom-copy, .sidebar-version, .storage-hint { display: none; }
+  .brand-wordmark, .sidebar-section, .sidebar-label, .nav-count, .sidebar-bottom-copy, .sidebar-version, .storage-hint { display: none; }
   .sidebar-top { padding: 2px 0 8px; }
   .brand { justify-content: center; padding: 0; }
-  .workspace-pill { justify-content: center; padding: 7px 0; }
   .sidebar-nav { margin-top: 10px; }
   .sidebar-link { justify-content: center; padding: 0; }
   .sidebar-link.active::before { left: -4px; }
@@ -993,17 +968,15 @@ button, input, textarea, select { font: inherit; }
   .sidebar { position: static; width: 100%; flex-direction: row; align-items: center; gap: 10px; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; }
   .sidebar-top { display: flex; align-items: center; gap: 8px; padding: 0; }
   .brand-wordmark { display: block; }
-  .workspace-pill, .sidebar-bottom { display: none; }
+  .sidebar-bottom { display: none; }
   .sidebar-nav { flex-direction: row; gap: 4px; overflow-x: auto; margin: 0; padding: 0; }
   .sidebar-link { min-width: 38px; padding: 0; justify-content: center; }
   .sidebar-section { display: none; }
   .topbar { position: static; min-height: 52px; padding: 0 14px; }
   .topbar-right { gap: 6px; }
   .env-indicator { display: none; }
-  /* 52px 的顶栏放不下两行：说明行收掉，标题单独占一行 */
-  .topbar-head p { display: none; }
+  .topbar-head h1 { font-size: 16px; }
   .page-wrap { padding: 16px 14px 30px; }
-  .page-title, .page-h h1 { font-size: 18px; }
   .stat-grid, .kpi-row { grid-template-columns: minmax(0, 1fr); gap: 9px; }
   .kpi-row.is-three, .kpi-row.is-two { grid-template-columns: minmax(0, 1fr); }
   .stat-card, .kpi { padding: 13px 14px; }

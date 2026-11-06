@@ -5,6 +5,11 @@ import type { Character } from "~/utils/mock-data";
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
 import { applyAsrProviderPreset, applyVoiceProviderPreset } from "~/utils/voice-provider-preset";
 
+// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+definePageMeta({
+  topbar: { title: "模型设置" },
+});
+
 /**
  * 模型设置：从「角色设置」弹窗里搬出来的。
  * 弹窗要装 9 个字段 + 6 段说明，在 1440×900 的笔记本上一屏放不下，
@@ -989,7 +994,6 @@ watch(id, () => void loadCharacter());
   <div class="page-wrap ms-a">
     <PageHeader
       :eyebrow="'角色管理 / ' + (character?.name ?? '角色') + ' / 模型设置'"
-      title="模型设置"
       description="决定这个角色使用哪些模型：对话、语音、看图、记忆助手和语境助手可以分别配置。API Key 加密保存、不回传给网页。"
       :back-to="backTarget"
       :back-label="backLabel"
