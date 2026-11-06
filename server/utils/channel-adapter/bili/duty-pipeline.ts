@@ -32,7 +32,7 @@ import { resolveCharacterApiKey } from "../../credential-encryption";
 import { parseJsonLoose } from "../../loose-json";
 import type { BiliConnectionRecord, BiliDutyConfig } from "./configure";
 import { biliOptions } from "./configure";
-import { acquireBiliDutyLease, BiliDutyLeaseLostError } from "./bili-duty-lease";
+import { acquireBiliDutyLease } from "./bili-duty-lease";
 import { remainingQuota, toDayKey } from "./duty-scheduler";
 import {
   extractBvids,
@@ -659,21 +659,6 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
 
   try {
     return await runDutyRoundLocked(record, binding, lease.assertOwned);
-  } catch (error) {
-    if (error instanceof BiliDutyLeaseLostError) {
-      return {
-        ok: false,
-        picked: 0,
-        skipped: 0,
-        watched: 0,
-        seenVideos: 0,
-        delivered: { dm: false, comments: 0, fav: 0, dynamic: false },
-        pickedItems: [],
-        notes: [error.message],
-        error: "值班执行租约失效，已停止本轮后续操作",
-      };
-    }
-    throw error;
   } finally {
     await lease.release().catch((error: unknown) => {
       console.error("[bili] 释放值班执行租约失败；它会在过期后自动回收。", error instanceof Error ? error.message : String(error));
@@ -786,6 +771,9 @@ async function runDutyRoundLocked(
       },
     },
   });
+
+  // 主人互动可能已经走过多个外部写操作；返回主流程前再确认一次租约。
+  await beforeExternalWrite();
 
   if (remaining <= 0) {
     return {
