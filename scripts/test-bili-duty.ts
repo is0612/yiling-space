@@ -9,6 +9,7 @@ import {
   toDayKey,
   windowDayKey,
   windowsRunFromTimestamps,
+  scheduledWindowAt,
 } from "../server/utils/channel-adapter/bili/duty-scheduler";
 import { buildDutyPrompt } from "../server/utils/channel-adapter/bili/duty-prompt";
 import { mergeOwnerFirst, pickOwnerCandidates, preparePublicComment } from "../server/utils/channel-adapter/bili/duty-pipeline";
@@ -93,6 +94,24 @@ async function main() {
   assert.deepEqual(windowsRunFromTimestamps([makeDate("2026-10-26", "12:30")]), ["2026-10-26:noon"]);
   assert.deepEqual(windowsRunFromTimestamps([]), []);
   assert.deepEqual(windowsRunFromTimestamps([new Date("invalid")]), []);
+
+  // 手动触发若落在谷时窗口，也要标记同一窗口；跨午夜沿用前一晚业务日。
+  const enabledWindows = makeConfig({ peakValley: true, noon: true, night: true });
+  assert.deepEqual(
+    scheduledWindowAt(makeDate("2026-10-25", "13:00"), enabledWindows),
+    { businessDay: "2026-10-25", windowKey: "noon" },
+  );
+  assert.deepEqual(
+    scheduledWindowAt(makeDate("2026-10-25", "03:00"), enabledWindows),
+    { businessDay: "2026-10-24", windowKey: "night" },
+    "凌晨手动值班必须归到前一晚的 night 窗口。",
+  );
+  assert.equal(scheduledWindowAt(makeDate("2026-10-25", "10:00"), enabledWindows), null);
+  assert.equal(
+    scheduledWindowAt(makeDate("2026-10-25", "13:00"), makeConfig({ peakValley: false })),
+    null,
+    "关闭谷时调度时，手动值班不应创建计划窗口标记。",
+  );
 
   // 13. 当晚跑过 → 次日凌晨不再触发（老实现因为自然日变了会再跑一轮）
   const afterNight = windowsRunFromTimestamps([makeDate("2026-10-26", "18:30")]);
@@ -341,6 +360,7 @@ async function main() {
   console.log("✅ test-bili-duty 全部通过");
   console.log("   谷时窗口判断（含跨午夜）：通过");
   console.log("   跨午夜归一 / 从报告重建窗口标记：通过");
+  console.log("   手动触发与定时共用当前谷时窗口（含跨午夜业务日）：通过");
   console.log("   额度 / 去重 / 运行态判断：通过");
   console.log("   值班章程提示词：通过");
   console.log("   刷站口味注入（空/有/底线不被顶掉）：通过");
