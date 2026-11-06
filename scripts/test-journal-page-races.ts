@@ -41,7 +41,17 @@ function harness() {
   const requests: Request[] = [];
   const confirmations: Confirmation[] = [];
   const messages: string[] = [];
-  const role = { value: "role-a" };
+  let roleValue = "role-a";
+  const role = {} as Ref;
+  Object.defineProperty(role, "value", {
+    get: () => roleValue,
+    set: (next: unknown) => {
+      const previous = roleValue;
+      roleValue = String(next);
+      if (previous === roleValue) return;
+      for (const watcher of watchers) if (watcher.sources.includes(role)) watcher.callback();
+    },
+  });
   let unmount: (() => void) | null = null;
 
   const bindings = executable.runInContext(createContext({
