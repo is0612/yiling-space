@@ -988,7 +988,7 @@ export async function processNextMemoryJob(
   if (configuredCandidates.length === 0 && hasUnconfiguredCandidates) {
     return {
       processed: false,
-      message: "待处理阶段总结关联的角色尚未配置模型 API。请打开该角色的 AI 对话 → 模型参数填写 API 地址、Key 和模型名称；任务会保留在队列中。",
+      message: "待处理阶段总结关联的角色尚未配置模型 API。请打开该角色的「模型设置 → 模型参数」填写 API 地址、Key 和模型名称；任务会保留在队列中。",
     };
   }
 
@@ -1292,7 +1292,7 @@ export async function processNextMemoryJob(
     const chatSettings = resolveChatModelSettings(scope.character.modelConfig);
     const apiKey = await resolveCharacterApiKey(scope.character.modelConfig, chatSettings.apiBaseUrl);
     if (!apiKey || !chatSettings.model) {
-      throw new Error("角色尚未配置模型 API。请先在角色的 AI 对话 → 模型参数中填写 API Key 与模型名称。");
+      throw new Error("角色尚未配置模型 API。请先在角色的「模型设置 → 模型参数」中填写 API Key 与模型名称。");
     }
     const aiResult = await analyzeMemoryPeriod({
       apiKey,

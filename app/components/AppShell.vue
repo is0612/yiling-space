@@ -4,7 +4,6 @@ import {
   DataAnalysis,
   Cpu,
   Calendar,
-  ChatDotRound,
   ChatLineRound,
   DataBoard,
   Refresh,
@@ -66,8 +65,8 @@ type NavigationItem = {
 await useCharacterListData();
 
 /**
- * 三个角色级页面（记忆 / 对话 / 阶段总结）现在都是菜单页，
- * 角色在页内下拉切换，所以侧栏不再需要拼 id。
+ * 角色级页面（记忆 / 阶段总结）都是菜单页，角色在页内下拉切换，
+ * 所以侧栏不再需要拼 id。
  */
 const navigation = computed<NavigationItem[]>(() => {
   const items: NavigationItem[] = [
@@ -90,12 +89,6 @@ const navigation = computed<NavigationItem[]>(() => {
       label: "日记手账",
       href: "/journal",
       icon: Reading,
-    },
-    {
-      key: "chat",
-      label: "AI 对话",
-      href: "/chat",
-      icon: ChatDotRound,
     },
     {
       key: "snapshots",
@@ -126,8 +119,6 @@ function isActive(item: NavigationItem) {
       return path === "/characters";
     case "memory":
       return path === "/memory" || /^\/characters\/[^/]+\/settings\/memory$/.test(path);
-    case "chat":
-      return path === "/chat";
     case "snapshots":
       return path === "/snapshots";
     case "bili":

@@ -2,7 +2,6 @@
 import {
   ArrowDown,
   Calendar,
-  ChatDotRound,
   ChatLineSquare,
   Clock,
   Collection,
@@ -191,12 +190,12 @@ async function duplicateCharacter(character: Character) {
   }
 }
 
-/** 停用 / 启用：停用后角色不再回复 AI 对话、渠道消息和 B站 值班。 */
+/** 停用 / 启用：停用后角色不再回复消息、不再跑 AI 回复和 B站 值班。 */
 async function toggleCharacterStatus(character: Character) {
   const pausing = character.status !== "已暂停";
   if (pausing) {
     const confirmed = await ElMessageBox.confirm(
-      `停用「${character.name}」后，它不再回复 AI 对话、渠道消息，也不跑 B站 值班。已有记忆和阶段总结不受影响，自动归档仍按记忆设置单独控制。`,
+      `停用「${character.name}」后，它不再回复消息、也不跑 B站 值班。已有记忆和阶段总结不受影响，自动归档仍按记忆设置单独控制。`,
       "停用角色",
       { confirmButtonText: "停用", cancelButtonText: "取消", type: "warning" },
     ).catch(() => false);
@@ -561,11 +560,8 @@ function runCharacterCommand(command: string) {
           <div class="detail-actions">
             <el-button
               type="primary"
-              @click="navigateTo(`/chat?c=${selected.id}`)"
+              @click="navigateTo(`/memory?c=${selected.id}`)"
             >
-              <el-icon><ChatDotRound /></el-icon>开始对话
-            </el-button>
-            <el-button @click="navigateTo(`/memory?c=${selected.id}`)">
               <el-icon><Collection /></el-icon>角色记忆
             </el-button>
             <el-button @click="openProfile(selected)">
@@ -901,7 +897,7 @@ function runCharacterCommand(command: string) {
 
       <template #footer>
         <div class="create-foot">
-          <span class="create-foot-note">创建后到「模型设置」配服务商与 API Key、到「记忆设置」调归档周期，配好就能开始对话。</span>
+          <span class="create-foot-note">创建后到「模型设置」配服务商与 API Key、到「记忆设置」调归档周期，配好就能接 QQ 上线。</span>
           <span class="create-foot-actions">
             <el-button @click="dialogOpen = false">
               取消

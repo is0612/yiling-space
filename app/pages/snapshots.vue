@@ -6,7 +6,7 @@ import type { Character, Snapshot, SnapshotAnalysis, SnapshotSourceMessage } fro
 const characters = useCharacterList();
 await useCharacterListData();
 
-/** 菜单页：当前角色由 ?c= 决定，选择和 /memory、/chat 共用一份 cookie */
+/** 菜单页：当前角色由 ?c= 决定，选择和 /memory 共用一份 cookie */
 const { id } = useCharacterSelection("/snapshots");
 
 /** 头像 / 状态 / 归档周期都在角色列表里，不必再单独拉一次角色档案 */

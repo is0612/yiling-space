@@ -111,7 +111,7 @@ async function loadTurnDetail() {
 }
 
 const kindLabels: Record<string, string> = {
-  chat: "网页对话", channel: "QQ 回复", snapshot: "阶段总结", events: "忆泡整理",
+  chat: "对话接口", channel: "QQ 回复", snapshot: "阶段总结", events: "忆泡整理",
   journal: "日记 / 手账", "bili-screening": "值班初筛", "bili-judge": "值班判断",
   proactive: "主动找话", vision: "看图", "sticker-label": "表情包识别",
   "memory-assistant": "记忆助手", "context-assistant": "语境助手",

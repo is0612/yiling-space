@@ -282,7 +282,7 @@ onBeforeUnmount(() => {
         <ol class="guide-steps">
           <li><span>1</span>新建角色，填人设</li>
           <li><span>2</span>在模型设置里填模型 API</li>
-          <li><span>3</span>开始对话，到周期结束时自动归档</li>
+          <li><span>3</span>在 QQ 上聊，到周期结束时自动归档</li>
         </ol>
         <button
           class="btn primary lg"

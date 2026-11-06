@@ -290,7 +290,7 @@ async function checkDatabase(rawUrl: string, env: EnvMap): Promise<void> {
       line("ok", `${configured.length} 个角色配了自己的模型 Key：${configured.map((row) => row.name).slice(0, 3).join("、")}${configured.length > 3 ? " 等" : ""}`);
     } else if (characterCount > 0) {
       line("warn", "没有任何角色配置模型 Key，聊天不会有回复");
-      fix("登录 → 角色 →「AI 对话 → 模型参数」填 API Key，或设置 .env 的 LLM_API_KEY");
+      fix("登录 → 角色 →「模型设置 → 模型参数」填 API Key，或设置 .env 的 LLM_API_KEY");
     }
 
     // ---- 凭据加密密钥 ----

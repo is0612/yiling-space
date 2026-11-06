@@ -75,7 +75,7 @@
 
 - **`.env` 里三处数据库配置必须对上**：`POSTGRES_PASSWORD`、`DATABASE_URL` 里的密码、以及 `docker-compose.yml` 读到的那份。这是手改最容易错的地方，`yarn setup` 会自动对齐。
 - **`db:seed:dev` 是幂等的**，只创建/更新 `.env` 里指定的那个本地账号，不植入任何演示角色。忘记管理员密码就改 `DEV_OWNER_PASSWORD` 再跑一次。
-- **`LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` 是可选的兜底配置**，供「没有单独配置模型」的角色使用；正常应该在页面的「AI 对话 → 模型参数」里按角色填。这两处都不写也能跑起来，只是 AI 不会回话。
+- **`LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` 是可选的兜底配置**，供「没有单独配置模型」的角色使用；正常应该在页面的「模型设置 → 模型参数」里按角色填。这两处都不写也能跑起来，只是 AI 不会回话。
 - **周期任务不在 Web 进程里**：`yarn scheduler:run` 负责排期入队，`yarn worker:run` 负责消费，调试时用各自的 `watch` 版本。命令与间隔变量见 `docs/deployment.md` §9。
 
 ## 2.1 本地全量校验
@@ -104,7 +104,7 @@ PostgreSQL 的运行数据存放在 Docker named volume `yiling_postgres_data`�
 
 如果上传图片或其他文件存放在本地目录，还必须单独备份这些文件。仅备份 PostgreSQL 不会自动包含文件系统中的图片或附件。角色的表情包就属于这一类：清单在 `character_stickers` 表，图片本体在 `.data/stickers/<角色 id>/`，迁移时两边都要搬；只搬库的话页面会显示“图片文件不在本机”。
 
-另外，网页中保存的角色 API Key 使用本机生成的加密密钥 `.data/credentials-encryption.key` 加密。备份/迁移包含 API Key 的数据库时，必须将该文件安全地一并备份并恢复到新电脑项目根目录的 `.data/` 下；如果丢失，原有 API Key 无法解密，需要在角色的“AI 对话 → 模型参数”中重新录入。该文件已被 Git 忽略，不能提交到仓库。
+另外，网页中保存的角色 API Key 使用本机生成的加密密钥 `.data/credentials-encryption.key` 加密。备份/迁移包含 API Key 的数据库时，必须将该文件安全地一并备份并恢复到新电脑项目根目录的 `.data/` 下；如果丢失，原有 API Key 无法解密，需要在角色的“模型设置 → 模型参数”中重新录入。该文件已被 Git 忽略，不能提交到仓库。
 
 ## 3.1 只搬角色：角色卡
 

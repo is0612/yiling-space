@@ -384,7 +384,7 @@ async function main(): Promise<void> {
     console.log(`  密码  ${values.adminPassword}`);
     console.log("");
     console.log("AI 还不会说话——还需要给它填模型 Key（二选一）：");
-    console.log("  · 页面里填（推荐）：登录 → 角色 →「AI 对话 → 模型参数」，Key 加密存库");
+    console.log("  · 页面里填（推荐）：登录 → 角色 →「模型设置 → 模型参数」，Key 加密存库");
     console.log("  · 或者写进 .env 的 LLM_API_KEY / LLM_MODEL / LLM_BASE_URL，作为全局默认");
 
     // 只有没装时才提：装好的人不需要再被告知一遍怎么装

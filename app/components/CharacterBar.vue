@@ -2,8 +2,8 @@
 import type { Character } from "~/utils/mock-data";
 
 /**
- * 三个菜单页（角色记忆 / AI 对话 / 阶段总结）共用顶部的角色切换条。
- * 以前这三页各自复制了一份 char-bar 的模板 + CSS，漂到数值都不一样
+ * 两个菜单页（角色记忆 / 阶段总结）共用顶部的角色切换条。
+ * 以前这两页各自复制了一份 char-bar 的模板 + CSS，漂到数值都不一样
  * （memory 是 12px 18px / 240px，另两页是 10px 16px / 220px）。这里收成一处。
  *
  * 选角色的逻辑走 useCharacterSelection(path)，切角色时先把新 id 抛给页面
@@ -14,9 +14,9 @@ const props = withDefaults(
   defineProps<{
     /** useCharacterSelection 的停留路径，如 "/memory" */
     path: string;
-    /** 额外的禁用条件：对话页 sending、阶段总结页 creating */
+    /** 额外的禁用条件：阶段总结页 creating */
     disabled?: boolean;
-    /** 没有角色时整块空态的文案（三页措辞不同） */
+    /** 没有角色时整块空态的文案（两页措辞不同） */
     emptyText: string;
   }>(),
   { disabled: false },

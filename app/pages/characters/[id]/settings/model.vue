@@ -116,7 +116,7 @@ const loadingUsage = ref(false);
 const modelCallLogsOpen = ref(false);
 
 const KIND_LABELS: Record<string, string> = {
-  chat: "AI 对话",
+  chat: "对话接口",
   channel: "QQ 回复",
   snapshot: "阶段总结",
   events: "忆泡整理",
@@ -219,14 +219,12 @@ const quotaPercent = computed(() => {
 
 const usageKinds = computed(() => Object.entries(dailyUsage.value?.usage.byKind ?? {}));
 
-/** 三个入口各回各家：对话页、角色管理页、角色记忆页 */
+/** 两个入口各回各家：角色管理页、角色记忆页 */
 const backTarget = computed(() => {
-  if (route.query.from === "chat") return `/chat?c=${id.value}`;
   if (route.query.from === "characters") return "/characters";
   return `/memory?c=${id.value}`;
 });
 const backLabel = computed(() => {
-  if (route.query.from === "chat") return "返回对话";
   if (route.query.from === "characters") return "返回角色管理";
   return "返回角色记忆";
 });
@@ -2324,7 +2322,7 @@ watch(id, () => void loadCharacter());
             </div>
           </div>
           <p class="side-note">
-            这里的配置只影响该角色的 AI 对话与自动归档提炼，不改变其他角色。
+            这里的配置只影响该角色在 QQ 上的回复与自动归档提炼，不改变其他角色。
           </p>
         </section>
       </aside>

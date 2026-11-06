@@ -211,7 +211,7 @@ const channelFilter = ref(SOURCE_ALL);
 const query = ref("");
 /**
  * 这页是「记忆中枢」，不是聊天记录查看器：主列表默认只放长期记忆和阶段总结。
- * 对话原文去 /chat 看（统计带上有入口），否则聊天一多就会把记忆挤出取数窗口。
+ * 对话原文走「群聊记录 / 私聊记录」弹窗，否则聊天一多就会把记忆挤出取数窗口。
  */
 const filterOptions = [
   { label: "全部记录", type: undefined },
@@ -1330,13 +1330,7 @@ watch(id, () => {
               class="ms-link"
               :disabled="!character.id"
               @click="openPrivateChats"
-            >私聊记录</button> ·
-            <button
-              type="button"
-              class="ms-link"
-              :disabled="!character.id || !recordedMessageCount"
-              @click="navigateTo('/chat?c=' + character.id)"
-            >看原文</button>
+            >私聊记录</button>
           </span>
         </div>
         <div class="sb-cell">

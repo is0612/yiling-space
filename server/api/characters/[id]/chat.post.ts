@@ -173,7 +173,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 503, statusMessage: "当前角色保存的 API Key 无法解密，请重新打开模型参数并填写 API Key。" });
   }
   if (!apiKey || !chatSettings.model) {
-    throw createError({ statusCode: 503, statusMessage: "尚未配置模型 API。请在当前角色的「AI 对话 → 模型参数」中填写 API Key 和模型名称。" });
+    throw createError({ statusCode: 503, statusMessage: "尚未配置模型 API。请在当前角色的「模型设置 → 模型参数」中填写 API Key 和模型名称。" });
   }
 
   const quota = await readDailyQuota(characterId, character.modelConfig);

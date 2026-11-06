@@ -48,12 +48,12 @@ const LEGACY_CHARACTER_COOKIE = "memory_last_character";
 const CHARACTER_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
 
 /**
- * 菜单页（/memory、/chat、/snapshots）的「当前角色」选择逻辑。
+ * 菜单页（/memory、/snapshots）的「当前角色」选择逻辑。
  *
  * 真值是地址栏的 `?c=`：分享链接、从别处带 `c=` 进来都以链接为准；
  * cookie 只负责「下次打开还记得上次选了谁」，再没有就回退到列表第一个。
  *
- * 三个菜单页共用同一个 cookie，切了角色就一起走 —— 否则在这页选了 A、
+ * 两个菜单页共用同一个 cookie，切了角色就一起走 —— 否则在这页选了 A、
  * 点侧栏去另一页还是 B。
  *
  * @param path 切换角色后要停留的页面路径（如 "/memory"）
