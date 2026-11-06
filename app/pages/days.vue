@@ -142,6 +142,7 @@ async function saveEdit() {
     if (seq !== editSaveSeq || targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     editOpen.value = false;
     await loadDetail(targetDayKey, targetCharacterId);
+    if (seq !== editSaveSeq || targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     ElMessage.success("忆泡已更新。");
   } catch (error) {
     if (seq !== editSaveSeq || targetCharacterId !== id.value || targetDayKey !== selected.value) return;
@@ -172,6 +173,7 @@ async function setEventStatus(event: DayEvent, status: "ACTIVE" | "ARCHIVED") {
     await $fetch(url, { method: "PATCH", body: { status } });
     if (targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     await loadDetail(targetDayKey, targetCharacterId);
+    if (targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     ElMessage.success(status === "ARCHIVED" ? "已隐藏，可在「已隐藏」里恢复。" : "已恢复。");
   } catch (error) {
     // 取消确认框或切换页面不是操作失败，不弹红条。
