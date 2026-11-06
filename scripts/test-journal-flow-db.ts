@@ -982,6 +982,14 @@ async function main() {
     console.log("   一份 SKIP：按份记录，新聊天后才重评");
     console.log("   Scheduler → Worker：显式日期/目标 + 旧 key 兼容 + 非法 key 安全失败");
   } finally {
+    await prisma.auditLog.deleteMany({
+      where: {
+        OR: [
+          { actorId: flowOwnerId },
+          ...(characterIds.length ? [{ characterId: { in: characterIds } }] : []),
+        ],
+      },
+    });
     if (scopeIds.length) {
       await prisma.memoryJob.deleteMany({ where: { memoryScopeId: { in: scopeIds } } });
       await prisma.characterJournal.deleteMany({ where: { memoryScopeId: { in: scopeIds } } });
