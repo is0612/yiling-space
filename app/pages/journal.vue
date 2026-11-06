@@ -107,6 +107,18 @@ const historyLoading = ref(false);
 const historyKind = ref<JournalKind>("DIARY");
 const revisions = ref<JournalRevision[]>([]);
 const restoring = ref(false);
+const detailCharacterId = ref("");
+const editTarget = ref<{ characterId: string; dayKey: string } | null>(null);
+const historyTarget = ref<{ characterId: string; dayKey: string; kind: JournalKind } | null>(null);
+
+// 每种异步操作独立序号：旧角色/旧日期/旧弹窗的响应不能覆盖当前页面。
+let listRequestSeq = 0;
+let detailRequestSeq = 0;
+let historyRequestSeq = 0;
+let writeRequestSeq = 0;
+let regenerateRequestSeq = 0;
+let editRequestSeq = 0;
+let restoreRequestSeq = 0;
 
 function markWriteDayTouched(): void {
   writeDayTouched.value = true;
@@ -187,18 +199,28 @@ const handbookSections = computed<HandbookSection[] | null>(() => {
   return content ? splitHandbook(content) : null;
 });
 
-async function loadList(keepSelection = false): Promise<void> {
-  if (!id.value) return;
+async function loadList(keepSelection = false, targetCharacterId = id.value): Promise<void> {
+  const seq = ++listRequestSeq;
+  const targetPage = page.value;
+  const targetMonth = month.value;
+  if (!targetCharacterId) {
+    items.value = [];
+    total.value = 0;
+    totalPages.value = 1;
+    return;
+  }
   loading.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/journals`;
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals`;
     const result = await requestFetch<JournalPage>(url, {
       query: {
-        page: page.value,
+        page: targetPage,
         pageSize: PAGE_SIZE,
-        ...(month.value ? { month: month.value } : {}),
+        ...(targetMonth ? { month: targetMonth } : {}),
       },
     });
+    if (seq !== listRequestSeq || targetCharacterId !== id.value || targetPage !== page.value || targetMonth !== month.value) return;
+
     items.value = result.items;
     total.value = result.total;
     totalPages.value = result.totalPages;
@@ -206,51 +228,64 @@ async function loadList(keepSelection = false): Promise<void> {
     todayKey.value = result.todayKey || "";
     yesterdayKey.value = result.yesterdayKey || "";
     if (!writeDayTouched.value) writeDay.value = yesterdayKey.value;
+
     const selectedExists = items.value.some((item) => item.dayKey === selectedDay.value);
     if (!keepSelection && !selectedExists) {
-      // 初次进入 / 换角色：默认选最新一天。SSR 下 watch 不一定立刻跑，
-      // 这里显式取一次详情，首屏才不会只有左边列表。
+      // 初次进入 / 换角色：默认选最新一天；这里显式加载详情，保证首屏左右两栏完整。
       selectedDay.value = items.value[0]?.dayKey ?? "";
-      if (selectedDay.value) await loadDetail(selectedDay.value);
-    } else if (selectedDay.value) {
-      // keepSelection 时即使这一天不在当前页也保留它 —— 补写了一个旧日期后
-      // 不该被弹回列表第一行。
-      await loadDetail(selectedDay.value);
     }
     if (!items.value.length) {
       selectedDay.value = "";
+      detailRequestSeq += 1;
       detail.value = null;
+      detailCharacterId.value = "";
+      detailLoading.value = false;
+    } else if (selectedDay.value) {
+      await loadDetail(selectedDay.value, targetCharacterId);
     }
   } catch {
+    if (seq !== listRequestSeq || targetCharacterId !== id.value) return;
     items.value = [];
     total.value = 0;
     totalPages.value = 1;
+    detailRequestSeq += 1;
     detail.value = null;
+    detailCharacterId.value = "";
+    detailLoading.value = false;
     ElMessage.error("日记/手账读取失败，请检查本地开发服务器日志。");
   } finally {
-    loading.value = false;
+    if (seq === listRequestSeq) loading.value = false;
   }
 }
 
-async function loadDetail(dayKey: string): Promise<void> {
-  if (!id.value || !dayKey) {
+async function loadDetail(dayKey: string, targetCharacterId = id.value): Promise<void> {
+  const seq = ++detailRequestSeq;
+  if (!targetCharacterId || !dayKey) {
     detail.value = null;
+    detailCharacterId.value = "";
+    detailLoading.value = false;
     return;
   }
   detailLoading.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/journals/${encodeURIComponent(dayKey)}`;
-    detail.value = await requestFetch<JournalDetail>(url);
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals/${encodeURIComponent(dayKey)}`;
+    const result = await requestFetch<JournalDetail>(url);
+    if (seq !== detailRequestSeq || targetCharacterId !== id.value || dayKey !== selectedDay.value) return;
+    detail.value = result;
+    detailCharacterId.value = targetCharacterId;
     // 只有一份时默认切到有的那一份，别让人对着空 tab 发呆。
     if (!detail.value.diary && detail.value.handbook) activeTab.value = "HANDBOOK";
     else if (!detail.value.handbook && detail.value.diary) activeTab.value = "DIARY";
   } catch (error) {
+    if (seq !== detailRequestSeq || targetCharacterId !== id.value || dayKey !== selectedDay.value) return;
     if (!isNotFound(error)) ElMessage.error("这一天的日记/手账读取失败。");
     detail.value = null;
+    detailCharacterId.value = "";
   } finally {
-    detailLoading.value = false;
+    if (seq === detailRequestSeq) detailLoading.value = false;
   }
 }
+
 
 async function writeDayNow(target: JournalKind | "BOTH" = "BOTH"): Promise<void> {
   if (!id.value || !writeDay.value) return;
