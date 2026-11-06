@@ -35,23 +35,5 @@ export default defineEventHandler(async (event) => {
     actorUserId: ownerId,
   }, prisma);
 
-  if (outcome.status === "created") {
-    await prisma.auditLog.create({
-      data: {
-        actorType: "USER",
-        actorId: ownerId,
-        characterId,
-        action: "journal.generated",
-        entityType: "CharacterJournal",
-        entityId: outcome.journalId ?? characterId,
-        details: {
-          dayKey,
-          target,
-          texts: Object.keys(outcome.created ?? {}),
-        },
-      },
-    });
-  }
-
   return journalGenerationResponse(outcome);
 });
