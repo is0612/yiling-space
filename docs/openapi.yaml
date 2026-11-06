@@ -968,10 +968,10 @@ paths:
   /admin/identities:
     get:
       tags: [Auth]
-      summary: 分页读取「她的朋友」（仅管理员）
+      summary: 分页读取「她遇到过的人」（仅管理员）
       description: |
-        一行 = 某角色认识的某个人（一条关系），不是一个账号；同一个人跟两个角色都聊过就是两行。
-        只返回关系元信息（平台、UID、昵称、互动次数、来源、最近一次），不含任何对话或记忆正文。
+        一行 = 某角色遇到过的一个平台账号；群成员第一次发言就会出现，即使尚未互动（interactionCount = 0）。
+        身份类型为平台账号级共享值，交流权限按角色关系独立保存。只返回关系元信息，不含对话或记忆正文。
         `stats` 与 `sourceCounts` 始终按该角色的全部朋友统计，不受 `q`、`source` 影响。
       parameters:
         - $ref: '#/components/parameters/Page'
@@ -1010,7 +1010,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [scopeId, characterId, characterName, identityId, platform, platformUid, interactionCount, knownSince, conversationCount]
+                      required: [scopeId, characterId, characterName, identityId, platform, platformUid, identityKind, identityKindSource, friendChatPolicy, interactionCount, knownSince, conversationCount]
                       properties:
                         scopeId: { type: string, format: uuid }
                         characterId: { type: string, format: uuid }
@@ -1021,6 +1021,10 @@ paths:
                         displayName: { type: string, nullable: true }
                         status: { type: string, enum: [UNVERIFIED, VERIFIED, REVOKED] }
                         linkedUserId: { type: string, format: uuid, nullable: true }
+                        identityKind: { type: string, enum: [UNKNOWN, HUMAN, AI], description: 平台账号的身份类型 }
+                        identityKindSource: { type: string, enum: [AUTO, MANUAL], description: 人工确认优先，自动识别不得覆盖 MANUAL }
+                        friendChatPolicy: { type: string, enum: [DEFAULT, ALLOW, BLOCK], description: 当前角色与此对象的交流权限 }
+                        aliases: { type: array, items: { type: string } }
                         interactionCount: { type: integer }
                         lastInteractedAt: { type: string, format: date-time, nullable: true }
                         knownSince: { type: string, format: date-time }
@@ -1062,6 +1066,50 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: 仅管理员可访问
+    patch:
+      tags: [Auth]
+      summary: 修改朋友身份与交流权限（仅管理员）
+      description: |
+        identityKind 更新平台账号级分类，并将来源标记为 MANUAL；
+        friendChatPolicy 只更新本角色与该账号的交流权限。两个字段可单独修改，也可一起提交。
+        至少传入一个字段，未知字段不会被保存。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              additionalProperties: false
+              properties:
+                identityKind: { type: string, enum: [UNKNOWN, HUMAN, AI] }
+                friendChatPolicy: { type: string, enum: [DEFAULT, ALLOW, BLOCK] }
+      responses:
+        '200':
+          description: 更新后的身份与角色交流策略
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scopeId, identityKind, identityKindSource, friendChatPolicy]
+                properties:
+                  scopeId: { type: string, format: uuid }
+                  identityKind: { type: string, enum: [UNKNOWN, HUMAN, AI] }
+                  identityKindSource: { type: string, enum: [AUTO, MANUAL] }
+                  friendChatPolicy: { type: string, enum: [DEFAULT, ALLOW, BLOCK] }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 仅管理员可访问
+        '404':
+          $ref: '#/components/responses/NotFound'
   /memory-progress:
     get:
       tags: [Memories]
