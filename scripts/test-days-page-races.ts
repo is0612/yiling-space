@@ -43,7 +43,17 @@ function harness() {
   const errors: string[] = [];
   const warnings: string[] = [];
   const successes: string[] = [];
-  const role: Ref = { value: "role-a" };
+  let roleValue = "role-a";
+  const role = {} as Ref;
+  Object.defineProperty(role, "value", {
+    get: () => roleValue,
+    set: (next: unknown) => {
+      const previous = roleValue;
+      roleValue = String(next);
+      if (previous === roleValue) return;
+      for (const watcher of watchers) if (watcher.sources.includes(role)) watcher.callback();
+    },
+  });
   let timerId = 0;
   let unmount: (() => void) | null = null;
 
