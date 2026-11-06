@@ -1481,7 +1481,45 @@ async function runChannelTurn(input: {
         conversation: { select: { memoryScopeId: true } },
       },
     });
-    const selected = selectRawMessagesForPrompt(retrievalQuery, rawCandidates, {
+    let rawPromptCandidates = rawCandidates;
+    if (isGroup && rawCandidates.length) {
+      const rawUids = [...new Set(
+        rawCandidates
+          .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
+          .map((item) => readStoredAuthorOpenId(item.metadata))
+          .filter(Boolean),
+      )];
+      if (rawUids.length) {
+        const rawIdentities = await prisma.externalIdentity.findMany({
+          where: { platform: input.platform, platformUid: { in: rawUids } },
+          select: {
+            platformUid: true,
+            kind: true,
+            memoryScopes: {
+              where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+              take: 1,
+              select: { friendChatPolicy: true },
+            },
+          },
+        });
+        const rawPolicyByUid = new Map(rawIdentities.map((identity) => [
+          identity.platformUid,
+          {
+            kind: identity.kind,
+            policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
+          },
+        ] as const));
+        rawPromptCandidates = rawCandidates.filter((item) => {
+          if (item.role !== "USER") return true;
+          const speaker = readStoredSpeaker(item.metadata);
+          const uid = readStoredAuthorOpenId(item.metadata);
+          if (speaker.isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) return true;
+          const identity = rawPolicyByUid.get(uid);
+          return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
+        });
+      }
+    }
+    const selected = selectRawMessagesForPrompt(retrievalQuery, rawPromptCandidates, {
       timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
       tokenBudget: resolveRawMessageTokenBudget(character.modelConfig),
       limit: resolveRawMessageLimit(character.modelConfig),
