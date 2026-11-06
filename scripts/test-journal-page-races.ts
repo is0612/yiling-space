@@ -147,7 +147,7 @@ async function staleListAfterRoleSwitch() {
   const newRequest = page.take("/api/characters/role-b/journals");
   oldRequest.resolve(listResult(DAY_A));
   await oldLoad;
-  assert.deepEqual(page.read("items"), []);
+  assert.equal(page.read<unknown[]>("items").length, 0);
   assert.equal(page.read("loading"), true);
   newRequest.resolve(listResult(DAY_B));
   await flushMicrotasks();
@@ -188,7 +188,7 @@ async function staleHistoryAfterRoleSwitch() {
   const newList = page.take("/api/characters/role-b/journals");
   oldRequest.resolve({ items: [revision()] });
   await oldLoad;
-  assert.deepEqual(page.read("revisions"), []);
+  assert.equal(page.read<unknown[]>("revisions").length, 0);
   assert.equal(page.read("historyOpen"), false);
   newList.resolve({ ...listResult(DAY_B), items: [] });
   await flushMicrotasks();
