@@ -139,7 +139,7 @@ function isPublicAddress(address: string, family: number): boolean {
   return false;
 }
 
-export function assertFetchableImageUrl(raw: string): URL {
+export function assertFetchableMediaUrl(raw: string): URL {
   let url: URL;
   try {
     url = new URL(raw);
@@ -163,7 +163,7 @@ export function assertFetchableImageUrl(raw: string): URL {
   return url;
 }
 
-export async function assertPublicHost(hostname: string): Promise<void> {
+export async function assertPublicMediaHost(hostname: string): Promise<void> {
   const host = unbracket(hostname).toLowerCase();
   const version = isIP(host);
   if (version === 4 || version === 6) {
@@ -260,7 +260,7 @@ function isExpectedDownloadError(error: unknown, prefix: string): error is Error
 
 function validateMediaUrl(raw: string, prefix: "IMAGE" | "VOICE"): URL {
   try {
-    return assertFetchableImageUrl(raw);
+    return assertFetchableMediaUrl(raw);
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     if (code === "IMAGE_BLOCKED_HOST") throw new Error(`${prefix}_BLOCKED_HOST`);
@@ -285,7 +285,7 @@ export async function downloadSafeMedia(
 
   // 预检查给出清晰错误；真正建立连接时还会通过 Agent 的 lookup 再校验并固定 IP。
   try {
-    await assertPublicHost(currentUrl.hostname);
+    await assertPublicMediaHost(currentUrl.hostname);
   } catch (error) {
     if (error instanceof Error && error.message === "IMAGE_BLOCKED_HOST") {
       throw new Error(`${prefix}_BLOCKED_HOST`);
@@ -328,7 +328,7 @@ export async function downloadSafeMedia(
           throw new Error(`${prefix}_DOWNLOAD_FAILED`);
         }
         try {
-          await assertPublicHost(next.hostname);
+          await assertPublicMediaHost(next.hostname);
         } catch (error) {
           if (error instanceof Error && error.message === "IMAGE_BLOCKED_HOST") {
             throw new Error(`${prefix}_BLOCKED_HOST`);
