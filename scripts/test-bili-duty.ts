@@ -11,7 +11,7 @@ import {
   windowsRunFromTimestamps,
 } from "../server/utils/channel-adapter/bili/duty-scheduler";
 import { buildDutyPrompt } from "../server/utils/channel-adapter/bili/duty-prompt";
-import { mergeOwnerFirst, pickOwnerCandidates } from "../server/utils/channel-adapter/bili/duty-pipeline";
+import { mergeOwnerFirst, pickOwnerCandidates, preparePublicComment } from "../server/utils/channel-adapter/bili/duty-pipeline";
 import {
   BILI_DUTY_DEFAULTS,
   normalizeDmTargetUid,
@@ -306,6 +306,38 @@ async function main() {
   assert.deepEqual(pickOwnerCandidates([], now).picked, []);
   assert.equal(pickOwnerCandidates([], now).fellBack, false);
 
+  // 普通值班流的公开评论：发布边界必须先脱敏，再限制最终长度。
+  assert.equal(
+    preparePublicComment("这个点很有意思 @某人 真的。"),
+    "这个点很有意思 真的。",
+    "公开评论必须删除 @ 提及，但保留其余正常内容。",
+  );
+  assert.equal(
+    preparePublicComment("加我 QQ 10000007"),
+    "加我 QQ",
+    "公开评论必须删除长数字串，避免泄露 QQ 号或 UID。",
+  );
+  assert.equal(
+    preparePublicComment("这条视频值得看。主人应该会喜欢。"),
+    "这条视频值得看。",
+    "包含私密关系信息的句子必须整句移除。",
+  );
+  assert.equal(
+    preparePublicComment("只跟主人说，私信里聊"),
+    "",
+    "评论完全由私密内容组成时必须变为空串，调用方应跳过发布。",
+  );
+  assert.equal(
+    preparePublicComment("这是一句完全正常的公开评论。"),
+    "这是一句完全正常的公开评论。",
+    "正常公开评论不应被误删或改写。",
+  );
+  assert.equal(
+    preparePublicComment("普通评论".repeat(50)).length,
+    120,
+    "脱敏后仍需遵守普通值班评论 120 字上限。",
+  );
+
   console.log("✅ test-bili-duty 全部通过");
   console.log("   谷时窗口判断（含跨午夜）：通过");
   console.log("   跨午夜归一 / 从报告重建窗口标记：通过");
@@ -316,6 +348,7 @@ async function main() {
   console.log("   打分口径 / 收藏与发动态闸门：通过");
   console.log("   主人优先（模型没留也进 / 上限 2 条 / 不被额度挤掉）：通过");
   console.log("   主人优先的时间窗（30 天 / 全老退回 3 条 / 空日期保留）：通过");
+  console.log("   普通值班公开评论发布前脱敏 / 为空跳过 / 120 字上限：通过");
 }
 
 main().catch((error) => {
