@@ -299,6 +299,7 @@ for (const test of [
   regenerateConfirmationCannotCrossRole,
   editUsesCapturedRoleAndDoesNotRefreshNewRole,
   restoreConfirmationCannotCrossDay,
+  monthFilterResetsPaginationAndSelection,
   unmountInvalidatesListRequest,
 ]) {
   await test();
