@@ -24,6 +24,22 @@ export function isAiOnlyGroupRound(identityKinds: readonly FriendIdentityKind[])
   return identityKinds.length > 0 && identityKinds.every((kind) => kind === "AI");
 }
 
+/**
+ * 计算一轮结束后的连续 AI-only 轮数。
+ *
+ * 只有明确确认的真人参与，才能打断 AI 连聊计数；UNKNOWN 既不能冒充真人清零，
+ * 也不能冒充 AI 增加轮数。这样未分类的机器人不会轻易把已有的保护计数洗掉。
+ */
+export function nextConsecutiveAiRounds(
+  current: number,
+  identityKinds: readonly FriendIdentityKind[],
+): number {
+  const previous = Number.isFinite(current) ? Math.max(0, Math.floor(current)) : 0;
+  if (identityKinds.some((kind) => kind === "HUMAN")) return 0;
+  if (isAiOnlyGroupRound(identityKinds)) return previous + 1;
+  return previous;
+}
+
 /** 达到连续 AI 轮数上限后暂停；后续真人参与会将计数清零。 */
 export function shouldPauseAiOnlyRound(consecutiveAiRounds: number): boolean {
   return Number.isFinite(consecutiveAiRounds)
