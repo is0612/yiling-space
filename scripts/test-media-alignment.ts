@@ -74,4 +74,4 @@ const recordEvent = {
 assert.equal(readOnebotMessageText(recordEvent), "再听这个[语音]");
 assert.equal(readOnebotVoices(recordEvent).length, 1, "record 标准段行为继续保留。");
 
-console.log("test-media-alignment: 8/8 PASS");
+console.log("test-media-alignment: PASS");
