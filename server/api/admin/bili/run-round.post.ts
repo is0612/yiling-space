@@ -2,6 +2,7 @@ import { createError, readBody } from "h3";
 import { requireAdminActor } from "../../../utils/auth";
 import { loadBiliConnections } from "../../../utils/channel-adapter/bili/configure";
 import { runDutyRound } from "../../../utils/channel-adapter/bili/duty-pipeline";
+import { scheduledWindowAt } from "../../../utils/channel-adapter/bili/duty-scheduler";
 
 /**
  * 手动触发一轮 B站值班（对应 bili-desk 的 POST /api/agent/run）。
@@ -41,7 +42,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const started = Date.now();
-  const result = await runDutyRound(connection, { id: binding.id, characterId: binding.characterId });
+  const scheduledWindow = scheduledWindowAt(new Date(), connection.duty) ?? undefined;
+  const result = await runDutyRound(connection, { id: binding.id, characterId: binding.characterId }, scheduledWindow);
   const seconds = Math.round((Date.now() - started) / 10) / 100;
 
   return {
