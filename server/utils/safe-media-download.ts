@@ -257,6 +257,17 @@ function isExpectedDownloadError(error: unknown, prefix: string): error is Error
   return error.message.startsWith(`${prefix}_`);
 }
 
+function validateMediaUrl(raw: string, prefix: "IMAGE" | "VOICE"): URL {
+  try {
+    return assertFetchableImageUrl(raw);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    if (code === "IMAGE_BLOCKED_HOST") throw new Error(`${prefix}_BLOCKED_HOST`);
+    if (code === "IMAGE_INVALID_PROTOCOL") throw new Error(`${prefix}_INVALID_PROTOCOL`);
+    throw new Error(`${prefix}_INVALID_URL`);
+  }
+}
+
 export async function downloadSafeMedia(
   rawUrl: string,
   options: {
@@ -268,7 +279,7 @@ export async function downloadSafeMedia(
   },
 ): Promise<{ buffer: Buffer; mime: string }> {
   const { prefix, maxBytes, timeoutMs, headers, requiredMimePrefix } = options;
-  let currentUrl = assertFetchableImageUrl(rawUrl);
+  let currentUrl = validateMediaUrl(rawUrl, prefix);
   const signal = AbortSignal.timeout(timeoutMs);
 
   // 预检查给出清晰错误；真正建立连接时还会通过 Agent 的 lookup 再校验并固定 IP。
@@ -307,7 +318,7 @@ export async function downloadSafeMedia(
 
         let next: URL;
         try {
-          next = assertFetchableImageUrl(new URL(location, currentUrl).toString());
+          next = validateMediaUrl(new URL(location, currentUrl).toString(), prefix);
         } catch (error) {
           if (error instanceof Error && error.message === "IMAGE_BLOCKED_HOST") {
             throw new Error(`${prefix}_BLOCKED_HOST`);
