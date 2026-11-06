@@ -171,7 +171,9 @@ export default defineEventHandler(async (event) => {
       status: entry.status,
       confidence: entry.confidence,
       sourceMessageIds: entry.sourceMessageIds,
-      scope: entry.memoryScope.scopeType === "USER_PRIVATE" ? "private" : "character",
+      scope: entry.memoryScope.scopeType === "USER_PRIVATE"
+        ? "private"
+        : entry.memoryScope.scopeType === "EXTERNAL_IDENTITY" ? "external" : "character",
     })),
     // 会话按「当天第一次开口」排序，读起来和一天的时间走向一致。
     messageGroups: [...groups.values()]
