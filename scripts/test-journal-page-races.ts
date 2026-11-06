@@ -218,7 +218,7 @@ async function editUsesCapturedRoleAndDoesNotRefreshNewRole() {
   page.set("detailCharacterId", "role-a");
   page.set("detail", detailResult(DAY_A));
   page.call("openEdit", "DIARY");
-  assert.equal(page.read("editTarget").characterId, "role-a");
+  assert.equal(page.read<{ characterId: string; dayKey: string } | null>("editTarget")?.characterId, "role-a");
   const pending = page.call("saveEdit");
   const patch = page.take(`/api/characters/role-a/journals/${DAY_A}`, "PATCH");
   page.set("id", "role-b");
