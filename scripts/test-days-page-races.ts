@@ -121,7 +121,7 @@ function day(key: string) {
   return { dayKey: key, state: "FINAL", eventCount: 2, extractedAt: "2026-11-05T16:00:00.000Z" };
 }
 function daysResult(key: string, timeZone = "Asia/Shanghai") {
-  return { today: key, timeZone, days: [day(key)] };
+  return { today: key, timeZone, days: [day(key)], truncated: false };
 }
 function detailResult(key: string, timeZone = "Asia/Shanghai") {
   return {
