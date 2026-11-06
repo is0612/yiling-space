@@ -1071,13 +1071,18 @@ export const VOICE_UNTRANSCRIBED = "[语音（没转成文字）]";
  * 只有 `transcripts` 长度覆盖不到的那些 `[语音]`（超过 `MAX_VOICES_PER_TURN`、
  * 或者压根没尝试转写）才保持原样。
  */
-export function applyVoiceTranscripts(content: string, transcripts: Array<string | null>): string {
+export function applyVoiceTranscripts(content: string, transcripts: Array<string | null | undefined>): string {
   if (!transcripts.length || !content.includes("[语音]")) return content;
   let text = content;
   let cursor = 0;
   for (const transcript of transcripts) {
     const index = text.indexOf("[语音]", cursor);
     if (index < 0) break;
+    // undefined 表示因每轮 ASR 上限未处理，保留裸占位符；null 表示识别失败。
+    if (transcript === undefined) {
+      cursor = index + "[语音]".length;
+      continue;
+    }
     const value = transcript?.trim();
     const replacement = value ? `[语音：${value}]` : VOICE_UNTRANSCRIBED;
     text = text.slice(0, index) + replacement + text.slice(index + "[语音]".length);
