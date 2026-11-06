@@ -65,6 +65,39 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
 const suffix = randomUUID();
 const characterId = randomUUID();
 const connectionId = randomUUID();
+
+/**
+ * 固定的小号 key。`platform_connections` 上有 `(platform, platformAccountKey)` 唯一约束,
+ * 所以这个值一旦被上一次没跑完的用例留在库里，下一次就开始就撞 23505。
+ *
+ * 2026-11-07 就踩到了：一次 Ctrl-C 中断，cleanup 没执行，之后再跑直接
+ * `duplicate key value violates unique constraint "platform_connections_platform_platformAccountKey_key"`。
+ * 因此开跑前先把用同一套固定标识的残骸清掉 —— 这比“换独立数据库”省事，也不影响
+ * 本机正在跑的真实适配器（它用的是真实 QQ 号，不是这个假号）。
+ */
+const FIXTURE_ACCOUNT_KEY = "123456789";
+
+async function purgeStaleFixtures(): Promise<void> {
+  const stale = await prisma.platformConnection.findMany({
+    where: { platform: "qq-onebot", platformAccountKey: FIXTURE_ACCOUNT_KEY },
+    select: { id: true },
+  });
+  for (const { id } of stale) {
+    const bindings = await prisma.characterChannelBinding.findMany({
+      where: { connectionId: id },
+      select: { id: true, characterId: true },
+    });
+    for (const binding of bindings) {
+      await prisma.conversation.deleteMany({ where: { channelBindingId: binding.id } }).catch(() => undefined);
+      await prisma.character.deleteMany({ where: { id: binding.characterId } }).catch(() => undefined);
+    }
+    await prisma.onebotGroupAnnouncement.deleteMany({ where: { connectionId: id } }).catch(() => undefined);
+    await prisma.auditLog.deleteMany({ where: { entityType: "PlatformConnection", entityId: id } }).catch(() => undefined);
+    await prisma.characterChannelBinding.deleteMany({ where: { connectionId: id } }).catch(() => undefined);
+    await prisma.platformConnection.deleteMany({ where: { id } }).catch(() => undefined);
+  }
+  await prisma.user.deleteMany({ where: { username: { startsWith: "onebot-test-" } } }).catch(() => undefined);
+}
 let conversationId = "";
 let bindingId = "";
 
@@ -103,6 +136,8 @@ try {
   children.push(await spawnServer("scripts/mock-onebot-gateway.mjs", { ONEBOT_MOCK_HTTP_PORT: "4031", ONEBOT_MOCK_WS_PORT: "4030", ONEBOT_MOCK_REQUIRE_TOKEN: "mock-ws-token" }, "mock-onebot-ready"));
 
   // 1. Seed a character (with a global scope) and an OneBot connection + default binding.
+  //    先清上一次中断留下的同名 fixture，否则唯一约束直接挡住这一轮。
+  await purgeStaleFixtures();
   const user = await prisma.user.create({ data: { username: `onebot-test-${suffix}`, passwordHash: "x", role: "ADMIN" }, select: { id: true } });
   await prisma.character.create({
     data: {
@@ -126,7 +161,7 @@ try {
     data: {
       id: connectionId,
       platform: "qq-onebot",
-      platformAccountKey: "123456789",
+      platformAccountKey: FIXTURE_ACCOUNT_KEY,
       displayName: "测试 QQ 小号",
       // 本机可能正跑着真实适配器；DISABLED 让它不会被 runner 加载，测试用直连验证协议层。
       status: "DISABLED",
