@@ -3,7 +3,7 @@ import type { Prisma } from "../../../src/generated/prisma/client";
 import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { readCharacterBody, readCharacterProfilePatch } from "../../utils/character-profile-input";
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
-import { encryptApiKey } from "../../utils/credential-encryption";
+import { encryptApiKey, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
 import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
 import { requireActorUserId } from "../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../utils/local-api";
@@ -46,6 +46,11 @@ export default defineEventHandler(async (event) => {
   /** 语音 Key 的明文只在这里短暂停留，落库前一定加密；不写日志、不回显。 */
   let voiceApiKeyPlain = "";
   let clearVoiceApiKey = false;
+  /** 识别专用 Key：合成与识别不是同一家时用，留空则回落到共用的语音 Key。 */
+  let asrApiKeyPlain = "";
+  let clearAsrApiKey = false;
+  /** 页面点过「同语音合成」：服务端把合成那把 Key 复制到识别（Key 不经过浏览器）。 */
+  let syncAsrFromVoice = false;
   /** 图片（看图）模型的 Key：与语音同理，几乎必然是另一家服务商，单独一把。 */
   let visionApiKeyPlain = "";
   let clearVisionApiKey = false;
@@ -239,6 +244,8 @@ export default defineEventHandler(async (event) => {
     ["asrModel", "语音识别模型", 120],
     // MiniMax 的 GroupId：查询参数，不是密钥但也不是能随便公开的东西。
     ["ttsGroupId", "语音服务 GroupId", 100],
+    // Breeze 的演技指令（"声音软软的、带一点气声"），一句话的长度足够。
+    ["ttsInstructions", "语音语气指令", 400],
   ] as const) {
     if (body[key] === undefined) continue;
     if (typeof body[key] !== "string") {
@@ -255,13 +262,44 @@ export default defineEventHandler(async (event) => {
    * 语音服务商。空字符串 = 自动判断（看地址里有没有 minimax），
    * 显式写了就必须是认得的那两个 —— 写错了会静默走另一家的协议，报错信息会非常难懂。
    */
+  /**
+   * 语速。0.5–2.0，缺省 1。
+   *
+   * 必须能在页面上调：MiniMax 的默认音色本身偏慢，想快一点过去只能改 .env 再重启适配器，
+   * 而「重启」这一步在页面上完全没有提示。
+   */
+  if (body.ttsSpeed !== undefined) {
+    const value = typeof body.ttsSpeed === "number" ? body.ttsSpeed : Number(body.ttsSpeed);
+    if (!Number.isFinite(value) || value < 0.5 || value > 2) {
+      throw createError({ statusCode: 400, statusMessage: "语音语速必须是 0.5 到 2 之间的数字。" });
+    }
+    modelConfigPatch.ttsSpeed = Math.round(value * 100) / 100;
+  }
+
+  /**
+   * 语速。0.5–2.0，缺省 1。
+   *
+   * 必须能在页面上调：MiniMax 的默认音色本身偏慢，想快一点过去只能改 .env 再重启适配器，
+   * 而「重启」这一步在页面上完全没有提示。
+   */
+  if (body.ttsSpeed !== undefined) {
+    const value = typeof body.ttsSpeed === "number" ? body.ttsSpeed : Number(body.ttsSpeed);
+    if (!Number.isFinite(value) || value < 0.5 || value > 2) {
+      throw createError({ statusCode: 400, statusMessage: "语音语速必须是 0.5 到 2 之间的数字。" });
+    }
+    modelConfigPatch.ttsSpeed = Math.round(value * 100) / 100;
+  }
+
   if (body.ttsProvider !== undefined) {
     if (typeof body.ttsProvider !== "string") {
       throw createError({ statusCode: 400, statusMessage: "语音服务商必须是文本。" });
     }
     const value = body.ttsProvider.trim();
-    if (value && value !== "openai" && value !== "minimax") {
-      throw createError({ statusCode: 400, statusMessage: "语音服务商只支持 openai（含兼容接口）或 minimax。" });
+    if (value && value !== "openai" && value !== "minimax" && value !== "breeze") {
+      throw createError({
+        statusCode: 400,
+        statusMessage: "语音服务商只支持 openai（含兼容接口）、minimax 或 breeze。",
+      });
     }
     modelConfigPatch.ttsProvider = value;
   }
@@ -296,6 +334,71 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: "清除语音 API Key 的参数无效。" });
     }
     clearVoiceApiKey = body.clearVoiceApiKey;
+  }
+
+  if (body.asrProvider !== undefined) {
+    if (typeof body.asrProvider !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "识别服务商必须是文本。" });
+    }
+    const value = body.asrProvider.trim();
+    // Breeze 只做合成，没有识别端点，所以这里不收它。
+    if (value && value !== "openai" && value !== "minimax") {
+      throw createError({
+        statusCode: 400,
+        statusMessage: "识别服务商只支持 openai（含兼容接口）或 minimax。",
+      });
+    }
+    modelConfigPatch.asrProvider = value;
+  }
+
+  /**
+   * 识别（ASR）单独一份。合成与识别不是同一家时必须能分开填：
+   * Breeze 只做合成，把这把 Key 喂给识别服务商只会 401，而报错只写「鉴权失败」。
+   * 留空 = 回落到共用的语音 Key（一家全包时的老行为）。
+   */
+  if (body.asrApiBaseUrl !== undefined) {
+    if (typeof body.asrApiBaseUrl !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "识别服务地址必须是文本。" });
+    }
+    try {
+      modelConfigPatch.asrApiBaseUrl = body.asrApiBaseUrl.trim()
+        ? validateChatApiBaseUrl(body.asrApiBaseUrl)
+        : "";
+    } catch (error) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: error instanceof Error ? error.message : "识别服务地址无效。",
+      });
+    }
+  }
+
+  if (body.asrApiKey !== undefined) {
+    if (typeof body.asrApiKey !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "识别服务的 API Key 必须是文本。" });
+    }
+    const key = body.asrApiKey.trim();
+    if (key.length > 8192) throw createError({ statusCode: 400, statusMessage: "API Key 不能超过 8192 个字符。" });
+    if (key) asrApiKeyPlain = key;
+  }
+
+  if (body.clearAsrApiKey !== undefined) {
+    if (typeof body.clearAsrApiKey !== "boolean") {
+      throw createError({ statusCode: 400, statusMessage: "清除识别 API Key 的参数无效。" });
+    }
+    clearAsrApiKey = body.clearAsrApiKey;
+  }
+
+  /**
+   * 页面上的「同语音合成」：把合成的 Key 在服务端复制一份给识别。
+   *
+   * Key 明文不回传浏览器，所以复制只能在这里做 —— 前端只送一个开关，
+   * 拿不到也传不了 Key。复制过去之后识别就是独立一把，用户改合成那把不会连带影响识别。
+   */
+  if (body.syncAsrFromVoice !== undefined) {
+    if (typeof body.syncAsrFromVoice !== "boolean") {
+      throw createError({ statusCode: 400, statusMessage: "同步识别 Key 的参数无效。" });
+    }
+    syncAsrFromVoice = body.syncAsrFromVoice;
   }
 
   /**
@@ -383,7 +486,7 @@ export default defineEventHandler(async (event) => {
   const { chatApiKey, clearApiKey, ...safeSettingsPatch } = settingsPatch;
   Object.assign(modelConfigPatch, safeSettingsPatch);
 
-  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey) {
+  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
     if (clearApiKey) delete nextConfig.chatApiKeyEncrypted;
     if (chatApiKey) nextConfig.chatApiKeyEncrypted = await encryptApiKey(chatApiKey);
@@ -391,6 +494,15 @@ export default defineEventHandler(async (event) => {
     // 混用一个字段会导致「换语音服务商时把聊天也换掉」。
     if (clearVoiceApiKey) delete nextConfig.voiceApiKeyEncrypted;
     if (voiceApiKeyPlain) nextConfig.voiceApiKeyEncrypted = await encryptApiKey(voiceApiKeyPlain);
+    // 识别是独立一把：合成换成只做合成的服务商之后，共用那把 Key 打识别服务商只会 401。
+    if (clearAsrApiKey) delete nextConfig.asrApiKeyEncrypted;
+    if (asrApiKeyPlain) nextConfig.asrApiKeyEncrypted = await encryptApiKey(asrApiKeyPlain);
+    // 「同语音合成」：在服务端把合成那把复制过来。用户自己填了识别 Key 时以用户为准。
+    if (syncAsrFromVoice && !asrApiKeyPlain && !clearAsrApiKey) {
+      const source = await resolveCharacterVoiceApiKey(nextConfig).catch(() => "");
+      if (source) nextConfig.asrApiKeyEncrypted = await encryptApiKey(source);
+      else console.warn("[voice] 点了「同语音合成」但合成那边没有 Key，识别 Key 保持不变");
+    }
     // 图片模型的 Key 同理再分开一把，三家可以各是各的。
     if (clearVisionApiKey) delete nextConfig.visionApiKeyEncrypted;
     if (visionApiKeyPlain) nextConfig.visionApiKeyEncrypted = await encryptApiKey(visionApiKeyPlain);

@@ -4,7 +4,7 @@ import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemo
 import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
-import { isContextAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
+import { isAsrApiKeySaved, isContextAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 
 function positiveNumber(value: unknown): number {
@@ -103,10 +103,18 @@ export type CharacterDto = {
   ttsModel: string;
   ttsVoice: string;
   asrModel: string;
-  /** 语音服务商：openai（含兼容接口）/ minimax。空 = 按地址自动判断。 */
+  /** 语音服务商：openai（含兼容接口）/ minimax / breeze。空 = 按地址自动判断。 */
   ttsProvider: string;
   /** MiniMax 的 GroupId（查询参数）。 */
   ttsGroupId: string;
+  /** Breeze 的演技指令；空 = 用环境变量。 */
+  ttsInstructions: string;
+  /** 语速 0.5–2.0；0 = 用环境变量或默认 1。 */
+  ttsSpeed: number;
+  /** 识别专用地址；空 = 用环境变量 `VOICE_ASR_BASE_URL` 或语音地址。 */
+  asrApiBaseUrl: string;
+  /** 识别专用 Key 是否已保存（合成与识别不是同一家时用）。 */
+  asrApiKeyConfigured: boolean;
   /** 看图（图片）模型：空 = 回落到环境变量 / 对话模型，所以"没配"是正常状态。 */
   visionModel: string;
   /** 看图服务地址；空 = 用环境变量或角色聊天地址。 */
@@ -299,6 +307,10 @@ export function toCharacterDto(input: unknown): CharacterDto {
     asrModel: typeof config.asrModel === "string" ? config.asrModel : "",
     ttsProvider: typeof config.ttsProvider === "string" ? config.ttsProvider : "",
     ttsGroupId: typeof config.ttsGroupId === "string" ? config.ttsGroupId : "",
+    ttsInstructions: typeof config.ttsInstructions === "string" ? config.ttsInstructions : "",
+    ttsSpeed: typeof config.ttsSpeed === "number" ? config.ttsSpeed : 0,
+    asrApiBaseUrl: typeof config.asrApiBaseUrl === "string" ? config.asrApiBaseUrl : "",
+    asrApiKeyConfigured: isAsrApiKeySaved(config),
     visionModel: typeof config.visionModel === "string" ? config.visionModel : "",
     visionApiBaseUrl: typeof config.visionApiBaseUrl === "string" ? config.visionApiBaseUrl : "",
     visionApiKeyConfigured: isVisionApiKeySaved(config),

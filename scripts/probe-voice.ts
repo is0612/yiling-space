@@ -24,6 +24,7 @@ import { resolveChatModelSettings } from "../server/utils/chat-model-config";
 import { resolveCharacterApiKey, resolveCharacterVoiceApiKey } from "../server/utils/credential-encryption";
 import { getPrisma } from "../server/utils/prisma";
 import {
+  buildBreezeEndpoint,
   buildMinimaxEndpoint,
   buildSpeechEndpoint,
   resolveVoiceTtsSettings,
@@ -96,7 +97,9 @@ async function main() {
     sampleRate: settings.sampleRate ?? "(服务商默认)",
     endpoint: settings.provider === "minimax"
       ? buildMinimaxEndpoint(settings.apiBaseUrl, settings.groupId).toString()
-      : buildSpeechEndpoint(settings.apiBaseUrl).toString(),
+      : settings.provider === "breeze"
+        ? buildBreezeEndpoint(settings.apiBaseUrl, settings.voice)
+        : buildSpeechEndpoint(settings.apiBaseUrl).toString(),
     keyPresent: Boolean(settings.apiKey),
     ...(settings.provider === "minimax" ? { groupIdPresent: Boolean(settings.groupId) } : {}),
   }));

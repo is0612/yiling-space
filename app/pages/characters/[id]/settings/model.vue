@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { Promotion, Refresh, TopRight } from "@element-plus/icons-vue";
+import { CopyDocument, Promotion, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import type { Character } from "~/utils/mock-data";
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
+import { applyAsrProviderPreset, applyVoiceProviderPreset } from "~/utils/voice-provider-preset";
 
 /**
  * 模型设置：从「角色设置」弹窗里搬出来的。
@@ -52,8 +53,21 @@ const clearVoiceApiKey = ref(false);
 const draftVoiceApiBaseUrl = ref("");
 const draftVoiceTtsModel = ref("");
 const draftVoiceTtsVoice = ref("");
+/** 语速 0.5–2.0；页面里始终是个具体数字，0 只存在于库里（= 用环境变量/默认 1） */
+const draftVoiceSpeed = ref(1);
 const draftVoiceAsrModel = ref("");
 const draftVoiceGroupId = ref("");
+/** Breeze 的演技指令：一句话决定她怎么说，不填就用 .env 里的 */
+const draftVoiceInstructions = ref("");
+// ── 识别（ASR）：和合成是两套配置 ──
+// 合成分给 Breeze / MiniMax、识别分给另一家是常态（Breeze 根本没有识别端点），
+// 共用一把 Key 只会拿 B 家的 Key 去打 A 家，换回一个看不出原因的 401。
+const draftAsrProvider = ref("auto");
+const draftAsrApiBaseUrl = ref("");
+const draftAsrApiKey = ref("");
+const clearAsrApiKey = ref(false);
+/** 点过「同语音合成」：保存时让服务端把合成那把 Key 复制到识别（Key 不回传网页，只能服务端抄）。 */
+const syncAsrFromVoice = ref(false);
 /** 语音模型下拉里「获取模型」拉回来的清单 */
 const fetchedVoiceModels = ref<string[]>([]);
 const fetchingVoiceModels = ref(false);
@@ -152,8 +166,14 @@ const draftSignature = computed(() => JSON.stringify([
   draftVoiceApiBaseUrl.value.trim(),
   draftVoiceTtsModel.value.trim(),
   draftVoiceTtsVoice.value.trim(),
+  draftVoiceSpeed.value,
   draftVoiceAsrModel.value.trim(),
   draftVoiceGroupId.value.trim(),
+  draftVoiceInstructions.value.trim(),
+  draftAsrProvider.value,
+  draftAsrApiBaseUrl.value.trim(),
+  clearAsrApiKey.value,
+  syncAsrFromVoice.value,
   clearVoiceApiKey.value,
   // 图片模型：Key 明文同样不进指纹，勾选要进
   draftVisionModel.value.trim(),
@@ -229,16 +249,31 @@ const backLabel = computed(() => {
   return "返回角色记忆";
 });
 
+/**
+ * 六个 API Key 输入框共用的文案，只在这里定义一次。
+ *
+ * 之前六处各写各的：同一个状态有的有徽标、有的没有；说明有的写「AES-256-GCM」、
+ * 有的写「不会回显原文」、有的两样都不写。用户看到的是六套说法，还以为是六个功能。
+ */
+const API_KEY_SAVED_PLACEHOLDER = "已加密保存；留空表示保持不变";
+const API_KEY_EMPTY_PLACEHOLDER = "填写 API Key";
+const API_KEY_CLEAR_LABEL = "清除已保存的 Key";
+const API_KEY_HELP =
+  "使用本机凭据加密密钥进行 AES-256-GCM 加密保存；留空表示不修改已有 Key，不会回传原文。";
+
+/**
+ * 字段上**不再标「必填 / 可选」**（2026-11-06 用户决定）。
+ *
+ * 理由：这些字段本来就是「要用这个功能就得填」，标「可选」等于暗示不填也能用，
+ * 反而要再写一段说明解释回落到哪 —— 越标越乱。哪个字段其实有回落，
+ * 直接写在它自己的说明里就够了，不需要一个额外的徽标。
+ */
+
 const apiKeySource = computed(() => character.value?.chatApiKeySource ?? "missing");
 const apiKeyPlaceholder = computed(() => {
-  if (apiKeySource.value === "character") return "已加密保存；留空表示保持不变";
+  if (apiKeySource.value === "character") return API_KEY_SAVED_PLACEHOLDER;
   if (apiKeySource.value === "environment") return "当前使用服务端默认 Key；填写可覆盖";
-  return "请填写 API Key";
-});
-const apiKeyHint = computed(() => {
-  if (apiKeySource.value === "character") return "此角色已保存 API Key。留空可保持现有 Key，不会在网页中显示原文。";
-  if (apiKeySource.value === "environment") return "当前使用服务端默认 Key。输入新 Key 后会为本角色单独保存。";
-  return "Key 只提交到本机服务端，使用 AES-256-GCM 加密后保存，不会回传给网页。";
+  return API_KEY_EMPTY_PLACEHOLDER;
 });
 
 const currentProvider = computed(() => providerByKey(draftProviderKey.value));
@@ -270,6 +305,8 @@ const contextAssistantModelOptions = computed(() => buildModelOptions({
 
 // ── 语音模型的计算属性 ──
 const voiceKeyConfigured = computed(() => character.value?.voiceApiKeyConfigured === true);
+/** 识别专用 Key 是否已保存（和语音那把分开两把） */
+const asrKeyConfigured = computed(() => character.value?.asrApiKeyConfigured === true);
 /**
  * "auto" 是前端哨兵值，保存时映射回空字符串（= 交给后端按地址推断）。
  * 不能用空串当下拉值：Element Plus 把空串当「未选择」，那个选项会显示不出来。
@@ -279,13 +316,16 @@ const voiceUsesMinimax = computed(() => {
   if (draftVoiceProvider.value === "openai") return false;
   return /minimax/i.test(draftVoiceApiBaseUrl.value);
 });
-const voiceKeyPlaceholder = computed(() => {
-  if (voiceKeyConfigured.value) return "已加密保存；留空表示保持不变";
-  return voiceUsesMinimax.value ? "sk-...（MiniMax 接口密钥页创建）" : "sk-...（服务商后台复制）";
+/** Breeze 与前两家不是一套协议：地址、音色、语气指令都只在它这里生效。 */
+const voiceUsesBreeze = computed(() => {
+  if (draftVoiceProvider.value === "breeze") return true;
+  if (draftVoiceProvider.value === "minimax" || draftVoiceProvider.value === "openai") return false;
+  return /breeze\.blue/i.test(draftVoiceApiBaseUrl.value);
 });
-const voiceKeyHint = computed(() => {
-  if (voiceKeyConfigured.value) return "此角色已保存语音 Key。留空保持现有 Key，不会回显原文。";
-  return "语音模型用的 Key，加密保存、不回传网页；与对话模型那把 Key 分开两把。";
+const voiceKeyPlaceholder = computed(() => {
+  if (voiceKeyConfigured.value) return API_KEY_SAVED_PLACEHOLDER;
+  if (voiceUsesBreeze.value) return "brz_...（Breeze 开发者后台创建）";
+  return voiceUsesMinimax.value ? "sk-...（MiniMax 接口密钥页创建）" : "sk-...（服务商后台复制）";
 });
 
 // ── 图片模型的计算属性 ──
@@ -308,13 +348,9 @@ const visionModelOptions = computed(() => {
   return current && !merged.includes(current) ? [current, ...merged] : merged;
 });
 const visionKeyPlaceholder = computed(() => {
-  if (visionKeyConfigured.value) return "已加密保存；留空表示保持不变";
+  if (visionKeyConfigured.value) return API_KEY_SAVED_PLACEHOLDER;
   const name = visionProviderName.value;
   return name ? `sk-...（${name} 后台复制）` : "sk-...（服务商后台复制）";
-});
-const visionKeyHint = computed(() => {
-  if (visionKeyConfigured.value) return "此角色已保存看图 Key。留空保持现有 Key，不会回显原文。";
-  return "留空 = 用服务端 VISION_API_KEY，再退一步用对话模型那把 Key。换了一家服务商就必须单独填。";
 });
 /** 选服务商时只带地址：视觉模型名各家的叫法差太多，替用户猜一个反而要改 */
 function applyVisionProvider(key: string) {
@@ -398,42 +434,65 @@ const voiceProviderPreset = computed(() => {
 const voiceConsoleUrl = computed(() => voiceProviderPreset.value?.consoleUrl ?? "");
 const voiceProviderName = computed(() => voiceProviderPreset.value?.name ?? "");
 
-/** 两家的默认三件套：选服务商时一键带过去（和对话模型「选服务商自动填地址」同一套思路） */
-const VOICE_PRESET: Record<string, { baseUrl: string; model: string; voice: string }> = {
-  minimax: { baseUrl: "https://api.minimaxi.com/v1", model: "speech-2.5-turbo-preview", voice: "female-shaonv" },
-  openai: { baseUrl: "https://api.siliconflow.cn/v1", model: "FunAudioLLM/CosyVoice2-0.5B", voice: "FunAudioLLM/CosyVoice2-0.5B:claire" },
-};
+/** 三家的默认三件套在 `~/utils/voice-provider-preset` 里（带单测），这里只负责写回输入框 */
 
 /**
- * 选服务商时把地址 / 模型 / 音色一起带过去。
- * 只在「空着」或「还填着另一家的默认值」时才替换 —— 用户自己调过的参数不能被一次下拉冲掉。
- * 「自动判断」一个字段都不改：它的定义就是「看下面填的地址」，替用户改写地址等于替它下判断。
- *
- * ⚠️ 两个方向都要处理。以前只在 provider === "minimax" 时填，切回 OpenAI 兼容时地址和模型
- * 仍停在 MiniMax，界面上写着 OpenAI 兼容、实际打的是 MiniMax 的接口，合成必然失败。
+ * 选服务商时把地址 / 模型 / 音色一起带过去（规则见 `~/utils/voice-provider-preset`，
+ * 那边的「像不像别家」判断有单测，别再在这里分方向写 if）。
  */
 function applyVoiceProviderTemplate(provider: string) {
-  const preset = VOICE_PRESET[provider];
-  if (!preset) return;
-  const toMinimax = provider === "minimax";
+  const next = applyVoiceProviderPreset(
+    {
+      baseUrl: draftVoiceApiBaseUrl.value,
+      model: draftVoiceTtsModel.value,
+      voice: draftVoiceTtsVoice.value,
+    },
+    provider,
+  );
+  if (!next) return;
 
-  const url = draftVoiceApiBaseUrl.value.trim();
-  if (!url || (toMinimax ? /siliconflow|api\.openai\.com/i.test(url) : /minimax/i.test(url))) {
-    draftVoiceApiBaseUrl.value = preset.baseUrl;
-  }
-
-  const model = draftVoiceTtsModel.value.trim();
-  if (!model || (toMinimax ? /cosyvoice|^tts-|gpt-4o-mini-tts|moss/i.test(model) : /^speech-|minimax/i.test(model))) {
-    draftVoiceTtsModel.value = preset.model;
-  }
-
-  const voice = draftVoiceTtsVoice.value.trim();
-  if (!voice || (toMinimax ? /funaudiollm|^(alloy|nova|shimmer|echo|fable|onyx|sage|coral)$/i.test(voice) : /^(female|male)-/i.test(voice))) {
-    draftVoiceTtsVoice.value = preset.voice;
-  }
+  draftVoiceApiBaseUrl.value = next.baseUrl;
+  draftVoiceTtsModel.value = next.model;
+  draftVoiceTtsVoice.value = next.voice;
 
   // 换了一家用，「获取模型」上一家拉回来的清单就不作数了
   fetchedVoiceModels.value = [];
+}
+
+/** 识别侧选服务商：带出地址和模型（和合成同一套规则） */
+function applyAsrProviderTemplate(provider: string) {
+  const next = applyAsrProviderPreset(
+    { baseUrl: draftAsrApiBaseUrl.value, model: draftVoiceAsrModel.value },
+    provider,
+  );
+  if (!next) return;
+  draftAsrApiBaseUrl.value = next.baseUrl;
+  draftVoiceAsrModel.value = next.model;
+  // 换了服务商，之前点过「同语音合成」的意图就不成立了
+  syncAsrFromVoice.value = false;
+}
+
+/**
+ * 「同语音合成」：把合成的服务商/地址抄过来，并让服务端保存时把 Key 也复制一份。
+ * Key 本身不回传网页，所以复制只能发生在服务端 —— 前端只送一个开关。
+ */
+function useSameAsVoice() {
+  if (voiceUsesBreeze.value) {
+    ElMessage.warning("合成用的是 Breeze，它只有合成、没有识别端点；识别得单独配一家。");
+    return;
+  }
+  // 服务商取合成的；「自动判断」时按地址认，认不出来就算 OpenAI 兼容
+  const provider = voiceUsesMinimax.value || /minimax/i.test(draftVoiceApiBaseUrl.value)
+    ? "minimax"
+    : "openai";
+  draftAsrProvider.value = provider;
+  draftAsrApiBaseUrl.value = draftVoiceApiBaseUrl.value.trim();
+  draftAsrApiKey.value = "";
+  clearAsrApiKey.value = false;
+  syncAsrFromVoice.value = true;
+  // 识别模型不能抄合成的（breeze-tts-2 拿去做识别只会 400），按服务商给默认
+  const next = applyAsrProviderPreset({ baseUrl: draftAsrApiBaseUrl.value, model: "" }, provider);
+  if (next) draftVoiceAsrModel.value = next.model;
 }
 
 /** 语音模型下拉选项：已保存的值 + 拉回来的清单，去重 */
@@ -627,12 +686,6 @@ const modelOptions = computed(() => buildModelOptions({
   current: draftChatModel.value,
   fetched: fetchedModels.value,
 }));
-const providerHint = computed(() => {
-  const preset = currentProvider.value;
-  if (!preset || preset.key === "custom") return "没有列出的平台选「自定义」，手填 API 地址和模型名即可。";
-  if (!preset.supportsModelList) return preset.name + " 不提供模型列表接口，下面的选项来自内置清单，也可以直接手填。";
-  return "已填入 " + preset.name + " 的公开兼容地址；点「获取模型」可拉取该 Key 能用的全部模型。";
-});
 
 function readError(error: unknown, fallback: string): string {
   if (error && typeof error === "object" && "statusMessage" in error) {
@@ -708,8 +761,15 @@ async function loadCharacter() {
     draftVoiceApiBaseUrl.value = data.voiceApiBaseUrl ?? "";
     draftVoiceTtsModel.value = data.ttsModel ?? "";
     draftVoiceTtsVoice.value = data.ttsVoice ?? "";
+    draftVoiceSpeed.value = data.ttsSpeed && data.ttsSpeed > 0 ? data.ttsSpeed : 1;
     draftVoiceAsrModel.value = data.asrModel ?? "";
     draftVoiceGroupId.value = data.ttsGroupId ?? "";
+    draftVoiceInstructions.value = data.ttsInstructions ?? "";
+    draftAsrProvider.value = data.asrProvider || "auto";
+    draftAsrApiBaseUrl.value = data.asrApiBaseUrl ?? "";
+    draftAsrApiKey.value = "";
+    clearAsrApiKey.value = false;
+    syncAsrFromVoice.value = false;
     // 图片模型
     draftVisionModel.value = data.visionModel ?? "";
     draftVisionApiBaseUrl.value = data.visionApiBaseUrl ?? "";
@@ -778,9 +838,16 @@ async function save(silent = false): Promise<boolean> {
         voiceApiBaseUrl: draftVoiceApiBaseUrl.value.trim(),
         ttsModel: draftVoiceTtsModel.value.trim(),
         ttsVoice: draftVoiceTtsVoice.value.trim(),
+        ttsSpeed: draftVoiceSpeed.value,
         asrModel: draftVoiceAsrModel.value.trim(),
         ttsProvider: draftVoiceProvider.value === "auto" ? "" : draftVoiceProvider.value,
         ttsGroupId: draftVoiceGroupId.value.trim(),
+        ttsInstructions: draftVoiceInstructions.value.trim(),
+        asrProvider: draftAsrProvider.value === "auto" ? "" : draftAsrProvider.value,
+        asrApiBaseUrl: draftAsrApiBaseUrl.value.trim(),
+        ...(draftAsrApiKey.value.trim() ? { asrApiKey: draftAsrApiKey.value.trim() } : {}),
+        ...(clearAsrApiKey.value ? { clearAsrApiKey: true } : {}),
+        ...(syncAsrFromVoice.value ? { syncAsrFromVoice: true } : {}),
         ...(draftVoiceApiKey.value.trim() ? { voiceApiKey: draftVoiceApiKey.value.trim() } : {}),
         ...(clearVoiceApiKey.value ? { clearVoiceApiKey: true } : {}),
         // 图片模型
@@ -1029,12 +1096,9 @@ watch(id, () => void loadCharacter());
               <div class="brick-head-txt">
                 <div class="brick-heading">
                   <h2 class="brick-title">
-                    连接
+                    对话模型
                   </h2>
                 </div>
-                <p class="brick-desc">
-                  选服务商会自动填好公开兼容地址和常用模型，也可以完全手填。
-                </p>
               </div>
             </div>
 
@@ -1057,16 +1121,12 @@ watch(id, () => void loadCharacter());
                     :value="preset.key"
                   />
                 </el-select>
-                <p class="field-help">
-                  {{ providerHint }}
-                </p>
               </div>
 
               <div class="field">
                 <!-- 标签行右侧挂开放平台入口：用户卡住的点不是「填什么」，而是「去哪拿 Key」 -->
                 <div class="field-head">
                   <span class="field-label">API 地址</span>
-                  <span class="field-req">必填</span>
                   <a
                     v-if="consoleUrl"
                     class="field-link"
@@ -1084,14 +1144,15 @@ watch(id, () => void loadCharacter());
                   aria-label="API 地址"
                   placeholder="https://api.deepseek.com/v1"
                 />
-                <p class="field-help">
-                  填 API 根地址，不要追加 /chat/completions。必须 HTTPS；HTTP 仅允许本机地址。
-                </p>
               </div>
 
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">API Key</span>
+                  <span
+                    class="pill"
+                    :class="apiKeySource === 'missing' ? 'pill-rose' : 'pill-green'"
+                  >{{ apiKeySource === "character" ? "已保存" : apiKeySource === "environment" ? "服务端默认" : "未填写" }}</span>
                 </div>
                 <el-input
                   v-model="draftChatApiKey"
@@ -1102,40 +1163,20 @@ watch(id, () => void loadCharacter());
                   aria-label="API Key"
                   :placeholder="apiKeyPlaceholder"
                 />
-                <p class="field-help">
-                  {{ apiKeyHint }}
-                </p>
                 <el-checkbox
                   v-if="apiKeySource === 'character'"
                   v-model="clearSavedApiKey"
                   class="field-check"
                 >
-                  移除此角色单独保存的 API Key
+                  {{ API_KEY_CLEAR_LABEL }}
                 </el-checkbox>
               </div>
-            </div>
-          </section>
 
-          <!-- ② 模型 -->
-          <section class="brick">
-            <div class="brick-head">
-              <div class="brick-head-txt">
-                <div class="brick-heading">
-                  <h2 class="brick-title">
-                    模型
-                  </h2>
-                </div>
-                <p class="brick-desc">
-                  选项来自内置目录；「获取模型」会先保存再向服务商拉取真实列表，失败的原始提示会直接显示。
-                </p>
-              </div>
-            </div>
-
-            <div class="fields">
+              <!-- 模型和「服务商 / 地址 / Key」本来是同一件事：连接通不通取决于这四项配套。
+                   以前单独一块砖，看起来像两个独立步骤，实际选完服务商就要在这里选模型 -->
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">模型名称</span>
-                  <span class="field-req">必填</span>
                 </div>
                 <div class="model-row">
                   <el-select
@@ -1163,6 +1204,16 @@ watch(id, () => void loadCharacter());
                   </el-button>
                 </div>
               </div>
+            </div>
+
+            <div class="voice-test-bar">
+              <el-button
+                :loading="testing"
+                :disabled="saving || testingMemoryAssistant || fetchingMemoryAssistantModels || testingContextAssistant || fetchingContextAssistantModels"
+                @click="testConnection"
+              >
+                <el-icon><Promotion /></el-icon>{{ testing ? "测试中…" : "测试" }}
+              </el-button>
             </div>
           </section>
 
@@ -1379,13 +1430,9 @@ watch(id, () => void loadCharacter());
               <div class="brick-head-txt">
                 <div class="brick-heading">
                   <h2 class="brick-title">
-                    语音服务商
+                    语音合成
                   </h2>
                 </div>
-                <p class="brick-desc">
-                  她发语音条、听懂别人语音时用的服务，与上面的对话模型可以是两家。
-                  开关在「QQ 渠道 → 角色行为 → 语音」，这里只管「用哪家、哪把 Key、哪个音色」。
-                </p>
               </div>
             </div>
 
@@ -1412,10 +1459,11 @@ watch(id, () => void loadCharacter());
                     label="MiniMax（中文女声好、延迟 1-3 秒）"
                     value="minimax"
                   />
+                  <el-option
+                    label="Breeze（可写语气指令、要克隆音色）"
+                    value="breeze"
+                  />
                 </el-select>
-                <p class="field-help">
-                  两家协议不一样（MiniMax 要 GID、返回的音频是 hex）。选 MiniMax 会自动带好地址、模型和音色。
-                </p>
               </div>
 
               <!-- 顺序与右边的对话模型一致：服务商 → API 地址 → API Key。
@@ -1438,11 +1486,8 @@ watch(id, () => void loadCharacter());
                   v-model="draftVoiceApiBaseUrl"
                   maxlength="500"
                   aria-label="语音 API 地址"
-                  :placeholder="voiceUsesMinimax ? 'https://api.minimaxi.com/v1' : 'https://api.siliconflow.cn/v1'"
+                  :placeholder="voiceUsesBreeze ? 'https://api.breeze.blue' : voiceUsesMinimax ? 'https://api.minimaxi.com/v1' : 'https://api.siliconflow.cn/v1'"
                 />
-                <p class="field-help">
-                  填 API 根地址，不要追加 /audio/speech 或 /t2a_v2。
-                </p>
               </div>
 
               <div class="field">
@@ -1462,15 +1507,12 @@ watch(id, () => void loadCharacter());
                   aria-label="语音 API Key"
                   :placeholder="voiceKeyPlaceholder"
                 />
-                <p class="field-help">
-                  {{ voiceKeyHint }}
-                </p>
                 <el-checkbox
                   v-if="voiceKeyConfigured"
                   v-model="clearVoiceApiKey"
                   class="field-check"
                 >
-                  移除此角色单独保存的语音 Key
+                  {{ API_KEY_CLEAR_LABEL }}
                 </el-checkbox>
               </div>
 
@@ -1480,7 +1522,6 @@ watch(id, () => void loadCharacter());
               >
                 <div class="field-head">
                   <span class="field-label">MiniMax 空间 ID（GID）</span>
-                  <span class="field-req">可选，先留空</span>
                 </div>
                 <el-input
                   v-model="draftVoiceGroupId"
@@ -1488,12 +1529,6 @@ watch(id, () => void loadCharacter());
                   aria-label="MiniMax 空间 ID（GID）"
                   placeholder="留空即可；报 GroupId 不匹配时再填"
                 />
-                <p class="field-help">
-                  新版接口（<code>sk-</code> 开头的账号级 Key）不需要它。填了不属于这把 Key 的空间 ID，
-                  MiniMax 会回 <code>1004 token not match group</code> —— 服务端会自动去掉 GID 再试一次，
-                  但最好是留空。老版 JWT 形式的 Key 才必须填。
-                  要找的话在 platform.minimaxi.com → 个人信息 → 空间管理 → 个人空间那一行的「管理」，页里叫「空间 ID（GID）」。
-                </p>
               </div>
 
               <div class="field">
@@ -1525,12 +1560,6 @@ watch(id, () => void loadCharacter());
                     <el-icon><Refresh /></el-icon>{{ fetchingVoiceModels ? "获取中…" : "获取模型" }}
                   </el-button>
                 </div>
-                <p
-                  v-if="voiceUsesMinimax"
-                  class="field-help"
-                >
-                  聊天用 turbo 就够；hd 贵一倍、更慢，4 秒的群语音听不出差别。
-                </p>
               </div>
 
               <div class="field">
@@ -1541,16 +1570,149 @@ watch(id, () => void loadCharacter());
                   v-model="draftVoiceTtsVoice"
                   maxlength="100"
                   aria-label="语音音色"
-                  :placeholder="voiceUsesMinimax ? 'female-shaonv' : 'FunAudioLLM/CosyVoice2-0.5B:claire'"
+                  :placeholder="voiceUsesBreeze ? 'voc_...（Breeze 里克隆出来的音色 id）' : voiceUsesMinimax ? 'female-shaonv' : 'FunAudioLLM/CosyVoice2-0.5B:claire'"
                 />
-                <p class="field-help">
-                  <template v-if="voiceUsesMinimax">
-                    female-shaonv 少女 / female-yujie 御姐 / female-chengshu 成熟。
-                  </template>
-                  <template v-else>
-                    要带模型前缀。claire 温柔 / anna 沉稳 / bella 热情 / diana 活泼。
-                  </template>
-                </p>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">语速</span>
+                </div>
+                <div class="knob-ctl">
+                  <el-slider
+                    v-model="draftVoiceSpeed"
+                    class="knob-slider"
+                    :min="0.5"
+                    :max="2"
+                    :step="0.05"
+                    aria-label="语音语速"
+                  />
+                  <el-input-number
+                    v-model="draftVoiceSpeed"
+                    class="knob-number narrow"
+                    :min="0.5"
+                    :max="2"
+                    :step="0.05"
+                    :precision="2"
+                    :controls="false"
+                    aria-label="语音语速数值"
+                  />
+                </div>
+              </div>
+              </div>
+
+              <!-- Breeze 独有：语气是「写出来」的，不是靠音色自带 -->
+              <div
+                v-if="voiceUsesBreeze"
+                class="field"
+              >
+                <div class="field-head">
+                  <span class="field-label">语气指令</span>
+                </div>
+                <el-input
+                  v-model="draftVoiceInstructions"
+                  type="textarea"
+                  :rows="2"
+                  maxlength="400"
+                  show-word-limit
+                  aria-label="语音语气指令"
+                  placeholder="例：声音软软的、轻轻的，带一点气声，说话有点黏，语气温柔"
+                />
+              </div>
+            </div>
+
+            <!-- 语音的验证：真合成一句，走完整链路（Key/地址/模型/音色/hex/silk） -->
+            <div class="voice-test-bar">
+              <el-button
+                :loading="testingVoice"
+                :disabled="saving || fetchingVoiceModels"
+                @click="testVoice"
+              >
+                <el-icon><Promotion /></el-icon>{{ testingVoice ? "测试中…" : "测试" }}
+              </el-button>
+            </div>
+          </section>
+
+          <!-- 识别和合成是两套配置：Breeze 只做合成，共用一把 Key 只会 401 -->
+          <section class="brick">
+            <div class="brick-head">
+              <div class="brick-head-txt">
+                <div class="brick-heading">
+                  <h2 class="brick-title">
+                    语音识别
+                  </h2>
+                </div>
+              </div>
+              <el-button
+                :disabled="saving"
+                @click="useSameAsVoice"
+              >
+                <el-icon><CopyDocument /></el-icon>同语音合成
+              </el-button>
+            </div>
+
+            <div class="fields">
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">服务商</span>
+                </div>
+                <el-select
+                  v-model="draftAsrProvider"
+                  class="field-ctl"
+                  aria-label="识别服务商"
+                  placeholder="自动判断（看下面的地址）"
+                  @change="applyAsrProviderTemplate"
+                >
+                  <el-option
+                    label="自动判断（看下面的地址）"
+                    value="auto"
+                  />
+                  <el-option
+                    label="OpenAI 兼容（硅基流动 / OpenAI whisper）"
+                    value="openai"
+                  />
+                  <el-option
+                    label="MiniMax（asr-1.0，中文识别好）"
+                    value="minimax"
+                  />
+                </el-select>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API 地址</span>
+                </div>
+                <el-input
+                  v-model="draftAsrApiBaseUrl"
+                  maxlength="500"
+                  aria-label="识别 API 地址"
+                  placeholder="https://api.minimaxi.com/v1"
+                />
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API Key</span>
+                  <span
+                    class="pill"
+                    :class="asrKeyConfigured || syncAsrFromVoice ? 'pill-green' : 'pill-rose'"
+                  >{{ syncAsrFromVoice ? "保存后同步" : asrKeyConfigured ? "已保存" : "未填写" }}</span>
+                </div>
+                <el-input
+                  v-model="draftAsrApiKey"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  maxlength="8192"
+                  aria-label="识别 API Key"
+                  :placeholder="asrKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : API_KEY_EMPTY_PLACEHOLDER"
+                />
+                <el-checkbox
+                  v-if="asrKeyConfigured"
+                  v-model="clearAsrApiKey"
+                  class="field-check"
+                >
+                  {{ API_KEY_CLEAR_LABEL }}
+                </el-checkbox>
               </div>
 
               <div class="field">
@@ -1563,24 +1725,7 @@ watch(id, () => void loadCharacter());
                   aria-label="语音识别模型"
                   placeholder="留空 = 用服务商默认（MiniMax 是 asr-1.0）"
                 />
-                <p class="field-help">
-                  听懂语音用。识别跟着「服务商」走（MiniMax 用 /speech_to_text，OpenAI 兼容用
-                  /audio/transcriptions）。留空时 MiniMax 自动用 asr-1.0；OpenAI 兼容服务商
-                  必须填（如硅基流动 SenseVoiceSmall、OpenAI whisper-1）。
-                </p>
               </div>
-            </div>
-
-            <!-- 语音的验证：真合成一句，走完整链路（Key/地址/模型/音色/hex/silk） -->
-            <div class="voice-test-bar">
-              <el-button
-                :loading="testingVoice"
-                :disabled="saving || fetchingVoiceModels"
-                @click="testVoice"
-              >
-                <el-icon><Promotion /></el-icon>{{ testingVoice ? "合成中…" : "测试语音合成" }}
-              </el-button>
-              <span class="voice-test-note">会真合成一句，按字符计费；成功会显示耗时，失败原因在服务端日志 [voice] 那行。</span>
             </div>
           </section>
         </div>
@@ -1594,14 +1739,9 @@ watch(id, () => void loadCharacter());
               <div class="brick-head-txt">
                 <div class="brick-heading">
                   <h2 class="brick-title">
-                    图片服务商
+                    图片模型
                   </h2>
                 </div>
-                <p class="brick-desc">
-                  她「看图」时用的那一家，和对话模型可以是两家。四项全留空就是今天的样子：交给对话模型顺便看 ——
-                  但思考型模型会把输出预算全烧在思考上，最后正文为空，你只看到一句「[图片]」。
-                  所以建议单独配一个不思考的视觉模型。开关仍在「QQ 渠道 → 角色行为 → 看群里的图」。
-                </p>
               </div>
             </div>
 
@@ -1609,7 +1749,6 @@ watch(id, () => void loadCharacter());
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">服务商</span>
-                  <span class="field-req">可选</span>
                 </div>
                 <el-select
                   :model-value="visionProviderKey"
@@ -1624,9 +1763,6 @@ watch(id, () => void loadCharacter());
                     :value="provider.key"
                   />
                 </el-select>
-                <p class="field-help">
-                  选中会自动填好这家的地址与常用视觉模型；没有列出的选「自定义」，手填即可。
-                </p>
               </div>
 
               <div class="field">
@@ -1649,9 +1785,6 @@ watch(id, () => void loadCharacter());
                   aria-label="图片 API 地址"
                   :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型）'"
                 />
-                <p class="field-help">
-                  填 API 根地址，不要追加 /chat/completions。留空即用对话模型那个地址。
-                </p>
               </div>
 
               <div class="field">
@@ -1671,15 +1804,12 @@ watch(id, () => void loadCharacter());
                   aria-label="图片 API Key"
                   :placeholder="visionKeyPlaceholder"
                 />
-                <p class="field-help">
-                  {{ visionKeyHint }}
-                </p>
                 <el-checkbox
                   v-if="visionKeyConfigured"
                   v-model="clearVisionApiKey"
                   class="field-check"
                 >
-                  移除此角色单独保存的看图 Key
+                  {{ API_KEY_CLEAR_LABEL }}
                 </el-checkbox>
               </div>
 
@@ -1712,11 +1842,6 @@ watch(id, () => void loadCharacter());
                     <el-icon><Refresh /></el-icon>{{ fetchingVisionModels ? "获取中…" : "获取模型" }}
                   </el-button>
                 </div>
-                <p class="field-help">
-                  只负责把图读成两三句中文，不需要推理能力。智谱的 <code>glm-4v-flash</code> 免费且不挤，
-                  通义 <code>qwen3-vl-flash</code> 百万 token 一毛五，都够用；<code>glm-4.6v-flash</code> 更新，但晚上常被挤到 429。
-                  「获取模型」拉的是填写地址那一家（留空就是对话那家）的清单，里面混着聊天模型，挑名字里带 <code>vl</code> / <code>vision</code> 的。
-                </p>
               </div>
             </div>
 
@@ -1727,9 +1852,8 @@ watch(id, () => void loadCharacter());
                 :disabled="saving"
                 @click="testVision"
               >
-                <el-icon><Promotion /></el-icon>{{ testingVision ? "测试中…" : "测试看图" }}
+                <el-icon><Promotion /></el-icon>{{ testingVision ? "测试中…" : "测试" }}
               </el-button>
-              <span class="voice-test-note">会现画一张上红 / 中绿 / 下蓝的图发过去，答对三种颜色才算能用；一次调用，几乎不花钱。</span>
             </div>
           </section>
         </div>
@@ -1743,13 +1867,9 @@ watch(id, () => void loadCharacter());
               <div class="brick-head-txt">
                 <div class="brick-heading">
                   <h2 class="brick-title">
-                    记忆助手模型
+                    记忆助手
                   </h2>
                 </div>
-                <p class="brick-desc">
-                  记忆助手使用独立模型和独立 API Key，负责检索时分析历史材料；不会借用大肥鱼的聊天 Key。
-                  启用后，大肥鱼会在现有上下文不足以回答具体历史问题时请求它检索；普通聊天不会额外调用。启用开关位于「角色管理」的角色档案中。
-                </p>
               </div>
             </div>
 
@@ -1772,15 +1892,11 @@ watch(id, () => void loadCharacter());
                     :value="provider.key"
                   />
                 </el-select>
-                <p class="field-help">
-                  选择服务商会自动填入 API 地址和常见模型；没有列出的平台选「自定义」后手动填写。
-                </p>
               </div>
 
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">API 地址</span>
-                  <span class="field-req">可选</span>
                   <a
                     v-if="memoryAssistantConsoleUrl"
                     class="field-link"
@@ -1798,9 +1914,6 @@ watch(id, () => void loadCharacter());
                   aria-label="记忆助手 API 地址"
                   :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型地址）'"
                 />
-                <p class="field-help">
-                  填 API 根地址，不要追加 /chat/completions。留空时沿用这个角色的对话模型地址。
-                </p>
               </div>
 
               <div class="field">
@@ -1818,26 +1931,21 @@ watch(id, () => void loadCharacter());
                   autocomplete="new-password"
                   maxlength="8192"
                   aria-label="记忆助手 API Key"
-                  :placeholder="memoryAssistantKeyConfigured ? '已加密保存；留空表示保持不变' : '填写记忆助手专用 API Key'"
+                  :placeholder="memoryAssistantKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : '填写记忆助手专用 API Key'"
                 />
-                <p class="field-help">
-                  使用本机凭据加密密钥进行 AES-256-GCM 加密保存。留空表示不修改已有 Key，不会回传 Key 原文；这里必须使用记忆助手自己的 Key。
-                  <template v-if="character?.memoryAssistantEnabled">记忆助手开启中；如需移除 Key 或清空模型，请先到角色管理关闭助手。</template>
-                </p>
                 <el-checkbox
                   v-if="memoryAssistantKeyConfigured"
                   v-model="clearMemoryAssistantApiKey"
                   :disabled="character?.memoryAssistantEnabled === true"
                   class="field-check"
                 >
-                  移除记忆助手单独保存的 API Key
+                  {{ API_KEY_CLEAR_LABEL }}
                 </el-checkbox>
               </div>
 
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">模型名称</span>
-                  <span class="field-req">必填</span>
                 </div>
                 <div class="model-row">
                   <el-select
@@ -1924,9 +2032,8 @@ watch(id, () => void loadCharacter());
                 :disabled="saving || testing || testingVision || testingVoice || fetchingMemoryAssistantModels"
                 @click="testMemoryAssistant"
               >
-                <el-icon><Promotion /></el-icon>{{ testingMemoryAssistant ? "测试中…" : "保存并测试记忆助手" }}
+                <el-icon><Promotion /></el-icon>{{ testingMemoryAssistant ? "测试中…" : "测试" }}
               </el-button>
-              <span class="voice-test-note">会使用已保存的独立 API Key 和模型发送一条简短测试请求，不会读取或修改任何记忆。</span>
             </div>
           </section>
         </div>
@@ -1939,12 +2046,9 @@ watch(id, () => void loadCharacter());
               <div class="brick-head-txt">
                 <div class="brick-heading">
                   <h2 class="brick-title">
-                    语境助手模型
+                    语境助手
                   </h2>
                 </div>
-                <p class="brick-desc">
-                  语境助手使用独立模型和独立 API Key，整理当前对话语境，帮助角色理解指代和对话对象。默认关闭；开启后会额外调用语境助手。
-                </p>
               </div>
             </div>
 
@@ -1967,15 +2071,11 @@ watch(id, () => void loadCharacter());
                     :value="provider.key"
                   />
                 </el-select>
-                <p class="field-help">
-                  选择服务商会自动填入 API 地址和常见模型；没有列出的平台选「自定义」后手动填写。
-                </p>
               </div>
 
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">API 地址</span>
-                  <span class="field-req">可选</span>
                   <a
                     v-if="contextAssistantConsoleUrl"
                     class="field-link"
@@ -1993,9 +2093,6 @@ watch(id, () => void loadCharacter());
                   aria-label="语境助手 API 地址"
                   :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型地址）'"
                 />
-                <p class="field-help">
-                  填 API 根地址，不要追加 /chat/completions。留空时沿用这个角色的对话模型地址。
-                </p>
               </div>
 
               <div class="field">
@@ -2013,28 +2110,21 @@ watch(id, () => void loadCharacter());
                   autocomplete="new-password"
                   maxlength="8192"
                   aria-label="语境助手 API Key"
-                  :placeholder="contextAssistantKeyConfigured ? '已加密保存；留空表示保持不变' : '填写语境助手专用 API Key'"
+                  :placeholder="contextAssistantKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : '填写语境助手专用 API Key'"
                 />
-                <p class="field-help">
-                  使用本机凭据加密密钥进行 AES-256-GCM 加密保存。留空表示不修改已有 Key，不会回传 Key 原文；这里必须使用语境助手自己的 Key。
-                  <template v-if="draftContextAssistantEnabled">
-                    移除 Key 或清空模型前，请先关闭下方语境助手开关。
-                  </template>
-                </p>
                 <el-checkbox
                   v-if="contextAssistantKeyConfigured"
                   v-model="clearContextAssistantApiKey"
                   :disabled="draftContextAssistantEnabled"
                   class="field-check"
                 >
-                  移除语境助手单独保存的 API Key
+                  {{ API_KEY_CLEAR_LABEL }}
                 </el-checkbox>
               </div>
 
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">模型名称</span>
-                  <span class="field-req">必填</span>
                 </div>
                 <div class="model-row">
                   <el-select
@@ -2155,19 +2245,15 @@ watch(id, () => void loadCharacter());
                   </h2>
                 </div>
                 <p class="brick-desc">
-                  保存独立模型名称和 API Key 后，可在这里启用语境助手。开关与本页配置一起保存。
+                  模型配置保存后，还需要到「角色管理」为这个角色打开记忆助手。未配置模型名称或独立 Key 时，开关不可用。
+                  记忆助手只在大肥鱼判断现有上下文不足、需要回看历史细节时才额外调用；普通聊天不会多发一次模型请求。关闭它不会影响大肥鱼现有的记忆检索和正常聊天。
                 </p>
               </div>
             </div>
             <div class="metric-row">
               <span>模型配置</span>
               <span class="metric-value">
-                {{ draftContextAssistantModel.trim() && character?.contextAssistantApiKeyConfigured ? "已具备启用条件" : "尚未完整配置" }}
-                <el-switch
-                  v-model="draftContextAssistantEnabled"
-                  aria-label="启用语境助手"
-                  :disabled="saving || (!draftContextAssistantEnabled && (!draftContextAssistantModel.trim() || !(draftContextAssistantApiKey.trim() || (contextAssistantKeyConfigured && !clearContextAssistantApiKey))))"
-                />
+                {{ draftMemoryAssistantModel.trim() && character?.memoryAssistantApiKeyConfigured ? "已具备启用条件" : "尚未完整配置" }}
               </span>
             </div>
           </section>
@@ -2179,26 +2265,18 @@ watch(id, () => void loadCharacter());
                 :disabled="saving || testing || testingVision || testingVoice || fetchingContextAssistantModels"
                 @click="testContextAssistant"
               >
-                <el-icon><Promotion /></el-icon>{{ testingContextAssistant ? "测试中…" : "保存并测试语境助手" }}
+                <el-icon><Promotion /></el-icon>{{ testingContextAssistant ? "测试中…" : "测试" }}
               </el-button>
-              <span class="voice-test-note">会使用已保存的独立 API Key 和模型发送一条简短测试请求，不会读取或修改任何对话和记忆。</span>
             </div>
           </section>
         </div>
 
-        <!-- 吸底操作条：往下滚也能按到主操作 -->
+        <!-- 吸底操作条：只留保存。测试按钮跟在各自的模型下面，不再从这里统一触发 -->
         <div class="act-bar">
           <span
             class="act-state"
             :class="{ dirty }"
           >{{ saveStateLabel }}</span>
-          <el-button
-            :loading="testing"
-            :disabled="saving || testingMemoryAssistant || fetchingMemoryAssistantModels || testingContextAssistant || fetchingContextAssistantModels"
-            @click="testConnection"
-          >
-            {{ testing ? "测试中…" : "保存并测试" }}
-          </el-button>
           <el-button
             type="primary"
             :loading="saving"
@@ -2367,10 +2445,12 @@ watch(id, () => void loadCharacter());
 .ms-a .brick { border-radius: 10px; background: var(--surface); padding: var(--sp-5); }
 
 .brick-head { display: flex; align-items: flex-start; gap: var(--sp-4); }
+.brick-desc { max-width: 44em; margin: var(--sp-1) 0 0; color: var(--dim); font-size: 12px; line-height: 1.65; }
+.ms-a .field-help { max-width: 44em; margin: 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
+.knob .field-help { grid-area: help; }
 .brick-head-txt { min-width: 0; flex: 1; }
 .brick-heading { display: flex; align-items: center; gap: var(--sp-2); }
 .brick-title { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; letter-spacing: -.01em; line-height: 1.4; }
-.brick-desc { max-width: 44em; margin: var(--sp-1) 0 0; color: var(--dim); font-size: 12px; line-height: 1.65; }
 .head-act { flex: none; }
 
 /* ── 字段（竖排：标签 → 控件 → 一句解释） ───────────── */
@@ -2379,7 +2459,6 @@ watch(id, () => void loadCharacter());
 /* 标签行：左标签 + 右侧开放平台入口。基线对齐，链接不能比标签高出一截 */
 .field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); }
 .field-label { color: var(--text-2); font-size: 14px; font-weight: 600; line-height: 1.5; }
-.field-req { color: var(--dim); font-size: 12px; font-weight: 500; }
 /* 12px 文字链接只能用 --brand-strong（#bf3a63）：--brand 只有 3.2:1，不到 AA */
 .field-link {
   display: inline-flex;
@@ -2399,7 +2478,6 @@ watch(id, () => void loadCharacter());
 .field-ctl { width: 100%; }
 /* main.css 的 .form-help 落在 --faint 上，那是装饰色；说明文字要读得清，改 --dim */
 /* 行宽用 em 不用 ch：中文一个字的宽度也是 1em，62ch 只够放 ~31 个汉字 */
-.ms-a .field-help { max-width: 44em; margin: 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
 .field-check { align-self: flex-start; height: 20px; }
 
 /* 模型下拉 + 「获取模型」同行：select 吃掉剩余宽度，按钮不吃 */
@@ -2408,7 +2486,6 @@ watch(id, () => void loadCharacter());
 
 /* 语音的验证条：按钮 + 一句成本提示，与字段区用上边框隔开 */
 .voice-test-bar, .vision-test-bar { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); border-top: 1px solid var(--surface-3); padding-top: var(--sp-4); }
-.voice-test-note { flex: 1; color: var(--dim); font-size: 12px; line-height: 1.7; }
 
 /* ── 参数（横排：左边说「调它有什么用」，右边落控件） ── */
 /* 分两列改成一行一条：说明在半个卡片宽里会折成五六行，把控件挤出视线；
@@ -2430,7 +2507,6 @@ watch(id, () => void loadCharacter());
 }
 .knob-label { grid-area: label; color: var(--text-2); font-size: 14px; font-weight: 600; line-height: 1.5; }
 .knob-ctl { display: flex; grid-area: ctl; align-items: center; gap: var(--sp-2); }
-.knob .field-help { grid-area: help; }
 .knob + .knob { border-top: 1px solid var(--surface-3); }
 .knob-slider { min-width: 88px; flex: 1; }
 .knob-number { width: 100%; }

@@ -447,7 +447,7 @@ assert.equal(
 // ── 9. 配置解析 ────────────────────────────────────────
 const VOICE_ENV_KEYS = [
   "VOICE_TTS_MODEL", "VOICE_TTS_BASE_URL", "VOICE_TTS_API_KEY", "VOICE_TTS_VOICE", "VOICE_TTS_SPEED",
-  "VOICE_TTS_PROVIDER", "VOICE_TTS_GROUP_ID",
+  "VOICE_TTS_PROVIDER", "VOICE_TTS_GROUP_ID", "VOICE_TTS_INSTRUCTIONS", "VOICE_TTS_LANGUAGE", "VOICE_TTS_INSTRUCTIONS", "VOICE_TTS_LANGUAGE",
   "VOICE_ASR_MODEL", "VOICE_ASR_BASE_URL", "VOICE_ASR_API_KEY", "VOICE_ASR_LANGUAGE",
 ] as const;
 const savedEnv = new Map<string, string | undefined>(VOICE_ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -489,6 +489,29 @@ try {
   assert.equal(pageMinimax!.voice, "female-yujie");
   clearVoiceEnv();
 
+  // Breeze：地址里带 breeze.blue 就该走它的协议；它没有默认音色，voice_id 必须显式给。
+  process.env.VOICE_TTS_MODEL = "breeze-tts-2";
+  process.env.VOICE_TTS_BASE_URL = "https://api.breeze.blue";
+  process.env.VOICE_TTS_API_KEY = "brz-key";
+  assert.equal(
+    resolveVoiceTtsSettings({}),
+    null,
+    "Breeze 没有默认音色：没填 voc_ id 就不该发语音（拿 alloy 打过去只会 404）。",
+  );
+  const breeze = resolveVoiceTtsSettings({ modelConfig: { ttsVoice: "voc_abc123", ttsInstructions: "软软的" } });
+  assert.equal(breeze!.provider, "breeze", "地址里带 breeze.blue 就该走 Breeze 协议。");
+  assert.equal(breeze!.voice, "voc_abc123");
+  assert.equal(breeze!.instructions, "软软的", "页面填的语气指令要带下来。");
+  assert.equal(breeze!.language, "zh", "默认中文。");
+  // 没填地址也不该回落到角色的聊天地址 —— 那会把请求打到别家去。
+  delete process.env.VOICE_TTS_BASE_URL;
+  const breezeDefaultBase = resolveVoiceTtsSettings({
+    modelConfig: { ttsProvider: "breeze", ttsVoice: "voc_abc123" },
+    chatApiBaseUrl: "https://api.deepseek.com/v1",
+  });
+  assert.equal(breezeDefaultBase!.apiBaseUrl, "https://api.breeze.blue", "Breeze 用自己的默认根地址。");
+  clearVoiceEnv();
+
   // 合成换成 MiniMax 之后，识别不能跟着搬过去 —— MiniMax 没有 /audio/transcriptions。
   // 所以 ASR 地址以 VOICE_ASR_BASE_URL 为准，页面上那个「服务地址」只服务合成。
   process.env.VOICE_ASR_MODEL = "FunAudioLLM/SenseVoiceSmall";
@@ -503,6 +526,39 @@ try {
     modelConfig: { voiceApiBaseUrl: "https://api.minimaxi.com/v1" },
   });
   assert.equal(fallbackAsr!.apiBaseUrl, "https://api.minimaxi.com/v1", "没单独配时才复用页面地址。");
+  clearVoiceEnv();
+
+  // 识别和合成不是同一家：合成在 Breeze、识别在 MiniMax，Key 必须能分开两把。
+  process.env.VOICE_ASR_MODEL = "asr-1.0";
+  process.env.VOICE_ASR_BASE_URL = "https://api.minimaxi.com/v1";
+  const splitKey = resolveVoiceAsrSettings({
+    modelConfig: { voiceApiBaseUrl: "https://api.breeze.blue", ttsProvider: "breeze" },
+    voiceApiKey: "brz-tts-key",
+    asrApiKey: "sk-minimax-asr",
+  });
+  assert.equal(splitKey!.provider, "minimax", "识别地址是 minimax 就该走它的端点。");
+  assert.equal(splitKey!.apiKey, "sk-minimax-asr", "识别专用 Key 不能被合成的 Key 盖掉。");
+
+  // 同一家（合成与识别都是 MiniMax）才复用原来那把 Key —— 一家全包时只填一次。
+  const sharedKey = resolveVoiceAsrSettings({
+    modelConfig: { ttsProvider: "minimax" },
+    voiceApiKey: "shared-key",
+  });
+  assert.equal(sharedKey!.apiKey, "shared-key", "同一家才复用合成的 Key。");
+
+  // 不同家时绝不能复用：Breeze 的 Key 拿去打 MiniMax 只会 401，而报错只说鉴权失败。
+  // 所以这里宁可不识别（返回 null），也不拿一把不相干的 Key 去试。
+  const crossVendor = resolveVoiceAsrSettings({
+    modelConfig: { ttsProvider: "breeze", voiceApiBaseUrl: "https://api.breeze.blue" },
+    voiceApiKey: "brz-tts-key",
+  });
+  assert.equal(crossVendor, null, "合成在 Breeze、识别在 MiniMax 时不能拿合成的 Key 顶上。");
+
+  const pageAsrBase = resolveVoiceAsrSettings({
+    modelConfig: { asrApiBaseUrl: "https://api.minimaxi.com/v1", asrModel: "asr-1.0" },
+    asrApiKey: "k",
+  });
+  assert.equal(pageAsrBase!.apiBaseUrl, "https://api.minimaxi.com/v1", "页面填的识别地址优先。");
   clearVoiceEnv();
 
   // 页面上填的那一套优先于环境变量：换服务商不该逼人去改 .env。
@@ -541,6 +597,22 @@ try {
   assert.equal(tts!.apiBaseUrl, "https://api.openai.com/v1");
   assert.equal(tts!.voice, "alloy", "没指定音色用默认值。");
   assert.equal(tts!.speed, 1);
+
+  // 语速：页面 > 环境变量 > 1。页面没这个旋钮之前，调快只能改 .env 再重启适配器。
+  process.env.VOICE_TTS_SPEED = "1.3";
+  assert.equal(resolveVoiceTtsSettings(chatInput)!.speed, 1.3, "环境变量生效。");
+  assert.equal(
+    resolveVoiceTtsSettings({ ...chatInput, modelConfig: { ttsSpeed: 1.1 } })!.speed,
+    1.1,
+    "页面填的语速优先于环境变量。",
+  );
+  assert.equal(
+    resolveVoiceTtsSettings({ ...chatInput, modelConfig: { ttsSpeed: 9 } })!.speed,
+    2,
+    "超出范围要夹到上限，不能原样发给服务商。",
+  );
+  delete process.env.VOICE_TTS_SPEED;
+  assert.equal(resolveVoiceTtsSettings(chatInput)!.speed, 1, "都没配就回到 1。");
 
   const asr = resolveVoiceAsrSettings(chatInput);
   assert.ok(asr);

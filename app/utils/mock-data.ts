@@ -100,10 +100,18 @@ export type Character = {
   ttsModel?: string;
   ttsVoice?: string;
   asrModel?: string;
-  /** 语音服务商：openai（含兼容接口）/ minimax；空 = 按地址自动判断。 */
+  /** 语音服务商：openai（含兼容接口）/ minimax / breeze；空 = 按地址自动判断。 */
   ttsProvider?: string;
   /** MiniMax 的 GroupId。 */
   ttsGroupId?: string;
+  /** Breeze 的语气指令；空 = 用环境变量。 */
+  ttsInstructions?: string;
+  /** 语速 0.5–2.0；0 = 用环境变量或默认 1。 */
+  ttsSpeed?: number;
+  /** 识别专用：服务商 / 地址 / Key 是否已保存。 */
+  asrProvider?: string;
+  asrApiBaseUrl?: string;
+  asrApiKeyConfigured?: boolean;
   /** 看图（图片）模型；空 = 回落到环境变量 / 对话模型。 */
   visionModel?: string;
   /** 看图服务地址；空 = 用环境变量或角色聊天地址。 */

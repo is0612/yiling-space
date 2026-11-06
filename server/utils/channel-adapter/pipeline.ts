@@ -29,7 +29,7 @@ import {
   shouldUseOnlyTargetGroupRawRows,
 } from "../owner-timeline-retrieval";
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
-import { resolveCharacterApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
+import { resolveCharacterApiKey, resolveCharacterAsrApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
 import {
   extractMemoryAssistantSearchTerms, rankMemoriesWithBudget, rankSnapshotsWithBudget,
   resolveMemoryItemLimit, resolveMemoryTokenBudget, resolveRecentMessageLimit, resolveSnapshotTokenBudget,
@@ -704,6 +704,7 @@ async function attachVoiceTranscripts(
     apiBaseUrl: string;
     apiKey: string;
     voiceApiKey: string;
+    asrApiKey: string;
   },
 ): Promise<ChannelTurnMessage[]> {
   if (!messages.some((message) => (message.voices?.length ?? 0) > 0)) return messages;
@@ -724,6 +725,7 @@ async function attachVoiceTranscripts(
     chatApiBaseUrl: context.apiBaseUrl,
     chatApiKey: context.apiKey,
     voiceApiKey: context.voiceApiKey,
+    asrApiKey: context.asrApiKey,
   });
   if (!settings) return messages;
 
@@ -948,6 +950,8 @@ async function runChannelTurn(input: {
    * 而它常常是页面上单独填的。解密失败按没配处理，不影响聊天。
    */
   const voiceApiKey = await resolveCharacterVoiceApiKey(character.modelConfig).catch(() => "");
+  /** 识别专用 Key：合成与识别不是一家时（Breeze + MiniMax）必须分开，否则识别侧 401。 */
+  const asrApiKey = await resolveCharacterAsrApiKey(character.modelConfig).catch(() => "");
 
   // 额度用完就静默不回：渠道里抛错会把一条普通聊天变成失败事件，还会触发重试。
   const quota = await readDailyQuota(input.characterId, character.modelConfig);
@@ -970,6 +974,7 @@ async function runChannelTurn(input: {
     apiBaseUrl: chatSettings.apiBaseUrl,
     apiKey,
     voiceApiKey,
+    asrApiKey,
   });
 
   /**

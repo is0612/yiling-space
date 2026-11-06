@@ -94,6 +94,8 @@ const TTS_TIMEOUT_MS = 45_000;
 const ASR_TIMEOUT_MS = 30_000;
 const MODEL_MAX_CHARS = 120;
 const VOICE_NAME_MAX_CHARS = 100;
+/** Breeze 的演技指令：一句人话的长度足够，太长模型也抓不住重点。 */
+const VOICE_INSTRUCTIONS_MAX_CHARS = 400;
 
 /** 她这条回复能不能发语音：角色级开关，默认关（同 emojiEnabled 的路子）。 */
 export function isVoiceReplyEnabled(configValue: unknown): boolean {
@@ -136,7 +138,10 @@ export function resolveVoiceCooldownMs(configValue: unknown): number {
   return resolveVoiceCooldownMinutes(configValue) * 60 * 1000;
 }
 
-export type VoiceTtsProvider = "openai" | "minimax";
+export type VoiceTtsProvider = "openai" | "minimax" | "breeze";
+
+/** ASR 只有这两家：Breeze 只做合成，没有识别端点。 */
+export type VoiceAsrProvider = "openai" | "minimax";
 
 /**
  * 这两家的差别不只是端点：MiniMax 的 `data.audio` 是 **hex 字符串**（不是二进制），
@@ -150,6 +155,13 @@ export type VoiceTtsSettings = {
   apiKey: string;
   /** 仅 MiniMax 需要；留空就不拼查询参数（新账号改纯 Bearer 时也不至于卡住）。 */
   groupId: string;
+  /**
+   * 仅 Breeze 用：自然语言演技指令（"声音软软的、带一点气声"这种）。
+   * 这是它和 OpenAI 兼容那套最大的区别 —— 语气可以写出来，不必靠音色自带。
+   */
+  instructions: string;
+  /** 仅 Breeze 用：`language_code`。默认 zh。 */
+  language: string;
   /** 语速。0.5–2.0，默认 1。 */
   speed: number;
   /**
@@ -163,11 +175,14 @@ export type VoiceTtsSettings = {
 /** MiniMax 国内站默认端点。国际站是 api.minimax.io，靠地址推断。 */
 const MINIMAX_DEFAULT_BASE = "https://api.minimaxi.com/v1";
 
+/** Breeze 的根地址：它的 `/v1` 是端点的一部分，不是 Base URL 的后缀。 */
+const BREEZE_DEFAULT_BASE = "https://api.breeze.blue";
+
 /** MiniMax 语音识别的默认模型。仅当页面没配 `asrModel` 时兜底，不是写死覆盖用户配置。 */
 const MINIMAX_ASR_DEFAULT_MODEL = "asr-1.0";
 
 export type VoiceAsrSettings = {
-  provider: VoiceTtsProvider;
+  provider: VoiceAsrProvider;
   model: string;
   apiBaseUrl: string;
   apiKey: string;
@@ -185,6 +200,11 @@ export type VoiceSettingsInput = {
    * 它 > 环境变量 `VOICE_*_API_KEY` > 角色自己的聊天 Key。
    */
   voiceApiKey?: string;
+  /**
+   * 角色级**识别**专用 Key（可选）。合成与识别不是同一家时用它：
+   * 不填才回落到 `voiceApiKey`，保持「一家全包」时的老行为。
+   */
+  asrApiKey?: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -244,18 +264,24 @@ export function resolveVoiceTtsSettings(input: VoiceSettingsInput): VoiceTtsSett
     || "").slice(0, MODEL_MAX_CHARS);
   if (!model) return null;
 
-  // 服务商：显式配了就用（`ttsProvider` / `VOICE_TTS_PROVIDER`），没配就看地址里的 minimax。
+  // 服务商：显式配了就用（`ttsProvider` / `VOICE_TTS_PROVIDER`），没配就看地址里的 breeze/minimax。
   // 自动推断是刻意的 —— 用户只想换一家服务，不该被逼着多填一个枚举。
   const explicitProvider = readString(config.ttsProvider) || readString(process.env.VOICE_TTS_PROVIDER);
   const explicitBase = readString(config.voiceApiBaseUrl) || readString(process.env.VOICE_TTS_BASE_URL);
   const chatBase = input.chatApiBaseUrl ?? "";
-  const provider: VoiceTtsProvider = explicitProvider === "minimax" || explicitProvider === "openai"
+  const provider: VoiceTtsProvider = isKnownTtsProvider(explicitProvider)
     ? explicitProvider
-    : (/minimax/i.test(explicitBase || chatBase) ? "minimax" : "openai");
+    : (/breeze\.blue/i.test(explicitBase)
+      ? "breeze"
+      : (/minimax/i.test(explicitBase || chatBase) ? "minimax" : "openai"));
 
+  // Breeze 自带根地址，且**不能**回落到聊天地址：它的端点是 `/v1/text-to-speech/{voice_id}`，
+  // 拿聊天地址拼只会 404，日志里还看不出是地址错了。
   const apiBaseUrl = resolveVoiceBaseUrl(
-    explicitBase || (provider === "minimax" ? MINIMAX_DEFAULT_BASE : ""),
-    chatBase,
+    explicitBase || (provider === "minimax"
+      ? MINIMAX_DEFAULT_BASE
+      : provider === "breeze" ? BREEZE_DEFAULT_BASE : ""),
+    provider === "breeze" ? "" : chatBase,
   );
   if (!apiBaseUrl) return null;
 
@@ -268,8 +294,16 @@ export function resolveVoiceTtsSettings(input: VoiceSettingsInput): VoiceTtsSett
 
   const voice = (readString(config.ttsVoice)
     || readString(process.env.VOICE_TTS_VOICE)
-    || (provider === "minimax" ? "female-shaonv" : "alloy")).slice(0, VOICE_NAME_MAX_CHARS);
-  const speedRaw = Number(process.env.VOICE_TTS_SPEED ?? "1");
+    || (provider === "minimax" ? "female-shaonv" : provider === "breeze" ? "" : "alloy"))
+    .slice(0, VOICE_NAME_MAX_CHARS);
+  // Breeze 没有「默认音色」：voice_id 是克隆出来的，没配就发不了语音。
+  if (provider === "breeze" && !voice) return null;
+  // 语速：页面填的 > 环境变量 > 1。以前只认环境变量，页面上根本没这个旋钮，
+  // 想调快一点只能去改 .env 再重启适配器（2026-11-07 用户反馈「说话太慢」时才发现）。
+  const configuredSpeed = Number(config.ttsSpeed);
+  const speedRaw = Number.isFinite(configuredSpeed) && configuredSpeed > 0
+    ? configuredSpeed
+    : Number(process.env.VOICE_TTS_SPEED ?? "1");
   const speed = Number.isFinite(speedRaw) ? Math.min(2, Math.max(0.5, speedRaw)) : 1;
   // 只接受 silk 认识的几档采样率，其余当没配（写错了不如不传）。
   const sampleRateRaw = Number(process.env.VOICE_TTS_SAMPLE_RATE ?? "");
@@ -278,6 +312,10 @@ export function resolveVoiceTtsSettings(input: VoiceSettingsInput): VoiceTtsSett
     : undefined;
   const groupId = (readString(config.ttsGroupId) || readString(process.env.VOICE_TTS_GROUP_ID))
     .slice(0, VOICE_NAME_MAX_CHARS);
+  // 演技指令只对 Breeze 有意义；别的服务商传了也不会用，所以照样解析出来、由请求侧决定用不用。
+  const instructions = (readString(config.ttsInstructions)
+    || readString(process.env.VOICE_TTS_INSTRUCTIONS)).slice(0, VOICE_INSTRUCTIONS_MAX_CHARS);
+  const language = (readString(process.env.VOICE_TTS_LANGUAGE) || "zh").slice(0, 2);
 
   return {
     provider,
@@ -286,9 +324,16 @@ export function resolveVoiceTtsSettings(input: VoiceSettingsInput): VoiceTtsSett
     apiBaseUrl,
     apiKey,
     groupId,
+    instructions,
+    language,
     speed,
     ...(sampleRate ? { sampleRate } : {}),
   };
+}
+
+/** 只认这三家；写错的值当没配，交给地址推断，免得静默走错协议。 */
+function isKnownTtsProvider(value: string): value is VoiceTtsProvider {
+  return value === "openai" || value === "minimax" || value === "breeze";
 }
 
 /** 解析 ASR 配置。返回 null = 不转写语音。优先级规则同 TTS。 */
@@ -307,7 +352,11 @@ export function resolveVoiceAsrSettings(input: VoiceSettingsInput): VoiceAsrSett
   const configVoiceBase = readString(config.voiceApiBaseUrl);
   const envTtsBase = readString(process.env.VOICE_TTS_BASE_URL);
   const chatBase = input.chatApiBaseUrl ?? "";
-  const provider: VoiceTtsProvider = explicitProvider === "minimax" || explicitProvider === "openai"
+  /*
+   * 识别只认这两家。TTS 换到 Breeze 时 `ttsProvider` 会等于 "breeze"，
+   * 但它没有识别端点 —— 这里当没配处理，交给 `VOICE_ASR_*` 自己决定。
+   */
+  const provider: VoiceAsrProvider = explicitProvider === "minimax" || explicitProvider === "openai"
     ? explicitProvider
     : (/minimax/i.test(envAsrBase || configVoiceBase || envTtsBase || chatBase) ? "minimax" : "openai");
 
@@ -346,19 +395,40 @@ export function resolveVoiceAsrSettings(input: VoiceSettingsInput): VoiceAsrSett
   //     再兜底 MINIMAX_DEFAULT_BASE。
   //   - openai：环境变量 `VOICE_ASR_BASE_URL` 优先，再回落页面/聊天地址。
   let asrBase: string;
+  // 页面上的「识别地址」优先级最高：合成与识别不是一家时，这是唯一能指明方向的地方。
+  const configAsrBase = readString(config.asrApiBaseUrl);
   if (provider === "minimax") {
-    asrBase = (/minimax/i.test(envAsrBase) ? envAsrBase : "")
+    asrBase = (/minimax/i.test(configAsrBase) ? configAsrBase : "")
+      || (/minimax/i.test(envAsrBase) ? envAsrBase : "")
       || configVoiceBase
       || (/minimax/i.test(envTtsBase) ? envTtsBase : "")
       || MINIMAX_DEFAULT_BASE;
   } else {
-    asrBase = envAsrBase || configVoiceBase || envTtsBase;
+    asrBase = configAsrBase || envAsrBase || configVoiceBase || envTtsBase;
   }
   const apiBaseUrl = resolveVoiceBaseUrl(asrBase, chatBase);
   if (!apiBaseUrl) return null;
 
-  const apiKey = input.voiceApiKey?.trim()
+  /*
+   * Key 的顺序：识别专用 > 环境变量 > 共用那把（仅同一家）> 聊天 Key。
+   *
+   * 「同一家才复用」是这条链路上最容易错的判断：合成换成 Breeze 之后，
+   * 共用那把 Key 根本不属于识别服务商，喂给 MiniMax 只会 401，而报错只写鉴权失败。
+   * 2026-11-06 就是这样坏掉的（页面填了 Breeze 的 Key，识别偷偷拿它去打 MiniMax）。
+   * 同一家时复用是合理的（硅基流动一家全包，只填一次）；不同家就必须分开填。
+   */
+  const ttsHint = readString(config.ttsProvider) || readString(process.env.VOICE_TTS_PROVIDER);
+  const ttsBaseForCompare = configVoiceBase || envTtsBase || chatBase;
+  const ttsProvider: VoiceTtsProvider = isKnownTtsProvider(ttsHint)
+    ? ttsHint
+    : (/breeze\.blue/i.test(ttsBaseForCompare)
+      ? "breeze"
+      : (/minimax/i.test(ttsBaseForCompare) ? "minimax" : "openai"));
+  const sharedKey = ttsProvider === provider ? input.voiceApiKey?.trim() : "";
+
+  const apiKey = input.asrApiKey?.trim()
     || readString(process.env.VOICE_ASR_API_KEY)
+    || sharedKey
     || input.chatApiKey?.trim()
     || "";
   if (!apiKey) return null;
@@ -638,7 +708,60 @@ function isWavLenient(buffer: Buffer): boolean {
  */
 async function requestWav(text: string, settings: VoiceTtsSettings): Promise<Buffer | null> {
   if (settings.provider === "minimax") return requestMinimaxWav(text, settings);
+  if (settings.provider === "breeze") return requestBreezeWav(text, settings);
   return requestOpenaiWav(text, settings);
+}
+
+/**
+ * Breeze（BreezeBlue）的 `POST /v1/text-to-speech/{voice_id}`。
+ *
+ * 三个和另外两家不一样的地方，改之前先看这里：
+ *   1. **鉴权头是 `xi-api-key`**，不是 `Authorization: Bearer`。
+ *   2. **Cloudflare 会按 UA 拦**：不带浏览器 UA 直接 403 `error code: 1010`
+ *      （2026-11-06 实测，报错里完全没有"UA"两个字，很难看出来）。
+ *   3. 失败时 HTTP 可能是 4xx **且返回 JSON 而不是音频**，所以拿到字节后还要验 RIFF 头，
+ *      否则会把一段 `{"detail":...}` 当 wav 喂给 silk，报一个完全无关的错。
+ */
+export function buildBreezeEndpoint(baseUrl: string, voice: string): string {
+  const base = baseUrl.replace(/\/+$/, "");
+  return `${base}/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=wav`;
+}
+
+async function requestBreezeWav(text: string, settings: VoiceTtsSettings): Promise<Buffer | null> {
+  const endpoint = buildBreezeEndpoint(settings.apiBaseUrl, settings.voice);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        "xi-api-key": settings.apiKey,
+        "content-type": "application/json",
+        "user-agent": "yiling-space/1.0 (+https://github.com/is0612/yiling-space)",
+      },
+      body: JSON.stringify({
+        text,
+        model_id: settings.model,
+        language_code: settings.language,
+        ...(settings.instructions ? { instructions: settings.instructions } : {}),
+        voice_settings: { speed: settings.speed },
+      }),
+      signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      console.error("[voice] tts 失败：HTTP " + response.status + " " + (await safeText(response)).slice(0, 200));
+      return null;
+    }
+    const audio = Buffer.from(await response.arrayBuffer());
+    if (audio.subarray(0, 4).toString("latin1") !== "RIFF") {
+      console.error("[voice] tts 返回的不是 wav：" + audio.subarray(0, 160).toString("utf8"));
+      return null;
+    }
+    return audio;
+  } catch (error) {
+    console.error("[voice] tts 请求异常：", error instanceof Error ? error.message : String(error));
+    return null;
+  }
 }
 
 async function requestOpenaiWav(text: string, settings: VoiceTtsSettings): Promise<Buffer | null> {
@@ -941,7 +1064,16 @@ async function transcribeOne(
   try {
     wav = await voiceToWav(await downloadVoice(ref.url));
   } catch (error) {
-    console.error("[voice] asr 解码失败：", error instanceof Error ? error.message : String(error));
+    // 带上主机名：语音直链失败十次有九次是「地址根本不是公网可取的」，光看错误码分不清。
+    let host = "?";
+    try {
+      host = new URL(ref.url).host;
+    } catch {
+      // 地址都解析不出来，就按未知主机记
+    }
+    console.error(
+      "[voice] asr 解码失败：" + (error instanceof Error ? error.message : String(error)) + " host=" + host,
+    );
     return null;
   }
 
