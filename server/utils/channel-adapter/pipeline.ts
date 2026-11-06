@@ -635,21 +635,35 @@ async function attachImageDescriptions(
   const descriptionsByMessage = new Map<string, Array<string | null>>();
   for (const message of messages) {
     if (remaining <= 0) break;
-    const refs = (message.images ?? []).filter((image) => Boolean(image.url));
+    const refs = message.images ?? [];
     if (!refs.length) continue;
-    const batch = refs.slice(0, remaining);
+
+    // 只对有 URL 的媒体发起视觉请求，但保留它们在原始图片数组里的序号。
+    // 不能先 filter 再按结果顺序回填，否则前面的无 URL 图片会让后续描述错位。
+    const targetIndexes: number[] = [];
+    for (let index = 0; index < refs.length && targetIndexes.length < remaining; index += 1) {
+      if (refs[index]?.url) targetIndexes.push(index);
+    }
+    if (!targetIndexes.length) continue;
+
+    const batch = targetIndexes.map((index) => refs[index]!);
     remaining -= batch.length;
+    let batchDescriptions: Array<string | null>;
     try {
-      descriptionsByMessage.set(
-        message.externalMessageId,
-        await describeImages(batch, settings, {
-          characterId: context.characterId,
-          channelBindingId: context.bindingId,
-        }),
-      );
+      batchDescriptions = await describeImages(batch, settings, {
+        characterId: context.characterId,
+        channelBindingId: context.bindingId,
+      });
     } catch {
       // 看图失败只是少一句描述，`[图片]` 原样保留。
+      batchDescriptions = batch.map(() => null);
     }
+
+    const aligned = Array.from({ length: refs.length }, () => null as string | null);
+    targetIndexes.forEach((originalIndex, resultIndex) => {
+      aligned[originalIndex] = batchDescriptions[resultIndex] ?? null;
+    });
+    descriptionsByMessage.set(message.externalMessageId, aligned);
   }
   if (!descriptionsByMessage.size) return messages;
 
