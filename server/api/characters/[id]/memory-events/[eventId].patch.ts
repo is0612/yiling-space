@@ -73,42 +73,44 @@ export default defineEventHandler(async (event) => {
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    const updated = await tx.memoryEvent.update({
-    where: { id: eventId },
-    data,
-    select: {
-      id: true,
-      dayKey: true,
-      occurredAt: true,
-      timeOfDay: true,
-      place: true,
-      participants: true,
-      title: true,
-      detail: true,
-      state: true,
-      status: true,
-      memoryScope: { select: { scopeType: true } },
-    },
-  });
-    await tx.auditLog.create({
-    data: {
-      actorType: "USER",
-      actorId: ownerId,
-      characterId,
-      action: data.status === "ARCHIVED"
-        ? "memory.event_archived"
-        : data.status === "ACTIVE"
-          ? "memory.event_restored"
-          : "memory.event_updated",
-      entityType: "MemoryEvent",
-      entityId: eventId,
-      details: {
-        before: { title: existing.title, status: existing.status },
-        changed: Object.keys(data),
+    const result = await tx.memoryEvent.update({
+      where: { id: eventId },
+      data,
+      select: {
+        id: true,
+        dayKey: true,
+        occurredAt: true,
+        timeOfDay: true,
+        place: true,
+        participants: true,
+        title: true,
+        detail: true,
+        state: true,
+        status: true,
+        memoryScope: { select: { scopeType: true } },
       },
-    },
-  });
-    return updated;
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorType: "USER",
+        actorId: ownerId,
+        characterId,
+        action: data.status === "ARCHIVED"
+          ? "memory.event_archived"
+          : data.status === "ACTIVE"
+            ? "memory.event_restored"
+            : "memory.event_updated",
+        entityType: "MemoryEvent",
+        entityId: eventId,
+        details: {
+          before: { title: existing.title, status: existing.status },
+          changed: Object.keys(data),
+        },
+      },
+    });
+
+    return result;
   });
 
   return {
@@ -122,6 +124,8 @@ export default defineEventHandler(async (event) => {
     detail: updated.detail,
     state: updated.state,
     status: updated.status,
-    scope: updated.memoryScope.scopeType === "USER_PRIVATE" ? "private" : "character",
+    scope: updated.memoryScope.scopeType === "USER_PRIVATE"
+      ? "private"
+      : updated.memoryScope.scopeType === "EXTERNAL_IDENTITY" ? "external" : "character",
   };
 });
