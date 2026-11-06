@@ -136,6 +136,7 @@ export function readOnebotMessageText(data: unknown): string {
           parts.push(typeof segData.summary === "string" && segData.summary.trim() ? segData.summary.trim() : "[表情包]");
           break;
         case "record":
+        case "voice":
           parts.push("[语音]");
           break;
         case "video":
