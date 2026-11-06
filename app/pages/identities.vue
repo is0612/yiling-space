@@ -633,13 +633,13 @@ onMounted(() => load(1));
             <div class="friend-control-row">
               <label :for="`friend-policy-${friend.scopeId}`">交流</label>
               <select :id="`friend-policy-${friend.scopeId}`" v-model="friend.friendChatPolicy" class="friend-control-select">
-                <option value="DEFAULT">自动判断（AI 默认不回）</option>
+                <option value="DEFAULT">默认规则（AI 默认不回）</option>
                 <option value="ALLOW">允许交流</option>
                 <option value="BLOCK">禁止交流</option>
               </select>
             </div>
             <div class="friend-control-actions">
-              <span>身份类型对同一平台账号生效；交流权限只对当前角色生效。</span>
+              <span>身份类型目前由你手动确认，对同一平台账号生效；交流权限只对当前角色生效。</span>
               <button
                 type="button"
                 class="alias-save"
