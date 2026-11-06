@@ -11,6 +11,7 @@
 
 import { downloadImage } from "../server/utils/image-understanding";
 import { downloadVoice } from "../server/utils/voice";
+import { createPinnedLookup } from "../server/utils/safe-media-download";
 
 // ── 极简用例运行器 ────────────────────────────────────────────────
 type CaseResult = { name: string; ok: boolean; detail: string };
@@ -108,7 +109,9 @@ function makeResponse(input: { url: string; status: number; headers: Record<stri
  */
 function createTransport(routes: Record<string, Route>) {
   const hops: string[] = [];
+  const redirectModes: string[] = [];
   const fetchImpl = async (input: unknown, init?: { redirect?: string }): Promise<unknown> => {
+    redirectModes.push(init?.redirect ?? "follow");
     // 生产代码传进来的可能是字符串，也可能是 URL 对象（`fetch(url, …)` 里 url 是 URL）。
     const url = input instanceof URL
       ? input.href
@@ -132,18 +135,18 @@ function createTransport(routes: Record<string, Route>) {
       body: route.body ?? emptyBody(),
     });
   };
-  return { fetchImpl, hops };
+  return { fetchImpl, hops, redirectModes };
 }
 
 async function withTransport(
   routes: Record<string, Route>,
-  run: (transport: { fetchImpl: typeof fetch; hops: string[] }) => Promise<void>,
+  run: (transport: { fetchImpl: typeof fetch; hops: string[]; redirectModes: string[] }) => Promise<void>,
 ): Promise<void> {
   const original = globalThis.fetch;
   const transport = createTransport(routes);
   globalThis.fetch = transport.fetchImpl as unknown as typeof fetch;
   try {
-    await run(transport as unknown as { fetchImpl: typeof fetch; hops: string[] });
+    await run(transport as unknown as { fetchImpl: typeof fetch; hops: string[]; redirectModes: string[] });
   } finally {
     globalThis.fetch = original;
   }
@@ -208,7 +211,92 @@ await check("多跳 公网 → 公网 → 内网：中间那一跳也不能打�
   );
 });
 
-// 1.3 语音走同一套白名单，必须同样安全。
+// 1.3 显式检查图片链路每一跳都使用 manual，不能依赖 fetch 自动跟随。
+await check("每一跳重定向都必须使用 manual", async () => {
+  await withTransport({
+    [PUBLIC_A]: { redirectTo: PUBLIC_B },
+    [PUBLIC_B]: {
+      status: 200,
+      headers: { "content-type": "image/png" },
+      body: chunkedBody(1024),
+    },
+  }, async ({ redirectModes, hops }) => {
+    const result = await downloadImage(PUBLIC_A);
+    expect(result.buffer.byteLength === 1024, "重定向后的正常图片应成功读取");
+    expect(hops.length === 2, `预期两跳，实际 ${hops.length} 跳`);
+    expect(
+      redirectModes.length === 2 && redirectModes.every((mode) => mode === "manual"),
+      `每一跳都必须 redirect: manual，实际为 ${redirectModes.join(", ")}`,
+    );
+  });
+});
+
+// 1.4 DNS 重绑定：预检查得到公网 IP，真实连接阶段重新解析却变成内网，必须阻断。
+await check("DNS 重绑定：连接阶段解析到内网时不给 socket 地址", async () => {
+  const queue = [
+    [{ address: "8.8.8.8", family: 4 }],
+    [{ address: "127.0.0.1", family: 4 }],
+  ];
+  let lookups = 0;
+  let blocked = 0;
+  const resolveAll = async (_hostname: string) => {
+    lookups += 1;
+    const next = queue.shift();
+    if (!next) throw new Error("unexpected extra DNS lookup");
+    return next;
+  };
+
+  // 第一次模拟下载前的 DNS 预检查：公网地址通过。
+  const preflight = await resolveAll("media.example.test");
+  expect(preflight[0]?.address === "8.8.8.8", "预检查应先得到公网 IP");
+
+  const lookup = createPinnedLookup(() => { blocked += 1; }, resolveAll);
+  const callbackArgs: unknown[][] = [];
+  await new Promise<void>((resolve) => {
+    lookup("media.example.test", { all: true }, (...args) => {
+      callbackArgs.push(args);
+      resolve();
+    });
+  });
+
+  const error = callbackArgs[0]?.[0] as (Error & { code?: string }) | undefined;
+  expect(blocked === 1, `DNS 内网地址必须触发阻断，实际 blocked=${blocked}`);
+  expect(error?.code === "EACCES", `socket lookup 应返回 EACCES，实际 ${error?.code}`);
+  expect(callbackArgs[0]?.length === 1, "被阻断时不得向 socket 交付任何地址");
+  expect(lookups === 2, `应恰好预检查+建连两次解析，实际 ${lookups} 次`);
+});
+
+// 1.5 DNS 固定：连接回调直接交付刚校验的 IP，不再让 socket 第三次解析。
+await check("DNS 固定：校验后的 IP 直接交付 socket", async () => {
+  const queue = [
+    [{ address: "8.8.8.8", family: 4 }],
+    [{ address: "8.8.8.8", family: 4 }],
+  ];
+  let lookups = 0;
+  const resolveAll = async (_hostname: string) => {
+    lookups += 1;
+    const next = queue.shift();
+    if (!next) throw new Error("unexpected extra DNS lookup");
+    return next;
+  };
+  await resolveAll("media.example.test"); // 模拟预检查。
+
+  const lookup = createPinnedLookup(() => undefined, resolveAll);
+  const callbackArgs: unknown[][] = [];
+  await new Promise<void>((resolve) => {
+    lookup("media.example.test", { family: 4 }, (...args) => {
+      callbackArgs.push(args);
+      resolve();
+    });
+  });
+
+  expect(callbackArgs[0]?.[0] === null, "公网 DNS 结果应通过");
+  expect(callbackArgs[0]?.[1] === "8.8.8.8", "socket 收到的地址必须是已校验 IP");
+  expect(callbackArgs[0]?.[2] === 4, "socket 收到的地址族必须是 IPv4");
+  expect(lookups === 2, `不允许第三次独立解析，实际 ${lookups} 次`);
+});
+
+// 1.6 语音走同一套白名单，必须同样安全。
 for (const { label, target } of [redirectTargets[0]!, redirectTargets[1]!]) {
   await check(`语音 公网 302 → ${label}：内网不能收到请求`, async () => {
     await withTransport({
