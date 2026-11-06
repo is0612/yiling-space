@@ -37,7 +37,13 @@ type PendingRequest = {
 };
 
 function harness() {
-  const watchers: Array<{ sources: Ref[]; callback: () => void }> = [];
+  /**
+   * Vue 的 `watch` 回调签名是 `(新值, 旧值)`，页面里的 `watch(selected, (dayKey) => …)` 就靠这个入参取日期。
+   * 以前的桩调用 `callback()` 不传参，`dayKey` 永远是 `undefined`，于是选日期后从不发详情请求 ——
+   * 测试看起来在测竞态，实际测的是一个被桩削掉的分支。
+   */
+  type Watcher = { sources: Ref[]; callback: (...args: unknown[]) => void; previous: unknown[] };
+  const watchers: Watcher[] = [];
   const timers = new Map<number, () => void>();
   const requests: PendingRequest[] = [];
   const errors: string[] = [];
@@ -45,13 +51,23 @@ function harness() {
   const successes: string[] = [];
   let roleValue = "role-a";
   const role = {} as Ref;
+  function notify(changed: Ref) {
+    for (const watcher of watchers) {
+      if (!watcher.sources.includes(changed)) continue;
+      const current = watcher.sources.map((source) => source.value);
+      const previous = watcher.previous;
+      watcher.previous = current;
+      if (current.length === 1) watcher.callback(current[0], previous[0]);
+      else watcher.callback(current, previous);
+    }
+  }
   Object.defineProperty(role, "value", {
     get: () => roleValue,
     set: (next: unknown) => {
       const previous = roleValue;
       roleValue = String(next);
       if (previous === roleValue) return;
-      for (const watcher of watchers) if (watcher.sources.includes(role)) watcher.callback();
+      notify(role);
     },
   });
   let timerId = 0;
@@ -67,13 +83,16 @@ function harness() {
           const previous = value;
           value = next;
           if (Object.is(previous, next)) return;
-          for (const watcher of watchers) if (watcher.sources.includes(result)) watcher.callback();
+          notify(result);
         },
       });
       return result;
     },
     computed: (get: () => unknown) => ({ get value() { return get(); } }),
-    watch: (sources: Ref | Ref[], callback: () => void) => watchers.push({ sources: Array.isArray(sources) ? sources : [sources], callback }),
+    watch: (sources: Ref | Ref[], callback: (...args: unknown[]) => void) => {
+      const list = Array.isArray(sources) ? sources : [sources];
+      watchers.push({ sources: list, callback, previous: list.map((source) => source.value) });
+    },
     onBeforeUnmount: (callback: () => void) => { unmount = callback; },
     useCharacterListData: async () => {},
     useCharacterSelection: () => ({ id: role }),
@@ -167,8 +186,55 @@ async function staleRoleDays() {
   page.finish();
 }
 
-async function staleSelectedDay() {
+async function lateRoleResponse() {
   const page = harness();
+  const old = page.call("loadDays", "role-a");
+  const oldResponse = page.take("/api/characters/role-a/days");
+  page.set("id", "role-b");
+  const currentResponse = page.take("/api/characters/role-b/days");
+  // 新角色先返回：页面进入 role-b 的状态，并去取 role-b 当天的详情。
+  currentResponse.resolve(daysResult("2026-11-05"));
+  await flushMicrotasks();
+  assert.deepEqual(page.read("days"), [day("2026-11-05")]);
+  const detailResponse = page.take("/api/characters/role-b/days/2026-11-05");
+  // 旧角色的响应后到：既不能改日期列表，也不能改时区。
+  oldResponse.resolve(daysResult("2026-11-01", "Europe/London"));
+  await old;
+  await flushMicrotasks();
+  assert.deepEqual(page.read("days"), [day("2026-11-05")], "晚到的旧角色响应不能覆盖新角色数据");
+  assert.equal(page.read("timeZone"), "Asia/Shanghai", "晚到的旧角色响应不能改掉新角色的时区");
+  detailResponse.resolve(detailResult("2026-11-05"));
+  await flushMicrotasks();
+  assert.equal(page.read("loading"), false);
+  page.finish();
+}
+
+async function rapidRoleSwitches() {
+  const page = harness();
+  const first = page.call("loadDays", "role-a");
+  const firstResponse = page.take("/api/characters/role-a/days");
+  page.set("id", "role-b");
+  const middleResponse = page.take("/api/characters/role-b/days");
+  page.set("id", "role-a");
+  const lastResponse = page.take("/api/characters/role-a/days");
+  middleResponse.resolve(daysResult("2026-11-03"));
+  await flushMicrotasks();
+  assert.equal((page.read<unknown[]>("days")).length, 0, "中间角色的响应不能落到页面上");
+  lastResponse.resolve(daysResult("2026-11-05"));
+  await flushMicrotasks();
+  assert.deepEqual(page.read("days"), [day("2026-11-05")]);
+  const detailResponse = page.take("/api/characters/role-a/days/2026-11-05");
+  firstResponse.resolve(daysResult("2026-11-01"));
+  await first;
+  await flushMicrotasks();
+  assert.deepEqual(page.read("days"), [day("2026-11-05")], "第一次的 role-a 响应也不能覆盖最后一次的结果");
+  detailResponse.resolve(detailResult("2026-11-05"));
+  await flushMicrotasks();
+  assert.equal(page.read("loading"), false);
+  page.finish();
+}
+
+async function staleSelectedDay() {  const page = harness();
   page.set("selected", "2026-11-04");
   const old = page.take("/api/characters/role-a/days/2026-11-04");
   page.set("selected", "2026-11-05");
@@ -227,7 +293,7 @@ async function unmountInvalidatesRequests() {
   page.finish();
 }
 
-for (const test of [staleRoleDays, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests]) {
+for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests]) {
   await test();
   console.log(`PASS ${test.name}`);
 }

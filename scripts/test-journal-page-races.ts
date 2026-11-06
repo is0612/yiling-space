@@ -332,7 +332,9 @@ async function unmountInvalidatesListRequest() {
   page.unmountPage();
   request.resolve(listResult(DAY_A));
   await pending;
-  assert.deepEqual(page.read("items"), []);
+  // `items` 是 VM 内部 `ref([])` 建的数组，和宿主的 `[]` 原型不同，deepStrictEqual 会误报；
+  // 这里要断言的是「没留下条目」，比长度即可。
+  assert.equal((page.read<unknown[]>("items")).length, 0, "过期请求/卸载后不能留下旧条目");
   page.finish();
 }
 
