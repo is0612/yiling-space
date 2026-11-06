@@ -573,6 +573,15 @@ export async function getOnebotCookies(
   return "";
 }
 
+/**
+ * 调一次网关 HTTP API 的超时。
+ *
+ * **必须带超时**：网关抖一下（WS 掉线重连期间）这条请求会一直挂着不返回，
+ * 而私聊的发送是在串行队列里 `await` 的 —— 一个挂死的发送会把后面所有私聊堵死，
+ * 表现是「她不回我私聊了」，日志里却一条错误都没有（2026-11-06 实测）。
+ */
+const ONEBOT_ACTION_TIMEOUT_MS = 15_000;
+
 export async function callOnebotAction(
   config: OnebotConnectionConfig,
   action: string,
@@ -585,6 +594,7 @@ export async function callOnebotAction(
       ...(config.httpToken ? { authorization: "Bearer " + config.httpToken } : {}),
     },
     body: JSON.stringify(params),
+    signal: AbortSignal.timeout(ONEBOT_ACTION_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`ONEBOT_SEND_HTTP_${response.status}: 发送 OneBot 消息失败。`);

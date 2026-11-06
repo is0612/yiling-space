@@ -9,9 +9,30 @@
  */
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 
 const MAX_REDIRECTS = 5;
+
+/** 这个文件里的响应一律来自 undici 的 fetch，类型也跟着它走。 */
+type FetchResponse = Awaited<ReturnType<typeof undiciFetch>>;
+
+/**
+ * 把嵌套的 fetch 错误压成一行可读的原因（`UND_ERR_CONNECT_TIMEOUT` / `CERT_...` / `fetch failed`…）。
+ *
+ * 为什么需要：`fetch failed` 是 undici 的通用外壳，真正的原因在 `error.cause` 里，
+ * 不扒出来日志就只有「下载失败」四个字（2026-11-06 语音识别卡这里时就是这样）。
+ */
+function describeFetchError(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    const item = current as { message?: string; code?: string };
+    const piece = [item.code, item.message].filter(Boolean).join(" ");
+    if (piece && !parts.includes(piece)) parts.push(piece);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return parts.join(" <- ").slice(0, 200);
+}
 
 type IpRecord = { address: string; family: number };
 
@@ -225,7 +246,7 @@ export function createPinnedLookup(
   }) as PinnedLookup;
 }
 
-async function cancelBody(response: Response | undefined): Promise<void> {
+async function cancelBody(response: FetchResponse | undefined): Promise<void> {
   try {
     await response?.body?.cancel();
   } catch {
@@ -233,7 +254,7 @@ async function cancelBody(response: Response | undefined): Promise<void> {
   }
 }
 
-async function readLimitedBody(response: Response, maxBytes: number, prefix: string): Promise<Buffer> {
+async function readLimitedBody(response: FetchResponse, maxBytes: number, prefix: string): Promise<Buffer> {
   if (!response.body) return Buffer.alloc(0);
 
   const reader = response.body.getReader();
@@ -315,15 +336,22 @@ export async function downloadSafeMedia(
       connect: { lookup: createPinnedLookup(() => { blockedDuringConnect = true; }) as never },
     });
 
-    let response: Response | undefined;
+    let response: FetchResponse | undefined;
     try {
-      response = await fetch(currentUrl, {
+      /*
+       * 必须用 undici 自己的 fetch，不能用 Node 的全局 fetch。
+       *
+       * 全局 fetch 带的是 Node 内置的那份 undici，而我们 new 的 Agent 来自 npm 装的 undici
+       * （版本还不一样：内置 7.x、依赖里 8.x）。把 8.x 的 Agent 当 dispatcher 塞给 7.x 的 fetch，
+       * 对方认不出这个 dispatcher 的接口，直接抛 `UND_ERR_INVALID_ARG invalid onRequestStart method`
+       * —— 表现就是「所有外链下载失败」，连 403/404 都拿不到（2026-11-06 实测）。
+       */
+      response = await undiciFetch(currentUrl, {
         redirect: "manual",
         signal,
         headers,
-        // Node 全局 fetch 基于 Undici；dispatcher 的自定义 lookup 把校验 IP 固定到实际连接。
         dispatcher: agent,
-      } as RequestInit & { dispatcher: Agent });
+      });
 
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get("location");
@@ -376,7 +404,12 @@ export async function downloadSafeMedia(
       await cancelBody(response);
       if (blockedDuringConnect) throw new Error(`${prefix}_BLOCKED_HOST`);
       if (isExpectedDownloadError(error, prefix)) throw error;
-      throw new Error(`${prefix}_DOWNLOAD_FAILED`);
+      /*
+       * 带上底层原因：`DOWNLOAD_FAILED` 一个词什么信息都没有。
+       * 2026-11-06 语音识别就卡在这里 —— 日志只有 `VOICE_DOWNLOAD_FAILED`，
+       * 分不清是 DNS、TLS、超时还是没给 UA。错误里通常只有主机名，不带查询串里的 rkey。
+       */
+      throw new Error(`${prefix}_DOWNLOAD_FAILED (${describeFetchError(error)})`, { cause: error });
     } finally {
       try {
         await agent.close();
