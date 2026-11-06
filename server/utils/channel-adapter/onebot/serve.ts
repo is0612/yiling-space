@@ -1680,7 +1680,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
           groupId: event.groupId,
           at: receivedAt,
           speaker: event.displayName,
-          text: event.content,
+          // 仍刷新群活跃时间，但不把被禁止对象的正文写入群活跃度摘要。
+          text: shouldBlockFriendSpeaker(speakerKind, speakerPolicy) ? "" : event.content,
         });
       }
 
