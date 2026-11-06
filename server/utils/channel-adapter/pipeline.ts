@@ -48,6 +48,7 @@ import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
+import { shouldBlockFriendSpeaker } from "../friend-chat-policy";
 import { pickStickerCatalog, type StickerCatalogEntry } from "../stickers";
 import {
   loadCatchphraseCatalog, markCatchphrasesUsed, pickCatchphraseCatalog, toCatchphrasePromptEntries,
@@ -1041,6 +1042,48 @@ async function runChannelTurn(input: {
       : Promise.resolve([]),
   ]);
 
+  // 被标记为 AI / 禁止交流的对象，旧消息仍保存在聊天记录中，但不再进入后续群聊提示词。
+  const blockedRecentMessageIds = new Set<string>();
+  if (isGroup && recentStoredMessages.length) {
+    const historicalUids = [...new Set(
+      recentStoredMessages
+        .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
+        .map((item) => readStoredAuthorOpenId(item.metadata))
+        .filter(Boolean),
+    )];
+    if (historicalUids.length) {
+      const historicalIdentities = await prisma.externalIdentity.findMany({
+        where: { platform: input.platform, platformUid: { in: historicalUids } },
+        select: {
+          platformUid: true,
+          kind: true,
+          memoryScopes: {
+            where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+            take: 1,
+            select: { friendChatPolicy: true },
+          },
+        },
+      });
+      const historicalPolicyByUid = new Map(historicalIdentities.map((identity) => [
+        identity.platformUid,
+        {
+          kind: identity.kind,
+          policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
+        },
+      ] as const));
+      for (const item of recentStoredMessages) {
+        if (item.role !== "USER") continue;
+        const speaker = readStoredSpeaker(item.metadata);
+        const uid = readStoredAuthorOpenId(item.metadata);
+        if (speaker.isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) continue;
+        const identity = historicalPolicyByUid.get(uid);
+        if (shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT")) {
+          blockedRecentMessageIds.add(item.id);
+        }
+      }
+    }
+  }
+
   // 表情要看三件事：渠道收不收（清单）、角色开没开开关、这个会话的额度用没用完。
   // 只看前两个的话，一个爱发表情的角色会在每句后面都挂一张。
   const lastAssistant = recentStoredMessages.find((item) => item.role === "ASSISTANT");
@@ -1137,9 +1180,10 @@ async function runChannelTurn(input: {
    * 这里用**宽判据**（`looksLikeSystemMessage`）：误判也只是这一行不进提示词，
    * 原文还在库里，群聊原文页照常能看到。写入侧用的是窄判据，两件事别搞反。
    */
-  const recentMessages: ConversationContextMessage[] = recentStoredMessages
+  const recentMessages: ConversationContextMessage[] = [...recentStoredMessages]
     .reverse()
     .filter((item) => item.role === "USER" || item.role === "ASSISTANT")
+    .filter((item) => !blockedRecentMessageIds.has(item.id))
     .filter((item) => !(item.role === "USER" && looksLikeSystemMessage(item.content)))
     .map((item) => ({
       role: item.role as "USER" | "ASSISTANT",
