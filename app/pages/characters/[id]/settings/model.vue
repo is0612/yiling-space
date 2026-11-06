@@ -1528,6 +1528,7 @@ watch(id, () => void loadCharacter());
                   aria-label="语音音色"
                   :placeholder="voiceUsesBreeze ? 'voc_...（Breeze 里克隆出来的音色 id）' : voiceUsesMinimax ? 'female-shaonv' : 'FunAudioLLM/CosyVoice2-0.5B:claire'"
                 />
+              </div>
 
               <div class="field">
                 <div class="field-head">
@@ -1553,7 +1554,6 @@ watch(id, () => void loadCharacter());
                     aria-label="语音语速数值"
                   />
                 </div>
-              </div>
               </div>
 
               <!-- Breeze 独有：语气是「写出来」的，不是靠音色自带 -->
