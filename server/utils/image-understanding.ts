@@ -247,7 +247,20 @@ async function describeOne(
       signal: AbortSignal.timeout(VISION_TIMEOUT_MS),
     });
     // 429 在这里最常见（免费视觉模型排队），而且它和「图看不清」在聊天里长得一模一样。
-    if (!response.ok) return fail(`视觉接口返回 HTTP ${response.status}`);
+    if (!response.ok) {
+      /*
+       * 带上响应正文：`视觉接口返回 HTTP 400` 一个词既分不清是「模型不存在」「图太大」
+       * 还是「这个模型根本不支持 image_url」，而三种原因的修法完全不同。
+       * 正文通常是一段 JSON 错误说明，不含图片数据；裁到 200 字够定位。
+       */
+      let detail = "";
+      try {
+        detail = (await response.text()).replace(/\s+/gu, " ").slice(0, 200);
+      } catch {
+        detail = "";
+      }
+      return fail(`视觉接口返回 HTTP ${response.status}${detail ? `：${detail}` : ""}`);
+    }
     payload = await response.json();
   } catch (error) {
     const name = error instanceof Error ? error.name : "Error";
