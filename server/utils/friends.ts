@@ -96,6 +96,86 @@ export async function recordFriendInteraction(input: {
 }
 
 /**
+ * 记录群里遇到过的人，但不增加互动次数。
+ *
+ * 群成员可能从未被她回复过；依然需要在「她的朋友」页手动标记 AI / 真人，
+ * 否则无法在第一次正式互动前设置禁聊规则。互动次数仍只由 recordFriendInteraction 增加。
+ */
+export async function ensureGroupMemberIdentity(input: {
+  characterId: string;
+  platform: string;
+  platformUid: string;
+  displayName?: string | null;
+}): Promise<{ kind: "UNKNOWN" | "HUMAN" | "AI"; friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK" } | null> {
+  const platformUid = (input.platformUid ?? "").trim();
+  if (!platformUid) return null;
+
+  const prisma = getPrisma();
+  const existing = await prisma.externalIdentity.findUnique({
+    where: { platform_platformUid: { platform: input.platform, platformUid } },
+    select: {
+      id: true,
+      displayName: true,
+      kind: true,
+      memoryScopes: {
+        where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+        take: 1,
+        select: { id: true, firstSource: true, friendChatPolicy: true },
+      },
+    },
+  });
+
+  let identityId: string;
+  let kind: "UNKNOWN" | "HUMAN" | "AI";
+  let relation = existing?.memoryScopes[0] ?? null;
+  if (existing) {
+    identityId = existing.id;
+    kind = existing.kind;
+    if (input.displayName && input.displayName.slice(0, 255) !== existing.displayName) {
+      await prisma.externalIdentity.update({
+        where: { id: existing.id },
+        data: { displayName: input.displayName.slice(0, 255) },
+      });
+    }
+  } else {
+    const created = await prisma.externalIdentity.upsert({
+      where: { platform_platformUid: { platform: input.platform, platformUid } },
+      create: {
+        platform: input.platform,
+        platformUid,
+        displayName: input.displayName?.slice(0, 255) || null,
+        status: "UNVERIFIED",
+      },
+      update: {
+        ...(input.displayName ? { displayName: input.displayName.slice(0, 255) } : {}),
+      },
+      select: { id: true, kind: true },
+    });
+    identityId = created.id;
+    kind = created.kind;
+  }
+
+  if (!relation) {
+    const scope = await ensureExternalIdentityScope(input.characterId, input.platform, platformUid, identityId);
+    await prisma.memoryScope.updateMany({
+      where: { id: scope.scopeId, firstSource: null },
+      data: { firstSource: "GROUP" },
+    });
+    relation = await prisma.memoryScope.findUnique({
+      where: { id: scope.scopeId },
+      select: { id: true, firstSource: true, friendChatPolicy: true },
+    });
+  } else if (relation.firstSource === null) {
+    await prisma.memoryScope.updateMany({
+      where: { id: relation.id, firstSource: null },
+      data: { firstSource: "GROUP" },
+    });
+  }
+
+  return { kind, friendChatPolicy: relation?.friendChatPolicy ?? "DEFAULT" };
+}
+
+/**
  * 单个周期最多给多少个朋友排快照。
  *
  * 与主人私人范围不同，这些范围的数量随朋友数增长，每一个都要单独调一次模型提炼。
