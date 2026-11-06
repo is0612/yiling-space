@@ -155,7 +155,9 @@ export async function buildGroupActivityContext(
     const accountId = typeof meta.authorOpenId === "string" ? meta.authorOpenId.trim() : "";
     if (meta.isOwner === true || (input.ownerQq && accountId === input.ownerQq.trim())) return true;
     const identity = policyByAccount.get(accountId);
-    return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.friendChatPolicy ?? "DEFAULT");
+    // 这里读的是上面 map 里存的 `policy` 字段；写成 `friendChatPolicy` 会永远取不到，
+    // 回落成 DEFAULT，把 ALLOW 的 AI 一起挡掉（2026-11-07 测试只数出 3 个人就是这么来的）。
+    return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
   });
   if (visibleRows.length === 0) return null;
   visibleRows.reverse();
