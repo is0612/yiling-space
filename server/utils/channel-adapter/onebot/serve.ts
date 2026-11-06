@@ -32,6 +32,7 @@ import {
   shouldBlockFriendSpeaker,
   shouldPauseAiOnlyRound,
   MAX_CONSECUTIVE_AI_ROUNDS,
+  nextConsecutiveAiRounds,
 } from "./group-chat";
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
 import { createGroupActivityRecorder } from "../../group-activity";
@@ -1365,7 +1366,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       });
       return;
     }
-    const aiOnlyRound = isAiOnlyGroupRound(items.map(kindFor));
+    const roundIdentityKinds = items.map(kindFor);
+    const aiOnlyRound = isAiOnlyGroupRound(roundIdentityKinds);
 
     // 按群解析：同一个绑定挂了好几个群时，每个群可以有自己的那一档。
     const settings = groupChatForGroup(binding.groupChat, binding.groupChatModes, groupEvent.groupId);
@@ -1555,7 +1557,12 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     if (result.status === "replied" || result.status === "silent") {
       await prisma.conversation.updateMany({
         where: { channelBindingId: binding.id, externalConversationId: groupEvent.conversationKey },
-        data: { consecutiveAiRounds: aiOnlyRound ? (conversation?.consecutiveAiRounds ?? 0) + 1 : 0 },
+        data: {
+          consecutiveAiRounds: nextConsecutiveAiRounds(
+            conversation?.consecutiveAiRounds ?? 0,
+            roundIdentityKinds,
+          ),
+        },
       }).catch((error) => {
         console.error("[onebot] 更新连续 AI 对话计数失败：", error instanceof Error ? error.message : String(error));
       });
