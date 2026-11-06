@@ -118,7 +118,9 @@ function resultFor(handler: string) {
   return handler === "runAiArchive" ? { processed: [], skipped: [], pending: 0 } : { id: "new", outcome: "CREATED", duplicate: false };
 }
 async function completionRaces() {
-  for (const handler of handlers) for (const reject of [false, true]) {
+  // AI 重新提炼只排后台任务，不会在 POST 返回后立即刷新列表。
+  // 这里测的是「完成后会跟进列表刷新」的写操作；后台 AI 重提炼另由 normalFlow 验证。
+  for (const handler of handlers.filter((item) => item !== "regenerateWithAi")) for (const reject of [false, true]) {
     const page = harness();
     const selected = snapshot("a");
     await page.call("applyDetail", selected);
