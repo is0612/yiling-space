@@ -7,9 +7,11 @@ import { runDutyRound } from "../server/utils/channel-adapter/bili/duty-pipeline
 import {
   shouldRunDuty,
   toDayKey,
+  windowDayKey,
   windowsRunFromTimestamps,
   type BiliDutyState,
 } from "../server/utils/channel-adapter/bili/duty-scheduler";
+import { readBiliDutyWindowRunMarks } from "../server/utils/channel-adapter/bili/bili-duty-window-run";
 import { createBiliMessageHandler, pollBiliInbox } from "../server/utils/channel-adapter/bili/serve";
 import { getPrisma } from "../server/utils/prisma";
 
@@ -115,16 +117,24 @@ async function refreshState(bindingId: string, config: BiliDutyConfig): Promise<
   const now = new Date();
   const today = toDayKey(now);
   const since = new Date(now.getTime() - STATE_LOOKBACK_MS);
-  const reports = await prisma.biliRoundReport.findMany({
-    where: { bindingId, createdAt: { gte: since } },
-    select: { pickedCount: true, createdAt: true, day: true },
-  });
-  // 额度按自然日算（每天上限），窗口标记按窗口业务日算（跨午夜同一个夜）
+  const [reports, attemptedWindows] = await Promise.all([
+    prisma.biliRoundReport.findMany({
+      where: { bindingId, createdAt: { gte: since } },
+      select: { pickedCount: true, createdAt: true, day: true },
+    }),
+    readBiliDutyWindowRunMarks(prisma, bindingId, since),
+  ]);
+  // 额度按自然日算（每天上限），窗口标记按窗口业务日算（跨午夜同一个夜）。
+  // 成功日报与「尝试过但无日报」分开读，后者防止无候选/配置错误每分钟重复触发。
   const resetAt = config.quotaResetAt ? new Date(config.quotaResetAt) : null;
   const picked = reports
     .filter((report) => report.day === today && (!resetAt || report.createdAt >= resetAt))
     .reduce((sum, report) => sum + report.pickedCount, 0);
-  return { day: today, picked, windowsRun: windowsRunFromTimestamps(reports.map((report) => report.createdAt)) };
+  const windowsRun = new Set([
+    ...windowsRunFromTimestamps(reports.map((report) => report.createdAt)),
+    ...attemptedWindows,
+  ]);
+  return { day: today, picked, windowsRun: [...windowsRun] };
 }
 
 async function serveConnection(record: BiliConnectionRecord): Promise<void> {
@@ -151,7 +161,10 @@ async function serveConnection(record: BiliConnectionRecord): Promise<void> {
           windowsRun: state.windowsRun,
         });
         try {
-          const result = await runDutyRound(record, binding);
+          const result = await runDutyRound(record, binding, {
+            businessDay: windowDayKey(now, decision.window),
+            windowKey: decision.window,
+          });
           log({ event: "bili-duty-done", connectionId: record.id, bindingId: binding.id, ...result });
         } catch (error) {
           log({

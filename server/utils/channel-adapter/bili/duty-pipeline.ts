@@ -32,6 +32,13 @@ import { resolveCharacterApiKey } from "../../credential-encryption";
 import { parseJsonLoose } from "../../loose-json";
 import type { BiliConnectionRecord, BiliDutyConfig } from "./configure";
 import { biliOptions } from "./configure";
+import { acquireBiliDutyLease } from "./bili-duty-lease";
+import {
+  completeBiliDutyWindowRun,
+  failBiliDutyWindowRun,
+  startBiliDutyWindowRun,
+  type BiliScheduledWindow,
+} from "./bili-duty-window-run";
 import { remainingQuota, toDayKey } from "./duty-scheduler";
 import {
   extractBvids,
@@ -107,6 +114,14 @@ const WATCH_TIMEOUT_MS = 10 * 60 * 1000;
 const DM_MAX_CHARS = 480;
 /** 评论文本上限（CLI 没有硬限，但像真人随口说一句）。 */
 const COMMENT_MAX_CHARS = 120;
+
+/**
+ * 普通值班流评论是公开内容：必须在最终长度截断前复用公开脱敏闸。
+ * 与动态、主人投稿评论走同一个规则；脱敏后为空时调用方不得执行 CLI 写操作。
+ */
+export function preparePublicComment(text: string): string {
+  return sanitizePublicText(text).slice(0, COMMENT_MAX_CHARS);
+}
 /**
  * 收藏每天最多几条。CLI 只限了 5 秒/次、60 次/小时，管不住「一天收三十个视频」——
  * 收藏是「我想留着」，收了三十个等于没收藏。
@@ -510,7 +525,12 @@ function dmRecipient(config: BiliDutyConfig): { arg: string; label: string } {
 }
 
 /** 私信主人（或值班设置里指定的收件人）。 */
-async function deliverDm(record: BiliConnectionRecord, config: BiliDutyConfig, picked: PickedVideo[]): Promise<DeliveryOutcome> {
+async function deliverDm(
+  record: BiliConnectionRecord,
+  config: BiliDutyConfig,
+  picked: PickedVideo[],
+  beforeExternalWrite: () => Promise<void>,
+): Promise<DeliveryOutcome> {
   if (config.dmMode === "off") return { sent: false, fatal: false };
   if (picked.length === 0) return { sent: false, fatal: false };
   const text = buildDmText(picked);
@@ -521,6 +541,7 @@ async function deliverDm(record: BiliConnectionRecord, config: BiliDutyConfig, p
     const argv = ["dm", "send", recipient.arg, "--file", path];
     // 陌生收件人（没聊过、也不是互关）CLI 会直接拒发，要显式开 --allow-new
     if (config.dmAllowNew) argv.push("--allow-new");
+    await beforeExternalWrite();
     const result = await runBili(argv, biliOptions(record));
     return result;
   });
@@ -540,14 +561,22 @@ async function deliverComment(
   config: BiliDutyConfig,
   bvid: string,
   text: string,
+  beforeExternalWrite: () => Promise<void>,
 ): Promise<DeliveryOutcome> {
-  const trimmed = text.trim().slice(0, COMMENT_MAX_CHARS);
-  if (!trimmed) return { sent: false, fatal: false };
+  const trimmed = preparePublicComment(text);
+  if (!trimmed) {
+    return {
+      sent: false,
+      fatal: false,
+      ...(text.trim() ? { note: `评论 ${bvid} 经公开发布脱敏后为空，已跳过。` } : {}),
+    };
+  }
 
   const args = ["comment", "post", bvid];
   const outcome = await withTempText(trimmed, async (path) => {
     const argv = [...args, "--file", path];
     if (config.mentionName) argv.push("--at", config.mentionName);
+    await beforeExternalWrite();
     return runBili(argv, biliOptions(record));
   });
 
@@ -561,7 +590,12 @@ async function deliverComment(
 }
 
 /** 收藏一条视频。CLI 自带 guard（5 秒一次、60 次/小时），日上限由调用方管。 */
-async function favVideo(record: BiliConnectionRecord, bvid: string): Promise<DeliveryOutcome> {
+async function favVideo(
+  record: BiliConnectionRecord,
+  bvid: string,
+  beforeExternalWrite: () => Promise<void>,
+): Promise<DeliveryOutcome> {
+  await beforeExternalWrite();
   const outcome = await runBili(["video", "fav", bvid], biliOptions(record));
   const error = readBiliError(outcome.json);
   if (!error && outcome.code === 0) return { sent: true, fatal: false };
@@ -586,10 +620,17 @@ function buildDynamicText(item: PickedVideo): string {
 }
 
 /** 发一条公开动态。这是整条流水线里唯一会向陌生人可见的写操作。 */
-async function postDynamic(record: BiliConnectionRecord, text: string): Promise<DeliveryOutcome> {
+async function postDynamic(
+  record: BiliConnectionRecord,
+  text: string,
+  beforeExternalWrite: () => Promise<void>,
+): Promise<DeliveryOutcome> {
   const trimmed = text.trim().slice(0, DYNAMIC_MAX_CHARS);
   if (!trimmed) return { sent: false, fatal: false };
-  const outcome = await withTempText(trimmed, (path) => runBili(["dynamic", "post", "--file", path], biliOptions(record)));
+  const outcome = await withTempText(trimmed, async (path) => {
+    await beforeExternalWrite();
+    return runBili(["dynamic", "post", "--file", path], biliOptions(record));
+  });
   const error = readBiliError(outcome.json);
   if (!error && outcome.code === 0) return { sent: true, fatal: false };
   const code = error?.code ?? (outcome.timedOut ? "timeout" : "unknown_error");
@@ -605,7 +646,78 @@ async function postDynamic(record: BiliConnectionRecord, text: string): Promise<
  * 注意：这里 bili CLI 的"找候选/看懂/投递"是真实跨进程调用；模型判断是真实模型调用。
  * 在没有配置 bili CLI / 模型 / 凭证的环境下，本函数会返回明确的错误，而不是假装成功。
  */
-export async function runDutyRound(record: BiliConnectionRecord, binding: { id: string; characterId: string }): Promise<BiliDutyRoundResult> {
+export async function runDutyRound(
+  record: BiliConnectionRecord,
+  binding: { id: string; characterId: string },
+  scheduledWindow?: BiliScheduledWindow,
+): Promise<BiliDutyRoundResult> {
+  const prisma = getPrisma();
+  const lease = await acquireBiliDutyLease(prisma, binding.id);
+  if (!lease) {
+    return {
+      ok: false,
+      picked: 0,
+      skipped: 0,
+      watched: 0,
+      seenVideos: 0,
+      delivered: { dm: false, comments: 0, fav: 0, dynamic: false },
+      pickedItems: [],
+      notes: ["该角色的 B站 值班已有一轮正在执行，本次未启动，避免重复评论、私信或互动。"],
+      error: "已有值班轮次正在执行",
+    };
+  }
+
+  let windowRunStarted = false;
+  try {
+    if (scheduledWindow) {
+      // 必须在锁内、任何模型/CLI/外部动作之前先记本窗口已尝试。
+      await startBiliDutyWindowRun(prisma, binding.id, scheduledWindow, lease.token);
+      windowRunStarted = true;
+    }
+
+    const result = await runDutyRoundLocked(record, binding, lease.assertOwned);
+    if (scheduledWindow && windowRunStarted) {
+      await lease.assertOwned();
+      const updated = await completeBiliDutyWindowRun(
+        prisma,
+        binding.id,
+        scheduledWindow,
+        lease.token,
+        result.error ?? null,
+      );
+      if (!updated) {
+        console.warn("[bili] 本轮结果未能写回窗口记录（租约可能已被接管）。", binding.id);
+      }
+    }
+    return result;
+  } catch (error) {
+    if (scheduledWindow && windowRunStarted) {
+      try {
+        await lease.assertOwned();
+        const updated = await failBiliDutyWindowRun(prisma, binding.id, scheduledWindow, lease.token, error);
+        if (!updated) {
+          console.warn("[bili] 本轮异常未能写回窗口记录（租约可能已被接管）。", binding.id);
+        }
+      } catch (markError) {
+        console.error(
+          "[bili] 记录值班窗口异常状态失败；窗口开始记录仍会阻止自动重复执行。",
+          markError instanceof Error ? markError.message : String(markError),
+        );
+      }
+    }
+    throw error;
+  } finally {
+    await lease.release().catch((error: unknown) => {
+      console.error("[bili] 释放值班执行租约失败；它会在过期后自动回收。", error instanceof Error ? error.message : String(error));
+    });
+  }
+}
+
+async function runDutyRoundLocked(
+  record: BiliConnectionRecord,
+  binding: { id: string; characterId: string },
+  beforeExternalWrite: () => Promise<void>,
+): Promise<BiliDutyRoundResult> {
   const prisma = getPrisma();
   const now = new Date();
   const today = toDayKey(now);
@@ -678,6 +790,9 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
     return { ok: false, ...empty, seenVideos: seenBvids.size, notes, error: "额度已用完" };
   }
 
+  // 锁失效时尽早停止，避免继续消耗模型额度或推进主人互动流程。
+  await beforeExternalWrite();
+
   // 0. 主人内容互动（owner-watch.ts）。独立于推荐流：只对主人的投稿动手。
   const ownerResult = await runOwnerWatch({
     record,
@@ -687,6 +802,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
     characterPrompt: character.basePrompt.slice(0, 12_000),
     day: today,
     notes,
+    beforeExternalWrite,
     model: {
       model: modelSettings.model,
       apiKey,
@@ -702,6 +818,9 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
       },
     },
   });
+
+  // 主人互动可能已经走过多个外部写操作；返回主流程前再确认一次租约。
+  await beforeExternalWrite();
 
   if (remaining <= 0) {
     return {
@@ -788,6 +907,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
   };
 
   // 4. 粗筛：只对入选的才付出 watch 的代价
+  await beforeExternalWrite();
   const modelShortlist = await shortlistCandidates(candidates, settings.watchLimit, model, notes);
   // 「主人发的」不交给粗筛决定要不要看：模型没留也补到最前面（最多 OWNER_PICK_MAX 条）。
   // 提示词里已经请它优先，但那是请求不是契约 —— 主人发的东西她一定看，这条由代码保证。
@@ -806,6 +926,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
   let watchedCount = 0;
 
   for (const bvid of shortlist) {
+    await beforeExternalWrite();
     const candidate = byBvid.get(bvid);
     if (!candidate) continue;
     if (picked.length >= remaining) break;
@@ -847,7 +968,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
 
   const delivered = { dm: false, comments: 0, fav: 0, dynamic: false };
   if (picked.length > 0) {
-    const dmOutcome = await deliverDm(record, config, picked);
+    const dmOutcome = await deliverDm(record, config, picked, beforeExternalWrite);
     delivered.dm = dmOutcome.sent;
     if (dmOutcome.note) notes.push(dmOutcome.note);
 
@@ -859,7 +980,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
         .slice(0, config.commentPerRound);
       for (const item of commentTargets) {
         if (fatal) break;
-        const outcome = await deliverComment(record, config, item.candidate.bvid, item.comment);
+        const outcome = await deliverComment(record, config, item.candidate.bvid, item.comment, beforeExternalWrite);
         if (outcome.sent) delivered.comments += 1;
         if (outcome.note) notes.push(outcome.note);
         if (outcome.fatal) fatal = true;
@@ -885,7 +1006,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
           notes.push(`《${item.candidate.title.slice(0, 20)}》分数够但理由太短，不收藏。`);
           continue;
         }
-        const outcome = await favVideo(record, item.candidate.bvid);
+        const outcome = await favVideo(record, item.candidate.bvid, beforeExternalWrite);
         if (outcome.note) notes.push(outcome.note);
         if (!outcome.sent) {
           if (outcome.fatal) break;
@@ -925,7 +1046,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
           if (!text) {
             notes.push(`《${best.candidate.title.slice(0, 20)}》的理由过不了公开闸，今天不发动态。`);
           } else {
-            const outcome = await postDynamic(record, text);
+            const outcome = await postDynamic(record, text, beforeExternalWrite);
             if (outcome.note) notes.push(outcome.note);
             if (outcome.sent) {
               delivered.dynamic = true;
@@ -1026,6 +1147,8 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
   // 同一 (binding, day, roundIndex) 重跑时覆盖同一条记忆，不重复堆积
   const journalKey = `bili-duty:${binding.id}:${today}:${roundIndex}`;
 
+  // 最终报告、判重和札记同样属于本轮的数据库写入；失去租约的旧执行者不能落库。
+  await beforeExternalWrite();
   const report = await prisma.$transaction(async (tx) => {
     const created = await tx.biliRoundReport.create({
       data: {

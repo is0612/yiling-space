@@ -72,7 +72,7 @@ export const BILI_CATALOG: BiliCatalogGroup[] = [
       { id: "me.show", label: "我的资料", argv: ["me", "show"] },
       { id: "me.stats", label: "创作数据", argv: ["me", "stats"] },
       { id: "owner.show", label: "当前主人", argv: ["owner", "show"] },
-      { id: "owner.set", label: "设置主人", argv: ["owner", "set"], params: [p("uid", "UID / 昵称", { pos: true, ph: "12345678" })] },
+      { id: "owner.set", label: "设置主人", argv: ["owner", "set"], write: true, params: [p("uid", "UID / 昵称", { pos: true, ph: "12345678" })] },
       { id: "me.favs", label: "我的收藏夹", argv: ["me", "favs"] },
     ],
   },
@@ -155,6 +155,55 @@ export function findBiliCatalogItem(itemId: string): BiliCatalogItem | null {
     }
   }
   return null;
+}
+
+export class BiliCommandRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BiliCommandRequestError";
+  }
+}
+
+/**
+ * 服务端命令执行边界：目录 ID 必须存在，且请求 argv 的命令路径必须与目录项一致。
+ * 不接受缺失/未知的 itemId，也不允许客户端用只读 itemId 搭配另一条写命令。
+ */
+export function prepareBiliCommandInvocation(
+  groups: BiliCatalogGroup[],
+  input: { itemId?: unknown; argv?: unknown; allowWrite?: unknown },
+): { item: BiliCatalogItem; argv: string[]; write: boolean } {
+  const itemId = typeof input.itemId === "string" ? input.itemId.trim() : "";
+  if (!itemId) {
+    throw new BiliCommandRequestError("缺少命令目录 ID，拒绝执行未登记的命令。");
+  }
+
+  if (
+    !Array.isArray(input.argv)
+    || input.argv.length === 0
+    || !input.argv.every((part) => typeof part === "string" && part.trim().length > 0)
+  ) {
+    throw new BiliCommandRequestError("命令参数无效或为空。");
+  }
+  const argv = (input.argv as string[]).map((part) => part.trim());
+
+  const item = groups.flatMap((group) => group.items).find((candidate) => candidate.id === itemId);
+  if (!item) {
+    throw new BiliCommandRequestError("未知命令目录 ID，拒绝执行。请刷新命令目录后重试。");
+  }
+  if (item.argv.length === 0) {
+    throw new BiliCommandRequestError("该目录项不是可直接执行的 bili CLI 命令。");
+  }
+  const matchesCommand = item.argv.length <= argv.length
+    && item.argv.every((part, index) => argv[index] === part);
+  if (!matchesCommand) {
+    throw new BiliCommandRequestError("命令参数与命令目录不匹配，已拒绝执行。");
+  }
+
+  const write = item.write === true;
+  if (write && input.allowWrite !== true && !argv.includes("--dry-run")) {
+    argv.push("--dry-run");
+  }
+  return { item, argv, write };
 }
 
 /** 侧栏默认收起的命令 id。前端首次加载 / 点「恢复默认」时用它。 */

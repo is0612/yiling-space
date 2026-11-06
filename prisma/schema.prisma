@@ -247,6 +247,8 @@ model CharacterChannelBinding {
   biliRoundReports BiliRoundReport[]
   biliSeenVideos   BiliSeenVideo[]
   biliActions      BiliAction[]
+  biliDutyLease    BiliDutyLease?
+  biliDutyWindowRuns BiliDutyWindowRun[]
 
   @@unique([characterId, connectionId])
   @@index([status])
@@ -849,8 +851,56 @@ model BiliAction {
   @@map("bili_actions")
 }
 
+/// B站某个角色绑定当前值班轮次的数据库租约。
+///
+/// 手动入口和定时适配器最终都进入 runDutyRound，因此按 binding 唯一认领；
+/// expiresAt 配合定时续租处理进程崩溃，token 则阻止旧执行者续租或释放新租约。
+model BiliDutyLease {
+  bindingId String                  @id @db.Uuid
+  token     String                  @db.Uuid
+  expiresAt DateTime                @db.Timestamptz(6)
+  createdAt DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
+  binding   CharacterChannelBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("bili_duty_leases")
+}
+
 /// 每次模型调用的 token 记账。
 /// 故意不做外键：账单不应该随角色/会话删除而消失，且这里只用于统计与额度。
+
+/// B站谷时调度窗口的尝试记录，与日报内容分离。
+///
+/// 没有候选、模型未配置或 CLI 返回错误时，值班流水线可能正常提前返回而不生成日报；
+/// 如果调度器只靠 BiliRoundReport.createdAt 重建窗口状态，就会每分钟重复尝试。
+/// 这张表在拿到 binding 租约后、开始任何工作前先落一条记录；该窗口本轮无论正常结束、
+/// 返回无候选还是进程异常中断，都不会被自动重复触发，以免不确定外部动作是否已发生时重放。
+model BiliDutyWindowRun {
+  id          String                  @id @default(uuid()) @db.Uuid
+  bindingId   String                  @db.Uuid
+  /// 窗口业务日；夜间跨午夜窗口使用前一晚的日期。
+  businessDay String                  @db.VarChar(10)
+  /// noon | night
+  windowKey   String                  @db.VarChar(10)
+  /// RUNNING | COMPLETED | FAILED
+  status      String                  @default("RUNNING") @db.VarChar(20)
+  attemptCount Int                    @default(1)
+  /// 与 BiliDutyLease.token 对应，用于阻止旧执行者覆盖接管后的结果。
+  leaseToken  String                  @db.Uuid
+  startedAt   DateTime                @default(now()) @db.Timestamptz(6)
+  finishedAt  DateTime?               @db.Timestamptz(6)
+  lastError   String?                 @db.Text
+  createdAt   DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
+  binding     CharacterChannelBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+
+  @@unique([bindingId, businessDay, windowKey])
+  @@index([bindingId, createdAt])
+  @@index([status, updatedAt])
+  @@map("bili_duty_window_runs")
+}
+
 model ModelUsage {
   id               String   @id @default(uuid()) @db.Uuid
   /// 调用类别：chat / channel / snapshot / bili-screening / bili-judge / other。

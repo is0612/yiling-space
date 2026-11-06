@@ -135,6 +135,8 @@ export type OwnerWatchContext = {
   };
   day: string;
   notes: string[];
+  /** 公开评论/点赞/收藏/投币/私信等外部写操作前确认本轮仍持有数据库租约。 */
+  beforeExternalWrite: () => Promise<void>;
 };
 
 /** 把一段文本写进临时文件，交给 bili 的 `--file`（跟 duty-pipeline 里同一套做法）。 */
@@ -222,7 +224,9 @@ async function runWrite(
   argv: string[],
   label: string,
   notes: string[],
+  beforeExternalWrite: () => Promise<void>,
 ): Promise<ActionOutcome> {
+  await beforeExternalWrite();
   const result = await runBili(argv, biliOptions(record));
   const error = readBiliError(result.json);
   if (!error && result.code === 0) return { ok: true, fatal: false };
@@ -417,7 +421,7 @@ export async function runOwnerWatch(ctx: OwnerWatchContext): Promise<OwnerWatchO
 
     // 点赞
     if (config.ownerLike && !relation.liked) {
-      const result = await runWrite(record, ["video", "like", card.bvid], `点赞 ${card.bvid}`, notes);
+      const result = await runWrite(record, ["video", "like", card.bvid], `点赞 ${card.bvid}`, notes, ctx.beforeExternalWrite);
       if (result.ok) {
         outcome.liked += 1;
         actions.push("点赞");
@@ -430,7 +434,7 @@ export async function runOwnerWatch(ctx: OwnerWatchContext): Promise<OwnerWatchO
 
     // 收藏
     if (config.ownerFav && !relation.favorited && !fatal) {
-      const result = await runWrite(record, ["video", "fav", card.bvid], `收藏 ${card.bvid}`, notes);
+      const result = await runWrite(record, ["video", "fav", card.bvid], `收藏 ${card.bvid}`, notes, ctx.beforeExternalWrite);
       if (result.ok) {
         outcome.faved += 1;
         actions.push("收藏");
@@ -459,6 +463,7 @@ export async function runOwnerWatch(ctx: OwnerWatchContext): Promise<OwnerWatchO
         ["video", "coin", card.bvid, "--coins", "1"],
         `投币 ${card.bvid}`,
         notes,
+        ctx.beforeExternalWrite,
       );
       if (result.ok) {
         outcome.coined += 1;
@@ -478,7 +483,7 @@ export async function runOwnerWatch(ctx: OwnerWatchContext): Promise<OwnerWatchO
       const text = sanitizePublicText(judged.comment).slice(0, OWNER_COMMENT_MAX_CHARS);
       if (text) {
         const result = await withTempText(text, (path) =>
-          runWrite(record, ["comment", "post", card.bvid, "--file", path, "--at", "owner"], `评论 ${card.bvid}`, notes),
+          runWrite(record, ["comment", "post", card.bvid, "--file", path, "--at", "owner"], `评论 ${card.bvid}`, notes, ctx.beforeExternalWrite),
         );
         if (result.ok) {
           outcome.commented += 1;
@@ -528,7 +533,7 @@ export async function runOwnerWatch(ctx: OwnerWatchContext): Promise<OwnerWatchO
     const result = await withTempText(text, (path) => {
       const argv = ["dm", "send", recipient, "--file", path];
       if (config.dmAllowNew) argv.push("--allow-new");
-      return runWrite(record, argv, "私信主人", notes);
+      return runWrite(record, argv, "私信主人", notes, ctx.beforeExternalWrite);
     });
     outcome.dm = result.ok;
   }
