@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { getPrisma } from "../../prisma";
+import { ensureGroupMemberIdentity } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
 import type { OnebotSegment } from "./types";
@@ -1655,25 +1656,19 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     let speakerPolicy: "DEFAULT" | "ALLOW" | "BLOCK" = isOwnerEvent ? "ALLOW" : "DEFAULT";
 
     if (isGroupMessage && event.userId.trim()) {
-      const identity = await getPrisma().externalIdentity.findUnique({
-        where: {
-          platform_platformUid: {
+      // 每个在群里发过言的人都先建立一个「遇到过」关系，互动次数仍只在她真正回复后增加。
+      // 这样她可以在第一次正式交流前，就把某条鱼标记为 AI / 禁止交流。
+      const identity = isOwnerEvent
+        ? null
+        : await ensureGroupMemberIdentity({
+            characterId: binding.characterId,
             platform: ONEBOT_PLATFORM,
             platformUid: event.userId.trim(),
-          },
-        },
-        select: {
-          kind: true,
-          memoryScopes: {
-            where: { characterId: binding.characterId, scopeType: "EXTERNAL_IDENTITY" },
-            take: 1,
-            select: { friendChatPolicy: true },
-          },
-        },
-      });
-      if (!isOwnerEvent && identity) {
+            displayName: event.displayName,
+          });
+      if (identity) {
         speakerKind = identity.kind;
-        speakerPolicy = identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT";
+        speakerPolicy = identity.friendChatPolicy;
       }
 
       // 只统计群里发生了什么；屏蔽只影响她看见的语境和是否回复。
