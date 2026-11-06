@@ -32,6 +32,7 @@ import { resolveCharacterApiKey } from "../../credential-encryption";
 import { parseJsonLoose } from "../../loose-json";
 import type { BiliConnectionRecord, BiliDutyConfig } from "./configure";
 import { biliOptions } from "./configure";
+import { acquireBiliDutyLease, BiliDutyLeaseLostError } from "./bili-duty-lease";
 import { remainingQuota, toDayKey } from "./duty-scheduler";
 import {
   extractBvids,
@@ -518,7 +519,12 @@ function dmRecipient(config: BiliDutyConfig): { arg: string; label: string } {
 }
 
 /** 私信主人（或值班设置里指定的收件人）。 */
-async function deliverDm(record: BiliConnectionRecord, config: BiliDutyConfig, picked: PickedVideo[]): Promise<DeliveryOutcome> {
+async function deliverDm(
+  record: BiliConnectionRecord,
+  config: BiliDutyConfig,
+  picked: PickedVideo[],
+  beforeExternalWrite: () => Promise<void>,
+): Promise<DeliveryOutcome> {
   if (config.dmMode === "off") return { sent: false, fatal: false };
   if (picked.length === 0) return { sent: false, fatal: false };
   const text = buildDmText(picked);
@@ -529,6 +535,7 @@ async function deliverDm(record: BiliConnectionRecord, config: BiliDutyConfig, p
     const argv = ["dm", "send", recipient.arg, "--file", path];
     // 陌生收件人（没聊过、也不是互关）CLI 会直接拒发，要显式开 --allow-new
     if (config.dmAllowNew) argv.push("--allow-new");
+    await beforeExternalWrite();
     const result = await runBili(argv, biliOptions(record));
     return result;
   });
@@ -548,6 +555,7 @@ async function deliverComment(
   config: BiliDutyConfig,
   bvid: string,
   text: string,
+  beforeExternalWrite: () => Promise<void>,
 ): Promise<DeliveryOutcome> {
   const trimmed = preparePublicComment(text);
   if (!trimmed) {
@@ -562,6 +570,7 @@ async function deliverComment(
   const outcome = await withTempText(trimmed, async (path) => {
     const argv = [...args, "--file", path];
     if (config.mentionName) argv.push("--at", config.mentionName);
+    await beforeExternalWrite();
     return runBili(argv, biliOptions(record));
   });
 
@@ -575,7 +584,12 @@ async function deliverComment(
 }
 
 /** 收藏一条视频。CLI 自带 guard（5 秒一次、60 次/小时），日上限由调用方管。 */
-async function favVideo(record: BiliConnectionRecord, bvid: string): Promise<DeliveryOutcome> {
+async function favVideo(
+  record: BiliConnectionRecord,
+  bvid: string,
+  beforeExternalWrite: () => Promise<void>,
+): Promise<DeliveryOutcome> {
+  await beforeExternalWrite();
   const outcome = await runBili(["video", "fav", bvid], biliOptions(record));
   const error = readBiliError(outcome.json);
   if (!error && outcome.code === 0) return { sent: true, fatal: false };
@@ -600,10 +614,17 @@ function buildDynamicText(item: PickedVideo): string {
 }
 
 /** 发一条公开动态。这是整条流水线里唯一会向陌生人可见的写操作。 */
-async function postDynamic(record: BiliConnectionRecord, text: string): Promise<DeliveryOutcome> {
+async function postDynamic(
+  record: BiliConnectionRecord,
+  text: string,
+  beforeExternalWrite: () => Promise<void>,
+): Promise<DeliveryOutcome> {
   const trimmed = text.trim().slice(0, DYNAMIC_MAX_CHARS);
   if (!trimmed) return { sent: false, fatal: false };
-  const outcome = await withTempText(trimmed, (path) => runBili(["dynamic", "post", "--file", path], biliOptions(record)));
+  const outcome = await withTempText(trimmed, async (path) => {
+    await beforeExternalWrite();
+    return runBili(["dynamic", "post", "--file", path], biliOptions(record));
+  });
   const error = readBiliError(outcome.json);
   if (!error && outcome.code === 0) return { sent: true, fatal: false };
   const code = error?.code ?? (outcome.timedOut ? "timeout" : "unknown_error");
@@ -620,6 +641,51 @@ async function postDynamic(record: BiliConnectionRecord, text: string): Promise<
  * 在没有配置 bili CLI / 模型 / 凭证的环境下，本函数会返回明确的错误，而不是假装成功。
  */
 export async function runDutyRound(record: BiliConnectionRecord, binding: { id: string; characterId: string }): Promise<BiliDutyRoundResult> {
+  const prisma = getPrisma();
+  const lease = await acquireBiliDutyLease(prisma, binding.id);
+  if (!lease) {
+    return {
+      ok: false,
+      picked: 0,
+      skipped: 0,
+      watched: 0,
+      seenVideos: 0,
+      delivered: { dm: false, comments: 0, fav: 0, dynamic: false },
+      pickedItems: [],
+      notes: ["该角色的 B站 值班已有一轮正在执行，本次未启动，避免重复评论、私信或互动。"],
+      error: "已有值班轮次正在执行",
+    };
+  }
+
+  try {
+    return await runDutyRoundLocked(record, binding, lease.assertOwned);
+  } catch (error) {
+    if (error instanceof BiliDutyLeaseLostError) {
+      return {
+        ok: false,
+        picked: 0,
+        skipped: 0,
+        watched: 0,
+        seenVideos: 0,
+        delivered: { dm: false, comments: 0, fav: 0, dynamic: false },
+        pickedItems: [],
+        notes: [error.message],
+        error: "值班执行租约失效，已停止本轮后续操作",
+      };
+    }
+    throw error;
+  } finally {
+    await lease.release().catch((error: unknown) => {
+      console.error("[bili] 释放值班执行租约失败；它会在过期后自动回收。", error instanceof Error ? error.message : String(error));
+    });
+  }
+}
+
+async function runDutyRoundLocked(
+  record: BiliConnectionRecord,
+  binding: { id: string; characterId: string },
+  beforeExternalWrite: () => Promise<void>,
+): Promise<BiliDutyRoundResult> {
   const prisma = getPrisma();
   const now = new Date();
   const today = toDayKey(now);
@@ -701,6 +767,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
     characterPrompt: character.basePrompt.slice(0, 12_000),
     day: today,
     notes,
+    beforeExternalWrite,
     model: {
       model: modelSettings.model,
       apiKey,
@@ -861,7 +928,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
 
   const delivered = { dm: false, comments: 0, fav: 0, dynamic: false };
   if (picked.length > 0) {
-    const dmOutcome = await deliverDm(record, config, picked);
+    const dmOutcome = await deliverDm(record, config, picked, beforeExternalWrite);
     delivered.dm = dmOutcome.sent;
     if (dmOutcome.note) notes.push(dmOutcome.note);
 
@@ -873,7 +940,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
         .slice(0, config.commentPerRound);
       for (const item of commentTargets) {
         if (fatal) break;
-        const outcome = await deliverComment(record, config, item.candidate.bvid, item.comment);
+        const outcome = await deliverComment(record, config, item.candidate.bvid, item.comment, beforeExternalWrite);
         if (outcome.sent) delivered.comments += 1;
         if (outcome.note) notes.push(outcome.note);
         if (outcome.fatal) fatal = true;
@@ -899,7 +966,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
           notes.push(`《${item.candidate.title.slice(0, 20)}》分数够但理由太短，不收藏。`);
           continue;
         }
-        const outcome = await favVideo(record, item.candidate.bvid);
+        const outcome = await favVideo(record, item.candidate.bvid, beforeExternalWrite);
         if (outcome.note) notes.push(outcome.note);
         if (!outcome.sent) {
           if (outcome.fatal) break;
@@ -939,7 +1006,7 @@ export async function runDutyRound(record: BiliConnectionRecord, binding: { id: 
           if (!text) {
             notes.push(`《${best.candidate.title.slice(0, 20)}》的理由过不了公开闸，今天不发动态。`);
           } else {
-            const outcome = await postDynamic(record, text);
+            const outcome = await postDynamic(record, text, beforeExternalWrite);
             if (outcome.note) notes.push(outcome.note);
             if (outcome.sent) {
               delivered.dynamic = true;
