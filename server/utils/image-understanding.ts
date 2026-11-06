@@ -151,9 +151,40 @@ export async function downloadImage(rawUrl: string): Promise<{ buffer: Buffer; m
   return { buffer: result.buffer, mime: result.mime };
 }
 
+/**
+ * 送进视觉模型之前先把图缩小。
+ *
+ * 为什么要缩：QQ 群里随手一张截图就 2000px 起步，转 base64 之后 2~4MB。智谱这类接口对
+ * 单张图的大小卡得很死，超了直接回 `HTTP 400` —— 而 400 和「模型不存在」「不支持 image_url」
+ * 共用同一个状态码，从日志里根本分不出来（2026-11-06 实测一小半的图都是这么丢的）。
+ *
+ * 规则和表情包缩图一致：**只缩不放**，长短边等比；本来就不大就原样返回（重编码只掉画质）。
+ * 动图取第一帧 —— 看图只需要一个画面，不必为一张动图付几十帧的带宽。
+ * 解码失败返回原图：看不清是一回事，让整条看图链路直接失败是另一回事。
+ */
+export const VISION_MAX_EDGE = 1024;
+
+export async function shrinkForVision(
+  image: { buffer: Buffer; mime: string },
+): Promise<{ buffer: Buffer; mime: string }> {
+  try {
+    const sharp = (await import("sharp")).default;
+    const meta = await sharp(image.buffer).metadata();
+    const edge = Math.max(meta.width ?? 0, meta.height ?? 0);
+    if (!edge || edge <= VISION_MAX_EDGE) return image;
+    const resized = await sharp(image.buffer, { animated: false })
+      .rotate()
+      .resize({ width: VISION_MAX_EDGE, height: VISION_MAX_EDGE, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+    return { buffer: resized, mime: "image/jpeg" };
+  } catch {
+    return image;
+  }
+}
+
 /** 把 `downloadImage` 的机器码翻成人话：这几种的修法完全不同，别糊成一句「下载失败」。 */
-function describeDownloadError(error: unknown): string {
-  const code = error instanceof Error ? error.message : "";
+function describeDownloadError(error: unknown): string {  const code = error instanceof Error ? error.message : "";
   if (code.startsWith("IMAGE_HTTP_")) {
     return `取图返回 HTTP ${code.slice("IMAGE_HTTP_".length)}（多为 rkey 过期，直链只在收到消息那几分钟有效）`;
   }
@@ -219,6 +250,9 @@ async function describeOne(
   } catch (error) {
     return fail(`图片下载失败：${describeDownloadError(error)}`);
   }
+
+  // 缩到 1024 边长再送：原图 base64 常常 2~4MB，视觉接口会直接 400。
+  image = await shrinkForVision(image);
 
   const dataUrl = `data:${image.mime};base64,${image.buffer.toString("base64")}`;
   const body = {

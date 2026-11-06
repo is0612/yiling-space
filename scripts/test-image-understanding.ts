@@ -12,6 +12,8 @@ import {
   assertFetchableImageUrl,
   resolveImageUnderstandingSettings,
   sanitizeDescription,
+  shrinkForVision,
+  VISION_MAX_EDGE,
   MAX_IMAGES_PER_TURN,
 } from "../server/utils/image-understanding";
 import { readOnebotImages } from "../server/utils/channel-adapter/onebot/types";
@@ -322,5 +324,33 @@ assert.equal(
 );
 
 assert.equal(MAX_IMAGES_PER_TURN, 3, "一轮最多看三张，别让一次群聊刷出一堆视觉调用。");
+
+// ── 送进视觉模型前的缩图 ───────────────────────────────
+// 大图 base64 常常 2~4MB，视觉接口直接回 400；缩到 1024 边长能消掉这类失败。
+{
+  const sharp = (await import("sharp")).default;
+
+  const big = await sharp({
+    create: { width: 3000, height: 2000, channels: 3, background: { r: 20, g: 120, b: 200 } },
+  }).png().toBuffer();
+  const shrunk = await shrinkForVision({ buffer: big, mime: "image/png" });
+  const shrunkMeta = await sharp(shrunk.buffer).metadata();
+  assert.ok(
+    Math.max(shrunkMeta.width ?? 0, shrunkMeta.height ?? 0) <= VISION_MAX_EDGE,
+    `大图应该缩到 ${VISION_MAX_EDGE} 以内，实际 ${shrunkMeta.width}x${shrunkMeta.height}`,
+  );
+  assert.equal(shrunk.mime, "image/jpeg", "缩过之后统一转 jpeg，体积最小");
+  assert.ok(shrunk.buffer.length < big.length, "缩完必须比原图小");
+
+  const small = await sharp({
+    create: { width: 640, height: 480, channels: 3, background: { r: 200, g: 60, b: 60 } },
+  }).png().toBuffer();
+  const untouched = await shrinkForVision({ buffer: small, mime: "image/png" });
+  assert.equal(untouched.buffer, small, "本来就不大就原样返回，不做无谓的重编码");
+
+  const broken = Buffer.from("not an image");
+  const fallback = await shrinkForVision({ buffer: broken, mime: "image/png" });
+  assert.equal(fallback.buffer, broken, "解不开的图原样送出去，让服务商自己报错");
+}
 
 console.log("test-image-understanding: ok");
