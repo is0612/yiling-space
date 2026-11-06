@@ -1835,7 +1835,7 @@ paths:
                   detail: { type: string }
                   state: { type: string, enum: [DRAFT, FINAL] }
                   status: { type: string, enum: [ACTIVE, ARCHIVED] }
-                  scope: { type: string, enum: [character, private] }
+                  scope: { type: string, enum: [character, private, external], description: external 表示 EXTERNAL_IDENTITY 范围 }
         '400':
           description: 字段校验失败，或没有需要修改的字段
         '401':
