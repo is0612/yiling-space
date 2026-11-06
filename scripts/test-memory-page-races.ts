@@ -53,6 +53,7 @@ function harness() {
     onMounted: () => {},
     onBeforeUnmount: () => {},
     useCharacterList: () => ({ value: [] }),
+    useMemoryProgress: () => ({ lastFinished: { value: null } }),
     useCharacterSelection: () => ({ id: role }),
     URLSearchParams,
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
