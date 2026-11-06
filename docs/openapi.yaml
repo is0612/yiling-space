@@ -1939,7 +1939,7 @@ paths:
                           type: array
                           description: 这条忆泡的全部证据消息 id（按时间升序）；`sourceMessageId` 只是第一条
                           items: { type: string }
-                        scope: { type: string, enum: [character, private] }
+                        scope: { type: string, enum: [character, private, external], description: external 表示 EXTERNAL_IDENTITY 范围 }
                   messageGroups:
                     type: array
                     description: 当天原文，按会话分组（群聊标题为「QQ群 <群号>」）
