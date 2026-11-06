@@ -25,6 +25,9 @@ type Friend = {
   displayName: string | null;
   status: string;
   linkedUserId: string | null;
+  identityKind: "UNKNOWN" | "HUMAN" | "AI";
+  identityKindSource: "AUTO" | "MANUAL";
+  friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK";
   interactionCount: number;
   lastInteractedAt: string | null;
   knownSince: string;
@@ -235,6 +238,34 @@ function onQueryInput() {
 const editingScopeId = ref("");
 const aliasDraft = ref("");
 const aliasSaving = ref(false);
+const friendSettingsSavingScopeId = ref("");
+
+async function saveFriendSettings(friend: Friend) {
+  if (friendSettingsSavingScopeId.value) return;
+  friendSettingsSavingScopeId.value = friend.scopeId;
+  try {
+    const response = await $fetch<{
+      identityKind: Friend["identityKind"];
+      identityKindSource: Friend["identityKindSource"];
+      friendChatPolicy: Friend["friendChatPolicy"];
+    }>(`/api/admin/identities/${friend.scopeId}`, {
+      method: "PATCH",
+      body: {
+        identityKind: friend.identityKind,
+        friendChatPolicy: friend.friendChatPolicy,
+      },
+    });
+    friends.value = friends.value.map((item) => item.scopeId === friend.scopeId
+      ? { ...item, ...response }
+      : item);
+    ElMessage.success("身份与交流权限已保存。");
+  } catch (error) {
+    ElMessage.error(readErrorMessage(error, "身份与交流权限没保存上。"));
+    await load(page.value);
+  } finally {
+    friendSettingsSavingScopeId.value = "";
+  }
+}
 
 async function startEdit(friend: Friend) {
   editingScopeId.value = friend.scopeId;
@@ -350,7 +381,7 @@ onMounted(() => load(1));
     <PageHeader
       eyebrow="角色 / 人际"
       title="她的朋友"
-      description="她认识的人按角色分开记。私聊发来消息就算认识；群里只记她真的回了谁 —— 没被搭理的发言不会出现在这里。"
+      description="她认识的人按角色分开记。可以纠正对方是真人还是 AI，也可以单独决定她要不要和这个对象交流。"
     >
       <template #actions>
         <button
@@ -585,6 +616,37 @@ onMounted(() => load(1));
                 @click="cancelEdit"
               >
                 取消
+              </button>
+            </div>
+          </div>
+
+          <div class="friend-controls">
+            <div class="friend-control-row">
+              <label :for="`friend-kind-${friend.scopeId}`">身份</label>
+              <select :id="`friend-kind-${friend.scopeId}`" v-model="friend.identityKind" class="friend-control-select">
+                <option value="UNKNOWN">未知</option>
+                <option value="HUMAN">真人</option>
+                <option value="AI">AI 鱼</option>
+              </select>
+              <span v-if="friend.identityKindSource === 'MANUAL'" class="friend-control-note">人工确认</span>
+            </div>
+            <div class="friend-control-row">
+              <label :for="`friend-policy-${friend.scopeId}`">交流</label>
+              <select :id="`friend-policy-${friend.scopeId}`" v-model="friend.friendChatPolicy" class="friend-control-select">
+                <option value="DEFAULT">自动判断（AI 默认不回）</option>
+                <option value="ALLOW">允许交流</option>
+                <option value="BLOCK">禁止交流</option>
+              </select>
+            </div>
+            <div class="friend-control-actions">
+              <span>身份类型对同一平台账号生效；交流权限只对当前角色生效。</span>
+              <button
+                type="button"
+                class="alias-save"
+                :disabled="friendSettingsSavingScopeId === friend.scopeId"
+                @click="saveFriendSettings(friend)"
+              >
+                {{ friendSettingsSavingScopeId === friend.scopeId ? "保存中…" : "保存设置" }}
               </button>
             </div>
           </div>
@@ -834,6 +896,32 @@ onMounted(() => load(1));
 .suggest-ok { background: var(--brand); color: #fff; }
 .suggest-no { background: none; color: var(--dim); }
 .suggest-no:hover { color: var(--text); }
+
+/* 身份与交流权限：身份是平台账号属性，交流政策是当前角色的关系属性。 */
+.friend-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 13px;
+  border-top: 1px solid var(--surface-3);
+  padding-top: 12px;
+}
+.friend-control-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.friend-control-row label { flex: 0 0 38px; color: var(--dim); font-size: 12px; }
+.friend-control-select {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--surface-3);
+  border-radius: 7px;
+  background: var(--surface);
+  padding: 6px 9px;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+}
+.friend-control-note { color: var(--brand-strong); font-size: 11px; }
+.friend-control-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.friend-control-actions > span { min-width: 0; color: var(--dim); font-size: 11px; line-height: 1.5; }
+.friend-control-actions .alias-save { flex: none; }
 
 /* 释义行：label 定宽 56px，值紧跟在后 */
 .fr-kv { display: flex; flex-direction: column; gap: 7px; margin: 14px 0 0; border-top: 1px solid var(--surface-3); padding-top: 12px; }
