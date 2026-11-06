@@ -29,7 +29,7 @@ type DayEvent = {
   state: "DRAFT" | "FINAL";
   status: "ACTIVE" | "ARCHIVED";
   confidence: number | null;
-  scope: "character" | "private";
+  scope: "character" | "private" | "external";
 };
 type DayMessage = { id: string; role: string; content: string; occurredAt: string; author: string | null; member: string | null };
 type DayMessageGroup = { id: string; title: string; total: number; messages: DayMessage[] };
@@ -443,6 +443,10 @@ await loadDays();
                 v-if="event.scope === 'private'"
                 class="event-private"
               >私人</span>
+              <span
+                v-if="event.scope === 'external'"
+                class="event-external"
+              >外部身份</span>
             </div>
             <h3 class="event-title">
               {{ event.title }}
@@ -605,6 +609,7 @@ await loadDays();
 .event-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--faint); }
 .event-draft { padding: 1px 6px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 12px; }
 .event-private { padding: 1px 6px; border-radius: 999px; background: #ede9fe; color: #5b21b6; font-size: 12px; }
+.event-external { padding: 1px 6px; border-radius: 999px; background: #e0f2fe; color: #075985; font-size: 12px; }
 .event-title { font-size: 14px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
 .event-detail { font-size: 13px; color: var(--dim); line-height: 1.8; margin-top: 4px; }
 .event-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--faint); margin-top: 6px; }
