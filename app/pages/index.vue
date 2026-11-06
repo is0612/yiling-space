@@ -341,7 +341,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <!-- 四个时点：归档、周期、花费，全部取这个角色自己的账。
+          <!-- 四个数字：归档、记忆、花费，全部取这个角色自己的账。
+               第二格原来放「本周期消息」，但它跟自动归档开关绑死：归档一关，
+               周期不成立、数字恒为 0，看着像坏了。换成长期记忆条数，永远有值。
                不再放「待处理任务」—— 失败任务在顶部报警条里已经说过一次，
                这里再报一遍属于重复，而且挤掉了一行能放四格的宽度。 -->
           <div class="hero-stats">
@@ -361,11 +363,11 @@ onBeforeUnmount(() => {
               <span class="stat-f">{{ card.character.nextSnapshotAt ? card.character.nextSnapshotLabel : "没有开启自动归档" }}</span>
             </div>
             <div class="stat">
-              <span class="stat-k">本周期消息</span>
+              <span class="stat-k">角色记忆</span>
               <span class="stat-v">
-                {{ card.character.cycleMessageCount }}<small>条</small>
+                {{ card.character.memoryCount }}<small>条</small>
               </span>
-              <span class="stat-f">{{ card.character.cycle ? `第 ${card.character.cycle.dayIndex}/${card.character.cycle.totalDays} 天` : "暂无进行中的周期" }}</span>
+              <span class="stat-f">长期记忆条目</span>
             </div>
             <div class="stat">
               <span class="stat-k">上次归档</span>
@@ -400,7 +402,7 @@ onBeforeUnmount(() => {
               />
             </div>
             <span class="hero-cycle-text">
-              第 {{ card.character.cycle.dayIndex }}/{{ card.character.cycle.totalDays }} 天 · 本周期 {{ card.character.cycleMessageCount }} 条消息
+              第 {{ card.character.cycle.dayIndex }}/{{ card.character.cycle.totalDays }} 天 · 本周期新增 {{ card.character.cycleMemoryCount }} 条记忆
             </span>
           </div>
         </section>

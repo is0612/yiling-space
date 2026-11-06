@@ -31,7 +31,6 @@ export type OverviewCharacter = {
   latestSnapshotVersion: number | null;
   memoryCount: number;
   cycle: OverviewCycle | null;
-  cycleMessageCount: number;
   cycleMemoryCount: number;
   chatModel: string;
   chatApiKeyConfigured: boolean;
@@ -119,7 +118,7 @@ export type OverviewNextSnapshot = {
 };
 
 export type OverviewCycleSummary = {
-  messageCount: number;
+  memoryCount: number;
   dayIndex: number;
   totalDays: number;
   endISOLabel: string;

@@ -199,21 +199,9 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
     taskCountByCharacter.set(characterId, bucket);
   }
 
-  // 每个角色各算一次周期消息数：周期起点取决于该角色自己的 nextSnapshotAt，无法用一次 groupBy 覆盖。
-  const cycleMessageCounts = await Promise.all(
-    characters.map(async (character) => {
-      const cycle = resolveCycle(character.memorySetting, now);
-      if (!cycle) return 0;
-      return prisma.message.count({
-        where: {
-          conversation: { is: { characterId: character.id } },
-          occurredAt: { gte: new Date(cycle.startISO) },
-        },
-      });
-    }),
-  );
-
-  const overviewCharacters: OverviewCharacter[] = characters.map((character, index) => {
+  // 周期进度只统计「本周期新增的记忆」：消息条数与自动归档开关强绑定
+  // （关掉归档就没有周期，count 只能是 0），放在这里既容易误读、又白跑一次分组查询。
+  const overviewCharacters: OverviewCharacter[] = characters.map((character) => {
     const setting = character.memorySetting;
     const timeZone = setting?.timezone || "Asia/Shanghai";
     const cycle = resolveCycle(setting, now);
@@ -248,7 +236,6 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
       latestSnapshotVersion: latestSnapshot?.version ?? null,
       memoryCount: memoryItems.length,
       cycle,
-      cycleMessageCount: cycleMessageCounts[index] ?? 0,
       cycleMemoryCount: cycleMemories,
       chatModel: chatSettings.model,
       chatApiKeyConfigured: chatSettings.apiKeyConfigured,
@@ -264,7 +251,7 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
 
   const pending = overviewCharacters.reduce((total, character) => total + character.pendingTaskCount, 0);
   const failed = overviewCharacters.reduce((total, character) => total + character.failedTaskCount, 0);
-  const cycleMessageTotal = overviewCharacters.reduce((total, character) => total + character.cycleMessageCount, 0);
+  const cycleMemoryTotal = overviewCharacters.reduce((total, character) => total + character.cycleMemoryCount, 0);
 
   const tasks: OverviewPayload["tasks"] = {
     pending,
@@ -427,7 +414,7 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
       : null,
     cycle: nextCharacter?.cycle
       ? {
-          messageCount: cycleMessageTotal,
+          memoryCount: cycleMemoryTotal,
           dayIndex: nextCharacter.cycle.dayIndex,
           totalDays: nextCharacter.cycle.totalDays,
           endISOLabel: nextCharacter.nextSnapshotLabel,

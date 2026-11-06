@@ -3120,7 +3120,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [id, name, avatar, avatarTone, status, channels, intervalDays, pendingIntervalDays, autoSnapshotEnabled, nextSnapshotAt, nextSnapshotLabel, latestSnapshotAt, latestSnapshotLabel, latestSnapshotVersion, memoryCount, cycle, cycleMessageCount, cycleMemoryCount, chatModel, chatApiKeyConfigured, failedTaskCount, pendingTaskCount]
+                      required: [id, name, avatar, avatarTone, status, channels, intervalDays, pendingIntervalDays, autoSnapshotEnabled, nextSnapshotAt, nextSnapshotLabel, latestSnapshotAt, latestSnapshotLabel, latestSnapshotVersion, memoryCount, cycle, cycleMemoryCount, chatModel, chatApiKeyConfigured, failedTaskCount, pendingTaskCount]
                       properties:
                         id: { type: string, format: uuid }
                         name: { type: string }
@@ -3147,7 +3147,6 @@ paths:
                             dayIndex: { type: integer, minimum: 1 }
                             totalDays: { type: integer, minimum: 1 }
                             missed: { type: boolean, description: 已过 nextSnapshotAt 但快照未生成 }
-                        cycleMessageCount: { type: integer, minimum: 0, description: 本周期内的原始消息条数 }
                         cycleMemoryCount: { type: integer, minimum: 0, description: 本周期内新增的活跃记忆条数 }
                         chatModel: { type: string }
                         chatApiKeyConfigured: { type: boolean, description: false 时该角色的快照任务会留在队列中不执行 }
@@ -3219,9 +3218,9 @@ paths:
                     nullable: true
                     type: object
                     description: 以 nextSnapshot 对应角色为准；没有进行中的周期时为 null
-                    required: [messageCount, dayIndex, totalDays, endISOLabel]
+                    required: [memoryCount, dayIndex, totalDays, endISOLabel]
                     properties:
-                      messageCount: { type: integer, minimum: 0, description: 全部角色本周期消息之和 }
+                      memoryCount: { type: integer, minimum: 0, description: 全部角色本周期新增记忆之和 }
                       dayIndex: { type: integer, minimum: 1 }
                       totalDays: { type: integer, minimum: 1 }
                       endISOLabel: { type: string }
