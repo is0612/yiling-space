@@ -54,19 +54,17 @@ export default defineEventHandler(async (event) => {
       memoryScope: { is: { characterId } },
       dayKey: { in: dayKeys },
     };
-    const [progressRows, draftRows] = dayKeys.length
-      ? await Promise.all([
-        prisma.memoryEventDay.groupBy({
-          by: ["dayKey"],
-          where: progressWhere,
-          _max: { extractedAt: true },
-        }),
-        prisma.memoryEventDay.findMany({
-          where: { ...progressWhere, state: "DRAFT" },
-          select: { dayKey: true },
-        }),
-      ])
-      : [[], []];
+    const [progressRows, draftRows] = await Promise.all([
+      prisma.memoryEventDay.groupBy({
+        by: ["dayKey"],
+        where: progressWhere,
+        _max: { extractedAt: true },
+      }),
+      prisma.memoryEventDay.findMany({
+        where: { ...progressWhere, state: "DRAFT" },
+        select: { dayKey: true },
+      }),
+    ]);
     const progressByDay = new Map(progressRows.map((row) => [row.dayKey, row._max.extractedAt]));
     const draftDays = new Set(draftRows.map((row) => row.dayKey));
     const rows = dayKeys.map((dayKey) => ({
