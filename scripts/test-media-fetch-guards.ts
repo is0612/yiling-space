@@ -369,6 +369,29 @@ await check("语音：无 Content-Length 的 10MB 响应必须提前中止", asy
   });
 });
 
+await check("语音：Content-Length 谎报偏小（1KB）时仍按实际字节数中止", async () => {
+  const body = chunkedBody(10 * 1024 * 1024);
+  await withTransport({
+    [PUBLIC_A]: { status: 200, headers: { "content-length": "1024" }, body },
+  }, async () => {
+    await assertThrowsCode(() => downloadVoice(PUBLIC_A), "VOICE_TOO_LARGE");
+    expect(
+      body.bytesPulled() <= VOICE_LIMIT + 64 * 1024,
+      `语音 Content-Length 谎报后仍拉取了 ${body.bytesPulled()} 字节`,
+    );
+  });
+});
+
+await check("语音：Content-Length 诚实偏大时零字节读取", async () => {
+  const body = chunkedBody(10 * 1024 * 1024);
+  await withTransport({
+    [PUBLIC_A]: { status: 200, headers: { "content-length": String(10 * 1024 * 1024) }, body },
+  }, async () => {
+    await assertThrowsCode(() => downloadVoice(PUBLIC_A), "VOICE_TOO_LARGE");
+    expect(body.bytesPulled() === 0, `声明超过 6MB 时不该读取 body，实际拉取 ${body.bytesPulled()} 字节`);
+  });
+});
+
 await check("语音：正常 2MB 响应照常返回", async () => {
   await withTransport({ [PUBLIC_A]: { status: 200, headers: {}, body: chunkedBody(2 * 1024 * 1024) } }, async () => {
     const buffer = await downloadVoice(PUBLIC_A);
