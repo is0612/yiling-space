@@ -322,10 +322,8 @@ export function applyImageDescriptions(content: string, descriptions: Array<stri
     if (index < 0) break;
 
     const value = description?.trim();
-    const replacement = value ? `[图片：${value}]` : "[图片]";
-    if (value) {
-      text = text.slice(0, index) + replacement + text.slice(index + "[图片]".length);
-    }
+    const replacement = value ? `[图片：${value}]` : "[图片：无法读取]";
+    text = text.slice(0, index) + replacement + text.slice(index + "[图片]".length);
     cursor = index + replacement.length;
   }
   return text;
