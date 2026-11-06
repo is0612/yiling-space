@@ -898,6 +898,72 @@ try {
     record.bindings[0]!.groupChat = { ...ambientSettings };
   }
 
+  // ── mention 档主人普通发言：验证真实 Prisma 落库，而不只是 buffered ──
+  {
+    const ownerMentionConfig = {
+      groupChatMode: "mention",
+      batchWindowSeconds: 3,
+      mentionWindowSeconds: 1,
+      minGapSeconds: 0,
+      dailyMax: 0,
+      quietStart: "00:00",
+      quietEnd: "00:00",
+      ambientChance: 1,
+    };
+    await prisma.characterChannelBinding.update({
+      where: { id: bindingId },
+      data: { config: ownerMentionConfig },
+    });
+    record.bindings[0]!.groupChat = {
+      ...ambientSettings,
+      mode: "mention",
+      batchWindowSeconds: 3,
+      mentionWindowSeconds: 1,
+      dailyMax: 0,
+      quietStart: "00:00",
+      quietEnd: "00:00",
+    };
+    record.ownerQq = "222";
+
+    const before = await userCount(1017);
+    const ownerMessageId = "121";
+    const ownerContent = "mention 档主人普通消息落库验证";
+    await emitToGroup(1017, Number(ownerMessageId), ownerContent, 222, false);
+    // 主人普通消息先进入攒批，等待真实 flush 完成；flush 会在 mention 闸门拒绝回复后写 context。
+    await sleep(4500);
+
+    assert.equal(await assistantCount(1017), 0, "mention 档下主人普通发言只保存上下文，不能触发 AI 回复。");
+    assert.equal(await userCount(1017), before + 1, "主人普通发言必须在攒批 flush 后真实写入数据库。");
+    assert.equal((await groupSends(1017)).length, 0, "主人普通发言不能因为进入攒批而发送群回复。");
+
+    const ownerRow = await prisma.message.findFirst({
+      where: {
+        externalMessageId: ownerMessageId,
+        conversation: { is: { channelBindingId: bindingId, externalConversationId: "g:1017" } },
+      },
+      select: { role: true, content: true, metadata: true },
+    });
+    assert(ownerRow, "必须能按 OneBot 原始 message id 查到主人消息记录。");
+    assert.equal(ownerRow.role, "USER");
+    assert.equal(ownerRow.content, ownerContent, "落库正文必须保留原文。");
+    const ownerMetadata = ownerRow.metadata as Record<string, unknown> | null;
+    assert.equal(ownerMetadata?.storedReason, "context", "mention 档主人普通消息必须按 context 保存，不是 mentioned。");
+    assert.equal(ownerMetadata?.isOwner, true, "落库 metadata 必须保留主人身份。");
+
+    // 同一 mention 档下，普通群友的无 @ 发言仍应在入口处被挡住，不得混进主人上下文。
+    await emitToGroup(1017, 122, "普通群友的消息不能写入", 555, false);
+    await sleep(1200);
+    assert.equal(await userCount(1017), before + 1, "普通群友普通消息不能被错误写入这个群会话。");
+    assert.equal(await assistantCount(1017), 0, "普通群友普通消息仍不能触发 AI 回复。");
+    assert.equal((await groupSends(1017)).length, 0, "普通群友普通消息仍不能触发群回复。");
+
+    await prisma.characterChannelBinding.update({
+      where: { id: bindingId },
+      data: { config: { ...ambientSettings } },
+    });
+    record.bindings[0]!.groupChat = { ...ambientSettings };
+  }
+
   closeGateway();
 
   console.log("OneBot 渠道端到端测试通过：WS token 鉴权与单次握手、事件接入、CQ 码解析、凭据解密、角色绑定路由、记忆检索、模型回复、表情段发送与表情额度、消息持久化、外部身份 upsert、回发平台与幂等去重、群公告草稿与确认发布、普通成员越权拦截、按群滚动 10 分钟回复上限、群聊统一攒批（mention 档只在被叫到时进管道）、自然接话闸门、按群覆盖群聊模式、引用与 @ 的分工（回上一条不加、接旧句才引用、点名才 @）、别人 @ 别人时不抢话（@all 例外）、围栏 JSON 照常回、戳一戳能叫醒她（戳别人不算）、B站 指令主人专属、临时会话的回复带上来源群号。");
