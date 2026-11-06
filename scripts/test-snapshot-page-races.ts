@@ -36,6 +36,7 @@ function harness() {
     watch: (sources: Ref | Ref[], callback: () => void) => watchers.push({ sources: Array.isArray(sources) ? sources : [sources], callback }),
     onMounted: () => {}, useCharacterList: () => ({ value: [] }), useCharacterSelection: () => ({ id: role }),
     useMemoryProgress: () => ({ lastFinished: { value: null } }),
+    refreshMemoryProgress: async () => [],
     ElMessage: { error: notify, success: notify, warning: notify, info: notify },
     ElMessageBox: { confirm: () => new Promise((resolve, reject) => confirmations.push({ resolve, reject })) },
     $fetch: (url: string, options?: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
