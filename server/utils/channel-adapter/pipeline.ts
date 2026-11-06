@@ -633,7 +633,7 @@ async function attachImageDescriptions(
   if (!settings) return messages;
 
   let remaining = MAX_IMAGES_PER_TURN;
-  const descriptionsByMessage = new Map<string, Array<string | null>>();
+  const descriptionsByMessage = new Map<string, Array<string | null | undefined>>();
   for (const message of messages) {
     if (remaining <= 0) break;
     const refs = message.images ?? [];
@@ -660,7 +660,11 @@ async function attachImageDescriptions(
       batchDescriptions = batch.map(() => null);
     }
 
-    const aligned = alignMediaResults(refs.length, targetIndexes, batchDescriptions);
+    const aligned = alignMediaResults(refs.length, targetIndexes, batchDescriptions, undefined);
+    // 没有直链的图片是明确的读取失败；有直链但本轮额度未覆盖的图片保持原占位符。
+    refs.forEach((image, index) => {
+      if (!image.url) aligned[index] = null;
+    });
     descriptionsByMessage.set(message.externalMessageId, aligned);
   }
   if (!descriptionsByMessage.size) return messages;
@@ -717,7 +721,7 @@ async function attachVoiceTranscripts(
   if (!settings) return messages;
 
   let remaining = MAX_VOICES_PER_TURN;
-  const transcriptsByMessage = new Map<string, Array<string | null>>();
+  const transcriptsByMessage = new Map<string, Array<string | null | undefined>>();
   for (const message of messages) {
     const voices = message.voices ?? [];
     if (!voices.length) continue;
@@ -745,7 +749,11 @@ async function attachVoiceTranscripts(
       batchTranscripts = batch.map(() => null);
     }
 
-    const aligned = alignMediaResults(voices.length, selectedIndexes, batchTranscripts);
+    const aligned = alignMediaResults(voices.length, selectedIndexes, batchTranscripts, undefined);
+    // 没有直链的语音明确标记为无法转写；超出每轮 ASR 上限的语音保留原占位符。
+    voices.forEach((voice, index) => {
+      if (!voice.url) aligned[index] = null;
+    });
     transcriptsByMessage.set(message.externalMessageId, aligned);
   }
   if (!transcriptsByMessage.size) return messages;
