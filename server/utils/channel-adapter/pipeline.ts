@@ -645,7 +645,14 @@ async function attachImageDescriptions(
     for (let index = 0; index < refs.length && targetIndexes.length < remaining; index += 1) {
       if (refs[index]?.url) targetIndexes.push(index);
     }
-    if (!targetIndexes.length) continue;
+    if (!targetIndexes.length) {
+      // 这一条消息里的图片都没有可下载直链：不发起模型请求，但逐个标成无法读取。
+      descriptionsByMessage.set(
+        message.externalMessageId,
+        refs.map(() => null),
+      );
+      continue;
+    }
 
     const batch = targetIndexes.map((index) => refs[index]!);
     remaining -= batch.length;
