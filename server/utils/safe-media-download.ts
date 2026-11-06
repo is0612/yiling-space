@@ -124,12 +124,13 @@ function isPrivateIpv6(address: string): boolean {
 
   // 只放行 2000::/3 全球单播，再排除文档网段、协议特殊用途和 6to4。
   if (!inIpv6Cidr(value, "2000::", 3)) return true;
-  return [
+  const blocked: Array<[string, number]> = [
     ["2001::", 23],
     ["2001:db8::", 32],
     ["2002::", 16],
     ["3fff::", 20],
-  ].some(([network, prefix]) => inIpv6Cidr(value, network, prefix));
+  ];
+  return blocked.some(([network, prefix]) => inIpv6Cidr(value, network, prefix));
 }
 
 function isPublicAddress(address: string, family: number): boolean {
@@ -320,6 +321,7 @@ export async function downloadSafeMedia(
         try {
           next = validateMediaUrl(new URL(location, currentUrl).toString(), prefix);
         } catch (error) {
+          if (isExpectedDownloadError(error, prefix)) throw error;
           if (error instanceof Error && error.message === "IMAGE_BLOCKED_HOST") {
             throw new Error(`${prefix}_BLOCKED_HOST`);
           }
