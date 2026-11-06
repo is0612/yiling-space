@@ -152,7 +152,7 @@ async function staleRoleDays() {
   assert.equal(page.read("timeZone"), "America/Los_Angeles");
   page.take("/api/characters/role-b/days/2026-11-05").resolve(detailResult("2026-11-05", "America/Los_Angeles"));
   await flushMicrotasks();
-  assert.equal(page.read("detail").day.dayKey, "2026-11-05");
+  assert.equal(page.read<{ day: { dayKey: string } }>("detail").day.dayKey, "2026-11-05");
   assert.equal(page.read("loading"), false);
   page.finish();
 }
