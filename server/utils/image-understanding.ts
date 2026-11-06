@@ -22,7 +22,10 @@ import { resolveCharacterVisionApiKey } from "./credential-encryption";
 import { readModelUsage, recordModelUsage } from "./model-usage";
 import { downloadSafeMedia } from "./safe-media-download";
 
-export { assertFetchableImageUrl, assertPublicHost } from "./safe-media-download";
+export {
+  assertFetchableMediaUrl as assertFetchableImageUrl,
+  assertPublicMediaHost as assertPublicHost,
+} from "./safe-media-download";
 
 /** 一轮最多看几张。图片描述按张计费，群里一轮三张已经够说明问题了。 */
 export const MAX_IMAGES_PER_TURN = 3;
@@ -156,6 +159,9 @@ function describeDownloadError(error: unknown): string {
   }
   if (code === "IMAGE_TOO_LARGE") return "图片超过 4MB 上限";
   if (code === "IMAGE_BLOCKED_HOST") return "直链指向内网/回环地址，被白名单拦了";
+  if (code === "IMAGE_REDIRECT_LIMIT") return "图片下载重定向次数过多，已停止下载";
+  if (code === "IMAGE_EMPTY") return "图片响应为空";
+  if (code === "IMAGE_INVALID_URL" || code === "IMAGE_INVALID_PROTOCOL") return "图片直链无效或协议不受支持";
   if (code === "IMAGE_NOT_IMAGE") return "返回的不是图片（多半是防盗链跳到了 HTML）";
   return "下载超时或连不上";
 }
