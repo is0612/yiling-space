@@ -349,6 +349,16 @@ export async function listAcquaintances(input: {
     scopeType: "EXTERNAL_IDENTITY",
     externalIdentityId: { not: null },
     interactionCount: { gt: 0 },
+    // 管理页仍显示被屏蔽对象供用户调整；对话提示词里的熟人名单不再包含他们。
+    AND: [
+      { friendChatPolicy: { not: "BLOCK" } },
+      {
+        OR: [
+          { friendChatPolicy: "ALLOW" },
+          { externalIdentity: { is: { kind: { not: "AI" } } } },
+        ],
+      },
+    ],
   };
 
   const [privateRows, groupRows, tally, roomRows] = await Promise.all([
