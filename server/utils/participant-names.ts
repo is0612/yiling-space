@@ -163,7 +163,8 @@ export async function resolveParticipantAccounts(
 
   const [exactDisplayNames, byAlias] = await Promise.all([
     prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
-      SELECT DISTINCT metadata->>'authorOpenId' AS uid
+      -- metadata 必须带表别名：conversations 也有同名列，裸写会抛 42702，整轮回复直接失败。
+      SELECT DISTINCT m.metadata->>'authorOpenId' AS uid
       FROM messages m
       JOIN conversations c ON c.id = m."conversationId"
       JOIN memory_scopes s ON s.id = c."memoryScopeId"
@@ -196,7 +197,8 @@ export async function resolveParticipantAccounts(
   if (wanted.length < 2) return [];
   const escaped = wanted.replace(/[\\%_]/gu, (char) => `\\${char}`);
   const fuzzyDisplayNames = await prisma.$queryRaw<Array<{ uid: string }>>(Prisma.sql`
-    SELECT DISTINCT metadata->>'authorOpenId' AS uid
+    -- 同上：这三张表里 messages 和 conversations 都有 metadata 列，不限定就是 42702。
+    SELECT DISTINCT m.metadata->>'authorOpenId' AS uid
     FROM messages m
     JOIN conversations c ON c.id = m."conversationId"
     JOIN memory_scopes s ON s.id = c."memoryScopeId"
