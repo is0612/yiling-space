@@ -6,7 +6,7 @@ import { PrismaClient } from "../src/generated/prisma/client";
 import { resolveDailyEventWindow, resolveDayWindow } from "../server/utils/memory-event-time";
 import { enqueueDueMemorySnapshots } from "../server/utils/memory-scheduler";
 import { processNextMemoryJob } from "../server/utils/memory-worker";
-import { generateJournalForDay, saveJournalEdit } from "../server/utils/journal-service";
+import { generateJournalForDay, restoreJournalRevision, saveJournalEdit } from "../server/utils/journal-service";
 import type { DiaryAiEntry, HandbookAiEntry, JournalAiResult } from "../server/utils/journal-ai";
 
 /**
@@ -590,6 +590,68 @@ async function main() {
       assert.equal(revisions.length, 2, "AI 不应在人工编辑后再落一版");
       assert.equal(revisions[0]?.revisionType, "USER_EDITED");
       assert.equal(revisions[0]?.content, "人工在 AI 生成期间保存的第二版，这一版必须是最新。");
+    }
+
+    // 2.5 regenerate 期间用户恢复旧版：RESTORED 也属于人工决定，AI 不能盖到它后面。
+    {
+      const scaffold = await buildScaffold("restore-vs-regenerate");
+      await prisma.characterJournal.create({
+        data: { memoryScopeId: scaffold.scopeId, dayKey, status: "ACTIVE" },
+      });
+      const first = await saveJournalEdit({
+        characterId: scaffold.characterId,
+        dayKey,
+        kind: "DIARY",
+        content: "人工保存的第一版日记，作为稍后恢复的来源。",
+        actorUserId: flowOwnerId,
+      }, prisma);
+      assert.equal(first.ok, true);
+
+      const gate = deferred();
+      let entered = false;
+      const fakeDiary = async () => {
+        entered = true;
+        await gate.promise;
+        return result({
+          action: "CREATE",
+          content: diaryContent,
+          sourceMessageIds: [scaffold.messageId],
+          sourceEventIds: [],
+        });
+      };
+      const regenerated = generateJournalForDay(
+        { characterId: scaffold.characterId, dayKey, mode: "regenerate", target: "DIARY" },
+        prisma,
+        { generateDiary: fakeDiary },
+      );
+      for (let index = 0; index < 100 && !entered; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(entered, true, "AI 重写应已进入模型调用");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const restored = await restoreJournalRevision({
+        characterId: scaffold.characterId,
+        dayKey,
+        kind: "DIARY",
+        version: 1,
+        actorUserId: flowOwnerId,
+      }, prisma);
+      assert.equal(restored.ok, true, "模型生成期间应能恢复旧版");
+      if (!restored.ok) throw new Error(restored.message);
+
+      gate.resolve();
+      const outcome = await regenerated;
+      assert.equal(outcome.status, "existing", "生成期间被人工恢复时，不能返回 created");
+      assert.match(outcome.reason ?? "", /手动改过/, "API 要说明保留了人工恢复版本");
+      const revisions = await prisma.journalRevision.findMany({
+        where: { journal: { is: { memoryScopeId: scaffold.scopeId, dayKey } }, kind: "DIARY" },
+        orderBy: { version: "desc" },
+        select: { version: true, revisionType: true, content: true },
+      });
+      assert.equal(revisions.length, 2, "AI 不应在 RESTORED 版本后再落一版");
+      assert.equal(revisions[0]?.revisionType, "RESTORED");
+      assert.equal(revisions[0]?.content, "人工保存的第一版日记，作为稍后恢复的来源。");
     }
 
     // 3. DIARY 已存在、HANDBOOK 返回 SKIP：不能把整天当成完成；新聊天后允许重评。
