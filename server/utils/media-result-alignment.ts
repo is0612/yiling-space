@@ -8,11 +8,13 @@ export function alignMediaResults<T>(
   sourceLength: number,
   targetIndexes: readonly number[],
   results: readonly (T | null | undefined)[],
-  unselectedValue: T | null | undefined = null,
+  unselectedValue?: T | null,
 ): Array<T | null | undefined> {
+  // 未传第四参时默认 null；显式传 undefined 则保留为「本轮未处理」。
+  const fillValue = arguments.length >= 4 ? unselectedValue : null;
   const aligned = Array.from(
     { length: Math.max(0, Math.trunc(sourceLength)) },
-    () => unselectedValue,
+    () => fillValue,
   );
 
   for (let resultIndex = 0; resultIndex < targetIndexes.length; resultIndex += 1) {
