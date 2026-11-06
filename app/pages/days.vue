@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character } from "~/utils/mock-data";
+import { formatDayClock } from "~/utils/day-time";
 
 /**
  * 忆泡日历：一天一行，点开看那天发生了什么。
@@ -40,6 +41,7 @@ const currentCharacter = computed<Character | null>(
 
 const days = ref<DayRow[]>([]);
 const today = ref("");
+const timeZone = ref("Asia/Shanghai");
 /** 按忆泡标题/详情搜索日期；空 = 普通列表。 */
 const searchQuery = ref("");
 const searchActive = computed(() => searchQuery.value.trim().length > 0);
@@ -50,6 +52,9 @@ const detail = ref<{
   events: DayEvent[];
   messageGroups: DayMessageGroup[];
   usage: { calls: number; tokens: number };
+  timeZone: string;
+  eventsTotal: number;
+  eventsTruncated: boolean;
 } | null>(null);
 /** 原文总数：按会话分组后要自己加总。用当天真实条数，不是「载进来的条数」。 */
 const totalMessages = computed(() => (detail.value?.messageGroups ?? []).reduce((sum, group) => sum + (group.total ?? group.messages.length), 0));
@@ -79,6 +84,11 @@ function originalCountLabel(group: DayMessageGroup) {
 }
 const detailLoading = ref(false);
 const showMessages = ref(false);
+
+// 每次新请求都会推进序号；角色、日期或搜索条件变化时，旧响应只能被丢弃。
+let daysRequestSeq = 0;
+let detailRequestSeq = 0;
+let editSaveSeq = 0;
 
 /** 隐藏的忆泡单独收起来：默认不占视线，但随时能恢复。 */
 const activeEvents = computed(() => (detail.value?.events ?? []).filter((item) => item.status !== "ARCHIVED"));
@@ -176,78 +186,129 @@ function formatTokens(tokens: number) {
   if (!tokens) return "0";
   return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
 }
-function clockOf(iso: string | null) {  if (!iso) return "";
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "";
-  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+function clockOf(iso: string | null) {
+  return formatDayClock(iso, timeZone.value);
 }
 function timeOf(event: DayEvent) {
-  const at = new Date(event.occurredAt);
-  const clock = Number.isNaN(at.getTime())
-    ? ""
-    : `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  const clock = formatDayClock(event.occurredAt, timeZone.value);
   return [clock, event.timeOfDay].filter(Boolean).join(" · ");
 }
 
-async function loadDays() {
-  if (!id.value) return;
+async function loadDays(targetCharacterId = id.value) {
+  const seq = ++daysRequestSeq;
+  const keyword = searchQuery.value.trim();
+  if (!targetCharacterId || targetCharacterId !== id.value) return;
   loading.value = true;
   try {
-    const keyword = searchQuery.value.trim();
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/days${keyword ? `?q=${encodeURIComponent(keyword)}` : ""}`;
-    const result = await $fetch<{ today: string; days: DayRow[] }>(url);
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/days${keyword ? `?q=${encodeURIComponent(keyword)}` : ""}`;
+    const result = await $fetch<{ today: string; timeZone: string; days: DayRow[] }>(url);
+    if (seq !== daysRequestSeq || targetCharacterId !== id.value || keyword !== searchQuery.value.trim()) return;
+
     days.value = result.days;
     today.value = result.today;
-    if (!result.days.some((day) => day.dayKey === selected.value)) {
-      selected.value = result.days[0]?.dayKey ?? "";
+    timeZone.value = result.timeZone || "Asia/Shanghai";
+
+    const nextSelected = result.days.some((day) => day.dayKey === selected.value)
+      ? selected.value
+      : result.days[0]?.dayKey ?? "";
+    if (nextSelected !== selected.value) {
+      selected.value = nextSelected;
+      // selected watcher owns loading the newly selected day's detail.
+    } else if (nextSelected) {
+      // The selection did not change, so its watcher will not run.
+      void loadDetail(nextSelected, targetCharacterId);
+    } else {
+      detailRequestSeq += 1;
+      detail.value = null;
+      detailLoading.value = false;
     }
-    if (selected.value) await loadDetail(selected.value);
-    else detail.value = null;
   } catch {
+    if (seq !== daysRequestSeq || targetCharacterId !== id.value || keyword !== searchQuery.value.trim()) return;
     days.value = [];
     detail.value = null;
     ElMessage.error("忆泡日历读取失败，请检查本地开发服务器日志。");
   } finally {
-    loading.value = false;
+    if (seq === daysRequestSeq) loading.value = false;
   }
 }
 
-async function loadDetail(dayKey: string) {
-  if (!id.value || !dayKey) return;
+async function loadDetail(dayKey: string, targetCharacterId = id.value) {
+  const seq = ++detailRequestSeq;
+  if (!targetCharacterId || targetCharacterId !== id.value || !dayKey) return;
   detailLoading.value = true;
   try {
     // URL 先落成 string 再传：模板字面量的字面类型会让 Nuxt 的路由类型推导爆栈（TS2321）。
-    const url: string = `/api/characters/${encodeURIComponent(id.value)}/days/${encodeURIComponent(dayKey)}`;
-    detail.value = await $fetch<{
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/days/${encodeURIComponent(dayKey)}`;
+    const result = await $fetch<{
       day: DayRow | null;
       events: DayEvent[];
       messageGroups: DayMessageGroup[];
       usage: { calls: number; tokens: number };
+      timeZone: string;
+      eventsTotal: number;
+      eventsTruncated: boolean;
     }>(url);
+    if (seq !== detailRequestSeq || targetCharacterId !== id.value || dayKey !== selected.value) return;
+    detail.value = result;
+    timeZone.value = result.timeZone || timeZone.value || "Asia/Shanghai";
     showMessages.value = false;
   } catch {
+    if (seq !== detailRequestSeq || targetCharacterId !== id.value || dayKey !== selected.value) return;
     detail.value = null;
     ElMessage.error("这一天的忆泡读取失败。");
   } finally {
-    detailLoading.value = false;
+    if (seq === detailRequestSeq) detailLoading.value = false;
   }
 }
 
 watch(id, () => {
+  // 角色切换时作废旧角色的所有在途请求，并清空不属于新角色的页面状态。
+  daysRequestSeq += 1;
+  detailRequestSeq += 1;
+  editSaveSeq += 1;
   selected.value = "";
-  void loadDays();
+  days.value = [];
+  today.value = "";
+  timeZone.value = "Asia/Shanghai";
+  detail.value = null;
+  loading.value = false;
+  detailLoading.value = false;
+  editOpen.value = false;
+  editing.value = null;
+  editSaving.value = false;
+  form.value = { title: "", detail: "", place: "", participants: "" };
+  if (searchTimer) clearTimeout(searchTimer);
+  void loadDays(id.value);
 });
 watch(selected, (dayKey) => {
-  if (dayKey) void loadDetail(dayKey);
+  if (dayKey) void loadDetail(dayKey, id.value);
+  else {
+    detailRequestSeq += 1;
+    detail.value = null;
+    detailLoading.value = false;
+  }
 });
-// 搜索：300ms 防抖，避免每敲一个字就打一次接口。
+// 搜索：300ms 防抖。输入变化的当下就让旧请求失效，而不是等下一个请求发出。
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 watch(searchQuery, () => {
   if (searchTimer) clearTimeout(searchTimer);
+  daysRequestSeq += 1;
+  detailRequestSeq += 1;
+  days.value = [];
+  selected.value = "";
+  detail.value = null;
+  detailLoading.value = false;
+  loading.value = true;
   searchTimer = setTimeout(() => {
-    selected.value = "";
-    void loadDays();
+    searchTimer = null;
+    void loadDays(id.value);
   }, 300);
+});
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
+  daysRequestSeq += 1;
+  detailRequestSeq += 1;
+  editSaveSeq += 1;
 });
 
 await loadDays();
@@ -335,7 +396,7 @@ await loadDays();
           <header class="day-detail-head">
             <h2>{{ dayLabel(detail.day?.dayKey ?? selected) }}</h2>
             <span class="muted-note">
-              {{ detail.events.length }} 条忆泡
+              {{ detail.eventsTotal }} 条忆泡
               <template v-if="detail.day?.extractedAt"> · 上次整理 {{ clockOf(detail.day.extractedAt) }}</template>
               <template v-if="detail.usage.calls">
                 · 整理 {{ detail.usage.calls }} 次 · {{ formatTokens(detail.usage.tokens) }} tokens
@@ -343,6 +404,12 @@ await loadDays();
             </span>
           </header>
 
+          <div
+            v-if="detail.eventsTruncated"
+            class="muted-note day-empty"
+          >
+            当天共有 {{ detail.eventsTotal }} 条忆泡，当前仅展示最早的 {{ detail.events.length }} 条。
+          </div>
           <div
             v-if="!activeEvents.length"
             class="muted-note day-empty"
