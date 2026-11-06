@@ -18,7 +18,7 @@ import "dotenv/config";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
-import { recordFriendInteraction } from "../server/utils/friends";
+import { ensureGroupMemberIdentity, recordFriendInteraction } from "../server/utils/friends";
 
 const prisma = getPrisma();
 const suffix = randomUUID();
@@ -26,6 +26,7 @@ const userId = randomUUID();
 const characterId = randomUUID();
 const otherCharacterId = randomUUID();
 const platformUid = `friend-relation-${suffix}`;
+const seenOnlyUid = `friend-seen-only-${suffix}`;
 const PLATFORM = "test-platform";
 const MINUTE = 60 * 1000;
 
@@ -59,6 +60,40 @@ try {
       { id: otherCharacterId, ownerId: userId, name: "朋友关系隔离回归", basePrompt: "integration test" },
     ],
   });
+
+  // 群里遇到过但还没回复的人也要可管理，建立关系不能冒充一次互动。
+  const seenOnly = await ensureGroupMemberIdentity({
+    characterId,
+    platform: PLATFORM,
+    platformUid: seenOnlyUid,
+    displayName: "还没互动的 AI 鱼",
+  });
+  assert.deepEqual(seenOnly, { kind: "UNKNOWN", friendChatPolicy: "DEFAULT" });
+  const seenOnlyScope = await prisma.memoryScope.findUnique({
+    where: { scopeKey: `character:${characterId}:external:${PLATFORM}:${seenOnlyUid}` },
+    select: { interactionCount: true, firstSource: true, friendChatPolicy: true },
+  });
+  assert.deepEqual(seenOnlyScope, {
+    interactionCount: 0,
+    firstSource: "GROUP",
+    friendChatPolicy: "DEFAULT",
+  }, "只在群里出现过的人不增加互动次数，但需要出现在身份管理名单。");
+
+  await prisma.externalIdentity.update({
+    where: { platform_platformUid: { platform: PLATFORM, platformUid: seenOnlyUid } },
+    data: { kind: "AI", kindSource: "MANUAL" },
+  });
+  await prisma.memoryScope.updateMany({
+    where: { characterId, externalIdentity: { platform, platformUid: seenOnlyUid } },
+    data: { friendChatPolicy: "BLOCK" },
+  });
+  const seenAgain = await ensureGroupMemberIdentity({
+    characterId,
+    platform: PLATFORM,
+    platformUid: seenOnlyUid,
+    displayName: "改过群名的 AI 鱼",
+  });
+  assert.deepEqual(seenAgain, { kind: "AI", friendChatPolicy: "BLOCK" }, "后续遇到不会覆盖手动身份和交流权限。");
 
   const mid = new Date(Date.now() - 3 * MINUTE * 60);
 
@@ -141,7 +176,7 @@ try {
   console.log("通过：互动次数与时间、防乱序、异常日期兜底，以及平台身份全局共享、交流策略按角色隔离。");
 } finally {
   await prisma.memoryScope.deleteMany({ where: { characterId: { in: [characterId, otherCharacterId] } } });
-  await prisma.externalIdentity.deleteMany({ where: { platform: PLATFORM, platformUid } });
+  await prisma.externalIdentity.deleteMany({ where: { platform: PLATFORM, platformUid: { in: [platformUid, seenOnlyUid] } } });
   await prisma.character.deleteMany({ where: { id: { in: [characterId, otherCharacterId] } } });
   await prisma.user.deleteMany({ where: { id: userId } });
   await prisma.$disconnect();
