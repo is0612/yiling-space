@@ -48,10 +48,12 @@ export default defineEventHandler(async (event) => {
     }
     : null;
 
-  const events = await prisma.memoryEvent.findMany({
-    where: { dayKey, memoryScope: { is: { characterId } } },
-    orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-    take: 100,
+  const eventWhere = { dayKey, memoryScope: { is: { characterId } } };
+  const [events, eventsTotal] = await Promise.all([
+    prisma.memoryEvent.findMany({
+      where: eventWhere,
+      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      take: 100,
     select: {
       id: true,
       occurredAt: true,
@@ -65,8 +67,10 @@ export default defineEventHandler(async (event) => {
       confidence: true,
       sourceMessageIds: true,
       memoryScope: { select: { scopeType: true } },
-    },
-  });
+      },
+    }),
+    prisma.memoryEvent.count({ where: eventWhere }),
+  ]);
 
   const window = resolveDayWindow(dayKey, timeZone);
   /**
@@ -149,6 +153,9 @@ export default defineEventHandler(async (event) => {
   });
 
   return {
+    timeZone,
+    eventsTotal,
+    eventsTruncated: eventsTotal > events.length,
     day: day
       ? { ...day, extractedAt: day.extractedAt?.toISOString() ?? null }
       : { dayKey, state: null, eventCount: 0, extractedAt: null },
