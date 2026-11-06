@@ -20,6 +20,13 @@ const mapped = mapSchemaToGroups({
         { name: "text", kind: "argument", type: "str", required: true, help: "正文" },
       ],
     },
+    {
+      command: "bili owner set",
+      help: "设置主人",
+      params: [
+        { name: "uid", kind: "argument", type: "str", required: true, help: "UID / 昵称" },
+      ],
+    },
   ],
 });
 
@@ -41,6 +48,10 @@ const comment = mapped.groups.find((group) => group.group === "评论")?.items.f
 assert(comment, "comment post must be present.");
 assert.equal(comment.write, true, "comment post must be marked as a write command.");
 assert(comment.params?.every((param) => param.pos === true), "both comment args are positional.");
+
+const ownerSet = mapped.groups.find((group) => group.group === "账号")?.items.find((item) => item.id === "owner.set");
+assert(ownerSet, "owner set must be present in schema-derived catalog.");
+assert.equal(ownerSet.write, true, "owner set mutates the CLI owner's configuration and must be protected as a write.");
 
 const system = mapped.groups.find((group) => group.group === "系统");
 assert(system?.items.some((item) => item.id === "selfcheck"), "local selfcheck item must stay in 系统.");
