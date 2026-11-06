@@ -35,17 +35,5 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  await prisma.auditLog.create({
-    data: {
-      actorType: "USER",
-      actorId: ownerId,
-      characterId,
-      action: "journal.restored",
-      entityType: "JournalRevision",
-      entityId: result.revision.id,
-      details: { dayKey, kind: kindRaw, restoredFrom: version, version: result.revision.version },
-    },
-  });
-
   return { ok: true, revision: toJournalRevisionDto(result.revision) };
 });
