@@ -40,6 +40,22 @@ assert.deepEqual(
   "前面多个媒体缺失时仍按原序号回填。",
 );
 
+const imageLimitResults = alignMediaResults(3, [0], ["第一张"], undefined);
+assert.deepEqual(imageLimitResults, ["第一张", undefined, undefined]);
+assert.equal(
+  applyImageDescriptions("[图片][图片][图片]", imageLimitResults),
+  "[图片：第一张][图片][图片]",
+  "因单轮图片上限未处理的图片继续保留原占位符。",
+);
+
+const voiceLimitResults = alignMediaResults(3, [0], ["第一条"], undefined);
+assert.deepEqual(voiceLimitResults, ["第一条", undefined, undefined]);
+assert.equal(
+  applyVoiceTranscripts("[语音][语音][语音]", voiceLimitResults),
+  "[语音：第一条][语音][语音]",
+  "因单轮 ASR 上限未处理的语音继续保留原占位符。",
+);
+
 const voiceEvent = {
   message: [
     { type: "text", data: { text: "你听这个" } },
@@ -58,4 +74,4 @@ const recordEvent = {
 assert.equal(readOnebotMessageText(recordEvent), "再听这个[语音]");
 assert.equal(readOnebotVoices(recordEvent).length, 1, "record 标准段行为继续保留。");
 
-console.log("test-media-alignment: 6/6 PASS");
+console.log("test-media-alignment: 8/8 PASS");
