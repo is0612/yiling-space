@@ -1689,6 +1689,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         });
       }
 
+      // 先在入口过滤：被禁止的对象不参与对话，也不能通过 @ 绕过。
+      if (shouldBlockFriendSpeaker(speakerKind, speakerPolicy)) {
+        return { status: "ignored", reason: "friend_policy_blocked" };
+      }
+
       // 真人重新参与就解除 bot-to-bot 连聊保护。放进同一会话队列，保证先于这一条消息的 flush。
       if (speakerKind === "HUMAN") {
         void enqueueConversation(contextKey, async () => {
@@ -1702,11 +1707,6 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         }).catch((error) => {
           console.error("[onebot] 重置连续 AI 对话计数失败：", error instanceof Error ? error.message : String(error));
         });
-      }
-
-      // 先在入口过滤：被禁止的 AI 连短期群聊上下文也不污染，更不会进入提示词背景。
-      if (shouldBlockFriendSpeaker(speakerKind, speakerPolicy)) {
-        return { status: "ignored", reason: "friend_policy_blocked" };
       }
     }
 
