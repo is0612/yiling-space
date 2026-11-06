@@ -21,6 +21,14 @@ assert.equal(
   "第一张图片没有 URL 时，第二张描述不能错填到第一张。",
 );
 
+const noImageUrls = alignMediaResults(2, [], [], null);
+assert.deepEqual(noImageUrls, [null, null]);
+assert.equal(
+  applyImageDescriptions("[图片][图片]", noImageUrls),
+  "[图片：无法读取][图片：无法读取]",
+  "一条消息全部图片都没有直链时，每个槽位都应明确标为无法读取。",
+);
+
 const voiceTranscripts = alignMediaResults(2, [1], ["第二条语音"]);
 assert.deepEqual(voiceTranscripts, [null, "第二条语音"]);
 assert.equal(
