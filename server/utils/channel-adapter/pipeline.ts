@@ -44,6 +44,7 @@ import {
 } from "../image-understanding";
 import { CLOSE_FRIEND_LIMIT, listAcquaintances, recordFriendInteraction } from "../friends";
 import { isEmojiBudgetSpent, resolveEmojiFrequency } from "../emoji-frequency";
+import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
@@ -659,10 +660,7 @@ async function attachImageDescriptions(
       batchDescriptions = batch.map(() => null);
     }
 
-    const aligned = Array.from({ length: refs.length }, () => null as string | null);
-    targetIndexes.forEach((originalIndex, resultIndex) => {
-      aligned[originalIndex] = batchDescriptions[resultIndex] ?? null;
-    });
+    const aligned = alignMediaResults(refs.length, targetIndexes, batchDescriptions);
     descriptionsByMessage.set(message.externalMessageId, aligned);
   }
   if (!descriptionsByMessage.size) return messages;
@@ -747,10 +745,7 @@ async function attachVoiceTranscripts(
       batchTranscripts = batch.map(() => null);
     }
 
-    const aligned = Array.from({ length: voices.length }, () => null as string | null);
-    selectedIndexes.forEach((originalIndex, resultIndex) => {
-      aligned[originalIndex] = batchTranscripts[resultIndex] ?? null;
-    });
+    const aligned = alignMediaResults(voices.length, selectedIndexes, batchTranscripts);
     transcriptsByMessage.set(message.externalMessageId, aligned);
   }
   if (!transcriptsByMessage.size) return messages;
