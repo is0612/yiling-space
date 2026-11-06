@@ -222,11 +222,11 @@ export class GroupContext {
    * message id（提示词里不能出现真实账号）。所以这层映射留在进程内，由发送侧查。
    * 查不到（消息比窗口老、或这轮压根没经过这里）返回 null，调用方就别 @。
    */
-  senderOf(key: string, messageId: string): string | null {
+  senderOf(key: string, messageId: string, maxAgeMs = this.windowMs): string | null {
     if (!messageId) return null;
     const now = this.now();
     const found = this.state(key).messages.find((message) =>
-      message.messageId === messageId && now - message.at <= this.windowMs);
+      message.messageId === messageId && now - message.at <= maxAgeMs);
     return found?.senderQq || null;
   }
 
@@ -237,12 +237,12 @@ export class GroupContext {
    * 一张半准不准的表比没有表更糟，模型会拿它当事实用。
    * 上限 20 条：这个群同时有二十几条鱼，再多也只是噪音。
    */
-  members(key: string): GroupMemberOwnership[] {
+  members(key: string, excludedSenders: ReadonlySet<string> = new Set()): GroupMemberOwnership[] {
     const state = this.state(key);
     const nameOfQq = new Map<string, string>();
     const qqOfName = new Map<string, string>();
     for (const message of state.messages) {
-      if (!message.senderQq || !message.displayName) continue;
+      if (!message.senderQq || !message.displayName || excludedSenders.has(message.senderQq)) continue;
       nameOfQq.set(message.senderQq, message.displayName);
       if (!qqOfName.has(message.displayName)) qqOfName.set(message.displayName, message.senderQq);
     }
@@ -256,7 +256,9 @@ export class GroupContext {
       if (ownerQq && ownerQq !== qq) pairs.set(qq, ownerQq);
     }
     // 自述优先：名字可能有歧义，自己 @ 着人喊「主人」不会。
-    for (const [qq, ownerQq] of state.owners) pairs.set(qq, ownerQq);
+    for (const [qq, ownerQq] of state.owners) {
+      if (!excludedSenders.has(qq) && !excludedSenders.has(ownerQq)) pairs.set(qq, ownerQq);
+    }
     const out: GroupMemberOwnership[] = [];
     for (const [qq, ownerQq] of pairs) {
       const speaker = nameOfQq.get(qq);
@@ -300,24 +302,38 @@ export class GroupContext {
   }
 
   /** 有活跃话题、且这轮里有人是参与者（或引用锚点）时，值得看一眼。 */
-  topicCandidate(key: string, facts: readonly GroupMessageFacts[]): boolean {
+  topicCandidate(
+    key: string,
+    facts: readonly GroupMessageFacts[],
+    excludedSenders: ReadonlySet<string> = new Set(),
+  ): boolean {
     const state = this.state(key);
     const now = this.now();
-    const active = state.topics.filter((topic) => now < topic.expiresAt);
+    const excludedCodes = new Set(
+      [...state.memberCodes.entries()]
+        .filter(([qq]) => excludedSenders.has(qq))
+        .map(([, code]) => code),
+    );
+    const active = state.topics.filter((topic) => {
+      if (now >= topic.expiresAt) return false;
+      const anchor = state.messages.find((message) => message.messageId === topic.anchorMessageId);
+      if (anchor && excludedSenders.has(anchor.senderQq)) return false;
+      return topic.participants.some((member) => !excludedCodes.has(member));
+    });
     if (!active.length) return false;
     const senders = new Set(facts.map((fact) => this.memberCode(key, fact.senderQq)));
     const replies = new Set(facts.map((fact) => fact.replyToMessageId).filter(Boolean));
     return active.some((topic) =>
-      topic.participants.some((member) => senders.has(member))
+      topic.participants.some((member) => !excludedCodes.has(member) && senders.has(member))
       || (topic.anchorMessageId && replies.has(topic.anchorMessageId)),
     );
   }
 
   /** 给模型的参与锚点：只给还活着的，最多 maxTopics。 */
-  anchors(key: string): GroupTopicAnchor[] {
+  anchors(key: string, excludedMessageIds: ReadonlySet<string> = new Set()): GroupTopicAnchor[] {
     const now = this.now();
     return this.state(key).topics
-      .filter((topic) => now < topic.expiresAt)
+      .filter((topic) => now < topic.expiresAt && !excludedMessageIds.has(topic.anchorMessageId))
       .sort((a, b) => b.lastEvidenceAt - a.lastEvidenceAt)
       .slice(0, this.maxTopics)
       .map((topic) => ({ id: topic.anchorMessageId, label: this.labelOf(key, topic.anchorMessageId) }));

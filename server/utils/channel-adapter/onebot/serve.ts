@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { getPrisma } from "../../prisma";
+import { ensureGroupMemberIdentity } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
 import type { OnebotSegment } from "./types";
@@ -27,6 +28,11 @@ import {
   groupChatWindowMs,
   isClarificationMessage,
   mentionsCharacterName,
+  isAiOnlyGroupRound,
+  shouldBlockFriendSpeaker,
+  shouldPauseAiOnlyRound,
+  MAX_CONSECUTIVE_AI_ROUNDS,
+  nextConsecutiveAiRounds,
 } from "./group-chat";
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
 import { GROUP_MUTE_MS, createGroupMuteStore, isQuietRequest, isResumeRequest } from "./group-mute";
@@ -1289,18 +1295,97 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
   };
 
   const flushGroupRound = async (items: PendingGroupMessage[]): Promise<void> => {
+    const originalItems = items;
     const binding = items[0]!.binding;
     const groupEvent = items[0]!.event;
+    const contextKey = `${binding.id}:${groupEvent.conversationKey}`;
+    const prisma = getPrisma();
+    const originalIds = originalItems.map((item) => item.event.messageId);
+    const backgroundLines = groupContext.background(contextKey, originalIds);
+    const analysisBackgroundLines = groupContext.background(contextKey, originalIds, {
+      windowMs: 15 * 60_000,
+      maxMessages: 120,
+      maxChars: 24_000,
+    });
+    // 重新检查缓冲前已进入短期上下文的历史发言：用户可能刚刚把某条鱼改成「禁止交流」。
+    const contextUidByMessageId = new Map<string, string>();
+    for (const line of [...backgroundLines, ...analysisBackgroundLines]) {
+      const uid = groupContext.senderOf(contextKey, line.id, 15 * 60_000);
+      if (uid) contextUidByMessageId.set(line.id, uid);
+    }
+
+    // 冲模型之前按平台账号身份过滤。身份是全局属性，交流权限从当前角色的关系范围读取。
+    const authorUids = [...new Set([
+      ...originalItems.map((item) => item.event.userId.trim()),
+      ...contextUidByMessageId.values(),
+    ].filter(Boolean))];
+    const identities = authorUids.length
+      ? await prisma.externalIdentity.findMany({
+          where: { platform: ONEBOT_PLATFORM, platformUid: { in: authorUids } },
+          select: {
+            platformUid: true,
+            kind: true,
+            memoryScopes: {
+              where: { characterId: binding.characterId, scopeType: "EXTERNAL_IDENTITY" },
+              take: 1,
+              select: { friendChatPolicy: true },
+            },
+          },
+        })
+      : [];
+    const identityByUid = new Map(identities.map((identity) => [
+      identity.platformUid,
+      {
+        kind: identity.kind,
+        policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
+      },
+    ] as const));
+    const isBlockedUid = (uid: string) => {
+      if (record.ownerQq && uid === record.ownerQq) return false;
+      const identity = identityByUid.get(uid);
+      return shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
+    };
+    const kindFor = (item: PendingGroupMessage) => item.isOwner
+      ? "HUMAN" as const
+      : identityByUid.get(item.event.userId)?.kind ?? "UNKNOWN" as const;
+    const policyFor = (item: PendingGroupMessage) => item.isOwner
+      ? "ALLOW" as const
+      : identityByUid.get(item.event.userId)?.policy ?? "DEFAULT" as const;
+    const blockedSpeakerUids = new Set(authorUids.filter(isBlockedUid));
+    const blockedMessageIds = new Set(
+      originalItems
+        .filter((item) => shouldBlockFriendSpeaker(kindFor(item), policyFor(item)))
+        .map((item) => item.event.messageId),
+    );
+    const blockedContextMessageIds = new Set(
+      [...contextUidByMessageId.entries()]
+        .filter(([, uid]) => isBlockedUid(uid))
+        .map(([messageId]) => messageId),
+    );
+    const excludedContextIds = new Set([...blockedMessageIds, ...blockedContextMessageIds]);
+    items = originalItems.filter((item) => !blockedMessageIds.has(item.event.messageId));
+    if (!items.length) {
+      logGroupRound(groupEvent.groupId, {
+        reason: "friend_policy_blocked",
+        messages: originalItems.length,
+        blocked: blockedMessageIds.size,
+        direct: false,
+        named: false,
+      });
+      return;
+    }
+    const roundIdentityKinds = items.map(kindFor);
+    const aiOnlyRound = isAiOnlyGroupRound(roundIdentityKinds);
+
     // 按群解析：同一个绑定挂了好几个群时，每个群可以有自己的那一档。
     const settings = groupChatForGroup(binding.groupChat, binding.groupChatModes, groupEvent.groupId);
-    const contextKey = `${binding.id}:${groupEvent.conversationKey}`;
     const direct = items.some((item) => item.direct);
     const named = items.some((item) => item.named);
     // 这一轮是不是被「戳一戳」叫醒的。只在为真时打，避免每行日志多一个 false。
     const poked = items.some((item) => item.event.poke !== undefined);
     // 入队时已解析好，直接用，不再重复解 CQ 码。
     const facts = items.map((item) => item.facts);
-    const topicCandidate = groupContext.topicCandidate(contextKey, facts);
+    const topicCandidate = groupContext.topicCandidate(contextKey, facts, blockedSpeakerUids);
     /**
      * 这一批有没有「@ 的是别人」。
      *
@@ -1336,12 +1421,22 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         .filter((item) => item.direct)
         .every((item) => item.event.poke === undefined && isClarificationMessage(item.event.content));
 
-    const prisma = getPrisma();
     // lastEventAt 已挪到事件入口统一更新（含 mention 档早退），这里不再重复写。
     const conversation = await prisma.conversation.findFirst({
       where: { channelBindingId: binding.id, externalConversationId: groupEvent.conversationKey },
-      select: { id: true },
+      select: { id: true, consecutiveAiRounds: true },
     });
+    if (aiOnlyRound && shouldPauseAiOnlyRound(conversation?.consecutiveAiRounds ?? 0)) {
+      logGroupRound(groupEvent.groupId, {
+        reason: "ai_dialogue_limit",
+        messages: items.length,
+        direct,
+        named,
+        consecutiveAiRounds: conversation?.consecutiveAiRounds ?? 0,
+        maxConsecutiveAiRounds: MAX_CONSECUTIVE_AI_ROUNDS,
+      });
+      return;
+    }
     const lastAssistant = conversation
       ? await prisma.message.findFirst({
           where: { conversationId: conversation.id, role: "ASSISTANT" },
@@ -1441,6 +1536,15 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         ...(item.event.voices.length ? { voices: item.event.voices } : {}),
         occurredAt: new Date(item.at),
       })),
+      // 被身份策略过滤的消息不进模型/消息正文，但仍只登记为群成员，不记录内容。
+      memberObservations: originalItems.map((item) => ({
+        externalMessageId: item.event.messageId,
+        authorOpenId: item.event.userId,
+        authorPlatformUid: item.event.userId,
+        ...(item.event.displayName ? { authorDisplayName: item.event.displayName } : {}),
+        content: item.event.content,
+        occurredAt: new Date(item.at),
+      })),
       faceCatalog: ONEBOT_FACES,
       // 她自己的表情包：清单非空时优先于内置表情（空清单 = 这个角色还没传过图）。
       stickerCatalog: await loadStickerCatalog(binding.characterId),
@@ -1450,11 +1554,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       allowSilent: !gate.mustReply,
       group: {
         direct,
-        background: groupContext.background(contextKey, currentIds),
-        analysisBackground: groupContext.background(contextKey, currentIds, { windowMs: 15 * 60_000, maxMessages: 120, maxChars: 24_000 }),
-        anchors: groupContext.anchors(contextKey),
+        background: backgroundLines.filter((line) => !excludedContextIds.has(line.id)),
+        analysisBackground: analysisBackgroundLines.filter((line) => !excludedContextIds.has(line.id)),
+        anchors: groupContext.anchors(contextKey, excludedContextIds),
         // 谁是谁的人：让她判断「我的鱼」「我家宝」时能查表，而不是猜自己。
-        members: groupContext.members(contextKey),
+        members: groupContext.members(contextKey, blockedSpeakerUids),
         // 「谁在跟她说话」的统计要用：@ 的是这个号、叫的是这些名字，才算冲她说的。
         selfQq: record.accountQq,
         ownerQq: record.ownerQq,
@@ -1462,11 +1566,27 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       },
       sendReply: createReplySender(record.config, groupEvent, {
         // 引用谁就 @ 谁：transcript 里只有 message id，真实 QQ 号留在进程内查。
-        resolveAtQq: (messageId) => groupContext.senderOf(contextKey, messageId),
+        resolveAtQq: (messageId) => {
+          const uid = groupContext.senderOf(contextKey, messageId, 15 * 60_000);
+          return uid && !blockedSpeakerUids.has(uid) ? uid : null;
+        },
         selfQq: record.accountQq,
       }),
     });
 
+    if (result.status === "replied" || result.status === "silent") {
+      await prisma.conversation.updateMany({
+        where: { channelBindingId: binding.id, externalConversationId: groupEvent.conversationKey },
+        data: {
+          consecutiveAiRounds: nextConsecutiveAiRounds(
+            conversation?.consecutiveAiRounds ?? 0,
+            roundIdentityKinds,
+          ),
+        },
+      }).catch((error) => {
+        console.error("[onebot] 更新连续 AI 对话计数失败：", error instanceof Error ? error.message : String(error));
+      });
+    }
     if (result.status === "replied") {
       groupContext.recordReply(contextKey, facts, { source: direct ? "mention" : "ambient" });
       groupActivity.spoke({
@@ -1559,23 +1679,63 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     // 对群消息总是解析（哪怕正文为空），remember 仍只记有正文的。
     const receivedAt = Date.now();
     const facts = isGroupMessage ? factsOf(event, receivedAt) : null;
-    // 先进短期上下文：哪怕这条后面被闸门丢掉，它也是下一轮的背景。
+    let speakerKind: "UNKNOWN" | "HUMAN" | "AI" = isOwnerEvent ? "HUMAN" : "UNKNOWN";
+    let speakerPolicy: "DEFAULT" | "ALLOW" | "BLOCK" = isOwnerEvent ? "ALLOW" : "DEFAULT";
+
+    if (isGroupMessage && event.userId.trim()) {
+      // 每个在群里发过言的人都先建立一个「遇到过」关系，互动次数仍只在她真正回复后增加。
+      // 这样她可以在第一次正式交流前，就把某条鱼标记为 AI / 禁止交流。
+      const identity = isOwnerEvent
+        ? null
+        : await ensureGroupMemberIdentity({
+            characterId: binding.characterId,
+            platform: ONEBOT_PLATFORM,
+            platformUid: event.userId.trim(),
+            displayName: event.displayName,
+          });
+      if (identity) {
+        speakerKind = identity.kind;
+        speakerPolicy = identity.friendChatPolicy;
+      }
+
+      // 只统计群里发生了什么；屏蔽只影响她看见的语境和是否回复。
+      if (event.content) {
+        groupActivity.record({
+          bindingId: binding.id,
+          characterId: binding.characterId,
+          conversationId: event.conversationKey,
+          groupId: event.groupId,
+          at: receivedAt,
+          speaker: event.displayName,
+          // 仍刷新群活跃时间，但不把被禁止对象的正文写入群活跃度摘要。
+          text: shouldBlockFriendSpeaker(speakerKind, speakerPolicy) ? "" : event.content,
+        });
+      }
+
+      // 先在入口过滤：被禁止的对象不参与对话，也不能通过 @ 绕过。
+      if (shouldBlockFriendSpeaker(speakerKind, speakerPolicy)) {
+        return { status: "ignored", reason: "friend_policy_blocked" };
+      }
+
+      // 真人重新参与就解除 bot-to-bot 连聊保护。放进同一会话队列，保证先于这一条消息的 flush。
+      if (speakerKind === "HUMAN") {
+        void enqueueConversation(contextKey, async () => {
+          await getPrisma().conversation.updateMany({
+            where: {
+              channelBindingId: binding.id,
+              externalConversationId: event.conversationKey,
+            },
+            data: { consecutiveAiRounds: 0 },
+          });
+        }).catch((error) => {
+          console.error("[onebot] 重置连续 AI 对话计数失败：", error instanceof Error ? error.message : String(error));
+        });
+      }
+    }
+
+    // 先进短期上下文：只记允许参与的发言；后续被闸门拒绝的消息仍可作为背景。
     if (isGroupMessage && event.content && facts) {
       groupContext.remember(contextKey, facts);
-      /**
-       * 同时记进群活跃度。放在这里（而不是 `flushGroupRound`）是因为 mention 档下
-       * 没被叫到的消息根本进不了攒批 —— 那些消息恰恰是「群里在聊、只是没叫她」的证据，
-       * 漏掉它们，一个热闹的群会被判成冷场。
-       */
-      groupActivity.record({
-        bindingId: binding.id,
-        characterId: binding.characterId,
-        conversationId: event.conversationKey,
-        groupId: event.groupId,
-        at: receivedAt,
-        speaker: event.displayName,
-        text: event.content,
-      });
     }
 
     // 只计算一次话题候选，避免主人上下文旁路和 mention 闸门使用不同判断。

@@ -18,20 +18,22 @@ import "dotenv/config";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
-import { recordFriendInteraction } from "../server/utils/friends";
+import { ensureGroupMemberIdentity, recordFriendInteraction } from "../server/utils/friends";
 
 const prisma = getPrisma();
 const suffix = randomUUID();
 const userId = randomUUID();
 const characterId = randomUUID();
+const otherCharacterId = randomUUID();
 const platformUid = `friend-relation-${suffix}`;
+const seenOnlyUid = `friend-seen-only-${suffix}`;
 const PLATFORM = "test-platform";
 const MINUTE = 60 * 1000;
 
 async function readRelation() {
   const scope = await prisma.memoryScope.findUnique({
     where: { scopeKey: `character:${characterId}:external:${PLATFORM}:${platformUid}` },
-    select: { interactionCount: true, lastInteractedAt: true, firstSource: true },
+    select: { id: true, externalIdentityId: true, interactionCount: true, lastInteractedAt: true, firstSource: true, friendChatPolicy: true },
   });
   assert.ok(scope, "关系行没建出来。");
   return scope;
@@ -52,9 +54,49 @@ try {
   await prisma.user.create({
     data: { id: userId, username: `friend-relation-${suffix}`, passwordHash: "integration-test-only" },
   });
-  await prisma.character.create({
-    data: { id: characterId, ownerId: userId, name: "朋友记账回归", basePrompt: "integration test" },
+  await prisma.character.createMany({
+    data: [
+      { id: characterId, ownerId: userId, name: "朋友记账回归", basePrompt: "integration test" },
+      { id: otherCharacterId, ownerId: userId, name: "朋友关系隔离回归", basePrompt: "integration test" },
+    ],
   });
+
+  // 群里遇到过但还没回复的人也要可管理，建立关系不能冒充一次互动。
+  const seenOnly = await ensureGroupMemberIdentity({
+    characterId,
+    platform: PLATFORM,
+    platformUid: seenOnlyUid,
+    displayName: "还没互动的 AI 鱼",
+  });
+  assert.deepEqual(seenOnly, { kind: "UNKNOWN", friendChatPolicy: "DEFAULT" });
+  const seenOnlyScope = await prisma.memoryScope.findUnique({
+    where: { scopeKey: `character:${characterId}:external:${PLATFORM}:${seenOnlyUid}` },
+    select: { interactionCount: true, firstSource: true, friendChatPolicy: true },
+  });
+  assert.deepEqual(seenOnlyScope, {
+    interactionCount: 0,
+    firstSource: "GROUP",
+    friendChatPolicy: "DEFAULT",
+  }, "只在群里出现过的人不增加互动次数，但需要出现在身份管理名单。");
+
+  await prisma.externalIdentity.update({
+    where: { platform_platformUid: { platform: PLATFORM, platformUid: seenOnlyUid } },
+    data: { kind: "AI", kindSource: "MANUAL" },
+  });
+  await prisma.memoryScope.updateMany({
+    where: {
+      characterId,
+      externalIdentity: { is: { platform: PLATFORM, platformUid: seenOnlyUid } },
+    },
+    data: { friendChatPolicy: "BLOCK" },
+  });
+  const seenAgain = await ensureGroupMemberIdentity({
+    characterId,
+    platform: PLATFORM,
+    platformUid: seenOnlyUid,
+    displayName: "改过群名的 AI 鱼",
+  });
+  assert.deepEqual(seenAgain, { kind: "AI", friendChatPolicy: "BLOCK" }, "后续遇到不会覆盖手动身份和交流权限。");
 
   const mid = new Date(Date.now() - 3 * MINUTE * 60);
 
@@ -92,11 +134,53 @@ try {
     "坏日期应该退回「现在」，而不是写进一个 Invalid Date 或者把时间拉回去。",
   );
 
-  console.log("通过：「最近一次」只往前推，次数照加，坏日期不炸。");
+  // 5. 身份类型是平台账号全局属性，交流权限是角色关系属性。
+  const identity = await prisma.externalIdentity.findUnique({
+    where: { platform_platformUid: { platform: PLATFORM, platformUid } },
+    select: { id: true, kind: true, kindSource: true },
+  });
+  assert.ok(identity, "平台身份必须存在。");
+  assert.equal(identity.kind, "UNKNOWN", "新身份默认未知。");
+  assert.equal(identity.kindSource, "AUTO", "未人工纠正前保留自动来源标记。");
+  assert.equal(relation.friendChatPolicy, "DEFAULT", "新关系默认沿用自动交流策略。");
+
+  await prisma.externalIdentity.update({
+    where: { id: identity.id },
+    data: { kind: "AI", kindSource: "MANUAL" },
+  });
+  await prisma.memoryScope.update({
+    where: { id: relation.id },
+    data: { friendChatPolicy: "BLOCK" },
+  });
+
+  await recordFriendInteraction({
+    characterId: otherCharacterId,
+    platform: PLATFORM,
+    platformUid,
+    displayName: "另一个角色也认识的朋友",
+    source: "GROUP",
+  });
+  const otherScope = await prisma.memoryScope.findUnique({
+    where: { scopeKey: `character:${otherCharacterId}:external:${PLATFORM}:${platformUid}` },
+    select: { id: true, externalIdentityId: true, friendChatPolicy: true },
+  });
+  assert.ok(otherScope, "另一个角色应该有独立关系。");
+  assert.equal(otherScope.externalIdentityId, identity.id, "两个角色共享同一个平台身份。");
+  assert.equal(otherScope.friendChatPolicy, "DEFAULT", "另一个角色的默认交流策略不能被第一个角色的 BLOCK 污染。");
+
+  await prisma.memoryScope.update({ where: { id: relation.id }, data: { friendChatPolicy: "ALLOW" } });
+  const [updatedIdentity, isolatedScope] = await Promise.all([
+    prisma.externalIdentity.findUnique({ where: { id: identity.id }, select: { kind: true, kindSource: true } }),
+    prisma.memoryScope.findUnique({ where: { id: otherScope.id }, select: { friendChatPolicy: true } }),
+  ]);
+  assert.deepEqual(updatedIdentity, { kind: "AI", kindSource: "MANUAL" }, "人工身份纠正不会因角色关系更新而丢失。");
+  assert.equal(isolatedScope?.friendChatPolicy, "DEFAULT", "第一个角色的 ALLOW 也不能串到第二个角色。");
+
+  console.log("通过：互动次数与时间、防乱序、异常日期兜底，以及平台身份全局共享、交流策略按角色隔离。");
 } finally {
-  await prisma.memoryScope.deleteMany({ where: { characterId } });
-  await prisma.externalIdentity.deleteMany({ where: { platform: PLATFORM, platformUid } });
-  await prisma.character.deleteMany({ where: { id: characterId } });
+  await prisma.memoryScope.deleteMany({ where: { characterId: { in: [characterId, otherCharacterId] } } });
+  await prisma.externalIdentity.deleteMany({ where: { platform: PLATFORM, platformUid: { in: [platformUid, seenOnlyUid] } } });
+  await prisma.character.deleteMany({ where: { id: { in: [characterId, otherCharacterId] } } });
   await prisma.user.deleteMany({ where: { id: userId } });
   await prisma.$disconnect();
 }

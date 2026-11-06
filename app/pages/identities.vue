@@ -5,8 +5,8 @@
  * 一行 = 某角色认识的某个人（一条关系），不是一个账号。同一个 QQ 号跟两个角色都聊过
  * 就有两行，所以页面先选角色，再看这个角色的名单。
  *
- * 口径（和产品对齐过）：私聊一进来就记；群里只记她真的回了谁。所以这里出现的人，
- * 都是跟她有过一来一往的，不是「在群里出现过」。
+ * 私聊来访或群里发过言的人都会出现在名单；群成员第一次发言只建立「遇到过」记录，
+ * 不增加互动次数。只有她真的回了对方，群聊互动次数才 +1。
  *
  * 名单会一直长（群里认人会一直往上加），所以筛选、排序、翻页全在服务端做：
  * 页面每次只拿一页，统计带和来源计数由接口按「这个角色的全部朋友」另算，
@@ -25,6 +25,9 @@ type Friend = {
   displayName: string | null;
   status: string;
   linkedUserId: string | null;
+  identityKind: "UNKNOWN" | "HUMAN" | "AI";
+  identityKindSource: "AUTO" | "MANUAL";
+  friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK";
   interactionCount: number;
   lastInteractedAt: string | null;
   knownSince: string;
@@ -235,6 +238,34 @@ function onQueryInput() {
 const editingScopeId = ref("");
 const aliasDraft = ref("");
 const aliasSaving = ref(false);
+const friendSettingsSavingScopeId = ref("");
+
+async function saveFriendSettings(friend: Friend) {
+  if (friendSettingsSavingScopeId.value) return;
+  friendSettingsSavingScopeId.value = friend.scopeId;
+  try {
+    const response = await $fetch<{
+      identityKind: Friend["identityKind"];
+      identityKindSource: Friend["identityKindSource"];
+      friendChatPolicy: Friend["friendChatPolicy"];
+    }>(`/api/admin/identities/${friend.scopeId}`, {
+      method: "PATCH",
+      body: {
+        identityKind: friend.identityKind,
+        friendChatPolicy: friend.friendChatPolicy,
+      },
+    });
+    friends.value = friends.value.map((item) => item.scopeId === friend.scopeId
+      ? { ...item, ...response }
+      : item);
+    ElMessage.success("身份与交流权限已保存。");
+  } catch (error) {
+    ElMessage.error(readErrorMessage(error, "身份与交流权限没保存上。"));
+    await load(page.value);
+  } finally {
+    friendSettingsSavingScopeId.value = "";
+  }
+}
 
 async function startEdit(friend: Friend) {
   editingScopeId.value = friend.scopeId;
@@ -350,7 +381,7 @@ onMounted(() => load(1));
     <PageHeader
       eyebrow="角色 / 人际"
       title="她的朋友"
-      description="她认识的人按角色分开记。私聊发来消息就算认识；群里只记她真的回了谁 —— 没被搭理的发言不会出现在这里。"
+      description="私聊来访、群里见过的人都会记录下来。可以手动标记真人 / AI，并按角色决定她是否与对方交流。"
     >
       <template #actions>
         <button
@@ -467,7 +498,7 @@ onMounted(() => load(1));
         <div class="band-cell">
           <span class="band-k">{{ currentCharacter?.name ?? "她" }}认识的人</span>
           <span class="band-v">{{ stats.total }}<small>个</small></span>
-          <span class="band-f">有过一来一往的都算</span>
+          <span class="band-f">私聊来访或在群里发过言的人都会出现</span>
         </div>
         <div class="band-cell">
           <span class="band-k">聊过两次以上</span>
@@ -486,12 +517,12 @@ onMounted(() => load(1));
         class="empty-block"
       >
         <span class="empty-icon"><el-icon><User /></el-icon></span>
-        <h3>{{ stats.total ? "没有找到这个人" : "还没有朋友" }}</h3>
+        <h3>{{ stats.total ? "没有找到这个人" : "还没遇到人" }}</h3>
         <p v-if="stats.total">
           换个关键词，或者把来源切回「全部」。
         </p>
         <p v-else>
-          有人在 QQ 上私聊她，或者她在群里回了谁，这里就会出现那个人。
+          有人私聊她或在群里发言后，就会出现在这里；即使还没互动，也能先设置身份和交流权限。
         </p>
       </div>
 
@@ -527,7 +558,7 @@ onMounted(() => load(1));
                 {{ platformLabel(friend.platform) }}<span class="sep">·</span>{{ friend.platformUid }}
               </p>
             </div>
-            <span class="pill pill-gray">{{ sourceLabel(friend.firstSource) }}</span>
+            <span class="pill pill-gray">{{ friend.interactionCount > 0 ? sourceLabel(friend.firstSource) : "群里见过" }}</span>
           </div>
 
           <div class="fr-alias">
@@ -585,6 +616,37 @@ onMounted(() => load(1));
                 @click="cancelEdit"
               >
                 取消
+              </button>
+            </div>
+          </div>
+
+          <div class="friend-controls">
+            <div class="friend-control-row">
+              <label :for="`friend-kind-${friend.scopeId}`">身份</label>
+              <select :id="`friend-kind-${friend.scopeId}`" v-model="friend.identityKind" class="friend-control-select">
+                <option value="UNKNOWN">未知</option>
+                <option value="HUMAN">真人</option>
+                <option value="AI">AI 鱼</option>
+              </select>
+              <span v-if="friend.identityKindSource === 'MANUAL'" class="friend-control-note">人工确认</span>
+            </div>
+            <div class="friend-control-row">
+              <label :for="`friend-policy-${friend.scopeId}`">交流</label>
+              <select :id="`friend-policy-${friend.scopeId}`" v-model="friend.friendChatPolicy" class="friend-control-select">
+                <option value="DEFAULT">默认规则（AI 默认不回）</option>
+                <option value="ALLOW">允许交流</option>
+                <option value="BLOCK">禁止交流</option>
+              </select>
+            </div>
+            <div class="friend-control-actions">
+              <span>身份类型目前由你手动确认，对同一平台账号生效；交流权限只对当前角色生效。</span>
+              <button
+                type="button"
+                class="alias-save"
+                :disabled="friendSettingsSavingScopeId === friend.scopeId"
+                @click="saveFriendSettings(friend)"
+              >
+                {{ friendSettingsSavingScopeId === friend.scopeId ? "保存中…" : "保存设置" }}
               </button>
             </div>
           </div>
@@ -834,6 +896,32 @@ onMounted(() => load(1));
 .suggest-ok { background: var(--brand); color: #fff; }
 .suggest-no { background: none; color: var(--dim); }
 .suggest-no:hover { color: var(--text); }
+
+/* 身份与交流权限：身份是平台账号属性，交流政策是当前角色的关系属性。 */
+.friend-controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 13px;
+  border-top: 1px solid var(--surface-3);
+  padding-top: 12px;
+}
+.friend-control-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.friend-control-row label { flex: 0 0 38px; color: var(--dim); font-size: 12px; }
+.friend-control-select {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--surface-3);
+  border-radius: 7px;
+  background: var(--surface);
+  padding: 6px 9px;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+}
+.friend-control-note { color: var(--brand-strong); font-size: 11px; }
+.friend-control-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.friend-control-actions > span { min-width: 0; color: var(--dim); font-size: 11px; line-height: 1.5; }
+.friend-control-actions .alias-save { flex: none; }
 
 /* 释义行：label 定宽 56px，值紧跟在后 */
 .fr-kv { display: flex; flex-direction: column; gap: 7px; margin: 14px 0 0; border-top: 1px solid var(--surface-3); padding-top: 12px; }

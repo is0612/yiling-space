@@ -1,18 +1,17 @@
 /**
  * 「她的朋友」：某个角色认识的某个人。
  *
- * 关系直接落在 `EXTERNAL_IDENTITY` 记忆范围上（`scopeKey` 里带 characterId），所以这里只做
- * 三件事：认人（upsert 外部身份）、开范围、记一次互动。**不为「朋友」新建关系表** ——
- * 新建就得跟记忆范围两头同步，而这张范围本来就唯一对应「某角色 × 某个人」。
+ * 关系直接落在 `EXTERNAL_IDENTITY` 记忆范围上（`scopeKey` 里带 characterId），不另建朋友关系表：
+ * 平台账号身份存在 `ExternalIdentity`，角色自己的交流权限与互动次数存在 `MemoryScope`。
  *
- * 另有一张 `group_members`，它记的**不是关系**，是「谁在哪个群说过话」：有了它，
- * 熟人才分得清「A 群的小胖鱼」和「B 群的小胖鱼」，群聊时也不会把别群的熟人当成屋里的人。
- * 两张表各管一件事：这里管「她回过谁」，那里管「谁在这个屋里」。
- *
- * 计数口径（和产品对齐过）：
+ * 群成员第一次发言就会先建立「遇到过」关系，供管理员提前标注真人 / AI 和交流权限；
+ * 这一步不增加互动次数。计数口径：
  * - 私聊：对方发来消息就 +1。
  * - 群聊：只有她真的回了谁才 +1（`pipeline.ts` 用 `replyToMessageId`/`atMessageId` 反查作者）。
- *   群里没被搭理的发言不算认识，否则一个活跃群几天就攒出几百个"朋友"。
+ *   群里没被搭理的发言不增加互动数，避免一个活跃群几天就攒出几百个"朋友"。
+ *
+ * 另有一张 `group_members`，它记录「谁在哪个群说过话」，用于群成员与角色归属等统计；
+ * 身份管理本身不依赖它，平台身份与角色关系由上面的两张表负责。
  *
  * 注意：这里只解决「谁」，不解决「她记得什么」。外部身份范围的记忆提炼由
  * `memory-scheduler.ts` 按周期排（`listFriendScopesWithActivity`），所以关系行和记忆是两条线：
@@ -93,6 +92,86 @@ export async function recordFriendInteraction(input: {
   ]);
 
   return { identityId: identity.id, scopeId: scope.scopeId };
+}
+
+/**
+ * 记录群里遇到过的人，但不增加互动次数。
+ *
+ * 群成员可能从未被她回复过；依然需要在「她的朋友」页手动标记 AI / 真人，
+ * 否则无法在第一次正式互动前设置禁聊规则。互动次数仍只由 recordFriendInteraction 增加。
+ */
+export async function ensureGroupMemberIdentity(input: {
+  characterId: string;
+  platform: string;
+  platformUid: string;
+  displayName?: string | null;
+}): Promise<{ kind: "UNKNOWN" | "HUMAN" | "AI"; friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK" } | null> {
+  const platformUid = (input.platformUid ?? "").trim();
+  if (!platformUid) return null;
+
+  const prisma = getPrisma();
+  const existing = await prisma.externalIdentity.findUnique({
+    where: { platform_platformUid: { platform: input.platform, platformUid } },
+    select: {
+      id: true,
+      displayName: true,
+      kind: true,
+      memoryScopes: {
+        where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+        take: 1,
+        select: { id: true, firstSource: true, friendChatPolicy: true },
+      },
+    },
+  });
+
+  let identityId: string;
+  let kind: "UNKNOWN" | "HUMAN" | "AI";
+  let relation = existing?.memoryScopes[0] ?? null;
+  if (existing) {
+    identityId = existing.id;
+    kind = existing.kind;
+    if (input.displayName && input.displayName.slice(0, 255) !== existing.displayName) {
+      await prisma.externalIdentity.update({
+        where: { id: existing.id },
+        data: { displayName: input.displayName.slice(0, 255) },
+      });
+    }
+  } else {
+    const created = await prisma.externalIdentity.upsert({
+      where: { platform_platformUid: { platform: input.platform, platformUid } },
+      create: {
+        platform: input.platform,
+        platformUid,
+        displayName: input.displayName?.slice(0, 255) || null,
+        status: "UNVERIFIED",
+      },
+      update: {
+        ...(input.displayName ? { displayName: input.displayName.slice(0, 255) } : {}),
+      },
+      select: { id: true, kind: true },
+    });
+    identityId = created.id;
+    kind = created.kind;
+  }
+
+  if (!relation) {
+    const scope = await ensureExternalIdentityScope(input.characterId, input.platform, platformUid, identityId);
+    await prisma.memoryScope.updateMany({
+      where: { id: scope.scopeId, firstSource: null },
+      data: { firstSource: "GROUP" },
+    });
+    relation = await prisma.memoryScope.findUnique({
+      where: { id: scope.scopeId },
+      select: { id: true, firstSource: true, friendChatPolicy: true },
+    });
+  } else if (relation.firstSource === null) {
+    await prisma.memoryScope.updateMany({
+      where: { id: relation.id, firstSource: null },
+      data: { firstSource: "GROUP" },
+    });
+  }
+
+  return { kind, friendChatPolicy: relation?.friendChatPolicy ?? "DEFAULT" };
 }
 
 /**
@@ -270,6 +349,16 @@ export async function listAcquaintances(input: {
     scopeType: "EXTERNAL_IDENTITY",
     externalIdentityId: { not: null },
     interactionCount: { gt: 0 },
+    // 管理页仍显示被屏蔽对象供用户调整；对话提示词里的熟人名单不再包含他们。
+    AND: [
+      { friendChatPolicy: { not: "BLOCK" } },
+      {
+        OR: [
+          { friendChatPolicy: "ALLOW" },
+          { externalIdentity: { is: { kind: { not: "AI" } } } },
+        ],
+      },
+    ],
   };
 
   const [privateRows, groupRows, tally, roomRows] = await Promise.all([

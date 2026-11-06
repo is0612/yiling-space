@@ -48,6 +48,7 @@ import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
+import { shouldBlockFriendSpeaker } from "../friend-chat-policy";
 import { pickStickerCatalog, type StickerCatalogEntry } from "../stickers";
 import {
   loadCatchphraseCatalog, markCatchphrasesUsed, pickCatchphraseCatalog, toCatchphrasePromptEntries,
@@ -450,6 +451,8 @@ export type ChannelBatchInput = {
   eventType: string;
   externalConversationId: string;
   messages: ChannelTurnMessage[];
+  /** 原始群成员观察。被身份策略过滤的消息不进入模型/聊天记录，但成员名单仍能看到说话者。 */
+  memberObservations?: ChannelTurnMessage[];
   faceCatalog?: ReadonlyArray<{ id: string; name: string }>;
   stickerCatalog?: ReadonlyArray<StickerCatalogEntry>;
   /** 允许模型说「这轮不插嘴」。被 @ 时传 false —— 点名了还不回比乱回更糟。 */
@@ -790,6 +793,8 @@ async function runChannelTurn(input: {
   eventType: string;
   externalConversationId: string;
   messages: ChannelTurnMessage[];
+  /** 原始群成员观察。被身份策略过滤的内容不落库，只用于更新群成员名单。 */
+  memberObservations?: ChannelTurnMessage[];
   faceCatalog?: ReadonlyArray<{ id: string; name: string }>;
   stickerCatalog?: ReadonlyArray<StickerCatalogEntry>;
   /** 允许模型说「这轮我不插嘴」。只有群聊批处理会传。 */
@@ -1042,6 +1047,48 @@ async function runChannelTurn(input: {
       : Promise.resolve([]),
   ]);
 
+  // 被标记为 AI / 禁止交流的对象，旧消息仍保存在聊天记录中，但不再进入后续群聊提示词。
+  const blockedRecentMessageIds = new Set<string>();
+  if (isGroup && recentStoredMessages.length) {
+    const historicalUids = [...new Set(
+      recentStoredMessages
+        .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
+        .map((item) => readStoredAuthorOpenId(item.metadata))
+        .filter(Boolean),
+    )];
+    if (historicalUids.length) {
+      const historicalIdentities = await prisma.externalIdentity.findMany({
+        where: { platform: input.platform, platformUid: { in: historicalUids } },
+        select: {
+          platformUid: true,
+          kind: true,
+          memoryScopes: {
+            where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+            take: 1,
+            select: { friendChatPolicy: true },
+          },
+        },
+      });
+      const historicalPolicyByUid = new Map(historicalIdentities.map((identity) => [
+        identity.platformUid,
+        {
+          kind: identity.kind,
+          policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
+        },
+      ] as const));
+      for (const item of recentStoredMessages) {
+        if (item.role !== "USER") continue;
+        const speaker = readStoredSpeaker(item.metadata);
+        const uid = readStoredAuthorOpenId(item.metadata);
+        if (speaker.isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) continue;
+        const identity = historicalPolicyByUid.get(uid);
+        if (shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT")) {
+          blockedRecentMessageIds.add(item.id);
+        }
+      }
+    }
+  }
+
   // 表情要看三件事：渠道收不收（清单）、角色开没开开关、这个会话的额度用没用完。
   // 只看前两个的话，一个爱发表情的角色会在每句后面都挂一张。
   const lastAssistant = recentStoredMessages.find((item) => item.role === "ASSISTANT");
@@ -1138,9 +1185,10 @@ async function runChannelTurn(input: {
    * 这里用**宽判据**（`looksLikeSystemMessage`）：误判也只是这一行不进提示词，
    * 原文还在库里，群聊原文页照常能看到。写入侧用的是窄判据，两件事别搞反。
    */
-  const recentMessages: ConversationContextMessage[] = recentStoredMessages
+  const recentMessages: ConversationContextMessage[] = [...recentStoredMessages]
     .reverse()
     .filter((item) => item.role === "USER" || item.role === "ASSISTANT")
+    .filter((item) => !blockedRecentMessageIds.has(item.id))
     .filter((item) => !(item.role === "USER" && looksLikeSystemMessage(item.content)))
     .map((item) => ({
       role: item.role as "USER" | "ASSISTANT",
@@ -1169,6 +1217,8 @@ async function runChannelTurn(input: {
     ? await buildGroupActivityContext({
         prisma,
         conversationId: existingConversation.id,
+        characterId: input.characterId,
+        platform: input.platform,
         query: currentMessage,
         timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
         selfQq: input.group.selfQq,
@@ -1438,7 +1488,45 @@ async function runChannelTurn(input: {
         conversation: { select: { memoryScopeId: true } },
       },
     });
-    const selected = selectRawMessagesForPrompt(retrievalQuery, rawCandidates, {
+    let rawPromptCandidates = rawCandidates;
+    if (isGroup && rawCandidates.length) {
+      const rawUids = [...new Set(
+        rawCandidates
+          .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
+          .map((item) => readStoredAuthorOpenId(item.metadata))
+          .filter(Boolean),
+      )];
+      if (rawUids.length) {
+        const rawIdentities = await prisma.externalIdentity.findMany({
+          where: { platform: input.platform, platformUid: { in: rawUids } },
+          select: {
+            platformUid: true,
+            kind: true,
+            memoryScopes: {
+              where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+              take: 1,
+              select: { friendChatPolicy: true },
+            },
+          },
+        });
+        const rawPolicyByUid = new Map(rawIdentities.map((identity) => [
+          identity.platformUid,
+          {
+            kind: identity.kind,
+            policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
+          },
+        ] as const));
+        rawPromptCandidates = rawCandidates.filter((item) => {
+          if (item.role !== "USER") return true;
+          const speaker = readStoredSpeaker(item.metadata);
+          const uid = readStoredAuthorOpenId(item.metadata);
+          if (speaker.isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) return true;
+          const identity = rawPolicyByUid.get(uid);
+          return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
+        });
+      }
+    }
+    const selected = selectRawMessagesForPrompt(retrievalQuery, rawPromptCandidates, {
       timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
       tokenBudget: resolveRawMessageTokenBudget(character.modelConfig),
       limit: resolveRawMessageLimit(character.modelConfig),
@@ -1986,7 +2074,7 @@ async function runChannelTurn(input: {
      * 对同一个群里天天见的其他人无从判断。
      */
     if (isGroup) {
-      for (const member of buildGroupMemberDeltas(messages)) {
+      for (const member of buildGroupMemberDeltas(input.memberObservations ?? messages)) {
         await tx.groupMember.upsert({
           where: {
             conversationId_platformUid: { conversationId: conversation.id, platformUid: member.platformUid },
@@ -2234,6 +2322,7 @@ export async function handleChannelBatch(input: ChannelBatchInput): Promise<Chan
     eventType: input.eventType,
     externalConversationId: input.externalConversationId,
     messages: input.messages,
+    ...(input.memberObservations ? { memberObservations: input.memberObservations } : {}),
     ...(input.faceCatalog ? { faceCatalog: input.faceCatalog } : {}),
     ...(input.stickerCatalog?.length ? { stickerCatalog: input.stickerCatalog } : {}),
     ...(input.group ? { group: input.group } : {}),

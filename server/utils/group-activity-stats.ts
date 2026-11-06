@@ -1,5 +1,6 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import { parseEventTimeRange } from "./memory-event-time";
+import { shouldBlockFriendSpeaker } from "./friend-chat-policy";
 
 /**
  * 「这个群里谁跟我聊过 / 谁跟我聊得最多」——用代码数出来，不让模型从几条忆泡里拼名单。
@@ -10,6 +11,7 @@ import { parseEventTimeRange } from "./memory-event-time";
  * 是输入里根本没有一份按群、按天的完整名单 —— 它只能从检索到的几条事件里猜。
  *
  * 这里只做统计，不做判断：谁说了几句、几句是冲她说的、最后一句是什么时候。
+ * 统计会遵循当前角色的交流权限，已禁止对象的历史发言不再进入提示词。
  * 事实交给代码，模型只负责用角色的口吻说出来。
  *
  * 和 `group-activity.ts` 区分：那个是「群安静了多久」的内存记录器，给主动搭话判冷场用；
@@ -72,8 +74,10 @@ export function parseSelfNames(input: {
 }
 
 export type GroupActivityQueryInput = {
-  prisma: Pick<PrismaClient, "message">;
+  prisma: Pick<PrismaClient, "message" | "externalIdentity">;
   conversationId: string;
+  characterId: string;
+  platform: string;
   query: string;
   now?: Date;
   timeZone?: string;
@@ -115,14 +119,53 @@ export async function buildGroupActivityContext(
     select: { content: true, occurredAt: true, metadata: true },
   });
   if (rows.length === 0) return null;
-  rows.reverse();
+
+  // 这份榜单会进入模型提示词：当前已禁止交流的 AI / 群友不能通过历史统计重新出现。
+  const accountIds = [...new Set(rows.flatMap((row) => {
+    const meta = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+      ? row.metadata as Record<string, unknown>
+      : {};
+    if (meta.isOwner === true) return [];
+    return typeof meta.authorOpenId === "string" && meta.authorOpenId.trim()
+      ? [meta.authorOpenId.trim()]
+      : [];
+  }))];
+  const identities = accountIds.length
+    ? await input.prisma.externalIdentity.findMany({
+        where: { platform: input.platform, platformUid: { in: accountIds } },
+        select: {
+          platformUid: true,
+          kind: true,
+          memoryScopes: {
+            where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+            take: 1,
+            select: { friendChatPolicy: true },
+          },
+        },
+      })
+    : [];
+  const policyByAccount = new Map(identities.map((identity) => [
+    identity.platformUid,
+    { kind: identity.kind, policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT" },
+  ] as const));
+  const visibleRows = rows.filter((row) => {
+    const meta = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+      ? row.metadata as Record<string, unknown>
+      : {};
+    const accountId = typeof meta.authorOpenId === "string" ? meta.authorOpenId.trim() : "";
+    if (meta.isOwner === true || (input.ownerQq && accountId === input.ownerQq.trim())) return true;
+    const identity = policyByAccount.get(accountId);
+    return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.friendChatPolicy ?? "DEFAULT");
+  });
+  if (visibleRows.length === 0) return null;
+  visibleRows.reverse();
 
   const selfQq = input.selfQq?.trim() ?? "";
   const ownerQq = input.ownerQq?.trim() ?? "";
   const selfNames = (input.selfNames ?? []).map((name) => name.trim()).filter(Boolean);
   const byAccount = new Map<string, GroupActivityMember>();
 
-  for (const row of rows) {
+  for (const row of visibleRows) {
     const meta = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
       ? row.metadata as Record<string, unknown>
       : {};
@@ -184,7 +227,7 @@ export async function buildGroupActivityContext(
     rangeLabel,
     start: start.toISOString(),
     end: end.toISOString(),
-    totalMessages: rows.length,
+    totalMessages: visibleRows.length,
     members,
     note: `本群 ${rangeLabel}的群友发言统计：messages = 发言条数；atYou = @ 你、叫你名字或 @all 的条数。这是本群口径，不是全局互动次数，也不代表私聊关系。`,
   };
