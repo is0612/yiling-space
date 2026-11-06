@@ -16,12 +16,13 @@
  *   3. **失败必须静默**：看图失败只是少了一句描述，不能让整轮回复变成错误事件。
  */
 
-import { isIP } from "node:net";
-import { lookup } from "node:dns/promises";
 
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { resolveCharacterVisionApiKey } from "./credential-encryption";
 import { readModelUsage, recordModelUsage } from "./model-usage";
+import { downloadSafeMedia } from "./safe-media-download";
+
+export { assertFetchableImageUrl, assertPublicHost } from "./safe-media-download";
 
 /** 一轮最多看几张。图片描述按张计费，群里一轮三张已经够说明问题了。 */
 export const MAX_IMAGES_PER_TURN = 3;
@@ -136,126 +137,15 @@ export async function resolveVisionSettingsForCharacter(
   return resolveImageUnderstandingSettings({ ...input, visionApiKey }, options);
 }
 
-/** 私网/回环 IPv4：这些地址是"本机或内网"，外部 URL 指向它们一律拒绝。 */
-function isPrivateIpv4(address: string): boolean {
-  const octets = address.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((item) => !Number.isInteger(item) || item < 0 || item > 255)) return true;
-  const [first = 0, second = 0, third = 0] = octets;
-  return first === 0
-    || first === 10
-    || first === 127
-    || (first === 100 && second >= 64 && second <= 127)
-    || (first === 169 && second === 254)
-    || (first === 172 && second >= 16 && second <= 31)
-    || (first === 192 && second === 168)
-    || (first === 198 && (second === 18 || second === 19))
-    || (first === 192 && second === 0 && (third === 0 || third === 2))
-    || first >= 224;
-}
-
-function isPrivateIpv6(address: string): boolean {
-  const value = address.toLowerCase();
-  if (value === "::1" || value === "::") return true;
-  // IPv4-mapped（::ffff:10.0.0.1）按内网算：它可以把请求打到私网 IPv4。
-  const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped?.[1]) return isPrivateIpv4(mapped[1]);
-  return value.startsWith("fc")
-    || value.startsWith("fd")
-    || value.startsWith("fe8")
-    || value.startsWith("fe9")
-    || value.startsWith("fea")
-    || value.startsWith("feb");
-}
-
-function unbracket(hostname: string): string {
-  return hostname.replace(/^\[/, "").replace(/\]$/, "");
-}
-
-/**
- * 下载前的第一道闸：只接受 http(s)，且不能是字面量内网地址。
- * 抛出的是错误，调用方吞掉即可 —— 这张图就当没拿到。
- */
-export function assertFetchableImageUrl(raw: string): URL {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("IMAGE_INVALID_URL");
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("IMAGE_INVALID_PROTOCOL");
-  if (url.username || url.password) throw new Error("IMAGE_INVALID_URL");
-  const host = unbracket(url.hostname).toLowerCase();
-  if (!host) throw new Error("IMAGE_INVALID_URL");
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")
-    || host.endsWith(".internal") || host.endsWith(".lan") || host === "home.arpa") {
-    throw new Error("IMAGE_BLOCKED_HOST");
-  }
-  const version = isIP(host);
-  if (version === 4 && isPrivateIpv4(host)) throw new Error("IMAGE_BLOCKED_HOST");
-  if (version === 6 && isPrivateIpv6(host)) throw new Error("IMAGE_BLOCKED_HOST");
-  return url;
-}
-
-/**
- * 第二道闸：域名可以先过字面量检查，解析出来的地址却可能是内网。
- * DNS 查回来的每一条都得是公网地址，否则整张图都不下载。
- */
-export async function assertPublicHost(hostname: string): Promise<void> {
-  const host = unbracket(hostname).toLowerCase();
-  const version = isIP(host);
-  if (version === 4) {
-    if (isPrivateIpv4(host)) throw new Error("IMAGE_BLOCKED_HOST");
-    return;
-  }
-  if (version === 6) {
-    if (isPrivateIpv6(host)) throw new Error("IMAGE_BLOCKED_HOST");
-    return;
-  }
-  const addresses = await lookup(host, { all: true, verbatim: true });
-  if (!addresses.length) throw new Error("IMAGE_DOWNLOAD_FAILED");
-  for (const entry of addresses) {
-    const blocked = entry.family === 4 ? isPrivateIpv4(entry.address) : isPrivateIpv6(entry.address);
-    if (blocked) throw new Error("IMAGE_BLOCKED_HOST");
-  }
-}
-
 export async function downloadImage(rawUrl: string): Promise<{ buffer: Buffer; mime: string }> {
-  const url = assertFetchableImageUrl(rawUrl);
-  await assertPublicHost(url.hostname);
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-      headers: { accept: "image/*" },
-    });
-  } catch {
-    throw new Error("IMAGE_DOWNLOAD_FAILED");
-  }
-  if (!response.ok) throw new Error("IMAGE_HTTP_" + response.status);
-
-  // 重定向之后可能换了 host：最终地址要再过一遍同样的检查，别让 302 绕开白名单。
-  try {
-    await assertPublicHost(new URL(response.url).hostname);
-  } catch {
-    throw new Error("IMAGE_BLOCKED_HOST");
-  }
-
-  const declaredLength = Number(response.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_IMAGE_BYTES) throw new Error("IMAGE_TOO_LARGE");
-
-  const mime = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
-  if (!mime.startsWith("image/")) throw new Error("IMAGE_NOT_IMAGE");
-
-  let buffer: Buffer;
-  try {
-    buffer = Buffer.from(await response.arrayBuffer());
-  } catch {
-    throw new Error("IMAGE_DOWNLOAD_FAILED");
-  }
-  if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error("IMAGE_TOO_LARGE");
-  return { buffer, mime };
+  const result = await downloadSafeMedia(rawUrl, {
+    prefix: "IMAGE",
+    maxBytes: MAX_IMAGE_BYTES,
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    headers: { accept: "image/*" },
+    requiredMimePrefix: "image/",
+  });
+  return { buffer: result.buffer, mime: result.mime };
 }
 
 /** 把 `downloadImage` 的机器码翻成人话：这几种的修法完全不同，别糊成一句「下载失败」。 */
