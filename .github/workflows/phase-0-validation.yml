@@ -223,7 +223,7 @@ jobs:
         run: yarn run test:isolated
 
       - name: B站 命令目录与解析层测试
-        run: yarn run test:bili-runner
+        run: yarn run test:bili-runner && yarn run test:bili-schema
 
       - name: B站 视频卡片解析测试
         run: yarn run test:bili-cards
