@@ -48,7 +48,8 @@ assert.equal(ctx.senderOf("g:1", "m2"), "222");
 assert.equal(ctx.senderOf("g:2", "m1"), null, "别的群的消息 id 不能串到本群。");
 assert.equal(ctx.senderOf("g:1", "no-such-id"), null, "查不到就别 @。");
 assert.equal(ctx.senderOf("g:1", ""), null);
-assert.equal(ctx.senderOf("g:1", "m1", 1), null, "身份过滤可用比常规窗口更长的消息保留期，但不会突破调用方给定的上限。");
+now += 2;
+assert.equal(ctx.senderOf("g:1", "m1", 1), null, "调用方可以用更窄的时间上限，排除已过期的历史发言。");
 
 // ── 2. 入模正文：@ 她自己 / 别人 / 全体 ────────────────────────
 assert.equal(ctx.formatText("g:1", `@${SELF} 你好`), "@self 你好");
