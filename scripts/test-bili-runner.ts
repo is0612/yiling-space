@@ -1,7 +1,7 @@
 import "dotenv/config";
 import assert from "node:assert/strict";
 import { runBili, biliJson, resolveBiliBin } from "../server/utils/channel-adapter/bili/runner";
-import { BILI_CATALOG, findBiliCatalogItem } from "../server/utils/channel-adapter/bili/catalog";
+import { BILI_CATALOG, findBiliCatalogItem, BiliCommandRequestError, prepareBiliCommandInvocation } from "../server/utils/channel-adapter/bili/catalog";
 import { biliHomeEnv, biliOptions, type BiliConnectionRecord } from "../server/utils/channel-adapter/bili/configure";
 
 async function main() {
@@ -30,7 +30,7 @@ async function main() {
   assert.ok(writeItems.length > 0, "应有写操作命令标记 write=true");
   // 写操作应包含点赞/收藏/投币/三连/评论/私信/动态
   const writeIds = new Set(writeItems.map((i) => i.id));
-  for (const id of ["video.like", "video.fav", "video.coin", "video.triple", "comment.post", "dm.send", "dynamic.post"]) {
+  for (const id of ["video.like", "video.fav", "video.coin", "video.triple", "comment.post", "dm.send", "dynamic.post", "owner.set"]) {
     assert.ok(writeIds.has(id), `写操作 ${id} 应存在`);
   }
 
@@ -38,6 +38,47 @@ async function main() {
   const videoWatch = findBiliCatalogItem("video.watch");
   assert.ok(videoWatch, "video.watch 应存在");
   assert.deepEqual(videoWatch?.argv, ["video", "watch"]);
+
+  // 6a. 服务端执行边界：itemId 和 argv 必须匹配，且未知/缺失目录项一律拒绝。
+  assert.throws(
+    () => prepareBiliCommandInvocation(BILI_CATALOG, { argv: ["video", "coin", "BV1xx411c7mD"] }),
+    BiliCommandRequestError,
+    "缺少 itemId 的请求不能绕过命令目录写保护。",
+  );
+  assert.throws(
+    () => prepareBiliCommandInvocation(BILI_CATALOG, { itemId: "unknown.command", argv: ["video", "coin"] }),
+    BiliCommandRequestError,
+    "未知 itemId 必须拒绝，不能把未登记命令当只读命令执行。",
+  );
+  assert.throws(
+    () => prepareBiliCommandInvocation(BILI_CATALOG, { itemId: "auth.status", argv: ["video", "coin", "BV1xx411c7mD"] }),
+    BiliCommandRequestError,
+    "不能把只读 itemId 和写操作 argv 拼在同一个请求里。",
+  );
+  const safeRead = prepareBiliCommandInvocation(BILI_CATALOG, {
+    itemId: "auth.status",
+    argv: ["auth", "status"],
+  });
+  assert.deepEqual(safeRead.argv, ["auth", "status"], "合法只读命令不应被改写。");
+  assert.equal(safeRead.write, false);
+
+  const guardedWrite = prepareBiliCommandInvocation(BILI_CATALOG, {
+    itemId: "video.coin",
+    argv: ["video", "coin", "BV1xx411c7mD"],
+  });
+  assert.equal(guardedWrite.write, true);
+  assert(guardedWrite.argv.includes("--dry-run"), "未明确确认的写操作必须被自动加上 --dry-run。");
+  const confirmedWrite = prepareBiliCommandInvocation(BILI_CATALOG, {
+    itemId: "video.coin",
+    argv: ["video", "coin", "BV1xx411c7mD"],
+    allowWrite: true,
+  });
+  assert(!confirmedWrite.argv.includes("--dry-run"), "只有显式 allowWrite 才能执行真实写操作。");
+  const alreadyDryRun = prepareBiliCommandInvocation(BILI_CATALOG, {
+    itemId: "video.coin",
+    argv: ["video", "coin", "BV1xx411c7mD", "--dry-run"],
+  });
+  assert.equal(alreadyDryRun.argv.filter((arg) => arg === "--dry-run").length, 1, "--dry-run 不能重复追加。");
 
   // 7. 分区排行参数里应含分区选择与 choices
   const hotRank = findBiliCatalogItem("hot.rank");
