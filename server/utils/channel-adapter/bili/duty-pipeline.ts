@@ -758,6 +758,9 @@ async function runDutyRoundLocked(
     return { ok: false, ...empty, seenVideos: seenBvids.size, notes, error: "额度已用完" };
   }
 
+  // 锁失效时尽早停止，避免继续消耗模型额度或推进主人互动流程。
+  await beforeExternalWrite();
+
   // 0. 主人内容互动（owner-watch.ts）。独立于推荐流：只对主人的投稿动手。
   const ownerResult = await runOwnerWatch({
     record,
@@ -869,6 +872,7 @@ async function runDutyRoundLocked(
   };
 
   // 4. 粗筛：只对入选的才付出 watch 的代价
+  await beforeExternalWrite();
   const modelShortlist = await shortlistCandidates(candidates, settings.watchLimit, model, notes);
   // 「主人发的」不交给粗筛决定要不要看：模型没留也补到最前面（最多 OWNER_PICK_MAX 条）。
   // 提示词里已经请它优先，但那是请求不是契约 —— 主人发的东西她一定看，这条由代码保证。
@@ -887,6 +891,7 @@ async function runDutyRoundLocked(
   let watchedCount = 0;
 
   for (const bvid of shortlist) {
+    await beforeExternalWrite();
     const candidate = byBvid.get(bvid);
     if (!candidate) continue;
     if (picked.length >= remaining) break;
@@ -1107,6 +1112,8 @@ async function runDutyRoundLocked(
   // 同一 (binding, day, roundIndex) 重跑时覆盖同一条记忆，不重复堆积
   const journalKey = `bili-duty:${binding.id}:${today}:${roundIndex}`;
 
+  // 最终报告、判重和札记同样属于本轮的数据库写入；失去租约的旧执行者不能落库。
+  await beforeExternalWrite();
   const report = await prisma.$transaction(async (tx) => {
     const created = await tx.biliRoundReport.create({
       data: {
