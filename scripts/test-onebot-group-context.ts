@@ -48,6 +48,7 @@ assert.equal(ctx.senderOf("g:1", "m2"), "222");
 assert.equal(ctx.senderOf("g:2", "m1"), null, "别的群的消息 id 不能串到本群。");
 assert.equal(ctx.senderOf("g:1", "no-such-id"), null, "查不到就别 @。");
 assert.equal(ctx.senderOf("g:1", ""), null);
+assert.equal(ctx.senderOf("g:1", "m1", 1), null, "身份过滤可用比常规窗口更长的消息保留期，但不会突破调用方给定的上限。");
 
 // ── 2. 入模正文：@ 她自己 / 别人 / 全体 ────────────────────────
 assert.equal(ctx.formatText("g:1", `@${SELF} 你好`), "@self 你好");
@@ -82,6 +83,12 @@ assert.equal(ctx.activeTopicCount(topicKey), 1);
 assert.equal(ctx.topicCandidate(topicKey, [facts({ messageId: "a2", senderQq: "111" })]), true, "参与者继续说，算话题候选。");
 assert.equal(ctx.topicCandidate(topicKey, [facts({ messageId: "a3", senderQq: "333" })]), false, "陌生人说话不算。");
 assert.deepEqual(ctx.anchors(topicKey).map((anchor) => anchor.id), ["a1"]);
+assert.deepEqual(ctx.anchors(topicKey, new Set(["a1"])), [], "身份被禁止后，不再向模型提供它的旧话题锚点。");
+assert.equal(
+  ctx.topicCandidate(topicKey, [facts({ messageId: "a2-blocked", senderQq: "111" })], new Set(["111"])),
+  false,
+  "被禁止成员的历史话题不再触发模型接话。",
+);
 
 // 恰好 3 分钟：还活着；超过就失效。
 now += minutes(3) - 1;
@@ -168,6 +175,7 @@ assert.deepEqual(
   [{ member: "member_2", speaker: "千人安知鱼之乐", belongsTo: "member_1", belongsToName: "群友甲" }],
   "「@某人 主人夸我了」要能学成归属。",
 );
+assert.deepEqual(ownership.members("g:o", new Set(["222"])), [], "被禁止成员不再进入群成员关系提示。");
 
 // 群名片（弱线索）：`X的Y` 与 `Y（主人：X）` 两种写法都认。
 const fromNames = createGroupContext({ selfQq: SELF, now: () => now });
