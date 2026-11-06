@@ -316,12 +316,16 @@ export function applyImageDescriptions(content: string, descriptions: Array<stri
   let text = content;
   let cursor = 0;
   for (const description of descriptions) {
-    const value = description?.trim();
-    if (!value) continue;
+    // 每个结果都必须消费一个原始图片占位符。失败结果保持 [图片]，
+    // 但不能跳过它，否则后一张图片的描述会错填到前一张。
     const index = text.indexOf("[图片]", cursor);
     if (index < 0) break;
-    const replacement = `[图片：${value}]`;
-    text = text.slice(0, index) + replacement + text.slice(index + "[图片]".length);
+
+    const value = description?.trim();
+    const replacement = value ? `[图片：${value}]` : "[图片]";
+    if (value) {
+      text = text.slice(0, index) + replacement + text.slice(index + "[图片]".length);
+    }
     cursor = index + replacement.length;
   }
   return text;
