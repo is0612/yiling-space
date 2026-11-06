@@ -5,13 +5,13 @@ import { buildPage, readPageQuery } from "../../../utils/pagination";
 import { getPrisma } from "../../../utils/prisma";
 
 /**
- * 「她的朋友」：某个角色认识的某个人。
+ * 「她的朋友」：某个角色遇到过的某个人。
  *
- * **一行 = 一条关系**，不是一个账号。同一个 QQ 号跟两个角色都聊过就有两行 ——
- * 「聊过几次」「从哪认识的」本来就按角色算（关系落在各自的 `EXTERNAL_IDENTITY`
- * 记忆范围上，scopeKey 里带 characterId）。
+ * **一行 = 一条关系**，不是一个账号。同一个 QQ 号在两个角色的群里出现，会有两行；
+ * 平台身份类型是账号级共享的，交流权限和互动次数则按角色分开。
  *
- * 只返回关系的元信息，不返回任何对话或记忆正文：这里要看的是「谁」，不是「说了什么」。
+ * 群成员第一次发言就会建立「遇到过」记录（interactionCount = 0），方便提前标记 AI / 禁止交流；
+ * 只有她真的回复了对方，互动次数才会增加。这里只返回关系元信息，不返回对话或记忆正文。
  *
  * 分页在这儿做，因为名单会一直长（群里认人会一直往上加）：
  * `?characterId=&q=&source=ALL|PRIVATE|GROUP&sort=recent|count|closeness|known&dir=asc|desc&page=1&pageSize=12`
@@ -30,14 +30,12 @@ const DEFAULT_PAGE_SIZE = 12;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * 「算朋友」的硬条件：有身份、真的互动过。
- * `interactionCount > 0` 不是冗余条件 —— 0 次是「在群里出现过但没被搭理」的历史残留，
- * 旧版群聊会给他们建身份，那些行不该出现在这张页面上。
+ * 名单包括已互动朋友和群里遇到过、但还没来往的人。
+ * 零互动的群成员也要能被提前标记身份/交流权限；互动次数仍用于区分熟悉程度。
  */
 const FRIEND_BASE: Prisma.MemoryScopeWhereInput = {
   scopeType: "EXTERNAL_IDENTITY",
   externalIdentityId: { not: null },
-  interactionCount: { gt: 0 },
 };
 
 /** 库里存 bili / qq-onebot / wechat，页面显示 B站 / QQ / 微信；搜「QQ」也得能搜到。 */
