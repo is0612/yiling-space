@@ -341,7 +341,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <!-- 五个时点：归档、周期、任务、花费，全部取这个角色自己的账 -->
+          <!-- 四个时点：归档、周期、花费，全部取这个角色自己的账。
+               不再放「待处理任务」—— 失败任务在顶部报警条里已经说过一次，
+               这里再报一遍属于重复，而且挤掉了一行能放四格的宽度。 -->
           <div class="hero-stats">
             <div class="stat">
               <span class="stat-k">距下次归档</span>
@@ -371,20 +373,6 @@ onBeforeUnmount(() => {
                 {{ card.character.latestSnapshotVersion ? card.character.latestSnapshotLabel : "—" }}<small v-if="card.character.latestSnapshotVersion">v{{ card.character.latestSnapshotVersion }}</small>
               </span>
               <span class="stat-f">{{ card.character.latestSnapshotVersion ? `已归档 ${card.character.latestSnapshotVersion} 次` : "还没有归档过" }}</span>
-            </div>
-            <div class="stat">
-              <span class="stat-k">待处理任务</span>
-              <span class="stat-v">
-                {{ card.character.pendingTaskCount }}<small>项</small>
-              </span>
-              <span class="stat-f">
-                <template v-if="card.character.failedTaskCount > 0">
-                  <em class="is-err">{{ card.character.failedTaskCount }} 个失败待处理</em>
-                </template>
-                <template v-else>
-                  暂无异常
-                </template>
-              </span>
             </div>
             <div class="stat">
               <span class="stat-k">今日花费</span>
@@ -716,7 +704,7 @@ onBeforeUnmount(() => {
    四列就不等宽了，数字的左缘会一行比一行靠右。 */
 .ov-a .hero-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 24px;
   margin-top: 20px;
   padding-top: 18px;
@@ -770,10 +758,6 @@ onBeforeUnmount(() => {
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.ov-a .stat-f .is-err {
-  color: var(--red);
-  font-style: normal;
 }
 .ov-a .hero-cycle {
   display: flex;
@@ -878,16 +862,11 @@ onBeforeUnmount(() => {
   text-decoration: none;
 }
 
-/* 五格在窄屏会挤成一团：先退到 3 列，≤720 再退到 2 列。
-   两种情况都会有格子被挤到行首，行首那根竖线会悬在卡片内衬里，索性一起收掉。 */
-@media (max-width: 1000px) {
-  .ov-a .hero-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 20px; }
-  .ov-a .stat + .stat::before { display: none; }
-}
+/* 四格在窄屏会挤成一团：≤720 只保留卡片自己的内衬和标题换行，
+   格子怎么排交给下面按卡片宽度判断的 @container。 */
 @media (max-width: 720px) {
   .ov-a .hero { padding: 16px; }
   .ov-a .hero-head { flex-wrap: wrap; }
-  .ov-a .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 20px; }
   .ov-a .hero-cycle { flex-wrap: wrap; gap: 8px; }
   .ov-a .hero-cycle-text { flex: none; }
 }
@@ -897,24 +876,17 @@ onBeforeUnmount(() => {
   .ov-a .ov-stage { width: 100%; }
 }
 
-/* 卡片被角色挤窄之后，五格自己会挤成一团。
+/* 卡片被角色挤窄之后，四格自己会挤成一团：500 以下退成 2×2。
    这里用 @container 而不是 @media —— 决定卡片多宽的是右边留了多少，
-   不是屏幕多大；1920 的屏配上大角色，卡片一样可能只有 700px。
-   拆成 6 栏、前三个各占 2 栏、后两个各占 3 栏，正好排成 3+2 两行且不留空位。 */
-@container (max-width: 760px) {
+   不是屏幕多大；1920 的屏配上大角色，卡片一样可能只有 500px。
+   退到两行时行首那根竖线会悬在卡片内衬里，索性一起收掉。
+   原来是 5 格，用「6 栏 + 前 3 个各占 2 栏、后 2 个各占 3 栏」凑 3+2；
+   去掉「待处理任务」只剩 4 格，直接 2×2 就够了。 */
+@container (max-width: 500px) {
   .ov-a .hero-stats {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     row-gap: 20px;
   }
-  .ov-a .stat { grid-column: span 2; }
-  .ov-a .stat:nth-child(4),
-  .ov-a .stat:nth-child(5) { grid-column: span 3; }
   .ov-a .stat + .stat::before { display: none; }
-}
-@container (max-width: 480px) {
-  .ov-a .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ov-a .stat,
-  .ov-a .stat:nth-child(4),
-  .ov-a .stat:nth-child(5) { grid-column: span 1; }
 }
 </style>

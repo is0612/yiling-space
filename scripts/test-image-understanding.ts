@@ -262,6 +262,65 @@ for (const blocked of [
 // 带上账号密码的 URL 也拒绝：那是把凭据塞进日志的常见姿势。
 assert.throws(() => assertFetchableImageUrl("https://user:pass@example.com/a.png"), /IMAGE_/);
 
+// ── 7. 失败项必须吃掉占位符（第二轮复现：描述错位）──────────
+/**
+ * 契约（本轮新增，生产实现尚未满足）：一张图识别失败时，它那个坑要填成
+ * `[图片：无法读取]`，**不能**让后面那张的描述往前顶。
+ *
+ * 当前 `applyImageDescriptions` 里 null 走的是 `continue`，没消费占位符：
+ * `[图片][图片]` + `[null, "第二张"]` 会得到 `[图片：第二张][图片]` ——
+ * 第二张的描述被安到了第一张头上。语音那边（`applyVoiceTranscripts`）是消费的、
+ * 填 `[语音（没转成文字）]`，两边行为不一致，说明这是漏了而不是设计取舍。
+ */
+const IMAGE_UNREADABLE = "[图片：无法读取]";
+const placeholderFailures: string[] = [];
+
+function expectText(name: string, actual: string, expected: string) {
+  if (actual === expected) {
+    console.log(`  PASS ${name}`);
+    return;
+  }
+  placeholderFailures.push(`${name}：期望 ${expected}，实际 ${actual}`);
+  console.log(`  FAIL ${name}\n       期望：${expected}\n       实际：${actual}`);
+}
+
+// 7.1 首位失败：第二张的描述绝不能顶到第一张的坑里。
+expectText(
+  "首位识别失败不错位",
+  applyImageDescriptions("[图片][图片]", [null, "第二张图片的描述"]),
+  `${IMAGE_UNREADABLE}[图片：第二张图片的描述]`,
+);
+// 7.2 反向场景：首位成功、次位失败。
+expectText(
+  "末位识别失败不错位",
+  applyImageDescriptions("[图片][图片]", ["第一张图片的描述", null]),
+  `[图片：第一张图片的描述]${IMAGE_UNREADABLE}`,
+);
+// 7.3 中间失败：三张图里第二张挂了，第一、第三张各自留在原位。
+expectText(
+  "中间识别失败不错位",
+  applyImageDescriptions("[图片][图片][图片]", ["第一张", null, "第三张"]),
+  `[图片：第一张]${IMAGE_UNREADABLE}[图片：第三张]`,
+);
+// 7.4 连续失败：两个坑都要占住，不能退化成裸的 [图片]。
+expectText(
+  "连续识别失败逐个占位",
+  applyImageDescriptions("[图片][图片]", [null, null]),
+  `${IMAGE_UNREADABLE}${IMAGE_UNREADABLE}`,
+);
+// 7.5 全成功：位置必须原样保持（防回归）。
+expectText(
+  "全部成功时按序填充",
+  applyImageDescriptions("[图片] 和 [图片]", ["第一张", "第二张"]),
+  "[图片：第一张] 和 [图片：第二张]",
+);
+
+assert.equal(
+  placeholderFailures.length,
+  0,
+  `图片描述占位契约未满足（${placeholderFailures.length} 条）：\n- ${placeholderFailures.join("\n- ")}`,
+);
+
 assert.equal(MAX_IMAGES_PER_TURN, 3, "一轮最多看三张，别让一次群聊刷出一堆视觉调用。");
 
 console.log("test-image-understanding: ok");

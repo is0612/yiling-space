@@ -167,7 +167,9 @@
     "regen:events": "tsx scripts/regenerate-events-day.ts",
     "test:day-time": "tsx scripts/test-day-time.ts",
     "test:days-page-races": "tsx scripts/test-days-page-races.ts",
-    "test:journal-page-races": "tsx scripts/test-journal-page-races.ts"
+    "test:journal-page-races": "tsx scripts/test-journal-page-races.ts",
+    "test:media-fetch-guards": "tsx scripts/test-media-fetch-guards.ts",
+    "test:onebot-message-integrity": "tsx scripts/test-onebot-message-integrity.ts"
   },
   "dependencies": {
     "@audio/decode-amr": "^1.3.1",
