@@ -44,11 +44,12 @@ export default defineEventHandler(async (event) => {
         ],
       },
       orderBy: [{ occurredAt: "desc" }],
-      take: 300,
+      take: 301,
       select: { dayKey: true },
     });
+    const truncated = matched.length > 300;
     const counts = new Map<string, number>();
-    for (const item of matched) counts.set(item.dayKey, (counts.get(item.dayKey) ?? 0) + 1);
+    for (const item of matched.slice(0, 300)) counts.set(item.dayKey, (counts.get(item.dayKey) ?? 0) + 1);
     const dayKeys = [...counts.keys()].sort((left, right) => right.localeCompare(left));
     const progressWhere = {
       memoryScope: { is: { characterId } },
@@ -75,7 +76,7 @@ export default defineEventHandler(async (event) => {
       eventCount: counts.get(dayKey) ?? 0,
       extractedAt: progressByDay.get(dayKey)?.toISOString() ?? null,
     }));
-    return { today, timeZone, days: rows, query };
+    return { today, timeZone, days: rows, query, truncated };
   }
 
   /**
@@ -89,14 +90,16 @@ export default defineEventHandler(async (event) => {
    * 用 groupBy 而不是取回所有行在内存里合并：`take: 90` 必须落在**天**上，
    * 否则多范围的行会把 90 格额度吃掉，实际只看得到一半天数。
    */
-  const grouped = await prisma.memoryEventDay.groupBy({
+  const groupedRows = await prisma.memoryEventDay.groupBy({
     by: ["dayKey"],
     where: { memoryScope: { is: { characterId } } },
     orderBy: { dayKey: "desc" },
-    take: 90,
+    take: 91,
     _sum: { eventCount: true },
     _max: { extractedAt: true },
   });
+  let truncated = groupedRows.length > 90;
+  const grouped = groupedRows.slice(0, 90);
 
   // state 没法在 groupBy 里聚合，单独取「还有范围停在 DRAFT」的天。
   const draftRows = grouped.length
@@ -120,7 +123,11 @@ export default defineEventHandler(async (event) => {
   // 今天还没整理过时也补一行：否则「今天」会从列表里整个消失，用户以为页面坏了。
   if (!rows.some((row) => row.dayKey === today)) {
     rows.unshift({ dayKey: today, state: "DRAFT", eventCount: 0, extractedAt: null });
+    if (rows.length > 90) {
+      rows.pop();
+      truncated = true;
+    }
   }
 
-  return { today, timeZone, days: rows, query: "" };
+  return { today, timeZone, days: rows, query: "", truncated };
 });
