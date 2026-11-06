@@ -431,13 +431,13 @@ await loadDays();
             v-if="detail.eventsTruncated"
             class="muted-note day-empty"
           >
-            当天共有 {{ detail.eventsTotal }} 条忆泡，当前仅展示最早的 {{ detail.events.length }} 条。
+当天共有 {{ detail.eventsTotal }} 条忆泡（包含已隐藏），当前按时间仅展示最早的 {{ detail.events.length }} 条；下方已隐藏列表也只统计当前展示范围。
           </div>
           <div
             v-if="!activeEvents.length"
             class="muted-note day-empty"
           >
-            这一天还没有整理出忆泡。
+            {{ detail.eventsTruncated ? "当前展示的忆泡中没有可见内容；当天其余忆泡尚未显示。" : "这一天还没有整理出忆泡。" }}
           </div>
           <article
             v-for="event in activeEvents"
@@ -492,7 +492,7 @@ await loadDays();
             class="day-archived"
           >
             <p class="muted-note">
-              已隐藏 {{ archivedEvents.length }} 条
+              已隐藏 {{ archivedEvents.length }} 条<template v-if="detail.eventsTruncated">（当前展示范围）</template>
             </p>
             <div
               v-for="event in archivedEvents"
