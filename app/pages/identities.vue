@@ -213,6 +213,17 @@ async function load(target = page.value) {
 function pickCharacter(characterId: string) {
   if (characterId === activeCharacterId.value) return;
   activeCharacterId.value = characterId;
+  /*
+   * 待审备注属于「这个角色」，切走就得连人带资料一起收掉。
+   *
+   * 只靠 openSuggestions 里的 requestId 校验不够：那一条只挡「在途响应晚回来」，
+   * 挡不住「上一个角色的清单已经加载好、还留在弹窗里」—— 切完角色仍然看到别人的叫法。
+   * 所以在途请求作废、弹窗关闭、已加载的条目清空，三件事一起做。
+   */
+  suggestionRequestSequence += 1;
+  suggestionDialogOpen.value = false;
+  suggestions.value = [];
+  suggestionsLoading.value = false;
   load(1);
 }
 

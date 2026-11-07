@@ -354,10 +354,11 @@ async function concurrentFieldPatchesKeepBoth() {
   assert.equal(policyBody.friendChatPolicy, "ALLOW", "权限只提交权限字段");
   assert.equal("identityKind" in policyBody, false, "权限请求不该顺带写身份");
 
-  // 服务端回报的整条关系是「请求开始时」的快照：权限那次带着旧的 UNKNOWN。
-  policyPatch.resolve({ identityKind: "UNKNOWN", identityKindSource: "AUTO", friendChatPolicy: "ALLOW" });
+  // 服务端只返回「本次实际改的那个字段」（另一个维度可能被并发 PATCH 更新，
+  // 返回事务外读到的旧值会让前端把刚保存好的设置覆盖回去），所以这里也照契约造响应。
+  policyPatch.resolve({ scopeId: "a-1", friendChatPolicy: "ALLOW" });
   await flushMicrotasks();
-  kindPatch.resolve({ identityKind: "AI", identityKindSource: "MANUAL", friendChatPolicy: "DEFAULT" });
+  kindPatch.resolve({ scopeId: "a-1", identityKind: "AI", identityKindSource: "MANUAL" });
   await flushMicrotasks();
 
   const after = page.read<FriendRecord[]>("friends")[0]!;
@@ -380,9 +381,9 @@ async function sameFieldLastWriteWins() {
   page.call("setIdentityKind", target, "AI");
   const second = page.take("/api/admin/identities/a-1", "PATCH");
 
-  first.resolve({ identityKind: "HUMAN", identityKindSource: "MANUAL", friendChatPolicy: "DEFAULT" });
+  first.resolve({ scopeId: "a-1", identityKind: "HUMAN", identityKindSource: "MANUAL" });
   await flushMicrotasks();
-  second.resolve({ identityKind: "AI", identityKindSource: "MANUAL", friendChatPolicy: "DEFAULT" });
+  second.resolve({ scopeId: "a-1", identityKind: "AI", identityKindSource: "MANUAL" });
   await flushMicrotasks();
 
   const after = page.read<FriendRecord[]>("friends")[0]!;
