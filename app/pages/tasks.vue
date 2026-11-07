@@ -401,9 +401,10 @@ async function retrySelectedTask() {
     selectedTask.value = tasks.value.find((item) => item.id === task.id) ?? null;
     if (!selectedTask.value) {
       detailsOpen.value = false;
-      ElMessage.info("任务状态已变化，已从当前筛选结果移出。");
+      ElMessage.info("任务已更新，并从当前筛选结果移出。");
+    } else {
+      ElMessage.success(stuck ? "任务已放回队列，等 Worker 跑一次就会执行。" : "任务已重新排队。");
     }
-    ElMessage.success(stuck ? "任务已放回队列，等 Worker 跑一次就会执行。" : "任务已重新排队。");
   } catch (error) {
     ElMessage.error(getErrorMessage(error, "任务重新入队失败。"));
   } finally {
@@ -431,9 +432,10 @@ async function cancelSelectedTask() {
     selectedTask.value = tasks.value.find((item) => item.id === task.id) ?? null;
     if (!selectedTask.value) {
       detailsOpen.value = false;
-      ElMessage.info("任务状态已变化，已从当前筛选结果移出。");
+      ElMessage.info("任务已取消，并从当前筛选结果移出。");
+    } else {
+      ElMessage.success("任务已取消，审计记录已保留。");
     }
-    ElMessage.success("任务已取消，审计记录已保留。");
   } catch (error) {
     ElMessage.error(getErrorMessage(error, "取消任务失败。"));
   } finally {
