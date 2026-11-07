@@ -3,6 +3,7 @@ import {
   checkPasswordPolicy,
   hashPassword,
   passwordPolicyMessage,
+  readSessionToken,
   requireAdminActor,
   revokeOtherSessions,
 } from "../../../utils/auth";
@@ -64,11 +65,20 @@ export default defineEventHandler(async (event) => {
   if (rawStatus) data.status = rawStatus as "ACTIVE" | "DISABLED";
   if (password) data.passwordHash = await hashPassword(password);
 
-  await prisma.user.update({ where: { id: targetId }, data });
+  // A forced reset exists for the case where the old password can no longer be trusted, so every
+  // device signed in with it has to be signed out. Resetting your own password keeps the session
+  // you are clicking from, otherwise the administrator would throw themselves out of the page.
+  const mustRevoke = Boolean(password) || disabling;
+  const keepCurrentSession = Boolean(password) && target.id === admin.user.id;
+  const currentToken = keepCurrentSession ? readSessionToken(event) : undefined;
 
-  if (disabling) {
-    await revokeOtherSessions({ userId: targetId });
-  }
+  // Both writes share one transaction. A fresh hash stored while the old sessions survived is
+  // exactly the half-applied state that makes a reset pointless.
+  const revokedSessions = await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: targetId }, data });
+    if (!mustRevoke) return 0;
+    return revokeOtherSessions({ userId: targetId, currentToken, client: tx });
+  });
 
   await prisma.auditLog
     .create({
@@ -78,10 +88,10 @@ export default defineEventHandler(async (event) => {
         action: "admin.user_updated",
         entityType: "User",
         entityId: targetId,
-        details: { fields: Object.keys(data), disabled: disabling },
+        details: { fields: Object.keys(data), disabled: disabling, revokedSessions },
       },
     })
     .catch(() => undefined);
 
-  return { updated: true };
+  return { updated: true, revokedSessions };
 });

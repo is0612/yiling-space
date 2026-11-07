@@ -17,10 +17,11 @@
 - **会话管理**（`GET /api/auth/sessions`、`DELETE /api/auth/sessions/{id}`、`POST /api/auth/sessions/revoke-others`）：设备列表只返回会话 id、时间戳和由 User-Agent 派生的设备名，**不返回令牌哈希**。撤销只能作用于当前账号的会话，越权 id 与不存在的 id 同样返回 404，避免通过错误差异探测其他账号是否存在会话。撤销当前会话会同时清除 Cookie。
 - **登录审计**：登录成功/失败、登出、注册、改密与撤销会话均写入 `audit_logs`（`auth.login`、`auth.login_failed`、`auth.logout`、`auth.register`、`auth.password_changed`、`auth.session_revoked`、`auth.sessions_revoked`）；管理员可通过 `GET /api/admin/audit` 查看（用户管理页「最近登录活动」）。
 - **邮箱自助注册**（`POST /api/auth/register`）：邮箱即登录标识，存入 `email`（唯一）与 `username`。**默认关闭**，需显式设置 `YILING_ALLOW_REGISTRATION=true` 才开放（建议部署到服务器后按需开启）。**不发送验证邮件**（本部署无 SMTP）；注册 IP 只存哈希（`registrationIpHash`），注册按邮箱/IP 复用登录限流。
+- **管理员维护账号**（`PATCH /api/admin/users/{id}`）：可改显示名、启用/停用、强制重置密码。**重置密码会吊销该账号全部会话**（旧设备 Cookie 立即失效，必须用新密码重新登录）；管理员重置自己的密码时保留发起操作的那台设备，其余设备退出。停用账号会立即吊销全部会话，重新启用不会让旧会话复活，必须重新登录。密码哈希写入与会话吊销在**同一个数据库事务**内完成，任一步失败整体回滚，不存在「密码换了但旧会话还活着」的中间状态。
 - **账号分层**：`User.role` 只有 `ADMIN` / `USER` 两档，普通用户创建时默认 `USER`。业务接口一律按会话里的 `userId`（`ownerId`）过滤，因此每个用户天然只能读写自己的角色与记忆；管理员接口（`/api/admin/users`）仅管理员可访问，且只返回账号身份与统计、**不返回任何对话或记忆内容**。停用账号会立即使其会话失效。
 - **管理员护栏**：管理员不能停用自己的账号，也不能停用最后一个可用的管理员。
 
-仍待完成：密码重置（忘记密码）流程、注册邮箱验证（需 SMTP，可选）、登录/登出的完整审计视图，以及部署侧的 HTTPS 与反向代理信任配置。
+仍待完成：**自助**忘记密码（邮件重置链接，需 SMTP；当前只能由管理员在用户管理页重置）、注册邮箱验证（需 SMTP，可选）、登录/登出的完整审计视图，以及部署侧的 HTTPS 与反向代理信任配置。
 
 ## 2. 服务端 Token
 
@@ -80,6 +81,7 @@
 ## 7. 公开部署前最低检查
 
 - 登录会话在服务端被验证。✅ 已实现（`sessions` 表 + HttpOnly Cookie + 401 语义）
+- 管理员重置密码、停用账号会吊销该账号全部会话，且与密码写入同事务。✅ 已实现（`scripts/test-auth-admin-reset.ts` 覆盖六条验收）
 - 写操作拥有服务端授权校验。✅ 已实现（按 `ownerId` 过滤，所有写接口从会话取身份）
 - HTTPS 已启用。⬜ 部署时配置；启用后设置 `YILING_COOKIE_SECURE=true` 或 `NODE_ENV=production`
 - CORS、CSRF、速率限制按部署方式配置。⚠️ CSRF 与登录限流已实现；跨域未开放（默认同源），部署在反向代理后需确认 Host 与 `Origin` 一致

@@ -67,6 +67,9 @@ const rows = [
 ];
 const fakePrisma = {
   message: { findMany: async () => rows },
+  // 朋友/身份过滤：这里刻意不返回任何身份记录，模拟「全部未分类」的最旧口径。
+  // 已分类的 AI / 被禁止对象过滤在 `test:group-activity-stats` 里单独覆盖。
+  externalIdentity: { findMany: async () => [] },
 } as unknown as Parameters<typeof buildGroupActivityContext>[0]["prisma"];
 
 const activity = await buildGroupActivityContext({

@@ -101,11 +101,26 @@ console.log("\n[2] mention 模式 · 主人普通发言");
 
 /**
  * Prisma 桩：`getPrisma()` 会优先返回 `globalThis.__yilingPrisma`。
- * 这里塞一个「什么方法都能调、调用即记录、永远 resolve(null)」的代理，
- * 保证 handler 里的落库旁路（连接活性、群活跃度）不会真连库，也不会抛。
+ * 这里塞一个「什么方法都能调、调用即记录」的代理，保证 handler 里的落库旁路
+ * （连接活性、群活跃度）不会真连库，也不会抛。
+ *
+ * 朋友/身份落地后，群聊入口会先给发言人预登记一条外部身份与关系
+ * （`ensureGroupMemberIdentity`），这条链路会读 `upsert` 的返回值：
+ * 全返回 null 的话，`created.id` 直接抛 `Cannot read properties of null`
+ * —— 看起来像「群友消息把 handler 打崩了」，其实是桩没模拟出「新建行」。
+ * 这里只给身份/关系这几个方法补上最小返回值，其余仍是 null（缺行、无会话）。
  */
 const prismaCalls: string[] = [];
 function createStubPrisma(): unknown {
+  const responses: Record<string, unknown> = {
+    // 首次发言：还没有身份行，走 create 分支。
+    "prisma.externalIdentity.findUnique": null,
+    "prisma.externalIdentity.upsert": { id: "identity-stub", kind: "UNKNOWN" },
+    "prisma.externalIdentity.update": { id: "identity-stub", kind: "UNKNOWN" },
+    "prisma.memoryScope.upsert": { id: "scope-stub" },
+    "prisma.memoryScope.findUnique": { id: "scope-stub", firstSource: null, friendChatPolicy: "DEFAULT" },
+    "prisma.memoryScope.updateMany": { count: 1 },
+  };
   const wrap = (path: string): unknown => new Proxy(function stub() {}, {
     get(_target, property) {
       // 别让代理自己被当成 thenable，否则 await 会炸。
@@ -114,7 +129,7 @@ function createStubPrisma(): unknown {
     },
     apply() {
       prismaCalls.push(`${path}()`);
-      return Promise.resolve(null);
+      return Promise.resolve(path in responses ? responses[path] : null);
     },
   });
   return wrap("prisma");

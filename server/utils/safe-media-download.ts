@@ -17,6 +17,24 @@ const MAX_REDIRECTS = 5;
 type FetchResponse = Awaited<ReturnType<typeof undiciFetch>>;
 
 /**
+ * 传输层。
+ *
+ * 默认永远是 undici 的 fetch（原因见下面 `downloadSafeMedia` 里的注释：全局 fetch 带的是
+ * Node 内置那份 undici，和我们自建的 Agent 版本不匹配）。
+ *
+ * 但这也意味着**测试替换 `globalThis.fetch` 拦不住它** —— 2026-11-07 的媒体安全用例
+ * 就是这么全红的：mock 装上了，请求照样真的发到公网，最后统一超时成
+ * `*_DOWNLOAD_FAILED (23 timeout)`，看起来像下载器坏了。所以留一个只给测试用的注入点：
+ * 生产代码不调用它，行为与直接写 `undiciFetch` 完全一致。
+ */
+let mediaFetch = undiciFetch;
+
+/** 仅供测试：换成离线假传输（传 `null` 恢复）。不要在业务代码里调用。 */
+export function setMediaFetchForTest(next: typeof undiciFetch | null): void {
+  mediaFetch = next ?? undiciFetch;
+}
+
+/**
  * 把嵌套的 fetch 错误压成一行可读的原因（`UND_ERR_CONNECT_TIMEOUT` / `CERT_...` / `fetch failed`…）。
  *
  * 为什么需要：`fetch failed` 是 undici 的通用外壳，真正的原因在 `error.cause` 里，
@@ -346,7 +364,7 @@ export async function downloadSafeMedia(
        * 对方认不出这个 dispatcher 的接口，直接抛 `UND_ERR_INVALID_ARG invalid onRequestStart method`
        * —— 表现就是「所有外链下载失败」，连 403/404 都拿不到（2026-11-06 实测）。
        */
-      response = await undiciFetch(currentUrl, {
+      response = await mediaFetch(currentUrl, {
         redirect: "manual",
         signal,
         headers,

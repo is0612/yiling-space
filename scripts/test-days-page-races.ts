@@ -74,6 +74,8 @@ function harness() {
   let unmount: (() => void) | null = null;
 
   const context = createContext({
+    /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
+    definePageMeta: () => {},
     ref: (initial: unknown) => {
       let value = initial;
       const result = {} as Ref;

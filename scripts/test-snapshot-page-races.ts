@@ -32,6 +32,8 @@ function harness() {
   const role = { value: "role-a" };
   const notify = (message: string) => messages.push(message);
   const bindings = executable.runInContext(createContext({
+    /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
+    definePageMeta: () => {},
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: (sources: Ref | Ref[], callback: () => void) => watchers.push({ sources: Array.isArray(sources) ? sources : [sources], callback }),
     onMounted: () => {}, useCharacterList: () => ({ value: [] }), useCharacterSelection: () => ({ id: role }),

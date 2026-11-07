@@ -86,6 +86,9 @@ try {
   assert.equal(await revokeSessionByToken(second.token), false, "Revoking twice must not report a second change.");
 
   // 5. Disabled accounts cannot authenticate even with a valid session.
+  // 这里直接改库、绕过接口，只验证「解析时会拒绝停用账号」这一层。
+  // 走 `/api/admin/users/[id]` 停用时还会吊销全部会话，重新启用后旧 Cookie 不会复活，
+  // 那条路径由 scripts/test-auth-admin-reset.ts 覆盖。
   const third = await createSession({ userId, ip });
   await prisma.user.update({ where: { id: userId }, data: { status: "DISABLED" } });
   assert.equal(await resolveSessionUser(third.token), null, "Disabled users must not authenticate.");

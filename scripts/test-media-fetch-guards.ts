@@ -11,7 +11,7 @@
 
 import { downloadImage } from "../server/utils/image-understanding";
 import { downloadVoice } from "../server/utils/voice";
-import { createPinnedLookup } from "../server/utils/safe-media-download";
+import { createPinnedLookup, setMediaFetchForTest } from "../server/utils/safe-media-download";
 
 // ── 极简用例运行器 ────────────────────────────────────────────────
 type CaseResult = { name: string; ok: boolean; detail: string };
@@ -144,11 +144,15 @@ async function withTransport(
 ): Promise<void> {
   const original = globalThis.fetch;
   const transport = createTransport(routes);
+  // 下载器直连 undici 的 fetch，只换 `globalThis.fetch` 拦不住它 —— 用例会真的出网、
+  // 然后统一超时成 `*_DOWNLOAD_FAILED (23)`。两处都要装，别只装一半。
   globalThis.fetch = transport.fetchImpl as unknown as typeof fetch;
+  setMediaFetchForTest(transport.fetchImpl as unknown as Parameters<typeof setMediaFetchForTest>[0]);
   try {
     await run(transport as unknown as { fetchImpl: typeof fetch; hops: string[]; redirectModes: string[] });
   } finally {
     globalThis.fetch = original;
+    setMediaFetchForTest(null);
   }
 }
 

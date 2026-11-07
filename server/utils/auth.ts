@@ -1,6 +1,7 @@
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { createError, getHeader, getRequestURL, type H3Event } from "h3";
+import type { Prisma } from "../../src/generated/prisma/client";
 import { getPrisma } from "./prisma";
 
 const scrypt = promisify(scryptCallback);
@@ -509,9 +510,19 @@ export async function revokeSessionForUser(input: {
 }
 
 /** Revokes every active session of the account except the one making the request. */
-export async function revokeOtherSessions(input: { userId: string; currentToken?: string }): Promise<number> {
+export async function revokeOtherSessions(input: {
+  userId: string;
+  currentToken?: string;
+  /**
+   * Run inside a caller-supplied transaction. Password resets and session revocation must land
+   * together: a new hash with the old sessions still alive is exactly the state that leaves a
+   * stolen cookie working.
+   */
+  client?: Pick<Prisma.TransactionClient, "session">;
+}): Promise<number> {
   const currentHash = input.currentToken ? hashSessionToken(input.currentToken) : "";
-  const result = await getPrisma().session.updateMany({
+  const client = input.client ?? getPrisma();
+  const result = await client.session.updateMany({
     where: {
       userId: input.userId,
       revokedAt: null,
@@ -551,7 +562,11 @@ export async function changePassword(input: {
   }
 
   const passwordHash = await hashPassword(input.newPassword);
-  await prisma.user.update({ where: { id: account.id }, data: { passwordHash } });
-  const revokedSessions = await revokeOtherSessions({ userId: account.id, currentToken: input.currentToken });
+  // One transaction: a new hash that never reached the revocation step would leave every stolen
+  // cookie working against the new password.
+  const revokedSessions = await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: account.id }, data: { passwordHash } });
+    return revokeOtherSessions({ userId: account.id, currentToken: input.currentToken, client: tx });
+  });
   return { revokedSessions };
 }

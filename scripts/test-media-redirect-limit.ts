@@ -7,12 +7,13 @@
 import assert from "node:assert/strict";
 
 import { downloadImage } from "../server/utils/image-understanding";
+import { setMediaFetchForTest } from "../server/utils/safe-media-download";
 
 const originalFetch = globalThis.fetch;
 let requests = 0;
 const redirectModes: Array<RequestRedirect | undefined> = [];
 
-globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   requests += 1;
   redirectModes.push(init?.redirect);
 
@@ -22,6 +23,10 @@ globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promi
     headers: { location: `/redirect-${requests}` },
   });
 }) as typeof fetch;
+
+globalThis.fetch = mockFetch;
+// 下载器直连 undici 的 fetch：只换全局变量拦不住，用例会真的出网并超时。
+setMediaFetchForTest(mockFetch as unknown as Parameters<typeof setMediaFetchForTest>[0]);
 
 try {
   await assert.rejects(
@@ -34,4 +39,5 @@ try {
   console.log("media redirect limit: 1/1 PASS");
 } finally {
   globalThis.fetch = originalFetch;
+  setMediaFetchForTest(null);
 }
