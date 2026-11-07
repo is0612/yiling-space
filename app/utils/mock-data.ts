@@ -3,11 +3,8 @@ export type TimelineType = "message" | "memory" | "snapshot" | "event" | "memory
 
 export type Character = {
   id: string;
-  /**
-   * 血缘 id：这个角色最初来自哪一份角色数据（导入角色卡时用于认出「同一个她」）。
-   * 空 = 本机原生角色。老接口没有这个字段，所以标可选。
-   */
-  originId?: string | null;
+  /** 稳定同步根 ID；旧接口或旧缓存缺省时仍允许字段不存在。 */
+  originId?: string;
   name: string;
   alias: string;
   description: string;
