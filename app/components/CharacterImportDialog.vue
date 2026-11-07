@@ -35,7 +35,7 @@ type BundlePreview = {
   description: string;
   exportedAt: string | null;
   formatVersion: number | null;
-  /** 卡片的血缘 id；null = 老卡没带，认不出是哪个角色，只能新建。 */
+  /** 卡片的同步根 ID；null = 老卡没带，认不出同源角色，只能新建。 */
   originId: string | null;
   counts: BundleCounts;
 };
@@ -151,7 +151,7 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
 
 const ORIGIN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 卡片里的血缘 id。只认 UUID：不像 id 的一律当「没带」，别拿它去猜角色。 */
+/** 卡片里的同步根 ID。只认 UUID：不像 id 的一律当「没带」，别拿它去猜角色。 */
 function readOriginId(source: Record<string, unknown>): string | null {
   const value = asRecord(source.origin).characterId;
   if (typeof value !== "string") return null;
@@ -280,7 +280,7 @@ async function submit() {
   if (!payload.value || importing.value) return;
   importing.value = true;
   try {
-    // 合并走 ?target=：包本身不动，服务端按血缘再校验一次「确实是同一个她」。
+    // 合并走 ?target=：包本身不动，服务端按同步根再次校验目标确实同源。
     const url = merging.value && mergeTarget.value
       ? `/api/characters/import?target=${encodeURIComponent(mergeTarget.value.id)}`
       : "/api/characters/import";
