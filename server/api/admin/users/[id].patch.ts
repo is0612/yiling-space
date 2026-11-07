@@ -3,9 +3,7 @@ import {
   checkPasswordPolicy,
   hashPassword,
   passwordPolicyMessage,
-  readSessionToken,
   requireAdminActor,
-  revokeOtherSessions,
 } from "../../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
@@ -65,19 +63,17 @@ export default defineEventHandler(async (event) => {
   if (rawStatus) data.status = rawStatus as "ACTIVE" | "DISABLED";
   if (password) data.passwordHash = await hashPassword(password);
 
-  // A forced reset exists for the case where the old password can no longer be trusted, so every
-  // device signed in with it has to be signed out. Resetting your own password keeps the session
-  // you are clicking from, otherwise the administrator would throw themselves out of the page.
-  const mustRevoke = Boolean(password) || disabling;
-  const keepCurrentSession = Boolean(password) && target.id === admin.user.id;
-  const currentToken = keepCurrentSession ? readSessionToken(event) : undefined;
-
-  // Both writes share one transaction. A fresh hash stored while the old sessions survived is
-  // exactly the half-applied state that makes a reset pointless.
-  const revokedSessions = await prisma.$transaction(async (tx) => {
+  // 密码重置和账号停用都必须让目标账号的旧会话立即失效。
+  // 与用户资料变更放在同一事务，避免密码已更新但会话撤销失败的半完成状态。
+  const revokeSessions = disabling || Boolean(password);
+  await prisma.$transaction(async (tx) => {
     await tx.user.update({ where: { id: targetId }, data });
-    if (!mustRevoke) return 0;
-    return revokeOtherSessions({ userId: targetId, currentToken, client: tx });
+    if (revokeSessions) {
+      await tx.session.updateMany({
+        where: { userId: targetId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
   });
 
   await prisma.auditLog
@@ -88,10 +84,10 @@ export default defineEventHandler(async (event) => {
         action: "admin.user_updated",
         entityType: "User",
         entityId: targetId,
-        details: { fields: Object.keys(data), disabled: disabling, revokedSessions },
+        details: { fields: Object.keys(data), disabled: disabling },
       },
     })
     .catch(() => undefined);
 
-  return { updated: true, revokedSessions };
+  return { updated: true };
 });

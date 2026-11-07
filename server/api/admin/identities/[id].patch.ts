@@ -76,10 +76,14 @@ export default defineEventHandler(async (event) => {
     return { identity, relation };
   });
 
+  // 只返回本次实际修改的字段。另一个维度可能被并发 PATCH 更新，
+  // 返回事务外读取的旧值会让前端把刚保存成功的新设置覆盖回去。
   return {
     scopeId,
-    identityKind: result.identity.kind,
-    identityKindSource: result.identity.kindSource,
-    friendChatPolicy: result.relation.friendChatPolicy,
+    ...(identityKind ? {
+      identityKind: result.identity.kind,
+      identityKindSource: result.identity.kindSource,
+    } : {}),
+    ...(friendChatPolicy ? { friendChatPolicy: result.relation.friendChatPolicy } : {}),
   };
 });

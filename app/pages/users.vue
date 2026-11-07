@@ -167,16 +167,11 @@ async function submitReset() {
   }
   resetting.value = true;
   try {
-    const result = await $fetch<{ revokedSessions?: number }>(`/api/admin/users/${encodeURIComponent(resetTarget.value.id)}`, {
+    await $fetch(`/api/admin/users/${encodeURIComponent(resetTarget.value.id)}`, {
       method: "PATCH",
       body: { password },
     });
-    const revoked = result?.revokedSessions ?? 0;
-    ElMessage.success(
-      revoked > 0
-        ? `密码已重置，已退出 ${revoked} 台设备，请把新密码告知该用户。`
-        : "密码已重置，请把新密码告知该用户。",
-    );
+    ElMessage.success("密码已重置，请把新密码告知该用户。");
     resetTarget.value = null;
     resetPassword.value = "";
     dialogVisible.value = false;
@@ -394,7 +389,7 @@ onMounted(() => {
       </p>
       <template #footer>
         <div class="dlg-foot">
-          <span class="dlg-foot-note">重置会让对方所有设备退出登录，须用新密码重新登录</span>
+          <span class="dlg-foot-note">重置后，对方所有已登录设备都需要重新登录</span>
           <span class="dlg-foot-actions">
             <el-button @click="dialogVisible = false">
               取消

@@ -65,21 +65,6 @@ type FriendPage = {
 const PAGE_SIZE = 12;
 
 const loading = ref(true);
-
-/**
- * 列表请求代际。
- *
- * 切角色、换来源、换排序、搜索、翻页都会各自发一次请求，慢的那个常常后回来。
- * 只有「最新一次请求」允许写回状态；旧请求连 loading 都不能关 ——
- * 否则新请求还在飞，界面已经先显示空了。
- *
- * 这里不做防抖合并：用户点两下筛选就该看到第二次的结果，压掉第一次请求反而会
- * 让人以为没点中。
- */
-let listGeneration = 0;
-/** 卸载后一律不再写状态，避免「组件已销毁还在 set ref」这类异常更新。 */
-let unmounted = false;
-
 const friends = ref<Friend[]>([]);
 const characters = ref<Character[]>([]);
 const activeCharacterId = ref("");
@@ -186,25 +171,27 @@ const sourceOptions = computed<Array<{ value: "ALL" | "PRIVATE" | "GROUP"; label
   { value: "GROUP", label: "群里认识", count: sourceCounts.value.group },
 ]);
 
+// 列表请求序号：快速切角色 / 搜索 / 翻页时，只允许最后一次请求提交页面状态。
+let loadSequence = 0;
+
 async function load(target = page.value) {
-  const generation = ++listGeneration;
+  const requestId = ++loadSequence;
+  // 请求参数在发出时固定下来，不能让响应对应的筛选条件在等待期间变化。
+  const requestQuery = {
+    characterId: activeCharacterId.value || undefined,
+    q: query.value.trim() || undefined,
+    source: sourceFilter.value,
+    sort: sortBy.value,
+    dir: sortDirections.value[sortBy.value],
+    page: target,
+    pageSize: PAGE_SIZE,
+  };
   loading.value = true;
   // 换角色 / 换筛选 / 翻页之后，之前勾的人可能已经不在这一页上了，先清空勾选。
   selectedIds.value = [];
   try {
-    const response = await $fetch<FriendPage>("/api/admin/identities", {
-      query: {
-        characterId: activeCharacterId.value || undefined,
-        q: query.value.trim() || undefined,
-        source: sourceFilter.value,
-        sort: sortBy.value,
-        dir: sortDirections.value[sortBy.value],
-        page: target,
-        pageSize: PAGE_SIZE,
-      },
-    });
-    // 旧请求晚回来：连 activeCharacterId 都不能往回写，否则界面会自己跳回上一个角色。
-    if (generation !== listGeneration || unmounted) return;
+    const response = await $fetch<FriendPage>("/api/admin/identities", { query: requestQuery });
+    if (requestId !== loadSequence) return;
     friends.value = response.items;
     characters.value = response.characters;
     activeCharacterId.value = response.activeCharacterId;
@@ -215,11 +202,10 @@ async function load(target = page.value) {
     sourceCounts.value = response.sourceCounts;
     pendingSuggestions.value = response.pendingSuggestions ?? 0;
   } catch (error) {
-    if (generation !== listGeneration || unmounted) return;
+    if (requestId !== loadSequence) return;
     ElMessage.error(readErrorMessage(error, "无法读取朋友列表。"));
   } finally {
-    // 关键：只有最新一次请求能关 loading。旧请求无条件关掉会让界面在空列表上停住。
-    if (generation === listGeneration && !unmounted) loading.value = false;
+    if (requestId === loadSequence) loading.value = false;
   }
 }
 
@@ -227,12 +213,6 @@ async function load(target = page.value) {
 function pickCharacter(characterId: string) {
   if (characterId === activeCharacterId.value) return;
   activeCharacterId.value = characterId;
-  // 待审备注属于「这个角色」。弹窗开着时切走，就把弹窗关掉、在途请求作废，
-  // 否则新角色页面上会挂着一份上一个角色的备注清单。
-  suggestionsGeneration += 1;
-  suggestionDialogOpen.value = false;
-  suggestions.value = [];
-  suggestionsLoading.value = false;
   load(1);
 }
 
@@ -321,40 +301,23 @@ function saveStateLabel(scopeId: string) {
 }
 
 /**
- * 改一个字段就 PATCH 一次。
- *
- * 两件事不能省：
- * 1. **序号按字段记**（`scopeId:字段`），不再按卡片记。身份和交流是两个独立字段，
- *    连点两下会并发两个请求；按卡片记序号的话，身份那次响应会被判成「过期」丢掉，
- *    它带的 `identityKindSource` 就永远对不上。
- * 2. **只回写本次改的那个字段**。服务端的响应是整条关系，但并发时它是「请求开始时」
- *    的快照 —— 把整个响应摊回本地，会把另一项刚改好的值顶回旧值
- *    （2026-11-07 实测：身份改成 AI、权限改成允许，界面上身份又跳回真人，
- *    刷新后才正常；其实两项都已经入库了）。
+ * 改一个字段就 PATCH 一次，带序号防乱序：连点两下时只认最后一次的响应，
+ * 否则先发的请求后回来，会把界面上新的选择又改回旧值。
  */
 async function patchFriend(friend: Friend, patch: { identityKind?: Friend["identityKind"]; friendChatPolicy?: Friend["friendChatPolicy"] }) {
   const scopeId = friend.scopeId;
-  const field = patch.identityKind !== undefined ? "identityKind" : "friendChatPolicy";
-  const tokenKey = `${scopeId}:${field}`;
-  const token = (saveTokens.get(tokenKey) ?? 0) + 1;
-  saveTokens.set(tokenKey, token);
+  const token = (saveTokens.get(scopeId) ?? 0) + 1;
+  saveTokens.set(scopeId, token);
   markSaveState(scopeId, "saving");
   try {
-    const response = await $fetch<{
-      identityKind: Friend["identityKind"];
-      identityKindSource: Friend["identityKindSource"];
-      friendChatPolicy: Friend["friendChatPolicy"];
-    }>(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
-    if (saveTokens.get(tokenKey) !== token || unmounted) return;
-    friends.value = friends.value.map((item) => {
-      if (item.scopeId !== scopeId) return item;
-      return patch.identityKind !== undefined
-        ? { ...item, identityKind: response.identityKind, identityKindSource: response.identityKindSource }
-        : { ...item, friendChatPolicy: response.friendChatPolicy };
-    });
+    const response = await $fetch<
+      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy">> & { scopeId: string }
+    >(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
+    if (saveTokens.get(scopeId) !== token) return;
+    friends.value = friends.value.map((item) => (item.scopeId === scopeId ? { ...item, ...response } : item));
     markSaveState(scopeId, "saved");
   } catch (error) {
-    if (saveTokens.get(tokenKey) !== token || unmounted) return;
+    if (saveTokens.get(scopeId) !== token) return;
     markSaveState(scopeId, null);
     ElMessage.error(readErrorMessage(error, "没保存上，已恢复成服务端的设置。"));
     await load(page.value);
@@ -505,7 +468,6 @@ async function saveAliases(friend: Friend, aliases: string | string[], closeEdit
       `/api/admin/identities/aliases/${friend.scopeId}`,
       { method: "PATCH", body: { aliases } },
     );
-    if (unmounted) return;
     applyAliases(friend.scopeId, response.aliases);
     if (closeEditor) cancelEdit();
     if (response.dropped > 0) {
@@ -543,28 +505,24 @@ const suggestionDialogOpen = ref(false);
 const suggestions = ref<Suggestion[]>([]);
 const suggestionsLoading = ref(false);
 const resolvingSuggestionId = ref("");
-/** 待审备注也要按代际丢弃：弹窗开着时切角色，旧角色的清单不能落进新页面。 */
-let suggestionsGeneration = 0;
+let suggestionRequestSequence = 0;
 
 async function openSuggestions() {
-  const generation = ++suggestionsGeneration;
-  // 请求发出时就把角色钉住，别在响应回来时再读一次 activeCharacterId。
-  const characterId = activeCharacterId.value;
+  const requestId = ++suggestionRequestSequence;
+  const requestedCharacterId = activeCharacterId.value;
   suggestionDialogOpen.value = true;
   suggestionsLoading.value = true;
-  // 先清空：换角色后重新打开时，不该先闪一下上一个角色的备注。
-  suggestions.value = [];
   try {
     const response = await $fetch<{ items: Suggestion[] }>("/api/admin/identities/aliases/suggestions", {
-      query: { characterId: characterId || undefined },
+      query: { characterId: requestedCharacterId || undefined },
     });
-    if (generation !== suggestionsGeneration || unmounted) return;
+    if (requestId !== suggestionRequestSequence || requestedCharacterId !== activeCharacterId.value) return;
     suggestions.value = response.items;
   } catch (error) {
-    if (generation !== suggestionsGeneration || unmounted) return;
+    if (requestId !== suggestionRequestSequence) return;
     ElMessage.error(readErrorMessage(error, "读取待审备注失败。"));
   } finally {
-    if (generation === suggestionsGeneration && !unmounted) suggestionsLoading.value = false;
+    if (requestId === suggestionRequestSequence) suggestionsLoading.value = false;
   }
 }
 
@@ -593,12 +551,9 @@ async function resolveSuggestion(suggestion: Suggestion, approve: boolean) {
 }
 
 onBeforeUnmount(() => {
-  // 卸载后所有在途请求一律作废：不能再去 set 已经销毁的 ref，也不能弹通知。
-  unmounted = true;
-  listGeneration += 1;
-  suggestionsGeneration += 1;
-  // 清掉保存序号，在途的 PATCH 回来时 token 对不上，自然走不到写回分支。
-  saveTokens.clear();
+  // 让卸载前仍在途的列表 / 待审备注请求失效，避免迟到响应继续改状态。
+  loadSequence += 1;
+  suggestionRequestSequence += 1;
   if (searchTimer) clearTimeout(searchTimer);
   for (const timer of saveTimers.values()) clearTimeout(timer);
   saveTimers.clear();

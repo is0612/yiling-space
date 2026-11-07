@@ -1,7 +1,6 @@
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { createError, getHeader, getRequestURL, type H3Event } from "h3";
-import type { Prisma } from "../../src/generated/prisma/client";
 import { getPrisma } from "./prisma";
 
 const scrypt = promisify(scryptCallback);
@@ -510,19 +509,9 @@ export async function revokeSessionForUser(input: {
 }
 
 /** Revokes every active session of the account except the one making the request. */
-export async function revokeOtherSessions(input: {
-  userId: string;
-  currentToken?: string;
-  /**
-   * Run inside a caller-supplied transaction. Password resets and session revocation must land
-   * together: a new hash with the old sessions still alive is exactly the state that leaves a
-   * stolen cookie working.
-   */
-  client?: Pick<Prisma.TransactionClient, "session">;
-}): Promise<number> {
+export async function revokeOtherSessions(input: { userId: string; currentToken?: string }): Promise<number> {
   const currentHash = input.currentToken ? hashSessionToken(input.currentToken) : "";
-  const client = input.client ?? getPrisma();
-  const result = await client.session.updateMany({
+  const result = await getPrisma().session.updateMany({
     where: {
       userId: input.userId,
       revokedAt: null,
@@ -562,11 +551,23 @@ export async function changePassword(input: {
   }
 
   const passwordHash = await hashPassword(input.newPassword);
-  // One transaction: a new hash that never reached the revocation step would leave every stolen
-  // cookie working against the new password.
+
+  // 密码更新与其他设备会话撤销必须原子完成，避免密码已修改但会话仍有效。
+  // 当前请求使用的会话保留，避免用户修改密码后立即被当前页面登出。
   const revokedSessions = await prisma.$transaction(async (tx) => {
     await tx.user.update({ where: { id: account.id }, data: { passwordHash } });
-    return revokeOtherSessions({ userId: account.id, currentToken: input.currentToken, client: tx });
+    const result = await tx.session.updateMany({
+      where: {
+        userId: account.id,
+        revokedAt: null,
+        ...(input.currentToken
+          ? { tokenHash: { not: hashSessionToken(input.currentToken) } }
+          : {}),
+      },
+      data: { revokedAt: new Date() },
+    });
+    return result.count;
   });
+
   return { revokedSessions };
 }
