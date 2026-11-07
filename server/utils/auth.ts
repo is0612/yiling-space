@@ -551,7 +551,23 @@ export async function changePassword(input: {
   }
 
   const passwordHash = await hashPassword(input.newPassword);
-  await prisma.user.update({ where: { id: account.id }, data: { passwordHash } });
-  const revokedSessions = await revokeOtherSessions({ userId: account.id, currentToken: input.currentToken });
+
+  // 密码更新与其他设备会话撤销必须原子完成，避免密码已修改但会话仍有效。
+  // 当前请求使用的会话保留，避免用户修改密码后立即被当前页面登出。
+  const revokedSessions = await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: account.id }, data: { passwordHash } });
+    const result = await tx.session.updateMany({
+      where: {
+        userId: account.id,
+        revokedAt: null,
+        ...(input.currentToken
+          ? { tokenHash: { not: hashSessionToken(input.currentToken) } }
+          : {}),
+      },
+      data: { revokedAt: new Date() },
+    });
+    return result.count;
+  });
+
   return { revokedSessions };
 }
