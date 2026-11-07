@@ -82,10 +82,11 @@ type NavigationSection = {
 // 首屏就取到角色列表：角色管理页的卡片要用，别在这里等第二次请求。
 await useCharacterListData();
 const characters = useCharacterList();
-const { id: activeCharacterId, go: goToCharacter } = useCharacterSelection(route.path);
-const activeCharacter = computed(
-  () => characters.value.find((item) => item.id === activeCharacterId.value) ?? null,
-);
+const {
+  id: activeCharacterId,
+  character: activeCharacter,
+  go: goToCharacter,
+} = useCharacterSelection(route.path);
 
 async function handleCharacterSwitch(nextId: string) {
   if (!nextId || nextId === activeCharacterId.value) return;
@@ -131,8 +132,8 @@ const workspaceNavigation: NavigationItem[] = [
 ];
 
 /**
- * 成长系统：九个页面目前只有路由和空白骨架，业务逻辑一件都还没接。
- * 这里只登记入口，不要在侧栏里读角色、拉接口 —— 菜单不该比页面先知道数据。
+ * 成长系统：九个页面目前只有路由和空白骨架。
+ * 页面通过 GrowthPlaceholder 读取统一角色上下文；菜单只登记入口，不读角色、不拉接口。
  */
 const growthNavigation: NavigationItem[] = [
   { key: "growth", label: "总览", href: "/growth", icon: TrendCharts, exact: true },
