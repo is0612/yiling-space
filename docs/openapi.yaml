@@ -5002,7 +5002,7 @@ components:
         - $ref: '#/components/schemas/ContextAssistantSettings'
         - $ref: '#/components/schemas/CharacterInput'
         - type: object
-          required: [id, createdAt, updatedAt]
+          required: [id, originId, createdAt, updatedAt]
           properties:
             id: { type: string, format: uuid }
             originId: { type: string, format: uuid, description: 稳定同步根 ID：同一角色的跨设备实例用它匹配；本机新建角色以自己的 id 为根 }
