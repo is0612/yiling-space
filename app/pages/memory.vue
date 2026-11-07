@@ -1527,82 +1527,82 @@ watch(id, () => {
                   <article
                     class="timeline-item"
                   >
-                  <div
-                    class="timeline-marker"
-                    :class="toneFor(entry.tagTone)"
-                  >
-                    {{ markerFor(entry.type) }}
-                  </div>
-                  <div class="timeline-content">
-                    <div class="timeline-heading">
-                      <span class="timeline-title">{{ entry.title }}</span><span class="muted-note">{{ entry.time }}</span>
-                    </div>
-                    <p class="timeline-summary">
-                      {{ entry.summary }}
-                    </p>
-                    <div class="timeline-meta">
-                      <span
-                        class="pill"
-                        :class="toneFor(entry.tagTone)"
-                      >{{ entry.tag }}</span><span v-if="entry.channel !== entry.tag">{{ entry.channel }}</span><span>{{ entry.source }}</span><span
-                        v-if="entry.type === 'memory' && entry.importance !== undefined"
-                        class="timeline-importance"
-                      >重要度 {{ entry.importance.toFixed(2) }}</span>
-                    </div>
-                    <!-- 行内只留「编辑 + 更多」：原来 4 个链接常显，其中 2 个破坏性，
-                       每行都在喊。状态类操作收进菜单，默认不占视线。 -->
                     <div
-                      v-if="entry.type === 'memory'"
-                      class="memory-actions"
+                      class="timeline-marker"
+                      :class="toneFor(entry.tagTone)"
                     >
-                      <el-button
-                        link
-                        type="primary"
-                        size="small"
-                        @click="openMemoryEditor(entry)"
-                      >
-                        编辑
-                      </el-button>
-                      <el-dropdown
-                        trigger="click"
-                        placement="bottom-end"
-                        @command="runMemoryCommand(entry, String($event))"
-                      >
-                        <button
-                          type="button"
-                          class="row-more"
-                        >
-                          更多<el-icon><ArrowDown /></el-icon>
-                        </button>
-                        <template #dropdown>
-                          <el-dropdown-menu>
-                            <template v-if="entry.tag === '长期记忆'">
-                              <el-dropdown-item command="archived">
-                                归档
-                              </el-dropdown-item>
-                              <el-dropdown-item command="invalidated">
-                                标记失效
-                              </el-dropdown-item>
-                            </template>
-                            <el-dropdown-item
-                              v-else
-                              command="active"
-                            >
-                              恢复有效
-                            </el-dropdown-item>
-                            <el-dropdown-item
-                              command="trash"
-                              divided
-                              style="color:var(--red)"
-                            >
-                              移入回收站
-                            </el-dropdown-item>
-                          </el-dropdown-menu>
-                        </template>
-                      </el-dropdown>
+                      {{ markerFor(entry.type) }}
                     </div>
-                  </div>
-                </article>
+                    <div class="timeline-content">
+                      <div class="timeline-heading">
+                        <span class="timeline-title">{{ entry.title }}</span><span class="muted-note">{{ entry.time }}</span>
+                      </div>
+                      <p class="timeline-summary">
+                        {{ entry.summary }}
+                      </p>
+                      <div class="timeline-meta">
+                        <span
+                          class="pill"
+                          :class="toneFor(entry.tagTone)"
+                        >{{ entry.tag }}</span><span v-if="entry.channel !== entry.tag">{{ entry.channel }}</span><span>{{ entry.source }}</span><span
+                          v-if="entry.type === 'memory' && entry.importance !== undefined"
+                          class="timeline-importance"
+                        >重要度 {{ entry.importance.toFixed(2) }}</span>
+                      </div>
+                      <!-- 行内只留「编辑 + 更多」：原来 4 个链接常显，其中 2 个破坏性，
+                       每行都在喊。状态类操作收进菜单，默认不占视线。 -->
+                      <div
+                        v-if="entry.type === 'memory'"
+                        class="memory-actions"
+                      >
+                        <el-button
+                          link
+                          type="primary"
+                          size="small"
+                          @click="openMemoryEditor(entry)"
+                        >
+                          编辑
+                        </el-button>
+                        <el-dropdown
+                          trigger="click"
+                          placement="bottom-end"
+                          @command="runMemoryCommand(entry, String($event))"
+                        >
+                          <button
+                            type="button"
+                            class="row-more"
+                          >
+                            更多<el-icon><ArrowDown /></el-icon>
+                          </button>
+                          <template #dropdown>
+                            <el-dropdown-menu>
+                              <template v-if="entry.tag === '长期记忆'">
+                                <el-dropdown-item command="archived">
+                                  归档
+                                </el-dropdown-item>
+                                <el-dropdown-item command="invalidated">
+                                  标记失效
+                                </el-dropdown-item>
+                              </template>
+                              <el-dropdown-item
+                                v-else
+                                command="active"
+                              >
+                                恢复有效
+                              </el-dropdown-item>
+                              <el-dropdown-item
+                                command="trash"
+                                divided
+                                style="color:var(--red)"
+                              >
+                                移入回收站
+                              </el-dropdown-item>
+                            </el-dropdown-menu>
+                          </template>
+                        </el-dropdown>
+                      </div>
+                    </div>
+                  </article>
                 </template>
                 <p
                   v-if="truncated"

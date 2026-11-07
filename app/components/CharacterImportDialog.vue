@@ -474,7 +474,10 @@ function formatExportedAt(value: string | null): string {
           v-model="mergeMode"
           class="merge-options"
         >
-          <el-radio value="merge" :disabled="!mergeTarget">
+          <el-radio
+            value="merge"
+            :disabled="!mergeTarget"
+          >
             合并进去（本地内容不动，导入的接成新版本）
           </el-radio>
           <el-radio value="copy">

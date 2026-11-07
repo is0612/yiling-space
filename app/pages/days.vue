@@ -417,7 +417,10 @@ await loadDays();
           <span class="day-item-label">{{ dayLabel(day.dayKey) }}</span>
           <span class="day-item-meta">
             {{ day.eventCount }} 条
-            <span v-if="day.state === 'DRAFT'" class="day-item-draft">还在记</span>
+            <span
+              v-if="day.state === 'DRAFT'"
+              class="day-item-draft"
+            >还在记</span>
           </span>
         </button>
         <el-pagination
@@ -511,7 +514,9 @@ await loadDays();
             class="day-archived"
           >
             <p class="muted-note">
-              已隐藏 {{ archivedEvents.length }} 条<template v-if="detail.eventsTotal > detail.eventsPageSize">（当前页）</template>
+              已隐藏 {{ archivedEvents.length }} 条<template v-if="detail.eventsTotal > detail.eventsPageSize">
+                （当前页）
+              </template>
             </p>
             <div
               v-for="event in archivedEvents"

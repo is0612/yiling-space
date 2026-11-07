@@ -2103,7 +2103,10 @@ function copyInstallGuide() {
             </el-checkbox>
           </el-form-item>
           <el-form-item class="cq-check">
-            <el-checkbox v-model="form.qzoneAutoAskEnabled" :disabled="!form.qzoneEnabled">
+            <el-checkbox
+              v-model="form.qzoneAutoAskEnabled"
+              :disabled="!form.qzoneEnabled"
+            >
               她想发 / 想评论时，主动来问我同不同意
             </el-checkbox>
           </el-form-item>
@@ -2182,7 +2185,6 @@ function copyInstallGuide() {
             </span>
           </p>
         </div>
-
       </el-form>
 
       <template #footer>

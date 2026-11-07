@@ -634,7 +634,10 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="totalTasks > 0" class="pagination-bar">
+    <div
+      v-if="totalTasks > 0"
+      class="pagination-bar"
+    >
       <span class="pagination-summary">
         第 {{ (currentPage - 1) * pageSize + 1 }}–{{ Math.min(currentPage * pageSize, totalTasks) }} 条，共 {{ totalTasks }} 条
         <template v-if="hasFilters">（当前为筛选结果）</template>

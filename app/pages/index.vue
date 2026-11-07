@@ -381,21 +381,21 @@ onBeforeUnmount(() => {
               <span class="stat-f">{{ card.cost ? `近 7 天 ${formatCny(card.cost.windowCostCny)}` : "还没有模型调用" }}</span>
             </div>
 
-          <!-- 用量金额是估算值：未定价 token 不计入金额，缺缓存明细的调用按未命中价估算。 -->
-          <div
-            v-if="card.cost && (card.cost.today.unpricedTokens > 0 || card.cost.unpricedModels.length > 0 || card.cost.uncachedCalls > 0)"
-            class="usage-notes"
-          >
-            <p v-if="card.cost.today.unpricedTokens > 0">
-              今日有 {{ formatTokenCount(card.cost.today.unpricedTokens) }} 个未定价 token，未计入今日金额。
-            </p>
-            <p v-if="card.cost.unpricedModels.length > 0">
-              近 7 天出现未定价模型：{{ card.cost.unpricedModels.join("、") }}；相关费用未计入。
-            </p>
-            <p v-if="card.cost.uncachedCalls > 0">
-              近 7 天有 {{ card.cost.uncachedCalls }} 次调用缺少缓存明细，按未命中价估算，金额可能偏高。
-            </p>
-          </div>
+            <!-- 用量金额是估算值：未定价 token 不计入金额，缺缓存明细的调用按未命中价估算。 -->
+            <div
+              v-if="card.cost && (card.cost.today.unpricedTokens > 0 || card.cost.unpricedModels.length > 0 || card.cost.uncachedCalls > 0)"
+              class="usage-notes"
+            >
+              <p v-if="card.cost.today.unpricedTokens > 0">
+                今日有 {{ formatTokenCount(card.cost.today.unpricedTokens) }} 个未定价 token，未计入今日金额。
+              </p>
+              <p v-if="card.cost.unpricedModels.length > 0">
+                近 7 天出现未定价模型：{{ card.cost.unpricedModels.join("、") }}；相关费用未计入。
+              </p>
+              <p v-if="card.cost.uncachedCalls > 0">
+                近 7 天有 {{ card.cost.uncachedCalls }} 次调用缺少缓存明细，按未命中价估算，金额可能偏高。
+              </p>
+            </div>
           </div>
 
           <!-- 本周期进度 -->

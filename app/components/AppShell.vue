@@ -297,7 +297,9 @@ function isActive(item: NavigationItem) {
               <span class="admin-name">{{ activeCharacter?.name || "选择角色" }}</span>
               <span class="admin-note">当前角色 · 共 {{ characters.length }} 个</span>
             </span>
-            <el-icon class="character-switcher-arrow"><ArrowDown /></el-icon>
+            <el-icon class="character-switcher-arrow">
+              <ArrowDown />
+            </el-icon>
           </button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -309,7 +311,10 @@ function isActive(item: NavigationItem) {
               >
                 <span class="character-switcher-option-avatar">{{ item.avatar || item.name.slice(0, 1) }}</span>
                 <span>{{ item.name }}</span>
-                <span v-if="item.id === activeCharacterId" class="character-switcher-current">当前</span>
+                <span
+                  v-if="item.id === activeCharacterId"
+                  class="character-switcher-current"
+                >当前</span>
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
