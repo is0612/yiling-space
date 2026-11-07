@@ -363,7 +363,6 @@ export function connectOnebot(
     socket.onmessage = async (event) => {
       const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf8");
       const payload = safeJson(text);
-      if (!payload || typeof payload !== "object") return;
       // 红包只做结构诊断：不记录消息正文、QQ 号、凭据或完整原始事件。
       const redPacketDiagnostic = inspectOnebotRedPacket(payload);
       if (redPacketDiagnostic) {

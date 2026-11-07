@@ -208,6 +208,9 @@ jobs:
       - name: QQ 小号（OneBot）渠道端到端测试
         run: yarn run test:onebot
 
+      - name: OneBot inbound message diagnostics test
+        run: yarn run test:onebot-red-packet
+
       - name: 渠道消息落库 metadata 测试
         run: yarn run test:channel-message-metadata
 
