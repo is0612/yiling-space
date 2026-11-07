@@ -1,4 +1,4 @@
-import { createError, getRouterParam } from "h3";
+import { createError, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
@@ -49,11 +49,19 @@ export default defineEventHandler(async (event) => {
     : null;
 
   const eventWhere = { dayKey, memoryScope: { is: { characterId } } };
-  const [events, eventsTotal] = await Promise.all([
-    prisma.memoryEvent.findMany({
+  const eventsTotal = await prisma.memoryEvent.count({ where: eventWhere });
+  const params = getQuery(event);
+  const pageSize = 20;
+  const requestedPage = Number(params.page);
+  const totalPages = Math.max(1, Math.ceil(eventsTotal / pageSize));
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0
+    ? Math.min(requestedPage, totalPages)
+    : 1;
+  const events = await prisma.memoryEvent.findMany({
       where: eventWhere,
       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-      take: 100,
+      skip: (page - 1) * pageSize,
+      take: pageSize,
       select: {
         id: true,
         occurredAt: true,
@@ -68,9 +76,7 @@ export default defineEventHandler(async (event) => {
         sourceMessageIds: true,
         memoryScope: { select: { scopeType: true } },
       },
-    }),
-    prisma.memoryEvent.count({ where: eventWhere }),
-  ]);
+    });
 
   const window = resolveDayWindow(dayKey, timeZone);
   /**
@@ -156,6 +162,9 @@ export default defineEventHandler(async (event) => {
     timeZone,
     eventsTotal,
     eventsTruncated: eventsTotal > events.length,
+    eventsPage: page,
+    eventsPageSize: pageSize,
+    eventsTotalPages: totalPages,
     day: day
       ? { ...day, extractedAt: day.extractedAt?.toISOString() ?? null }
       : { dayKey, state: null, eventCount: 0, extractedAt: null },
