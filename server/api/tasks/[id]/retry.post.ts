@@ -1,5 +1,5 @@
 import { createError, getRouterParam } from "h3";
-import { requireActorUserId } from "../../../utils/auth";
+import { requireAdminActor } from "../../../utils/auth";
 import { requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
 import { MEMORY_JOB_LEASE_MS, planJobRequeue } from "../../../utils/memory-job-lease";
@@ -12,14 +12,14 @@ import { MEMORY_JOB_LEASE_MS, planJobRequeue } from "../../../utils/memory-job-l
  * 任务会永远停在 RUNNING，页面上却写着「Worker 正在执行」，只能靠重启 Worker 才能解开。
  */
 export default defineEventHandler(async (event) => {
-  const ownerId = await requireActorUserId(event);
+  const actor = await requireAdminActor(event);
   const id = requireUuid(getRouterParam(event, "id") ?? "", "任务");
   const now = new Date();
   const prisma = getPrisma();
 
   return prisma.$transaction(async (tx) => {
     const job = await tx.memoryJob.findFirst({
-      where: { id, memoryScope: { is: { character: { is: { ownerId } } } } },
+      where: { id },
       select: {
         id: true,
         type: true,
@@ -69,7 +69,7 @@ export default defineEventHandler(async (event) => {
     await tx.auditLog.create({
       data: {
         actorType: "USER",
-        actorId: ownerId,
+        actorId: actor.user.id,
         characterId: job.memoryScope.character.id,
         action: "memory_job.manual_retry",
         entityType: "MemoryJob",
