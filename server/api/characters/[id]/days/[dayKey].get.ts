@@ -161,7 +161,6 @@ export default defineEventHandler(async (event) => {
   return {
     timeZone,
     eventsTotal,
-    eventsTruncated: eventsTotal > events.length,
     eventsPage: page,
     eventsPageSize: pageSize,
     eventsTotalPages: totalPages,
