@@ -43,6 +43,7 @@ type TaskListResponse = {
   pageSize: number;
   totalPages: number;
   hasMore: boolean;
+  stuckCount: number;
   statusCounts: Record<MemoryTask["status"], number>;
 };
 type WorkerResult = {
@@ -67,6 +68,7 @@ const totalTasks = ref(0);
 const currentPage = ref(1);
 const pageSize = ref(20);
 const totalPages = ref(1);
+const stuckCount = ref(0);
 const requestVersion = ref(0);
 const statusCounts = ref<Record<MemoryTask["status"], number>>({
   QUEUED: 0, RUNNING: 0, SUCCEEDED: 0, FAILED: 0, SKIPPED: 0, RETRY_WAIT: 0, CANCELLED: 0,
@@ -92,12 +94,6 @@ function isStuck(task: MemoryTask) {
   return task.status === "RUNNING" && task.leaseExpired;
 }
 
-const stuckTasks = computed(() => tasks.value.filter(isStuck));
-/** 卡得最久的那条（列表按创建时间排，不能拿第一条）。 */
-const oldestStuckAt = computed(() => stuckTasks.value
-  .map((task) => task.lockedAt)
-  .filter((value): value is string => Boolean(value))
-  .sort()[0] ?? null);
 
 /** 计数和筛选合成一行：状态分布就是筛选条件，不需要再排一张 KPI。 */
 const statusChips = computed(() => [
@@ -275,12 +271,14 @@ async function loadTasks() {
     currentPage.value = result.page;
     pageSize.value = result.pageSize;
     totalPages.value = result.totalPages;
+    stuckCount.value = result.stuckCount;
     statusCounts.value = result.statusCounts;
   } catch (error) {
     if (version !== requestVersion.value) return;
     tasks.value = [];
     totalTasks.value = 0;
     totalPages.value = 1;
+    stuckCount.value = 0;
     statusCounts.value = { QUEUED: 0, RUNNING: 0, SUCCEEDED: 0, FAILED: 0, SKIPPED: 0, RETRY_WAIT: 0, CANCELLED: 0 };
     loadError.value = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
@@ -477,15 +475,14 @@ onMounted(() => void loadTasks());
 
     <!-- 卡在「运行中」是另一种坏法：没有失败记录、队列里也没积压，只有这一行能看出来 -->
     <button
-      v-if="stuckTasks.length > 0 && statusFilter !== 'RUNNING'"
+      v-if="stuckCount > 0 && statusFilter !== 'RUNNING'"
       type="button"
       class="alert-row"
       @click="setStatusFilter('RUNNING')"
     >
       <el-icon><Warning /></el-icon>
       <span>
-        <strong>{{ stuckTasks.length }} 条任务卡在「运行中」</strong>，最久的是
-        {{ sinceText(oldestStuckAt) }}前被领走的，没人回收 —— 点这里只看它们。
+        <strong>{{ stuckCount }} 条任务卡在「运行中」</strong>，租约已过期且尚未回收 —— 点这里只看它们。
       </span>
       <el-icon class="go">
         <ArrowRight />
