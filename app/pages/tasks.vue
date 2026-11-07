@@ -71,6 +71,7 @@ const currentPage = ref(1);
 const pageSize = ref(20);
 const totalPages = ref(1);
 const stuckCount = ref(0);
+const oldestStuckAt = ref<string | null>(null);
 const requestVersion = ref(0);
 const statusCounts = ref<Record<MemoryTask["status"], number>>({
   QUEUED: 0, RUNNING: 0, SUCCEEDED: 0, FAILED: 0, SKIPPED: 0, RETRY_WAIT: 0, CANCELLED: 0,
@@ -108,8 +109,6 @@ const statusChips = computed(() => [
   { value: "CANCELLED", label: "已取消", count: statusCounts.value.CANCELLED },
 ]);
 
-const filtered = computed(() => tasks.value);
-
 function resetFilters() {
   query.value = "";
   statusFilter.value = "ALL";
@@ -118,7 +117,7 @@ function resetFilters() {
 }
 
 function setStatusFilter(value: string) {
-  if (statusFilter.value === value) return;
+  if (statusFilter.value === value && currentPage.value === 1) return;
   statusFilter.value = value;
   currentPage.value = 1;
   void loadTasks();
@@ -255,7 +254,7 @@ function taskStatusHint(task: MemoryTask) {
   return "该任务已失败，请查看失败原因并在必要时重新入队。";
 }
 
-async function loadTasks() {
+async function loadTasks(allowPageCorrection = true) {
   const version = ++requestVersion.value;
   loading.value = true;
   loadError.value = "";
@@ -268,6 +267,12 @@ async function loadTasks() {
     if (query.value.trim()) params.set("q", query.value.trim());
     const result = await $fetch<TaskListResponse>("/api/tasks?" + params.toString());
     if (version !== requestVersion.value) return;
+    // 操作任务后筛选结果可能缩小，当前页随之越界；只回退重查一次，避免空页锁死。
+    if (allowPageCorrection && result.page > result.totalPages) {
+      currentPage.value = result.totalPages;
+      await loadTasks(false);
+      return;
+    }
     tasks.value = result.items;
     totalTasks.value = result.total;
     allTasksTotal.value = result.allTotal;
@@ -275,6 +280,7 @@ async function loadTasks() {
     pageSize.value = result.pageSize;
     totalPages.value = result.totalPages;
     stuckCount.value = result.stuckCount;
+    oldestStuckAt.value = result.oldestStuckAt;
     statusCounts.value = result.statusCounts;
   } catch (error) {
     if (version !== requestVersion.value) return;
@@ -282,6 +288,7 @@ async function loadTasks() {
     totalTasks.value = 0;
     totalPages.value = 1;
     stuckCount.value = 0;
+    oldestStuckAt.value = null;
     statusCounts.value = { QUEUED: 0, RUNNING: 0, SUCCEEDED: 0, FAILED: 0, SKIPPED: 0, RETRY_WAIT: 0, CANCELLED: 0 };
     loadError.value = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
@@ -351,6 +358,15 @@ const canRetry = computed(() => {
 });
 const canCancel = computed(() => !!selectedTask.value && ["QUEUED", "RETRY_WAIT"].includes(selectedTask.value.status));
 
+async function copyTaskId(id: string) {
+  try {
+    await navigator.clipboard.writeText(id);
+    ElMessage.success("已复制完整任务编号。");
+  } catch {
+    ElMessage.error("复制失败，请手动选择编号复制。");
+  }
+}
+
 function openDetails(task: MemoryTask) {
   selectedTask.value = task;
   detailsOpen.value = true;
@@ -383,6 +399,10 @@ async function retrySelectedTask() {
     await $fetch(`/api/tasks/${encodeURIComponent(task.id)}/retry`, { method: "POST" });
     await loadTasks();
     selectedTask.value = tasks.value.find((item) => item.id === task.id) ?? null;
+    if (!selectedTask.value) {
+      detailsOpen.value = false;
+      ElMessage.info("任务状态已变化，已从当前筛选结果移出。");
+    }
     ElMessage.success(stuck ? "任务已放回队列，等 Worker 跑一次就会执行。" : "任务已重新排队。");
   } catch (error) {
     ElMessage.error(getErrorMessage(error, "任务重新入队失败。"));
@@ -409,6 +429,10 @@ async function cancelSelectedTask() {
     await $fetch(`/api/tasks/${encodeURIComponent(task.id)}/cancel`, { method: "POST" });
     await loadTasks();
     selectedTask.value = tasks.value.find((item) => item.id === task.id) ?? null;
+    if (!selectedTask.value) {
+      detailsOpen.value = false;
+      ElMessage.info("任务状态已变化，已从当前筛选结果移出。");
+    }
     ElMessage.success("任务已取消，审计记录已保留。");
   } catch (error) {
     ElMessage.error(getErrorMessage(error, "取消任务失败。"));
@@ -488,7 +512,7 @@ onBeforeUnmount(() => {
     >
       <el-icon><Warning /></el-icon>
       <span>
-        <strong>{{ stuckCount }} 条任务卡在「运行中」</strong>，租约已过期且尚未回收 —— 点这里只看它们。
+        <strong>{{ stuckCount }} 条任务卡在「运行中」</strong>，租约已过期且尚未回收<template v-if="oldestStuckAt">，最早于 {{ sinceText(oldestStuckAt) }}前领走</template> —— 点这里只看它们。
       </span>
       <el-icon class="go">
         <ArrowRight />
@@ -514,7 +538,7 @@ onBeforeUnmount(() => {
           v-model="query"
           class="search"
           clearable
-          placeholder="搜索角色、任务类型或完整任务编号"
+          placeholder="搜索角色、任务类型或任务编号前缀"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
@@ -555,18 +579,18 @@ onBeforeUnmount(() => {
       </div>
 
       <div
-        v-else-if="!filtered.length"
+        v-else-if="!tasks.length"
         class="tbl-empty"
       >
         <span class="empty-icon"><el-icon><Files /></el-icon></span>
-        <h3>{{ tasks.length ? "没有匹配的任务" : "还没有任务记录" }}</h3>
+        <h3>{{ hasFilters ? "没有匹配的任务" : "还没有任务记录" }}</h3>
         <p>
-          {{ tasks.length
+          {{ hasFilters
             ? "换个关键词，或者把状态筛选切回「全部」。"
             : "启用角色的自动归档并到达周期边界后，「扫描到期周期」会在这里排入任务。" }}
         </p>
         <button
-          v-if="tasks.length"
+          v-if="hasFilters"
           type="button"
           class="abtn"
           @click="resetFilters"
@@ -580,7 +604,7 @@ onBeforeUnmount(() => {
         class="tbl-body"
       >
         <button
-          v-for="task in filtered"
+          v-for="task in tasks"
           :key="task.id"
           type="button"
           class="tbl-row"
@@ -588,7 +612,7 @@ onBeforeUnmount(() => {
         >
           <span class="cell-task">
             <b>{{ taskTypeText(task.type) }}</b>
-            <em>{{ task.characterName }} · #{{ task.id.slice(0, 8) }}</em>
+            <em :title="task.id">{{ task.characterName }} · #{{ task.id.slice(0, 8) }}</em>
           </span>
           <span class="cell-period">
             {{ periodText(task) }}
@@ -648,6 +672,7 @@ onBeforeUnmount(() => {
           {{ selectedTask.characterName }}
           <span class="sep">·</span>
           <code :title="selectedTask.id">#{{ selectedTask.id.slice(0, 8) }}</code>
+          <button type="button" class="copy-id" @click.stop="copyTaskId(selectedTask.id)">复制完整编号</button>
         </p>
 
         <p class="d-period">
@@ -743,6 +768,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.tasks-a { padding-bottom: 180px; }
 /* ══════════════════════════════════════════════════════════════
    沿用总览 / QQ 渠道的 A 套：白砖、零描边、零阴影，层次靠明度差与间距。
    全部规则挂在 .tasks-a 下（作用域 + 压过 main.css 的单类规则）。
