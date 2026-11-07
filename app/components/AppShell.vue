@@ -91,9 +91,9 @@ async function handleCharacterSwitch(nextId: string) {
   if (!nextId || nextId === activeCharacterId.value) return;
   // 角色详情/设置页本身带有角色 ID，切换时同步替换路径参数；
   // 其他菜单页保留当前路由，只更新共享的 ?c= 与 cookie。
-  const characterRoute = /^\\/characters\\/[^/]+/.exec(route.path);
+  const characterRoute = /^\/characters\/[^/]+/.exec(route.path);
   const targetPath = characterRoute
-    ? route.path.replace(/^\\/characters\\/[^/]+/, `/characters/${encodeURIComponent(nextId)}`)
+    ? route.path.replace(/^\/characters\/[^/]+/, `/characters/${encodeURIComponent(nextId)}`)
     : route.path;
   await goToCharacter(nextId, targetPath);
 }
