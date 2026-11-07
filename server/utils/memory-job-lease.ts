@@ -83,3 +83,22 @@ export function planJobRequeue(
   }
   return { ok: false, message: "只有失败、等待重试、已取消或租约过期的运行中任务可以手动重新入队。" };
 }
+
+
+/**
+ * 长任务发起下一次模型请求前刷新租约。
+ *
+ * lockedAt 表示最近一次领取/续租时间；startedAt 保留本次执行真正开始的时间。
+ * 使用条件更新，旧 Worker 不能替新 Worker 延长租约。
+ */
+export async function renewMemoryJobLease(
+  db: Pick<Prisma.TransactionClient, "memoryJob">,
+  lease: MemoryJobLease,
+  now: Date = new Date(),
+): Promise<void> {
+  const renewed = await db.memoryJob.updateMany({
+    where: memoryJobLeaseWhere(lease),
+    data: { lockedAt: now },
+  });
+  if (renewed.count !== 1) throw new MemoryJobLeaseLostError();
+}
