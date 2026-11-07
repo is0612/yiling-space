@@ -1282,12 +1282,6 @@ watch(id, () => {
       </template>
     </PageHeader>
 
-    <!-- 角色切换：菜单页的入口，放在内容最上方、贴着标题，不塞进右上角按钮堆里 -->
-    <CharacterBar
-      path="/memory"
-      empty-text="还没有角色。先创建一个角色，再回来整理它的记忆。"
-    />
-
     <template v-if="characters.length">
       <!-- 一组数字只讲一遍：原来 KPI 四格 + 右栏「记忆状态」卡是同一组数据。
          这里收成一条静音统计带，字号 18px，比记忆正文更弱。 -->
