@@ -46,16 +46,22 @@ export default defineEventHandler(async (event) => {
     EXTRACT_EVENTS: "EXTRACT_EVENTS",
     GENERATE_JOURNAL: "GENERATE_JOURNAL",
   };
-  const matchedType = typeByLabel[searchValue] ?? typeByCode[searchValue.toUpperCase()];
+  const normalizedSearch = searchValue.toUpperCase();
+  const matchedTypes = statuses.length
+    ? Object.entries({ ...typeByLabel, ...typeByCode })
+      .filter(([label, type]) => label.toUpperCase().includes(normalizedSearch) || type.includes(normalizedSearch))
+      .map(([, type]) => type)
+    : [];
   const searchWhere = searchValue ? {
     OR: [
       { id: { contains: searchValue, mode: "insensitive" as const } },
       { memoryScope: { character: { name: { contains: searchValue, mode: "insensitive" as const } } } },
-      ...(matchedType ? [{ type: matchedType as "GENERATE_SNAPSHOT" | "REGENERATE_SNAPSHOT" | "UPDATE_LONG_TERM_MEMORY" | "CLEAN_EXPIRED_MESSAGES" | "EXTRACT_EVENTS" | "GENERATE_JOURNAL" }] : []),
+      ...(matchedTypes.length > 0 ? [{ type: { in: [...new Set(matchedTypes)] as ("GENERATE_SNAPSHOT" | "REGENERATE_SNAPSHOT" | "UPDATE_LONG_TERM_MEMORY" | "CLEAN_EXPIRED_MESSAGES" | "EXTRACT_EVENTS" | "GENERATE_JOURNAL")[] } }] : []),
     ],
   } : {};
   const where = { ...statusWhere, ...searchWhere };
-  const [jobs, total, statusGroups] = await Promise.all([
+  const leaseExpiredBefore = new Date(now.getTime() - 5 * 60 * 1000);
+  const [jobs, total, statusGroups, stuckCount] = await Promise.all([
     prisma.memoryJob.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -81,6 +87,15 @@ export default defineEventHandler(async (event) => {
     }),
     prisma.memoryJob.count({ where }),
     prisma.memoryJob.groupBy({ by: ["status"], _count: { _all: true } }),
+    prisma.memoryJob.count({
+      where: {
+        status: "RUNNING",
+        OR: [
+          { lockedAt: null },
+          { lockedAt: { lt: leaseExpiredBefore } },
+        ],
+      },
+    }),
   ]);
 
   const cleanupJobs = jobs.filter((job) => job.type === "CLEAN_EXPIRED_MESSAGES");
@@ -144,6 +159,7 @@ export default defineEventHandler(async (event) => {
       page,
       pageSize,
     ),
+    stuckCount,
     statusCounts: {
       QUEUED: statusGroups.find((group) => group.status === "QUEUED")?._count._all ?? 0,
       RUNNING: statusGroups.find((group) => group.status === "RUNNING")?._count._all ?? 0,
