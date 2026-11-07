@@ -4730,7 +4730,7 @@ components:
         exportedBy: { type: string, enum: [yiling-space] }
         origin:
           type: object
-          description: 血缘：这张卡最初来自哪一份角色数据。导入时用它认出「本机已有同一个她」从而允许合并；空字符串 = 老卡/没有血缘信息，只能新建。
+          description: 稳定同步根 ID：同一角色的跨设备实例用它匹配并合并；空字符串表示历史卡片未携带 origin，只能新建。
           properties:
             characterId: { type: string, description: 来源角色 id（UUID）；不像 UUID 的值导入时会被忽略 }
         character:
