@@ -7,8 +7,8 @@ import { createApp, eventHandler, toNodeListener } from "h3";
 import { getPrisma } from "../server/utils/prisma";
 import { encryptApiKey } from "../server/utils/credential-encryption";
 import { hashSessionToken } from "../server/utils/auth";
-import { processNextMemoryJob } from "../server/utils/memory-worker";
-import { MEMORY_JOB_LEASE_MS } from "../server/utils/memory-job-lease";
+import { processNextMemoryJob, reclaimExpiredMemoryJobs } from "../server/utils/memory-worker";
+import { isMemoryJobLeaseExpired, MEMORY_JOB_LEASE_MS, MemoryJobLeaseLostError, renewMemoryJobLease } from "../server/utils/memory-job-lease";
 
 // Never allow this regression to write to the user's business database.
 const database = new URL(process.env.DATABASE_URL ?? "");
@@ -118,6 +118,31 @@ async function fixture(type: "EXTRACT_EVENTS" | "GENERATE_SNAPSHOT" | "GENERATE_
   } });
   return { job, scopeId };
 }
+async function verifyLeaseRenewal() {
+  const { job } = await fixture("EXTRACT_EVENTS");
+  const startedAt = new Date(Date.now() - MEMORY_JOB_LEASE_MS - 30_000);
+  const claimToken = `lease-renewal:${randomUUID()}`;
+  await prisma.memoryJob.update({
+    where: { id: job.id },
+    data: { status: "RUNNING", lockedAt: startedAt, lockedBy: claimToken, startedAt },
+  });
+
+  await renewMemoryJobLease(prisma, { jobId: job.id, claimToken });
+  const renewed = await prisma.memoryJob.findUniqueOrThrow({ where: { id: job.id } });
+  assert(renewed.lockedAt && renewed.lockedAt.getTime() > startedAt.getTime());
+  assert.equal(renewed.startedAt?.getTime(), startedAt.getTime(), "Renewal must preserve the original start time.");
+  assert.equal(isMemoryJobLeaseExpired(renewed.lockedAt), false);
+  const recovered = await reclaimExpiredMemoryJobs(prisma, { ownerId: owner.id });
+  assert.equal(recovered.recovered, 0, "A renewed lease must not be reclaimed.");
+
+  await assert.rejects(
+    () => renewMemoryJobLease(prisma, { jobId: job.id, claimToken: "stale-worker-token" }),
+    (error: unknown) => error instanceof MemoryJobLeaseLostError,
+    "A stale worker must not renew a successor's lease.",
+  );
+  console.log("Memory job lease renewal regression passed.");
+}
+
 async function noArtifacts(scopeId: string) {
   assert.equal(await prisma.memoryEvent.count({ where: { memoryScopeId: scopeId } }), 0);
   assert.equal(await prisma.memoryEventDay.count({ where: { memoryScopeId: scopeId } }), 0);
@@ -125,6 +150,7 @@ async function noArtifacts(scopeId: string) {
   assert.equal(await prisma.characterJournal.count({ where: { memoryScopeId: scopeId } }), 0);
 }
 try {
+  await verifyLeaseRenewal();
   for (const type of ["EXTRACT_EVENTS", "GENERATE_SNAPSHOT", "GENERATE_JOURNAL"] as const) {
     for (const destination of ["cancel", "new-token", "model-error"] as const) {
       gate = barrier(); fail = false; journalSkip = false;
