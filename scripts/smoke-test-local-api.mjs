@@ -619,6 +619,11 @@ const timelineAfterSnapshots = await request(`/api/characters/${created.id}/time
 assert(Array.isArray(timelineAfterSnapshots.entries) && timelineAfterSnapshots.entries.length === 6, "The real timeline should include the saved memory, three messages, and both snapshot versions.");
 assert(timelineAfterSnapshots.entries.some((entry) => entry.id === `snapshot:${createdSnapshot.id}` && entry.type === "snapshot" && entry.tag === "已被替代"), "The timeline should show superseded snapshot versions.");
 assert(timelineAfterSnapshots.entries.some((entry) => entry.id === `snapshot:${regeneratedSnapshot.id}` && entry.type === "snapshot" && entry.tag === "当前版本"), "The timeline should show the current snapshot version.");
+const memoryOnlyTimeline = await request(`/api/characters/${created.id}/timeline?kinds=memory`);
+assert(memoryOnlyTimeline.entries.length === 1 && memoryOnlyTimeline.entries.every((entry) => entry.type === "memory"), "kinds=memory must return only long-term memory entries.");
+assert(memoryOnlyTimeline.counts.snapshot === 2, "Timeline counts must remain global even when the entry kinds are filtered.");
+const snapshotOnlyTimeline = await request(`/api/characters/${created.id}/timeline?kinds=snapshot`);
+assert(snapshotOnlyTimeline.entries.length === 2 && snapshotOnlyTimeline.entries.every((entry) => entry.type === "snapshot"), "kinds=snapshot must return only snapshot entries.");
 
 const trashedMemory = await request(`/api/memories/${createdMemory.id}/trash`, { method: "POST" });
 assert(trashedMemory.status === "TRASHED" && trashedMemory.statusBeforeTrash === "ACTIVE", "Moving a memory to trash should retain its prior status.");
