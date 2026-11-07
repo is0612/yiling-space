@@ -1903,6 +1903,14 @@ paths:
           in: query
           description: 搜索词（≤40 字），命中忆泡标题、详情或参与者显示名。
           schema: { type: string, example: "小明" }
+        - name: page
+          in: query
+          description: 页码，从 1 开始。
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          description: 每页日期数，默认 20，最大 100。
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
           description: 日期列表与角色时区的今天
