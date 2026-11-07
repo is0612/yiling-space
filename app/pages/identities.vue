@@ -171,22 +171,27 @@ const sourceOptions = computed<Array<{ value: "ALL" | "PRIVATE" | "GROUP"; label
   { value: "GROUP", label: "群里认识", count: sourceCounts.value.group },
 ]);
 
+// 列表请求序号：快速切角色 / 搜索 / 翻页时，只允许最后一次请求提交页面状态。
+let loadSequence = 0;
+
 async function load(target = page.value) {
+  const requestId = ++loadSequence;
+  // 请求参数在发出时固定下来，不能让响应对应的筛选条件在等待期间变化。
+  const requestQuery = {
+    characterId: activeCharacterId.value || undefined,
+    q: query.value.trim() || undefined,
+    source: sourceFilter.value,
+    sort: sortBy.value,
+    dir: sortDirections.value[sortBy.value],
+    page: target,
+    pageSize: PAGE_SIZE,
+  };
   loading.value = true;
   // 换角色 / 换筛选 / 翻页之后，之前勾的人可能已经不在这一页上了，先清空勾选。
   selectedIds.value = [];
   try {
-    const response = await $fetch<FriendPage>("/api/admin/identities", {
-      query: {
-        characterId: activeCharacterId.value || undefined,
-        q: query.value.trim() || undefined,
-        source: sourceFilter.value,
-        sort: sortBy.value,
-        dir: sortDirections.value[sortBy.value],
-        page: target,
-        pageSize: PAGE_SIZE,
-      },
-    });
+    const response = await $fetch<FriendPage>("/api/admin/identities", { query: requestQuery });
+    if (requestId !== loadSequence) return;
     friends.value = response.items;
     characters.value = response.characters;
     activeCharacterId.value = response.activeCharacterId;
@@ -197,9 +202,10 @@ async function load(target = page.value) {
     sourceCounts.value = response.sourceCounts;
     pendingSuggestions.value = response.pendingSuggestions ?? 0;
   } catch (error) {
+    if (requestId !== loadSequence) return;
     ElMessage.error(readErrorMessage(error, "无法读取朋友列表。"));
   } finally {
-    loading.value = false;
+    if (requestId === loadSequence) loading.value = false;
   }
 }
 
@@ -501,19 +507,24 @@ const suggestionDialogOpen = ref(false);
 const suggestions = ref<Suggestion[]>([]);
 const suggestionsLoading = ref(false);
 const resolvingSuggestionId = ref("");
+let suggestionRequestSequence = 0;
 
 async function openSuggestions() {
+  const requestId = ++suggestionRequestSequence;
+  const requestedCharacterId = activeCharacterId.value;
   suggestionDialogOpen.value = true;
   suggestionsLoading.value = true;
   try {
     const response = await $fetch<{ items: Suggestion[] }>("/api/admin/identities/aliases/suggestions", {
-      query: { characterId: activeCharacterId.value || undefined },
+      query: { characterId: requestedCharacterId || undefined },
     });
+    if (requestId !== suggestionRequestSequence || requestedCharacterId !== activeCharacterId.value) return;
     suggestions.value = response.items;
   } catch (error) {
+    if (requestId !== suggestionRequestSequence) return;
     ElMessage.error(readErrorMessage(error, "读取待审备注失败。"));
   } finally {
-    suggestionsLoading.value = false;
+    if (requestId === suggestionRequestSequence) suggestionsLoading.value = false;
   }
 }
 
@@ -542,6 +553,9 @@ async function resolveSuggestion(suggestion: Suggestion, approve: boolean) {
 }
 
 onBeforeUnmount(() => {
+  // 让卸载前仍在途的列表 / 待审备注请求失效，避免迟到响应继续改状态。
+  loadSequence += 1;
+  suggestionRequestSequence += 1;
   if (searchTimer) clearTimeout(searchTimer);
   for (const timer of saveTimers.values()) clearTimeout(timer);
   saveTimers.clear();
