@@ -285,7 +285,6 @@ button, input, textarea, select { font: inherit; }
 .storage-track { height: 4px; margin-top: 7px; overflow: hidden; border-radius: 2px; background: var(--line); }
 .storage-fill { width: 62%; height: 100%; border-radius: 2px; background: var(--brand); }
 .storage-hint { margin-top: 6px; color: var(--faint); font-size: 12px; }
-.admin-row { display: flex; align-items: center; gap: 9px; padding: 8px 6px; }
 .admin-avatar {
   display: flex;
   width: 30px;
@@ -314,8 +313,6 @@ button, input, textarea, select { font: inherit; }
 .character-switcher-option-avatar { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; margin-right: 8px; border-radius: 50%; background: var(--brand-soft); color: var(--brand-strong); font-size: 11px; font-weight: 700; }
 .character-switcher-current { margin-left: 14px; color: var(--brand-strong); font-size: 11px; }
 .sidebar-version { display: flex; justify-content: space-between; padding: 8px 6px 2px; color: var(--faint); font-size: 12px; }
-.sidebar-logout { width: 100%; justify-content: flex-start; margin: 2px 0 0; color: var(--dim); font-size: 12px; }
-.sidebar-logout:hover { color: var(--brand-strong); }
 
 /* 顶栏 */
 .app-main { min-width: 0; grid-column: 2; }
@@ -998,11 +995,6 @@ button, input, textarea, select { font: inherit; }
   .character-switcher { width: 34px; }
   .character-switcher-trigger { width: 34px; justify-content: center; padding: 0; }
   .character-switcher-copy, .character-switcher-arrow { display: none; }
-  /* 78px 图标栏里只留一个图标：el-button 的文字是裸文本节点，没有 span 可选，所以用 font-size:0 收掉；
-     图标单独给回 16px。选择器落到 .sidebar-bottom 后代上（0,2,0），确保压过 Element Plus 的 .el-button（0,1,0），
-     不吃两边样式表的先后顺序。overflow:hidden 兜底：万一字号没压住，也不会溢出栏外。 */
-  .sidebar-bottom .sidebar-logout { width: 34px; overflow: hidden; padding: 0; font-size: 0; justify-content: center; }
-  .sidebar-bottom .sidebar-logout .el-icon { font-size: 16px; }
   .topbar { padding: 0 16px; }
   .env-indicator { display: none; }
   .page-wrap { padding: 18px 18px 36px; }
