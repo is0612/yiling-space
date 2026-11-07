@@ -355,9 +355,9 @@ const SECRET_NAME_PATTERN = /(apikey|api_key|token|secret|password|credential)/i
 const ORIGIN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * 血缘 id 只认 UUID，不像 id 的一律当「没有」。
+ * 同步根 ID 只认 UUID，不像 id 的一律当「没有」。
  *
- * 和别处「不认识就拒绝」不同：它只是合并时的认人线索，不是内容。手改坏一个字符
+ * 和别处「不认识就拒绝」不同：它只是跨设备合并时的身份线索，不是内容。手改坏一个字符
  * 就整张卡导不进来，代价远大于丢掉合并能力（丢了还能走新建副本）。
  */
 export function normalizeBundleOriginId(value: unknown): string | null {
@@ -607,7 +607,7 @@ export type BundleBuildInput = {
     styleExamples?: string | null;
     userAddress?: string | null;
     modelConfig?: unknown;
-    /** 角色行上的血缘 id；导出时优先用它，没有才在调用方回落到角色自己的 id。 */
+    /** 角色行上的稳定同步根 ID；旧行为空时由导出调用方回落到角色自己的 id。 */
     originCharacterId?: string | null;
   };
   memorySetting?: {
