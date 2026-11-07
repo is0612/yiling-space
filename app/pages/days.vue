@@ -512,7 +512,7 @@ await loadDays();
             class="day-archived"
           >
             <p class="muted-note">
-              已隐藏 {{ archivedEvents.length }} 条<template v-if="detail.eventsTruncated">（当前展示范围）</template>
+              已隐藏 {{ archivedEvents.length }} 条<template v-if="detail.eventsTruncated">（当前页）</template>
             </p>
             <div
               v-for="event in archivedEvents"
