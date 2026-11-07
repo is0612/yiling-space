@@ -143,8 +143,7 @@ export async function loadCharacterExportBundle(input: {
   const includeFriends = input.includeFriends !== false;
   const now = input.now ?? new Date();
   const bundle = buildCharacterBundle({
-    // 血缘优先取角色行上记着的 origin：本机原生角色还没有，就用它自己的 id ——
-    // 这次导出的卡片从此成为「这一份数据」的身份证。
+    // 使用稳定同步根；兼容迁移前的旧行时，空值回退到本机实例 id。
     character: { ...character, originCharacterId: character.originCharacterId ?? character.id },
     memorySetting: character.memorySetting,
     // 查询条件已经排除他人范围，这里再按同一规则筛一次：将来若有人把 where 放宽，
@@ -902,7 +901,7 @@ export async function importCharacterCard(input: {
   raw: unknown;
   ownerId: string;
   now?: Date;
-  /** 合并目标角色。必须是同一个血缘（卡片 `origin.characterId` 对得上）。 */
+  /** 合并目标角色。必须与卡片的稳定同步根 ID 一致。 */
   targetCharacterId?: string | null;
 }): Promise<CharacterImportResult> {
   const bundle = parseCharacterBundle(input.raw);
@@ -960,8 +959,8 @@ async function createCharacterFromBundle(input: {
         userAddress: bundle.character.userAddress || "主人",
         // 导入即用：卡上写着「已暂停」的话，换机器后第一件事是找不到人。
         status: "ACTIVE",
-        // 血缘跟过来：这张卡下次再被导出时仍指向最初的 origin，A→B→C 才不会断线。
-        originCharacterId: bundle.originId,
+        // 带 origin 的卡继承原同步根；老卡没有 origin 时，以新实例自己的 ID 建立独立同步根。
+        originCharacterId: bundle.originId ?? characterId,
         modelConfig: {
           alias: bundle.character.alias || "导入角色",
           description: bundle.character.description,
@@ -1094,9 +1093,9 @@ async function createCharacterFromBundle(input: {
 /**
  * 把一张卡并进已有角色。
  *
- * 前置条件：卡片带 `origin.characterId`，且目标角色就是「同一个她」——
- * 要么目标自己的 id 就是 origin（同一台机器 / 恢复过整库），要么目标的 `originCharacterId` 是它
- * （从同一份数据导出来过，之后各自长了一段时间）。**不按名字猜**：两张都叫「一只鱼」的卡
+ * 前置条件：卡片带 `origin.characterId`，且目标角色的同步根与之相同——
+ * 目标自己的 id 就是根（根实例），或目标的 `originCharacterId` 就是该根（导入副本）。
+ * 同一个根可以对应多个本地实例，因此调用方必须明确指定目标。**不按名字猜**：两张都叫「一只鱼」的卡
  * 是两个不同的人，名字撞上了也不该合并。
  *
  * 冲突口径（用户选定）：**本地保留，导入的追加**。
@@ -1146,8 +1145,9 @@ async function mergeCharacterCard(input: {
   const added = emptyAdded();
 
   await prisma.$transaction(async (tx) => {
-    // 目标自己没有血缘记录时补上：它以后被导出就能认出更多同源的卡。
-    if (!target.originCharacterId) {
+    // 兼容迁移前创建的原生角色：若它本身就是同步根，补齐为自己的实例 ID。
+    // 正常迁移后此分支不再触发；绝不能把已有的非空同步根改写掉。
+    if (!target.originCharacterId && target.id === bundle.originId) {
       await tx.character.update({
         where: { id: target.id },
         data: { originCharacterId: bundle.originId as string },
