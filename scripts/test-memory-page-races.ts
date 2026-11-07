@@ -39,7 +39,7 @@ type PendingRequest = {
   reject: (error: unknown) => void;
 };
 
-function harness() {
+function harness(growthMode = false) {
   const watchers: Array<{ sources: Ref[]; callback: () => void }> = [];
   const timers = new Map<number, () => void>();
   const requests: PendingRequest[] = [];
@@ -49,7 +49,7 @@ function harness() {
   const bindings = executable.runInContext(createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
-    defineProps: () => ({}),
+    defineProps: () => ({ growthMode }),
     ref: (value: unknown) => ({ value }),
     computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: (sources: Ref | Ref[], callback: () => void) => watchers.push({ sources: Array.isArray(sources) ? sources : [sources], callback }),
@@ -134,6 +134,22 @@ function assertDetail(page: ReturnType<typeof harness>, id: string) {
   equal(page.read("editingMemorySource"), detail(id).sourceMessage);
   equal(page.read("editingMemorySnapshot"), detail(id).sourceSnapshot);
   assert.equal(page.read("memoryEditDialogOpen"), true);
+}
+
+async function growthModeOnlyLoadsMemories() {
+  const page = harness(true);
+  assert.equal(page.read("activeFilter"), "长期记忆", "Growth memory view must default to long-term memories only.");
+  const loading = page.call("loadCharacter");
+  page.take("/api/characters/role-a").resolve({ id: "role-a", name: "角色 A" });
+  await flush();
+  const timelineRequest = page.take("/api/characters/role-a/timeline");
+  assert.equal(new URL(timelineRequest.url, "http://test.local").searchParams.get("kinds"), "memory",
+    "Growth memory view must request only long-term memory timeline entries.");
+  timelineRequest.resolve(timeline("role-a"));
+  await loading;
+  equal(page.read("timelineEntries"), [{ id: "role-a" }]);
+  assert.equal(page.read("knownTotal"), 3, "Growth memory counts must exclude snapshots and memory events.");
+  page.done(); // Growth memory view must not request snapshots.
 }
 
 async function detailOrder() {
@@ -340,7 +356,7 @@ async function staleGroup() {
   page.done();
 }
 
-for (const test of [detailOrder, saveDuringDetailLoad, staleSaveCompletion, roleSwitchDetail, roleSwitchSearch, queryChanges, staleTimeline, staleGroup]) {
+for (const test of [growthModeOnlyLoadsMemories, detailOrder, saveDuringDetailLoad, staleSaveCompletion, roleSwitchDetail, roleSwitchSearch, queryChanges, staleTimeline, staleGroup]) {
   await test();
   console.log(`PASS ${test.name}`);
 }
