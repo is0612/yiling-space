@@ -4,7 +4,6 @@ import {
   hashPassword,
   passwordPolicyMessage,
   requireAdminActor,
-  revokeOtherSessions,
 } from "../../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
@@ -64,11 +63,18 @@ export default defineEventHandler(async (event) => {
   if (rawStatus) data.status = rawStatus as "ACTIVE" | "DISABLED";
   if (password) data.passwordHash = await hashPassword(password);
 
-  await prisma.user.update({ where: { id: targetId }, data });
-
-  if (disabling) {
-    await revokeOtherSessions({ userId: targetId });
-  }
+  // 密码重置和账号停用都必须让目标账号的旧会话立即失效。
+  // 与用户资料变更放在同一事务，避免密码已更新但会话撤销失败的半完成状态。
+  const revokeSessions = disabling || Boolean(password);
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: targetId }, data });
+    if (revokeSessions) {
+      await tx.session.updateMany({
+        where: { userId: targetId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
+  });
 
   await prisma.auditLog
     .create({
