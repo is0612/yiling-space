@@ -4,11 +4,11 @@ import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
 
-/** Execute the current days.vue script with controlled requests and watchers. */
-const pagePath = new URL("../app/pages/days.vue", import.meta.url);
+/** Execute the current DaysWorkspace.vue script with controlled requests and watchers. */
+const pagePath = new URL("../app/components/DaysWorkspace.vue", import.meta.url);
 const sfc = readFileSync(pagePath, "utf8");
 const scriptMatch = sfc.match(/<script\b[^>]*>([\s\S]*?)<\/script>/);
-assert.ok(scriptMatch, "days.vue must contain a script block");
+assert.ok(scriptMatch, "DaysWorkspace.vue must contain a script block");
 const source = ts.createSourceFile("days-page.ts", scriptMatch[1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const statements = source.statements.filter((node) => !ts.isImportDeclaration(node)
   && !(ts.isExpressionStatement(node) && ts.isAwaitExpression(node.expression)));
@@ -26,7 +26,7 @@ const compiled = ts.transpileModule(`(function () {\n${program}\n})()`, {
   reportDiagnostics: true,
 });
 assert.equal(compiled.diagnostics?.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error).length, 0);
-const executable = new Script(compiled.outputText, { filename: "days.vue.actual-script.js" });
+const executable = new Script(compiled.outputText, { filename: "DaysWorkspace.vue.actual-script.js" });
 
 type Ref = { value: unknown };
 type PendingRequest = {
@@ -301,4 +301,4 @@ for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSel
   await test();
   console.log(`PASS ${test.name}`);
 }
-console.log("days page async race regressions passed (actual days.vue handlers and watchers)");
+console.log("days page async race regressions passed (actual DaysWorkspace.vue handlers and watchers)");
