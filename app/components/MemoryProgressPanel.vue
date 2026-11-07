@@ -49,6 +49,14 @@ const visible = computed(() => jobs.value.filter((job) => {
 const hasActive = computed(() => visible.value.some((job) => isActive(job.status)));
 
 /**
+ * 任务监控页不需要这块浮层：那一页列的就是同一批任务，信息重复；
+ * 而它是 `position: fixed` 的 320-370px 宽面板，正好压住页面底部的分页条
+ * （窄屏下会整条盖死），一有点任务在跑就没法翻页。
+ */
+const route = useRoute();
+const suppressedHere = computed(() => route.path.startsWith("/tasks"));
+
+/**
  * 读屏播报只报「状态变了」，不报每秒都在跳的已用时 ——
  * 整块 `aria-live` 挂在列表上会每秒念一遍，等于噪音。
  */
@@ -148,7 +156,7 @@ function detail(job: MemoryProgressRow): string {
 
 <template>
   <aside
-    v-if="visible.length"
+    v-if="visible.length && !suppressedHere"
     class="memory-progress"
     :class="{ 'is-idle': !hasActive }"
   >
