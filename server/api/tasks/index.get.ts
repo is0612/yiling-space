@@ -1,6 +1,6 @@
 import { createError, getQuery } from "h3";
 import { requireAdminActor } from "../../utils/auth";
-import { isMemoryJobLeaseExpired } from "../../utils/memory-job-lease";
+import { isMemoryJobLeaseExpired, MEMORY_JOB_LEASE_MS } from "../../utils/memory-job-lease";
 import { buildPage, readPageQuery } from "../../utils/pagination";
 import { getPrisma } from "../../utils/prisma";
 
@@ -52,9 +52,10 @@ export default defineEventHandler(async (event) => {
       .filter(([label, type]) => label.toUpperCase().includes(normalizedSearch) || type.includes(normalizedSearch))
       .map(([, type]) => type)
     : [];
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(searchValue);
   const searchWhere = searchValue ? {
     OR: [
-      { id: { contains: searchValue, mode: "insensitive" as const } },
+      ...(isUuid ? [{ id: searchValue }, { memoryScopeId: searchValue }] : []),
       { memoryScope: { character: { name: { contains: searchValue, mode: "insensitive" as const } } } },
       ...(matchedTypes.length > 0 ? [{ type: { in: [...new Set(matchedTypes)] as ("GENERATE_SNAPSHOT" | "REGENERATE_SNAPSHOT" | "UPDATE_LONG_TERM_MEMORY" | "CLEAN_EXPIRED_MESSAGES" | "EXTRACT_EVENTS" | "GENERATE_JOURNAL")[] } }] : []),
     ],
@@ -160,6 +161,8 @@ export default defineEventHandler(async (event) => {
       pageSize,
     ),
     stuckCount,
+    stuckCount,
+    oldestStuckAt: oldestStuck?.lockedAt?.toISOString() ?? null,
     statusCounts: {
       QUEUED: statusGroups.find((group) => group.status === "QUEUED")?._count._all ?? 0,
       RUNNING: statusGroups.find((group) => group.status === "RUNNING")?._count._all ?? 0,
