@@ -62,7 +62,11 @@ const detail = ref<{
   messageGroups: DayMessageGroup[];
   usage: { calls: number; tokens: number };
   timeZone: string;
+  /** 当天忆泡总数（含已隐藏），分页控件用。 */
   eventsTotal: number;
+  eventsPage: number;
+  eventsPageSize: number;
+  eventsTotalPages: number;
 } | null>(null);
 /** 原文总数：按会话分组后要自己加总。用当天真实条数，不是「载进来的条数」。 */
 const totalMessages = computed(() => (detail.value?.messageGroups ?? []).reduce((sum, group) => sum + (group.total ?? group.messages.length), 0));
@@ -423,7 +427,7 @@ await loadDays();
         <el-pagination
           v-if="daysTotal > daysPageSize"
           class="day-pagination"
-          small
+          size="small"
           background
           layout="prev, pager, next"
           :current-page="daysPage"
@@ -532,7 +536,7 @@ await loadDays();
           <el-pagination
             v-if="detail.eventsTotalPages > 1"
             class="event-pagination"
-            small
+            size="small"
             background
             layout="prev, pager, next, total"
             :current-page="eventsPage"
