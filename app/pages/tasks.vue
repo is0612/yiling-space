@@ -460,7 +460,7 @@ onBeforeUnmount(() => {
           type="button"
           class="btn"
           :disabled="loading"
-          @click="loadTasks"
+          @click="loadTasks()"
         >
           <el-icon><Refresh /></el-icon>刷新
         </button>
@@ -674,7 +674,13 @@ onBeforeUnmount(() => {
           {{ selectedTask.characterName }}
           <span class="sep">·</span>
           <code :title="selectedTask.id">#{{ selectedTask.id.slice(0, 8) }}</code>
-          <button type="button" class="copy-id" @click.stop="copyTaskId(selectedTask.id)">复制完整编号</button>
+          <button
+            type="button"
+            class="copy-id"
+            @click.stop="copyTaskId(selectedTask.id)"
+          >
+            复制完整编号
+          </button>
         </p>
 
         <p class="d-period">
@@ -770,7 +776,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.tasks-a { padding-bottom: 180px; }
 /* ══════════════════════════════════════════════════════════════
    沿用总览 / QQ 渠道的 A 套：白砖、零描边、零阴影，层次靠明度差与间距。
    全部规则挂在 .tasks-a 下（作用域 + 压过 main.css 的单类规则）。
@@ -948,6 +953,21 @@ onBeforeUnmount(() => {
 .d-sub { margin: 5px 0 0; color: var(--dim); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .d-sub .sep { margin: 0 5px; color: var(--faint); }
 .d-sub code { border-radius: 4px; background: var(--surface-3); padding: 1px 5px; color: var(--text-2); font-family: ui-monospace, Consolas, monospace; font-size: 12px; user-select: all; }
+/* 「复制完整编号」：和编号同行的轻量文字按钮 —— 浏览器默认按钮（灰底 + outset 边框）
+   会在这行里凸出来一块，所以边框/底色全部清掉，只在 hover 时给下划线。 */
+.copy-id {
+  margin-left: 6px;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--brand-strong);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.copy-id:hover { text-decoration: underline; text-underline-offset: 3px; }
+.copy-id:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 3px; }
 .d-period {
   margin: 14px 0 0;
   border-radius: 8px;
