@@ -1,17 +1,17 @@
 import { createError, getRouterParam } from "h3";
-import { requireActorUserId } from "../../../utils/auth";
+import { requireAdminActor } from "../../../utils/auth";
 import { requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
 
 export default defineEventHandler(async (event) => {
-  const ownerId = await requireActorUserId(event);
+  const actor = await requireAdminActor(event);
   const id = requireUuid(getRouterParam(event, "id") ?? "", "任务");
   const now = new Date();
   const prisma = getPrisma();
 
   return prisma.$transaction(async (tx) => {
     const job = await tx.memoryJob.findFirst({
-      where: { id, memoryScope: { is: { character: { is: { ownerId } } } } },
+      where: { id },
       select: {
         id: true,
         type: true,
@@ -31,7 +31,7 @@ export default defineEventHandler(async (event) => {
         completedAt: now,
         lockedAt: null,
         lockedBy: null,
-        lastError: "任务已由本地管理员手动取消。",
+        lastError: "任务已由管理员手动取消。",
       },
     });
     if (updated.count !== 1) {
@@ -41,7 +41,7 @@ export default defineEventHandler(async (event) => {
     await tx.auditLog.create({
       data: {
         actorType: "USER",
-        actorId: ownerId,
+        actorId: actor.user.id,
         characterId: job.memoryScope.character.id,
         action: "memory_job.cancelled",
         entityType: "MemoryJob",
