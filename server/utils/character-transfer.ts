@@ -143,8 +143,7 @@ export async function loadCharacterExportBundle(input: {
   const includeFriends = input.includeFriends !== false;
   const now = input.now ?? new Date();
   const bundle = buildCharacterBundle({
-    // 血缘优先取角色行上记着的 origin：本机原生角色还没有，就用它自己的 id ——
-    // 这次导出的卡片从此成为「这一份数据」的身份证。
+    // 使用稳定同步根；兼容迁移前的旧行时，空值回退到本机实例 id。
     character: { ...character, originCharacterId: character.originCharacterId ?? character.id },
     memorySetting: character.memorySetting,
     // 查询条件已经排除他人范围，这里再按同一规则筛一次：将来若有人把 where 放宽，
@@ -1094,9 +1093,9 @@ async function createCharacterFromBundle(input: {
 /**
  * 把一张卡并进已有角色。
  *
- * 前置条件：卡片带 `origin.characterId`，且目标角色就是「同一个她」——
- * 要么目标自己的 id 就是 origin（同一台机器 / 恢复过整库），要么目标的 `originCharacterId` 是它
- * （从同一份数据导出来过，之后各自长了一段时间）。**不按名字猜**：两张都叫「一只鱼」的卡
+ * 前置条件：卡片带 `origin.characterId`，且目标角色的同步根与之相同——
+ * 目标自己的 id 就是根（根实例），或目标的 `originCharacterId` 就是该根（导入副本）。
+ * 同一个根可以对应多个本地实例，因此调用方必须明确指定目标。**不按名字猜**：两张都叫「一只鱼」的卡
  * 是两个不同的人，名字撞上了也不该合并。
  *
  * 冲突口径（用户选定）：**本地保留，导入的追加**。
