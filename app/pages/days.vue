@@ -362,10 +362,6 @@ await loadDays();
       eyebrow="工作空间 / 角色记忆"
       description="一天一行，点开看那天发生了什么。忆泡是整理过的事件，原文是当时的对话。"
     />
-    <CharacterBar
-      path="/days"
-      empty-text="先创建一个角色，这里才会按天记录她经历过的事。"
-    />
 
     <div
       v-if="!currentCharacter"
