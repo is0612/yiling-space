@@ -9,6 +9,7 @@ import {
   hashPassword,
   isLoginThrottled,
   isRegistrationEnabled,
+  isUniqueConstraintError,
   passwordPolicyMessage,
   readPasswordField,
   recordLoginAttempt,
@@ -62,21 +63,34 @@ export default defineEventHandler(async (event) => {
     select: { id: true },
   });
   if (existing) {
+    // 重复注册也算一次失败的注册尝试，否则邮箱是否已注册可以被无限制地批量探测。
+    await recordLoginAttempt({ username: email, ip, succeeded: false });
     throw createError({ statusCode: 409, statusMessage: "该邮箱已注册，请直接登录。" });
   }
 
-  const user = await prisma.user.create({
-    data: {
-      username: email,
-      email,
-      passwordHash: await hashPassword(password),
-      displayName: displayName || null,
-      role: "USER",
-      status: "ACTIVE",
-      registrationIpHash: hashClientAddress(ip),
-    },
-    select: { id: true, username: true, displayName: true, role: true },
-  });
+  let user: { id: string; username: string; displayName: string | null; role: string };
+  try {
+    user = await prisma.user.create({
+      data: {
+        username: email,
+        email,
+        passwordHash: await hashPassword(password),
+        displayName: displayName || null,
+        role: "USER",
+        status: "ACTIVE",
+        registrationIpHash: hashClientAddress(ip),
+      },
+      select: { id: true, username: true, displayName: true, role: true },
+    });
+  } catch (error) {
+    // 并发提交同一邮箱时预检查会同时通过，最终由唯一索引裁决：落败的请求按重复注册返回，
+    // 而不是把数据库约束错误暴露成 500。
+    if (isUniqueConstraintError(error)) {
+      await recordLoginAttempt({ username: email, ip, succeeded: false });
+      throw createError({ statusCode: 409, statusMessage: "该邮箱已注册，请直接登录。" });
+    }
+    throw error;
+  }
 
   await recordLoginAttempt({ username: email, ip, succeeded: true });
 

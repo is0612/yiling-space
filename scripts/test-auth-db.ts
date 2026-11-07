@@ -7,6 +7,7 @@ import {
   changePassword,
   countRecentLoginFailures,
   createSession,
+  createSessionForVerifiedPassword,
   hashClientAddress,
   hashPassword,
   hashSessionToken,
@@ -38,6 +39,35 @@ function expectStatus(fn: () => Promise<unknown>, statusCode: number) {
     () => assert.fail("Expected the call to throw status " + statusCode + "."),
     (error: { statusCode?: number }) => assert.equal(error.statusCode, statusCode),
   );
+}
+
+/**
+ * 让 sessions 表在这个用户被吊销时抛错，用来验证「密码已写、会话没吊销」这种半完成状态
+ * 会被事务整体回滚。函数名与其他验收脚本刻意区分，避免并行跑测试时互相覆盖。
+ */
+async function installFailingSessionRevokeTrigger(targetId: string): Promise<void> {
+  await prisma.$executeRawUnsafe(`
+    CREATE OR REPLACE FUNCTION yiling_test_block_pw_sessions() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW."revokedAt" IS NOT NULL
+         AND OLD."revokedAt" IS NULL
+         AND NEW."userId" = '${targetId}'::uuid THEN
+        RAISE EXCEPTION 'simulated session revocation failure';
+      END IF;
+      RETURN NEW;
+    END;
+    $$;
+  `);
+  await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS yiling_test_block_pw_sessions ON "sessions"`);
+  await prisma.$executeRawUnsafe(
+    `CREATE TRIGGER yiling_test_block_pw_sessions BEFORE UPDATE ON "sessions" FOR EACH ROW EXECUTE FUNCTION yiling_test_block_pw_sessions()`,
+  );
+}
+
+async function dropFailingSessionRevokeTrigger(): Promise<void> {
+  await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS yiling_test_block_pw_sessions ON "sessions"`);
+  await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS yiling_test_block_pw_sessions()`);
 }
 
 try {
@@ -215,8 +245,65 @@ try {
   assert.equal(await verifyPassword("integration-test-password-2", storedHash), true, "The new password must verify.");
   assert.equal(await verifyPassword(initialPassword, storedHash), false, "The old password must stop working.");
 
-  console.log("Auth DB integration passed: session issue/resolve/expiry/revocation, disabled-user rejection, stale-session cleanup, hashed token and address storage, database-backed login throttling counters, device listing, cross-account revocation refusal, self-revocation reporting, sign-out-others, and password change with session invalidation.");
+  // 15. Without the calling session, a password change revokes every active session of the account.
+  const deviceOne = await createSession({ userId, ip });
+  const deviceTwo = await createSession({ userId, ip });
+  const revokedAll = await changePassword({
+    userId,
+    currentPassword: "integration-test-password-2",
+    newPassword: "integration-test-password-3",
+  });
+  assert(revokedAll.revokedSessions >= 2, "不传当前会话时，必须吊销该账号全部活动会话。");
+  assert.equal(
+    await prisma.session.count({ where: { userId, revokedAt: null, expiresAt: { gt: new Date() } } }),
+    0,
+    "不传当前会话时，该账号不应留下任何活动会话。",
+  );
+  assert.equal(await resolveSessionUser(deviceOne.token), null, "旧设备一必须失效。");
+  assert.equal(await resolveSessionUser(deviceTwo.token), null, "旧设备二必须失效。");
+
+  // 16. A failure while revoking sessions rolls the password hash back with it.
+  const survivor = await createSession({ userId, ip });
+  const bystanderAfterChange = await createSession({ userId, ip });
+  const hashBeforeFailure = (await prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } }))?.passwordHash ?? "";
+  await installFailingSessionRevokeTrigger(userId);
+  let changeFailed = false;
+  try {
+    await changePassword({
+      userId,
+      currentPassword: "integration-test-password-3",
+      newPassword: "integration-test-password-4",
+      currentToken: survivor.token,
+    });
+  } catch {
+    changeFailed = true;
+  } finally {
+    await dropFailingSessionRevokeTrigger();
+  }
+  assert.equal(changeFailed, true, "会话吊销失败时，改密必须整体失败。");
+  const hashAfterFailure = (await prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } }))?.passwordHash ?? "";
+  assert.equal(hashAfterFailure, hashBeforeFailure, "事务回滚：密码哈希不得被写入。");
+  assert.equal(await verifyPassword("integration-test-password-3", hashAfterFailure), true, "回滚后原密码仍然有效。");
+  assert.equal(await verifyPassword("integration-test-password-4", hashAfterFailure), false, "失败的新密码不得生效。");
+  assert.equal((await resolveSessionUser(survivor.token))?.id, userId, "事务回滚：会话不得被吊销。");
+  assert.equal((await resolveSessionUser(bystanderAfterChange.token))?.id, userId, "事务回滚：其他设备也不得被吊销。");
+
+  // 17. A login that verified an old hash cannot mint a session after the password was reset.
+  const staleHash = hashAfterFailure;
+  const resetHash = await hashPassword("integration-test-password-5");
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash: resetHash } });
+  assert.equal(
+    await createSessionForVerifiedPassword({ userId, expectedPasswordHash: staleHash, ip }),
+    null,
+    "管理员重置密码后，用旧哈希校验通过的登录不得再开出会话。",
+  );
+  const freshAfterReset = await createSessionForVerifiedPassword({ userId, expectedPasswordHash: resetHash, ip });
+  assert(freshAfterReset, "使用当前密码哈希时仍应正常签发会话。");
+  assert.equal((await resolveSessionUser(freshAfterReset?.token ?? ""))?.id, userId, "新会话必须可用。");
+
+  console.log("Auth DB integration passed: session issue/resolve/expiry/revocation, disabled-user rejection, stale-session cleanup, hashed token and address storage, database-backed login throttling counters, device listing, cross-account revocation refusal, self-revocation reporting, sign-out-others, password change with session invalidation, password-change rollback, and stale-hash login rejection.");
 } finally {
+  await dropFailingSessionRevokeTrigger().catch(() => undefined);
   await prisma.session.deleteMany({ where: { userId: { in: [userId, intruderId].filter(Boolean) } } });
   await prisma.loginAttempt.deleteMany({ where: { username: { in: [username, bruteForceName, intruderName] } } });
   if (userId) {

@@ -343,6 +343,57 @@ export async function createSession(input: {
   return { token, expiresAt };
 }
 
+/**
+ * Issues a session only if the account still holds the password hash that was just verified.
+ *
+ * A login verifies the password in application code, which leaves a window between "the password
+ * is correct" and "a session exists". If an administrator resets the password inside that window,
+ * the freshly issued session would outlive the reset and keep a stolen old password alive. Locking
+ * the account row makes the check and the insert serialise against the reset transaction, which
+ * updates the same row.
+ */
+export async function createSessionForVerifiedPassword(input: {
+  userId: string;
+  expectedPasswordHash: string;
+  ip?: string;
+  userAgent?: string;
+}): Promise<{ token: string; expiresAt: Date } | null> {
+  const prisma = getPrisma();
+  const token = createSessionToken();
+  const ttlMs = sessionTtlMs();
+  const expiresAt = new Date(Date.now() + ttlMs);
+
+  const created = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ passwordHash: string; status: string }>>`
+      SELECT "passwordHash", "status"::text AS "status"
+      FROM "users"
+      WHERE "id" = ${input.userId}::uuid
+      FOR UPDATE
+    `;
+    const row = rows[0];
+    if (!row || row.passwordHash !== input.expectedPasswordHash || row.status !== "ACTIVE") return false;
+
+    await tx.session.create({
+      data: {
+        userId: input.userId,
+        tokenHash: hashSessionToken(token),
+        expiresAt,
+        ipHash: input.ip ? hashClientAddress(input.ip) : null,
+        userAgent: input.userAgent ? input.userAgent.slice(0, 255) : null,
+      },
+      select: { id: true },
+    });
+    return true;
+  });
+
+  return created ? { token, expiresAt } : null;
+}
+
+/** Prisma reports unique-constraint violations as P2002 regardless of which index tripped. */
+export function isUniqueConstraintError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2002";
+}
+
 export async function revokeSessionByToken(token: string): Promise<boolean> {
   if (!token) return false;
   const result = await getPrisma().session.updateMany({

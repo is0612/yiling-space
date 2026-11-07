@@ -4,7 +4,7 @@ import {
   buildSessionCookie,
   clientAddressOf,
   countRecentLoginFailures,
-  createSession,
+  createSessionForVerifiedPassword,
   isLoginThrottled,
   readPasswordField,
   recordLoginAttempt,
@@ -34,9 +34,8 @@ export default defineEventHandler(async (event) => {
   const passwordMatches = await verifyPassword(password, account?.passwordHash ?? DUMMY_PASSWORD_HASH);
   const authenticated = Boolean(account) && passwordMatches && account?.status === "ACTIVE";
 
-  await recordLoginAttempt({ username, ip, succeeded: authenticated });
-
   if (!authenticated || !account) {
+    await recordLoginAttempt({ username, ip, succeeded: false });
     await prisma.auditLog
       .create({
         data: {
@@ -52,11 +51,32 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 401, statusMessage: "用户名或密码不正确。" });
   }
 
-  const session = await createSession({
+  // 密码校验通过不等于还能登录：管理员可能刚好重置了密码或停用了账号。
+  // 建会话时再比对一次密码哈希（并对账号行加锁），避免旧密码在重置之后仍然开出会话。
+  const session = await createSessionForVerifiedPassword({
     userId: account.id,
+    expectedPasswordHash: account.passwordHash,
     ip,
     userAgent: getHeader(event, "user-agent") ?? undefined,
   });
+  if (!session) {
+    await recordLoginAttempt({ username, ip, succeeded: false });
+    await prisma.auditLog
+      .create({
+        data: {
+          actorType: "USER",
+          actorId: account.id,
+          action: "auth.login_failed",
+          entityType: "User",
+          entityId: account.id,
+          details: { username, reason: "credentials_changed" },
+        },
+      })
+      .catch(() => undefined);
+    throw createError({ statusCode: 401, statusMessage: "用户名或密码不正确。" });
+  }
+
+  await recordLoginAttempt({ username, ip, succeeded: true });
   setHeader(event, "set-cookie", buildSessionCookie(session.token, sessionTtlMs()));
   await revokeExpiredSessions().catch(() => undefined);
   await prisma.auditLog

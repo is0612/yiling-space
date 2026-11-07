@@ -109,6 +109,7 @@
     "test:auth": "tsx scripts/test-auth.ts",
     "test:auth-db": "tsx scripts/test-auth-db.ts",
     "test:auth-admin-reset": "tsx scripts/test-auth-admin-reset.ts",
+    "test:auth-flows": "tsx scripts/test-auth-flows.ts",
     "test:onebot": "tsx scripts/test-onebot-adapter.ts",
     "test:group-mute": "tsx scripts/test-group-mute.ts",
     "test:onebot-multigroup": "tsx scripts/test-onebot-multigroup.ts",
