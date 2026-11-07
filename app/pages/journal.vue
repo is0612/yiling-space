@@ -551,10 +551,6 @@ await loadList();
       eyebrow="工作空间 / 日记与手账"
       description="同一天的两份独立文本：日记是第一人称叙事，手账是结构化记录；各自版本、各自编辑。"
     />
-    <CharacterBar
-      path="/journal"
-      empty-text="先创建一个角色，这里才会有她的日记和手账。"
-    />
 
     <div
       v-if="!currentCharacter"
