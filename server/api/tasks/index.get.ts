@@ -53,22 +53,29 @@ export default defineEventHandler(async (event) => {
       .map(([, type]) => type)
     : [];
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(searchValue);
-  // 列表展示 UUID 前 8 位，支持把可见短编号粘回搜索框。
-  // PostgreSQL UUID 列不能直接做 startsWith/LIKE，先用参数化 SQL 将 UUID 转文本查前缀。
-  const isUuidPrefix = /^[0-9a-f]{8,36}$/i.test(searchValue) && !isUuid;
+  // 列表展示 UUID 前 8 位，支持把可见短编号粘回搜索框（带不带连字符都认）。
+  // PostgreSQL 的 UUID 列不能直接 LIKE，用参数化 SQL 转文本、去掉连字符再比前缀。
+  // 不加 LIMIT：8 位十六进制前缀在真实 UUID 上几乎唯一，而截断会让 total 静默少报。
+  const hexSearch = searchValue.replace(/-/g, "");
+  const isUuidPrefix = !isUuid
+    && hexSearch.length >= 8
+    && hexSearch.length <= 32
+    && /^[0-9a-f]+$/i.test(hexSearch)
+    && /^[0-9a-f-]+$/i.test(searchValue);
   const matchingJobIds = isUuidPrefix
     ? await prisma.$queryRaw<Array<{ id: string }>>`
         SELECT id::text AS id
         FROM memory_jobs
-        WHERE id::text ILIKE ${searchValue + "%"}
-        LIMIT 50
+        WHERE replace(id::text, '-', '') ILIKE ${hexSearch + "%"}
       `
     : [];
+  // 角色名走 Prisma 的 `contains`，它原样拼进 LIKE —— 不转义的话搜「%」会命中全表。
+  const nameNeedle = searchValue.replace(/[\\%_]/g, (char) => "\\" + char);
   const searchWhere = searchValue ? {
     OR: [
       ...(isUuid ? [{ id: searchValue }, { memoryScopeId: searchValue }, { memoryScope: { characterId: searchValue } }] : []),
       ...(matchingJobIds.length ? [{ id: { in: matchingJobIds.map((row) => row.id) } }] : []),
-      { memoryScope: { character: { name: { contains: searchValue, mode: "insensitive" as const } } } },
+      { memoryScope: { character: { name: { contains: nameNeedle, mode: "insensitive" as const } } } },
       ...(matchedTypes.length > 0 ? [{ type: { in: [...new Set(matchedTypes)] as ("GENERATE_SNAPSHOT" | "REGENERATE_SNAPSHOT" | "UPDATE_LONG_TERM_MEMORY" | "CLEAN_EXPIRED_MESSAGES" | "EXTRACT_EVENTS" | "GENERATE_JOURNAL")[] } }] : []),
     ],
   } : {};
