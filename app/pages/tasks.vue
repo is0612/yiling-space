@@ -42,9 +42,9 @@ type TaskListResponse = {
   allTotal: number;
   page: number;
   pageSize: number;
+  totalPages: number;
   stuckCount: number;
   oldestStuckAt: string | null;
-  stuckCount: number;
   statusCounts: Record<MemoryTask["status"], number>;
 };
 type WorkerResult = {
@@ -69,8 +69,7 @@ const totalTasks = ref(0);
 const allTasksTotal = ref(0);
 const currentPage = ref(1);
 const pageSize = ref(20);
-const stuckCount = ref(0);
-const oldestStuckAt = ref<string | null>(null);
+const totalPages = ref(1);
 const stuckCount = ref(0);
 const requestVersion = ref(0);
 const statusCounts = ref<Record<MemoryTask["status"], number>>({

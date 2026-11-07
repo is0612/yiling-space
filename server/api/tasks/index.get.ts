@@ -28,7 +28,7 @@ export default defineEventHandler(async (event) => {
   const now = new Date();
   // 任务监控是管理员的全局运维台：统计和列表覆盖所有角色，不按管理员账号筛选。
   const statusWhere = statusValue === "ISSUES"
-    ? { status: { in: ["FAILED", "RETRY_WAIT"] as const } }
+    ? { status: { in: ["FAILED", "RETRY_WAIT"] as JobStatus[] } }
     : statusValue ? { status: statusValue as JobStatus } : {};
   const typeByLabel: Record<string, string> = {
     "生成阶段总结": "GENERATE_SNAPSHOT",
@@ -61,8 +61,12 @@ export default defineEventHandler(async (event) => {
     ],
   } : {};
   const where = { ...statusWhere, ...searchWhere };
-  const leaseExpiredBefore = new Date(now.getTime() - 5 * 60 * 1000);
-  const [jobs, total, statusGroups, stuckCount] = await Promise.all([
+  const leaseExpiredBefore = new Date(now.getTime() - MEMORY_JOB_LEASE_MS);
+  const stuckWhere = {
+    status: "RUNNING" as const,
+    OR: [{ lockedAt: null }, { lockedAt: { lt: leaseExpiredBefore } }],
+  };
+  const [jobs, total, allTotal, statusGroups, stuckCount, oldestStuck] = await Promise.all([
     prisma.memoryJob.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -89,14 +93,11 @@ export default defineEventHandler(async (event) => {
     prisma.memoryJob.count({ where }),
     prisma.memoryJob.count(),
     prisma.memoryJob.groupBy({ by: ["status"], _count: { _all: true } }),
-    prisma.memoryJob.count({
-      where: {
-        status: "RUNNING",
-        OR: [
-          { lockedAt: null },
-          { lockedAt: { lt: leaseExpiredBefore } },
-        ],
-      },
+    prisma.memoryJob.count({ where: stuckWhere }),
+    prisma.memoryJob.findFirst({
+      where: stuckWhere,
+      orderBy: [{ lockedAt: "asc" }, { createdAt: "asc" }],
+      select: { lockedAt: true },
     }),
   ]);
 
@@ -163,7 +164,6 @@ export default defineEventHandler(async (event) => {
     ),
     stuckCount,
     allTotal,
-    stuckCount,
     oldestStuckAt: oldestStuck?.lockedAt?.toISOString() ?? null,
     statusCounts: {
       QUEUED: statusGroups.find((group) => group.status === "QUEUED")?._count._all ?? 0,
