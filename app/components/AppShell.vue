@@ -99,8 +99,7 @@ async function handleCharacterSwitch(nextId: string) {
 }
 
 /**
- * 角色级页面（记忆 / 阶段总结）都是菜单页，角色在页内下拉切换，
- * 所以侧栏不再需要拼 id。
+ * 角色级页面从侧栏共享当前角色；各页面通过同一份 query/cookie 状态读取数据。
  */
 const workspaceNavigation: NavigationItem[] = [
   { key: "home", label: "总览", href: "/", icon: DataBoard },
