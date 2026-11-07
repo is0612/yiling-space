@@ -23,7 +23,7 @@ import {
 } from "./conversation-message";
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
 import { normalizeFriendAliases } from "./friend-aliases";
-import { MEMORY_JOB_LEASE_MS, lockMemoryJobLease, memoryJobLeaseWhere, MemoryJobLeaseLostError, type MemoryJobLease } from "./memory-job-lease";
+import { MEMORY_JOB_LEASE_MS, lockMemoryJobLease, memoryJobLeaseWhere, MemoryJobLeaseLostError, renewMemoryJobLease, type MemoryJobLease } from "./memory-job-lease";
 import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
 import { EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
 import { rawMessageCleanupDependencyCutoff } from "./memory-event-cleanup";
@@ -341,6 +341,8 @@ export async function runDailyEventJob(
             ...readMessageSpeaker(row.metadata),
           };
         });
+        // 一个任务可能跨多个会话连续请求模型；每次请求前续租，避免总耗时超过 5 分钟被其他 Worker 误回收。
+        await renewMemoryJobLease(prisma, lease);
         const aiResult = await analyzeMemoryPeriod({
           apiKey,
           apiBaseUrl: chatSettings.apiBaseUrl,
