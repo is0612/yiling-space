@@ -55,7 +55,7 @@ export default defineEventHandler(async (event) => {
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(searchValue);
   const searchWhere = searchValue ? {
     OR: [
-      ...(isUuid ? [{ id: searchValue }, { memoryScopeId: searchValue }] : []),
+      ...(isUuid ? [{ id: searchValue }, { memoryScopeId: searchValue }, { memoryScope: { characterId: searchValue } }] : []),
       { memoryScope: { character: { name: { contains: searchValue, mode: "insensitive" as const } } } },
       ...(matchedTypes.length > 0 ? [{ type: { in: [...new Set(matchedTypes)] as ("GENERATE_SNAPSHOT" | "REGENERATE_SNAPSHOT" | "UPDATE_LONG_TERM_MEMORY" | "CLEAN_EXPIRED_MESSAGES" | "EXTRACT_EVENTS" | "GENERATE_JOURNAL")[] } }] : []),
     ],
@@ -87,6 +87,7 @@ export default defineEventHandler(async (event) => {
       },
     }),
     prisma.memoryJob.count({ where }),
+    prisma.memoryJob.count(),
     prisma.memoryJob.groupBy({ by: ["status"], _count: { _all: true } }),
     prisma.memoryJob.count({
       where: {
@@ -161,6 +162,7 @@ export default defineEventHandler(async (event) => {
       pageSize,
     ),
     stuckCount,
+    allTotal,
     stuckCount,
     oldestStuckAt: oldestStuck?.lockedAt?.toISOString() ?? null,
     statusCounts: {
