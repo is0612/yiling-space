@@ -2,6 +2,7 @@
 import { ArrowRight, ArrowDown, Collection, Files, Search, MagicStick, Delete, Loading } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character, type Snapshot, type TimelineEntry, type TimelineType } from "~/utils/mock-data";
+import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
 
 const props = defineProps<{ growthMode?: boolean }>();
 const isGrowthMode = computed(() => props.growthMode === true);
@@ -1227,6 +1228,7 @@ watch(id, () => {
 
 <template>
   <div class="page-wrap">
+    <MemorySectionNavigation v-if="isGrowthMode" active="memory" />
     <PageHeader
       :eyebrow="isGrowthMode ? '成长系统 / 记忆系统' : '工作空间 / 角色记忆'"
       :description="isGrowthMode ? '查看、检索和整理她的长期记忆，并追溯每条记忆的来源。' : '通过左下角切换角色，查看它的对话、阶段总结与长期记忆。'"
