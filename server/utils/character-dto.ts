@@ -13,12 +13,8 @@ function positiveNumber(value: unknown): number {
 
 export type CharacterDto = {
   id: string;
-  /**
-   * 血缘 id：这个角色最初来自哪一份角色数据。
-   * 导入角色卡时用它认出「本机已有同一个她」，所以合并判断在前端就能做；
-   * 空 = 本机原生角色（导出时才第一次确定）。
-   */
-  originId: string | null;
+  /** 稳定同步根 ID：同一角色在不同设备上的本地实例通过它识别；本机新建角色以自己的 id 为根。 */
+  originId: string;
   name: string;
   alias: string;
   description: string;
@@ -237,7 +233,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
 
   return {
     id: character.id,
-    originId: character.originCharacterId ?? null,
+    originId: character.originCharacterId ?? character.id,
     name: character.name,
     alias: typeof config.alias === "string" ? config.alias : "自定义角色",
     description: typeof config.description === "string" ? config.description : "",

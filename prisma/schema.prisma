@@ -201,14 +201,10 @@ model Character {
   /// 角色在这个对话里怎么称呼用户（默认「主人」）。空字符串 = 不特意称呼。
   userAddress       String                    @default("主人") @db.VarChar(40)
   modelConfig       Json                      @default("{}") @db.JsonB
-  /// 角色卡的血缘标记：这个角色最初来自哪一份角色数据（导出时的 `origin.characterId`）。
-  ///
-  /// 存在的理由只有一个 —— **合并**。导入永远是新建一行，新行有自己的 id；如果只认 id，
-  /// 从另一台机器导回来的同一张卡就再也认不出「这是同一个她」，只能并排养出两个。
-  /// 所以第一次导出时把来源角色 id 写进卡片，导入后存在这里；导出时优先用它，
-  /// 血缘因此能跨多跳延续（A → B → C 导来导去仍是同一个 origin）。
-  ///
-  /// 为空 = 本机原生角色（导出时才第一次确定它自己的 id），或来自不带 origin 的老卡。
+  /// 稳定同步根 ID：同一角色在不同设备上的本地实例通过它识别并合并。
+  /// 本机新建时等于自己的 id；导入带 origin 的角色继承卡片中的根；无 origin 的老卡
+  /// 以新实例自己的 id 建立独立根。一个同步根允许对应多个本地实例，因此不能加唯一约束。
+  /// 正常应用创建路径会始终写入；迁移负责回填历史 NULL。
   originCharacterId String?                   @db.Uuid
   status            CharacterStatus           @default(ACTIVE)
   createdAt         DateTime                  @default(now()) @db.Timestamptz(6)

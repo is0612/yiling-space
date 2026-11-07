@@ -10,7 +10,7 @@ import { getPrisma } from "../../utils/prisma";
  * 导入一张角色卡。
  *
  * 默认**新建角色**（不合并、不覆盖）。带上 `?target=<角色 id>` 时改为把卡并进那个角色，
- * 前提是两边同一个血缘（卡片 `origin.characterId` 与目标对得上），规则见
+ * 前提是卡片同步根 ID（`origin.characterId`）与目标角色的同步根一致，规则见
  * `server/utils/character-transfer.ts` 的 `mergeCharacterCard`。
  *
  * 包被当成不可信输入：字段逐个校验、数量上限、模型参数走白名单、任何密钥字段都不读。

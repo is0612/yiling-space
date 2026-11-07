@@ -16,6 +16,8 @@ export default defineEventHandler(async (event) => {
     data: {
       id: characterId,
       ownerId,
+      // 本机新建角色以自己的实例 ID 作为稳定同步根；导入副本则继承卡片上的根。
+      originCharacterId: characterId,
       name,
       avatar: name.slice(0, 1),
       basePrompt: personality || "请补充角色的人设与行为规则。",

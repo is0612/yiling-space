@@ -35,7 +35,7 @@ type BundlePreview = {
   description: string;
   exportedAt: string | null;
   formatVersion: number | null;
-  /** 卡片的血缘 id；null = 老卡没带，认不出是哪个角色，只能新建。 */
+  /** 卡片的同步根 ID；null = 老卡没带，认不出同源角色，只能新建。 */
   originId: string | null;
   counts: BundleCounts;
 };
@@ -75,8 +75,10 @@ const errorMessage = ref("");
 const importing = ref(false);
 const dragging = ref(false);
 const preview = ref<BundlePreview | null>(null);
-/** 本机认出的同一个角色；null = 认不出，只能新建。 */
-const mergeTarget = ref<Character | null>(null);
+/** 本机所有同源角色；可能有多个副本，不能只取列表中的第一个。 */
+const mergeTargets = ref<Character[]>([]);
+const mergeTargetId = ref("");
+const mergeTarget = computed(() => mergeTargets.value.find((item) => item.id === mergeTargetId.value) ?? null);
 /** merge = 并进 mergeTarget；copy = 新建副本（并排养两个）。 */
 const mergeMode = ref<"merge" | "copy">("copy");
 /** 原样保留解析结果，提交时不再二次序列化字符串，避免编码/BOM 相关问题 */
@@ -90,7 +92,8 @@ function reset() {
   dragging.value = false;
   preview.value = null;
   payload.value = null;
-  mergeTarget.value = null;
+  mergeTargets.value = [];
+  mergeTargetId.value = "";
   mergeMode.value = "copy";
   if (fileInput.value) fileInput.value.value = "";
 }
@@ -148,7 +151,7 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
 
 const ORIGIN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 卡片里的血缘 id。只认 UUID：不像 id 的一律当「没带」，别拿它去猜角色。 */
+/** 卡片里的同步根 ID。只认 UUID：不像 id 的一律当「没带」，别拿它去猜角色。 */
 function readOriginId(source: Record<string, unknown>): string | null {
   const value = asRecord(source.origin).characterId;
   if (typeof value !== "string") return null;
@@ -156,12 +159,12 @@ function readOriginId(source: Record<string, unknown>): string | null {
   return ORIGIN_ID_PATTERN.test(trimmed) ? trimmed.toLowerCase() : null;
 }
 
-/** 本机已有的同一个她：要么这个角色本身就是来源，要么它也是从同一份数据导进来的。 */
-function findSameOrigin(originId: string | null): Character | null {
-  if (!originId) return null;
-  return (props.characters ?? []).find(
+/** 返回全部同源实例；一个同步根允许在本机对应多个角色副本。 */
+function findSameOrigin(originId: string | null): Character[] {
+  if (!originId) return [];
+  return (props.characters ?? []).filter(
     (item) => item.id === originId || item.originId === originId,
-  ) ?? null;
+  );
 }
 
 function buildPreview(source: Record<string, unknown>): BundlePreview {
@@ -240,10 +243,10 @@ async function handleFile(file: File) {
 
   preview.value = buildPreview(record);
   payload.value = record;
-  // 认出「同一个她」就把默认动作设成合并 —— 人是为了补数据才导这张卡的，
-  // 但按钮仍然留在那儿，想并排养两个随时可以改成新建副本。
-  mergeTarget.value = findSameOrigin(preview.value.originId);
-  mergeMode.value = mergeTarget.value ? "merge" : "copy";
+  // 只有唯一同源目标时才默认合并；存在多个副本必须由用户明确选择，不能按更新时间猜。
+  mergeTargets.value = findSameOrigin(preview.value.originId);
+  mergeTargetId.value = mergeTargets.value.length === 1 ? mergeTargets.value[0]!.id : "";
+  mergeMode.value = mergeTargets.value.length === 1 ? "merge" : "copy";
 }
 
 function onFileChange(event: Event) {
@@ -277,7 +280,7 @@ async function submit() {
   if (!payload.value || importing.value) return;
   importing.value = true;
   try {
-    // 合并走 ?target=：包本身不动，服务端按血缘再校验一次「确实是同一个她」。
+    // 合并走 ?target=：包本身不动，服务端按同步根再次校验目标确实同源。
     const url = merging.value && mergeTarget.value
       ? `/api/characters/import?target=${encodeURIComponent(mergeTarget.value.id)}`
       : "/api/characters/import";
@@ -324,8 +327,8 @@ function formatExportedAt(value: string | null): string {
     :close-on-press-escape="!importing"
   >
     <p class="lead">
-      导入会新建一个角色，不会覆盖已有的同名角色。包里是人设、记忆、忆泡、忆泡日历、日记手账（含历史版本）、梗和阶段总结；
-      表情包与 API Key 不在包内，新机器上重新同步 / 重新填写即可。
+      导入会优先识别同源角色：找到一个时可直接合并，找到多个时由你选择目标；也可以新建副本。没有来源信息的旧卡会作为新角色导入。
+      包里是人设、记忆、忆泡、忆泡日历、日记手账（含历史版本）、梗和阶段总结；表情包与 API Key 不在包内，新机器上重新同步 / 重新填写即可。
     </p>
 
     <input
@@ -433,20 +436,45 @@ function formatExportedAt(value: string | null): string {
         </div>
       </dl>
 
-      <!-- 认出了本机同一个她：默认合并，但「并排养两个」仍然可选 -->
+      <!-- 同一同步根可能有多个本地副本；多目标时必须明确选择，绝不自动取第一个。 -->
       <div
-        v-if="mergeTarget"
+        v-if="mergeTargets.length"
         class="merge-box"
       >
         <div class="merge-head">
-          本机已有同一个她：<strong>{{ mergeTarget.name }}</strong>
-          <span class="merge-meta">{{ mergeTarget.memoryCount }} 条记忆</span>
+          <template v-if="mergeTargets.length === 1">
+            本机找到同源角色：<strong>{{ mergeTargets[0]?.name }}</strong>
+            <span class="merge-meta">{{ mergeTargets[0]?.memoryCount ?? 0 }} 条记忆</span>
+          </template>
+          <template v-else>
+            本机找到 {{ mergeTargets.length }} 个同源角色，请选择要合并到哪一个。
+          </template>
+        </div>
+        <el-select
+          v-if="mergeTargets.length > 1"
+          v-model="mergeTargetId"
+          class="merge-target-select"
+          placeholder="选择合并目标"
+          style="width: 100%; margin-top: 8px"
+        >
+          <el-option
+            v-for="candidate in mergeTargets"
+            :key="candidate.id"
+            :value="candidate.id"
+            :label="`${candidate.name} · ${candidate.memoryCount} 条记忆 · ${candidate.id.slice(0, 8)}`"
+          />
+        </el-select>
+        <div
+          v-if="mergeTarget && mergeTargets.length > 1"
+          class="merge-meta merge-selected"
+        >
+          已选择：{{ mergeTarget.name }}（{{ mergeTarget.memoryCount }} 条记忆）
         </div>
         <el-radio-group
           v-model="mergeMode"
           class="merge-options"
         >
-          <el-radio value="merge">
+          <el-radio value="merge" :disabled="!mergeTarget">
             合并进去（本地内容不动，导入的接成新版本）
           </el-radio>
           <el-radio value="copy">

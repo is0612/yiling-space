@@ -26,7 +26,11 @@ try {
     assert.equal(result.status, 0, `Isolated character check failed: ${args.join(" ")}`);
   };
   run("node_modules/prisma/build/index.js", ["migrate", "deploy"]);
-  for (const script of ["test-character-portable-db.ts", "test-character-delete-db.ts"]) {
+  for (const script of [
+    "test-character-portable-db.ts",
+    "test-character-sync-root-db.ts",
+    "test-character-delete-db.ts",
+  ]) {
     run("node_modules/tsx/dist/cli.mjs", [`scripts/${script}`]);
   }
   console.log("Isolated character database checks passed; business data was not used for fixtures.");
