@@ -3,8 +3,8 @@ export type TimelineType = "message" | "memory" | "snapshot" | "event" | "memory
 
 export type Character = {
   id: string;
-  /** 稳定同步根 ID；旧接口或旧缓存缺省时仍允许字段不存在。 */
-  originId?: string;
+  /** 稳定同步根 ID；旧接口或旧缓存可能缺省或为 null。 */
+  originId?: string | null;
   name: string;
   alias: string;
   description: string;
