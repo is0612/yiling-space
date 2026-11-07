@@ -243,10 +243,10 @@ function taskIssueTitle(task: MemoryTask) {
 function taskStatusHint(task: MemoryTask) {
   if (task.status === "QUEUED") return "任务已进入持久化队列，等待 Worker 执行。";
   if (isStuck(task)) {
-    return `领走这条任务的进程已经退出（${sinceText(task.lockedAt)}前领走，租约只有 5 分钟），没有进程会来回收它：`
+    return `Worker 最后一次续租在 ${sinceText(task.lockedAt)}前；租约连续 5 分钟没有续期，任务已可回收：`
       + "回收是「有人领任务时顺带做的」，本机没在跑 Worker 就一直不会发生。点「回收并重新入队」可以立刻放回队列。";
   }
-  if (task.status === "RUNNING") return "Worker 正在执行该任务（租约 5 分钟，超期没人回收才算卡住）。";
+  if (task.status === "RUNNING") return "Worker 正在执行该任务；较长的忆泡任务会在每次模型请求前续租，连续 5 分钟没有续期才算卡住。";
   if (task.status === "SUCCEEDED") return "任务已完成，没有记录错误。";
   if (task.status === "SKIPPED") return "该任务没有需要处理的活动，已按规则跳过。";
   if (task.status === "RETRY_WAIT") return "任务执行未成功，系统会在计划时间再次尝试。";
@@ -385,7 +385,7 @@ async function retrySelectedTask() {
   try {
     await ElMessageBox.confirm(
       stuck
-        ? `这条任务${sinceText(task.lockedAt)}前被领走后就没人管了，租约早已过期。放回队列会重置尝试计数，接下来由 Worker 重新执行；审计记录会保留。`
+        ? `这条任务最后一次续租已是 ${sinceText(task.lockedAt)}前，租约早已过期。放回队列会重置尝试计数，接下来由 Worker 重新执行；审计记录会保留。`
         : "系统会清除本次任务的错误状态和尝试计数，并立即重新排队。历史审计记录会保留。",
       stuck ? "回收卡住的任务" : "重新入队任务",
       { confirmButtonText: stuck ? "回收并重新入队" : "重新入队", cancelButtonText: "取消", type: "warning" },
@@ -514,7 +514,7 @@ onBeforeUnmount(() => {
     >
       <el-icon><Warning /></el-icon>
       <span>
-        <strong>{{ stuckCount }} 条任务卡在「运行中」</strong>，租约已过期且尚未回收<template v-if="oldestStuckAt">，最早于 {{ sinceText(oldestStuckAt) }}前领走</template> —— 点这里只看它们。
+        <strong>{{ stuckCount }} 条任务卡在「运行中」</strong>，租约已过期且尚未回收<template v-if="oldestStuckAt">，最早一次租约续期在 {{ sinceText(oldestStuckAt) }}前</template> —— 点这里只看它们。
       </span>
       <el-icon class="go">
         <ArrowRight />
@@ -624,7 +624,7 @@ onBeforeUnmount(() => {
             <span
               class="pill"
               :class="tone(task)"
-              :title="isStuck(task) ? `领走它之后就没消息了（${sinceText(task.lockedAt)}），租约已过期` : ''"
+              :title="isStuck(task) ? `最后一次续租在 ${sinceText(task.lockedAt)}前，租约已过期` : ''"
             >{{ statusLabel(task) }}</span>
           </span>
           <span class="num">{{ task.attemptCount }} / {{ task.maxAttempts }}</span>
@@ -701,7 +701,7 @@ onBeforeUnmount(() => {
             <dd>{{ formatDate(selectedTask.startedAt) }}</dd>
           </div>
           <div v-if="selectedTask.lockedAt">
-            <dt>租约</dt>
+            <dt>最近租约更新时间</dt>
             <dd>
               {{ formatDate(selectedTask.lockedAt) }}
               <span
