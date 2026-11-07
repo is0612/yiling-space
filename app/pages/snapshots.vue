@@ -303,11 +303,6 @@ async function reviewChange(changeIndex: number, decision: "ACCEPT" | "IGNORE", 
   }
 }
 
-async function switchCharacter(nextId: string) {
-  if (!nextId || nextId === id.value) return;
-  resetCharacterPage();
-}
-
 /**
  * 立即归档一次：手动触发「自动归档」。
  *
@@ -513,14 +508,6 @@ watch(id, () => {
         </button>
       </template>
     </PageHeader>
-
-    <!-- 角色切换：和角色记忆、AI 对话同一个位置、同一套控件 -->
-    <CharacterBar
-      path="/snapshots"
-      :disabled="creating"
-      empty-text="还没有角色。先创建一个角色，归档任务才有对象。"
-      @change="switchCharacter"
-    />
 
     <template v-if="characters.length">
       <!-- 一条静音统计带：原来三张 KPI 卡和正文一样重，其中两个数几乎不变 -->
