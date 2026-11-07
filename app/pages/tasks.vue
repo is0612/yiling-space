@@ -39,6 +39,7 @@ type MemoryTask = {
 type TaskListResponse = {
   items: MemoryTask[];
   total: number;
+  allTotal: number;
   page: number;
   pageSize: number;
   stuckCount: number;
@@ -65,6 +66,7 @@ type SchedulerReport = {
 
 const tasks = ref<MemoryTask[]>([]);
 const totalTasks = ref(0);
+const allTasksTotal = ref(0);
 const currentPage = ref(1);
 const pageSize = ref(20);
 const stuckCount = ref(0);
@@ -98,7 +100,7 @@ function isStuck(task: MemoryTask) {
 
 /** 计数和筛选合成一行：状态分布就是筛选条件，不需要再排一张 KPI。 */
 const statusChips = computed(() => [
-  { value: "ALL", label: "全部", count: totalTasks.value },
+  { value: "ALL", label: "全部", count: allTasksTotal.value },
   { value: "QUEUED", label: "待执行", count: statusCounts.value.QUEUED },
   { value: "RUNNING", label: "运行中", count: statusCounts.value.RUNNING },
   { value: "SUCCEEDED", label: "成功", count: statusCounts.value.SUCCEEDED },
@@ -269,6 +271,7 @@ async function loadTasks() {
     if (version !== requestVersion.value) return;
     tasks.value = result.items;
     totalTasks.value = result.total;
+    allTasksTotal.value = result.allTotal;
     currentPage.value = result.page;
     pageSize.value = result.pageSize;
     totalPages.value = result.totalPages;
