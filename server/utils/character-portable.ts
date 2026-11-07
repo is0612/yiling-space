@@ -132,14 +132,13 @@ export type CharacterBundleCharacter = {
 };
 
 /**
- * 血缘：这张卡最初来自哪一份角色数据。
+ * 稳定同步根：同一角色在不同设备上的本地实例通过它识别并合并。
  *
- * 它不是账号，也不是「本机的角色 id」—— 导入永远新建一行，新行有自己的 id。
- * 这里记的是第一份数据的 id，导出时优先取角色行上的 `originCharacterId`，
- * 所以 A → B → C 反复导出导入之后仍然指向同一个 origin。
+ * 它不是本机数据库主键：每台设备导入时都会生成自己的 `Character.id`，
+ * 但带 origin 的卡会继承同一个同步根，因而 A → B → A 可以继续合并。
+ * 本机新建角色以自己的实例 id 作为同步根；无 origin 的老卡导入时也以新实例 id 建根。
  *
- * 用途只有一个：**认出本机已有的同一个角色**，从而允许合并而不是并排养出两个。
- * 空字符串 = 这份卡没有血缘信息（老卡，或导出时角色行上也没有），只能新建。
+ * 空字符串仅用于兼容历史卡片；新版本正常导出应始终携带有效 UUID。
  */
 export type CharacterBundleOrigin = {
   characterId: string;
@@ -820,9 +819,7 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
 
 export type ParsedCharacterBundle = {
   formatVersion: number;
-  /**
-   * 血缘 id；null = 这张卡没带来源角色信息，只能新建（不能合并）。
-   */
+  /** 稳定同步根 ID；null = 历史卡片未携带 origin，只能新建并建立独立根。 */
   originId: string | null;
   character: CharacterBundleCharacter;
   modelConfig: CharacterBundleModelConfig;
@@ -870,7 +867,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     bad(`角色卡格式版本 ${version} 高于当前程序支持的 ${CHARACTER_BUNDLE_VERSION}，请先升级程序。`);
   }
 
-  // 血缘：v1 老卡与手工整理的卡都可能没有这一段，缺省就是「认不出，只能新建」。
+  // 兼容旧卡：没有有效 origin 时无法自动匹配；导入新建时会用新实例 id 建立独立同步根。
   const originId = normalizeBundleOriginId(asRecord(body.origin).characterId);
 
   const character = asRecord(body.character);
