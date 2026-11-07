@@ -380,7 +380,6 @@ onBeforeUnmount(() => {
               <span class="stat-v">{{ card.cost ? formatCny(card.cost.today.costCny) : "—" }}</span>
               <span class="stat-f">{{ card.cost ? `近 7 天 ${formatCny(card.cost.windowCostCny)}` : "还没有模型调用" }}</span>
             </div>
-          </div>
 
           <!-- 用量金额是估算值：未定价 token 不计入金额，缺缓存明细的调用按未命中价估算。 -->
           <div
@@ -778,6 +777,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 .ov-a .usage-notes {
+  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   gap: 4px;
