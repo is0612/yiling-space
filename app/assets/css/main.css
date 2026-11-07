@@ -302,6 +302,17 @@ button, input, textarea, select { font: inherit; }
 .admin-info { min-width: 0; flex: 1; }
 .admin-name { color: var(--text-2); font-size: 12px; font-weight: 600; }
 .admin-note { margin-top: 1px; color: var(--faint); font-size: 12px; }
+.character-switcher { display: block; width: 100%; }
+.character-switcher-trigger { display: flex; width: 100%; align-items: center; gap: 9px; border: 0; border-radius: 8px; background: transparent; padding: 8px 6px; color: var(--text-2); text-align: left; cursor: pointer; }
+.character-switcher-trigger:hover { background: var(--surface); }
+.character-switcher-trigger:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.character-switcher-avatar { font-size: 13px; }
+.character-switcher-copy { display: flex; min-width: 0; flex-direction: column; }
+.character-switcher-copy .admin-name, .character-switcher-copy .admin-note { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.character-switcher-arrow { flex: none; color: var(--faint); font-size: 12px; }
+.character-switcher-empty { text-decoration: none; }
+.character-switcher-option-avatar { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; margin-right: 8px; border-radius: 50%; background: var(--brand-soft); color: var(--brand-strong); font-size: 11px; font-weight: 700; }
+.character-switcher-current { margin-left: 14px; color: var(--brand-strong); font-size: 11px; }
 .sidebar-version { display: flex; justify-content: space-between; padding: 8px 6px 2px; color: var(--faint); font-size: 12px; }
 .sidebar-logout { width: 100%; justify-content: flex-start; margin: 2px 0 0; color: var(--dim); font-size: 12px; }
 .sidebar-logout:hover { color: var(--brand-strong); }
@@ -984,7 +995,9 @@ button, input, textarea, select { font: inherit; }
   .sidebar-group-body.is-collapsed { display: flex; }
   .sidebar-bottom { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .storage-widget { display: none; }
-  .admin-row { padding: 0; justify-content: center; }
+  .character-switcher { width: 34px; }
+  .character-switcher-trigger { width: 34px; justify-content: center; padding: 0; }
+  .character-switcher-copy, .character-switcher-arrow { display: none; }
   /* 78px 图标栏里只留一个图标：el-button 的文字是裸文本节点，没有 span 可选，所以用 font-size:0 收掉；
      图标单独给回 16px。选择器落到 .sidebar-bottom 后代上（0,2,0），确保压过 Element Plus 的 .el-button（0,1,0），
      不吃两边样式表的先后顺序。overflow:hidden 兜底：万一字号没压住，也不会溢出栏外。 */
