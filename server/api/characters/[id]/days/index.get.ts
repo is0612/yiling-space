@@ -77,7 +77,8 @@ export default defineEventHandler(async (event) => {
     _sum: { eventCount: true },
     _max: { extractedAt: true },
   });
-  const byDay = new Map<string, (typeof groupedRows)[number] | null>(groupedRows.map((row) => [row.dayKey, row]));
+  const byDay = new Map<string, (typeof groupedRows)[number] | null>();
+  for (const row of groupedRows) byDay.set(row.dayKey, row);
   if (!byDay.has(today)) byDay.set(today, null);
   const allDayKeys = [...byDay.keys()].sort((left, right) => right.localeCompare(left));
   const total = allDayKeys.length;
