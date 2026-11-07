@@ -1232,12 +1232,12 @@ paths:
       tags: [Characters]
       operationId: importCharacterCard
       summary: 导入角色卡
-      description: "默认新建角色：同名只在名称后加「副本」后缀，不覆盖已有角色。带 `target` 时改为把卡并进该角色（合并），前提是两边同一血缘（卡片 `origin.characterId` 与目标对得上），否则 400。合并口径：本地内容一律保留，导入的按内容去重后追加，日记/手账接在本地最大版本号后面成为新版本。包被当作不可信输入逐字段校验（数量、长度、枚举），模型参数只接受白名单字段，任何密钥字段都不会写入数据库。记忆与忆泡的来源消息指针一律置空 —— 会话原文不随包走。导入后角色的 API Key 需要重新填写，表情包需要重新同步。新建写 `character.imported` 审计，合并写 `character.merged`。"
+      description: "默认新建角色：同名只在名称后加「副本」后缀，不覆盖已有角色。带 `target` 时改为把卡并进该角色（合并），前提是卡片同步根 ID（`origin.characterId`）与目标角色的同步根一致，否则 400。合并口径：本地内容一律保留，导入的按内容去重后追加，日记/手账接在本地最大版本号后面成为新版本。包被当作不可信输入逐字段校验（数量、长度、枚举），模型参数只接受白名单字段，任何密钥字段都不会写入数据库。记忆与忆泡的来源消息指针一律置空 —— 会话原文不随包走。导入后角色的 API Key 需要重新填写，表情包需要重新同步。新建写 `character.imported` 审计，合并写 `character.merged`。"
       parameters:
         - name: target
           in: query
           required: false
-          description: 合并目标角色的 id。只接受同一血缘的角色；不传则新建。
+          description: 合并目标角色的 id。只接受同步根 ID 一致的角色；不传则新建。
           schema: { type: string, format: uuid }
       requestBody:
         required: true
