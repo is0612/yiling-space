@@ -1,5 +1,5 @@
 import { createError, getQuery } from "h3";
-import { requireActorUserId } from "../../utils/auth";
+import { requireAdminActor } from "../../utils/auth";
 import { isMemoryJobLeaseExpired } from "../../utils/memory-job-lease";
 import { buildPage, readPageQuery } from "../../utils/pagination";
 import { getPrisma } from "../../utils/prisma";
@@ -8,7 +8,7 @@ const statuses = ["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "SKIPPED", "RETRY_
 type JobStatus = (typeof statuses)[number];
 
 export default defineEventHandler(async (event) => {
-  const ownerId = await requireActorUserId(event);
+  await requireAdminActor(event);
   const query = getQuery(event);
   const statusValue = typeof query.status === "string" ? query.status.toUpperCase() : "";
   if (statusValue && !(statuses as readonly string[]).includes(statusValue)) {
@@ -23,10 +23,8 @@ export default defineEventHandler(async (event) => {
 
   const prisma = getPrisma();
   const now = new Date();
-  const where = {
-    memoryScope: { is: { character: { is: { ownerId } } } },
-    ...(statusValue ? { status: statusValue as JobStatus } : {}),
-  };
+  // 任务监控是管理员的全局运维台：统计和列表覆盖所有角色，不按管理员账号筛选。
+  const where = statusValue ? { status: statusValue as JobStatus } : {};
   const [jobs, total, statusGroups] = await Promise.all([
     prisma.memoryJob.findMany({
       where,
@@ -52,7 +50,7 @@ export default defineEventHandler(async (event) => {
       },
     }),
     prisma.memoryJob.count({ where }),
-    prisma.memoryJob.groupBy({ by: ["status"], where: { memoryScope: { is: { character: { is: { ownerId } } } } }, _count: { _all: true } }),
+    prisma.memoryJob.groupBy({ by: ["status"], _count: { _all: true } }),
   ]);
 
   const cleanupJobs = jobs.filter((job) => job.type === "CLEAN_EXPIRED_MESSAGES");
