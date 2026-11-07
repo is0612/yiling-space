@@ -443,8 +443,8 @@ function formatExportedAt(value: string | null): string {
       >
         <div class="merge-head">
           <template v-if="mergeTargets.length === 1">
-            本机找到同源角色：<strong>{{ mergeTargets[0]!.name }}</strong>
-            <span class="merge-meta">{{ mergeTargets[0]!.memoryCount }} 条记忆</span>
+            本机找到同源角色：<strong>{{ mergeTargets[0]?.name }}</strong>
+            <span class="merge-meta">{{ mergeTargets[0]?.memoryCount ?? 0 }} 条记忆</span>
           </template>
           <template v-else>
             本机找到 {{ mergeTargets.length }} 个同源角色，请选择要合并到哪一个。
@@ -461,7 +461,7 @@ function formatExportedAt(value: string | null): string {
             v-for="candidate in mergeTargets"
             :key="candidate.id"
             :value="candidate.id"
-            :label="`${candidate.name} · ${candidate.memoryCount} 条记忆 · ${new Date(candidate.updatedAt ?? 0).toLocaleString()}`"
+            :label="`${candidate.name} · ${candidate.memoryCount} 条记忆 · ${candidate.id.slice(0, 8)}`"
           />
         </el-select>
         <div
