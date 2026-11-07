@@ -152,7 +152,7 @@ function day(key: string) {
   return { dayKey: key, state: "FINAL", eventCount: 2, extractedAt: "2026-11-05T16:00:00.000Z" };
 }
 function daysResult(key: string, timeZone = "Asia/Shanghai") {
-  return { today: key, timeZone, days: [day(key)], truncated: false };
+  return { today: key, timeZone, days: [day(key)], page: 1, pageSize: 20, total: 1, totalPages: 1 };
 }
 function detailResult(key: string, timeZone = "Asia/Shanghai") {
   return {
@@ -160,6 +160,9 @@ function detailResult(key: string, timeZone = "Asia/Shanghai") {
     events: [],
     eventsTotal: 0,
     eventsTruncated: false,
+    eventsPage: 1,
+    eventsPageSize: 20,
+    eventsTotalPages: 1,
     messageGroups: [],
     usage: { calls: 1, tokens: 100 },
     timeZone,
