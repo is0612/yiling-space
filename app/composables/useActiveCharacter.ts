@@ -85,6 +85,11 @@ export function useCharacterSelection(path: string) {
     return characters.value[0]?.id || "";
   });
 
+  // 角色对象与 ID 从同一份选择结果派生，页面不再各自按 query/cookie 查找角色。
+  const character = computed(
+    () => characters.value.find((item) => item.id === id.value) ?? null,
+  );
+
   function remember(nextId: string) {
     if (!nextId) return;
     stored.value = nextId;
@@ -100,5 +105,5 @@ export function useCharacterSelection(path: string) {
     );
   }
 
-  return { id, remember, go };
+  return { id, character, remember, go };
 }
