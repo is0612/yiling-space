@@ -310,11 +310,9 @@ async function patchFriend(friend: Friend, patch: { identityKind?: Friend["ident
   saveTokens.set(scopeId, token);
   markSaveState(scopeId, "saving");
   try {
-    const response = await $fetch<{
-      identityKind: Friend["identityKind"];
-      identityKindSource: Friend["identityKindSource"];
-      friendChatPolicy: Friend["friendChatPolicy"];
-    }>(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
+    const response = await $fetch<
+      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy">> & { scopeId: string }
+    >(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
     if (saveTokens.get(scopeId) !== token) return;
     friends.value = friends.value.map((item) => (item.scopeId === scopeId ? { ...item, ...response } : item));
     markSaveState(scopeId, "saved");
