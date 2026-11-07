@@ -18,7 +18,16 @@ const prisma = getPrisma();
 (globalThis as unknown as { defineEventHandler: typeof eventHandler }).defineEventHandler = eventHandler;
 const retry = (await import("../server/api/tasks/[id]/retry.post")).default;
 const cancel = (await import("../server/api/tasks/[id]/cancel.post")).default;
-const owner = await prisma.user.findFirstOrThrow();
+/**
+ * 自己建一个管理员账号，不 `findFirst`。
+ *
+ * 隔离跑法会先插入一条 USER 角色的「无关用户」做跨用户隔离，`findFirst` 随手拿到它时，
+ * `/tasks/{id}/retry|cancel` 的 `requireAdminActor` 会直接 403 —— 测试挂在一个和本用例
+ * 毫无关系的账号选择上。这里要的是「管理员能操作」，该由用例自己保证。
+ */
+const owner = await prisma.user.create({ data: {
+  username: `__fencing_admin_${randomUUID()}`, passwordHash: "x", role: "ADMIN",
+} });
 const sessionToken = randomUUID();
 const session = await prisma.session.create({ data: {
   userId: owner.id, tokenHash: hashSessionToken(sessionToken), expiresAt: new Date(Date.now() + 3_600_000),

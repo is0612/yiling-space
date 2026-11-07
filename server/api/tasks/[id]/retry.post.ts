@@ -27,6 +27,7 @@ export default defineEventHandler(async (event) => {
         attemptCount: true,
         lockedAt: true,
         lockedBy: true,
+        lastError: true,
         memoryScope: { select: { character: { select: { id: true, memorySetting: { select: { rawMessageCleanupEnabled: true, rawMessageRetentionDays: true } } } } } },
       },
     });
@@ -81,6 +82,12 @@ export default defineEventHandler(async (event) => {
           previousLockedAt: job.lockedAt?.toISOString() ?? null,
           // 记录是谁把这条任务丢下的：排查「为什么总卡住」时，这一格比时间戳有用
           previousLockedBy: job.lockedBy,
+          /**
+           * 重试会把行上的 `lastError` 清空（状态回到 QUEUED），不留一份就再也查不到
+           * 上次为什么失败。2026-11-07 那条阶段总结正是这样：只看到它「排队很久」，
+           * 失败原因已经没了。只存我们自己的错误串，不含模型原文或聊天正文。
+           */
+          previousLastError: job.lastError?.slice(0, 500) ?? null,
         },
       },
     });

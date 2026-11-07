@@ -5,8 +5,12 @@
  * 那个请求的 loading 里**：切走页面、刷新一下，用户就再也看不到它跑到哪了。
  * 所以状态来源统一是数据库（`/api/memory-progress`），这里只负责轮询和共享。
  *
- * 轮询节奏：有活任务 2 秒一次，闲时 10 秒一次 —— 闲着的时候一次轮询只有一条
- * 「有没有在跑的任务」查询，代价可以忽略，但能自动接住调度器/worker 起的那一批。
+ * 轮询节奏按「这个状态还会不会自己变化」分档，不是有活任务就一律 2 秒：
+ * - 忆泡整理分块提交，进度会一跳一跳地走，2 秒才看得出在动；
+ * - 阶段总结是一次整段模型调用，中间没有任何可观测态，2 秒问一次问不出新东西；
+ * - 排队 / 退避 / 租约过期没有任何东西在推进，问得再快也不会变，反而会一直刷；
+ * - 闲着只为了接住调度器 / Worker 新排的任务，不需要很勤。
+ * 后台标签页不轮询：没有人看的时候，每 2 秒一次只是白烧请求。
  */
 
 export type MemoryProgressRow = {
@@ -34,16 +38,40 @@ export type MemoryJobFinished = {
 };
 
 const ACTIVE_STATUSES = ["QUEUED", "RUNNING", "RETRY_WAIT"];
-const ACTIVE_POLL_MS = 2_000;
-const IDLE_POLL_MS = 10_000;
+/** 忆泡整理：分块落库，`done/total` 会变。 */
+export const MEMORY_PROGRESS_EVENT_POLL_MS = 2_000;
+/** 阶段总结：一次模型调用，中间没有可观测状态，只要接住「跑完了」。 */
+export const MEMORY_PROGRESS_SNAPSHOT_POLL_MS = 5_000;
+/** 排队 / 退避等待 / 租约过期：没有进程领取之前不会自己变化。 */
+export const MEMORY_PROGRESS_WAITING_POLL_MS = 10_000;
+/** 闲着：只是为了接住调度器 / Worker 新排的任务。 */
+export const MEMORY_PROGRESS_IDLE_POLL_MS = 15_000;
 
 export function isActiveMemoryJob(status: string): boolean {
   return ACTIVE_STATUSES.includes(status);
 }
 
+/**
+ * 下一次轮询该等多久。
+ *
+ * 抽成纯函数是为了能单独测：这些数字以前直接拍在 `scheduleNext` 里，改一次只能开浏览器
+ * 看网络面板才知道生效没有。`leaseExpired` 的 RUNNING 不算「在跑」——领走它的进程可能
+ * 已经不在了，只有人去任务监控点重试才会变。
+ */
+export function memoryProgressPollDelay(
+  jobs: Array<Pick<MemoryProgressRow, "type" | "status" | "leaseExpired">>,
+): number {
+  const running = jobs.filter((job) => job.status === "RUNNING" && !job.leaseExpired);
+  if (running.some((job) => job.type === "EXTRACT_EVENTS")) return MEMORY_PROGRESS_EVENT_POLL_MS;
+  if (running.length > 0) return MEMORY_PROGRESS_SNAPSHOT_POLL_MS;
+  if (jobs.some((job) => isActiveMemoryJob(job.status))) return MEMORY_PROGRESS_WAITING_POLL_MS;
+  return MEMORY_PROGRESS_IDLE_POLL_MS;
+}
+
 let timer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 let inflight = false;
+let visibilityBound = false;
 
 function progressState() {
   return {
@@ -84,17 +112,35 @@ export async function refreshMemoryProgress(): Promise<MemoryProgressRow[]> {
 function scheduleNext() {
   if (!import.meta.client) return;
   if (timer) clearTimeout(timer);
-  const active = progressState().jobs.value.some((job) => isActiveMemoryJob(job.status));
+  timer = null;
+  /**
+   * 后台标签页直接停表。回调在隐藏之后才到点的话，这里也会在下一次调度时停下，
+   * 最多多跑一次；切回前台由 `visibilitychange` 立刻补一次并重新排表。
+   */
+  if (document.visibilityState === "hidden") return;
+  const delay = memoryProgressPollDelay(progressState().jobs.value);
   timer = setTimeout(async () => {
     await refreshMemoryProgress();
     scheduleNext();
-  }, active ? ACTIVE_POLL_MS : IDLE_POLL_MS);
+  }, delay);
 }
 
-/** 只启动一次；多次调用（每个页面都会挂面板）不会叠加定时器。 */
+function onVisibilityChange() {
+  if (document.visibilityState === "hidden") return;
+  if (!started) return;
+  // 补一次「切回前台」的刷新，再按最新状态重新排表（scheduleNext 会清掉旧的定时器）。
+  void refreshMemoryProgress().then(scheduleNext);
+}
+
+/** 只启动一次；多次调用（每个页面都会挂面板）不会叠加定时器，也不会重复挂监听。 */
 export function ensureMemoryProgressPolling() {
   if (!import.meta.client || started) return;
   started = true;
+  if (!visibilityBound) {
+    visibilityBound = true;
+    document.addEventListener("visibilitychange", onVisibilityChange);
+  }
+  if (document.visibilityState === "hidden") return;
   void refreshMemoryProgress().then(scheduleNext);
 }
 

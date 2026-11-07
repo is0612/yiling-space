@@ -25,6 +25,9 @@ const isActive = isActiveMemoryJob;
 const now = ref(Date.now());
 /** 只看「本次亲眼看到结束」的任务；页面刚打开时摆一堆历史完成态没有意义。 */
 const finishedAt = ref(new Map<string, number>());
+/** 成功一闪而过没关系；失败 8 秒就消失，用户只会觉得「怎么没反应」，然后去点重试。 */
+const FINISHED_VISIBLE_MS = 8_000;
+const FAILED_VISIBLE_MS = 60_000;
 let ticker: ReturnType<typeof setInterval> | null = null;
 
 watch(jobs, (next, previous) => {
@@ -39,7 +42,8 @@ watch(jobs, (next, previous) => {
 const visible = computed(() => jobs.value.filter((job) => {
   if (isActive(job.status)) return true;
   const finished = finishedAt.value.get(job.id);
-  return Boolean(finished) && now.value - finished! < 8_000;
+  if (!finished) return false;
+  return now.value - finished < (job.status === "FAILED" ? FAILED_VISIBLE_MS : FINISHED_VISIBLE_MS);
 }));
 
 const hasActive = computed(() => visible.value.some((job) => isActive(job.status)));
@@ -63,10 +67,14 @@ onUnmounted(() => {
   if (ticker) clearInterval(ticker);
 });
 
-function elapsedLabel(startedAt: string | null, updatedAt: string): string {
-  const from = new Date(startedAt ?? updatedAt).getTime();
-  if (!Number.isFinite(from)) return "";
-  const seconds = Math.max(0, Math.round((now.value - from) / 1000));
+function elapsedSeconds(job: MemoryProgressRow): number {
+  const from = new Date(job.startedAt ?? job.updatedAt).getTime();
+  if (!Number.isFinite(from)) return 0;
+  return Math.max(0, Math.round((now.value - from) / 1000));
+}
+
+function elapsedLabel(job: MemoryProgressRow): string {
+  const seconds = elapsedSeconds(job);
   if (seconds < 60) return `${seconds} 秒`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes} 分 ${seconds % 60} 秒`;
@@ -101,20 +109,31 @@ function percent(job: MemoryProgressRow): number | null {
 }
 
 function detail(job: MemoryProgressRow): string {
-  const elapsed = elapsedLabel(job.startedAt, job.updatedAt);
+  const elapsed = elapsedLabel(job);
   if (job.status === "RUNNING" && job.leaseExpired) {
     return "超过 5 分钟没有动静，去任务监控重试即可从断点接着跑。";
   }
   if (job.status === "FAILED") return job.lastError ?? "任务失败，可在任务监控里重试。";
   if (!isActive(job.status)) return `用时 ${elapsed}`;
-  if (job.status === "QUEUED") return "已排队，等执行进程领取。";
+  if (job.status === "QUEUED") {
+    /**
+     * 排队超过一分钟还不动，多半是整机没有 Worker 在跑：手动按钮排完任务会当场执行，
+     * 但「任务监控里点重试」只把状态改成 QUEUED，没有任何进程领取它。
+     * 不说破的话，用户看到的就是一个永远「已排队」、接口还每 2 秒问一次的面板。
+     */
+    return elapsedSeconds(job) >= 60
+      ? `已排队 ${elapsed}，还没有执行进程领取；需要有 Worker 在跑（本地：yarn worker:watch）才会开始。`
+      : "已排队，等执行进程领取。";
+  }
   /**
    * 退避等待里「正在提炼」是假的：上一次调用已经失败了，正在等下一次。
    * 这一支以前会显示成「正在分块提炼 · 用时 3 分钟」，看不出是在重试。
+   * 也不能说「已完成的部分不会重跑」—— 阶段总结是一次调用，重试就是整段重来。
    */
   if (job.status === "RETRY_WAIT") {
     const reason = job.lastError ? `上次失败：${job.lastError.slice(0, 120)}；` : "";
-    return `${reason}退避后自动重试，已完成的部分不会重跑。`;
+    const redo = job.type === "EXTRACT_EVENTS" ? "已经落库的分块不会重跑。" : "整段总结会重新调用一次模型。";
+    return `${reason}${redo}到点后由 Worker 领取重试；本地没跑 Worker 时不会自己开始。`;
   }
   if (job.type === "EXTRACT_EVENTS") {
     if (job.done !== null && job.total !== null) {
