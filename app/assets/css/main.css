@@ -210,6 +210,33 @@ button, input, textarea, select { font: inherit; }
   font-weight: 700;
   letter-spacing: .02em;
 }
+/* 可折叠分组标题：外观与 .sidebar-section 一致，右侧多一个展开箭头。
+   标题本身也是按钮，键盘能到（.sidebar-link:focus-visible 那组选择器不含 button）。 */
+.sidebar-group {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: none;
+  padding: 14px 8px 4px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-align: left;
+  cursor: pointer;
+  transition: color .13s var(--ease);
+}
+.sidebar-group:hover { color: var(--text-2); }
+.sidebar-group:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.sidebar-group .el-icon { margin-left: auto; font-size: 12px; transition: transform .16s var(--ease); }
+.sidebar-group.is-open .el-icon { transform: rotate(90deg); }
+
+/* 每组链接包一层，保持原来「链接直接挂在 .sidebar-nav 上」的 1px 行距 */
+.sidebar-group-body { display: flex; flex-direction: column; gap: 1px; }
+.sidebar-group-body.is-collapsed { display: none; }
+
 .sidebar-link {
   position: relative;
   display: flex;
@@ -950,6 +977,11 @@ button, input, textarea, select { font: inherit; }
   .sidebar-nav { margin-top: 10px; }
   .sidebar-link { justify-content: center; padding: 0; }
   .sidebar-link.active::before { left: -4px; }
+  /* 图标栏里没有文字可读，分组标题退化成一条分隔线；子项一律列出 ——
+     标题都看不见了，再按收起状态藏子项就等于这一组彻底没有入口 */
+  .sidebar-group { height: 0; margin: 6px 4px 4px; overflow: hidden; border-top: 1px solid var(--line); padding: 0; font-size: 0; }
+  .sidebar-group .el-icon { display: none; }
+  .sidebar-group-body.is-collapsed { display: flex; }
   .sidebar-bottom { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .storage-widget { display: none; }
   .admin-row { padding: 0; justify-content: center; }
@@ -972,6 +1004,9 @@ button, input, textarea, select { font: inherit; }
   .sidebar-nav { flex-direction: row; gap: 4px; overflow-x: auto; margin: 0; padding: 0; }
   .sidebar-link { min-width: 38px; padding: 0; justify-content: center; }
   .sidebar-section { display: none; }
+  /* 顶部横条：分组标题不占位，子项直接接在行的后面（display:contents 拆掉这层包裹） */
+  .sidebar-group { display: none; }
+  .sidebar-group-body, .sidebar-group-body.is-collapsed { display: contents; }
   .topbar { position: static; min-height: 52px; padding: 0 14px; }
   .topbar-right { gap: 6px; }
   .env-indicator { display: none; }

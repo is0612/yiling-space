@@ -1,14 +1,24 @@
 <script setup lang="ts">
 import type { Component } from "vue";
 import {
+  Aim,
+  ArrowRight,
+  Avatar,
+  ChatDotRound,
+  Collection,
   DataAnalysis,
   Cpu,
   Calendar,
   ChatLineRound,
   DataBoard,
+  MagicStick,
+  Memo,
+  Odometer,
   Refresh,
   Setting,
+  Star,
   SwitchButton,
+  TrendCharts,
   User,
   UserFilled,
   Connection,
@@ -57,8 +67,18 @@ type NavigationItem = {
   label: string;
   href: string;
   icon: Component;
-  section?: string;
   count?: string;
+  /** 只按完整路径高亮：分组默认入口（如 /growth）不能被 /growth/xxx 一起点亮 */
+  exact?: boolean;
+};
+
+/** 分组：工作空间与成长系统是同级，系统管理仅管理员可见 */
+type NavigationSection = {
+  key: string;
+  label: string;
+  items: NavigationItem[];
+  /** 可折叠分组：标题可点，展开状态只记在本次会话里 */
+  collapsible?: boolean;
 };
 
 // 首屏就取到角色列表：角色管理页的卡片要用，别在这里等第二次请求。
@@ -68,50 +88,94 @@ await useCharacterListData();
  * 角色级页面（记忆 / 阶段总结）都是菜单页，角色在页内下拉切换，
  * 所以侧栏不再需要拼 id。
  */
-const navigation = computed<NavigationItem[]>(() => {
-  const items: NavigationItem[] = [
-    { key: "home", label: "总览", href: "/", icon: DataBoard, section: "工作空间" },
-    { key: "characters", label: "角色管理", href: "/characters", icon: User },
-    {
-      key: "memory",
-      label: "角色记忆",
-      href: "/memory",
-      icon: Cpu,
-    },
-    {
-      key: "days",
-      label: "忆泡日历",
-      href: "/days",
-      icon: Notebook,
-    },
-    {
-      key: "journal",
-      label: "日记手账",
-      href: "/journal",
-      icon: Reading,
-    },
-    {
-      key: "snapshots",
-      label: "阶段总结",
-      href: "/snapshots",
-      icon: Calendar,
-    },
+const workspaceNavigation: NavigationItem[] = [
+  { key: "home", label: "总览", href: "/", icon: DataBoard },
+  { key: "characters", label: "角色管理", href: "/characters", icon: User },
+  {
+    key: "memory",
+    label: "角色记忆",
+    href: "/memory",
+    icon: Cpu,
+  },
+  {
+    key: "days",
+    label: "忆泡日历",
+    href: "/days",
+    icon: Notebook,
+  },
+  {
+    key: "journal",
+    label: "日记手账",
+    href: "/journal",
+    icon: Reading,
+  },
+  {
+    key: "snapshots",
+    label: "阶段总结",
+    href: "/snapshots",
+    icon: Calendar,
+  },
+];
+
+/**
+ * 成长系统：九个页面目前只有路由和空白骨架，业务逻辑一件都还没接。
+ * 这里只登记入口，不要在侧栏里读角色、拉接口 —— 菜单不该比页面先知道数据。
+ */
+const growthNavigation: NavigationItem[] = [
+  { key: "growth", label: "总览", href: "/growth", icon: TrendCharts, exact: true },
+  { key: "growth-memory", label: "记忆系统", href: "/growth/memory", icon: Collection },
+  { key: "growth-social", label: "社交关系系统", href: "/growth/social", icon: Avatar },
+  { key: "growth-preferences", label: "偏好系统", href: "/growth/preferences", icon: Star },
+  { key: "growth-language", label: "语料 / 表达习惯", href: "/growth/language", icon: ChatDotRound },
+  { key: "growth-state", label: "状态系统", href: "/growth/state", icon: Odometer },
+  { key: "growth-reflection", label: "反思与成长", href: "/growth/reflection", icon: MagicStick },
+  { key: "growth-knowledge", label: "轻量知识系统", href: "/growth/knowledge", icon: Memo },
+  { key: "growth-goals", label: "目标与愿望", href: "/growth/goals", icon: Aim },
+];
+
+const adminNavigation = computed<NavigationItem[]>(() => {
+  if (!isAdmin.value) return [];
+  return [
+    { key: "qq", label: "QQ 渠道", href: "/qq", icon: ChatLineRound },
+    { key: "bili", label: "B站值班台", href: "/bili", icon: VideoPlay },
+    { key: "tasks", label: "任务监控", href: "/tasks", icon: DataAnalysis },
+    { key: "identities", label: "她的朋友", href: "/identities", icon: Connection },
+    { key: "users", label: "用户管理", href: "/users", icon: UserFilled },
+    { key: "settings", label: "系统设置", href: "/settings", icon: Setting },
   ];
-  if (isAdmin.value) {
-    items.push(
-      { key: "qq", label: "QQ 渠道", href: "/qq", icon: ChatLineRound, section: "系统管理" },
-      { key: "bili", label: "B站值班台", href: "/bili", icon: VideoPlay },
-      { key: "tasks", label: "任务监控", href: "/tasks", icon: DataAnalysis },
-      { key: "identities", label: "她的朋友", href: "/identities", icon: Connection },
-      { key: "users", label: "用户管理", href: "/users", icon: UserFilled },
-      { key: "settings", label: "系统设置", href: "/settings", icon: Setting },
-    );
-  }
-  return items;
 });
+
+const navigation = computed<NavigationSection[]>(() => {
+  const sections: NavigationSection[] = [
+    { key: "workspace", label: "工作空间", items: workspaceNavigation },
+    { key: "growth", label: "成长系统", items: growthNavigation, collapsible: true },
+  ];
+  if (adminNavigation.value.length) {
+    sections.push({ key: "system", label: "系统管理", items: adminNavigation.value });
+  }
+  return sections;
+});
+
+function isGrowthPath(path: string) {
+  return path === "/growth" || path.startsWith("/growth/");
+}
+
+/**
+ * 九个入口默认全展开：一进门就要能看见它们。
+ * 收起只在用户点了分组标题之后发生；一旦进到成长系统的任意页面（含刷新、直接输 URL），
+ * 再打开一次，保证「当前页的菜单在侧栏里看得见」。
+ */
+const growthOpen = ref(true);
+watch(
+  () => route.path,
+  (path) => {
+    if (isGrowthPath(path)) growthOpen.value = true;
+  },
+);
 
 function isActive(item: NavigationItem) {
   const path = route.path;
+  if (item.exact) return path === item.href;
   switch (item.key) {
     case "home":
       return path === "/";
@@ -156,27 +220,47 @@ function isActive(item: NavigationItem) {
         aria-label="主导航"
       >
         <template
-          v-for="item in navigation"
-          :key="item.href"
+          v-for="section in navigation"
+          :key="section.key"
         >
+          <button
+            v-if="section.collapsible"
+            type="button"
+            class="sidebar-group"
+            :class="{ 'is-open': growthOpen }"
+            :aria-expanded="growthOpen"
+            :aria-controls="`sidebar-nav-${section.key}`"
+            @click="growthOpen = !growthOpen"
+          >
+            <span>{{ section.label }}</span>
+            <el-icon><ArrowRight /></el-icon>
+          </button>
           <div
-            v-if="item.section"
+            v-else
             class="sidebar-section"
           >
-            {{ item.section }}
+            {{ section.label }}
           </div>
-          <NuxtLink
-            :to="item.href"
-            class="sidebar-link"
-            :class="{ active: isActive(item) }"
+          <div
+            :id="`sidebar-nav-${section.key}`"
+            class="sidebar-group-body"
+            :class="{ 'is-collapsed': section.collapsible && !growthOpen }"
           >
-            <el-icon><component :is="item.icon" /></el-icon>
-            <span class="sidebar-label">{{ item.label }}</span>
-            <span
-              v-if="item.count"
-              class="nav-count"
-            >{{ item.count }}</span>
-          </NuxtLink>
+            <NuxtLink
+              v-for="item in section.items"
+              :key="item.href"
+              :to="item.href"
+              class="sidebar-link"
+              :class="{ active: isActive(item) }"
+            >
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span class="sidebar-label">{{ item.label }}</span>
+              <span
+                v-if="item.count"
+                class="nav-count"
+              >{{ item.count }}</span>
+            </NuxtLink>
+          </div>
         </template>
       </nav>
 
