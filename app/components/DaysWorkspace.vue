@@ -2,6 +2,7 @@
 import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character } from "~/utils/mock-data";
 import { formatDayClock } from "~/utils/day-time";
+import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
 
 
 /**
