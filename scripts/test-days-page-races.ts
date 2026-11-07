@@ -159,7 +159,6 @@ function detailResult(key: string, timeZone = "Asia/Shanghai") {
     day: day(key),
     events: [],
     eventsTotal: 0,
-    eventsTruncated: false,
     eventsPage: 1,
     eventsPageSize: 20,
     eventsTotalPages: 1,
