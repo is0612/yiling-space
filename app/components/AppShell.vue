@@ -3,6 +3,7 @@ import type { Component } from "vue";
 import {
   Aim,
   ArrowRight,
+  ArrowDown,
   Avatar,
   ChatDotRound,
   Collection,
@@ -32,9 +33,6 @@ const route = useRoute();
 const { displayName, logout, isLocalDevIdentity, isAdmin } = useAuthSession();
 const loggingOut = ref(false);
 const avatarLetter = computed(() => (displayName.value || "管").slice(0, 1));
-const roleLabel = computed(() =>
-  isLocalDevIdentity.value ? "本地开发身份" : isAdmin.value ? "已登录管理员" : "已登录用户",
-);
 
 /**
  * 页面标题放顶栏：路由解析时就能拿到，服务端首屏直接带出来，不会先闪一下再归位。
@@ -83,6 +81,22 @@ type NavigationSection = {
 
 // 首屏就取到角色列表：角色管理页的卡片要用，别在这里等第二次请求。
 await useCharacterListData();
+const characters = useCharacterList();
+const { id: activeCharacterId, go: goToCharacter } = useCharacterSelection(route.path);
+const activeCharacter = computed(
+  () => characters.value.find((item) => item.id === activeCharacterId.value) ?? null,
+);
+
+async function handleCharacterSwitch(nextId: string) {
+  if (!nextId || nextId === activeCharacterId.value) return;
+  // 角色详情/设置页本身带有角色 ID，切换时同步替换路径参数；
+  // 其他菜单页保留当前路由，只更新共享的 ?c= 与 cookie。
+  const characterRoute = /^\\/characters\\/[^/]+/.exec(route.path);
+  const targetPath = characterRoute
+    ? route.path.replace(/^\\/characters\\/[^/]+/, `/characters/${encodeURIComponent(nextId)}`)
+    : route.path;
+  await goToCharacter(nextId, targetPath);
+}
 
 /**
  * 角色级页面（记忆 / 阶段总结）都是菜单页，角色在页内下拉切换，
@@ -265,28 +279,53 @@ function isActive(item: NavigationItem) {
       </nav>
 
       <div class="sidebar-bottom">
-        <div class="admin-row">
-          <div class="admin-avatar">
-            {{ avatarLetter }}
-          </div>
-          <div class="admin-info sidebar-bottom-copy">
-            <div class="admin-name">
-              {{ displayName }}
-            </div>
-            <div class="admin-note">
-              {{ roleLabel }}
-            </div>
-          </div>
-        </div>
-        <el-button
-          class="sidebar-logout"
-          text
-          size="small"
-          :loading="loggingOut"
-          @click="handleLogout"
+        <el-dropdown
+          v-if="characters.length"
+          class="character-switcher"
+          trigger="click"
+          placement="top-start"
+          @command="handleCharacterSwitch"
         >
-          <el-icon><SwitchButton /></el-icon>退出登录
-        </el-button>
+          <button
+            type="button"
+            class="character-switcher-trigger"
+            :aria-label="`当前角色：${activeCharacter?.name || '未选择'}，点击切换角色`"
+          >
+            <span class="admin-avatar character-switcher-avatar">
+              {{ activeCharacter?.avatar || activeCharacter?.name?.slice(0, 1) || "忆" }}
+            </span>
+            <span class="admin-info sidebar-bottom-copy character-switcher-copy">
+              <span class="admin-name">{{ activeCharacter?.name || "选择角色" }}</span>
+              <span class="admin-note">当前角色 · 共 {{ characters.length }} 个</span>
+            </span>
+            <el-icon class="character-switcher-arrow"><ArrowDown /></el-icon>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="item in characters"
+                :key="item.id"
+                :command="item.id"
+                :class="{ 'is-current-character': item.id === activeCharacterId }"
+              >
+                <span class="character-switcher-option-avatar">{{ item.avatar || item.name.slice(0, 1) }}</span>
+                <span>{{ item.name }}</span>
+                <span v-if="item.id === activeCharacterId" class="character-switcher-current">当前</span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <NuxtLink
+          v-else
+          to="/characters"
+          class="character-switcher-trigger character-switcher-empty"
+        >
+          <span class="admin-avatar character-switcher-avatar">＋</span>
+          <span class="admin-info sidebar-bottom-copy character-switcher-copy">
+            <span class="admin-name">还没有角色</span>
+            <span class="admin-note">去创建一个角色</span>
+          </span>
+        </NuxtLink>
         <div class="sidebar-version">
           <span>Yiling Space · 预览版</span><span>v0.1</span>
         </div>
