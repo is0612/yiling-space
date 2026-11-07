@@ -161,7 +161,12 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
       },
     }),
     prisma.memorySnapshot.findMany({
-      where: { memoryScope: { is: { character: { is: { ownerId } } } } },
+      // 总览的「最近总结」与角色卡口径一致：只展示自动生成的阶段总结。
+      // MANUAL 是手动存档，不代表 AI 总结已生成，不能混入活动流或全局最近总结。
+      where: {
+        kind: "AUTOMATIC",
+        memoryScope: { is: { character: { is: { ownerId } } } },
+      },
       orderBy: [{ createdAt: "desc" }, { version: "desc" }],
       take: 5,
       select: {
