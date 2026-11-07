@@ -41,8 +41,8 @@ type TaskListResponse = {
   total: number;
   page: number;
   pageSize: number;
-  totalPages: number;
-  hasMore: boolean;
+  stuckCount: number;
+  oldestStuckAt: string | null;
   stuckCount: number;
   statusCounts: Record<MemoryTask["status"], number>;
 };
@@ -67,7 +67,8 @@ const tasks = ref<MemoryTask[]>([]);
 const totalTasks = ref(0);
 const currentPage = ref(1);
 const pageSize = ref(20);
-const totalPages = ref(1);
+const stuckCount = ref(0);
+const oldestStuckAt = ref<string | null>(null);
 const stuckCount = ref(0);
 const requestVersion = ref(0);
 const statusCounts = ref<Record<MemoryTask["status"], number>>({
@@ -415,6 +416,9 @@ async function cancelSelectedTask() {
 }
 
 onMounted(() => void loadTasks());
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
+});
 </script>
 
 <template>
@@ -508,7 +512,7 @@ onMounted(() => void loadTasks());
           v-model="query"
           class="search"
           clearable
-          placeholder="搜索任务、角色或编号"
+          placeholder="搜索角色、任务类型或完整任务编号"
         >
           <template #prefix>
             <el-icon><Search /></el-icon>
