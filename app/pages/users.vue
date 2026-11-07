@@ -389,7 +389,7 @@ onMounted(() => {
       </p>
       <template #footer>
         <div class="dlg-foot">
-          <span class="dlg-foot-note">重置不会退出对方已登录的设备</span>
+          <span class="dlg-foot-note">重置后，对方所有已登录设备都需要重新登录</span>
           <span class="dlg-foot-actions">
             <el-button @click="dialogVisible = false">
               取消
