@@ -11,12 +11,15 @@ export default defineEventHandler(async (event) => {
   await requireAdminActor(event);
   const query = getQuery(event);
   const statusValue = typeof query.status === "string" ? query.status.toUpperCase() : "";
-  if (statusValue && !(statuses as readonly string[]).includes(statusValue)) {
+  if (statusValue && statusValue !== "ISSUES" && !(statuses as readonly string[]).includes(statusValue)) {
     throw createError({ statusCode: 400, statusMessage: "任务状态筛选值无效。" });
   }
   // 任务表只增不减，分页口径和其它列表接口一致（旧的 `?limit=` 仍当 pageSize 用）。
+  const searchValue = typeof query.q === "string" ? query.q.trim() : "";
+  if (searchValue.length > 100) throw createError({ statusCode: 400, statusMessage: "搜索内容不能超过 100 个字符。" });
+
   const { page, pageSize, skip } = readPageQuery(query, {
-    defaultPageSize: 50,
+    defaultPageSize: 20,
     maxPageSize: 100,
     legacySizeKey: "limit",
   });
@@ -24,7 +27,34 @@ export default defineEventHandler(async (event) => {
   const prisma = getPrisma();
   const now = new Date();
   // 任务监控是管理员的全局运维台：统计和列表覆盖所有角色，不按管理员账号筛选。
-  const where = statusValue ? { status: statusValue as JobStatus } : {};
+  const statusWhere = statusValue === "ISSUES"
+    ? { status: { in: ["FAILED", "RETRY_WAIT"] as const } }
+    : statusValue ? { status: statusValue as JobStatus } : {};
+  const typeByLabel: Record<string, string> = {
+    "生成阶段总结": "GENERATE_SNAPSHOT",
+    "重新生成总结": "REGENERATE_SNAPSHOT",
+    "长期记忆更新": "UPDATE_LONG_TERM_MEMORY",
+    "清理过期消息": "CLEAN_EXPIRED_MESSAGES",
+    "整理忆泡": "EXTRACT_EVENTS",
+    "生成日记/手账": "GENERATE_JOURNAL",
+  };
+  const typeByCode: Record<string, string> = {
+    GENERATE_SNAPSHOT: "GENERATE_SNAPSHOT",
+    REGENERATE_SNAPSHOT: "REGENERATE_SNAPSHOT",
+    UPDATE_LONG_TERM_MEMORY: "UPDATE_LONG_TERM_MEMORY",
+    CLEAN_EXPIRED_MESSAGES: "CLEAN_EXPIRED_MESSAGES",
+    EXTRACT_EVENTS: "EXTRACT_EVENTS",
+    GENERATE_JOURNAL: "GENERATE_JOURNAL",
+  };
+  const matchedType = typeByLabel[searchValue] ?? typeByCode[searchValue.toUpperCase()];
+  const searchWhere = searchValue ? {
+    OR: [
+      { id: { contains: searchValue, mode: "insensitive" as const } },
+      { memoryScope: { character: { name: { contains: searchValue, mode: "insensitive" as const } } } },
+      ...(matchedType ? [{ type: matchedType as "GENERATE_SNAPSHOT" | "REGENERATE_SNAPSHOT" | "UPDATE_LONG_TERM_MEMORY" | "CLEAN_EXPIRED_MESSAGES" | "EXTRACT_EVENTS" | "GENERATE_JOURNAL" }] : []),
+    ],
+  } : {};
+  const where = { ...statusWhere, ...searchWhere };
   const [jobs, total, statusGroups] = await Promise.all([
     prisma.memoryJob.findMany({
       where,
