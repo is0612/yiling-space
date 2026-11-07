@@ -53,9 +53,21 @@ export default defineEventHandler(async (event) => {
       .map(([, type]) => type)
     : [];
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(searchValue);
+  // 列表展示 UUID 前 8 位，支持把可见短编号粘回搜索框。
+  // PostgreSQL UUID 列不能直接做 startsWith/LIKE，先用参数化 SQL 将 UUID 转文本查前缀。
+  const isUuidPrefix = /^[0-9a-f]{8,36}$/i.test(searchValue) && !isUuid;
+  const matchingJobIds = isUuidPrefix
+    ? await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id::text AS id
+        FROM memory_jobs
+        WHERE id::text ILIKE ${searchValue + "%"}
+        LIMIT 50
+      `
+    : [];
   const searchWhere = searchValue ? {
     OR: [
       ...(isUuid ? [{ id: searchValue }, { memoryScopeId: searchValue }, { memoryScope: { characterId: searchValue } }] : []),
+      ...(matchingJobIds.length ? [{ id: { in: matchingJobIds.map((row) => row.id) } }] : []),
       { memoryScope: { character: { name: { contains: searchValue, mode: "insensitive" as const } } } },
       ...(matchedTypes.length > 0 ? [{ type: { in: [...new Set(matchedTypes)] as ("GENERATE_SNAPSHOT" | "REGENERATE_SNAPSHOT" | "UPDATE_LONG_TERM_MEMORY" | "CLEAN_EXPIRED_MESSAGES" | "EXTRACT_EVENTS" | "GENERATE_JOURNAL")[] } }] : []),
     ],
