@@ -460,6 +460,21 @@ async function main() {
     "导入要把血缘带过来，否则以后再导回来就认不出是同一个她",
   );
 
+  // 老卡没有 origin：导入后以新实例自己的 id 建立独立同步根，不能继续留空。
+  const legacyCard = JSON.parse(serialized) as Record<string, unknown>;
+  delete legacyCard.origin;
+  const legacyImport = await importCharacterCard({ raw: legacyCard, ownerId: ownerA });
+  characterIds.push(legacyImport.characterId);
+  const legacyCharacter = await prisma.character.findUniqueOrThrow({
+    where: { id: legacyImport.characterId },
+    select: { id: true, originCharacterId: true },
+  });
+  assert.equal(
+    legacyCharacter.originCharacterId,
+    legacyCharacter.id,
+    "无 origin 的旧卡应以新实例 id 建立自己的同步根",
+  );
+
   // 模拟两台设备分叉：本地改写同一条记忆，但 originId 不变；合并时必须认出是同一条并保留本地。
   const localLineageMemory = importedGlobal?.memoryItems.find((item) => item.content === "主人住在杭州");
   assert.ok(localLineageMemory?.originId, "导入后必须保留源记忆血缘 ID");
