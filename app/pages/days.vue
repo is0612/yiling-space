@@ -63,7 +63,6 @@ const detail = ref<{
   usage: { calls: number; tokens: number };
   timeZone: string;
   eventsTotal: number;
-  eventsTruncated: boolean;
 } | null>(null);
 /** 原文总数：按会话分组后要自己加总。用当天真实条数，不是「载进来的条数」。 */
 const totalMessages = computed(() => (detail.value?.messageGroups ?? []).reduce((sum, group) => sum + (group.total ?? group.messages.length), 0));
@@ -512,7 +511,7 @@ await loadDays();
             class="day-archived"
           >
             <p class="muted-note">
-              已隐藏 {{ archivedEvents.length }} 条<template v-if="detail.eventsTruncated">（当前页）</template>
+              已隐藏 {{ archivedEvents.length }} 条<template v-if="detail.eventsTotal > detail.eventsPageSize">（当前页）</template>
             </p>
             <div
               v-for="event in archivedEvents"
