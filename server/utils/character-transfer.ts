@@ -960,8 +960,8 @@ async function createCharacterFromBundle(input: {
         userAddress: bundle.character.userAddress || "主人",
         // 导入即用：卡上写着「已暂停」的话，换机器后第一件事是找不到人。
         status: "ACTIVE",
-        // 血缘跟过来：这张卡下次再被导出时仍指向最初的 origin，A→B→C 才不会断线。
-        originCharacterId: bundle.originId,
+        // 带 origin 的卡继承原同步根；老卡没有 origin 时，以新实例自己的 ID 建立独立同步根。
+        originCharacterId: bundle.originId ?? characterId,
         modelConfig: {
           alias: bundle.character.alias || "导入角色",
           description: bundle.character.description,
@@ -1146,8 +1146,9 @@ async function mergeCharacterCard(input: {
   const added = emptyAdded();
 
   await prisma.$transaction(async (tx) => {
-    // 目标自己没有血缘记录时补上：它以后被导出就能认出更多同源的卡。
-    if (!target.originCharacterId) {
+    // 兼容迁移前创建的原生角色：若它本身就是同步根，补齐为自己的实例 ID。
+    // 正常迁移后此分支不再触发；绝不能把已有的非空同步根改写掉。
+    if (!target.originCharacterId && target.id === bundle.originId) {
       await tx.character.update({
         where: { id: target.id },
         data: { originCharacterId: bundle.originId as string },
