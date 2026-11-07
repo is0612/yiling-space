@@ -73,27 +73,31 @@ export default defineEventHandler(async (event) => {
         },
       })
       : Promise.resolve([]),
-    prisma.memoryItem.findMany({
-      where: memoryWhere,
-      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-      take: includeMessages ? 250 : 400,
-      select: {
-        id: true,
-        category: true,
-        content: true,
-        status: true,
-        importance: true,
-        createdAt: true,
-        updatedAt: true,
-        memoryScope: { select: { scopeType: true } },
-      },
-    }),
-    prisma.memorySnapshot.findMany({
-      where: snapshotWhere,
-      orderBy: [{ createdAt: "desc" }, { version: "desc" }],
-      take: 100,
-      include: { sources: { select: { sourceType: true } } },
-    }),
+    kinds.has("memory")
+      ? prisma.memoryItem.findMany({
+          where: memoryWhere,
+          orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+          take: includeMessages ? 250 : 400,
+          select: {
+            id: true,
+            category: true,
+            content: true,
+            status: true,
+            importance: true,
+            createdAt: true,
+            updatedAt: true,
+            memoryScope: { select: { scopeType: true } },
+          },
+        })
+      : Promise.resolve([]),
+    kinds.has("snapshot")
+      ? prisma.memorySnapshot.findMany({
+          where: snapshotWhere,
+          orderBy: [{ createdAt: "desc" }, { version: "desc" }],
+          take: 100,
+          include: { sources: { select: { sourceType: true } } },
+        })
+      : Promise.resolve([]),
     kinds.has("memoryEvent")
       ? prisma.memoryEvent.findMany({
         where: eventWhere,
@@ -127,12 +131,12 @@ export default defineEventHandler(async (event) => {
   );
 
   // 每天的整理进度：页面靠它显示「上次整理 14:20」，并区分「今天还在长」。
-  const days = await prisma.memoryEventDay.findMany({
+  const days = kinds.has("memoryEvent") ? await prisma.memoryEventDay.findMany({
     where: { memoryScope: { is: { characterId } } },
     orderBy: { dayKey: "desc" },
     take: 60,
     select: { dayKey: true, state: true, eventCount: true, extractedAt: true },
-  });
+  }) : [];
 
   return {
     entries,
