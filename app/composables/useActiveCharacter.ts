@@ -77,6 +77,9 @@ export function useCharacterSelection(path: string) {
   }
 
   const id = computed(() => {
+    // 角色详情/设置页的路径 ID 是该页的明确上下文，优先于全局记忆值。
+    const fromCharacterRoute = String(route.params.id || "");
+    if (isAvailable(fromCharacterRoute)) return fromCharacterRoute;
     const fromQuery = String(route.query.c || "");
     if (isAvailable(fromQuery)) return fromQuery;
     const remembered = String(stored.value || legacy.value || "");
@@ -90,10 +93,13 @@ export function useCharacterSelection(path: string) {
   }
 
   /** 切换角色：先记住再跳，跳过去的地址里带着 ?c= */
-  function go(nextId: string) {
+  function go(nextId: string, targetPath = path) {
     if (!nextId || nextId === id.value) return;
     remember(nextId);
-    return navigateTo({ path, query: { c: nextId } }, { replace: true });
+    return navigateTo(
+      { path: targetPath, query: { ...route.query, c: nextId } },
+      { replace: true },
+    );
   }
 
   return { id, remember, go };
