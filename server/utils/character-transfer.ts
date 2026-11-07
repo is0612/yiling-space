@@ -901,7 +901,7 @@ export async function importCharacterCard(input: {
   raw: unknown;
   ownerId: string;
   now?: Date;
-  /** 合并目标角色。必须是同一个血缘（卡片 `origin.characterId` 对得上）。 */
+  /** 合并目标角色。必须与卡片的稳定同步根 ID 一致。 */
   targetCharacterId?: string | null;
 }): Promise<CharacterImportResult> {
   const bundle = parseCharacterBundle(input.raw);
