@@ -46,6 +46,7 @@ async function main() {
     data: {
       id: characterId,
       ownerId: ownerA,
+      originCharacterId: characterId,
       name: "小鱼",
       basePrompt: "你是小鱼，说话很短。",
       styleExamples: "主人：在吗\n小鱼：在。",
