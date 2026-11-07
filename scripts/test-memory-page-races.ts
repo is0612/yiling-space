@@ -8,11 +8,11 @@ import ts from "typescript";
  * No Nuxt server, browser, database, real timers, or network requests are needed.
  * Run: yarn tsx scripts/test-memory-page-races.ts
  */
-const pagePath = new URL("../app/pages/memory.vue", import.meta.url);
+const pagePath = new URL("../app/components/MemoryWorkspace.vue", import.meta.url);
 const sfc = readFileSync(pagePath, "utf8");
 const scriptMatch = sfc.match(/<script\b[^>]*>([\s\S]*?)<\/script>/);
-assert.ok(scriptMatch, "memory.vue must contain a script block");
-const source = ts.createSourceFile("memory-page.ts", scriptMatch[1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+assert.ok(scriptMatch, "MemoryWorkspace.vue must contain a script block");
+const source = ts.createSourceFile("memory-workspace.ts", scriptMatch[1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const statements = source.statements.filter((node) => !ts.isImportDeclaration(node)
   && !(ts.isExpressionStatement(node) && ts.isAwaitExpression(node.expression)));
 const names = statements.flatMap((node) => {
@@ -29,7 +29,7 @@ const compiled = ts.transpileModule(`(function () {\n${program}\n})()`, {
   reportDiagnostics: true,
 });
 assert.equal(compiled.diagnostics?.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error).length, 0);
-const executable = new Script(compiled.outputText, { filename: "memory.vue.actual-script.js" });
+const executable = new Script(compiled.outputText, { filename: "MemoryWorkspace.vue.actual-script.js" });
 
 type Ref = { value: unknown };
 type PendingRequest = {
@@ -49,6 +49,7 @@ function harness() {
   const bindings = executable.runInContext(createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
+    defineProps: () => ({}),
     ref: (value: unknown) => ({ value }),
     computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: (sources: Ref | Ref[], callback: () => void) => watchers.push({ sources: Array.isArray(sources) ? sources : [sources], callback }),
@@ -343,4 +344,4 @@ for (const test of [detailOrder, saveDuringDetailLoad, staleSaveCompletion, role
   await test();
   console.log(`PASS ${test.name}`);
 }
-console.log("memory page async race regressions passed (actual memory.vue handlers and watchers)");
+console.log("memory page async race regressions passed (actual MemoryWorkspace.vue handlers and watchers)");
