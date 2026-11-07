@@ -39,6 +39,10 @@ type MemoryTask = {
 type TaskListResponse = {
   items: MemoryTask[];
   total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  hasMore: boolean;
   statusCounts: Record<MemoryTask["status"], number>;
 };
 type WorkerResult = {
@@ -60,6 +64,10 @@ type SchedulerReport = {
 
 const tasks = ref<MemoryTask[]>([]);
 const totalTasks = ref(0);
+const currentPage = ref(1);
+const pageSize = ref(20);
+const totalPages = ref(1);
+const requestVersion = ref(0);
 const statusCounts = ref<Record<MemoryTask["status"], number>>({
   QUEUED: 0, RUNNING: 0, SUCCEEDED: 0, FAILED: 0, SKIPPED: 0, RETRY_WAIT: 0, CANCELLED: 0,
 });
@@ -102,21 +110,40 @@ const statusChips = computed(() => [
   { value: "CANCELLED", label: "已取消", count: statusCounts.value.CANCELLED },
 ]);
 
-const filtered = computed(() => tasks.value.filter((task) => {
-  const text = [task.id, task.characterName, task.characterId, taskTypeText(task.type)].join(" ").toLowerCase();
-  const queryMatches = !query.value || text.includes(query.value.toLowerCase());
-  const statusMatches = statusFilter.value === "ALL"
-    ? true
-    : statusFilter.value === "ISSUES"
-      ? task.status === "FAILED" || task.status === "RETRY_WAIT"
-      : task.status === statusFilter.value;
-  return queryMatches && statusMatches;
-}));
+const filtered = computed(() => tasks.value);
 
 function resetFilters() {
   query.value = "";
   statusFilter.value = "ALL";
+  currentPage.value = 1;
+  void loadTasks();
 }
+
+function setStatusFilter(value: string) {
+  if (statusFilter.value === value) return;
+  statusFilter.value = value;
+  currentPage.value = 1;
+  void loadTasks();
+}
+
+function changePage(value: number) {
+  currentPage.value = value;
+  void loadTasks();
+}
+
+function changePageSize(value: number) {
+  pageSize.value = value;
+  currentPage.value = 1;
+  void loadTasks();
+}
+
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+watch(query, () => {
+  currentPage.value = 1;
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => void loadTasks(), 300);
+});
+
 
 function taskTypeText(type: MemoryTask["type"]) {
   const names: Record<MemoryTask["type"], string> = {
@@ -231,23 +258,36 @@ function taskStatusHint(task: MemoryTask) {
 }
 
 async function loadTasks() {
+  const version = ++requestVersion.value;
   loading.value = true;
   loadError.value = "";
   try {
-    const result = await $fetch<TaskListResponse>("/api/tasks?limit=100");
+    const params = new URLSearchParams({
+      page: String(currentPage.value),
+      pageSize: String(pageSize.value),
+    });
+    if (statusFilter.value !== "ALL") params.set("status", statusFilter.value);
+    if (query.value.trim()) params.set("q", query.value.trim());
+    const result = await $fetch<TaskListResponse>("/api/tasks?" + params.toString());
+    if (version !== requestVersion.value) return;
     tasks.value = result.items;
     totalTasks.value = result.total;
+    currentPage.value = result.page;
+    pageSize.value = result.pageSize;
+    totalPages.value = result.totalPages;
     statusCounts.value = result.statusCounts;
   } catch (error) {
+    if (version !== requestVersion.value) return;
     tasks.value = [];
     totalTasks.value = 0;
+    totalPages.value = 1;
     statusCounts.value = { QUEUED: 0, RUNNING: 0, SUCCEEDED: 0, FAILED: 0, SKIPPED: 0, RETRY_WAIT: 0, CANCELLED: 0 };
     loadError.value = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
       : error instanceof Error ? error.message : "任务列表读取失败。";
     ElMessage.error("真实任务列表读取失败，请确认开发 API 已启用。");
   } finally {
-    loading.value = false;
+    if (version === requestVersion.value) loading.value = false;
   }
 }
 
@@ -426,7 +466,7 @@ onMounted(() => void loadTasks());
       v-if="failedCount > 0 && statusFilter !== 'ISSUES'"
       type="button"
       class="alert-row"
-      @click="statusFilter = 'ISSUES'"
+      @click="setStatusFilter('ISSUES')"
     >
       <el-icon><Warning /></el-icon>
       <span><strong>{{ failedCount }} 项失败或待重试</strong>，点这里只看它们。</span>
@@ -440,7 +480,7 @@ onMounted(() => void loadTasks());
       v-if="stuckTasks.length > 0 && statusFilter !== 'RUNNING'"
       type="button"
       class="alert-row"
-      @click="statusFilter = 'RUNNING'"
+      @click="setStatusFilter('RUNNING')"
     >
       <el-icon><Warning /></el-icon>
       <span>
@@ -461,7 +501,7 @@ onMounted(() => void loadTasks());
           type="button"
           class="chip"
           :class="{ on: statusFilter === chip.value, 'is-alert': chip.alert && statusFilter !== chip.value }"
-          @click="statusFilter = chip.value"
+          @click="setStatusFilter(chip.value)"
         >
           {{ chip.label }}<span class="n">{{ chip.count }}</span>
         </button>
@@ -563,6 +603,24 @@ onMounted(() => void loadTasks());
           <span class="chev"><el-icon><ArrowRight /></el-icon></span>
         </button>
       </div>
+    </div>
+
+    <div v-if="totalTasks > 0" class="pagination-bar">
+      <span class="pagination-summary">
+        第 {{ (currentPage - 1) * pageSize + 1 }}–{{ Math.min(currentPage * pageSize, totalTasks) }} 条，共 {{ totalTasks }} 条
+        <template v-if="hasFilters">（当前为筛选结果）</template>
+      </span>
+      <el-pagination
+        :current-page="currentPage"
+        :page-size="pageSize"
+        :page-sizes="[20, 50, 100]"
+        :total="totalTasks"
+        :disabled="loading"
+        background
+        layout="sizes, prev, pager, next"
+        @current-change="changePage"
+        @size-change="changePageSize"
+      />
     </div>
 
     <p class="footer-note">
@@ -741,6 +799,13 @@ onMounted(() => void loadTasks());
 .chips .chip.on .n { color: var(--brand-strong); opacity: .7; }
 
 .tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.pagination-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; }
+.pagination-summary { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.pagination-bar :deep(.el-pagination) { justify-content: flex-end; }
+@media (max-width: 720px) {
+  .pagination-bar { align-items: flex-start; flex-direction: column; }
+  .pagination-bar :deep(.el-pagination) { max-width: 100%; flex-wrap: wrap; justify-content: flex-start; }
+}
 .search { width: 240px; }
 .reset { border: 0; background: none; padding: 0 4px; color: var(--brand-strong); font-size: 12px; font-weight: 600; cursor: pointer; }
 .reset:hover { text-decoration: underline; }
