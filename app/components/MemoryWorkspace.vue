@@ -59,7 +59,7 @@ await useCharacterListData();
  * 没带参数时回退到上次选过的角色，再回退到列表第一个。
  * 选择和 /chat 共用一份（同一个 cookie），换页不会跳角色。
  */
-const { id } = useCharacterSelection("/memory");
+const { id } = useCharacterSelection(isGrowthMode.value ? "/growth/memory" : "/memory");
 
 const currentCharacter = ref<Character | null>(null);
 const snapshots = ref<Snapshot[]>([]);
