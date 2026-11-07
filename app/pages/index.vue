@@ -3,7 +3,7 @@ import {
   ArrowRight,
   User,
 } from "@element-plus/icons-vue";
-import { characterUrgency, describeCountdown, formatCny, type OverviewCharacter, type OverviewPayload } from "~/utils/overview";
+import { characterUrgency, describeCountdown, formatCny, formatTokenCount, type OverviewCharacter, type OverviewPayload } from "~/utils/overview";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文从异常条直接开始；refreshable 让顶栏出现刷新按钮。
 definePageMeta({
@@ -380,6 +380,23 @@ onBeforeUnmount(() => {
               <span class="stat-v">{{ card.cost ? formatCny(card.cost.today.costCny) : "—" }}</span>
               <span class="stat-f">{{ card.cost ? `近 7 天 ${formatCny(card.cost.windowCostCny)}` : "还没有模型调用" }}</span>
             </div>
+          </div>
+
+          <!-- 用量金额是估算值：未定价 token 不计入金额，缺缓存明细的调用按未命中价估算。 -->
+          <div
+            v-if="card.cost && (card.cost.today.unpricedTokens > 0 || card.cost.unpricedModels.length > 0 || card.cost.uncachedCalls > 0)"
+            class="usage-notes"
+          >
+            <p v-if="card.cost.today.unpricedTokens > 0">
+              今日有 {{ formatTokenCount(card.cost.today.unpricedTokens) }} 个未定价 token，未计入今日金额。
+            </p>
+            <p v-if="card.cost.unpricedModels.length > 0">
+              近 7 天出现未定价模型：{{ card.cost.unpricedModels.join("、") }}；相关费用未计入。
+            </p>
+            <p v-if="card.cost.uncachedCalls > 0">
+              近 7 天有 {{ card.cost.uncachedCalls }} 次调用缺少缓存明细，按未命中价估算，金额可能偏高。
+            </p>
+          </div>
           </div>
 
           <!-- 本周期进度 -->
@@ -759,6 +776,21 @@ onBeforeUnmount(() => {
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.ov-a .usage-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--amber);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ov-a .usage-notes p {
+  margin: 0;
 }
 .ov-a .hero-cycle {
   display: flex;
