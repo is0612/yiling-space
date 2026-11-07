@@ -1897,7 +1897,7 @@ paths:
       tags: [Memories]
       operationId: listCharacterMemoryDays
       summary: 列出角色有忆泡的日子
-      description: 数据源是 `memory_event_days`（一天一行，带整理进度），不是从忆泡反推的 —— 「今天还没整理」的日子也会出现。按日期倒序，最多返回 90 天；返回角色配置的 IANA 时区。普通列表超过 90 天时 `truncated=true`。传 `q` 时按忆泡标题/详情/参与者搜索，最多检查最近 300 条命中忆泡，返回**命中的日期**，`eventCount` 是命中条数而非当天全部条数；超过上限时 `truncated=true`。
+      description: 数据源是 `memory_event_days`（一天一行，带整理进度），不是从忆泡反推的 —— 「今天还没整理」的日子也会出现。按日期倒序分页，默认每页 20 天、最大 100 天；返回角色配置的 IANA 时区。传 `q` 时按忆泡标题/详情/参与者搜索，按命中日期去重后分页，返回**命中的日期**，`eventCount` 是命中条数而非当天全部条数。
       parameters:
         - name: q
           in: query
@@ -1910,11 +1910,14 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [today, timeZone, days, truncated]
+                required: [today, timeZone, days, page, pageSize, total, totalPages]
                 properties:
                   today: { type: string, example: "2026-10-31", description: 角色时区里的今天 }
                   timeZone: { type: string, example: "Asia/Shanghai", description: 角色配置的 IANA 时区 }
-                  truncated: { type: boolean, description: true 表示日期列表或搜索命中超过当前返回上限 }
+                  page: { type: integer, minimum: 1, description: 当前页码 }
+                  pageSize: { type: integer, minimum: 1, maximum: 100, description: 当前每页日期数 }
+                  total: { type: integer, minimum: 0, description: 当前筛选条件下的日期总数 }
+                  totalPages: { type: integer, minimum: 1, description: 总页数；无结果时为 1 }
                   days:
                     type: array
                     items:
@@ -1941,7 +1944,12 @@ paths:
       tags: [Memories]
       operationId: getCharacterMemoryDay
       summary: 某一天的忆泡与当天原文
-      description: 忆泡是整理过的事件，原文是当时的对话；两者都受同一套范围隔离约束。忆泡最多返回最早的 100 条，并通过 eventsTotal / eventsTruncated 明示是否截断；原文按会话分组，每个会话最多返回最近 200 条，单条正文截断 500 字。
+      description: 忆泡是整理过的事件，原文是当时的对话；两者都受同一套范围隔离约束。忆泡按 occurredAt、id 升序分页，每页固定 20 条；原文按会话分组，每个会话最多返回最近 200 条，单条正文截断 500 字。
+      parameters:
+        - name: page
+          in: query
+          description: 忆泡页码，从 1 开始，默认 1。
+          schema: { type: integer, minimum: 1, default: 1 }
       responses:
         '200':
           description: 当天忆泡与原文
@@ -1949,11 +1957,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [day, events, messageGroups, usage, timeZone, eventsTotal, eventsTruncated]
+                required: [day, events, messageGroups, usage, timeZone, eventsTotal, eventsPage, eventsPageSize, eventsTotalPages]
                 properties:
                   timeZone: { type: string, example: "Asia/Shanghai", description: 角色配置的 IANA 时区 }
                   eventsTotal: { type: integer, minimum: 0, description: 当天实际忆泡总数，包含已隐藏的忆泡 }
-                  eventsTruncated: { type: boolean, description: true 表示 events 只返回最早的 100 条 }
+                  eventsPage: { type: integer, minimum: 1, description: 当前忆泡页码 }
+                  eventsPageSize: { type: integer, enum: [20], description: 每页忆泡数 }
+                  eventsTotalPages: { type: integer, minimum: 1, description: 忆泡总页数；无结果时为 1 }
                   usage:
                     type: object
                     description: 那天整理忆泡的开销（kind=events 的模型调用），和 8 天快照分开记
