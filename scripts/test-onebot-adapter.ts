@@ -776,6 +776,8 @@ try {
   await waitFor(async () => (await assistantCount(1012)) >= 1);
   assert.equal(await assistantCount(1012), 1, "@all 不能算「@ 的是别人」，否则群里喊话她永远不接。");
 
+  // 切到「仅 @ 时回复」档，确保下面测试只验证是否识别为真实 at。
+  record.bindings[0]!.groupChat = { ...ambientSettings, mode: "mention" };
   // 字符串消息里的普通文本「@QQ」不能冒充真正的 CQ at 段。
   // 但真正的 CQ:at 字符串仍须识别，兼容把消息拍平的网关。
   await emitRawGroupMessage(1013, 99, "@123456789 这个号码只是正文，不是在叫她");
