@@ -1686,7 +1686,7 @@ async function runChannelTurn(input: {
 
           if (modelConfigForKnowledge.knowledgeAutoCollectEnabled === true && result.evidenceMessageIds.length) {
             const selected = privateMessages.filter(item => result.evidenceMessageIds.includes(item.id));
-            const rawContent = selected.map(item => `[${item.speaker || "好友"}] ${item.content.slice(0, 4_000)}`).join("\\n").slice(0, 20_000);
+            const rawContent = selected.map(item => `[${item.speaker || "好友"}] ${item.content.slice(0, 4_000)}`).join("\n").slice(0, 20_000);
             if (rawContent.trim()) {
               const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
               const duplicate = await prisma.knowledgeCandidate.findFirst({
