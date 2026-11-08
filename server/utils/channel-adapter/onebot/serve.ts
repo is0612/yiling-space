@@ -120,14 +120,8 @@ export function routeOnebotEventToBinding(
 function isSelfMentioned(event: OnebotResolvedEvent, fallbackSelfId = ""): boolean {
   const selfId = event.selfId || fallbackSelfId;
   if (!selfId) return false;
-  const data = event.data as { message?: unknown } | null;
-  const message = data?.message;
-  if (!Array.isArray(message)) {
-    // 字符串消息只认结构化的 CQ at 码；正文里手打的 @QQ 不是点名。
-    // 不能用 event.content.includes() 兜底，否则普通文本也会误触发机器人回复。
-    return readOnebotMentions(event.data, selfId).some((mention) => mention.target === "self");
-  }
-  // 只认真正的 at 段：正文里手打的「@123」不是点名，不能把她叫出来。
+  // 只认 OneBot at 段或字符串消息中的 CQ:at 码。
+  // 正文里手打的「@QQ」不是点名，不能用 event.content.includes() 兜底。
   return readOnebotMentions(event.data, selfId).some((mention) => mention.target === "self");
 }
 
