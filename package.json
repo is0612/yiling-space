@@ -186,7 +186,8 @@
     "test:group-activity-stats": "tsx scripts/test-group-activity-stats.ts",
     "backfill:social-experiences": "tsx scripts/backfill-social-experiences.ts",
     "test:backfill-social-experiences-db": "tsx scripts/test-backfill-social-experiences-db.ts",
-    "test:backfill-social-experiences-isolated": "tsx scripts/test-backfill-social-experiences-isolated.ts"
+    "test:backfill-social-experiences-isolated": "tsx scripts/test-backfill-social-experiences-isolated.ts",
+    "test:social-relationship-assessment-isolated": "tsx scripts/test-social-relationship-assessment-isolated.ts"
   },
   "dependencies": {
     "@audio/decode-amr": "^1.3.1",
