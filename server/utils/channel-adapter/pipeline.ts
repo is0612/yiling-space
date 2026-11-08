@@ -1652,6 +1652,27 @@ async function runChannelTurn(input: {
         ...(line.mentions?.length ? { mentions: line.mentions } : {}),
         occurredAt: new Date(line.at).toISOString(),
       })),
+      onKnowledgeCandidate: async (candidate) => {
+        const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+        const duplicate = await prisma.knowledgeCandidate.findFirst({
+          where: { characterId: input.characterId, sourceType: "CHAT", rawContent: candidate.rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
+          select: { id: true },
+        });
+        if (duplicate) return;
+        await prisma.knowledgeCandidate.create({
+          data: {
+            characterId: input.characterId,
+            sourceType: "CHAT",
+            rawContent: candidate.rawContent,
+            sourceRef: {
+              ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+              messageIds: candidate.sourceMessageIds,
+              reason: candidate.reason,
+              capturedAt: new Date().toISOString(),
+            } satisfies Prisma.InputJsonObject,
+          },
+        });
+      },
       recordAssistantUsage: async (entry) => {
         await recordModelUsage({
           kind: entry.kind,
