@@ -236,6 +236,31 @@ async function staleRoleLoadIgnored() {
   page.finish();
 }
 
+/** 1b. 切换全局角色时，旧角色尚未触发的搜索防抖也必须取消。 */
+async function roleSwitchCancelsPendingSearch() {
+  const page = harness();
+  page.call("load", 1);
+  page.take("/api/admin/identities").resolve(pageResult("char-a", friend("a-1", "char-a")));
+  await flushMicrotasks();
+
+  page.set("query", "旧角色关键词");
+  page.call("onQueryInput");
+  page.switchRole("char-b");
+  const roleResponse = page.take("/api/admin/identities");
+  assert.equal(roleResponse.options?.query?.characterId, "char-b");
+
+  page.tickSearch();
+  assert.equal(
+    page.read("loading"),
+    true,
+    "切角色后不应再触发旧角色的搜索请求",
+  );
+
+  roleResponse.resolve(pageResult("char-b", friend("b-1", "char-b")));
+  await flushMicrotasks();
+  page.finish();
+}
+
 /** 2. 连续切换来源 / 排序 / 搜索 / 分页：最终只能是最后一次操作的结果。 */
 async function lastActionWins() {
   const page = harness();
@@ -437,6 +462,7 @@ async function unmountInvalidatesSuggestions() {
 
 const cases: Array<[string, () => Promise<void>]> = [
   ["staleRoleLoadIgnored", staleRoleLoadIgnored],
+  ["roleSwitchCancelsPendingSearch", roleSwitchCancelsPendingSearch],
   ["lastActionWins", lastActionWins],
   ["staleSearchIgnored", staleSearchIgnored],
   ["staleRequestKeepsLoading", staleRequestKeepsLoading],
