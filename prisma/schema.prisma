@@ -1464,8 +1464,30 @@ model KnowledgeItem {
   updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
   character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
   candidate   KnowledgeCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  revisions   KnowledgeItemRevision[]
 
   @@index([characterId, status, updatedAt])
   @@index([characterId, category, status])
   @@map("knowledge_items")
+}
+
+/// 正式知识的不可覆盖历史版本。每次修改前保存被替换的完整快照。
+model KnowledgeItemRevision {
+  id         String       @id @default(uuid()) @db.Uuid
+  itemId     String       @db.Uuid
+  revision   Int
+  title      String       @db.VarChar(240)
+  content    String       @db.Text
+  category   String       @db.VarChar(40)
+  tags       String[]     @default([])
+  confidence Float?
+  status     String       @db.VarChar(20)
+  sourceType String       @db.VarChar(20)
+  sourceRef  Json?        @db.JsonB
+  createdAt  DateTime     @default(now()) @db.Timestamptz(6)
+  item       KnowledgeItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, revision])
+  @@index([itemId, createdAt])
+  @@map("knowledge_item_revisions")
 }
