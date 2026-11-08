@@ -62,6 +62,14 @@ enum FriendChatPolicy {
   BLOCK
 }
 
+/// 角色自己对某个平台账号的关系阶段。只用于 EXTERNAL_IDENTITY 类型的 MemoryScope。
+enum RelationshipStage {
+  STRANGER
+  ACQUAINTANCE
+  FRIEND
+  CLOSE_FRIEND
+}
+
 enum ConversationStatus {
   ACTIVE
   ARCHIVED
@@ -320,6 +328,11 @@ model MemoryScope {
   aliases            String[]           @default([])
   /// DEFAULT：真人/未知正常，AI 默认不接话；ALLOW / BLOCK 是这个角色自己的明确选择。
   friendChatPolicy   FriendChatPolicy   @default(DEFAULT)
+  /// 仅 EXTERNAL_IDENTITY 范围使用；其他范围保持 null。
+  relationshipStage  RelationshipStage?
+  /// 乐观并发版本：关系评估提交前必须核对版本，避免旧结果覆盖新状态。
+  relationshipVersion Int               @default(0)
+  relationshipUpdatedAt DateTime?        @db.Timestamptz(6)
   createdAt          DateTime           @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime           @updatedAt @db.Timestamptz(6)
   character          Character          @relation(fields: [characterId], references: [id], onDelete: Restrict)
@@ -333,6 +346,8 @@ model MemoryScope {
   jobs               MemoryJob[]
   journals           CharacterJournal[]
   aliasSuggestions   FriendAliasSuggestion[]
+  socialExperiences  SocialExperience[]
+  socialRelationChanges SocialRelationChange[]
 
   @@index([characterId, scopeType])
   @@index([characterId, interactionCount])
@@ -592,6 +607,54 @@ model MemoryJob {
   @@index([status, runAt])
   @@index([memoryScopeId, periodStart, periodEnd])
   @@map("memory_jobs")
+}
+
+/// 将角色级好友关系与全局/群聊忆泡关联。这里只保存引用，不复制事件正文。
+/// 一条忆泡可以涉及多个外部参与者，因此可以分别关联到多条角色级关系。
+model SocialExperience {
+  id            String      @id @default(uuid()) @db.Uuid
+  scopeId       String      @db.Uuid
+  memoryEventId String      @db.Uuid
+  createdAt     DateTime    @default(now()) @db.Timestamptz(6)
+  scope         MemoryScope @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  memoryEvent   MemoryEvent @relation(fields: [memoryEventId], references: [id], onDelete: Cascade)
+  usedInChanges SocialRelationChangeEvidence[]
+
+  @@unique([scopeId, memoryEventId])
+  @@index([scopeId, createdAt])
+  @@index([memoryEventId])
+  @@map("social_experiences")
+}
+
+/// 关系阶段变化历史。原因由关系评估/纠错流程提供；证据通过关联表引用忆泡经历。
+model SocialRelationChange {
+  id             String           @id @default(uuid()) @db.Uuid
+  scopeId        String           @db.Uuid
+  fromStage      RelationshipStage
+  toStage        RelationshipStage
+  reason         String           @db.Text
+  /// 防止同一评估结果重试时重复写入阶段变化。
+  idempotencyKey String           @unique @db.VarChar(500)
+  createdAt      DateTime         @default(now()) @db.Timestamptz(6)
+  scope          MemoryScope      @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  evidence       SocialRelationChangeEvidence[]
+
+  @@index([scopeId, createdAt])
+  @@map("social_relation_changes")
+}
+
+/// 一次关系变化使用了哪些独立经历。相同经历可以支持不同朋友的关系判断，
+/// 但同一段关系不能在后续变化中重复消费为新的证据。
+model SocialRelationChangeEvidence {
+  id             String               @id @default(uuid()) @db.Uuid
+  changeId       String               @db.Uuid
+  experienceId   String               @db.Uuid
+  change         SocialRelationChange @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  experience     SocialExperience     @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@unique([changeId, experienceId])
+  @@index([experienceId])
+  @@map("social_relation_change_evidence")
 }
 
 /// 「她想给朋友起的备注」的待审建议：由朋友快照提炼时顺带产出，用户点头后才进 `MemoryScope.aliases`。
@@ -1090,6 +1153,7 @@ model MemoryEvent {
   conversation     Conversation?     @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   sourceMessage    Message?          @relation("MemoryEventSourceMessage", fields: [sourceMessageId], references: [id], onDelete: SetNull)
   sourceSnapshot   MemorySnapshot?   @relation("MemoryEventSourceSnapshot", fields: [sourceSnapshotId], references: [id], onDelete: SetNull)
+  socialExperiences SocialExperience[]
 
   @@unique([memoryScopeId, dedupeKey])
   @@unique([memoryScopeId, originId])
