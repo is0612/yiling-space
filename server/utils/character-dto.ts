@@ -62,6 +62,7 @@ export type CharacterDto = {
   contextAssistantApiKeyConfigured: boolean;
   contextAssistantConfigured: boolean;
   /** 知识处理助手配置；API Key 只回显是否已保存。 */
+  knowledgeAutoCollectEnabled: boolean;
   knowledgeAssistantEnabled: boolean;
   knowledgeAssistantModel: string;
   knowledgeAssistantTemperature: number;
@@ -289,6 +290,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
       : "",
     contextAssistantApiKeyConfigured,
     contextAssistantConfigured: Boolean(contextAssistantModel && contextAssistantApiKeyConfigured),
+    knowledgeAutoCollectEnabled: config.knowledgeAutoCollectEnabled === true,
     knowledgeAssistantEnabled: config.knowledgeAssistantEnabled === true,
     knowledgeAssistantModel,
     knowledgeAssistantTemperature: typeof config.knowledgeAssistantTemperature === "number" && Number.isFinite(config.knowledgeAssistantTemperature) ? Math.min(2, Math.max(0, config.knowledgeAssistantTemperature)) : 0.1,
