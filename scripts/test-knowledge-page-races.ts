@@ -1,0 +1,320 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { Script, createContext } from "node:vm";
+import { setImmediate as flush } from "node:timers/promises";
+import ts from "typescript";
+
+type PendingRequest = {
+  url: string;
+  options?: { method?: string; body?: unknown; query?: Record<string, unknown> };
+  resolve: (value: unknown) => void;
+  reject: (error: unknown) => void;
+};
+
+function buildPageHarness(relativePath: string) {
+  const pagePath = new URL(relativePath, import.meta.url);
+  const sfc = readFileSync(pagePath, "utf8");
+  const scriptMatch = sfc.match(/<script\\b[^>]*>([\\s\\S]*?)<\\/script>/);
+  assert.ok(scriptMatch, `${relativePath} must contain a script block`);
+
+  const source = ts.createSourceFile("knowledge-page.ts", scriptMatch[1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const statements = source.statements.filter((node) => !ts.isImportDeclaration(node));
+  const names = statements.flatMap((node) => {
+    if (ts.isVariableStatement(node)) {
+      return node.declarationList.declarations.flatMap((declaration) => (
+        ts.isIdentifier(declaration.name) ? [declaration.name.text] : []
+      ));
+    }
+    return ts.isFunctionDeclaration(node) && node.name ? [node.name.text] : [];
+  });
+  const program = `${statements.map((node) => node.getText(source)).join("\\n")}
+return { ${names.join(", ")} };
+`;
+  const compiled = ts.transpileModule(`(function () {\\n${program}\\n})()`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    reportDiagnostics: true,
+  });
+  assert.equal(
+    compiled.diagnostics?.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error).length,
+    0,
+    `${relativePath} script must transpile without syntax errors`,
+  );
+
+  const role = { value: { id: "char-a", name: "角色 A" } };
+  const watchers: Array<{ source: { value: unknown }; callback: (next: unknown, previous: unknown) => void }> = [];
+  const requests: PendingRequest[] = [];
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const successes: string[] = [];
+  const unmountCallbacks: Array<() => void> = [];
+  const context = createContext({
+    definePageMeta: () => {},
+    useRoute: () => ({ path: relativePath }),
+    useCharacterSelection: () => ({ character: role }),
+    ref: (value: unknown) => ({ value }),
+    computed: (getter: () => unknown) => Object.defineProperty({}, "value", { get: getter }),
+    watch: (
+      source: { value: unknown },
+      callback: (next: unknown, previous: unknown) => void,
+      options?: { immediate?: boolean },
+    ) => {
+      watchers.push({ source, callback });
+      if (options?.immediate) callback(source.value, undefined);
+    },
+    onBeforeUnmount: (callback: () => void) => { unmountCallbacks.push(callback); },
+    ElMessage: {
+      error: (message: string) => errors.push(message),
+      warning: (message: string) => warnings.push(message),
+      success: (message: string) => successes.push(message),
+    },
+    $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
+      requests.push({ url, options, resolve, reject });
+    }),
+  });
+  const executable = new Script(compiled.outputText, { filename: relativePath + ".actual-script.js" });
+  const bindings = executable.runInContext(context) as Record<string, unknown>;
+
+  function read<T = unknown>(name: string): T {
+    assert.ok(name in bindings, `missing page binding: ${name}`);
+    return (bindings[name] as { value: T }).value;
+  }
+  function set(name: string, value: unknown) {
+    (bindings[name] as { value: unknown }).value = value;
+  }
+  function call<T = unknown>(name: string, ...args: unknown[]): Promise<T> {
+    const handler = bindings[name];
+    assert.equal(typeof handler, "function", `missing page handler: ${name}`);
+    return (handler as (...values: unknown[]) => Promise<T>)(...args);
+  }
+  function take(pathname: string, method?: string): PendingRequest {
+    const index = requests.findIndex((request) => {
+      const parsed = new URL(request.url, "http://test.local");
+      return parsed.pathname === pathname && (method === undefined || (request.options?.method ?? "GET") === method);
+    });
+    assert.ok(index >= 0, `expected pending request: ${method ?? "GET"} ${pathname}`);
+    return requests.splice(index, 1)[0]!;
+  }
+  function switchRole(id: string) {
+    const previous = role.value.id;
+    role.value = { id, name: `角色 ${id}` };
+    assert.ok(watchers[0], "role watcher must be registered first");
+    watchers[0]!.callback(id, previous);
+  }
+  function triggerKeyword() {
+    const keyword = bindings.keyword;
+    const watcher = watchers.find((entry) => entry.source === keyword);
+    assert.ok(watcher, "keyword watcher must be registered");
+    watcher.callback(read("keyword"), undefined);
+  }
+  function unmount() {
+    for (const callback of unmountCallbacks) callback();
+  }
+  function finish() {
+    assert.equal(requests.length, 0, `unsettled requests: ${requests.map((request) => request.url).join(", ")}`);
+    assert.deepEqual(errors, [], `unexpected error notifications: ${errors.join(", ")}`);
+  }
+
+  return { read, set, call, take, switchRole, triggerKeyword, unmount, requests, errors, warnings, successes, finish };
+}
+
+function workspace(label: string) {
+  return {
+    candidates: [],
+    items: [{ id: label, title: label, content: label, category: "GENERAL", tags: [], confidence: 1, status: "ACTIVE", sourceType: "MANUAL", sourceRef: null, revision: 1, createdAt: "2026-11-08", updatedAt: "2026-11-08" }],
+    candidateCount: 0,
+    itemCount: 1,
+  };
+}
+
+function characterSettings(id: string, model = `model-${id}`) {
+  return {
+    id,
+    knowledgeAssistantModel: model,
+    knowledgeAssistantApiBaseUrl: `https://${id}.example.com/v1`,
+    knowledgeAssistantEnabled: true,
+    knowledgeAutoCollectEnabled: false,
+    knowledgeAssistantTemperature: 0.2,
+    knowledgeAssistantMaxInputTokens: 8192,
+    knowledgeAssistantMaxOutputTokens: 1024,
+    knowledgeAssistantApiKeyConfigured: true,
+  };
+}
+
+async function flushMicrotasks() {
+  await flush();
+  await flush();
+}
+
+/** 1. 切换角色后，旧列表响应不能覆盖新角色，也不能提前关闭新请求的 loading。 */
+async function knowledgeListSwitchRace() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  const oldRequest = page.take("/api/characters/char-a/growth/knowledge");
+  page.switchRole("char-b");
+  const newRequest = page.take("/api/characters/char-b/growth/knowledge");
+
+  oldRequest.resolve(workspace("A old data"));
+  await flushMicrotasks();
+  assert.equal(page.read("loading"), true, "A 的旧请求不能提前关闭 B 的 loading");
+  assert.equal(page.read<{ items: unknown[] }>("data").items.length, 0, "切角色时应立即清空旧角色知识");
+
+  newRequest.resolve(workspace("B current data"));
+  await flushMicrotasks();
+  assert.equal(page.read<{ items: Array<{ title: string }> }>("data").items[0]?.title, "B current data");
+  assert.equal(page.read("loading"), false);
+  page.finish();
+}
+
+/** 2. 搜索连续变化时，只允许最后一次查询结果写回。 */
+async function knowledgeSearchLastRequestWins() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("initial"));
+  await flushMicrotasks();
+
+  page.set("keyword", "first query");
+  page.triggerKeyword();
+  const first = page.take("/api/characters/char-a/growth/knowledge");
+  assert.equal(first.options?.query?.q, "first query");
+
+  page.set("keyword", "latest query");
+  page.triggerKeyword();
+  const latest = page.take("/api/characters/char-a/growth/knowledge");
+  assert.equal(latest.options?.query?.q, "latest query");
+
+  latest.resolve(workspace("latest result"));
+  await flushMicrotasks();
+  first.resolve(workspace("stale result"));
+  await flushMicrotasks();
+
+  assert.equal(page.read<{ items: Array<{ title: string }> }>("data").items[0]?.title, "latest result");
+  page.finish();
+}
+
+/** 3. A 角色的新增操作晚回来时，不得清空 B 正在输入的内容或提示 A 的操作已完成。 */
+async function candidatePostDoesNotTouchNextRole() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("A"));
+  await flushMicrotasks();
+
+  page.set("rawContent", "A 的候选");
+  const adding = page.call("addCandidate");
+  const post = page.take("/api/characters/char-a/growth/knowledge/candidates", "POST");
+  page.switchRole("char-b");
+  const loadB = page.take("/api/characters/char-b/growth/knowledge");
+  page.set("rawContent", "B 正在输入的新内容");
+
+  post.resolve({ candidate: { id: "candidate-a" } });
+  await adding;
+  assert.equal(page.read("rawContent"), "B 正在输入的新内容");
+  assert.equal(page.successes.includes("已加入知识候选。"), false);
+  assert.equal(page.requests.length, 1, "A 的操作不能额外触发 B 的列表刷新");
+  loadB.resolve(workspace("B"));
+  await flushMicrotasks();
+  page.finish();
+}
+
+/** 4. A→B→A 快速切换时，第一次 A 的慢配置不能覆盖第二次 A 的新配置。 */
+async function settingsLoadUsesRoleGeneration() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
+  const firstA = page.take("/api/characters/char-a");
+
+  page.switchRole("char-b");
+  const loadB = page.take("/api/characters/char-b");
+  page.switchRole("char-a");
+  const secondA = page.take("/api/characters/char-a");
+
+  secondA.resolve(characterSettings("char-a", "new-a-model"));
+  await flushMicrotasks();
+  firstA.resolve(characterSettings("char-a", "stale-a-model"));
+  loadB.resolve(characterSettings("char-b"));
+  await flushMicrotasks();
+
+  assert.equal(page.read("model"), "new-a-model");
+  assert.equal(page.read("apiBaseUrl"), "https://char-a.example.com/v1");
+  page.finish();
+}
+
+/** 5. A 角色的慢保存响应不能覆盖 B 的表单，也不能清除 B 新输入的 API Key。 */
+async function staleSettingsSaveCannotMutateNextRole() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
+  page.take("/api/characters/char-a").resolve(characterSettings("char-a"));
+  await flushMicrotasks();
+
+  page.set("model", "a-custom-model");
+  page.set("apiKey", "A_SECRET");
+  const saving = page.call<boolean>("save");
+  const patchA = page.take("/api/characters/char-a", "PATCH");
+  assert.equal((patchA.options?.body as Record<string, unknown>).knowledgeAssistantApiKey, "A_SECRET");
+
+  page.switchRole("char-b");
+  const loadB = page.take("/api/characters/char-b");
+  loadB.resolve(characterSettings("char-b"));
+  await flushMicrotasks();
+  page.set("apiKey", "B_SECRET_NEW");
+
+  patchA.resolve(characterSettings("char-a", "saved-a-model"));
+  assert.equal(await saving, false, "角色切换后旧保存应视为对当前页面无效");
+  assert.equal(page.read("model"), "model-char-b");
+  assert.equal(page.read("apiBaseUrl"), "https://char-b.example.com/v1");
+  assert.equal(page.read("apiKey"), "B_SECRET_NEW");
+  assert.equal(page.successes.includes("知识处理助手设置已保存。"), false);
+  page.finish();
+}
+
+/** 6. 旧角色的获取模型请求不能把旧模型列表写入新角色。 */
+async function staleModelListCannotCrossRole() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
+  page.take("/api/characters/char-a").resolve(characterSettings("char-a"));
+  await flushMicrotasks();
+
+  const fetching = page.call("fetchModels");
+  const saveA = page.take("/api/characters/char-a", "PATCH");
+  saveA.resolve(characterSettings("char-a"));
+  await flushMicrotasks();
+  const modelsA = page.take("/api/characters/char-a/growth/knowledge/models");
+
+  page.switchRole("char-b");
+  const loadB = page.take("/api/characters/char-b");
+  loadB.resolve(characterSettings("char-b"));
+  await flushMicrotasks();
+
+  modelsA.resolve({ ok: true, models: ["old-a-model"], message: "已获取 1 个模型。" });
+  await fetching;
+  assert.deepEqual(page.read("models"), [], "A 的模型列表不能出现在 B 的设置页");
+  assert.equal(page.read("model"), "model-char-b");
+  page.finish();
+}
+
+/** 7. 页面卸载后，在途读取不再写状态或弹提示。 */
+async function unmountedSettingsLoadIsIgnored() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
+  const pending = page.take("/api/characters/char-a");
+  page.unmount();
+  pending.reject(new Error("late failure"));
+  await flushMicrotasks();
+  assert.equal(page.read("character"), null);
+  assert.deepEqual(page.errors, []);
+  page.finish();
+}
+
+async function main() {
+  const tests = [
+    ["知识列表切角色竞态", knowledgeListSwitchRace],
+    ["知识搜索最后请求生效", knowledgeSearchLastRequestWins],
+    ["候选提交不污染新角色", candidatePostDoesNotTouchNextRole],
+    ["设置页 A-B-A 代际隔离", settingsLoadUsesRoleGeneration],
+    ["旧保存响应不覆盖新角色", staleSettingsSaveCannotMutateNextRole],
+    ["旧模型列表不跨角色写入", staleModelListCannotCrossRole],
+    ["卸载后忽略设置读取", unmountedSettingsLoadIsIgnored],
+  ] as const;
+  for (const [name, test] of tests) {
+    await test();
+    console.log("  ✅", name);
+  }
+  console.log(`知识系统页面竞态验收通过：${tests.length} 项。`);
+}
+
+main().catch((error) => {
+  console.error("知识系统页面竞态验收失败。");
+  console.error(error);
+  process.exitCode = 1;
+});
