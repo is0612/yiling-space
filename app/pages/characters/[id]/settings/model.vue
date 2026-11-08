@@ -141,6 +141,7 @@ const KIND_LABELS: Record<string, string> = {
   "sticker-label": "表情包打标",
   "memory-assistant": "记忆助手",
   "context-assistant": "语境助手",
+  "knowledge-assistant": "知识处理助手",
   other: "其他",
 };
 
