@@ -157,7 +157,9 @@ input:not([type=checkbox]){width:100%;min-width:0;border:1px solid var(--line);b
 button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:9px 13px;cursor:pointer;white-space:nowrap}
 button:disabled{opacity:.55;cursor:not-allowed}
 .switch-label{display:flex;align-items:center;gap:7px;margin:0;white-space:nowrap}
-.collection-option{border:1px solid var(--line);border-radius:9px;padding:12px;background:var(--surface-2)}\n.collection-option .hint{margin:8px 0 0}\n.numeric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.collection-option{border:1px solid var(--line);border-radius:9px;padding:12px;background:var(--surface-2)}
+.collection-option .hint{margin:8px 0 0}
+.numeric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .actions{display:flex;justify-content:flex-end;margin-top:22px}
 button.primary{background:var(--accent);color:white;border-color:var(--accent);padding-inline:22px}
 @media(max-width:650px){.numeric-grid{grid-template-columns:1fr}.settings-card{padding:16px}.settings-heading{align-items:flex-start;flex-direction:column}}
