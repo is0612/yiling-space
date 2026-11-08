@@ -1,4 +1,5 @@
 import { createError, getRouterParam, readBody } from "h3";
+import type { Prisma } from "../../../../../../src/generated/prisma/client";
 import { requireActorUserId } from "../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../utils/prisma";
@@ -25,7 +26,7 @@ export default defineEventHandler(async (event) => {
   const character = await prisma.character.findFirst({ where: { id: characterId, ownerId }, select: { id: true } });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
   const candidate = await prisma.knowledgeCandidate.create({
-    data: { characterId, sourceType, sourceRef, rawContent },
+    data: { characterId, sourceType, sourceRef: sourceRef as Prisma.InputJsonObject | undefined, rawContent },
     select: { id: true, sourceType: true, sourceRef: true, rawContent: true, status: true, createdAt: true },
   });
   return { candidate };
