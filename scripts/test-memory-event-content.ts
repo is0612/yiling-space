@@ -25,7 +25,7 @@ try {
   assert.equal(result.analysis.events.length, 1, "Context can support new events but cannot produce old-only or unknown-source events.");
   assert.deepEqual(result.analysis.events[0]!.evidenceMessageIds, ["old", "new"]);
   assert.equal(result.analysis.events[0]!.precision, "day", "Explicit day precision must survive non-UTC-midnight timestamps.");
-  assert.equal(result.promptTemplateVersion, "memory-extraction-v7");
+  assert.equal(result.promptTemplateVersion, "memory-extraction-v8");
   const prompt = requests[0]!.messages.find((message) => message.role === "system")!.content;
   assert.match(prompt, /已经发生、明确计划\/约定/u);
   assert.match(prompt, /助手提议和角色扮演/u);
