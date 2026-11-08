@@ -13,7 +13,7 @@ import ts from "typescript";
  * 新请求还在飞，列表却已经显示空了。身份/交流两个字段共用一张卡片的保存序号，
  * 还会把另一项刚改好的值顶回旧值。
  *
- * 这里盯七件事，和浏览器验收清单一一对应：
+ * 这里覆盖九类异步边界，和浏览器验收清单一一对应：
  * 1. 切角色后旧列表晚回来，不能覆盖新角色，也不能把 activeCharacterId 写回去；
  * 2. 来源 / 排序 / 搜索 / 翻页连点时，最终显示最后一次操作的结果；
  * 3. 旧请求先返回时不能提前关 loading；
@@ -214,6 +214,7 @@ async function staleRoleLoadIgnored() {
 
   page.switchRole("char-b");
   const freshResponse = page.take("/api/admin/identities");
+  assert.equal(freshResponse.options?.query?.characterId, "char-b", "好友列表请求必须跟随全局当前角色");
 
   staleResponse.resolve(pageResult("char-a", friend("a-1", "char-a", { displayName: "A 的朋友" })));
   await stale;
@@ -327,8 +328,9 @@ async function suggestionsDoNotCrossRole() {
   assert.equal(page.read("suggestionDialogOpen"), true);
   assert.equal(page.read("suggestionsLoading"), true);
 
-  page.call("pickCharacter", "char-b");
+  page.switchRole("char-b");
   const roleResponse = page.take("/api/admin/identities");
+  assert.equal(roleResponse.options?.query?.characterId, "char-b", "切换全局角色后请求必须使用新角色");
   assert.equal(page.read("suggestionDialogOpen"), false, "切角色后弹窗必须关掉");
   assert.equal(page.read("suggestionsLoading"), false);
 
