@@ -13,7 +13,7 @@ import {
   resolveMemoryAssistantRuntime,
 } from "../memory-assistant";
 import { resolveChatTimeZone } from "../chat-time-context";
-import { resolveContextAssistantRuntime } from "../context-assistant";
+import { analyzePrivateKnowledgeCandidate, resolveContextAssistantRuntime, shouldConsiderPrivateKnowledgeCandidate } from "../context-assistant";
 import { rankKnowledgeItems } from "../knowledge-retrieval";
 import { generateGroupContextReply } from "../group-context-reply";
 import { parseEventTimeRange } from "../memory-event-time";
@@ -1637,6 +1637,74 @@ async function runChannelTurn(input: {
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
   const turnId = randomUUID();
+
+  // 私聊知识发现：先由本地规则筛选，只有出现知识型信号时才额外调用语境助手。
+  // 只分析当前轮真实 USER 消息；不带记忆、跨会话历史、群聊背景或其他好友数据。
+  const modelConfigForKnowledge = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
+    ? character.modelConfig as Record<string, unknown> : {};
+  if (!isGroup && modelConfigForKnowledge.knowledgeAutoCollectEnabled === true) {
+    const privateMessages = messages.map(item => ({
+      id: item.externalMessageId,
+      speaker: item.authorDisplayName ?? "",
+      content: item.content,
+    }));
+    if (shouldConsiderPrivateKnowledgeCandidate(privateMessages)) {
+      const privateContextRuntime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
+      if (privateContextRuntime) {
+        try {
+          const result = await analyzePrivateKnowledgeCandidate(privateContextRuntime, character.name, privateMessages);
+          await recordModelUsage({
+            kind: "context-assistant",
+            model: privateContextRuntime.model,
+            usage: toUsageTokens(result.usage),
+            characterId: input.characterId,
+            channelBindingId: input.bindingId,
+            ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+            metadata: { status: "success", turnId, source: "private-knowledge-candidate" },
+          }).catch(() => undefined);
+          if (result.evidenceMessageIds.length) {
+            const selected = privateMessages.filter(item => result.evidenceMessageIds.includes(item.id));
+            const rawContent = selected.map(item => `[${item.speaker || "好友"}] ${item.content.slice(0, 4_000)}`).join("\\n").slice(0, 20_000);
+            if (rawContent.trim()) {
+              const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+              const duplicate = await prisma.knowledgeCandidate.findFirst({
+                where: { characterId: input.characterId, sourceType: "CHAT", rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
+                select: { id: true },
+              });
+              if (!duplicate) {
+                await prisma.knowledgeCandidate.create({
+                  data: {
+                    characterId: input.characterId,
+                    sourceType: "CHAT",
+                    rawContent,
+                    sourceRef: {
+                      ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+                      messageIds: selected.map(item => item.id),
+                      speakers: [...new Set(selected.map(item => item.speaker).filter(Boolean))],
+                      reason: result.reason,
+                      capturedAt: new Date().toISOString(),
+                      channel: "PRIVATE",
+                    } satisfies Prisma.InputJsonObject,
+                  },
+                }).catch(() => undefined);
+              }
+            }
+          }
+        } catch (error) {
+          await recordModelUsage({
+            kind: "context-assistant",
+            model: privateContextRuntime.model,
+            usage: toUsageTokens(error instanceof Error && "usage" in error ? (error as Error & { usage?: import("../model-usage").ModelUsageTokens }).usage : undefined),
+            characterId: input.characterId,
+            channelBindingId: input.bindingId,
+            ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+            metadata: { status: "failed", turnId, source: "private-knowledge-candidate" },
+          }).catch(() => undefined);
+        }
+      }
+    }
+  }
+
   const turnDetail = createModelTurnDetail(isGroup, messages.map(item => ({
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
