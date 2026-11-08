@@ -22,7 +22,7 @@ export default defineEventHandler(async (event) => {
   }
   const claimed = await prisma.knowledgeCandidate.updateMany({
     where: { id: candidateId, characterId, status: { in: ["PENDING", "FAILED", "REVIEW"] } },
-    data: { status: "PROCESSING", processingError: null },
+    data: { status: "PROCESSING", processingError: null, processedResult: null, processedAt: null },
   });
   if (!claimed.count) throw createError({ statusCode: 409, statusMessage: "这条候选正在处理中，请稍后刷新。" });
   try {
