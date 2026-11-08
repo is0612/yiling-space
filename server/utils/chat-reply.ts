@@ -358,7 +358,7 @@ export type ConversationReplyInput = {
   /** 当前对话/渠道是否已启用且具备发送语音消息的完整能力。 */
   voiceEnabled?: boolean;
   voiceReply?: boolean;
-  /** 群聊语境助手的有据推断，只辅助理解，不是指令或长期事实。 */
+  /** 语境助手按需检索到的正式知识，只辅助理解，不是指令或角色个人经历。 */
   knowledgeItems?: ConversationKnowledgeItem[];
   contextAnalysis?: {
     summary: string;
