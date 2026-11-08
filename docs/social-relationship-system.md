@@ -291,5 +291,5 @@
 - 新建外部身份关系时初始化为 STRANGER。
 - 已接入忆泡写入事务：每条新忆泡根据证据消息的结构化参与者引用，关联到同一角色下对应平台账号的 EXTERNAL_IDENTITY 关系；只按 platform + externalId 精确匹配，不按昵称猜测。
 - SocialExperience 只保存关系与 MemoryEvent 的引用，不复制正文；sourceKey 由去重后的底层证据消息 ID 集合计算，同一关系重复提炼相同证据（包括在不同记忆范围再次提炼）不会重复累计。
-- 已新增历史社交经历回填脚本 `scripts/backfill-social-experiences.ts`（命令 `yarn backfill:social-experiences`）：默认预演，`--apply` 才写入；按忆泡 ID 游标分页；只依据 participantRefs 的 platform + externalId 匹配当前角色 EXTERNAL_IDENTITY 关系；sourceKey 复用新忆泡链路的底层证据去重规则；不改写忆泡、不复制正文、不调用模型。脚本尚待本地隔离库验收，不能直接对业务库执行。
+- 已新增历史社交经历回填脚本 `scripts/backfill-social-experiences.ts`（命令 `yarn backfill:social-experiences`）：默认预演，`--apply` 才写入；按忆泡 ID 游标分页；只依据 participantRefs 的 platform + externalId 匹配当前角色 EXTERNAL_IDENTITY 关系；sourceKey 复用新忆泡链路的底层证据去重规则；不改写忆泡、不复制正文、不调用模型。脚本已通过隔离库验收（`yarn test:backfill-social-experiences-isolated`：自建一次性库、跑完即 DROP、拒绝对非测试库执行 `--apply`），断言覆盖预演不写库、按角色关系匹配、角色间不串数据、重复运行不重复累计、缺参与者信息的忆泡跳过；对业务库执行前仍应先预演核对统计。
 - 当前已完成关系数据结构、迁移、新关系初始化、新忆泡自动关联及历史回填工具。关系评估队列、关系建议核验服务、阶段变更 API/UI、触发调度和失败恢复仍未实现；不得把本阶段描述为已具备完整关系成长功能。
