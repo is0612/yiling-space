@@ -200,3 +200,17 @@ export function isKnowledgeAssistantApiKeySaved(configValue: unknown): boolean {
   return typeof config.knowledgeAssistantApiKeyEncrypted === "string"
     && config.knowledgeAssistantApiKeyEncrypted.startsWith("v1.");
 }
+
+/** 社交关系评估助手使用独立凭据，不回落到任何其他模型或环境变量 Key。 */
+export async function resolveCharacterSocialRelationshipAssessmentAssistantApiKey(configValue: unknown): Promise<string> {
+  const config = asRecord(configValue);
+  const encrypted = config.socialRelationshipAssessmentAssistantApiKeyEncrypted;
+  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
+  return (await decryptApiKey(encrypted)).trim();
+}
+
+export function isSocialRelationshipAssessmentAssistantApiKeySaved(configValue: unknown): boolean {
+  const config = asRecord(configValue);
+  return typeof config.socialRelationshipAssessmentAssistantApiKeyEncrypted === "string"
+    && config.socialRelationshipAssessmentAssistantApiKeyEncrypted.startsWith("v1.");
+}
