@@ -19,6 +19,7 @@ export async function generateGroupContextReply(input: {
   candidates: MemoryAssistantCandidate[];
   onTurnDetail?: (detail: TurnDetailPatch) => void;
   analysisBackground?: ConversationReplyInput["groupBackground"];
+  onKnowledgeCandidate?: (candidate: { rawContent: string; sourceMessageIds: string[]; reason: string }) => Promise<void>;
   loadCandidates?: (query: string) => Promise<MemoryAssistantCandidate[]>;
   recordAssistantUsage: (entry: {
     kind: "context-assistant" | "memory-assistant";
@@ -71,6 +72,18 @@ export async function generateGroupContextReply(input: {
     }));
   report({ context: { status: "success", summary: analysis.summary, participation: analysis.participation,
     ...(analysis.uncertainty ? { uncertainty: analysis.uncertainty } : {}), evidence } });
+
+  if (analysis.knowledgeCandidate && input.onKnowledgeCandidate) {
+    const selected = evidence.filter(line => analysis.knowledgeCandidate!.evidenceMessageIds.includes(line.id));
+    const rawContent = selected.map(line => `[${line.speaker || line.member || "群聊"}] ${line.content}`).join("\\n").slice(0, 20_000);
+    if (rawContent.trim()) {
+      await input.onKnowledgeCandidate({
+        rawContent,
+        sourceMessageIds: selected.map(line => line.id),
+        reason: analysis.knowledgeCandidate.reason,
+      }).catch(() => undefined);
+    }
+  }
 
   let sources: MemoryAssistantCandidate[] = [];
   let memoryStatus: NonNullable<ConversationReplyInput["contextAnalysis"]>["memoryStatus"];
