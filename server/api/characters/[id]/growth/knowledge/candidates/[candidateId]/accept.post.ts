@@ -31,7 +31,16 @@ export default defineEventHandler(async (event) => {
   const tags = Array.isArray(result.tags) ? result.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 20) : [];
   const confidence = typeof result.confidence === "number" && Number.isFinite(result.confidence)
     ? Math.min(1, Math.max(0, result.confidence)) : null;
-  const item = await prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.knowledgeCandidate.updateMany({
+      where: { id: candidateId, characterId, status: "REVIEW" },
+      data: { status: "ACCEPTING" },
+    });
+    if (!claimed.count) {
+      const existing = await tx.knowledgeItem.findUnique({ where: { candidateId } });
+      if (existing) return { item: existing, alreadyAccepted: true };
+      throw createError({ statusCode: 409, statusMessage: "候选状态已变化，请刷新后重试。" });
+    }
     const created = await tx.knowledgeItem.create({
       data: {
         characterId, candidateId, title, content, category, tags, confidence,
@@ -42,7 +51,7 @@ export default defineEventHandler(async (event) => {
       where: { id: candidateId },
       data: { status: "ACCEPTED" },
     });
-    return created;
+    return { item: created, alreadyAccepted: false };
   });
-  return { item, alreadyAccepted: false };
+  return outcome;
 });
