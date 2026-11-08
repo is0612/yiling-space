@@ -52,7 +52,7 @@ try {
   assert.equal(loadedQuery, analysis.memoryQuery);
   assert.deepEqual(captured[0]?.sourceMessageIds, ["evidence"], "Only real included evidence ids may be collected.");
   assert(captured[0]?.rawContent.includes("说的是科幻电影。"));
-  assert.equal(captured?.reason, "群友解释了一个可复用的科学概念。");
+  assert.equal(captured[0]?.reason, "群友解释了一个可复用的科学概念。");
   assert.equal(details[0]?.context?.status, "success");
   assert.deepEqual(details[0]?.context?.evidence?.map(item => item.id), ["current", "evidence"]);
   assert.deepEqual(details[1]?.memory, { status: "success", query: analysis.memoryQuery, sources: [
