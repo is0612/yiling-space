@@ -114,7 +114,7 @@ async function fetchModels() {
       <p class="hint">助手负责判断候选是否值得保存、整理内容、识别重复与冲突。处理结果先进入待确认，不会自行写入正式知识库。</p>
       <div class="collection-option">
         <label class="switch-label"><input v-model="autoCollectEnabled" type="checkbox"> 从聊天中自动发现知识候选</label>
-        <p class="hint">开启后，群聊由群聊语境分析发现候选；好友私聊会先经过本地规则筛选，仅对可能有知识价值的内容调用私聊分析。候选原文进入候选箱，不会自动处理或入库。关闭时仍可手动添加候选。</p>
+        <p class="hint">此开关只控制是否保存聊天知识候选：开启后，群聊和好友私聊中识别到的可复用知识原文会进入候选箱，仍需知识处理助手整理并由你确认；关闭时不保存聊天候选。私聊会先经过本地规则预筛。无论此开关状态，只要语境助手已启用，系统仍可按需检索正式知识库；未确认候选不会参与检索。</p>
       </div>
       <label>模型名称</label>
       <div class="model-row">
