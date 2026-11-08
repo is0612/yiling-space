@@ -153,7 +153,6 @@ const adminNavigation = computed<NavigationItem[]>(() => {
     { key: "qq", label: "QQ 渠道", href: "/qq", icon: ChatLineRound },
     { key: "bili", label: "B站值班台", href: "/bili", icon: VideoPlay },
     { key: "tasks", label: "任务监控", href: "/tasks", icon: DataAnalysis },
-    { key: "identities", label: "她的朋友", href: "/identities", icon: Connection },
     { key: "users", label: "用户管理", href: "/users", icon: UserFilled },
     { key: "settings", label: "系统设置", href: "/settings", icon: Setting },
   ];
