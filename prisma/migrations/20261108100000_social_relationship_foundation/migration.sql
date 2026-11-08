@@ -17,6 +17,7 @@ CREATE TABLE "social_experiences" (
   "id" UUID NOT NULL,
   "scopeId" UUID NOT NULL,
   "memoryEventId" UUID NOT NULL,
+  "sourceKey" VARCHAR(64) NOT NULL,
   "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "social_experiences_pkey" PRIMARY KEY ("id")
 );
@@ -42,8 +43,10 @@ CREATE TABLE "social_relation_change_evidence" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "social_experiences_scopeId_memoryEventId_key"
-  ON "social_experiences"("scopeId", "memoryEventId");
+CREATE UNIQUE INDEX "social_experiences_scopeId_sourceKey_key"
+  ON "social_experiences"("scopeId", "sourceKey");
+CREATE INDEX "social_experiences_memoryEventId_idx"
+  ON "social_experiences"("memoryEventId");
 CREATE INDEX "social_experiences_scopeId_createdAt_idx"
   ON "social_experiences"("scopeId", "createdAt");
 CREATE INDEX "social_experiences_memoryEventId_idx"
