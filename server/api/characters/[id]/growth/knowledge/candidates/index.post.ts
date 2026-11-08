@@ -1,7 +1,7 @@
 import { createError, getRouterParam, readBody } from "h3";
-import { requireActorUserId } from "../../../../../utils/auth";
-import { requireUuid } from "../../../../../utils/local-api";
-import { getPrisma } from "../../../../../utils/prisma";
+import { requireActorUserId } from "../../../../../../utils/auth";
+import { requireUuid } from "../../../../../../utils/local-api";
+import { getPrisma } from "../../../../../../utils/prisma";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
