@@ -5,6 +5,7 @@ definePageMeta({ topbar: { title: "知识处理助手设置" } });
 
 type CharacterSettings = {
   id: string;
+  knowledgeAutoCollectEnabled?: boolean;
   knowledgeAssistantEnabled?: boolean;
   knowledgeAssistantModel?: string;
   knowledgeAssistantTemperature?: number;
@@ -25,6 +26,7 @@ const model = ref("");
 const apiBaseUrl = ref("");
 const apiKey = ref("");
 const enabled = ref(false);
+const autoCollectEnabled = ref(false);
 const temperature = ref(0.1);
 const maxInputTokens = ref(12288);
 const maxOutputTokens = ref(2048);
@@ -39,6 +41,7 @@ async function load() {
     model.value = data.knowledgeAssistantModel ?? "";
     apiBaseUrl.value = data.knowledgeAssistantApiBaseUrl ?? "";
     enabled.value = data.knowledgeAssistantEnabled === true;
+    autoCollectEnabled.value = data.knowledgeAutoCollectEnabled === true;
     temperature.value = data.knowledgeAssistantTemperature ?? 0.1;
     maxInputTokens.value = data.knowledgeAssistantMaxInputTokens ?? 12288;
     maxOutputTokens.value = data.knowledgeAssistantMaxOutputTokens ?? 2048;
@@ -58,6 +61,7 @@ async function save(silent = false) {
     const data = await $fetch<CharacterSettings>(`/api/characters/${encodeURIComponent(characterId.value)}`, {
       method: "PATCH",
       body: {
+        knowledgeAutoCollectEnabled: autoCollectEnabled.value,
         knowledgeAssistantEnabled: enabled.value,
         knowledgeAssistantModel: model.value.trim(),
         knowledgeAssistantApiBaseUrl: apiBaseUrl.value.trim(),
@@ -108,6 +112,10 @@ async function fetchModels() {
         <label class="switch-label"><input v-model="enabled" type="checkbox"> 启用助手</label>
       </div>
       <p class="hint">助手负责判断候选是否值得保存、整理内容、识别重复与冲突。处理结果先进入待确认，不会自行写入正式知识库。</p>
+      <div class="collection-option">
+        <label class="switch-label"><input v-model="autoCollectEnabled" type="checkbox"> 从群聊中自动发现知识候选</label>
+        <p class="hint">开启后，语境助手只会挑选有实际消息来源的可复用知识，原文进入候选箱；不会自动处理或入库。关闭时仍可手动添加候选。</p>
+      </div>
       <label>模型名称</label>
       <div class="model-row">
         <input v-model="model" list="knowledge-model-list" placeholder="例如 deepseek-chat">
@@ -149,7 +157,7 @@ input:not([type=checkbox]){width:100%;min-width:0;border:1px solid var(--line);b
 button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:9px 13px;cursor:pointer;white-space:nowrap}
 button:disabled{opacity:.55;cursor:not-allowed}
 .switch-label{display:flex;align-items:center;gap:7px;margin:0;white-space:nowrap}
-.numeric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.collection-option{border:1px solid var(--line);border-radius:9px;padding:12px;background:var(--surface-2)}\n.collection-option .hint{margin:8px 0 0}\n.numeric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .actions{display:flex;justify-content:flex-end;margin-top:22px}
 button.primary{background:var(--accent);color:white;border-color:var(--accent);padding-inline:22px}
 @media(max-width:650px){.numeric-grid{grid-template-columns:1fr}.settings-card{padding:16px}.settings-heading{align-items:flex-start;flex-direction:column}}
