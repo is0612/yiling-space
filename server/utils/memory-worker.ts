@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import {
   analyzeMemoryPeriod,
+  shouldRejectMemoryAttributedToAnotherTarget,
   type MemoryAiMessage,
   type MemoryChange,
 } from "./memory-ai";
@@ -17,9 +18,11 @@ import { localDayKey } from "./memory-event-time";
 import {
   conversationOriginLabel,
   readMessageAuthor,
+  readMessageMentions,
   readMessageMentionTargets,
   readMessageSpeaker,
   readSourceMessageIsOwner,
+  type ConversationMessageMention,
 } from "./conversation-message";
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
 import { normalizeFriendAliases } from "./friend-aliases";
@@ -74,6 +77,8 @@ type PeriodSourceMessage = {
   isOwner: boolean;
   /** 这条消息 @ 了谁（self / other / all）。用来判断「这句话是不是冲她说的」。 */
   mentionTargets?: string[];
+  /** 这条消息 @ 到的具体对象：代号 / 显示名 / 身份。只靠方向分类会认错人。 */
+  mentions?: ConversationMessageMention[];
   /** 发言人账号与平台：忆泡的参与者引用靠它推导，不靠模型写名字。 */
   authorOpenId?: string;
   platform?: string;
@@ -115,6 +120,7 @@ async function loadPeriodSourceMessages(
       // 漏掉这一步，桌面私聊的忆泡只有 `self` 引用，没有「对方」。
       isOwner: readSourceMessageIsOwner(row.metadata, { origin, role: row.role }),
       mentionTargets: readMessageMentionTargets(row.metadata),
+      mentions: readMessageMentions(row.metadata),
       // 发言人账号与平台：忆泡的参与者引用靠它推导。
       ...readMessageAuthor(row.metadata),
       // 发言人显示名：忆泡的 participants 靠它写对名字。手账链路一直是这么取的，
@@ -148,6 +154,7 @@ function toAiMessage(message: PeriodSourceMessage): MemoryAiMessage {
     origin: message.origin,
     isOwner: message.isOwner,
     ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
+    ...(message.mentions?.length ? { mentions: message.mentions } : {}),
     // 谁说的：不传的话模型只能从正文猜，猜不出就写「群友」，那个人当场丢掉。
     ...(message.speaker ? { speaker: message.speaker } : {}),
     ...(message.member ? { member: message.member } : {}),
@@ -270,6 +277,7 @@ export async function runDailyEventJob(
       origin,
       isOwner: readSourceMessageIsOwner(row.metadata, { origin, role: row.role }),
       mentionTargets: readMessageMentionTargets(row.metadata),
+      mentions: readMessageMentions(row.metadata),
       ...readMessageAuthor(row.metadata),
       ...readMessageSpeaker(row.metadata),
     };
@@ -337,6 +345,7 @@ export async function runDailyEventJob(
             ...row, origin,
             isOwner: readSourceMessageIsOwner(row.metadata, { origin, role: row.role }),
             mentionTargets: readMessageMentionTargets(row.metadata),
+            mentions: readMessageMentions(row.metadata),
             ...readMessageAuthor(row.metadata),
             ...readMessageSpeaker(row.metadata),
           };
@@ -1506,6 +1515,12 @@ export async function processNextMemoryJob(
           .map((id) => messagesById.get(id))
           .filter((message): message is NonNullable<typeof message> => Boolean(message));
         if (evidence.length === 0) {
+          rejectedChangeCount += 1;
+          continue;
+        }
+        // 称呼类记忆如果全部证据都只 @ 了别人，就不是在说她 —— 拒收。
+        // 这是 2026-11-08 实况的兜底（owner @ 另一个 AI「某个称呼」，被写成「她叫某个称呼」）。
+        if (shouldRejectMemoryAttributedToAnotherTarget(change, evidence)) {
           rejectedChangeCount += 1;
           continue;
         }

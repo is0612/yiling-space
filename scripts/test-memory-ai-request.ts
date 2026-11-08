@@ -56,8 +56,18 @@ const input = {
     content: "我喜欢星空。",
     origin: "QQ群 12345678",
     isOwner: true,
+  }, {
+    id: "message-2",
+    role: "USER",
+    eventType: "message",
+    occurredAt: "2026-10-04T10:01:00.000Z",
+    content: "@123456789 这个声音好听，比较像你",
+    origin: "QQ群 12345678",
+    isOwner: true,
+    mentionTargets: ["other"],
+    mentions: [{ qq: "123456789", target: "other", member: "member_2", speaker: "外部 bot", kind: "AI" }],
   }],
-  totalMessageCount: 1,
+  totalMessageCount: 2,
   omittedMessageCount: 0,
   activeMemories: [{
     id: "memory-1",
@@ -100,10 +110,23 @@ try {
   const promptMessages = promptInput.messages as Array<Record<string, unknown>>;
   assert.equal(promptMessages[0]?.origin, "QQ群 12345678", "群号来源必须进提示词，否则模型分不清是哪段关系在说话。");
   assert.equal(promptMessages[0]?.isOwner, true, "主人标记必须进提示词，否则提炼时分不清主人和群友。");
+  assert.deepEqual(
+    promptMessages[1]?.mentions,
+    [{ target: "other", member: "member_2", speaker: "外部 bot", kind: "AI" }],
+    "@ 对象必须带代号 / 显示名 / 身份；真实 QQ 不进记忆提示词。",
+  );
+  assert.equal(
+    promptMessages[1]?.content,
+    "@member_2 这个声音好听，比较像你",
+    "正文里的真实 QQ 要按结构化 mentions 换成 @member_n。",
+  );
+  assert(!JSON.stringify(promptMessages[1]).includes("123456789"), "真实账号只留在进程内。");
   const systemMessage = requestBody.messages.find((message) => message.role === "system");
   assert(systemMessage?.content.includes("群聊"), "系统提示词必须写明群聊的提炼边界。");
   assert(systemMessage?.content.includes("主人"), "系统提示词必须写明主人识别的规则。");
   assert(systemMessage?.content.includes("RELATIONSHIP"), "系统提示词必须写明关系记忆的规则。");
+  assert.match(systemMessage?.content ?? "", /target=other/u, "系统提示词必须解释 mentions.target=other 不是她。");
+  assert.match(systemMessage?.content ?? "", /不要把别人被叫的称呼/u, "系统提示词必须禁止把 @other 的称呼记成她的。");
   assert.equal(result.analysis.summary, "本周期测试摘要。");
   assert.equal(result.usage?.totalTokens, 16);
 

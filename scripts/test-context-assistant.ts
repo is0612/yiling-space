@@ -17,11 +17,14 @@ const input: ConversationReplyInput = {
   apiKey: "SECRET_CHAT_KEY", apiBaseUrl: "https://secret-chat.invalid/v1",
   currentMessage: "@self 我在教另一只鱼：别人说‘退下’时可以先问为什么。这不是叫你退下。",
   now: new Date("2026-11-05T03:00:00Z"),
-  transcript: [{ id: "current-1", member: "member_1", speaker: "群友", content: "@self 我在教另一只鱼：别人说‘退下’时可以先问为什么。这不是叫你退下。", isOwner: false }],
-  groupBackground: [{ id: "background-1", member: "member_2", content: "我们在讨论怎么教另一只鱼。" }],
+  transcript: [{ id: "current-1", member: "member_1", speaker: "群友", content: "@self 我在教另一只鱼：别人说‘退下’时可以先问为什么。这不是叫你退下。", isOwner: false, mentions: [{ qq: "999", target: "self" }] }],
+  groupBackground: [{ id: "background-1", member: "member_2", content: "@member_3 这个声音好听", mentions: [{ qq: "123456789", target: "other", member: "member_3", speaker: "外部 bot", kind: "AI" }] }],
   groupMembers: [{ member: "member_2", speaker: "另一只鱼", belongsTo: "member_1", belongsToName: "群友" }],
   groupAnchors: [{ id: "anchor-only", label: "教学示例" }],
-  recentMessages: [{ role: "ASSISTANT", content: "那边在讨论教学。", occurredAt: "2026-11-05T02:59:00Z" }],
+  recentMessages: [
+    { role: "USER", content: "@member_3 这个声音好听", speaker: "群友", mentions: [{ qq: "123456789", target: "other", member: "member_3", speaker: "外部 bot", kind: "AI" }] },
+    { role: "ASSISTANT", content: "那边在讨论教学。", occurredAt: "2026-11-05T02:59:00Z" },
+  ],
   memories: [{ id: "private-memory", category: "FACT", content: "SECRET_PRIVATE_MEMORY", confidence: 1, relevanceScore: 1, scope: "private" }],
   snapshots: [{ id: "private-snapshot", summary: "SECRET_PRIVATE_SNAPSHOT", periodStart: "", periodEnd: "", version: 1, relevanceScore: 1, scope: "private" }],
   styleExamples: "SECRET_STYLE", userAddress: "SECRET_ADDRESS",
@@ -39,9 +42,9 @@ function modelResponse(content: unknown = valid, finishReason = "stop", withUsag
 type RequestBody = { model: string; max_tokens: number; response_format: { type: string }; messages: Array<{ role: string; content: string }> };
 type PublicBody = {
   characterName: string; currentTime: string; currentMessage: string; contextClipped: boolean;
-  transcript: Array<{ id?: string; content: string; [key: string]: unknown }>;
-  groupBackground: Array<{ id?: string; content: string }>;
-  recentMessages: Array<{ id?: string; content: string }>;
+  transcript: Array<{ id?: string; content: string; mentions?: Array<Record<string, unknown>>; [key: string]: unknown }>;
+  groupBackground: Array<{ id?: string; content: string; mentions?: Array<Record<string, unknown>> }>;
+  recentMessages: Array<{ id?: string; content: string; mentions?: Array<Record<string, unknown>> }>;
   groupMembers: unknown[]; groupAnchors: unknown[];
 };
 const originalFetch = globalThis.fetch;
@@ -102,6 +105,19 @@ try {
   assert.equal(result.usage?.cacheHitTokens, 40);
   assert.equal(publicBodies[0]?.currentTime, "2026-11-05T03:00:00.000Z");
   assert.deepEqual(Object.keys(publicBodies[0]!).sort(), ["characterName", "currentTime", "currentMessage", "contextClipped", "transcript", "groupBackground", "recentMessages", "groupMembers", "groupAnchors"].sort());
+  assert.deepEqual(publicBodies[0]?.transcript[0]?.mentions, [{ target: "self" }], "语境助手也要知道这一行 @ 的是她本人。");
+  assert.deepEqual(
+    publicBodies[0]?.groupBackground[0]?.mentions,
+    [{ target: "other", member: "member_3", speaker: "外部 bot", kind: "AI" }],
+    "背景里的 @ 对象要带身份；只给 @member_3 分不清是另一个 bot 还是她。",
+  );
+  assert(!JSON.stringify(publicBodies[0]).includes("123456789"), "被 @ 对象的真实账号不能进语境助手提示词。");
+  assert.deepEqual(
+    publicBodies[0]?.recentMessages[0]?.mentions,
+    [{ target: "other", member: "member_3", speaker: "外部 bot", kind: "AI" }],
+    "最近对话里的 USER 行也要带 @ 对象；否则历史里的 @ 仍会被读成在说她。",
+  );
+  assert.match(requests[0]!.messages[0]!.content, /target other is another member or bot/u, "系统提示词必须说明 @other 不是她。");
   assert.match(requests[0]!.messages[0]!.content, /teaching/);
   assert.match(requests[0]!.messages[0]!.content, /退下/);
   // This only proves mocked output passes through validation and the instruction is present.

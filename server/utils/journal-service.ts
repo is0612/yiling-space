@@ -44,6 +44,7 @@ import { journalRevisionSelect } from "./journal-dto";
 import {
   conversationOriginLabel,
   readMessageIsOwner,
+  readMessageMentions,
   readMessageMentionTargets,
   readMessageSpeaker,
 } from "./conversation-message";
@@ -300,6 +301,7 @@ export async function collectJournalSources(
       origin,
       isOwner: readMessageIsOwner(row.metadata),
       mentionTargets: readMessageMentionTargets(row.metadata),
+      mentions: readMessageMentions(row.metadata),
       ...readMessageSpeaker(row.metadata),
     }));
   }));
@@ -332,6 +334,7 @@ export async function collectJournalSources(
     origin: message.origin,
     isOwner: message.isOwner,
     ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
+    ...(message.mentions?.length ? { mentions: message.mentions } : {}),
     // 这两行不能省：上面从 metadata 读到了 speaker/member，但这里是**重新组装**一份
     // 对象，漏掉就等于没读 —— 模型看到的仍然只有 role: USER，分不清是谁在说话。
     ...(message.speaker ? { speaker: message.speaker } : {}),
