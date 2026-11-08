@@ -4,7 +4,7 @@ import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemo
 import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
-import { isAsrApiKeySaved, isContextAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
+import { isAsrApiKeySaved, isContextAssistantApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 
 function positiveNumber(value: unknown): number {
@@ -61,6 +61,15 @@ export type CharacterDto = {
   contextAssistantApiBaseUrl: string;
   contextAssistantApiKeyConfigured: boolean;
   contextAssistantConfigured: boolean;
+  /** 知识处理助手配置；API Key 只回显是否已保存。 */
+  knowledgeAssistantEnabled: boolean;
+  knowledgeAssistantModel: string;
+  knowledgeAssistantTemperature: number;
+  knowledgeAssistantMaxInputTokens: number;
+  knowledgeAssistantMaxOutputTokens: number;
+  knowledgeAssistantApiBaseUrl: string;
+  knowledgeAssistantApiKeyConfigured: boolean;
+  knowledgeAssistantConfigured: boolean;
   /** 每日 token 额度，0 = 不限。 */
   dailyTokenLimit: number;
   /** 每次对话注入的记忆 / 快照 token 预算。 */
@@ -206,6 +215,8 @@ export function toCharacterDto(input: unknown): CharacterDto {
     ? config.contextAssistantModel.trim()
     : "";
   const contextAssistantApiKeyConfigured = isContextAssistantApiKeySaved(config);
+  const knowledgeAssistantModel = typeof config.knowledgeAssistantModel === "string" ? config.knowledgeAssistantModel.trim() : "";
+  const knowledgeAssistantApiKeyConfigured = isKnowledgeAssistantApiKeySaved(config);
   const avatarTone = resolveAvatarTone(character.name, config);
   const setting = character.memorySetting;
   const snapshots = character.memoryScopes.flatMap((scope) => scope.snapshots.map((snapshot) => snapshot.createdAt));
@@ -278,6 +289,14 @@ export function toCharacterDto(input: unknown): CharacterDto {
       : "",
     contextAssistantApiKeyConfigured,
     contextAssistantConfigured: Boolean(contextAssistantModel && contextAssistantApiKeyConfigured),
+    knowledgeAssistantEnabled: config.knowledgeAssistantEnabled === true,
+    knowledgeAssistantModel,
+    knowledgeAssistantTemperature: typeof config.knowledgeAssistantTemperature === "number" && Number.isFinite(config.knowledgeAssistantTemperature) ? Math.min(2, Math.max(0, config.knowledgeAssistantTemperature)) : 0.1,
+    knowledgeAssistantMaxInputTokens: typeof config.knowledgeAssistantMaxInputTokens === "number" && Number.isFinite(config.knowledgeAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.knowledgeAssistantMaxInputTokens))) : 12_288,
+    knowledgeAssistantMaxOutputTokens: typeof config.knowledgeAssistantMaxOutputTokens === "number" && Number.isFinite(config.knowledgeAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.knowledgeAssistantMaxOutputTokens))) : 2_048,
+    knowledgeAssistantApiBaseUrl: typeof config.knowledgeAssistantApiBaseUrl === "string" ? config.knowledgeAssistantApiBaseUrl : "",
+    knowledgeAssistantApiKeyConfigured,
+    knowledgeAssistantConfigured: Boolean(knowledgeAssistantModel && knowledgeAssistantApiKeyConfigured),
     dailyTokenLimit: positiveNumber(config.dailyTokenLimit),
     memoryTokenBudget: positiveNumber(config.memoryTokenBudget) || MEMORY_TOKEN_BUDGET_DEFAULT,
     snapshotTokenBudget: positiveNumber(config.snapshotTokenBudget) || SNAPSHOT_TOKEN_BUDGET_DEFAULT,
