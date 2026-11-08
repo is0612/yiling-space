@@ -7,6 +7,8 @@ import {
   type PrivateKnowledgeMessage,
 } from "../server/utils/context-assistant";
 import type { MemoryAssistantRuntime } from "../server/utils/memory-assistant";
+import { generateGroupContextReply } from "../server/utils/group-context-reply";
+import type { ConversationReplyInput } from "../server/utils/chat-reply";
 
 const runtime: MemoryAssistantRuntime = {
   model: "context-model", apiKey: "private-context-key", apiBaseUrl: "https://context.invalid/v1",
@@ -72,7 +74,44 @@ try {
     message("什么是异步函数？", "m4"),
   ]);
   assert.equal(bounded.knowledgeQuery?.length, 240);
-  console.log("Private knowledge candidate and lookup analysis tests passed (mocked; no real model calls).");
+
+  // A private turn can receive preloaded approved knowledge through the existing final-reply path.
+  let finalRequest: { model: string; messages: Array<{ role: string; content: string }> } | undefined;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(String(url), "https://character.invalid/v1/chat/completions");
+    finalRequest = JSON.parse(String(options?.body));
+    return Response.json({
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
+        action: "reply", reply: "这个概念的核心是类型参数。", usedMemoryIds: [],
+        usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [],
+      }) } }],
+      usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 },
+    });
+  };
+  const approvedKnowledge = {
+    id: "approved-knowledge-1", title: "TypeScript 泛型", content: "泛型允许定义可复用且保留类型信息的结构。",
+    category: "PROGRAMMING", tags: ["TypeScript", "泛型"], confidence: 0.95, sourceType: "MANUAL",
+  };
+  const privateChatInput: ConversationReplyInput = {
+    characterName: "小鲸鱼i", characterPrompt: "PERSONA",
+    model: "character", apiKey: "character-key", apiBaseUrl: "https://character.invalid/v1",
+    thinking: false, currentMessage: "什么是 TypeScript 泛型？",
+    recentMessages: [], memories: [], snapshots: [], knowledgeItems: [approvedKnowledge],
+  };
+  const privateReply = await generateGroupContextReply({
+    chatInput: privateChatInput,
+    assistant: null,
+    contextAssistant: null,
+    candidates: [],
+    recordAssistantUsage: async () => undefined,
+  });
+  assert.equal(privateReply.reply, "这个概念的核心是类型参数。");
+  const finalPrompt = JSON.stringify(finalRequest?.messages ?? []);
+  assert(finalPrompt.includes("approved-knowledge-1"));
+  assert(finalPrompt.includes("保留类型信息"));
+  assert(finalPrompt.includes("confirmed, character-owned learning records"));
+
+  console.log("Private knowledge candidate, lookup and final-prompt tests passed (mocked; no real model calls).");
 } finally {
   globalThis.fetch = originalFetch;
 }
