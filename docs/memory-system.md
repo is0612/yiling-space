@@ -29,7 +29,7 @@
 - 只有能落到具体日期、且有来源消息支撑的事件才会写入；没有日期的泛泛而谈、群友之间与她无关的闲聊不记。
 - 检索时先按问句里的日期框住那一天（支持今天/昨天/前天/N 天前/上周三/本周三/2026-10-25/10月25日/上午·下午·晚上等），框不住才退化成关键词；`participants` 目前是显示名，**不是身份引用**，跨平台同名不合并。
 - 忆泡与长期记忆一样受范围隔离：只读 `resolveChatMemoryScopes()` 放行的范围。
-- **群聊归属**：群消息落库时带 `metadata.mentionTargets`（`self` / `other` / `all`），提炼时逐条交给模型，用来判断「这句话是不是冲她说的」——群里同时跑着别的 bot 时，别人 @ 另一个号说的话很容易被记成「群友说她」。历史数据没有这个字段，可用 `yarn backfill:mention --apply` 从正文的 `@数字` 回填（幂等，已有值的会跳过）。2026-10-31 实测：回填 799 条后重跑当天，同一件事从「群友嫌她『我认』AI 味太浓」变成「有人立誓不再说『我认』」。
+- **群聊归属**：群消息落库时带 `metadata.mentionTargets`（`self` / `other` / `all`）与 `metadata.mentions`（按 @ 顺序保留对象：`qq`、群成员代号 `member`、显示名 `speaker`、身份 `kind: AI | HUMAN | UNKNOWN`）。`mentionTargets` 只够判断「是不是冲她说的」；`mentions` 才回答「@ 的是谁」——群里有多个 bot 时，只给 `other` 会让提炼模型把对方认成她本人（2026-11-08 实况：owner @ 另一个 AI 并叫它「某个称呼」，忆泡写成「对 123456789（当前角色）说」）。提炼/手账提示词里真实 QQ 会按 `mentions` 换成 `@self` / `@all` / `@member_n`，并明确「`target=other` 不是她，@ 后面的称呼属于那个对象」。写入侧另有一道确定性护栏：如果一条称呼/外号类记忆的全部证据都是 USER 消息、且每条都只 @ 了别人（没有 self / all / 她自己的回复），直接拒收（`shouldRejectMemoryAttributedToAnotherTarget`）。历史数据没有 `mentions`，可用 `yarn backfill:mention --apply` 从正文的 `@数字` 回填 `mentionTargets`（幂等，已有值的会跳过）；回填不补对象姓名/身份，旧消息仍会走旧行为。2026-10-31 实测：回填 799 条后重跑当天，同一件事从「群友嫌她『我认』AI 味太浓」变成「有人立誓不再说『我认』」。
 
 #### 参与者身份引用
 

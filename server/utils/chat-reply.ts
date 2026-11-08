@@ -1,5 +1,6 @@
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
 import { buildChatTimeContext, CHAT_TIME_ZONE_DEFAULT } from "./chat-time-context";
+import type { ConversationMessageMention } from "./conversation-message";
 // 只引类型：那个模块连着 token 估算，而这个文件要被提示词单测直接 import。
 import type { CrossChannelLine } from "./cross-channel-context";
 // 备注的清洗与截断：库里的数据不一定干净（旧版本、手工 SQL、迁移），
@@ -25,6 +26,8 @@ export type ConversationContextMessage = {
    */
   speaker?: string;
   isOwner?: boolean;
+  /** 这一行 @ 到谁；历史 USER 行也要带，否则模型只看到 `@member_n` 或裸 `@数字`。 */
+  mentions?: ConversationMessageMention[];
   /**
    * 这一条 ASSISTANT 回复里带没带图（表情包）。
    *
@@ -211,13 +214,22 @@ export type ConversationReplyInput = {
      * 于是它会把最后开口的群友当成主人 —— 群里对着谁都喊「主人」就是这么来的。
      */
     isOwner?: boolean;
+    /**
+     * 这一行 @ 到谁（按出现顺序）：member 是群内代号，speaker 是显示名，
+     * kind 是 AI / HUMAN / UNKNOWN。没有这个字段时模型只看到 `@member_n`，
+     * 无法判断这个代号背后是另一个 bot 还是某个人。
+     */
+    mentions?: ConversationMessageMention[];
   }>;
   /** 明确标记这是群聊：即使 allowSilent=false（被 @）也要用群聊语境。 */
   groupChat?: boolean;
   /** 本轮是否真实 @ 了她。程序事实，提示词只能参考，不能推翻。 */
   direct?: boolean;
   /** 本轮之前的近期群聊，只供理解，不要求回复。 */
-  groupBackground?: Array<{ id?: string; member?: string; speaker?: string; content: string; occurredAt?: string }>;
+  groupBackground?: Array<{
+    id?: string; member?: string; speaker?: string; content: string; occurredAt?: string;
+    mentions?: ConversationMessageMention[];
+  }>;
   /** 她参与过、还没过期的话题锚点，模型只能从里面选。 */
   groupAnchors?: Array<{ id: string; label: string }>;
   /**
@@ -468,7 +480,11 @@ export type ConversationReplyResult = {
 // v47：可选语境助手提供带来源的局面说明；角色仍可核对原话并自主沉默。
 // v48：自然接话按内容决定，不再把「多数沉默」当发言配额；旁观不等于禁止搭话。
 // v49：可选 responseExplanation 只说明面向用户的回复/沉默决定，不输出隐藏推理。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v50";
+// v50 之前的群聊只给了 `@member_n`，没给代号背后是谁。2026-11-08 实况：owner @ 另一个
+//      AI（显示名「外部 bot」）并叫它「某个称呼」，当前角色把 @ 对象认成自己，长期记忆写成
+//      「对 <被 @ 的 QQ>（当前角色）说」。v51 起每行带 `mentions`（member / speaker / kind），
+//      并明确「@other 不是她，@ 后面的称呼属于那个对象」。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v51";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -715,6 +731,7 @@ function systemPrompt(flags: {
       "You are reading a QQ group: transcript is the current round; groupBackground is earlier chatter (context only — you are not replying to it).",
       "When contextAnalysis is present, participation describes who is being addressed, not permission to speak: observing or uncertain does not forbid a relevant sideline reaction to an open group topic.",
       "Each transcript line carries isOwner, id and member code (@self = you, @member_n = someone else). Only isOwner true is your owner; every other line is not your owner. Every other line is a member or another bot — another bot's 主人 is theirs. recentMessages are earlier lines; USER lines also carry speaker/isOwner — never merge two members into one voice.",
+      "A line may also carry mentions: its @ targets in order, with member, speaker and kind (AI/HUMAN/UNKNOWN). This applies to transcript lines and USER lines in recentMessages and groupBackground. target self = you; target other is another member or bot, never you. A name or title right after @member_n belongs to that member — do not adopt another member's nickname, title or relationship as yours, and do not answer as if an @other line were addressed to you, even when the sentence talks about you.",
       "Referents and possessives are not you by default. 这鱼 / 他 / 她 is whoever was just named or spoke; 我的鱼 / 我家宝 is the speaker's own bot. Only your owner can call you theirs. A line is about you only if it @self's you or says your name; without either, the message is not about you — do not answer as if it were. A sideline remark is fine.",
       "Being @self does not make the sentence about you. With a third-person subject (她现在还有笨 / 你帮我跟她说一下) you are being talked to about them, not described.",
       "If someone @self's you only to take it back (没说你 / 不是说你 / 我说的是别人), that is courtesy, not a fight: answer 哦 / 行吧 or stay silent; never fire back.",
@@ -1089,6 +1106,16 @@ export async function generateConversationReply(input: ConversationReplyInput): 
             content: entry.content.slice(0, 1200),
             // 显式写出 true/false：缺字段会被模型读成「不知道」，那它就会挑一个猜。
             isOwner: entry.isOwner === true,
+            ...(entry.mentions?.length
+              ? {
+                  mentions: entry.mentions.slice(0, 8).map((mention) => ({
+                    target: mention.target,
+                    ...(mention.member ? { member: mention.member } : {}),
+                    ...(mention.speaker ? { speaker: mention.speaker.slice(0, 80) } : {}),
+                    ...(mention.kind ? { kind: mention.kind } : {}),
+                  })),
+                }
+              : {}),
             ...(entry.occurredAt ? { occurredAt: entry.occurredAt } : {}),
           })),
         }
@@ -1100,6 +1127,16 @@ export async function generateConversationReply(input: ConversationReplyInput): 
             ...(entry.member ? { member: entry.member } : {}),
             speaker: entry.speaker?.trim().slice(0, 80) || undefined,
             content: entry.content.slice(0, 600),
+            ...(entry.mentions?.length
+              ? {
+                  mentions: entry.mentions.slice(0, 8).map((mention) => ({
+                    target: mention.target,
+                    ...(mention.member ? { member: mention.member } : {}),
+                    ...(mention.speaker ? { speaker: mention.speaker.slice(0, 80) } : {}),
+                    ...(mention.kind ? { kind: mention.kind } : {}),
+                  })),
+                }
+              : {}),
             ...(entry.occurredAt ? { occurredAt: entry.occurredAt } : {}),
           })),
         }
@@ -1162,6 +1199,16 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       occurredAt: entry.occurredAt,
       ...(entry.speaker ? { speaker: entry.speaker.slice(0, 80) } : {}),
       ...(entry.role === "USER" ? { isOwner: entry.isOwner === true } : {}),
+      ...(entry.mentions?.length
+        ? {
+            mentions: entry.mentions.slice(0, 8).map((mention) => ({
+              target: mention.target,
+              ...(mention.member ? { member: mention.member } : {}),
+              ...(mention.speaker ? { speaker: mention.speaker.slice(0, 80) } : {}),
+              ...(mention.kind ? { kind: mention.kind } : {}),
+            })),
+          }
+        : {}),
       // 她自己带过图的那句：显式写 true，让她认得「那张图是我发的」。
       ...(entry.role === "ASSISTANT" && entry.hadSticker ? { hadSticker: true } : {}),
       // 她发过语音的那句：同上，标记带过去，否则她会否认自己会说话。

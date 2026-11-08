@@ -793,6 +793,13 @@ try {
     transcript: [
       { id: "m1", member: "member_1", speaker: "A", content: "@self 晚饭吃什么" },
       { id: "m2", member: "member_2", speaker: "B", content: "火锅" },
+      {
+        id: "m3",
+        member: "member_1",
+        speaker: "A",
+        content: "@member_3 这个声音好听",
+        mentions: [{ qq: "123456789", target: "other", member: "member_3", speaker: "外部 bot", kind: "AI" }],
+      },
     ],
     groupChat: true,
     direct: false,
@@ -807,7 +814,13 @@ try {
       detail: "说好拎桶带碗，米归阿深。",
       scope: "character",
     }],
-    recentMessages: [],
+    recentMessages: [{
+      role: "USER",
+      content: "@member_3 这个声音好听",
+      occurredAt: "2026-11-08T02:00:00.000Z",
+      speaker: "A",
+      mentions: [{ qq: "123456789", target: "other", member: "member_3", speaker: "外部 bot", kind: "AI" }],
+    }],
     memories: [],
     snapshots: [],
   });
@@ -825,10 +838,27 @@ try {
   assert.deepEqual(groupInput.policy, { direct: false }, "direct 要以程序事实进提示词。");
   assert.deepEqual(
     (groupInput.transcript as Array<{ id: string; member: string }>).map((item) => [item.id, item.member]),
-    [["m1", "member_1"], ["m2", "member_2"]],
+    [["m1", "member_1"], ["m2", "member_2"], ["m3", "member_1"]],
     "transcript 要带消息 id 与成员代号，模型才能引用证据。",
   );
+  const mentionedLine = (groupInput.transcript as Array<Record<string, unknown>>).find((item) => item.id === "m3");
+  assert.deepEqual(
+    mentionedLine?.mentions,
+    [{ target: "other", member: "member_3", speaker: "外部 bot", kind: "AI" }],
+    "@ 对象要带代号 / 显示名 / 身份，且真实 QQ 不能进角色提示词。",
+  );
+  assert(!JSON.stringify(mentionedLine).includes("123456789"), "真实账号只留在进程内，不能进提示词。");
+  assert.match(
+    groupSystem,
+    /target other is another member or bot, never you/,
+    "系统提示词必须说明 @other 不是她。",
+  );
   assert.equal((groupInput.groupBackground as Array<{ id: string }>)[0]?.id, "h1");
+  assert.deepEqual(
+    (groupInput.recentMessages as Array<{ mentions?: unknown }>)[0]?.mentions,
+    [{ target: "other", member: "member_3", speaker: "外部 bot", kind: "AI" }],
+    "历史 USER 行也要带 @ 对象，且真实 QQ 不进提示词。",
+  );
   assert.equal((groupInput.groupAnchors as Array<{ id: string }>)[0]?.id, "a1");
   assert.equal(grouped.groupDecision?.relation, "shared_topic");
   assert.equal(grouped.groupDecision?.topicAnchorMessageId, "a1", "锚点必须来自本次提供的 groupAnchors。");

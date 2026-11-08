@@ -3,6 +3,12 @@ import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
 import { type ConversationContextMessage, type ConversationGroupDecision } from "../chat-reply";
 import {
+  formatMentionContent,
+  readMessageMentions,
+  sanitizeMessageMentions,
+  type ConversationMessageMention,
+} from "../conversation-message";
+import {
   buildMemoryAssistantCandidates,
   resolveMemoryAssistantRuntime,
 } from "../memory-assistant";
@@ -139,6 +145,13 @@ export type ChannelTurnMessage = {
   content: string;
   /** 这条消息 @ 的是谁（self / other / all）。落库给忆泡提炼判断对象用。 */
   mentionTargets?: string[];
+  /**
+   * 这条消息 @ 到谁（按出现顺序）：群成员代号、显示名、身份。
+   *
+   * 比 `mentionTargets` 多出来的正是「是谁」：只给 `other` 时，模型知道不是她，
+   * 但不知道是另一个 bot 还是某个人，于是会把对方的称呼和关系算到她头上。
+   */
+  mentions?: ConversationMessageMention[];
   /** 给模型看的正文（@ 已代号化）；不传就等于 content。落库仍用 content。 */
   promptContent?: string;
   /** 群聊里的成员代号；只有群聊会传。 */
@@ -230,18 +243,22 @@ export function buildStoredMessageMetadata(input: {
     authorDisplayName?: string;
     member?: string;
     mentionTargets?: string[];
+    mentions?: ConversationMessageMention[];
     speaker?: { isOwner?: boolean };
     voices?: unknown[];
     content: string;
   };
 }): Prisma.InputJsonObject {
   const { message } = input;
+  const mentions = sanitizeMessageMentions(message.mentions);
   return {
     source: "channel",
     platform: input.platform,
     storedReason: input.storedReason,
     // 谁被 @ 了：提炼忆泡时用来判断「这句话是不是冲她说的」。
     ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
+    // 被 @ 的具体是谁：代号 / 显示名 / 身份。昵称会改，认人仍以 qq 为准。
+    ...(mentions.length ? { mentions } : {}),
     authorOpenId: message.authorOpenId,
     ...(message.authorDisplayName ? { authorDisplayName: message.authorDisplayName } : {}),
     // 群聊的成员代号（member_n）：昵称可能缺失或被改，代号在同一个群里稳定。
@@ -430,8 +447,14 @@ export function buildGroupMemberDeltas(messages: ReadonlyArray<{
 
 /** 群聊这一轮的上下文：本轮是否 @ 她、之前几句、她参与过的话题。 */export type ChannelGroupTurnContext = {
   direct: boolean;
-  background: Array<{ id: string; at: number; member: string; speaker: string; text: string }>;
-  analysisBackground?: Array<{ id: string; at: number; member: string; speaker: string; text: string }>;
+  background: Array<{
+    id: string; at: number; member: string; speaker: string; text: string;
+    mentions?: Array<{ target: "self" | "other" | "all"; member?: string; speaker?: string }>;
+  }>;
+  analysisBackground?: Array<{
+    id: string; at: number; member: string; speaker: string; text: string;
+    mentions?: Array<{ target: "self" | "other" | "all"; member?: string; speaker?: string }>;
+  }>;
   anchors: Array<{ id: string; label: string }>;
   /** 群内归属（「X的Y」「@某人 主人夸我了」学来的）。空数组 = 这轮没学到，不注入。 */
   members?: Array<{ member: string; speaker: string; belongsTo: string; belongsToName: string }>;
@@ -1190,17 +1213,27 @@ async function runChannelTurn(input: {
     .filter((item) => item.role === "USER" || item.role === "ASSISTANT")
     .filter((item) => !blockedRecentMessageIds.has(item.id))
     .filter((item) => !(item.role === "USER" && looksLikeSystemMessage(item.content)))
-    .map((item) => ({
-      role: item.role as "USER" | "ASSISTANT",
-      content: item.content.slice(0, 1800),
-      occurredAt: item.occurredAt.toISOString(),
-      // 只有她自己的话不需要发言人；USER 的话一律带上，否则群里几条历史分不清是谁说的。
-      ...(item.role === "USER" ? readStoredSpeaker(item.metadata) : {}),
-      // 她自己发过图的回复：标出来，让她认得「那张图是我贴的」。
-      ...(item.role === "ASSISTANT" && readStoredStickerFlag(item.metadata) ? { hadSticker: true } : {}),
-      // 她自己发过语音的那条：同理，不带出去她就不知道自己刚才在「说话」。
-      ...(item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata) ? { hadVoice: true } : {}),
-    }));
+    .map((item) => {
+      // 历史 USER 行也可能 @ 了别人：只带 role/content 时，模型会把 `@数字`
+      // 或 `@member_n` 当成在说它自己。正文按 mentions 代号化，目标信息一起带出去。
+      const mentions = item.role === "USER" ? readMessageMentions(item.metadata) : [];
+      return {
+        role: item.role as "USER" | "ASSISTANT",
+        content: (mentions.length
+          ? formatMentionContent(item.content, mentions)
+          : item.content).slice(0, 1800),
+        occurredAt: item.occurredAt.toISOString(),
+        // 只有她自己的话不需要发言人；USER 的话一律带上，否则群里几条历史分不清是谁说的。
+        ...(item.role === "USER" ? readStoredSpeaker(item.metadata) : {}),
+        ...(mentions.length
+          ? { mentions: mentions.map(({ qq: _qq, ...rest }) => rest) }
+          : {}),
+        // 她自己发过图的回复：标出来，让她认得「那张图是我贴的」。
+        ...(item.role === "ASSISTANT" && readStoredStickerFlag(item.metadata) ? { hadSticker: true } : {}),
+        // 她自己发过语音的那条：同理，不带出去她就不知道自己刚才在「说话」。
+        ...(item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata) ? { hadVoice: true } : {}),
+      };
+    });
 
   const modelText = (message: ChannelTurnMessage) => message.promptContent ?? message.content;
   const currentMessage = messages.length === 1
@@ -1616,6 +1649,7 @@ async function runChannelTurn(input: {
       contextAssistant: isGroup ? await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl) : null,
       analysisBackground: input.group?.analysisBackground?.map(line => ({
         id: line.id, member: line.member, speaker: line.speaker, content: line.text,
+        ...(line.mentions?.length ? { mentions: line.mentions } : {}),
         occurredAt: new Date(line.at).toISOString(),
       })),
       recordAssistantUsage: async (entry) => {
@@ -1887,6 +1921,8 @@ async function runChannelTurn(input: {
                 // 谁是主人必须逐行带：顶层 speaker 在群聊路径下不会传（一轮里好几个人说话），
                 // 漏掉这一行，模型只能从「谁说话口吻像主人」里猜，结果就是对谁都喊主人。
                 isOwner: message.speaker?.isOwner === true,
+                // 这一行 @ 的是谁：只给 `@member_n` 不够，模型不知道代号背后是谁。
+                ...(message.mentions?.length ? { mentions: message.mentions } : {}),
                 ...(message.occurredAt ? { occurredAt: message.occurredAt.toISOString() } : {}),
               })),
             }
@@ -1902,6 +1938,7 @@ async function runChannelTurn(input: {
                       member: line.member,
                       speaker: line.speaker,
                       content: line.text,
+                      ...(line.mentions?.length ? { mentions: line.mentions } : {}),
                       occurredAt: new Date(line.at).toISOString(),
                     })),
                   }
