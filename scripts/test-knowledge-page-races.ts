@@ -298,6 +298,72 @@ async function unmountedSettingsLoadIsIgnored() {
   page.finish();
 }
 
+/** 8. 正式知识编辑必须携带读取时的 revision，成功后刷新当前角色数据。 */
+async function knowledgeEditUsesOptimisticRevision() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("initial"));
+  await flushMicrotasks();
+  const item = page.read<{ items: Array<{ id: string; title: string; content: string; category: string; tags: string[]; confidence: number; revision: number }> }>("data").items[0]!;
+  await page.call("startEdit", item);
+  page.set("editDraft", { title: "修订标题", content: "修订正文", category: "SCIENCE", tagsText: "天文学, 相对论", confidence: "0.95" });
+  const saving = page.call("saveEdit", item);
+  const patch = page.take("/api/characters/char-a/growth/knowledge/items/initial", "PATCH");
+  assert.equal((patch.options?.body as Record<string, unknown>).revision, 1);
+  assert.deepEqual((patch.options?.body as Record<string, unknown>).tags, ["天文学", "相对论"]);
+  patch.resolve({
+    item: { ...item, title: "修订标题", content: "修订正文", revision: 2 },
+    unchanged: false,
+  });
+  await flushMicrotasks();
+  const refreshed = page.take("/api/characters/char-a/growth/knowledge");
+  refreshed.resolve(workspace("after edit"));
+  await saving;
+  assert.equal(page.read("editingItemId"), "");
+  assert.ok(page.successes.some(message => message.includes("第 2 版")));
+  page.finish();
+}
+
+/** 9. 角色切换后，旧角色的版本历史响应不能显示在新角色页面。 */
+async function knowledgeHistoryDoesNotCrossRole() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("A"));
+  await flushMicrotasks();
+  const item = page.read<{ items: Array<{ id: string }> }>("data").items[0]!;
+  const opening = page.call("toggleHistory", item);
+  const history = page.take("/api/characters/char-a/growth/knowledge/items/A/history");
+  page.switchRole("char-b");
+  const loadB = page.take("/api/characters/char-b/growth/knowledge");
+  history.resolve({ revisions: [{ id: "old", revision: 1, title: "A 的旧版本" }] });
+  await opening;
+  assert.equal(page.read("historyItemId"), "");
+  assert.deepEqual([...page.read<unknown[]>("historyItems")], []);
+  loadB.resolve(workspace("B"));
+  await flushMicrotasks();
+  page.finish();
+}
+
+/** 10. 角色切换后，旧角色正在提交的编辑响应不能刷新或提示新角色。 */
+async function staleKnowledgeEditCannotTouchNextRole() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("A"));
+  await flushMicrotasks();
+  const item = page.read<{ items: Array<{ id: string; title: string; content: string; category: string; tags: string[]; confidence: number; revision: number }> }>("data").items[0]!;
+  await page.call("startEdit", item);
+  page.set("editDraft", { title: "A 新内容", content: item.content, category: item.category, tagsText: "", confidence: "1" });
+  const saving = page.call("saveEdit", item);
+  const patch = page.take("/api/characters/char-a/growth/knowledge/items/A", "PATCH");
+  page.switchRole("char-b");
+  const loadB = page.take("/api/characters/char-b/growth/knowledge");
+  patch.resolve({ item: { ...item, title: "A 新内容", revision: 2 }, unchanged: false });
+  await saving;
+  assert.equal(page.read("editingItemId"), "");
+  assert.equal(page.successes.some(message => message.includes("第 2 版")), false);
+  assert.equal(page.requests.length, 1, "旧角色的编辑响应不能额外刷新新角色列表");
+  loadB.resolve(workspace("B"));
+  await flushMicrotasks();
+  page.finish();
+}
+
 async function main() {
   const tests = [
     ["知识列表切角色竞态", knowledgeListSwitchRace],
@@ -307,6 +373,9 @@ async function main() {
     ["旧保存响应不覆盖新角色", staleSettingsSaveCannotMutateNextRole],
     ["旧模型列表不跨角色写入", staleModelListCannotCrossRole],
     ["卸载后忽略设置读取", unmountedSettingsLoadIsIgnored],
+    ["正式知识编辑携带乐观版本号", knowledgeEditUsesOptimisticRevision],
+    ["版本历史不跨角色显示", knowledgeHistoryDoesNotCrossRole],
+    ["旧知识编辑响应不污染新角色", staleKnowledgeEditCannotTouchNextRole],
   ] as const;
   for (const [name, test] of tests) {
     await test();
