@@ -49,8 +49,9 @@ export function rankKnowledgeItems<T extends KnowledgeSearchRecord>(
     if (full.length >= 3 && content.includes(full)) score += 3;
     return { item, relevanceScore: score };
   }).filter(row => row.relevanceScore > 0);
+  const timeOf = (value: Date | string) => value instanceof Date ? value.getTime() : Date.parse(value);
   ranked.sort((a, b) => b.relevanceScore - a.relevanceScore
-    || new Date(b.item.updatedAt).getTime() - new Date(a.item.updatedAt).getTime());
+    || timeOf(b.item.updatedAt) - timeOf(a.item.updatedAt));
   return ranked.slice(0, Math.max(1, Math.min(20, Math.round(limit))))
     .map(row => ({ ...row.item, relevanceScore: row.relevanceScore }));
 }
