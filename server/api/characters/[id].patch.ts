@@ -6,6 +6,7 @@ import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/
 import { encryptApiKey, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
 import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
 import { readKnowledgeAssistantSettingsPatch, validateKnowledgeAssistantEnabledConfig } from "../../utils/knowledge-assistant-config";
+import { readSocialRelationshipAssessmentAssistantSettingsPatch, validateSocialRelationshipAssessmentAssistantEnabledConfig } from "../../utils/social-relationship-assessment-config";
 import { requireActorUserId } from "../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../utils/local-api";
 import { MEMORY_ITEM_LIMIT_MAX, MEMORY_ITEM_LIMIT_MIN, RECENT_MESSAGE_LIMIT_MAX, RECENT_MESSAGE_LIMIT_MIN } from "../../utils/memory-retrieval";
@@ -49,10 +50,17 @@ export default defineEventHandler(async (event) => {
   } catch (error) {
     throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "知识处理助手配置无效。" });
   }
+  let socialRelationshipAssessmentAssistantPatch;
+  try {
+    socialRelationshipAssessmentAssistantPatch = readSocialRelationshipAssessmentAssistantSettingsPatch(body);
+  } catch (error) {
+    throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "关系评估助手配置无效。" });
+  }
   const modelConfigPatch: Record<string, unknown> = {
     ...profile.modelConfig,
     ...contextAssistantPatch.config,
     ...knowledgeAssistantPatch.config,
+    ...socialRelationshipAssessmentAssistantPatch.config,
   };
   /** 语音 Key 的明文只在这里短暂停留，落库前一定加密；不写日志、不回显。 */
   let voiceApiKeyPlain = "";
@@ -68,6 +76,9 @@ export default defineEventHandler(async (event) => {
   /** 记忆助手的 Key 与主聊天模型独立保存，不能互相回落。 */
   let memoryAssistantApiKeyPlain = "";
   let clearMemoryAssistantApiKey = false;
+  /** 关系评估助手专用 Key：只在服务端短暂接收明文，落库前加密。 */
+  const socialRelationshipAssessmentAssistantApiKeyPlain = socialRelationshipAssessmentAssistantPatch.apiKey;
+  const clearSocialRelationshipAssessmentAssistantApiKey = socialRelationshipAssessmentAssistantPatch.clearApiKey;
 
   if (body.memoryAssistantModel !== undefined) {
     modelConfigPatch.memoryAssistantModel = readTrimmedString(body.memoryAssistantModel, "记忆助手模型名称", 120);
@@ -497,7 +508,7 @@ export default defineEventHandler(async (event) => {
   const { chatApiKey, clearApiKey, ...safeSettingsPatch } = settingsPatch;
   Object.assign(modelConfigPatch, safeSettingsPatch);
 
-  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey || knowledgeAssistantPatch.apiKey || knowledgeAssistantPatch.clearApiKey) {
+  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey || knowledgeAssistantPatch.apiKey || knowledgeAssistantPatch.clearApiKey || socialRelationshipAssessmentAssistantApiKeyPlain || clearSocialRelationshipAssessmentAssistantApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
     if (clearApiKey) delete nextConfig.chatApiKeyEncrypted;
     if (chatApiKey) nextConfig.chatApiKeyEncrypted = await encryptApiKey(chatApiKey);
@@ -554,9 +565,14 @@ export default defineEventHandler(async (event) => {
     if (contextAssistantPatch.apiKey) nextConfig.contextAssistantApiKeyEncrypted = await encryptApiKey(contextAssistantPatch.apiKey);
     if (knowledgeAssistantPatch.clearApiKey) delete nextConfig.knowledgeAssistantApiKeyEncrypted;
     if (knowledgeAssistantPatch.apiKey) nextConfig.knowledgeAssistantApiKeyEncrypted = await encryptApiKey(knowledgeAssistantPatch.apiKey);
+    if (clearSocialRelationshipAssessmentAssistantApiKey) delete nextConfig.socialRelationshipAssessmentAssistantApiKeyEncrypted;
+    if (socialRelationshipAssessmentAssistantApiKeyPlain) {
+      nextConfig.socialRelationshipAssessmentAssistantApiKeyEncrypted = await encryptApiKey(socialRelationshipAssessmentAssistantApiKeyPlain);
+    }
     try {
       validateContextAssistantEnabledConfig(nextConfig);
       validateKnowledgeAssistantEnabledConfig(nextConfig);
+      validateSocialRelationshipAssessmentAssistantEnabledConfig(nextConfig);
     } catch (error) {
       throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "助手配置无效。" });
     }
