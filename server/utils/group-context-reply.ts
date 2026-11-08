@@ -74,12 +74,12 @@ export async function generateGroupContextReply(input: {
     ...(analysis.uncertainty ? { uncertainty: analysis.uncertainty } : {}), evidence } });
 
   if (analysis.knowledgeCandidate && input.onKnowledgeCandidate) {
-    const selected = evidence.filter(line => analysis.knowledgeCandidate!.evidenceMessageIds.includes(line.id));
-    const rawContent = selected.map(line => `[${line.speaker || line.member || "群聊"}] ${line.content}`).join("\\n").slice(0, 20_000);
+    const selected = evidence.filter(line => line.id && analysis.knowledgeCandidate!.evidenceMessageIds.includes(line.id));
+    const rawContent = selected.map(line => `[${line.speaker || line.member || "群聊"}] ${line.content}`).join("\n").slice(0, 20_000);
     if (rawContent.trim()) {
       await input.onKnowledgeCandidate({
         rawContent,
-        sourceMessageIds: selected.map(line => line.id),
+        sourceMessageIds: selected.flatMap(line => line.id ? [line.id] : []),
         reason: analysis.knowledgeCandidate.reason,
       }).catch(() => undefined);
     }
