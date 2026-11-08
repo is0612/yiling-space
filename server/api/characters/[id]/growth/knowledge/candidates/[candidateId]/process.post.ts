@@ -4,6 +4,7 @@ import { resolveKnowledgeAssistantRuntime, processKnowledgeWithAssistant } from 
 import { requireActorUserId } from "../../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../../utils/prisma";
+import { Prisma } from "../../../../../../../../src/generated/prisma/client";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
@@ -22,7 +23,7 @@ export default defineEventHandler(async (event) => {
   }
   const claimed = await prisma.knowledgeCandidate.updateMany({
     where: { id: candidateId, characterId, status: { in: ["PENDING", "FAILED", "REVIEW"] } },
-    data: { status: "PROCESSING", processingError: null, processedResult: null, processedAt: null },
+    data: { status: "PROCESSING", processingError: null, processedResult: Prisma.DbNull, processedAt: null },
   });
   if (!claimed.count) throw createError({ statusCode: 409, statusMessage: "这条候选正在处理中，请稍后刷新。" });
   try {
