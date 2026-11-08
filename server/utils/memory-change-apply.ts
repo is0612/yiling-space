@@ -4,6 +4,7 @@ import {
   type MemoryCategoryValue, type MemoryChange, type MemoryEventDraft,
 } from "./memory-ai";
 import { localDayKey } from "./memory-event-time";
+import { linkMemoryEventToSocialExperiences } from "./social-experiences";
 
 /**
  * 单条长期记忆变更的落库逻辑。
@@ -591,6 +592,14 @@ export async function applyMemoryEvents(
           status: "ACTIVE",
         },
         select: { id: true },
+      });
+
+      // 同一忆泡的真实参与者分别关联到各自的角色关系；引用和忆泡在同一事务内提交。
+      await linkMemoryEventToSocialExperiences(tx, {
+        characterId: ctx.characterId,
+        memoryEventId: created.id,
+        participantRefs: deriveParticipantRefs(scopedEvidence),
+        sourceMessageIds: scopedEvidence.map((message) => message.id),
       });
       applied.push({ id: created.id, title: draft.title, occurredAt: occurredAt.toISOString() });
       // 同一批里后面几条也要跟新写的这条比，否则同批内的近义重复挡不住。
