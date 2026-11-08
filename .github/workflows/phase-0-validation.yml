@@ -225,6 +225,9 @@ jobs:
       - name: 一次性数据库隔离测试
         run: yarn run test:isolated
 
+      - name: 社交关系任务队列隔离测试
+        run: yarn run test:social-relationship-queue-isolated
+
       - name: B站 命令目录与解析层测试
         run: yarn run test:bili-runner && yarn run test:bili-schema
 
