@@ -35,6 +35,7 @@ export async function ensureExternalIdentityScope(
       scopeType: "EXTERNAL_IDENTITY",
       scopeKey,
       externalIdentityId,
+      relationshipStage: "STRANGER",
     },
     update: {},
     select: { id: true },
