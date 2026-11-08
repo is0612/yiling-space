@@ -356,6 +356,13 @@ export async function claimNextSocialRelationshipAssessmentTask(
           "leaseToken" = ${leaseToken}::uuid,
           "leaseExpiresAt" = ${leaseExpiresAt},
           "fencingToken" = task."fencingToken" + 1,
+          -- 领取即认领本代：过期恢复靠 generation > processedGeneration 判断「执行期间是否来了新代」，
+          -- 若这里不前移，任何过期都会满足该条件，退避与最大尝试次数形同虚设（毒任务无限重试）。
+          "processedGeneration" = task."generation",
+          -- 领取即把「本批待处理原因」移出任务行：本代的原因冻结在返回的租约里，
+          -- 执行期间新到的原因才是下一代的。失败时 failSocialRelationshipAssessmentTask
+          -- 会把租约里的原因并回去，所以这里必须先清空，否则两代会共用同一批原因。
+          "triggerReasons" = ARRAY[]::TEXT[],
           "lastError" = NULL,
           "updatedAt" = ${now}
         FROM candidate
@@ -473,9 +480,11 @@ export async function failSocialRelationshipAssessmentTask(
         ELSE 'FAILED'::"SocialRelationshipAssessmentTaskStatus"
       END,
       "runAt" = CASE
-        WHEN "generation" > ${lease.generation} THEN ${now}
-        WHEN ${lease.attemptCount < lease.maxAttempts} THEN ${retryAt}
-        ELSE ${now}
+        -- 三个分支都是参数时 Postgres 推不出类型，会把整列当 text 再赋给 timestamptz，
+        -- 报 42804。complete 那边能用是因为 ELSE 引用了列本身，类型有依据，这里没有。
+        WHEN "generation" > ${lease.generation} THEN ${now}::timestamptz
+        WHEN ${lease.attemptCount < lease.maxAttempts} THEN ${retryAt}::timestamptz
+        ELSE ${now}::timestamptz
       END,
       "attemptCount" = CASE
         WHEN "generation" > ${lease.generation} THEN 0
