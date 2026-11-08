@@ -292,7 +292,7 @@ export function shouldAnalyzePrivateKnowledge(messages: readonly PrivateKnowledg
   const content = messages.map(item => item.content.trim()).filter(Boolean);
   if (!content.length) return false;
   const combined = content.join("\n");
-  if (combined.length < 18) return false;
+  if (combined.length < 4) return false;
   // Cheap local gate only: it deliberately prefers recall over precision; the analyzer makes
   // the semantic decision. Ordinary social chat should not incur an extra model request.
   return /(?:是什么|什么是|为什么|原理|概念|定义|解释|意思是|区别|怎么(?:做|用|实现|处理)|如何|方法|技巧|步骤|教程|规则|公式|语法|算法|配置|报错|错误|修复|纠正|应该是|其实是|知识点|科普|原理上|意味着|指的是|可以通过|需要先|注意事项|讲讲|说说|展开|详细说|举个例子)/u.test(combined)
