@@ -1,4 +1,5 @@
 import { createError, getRouterParam } from "h3";
+import type { Prisma } from "../../../../../../../src/generated/prisma/client";
 import { requireActorUserId } from "../../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../../utils/prisma";
@@ -44,7 +45,7 @@ export default defineEventHandler(async (event) => {
     const created = await tx.knowledgeItem.create({
       data: {
         characterId, candidateId, title, content, category, tags, confidence,
-        sourceType: candidate.sourceType, sourceRef: candidate.sourceRef ?? undefined,
+        sourceType: candidate.sourceType, sourceRef: candidate.sourceRef === null ? undefined : candidate.sourceRef as Prisma.InputJsonValue,
       },
     });
     await tx.knowledgeCandidate.update({
