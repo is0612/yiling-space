@@ -281,3 +281,12 @@
 - 尚未决定具体 AI 助手分工、模型供应商、触发数量/时间阈值、数据库表结构和 Worker 实现方式；这些在开发前根据整体成长系统架构与现有任务设施设计。
 - 本阶段不改变真人/AI/未知身份语义、现有好友交流权限、QQ 入口过滤和主动联系发送规则；关系成长与指定好友主动联系仍是不同功能。
 - 文档完成不代表功能完成。进入实现后仍需代码测试、隔离数据库竞态测试、类型检查、Lint、SFC、构建及本地 DSH 的真实 QQ 验收。
+
+
+## 12. 第二阶段实现进度（2026-11-08）
+
+- 已建立关系数据基础：MemoryScope 增加仅用于 EXTERNAL_IDENTITY 的 relationshipStage、乐观并发版本 relationshipVersion 和 relationshipUpdatedAt；既有外部身份关系初始化为 STRANGER，非外部身份范围保持 NULL。
+- 新建 SocialExperience，只保存角色级关系到既有 MemoryEvent 的引用，不复制事件正文；同一关系与同一忆泡通过唯一约束避免重复关联。
+- 新建 SocialRelationChange 与 SocialRelationChangeEvidence，用于保存阶段变化原因、幂等键和具体经历引用。
+- 新建外部身份关系时初始化为 STRANGER。
+- 当前只完成 Prisma 数据结构、迁移和初始化入口。经历自动关联、评估队列、关系评估/核验服务、阶段变化 API/UI、触发调度和完整测试尚未实现；不得把本阶段基础表描述为已具备关系成长功能。
