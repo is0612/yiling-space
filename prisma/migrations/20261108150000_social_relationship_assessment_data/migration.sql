@@ -66,6 +66,7 @@ CREATE TABLE "social_relationship_assessment_evidence" (
   "id" UUID NOT NULL,
   "assessmentId" UUID NOT NULL,
   "experienceId" UUID NOT NULL,
+  "scopeId" UUID NOT NULL,
   "kind" "SocialRelationshipAssessmentEvidenceKind" NOT NULL,
   "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "social_relationship_assessment_evidence_pkey" PRIMARY KEY ("id")
@@ -77,6 +78,11 @@ CREATE INDEX "social_relationship_assessment_tasks_status_runAt_idx"
   ON "social_relationship_assessment_tasks"("status", "runAt");
 CREATE INDEX "social_relationship_assessment_tasks_status_priority_runAt_idx"
   ON "social_relationship_assessment_tasks"("status", "priority", "runAt");
+
+CREATE UNIQUE INDEX "social_experiences_id_scopeId_key"
+  ON "social_experiences"("id", "scopeId");
+CREATE UNIQUE INDEX "social_relationship_assessments_id_scopeId_key"
+  ON "social_relationship_assessments"("id", "scopeId");
 
 CREATE INDEX "social_relationship_assessments_scopeId_createdAt_idx"
   ON "social_relationship_assessments"("scopeId", "createdAt");
@@ -99,8 +105,8 @@ ALTER TABLE "social_relationship_assessments"
   ADD CONSTRAINT "social_relationship_assessments_scopeId_fkey"
   FOREIGN KEY ("scopeId") REFERENCES "memory_scopes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "social_relationship_assessment_evidence"
-  ADD CONSTRAINT "social_relationship_assessment_evidence_assessmentId_fkey"
-  FOREIGN KEY ("assessmentId") REFERENCES "social_relationship_assessments"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  ADD CONSTRAINT "social_relationship_assessment_evidence_assessment_scope_fkey"
+  FOREIGN KEY ("assessmentId", "scopeId") REFERENCES "social_relationship_assessments"("id", "scopeId") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "social_relationship_assessment_evidence"
-  ADD CONSTRAINT "social_relationship_assessment_evidence_experienceId_fkey"
-  FOREIGN KEY ("experienceId") REFERENCES "social_experiences"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  ADD CONSTRAINT "social_relationship_assessment_evidence_experience_scope_fkey"
+  FOREIGN KEY ("experienceId", "scopeId") REFERENCES "social_experiences"("id", "scopeId") ON DELETE CASCADE ON UPDATE CASCADE;
