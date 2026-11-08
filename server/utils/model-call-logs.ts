@@ -5,7 +5,7 @@ import { getPrisma } from "./prisma";
 import { usageDayWindow } from "./model-usage";
 import { readModelTurnId } from "./model-turn-detail";
 
-export const MODEL_CALL_LOG_KINDS = ["chat", "channel", "snapshot", "events", "journal", "bili-screening", "bili-judge", "bili-owner", "proactive", "vision", "sticker-label", "catchphrase-mine", "memory-assistant", "context-assistant", "other"] as const;
+export const MODEL_CALL_LOG_KINDS = ["chat", "channel", "snapshot", "events", "journal", "bili-screening", "bili-judge", "bili-owner", "proactive", "vision", "sticker-label", "catchphrase-mine", "memory-assistant", "context-assistant", "knowledge-assistant", "other"] as const;
 const SUCCESS_STATUSES = ["success", "no_sources", "context_answered"] as const;
 const FAILED_STATUSES = ["failed", "final_reply_failed"] as const;
 export const MODEL_CALL_LOG_NOTE = "这是应用操作的用量记录，部分操作合并了重试，不等同于逐次供应商或 API Key 调用日志；未记录 Key 指纹。状态仅来自已知 metadata，不能由 token 推断成功，也不代表渠道发送成功；no_sources/context_answered 表示操作完成，不保证实际调用了供应商。零 token 表示没有报告用量，不代表免费。金额仅逐条估算，按记录时间和缓存明细取价；缺缓存明细按未命中估算，可能偏高；未知模型或缺用量的金额为空。筛选选项取所选日期内最多 200 个不同值。";
