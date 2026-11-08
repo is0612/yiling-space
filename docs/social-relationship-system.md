@@ -385,7 +385,7 @@
 - 新经历触发已接入 `SocialExperience` 创建事务：只对 `createManyAndReturn + skipDuplicates` 实际新增的经历排队；重复 sourceKey 被跳过时不增加 generation。关系任务按 scopeId 唯一合并，不为每条消息创建任务。
 - 同一任务触发时 generation 原子递增、触发原因去重合并、优先级取较高值。若任务正在 RUNNING，只增加 generation 和下一批触发原因，不更换当前租约；当前批完成后如发现 generation 更新，自动回到 QUEUED。
 - 已实现独立的社交任务领取、租约续期、完成、失败退避和过期恢复原语。领取使用数据库行锁与 `SKIP LOCKED`，每次领取生成独立 leaseToken 并递增 fencingToken；提交/续租/失败更新均同时校验执行者、leaseToken、fencingToken 与租约未过期。执行期间若 generation 增长，即使当前批失败或租约过期，也直接重排新一代，不会把新经历一起耗尽重试次数。
-- 失败最多自动尝试 3 次，退避从 1 分钟开始按指数递增、上限 6 小时；达到上限后保留 FAILED 任务。新的真实经历会重新唤醒 FAILED 任务并重置尝试次数。租约 5 分钟，过期后恢复为 RETRY_WAIT 或 FAILED。
+- 失败最多自动尝试 3 次，退避从 1 分钟开始按指数递增、上限 6 小时；达到上限后保留 FAILED 任务。新的真实经历会重新唤醒 FAILED 任务并重置尝试次数。租约 5 分钟，过期后无新 generation 时恢复为 RETRY_WAIT 或 FAILED；若执行期间有新 generation，则直接 QUEUED 并重置新一代尝试次数。
 - 本地记忆 Worker 已增加队列维护：启动/每轮运行时补齐已有 SocialExperience 但缺少任务的关系、安排到期的周期回顾、回收过期租约。QQ 一键启动原本就会启动该 Worker，因此无需再起独立常驻服务；也可单独运行 `yarn worker:watch`。
 - 周期回顾默认间隔为 30 天，可通过 `YILING_SOCIAL_RELATIONSHIP_REVIEW_INTERVAL_DAYS` 设置 1–365 天。该间隔只控制回顾排期，不是关系升级/降级阈值，也不代表到了日期就改变关系。
 - **当前批次不执行评估 AI**：Worker 只维护和恢复队列，不领取后空跑、不创建虚假成功记录、不修改关系阶段或相处状态。下一批完成独立评估配置与执行器后，再把真实评估接入 claim/complete/fail 生命周期。
