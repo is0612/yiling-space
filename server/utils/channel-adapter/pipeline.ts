@@ -13,7 +13,7 @@ import {
   resolveMemoryAssistantRuntime,
 } from "../memory-assistant";
 import { resolveChatTimeZone } from "../chat-time-context";
-import { analyzePrivateKnowledgeCandidate, resolveContextAssistantRuntime, shouldConsiderPrivateKnowledgeCandidate } from "../context-assistant";
+import { analyzePrivateKnowledgeCandidate, resolveContextAssistantRuntime, shouldAnalyzePrivateKnowledge } from "../context-assistant";
 import { rankKnowledgeItems } from "../knowledge-retrieval";
 import { generateGroupContextReply } from "../group-context-reply";
 import { parseEventTimeRange } from "../memory-event-time";
@@ -1638,17 +1638,33 @@ async function runChannelTurn(input: {
 
   const turnId = randomUUID();
 
-  // 私聊知识发现：先由本地规则筛选，只有出现知识型信号时才额外调用语境助手。
-  // 只分析当前轮真实 USER 消息；不带记忆、跨会话历史、群聊背景或其他好友数据。
+  // Formal knowledge lookup is shared by group and private paths and is always character-scoped.
+  const loadKnowledge = async (searchQuery: string): Promise<ConversationKnowledgeItem[]> => {
+    const rows = await prisma.knowledgeItem.findMany({
+      where: { characterId: input.characterId, status: "ACTIVE" },
+      orderBy: { updatedAt: "desc" },
+      take: 300,
+      select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, sourceType: true, updatedAt: true },
+    });
+    return rankKnowledgeItems(searchQuery, rows, 8).map(item => ({
+      id: item.id, title: item.title, content: item.content, category: item.category,
+      tags: item.tags, confidence: item.confidence, sourceType: item.sourceType,
+    }));
+  };
+
+  // One private analyzer call can both request a knowledge lookup and nominate candidate evidence.
+  // The local gate runs regardless of the auto-collect switch: retrieval must keep working when
+  // capture is disabled. Only current-round original messages enter this private-only analysis.
   const modelConfigForKnowledge = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
     ? character.modelConfig as Record<string, unknown> : {};
-  if (!isGroup && modelConfigForKnowledge.knowledgeAutoCollectEnabled === true) {
+  let privateKnowledgeItems: ConversationKnowledgeItem[] = [];
+  if (!isGroup) {
     const privateMessages = messages.map(item => ({
       id: item.externalMessageId,
       speaker: item.authorDisplayName ?? "",
       content: item.content,
     }));
-    if (shouldConsiderPrivateKnowledgeCandidate(privateMessages)) {
+    if (shouldAnalyzePrivateKnowledge(privateMessages)) {
       const privateContextRuntime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
       if (privateContextRuntime) {
         try {
@@ -1660,9 +1676,15 @@ async function runChannelTurn(input: {
             characterId: input.characterId,
             channelBindingId: input.bindingId,
             ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-            metadata: { status: "success", turnId, source: "private-knowledge-candidate" },
+            metadata: { status: "success", turnId, source: "private-knowledge-analysis" },
           }).catch(() => undefined);
-          if (result.evidenceMessageIds.length) {
+
+          // Retrieval is independent of auto-collection: only confirmed ACTIVE items are searchable.
+          if (result.knowledgeQuery) {
+            privateKnowledgeItems = await loadKnowledge(result.knowledgeQuery).catch(() => []);
+          }
+
+          if (modelConfigForKnowledge.knowledgeAutoCollectEnabled === true && result.evidenceMessageIds.length) {
             const selected = privateMessages.filter(item => result.evidenceMessageIds.includes(item.id));
             const rawContent = selected.map(item => `[${item.speaker || "好友"}] ${item.content.slice(0, 4_000)}`).join("\\n").slice(0, 20_000);
             if (rawContent.trim()) {
@@ -1698,7 +1720,7 @@ async function runChannelTurn(input: {
             characterId: input.characterId,
             channelBindingId: input.bindingId,
             ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-            metadata: { status: "failed", turnId, source: "private-knowledge-candidate" },
+            metadata: { status: "failed", turnId, source: "private-knowledge-analysis" },
           }).catch(() => undefined);
         }
       }
@@ -1721,18 +1743,7 @@ async function runChannelTurn(input: {
         ...(line.mentions?.length ? { mentions: line.mentions } : {}),
         occurredAt: new Date(line.at).toISOString(),
       })),
-      loadKnowledge: async (searchQuery: string): Promise<ConversationKnowledgeItem[]> => {
-        const rows = await prisma.knowledgeItem.findMany({
-          where: { characterId: input.characterId, status: "ACTIVE" },
-          orderBy: { updatedAt: "desc" },
-          take: 300,
-          select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, sourceType: true, updatedAt: true },
-        });
-        return rankKnowledgeItems(searchQuery, rows, 8).map(item => ({
-          id: item.id, title: item.title, content: item.content, category: item.category,
-          tags: item.tags, confidence: item.confidence, sourceType: item.sourceType,
-        }));
-      },
+      loadKnowledge,
       onKnowledgeCandidate: async (candidate) => {
         const modelConfig = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
           ? character.modelConfig as Record<string, unknown> : {};
@@ -2064,6 +2075,7 @@ async function runChannelTurn(input: {
         ...(crossChannel.length ? { crossChannel: { label: "QQ 群", lines: crossChannel } } : {}),
         memories,
         snapshots,
+        ...(privateKnowledgeItems.length ? { knowledgeItems: privateKnowledgeItems } : {}),
         ...(emojiFaces ? { emojiFaces } : {}),
         ...(stickerCatalog?.length ? { emojiStickers: stickerCatalog } : {}),
         // 告诉她「这一条会被念出来」：语气、长度、不要表情符号都靠这一段。
