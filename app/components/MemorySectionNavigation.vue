@@ -1,6 +1,6 @@
 <script setup lang="ts">
 withDefaults(defineProps<{
-  active: "memory" | "events";
+  active: "memory" | "events" | "snapshots";
 }>(), {
   active: "memory",
 });
@@ -23,6 +23,14 @@ withDefaults(defineProps<{
       :aria-current="active === 'events' ? 'page' : undefined"
     >
       忆泡日历
+    </NuxtLink>
+    <NuxtLink
+      to="/growth/memory/snapshots"
+      class="memory-section-link"
+      :class="{ active: active === 'snapshots' }"
+      :aria-current="active === 'snapshots' ? 'page' : undefined"
+    >
+      阶段总结
     </NuxtLink>
   </nav>
 </template>
