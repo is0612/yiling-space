@@ -346,7 +346,7 @@ export async function analyzePrivateKnowledgeCandidate(
       ...(usage ? { usage } : {}),
     };
   } catch (error) {
-    if (error instanceof ContextAssistantError) throw new ContextAssistantError(addUsage(error.usage, usage));
+    if (error instanceof ContextAssistantError) throw error;
     throw new ContextAssistantError(usage);
   }
 }
