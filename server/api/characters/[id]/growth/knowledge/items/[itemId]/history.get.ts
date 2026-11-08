@@ -1,4 +1,4 @@
-import { createError, getRouterParam } from "h3";
+import { createError, defineEventHandler, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../../utils/prisma";

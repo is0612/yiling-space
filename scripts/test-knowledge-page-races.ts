@@ -309,7 +309,9 @@ async function knowledgeEditUsesOptimisticRevision() {
   const saving = page.call("saveEdit", item);
   const patch = page.take("/api/characters/char-a/growth/knowledge/items/initial", "PATCH");
   assert.equal((patch.options?.body as Record<string, unknown>).revision, 1);
-  assert.deepEqual((patch.options?.body as Record<string, unknown>).tags, ["天文学", "相对论"]);
+  // 页面代码跑在 vm 沙箱里，跨 realm 的数组原型不同，deepStrictEqual 会判成「结构相同但非同一引用」，
+  // 因此先展平到当前 realm（与文件里其他跨 realm 断言一致）。
+  assert.deepEqual([...((patch.options?.body as Record<string, unknown>).tags as string[])], ["天文学", "相对论"]);
   patch.resolve({
     item: { ...item, title: "修订标题", content: "修订正文", revision: 2 },
     unchanged: false,
@@ -358,7 +360,7 @@ async function staleKnowledgeEditCannotTouchNextRole() {
   await saving;
   assert.equal(page.read("editingItemId"), "");
   assert.equal(page.successes.some(message => message.includes("第 2 版")), false);
-  assert.equal(page.requests.length, 1, "旧角色的编辑响应不能额外刷新新角色列表");
+  assert.equal(page.requests.length, 0, "旧角色的编辑响应不能额外刷新新角色列表");
   loadB.resolve(workspace("B"));
   await flushMicrotasks();
   page.finish();

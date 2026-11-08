@@ -1,4 +1,4 @@
-import { createError, getRouterParam, readBody } from "h3";
+import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import type { Prisma } from "../../../../../../../src/generated/prisma/client";
 import { requireActorUserId } from "../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../utils/local-api";
