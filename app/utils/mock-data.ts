@@ -59,6 +59,7 @@ export type Character = {
   contextAssistantApiBaseUrl?: string;
   contextAssistantApiKeyConfigured?: boolean;
   contextAssistantConfigured?: boolean;
+  knowledgeAutoCollectEnabled?: boolean;
   knowledgeAssistantEnabled?: boolean;
   knowledgeAssistantModel?: string;
   knowledgeAssistantTemperature?: number;
