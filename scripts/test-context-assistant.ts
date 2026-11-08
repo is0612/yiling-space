@@ -207,7 +207,15 @@ try {
   assert(!budgetResult.analysis.evidenceMessageIds.includes("old-0"), "Omitted background ids are not evidence.");
   assert(Buffer.byteLength(requests[0]!.messages.map(row => row.content).join(""), "utf8") + 256 <= 4_096,
     "Entire serialized prompt including system and reserve must remain within budget.");
-  const firstBody = JSON.stringify(selected);
+  reset(() => modelResponse({ ...valid, workingSummary: "群友与小鱼约好稍后继续聊天。", workingEvidenceMessageIds: ["saved", "invented"] }));
+  const carried = await analyzeGroupContext(runtime, input, { summary: "稍后继续聊天。", evidence: [{ id: "saved", role: "ASSISTANT", content: "晚点继续聊。", occurredAt: "2026-11-05T02:40:00Z" }] });
+  assert.deepEqual(carried.analysis.workingEvidenceMessageIds, ["saved"]);
+  assert(JSON.stringify(publicBodies[0]).includes("晚点继续聊。"), "Original stored evidence survives into the next analysis.");
+  reset(() => modelResponse({ ...valid, workingSummary: "member_2答应了", workingEvidenceMessageIds: ["current-1"] }));
+  assert.equal((await analyzeGroupContext(runtime, input)).analysis.workingSummary, "", "Do not persist process-local member aliases.");
+  reset();
+  await analyzeGroupContext(smallRuntime, longInput);
+  const firstBody = JSON.stringify(publicBodies[0]);
   reset();
   await analyzeGroupContext(smallRuntime, longInput);
   assert.equal(JSON.stringify(publicBodies[0]), firstBody, "Clipping/selection must be deterministic.");

@@ -28,6 +28,8 @@ export type RawMessageCandidate = {
   role: string;
   content: string;
   occurredAt: Date;
+  /** Required for bounded neighboring evidence; never infer a shared room from scope alone. */
+  conversationId?: string;
 };
 
 export type RankedRawMessage<T> = T & { relevanceScore: number; tokens: number; truncated: boolean };
@@ -131,9 +133,29 @@ export function selectRawMessagesForMemoryAssistant<T extends RawMessageCandidat
         : right.relevanceScore - left.relevanceScore || chronological(left, right),
     );
   // 没有关键词命中时也给少量时间方向正确的原文，让语义助手识别同义表达。
-  const ordered = matched.length
-    ? matched
-    : ranked.sort(chronological).slice(0, 6);
+  const primary = matched.length ? matched : ranked.sort(chronological).slice(0, 6);
+  // Keep a few complete exchanges, not isolated keyword hits. Neighbors must share
+  // an explicit conversation id and lie within two minutes; private scopes can contain
+  // several conversations and must never be treated as a single transcript.
+  const ordered: Array<RankedRawMessage<T>> = [];
+  const queued = new Set<string>();
+  const append = (row: RankedRawMessage<T>) => {
+    if (!queued.has(row.id)) { queued.add(row.id); ordered.push(row); }
+  };
+  for (const [index, anchor] of primary.entries()) {
+    append(anchor);
+    if (index >= 4 || !anchor.conversationId) continue;
+    const neighbors = ranked.filter(row => row.id !== anchor.id
+      && row.conversationId === anchor.conversationId
+      && Math.abs(row.occurredAt.getTime() - anchor.occurredAt.getTime()) <= 120_000);
+    const comparePosition = (row: RankedRawMessage<T>) =>
+      row.occurredAt.getTime() - anchor.occurredAt.getTime() || row.id.localeCompare(anchor.id);
+    const before = neighbors.filter(row => comparePosition(row) < 0)
+      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || b.id.localeCompare(a.id)).slice(0, 1);
+    const after = neighbors.filter(row => comparePosition(row) > 0)
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime() || a.id.localeCompare(b.id)).slice(0, 1);
+    for (const neighbor of [...before, ...after]) append(neighbor);
+  }
 
   const selected: Array<RankedRawMessage<T>> = [];
   let usedTokens = 0;

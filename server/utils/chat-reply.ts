@@ -15,6 +15,9 @@ import { DEFAULT_LLM_TIMEOUT_MS, readConfiguredLlmTimeoutMs } from "./llm-timeou
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 export type ConversationContextMessage = {
+  /** Verified source id when supplied by the channel pipeline. */
+  id?: string;
+  member?: string;
   role: "USER" | "ASSISTANT";
   content: string;
   occurredAt: string;

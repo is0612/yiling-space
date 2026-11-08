@@ -85,6 +85,12 @@ try {
   assert(!JSON.stringify(calls[1]!.messages).includes("EXTENDED_UNRELATED"));
   assert(!JSON.stringify(calls[1]!.messages).includes("字".repeat(700)), "Final evidence must be clipped to the wrapper's 600-char bound.");
 
+  let carriedSummary = "";
+  reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, evidenceMessageIds: ["stored-reply"], workingSummary: "小鱼答应稍后继续。", workingEvidenceMessageIds: ["stored-reply"] }) : response({ ...reply, usedMemoryIds: [] }));
+  await run({ chatInput: { ...chatInput, recentMessages: [{ id: "stored-reply", role: "ASSISTANT", content: "稍后继续聊。", occurredAt: "2026-11-05T00:00:00Z" }] }, onWorkingContext: async value => { carriedSummary = value.summary; } });
+  assert.equal(carriedSummary, "小鱼答应稍后继续。");
+  assert(JSON.stringify(calls[1]!.messages).includes("稍后继续聊。"), "Selected stored reply evidence reaches the final character.");
+
   reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, participation: "observing" }) : response({ ...reply, action: "silent", reply: "", usedMemoryIds: [] }));
   const silent = await run();
   assert.equal(silent.action, "silent", "Direct invitation flag does not force final output after advisory analysis.");

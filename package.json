@@ -71,7 +71,7 @@
     "test:owner-timeline-retrieval": "tsx scripts/test-owner-timeline-retrieval.ts",
     "test:model-call-logs": "tsx scripts/test-model-call-logs.ts",
     "test:model-turn-detail": "tsx scripts/test-model-turn-detail.ts",
-    "test:context-assistant": "tsx scripts/test-context-assistant.ts && tsx scripts/test-group-context-reply.ts && yarn run test:private-knowledge-candidate",
+    "test:context-assistant": "tsx scripts/test-context-assistant.ts && tsx scripts/test-group-context-reply.ts && tsx scripts/test-conversation-working-context.ts && tsx scripts/test-message-history-coverage.ts && yarn run test:private-knowledge-candidate",
     "test:memory-budget": "tsx scripts/test-memory-budget.ts",
     "test:memory-context": "tsx scripts/test-memory-context.ts",
     "test:memory-events": "tsx scripts/test-memory-events.ts",

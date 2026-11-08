@@ -14,8 +14,10 @@ import {
 } from "../memory-assistant";
 import { resolveChatTimeZone } from "../chat-time-context";
 import { analyzePrivateKnowledgeCandidate, resolveContextAssistantRuntime, shouldAnalyzePrivateKnowledge } from "../context-assistant";
+import { historyCursorWhere, historyExcludedIds, loadMessageHistoryCoverage } from "../message-history-coverage";
 import { rankKnowledgeItems } from "../knowledge-retrieval";
 import { generateGroupContextReply } from "../group-context-reply";
+import { loadConversationWorkingContext, saveConversationWorkingContext } from "../conversation-working-context";
 import { parseEventTimeRange } from "../memory-event-time";
 import {
   CROSS_CHANNEL_WINDOW_MINUTES,
@@ -1043,6 +1045,7 @@ async function runChannelTurn(input: {
 
   // 最近对话窗口与表情额度历史都依赖同一个会话，一起查（P3）。emojiFrequency 提前到这里。
   const emojiFrequency = resolveEmojiFrequency(character.modelConfig);
+  const contextRuntime = isGroup ? await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl) : null;
   const [recentStoredMessages, emojiHistory] = await Promise.all([
     existingConversation
       ? prisma.message.findMany({
@@ -1055,7 +1058,7 @@ async function runChannelTurn(input: {
               : {}),
           },
           orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-          take: resolveRecentMessageLimit(character.modelConfig),
+          take: contextRuntime ? Math.max(120, resolveRecentMessageLimit(character.modelConfig)) : resolveRecentMessageLimit(character.modelConfig),
           select: { id: true, role: true, content: true, occurredAt: true, metadata: true, externalMessageId: true },
         })
       : Promise.resolve([]),
@@ -1219,6 +1222,7 @@ async function runChannelTurn(input: {
       // 或 `@member_n` 当成在说它自己。正文按 mentions 代号化，目标信息一起带出去。
       const mentions = item.role === "USER" ? readMessageMentions(item.metadata) : [];
       return {
+        id: item.externalMessageId || item.id,
         role: item.role as "USER" | "ASSISTANT",
         content: (mentions.length
           ? formatMentionContent(item.content, mentions)
@@ -1736,6 +1740,30 @@ async function runChannelTurn(input: {
     }
   }
 
+  const workingContext = contextRuntime && existingConversation
+    ? await loadConversationWorkingContext(prisma, { conversationId: existingConversation.id, characterId: input.characterId }).catch(() => null)
+    : null;
+  let workingEvidence = workingContext?.evidence ?? [];
+  if (workingEvidence.length) {
+    const uids = [...new Set(workingEvidence.filter(row => row.role === "USER").map(row => readStoredAuthorOpenId(row.metadata)).filter(Boolean))];
+    const identities = uids.length ? await prisma.externalIdentity.findMany({
+      where: { platform: input.platform, platformUid: { in: uids } },
+      select: { platformUid: true, kind: true, memoryScopes: { where: { characterId: input.characterId }, select: { friendChatPolicy: true } } },
+    }) : [];
+    const blocked = new Set(identities.filter(row => shouldBlockFriendSpeaker(row.kind, row.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT")).map(row => row.platformUid));
+    workingEvidence = workingEvidence.filter(row => row.role === "ASSISTANT" || readStoredSpeaker(row.metadata).isOwner || !blocked.has(readStoredAuthorOpenId(row.metadata)));
+  }
+  const previousWorkingContext = workingContext && workingEvidence.length ? {
+    summary: workingEvidence.length === workingContext.evidence.length ? workingContext.summary : "",
+    evidence: workingEvidence.map(row => ({
+      id: row.id, role: row.role as "USER" | "ASSISTANT",
+      // Historical member aliases are process-local. Use the source display name for mentions.
+      content: formatMentionContent(row.content, readMessageMentions(row.metadata).map(mention => ({ ...mention, member: mention.speaker || "群成员" }))).replace(/@member_\d+/gu, "@群成员"),
+      occurredAt: row.occurredAt.toISOString(),
+      ...readStoredSpeaker(row.metadata),
+    })),
+  } : undefined;
+  let pendingWorkingContext: { summary: string; evidenceMessageIds: string[] } | undefined;
   const turnDetail = createModelTurnDetail(isGroup, messages.map(item => ({
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
@@ -1746,7 +1774,9 @@ async function runChannelTurn(input: {
     generated = await generateGroupContextReply({
       assistant: memoryAssistant,
       onTurnDetail: turnDetail.update,
-      contextAssistant: isGroup ? await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl) : null,
+      contextAssistant: contextRuntime,
+      previousWorkingContext,
+      onWorkingContext: async value => { pendingWorkingContext = value; },
       analysisBackground: input.group?.analysisBackground?.map(line => ({
         id: line.id, member: line.member, speaker: line.speaker, content: line.text,
         ...(line.mentions?.length ? { mentions: line.mentions } : {}),
@@ -1895,65 +1925,82 @@ async function runChannelTurn(input: {
         const assistantSnapshotCandidates = uniqueById([...snapshotCandidates, ...targetedSnapshots]);
         const assistantEventCandidates = uniqueById([...eventCandidates, ...targetedEvents, ...fallbackEvents]);
 
-        // 群聊原文只允许来自当前这个群；私聊只查当前说话人的 private scope。
-        // 两条路都按主题命中补查旧消息，且绝不跨群 / 跨用户扫描 private 原文。
+        // Do not mark the whole recent query as seen: the group composer keeps only six
+        // recent rows and the analyzer may clip more. Only explicitly supplied evidence is excluded.
+        const excludedHistoryIds = historyExcludedIds({
+          groupChat: isGroup,
+          recentIds: recentStoredMessages.map(item => item.id),
+          suppliedIds: [...crossChannel.map(item => item.id), ...rawMessages.map(item => item.id)],
+        });
+        const historySelect = {
+          id: true, conversationId: true, role: true, content: true, occurredAt: true, metadata: true,
+          conversation: { select: { memoryScopeId: true } },
+        } satisfies Prisma.MessageSelect;
+        type HistoryRow = Prisma.MessageGetPayload<{ select: typeof historySelect }>;
+        const filterHistory = async (rows: HistoryRow[]): Promise<HistoryRow[]> => {
+          if (!isGroup || !rows.length) return rows;
+          const uids = [...new Set(rows.filter(row => row.role === "USER")
+            .map(row => readStoredAuthorOpenId(row.metadata)).filter(Boolean))];
+          const identities = uids.length ? await prisma.externalIdentity.findMany({
+            where: { platform: input.platform, platformUid: { in: uids } },
+            select: { platformUid: true, kind: true, memoryScopes: {
+              where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+              take: 1, select: { friendChatPolicy: true },
+            } },
+          }) : [];
+          const byUid = new Map(identities.map(identity => [identity.platformUid, identity]));
+          return rows.filter(row => {
+            if (row.role !== "USER") return true;
+            const uid = readStoredAuthorOpenId(row.metadata);
+            if (readStoredSpeaker(row.metadata).isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) return true;
+            const identity = byUid.get(uid);
+            return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT");
+          });
+        };
+        const loadHistory = async (baseWhere: Prisma.MessageWhereInput): Promise<HistoryRow[]> => {
+          const where: Prisma.MessageWhereInput = { AND: [baseWhere, {
+            role: { in: ["USER", "ASSISTANT"] },
+            id: { notIn: [...excludedHistoryIds] },
+            OR: [
+              { externalMessageId: null },
+              { externalMessageId: { notIn: messages.map(message => message.externalMessageId) } },
+            ],
+          }] };
+          const matched = await prisma.message.findMany({
+            where: { AND: [where, ...(contentMatches.length ? [{ OR: contentMatches }] : [])] },
+            orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
+            take: searchRange ? 500 : 350, select: historySelect,
+          });
+          return loadMessageHistoryCoverage({
+            matched,
+            window: recentStoredMessages.map(row => ({ ...row,
+              conversationId: existingConversation?.id ?? "",
+              conversation: { memoryScopeId: isGroup ? globalScope.id : "" },
+            })).filter(row => isGroup && row.conversationId && !searchRange && !wantsFirst),
+            excludeIds: excludedHistoryIds,
+            filterVisible: filterHistory,
+            oldestFirst: wantsFirst,
+            fallbackLimit: searchRange ? 120 : 80,
+            fetchPage: ({ excludeIds, cursor, take }) => prisma.message.findMany({
+              where: { AND: [where, { id: { notIn: excludeIds } }, ...(cursor ? [historyCursorWhere(cursor, rawMessageOrder)] : [])] },
+              orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }], take, select: historySelect,
+            }),
+            fetchNeighbors: (anchor, direction) => {
+              const order = direction === "before" ? "desc" as const : "asc" as const;
+              return prisma.message.findMany({
+                where: { AND: [where, { conversationId: anchor.conversationId,
+                  occurredAt: { gte: new Date(anchor.occurredAt.getTime() - 120_000), lte: new Date(anchor.occurredAt.getTime() + 120_000) },
+                }, historyCursorWhere(anchor, order)] },
+                orderBy: [{ occurredAt: order }, { id: order }], take: 2, select: historySelect,
+              });
+            },
+          });
+        };
+        // Every query, including neighboring rows, retains the authorized room/private predicate.
         const rawRowsByScope = isGroup
-          ? (existingConversation
-            ? [await (async () => {
-                const baseWhere = {
-                  conversationId: existingConversation.id,
-                  role: { in: ["USER", "ASSISTANT"] as Array<"USER" | "ASSISTANT"> },
-                  ...rangeWhere,
-                };
-                const matched = await prisma.message.findMany({
-                  where: { ...baseWhere, ...(contentMatches.length ? { OR: contentMatches } : {}) },
-                  orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-                  take: searchRange ? 500 : 350,
-                  select: {
-                    id: true, role: true, content: true, occurredAt: true, metadata: true,
-                    conversation: { select: { memoryScopeId: true } },
-                  },
-                });
-                // 主题词命中不足时补一小批原文，让语义检索器能识别近义表达。
-                // 无日期的泛问句最多补最近 40 条；明确时间范围仍可补 120 条。
-                if ((!searchRange && !contentMatches.length) || matched.length >= 16) return matched;
-                const fallback = await prisma.message.findMany({
-                  where: baseWhere,
-                  orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-                  take: searchRange ? 120 : 40,
-                  select: {
-                    id: true, role: true, content: true, occurredAt: true, metadata: true,
-                    conversation: { select: { memoryScopeId: true } },
-                  },
-                });
-                return uniqueById([...matched, ...fallback]);
-              })()]
-            : [])
-          : await Promise.all(readableScopeIds.filter((scopeId) => scopeId !== globalScope.id).map(async (scopeId) => {
-              const baseWhere = buildPrivateScopeRawMessageWhere(scopeId, searchRange);
-              const matched = await prisma.message.findMany({
-                where: { ...baseWhere, ...(contentMatches.length ? { OR: contentMatches } : {}) },
-                orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-                take: searchRange ? 500 : 350,
-                select: {
-                  id: true, role: true, content: true, occurredAt: true, metadata: true,
-                  conversation: { select: { memoryScopeId: true } },
-                },
-              });
-              // 主题词命中不足时补一小批原文，让语义检索器能识别近义表达。
-              // 无日期的泛问句最多补最近 40 条；明确时间范围仍可补 120 条。
-              if ((!searchRange && !contentMatches.length) || matched.length >= 16) return matched;
-              const fallback = await prisma.message.findMany({
-                where: baseWhere,
-                orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-                take: searchRange ? 120 : 40,
-                select: {
-                  id: true, role: true, content: true, occurredAt: true, metadata: true,
-                  conversation: { select: { memoryScopeId: true } },
-                },
-              });
-              return uniqueById([...matched, ...fallback]);
-            }));
+          ? (existingConversation ? [await loadHistory({ conversationId: existingConversation.id, ...rangeWhere })] : [])
+          : await Promise.all(readableScopeIds.filter(scopeId => scopeId !== globalScope.id)
+            .map(scopeId => loadHistory(buildPrivateScopeRawMessageWhere(scopeId, searchRange))));
         // 主人私聊可以回看角色全局范围中「指定熟人自己发过的群消息」：
         // 仅在明确识别到人物账号时启用，只取该人物的 USER 原文，不把整群聊天搬进私聊。
         // 普通好友私聊仍然只能检索当前用户自己的 private scope。
@@ -1992,8 +2039,11 @@ async function runChannelTurn(input: {
           const speaker = readStoredSpeaker(row.metadata);
           return {
             id: row.id,
+            ...( "conversationId" in row && typeof row.conversationId === "string" ? { conversationId: row.conversationId } : {}),
             role: row.role,
-            content: row.content,
+            content: row.role === "USER"
+              ? formatMentionContent(row.content, readMessageMentions(row.metadata))
+              : row.content,
             occurredAt: row.occurredAt,
             memoryScopeId: row.conversation.memoryScopeId,
             ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
@@ -2006,11 +2056,7 @@ async function runChannelTurn(input: {
           snapshots: assistantSnapshotCandidates,
           events: assistantEventCandidates,
           rawMessages: assistantRawMessages,
-          excludeRawMessageIds: new Set([
-            ...recentStoredMessages.map((item) => item.id),
-            ...crossChannel.map((item) => item.id),
-            ...rawMessages.map((item) => item.id),
-          ]),
+          excludeRawMessageIds: excludedHistoryIds,
           scopeOf: (scopeId) => scopeId === globalScope.id ? "character" : "private",
           timeZone: chatTimeZone,
           ...(searchParticipantIds.length ? { participantIds: searchParticipantIds } : {}),
@@ -2294,6 +2340,28 @@ async function runChannelTurn(input: {
     }
     return conversation.id;
   });
+  if (pendingWorkingContext && contextRuntime && isGroup) {
+    try {
+      const references = pendingWorkingContext.evidenceMessageIds;
+      const sources = await prisma.message.findMany({
+        where: { conversationId, OR: [{ id: { in: references.filter(id => /^[0-9a-f-]{36}$/iu.test(id)) } }, { externalMessageId: { in: references } }] },
+        select: { id: true, externalMessageId: true, occurredAt: true },
+        orderBy: [{ occurredAt: "desc" }, { id: "desc" }], take: 24,
+      });
+      const cursor = await prisma.message.findFirst({
+        where: { conversationId, role: "USER", externalMessageId: { in: messages.map(row => row.externalMessageId) } },
+        orderBy: [{ occurredAt: "desc" }, { id: "desc" }], select: { id: true, occurredAt: true },
+      });
+      const complete = references.every(id => sources.some(row => row.id === id || row.externalMessageId === id));
+      if (sources.length && cursor) await saveConversationWorkingContext(prisma, {
+        conversationId, characterId: input.characterId, expectedRevision: workingContext?.revision ?? 0,
+        summary: complete ? pendingWorkingContext.summary : "", evidenceMessageIds: sources.map(row => row.id),
+        cursor,
+      });
+    } catch {
+      console.warn("[context] 工作摘要保存失败，下轮仍可读取原始记录。");
+    }
+  }
 
   if (generated.action === "reply") {
     /**

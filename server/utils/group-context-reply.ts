@@ -1,6 +1,6 @@
 import type { TurnDetailPatch } from "./model-turn-detail";
 import { generateConversationReply, type ConversationKnowledgeItem, type ConversationReplyInput } from "./chat-reply";
-import { analyzeGroupContext, ContextAssistantError, type ContextAnalysis } from "./context-assistant";
+import { analyzeGroupContext, ContextAssistantError, type ContextAnalysis, type PreviousWorkingContext } from "./context-assistant";
 import {
   callMemoryAssistant,
   memoryAssistantTurnSource,
@@ -19,6 +19,8 @@ export async function generateGroupContextReply(input: {
   candidates: MemoryAssistantCandidate[];
   onTurnDetail?: (detail: TurnDetailPatch) => void;
   analysisBackground?: ConversationReplyInput["groupBackground"];
+  previousWorkingContext?: PreviousWorkingContext;
+  onWorkingContext?: (value: { summary: string; evidenceMessageIds: string[] }) => Promise<void>;
   onKnowledgeCandidate?: (candidate: { rawContent: string; sourceMessageIds: string[]; reason: string }) => Promise<void>;
   loadKnowledge?: (query: string) => Promise<ConversationKnowledgeItem[]>;
   loadCandidates?: (query: string) => Promise<MemoryAssistantCandidate[]>;
@@ -45,7 +47,7 @@ export async function generateGroupContextReply(input: {
     const result = await analyzeGroupContext(input.contextAssistant, {
       ...input.chatInput,
       groupBackground: input.analysisBackground ?? input.chatInput.groupBackground,
-    });
+    }, input.previousWorkingContext);
     analysis = result.analysis;
     await record({ kind: "context-assistant", model: input.contextAssistant.model, usage: result.usage, status: "success" });
   } catch (error) {
@@ -58,8 +60,12 @@ export async function generateGroupContextReply(input: {
   }
 
   const evidenceIds = new Set(analysis.evidenceMessageIds);
+  const currentSources = [...(input.chatInput.transcript ?? []), ...(input.analysisBackground ?? input.chatInput.groupBackground ?? []), ...input.chatInput.recentMessages];
+  if (analysis.workingEvidenceMessageIds?.length && input.onWorkingContext) {
+    await input.onWorkingContext({ summary: analysis.workingSummary ?? "", evidenceMessageIds: analysis.workingEvidenceMessageIds }).catch(() => undefined);
+  }
   const seenEvidence = new Set<string>();
-  const evidence = [...(input.chatInput.transcript ?? []), ...(input.analysisBackground ?? input.chatInput.groupBackground ?? [])]
+  const evidence = currentSources
     .filter(line => {
       if (!line.id || !evidenceIds.has(line.id) || seenEvidence.has(line.id)) return false;
       seenEvidence.add(line.id);
@@ -77,7 +83,7 @@ export async function generateGroupContextReply(input: {
   if (analysis.knowledgeCandidate && input.onKnowledgeCandidate) {
     const candidateIds = new Set(analysis.knowledgeCandidate.evidenceMessageIds);
     const seen = new Set<string>();
-    const selected = [...(input.chatInput.transcript ?? []), ...(input.analysisBackground ?? input.chatInput.groupBackground ?? [])]
+    const selected = currentSources
       .filter(line => {
         if (!line.id || !candidateIds.has(line.id) || seen.has(line.id)) return false;
         seen.add(line.id);
@@ -140,7 +146,7 @@ export async function generateGroupContextReply(input: {
 
   const original = input.chatInput;
   // 大背景留给分析器，角色拿到本轮原话、被引用证据和少量最近互动。
-  const background = (input.analysisBackground ?? original.groupBackground ?? [])
+  const background = currentSources
     .filter(line => line.id && evidenceIds.has(line.id))
     .map(line => ({ ...line, content: line.content.slice(0, 600) }));
   const unique = <T extends { id: string }>(base: T[], extra: T[]): T[] => {
