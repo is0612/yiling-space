@@ -8,7 +8,10 @@ const items = [
 ];
 const astronomy = rankKnowledgeItems("黑洞是什么", items, 8);
 assert.equal(astronomy[0]?.id, "a");
-assert.ok(astronomy.some(item => item.id === "b"));
+assert.deepEqual(astronomy.map(item => item.id), ["a"]);
+const mixed = rankKnowledgeItems("黑洞 天文学", items, 8);
+assert.ok(mixed.some(item => item.id === "a"));
+assert.ok(mixed.some(item => item.id === "b"));
 assert.deepEqual(rankKnowledgeItems("TypeScript", items, 8).map(item => item.id), ["c"]);
 assert.deepEqual(rankKnowledgeItems("", items, 8), []);
 assert.equal(rankKnowledgeItems("天文学", items, 1).length, 1);
