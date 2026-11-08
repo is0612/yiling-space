@@ -258,23 +258,32 @@ export async function runSocialRelationshipQueueMaintenance(
     `;
 
     const periodicQueued = await tx.$executeRaw`
-      UPDATE "social_relationship_assessment_tasks"
+      WITH due AS (
+        SELECT "id"
+        FROM "social_relationship_assessment_tasks"
+        WHERE "status" = 'PAUSED'::"SocialRelationshipAssessmentTaskStatus"
+          AND "nextReviewAt" IS NOT NULL
+          AND "nextReviewAt" <= ${now}
+          AND "generation" <= "processedGeneration"
+        ORDER BY "nextReviewAt" ASC, "id" ASC
+        LIMIT ${batchSize}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "social_relationship_assessment_tasks" AS task
       SET
         "status" = 'QUEUED'::"SocialRelationshipAssessmentTaskStatus",
-        "generation" = "generation" + 1,
+        "generation" = task."generation" + 1,
         "triggerReasons" = CASE
-          WHEN 'PERIODIC_REVIEW' = ANY("triggerReasons") THEN "triggerReasons"
-          ELSE array_append("triggerReasons", 'PERIODIC_REVIEW')
+          WHEN 'PERIODIC_REVIEW' = ANY(task."triggerReasons") THEN task."triggerReasons"
+          ELSE array_append(task."triggerReasons", 'PERIODIC_REVIEW')
         END,
         "runAt" = ${now},
         "attemptCount" = 0,
         "lastError" = NULL,
         "nextReviewAt" = ${nextReviewAt},
         "updatedAt" = ${now}
-      WHERE "status" = 'PAUSED'::"SocialRelationshipAssessmentTaskStatus"
-        AND "nextReviewAt" IS NOT NULL
-        AND "nextReviewAt" <= ${now}
-        AND "generation" <= "processedGeneration"
+      FROM due
+      WHERE task."id" = due."id"
     `;
 
     const leases = await recoverExpiredLeasesInTransaction(tx, now, batchSize);
