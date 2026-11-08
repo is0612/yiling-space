@@ -36,6 +36,7 @@ export async function ensureExternalIdentityScope(
       scopeKey,
       externalIdentityId,
       relationshipStage: "STRANGER",
+      relationshipStatus: "UNOBSERVED",
     },
     update: {},
     select: { id: true },
