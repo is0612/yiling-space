@@ -101,6 +101,8 @@ async function dismissCandidate(candidate: Candidate) {
     ElMessage.error(e.data?.statusMessage || "操作失败。");
   }
 }
+function sourceLabel(sourceType: string) { return ({ MANUAL: "手动录入", CHAT: "聊天来源", IMPORT: "资料导入" } as Record<string,string>)[sourceType] ?? sourceType; }
+function sourceDetails(value: unknown) { return value ? JSON.stringify(value) : ""; }
 function statusLabel(status: string) {
   return ({ PENDING: "待处理", PROCESSING: "处理中", REVIEW: "待确认", FAILED: "处理失败", ACCEPTED: "已入库", DISMISSED: "已忽略" } as Record<string,string>)[status] ?? status;
 }
@@ -145,7 +147,7 @@ function formatDate(value: string) {
       <div class="section-heading"><div><span class="eyebrow">INBOX</span><h2>知识候选</h2></div><span class="muted">{{ data.candidates.length }} 条</span></div>
       <div v-if="!data.candidates.length" class="empty-state">暂时没有知识候选。你可以手动添加一条知识线索。</div>
       <article v-for="candidate in data.candidates" :key="candidate.id" class="candidate-card">
-        <div class="candidate-top"><span class="status">{{ statusLabel(candidate.status) }}</span><span class="muted">{{ formatDate(candidate.createdAt) }}</span></div>
+        <div class="candidate-top"><span class="status">{{ statusLabel(candidate.status) }} · {{ sourceLabel(candidate.sourceType) }}</span><span class="muted">{{ formatDate(candidate.createdAt) }}</span></div>
         <p class="candidate-raw">{{ candidate.rawContent }}</p>
         <p v-if="candidate.processingError" class="error-text">{{ candidate.processingError }}</p>
         <template v-if="candidate.processedResult">
@@ -172,7 +174,7 @@ function formatDate(value: string) {
         <div class="item-heading"><h3>{{ item.title }}</h3><span class="category">{{ item.category }}</span></div>
         <p>{{ item.content }}</p>
         <div class="tag-row"><span v-for="tag in item.tags" :key="tag" class="tag">{{ tag }}</span><span class="muted">可信度 {{ item.confidence === null ? "未标注" : Math.round(item.confidence * 100) + "%" }}</span><span class="muted">修订 {{ item.revision }}</span></div>
-        <div class="item-date">更新于 {{ formatDate(item.updatedAt) }}</div>
+        <div class="item-date">来源：{{ sourceLabel(item.sourceType) }}<span v-if="sourceDetails(item.sourceRef)"> · {{ sourceDetails(item.sourceRef) }}</span><br>更新于 {{ formatDate(item.updatedAt) }}</div>
       </article>
     </section>
     <div v-if="loading" class="loading-note">正在同步知识数据…</div>
