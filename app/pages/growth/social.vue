@@ -24,7 +24,7 @@ definePageMeta({
           <li>身份可标记为未知、真人或 AI；手动确认后不会被普通互动覆盖。</li>
           <li>可以按当前角色决定默认处理、允许交流或禁止交流。</li>
         </ul>
-        <NuxtLink to="/identities" class="social-action">
+        <NuxtLink to="/growth/social/friends" class="social-action">
           打开好友档案与交流管理 <span aria-hidden="true">→</span>
         </NuxtLink>
       </article>
