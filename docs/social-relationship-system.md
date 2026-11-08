@@ -377,5 +377,5 @@
 - 已在 `MemoryScope` 增加独立的 `relationshipStatus`，仅 EXTERNAL_IDENTITY 范围有值；既有关系迁移为 `UNOBSERVED`，新关系初始化为 `UNOBSERVED`。阶段仍由 `relationshipStage` 保存。
 - 新增每段关系唯一的 `SocialRelationshipAssessmentTask`，保存触发原因、generation、已处理 generation、优先级、计划时间、重试状态、租约字段、fencing token 与最近/下次评估时间；本批仅建立数据结构，不启用 Worker。
 - 新增不可覆盖的 `SocialRelationshipAssessment` 评估历史，记录评估时阶段/状态/版本、结论建议、理由观察、模型/提示词版本、输入截止点和执行结果。
-- 新增 `SocialRelationshipAssessmentEvidence`，引用既有 `SocialExperience` 并区分 NEW / CONTEXT；不复制忆泡正文。NEW 证据不得重复消费的确定性核验留待证据服务批次。
+- 新增 `SocialRelationshipAssessmentEvidence`，引用既有 `SocialExperience` 并区分 NEW / CONTEXT；通过复合外键在数据库层阻止跨关系/跨角色经历引用，不复制忆泡正文。NEW 证据不得重复消费的确定性核验留待证据服务批次。
 - 隔离库专项验收覆盖唯一约束、跨角色任务隔离、证据引用、级联删除和关系状态初始化；不连接或写入业务库。
