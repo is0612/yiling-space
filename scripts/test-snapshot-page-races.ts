@@ -7,7 +7,7 @@ import ts from "typescript";
 /** Execute the actual script/setup handlers with deferred fetch/confirmation promises.
  * Run: yarn tsx scripts/test-snapshot-page-races.ts (no DB, model, server or network).
  */
-const sfc = readFileSync(new URL("../app/pages/snapshots.vue", import.meta.url), "utf8");
+const sfc = readFileSync(new URL("../app/components/SnapshotsWorkspace.vue", import.meta.url), "utf8");
 const match = sfc.match(/<script\b[^>]*>([\s\S]*?)<\/script>/);
 assert.ok(match);
 const source = ts.createSourceFile("snapshots-page.ts", match[1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -34,6 +34,7 @@ function harness() {
   const bindings = executable.runInContext(createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
+    defineProps: () => ({ growthMode: false }),
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: (sources: Ref | Ref[], callback: () => void) => watchers.push({ sources: Array.isArray(sources) ? sources : [sources], callback }),
     onMounted: () => {}, useCharacterList: () => ({ value: [] }), useCharacterSelection: () => ({ id: role }),
