@@ -45,13 +45,13 @@ function reset(handler: (body: Call) => Response) { calls = []; entries = []; de
 try {
   reset(body => body.model === "context" ? response(analysis) : body.model === "memory" ? response({ sourceKeys: ["memory/public", "memory/private", "memory/invented"] }) : response(reply));
   let loadedQuery = "";
-  let captured: { rawContent: string; sourceMessageIds: string[]; reason: string } | null = null;
-  const result = await run({ loadCandidates: async query => { loadedQuery = query; return candidates; }, onKnowledgeCandidate: async value => { captured = value; } });
+  const captured: Array<{ rawContent: string; sourceMessageIds: string[]; reason: string }> = [];
+  const result = await run({ loadCandidates: async query => { loadedQuery = query; return candidates; }, onKnowledgeCandidate: async value => { captured.push(value); } });
   assert.equal(result.reply, reply.reply);
   assert.deepEqual(result.usedMemoryIds, ["public"]);
   assert.equal(loadedQuery, analysis.memoryQuery);
-  assert.deepEqual(captured?.sourceMessageIds, ["evidence"], "Only real included evidence ids may be collected.");
-  assert(captured?.rawContent.includes("说的是科幻电影。"));
+  assert.deepEqual(captured[0]?.sourceMessageIds, ["evidence"], "Only real included evidence ids may be collected.");
+  assert(captured[0]?.rawContent.includes("说的是科幻电影。"));
   assert.equal(captured?.reason, "群友解释了一个可复用的科学概念。");
   assert.equal(details[0]?.context?.status, "success");
   assert.deepEqual(details[0]?.context?.evidence?.map(item => item.id), ["current", "evidence"]);
