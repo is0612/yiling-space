@@ -65,6 +65,18 @@ try {
   assert(finalText.includes("PUBLIC_FILM_EVIDENCE"));
   assert(!finalText.includes("UNRELATED_BACKGROUND"), "Final character sees only evidence-linked background.");
 
+  reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, knowledgeQuery: "黑洞的逃逸速度" }) : response({ ...reply, usedMemoryIds: [] }));
+  let loadedKnowledgeQuery = "";
+  const knowledgeItem = { id: "knowledge-1", title: "黑洞", content: "黑洞的事件视界是无法逃逸的边界。", category: "SCIENCE", tags: ["天文学"], confidence: 0.94, sourceType: "CHAT" };
+  await run({ loadKnowledge: async query => { loadedKnowledgeQuery = query; return [knowledgeItem]; } });
+  assert.equal(loadedKnowledgeQuery, "黑洞的逃逸速度");
+  assert.deepEqual(calls.map(call => call.model), ["context", "character"], "Knowledge retrieval is a scoped database lookup, not another model call.");
+  const knowledgePrompt = JSON.stringify(calls[1]!.messages);
+  assert(knowledgePrompt.includes("knowledge-1"));
+  assert(knowledgePrompt.includes("事件视界"));
+  assert(knowledgePrompt.includes("confirmed, character-owned learning records"));
+  assert(!knowledgePrompt.includes("PRIVATE_MUST_NOT_REACH_MODELS"));
+
   const extendedBackground = [{ id: "extended", content: "EXTENDED_ANALYSIS_EVIDENCE_" + "字".repeat(1_000) }, { id: "extended-unrelated", content: "EXTENDED_UNRELATED" }];
   reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, evidenceMessageIds: ["extended"] }) : response({ ...reply, usedMemoryIds: [] }));
   await run({ analysisBackground: extendedBackground });
