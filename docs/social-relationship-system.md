@@ -24,7 +24,7 @@
 - OneBot 群聊入口先过滤身份与交流策略，攒批发送前再次校验；被明确禁止的发言不会进入当前回复上下文。
 - AI-only 群聊另有连续轮数保护，不能把它与某一个好友的 BLOCK 规则混为一谈。
 
-现有管理入口为 `/identities`，API 位于 `/api/admin/identities`。本轮成长系统页面先复用此入口，不复制业务逻辑。
+好友管理现位于 `/growth/social/friends`，旧 `/identities` 地址重定向到新页面；API 仍位于 `/api/admin/identities`。页面复用原有业务逻辑，不复制数据或接口。
 
 ## 4. 尚未实现 / 不应误认为已有
 
