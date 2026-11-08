@@ -137,7 +137,7 @@ export async function processKnowledgeWithAssistant(input: {
   const choice = asRecord(choices[0]);
   const message = asRecord(choice.message);
   const raw = typeof message.content === "string" ? message.content : "";
-  const parsed = parseJsonLoose(raw);
+  const parsed = parseJsonLoose(raw, { expect: "object" });
   const data = asRecord(parsed);
   const usage = readModelUsage(root);
   await recordModelUsage({
