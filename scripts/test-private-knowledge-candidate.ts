@@ -57,13 +57,15 @@ try {
   assert(serialized.includes("m2"));
   assert(!serialized.includes("SECRET"));
   assert.match(requestBody!.messages[0]!.content, /private conversation/u);
-  assert.match(requestBody!.messages[0]!.content, /Do not turn personal details/u);
+  // 提示词从「只做候选」扩成「候选 + 检索查询」后，这句改成了小写并接在分号后面；
+  // 断言的是「不许把私聊里的个人细节泛化成知识」这个语义，不锁大小写与句首位置。
+  assert.match(requestBody!.messages[0]!.content, /do not turn personal details/iu);
   assert.match(requestBody!.messages[0]!.content, /These are separate decisions/u);
   assert.match(requestBody!.messages[0]!.content, /approved knowledge base/u);
 
   // A question can request lookup without turning the question itself into a candidate.
   modelOutput = { knowledgeQuery: "异步函数与 Promise 的关系" };
-  const lookupOnly = await analyzePrivateKnowledgeCandidate(runtime, "小鲸鱼i", [
+  const lookupOnly = await analyzePrivateKnowledgeCandidate(runtime, "我们的角色", [
     message("为什么 async 函数会返回 Promise？", "m3"),
   ]);
   assert.equal(lookupOnly.knowledgeQuery, "异步函数与 Promise 的关系");
@@ -72,7 +74,7 @@ try {
 
   // Query text is bounded even when the analyzer returns an oversized field.
   modelOutput = { knowledgeQuery: "知".repeat(500) };
-  const bounded = await analyzePrivateKnowledgeCandidate(runtime, "小鲸鱼i", [
+  const bounded = await analyzePrivateKnowledgeCandidate(runtime, "我们的角色", [
     message("什么是异步函数？", "m4"),
   ]);
   assert.equal(bounded.knowledgeQuery?.length, 240);
@@ -95,7 +97,7 @@ try {
     category: "PROGRAMMING", tags: ["TypeScript", "泛型"], confidence: 0.95, sourceType: "MANUAL",
   };
   const privateChatInput: ConversationReplyInput = {
-    characterName: "小鲸鱼i", characterPrompt: "PERSONA",
+    characterName: "我们的角色", characterPrompt: "PERSONA",
     model: "character", apiKey: "character-key", apiBaseUrl: "https://character.invalid/v1",
     thinking: false, currentMessage: "什么是 TypeScript 泛型？",
     recentMessages: [], memories: [], snapshots: [], knowledgeItems: [approvedKnowledge],
