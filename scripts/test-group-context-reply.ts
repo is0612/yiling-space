@@ -17,7 +17,7 @@ const candidates: MemoryAssistantCandidate[] = [
   { sourceKey: "memory/public", sourceType: "memory", id: "public", scope: "character", relevanceScore: 1, category: "FACT", content: "PUBLIC_FILM_EVIDENCE" },
   { sourceKey: "memory/private", sourceType: "memory", id: "private", scope: "private", relevanceScore: 1, category: "FACT", content: "PRIVATE_MUST_NOT_REACH_MODELS" },
 ];
-const analysis = { summary: "用户问过去聊过的电影。", evidenceMessageIds: ["current", "evidence"], participation: "invited", memoryQuery: "上次科幻电影", knowledgeCandidate: { evidenceMessageIds: ["evidence", "invented"], reason: "群友解释了一个可复用的科学概念。" } };
+const analysis = { summary: "用户问过去聊过的电影。", evidenceMessageIds: ["current", "evidence"], participation: "invited", memoryQuery: "上次科幻电影", knowledgeCandidate: { evidenceMessageIds: ["unrelated", "invented"], reason: "群友解释了一个可复用的科学概念。" } };
 const reply = { action: "reply", reply: "上次聊的是这部电影。", usedMemoryIds: ["public"], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [] };
 const usage = { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 };
 function response(content: unknown): Response {
@@ -50,8 +50,8 @@ try {
   assert.equal(result.reply, reply.reply);
   assert.deepEqual(result.usedMemoryIds, ["public"]);
   assert.equal(loadedQuery, analysis.memoryQuery);
-  assert.deepEqual(captured[0]?.sourceMessageIds, ["evidence"], "Only real included evidence ids may be collected.");
-  assert(captured[0]?.rawContent.includes("说的是科幻电影。"));
+  assert.deepEqual(captured[0]?.sourceMessageIds, ["unrelated"], "Only real included evidence ids may be collected.");
+  assert(captured[0]?.rawContent.includes("UNRELATED_BACKGROUND"));
   assert.equal(captured[0]?.reason, "群友解释了一个可复用的科学概念。");
   assert.equal(details[0]?.context?.status, "success");
   assert.deepEqual(details[0]?.context?.evidence?.map(item => item.id), ["current", "evidence"]);
