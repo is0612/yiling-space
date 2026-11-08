@@ -143,6 +143,8 @@ type ExpiredTaskRow = {
   maxAttempts: number;
   fencingToken: number;
   leaseToken: string | null;
+  generation: number;
+  processedGeneration: number;
 };
 
 async function recoverExpiredLeasesInTransaction(
@@ -151,7 +153,8 @@ async function recoverExpiredLeasesInTransaction(
   batchSize: number,
 ): Promise<{ recovered: number; failed: number }> {
   const expired = await tx.$queryRaw<ExpiredTaskRow[]>`
-    SELECT "id", "attemptCount", "maxAttempts", "fencingToken", "leaseToken"
+    SELECT "id", "attemptCount", "maxAttempts", "fencingToken", "leaseToken",
+      "generation", "processedGeneration"
     FROM "social_relationship_assessment_tasks"
     WHERE "status" = 'RUNNING'::"SocialRelationshipAssessmentTaskStatus"
       AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= ${now})
@@ -163,16 +166,20 @@ async function recoverExpiredLeasesInTransaction(
   let recovered = 0;
   let failed = 0;
   for (const task of expired) {
-    const retry = task.attemptCount < task.maxAttempts;
-    const status = retry ? "RETRY_WAIT" : "FAILED";
-    const runAt = retry
-      ? new Date(now.getTime() + socialRelationshipRetryDelayMs(task.attemptCount))
-      : now;
+    const hasNewGeneration = task.generation > task.processedGeneration;
+    const retry = hasNewGeneration || task.attemptCount < task.maxAttempts;
+    const status = hasNewGeneration ? "QUEUED" : retry ? "RETRY_WAIT" : "FAILED";
+    const runAt = hasNewGeneration
+      ? now
+      : retry
+        ? new Date(now.getTime() + socialRelationshipRetryDelayMs(task.attemptCount))
+        : now;
     const changed = await tx.$executeRaw`
       UPDATE "social_relationship_assessment_tasks"
       SET
         "status" = ${status}::"SocialRelationshipAssessmentTaskStatus",
         "runAt" = ${runAt},
+        "attemptCount" = CASE WHEN ${hasNewGeneration} THEN 0 ELSE "attemptCount" END,
         "lockedAt" = NULL,
         "lockedBy" = NULL,
         "leaseToken" = NULL,
@@ -452,18 +459,28 @@ export async function failSocialRelationshipAssessmentTask(
   lease: SocialRelationshipAssessmentLease,
   error: unknown,
   now: Date = new Date(),
-): Promise<"RETRY_WAIT" | "FAILED"> {
-  const retry = lease.attemptCount < lease.maxAttempts;
-  const status = retry ? "RETRY_WAIT" : "FAILED";
-  const runAt = retry
-    ? new Date(now.getTime() + socialRelationshipRetryDelayMs(lease.attemptCount))
-    : now;
+): Promise<"QUEUED" | "RETRY_WAIT" | "FAILED"> {
+  const retryAt = new Date(now.getTime() + socialRelationshipRetryDelayMs(lease.attemptCount));
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 4_000) || "未知评估错误";
-  const updated = await prisma.$executeRaw`
+  const rows = await prisma.$queryRaw<Array<{ status: "QUEUED" | "RETRY_WAIT" | "FAILED" }>>`
     UPDATE "social_relationship_assessment_tasks"
     SET
-      "status" = ${status}::"SocialRelationshipAssessmentTaskStatus",
-      "runAt" = ${runAt},
+      "status" = CASE
+        WHEN "generation" > ${lease.generation}
+          THEN 'QUEUED'::"SocialRelationshipAssessmentTaskStatus"
+        WHEN ${lease.attemptCount < lease.maxAttempts}
+          THEN 'RETRY_WAIT'::"SocialRelationshipAssessmentTaskStatus"
+        ELSE 'FAILED'::"SocialRelationshipAssessmentTaskStatus"
+      END,
+      "runAt" = CASE
+        WHEN "generation" > ${lease.generation} THEN ${now}
+        WHEN ${lease.attemptCount < lease.maxAttempts} THEN ${retryAt}
+        ELSE ${now}
+      END,
+      "attemptCount" = CASE
+        WHEN "generation" > ${lease.generation} THEN 0
+        ELSE "attemptCount"
+      END,
       "triggerReasons" = ARRAY(
         SELECT DISTINCT reason
         FROM unnest("triggerReasons" || ${lease.triggerReasons}::TEXT[]) AS reasons(reason)
@@ -481,7 +498,9 @@ export async function failSocialRelationshipAssessmentTask(
       AND "leaseToken" = ${lease.leaseToken}::uuid
       AND "fencingToken" = ${lease.fencingToken}
       AND "leaseExpiresAt" > ${now}
+    RETURNING "status"
   `;
-  if (updated !== 1) throw new SocialRelationshipAssessmentLeaseLostError();
+  const status = rows[0]?.status;
+  if (!status) throw new SocialRelationshipAssessmentLeaseLostError();
   return status;
 }
