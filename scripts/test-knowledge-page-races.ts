@@ -364,6 +364,25 @@ async function staleKnowledgeEditCannotTouchNextRole() {
   page.finish();
 }
 
+/** 11. 遇到 409 时关闭旧草稿并刷新，避免用户拿过期内容覆盖新版本。 */
+async function revisionConflictClosesStaleEditor() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("A"));
+  await flushMicrotasks();
+  const item = page.read<{ items: Array<{ id: string; title: string; content: string; category: string; tags: string[]; confidence: number; revision: number }> }>("data").items[0]!;
+  await page.call("startEdit", item);
+  const saving = page.call("saveEdit", item);
+  const patch = page.take("/api/characters/char-a/growth/knowledge/items/A", "PATCH");
+  patch.reject({ data: { statusCode: 409, statusMessage: "版本冲突" } });
+  await flushMicrotasks();
+  const refresh = page.take("/api/characters/char-a/growth/knowledge");
+  refresh.resolve(workspace("latest"));
+  await saving;
+  assert.equal(page.read("editingItemId"), "");
+  assert.ok(page.errors.includes("版本冲突"));
+  assert.equal(page.requests.length, 0);
+}
+
 async function main() {
   const tests = [
     ["知识列表切角色竞态", knowledgeListSwitchRace],
@@ -376,6 +395,7 @@ async function main() {
     ["正式知识编辑携带乐观版本号", knowledgeEditUsesOptimisticRevision],
     ["版本历史不跨角色显示", knowledgeHistoryDoesNotCrossRole],
     ["旧知识编辑响应不污染新角色", staleKnowledgeEditCannotTouchNextRole],
+    ["版本冲突关闭过期草稿", revisionConflictClosesStaleEditor],
   ] as const;
   for (const [name, test] of tests) {
     await test();
