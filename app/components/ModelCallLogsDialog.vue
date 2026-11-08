@@ -114,7 +114,7 @@ const kindLabels: Record<string, string> = {
   chat: "对话接口", channel: "QQ 回复", snapshot: "阶段总结", events: "忆泡整理",
   journal: "日记 / 手账", "bili-screening": "值班初筛", "bili-judge": "值班判断",
   proactive: "主动找话", vision: "看图", "sticker-label": "表情包识别",
-  "memory-assistant": "记忆助手", "context-assistant": "语境助手",
+  "memory-assistant": "记忆助手", "context-assistant": "语境助手", "knowledge-assistant": "知识处理助手",
   "catchphrase-mine": "捡梗", "bili-owner": "主人内容挑选", other: "其他",
 };
 const statusLabels = { success: "已完成", failed: "失败", unknown: "未记录状态" };
