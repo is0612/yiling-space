@@ -906,22 +906,24 @@ try {
   });
 
   // 退到最严格的一档（只认被叫到）：戳她一戳照样要能叫醒。
+  // 这里必须用一段专用的群号：`assistantCount` / `userCount` 是按 `g:<群号>` 累计查库、从不清零，
+  // 跟别的用例共用一个群，「戳别人时必须是 0」这条断言就永远不成立（1014 已被 9.8 的 CQ at 用例占用）。
   record.bindings[0]!.groupChat = { ...ambientSettings, mode: "mention" };
-  await emitPoke(1014, 555, 666);
+  await emitPoke(1019, 555, 666);
   await sleep(5000);
-  assert.equal(await assistantCount(1014), 0, "戳的是别人，跟她无关，不能有任何反应。");
-  assert.equal(await userCount(1014), 0, "更不该落库：这条消息连背景都不该进。");
-  assert.equal((await groupSends(1014)).length, 0, "当然也不能发消息。");
+  assert.equal(await assistantCount(1019), 0, "戳的是别人，跟她无关，不能有任何反应。");
+  assert.equal(await userCount(1019), 0, "更不该落库：这条消息连背景都不该进。");
+  assert.equal((await groupSends(1019)).length, 0, "当然也不能发消息。");
 
-  await emitPoke(1014, 555, 123456789);
-  await waitFor(async () => (await assistantCount(1014)) >= 1).catch(() => undefined);
-  assert.equal(await assistantCount(1014), 1, "戳她本人 = 叫她一声，mention 档也要回。");
-  assert.equal(await userCount(1014), 1, "那次戳要落成一条可追溯的记录，不能只活在内存里。");
-  const pokeSends = (await groupSends(1014)).map((item) => String(item.body.message)).join(" ");
+  await emitPoke(1019, 555, 123456789);
+  await waitFor(async () => (await assistantCount(1019)) >= 1).catch(() => undefined);
+  assert.equal(await assistantCount(1019), 1, "戳她本人 = 叫她一声，mention 档也要回。");
+  assert.equal(await userCount(1019), 1, "那次戳要落成一条可追溯的记录，不能只活在内存里。");
+  const pokeSends = (await groupSends(1019)).map((item) => String(item.body.message)).join(" ");
   assert(pokeSends.includes(POKE_CONTENT), "戳这个动作本身要进到她看到的那一轮里。");
-  assert.ok(await waitForGroupRoundLog(1014, "direct"), "这一轮必须是按 direct 放行的。");
+  assert.ok(await waitForGroupRoundLog(1019, "direct"), "这一轮必须是按 direct 放行的。");
   assert(
-    roundLogs.some((line) => line.includes(`"groupId":"1014"`) && line.includes('"poked":true')),
+    roundLogs.some((line) => line.includes(`"groupId":"1019"`) && line.includes('"poked":true')),
     "日志还要能看出是被戳醒的，而不是被 @ 的 —— 两者都能让 direct 为真。",
   );
   /**
