@@ -1,0 +1,163 @@
+import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
+import { resolveCharacterKnowledgeAssistantApiKey } from "./credential-encryption";
+import { parseJsonLoose } from "./loose-json";
+import { readModelUsage, recordModelUsage } from "./model-usage";
+
+export type KnowledgeAssistantRuntime = {
+  model: string;
+  apiKey: string;
+  apiBaseUrl: string;
+  temperature: number;
+  maxInputTokens: number;
+  maxOutputTokens: number;
+};
+
+function bounded(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, value))
+    : fallback;
+}
+
+export async function resolveKnowledgeAssistantRuntime(
+  configValue: unknown,
+  fallbackApiBaseUrl: string,
+  options: { requireEnabled?: boolean } = {},
+): Promise<KnowledgeAssistantRuntime | null> {
+  const config = configValue !== null && typeof configValue === "object" && !Array.isArray(configValue)
+    ? configValue as Record<string, unknown>
+    : {};
+  if (options.requireEnabled !== false && config.knowledgeAssistantEnabled !== true) return null;
+  const model = typeof config.knowledgeAssistantModel === "string" ? config.knowledgeAssistantModel.trim().slice(0, 120) : "";
+  if (!model) return null;
+  let apiBaseUrl = "";
+  try {
+    apiBaseUrl = validateChatApiBaseUrl(
+      typeof config.knowledgeAssistantApiBaseUrl === "string" && config.knowledgeAssistantApiBaseUrl.trim()
+        ? config.knowledgeAssistantApiBaseUrl
+        : fallbackApiBaseUrl,
+    );
+  } catch {
+    return null;
+  }
+  let apiKey = "";
+  try {
+    apiKey = await resolveCharacterKnowledgeAssistantApiKey(configValue);
+  } catch {
+    return null;
+  }
+  if (!apiKey) return null;
+  return {
+    model,
+    apiKey,
+    apiBaseUrl,
+    temperature: bounded(config.knowledgeAssistantTemperature, 0.1, 0, 2),
+    maxInputTokens: Math.round(bounded(config.knowledgeAssistantMaxInputTokens, 12_288, 4_096, 32_768)),
+    maxOutputTokens: Math.round(bounded(config.knowledgeAssistantMaxOutputTokens, 2_048, 512, 8_192)),
+  };
+}
+
+export type KnowledgeProcessingResult = {
+  isKnowledge: boolean;
+  recommendation: "CREATE" | "DUPLICATE" | "CONFLICT" | "DISCARD";
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  confidence: number;
+  reason: string;
+  relatedItemIds: string[];
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function cleanText(value: unknown, max: number): string {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+export async function processKnowledgeWithAssistant(input: {
+  runtime: KnowledgeAssistantRuntime;
+  characterId: string;
+  candidateId: string;
+  candidateContent: string;
+  existingItems: Array<{ id: string; title: string; content: string; category: string; tags: string[] }>;
+}): Promise<KnowledgeProcessingResult> {
+  const system = [
+    "你是角色的知识整理助手。你的工作是判断一段候选内容是否值得长期复用，并整理成准确、可追溯的知识条目。",
+    "不要把聊天经历、临时安排、用户个人偏好或未经证实的猜测伪装成客观知识。不要编造来源或事实。",
+    "已有知识只用于识别重复和冲突。不能静默覆盖已有条目；重复建议 DUPLICATE，存在矛盾建议 CONFLICT。",
+    "不值得保存或只是一次性经历时，recommendation=DISCARD 且 isKnowledge=false。",
+    "只输出 JSON 对象，不要 Markdown，不要代码围栏。字段：isKnowledge(boolean), recommendation(CREATE|DUPLICATE|CONFLICT|DISCARD), title, content, category, tags(string[]), confidence(0..1), reason, relatedItemIds(string[])。",
+    "content 应自洽、简洁、保留必要条件和适用范围；不确定的内容必须明确写出不确定性。category 使用 GENERAL、SCIENCE、TECHNOLOGY、HISTORY、CULTURE、LANGUAGE、SKILL、OTHER 之一。",
+  ].join("\n");
+  const user = JSON.stringify({
+    candidate: input.candidateContent.slice(0, Math.max(2000, input.runtime.maxInputTokens * 3)),
+    existingKnowledge: input.existingItems.slice(0, 30),
+  });
+  const endpoint = buildChatCompletionsEndpoint(input.runtime.apiBaseUrl);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    redirect: "error",
+    headers: { authorization: "Bearer " + input.runtime.apiKey, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: input.runtime.model,
+      temperature: input.runtime.temperature,
+      max_tokens: input.runtime.maxOutputTokens,
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    }),
+    signal: AbortSignal.timeout(45_000),
+  });
+  if (!response.ok) {
+    await recordModelUsage({
+      kind: "knowledge-assistant",
+      model: input.runtime.model,
+      characterId: input.characterId,
+      metadata: { status: response.status, operation: "process-candidate" },
+    });
+    throw new Error(response.status === 401 || response.status === 403
+      ? "知识处理助手 API Key 无效或没有调用权限。"
+      : "知识处理助手返回 HTTP " + response.status + "。请检查 API 地址、Key 与模型权限。");
+  }
+  const payload: unknown = await response.json();
+  const root = asRecord(payload);
+  const choices = Array.isArray(root.choices) ? root.choices : [];
+  const choice = asRecord(choices[0]);
+  const message = asRecord(choice.message);
+  const raw = typeof message.content === "string" ? message.content : "";
+  const parsed = parseJsonLoose(raw);
+  const data = asRecord(parsed);
+  const usage = readModelUsage(root);
+  await recordModelUsage({
+    kind: "knowledge-assistant",
+    model: input.runtime.model,
+    characterId: input.characterId,
+    usage,
+    metadata: { operation: "process-candidate", candidateId: input.candidateId },
+  });
+  if (!Object.keys(data).length) throw new Error("知识处理助手没有返回可解析的 JSON 结果。");
+  const recommendation = ["CREATE", "DUPLICATE", "CONFLICT", "DISCARD"].includes(String(data.recommendation))
+    ? String(data.recommendation) as KnowledgeProcessingResult["recommendation"]
+    : "DISCARD";
+  const categoryRaw = cleanText(data.category, 40).toUpperCase();
+  const categories = ["GENERAL", "SCIENCE", "TECHNOLOGY", "HISTORY", "CULTURE", "LANGUAGE", "SKILL", "OTHER"];
+  return {
+    isKnowledge: data.isKnowledge === true && recommendation !== "DISCARD",
+    recommendation,
+    title: cleanText(data.title, 240),
+    content: cleanText(data.content, 12_000),
+    category: categories.includes(categoryRaw) ? categoryRaw : "GENERAL",
+    tags: Array.isArray(data.tags)
+      ? [...new Set(data.tags.filter((tag): tag is string => typeof tag === "string").map(tag => tag.trim().slice(0, 40)).filter(Boolean))].slice(0, 20)
+      : [],
+    confidence: typeof data.confidence === "number" && Number.isFinite(data.confidence)
+      ? Math.min(1, Math.max(0, data.confidence))
+      : 0.5,
+    reason: cleanText(data.reason, 2000),
+    relatedItemIds: Array.isArray(data.relatedItemIds)
+      ? [...new Set(data.relatedItemIds.filter((id): id is string => typeof id === "string"))].slice(0, 20)
+      : [],
+  };
+}
