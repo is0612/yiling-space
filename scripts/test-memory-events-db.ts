@@ -12,6 +12,7 @@ import { getPrisma } from "../server/utils/prisma";
 import { applyMemoryEvents } from "../server/utils/memory-change-apply";
 import { makeEventDedupeKey } from "../server/utils/memory-ai";
 import { toMemoryTimelineDtos } from "../server/utils/memory-timeline-dto";
+import { ensureExternalIdentityScope } from "../server/utils/identity-scope";
 
 const prisma = getPrisma();
 const owner = await prisma.user.findFirst({ select: { id: true } });
@@ -40,6 +41,14 @@ const scope = await prisma.memoryScope.findFirstOrThrow({
   where: { characterId: character.id },
   select: { id: true },
 });
+
+const friendUid = "social-test-" + character.id;
+const friendIdentity = await prisma.externalIdentity.create({
+  data: { platform: "qq-onebot", platformUid: friendUid, status: "UNVERIFIED" },
+  select: { id: true },
+});
+const friendRelation = await ensureExternalIdentityScope(character.id, "qq-onebot", friendUid, friendIdentity.id);
+
 const conversation = await prisma.conversation.create({
   data: { characterId: character.id, memoryScopeId: scope.id, title: "自检对话" },
   select: { id: true },
@@ -53,7 +62,7 @@ const messageLate = await prisma.message.create({
     role: "USER",
     content: "深夜聊到很晚",
     occurredAt: new Date("2026-10-30T15:30:00Z"),
-    metadata: { authorOpenId: "friend-1", platform: "qq-onebot", authorDisplayName: "小明" },
+    metadata: { authorOpenId: friendUid, platform: "qq-onebot", authorDisplayName: "小明" },
   },
   select: { id: true, occurredAt: true },
 });
@@ -73,7 +82,7 @@ const evidence = new Map([
     role: "USER" as const,
     occurredAt: messageLate.occurredAt,
     conversationId: conversation.id,
-    authorOpenId: "friend-1",
+    authorOpenId: friendUid,
     platform: "qq-onebot",
   }],
   [messageEarly.id, {
@@ -127,12 +136,26 @@ check(
   lateEvent?.sourceMessageIds,
 );
 check("忆泡记录所属会话（供按群检索）", lateEvent?.conversationId === conversation.id, lateEvent?.conversationId);
+const linkedExperience = await prisma.socialExperience.findMany({
+  where: { scopeId: friendRelation.scopeId },
+  select: { memoryEventId: true, sourceKey: true },
+});
+check(
+  "群聊忆泡自动关联到参与者自己的角色关系",
+  linkedExperience.length === 1 && linkedExperience[0]?.memoryEventId === lateEvent?.id,
+  linkedExperience,
+);
+check(
+  "主人单独发言的忆泡不误关联到群友关系",
+  await prisma.socialExperience.count({ where: { scopeId: friendRelation.scopeId, memoryEventId: earlyEvent?.id ?? "" } }) === 0,
+);
+
 // 参与者引用：从证据消息的作者推导，不是模型写的显示名。
 const lateRefs = (lateEvent?.participantRefs ?? []) as Array<Record<string, unknown>>;
 const earlyRefs = (earlyEvent?.participantRefs ?? []) as Array<Record<string, unknown>>;
 check(
   "群友的忆泡推出 external 引用",
-  lateRefs.some((ref) => ref.kind === "external" && ref.externalId === "friend-1" && ref.platform === "qq-onebot"),
+  lateRefs.some((ref) => ref.kind === "external" && ref.externalId === friendUid && ref.platform === "qq-onebot"),
   lateRefs,
 );
 check(
@@ -158,6 +181,11 @@ const near = await prisma.$transaction((tx) => applyMemoryEvents(
   evidence,
 ));
 check("改写标题保守保留，不凭公共子串吞事实", near.applied.length === 1 && near.skipped === 0, near);
+check(
+  "同一底层证据在重复提炼中只累计一次",
+  await prisma.socialExperience.count({ where: { scopeId: friendRelation.scopeId } }) === 1,
+);
+
 
 console.log("\n[4] 只撞人名的短标题");
 const shortSame = await prisma.$transaction((tx) => applyMemoryEvents(
@@ -330,6 +358,8 @@ await prisma.memoryEvent.deleteMany({ where: { memoryScopeId: scope.id } });
 await prisma.memoryEventDay.deleteMany({ where: { memoryScopeId: scope.id } });
 await prisma.message.deleteMany({ where: { conversationId: conversation.id } });
 await prisma.conversation.delete({ where: { id: conversation.id } });
+await prisma.memoryScope.delete({ where: { id: friendRelation.scopeId } });
+await prisma.externalIdentity.delete({ where: { id: friendIdentity.id } });
 await prisma.memoryScope.delete({ where: { id: scope.id } });
 await prisma.character.delete({ where: { id: character.id } });
 check("临时角色与事件清理干净", (await prisma.memoryEvent.count({ where: { memoryScopeId: scope.id } })) === 0);
