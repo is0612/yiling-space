@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { CopyDocument, Promotion, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { isImageGenerationModel } from "#shared/utils/vision-models";
 import type { Character } from "~/utils/mock-data";
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
 import { applyAsrProviderPreset, applyVoiceProviderPreset } from "~/utils/voice-provider-preset";
@@ -343,6 +344,18 @@ const visionModelOptions = computed(() => {
   const current = draftVisionModel.value.trim();
   return current && !merged.includes(current) ? [current, ...merged] : merged;
 });
+/**
+ * 看图模型下拉里，生图模型照列但标灰。
+ *
+ * 不直接过滤掉：它确实在服务商的 `/models` 里，凭空消失会让人以为「获取模型没生效」；
+ * 而它偏偏常排在第一位（名字带 image），不标一下就是点一次踩一次 404 —— 2026-11-08
+ * 那台中转的 `gpt-image-2` 就是这样被选中的。已保存的值哪怕命中判据也照常显示，
+ * 那正是最需要被看见的情况。
+ */
+function visionModelLabel(model: string): string {
+  return isImageGenerationModel(model) ? `${model}（画图模型，不能读图）` : model;
+}
+
 const visionKeyPlaceholder = computed(() => {
   if (visionKeyConfigured.value) return API_KEY_SAVED_PLACEHOLDER;
   const name = visionProviderName.value;
@@ -953,7 +966,13 @@ async function fetchVisionModels() {
       return;
     }
     fetchedVisionModels.value = result.models;
-    ElMessage.success(`${result.message}从里面挑一个能读图的。`);
+    // 生图模型混在同一个清单里，且名字最像「看图」—— 顺手报一下有几个被标灰，
+    // 否则用户只看到「获取成功」，下拉里那个灰掉的选项会像界面出错。
+    const imageGenCount = result.models.filter(isImageGenerationModel).length;
+    ElMessage.success(
+      `${result.message}从里面挑一个能读图的。`
+      + (imageGenCount ? `（其中 ${imageGenCount} 个是画图模型，已标灰：它们只生成图片，不能读图）` : ""),
+    );
   } catch (error) {
     ElMessage.error(readError(error, "获取模型列表失败，请稍后重试。"));
   } finally {
@@ -1765,8 +1784,9 @@ watch(id, () => void loadCharacter());
                     <el-option
                       v-for="model in visionModelOptions"
                       :key="model"
-                      :label="model"
+                      :label="visionModelLabel(model)"
                       :value="model"
+                      :disabled="isImageGenerationModel(model)"
                     />
                   </el-select>
                   <el-button

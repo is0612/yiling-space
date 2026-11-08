@@ -18,6 +18,10 @@ import {
 } from "../server/utils/image-understanding";
 import { readOnebotImages } from "../server/utils/channel-adapter/onebot/types";
 import { toCharacterDto } from "../server/utils/character-dto";
+import {
+  describeImageGenerationModel,
+  isImageGenerationModel,
+} from "../shared/utils/vision-models";
 
 // ── 1. 从段数组里取图 ───────────────────────────────────
 const images = readOnebotImages({
@@ -351,6 +355,59 @@ assert.equal(MAX_IMAGES_PER_TURN, 3, "一轮最多看三张，别让一次群聊
   const broken = Buffer.from("not an image");
   const fallback = await shrinkForVision({ buffer: broken, mime: "image/png" });
   assert.equal(fallback.buffer, broken, "解不开的图原样送出去，让服务商自己报错");
+}
+
+// ── 生图模型 vs 看图模型的名字判据 ─────────────────────
+// 2026-11-08 实况：中转的 `/models` 里 `gpt-image-2` 排第一位，用户按「看图」的直觉选中它，
+// 测试看图回 404（upstream rejected the request: not found）—— 看起来像 Base URL 填错了。
+// 这个判据只用来提前提醒：命中的标灰 + 404 时换一句话说清「它是画图的，不是看图的」。
+{
+  // 命中：这些名字都属于「生成图片」，不在 chat/completions 上
+  for (const model of [
+    "gpt-image-2",
+    "gpt-image-1",
+    "openai/gpt-image-1",
+    "dall-e-3",
+    "dalle-3",
+    "imagen-3.0",
+    "flux-1.1-pro",
+    "stable-diffusion-3",
+    "sdxl",
+    "sd3-medium",
+    "seedream-3.0",
+    "wanx2.1-t2i",
+    "qwen-image",
+    "cogview-4",
+    "midjourney",
+    "kling-v2",
+  ]) {
+    assert.equal(isImageGenerationModel(model), true, `${model} 应该被判成生图模型`);
+  }
+
+  // 放行：真的能读图的对话模型，以及认不出来的新名字（宁可不提醒，也别标灰）
+  for (const model of [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4.1-mini",
+    "glm-4.6v-flash",
+    "glm-4v-flash",
+    "qwen3-vl-flash",
+    "hunyuan-vision",
+    "gpt-5.6-luna",
+    "deepseek-flash",
+    "some-future-model-7",
+    "",
+    "   ",
+  ]) {
+    assert.equal(isImageGenerationModel(model), false, `${model || "(空)"} 不该被判成生图模型`);
+  }
+
+  assert.ok(isImageGenerationModel("  GPT-Image-2  "), "大小写与空白不该影响判据");
+
+  const message = describeImageGenerationModel("gpt-image-2");
+  assert.ok(message.includes("gpt-image-2"), "提示里要带上是哪个模型名");
+  assert.ok(message.includes("404") && message.includes("400"), "服务商可能回 404 也可能回 400，别只写一个");
+  assert.ok(message.includes("对话模型"), "要给出下一步：换一个能读图的对话模型");
 }
 
 console.log("test-image-understanding: ok");

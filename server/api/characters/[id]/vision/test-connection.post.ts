@@ -2,6 +2,7 @@ import { createError, getRouterParam } from "h3";
 import sharp from "sharp";
 
 import { buildChatCompletionsEndpoint, resolveChatModelSettings } from "../../../../utils/chat-model-config";
+import { describeImageGenerationModel, isImageGenerationModel } from "../../../../../shared/utils/vision-models";
 import { resolveCharacterApiKey } from "../../../../utils/credential-encryption";
 import { resolveVisionSettingsForCharacter } from "../../../../utils/image-understanding";
 import { requireActorUserId } from "../../../../utils/auth";
@@ -101,6 +102,9 @@ export default defineEventHandler(async (event) => {
   }
 
   const startedAt = Date.now();
+  // 出错时必须能看见「打了哪个地址、用的哪个模型名」：404 光看原文分不清是地址少了 /v1、
+  // 模型名拼错，还是「模型存在但不在这个接口上」（见下面 isImageGenerationModel 那段）。
+  const endpointLabel = "POST " + endpoint.host + endpoint.pathname;
   try {
     const response = await fetch(endpoint, {
       method: "POST",
@@ -131,15 +135,35 @@ export default defineEventHandler(async (event) => {
       // 把服务商的原文带一句回去：429 / 403 这类状态码自己说明不了问题
       // （智谱的免费视觉模型会先卡实名认证或并发，光看 429 只能瞎猜）。
       const raw = await response.text().catch(() => "");
-      const detail = raw.replace(/\s+/g, " ").slice(0, 300);
+      /**
+       * 中转/网关挡下来时常回一整页 HTML（实测那次是 Cloudflare 的错误页）。
+       * 原文照样截 300 字带回去会是一段标签汤，用户看不懂还占满提示条 ——
+       * 这种情况只留一句「它给的不是 JSON」，原因交给状态码那条话去解释。
+       */
+      const looksLikeHtml = /^\s*<(!doctype|html)/i.test(raw);
+      const detail = looksLikeHtml
+        ? "服务商返回的是 HTML 错误页（不是 JSON），多半是网关或中转挡下了这个请求。"
+        : raw.replace(/\s+/g, " ").slice(0, 300);
+      /**
+       * 生图模型的判据放在状态码之前。
+       *
+       * 同一个「填了 gpt-image-2」在不同中转上会拿到不同状态码：一台回 404
+       * （`upstream rejected the request: {"error":"not found"}`），另一台回 400
+       * （`The 'gpt-image-2' model is not supported when using Codex with a ChatGPT account`）。
+       * 按状态码分支的话，前者像「地址填错」、后者落到「HTTP 400」这句废话上 ——
+       * 而这俩其实是同一个错误：**这个模型不读图**。401/403 除外，那是 Key 的事。
+       */
+      const imageGenHint = isImageGenerationModel(settings.model);
       const message = response.status === 401 || response.status === 403
         ? "看图这把 Key 无效或没有该模型的权限（注意：它和对话模型的 Key 是分开存的）。"
-        : response.status === 404
-          ? "看图地址或模型名不存在，请检查 Base URL 与模型名称。"
-          : response.status === 429
-            ? describeThrottled(detail)
-            : "图片服务返回 HTTP " + response.status + "。";
-      return { ok: false, message, detail, model: settings.model, elapsedMs };
+        : imageGenHint
+          ? describeImageGenerationModel(settings.model) + "（" + endpointLabel + "）"
+          : response.status === 404
+            ? `看图地址或模型名不存在（${endpointLabel}，模型 ${settings.model}）。先确认 Base URL 有没有少 /v1，再确认模型名在这家的清单里。`
+            : response.status === 429
+              ? describeThrottled(detail)
+              : "图片服务返回 HTTP " + response.status + "。";
+      return { ok: false, message, detail, model: settings.model, endpoint: endpointLabel, elapsedMs };
     }
 
     const payload = await response.json() as {
