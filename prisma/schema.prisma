@@ -615,12 +615,14 @@ model SocialExperience {
   id            String      @id @default(uuid()) @db.Uuid
   scopeId       String      @db.Uuid
   memoryEventId String      @db.Uuid
+  /// 基于该经历的底层证据消息 ID 集合计算，避免不同记忆范围重复提炼同一批消息时重复累计。
+  sourceKey     String      @db.VarChar(64)
   createdAt     DateTime    @default(now()) @db.Timestamptz(6)
   scope         MemoryScope @relation(fields: [scopeId], references: [id], onDelete: Cascade)
   memoryEvent   MemoryEvent @relation(fields: [memoryEventId], references: [id], onDelete: Cascade)
   usedInChanges SocialRelationChangeEvidence[]
 
-  @@unique([scopeId, memoryEventId])
+  @@unique([scopeId, sourceKey])
   @@index([scopeId, createdAt])
   @@index([memoryEventId])
   @@map("social_experiences")
