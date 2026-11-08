@@ -5,7 +5,7 @@ import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
 
 /**
- * 「她的朋友」页面竞态回归：直接跑当前 `identities.vue` 的真实 script。
+ * 「她的朋友」页面竞态回归：直接跑当前 `SocialFriendsWorkspace.vue` 的真实 script。
  *
  * 起因（2026-11-07 验收）：这一页的 `load()` 当时是「发了就等」，既没有请求代际，
  * 也在 `finally` 里无条件关 loading。表现为切角色后旧响应把 `activeCharacterId`
@@ -22,10 +22,10 @@ import ts from "typescript";
  * 6. 刷新持久化由 `test:friend-relation-db` 与浏览器验收覆盖，这里不重复造库；
  * 7. 卸载后在途请求不再写状态、不弹错误。
  */
-const pagePath = new URL("../app/pages/identities.vue", import.meta.url);
+const pagePath = new URL("../app/components/SocialFriendsWorkspace.vue", import.meta.url);
 const sfc = readFileSync(pagePath, "utf8");
 const scriptMatch = sfc.match(/<script\b[^>]*>([\s\S]*?)<\/script>/);
-assert.ok(scriptMatch, "identities.vue must contain a script block");
+assert.ok(scriptMatch, "SocialFriendsWorkspace.vue must contain a script block");
 const source = ts.createSourceFile("identities-page.ts", scriptMatch[1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const statements = source.statements.filter((node) => !ts.isImportDeclaration(node)
   && !(ts.isExpressionStatement(node) && ts.isAwaitExpression(node.expression)));
@@ -45,9 +45,9 @@ const compiled = ts.transpileModule(`(function () {\n${program}\n})()`, {
 assert.equal(
   compiled.diagnostics?.filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error).length,
   0,
-  "identities.vue script must transpile without syntax errors",
+  "SocialFriendsWorkspace.vue script must transpile without syntax errors",
 );
-const executable = new Script(compiled.outputText, { filename: "identities.vue.actual-script.js" });
+const executable = new Script(compiled.outputText, { filename: "SocialFriendsWorkspace.vue.actual-script.js" });
 
 type Ref = { value: unknown };
 type PendingRequest = {
@@ -125,6 +125,8 @@ function pageResult(characterId: string, item: FriendRecord, overrides: Record<s
 
 function harness() {
   const requests: PendingRequest[] = [];
+  const role = { value: "char-a" };
+  const roleWatchers: Array<(next: string, previous: string) => void> = [];
   const errors: string[] = [];
   const warnings: string[] = [];
   const successes: string[] = [];
@@ -145,9 +147,11 @@ function harness() {
       return result;
     },
     computed: (get: () => unknown) => ({ get value() { return get(); } }),
-    watch: () => {},
+    watch: (_source: unknown, callback: (next: string, previous: string) => void) => { roleWatchers.push(callback); },
     nextTick: async () => {},
     onMounted: () => {},
+    useCharacterListData: async () => {},
+    useCharacterSelection: () => ({ id: role }),
     onBeforeUnmount: (callback: () => void) => { unmount = callback; },
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: (id: number) => timers.delete(id),
@@ -192,7 +196,12 @@ function harness() {
     assert.equal(requests.length, 0, `unsettled requests: ${requests.map((request) => request.url).join(", ")}`);
     assert.equal(errors.length, 0, `unexpected error notifications: ${errors.join(", ")}`);
   }
-  return { read, set, call, take, tickSearch, errors, warnings, successes, finish, unmountNow: () => unmount?.() };
+  function switchRole(next: string) {
+    const previous = role.value;
+    role.value = next;
+    for (const watcher of roleWatchers) watcher(next, previous);
+  }
+  return { read, set, call, take, tickSearch, switchRole, errors, warnings, successes, finish, unmountNow: () => unmount?.() };
 }
 
 async function flushMicrotasks() { await flush(); await flush(); }
@@ -200,11 +209,10 @@ async function flushMicrotasks() { await flush(); await flush(); }
 /** 1. 切角色后，旧角色的列表晚回来：不能覆盖新角色，也不能把 activeCharacterId 写回去。 */
 async function staleRoleLoadIgnored() {
   const page = harness();
-  page.set("activeCharacterId", "char-a");
   const stale = page.call("load", 1);
   const staleResponse = page.take("/api/admin/identities");
 
-  page.call("pickCharacter", "char-b");
+  page.switchRole("char-b");
   const freshResponse = page.take("/api/admin/identities");
 
   staleResponse.resolve(pageResult("char-a", friend("a-1", "char-a", { displayName: "A 的朋友" })));
@@ -441,4 +449,4 @@ for (const [name, run] of cases) {
   await run();
   console.log(`PASS ${name}`);
 }
-console.log("friend page async race regressions passed (actual identities.vue handlers)");
+console.log("friend page async race regressions passed (actual SocialFriendsWorkspace.vue handlers)");
