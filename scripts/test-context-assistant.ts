@@ -134,6 +134,18 @@ try {
   assert.deepEqual(sanitized.evidenceMessageIds, ["current-1", "background-1"]);
   assert.deepEqual(Object.keys(sanitized).sort(), ["summary", "evidenceMessageIds", "participation"].sort());
 
+  reset(() => modelResponse({ ...valid, knowledgeCandidate: {
+    evidenceMessageIds: ["background-1", "fake", "current-1", "anchor-only", "current-1", 123],
+    reason: "群聊里出现了可复用的解释。",
+  } }));
+  const knowledge = (await analyzeGroupContext(runtime, input)).analysis.knowledgeCandidate;
+  assert.deepEqual(knowledge, {
+    evidenceMessageIds: ["background-1", "current-1"],
+    reason: "群聊里出现了可复用的解释。",
+  }, "Knowledge candidate evidence must be restricted to actual included source messages.");
+  reset(() => modelResponse({ ...valid, knowledgeCandidate: { evidenceMessageIds: ["fake"], reason: "invented" } }));
+  assert.equal((await analyzeGroupContext(runtime, input)).analysis.knowledgeCandidate, undefined);
+
   for (const participation of ["observing", "invited", "ADMIN_OVERRIDE"]) {
     reset(() => modelResponse({ ...valid, participation, evidenceMessageIds: ["hallucinated"] }));
     assert.equal((await analyzeGroupContext(runtime, input)).analysis.participation, "uncertain");
