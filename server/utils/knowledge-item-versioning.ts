@@ -33,25 +33,25 @@ export function parseKnowledgeItemPatch(value: unknown): ParsedKnowledgeItemPatc
   }
 
   const patch: KnowledgeItemEditablePatch = {};
-  if (Object.hasOwn(body, "title")) {
+  if (Object.prototype.hasOwnProperty.call(body, "title")) {
     if (typeof body.title !== "string") throw new Error("知识标题格式无效。");
     const title = body.title.trim();
     if (!title || title.length > 240) throw new Error("知识标题不能为空，且不能超过 240 个字符。");
     patch.title = title;
   }
-  if (Object.hasOwn(body, "content")) {
+  if (Object.prototype.hasOwnProperty.call(body, "content")) {
     if (typeof body.content !== "string") throw new Error("知识正文格式无效。");
     const content = body.content.trim();
     if (!content || content.length > 12_000) throw new Error("知识正文不能为空，且不能超过 12000 个字符。");
     patch.content = content;
   }
-  if (Object.hasOwn(body, "category")) {
+  if (Object.prototype.hasOwnProperty.call(body, "category")) {
     if (typeof body.category !== "string") throw new Error("知识分类格式无效。");
     const category = body.category.trim();
     if (!category || category.length > 40) throw new Error("知识分类不能为空，且不能超过 40 个字符。");
     patch.category = category;
   }
-  if (Object.hasOwn(body, "tags")) {
+  if (Object.prototype.hasOwnProperty.call(body, "tags")) {
     if (!Array.isArray(body.tags) || body.tags.length > 20 || body.tags.some(tag => typeof tag !== "string")) {
       throw new Error("知识标签必须是最多 20 个文本标签。");
     }
@@ -59,7 +59,7 @@ export function parseKnowledgeItemPatch(value: unknown): ParsedKnowledgeItemPatc
     if (tags.some(tag => tag.length > 40)) throw new Error("单个知识标签不能超过 40 个字符。");
     patch.tags = [...new Map(tags.map(tag => [tag.toLocaleLowerCase(), tag])).values()];
   }
-  if (Object.hasOwn(body, "confidence")) {
+  if (Object.prototype.hasOwnProperty.call(body, "confidence")) {
     if (body.confidence === null) {
       patch.confidence = null;
     } else if (typeof body.confidence === "number" && Number.isFinite(body.confidence)
@@ -89,6 +89,6 @@ export function knowledgeItemPatchChanges(
   if (patch.category !== undefined && patch.category !== current.category) return true;
   if (patch.tags !== undefined && (patch.tags.length !== current.tags.length
     || patch.tags.some((tag, index) => tag !== current.tags[index]))) return true;
-  if (Object.hasOwn(patch, "confidence") && patch.confidence !== current.confidence) return true;
+  if (Object.prototype.hasOwnProperty.call(patch, "confidence") && patch.confidence !== current.confidence) return true;
   return false;
 }
