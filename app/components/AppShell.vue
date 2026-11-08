@@ -142,7 +142,7 @@ const growthNavigation: NavigationItem[] = [
   { key: "growth-language", label: "语料 / 表达习惯", href: "/growth/language", icon: ChatDotRound },
   { key: "growth-state", label: "状态系统", href: "/growth/state", icon: Odometer },
   { key: "growth-reflection", label: "反思与成长", href: "/growth/reflection", icon: MagicStick },
-  { key: "growth-knowledge", label: "轻量知识系统", href: "/growth/knowledge", icon: Memo },
+  { key: "growth-knowledge", label: "知识系统", href: "/growth/knowledge", icon: Memo },
   { key: "growth-goals", label: "目标与愿望", href: "/growth/goals", icon: Aim },
 ];
 
