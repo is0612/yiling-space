@@ -152,10 +152,11 @@ try {
   }
   reset(() => modelResponse({ ...valid, participation: "invited", evidenceMessageIds: ["current-1"] }));
   assert.equal((await analyzeGroupContext(runtime, input)).analysis.participation, "invited");
-  reset(() => modelResponse({ ...valid, summary: "摘".repeat(3_000), memoryQuery: "问".repeat(800), uncertainty: "疑".repeat(900) }));
+  reset(() => modelResponse({ ...valid, summary: "摘".repeat(3_000), memoryQuery: "问".repeat(800), knowledgeQuery: "知".repeat(800), uncertainty: "疑".repeat(900) }));
   const bounded = (await analyzeGroupContext(runtime, input)).analysis;
   assert.equal(bounded.summary.length, 1_600);
   assert.equal(bounded.memoryQuery?.length, 240);
+  assert.equal(bounded.knowledgeQuery?.length, 240);
   assert.equal(bounded.uncertainty?.length, 400);
   for (const content of ["not JSON SECRET_PROVIDER_BODY", "[]", "null", "{}", '{"summary":42}', '[{"summary":"bad"}]']) {
     reset(() => modelResponse(content));
