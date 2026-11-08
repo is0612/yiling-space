@@ -32,11 +32,44 @@ const maxInputTokens = ref(12288);
 const maxOutputTokens = ref(2048);
 const models = ref<string[]>([]);
 
-async function load() {
-  if (!characterId.value) { character.value = null; return; }
+let loadVersion = 0;
+let roleVersion = 0;
+let operationVersion = 0;
+let modelFetchVersion = 0;
+let pageDisposed = false;
+
+function isCurrentRole(targetCharacterId: string, expectedRoleVersion: number): boolean {
+  return !pageDisposed
+    && characterId.value === targetCharacterId
+    && roleVersion === expectedRoleVersion;
+}
+
+function resetDraft() {
+  character.value = null;
+  model.value = "";
+  apiBaseUrl.value = "";
+  apiKey.value = "";
+  enabled.value = false;
+  autoCollectEnabled.value = false;
+  temperature.value = 0.1;
+  maxInputTokens.value = 12288;
+  maxOutputTokens.value = 2048;
+  models.value = [];
+  loading.value = false;
+  saving.value = false;
+  fetchingModels.value = false;
+}
+
+async function load(targetCharacterId: string = characterId.value) {
+  const requestVersion = ++loadVersion;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
   loading.value = true;
   try {
-    const data = await $fetch<CharacterSettings>(`/api/characters/${encodeURIComponent(characterId.value)}`);
+    const data = await $fetch<CharacterSettings>(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}`,
+    );
+    if (requestVersion !== loadVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     character.value = data;
     model.value = data.knowledgeAssistantModel ?? "";
     apiBaseUrl.value = data.knowledgeAssistantApiBaseUrl ?? "";
@@ -45,56 +78,108 @@ async function load() {
     temperature.value = data.knowledgeAssistantTemperature ?? 0.1;
     maxInputTokens.value = data.knowledgeAssistantMaxInputTokens ?? 12288;
     maxOutputTokens.value = data.knowledgeAssistantMaxOutputTokens ?? 2048;
+    // API Key 从不回显；每个角色加载时都清空输入框。
     apiKey.value = "";
     models.value = [];
   } catch {
-    ElMessage.error("读取知识处理助手配置失败。");
-  } finally { loading.value = false; }
+    if (requestVersion === loadVersion && isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      ElMessage.error("读取知识处理助手配置失败。");
+    }
+  } finally {
+    if (requestVersion === loadVersion && isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      loading.value = false;
+    }
+  }
 }
-watch(characterId, () => { void load(); }, { immediate: true });
+
+watch(characterId, (nextCharacterId: string) => {
+  // 切角色时作废配置读取、保存和模型列表请求，避免 A 的表单或响应落到 B。
+  roleVersion += 1;
+  loadVersion += 1;
+  operationVersion += 1;
+  modelFetchVersion += 1;
+  resetDraft();
+  if (nextCharacterId) void load(nextCharacterId);
+}, { immediate: true, flush: "sync" });
 
 async function save(silent = false) {
-  if (!characterId.value || saving.value) return false;
-  if (enabled.value && !model.value.trim()) { ElMessage.warning("启用知识处理助手前，请填写模型名称。"); return false; }
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || saving.value || pageDisposed) return false;
+  if (enabled.value && !model.value.trim()) {
+    ElMessage.warning("启用知识处理助手前，请填写模型名称。");
+    return false;
+  }
+
+  const currentOperation = ++operationVersion;
+  const body = {
+    knowledgeAutoCollectEnabled: autoCollectEnabled.value,
+    knowledgeAssistantEnabled: enabled.value,
+    knowledgeAssistantModel: model.value.trim(),
+    knowledgeAssistantApiBaseUrl: apiBaseUrl.value.trim(),
+    knowledgeAssistantApiKey: apiKey.value,
+    knowledgeAssistantTemperature: temperature.value,
+    knowledgeAssistantMaxInputTokens: maxInputTokens.value,
+    knowledgeAssistantMaxOutputTokens: maxOutputTokens.value,
+  };
   saving.value = true;
   try {
-    const data = await $fetch<CharacterSettings>(`/api/characters/${encodeURIComponent(characterId.value)}`, {
-      method: "PATCH",
-      body: {
-        knowledgeAutoCollectEnabled: autoCollectEnabled.value,
-        knowledgeAssistantEnabled: enabled.value,
-        knowledgeAssistantModel: model.value.trim(),
-        knowledgeAssistantApiBaseUrl: apiBaseUrl.value.trim(),
-        knowledgeAssistantApiKey: apiKey.value,
-        knowledgeAssistantTemperature: temperature.value,
-        knowledgeAssistantMaxInputTokens: maxInputTokens.value,
-        knowledgeAssistantMaxOutputTokens: maxOutputTokens.value,
-      },
-    });
+    const data = await $fetch<CharacterSettings>(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}`,
+      { method: "PATCH", body },
+    );
+    if (currentOperation !== operationVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return false;
     character.value = data;
     apiKey.value = "";
     if (!silent) ElMessage.success("知识处理助手设置已保存。");
     return true;
   } catch (error) {
+    if (currentOperation !== operationVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return false;
     const e = error as { data?: { statusMessage?: string }; message?: string };
     ElMessage.error(e.data?.statusMessage || e.message || "保存失败。");
     return false;
-  } finally { saving.value = false; }
+  } finally {
+    if (currentOperation === operationVersion && isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      saving.value = false;
+    }
+  }
 }
 
 async function fetchModels() {
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  const currentFetch = ++modelFetchVersion;
+  if (!targetCharacterId || pageDisposed || fetchingModels.value) return;
   if (!await save(true)) return;
+  if (currentFetch !== modelFetchVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+
   fetchingModels.value = true;
   try {
     const result = await $fetch<{ ok: boolean; models: string[]; message: string }>(
-      `/api/characters/${encodeURIComponent(characterId.value)}/growth/knowledge/models`,
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/models`,
     );
+    if (currentFetch !== modelFetchVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     models.value = result.models;
     if (result.ok) ElMessage.success(result.message);
     else ElMessage.warning(result.message);
-  } catch { ElMessage.error("获取模型列表失败。"); }
-  finally { fetchingModels.value = false; }
+  } catch {
+    if (currentFetch === modelFetchVersion && isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      ElMessage.error("获取模型列表失败。");
+    }
+  } finally {
+    if (currentFetch === modelFetchVersion && isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      fetchingModels.value = false;
+    }
+  }
 }
+
+onBeforeUnmount(() => {
+  pageDisposed = true;
+  roleVersion += 1;
+  loadVersion += 1;
+  operationVersion += 1;
+  modelFetchVersion += 1;
+});
 </script>
 
 <template>
