@@ -185,3 +185,18 @@ export function isVisionApiKeySaved(configValue: unknown): boolean {
   const config = asRecord(configValue);
   return typeof config.visionApiKeyEncrypted === "string" && config.visionApiKeyEncrypted.startsWith("v1.");
 }
+
+
+/** 知识处理助手使用独立凭据，不回落到聊天、记忆或语境助手 Key。 */
+export async function resolveCharacterKnowledgeAssistantApiKey(configValue: unknown): Promise<string> {
+  const config = asRecord(configValue);
+  const encrypted = config.knowledgeAssistantApiKeyEncrypted;
+  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
+  return (await decryptApiKey(encrypted)).trim();
+}
+
+export function isKnowledgeAssistantApiKeySaved(configValue: unknown): boolean {
+  const config = asRecord(configValue);
+  return typeof config.knowledgeAssistantApiKeyEncrypted === "string"
+    && config.knowledgeAssistantApiKeyEncrypted.startsWith("v1.");
+}
