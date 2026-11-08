@@ -22,6 +22,11 @@ type KnowledgeItem = {
   id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null;
   status: string; sourceType: string; sourceRef: unknown; revision: number; createdAt: string; updatedAt: string;
 };
+type KnowledgeItemRevision = {
+  id: string; revision: number; title: string; content: string; category: string; tags: string[];
+  confidence: number | null; status: string; sourceType: string; sourceRef: unknown; createdAt: string;
+};
+type KnowledgeItemDraft = { title: string; content: string; category: string; tagsText: string; confidence: string };
 type WorkspaceData = { candidates: Candidate[]; items: KnowledgeItem[]; candidateCount: number; itemCount: number };
 const route = useRoute();
 const { character: activeCharacter } = useCharacterSelection(route.path);
@@ -32,6 +37,13 @@ const rawContent = ref("");
 const keyword = ref("");
 const data = ref<WorkspaceData>({ candidates: [], items: [], candidateCount: 0, itemCount: 0 });
 const busyIds = ref<string[]>([]);
+const editingItemId = ref("");
+const editDraft = ref<KnowledgeItemDraft>({ title: "", content: "", category: "", tagsText: "", confidence: "" });
+const savingItem = ref(false);
+const historyItemId = ref("");
+const historyLoading = ref(false);
+const historyItems = ref<KnowledgeItemRevision[]>([]);
+let historyRequestVersion = 0;
 
 let loadVersion = 0;
 let roleVersion = 0;
@@ -87,6 +99,13 @@ watch(characterId, (nextCharacterId: string) => {
   rawContent.value = "";
   busyIds.value = [];
   savingCandidate.value = false;
+  editingItemId.value = "";
+  editDraft.value = { title: "", content: "", category: "", tagsText: "", confidence: "" };
+  savingItem.value = false;
+  historyItemId.value = "";
+  historyLoading.value = false;
+  historyItems.value = [];
+  historyRequestVersion += 1;
   loading.value = false;
   if (nextCharacterId) void load(nextCharacterId);
 }, { immediate: true, flush: "sync" });
@@ -96,6 +115,7 @@ onBeforeUnmount(() => {
   pageDisposed = true;
   roleVersion += 1;
   loadVersion += 1;
+  historyRequestVersion += 1;
 });
 
 async function addCandidate() {
@@ -189,6 +209,96 @@ async function dismissCandidate(candidate: Candidate) {
     ElMessage.error(e.data?.statusMessage || "操作失败。");
   }
 }
+function startEdit(item: KnowledgeItem) {
+  editingItemId.value = item.id;
+  editDraft.value = {
+    title: item.title,
+    content: item.content,
+    category: item.category,
+    tagsText: item.tags.join(", "),
+    confidence: item.confidence === null ? "" : String(item.confidence),
+  };
+}
+
+function cancelEdit() {
+  editingItemId.value = "";
+  editDraft.value = { title: "", content: "", category: "", tagsText: "", confidence: "" };
+}
+
+async function saveEdit(item: KnowledgeItem) {
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || savingItem.value || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+  const draft = { ...editDraft.value };
+  const rawConfidence = draft.confidence.trim();
+  const confidence = rawConfidence ? Number(rawConfidence) : null;
+  if (confidence !== null && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
+    ElMessage.error("可信度必须是 0 到 1 之间的数字，留空表示未标注。");
+    return;
+  }
+  const tags = draft.tagsText.split(/[，,]/).map(tag => tag.trim()).filter(Boolean);
+  savingItem.value = true;
+  try {
+    const result = await $fetch<{ item: KnowledgeItem; unchanged: boolean }>(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/items/${encodeURIComponent(item.id)}`,
+      {
+        method: "PATCH",
+        body: {
+          revision: item.revision,
+          title: draft.title,
+          content: draft.content,
+          category: draft.category,
+          tags,
+          confidence,
+        },
+      },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    ElMessage.success(result.unchanged ? "内容没有变化。" : `已保存为第 ${result.item.revision} 版。`);
+    cancelEdit();
+    await load(targetCharacterId);
+  } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const e = error as { data?: { statusMessage?: string; statusCode?: number } };
+    ElMessage.error(e.data?.statusMessage || (e.data?.statusCode === 409 ? "知识已更新，请刷新后重试。" : "保存知识失败。"));
+    if (e.data?.statusCode === 409) await load(targetCharacterId);
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) savingItem.value = false;
+  }
+}
+
+async function toggleHistory(item: KnowledgeItem) {
+  if (historyItemId.value === item.id) {
+    historyRequestVersion += 1;
+    historyItemId.value = "";
+    historyItems.value = [];
+    historyLoading.value = false;
+    return;
+  }
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+  const requestVersion = ++historyRequestVersion;
+  historyItemId.value = item.id;
+  historyItems.value = [];
+  historyLoading.value = true;
+  try {
+    const result = await $fetch<{ revisions: KnowledgeItemRevision[] }>(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/items/${encodeURIComponent(item.id)}/history`,
+    );
+    if (requestVersion !== historyRequestVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    historyItems.value = result.revisions;
+  } catch (error) {
+    if (requestVersion !== historyRequestVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const e = error as { data?: { statusMessage?: string } };
+    ElMessage.error(e.data?.statusMessage || "读取知识版本历史失败。");
+  } finally {
+    if (requestVersion === historyRequestVersion && isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      historyLoading.value = false;
+    }
+  }
+}
+
 function sourceLabel(sourceType: string) { return ({ MANUAL: "手动录入", CHAT: "聊天来源", IMPORT: "资料导入" } as Record<string,string>)[sourceType] ?? sourceType; }
 function sourceDetails(value: unknown) { return value ? JSON.stringify(value) : ""; }
 function statusLabel(status: string) {
@@ -263,6 +373,32 @@ function formatDate(value: string) {
         <p>{{ item.content }}</p>
         <div class="tag-row"><span v-for="tag in item.tags" :key="tag" class="tag">{{ tag }}</span><span class="muted">可信度 {{ item.confidence === null ? "未标注" : Math.round(item.confidence * 100) + "%" }}</span><span class="muted">修订 {{ item.revision }}</span></div>
         <div class="item-date">来源：{{ sourceLabel(item.sourceType) }}<span v-if="sourceDetails(item.sourceRef)"> · {{ sourceDetails(item.sourceRef) }}</span><br>更新于 {{ formatDate(item.updatedAt) }}</div>
+        <div class="item-actions">
+          <button @click="editingItemId === item.id ? cancelEdit() : startEdit(item)">{{ editingItemId === item.id ? "取消编辑" : "编辑知识" }}</button>
+          <button @click="toggleHistory(item)">{{ historyItemId === item.id ? "收起历史" : "版本历史" }}</button>
+        </div>
+        <div v-if="editingItemId === item.id" class="item-editor">
+          <label>标题<input v-model="editDraft.title" maxlength="240"></label>
+          <label>正文<textarea v-model="editDraft.content" rows="5" maxlength="12000"></textarea></label>
+          <div class="editor-grid">
+            <label>分类<input v-model="editDraft.category" maxlength="40"></label>
+            <label>可信度（0–1，留空表示未标注）<input v-model="editDraft.confidence" type="number" min="0" max="1" step="0.01"></label>
+          </div>
+          <label>标签（用逗号分隔）<input v-model="editDraft.tagsText" maxlength="1000"></label>
+          <p class="muted">来源类型和来源引用保持不变，确保知识仍可追溯。</p>
+          <div class="item-actions"><button @click="cancelEdit()">取消</button><button class="primary" :disabled="savingItem" @click="saveEdit(item)">{{ savingItem ? "保存中…" : "保存为新版本" }}</button></div>
+        </div>
+        <div v-if="historyItemId === item.id" class="history-panel">
+          <div class="history-heading"><strong>历史版本</strong><span class="muted">当前版本 V{{ item.revision }}</span></div>
+          <p v-if="historyLoading" class="muted">正在读取历史…</p>
+          <p v-else-if="!historyItems.length" class="muted">暂无旧版本；每次成功修改后都会在这里保留被替换的版本。</p>
+          <article v-for="revision in historyItems" :key="revision.id" class="revision-card">
+            <div class="history-heading"><strong>版本 V{{ revision.revision }}</strong><span class="muted">{{ formatDate(revision.createdAt) }}</span></div>
+            <h4>{{ revision.title }}</h4>
+            <p>{{ revision.content }}</p>
+            <div class="tag-row"><span class="category">{{ revision.category }}</span><span v-for="tag in revision.tags" :key="tag" class="tag">{{ tag }}</span><span class="muted">可信度 {{ revision.confidence === null ? "未标注" : Math.round(revision.confidence * 100) + "%" }}</span></div>
+          </article>
+        </div>
       </article>
     </section>
     <div v-if="loading" class="loading-note">正在同步知识数据…</div>
@@ -287,6 +423,16 @@ button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2
 .result-top strong,.item-heading h3{color:var(--ink);font-size:14px}.reason,.error-text{font-size:12px;color:var(--dim);margin:0;line-height:1.6}.error-text{color:var(--danger,#c65b5b)}
 .tag-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.tag{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:3px 8px}
 .candidate-actions{display:flex;justify-content:flex-end;gap:8px}.item-heading h3{margin:0}.item-card p{white-space:pre-wrap}.item-date{font-size:11px;color:var(--dim);text-align:right}
+.item-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.item-editor,.history-panel{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2)}
+.item-editor label{display:flex;flex-direction:column;gap:5px;color:var(--dim);font-size:12px}
+.item-editor input,.item-editor textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);padding:9px;font:inherit;font-size:13px}
+.editor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.history-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.revision-card{display:flex;flex-direction:column;gap:7px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.revision-card h4{margin:0;color:var(--ink);font-size:13px}
+.revision-card p{font-size:12px;line-height:1.7;white-space:pre-wrap}
+
 .empty-state,.loading-note,.knowledge-empty{color:var(--dim);font-size:13px;padding:10px 0}.loading-note{text-align:center}
 @media(max-width:850px){.knowledge-flow{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){.knowledge-flow{grid-template-columns:1fr}.knowledge-context-note{margin-left:0}.knowledge-section{padding:13px}.candidate-actions{flex-wrap:wrap}}
