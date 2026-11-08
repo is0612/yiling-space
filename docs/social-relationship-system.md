@@ -382,6 +382,7 @@
 
 ### 14.8 任务队列与本地调度第二批（2026-11-08）
 
+- 补齐第一批评估迁移的 Prisma 命名漂移：仅重命名两条组合外键和一个唯一索引，字段、约束语义和业务数据均不变。
 - 新经历触发已接入 `SocialExperience` 创建事务：只对 `createManyAndReturn + skipDuplicates` 实际新增的经历排队；重复 sourceKey 被跳过时不增加 generation。关系任务按 scopeId 唯一合并，不为每条消息创建任务。
 - 同一任务触发时 generation 原子递增、触发原因去重合并、优先级取较高值。若任务正在 RUNNING，只增加 generation 和下一批触发原因，不更换当前租约；当前批完成后如发现 generation 更新，自动回到 QUEUED。
 - 已实现独立的社交任务领取、租约续期、完成、失败退避和过期恢复原语。领取使用数据库行锁与 `SKIP LOCKED`，每次领取生成独立 leaseToken 并递增 fencingToken；提交/续租/失败更新均同时校验执行者、leaseToken、fencingToken 与租约未过期。执行期间若 generation 增长，即使当前批失败或租约过期，也直接重排新一代，不会把新经历一起耗尽重试次数。
