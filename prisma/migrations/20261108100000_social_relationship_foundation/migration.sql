@@ -49,8 +49,7 @@ CREATE INDEX "social_experiences_memoryEventId_idx"
   ON "social_experiences"("memoryEventId");
 CREATE INDEX "social_experiences_scopeId_createdAt_idx"
   ON "social_experiences"("scopeId", "createdAt");
-CREATE INDEX "social_experiences_memoryEventId_idx"
-  ON "social_experiences"("memoryEventId");
+
 
 -- CreateIndex
 CREATE UNIQUE INDEX "social_relation_changes_idempotencyKey_key"
