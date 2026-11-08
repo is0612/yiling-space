@@ -186,6 +186,25 @@ check(
   await prisma.socialExperience.count({ where: { scopeId: friendRelation.scopeId } }) === 1,
 );
 
+const crossScopeDuplicate = await prisma.$transaction((tx) => applyMemoryEvents(
+  tx,
+  { memoryScopeId: friendRelation.scopeId, characterId: character.id, snapshotId: null, timeZone: "Asia/Shanghai", state: "FINAL" },
+  [{
+    ...base,
+    occurredAt: messageLate.occurredAt.toISOString(),
+    title: "同一事实在另一个记忆范围再次提炼",
+    detail: "底层证据消息完全相同",
+    evidenceMessageIds: [messageLate.id],
+  }],
+  evidence,
+));
+check("另一个记忆范围重复提炼仍正常保留忆泡", crossScopeDuplicate.applied.length === 1, crossScopeDuplicate);
+check(
+  "跨记忆范围的同一底层消息不会重复累计为社交经历",
+  await prisma.socialExperience.count({ where: { scopeId: friendRelation.scopeId } }) === 1,
+);
+
+
 
 console.log("\n[4] 只撞人名的短标题");
 const shortSame = await prisma.$transaction((tx) => applyMemoryEvents(
