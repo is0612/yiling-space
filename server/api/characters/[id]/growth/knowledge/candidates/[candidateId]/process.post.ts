@@ -41,7 +41,7 @@ export default defineEventHandler(async (event) => {
     });
     const updated = await prisma.knowledgeCandidate.update({
       where: { id: candidateId },
-      data: { status: "REVIEW", processedResult: result as never, processingError: null, processedAt: new Date() },
+      data: { status: "REVIEW", processedResult: result as unknown as Prisma.InputJsonValue, processingError: null, processedAt: new Date() },
       select: { id: true, status: true, processedResult: true, processedAt: true },
     });
     return { candidate: updated };
