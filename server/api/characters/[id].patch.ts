@@ -5,6 +5,7 @@ import { readCharacterBody, readCharacterProfilePatch } from "../../utils/charac
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
 import { encryptApiKey, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
 import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
+import { readKnowledgeAssistantSettingsPatch, validateKnowledgeAssistantEnabledConfig } from "../../utils/knowledge-assistant-config";
 import { requireActorUserId } from "../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../utils/local-api";
 import { MEMORY_ITEM_LIMIT_MAX, MEMORY_ITEM_LIMIT_MIN, RECENT_MESSAGE_LIMIT_MAX, RECENT_MESSAGE_LIMIT_MIN } from "../../utils/memory-retrieval";
@@ -42,7 +43,17 @@ export default defineEventHandler(async (event) => {
   } catch (error) {
     throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "语境助手配置无效。" });
   }
-  const modelConfigPatch: Record<string, unknown> = { ...profile.modelConfig, ...contextAssistantPatch.config };
+  let knowledgeAssistantPatch;
+  try {
+    knowledgeAssistantPatch = readKnowledgeAssistantSettingsPatch(body);
+  } catch (error) {
+    throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "知识处理助手配置无效。" });
+  }
+  const modelConfigPatch: Record<string, unknown> = {
+    ...profile.modelConfig,
+    ...contextAssistantPatch.config,
+    ...knowledgeAssistantPatch.config,
+  };
   /** 语音 Key 的明文只在这里短暂停留，落库前一定加密；不写日志、不回显。 */
   let voiceApiKeyPlain = "";
   let clearVoiceApiKey = false;
@@ -486,7 +497,7 @@ export default defineEventHandler(async (event) => {
   const { chatApiKey, clearApiKey, ...safeSettingsPatch } = settingsPatch;
   Object.assign(modelConfigPatch, safeSettingsPatch);
 
-  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey) {
+  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey || knowledgeAssistantPatch.apiKey || knowledgeAssistantPatch.clearApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
     if (clearApiKey) delete nextConfig.chatApiKeyEncrypted;
     if (chatApiKey) nextConfig.chatApiKeyEncrypted = await encryptApiKey(chatApiKey);
@@ -541,10 +552,13 @@ export default defineEventHandler(async (event) => {
     }
     if (contextAssistantPatch.clearApiKey) delete nextConfig.contextAssistantApiKeyEncrypted;
     if (contextAssistantPatch.apiKey) nextConfig.contextAssistantApiKeyEncrypted = await encryptApiKey(contextAssistantPatch.apiKey);
+    if (knowledgeAssistantPatch.clearApiKey) delete nextConfig.knowledgeAssistantApiKeyEncrypted;
+    if (knowledgeAssistantPatch.apiKey) nextConfig.knowledgeAssistantApiKeyEncrypted = await encryptApiKey(knowledgeAssistantPatch.apiKey);
     try {
       validateContextAssistantEnabledConfig(nextConfig);
+      validateKnowledgeAssistantEnabledConfig(nextConfig);
     } catch (error) {
-      throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "语境助手配置无效。" });
+      throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "助手配置无效。" });
     }
     data.modelConfig = nextConfig as Prisma.InputJsonObject;
   }
