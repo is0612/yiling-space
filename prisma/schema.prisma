@@ -226,6 +226,8 @@ model Character {
   proactiveIntents  ProactiveIntent[]
   stickers          CharacterSticker[]
   catchphrases      CharacterCatchphrase[]
+  knowledgeCandidates KnowledgeCandidate[]
+  knowledgeItems     KnowledgeItem[]
 
   @@index([ownerId, status])
   @@index([originCharacterId])
@@ -1296,4 +1298,51 @@ model JournalRevision {
   @@unique([journalId, kind, version])
   @@index([journalId, kind, version])
   @@map("journal_revisions")
+}
+
+
+/// 知识候选：收集到但尚未正式入库的原始知识线索。
+/// 候选保留来源和处理结果；只有明确接受后才会生成 KnowledgeItem。
+model KnowledgeCandidate {
+  id               String    @id @default(uuid()) @db.Uuid
+  characterId      String    @db.Uuid
+  sourceType       String    @default("MANUAL") @db.VarChar(20)
+  sourceRef        Json?     @db.JsonB
+  rawContent       String    @db.Text
+  status           String    @default("PENDING") @db.VarChar(20)
+  processedResult  Json?     @db.JsonB
+  processingError  String?   @db.Text
+  processedAt      DateTime? @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
+  character        Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  knowledgeItem    KnowledgeItem?
+
+  @@index([characterId, status, createdAt])
+  @@index([characterId, createdAt])
+  @@map("knowledge_candidates")
+}
+
+/// 正式知识条目：与候选分表，避免未经处理的原始内容被直接检索或注入聊天。
+model KnowledgeItem {
+  id          String    @id @default(uuid()) @db.Uuid
+  characterId String    @db.Uuid
+  candidateId String?   @unique @db.Uuid
+  title       String    @db.VarChar(240)
+  content     String    @db.Text
+  category    String    @default("GENERAL") @db.VarChar(40)
+  tags        String[]  @default([])
+  confidence  Float?
+  status      String    @default("ACTIVE") @db.VarChar(20)
+  sourceType  String    @default("MANUAL") @db.VarChar(20)
+  sourceRef   Json?     @db.JsonB
+  revision    Int       @default(1)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(6)
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  candidate   KnowledgeCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+
+  @@index([characterId, status, updatedAt])
+  @@index([characterId, category, status])
+  @@map("knowledge_items")
 }
