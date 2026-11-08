@@ -70,6 +70,41 @@ enum RelationshipStage {
   CLOSE_FRIEND
 }
 
+/// 关系当前相处状态，与亲疏阶段分开记录。
+enum SocialRelationshipStatus {
+  NORMAL
+  DISTANT
+  CONFLICT
+  REPAIRING
+  UNOBSERVED
+}
+
+enum SocialRelationshipAssessmentTaskStatus {
+  QUEUED
+  RUNNING
+  RETRY_WAIT
+  FAILED
+  PAUSED
+}
+
+enum SocialRelationshipAssessmentStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum SocialRelationshipAssessmentOutcome {
+  CHANGE
+  MAINTAIN
+  INSUFFICIENT
+  REVIEW
+}
+
+enum SocialRelationshipAssessmentEvidenceKind {
+  NEW
+  CONTEXT
+}
+
 enum ConversationStatus {
   ACTIVE
   ARCHIVED
@@ -332,7 +367,9 @@ model MemoryScope {
   friendChatPolicy   FriendChatPolicy   @default(DEFAULT)
   /// 仅 EXTERNAL_IDENTITY 范围使用；其他范围保持 null。
   relationshipStage  RelationshipStage?
-  /// 乐观并发版本：关系评估提交前必须核对版本，避免旧结果覆盖新状态。
+  /// 当前相处状态，与关系亲疏阶段分开；仅 EXTERNAL_IDENTITY 范围使用。
+  relationshipStatus SocialRelationshipStatus?
+  /// 乐观并发版本：关系阶段或相处状态变化时递增。
   relationshipVersion Int               @default(0)
   relationshipUpdatedAt DateTime?        @db.Timestamptz(6)
   createdAt          DateTime           @default(now()) @db.Timestamptz(6)
@@ -350,6 +387,8 @@ model MemoryScope {
   aliasSuggestions   FriendAliasSuggestion[]
   socialExperiences  SocialExperience[]
   socialRelationChanges SocialRelationChange[]
+  socialAssessmentTask SocialRelationshipAssessmentTask?
+  socialAssessments SocialRelationshipAssessment[]
 
   @@index([characterId, scopeType])
   @@index([characterId, interactionCount])
@@ -623,6 +662,7 @@ model SocialExperience {
   scope         MemoryScope @relation(fields: [scopeId], references: [id], onDelete: Cascade)
   memoryEvent   MemoryEvent @relation(fields: [memoryEventId], references: [id], onDelete: Cascade)
   usedInChanges SocialRelationChangeEvidence[]
+  usedInAssessments SocialRelationshipAssessmentEvidence[]
 
   @@unique([scopeId, sourceKey])
   @@index([scopeId, createdAt])
@@ -669,6 +709,85 @@ model SocialRelationChangeEvidence {
 ///
 /// `scopeId` 是关系行（MemoryScope.id），不是 ExternalIdentity.id —— 备注按「角色 × 人」隔离，
 /// 删角色时随 MemoryScope 级联清掉（scopeId 有外键）。
+/// 每段角色级好友关系一条可复用的评估任务状态；只保存调度状态，不承载执行逻辑。
+model SocialRelationshipAssessmentTask {
+  id                String                                  @id @default(uuid()) @db.Uuid
+  scopeId           String                                  @unique @db.Uuid
+  status            SocialRelationshipAssessmentTaskStatus  @default(QUEUED)
+  triggerReasons    String[]                                @default([])
+  /// 新经历/回顾触发时递增；执行中的新触发留给下一代处理。
+  generation        Int                                     @default(0)
+  processedGeneration Int                                   @default(0)
+  priority          Int                                     @default(0)
+  runAt             DateTime                                @default(now()) @db.Timestamptz(6)
+  attemptCount      Int                                     @default(0)
+  maxAttempts       Int                                     @default(3)
+  lockedAt          DateTime?                               @db.Timestamptz(6)
+  lockedBy          String?                                 @db.VarChar(255)
+  leaseToken        String?                                 @db.Uuid
+  leaseExpiresAt    DateTime?                               @db.Timestamptz(6)
+  fencingToken      Int                                     @default(0)
+  lastError         String?                                 @db.Text
+  lastAssessedAt    DateTime?                               @db.Timestamptz(6)
+  nextReviewAt      DateTime?                               @db.Timestamptz(6)
+  createdAt         DateTime                                @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                                @updatedAt @db.Timestamptz(6)
+  scope             MemoryScope                             @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+
+  @@index([status, runAt])
+  @@index([status, priority, runAt])
+  @@map("social_relationship_assessment_tasks")
+}
+
+/// 每次实际评估单独留档；失败、证据不足和保持不变都不能覆盖旧记录。
+model SocialRelationshipAssessment {
+  id                 String                                  @id @default(uuid()) @db.Uuid
+  scopeId            String                                  @db.Uuid
+  generation         Int
+  triggerReasons     String[]                                @default([])
+  evaluatedStage     RelationshipStage
+  evaluatedStatus    SocialRelationshipStatus
+  relationshipVersion Int
+  outcome            SocialRelationshipAssessmentOutcome?
+  suggestedStage     RelationshipStage?
+  suggestedStatus   SocialRelationshipStatus?
+  reason             String?                                 @db.Text
+  observations       Json?                                   @db.JsonB
+  confidence         Float?
+  modelProvider      String?                                 @db.VarChar(80)
+  modelName          String?                                 @db.VarChar(160)
+  promptVersion      String?                                 @db.VarChar(80)
+  inputCutoffAt      DateTime?                               @db.Timestamptz(6)
+  status             SocialRelationshipAssessmentStatus      @default(RUNNING)
+  error              String?                                 @db.Text
+  startedAt          DateTime                                @default(now()) @db.Timestamptz(6)
+  completedAt        DateTime?                               @db.Timestamptz(6)
+  createdAt          DateTime                                @default(now()) @db.Timestamptz(6)
+  scope              MemoryScope                             @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  evidence           SocialRelationshipAssessmentEvidence[]
+
+  @@index([scopeId, createdAt])
+  @@index([scopeId, relationshipVersion])
+  @@index([status, createdAt])
+  @@map("social_relationship_assessments")
+}
+
+/// 评估引用的经历。NEW 是本轮新增证据，CONTEXT 仅作背景；复用限制由后续证据服务核验。
+model SocialRelationshipAssessmentEvidence {
+  id             String                                      @id @default(uuid()) @db.Uuid
+  assessmentId   String                                      @db.Uuid
+  experienceId   String                                      @db.Uuid
+  kind           SocialRelationshipAssessmentEvidenceKind
+  createdAt      DateTime                                    @default(now()) @db.Timestamptz(6)
+  assessment     SocialRelationshipAssessment                @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  experience     SocialExperience                             @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@unique([assessmentId, experienceId])
+  @@index([experienceId, kind])
+  @@index([assessmentId, kind])
+  @@map("social_relationship_assessment_evidence")
+}
+
 model FriendAliasSuggestion {
   id        String   @id @default(uuid()) @db.Uuid
   scopeId   String   @db.Uuid
