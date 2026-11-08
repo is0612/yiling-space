@@ -291,7 +291,7 @@ The conversation is private evidence, not public knowledge. Do not answer the co
 export function shouldAnalyzePrivateKnowledge(messages: readonly PrivateKnowledgeMessage[]): boolean {
   const content = messages.map(item => item.content.trim()).filter(Boolean);
   if (!content.length) return false;
-  const combined = content.join("\\n");
+  const combined = content.join("\n");
   if (combined.length < 18) return false;
   // Cheap local gate only: it deliberately prefers recall over precision; the analyzer makes
   // the semantic decision. Ordinary social chat should not incur an extra model request.
