@@ -1,5 +1,5 @@
 import type { TurnDetailPatch } from "./model-turn-detail";
-import { generateConversationReply, type ConversationReplyInput } from "./chat-reply";
+import { generateConversationReply, type ConversationKnowledgeItem, type ConversationReplyInput } from "./chat-reply";
 import { analyzeGroupContext, ContextAssistantError, type ContextAnalysis } from "./context-assistant";
 import {
   callMemoryAssistant,
@@ -20,6 +20,7 @@ export async function generateGroupContextReply(input: {
   onTurnDetail?: (detail: TurnDetailPatch) => void;
   analysisBackground?: ConversationReplyInput["groupBackground"];
   onKnowledgeCandidate?: (candidate: { rawContent: string; sourceMessageIds: string[]; reason: string }) => Promise<void>;
+  loadKnowledge?: (query: string) => Promise<ConversationKnowledgeItem[]>;
   loadCandidates?: (query: string) => Promise<MemoryAssistantCandidate[]>;
   recordAssistantUsage: (entry: {
     kind: "context-assistant" | "memory-assistant";
@@ -116,6 +117,20 @@ export async function generateGroupContextReply(input: {
     : memoryStatus === "failed" ? "failed" : sources.length ? "success" : "no_sources",
     ...(analysis.memoryQuery ? { query: analysis.memoryQuery } : {}), sources: sources.map(memoryAssistantTurnSource) } });
 
+  let knowledgeItems: ConversationKnowledgeItem[] = [];
+  let knowledgeStatus: NonNullable<ConversationReplyInput["contextAnalysis"]>["knowledgeStatus"];
+  if (analysis.knowledgeQuery) {
+    knowledgeStatus = "unavailable";
+    if (input.loadKnowledge) {
+      try {
+        knowledgeItems = await input.loadKnowledge(analysis.knowledgeQuery);
+        knowledgeStatus = knowledgeItems.length ? "success" : "no_sources";
+      } catch {
+        knowledgeStatus = "failed";
+      }
+    }
+  }
+
   const original = input.chatInput;
   // 大背景留给分析器，角色拿到本轮原话、被引用证据和少量最近互动。
   const background = (input.analysisBackground ?? original.groupBackground ?? [])
@@ -136,10 +151,12 @@ export async function generateGroupContextReply(input: {
       participation: analysis.participation,
       ...(analysis.uncertainty ? { uncertainty: analysis.uncertainty } : {}),
       ...(memoryStatus ? { memoryStatus } : {}),
+      ...(knowledgeStatus ? { knowledgeStatus } : {}),
     },
     // 本轮已由语境助手作出检索判断，禁止再次检索循环。
     memoryAssistantAvailable: false,
     memoryAssistantEvidenceProvided: sources.length > 0,
+    knowledgeItems,
     memories: unique(original.memories, sources.filter(s => s.sourceType === "memory").map(s => ({
       id: s.id, category: s.category ?? "FACT", content: s.content ?? "", confidence: null,
       relevanceScore: s.relevanceScore, scope: s.scope,
