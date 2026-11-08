@@ -4,7 +4,7 @@ import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemo
 import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
-import { isAsrApiKeySaved, isContextAssistantApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
+import { isAsrApiKeySaved, isContextAssistantApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isSocialRelationshipAssessmentAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 
 function positiveNumber(value: unknown): number {
@@ -71,6 +71,15 @@ export type CharacterDto = {
   knowledgeAssistantApiBaseUrl: string;
   knowledgeAssistantApiKeyConfigured: boolean;
   knowledgeAssistantConfigured: boolean;
+  /** 关系评估助手独立模型配置；API Key 只回显是否已保存。 */
+  socialRelationshipAssessmentAssistantEnabled: boolean;
+  socialRelationshipAssessmentAssistantModel: string;
+  socialRelationshipAssessmentAssistantTemperature: number;
+  socialRelationshipAssessmentAssistantMaxInputTokens: number;
+  socialRelationshipAssessmentAssistantMaxOutputTokens: number;
+  socialRelationshipAssessmentAssistantApiBaseUrl: string;
+  socialRelationshipAssessmentAssistantApiKeyConfigured: boolean;
+  socialRelationshipAssessmentAssistantConfigured: boolean;
   /** 每日 token 额度，0 = 不限。 */
   dailyTokenLimit: number;
   /** 每次对话注入的记忆 / 快照 token 预算。 */
@@ -218,6 +227,13 @@ export function toCharacterDto(input: unknown): CharacterDto {
   const contextAssistantApiKeyConfigured = isContextAssistantApiKeySaved(config);
   const knowledgeAssistantModel = typeof config.knowledgeAssistantModel === "string" ? config.knowledgeAssistantModel.trim() : "";
   const knowledgeAssistantApiKeyConfigured = isKnowledgeAssistantApiKeySaved(config);
+  const socialRelationshipAssessmentAssistantModel = typeof config.socialRelationshipAssessmentAssistantModel === "string"
+    ? config.socialRelationshipAssessmentAssistantModel.trim()
+    : "";
+  const socialRelationshipAssessmentAssistantApiKeyConfigured = isSocialRelationshipAssessmentAssistantApiKeySaved(config);
+  const socialRelationshipAssessmentAssistantApiBaseUrl = typeof config.socialRelationshipAssessmentAssistantApiBaseUrl === "string"
+    ? config.socialRelationshipAssessmentAssistantApiBaseUrl
+    : "";
   const avatarTone = resolveAvatarTone(character.name, config);
   const setting = character.memorySetting;
   const snapshots = character.memoryScopes.flatMap((scope) => scope.snapshots.map((snapshot) => snapshot.createdAt));
@@ -299,6 +315,14 @@ export function toCharacterDto(input: unknown): CharacterDto {
     knowledgeAssistantApiBaseUrl: typeof config.knowledgeAssistantApiBaseUrl === "string" ? config.knowledgeAssistantApiBaseUrl : "",
     knowledgeAssistantApiKeyConfigured,
     knowledgeAssistantConfigured: Boolean(knowledgeAssistantModel && knowledgeAssistantApiKeyConfigured),
+    socialRelationshipAssessmentAssistantEnabled: config.socialRelationshipAssessmentAssistantEnabled === true,
+    socialRelationshipAssessmentAssistantModel,
+    socialRelationshipAssessmentAssistantTemperature: typeof config.socialRelationshipAssessmentAssistantTemperature === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantTemperature) ? Math.min(2, Math.max(0, config.socialRelationshipAssessmentAssistantTemperature)) : 0.1,
+    socialRelationshipAssessmentAssistantMaxInputTokens: typeof config.socialRelationshipAssessmentAssistantMaxInputTokens === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.socialRelationshipAssessmentAssistantMaxInputTokens))) : 16_384,
+    socialRelationshipAssessmentAssistantMaxOutputTokens: typeof config.socialRelationshipAssessmentAssistantMaxOutputTokens === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.socialRelationshipAssessmentAssistantMaxOutputTokens))) : 2_048,
+    socialRelationshipAssessmentAssistantApiBaseUrl,
+    socialRelationshipAssessmentAssistantApiKeyConfigured,
+    socialRelationshipAssessmentAssistantConfigured: Boolean(socialRelationshipAssessmentAssistantModel && socialRelationshipAssessmentAssistantApiBaseUrl && socialRelationshipAssessmentAssistantApiKeyConfigured),
     dailyTokenLimit: positiveNumber(config.dailyTokenLimit),
     memoryTokenBudget: positiveNumber(config.memoryTokenBudget) || MEMORY_TOKEN_BUDGET_DEFAULT,
     snapshotTokenBudget: positiveNumber(config.snapshotTokenBudget) || SNAPSHOT_TOKEN_BUDGET_DEFAULT,
