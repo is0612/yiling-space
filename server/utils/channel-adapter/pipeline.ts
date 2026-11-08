@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
-import { type ConversationContextMessage, type ConversationGroupDecision } from "../chat-reply";
+import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem } from "../chat-reply";
 import {
   formatMentionContent,
   readMessageMentions,
@@ -14,6 +14,7 @@ import {
 } from "../memory-assistant";
 import { resolveChatTimeZone } from "../chat-time-context";
 import { resolveContextAssistantRuntime } from "../context-assistant";
+import { rankKnowledgeItems } from "../knowledge-retrieval";
 import { generateGroupContextReply } from "../group-context-reply";
 import { parseEventTimeRange } from "../memory-event-time";
 import {
@@ -1652,6 +1653,18 @@ async function runChannelTurn(input: {
         ...(line.mentions?.length ? { mentions: line.mentions } : {}),
         occurredAt: new Date(line.at).toISOString(),
       })),
+      loadKnowledge: async (searchQuery: string): Promise<ConversationKnowledgeItem[]> => {
+        const rows = await prisma.knowledgeItem.findMany({
+          where: { characterId: input.characterId, status: "ACTIVE" },
+          orderBy: { updatedAt: "desc" },
+          take: 300,
+          select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, sourceType: true, updatedAt: true },
+        });
+        return rankKnowledgeItems(searchQuery, rows, 8).map(item => ({
+          id: item.id, title: item.title, content: item.content, category: item.category,
+          tags: item.tags, confidence: item.confidence, sourceType: item.sourceType,
+        }));
+      },
       onKnowledgeCandidate: async (candidate) => {
         const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
         const duplicate = await prisma.knowledgeCandidate.findFirst({
