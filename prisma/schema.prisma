@@ -664,6 +664,7 @@ model SocialExperience {
   usedInChanges SocialRelationChangeEvidence[]
   usedInAssessments SocialRelationshipAssessmentEvidence[]
 
+  @@unique([id, scopeId])
   @@unique([scopeId, sourceKey])
   @@index([scopeId, createdAt])
   @@index([memoryEventId])
@@ -766,6 +767,7 @@ model SocialRelationshipAssessment {
   scope              MemoryScope                             @relation(fields: [scopeId], references: [id], onDelete: Cascade)
   evidence           SocialRelationshipAssessmentEvidence[]
 
+  @@unique([id, scopeId])
   @@index([scopeId, createdAt])
   @@index([scopeId, relationshipVersion])
   @@index([status, createdAt])
@@ -777,10 +779,12 @@ model SocialRelationshipAssessmentEvidence {
   id             String                                      @id @default(uuid()) @db.Uuid
   assessmentId   String                                      @db.Uuid
   experienceId   String                                      @db.Uuid
+  scopeId        String                                      @db.Uuid
   kind           SocialRelationshipAssessmentEvidenceKind
   createdAt      DateTime                                    @default(now()) @db.Timestamptz(6)
-  assessment     SocialRelationshipAssessment                @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
-  experience     SocialExperience                             @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  /// 两条复合外键共享 scopeId：数据库层直接阻止把别的角色/关系的经历挂进本次评估。
+  assessment     SocialRelationshipAssessment                @relation(fields: [assessmentId, scopeId], references: [id, scopeId], onDelete: Cascade)
+  experience     SocialExperience                             @relation(fields: [experienceId, scopeId], references: [id, scopeId], onDelete: Cascade)
 
   @@unique([assessmentId, experienceId])
   @@index([experienceId, kind])
