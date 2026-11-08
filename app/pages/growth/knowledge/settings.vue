@@ -52,7 +52,7 @@ watch(characterId, () => { void load(); }, { immediate: true });
 
 async function save(silent = false) {
   if (!characterId.value || saving.value) return false;
-  if (!model.value.trim()) { ElMessage.warning("请填写知识处理助手模型名称。"); return false; }
+  if (enabled.value && !model.value.trim()) { ElMessage.warning("启用知识处理助手前，请填写模型名称。"); return false; }
   saving.value = true;
   try {
     const data = await $fetch<CharacterSettings>(`/api/characters/${encodeURIComponent(characterId.value)}`, {
