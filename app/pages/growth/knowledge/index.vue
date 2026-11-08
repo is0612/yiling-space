@@ -260,8 +260,11 @@ async function saveEdit(item: KnowledgeItem) {
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     const e = error as { data?: { statusMessage?: string; statusCode?: number } };
-    ElMessage.error(e.data?.statusMessage || (e.data?.statusCode === 409 ? "知识已更新，请刷新后重试。" : "保存知识失败。"));
-    if (e.data?.statusCode === 409) await load(targetCharacterId);
+    ElMessage.error(e.data?.statusMessage || (e.data?.statusCode === 409 ? "知识已更新，请检查最新版本后重新编辑。" : "保存知识失败。"));
+    if (e.data?.statusCode === 409) {
+      cancelEdit();
+      await load(targetCharacterId);
+    }
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) savingItem.value = false;
   }
