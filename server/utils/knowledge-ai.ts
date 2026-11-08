@@ -93,9 +93,19 @@ export async function processKnowledgeWithAssistant(input: {
     "只输出 JSON 对象，不要 Markdown，不要代码围栏。字段：isKnowledge(boolean), recommendation(CREATE|DUPLICATE|CONFLICT|DISCARD), title, content, category, tags(string[]), confidence(0..1), reason, relatedItemIds(string[])。",
     "content 应自洽、简洁、保留必要条件和适用范围；不确定的内容必须明确写出不确定性。category 使用 GENERAL、SCIENCE、TECHNOLOGY、HISTORY、CULTURE、LANGUAGE、SKILL、OTHER 之一。",
   ].join("\n");
+  const candidateBudget = Math.max(800, Math.floor(input.runtime.maxInputTokens * 0.35));
+  const existingLimit = Math.max(2, Math.min(12, Math.floor(input.runtime.maxInputTokens / 1_024)));
+  const existingContentLimit = Math.max(120, Math.min(350, Math.floor(input.runtime.maxInputTokens * 0.035)));
+  const existingKnowledge = input.existingItems.slice(0, existingLimit).map(item => ({
+    id: item.id,
+    title: item.title.slice(0, 120),
+    content: item.content.slice(0, existingContentLimit),
+    category: item.category,
+    tags: item.tags.slice(0, 8),
+  }));
   const user = JSON.stringify({
-    candidate: input.candidateContent.slice(0, Math.max(2000, input.runtime.maxInputTokens * 3)),
-    existingKnowledge: input.existingItems.slice(0, 30),
+    candidate: input.candidateContent.slice(0, candidateBudget),
+    existingKnowledge,
   });
   const endpoint = buildChatCompletionsEndpoint(input.runtime.apiBaseUrl);
   const response = await fetch(endpoint, {
