@@ -1666,6 +1666,9 @@ async function runChannelTurn(input: {
         }));
       },
       onKnowledgeCandidate: async (candidate) => {
+        const modelConfig = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
+          ? character.modelConfig as Record<string, unknown> : {};
+        if (modelConfig.knowledgeAutoCollectEnabled !== true) return;
         const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
         const duplicate = await prisma.knowledgeCandidate.findFirst({
           where: { characterId: input.characterId, sourceType: "CHAT", rawContent: candidate.rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
