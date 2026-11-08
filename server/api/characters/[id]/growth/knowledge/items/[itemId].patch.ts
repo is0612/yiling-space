@@ -1,9 +1,9 @@
 import { createError, getRouterParam, readBody } from "h3";
-import type { Prisma } from "../../../../../../src/generated/prisma/client";
-import { requireActorUserId } from "../../../../../utils/auth";
-import { requireUuid } from "../../../../../utils/local-api";
-import { getPrisma } from "../../../../../utils/prisma";
-import { knowledgeItemPatchChanges, parseKnowledgeItemPatch } from "../../../../../utils/knowledge-item-versioning";
+import type { Prisma } from "../../../../../../../src/generated/prisma/client";
+import { requireActorUserId } from "../../../../../../utils/auth";
+import { requireUuid } from "../../../../../../utils/local-api";
+import { getPrisma } from "../../../../../../utils/prisma";
+import { knowledgeItemPatchChanges, parseKnowledgeItemPatch } from "../../../../../../utils/knowledge-item-versioning";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
