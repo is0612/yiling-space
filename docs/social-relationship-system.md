@@ -292,3 +292,13 @@
 - 已接入忆泡写入事务：每条新忆泡根据证据消息的结构化参与者引用，关联到同一角色下对应平台账号的 EXTERNAL_IDENTITY 关系；只按 platform + externalId 精确匹配，不按昵称猜测。
 - SocialExperience 只保存关系与 MemoryEvent 的引用，不复制正文；sourceKey 由去重后的底层证据消息 ID 集合计算，同一关系重复提炼相同证据（包括在不同记忆范围再次提炼）不会重复累计。
 - 当前已完成关系数据结构、迁移、新关系初始化和新忆泡自动关联。历史忆泡回填、关系评估队列、关系建议核验服务、阶段变化 API/UI、触发调度和失败恢复仍未实现；不得把本阶段基础表描述为已具备完整关系成长功能。
+
+
+## 13. 历史社交经历回填工具（2026-11-08）
+
+- 新增 `yarn backfill:social-experiences`：默认只预演，显式传入 `--apply` 才写入；按 ACTIVE MemoryEvent ID 游标分页，只依据结构化 participantRefs 的 platform + externalId 匹配同一角色的 EXTERNAL_IDENTITY 关系。
+- 只创建 SocialExperience 到既有 MemoryEvent 的引用，不复制忆泡正文、不改写忆泡、不调用模型；sourceKey 复用底层证据消息 ID 集合哈希，依靠关系级唯一约束保证幂等。
+- 预演统计分别报告无证据、无可靠参与者引用、当前角色未建立对应关系三类跳过原因。第三类由 `skippedWithoutRelation` 单独计数，避免 scanned 与 eligible/skips 之间出现无法解释的差额。
+- 隔离库验收入口为 `yarn test:backfill-social-experiences-isolated`：创建一次性本地 PostgreSQL 数据库、执行 migrate deploy、运行数据库断言后 DROP；数据库断言脚本会拒绝非指定测试库。
+- 隔离库已验证预演只读、正确关联、跨角色隔离、重复运行幂等及缺少可靠信息时跳过。业务库实际回填前仍必须先执行预演、人工核对全部统计；只有确认统计合理后才使用 `--apply`。
+- 同一 sourceKey 存在多条忆泡时，当前代表记录由扫描顺序（MemoryEvent.id 升序）决定，不保证选择最早 occurredAt；该行为已知且稳定，后续如需调整应单独设计。
