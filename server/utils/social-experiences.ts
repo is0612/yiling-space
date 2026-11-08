@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import type { Prisma } from "../../src/generated/prisma/client";
 import { readExternalParticipantRefs } from "./participant-names";
+import { enqueueSocialRelationshipAssessment } from "./social-relationship-queue";
 
 export function buildSocialExperienceSourceKey(sourceMessageIds: readonly string[]): string | null {
   const ids = [...new Set(sourceMessageIds.map((id) => id.trim()).filter(Boolean))].sort();
@@ -61,6 +62,17 @@ export async function linkMemoryEventToSocialExperiences(
   });
   if (!data.length) return 0;
 
-  const created = await tx.socialExperience.createMany({ data, skipDuplicates: true });
-  return created.count;
+  // 只对真正新插入的经历触发队列；重复提炼被唯一约束跳过时，不增加 generation。
+  const created = await tx.socialExperience.createManyAndReturn({
+    data,
+    skipDuplicates: true,
+    select: { scopeId: true },
+  });
+  for (const scopeId of new Set(created.map((row) => row.scopeId))) {
+    await enqueueSocialRelationshipAssessment(tx, {
+      scopeId,
+      reason: "NEW_EXPERIENCE",
+    });
+  }
+  return created.length;
 }

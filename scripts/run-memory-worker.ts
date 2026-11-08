@@ -2,6 +2,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
 import { processNextMemoryJob } from "../server/utils/memory-worker";
+import { runSocialRelationshipQueueMaintenance } from "../server/utils/social-relationship-queue";
 
 const prisma = getPrisma();
 const watch = process.argv.includes("--watch");
@@ -16,6 +17,25 @@ process.on("SIGTERM", () => { running = false; });
 
 try {
   do {
+    try {
+      const socialQueue = await runSocialRelationshipQueueMaintenance(prisma);
+      if (socialQueue.backfilled || socialQueue.periodicQueued || socialQueue.recoveredLeases || socialQueue.failedLeases) {
+        process.stdout.write(JSON.stringify({
+          at: new Date().toISOString(),
+          event: "social-relationship-queue-maintained",
+          ...socialQueue,
+        }) + "\n");
+      }
+    } catch (error) {
+      // 社交队列维护故障不能阻断现有记忆任务。
+      process.stderr.write(JSON.stringify({
+        at: new Date().toISOString(),
+        event: "social-relationship-queue-error",
+        error: error instanceof Error ? error.message : String(error),
+      }) + "\n");
+      if (!watch) process.exitCode = 1;
+    }
+
     try {
       const result = await processNextMemoryJob(prisma, { workerId });
       if (result.processed) {
