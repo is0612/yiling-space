@@ -68,6 +68,10 @@ const experienceA = await prisma.socialExperience.create({
   data: { scopeId: scopeA, memoryEventId: eventA.id, sourceKey: `source-a-${runId}` },
   select: { id: true },
 });
+const experienceAContext = await prisma.socialExperience.create({
+  data: { scopeId: scopeA, memoryEventId: eventA.id, sourceKey: `source-a-context-${runId}` },
+  select: { id: true },
+});
 const experienceB = await prisma.socialExperience.create({
   data: { scopeId: scopeB, memoryEventId: eventB.id, sourceKey: `source-b-${runId}` },
   select: { id: true },
@@ -109,17 +113,21 @@ try {
       evaluatedStage: "STRANGER", evaluatedStatus: "UNOBSERVED", relationshipVersion: 0,
       status: "SUCCEEDED", outcome: "INSUFFICIENT", reason: "证据不足时保持原关系",
       evidence: { create: [
-        { experienceId: experienceA.id, kind: "NEW" },
-        { experienceId: experienceB.id, kind: "CONTEXT" },
+        { experienceId: experienceA.id, scopeId: scopeA, kind: "NEW" },
+        { experienceId: experienceAContext.id, scopeId: scopeA, kind: "CONTEXT" },
       ] },
     },
     include: { evidence: true },
   });
   check("评估历史独立保存结论，且不复制忆泡正文", assessment.outcome === "INSUFFICIENT" && assessment.reason !== null);
   check("评估证据能区分 NEW 与 CONTEXT", assessment.evidence.some(e => e.kind === "NEW") && assessment.evidence.some(e => e.kind === "CONTEXT"));
+  check("数据库复合外键拒绝把另一角色的经历挂入当前评估",
+    await expectPrismaCode(() => prisma.socialRelationshipAssessmentEvidence.create({
+      data: { assessmentId: assessment.id, experienceId: experienceB.id, scopeId: scopeA, kind: "CONTEXT" },
+    }), "P2003"));
   check("同一评估内同一经历不能重复挂接",
     await expectPrismaCode(() => prisma.socialRelationshipAssessmentEvidence.create({
-      data: { assessmentId: assessment.id, experienceId: experienceA.id, kind: "NEW" },
+      data: { assessmentId: assessment.id, experienceId: experienceA.id, scopeId: scopeA, kind: "NEW" },
     }), "P2002"));
   check("评估历史允许同一关系多次追加，不覆盖旧记录",
     (await prisma.socialRelationshipAssessment.count({ where: { scopeId: scopeA } })) === 1);
@@ -134,13 +142,13 @@ try {
     && (await prisma.socialRelationshipAssessment.count({ where: { scopeId: scopeA } })) === 2);
 
   console.log("\n[4] 外键与级联行为");
+  await prisma.socialExperience.delete({ where: { id: experienceA.id } });
+  const remainingEvidence = await prisma.socialRelationshipAssessmentEvidence.findMany({
+    where: { assessmentId: assessment.id }, select: { kind: true, experienceId: true },
+  });
   check("删除经历时对应评估证据引用级联删除",
-    await expectPrismaCode(async () => {
-      await prisma.socialExperience.delete({ where: { id: experienceA.id } });
-      throw new Error("sentinel");
-    }, "P2025") === false); // 实际删除成功；下方核对证据
-  check("经历删除后评估证据被级联清理",
-    (await prisma.socialRelationshipAssessmentEvidence.count({ where: { assessmentId: assessment.id } })) === 1);
+    remainingEvidence.length === 1 && remainingEvidence[0]!.kind === "CONTEXT"
+    && remainingEvidence[0]!.experienceId === experienceAContext.id);
   await prisma.memoryScope.delete({ where: { id: scopeA } });
   check("删除关系范围后，任务、评估历史及证据全部级联清理",
     (await prisma.socialRelationshipAssessmentTask.count({ where: { scopeId: scopeA } })) === 0
