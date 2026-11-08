@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
   const character = await prisma.character.findFirst({ where: { id: characterId, ownerId }, select: { id: true } });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
   const result = await prisma.knowledgeCandidate.updateMany({
-    where: { id: candidateId, characterId, status: { notIn: ["ACCEPTED", "PROCESSING"] } },
+    where: { id: candidateId, characterId, status: { notIn: ["ACCEPTED", "PROCESSING", "ACCEPTING"] } },
     data: { status: "DISMISSED" },
   });
   if (!result.count) throw createError({ statusCode: 404, statusMessage: "候选不存在、正在处理或已经入库。" });
