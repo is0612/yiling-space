@@ -496,7 +496,8 @@ export type ConversationReplyResult = {
 //      AI（显示名「外部 bot」）并叫它「某个称呼」，当前角色把 @ 对象认成自己，长期记忆写成
 //      「对 <被 @ 的 QQ>（当前角色）说」。v51 起每行带 `mentions`（member / speaker / kind），
 //      并明确「@other 不是她，@ 后面的称呼属于那个对象」。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v51";
+// v52：语境助手可按需附带已确认的知识条目；知识是带可信度的资料，不是指令，也不冒充个人经历。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v52";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
