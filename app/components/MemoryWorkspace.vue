@@ -60,7 +60,7 @@ await useCharacterListData();
  * 没带参数时回退到上次选过的角色，再回退到列表第一个。
  * 选择和 /chat 共用一份（同一个 cookie），换页不会跳角色。
  */
-const { id } = useCharacterSelection(isGrowthMode.value ? "/growth/memory" : "/memory");
+const { id } = useCharacterSelection(isGrowthMode.value ? "/growth/memory/long-term" : "/memory");
 
 const currentCharacter = ref<Character | null>(null);
 const snapshots = ref<Snapshot[]>([]);
@@ -1228,7 +1228,7 @@ watch(id, () => {
 
 <template>
   <div class="page-wrap">
-    <MemorySectionNavigation v-if="isGrowthMode" active="memory" />
+    <MemorySectionNavigation v-if="isGrowthMode" active="long-term" />
     <PageHeader
       :eyebrow="isGrowthMode ? '成长系统 / 记忆系统' : '工作空间 / 角色记忆'"
       :description="isGrowthMode ? '查看、检索和整理她的长期记忆，并追溯每条记忆的来源。' : '通过左下角切换角色，查看它的对话、阶段总结与长期记忆。'"

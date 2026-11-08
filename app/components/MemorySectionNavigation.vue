@@ -1,8 +1,8 @@
 <script setup lang="ts">
 withDefaults(defineProps<{
-  active: "memory" | "events" | "snapshots";
+  active: "overview" | "long-term" | "events" | "snapshots";
 }>(), {
-  active: "memory",
+  active: "overview",
 });
 </script>
 
@@ -11,8 +11,16 @@ withDefaults(defineProps<{
     <NuxtLink
       to="/growth/memory"
       class="memory-section-link"
-      :class="{ active: active === 'memory' }"
-      :aria-current="active === 'memory' ? 'page' : undefined"
+      :class="{ active: active === 'overview' }"
+      :aria-current="active === 'overview' ? 'page' : undefined"
+    >
+      总览
+    </NuxtLink>
+    <NuxtLink
+      to="/growth/memory/long-term"
+      class="memory-section-link"
+      :class="{ active: active === 'long-term' }"
+      :aria-current="active === 'long-term' ? 'page' : undefined"
     >
       长期记忆
     </NuxtLink>
@@ -42,6 +50,7 @@ withDefaults(defineProps<{
   gap: 6px;
   margin-bottom: 14px;
   border-bottom: 1px solid var(--line);
+  overflow-x: auto;
 }
 .memory-section-link {
   display: inline-flex;
@@ -52,6 +61,7 @@ withDefaults(defineProps<{
   color: var(--dim);
   font-size: 13px;
   text-decoration: none;
+  white-space: nowrap;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
 .memory-section-link:hover {

@@ -47,6 +47,8 @@ function harness() {
   const timers = new Map<number, () => void>();
   const requests: PendingRequest[] = [];
   const errors: string[] = [];
+  const infos: string[] = [];
+  let progressRefreshes = 0;
   const warnings: string[] = [];
   const successes: string[] = [];
   let roleValue = "role-a";
@@ -99,6 +101,8 @@ function harness() {
     onBeforeUnmount: (callback: () => void) => { unmount = callback; },
     useCharacterListData: async () => {},
     useCharacterSelection: () => ({ id: role }),
+    useMemoryProgress: () => ({ lastFinished: { value: null } }),
+    refreshMemoryProgress: async () => { progressRefreshes += 1; return []; },
     useCharacterList: () => ({ value: [{ id: "role-a", name: "角色 A" }, { id: "role-b", name: "角色 B" }] }),
     URLSearchParams,
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
@@ -107,6 +111,7 @@ function harness() {
       error: (message: string) => errors.push(message),
       warning: (message: string) => warnings.push(message),
       success: (message: string) => successes.push(message),
+      info: (message: string) => infos.push(message),
     },
     ElMessageBox: { confirm: async () => true },
     $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
@@ -146,7 +151,7 @@ function harness() {
     assert.equal(requests.length, 0, `unsettled requests: ${requests.map((request) => request.url).join(", ")}`);
     assert.equal(errors.length, 0, `unexpected error notifications: ${errors.join(", ")}`);
   }
-  return { read, set, call, take, tickSearch, timers, errors, warnings, successes, finish, unmount: () => unmount?.() };
+  return { read, set, call, take, tickSearch, timers, errors, warnings, successes, infos, get progressRefreshes() { return progressRefreshes; }, finish, unmount: () => unmount?.() };
 }
 
 function day(key: string) {
@@ -298,7 +303,28 @@ async function unmountInvalidatesRequests() {
   page.finish();
 }
 
-for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests]) {
+async function eventExtractionRefreshesCalendar() {
+  const page = harness();
+  const pending = page.call("runEventExtraction");
+  const request = page.take("/api/characters/role-a/memory-events/extract", undefined, "POST");
+  request.resolve({
+    queued: ["conversation-a"],
+    processed: [{ status: "SUCCEEDED", message: "整理完成" }],
+  });
+  await flushMicrotasks();
+  assert.equal(page.progressRefreshes, 1, "整理任务提交后应刷新全局进度");
+  const daysRequest = page.take("/api/characters/role-a/days");
+  daysRequest.resolve(daysResult("2026-11-08"));
+  await flushMicrotasks();
+  const detailRequest = page.take("/api/characters/role-a/days/2026-11-08");
+  detailRequest.resolve(detailResult("2026-11-08"));
+  await pending;
+  assert.deepEqual(page.read("days"), [day("2026-11-08")], "整理结束后应刷新忆泡日历");
+  assert.deepEqual(page.successes, ["整理完成"]);
+  page.finish();
+}
+
+for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests, eventExtractionRefreshesCalendar]) {
   await test();
   console.log(`PASS ${test.name}`);
 }
