@@ -1,9 +1,9 @@
 import { createError, getRouterParam } from "h3";
-import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../utils/chat-model-config";
-import { resolveCharacterKnowledgeAssistantApiKey } from "../../../../utils/credential-encryption";
-import { requireActorUserId } from "../../../../utils/auth";
-import { requireUuid } from "../../../../utils/local-api";
-import { getPrisma } from "../../../../utils/prisma";
+import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../../utils/chat-model-config";
+import { resolveCharacterKnowledgeAssistantApiKey } from "../../../../../utils/credential-encryption";
+import { requireActorUserId } from "../../../../../utils/auth";
+import { requireUuid } from "../../../../../utils/local-api";
+import { getPrisma } from "../../../../../utils/prisma";
 
 type ModelsResult = { ok: boolean; models: string[]; message: string; unsupported?: boolean; provider?: string };
 
