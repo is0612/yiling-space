@@ -537,6 +537,29 @@ try {
       },
     }),
   });
+
+  /** 模拟部分网关把整条消息拍平成字符串，而不是 OneBot 段数组。 */
+  const emitRawGroupMessage = (
+    groupId: number,
+    messageId: number,
+    message: string,
+    userId = 444,
+  ) => fetch("http://127.0.0.1:4031/__mock/emit", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      event: {
+        post_type: "message",
+        message_type: "group",
+        self_id: 123456789,
+        message_id: messageId,
+        user_id: userId,
+        group_id: groupId,
+        sender: { user_id: userId, nickname: "群友", role: "member" },
+        message,
+      },
+    }),
+  });
   const groupReplies = async () => (await readSent()).filter(
     (item) => item.action === "send_group_msg" && Number(item.body.group_id) === 1001,
   );
@@ -752,6 +775,15 @@ try {
   await emitToGroup(1012, 98, "全体注意一下", 555, "all");
   await waitFor(async () => (await assistantCount(1012)) >= 1);
   assert.equal(await assistantCount(1012), 1, "@all 不能算「@ 的是别人」，否则群里喊话她永远不接。");
+
+  // 字符串消息里的普通文本「@QQ」不能冒充真正的 CQ at 段。
+  // 但真正的 CQ:at 字符串仍须识别，兼容把消息拍平的网关。
+  await emitRawGroupMessage(1013, 99, "@123456789 这个号码只是正文，不是在叫她");
+  await sleep(2500);
+  assert.equal(await assistantCount(1013), 0, "字符串正文手打 @self QQ 不能触发回复。");
+  await emitRawGroupMessage(1014, 100, "[CQ:at,qq=123456789] 这次是真的叫你");
+  await waitFor(async () => (await assistantCount(1014)) >= 1);
+  assert.equal(await assistantCount(1014), 1, "字符串消息中的真实 CQ at 仍应触发回复。");
 
   /**
    * 9.9b 被挡下的 @other 轮次也要把「@ 的是谁」写进库。
