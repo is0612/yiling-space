@@ -33,6 +33,9 @@ const rawConfig = {
   chatApiKeyEncrypted: "v1.aaa.bbb.ccc",
   voiceApiKeyEncrypted: "v1.ddd.eee.fff",
   memoryAssistantApiKeyEncrypted: "v1.ggg.hhh.iii",
+  knowledgeAssistantApiKeyEncrypted: "v1.knowledge.key.secret",
+  knowledgeAssistantModel: "private-knowledge-model",
+  knowledgeAssistantEnabled: true,
   memoryAssistantModel: "private-memory-model",
   memoryAssistantEnabled: true,
   chatApiKey: "sk-plain",
@@ -45,6 +48,9 @@ const stripped = stripPortableModelConfig(rawConfig);
 assert.equal(Reflect.get(stripped, "chatApiKeyEncrypted"), undefined, "加密的聊天 Key 不能进包");
 assert.equal(Reflect.get(stripped, "voiceApiKeyEncrypted"), undefined, "加密的语音 Key 不能进包");
 assert.equal(Reflect.get(stripped, "memoryAssistantApiKeyEncrypted"), undefined, "记忆助手的加密 Key 不能进包");
+assert.equal(Reflect.get(stripped, "knowledgeAssistantApiKeyEncrypted"), undefined, "知识处理助手的加密 Key 不能进包");
+assert.equal(Reflect.get(stripped, "knowledgeAssistantModel"), undefined, "知识处理助手模型配置不随角色卡导出");
+assert.equal(Reflect.get(stripped, "knowledgeAssistantEnabled"), undefined, "导入角色卡时不自动启用知识处理助手");
 assert.equal(Reflect.get(stripped, "memoryAssistantModel"), undefined, "记忆助手的专用模型配置不随角色卡导出");
 assert.equal(Reflect.get(stripped, "memoryAssistantEnabled"), undefined, "导入角色卡时不自动启用记忆助手");
 assert.equal("chatApiKey" in stripped, false, "明文 Key 字段不能进包");
