@@ -306,7 +306,7 @@
 
 ## 14. 第三阶段：关系评估系统架构（2026-11-08 已确认设计）
 
-本节记录第三阶段关系评估系统的设计决定。**以下是目标架构，不代表数据库模型、Worker、AI 配置或 UI 已经实现。**
+本节记录第三阶段关系评估系统的设计决定。数据库基础模型与迁移已在 PR #17 实现；Worker、AI 配置、评估服务和 UI 仍未实现。
 
 ### 14.1 评估原则
 
@@ -370,3 +370,12 @@
 7. 可靠性验收：并发领取、执行中新增经历、模型失败、进程退出、租约过期、重试、过期建议和跨角色隔离。
 
 第一版先让单个独立评估能力跑通闭环，不提前引入通用多 Agent 编排平台。每一批开发完成后单独本地验收，通过并合并后再开始下一批。
+
+
+### 14.7 数据库基础第一批（2026-11-08）
+
+- 已在 `MemoryScope` 增加独立的 `relationshipStatus`，仅 EXTERNAL_IDENTITY 范围有值；既有关系迁移为 `UNOBSERVED`，新关系初始化为 `UNOBSERVED`。阶段仍由 `relationshipStage` 保存。
+- 新增每段关系唯一的 `SocialRelationshipAssessmentTask`，保存触发原因、generation、已处理 generation、优先级、计划时间、重试状态、租约字段、fencing token 与最近/下次评估时间；本批仅建立数据结构，不启用 Worker。
+- 新增不可覆盖的 `SocialRelationshipAssessment` 评估历史，记录评估时阶段/状态/版本、结论建议、理由观察、模型/提示词版本、输入截止点和执行结果。
+- 新增 `SocialRelationshipAssessmentEvidence`，引用既有 `SocialExperience` 并区分 NEW / CONTEXT；不复制忆泡正文。NEW 证据不得重复消费的确定性核验留待证据服务批次。
+- 隔离库专项验收覆盖唯一约束、跨角色任务隔离、证据引用、级联删除和关系状态初始化；不连接或写入业务库。
