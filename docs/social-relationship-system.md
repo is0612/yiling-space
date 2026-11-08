@@ -298,7 +298,7 @@
 
 - 新增 `yarn backfill:social-experiences`：默认只预演，显式传入 `--apply` 才写入；按 ACTIVE MemoryEvent ID 游标分页，只依据结构化 participantRefs 的 platform + externalId 匹配同一角色的 EXTERNAL_IDENTITY 关系。
 - 只创建 SocialExperience 到既有 MemoryEvent 的引用，不复制忆泡正文、不改写忆泡、不调用模型；sourceKey 复用底层证据消息 ID 集合哈希，依靠关系级唯一约束保证幂等。
-- 预演统计分别报告无证据、无可靠参与者引用、当前角色未建立对应关系三类跳过原因。第三类由 `skippedWithoutRelation` 单独计数，避免 scanned 与 eligible/skips 之间出现无法解释的差额。
+- 预演统计分别报告三类跳过原因：无证据（按忆泡计）、无可靠参与者引用（按忆泡计）、当前角色未建立对应关系（按「忆泡 × 账号」候选组合计）。`skippedWithoutRelation` 是候选组合级计数：同一忆泡里每个缺少 EXTERNAL_IDENTITY 关系的账号各记一次，不按账号去重，也不影响同一忆泡中其他已匹配账号的关联。三类计数与 `scanned`、`eligible` 粒度不同，应分别解读，不要相加对账。
 - 隔离库验收入口为 `yarn test:backfill-social-experiences-isolated`：创建一次性本地 PostgreSQL 数据库、执行 migrate deploy、运行数据库断言后 DROP；数据库断言脚本会拒绝非指定测试库。
 - 隔离库已验证预演只读、正确关联、跨角色隔离、重复运行幂等及缺少可靠信息时跳过。业务库实际回填前仍必须先执行预演、人工核对全部统计；只有确认统计合理后才使用 `--apply`。
 - 同一 sourceKey 存在多条忆泡时，当前代表记录由扫描顺序（MemoryEvent.id 升序）决定，不保证选择最早 occurredAt；该行为已知且稳定，后续如需调整应单独设计。

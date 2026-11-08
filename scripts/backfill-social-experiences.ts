@@ -113,6 +113,10 @@ while (true) {
       candidate.platformUid,
     ].join("\u0000"));
     if (!scopeId) {
+      // 计数单位是「忆泡 × 账号」候选组合：同一忆泡里每个缺少当前角色关系的账号各记一次，
+      // 不按账号去重；同一条忆泡中其他匹配到的账号不受影响，照常落库。
+      // 这与按忆泡计数的 skippedWithoutSourceEvidence / skippedWithoutParticipantRefs 粒度不同，
+      // 三者只分别解读，不要相加对账。
       noRelation += 1;
       return [];
     }

@@ -210,7 +210,13 @@ try {
   check("预演没有新增任何社交经历", before === 0 && afterPreview === 0, { before, afterPreview });
   check("预演标记 previewOnly、不回报 inserted", preview.previewOnly && preview.inserted === undefined, preview);
   check("预演扫到 9 条 ACTIVE 忆泡（归档那条不参与）", preview.scanned === 9, preview);
-  check("跳过计数：1 条无证据、2 条无可靠参与者、2 个账号没有当前角色关系",
+  // 三个跳过计数器粒度不同，不要相加对账：
+  //   skippedWithoutSourceEvidence / skippedWithoutParticipantRefs 按「忆泡」计，整条忆泡被跳过；
+  //   skippedWithoutRelation 按「忆泡 × 账号」候选组合计，同一忆泡里每个缺少当前角色关系的
+  //   账号各记一次，不按账号去重，同一条忆泡中其他能匹配的账号照常落库。
+  // fixture 里 noScopeUid 同时出现在 eA2（三参与者之一）和 eA7（唯一参与者），
+  // 因此这里断言的是 2 个候选组合，实际只涉及 1 个账号 —— 这不是账号去重校验。
+  check("跳过计数：1 条无证据、2 条无可靠参与者、2 个忆泡×账号组合没有对应关系",
     preview.skippedWithoutSourceEvidence === 1
     && preview.skippedWithoutParticipantRefs === 2
     && preview.skippedWithoutRelation === 2,
