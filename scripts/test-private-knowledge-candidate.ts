@@ -23,6 +23,8 @@ assert.equal(shouldConsiderPrivateKnowledgeCandidate([message("什么是 TypeScr
 assert.equal(shouldConsiderPrivateKnowledgeCandidate([message("这个报错其实是因为异步函数没有 await，需要先等待结果")]), true);
 assert.equal(shouldConsiderPrivateKnowledgeCandidate([message("How to use a promise in JavaScript?")]), true);
 assert.equal(shouldAnalyzePrivateKnowledge([message("讲讲数据库索引的原理")]), true);
+assert.equal(shouldAnalyzePrivateKnowledge([message("猫是什么？")]), true, "Concise knowledge questions must pass the local gate.");
+assert.equal(shouldAnalyzePrivateKnowledge([message("你呢")]), false, "Very short social chat must stay local.");
 
 const originalFetch = globalThis.fetch;
 let requestBody: { messages: Array<{ role: string; content: string }> } | undefined;
