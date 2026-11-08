@@ -14,7 +14,7 @@ type PendingRequest = {
 function buildPageHarness(relativePath: string) {
   const pagePath = new URL(relativePath, import.meta.url);
   const sfc = readFileSync(pagePath, "utf8");
-  const scriptMatch = sfc.match(/<script\\b[^>]*>([\\s\\S]*?)<\\/script>/);
+  const scriptMatch = sfc.match(/<script\b[^>]*>([\s\S]*?)<\/script>/);
   assert.ok(scriptMatch, `${relativePath} must contain a script block`);
 
   const source = ts.createSourceFile("knowledge-page.ts", scriptMatch[1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -27,10 +27,10 @@ function buildPageHarness(relativePath: string) {
     }
     return ts.isFunctionDeclaration(node) && node.name ? [node.name.text] : [];
   });
-  const program = `${statements.map((node) => node.getText(source)).join("\\n")}
+  const program = `${statements.map((node) => node.getText(source)).join("\n")}
 return { ${names.join(", ")} };
 `;
-  const compiled = ts.transpileModule(`(function () {\\n${program}\\n})()`, {
+  const compiled = ts.transpileModule(`(function () {\n${program}\n})()`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
     reportDiagnostics: true,
   });
