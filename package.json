@@ -93,6 +93,8 @@
     "test:model-pricing": "tsx scripts/test-model-pricing.ts",
     "test:chat-model-config": "tsx scripts/test-chat-model-config.ts",
     "test:context-assistant-config": "tsx scripts/test-context-assistant-config.ts",
+    "test:knowledge-assistant-config": "tsx scripts/test-knowledge-assistant-config.ts",
+    "test:knowledge-retrieval": "tsx scripts/test-knowledge-retrieval.ts",
     "test:desktop-conversation-db": "tsx scripts/test-desktop-conversation-db.ts",
     "test:chat-isolated": "tsx scripts/test-chat-isolated.ts",
     "test:chat-reply": "tsx scripts/test-chat-reply.ts",
