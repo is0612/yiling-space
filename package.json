@@ -71,7 +71,7 @@
     "test:owner-timeline-retrieval": "tsx scripts/test-owner-timeline-retrieval.ts",
     "test:model-call-logs": "tsx scripts/test-model-call-logs.ts",
     "test:model-turn-detail": "tsx scripts/test-model-turn-detail.ts",
-    "test:context-assistant": "tsx scripts/test-context-assistant.ts && tsx scripts/test-group-context-reply.ts",
+    "test:context-assistant": "tsx scripts/test-context-assistant.ts && tsx scripts/test-group-context-reply.ts && yarn run test:private-knowledge-candidate",
     "test:memory-budget": "tsx scripts/test-memory-budget.ts",
     "test:memory-context": "tsx scripts/test-memory-context.ts",
     "test:memory-events": "tsx scripts/test-memory-events.ts",
@@ -186,7 +186,8 @@
     "test:group-activity-stats": "tsx scripts/test-group-activity-stats.ts",
     "backfill:social-experiences": "tsx scripts/backfill-social-experiences.ts",
     "test:backfill-social-experiences-db": "tsx scripts/test-backfill-social-experiences-db.ts",
-    "test:backfill-social-experiences-isolated": "tsx scripts/test-backfill-social-experiences-isolated.ts"
+    "test:backfill-social-experiences-isolated": "tsx scripts/test-backfill-social-experiences-isolated.ts",
+    "test:private-knowledge-candidate": "tsx scripts/test-private-knowledge-candidate.ts"
   },
   "dependencies": {
     "@audio/decode-amr": "^1.3.1",
