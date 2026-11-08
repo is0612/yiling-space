@@ -17,7 +17,7 @@ const candidates: MemoryAssistantCandidate[] = [
   { sourceKey: "memory/public", sourceType: "memory", id: "public", scope: "character", relevanceScore: 1, category: "FACT", content: "PUBLIC_FILM_EVIDENCE" },
   { sourceKey: "memory/private", sourceType: "memory", id: "private", scope: "private", relevanceScore: 1, category: "FACT", content: "PRIVATE_MUST_NOT_REACH_MODELS" },
 ];
-const analysis = { summary: "用户问过去聊过的电影。", evidenceMessageIds: ["current", "evidence"], participation: "invited", memoryQuery: "上次科幻电影" };
+const analysis = { summary: "用户问过去聊过的电影。", evidenceMessageIds: ["current", "evidence"], participation: "invited", memoryQuery: "上次科幻电影", knowledgeCandidate: { evidenceMessageIds: ["evidence", "invented"], reason: "群友解释了一个可复用的科学概念。" } };
 const reply = { action: "reply", reply: "上次聊的是这部电影。", usedMemoryIds: ["public"], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [] };
 const usage = { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 };
 function response(content: unknown): Response {
@@ -45,10 +45,14 @@ function reset(handler: (body: Call) => Response) { calls = []; entries = []; de
 try {
   reset(body => body.model === "context" ? response(analysis) : body.model === "memory" ? response({ sourceKeys: ["memory/public", "memory/private", "memory/invented"] }) : response(reply));
   let loadedQuery = "";
-  const result = await run({ loadCandidates: async query => { loadedQuery = query; return candidates; } });
+  let captured: { rawContent: string; sourceMessageIds: string[]; reason: string } | null = null;
+  const result = await run({ loadCandidates: async query => { loadedQuery = query; return candidates; }, onKnowledgeCandidate: async value => { captured = value; } });
   assert.equal(result.reply, reply.reply);
   assert.deepEqual(result.usedMemoryIds, ["public"]);
   assert.equal(loadedQuery, analysis.memoryQuery);
+  assert.deepEqual(captured?.sourceMessageIds, ["evidence"], "Only real included evidence ids may be collected.");
+  assert(captured?.rawContent.includes("说的是科幻电影。"));
+  assert.equal(captured?.reason, "群友解释了一个可复用的科学概念。");
   assert.equal(details[0]?.context?.status, "success");
   assert.deepEqual(details[0]?.context?.evidence?.map(item => item.id), ["current", "evidence"]);
   assert.deepEqual(details[1]?.memory, { status: "success", query: analysis.memoryQuery, sources: [
