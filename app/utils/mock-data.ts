@@ -59,6 +59,14 @@ export type Character = {
   contextAssistantApiBaseUrl?: string;
   contextAssistantApiKeyConfigured?: boolean;
   contextAssistantConfigured?: boolean;
+  knowledgeAssistantEnabled?: boolean;
+  knowledgeAssistantModel?: string;
+  knowledgeAssistantTemperature?: number;
+  knowledgeAssistantMaxInputTokens?: number;
+  knowledgeAssistantMaxOutputTokens?: number;
+  knowledgeAssistantApiBaseUrl?: string;
+  knowledgeAssistantApiKeyConfigured?: boolean;
+  knowledgeAssistantConfigured?: boolean;
   /** 每日 token 额度，0 = 不限。 */
   dailyTokenLimit?: number;
   /** 每次对话注入记忆 / 快照的 token 预算。 */
