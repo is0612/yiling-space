@@ -1,9 +1,9 @@
 import { createError, getRouterParam } from "h3";
-import { resolveChatModelSettings } from "../../../../../../utils/chat-model-config";
-import { resolveKnowledgeAssistantRuntime, processKnowledgeWithAssistant } from "../../../../../../utils/knowledge-ai";
-import { requireActorUserId } from "../../../../../../utils/auth";
-import { requireUuid } from "../../../../../../utils/local-api";
-import { getPrisma } from "../../../../../../utils/prisma";
+import { resolveChatModelSettings } from "../../../../../../../utils/chat-model-config";
+import { resolveKnowledgeAssistantRuntime, processKnowledgeWithAssistant } from "../../../../../../../utils/knowledge-ai";
+import { requireActorUserId } from "../../../../../../../utils/auth";
+import { requireUuid } from "../../../../../../../utils/local-api";
+import { getPrisma } from "../../../../../../../utils/prisma";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
