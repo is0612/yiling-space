@@ -33,70 +33,158 @@ const keyword = ref("");
 const data = ref<WorkspaceData>({ candidates: [], items: [], candidateCount: 0, itemCount: 0 });
 const busyIds = ref<string[]>([]);
 
-async function load() {
-  if (!characterId.value) { data.value = { candidates: [], items: [], candidateCount: 0, itemCount: 0 }; return; }
+let loadVersion = 0;
+let roleVersion = 0;
+let pageDisposed = false;
+
+function emptyWorkspaceData(): WorkspaceData {
+  return { candidates: [], items: [], candidateCount: 0, itemCount: 0 };
+}
+
+function isCurrentRole(targetCharacterId: string, expectedRoleVersion: number): boolean {
+  return !pageDisposed
+    && characterId.value === targetCharacterId
+    && roleVersion === expectedRoleVersion;
+}
+
+async function load(
+  requestedCharacterId: string = characterId.value,
+  requestedKeyword: string = keyword.value.trim(),
+) {
+  const requestVersion = ++loadVersion;
+  const requestedRoleVersion = roleVersion;
+  if (pageDisposed || requestedCharacterId !== characterId.value) return;
+  if (!requestedCharacterId) {
+    data.value = emptyWorkspaceData();
+    loading.value = false;
+    return;
+  }
+
   loading.value = true;
   try {
-    data.value = await $fetch<WorkspaceData>(`/api/characters/${encodeURIComponent(characterId.value)}/growth/knowledge`, {
-      query: keyword.value.trim() ? { q: keyword.value.trim() } : {},
-    });
+    const result = await $fetch<WorkspaceData>(
+      `/api/characters/${encodeURIComponent(requestedCharacterId)}/growth/knowledge`,
+      { query: requestedKeyword ? { q: requestedKeyword } : {} },
+    );
+    if (requestVersion !== loadVersion || !isCurrentRole(requestedCharacterId, requestedRoleVersion)) return;
+    data.value = result;
   } catch (error) {
+    if (requestVersion !== loadVersion || !isCurrentRole(requestedCharacterId, requestedRoleVersion)) return;
     const e = error as { data?: { statusMessage?: string } };
     ElMessage.error(e.data?.statusMessage || "读取知识系统失败。");
-  } finally { loading.value = false; }
+  } finally {
+    if (requestVersion === loadVersion && isCurrentRole(requestedCharacterId, requestedRoleVersion)) {
+      loading.value = false;
+    }
+  }
 }
-watch(characterId, () => { void load(); }, { immediate: true });
+
+watch(characterId, (nextCharacterId: string) => {
+  // 切换角色立即作废旧请求，并清空旧角色内容，避免旧资料短暂显示在新角色名下。
+  roleVersion += 1;
+  loadVersion += 1;
+  data.value = emptyWorkspaceData();
+  rawContent.value = "";
+  busyIds.value = [];
+  savingCandidate.value = false;
+  loading.value = false;
+  if (nextCharacterId) void load(nextCharacterId);
+}, { immediate: true, flush: "sync" });
 watch(keyword, () => { void load(); });
 
+onBeforeUnmount(() => {
+  pageDisposed = true;
+  roleVersion += 1;
+  loadVersion += 1;
+});
+
 async function addCandidate() {
-  if (!characterId.value || savingCandidate.value || !rawContent.value.trim()) return;
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  const content = rawContent.value.trim();
+  if (!targetCharacterId || savingCandidate.value || !content || pageDisposed) return;
   savingCandidate.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(characterId.value)}/growth/knowledge/candidates`, {
-      method: "POST", body: { rawContent: rawContent.value.trim(), sourceType: "MANUAL" },
-    });
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates`,
+      { method: "POST", body: { rawContent: content, sourceType: "MANUAL" } },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     rawContent.value = "";
     ElMessage.success("已加入知识候选。");
-    await load();
+    await load(targetCharacterId);
   } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     const e = error as { data?: { statusMessage?: string } };
     ElMessage.error(e.data?.statusMessage || "添加候选失败。");
-  } finally { savingCandidate.value = false; }
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) savingCandidate.value = false;
+  }
 }
 
 async function runCandidate(candidate: Candidate) {
-  if (busyIds.value.includes(candidate.id)) return;
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || pageDisposed || busyIds.value.includes(candidate.id)) return;
   busyIds.value = [...busyIds.value, candidate.id];
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(characterId.value)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/process`, { method: "POST" });
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/process`,
+      { method: "POST" },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success("知识处理完成，请检查结果后决定是否入库。");
-    await load();
+    await load(targetCharacterId);
   } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     const e = error as { data?: { statusMessage?: string } };
     ElMessage.error(e.data?.statusMessage || "知识处理失败。");
-    await load();
-  } finally { busyIds.value = busyIds.value.filter(id => id !== candidate.id); }
+    await load(targetCharacterId);
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      busyIds.value = busyIds.value.filter(id => id !== candidate.id);
+    }
+  }
 }
 
 async function acceptCandidate(candidate: Candidate) {
-  if (busyIds.value.includes(candidate.id)) return;
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || pageDisposed || busyIds.value.includes(candidate.id)) return;
   busyIds.value = [...busyIds.value, candidate.id];
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(characterId.value)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/accept`, { method: "POST" });
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/accept`,
+      { method: "POST" },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success("已正式加入知识库。");
-    await load();
+    await load(targetCharacterId);
   } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     const e = error as { data?: { statusMessage?: string } };
     ElMessage.error(e.data?.statusMessage || "入库失败。");
-  } finally { busyIds.value = busyIds.value.filter(id => id !== candidate.id); }
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      busyIds.value = busyIds.value.filter(id => id !== candidate.id);
+    }
+  }
 }
 
 async function dismissCandidate(candidate: Candidate) {
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || pageDisposed) return;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(characterId.value)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/dismiss`, { method: "POST" });
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/dismiss`,
+      { method: "POST" },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success("已忽略这条候选。");
-    await load();
+    await load(targetCharacterId);
   } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     const e = error as { data?: { statusMessage?: string } };
     ElMessage.error(e.data?.statusMessage || "操作失败。");
   }
