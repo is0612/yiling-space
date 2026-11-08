@@ -5,16 +5,17 @@ import { toCharacterDto } from "../server/utils/character-dto";
 
 assert.deepEqual(readKnowledgeAssistantSettingsPatch({}), { config: {}, apiKey: "", clearApiKey: false });
 const patch = readKnowledgeAssistantSettingsPatch({
-  knowledgeAssistantEnabled: true, knowledgeAssistantModel: " model ", knowledgeAssistantApiKey: " key ",
+  knowledgeAutoCollectEnabled: true, knowledgeAssistantEnabled: true, knowledgeAssistantModel: " model ", knowledgeAssistantApiKey: " key ",
   knowledgeAssistantApiBaseUrl: "https://api.example.com/v1/", knowledgeAssistantTemperature: 0.1,
   knowledgeAssistantMaxInputTokens: 12288, knowledgeAssistantMaxOutputTokens: 2048,
 });
 assert.equal(patch.apiKey, "key");
+assert.equal(patch.config.knowledgeAutoCollectEnabled, true);
 assert.equal(patch.config.knowledgeAssistantModel, "model");
 assert.equal(patch.config.knowledgeAssistantApiBaseUrl, "https://api.example.com/v1");
 assert.equal(patch.config.knowledgeAssistantApiKey, undefined);
 for (const body of [
-  { knowledgeAssistantEnabled: "true" }, { clearKnowledgeAssistantApiKey: 1 },
+  { knowledgeAutoCollectEnabled: "true" }, { knowledgeAssistantEnabled: "true" }, { clearKnowledgeAssistantApiKey: 1 },
   { knowledgeAssistantModel: "x".repeat(121) }, { knowledgeAssistantApiKey: "x".repeat(8193) },
   { knowledgeAssistantApiBaseUrl: "https://10.0.0.1/v1" }, { knowledgeAssistantTemperature: 2.1 },
   { knowledgeAssistantMaxInputTokens: 4095 }, { knowledgeAssistantMaxInputTokens: 4096.5 },
@@ -34,6 +35,7 @@ assert.equal(isKnowledgeAssistantApiKeySaved({ knowledgeAssistantApiKeyEncrypted
 validateKnowledgeAssistantEnabledConfig({ ...patch.config, knowledgeAssistantApiKeyEncrypted: encrypted });
 const record = { id: "test", name: "角色", avatar: null, basePrompt: "", styleExamples: "", userAddress: "", status: "ACTIVE" as const, modelConfig: {}, updatedAt: new Date(), memorySetting: null, channelBindings: [], memoryScopes: [] };
 const defaults = toCharacterDto(record);
+assert.equal(defaults.knowledgeAutoCollectEnabled, false);
 assert.equal(defaults.knowledgeAssistantEnabled, false);
 assert.equal(defaults.knowledgeAssistantConfigured, false);
 assert.equal(defaults.knowledgeAssistantTemperature, 0.1);
@@ -41,6 +43,7 @@ assert.equal(defaults.knowledgeAssistantMaxInputTokens, 12288);
 assert.equal(defaults.knowledgeAssistantMaxOutputTokens, 2048);
 const configured = toCharacterDto({ ...record, modelConfig: { ...patch.config, knowledgeAssistantApiKeyEncrypted: encrypted } });
 assert.equal(configured.knowledgeAssistantConfigured, true);
+assert.equal(configured.knowledgeAutoCollectEnabled, true);
 assert.equal(configured.knowledgeAssistantApiKeyConfigured, true);
 assert.equal(Reflect.get(configured, "knowledgeAssistantApiKeyEncrypted"), undefined);
 assert.equal(Reflect.get(configured, "knowledgeAssistantApiKey"), undefined);
