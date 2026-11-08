@@ -1685,31 +1685,40 @@ async function runChannelTurn(input: {
           }
 
           if (modelConfigForKnowledge.knowledgeAutoCollectEnabled === true && result.evidenceMessageIds.length) {
-            const selected = privateMessages.filter(item => result.evidenceMessageIds.includes(item.id));
-            const rawContent = selected.map(item => `[${item.speaker || "好友"}] ${item.content.slice(0, 4_000)}`).join("\n").slice(0, 20_000);
-            if (rawContent.trim()) {
-              const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
-              const duplicate = await prisma.knowledgeCandidate.findFirst({
-                where: { characterId: input.characterId, sourceType: "CHAT", rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
-                select: { id: true },
-              });
-              if (!duplicate) {
-                await prisma.knowledgeCandidate.create({
-                  data: {
-                    characterId: input.characterId,
-                    sourceType: "CHAT",
-                    rawContent,
-                    sourceRef: {
-                      ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-                      messageIds: selected.map(item => item.id),
-                      speakers: [...new Set(selected.map(item => item.speaker).filter(Boolean))],
-                      reason: result.reason,
-                      capturedAt: new Date().toISOString(),
-                      channel: "PRIVATE",
-                    } satisfies Prisma.InputJsonObject,
-                  },
-                }).catch(() => undefined);
+            // 落库单独兜一层：写库失败不该被算成「模型调用失败」，也不能静默消失 ——
+            // 否则线上只是「候选没出现」，没有任何痕迹可查。
+            try {
+              const selected = privateMessages.filter(item => result.evidenceMessageIds.includes(item.id));
+              const rawContent = selected.map(item => `[${item.speaker || "好友"}] ${item.content.slice(0, 4_000)}`).join("\n").slice(0, 20_000);
+              if (rawContent.trim()) {
+                const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+                const duplicate = await prisma.knowledgeCandidate.findFirst({
+                  where: { characterId: input.characterId, sourceType: "CHAT", rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
+                  select: { id: true },
+                });
+                if (!duplicate) {
+                  await prisma.knowledgeCandidate.create({
+                    data: {
+                      characterId: input.characterId,
+                      sourceType: "CHAT",
+                      rawContent,
+                      sourceRef: {
+                        ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+                        messageIds: selected.map(item => item.id),
+                        speakers: [...new Set(selected.map(item => item.speaker).filter(Boolean))],
+                        reason: result.reason,
+                        capturedAt: new Date().toISOString(),
+                        channel: "PRIVATE",
+                      } satisfies Prisma.InputJsonObject,
+                    },
+                  });
+                }
               }
+            } catch (error) {
+              console.warn(
+                "[knowledge] 私聊知识候选写入失败（不影响本轮回复）：",
+                error instanceof Error ? error.message : String(error),
+              );
             }
           }
         } catch (error) {
