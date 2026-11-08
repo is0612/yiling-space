@@ -16,7 +16,8 @@ import type { OnebotSegment } from "./types";
 import { fillOnebotImageUrls, sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
 import { parseBindingRoutingKeys, type OnebotBindingRecord, type OnebotConnectionRecord } from "./configure";
 import { ONEBOT_FACES, toOnebotFaceSegments } from "./faces";
-import { handleChannelBatch, handleChannelMessage, type ChannelReplySender } from "../pipeline";
+import { handleChannelBatch, handleChannelMessage, buildStoredMessageMetadata, type ChannelReplySender } from "../pipeline";
+import type { ConversationMessageMention } from "../../conversation-message";
 import { loadBiliConnections } from "../bili/configure";
 import { runDutyRound, type BiliDutyRoundResult } from "../bili/duty-pipeline";
 import { isBiliRunCommand } from "./bili-run";
@@ -37,7 +38,7 @@ import {
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
 import { GROUP_MUTE_MS, createGroupMuteStore, isQuietRequest, isResumeRequest } from "./group-mute";
 import { createGroupActivityRecorder } from "../../group-activity";
-import { ONEBOT_PLATFORM, readOnebotMentionQqs, readOnebotMentionTargets, readOnebotReplyToId } from "./types";
+import { ONEBOT_PLATFORM, readOnebotMentions, readOnebotReplyToId } from "./types";
 import {
   resolveVoiceTtsSettings,
   synthesizeSpeechSilk,
@@ -122,17 +123,12 @@ function isSelfMentioned(event: OnebotResolvedEvent, fallbackSelfId = ""): boole
   const data = event.data as { message?: unknown } | null;
   const message = data?.message;
   if (!Array.isArray(message)) {
-    // 非数组时退回检查文本里的 @selfId
-    return event.content.includes(`@${selfId}`);
+    // 非数组时先认 CQ 码，再退回检查文本里的 @selfId（有的网关把字符串消息拍平了）。
+    return readOnebotMentions(event.data, selfId).some((mention) => mention.target === "self")
+      || event.content.includes(`@${selfId}`);
   }
-  for (const segment of message) {
-    if (!segment || typeof segment !== "object") continue;
-    const seg = segment as { type?: unknown; data?: { qq?: unknown } | null };
-    if (seg.type === "at" && seg.data?.qq !== undefined) {
-      if (String(seg.data.qq) === selfId) return true;
-    }
-  }
-  return false;
+  // 只认真正的 at 段：正文里手打的「@123」不是点名，不能把她叫出来。
+  return readOnebotMentions(event.data, selfId).some((mention) => mention.target === "self");
 }
 
 /** 已处理的群指令消息 id，防止 QQ 网关重复投递导致连刷两轮。 */
@@ -1202,17 +1198,30 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     return binding.groupBiliRunEnabled && isBiliRunCommand(event.content);
   };
 
-  const factsOf = (event: OnebotResolvedEvent, at: number): GroupMessageFacts => ({
-    messageId: event.messageId,
-    at,
-    senderQq: event.userId,
-    displayName: event.displayName,
-    text: event.content,
-    mentionTargets: readOnebotMentionTargets(event.data, event.selfId || record.accountQq),
-    // 具体 @ 了谁：分类结果只够判断「是不是叫她」，学归属要原始 QQ。
-    mentionQqs: readOnebotMentionQqs(event.data),
-    replyToMessageId: readOnebotReplyToId(event.data),
-  });
+  /**
+   * 一条群消息的事实。@ 只在这里解析一次，后续 remember / 闸门 / 落库 / 入模
+   * 都用同一份结构化结果，不再各自从 `content` 里的 `@数字` 反推。
+   */
+  const factsOf = (event: OnebotResolvedEvent, at: number): GroupMessageFacts => {
+    const parsedMentions = readOnebotMentions(event.data, event.selfId || record.accountQq);
+    const mentions = parsedMentions.map((mention) => ({
+      qq: mention.qq,
+      ...(mention.name ? { name: mention.name } : {}),
+      target: mention.target,
+    }));
+    return {
+      messageId: event.messageId,
+      at,
+      senderQq: event.userId,
+      displayName: event.displayName,
+      text: event.content,
+      mentionTargets: [...new Set(parsedMentions.map((mention) => mention.target))],
+      // 具体 @ 了谁：分类结果只够判断「是不是叫她」，学归属要原始 QQ。
+      mentionQqs: [...new Set(parsedMentions.map((mention) => mention.qq))],
+      mentions,
+      replyToMessageId: readOnebotReplyToId(event.data),
+    };
+  };
 
   /**
    * 一轮群聊的判定与处理。
@@ -1239,9 +1248,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
   const persistMentionedRound = async (
     items: PendingGroupMessage[],
     storedReason: "mentioned" | "context" = "mentioned",
+    mentionInfoByMessageId: ReadonlyMap<string, ConversationMessageMention[]> = new Map(),
   ): Promise<void> => {
     const binding = items[0]!.binding;
     const groupEvent = items[0]!.event;
+    const contextKey = `${binding.id}:${groupEvent.conversationKey}`;
     const prisma = getPrisma();
     const scope = await prisma.memoryScope.findFirst({
       where: { characterId: binding.characterId, scopeType: "CHARACTER_GLOBAL" },
@@ -1272,23 +1283,35 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       select: { id: true },
     });
     await prisma.message.createMany({
-      data: items.map((item) => ({
-        conversationId: conversation.id,
-        externalMessageId: item.event.messageId,
-        role: "USER" as const,
-        content: item.event.content,
-        occurredAt: new Date(item.at),
-        metadata: {
-          source: "channel",
-          platform: ONEBOT_PLATFORM,
-          storedReason,
-          authorOpenId: item.event.userId,
-          ...(item.event.displayName ? { authorDisplayName: item.event.displayName } : {}),
-          // 主人说的那句：提炼忆泡时靠它把「主人」和群友分开，别在私聊里读成别人说的。
-          ...(item.isOwner ? { isOwner: true } : {}),
-          ...(item.event.poke !== undefined ? { poke: true } : {}),
-        },
-      })),
+      data: items.map((item) => {
+        const mentions = mentionInfoByMessageId.get(item.event.messageId) ?? [];
+        return {
+          conversationId: conversation.id,
+          externalMessageId: item.event.messageId,
+          role: "USER" as const,
+          content: item.event.content,
+          occurredAt: new Date(item.at),
+          // 和正常回复走同一套 metadata 组装：被闸门挡下的群消息同样要带
+          // member / mentionTargets / mentions，否则长期记忆只看到 @数字 和一句正文。
+          metadata: {
+            ...buildStoredMessageMetadata({
+              platform: ONEBOT_PLATFORM,
+              storedReason,
+              message: {
+                authorOpenId: item.event.userId,
+                ...(item.event.displayName ? { authorDisplayName: item.event.displayName } : {}),
+                member: groupContext.memberCode(contextKey, item.event.userId),
+                ...(item.facts.mentionTargets.length ? { mentionTargets: item.facts.mentionTargets } : {}),
+                ...(mentions.length ? { mentions } : {}),
+                // 主人说的那句：提炼忆泡时靠它把「主人」和群友分开，别在私聊里读成别人说的。
+                ...(item.isOwner ? { speaker: { isOwner: true } } : {}),
+                content: item.event.content,
+              },
+            }),
+            ...(item.event.poke !== undefined ? { poke: true } : {}),
+          },
+        };
+      }),
       // 同一轮可能被重放（重连/重试），靠 (conversationId, externalMessageId) 唯一约束去重。
       skipDuplicates: true,
     });
@@ -1319,12 +1342,24 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       ...originalItems.map((item) => item.event.userId.trim()),
       ...contextUidByMessageId.values(),
     ].filter(Boolean))];
-    const identities = authorUids.length
+    /**
+     * 被 @ 的对象也要查身份：同一条消息里 @ 的是另一个 bot 还是人类，
+     * 决定了模型该不该把接下来的称呼算到自己头上。只查号、不建行 ——
+     * 对方没在本群说过话时查不到，宁可标 UNKNOWN，也不凭空造一个身份。
+     */
+    const selfQq = groupEvent.selfId || record.accountQq;
+    const mentionUids = [...new Set(
+      originalItems.flatMap((item) => (item.facts.mentions ?? []).map((mention) => mention.qq))
+        .filter((qq) => qq && qq !== "all" && qq !== selfQq),
+    )];
+    const identityUids = [...new Set([...authorUids, ...mentionUids])];
+    const identities = identityUids.length
       ? await prisma.externalIdentity.findMany({
-          where: { platform: ONEBOT_PLATFORM, platformUid: { in: authorUids } },
+          where: { platform: ONEBOT_PLATFORM, platformUid: { in: identityUids } },
           select: {
             platformUid: true,
             kind: true,
+            displayName: true,
             memoryScopes: {
               where: { characterId: binding.characterId, scopeType: "EXTERNAL_IDENTITY" },
               take: 1,
@@ -1337,6 +1372,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       identity.platformUid,
       {
         kind: identity.kind,
+        displayName: identity.displayName,
         policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
       },
     ] as const));
@@ -1385,6 +1421,32 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     const poked = items.some((item) => item.event.poke !== undefined);
     // 入队时已解析好，直接用，不再重复解 CQ 码。
     const facts = items.map((item) => item.facts);
+    /**
+     * 给模型和记忆看的 @ 对象详情：群成员代号 + 显示名 + 身份（AI / HUMAN / UNKNOWN）。
+     *
+     * 这一步是「@ 的是谁」的唯一出口。正文里的 `@member_n` 只有在它旁边能查到
+     * 这个人是谁时才有意义；只给代号，模型就会把 `@member_2 某个称呼` 里的称呼
+     * 和当前角色自己合并（2026-11-08 实际踩到）。
+     */
+    const describeMentions = (fact: GroupMessageFacts): ConversationMessageMention[] =>
+      (fact.mentions ?? []).flatMap((mention): ConversationMessageMention[] => {
+        if (mention.target === "all") return [{ target: "all" as const }];
+        if (mention.target === "self") return [{ target: "self" as const }];
+        const identity = identityByUid.get(mention.qq);
+        const speaker = (identity?.displayName || mention.name || "").trim();
+        return [{
+          // qq 只用于和正文里的 @ 对上；进角色提示词前由 chat-reply 剥掉。
+          qq: mention.qq,
+          target: "other" as const,
+          member: groupContext.memberCode(contextKey, mention.qq),
+          ...(speaker ? { speaker: speaker.slice(0, 40) } : {}),
+          ...(identity?.kind ? { kind: identity.kind } : {}),
+        }];
+      });
+    const mentionInfoByMessageId = new Map(items.map((item) => [
+      item.event.messageId,
+      describeMentions(item.facts),
+    ]));
     const topicCandidate = groupContext.topicCandidate(contextKey, facts, blockedSpeakerUids);
     /**
      * 这一批有没有「@ 的是别人」。
@@ -1495,7 +1557,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       // 静默期是例外：这十分钟里她本来就该「只听不说」，只存冲她来的那几句，
       // 等于十分钟的记忆是断的；全量落库不会有回复开销，也不会打扰任何人。
       if (muted || direct || named || ownerSpoke) {
-        await persistMentionedRound(items, direct || named ? "mentioned" : "context").catch((error) => {
+        await persistMentionedRound(items, direct || named ? "mentioned" : "context", mentionInfoByMessageId).catch((error) => {
           console.error("[onebot] 记录被挡下的轮次失败：", error instanceof Error ? error.message : String(error));
         });
       }
@@ -1507,7 +1569,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       logGroupRound(groupEvent.groupId, { reason: "group_reply_limit", messages: items.length, direct, named, ...(ownerSpoke ? { owner: true } : {}), ...(poked ? { poked } : {}) });
       // 限流挡下的同样是「冲她来的」轮次，一样落库；主人说的那句也别丢。
       if (direct || named || ownerSpoke) {
-        await persistMentionedRound(items, direct || named ? "mentioned" : "context").catch(() => undefined);
+        await persistMentionedRound(items, direct || named ? "mentioned" : "context", mentionInfoByMessageId).catch(() => undefined);
       }
       return;
     }
@@ -1527,6 +1589,10 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         content: item.event.content,
         // 谁被 @ 了：落库给提炼用 —— 「@ 的是别的 bot」这类事不能再记成她的事。
         ...(facts[index]?.mentionTargets.length ? { mentionTargets: facts[index]!.mentionTargets } : {}),
+        // 被 @ 的是谁：代号 + 显示名 + 身份，语境助手、最终回复与长期记忆共用这一份。
+        ...(mentionInfoByMessageId.get(item.event.messageId)?.length
+          ? { mentions: mentionInfoByMessageId.get(item.event.messageId)! }
+          : {}),
         // 入模的正文把 @ 换成代号；落库仍是原样。
         promptContent: groupContext.formatText(contextKey, item.event.content),
         member: groupContext.memberCode(contextKey, item.event.userId),

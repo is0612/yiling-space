@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { isNearDuplicateMemory, validateMemoryAiOutput } from "../server/utils/memory-ai";
+import { isNearDuplicateMemory, shouldRejectMemoryAttributedToAnotherTarget, validateMemoryAiOutput } from "../server/utils/memory-ai";
 
 const validIds = ["message-a", "message-b"];
 const activeIds = ["memory-1"];
@@ -118,6 +118,47 @@ assert.equal(
   ),
   false,
   "换了个说法的不判重 —— 这里只做确定性判重，宁可漏",
+);
+
+// ── @ 别人的称呼不能记成她的 ────────────────────────────────
+// 2026-11-08 实况：owner 在群里 @ 另一个 AI 并叫它「某个称呼」，提炼写成
+// 「主人称呼她为某个称呼」。只要全部证据都只 @ 了别人，称呼类记忆就不该落库。
+const onlyOther = [
+  { role: "USER", mentionTargets: ["other"] },
+  { role: "USER", mentionTargets: ["other"] },
+];
+assert.equal(
+  shouldRejectMemoryAttributedToAnotherTarget({ content: "主人称呼她为「某个称呼」" }, onlyOther),
+  true,
+  "证据全部只 @ 别人时，称呼类记忆必须拒收。",
+);
+assert.equal(
+  shouldRejectMemoryAttributedToAnotherTarget({ content: "主人称呼她为「某个称呼」" }, [
+    { role: "USER", mentionTargets: ["other"] },
+    { role: "USER", mentionTargets: ["self"] },
+  ]),
+  false,
+  "有一条 @ 她，就要交给模型判断，不能整套拒收。",
+);
+assert.equal(
+  shouldRejectMemoryAttributedToAnotherTarget({ content: "主人称呼她为「某个称呼」" }, [
+    { role: "USER", mentionTargets: ["other"] },
+    { role: "ASSISTANT" },
+  ]),
+  false,
+  "她自己的回复也是证据，不能因为夹了一条 @other 就拒收。",
+);
+assert.equal(
+  shouldRejectMemoryAttributedToAnotherTarget({ content: "主人称呼她为「某个称呼」" }, [
+    { role: "USER", mentionTargets: [] },
+  ]),
+  false,
+  "没有 @ 的消息保留现有语境判断，不能当成「@ 别人」。",
+);
+assert.equal(
+  shouldRejectMemoryAttributedToAnotherTarget({ content: "她喜欢晚上聊天" }, onlyOther),
+  false,
+  "不是称呼类记忆就不走这条护栏。",
 );
 
 console.log("Memory AI output validation tests passed.");

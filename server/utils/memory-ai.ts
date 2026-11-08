@@ -3,6 +3,7 @@ import { DEFAULT_LLM_TIMEOUT_MS, readConfiguredLlmTimeoutMs } from "./llm-timeou
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 import { createHash } from "node:crypto";
+import { formatMentionContent, type ConversationMessageMention } from "./conversation-message";
 
 export const MEMORY_CATEGORIES = [
   "FACT",
@@ -30,6 +31,13 @@ export type MemoryAiMessage = {
   isOwner?: boolean;
   /** 这条消息 @ 了谁：`self` 是她，`other` 是别人（群里另一个 bot / 别的成员）。 */
   mentionTargets?: string[];
+  /**
+   * 这条消息 @ 到的具体对象（按出现顺序）：member / speaker / kind 说明对方是谁。
+   * `qq` 只用于把正文里的 `@数字` 换成代号，进提示词前会剥掉。
+   * 只有 `mentionTargets: ["other"]` 时，模型知道「不是她」，但不知道「是谁」，
+   * 于是会把对方的称呼和关系算到她头上。
+   */
+  mentions?: ConversationMessageMention[];
   /**
    * 这条是谁说的（渠道显示名）。
    *
@@ -171,7 +179,7 @@ export type MemoryAiInput = {
 const MAX_RESPONSE_BYTES = 1_000_000;
 /** v5：忆泡抽取补上 `speaker` / `member`，并要求 participants 不写自己、不写泛称。 */
 /** v6：主人私聊可见全局记忆，支持 `scope: "character"` 写入与跨范围 INVALIDATE。 */
-const TEMPLATE_VERSION = "memory-extraction-v7";
+const TEMPLATE_VERSION = "memory-extraction-v8";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -356,6 +364,38 @@ function normalizeMemoryContent(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase().replace(/[\\s\\p{P}\\p{S}]+/gu, "");
 }
 
+/**
+ * 这条记忆是不是在写「别人怎么称呼她」。
+ *
+ * 只用来配合下面那个确定性护栏：称呼类记忆最容易把「@ 别人的称呼」写成
+ * 「别人叫她」。普通事实/偏好不走这条判断。
+ */
+const ADDRESS_TERM_PATTERN = /(称呼|叫我|喊我|称她|叫她|外号|昵称|小名)/u;
+
+/**
+ * 把「@ 的是别人」的称呼记到她头上时，确定性拒收。
+ *
+ * 这是 2026-11-08 实况的兜底：owner 在群里 @ 另一个 AI 并叫它「某个称呼」，
+ * 提炼模型把 @ 对象认成当前角色，写出「主人称呼她为某个称呼」。只靠提示词不够稳，
+ * 所以再加一条纯代码判据：
+ *   - 记忆内容在写称呼 / 外号 / 昵称；
+ *   - 全部证据消息都是 USER 发的，且每一条都只 @ 了别人（other，没有 self/all）。
+ * 三条同时成立才拒收。只要有一条证据是 @ 她、@all、她自己的回复，或者根本没 @，
+ * 就放行交给模型判断 —— 宁可漏，不误伤。
+ */
+export function shouldRejectMemoryAttributedToAnotherTarget(
+  change: Pick<MemoryChange, "content">,
+  evidence: ReadonlyArray<{ role: string; mentionTargets?: string[] }>,
+): boolean {
+  if (!ADDRESS_TERM_PATTERN.test(change.content)) return false;
+  if (evidence.length === 0) return false;
+  return evidence.every((message) => {
+    if (message.role !== "USER") return false;
+    const targets = message.mentionTargets ?? [];
+    return targets.includes("other") && !targets.includes("self") && !targets.includes("all");
+  });
+}
+
 function bigramJaccard(left: string, right: string): number {
   const grams = (value: string) => {
     const chars = Array.from(value);
@@ -506,6 +546,7 @@ function systemPrompt(options: {
     "仅根据输入的原始消息和现有记忆提炼事实。绝不补造未出现的细节；区分用户明确陈述、助手建议和不确定推断。",
     "只把对后续互动有长期价值的个人事实、稳定偏好、关系、目标、承诺写入 memoryChanges；一次性闲聊不要写成长记忆。",
     "同一周期可能同时包含私聊与群聊，每条消息的 origin 标明来源（例如「QQ群 12345678」「私聊」）。群聊里只有与她本人相关的内容才写成长期记忆：她说过的话、答应过的事、有人点名找她、她参与过的群内话题、群里的人怎么称呼她、她跟谁熟。",
+    "群聊消息上的 `mentions` 是程序解析出的 @ 对象（按 @ 出现顺序）：target=self 是她本人，all 是全体，other 是另一个成员或 bot；member 是群内稳定代号，speaker/kind 是那个对象的显示名与身份（AI/HUMAN/UNKNOWN）。**target=other 的句子不是对她说的**：即使正文里出现她的名字、或句中的称呼听起来像在叫她，被叫的是 mention 里的那个人。不要把别人被叫的称呼、外号、身份或互动关系写成她自己的；不要把 @other 的对象认成她本人。昵称会改也会重复，认人看 mention 的 member/target，不靠名字。",
     "群友之间与她无关的闲聊只概括进 summary，不要写成她的记忆；群友的隐私（病情、住址、感情、财务、工作内幕）一律不写入 memoryChanges。需要区分场合时在记忆内容里带上群号，不要凭昵称推断同一个人在不同群或私聊里的身份。",
     "标了 isOwner 的消息是主人说的。主人与她相关的发言要优先记住，并在关系记忆里体现「主人」这个身份；群聊里也要把主人的话和群友的话分开，不要把主人的话记成「某个群友说的」。",
     "当你判断某个对话对象值得她长期记住时，写一条 category=RELATIONSHIP 的记忆，内容包含对方称呼、来源（哪个群或私聊）和这段关系的要点；不要为记不住的泛泛之交写关系记忆。",
@@ -535,7 +576,7 @@ function systemPrompt(options: {
       "**title 和 detail 里提到具体的人时也写名字**（用 `speaker`），不要写「群友」「群主」「对方」—— 事件正文和 participants 对不上时，她以后只能照着正文说「有个群友」，participants 里的名字白记了。只有确实指代一群人（例如「群里好几个人一起起哄」）时才用泛称。",
       "**participants 的三条硬规矩**：① 不要把你自己的名字写进去 —— 你是记事的人，不是「相关人物」；② 群聊里必须写 `speaker` 里那个具体的名字，绝对不要写「群友」「群成员」「对方」「有人」这类泛称 —— 泛称等于没记，过后谁都查不出是谁，提问时也匹配不到；③ 某句话分不清是谁说的，就不要写进 participants，写空数组也比写错人好。",
       "existingEvents 是这一天**已经记录过**的事件：不要重复记录，同一件事换个说法也算重复（例如「发布群公告」和「起草并发布公告」是同一件）。只写确实不同的事。但**不要因为它非空就整体返回空数组** —— 它只用来避免重复，这一段里只要还有没记过的事，就必须照常写出来。",
-      "群聊里可能同时有好几个 bot 在活动，别人 (@数字) 或直接说的话**不一定是冲她说的**。写 event 前必须先确认对象：只有 role=assistant 的消息（她自己说的）、明确叫她名字的话、@ 指向她的消息，才算「关于她」。如果一条评价/抱怨 @ 的是另一个号码、或者上下文显示在说别人的 bot，就不能写成「群友说她/嫌她/夸她」这类事——那件事的主体不是她。判断不出来时宁可不写，也别记成她的事。这条只适用于 origin 以「QQ群 」开头的消息：私聊和本地对话是两个人面对面说话，对方说的每一句都是对她说的，不要因为「没 @ 她、没叫名字」就跳过私聊事件。",
+      "群聊里可能同时有好几个 bot 在活动，别人 (@数字) 或直接说的话**不一定是冲她说的**。写 event 前必须先确认对象：先看 `mentions` 的 target，只有 role=assistant 的消息（她自己说的）、明确叫她名字的话、@ 指向她的消息（target=self），才算「关于她」。如果一条评价/抱怨 @ 的是另一个号码（target=other）、或者上下文显示在说别人的 bot，就不能写成「群友说她/嫌她/夸她」这类事——那件事的主体不是她，也不要写成「对@数字（她本人）说」。判断不出来时宁可不写，也别记成她的事。这条只适用于 origin 以「QQ群 」开头的消息：私聊和本地对话是两个人面对面说话，对方说的每一句都是对她说的，不要因为「没 @ 她、没叫名字」就跳过私聊事件。",
     );
   } else {
     lines.push(
@@ -622,37 +663,41 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
   const timeoutMs = readConfiguredLlmTimeoutMs("job") ?? DEFAULT_LLM_TIMEOUT_MS.job;
   // Keep connection settings out of the user prompt. Project fields explicitly so
   // extra runtime properties on nested objects cannot accidentally be serialized.
+  const toPromptMessage = (message: MemoryAiMessage) => {
+    const {
+      id, role, eventType, occurredAt, content, origin, isOwner, mentionTargets, mentions, speaker, member,
+    } = message;
+    // 正文里的真实 QQ 换成 @self / @all / @member_n：模型只需要认「谁」，
+    // 不需要账号；对应关系由 mentions 的 member/speaker/kind 给。没有结构化
+    // mentions 的老消息保持原样（旧行为）。
+    const promptContent = mentions?.length ? formatMentionContent(content, mentions) : content;
+    const promptMentions = mentions?.map(({ qq: _qq, ...rest }) => rest);
+    return {
+      id,
+      role,
+      eventType,
+      occurredAt,
+      content: promptContent,
+      ...(origin ? { origin } : {}),
+      ...(isOwner ? { isOwner } : {}),
+      // 群聊里 @ 的是谁：`other` 表示这句话是冲别人说的，不能记成她的事。
+      ...(mentionTargets?.length ? { mentionTargets } : {}),
+      // 具体对象：member 和正文里的 @member_n 对得上，speaker/kind 说明是谁。
+      ...(promptMentions?.length ? { mentions: promptMentions } : {}),
+      // 发言人：忆泡的 participants 靠它写对名字，而不是靠模型从正文猜。
+      ...(speaker ? { speaker } : {}),
+      ...(member ? { member } : {}),
+    };
+  };
   const promptInput = {
     periodStart: input.periodStart,
     periodEnd: input.periodEnd,
     timezone: input.timezone,
     scopeType: input.scopeType,
     characterName: input.characterName,
-    messages: input.messages.map(({
-      id, role, eventType, occurredAt, content, origin, isOwner, mentionTargets, speaker, member,
-    }) => ({
-      id,
-      role,
-      eventType,
-      occurredAt,
-      content,
-      ...(origin ? { origin } : {}),
-      ...(isOwner ? { isOwner } : {}),
-      // 群聊里 @ 的是谁：`other` 表示这句话是冲别人说的，不能记成她的事。
-      ...(mentionTargets?.length ? { mentionTargets } : {}),
-      // 发言人：忆泡的 participants 靠它写对名字，而不是靠模型从正文猜。
-      ...(speaker ? { speaker } : {}),
-      ...(member ? { member } : {}),
-    })),
+    messages: input.messages.map(toPromptMessage),
     ...(input.contextMessages?.length ? {
-      contextMessages: input.contextMessages.map(({ id, role, eventType, occurredAt, content, origin, isOwner, mentionTargets, speaker, member }) => ({
-        id, role, eventType, occurredAt, content,
-        ...(origin ? { origin } : {}),
-        ...(isOwner ? { isOwner } : {}),
-        ...(mentionTargets?.length ? { mentionTargets } : {}),
-        ...(speaker ? { speaker } : {}),
-        ...(member ? { member } : {}),
-      })),
+      contextMessages: input.contextMessages.map(toPromptMessage),
     } : {}),
     totalMessageCount: input.totalMessageCount,
     omittedMessageCount: input.omittedMessageCount,

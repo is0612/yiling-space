@@ -481,9 +481,12 @@ try {
   const published = await prisma.onebotGroupAnnouncement.findUniqueOrThrow({ where: { id: pendingRows[0]!.id } });
   assert.equal(published.status, "PUBLISHED");
   assert(published.publishedAt, "发布成功必须记录时间。");
-  const audit = await prisma.auditLog.findFirst({
+  const readAnnouncementAudit = () => prisma.auditLog.findFirst({
     where: { entityType: "PlatformConnection", entityId: connectionId, action: "channel.group_announcement_published" },
   });
+  // 审计写在公告接口回执之后、给用户回话之前；公告接口回执先到，别在这里和落库赛跑。
+  await waitFor(async () => Boolean(await readAnnouncementAudit()));
+  const audit = await readAnnouncementAudit();
   assert(audit, "群公告发布必须留审计记录。");
 
   // 普通成员即使 @ 她也只能走普通聊天，不能产生草稿或公告。
@@ -749,6 +752,86 @@ try {
   await emitToGroup(1012, 98, "全体注意一下", 555, "all");
   await waitFor(async () => (await assistantCount(1012)) >= 1);
   assert.equal(await assistantCount(1012), 1, "@all 不能算「@ 的是别人」，否则群里喊话她永远不接。");
+
+  /**
+   * 9.9b 被挡下的 @other 轮次也要把「@ 的是谁」写进库。
+   *
+   * 这一条是长期记忆认错人的源头：只存 `@<外部账号>` + mentionTargets:["other"]，
+   * 提炼模型不知道这个号是另一个 AI，会把它写成当前角色自己。目标身份必须
+   * 以「代号 + 显示名 + kind」落库，且真实 QQ 不冒充自己。
+   */
+  await prisma.externalIdentity.upsert({
+    where: { platform_platformUid: { platform: "qq-onebot", platformUid: "666" } },
+    create: {
+      platform: "qq-onebot", platformUid: "666", displayName: "外部 bot",
+      kind: "AI", status: "UNVERIFIED",
+    },
+    update: { displayName: "外部 bot", kind: "AI" },
+  });
+  const previousOwnerQq = record.ownerQq;
+  record.ownerQq = "222";
+  record.bindings[0]!.groupChat = { ...ambientSettings, mode: "all" };
+  await emitToGroup(1021, 1100, "这个声音好听，比较像你", 222, 666);
+  await waitForGroupRoundLog(1021, "addressed_to_others");
+  const readTargetedMessage = () => prisma.message.findFirst({
+    where: {
+      role: "USER",
+      conversation: { is: { channelBindingId: bindingId, externalConversationId: "g:1021" } },
+      content: { contains: "@666" },
+    },
+    select: { metadata: true },
+  });
+  // 日志在落库之前打；等 metadata 真的写进去再断言，否则查到 null 是测试在赛跑。
+  await waitFor(async () => {
+    const row = await readTargetedMessage();
+    return Array.isArray((row?.metadata as { mentions?: unknown[] } | null)?.mentions);
+  });
+  const targetedMessage = await readTargetedMessage();
+  const targetedMetadata = targetedMessage?.metadata as {
+    mentionTargets?: string[];
+    mentions?: Array<{ qq?: string; target?: string; member?: string; speaker?: string; kind?: string }>;
+  } | null;
+  assert.deepEqual(targetedMetadata?.mentionTargets, ["other"], "被挡下的 @other 消息仍要标 mentionTargets。");
+  const targetMention = targetedMetadata?.mentions?.[0];
+  assert.equal(targetMention?.target, "other", "@ 对象不能记成 self。");
+  assert.equal(targetMention?.speaker, "外部 bot", "目标显示名要落库，长期记忆才知道「某个称呼」说的是谁。");
+  assert.equal(targetMention?.kind, "AI", "目标身份要落库，不能把另一个 bot 当成人类群友。");
+  assert.ok(targetMention?.member, "目标要有群成员代号，和 transcript 里的 @member_n 对得上。");
+  assert.notEqual(targetMention?.qq, "123456789", "被 @ 的 QQ 不能是当前小号自己。");
+  record.ownerQq = previousOwnerQq;
+  record.bindings[0]!.groupChat = { ...ambientSettings, mode: "all" };
+
+  // 9.9c @ 人类群友同样不能认成她；身份类型要落成 HUMAN。
+  await prisma.externalIdentity.upsert({
+    where: { platform_platformUid: { platform: "qq-onebot", platformUid: "667" } },
+    create: {
+      platform: "qq-onebot", platformUid: "667", displayName: "群友乙",
+      kind: "HUMAN", status: "UNVERIFIED",
+    },
+    update: { displayName: "群友乙", kind: "HUMAN" },
+  });
+  record.ownerQq = "222";
+  await emitToGroup(1022, 1101, "这题你会吗", 222, 667);
+  await waitForGroupRoundLog(1022, "addressed_to_others");
+  const readHumanTargeted = () => prisma.message.findFirst({
+    where: {
+      role: "USER",
+      conversation: { is: { channelBindingId: bindingId, externalConversationId: "g:1022" } },
+      content: { contains: "@667" },
+    },
+    select: { metadata: true },
+  });
+  await waitFor(async () => {
+    const row = await readHumanTargeted();
+    return Array.isArray((row?.metadata as { mentions?: unknown[] } | null)?.mentions);
+  });
+  const humanTargeted = await readHumanTargeted();
+  const humanMention = (humanTargeted?.metadata as { mentions?: Array<{ target?: string; kind?: string; speaker?: string }> } | null)
+    ?.mentions?.[0];
+  assert.equal(humanMention?.target, "other", "@ 人类群友也是 other，不是 self。");
+  assert.equal(humanMention?.kind, "HUMAN", "@ 人类群友的身份要落成 HUMAN。");
+  assert.equal(humanMention?.speaker, "群友乙", "人类群友的显示名也要落库。");
+  record.ownerQq = previousOwnerQq;
 
   /**
    * 9.10 模型把 JSON 套在 ```json 围栏里回来 —— 必须照常回，不能整轮丢掉。
@@ -1050,7 +1133,7 @@ try {
 
   closeGateway();
 
-  console.log("OneBot 渠道端到端测试通过：WS token 鉴权与单次握手、事件接入、CQ 码解析、凭据解密、角色绑定路由、记忆检索、模型回复、表情段发送与表情额度、消息持久化、外部身份 upsert、回发平台与幂等去重、群公告草稿与确认发布、普通成员越权拦截、按群滚动 10 分钟回复上限、群聊统一攒批（mention 档只在被叫到时进管道）、自然接话闸门、按群覆盖群聊模式、引用与 @ 的分工（回上一条不加、接旧句才引用、点名才 @）、别人 @ 别人时不抢话（@all 例外）、围栏 JSON 照常回、戳一戳能叫醒她（戳别人不算）、B站 指令主人专属、临时会话的回复带上来源群号。");
+  console.log("OneBot 渠道端到端测试通过：WS token 鉴权与单次握手、事件接入、CQ 码解析、凭据解密、角色绑定路由、记忆检索、模型回复、表情段发送与表情额度、消息持久化、外部身份 upsert、回发平台与幂等去重、群公告草稿与确认发布、普通成员越权拦截、按群滚动 10 分钟回复上限、群聊统一攒批（mention 档只在被叫到时进管道）、自然接话闸门、按群覆盖群聊模式、引用与 @ 的分工（回上一条不加、接旧句才引用、点名才 @）、别人 @ 别人时不抢话（@all 例外）、被挡下的 @ 对象身份落库（AI/HUMAN 分开）、围栏 JSON 照常回、戳一戳能叫醒她（戳别人不算）、B站 指令主人专属、临时会话的回复带上来源群号。");
 } finally {
   for (const child of children) child.kill();
   await prisma.onebotGroupAnnouncement.deleteMany({ where: { connectionId } }).catch(() => undefined);

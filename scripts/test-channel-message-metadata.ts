@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {
   buildGroupMemberDeltas, buildStoredMessageMetadata, resolveGroupScopeRepair, resolveOwnerPrivateScopeRepair,
 } from "../server/utils/channel-adapter/pipeline";
-import { readSourceMessageIsOwner } from "../server/utils/conversation-message";
+import { formatMentionContent, readMessageMentions, readSourceMessageIsOwner } from "../server/utils/conversation-message";
 
 /**
  * 渠道消息落库 metadata 的单元测试。
@@ -37,6 +37,62 @@ assert.deepEqual(
   }).mentionTargets,
   ["self", "all"],
   "@ 她 / @全体 要原样保留。",
+);
+const mentionMetadata = buildStoredMessageMetadata({
+  ...base,
+  message: {
+    authorOpenId: "556",
+    content: "@123456789 这个声音好听，比较像你",
+    mentionTargets: ["other"],
+    member: "member_1",
+    mentions: [
+      { qq: "123456789", target: "other", member: "member_2", speaker: "外部 bot", kind: "AI" },
+      { target: "all" },
+    ],
+  },
+});
+assert.deepEqual(
+  mentionMetadata.mentions,
+  [
+    { qq: "123456789", target: "other", member: "member_2", speaker: "外部 bot", kind: "AI" },
+    { target: "all" },
+  ],
+  "被 @ 的对象要把 qq / 代号 / 显示名 / 身份一起落库；只留 other 会认错人。",
+);
+assert.deepEqual(
+  readMessageMentions(mentionMetadata),
+  [
+    { target: "other", qq: "123456789", member: "member_2", speaker: "外部 bot", kind: "AI" },
+    { target: "all" },
+  ],
+  "读回时保序，且 @other 仍以 qq 认人。",
+);
+assert.deepEqual(
+  buildStoredMessageMetadata({
+    ...base,
+    message: {
+      authorOpenId: "556",
+      content: "脏数据",
+      mentions: [{ target: "evil", qq: "1" }, { target: "other", speaker: "" }, { target: "self" }],
+    },
+  }).mentions,
+  [{ target: "self" }],
+  "坏 target / 没有对象的 other 要丢掉，不能把脏数据写进记忆输入。",
+);
+assert.equal(
+  formatMentionContent("@123456789 你好", [{ qq: "123456789", target: "other", member: "member_2" }]),
+  "@member_2 你好",
+  "@ 别人的正文要换成代号，记忆提示词里不出现真实 QQ。",
+);
+assert.equal(
+  formatMentionContent("@999 你好", [{ qq: "999", target: "self" }]),
+  "@self 你好",
+  "@ 当前鱼要写成 @self。",
+);
+assert.equal(
+  formatMentionContent("@all 开会", [{ qq: "all", target: "all" }]),
+  "@all 开会",
+  "@全体保持 @all。",
 );
 assert.equal(
   buildStoredMessageMetadata({ ...base, storedReason: "mentioned" }).storedReason,

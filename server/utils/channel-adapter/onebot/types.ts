@@ -160,16 +160,35 @@ export function readOnebotMessageText(data: unknown): string {
 export type OnebotMentionTarget = "self" | "other" | "all";
 
 /**
- * 解析 @ 指向。结构化段优先；字符串消息兼容 `[CQ:at,qq=...]`。
+ * 一个 at 段的完整解析结果：保留出现顺序、目标 QQ，以及网关可选给的显示名。
+ *
+ * 昵称会改、会重名，所以身份判断只认 `qq`；`name` 只用于让模型看懂
+ * 「这个 @member_n 是谁」，不能反推身份。没有 name 时下游再从身份表补。
+ */
+export type OnebotMentionSegment = {
+  qq: string;
+  name: string;
+  target: OnebotMentionTarget;
+};
+
+/**
+ * 解析 @ 段：结构化段优先；字符串消息兼容 `[CQ:at,qq=...]`。
+ *
+ * 这是 at 段解析的**唯一入口**：`readOnebotMentionTargets` 与 `readOnebotMentionQqs`
+ * 都从它派生。多写一份解析，迟早出现「分类说 other、QQ 列表里却找不到」的分叉。
  * 没有 selfId 时一律记 other —— 宁可少认一次，也不要把别人当成她。
  */
-export function readOnebotMentionTargets(data: unknown, selfId: string): OnebotMentionTarget[] {
+export function readOnebotMentions(data: unknown, selfId: string): OnebotMentionSegment[] {
   const message = (data as { message?: unknown } | null)?.message;
-  const targets = new Set<OnebotMentionTarget>();
-  const push = (raw: string) => {
-    if (raw === "all") targets.add("all");
-    else if (selfId && raw === selfId) targets.add("self");
-    else targets.add("other");
+  const out: OnebotMentionSegment[] = [];
+  const push = (raw: string, name = "") => {
+    const qq = raw.trim();
+    if (!qq) return;
+    out.push({
+      qq,
+      name: name.trim(),
+      target: qq === "all" ? "all" : selfId && qq === selfId ? "self" : "other",
+    });
   };
   if (Array.isArray(message)) {
     for (const segment of message) {
@@ -178,14 +197,20 @@ export function readOnebotMentionTargets(data: unknown, selfId: string): OnebotM
       if (seg.type !== "at") continue;
       const qq = seg.data?.qq;
       if (qq === undefined || qq === null) continue;
-      push(String(qq));
+      const name = seg.data?.name;
+      push(String(qq), typeof name === "string" ? name : "");
     }
   } else if (typeof message === "string") {
     for (const match of message.matchAll(/\[CQ:at,qq=([^,\]]+)/g)) {
       if (match[1]) push(match[1]);
     }
   }
-  return [...targets];
+  return out;
+}
+
+/** 一条消息里 @ 到的方向（self / all / other），去重保序。 */
+export function readOnebotMentionTargets(data: unknown, selfId: string): OnebotMentionTarget[] {
+  return [...new Set(readOnebotMentions(data, selfId).map((mention) => mention.target))];
 }
 
 /**
@@ -196,26 +221,7 @@ export function readOnebotMentionTargets(data: unknown, selfId: string): OnebotM
  * 这一句里，那个 QQ 就是说话人的主人。分类结果把身份抹平了，反查不出来。
  */
 export function readOnebotMentionQqs(data: unknown): string[] {
-  const message = (data as { message?: unknown } | null)?.message;
-  const qqs: string[] = [];
-  const push = (raw: string) => {
-    if (raw && !qqs.includes(raw)) qqs.push(raw);
-  };
-  if (Array.isArray(message)) {
-    for (const segment of message) {
-      if (!segment || typeof segment !== "object") continue;
-      const seg = segment as OnebotSegment;
-      if (seg.type !== "at") continue;
-      const qq = seg.data?.qq;
-      if (qq === undefined || qq === null) continue;
-      push(String(qq));
-    }
-  } else if (typeof message === "string") {
-    for (const match of message.matchAll(/\[CQ:at,qq=([^,\]]+)/g)) {
-      if (match[1]) push(match[1]);
-    }
-  }
-  return qqs;
+  return [...new Set(readOnebotMentions(data, "").map((mention) => mention.qq))];
 }
 
 /**

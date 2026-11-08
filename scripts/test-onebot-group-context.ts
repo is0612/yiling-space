@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { createGroupContext, type GroupMessageFacts } from "../server/utils/channel-adapter/onebot/group-context";
-import { readOnebotMentionQqs, readOnebotMentionTargets, readOnebotReplyToId } from "../server/utils/channel-adapter/onebot/types";
+import { readOnebotMentionQqs, readOnebotMentionTargets, readOnebotMentions, readOnebotReplyToId } from "../server/utils/channel-adapter/onebot/types";
 
 const SELF = "999";
 let now = 1_000_000;
@@ -146,6 +146,28 @@ assert.deepEqual(
   "字符串消息也要认 CQ 码。",
 );
 assert.deepEqual(readOnebotMentionTargets({ message: "[CQ:at,qq=111] 你好" }, ""), ["other"], "没有 selfId 时不要猜 self。");
+// 结构化 at 段：保留顺序、目标 QQ 与网关可选的显示名。昵称只用于展示，认人仍看 qq。
+assert.deepEqual(
+  readOnebotMentions({ message: [
+    { type: "text", data: { text: "先问 " } },
+    { type: "at", data: { qq: 111, name: "外部 bot" } },
+    { type: "text", data: { text: " 再问 " } },
+    { type: "at", data: { qq: 999 } },
+  ] }, SELF),
+  [
+    { qq: "111", name: "外部 bot", target: "other" },
+    { qq: "999", name: "", target: "self" },
+  ],
+  "at 段要按出现顺序保留 qq 与可选 name，不能只留一个分类。",
+);
+assert.deepEqual(
+  readOnebotMentions({ message: [
+    { type: "at", data: { qq: 111, name: "某个称呼" } },
+    { type: "at", data: { qq: 222, name: "某个称呼" } },
+  ] }, SELF).map((mention) => [mention.qq, mention.name, mention.target]),
+  [["111", "某个称呼", "other"], ["222", "某个称呼", "other"]],
+  "同名不同 QQ 必须分成两个对象；认人只认 QQ，不认昵称。",
+);
 assert.equal(
   readOnebotReplyToId({ message: [{ type: "reply", data: { id: 42 } }, { type: "text", data: { text: "嗯" } }] }),
   "42",
@@ -231,6 +253,26 @@ assert.deepEqual(
 assert.deepEqual(readOnebotMentionQqs({ message: "没有 at" }), [], "没有 @ 就是空数组。");
 assert.deepEqual(readOnebotMentionQqs({}), [], "缺字段不许抛错。");
 
+// 结构化 at 段要一路带到背景里：只给 `@member_2` 而不说这个代号是谁，
+// 模型仍会把 @ 后面的称呼算到当前角色头上。
+const structured = createGroupContext({ selfQq: SELF, now: () => now });
+structured.remember("g:m", facts({
+  messageId: "m1",
+  senderQq: "111",
+  displayName: "群友甲",
+  text: "@222 这个声音好听",
+  mentionTargets: ["other"],
+  mentions: [{ qq: "222", name: "外部 bot", target: "other" }],
+}));
+assert.deepEqual(
+  structured.background("g:m", []).map((line) => ({ text: line.text, mentions: line.mentions })),
+  [{
+    text: "@member_1 这个声音好听",
+    mentions: [{ target: "other", member: "member_1", speaker: "外部 bot" }],
+  }],
+  "背景行要带上被 @ 的对象代号与显示名，且真实 QQ 不进提示词。",
+);
+
 // ── 10. 「刚 @ 过别人」的延续：一句话拆两条发时，第二条别当成冲她说 ──
 // 2026-10-31 22:02 主人：「@群友乙 不是刷屏」「是这个不适合发群里」。
 // 第一条 @ 了群友乙被挡在门外、不落库；第二条没有 @，成了孤立单句，
@@ -297,4 +339,4 @@ for (let i = 0; i < 140; i++) extended.remember("busy", facts({ messageId: `busy
 assert.equal(extended.background("busy", []).length, 40);
 assert.equal(extended.background("busy", [], { windowMs: minutes(15), maxMessages: 120, maxChars: 24000 }).length, 120);
 
-console.log("群聊上下文测试通过：成员代号、@ 代号化、背景预算、话题建立/候选/过期/续期上限、并行话题淘汰、@ 与引用解析、原始 @ QQ、群内归属（自述优先于群名片、查不到人就不上表）、@ 别人之后的续话窗口。");
+console.log("群聊上下文测试通过：成员代号、@ 结构化解析（顺序/QQ/显示名/同名不同 QQ）、@ 代号化、背景预算与 @ 对象、话题建立/候选/过期/续期上限、并行话题淘汰、@ 与引用解析、原始 @ QQ、群内归属（自述优先于群名片、查不到人就不上表）、@ 别人之后的续话窗口。");

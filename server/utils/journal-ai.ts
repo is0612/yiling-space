@@ -13,6 +13,7 @@
  */
 
 import { composeCharacterPrompt } from "./chat-reply";
+import { formatMentionContent, type ConversationMessageMention } from "./conversation-message";
 import { parseJsonLoose } from "./loose-json";
 import { callRawModel } from "./raw-llm";
 import type { ModelUsageTokens } from "./model-usage";
@@ -44,6 +45,8 @@ export type JournalAiMessage = {
   origin?: string;
   isOwner?: boolean;
   mentionTargets?: string[];
+  /** 这条消息 @ 到的具体对象：代号 / 显示名 / 身份。 */
+  mentions?: ConversationMessageMention[];
   /** 这条是群里哪个人说的（显示名）。群聊里一条 USER 可能是主人、群友、别的 bot。 */
   speaker?: string;
   /** 群内稳定代号（`member_2`）：昵称会改，代号不会。 */
@@ -437,19 +440,25 @@ export function promptInput(input: JournalAiInput, extra: Record<string, unknown
     timezone: input.timezone,
     totalMessageCount: input.totalMessageCount,
     omittedMessageCount: input.omittedMessageCount,
-    messages: input.messages.map(({ id, role, occurredAt, content, origin, isOwner, mentionTargets, speaker, member }) => ({
-      id,
-      role,
-      occurredAt,
-      content,
-      ...(origin ? { origin } : {}),
-      ...(isOwner ? { isOwner } : {}),
-      ...(mentionTargets?.length ? { mentionTargets } : {}),
-      // 发言人：群聊里一条 USER 可能是主人、群友甲、群友乙或别的 bot，
-      // 没有这个字段模型会把别人做的事算到她头上。
-      ...(speaker ? { speaker } : {}),
-      ...(member ? { member } : {}),
-    })),
+    messages: input.messages.map(({ id, role, occurredAt, content, origin, isOwner, mentionTargets, mentions, speaker, member }) => {
+      // 和记忆提炼同一套：正文的真实 QQ 换成 @member_n，对应关系由 mentions 给。
+      const promptContent = mentions?.length ? formatMentionContent(content, mentions) : content;
+      const promptMentions = mentions?.map(({ qq: _qq, ...rest }) => rest);
+      return {
+        id,
+        role,
+        occurredAt,
+        content: promptContent,
+        ...(origin ? { origin } : {}),
+        ...(isOwner ? { isOwner } : {}),
+        ...(mentionTargets?.length ? { mentionTargets } : {}),
+        ...(promptMentions?.length ? { mentions: promptMentions } : {}),
+        // 发言人：群聊里一条 USER 可能是主人、群友甲、群友乙或别的 bot，
+        // 没有这个字段模型会把别人做的事算到她头上。
+        ...(speaker ? { speaker } : {}),
+        ...(member ? { member } : {}),
+      };
+    }),
     events: input.events.map(({ id, occurredAt, title, detail }) => ({ id, occurredAt, title, detail })),
     ...extra,
   };
@@ -491,6 +500,7 @@ export function diarySystemPrompt(input: JournalAiInput): string {
     "- 写经历和感受，不要复述所有事件，也不要写成工作日报。",
     "- 只写材料里有的东西：不要编天气、场景、动作、感官细节，也不要编对话。",
     "- **认清说话的人**：材料里 `role: assistant` 才是你自己说的；`role: user` 要看 `speaker`（谁说的）与 `isOwner`（是不是主人）。群聊里一条 user 可能是主人、群友甲、群友乙，甚至是别的 bot。",
+    "- **看清被 @ 的是谁**：消息上的 `mentions` 是 @ 对象（target=self 是你，all 是全体，other 是别人；speaker/kind 是对方的显示名与身份）。@other 的话不是对你说的；@ 后面的称呼、外号属于那个对象，不能写进你自己的日记里当成别人在叫你。",
     "- 别人说的事是**别人的**：群友去旅行、群友心情不好、主人今天很累，都不是你经历的事。你可以写「听谁说起」，但不能写成自己做的、自己的情绪。只有你自己说过的、真正参与过的事才用第一人称当作亲历。",
     "- 分不清某句话是谁说的，就别把它写进日记。",
     ...(input.messages.length === 0 && input.events.length > 0
@@ -527,6 +537,7 @@ export function handbookSystemPrompt(input: JournalAiInput): string {
     "- 待续事项：还没结束、想继续关注的事，可空。",
     "- 标签：1-5 个主题词。",
     "- **认清说话的人**：`role: assistant` 才是你自己；`role: user` 要看 `speaker` / `isOwner`，群聊里可能是主人、群友，甚至别的 bot。别人经历的事只能记成「听谁说起」，不能记成自己做的。",
+    "- **看清被 @ 的是谁**：`mentions` 是 @ 对象；target=other 不是你在被叫，@ 后面的称呼属于对方，不能记成你的外号或别人对你的称呼。",
     ...(input.messages.length === 0 && input.events.length > 0
       ? ["- 这一天的原始消息已经不在，只剩下忆泡。只能根据忆泡的标题和详情写；不要编造对话原文或未记录的场景。某个栏目没有来源支撑就留空。"]
       : []),

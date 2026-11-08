@@ -12,6 +12,17 @@
 
 export type GroupMentionTarget = "self" | "other" | "all";
 
+/**
+ * 一条消息里被 @ 的对象。`qq` 只用于对账（认人、和正文里的 @数字 对齐）；
+ * 进角色提示词时换成 `@member_n`，进记忆/手账提示词时也先换成代号。
+ * `name` 是网关 at 段可选带的显示名，用来让模型知道 member_n 是谁；没有就由身份表补。
+ */
+export type GroupMentionFact = {
+  qq: string;
+  name?: string;
+  target: GroupMentionTarget;
+};
+
 /** 一条群消息里与判定有关的事实。正文保持原样，@ 的代号化在 formatText 里做。 */
 export type GroupMessageFacts = {
   messageId: string;
@@ -24,6 +35,14 @@ export type GroupMessageFacts = {
   replyToMessageId: string;
   /** 这条 @ 到的原始 QQ（含她自己和 all）。只用于学「谁是谁的人」，不入提示词。 */
   mentionQqs?: string[];
+  /**
+   * 结构化 @ 段（按出现顺序）。
+   *
+   * 保留它是为了不再从拼接后的正文反推：`@数字` 只能说明「有人被 @」，
+   * 分不清是当前角色、别的 bot 还是人类；顺序也可能在正则重写里丢掉。
+   * 上游解析一次，这里原样存；入模时再由 memberCode 代号化。
+   */
+  mentions?: GroupMentionFact[];
 };
 
 /**
@@ -48,6 +67,8 @@ export type GroupBackgroundLine = {
   member: string;
   speaker: string;
   text: string;
+  /** 这条背景里 @ 的对象；模型看背景时也要知道 @member_n 指的是谁。 */
+  mentions?: Array<{ target: GroupMentionTarget; member?: string; speaker?: string }>;
 };
 
 export type GroupTopicAnchor = { id: string; label: string };
@@ -145,11 +166,25 @@ export class GroupContext {
     state.messages.push({ ...message });
     this.learnOwnership(state, message);
     // 这条 @ 的是别人：记下来，他后面那几句多半还是在跟那个人讲。
-    const mentionsOther = (message.mentionQqs ?? []).some(
+    const mentionQqs = this.mentionQqsOf(message);
+    const mentionsOther = mentionQqs.some(
       (qq) => qq && qq !== "all" && qq !== this.selfQq,
     ) || message.mentionTargets.includes("other");
     if (mentionsOther) state.lastOtherMention.set(message.senderQq, message.at);
     this.prune(state);
+  }
+
+  /**
+   * 一条消息 @ 到的原始 QQ。
+   *
+   * 结构化 `mentions` 优先：它是唯一保留了顺序与对象的来源；老消息没有这个字段时
+   * 才退回 `mentionQqs`。同一件事不要在调用方和这里各推一遍。
+   */
+  private mentionQqsOf(message: GroupMessageFacts): string[] {
+    if (message.mentions?.length) {
+      return [...new Set(message.mentions.map((mention) => mention.qq).filter(Boolean))];
+    }
+    return message.mentionQqs ?? [];
   }
 
   /**
@@ -178,7 +213,7 @@ export class GroupContext {
    */
   private learnOwnership(state: ConversationState, message: GroupMessageFacts): void {
     if (!message.text || !/主人/u.test(message.text)) return;
-    const others = (message.mentionQqs ?? []).filter(
+    const others = this.mentionQqsOf(message).filter(
       (qq) => qq && qq !== "all" && qq !== this.selfQq && qq !== message.senderQq,
     );
     if (others.length !== 1) return;
@@ -284,12 +319,18 @@ export class GroupContext {
     for (const message of state.messages.slice(-(limits?.maxMessages ?? this.maxMessages))) {
       if (excluded.has(message.messageId)) continue;
       if (now - message.at > (limits?.windowMs ?? this.windowMs)) continue;
+      const mentions = (message.mentions ?? []).map((mention) => ({
+        target: mention.target,
+        ...(mention.target === "other" ? { member: this.memberCode(key, mention.qq) } : {}),
+        ...(mention.name ? { speaker: mention.name.slice(0, 40) } : {}),
+      }));
       lines.push({
         id: message.messageId,
         at: message.at,
         member: this.memberCode(key, message.senderQq),
         speaker: message.displayName,
         text: this.truncate(this.formatText(key, message.text)),
+        ...(mentions.length ? { mentions } : {}),
       });
     }
     // 从最旧的开始丢，直到总量进预算；至少保留最后一条。

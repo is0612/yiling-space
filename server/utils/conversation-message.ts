@@ -55,6 +55,107 @@ export function readMessageMentionTargets(metadata: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+export type MessageMentionTarget = "self" | "other" | "all";
+export type MessageMentionKind = "AI" | "HUMAN" | "UNKNOWN";
+
+/**
+ * 一条消息里被 @ 的对象（按 at 段出现顺序）。
+ *
+ * 和 `mentionTargets` 的分工：那个只是方向分类，够判断「是不是在叫她」；
+ * 但判断「@ 的是谁」需要具体对象 —— 群里有好几个 bot，`other` 只是「不是她」，
+ * 模型仍可能把对方认成她本人（2026-11-08 实际踩到：owner @ 另一个 AI「某个称呼」，
+ * 忆泡写成「对 <被 @ 的 QQ>（当前角色）说」）。这里保留 QQ（认人用）、群成员代号、
+ * 显示名与身份类型，昵称改了也仍按 QQ 对得上。
+ */
+export type ConversationMessageMention = {
+  /** 原始平台账号。只用于把正文里的 @ 与对象对上，进角色/记忆/手账提示词前会剥掉。 */
+  qq?: string;
+  target: MessageMentionTarget;
+  /** 群内稳定代号（`member_2`）：和 transcript 里的 @member_n 对应。 */
+  member?: string;
+  /** 被 @ 对象的显示名；网关没给、身份表也没有时为空。 */
+  speaker?: string;
+  /** 被 @ 对象的身份。UNKNOWN 是「不知道」，不是「她本人」。 */
+  kind?: MessageMentionKind;
+};
+
+const MENTION_TARGETS = new Set<MessageMentionTarget>(["self", "other", "all"]);
+const MENTION_KINDS = new Set<MessageMentionKind>(["AI", "HUMAN", "UNKNOWN"]);
+
+function textField(value: unknown, limit: number): string {
+  return typeof value === "string" ? value.trim().slice(0, limit) : "";
+}
+
+/** 校验并收敛 @ 对象列表；坏字段跳过，不因为一条脏数据把整条消息的目标信息丢掉。 */
+export function sanitizeMessageMentions(value: unknown): ConversationMessageMention[] {
+  if (!Array.isArray(value)) return [];
+  const out: ConversationMessageMention[] = [];
+  const seen = new Set<string>();
+  for (const item of value.slice(0, 20)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const target = typeof record.target === "string" && MENTION_TARGETS.has(record.target as MessageMentionTarget)
+      ? record.target as MessageMentionTarget
+      : null;
+    if (!target) continue;
+    const qq = textField(record.qq, 32);
+    const member = textField(record.member, 40);
+    const speaker = textField(record.speaker, 80);
+    const rawKind = textField(record.kind, 16);
+    const kind = MENTION_KINDS.has(rawKind as MessageMentionKind) ? rawKind as MessageMentionKind : undefined;
+    // `other` 必须至少有一个能落地成具体对象的标识；否则这条 mention 只会让模型再猜一次。
+    if (target === "other" && !qq && !member && !speaker) continue;
+    const key = `${target}:${qq || member || speaker}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      target,
+      ...(qq ? { qq } : {}),
+      ...(member ? { member } : {}),
+      ...(speaker ? { speaker } : {}),
+      ...(kind ? { kind } : {}),
+    });
+  }
+  return out;
+}
+
+/** 从消息 metadata 里读 @ 对象详情；老消息没有这个字段时返回空数组。 */
+export function readMessageMentions(metadata: unknown): ConversationMessageMention[] {
+  const record = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
+  return sanitizeMessageMentions(record.mentions);
+}
+
+/**
+ * 把正文里的 `@<qq>` 换成 `@self` / `@all` / `@member_n`。
+ *
+ * 记忆/手账的提示词不该出现真实账号；而要不要换、换成谁，只能由**结构化 mentions**
+ * 决定 —— 正则猜不出这个号码是当前角色、别的 bot 还是人类。没有 mentions 的老消息
+ * 原样返回，保持旧行为。
+ */
+export function formatMentionContent(
+  content: string,
+  mentions: readonly ConversationMessageMention[] | undefined,
+): string {
+  if (!mentions?.length || !content) return content;
+  let out = content;
+  for (const mention of mentions) {
+    if (!mention.qq) continue;
+    const label = mention.target === "self"
+      ? "@self"
+      : mention.target === "all"
+        ? "@all"
+        : mention.member
+          ? `@${mention.member}`
+          : "";
+    if (!label) continue;
+    out = out.split(`@${mention.qq}`).join(label);
+    out = out.split(`[CQ:at,qq=${mention.qq}]`).join(label);
+  }
+  return out;
+}
+
 /**
  * 这条消息是谁发的（渠道账号）。忆泡的参与者引用靠它推导，而不是靠模型写名字。
  *

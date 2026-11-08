@@ -90,6 +90,13 @@ OneBot v11 的 `message` 字段是**分段数组**（CQ 码），例如：
 （`[害羞]`、`[白眼]`），清单外的 id 与语音/视频等仍用通用占位符（`[表情]`/`[语音]`）。
 语音/视频不下载；**图片默认也不下载**，正文里只留 `[图片]`。
 
+`at` 段不只在正文里拍平成 `@数字`：`readOnebotMentions()` 保留**出现顺序、目标 QQ、网关可选的 name**，
+`serve.ts` 入队时解析一次，后续闸门、落库、语填入模都用同一份。落库 metadata 写
+`mentions: [{ qq, target, member, speaker, kind }]`；`kind` 从 `ExternalIdentity` 查（AI / HUMAN / UNKNOWN），
+所以「@ 当前鱼」「@ 其他 AI」「@ 人类群友」可以分开判断。提示词里真实 QQ 会换成
+`@self` / `@all` / `@member_n`，并带上 `member` / `speaker` / `kind`；昵称改了或重名都仍以 QQ 认人。
+没有 at 段的消息不写 `mentions`，保留现有语境判断。
+
 表情名有意义：对方发「害羞」还是「白眼」，语气完全不同。一律写成 `[表情]` 等于没告诉模型
 任何东西。
 
