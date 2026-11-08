@@ -6,6 +6,10 @@ export function readKnowledgeAssistantSettingsPatch(body: Record<string, unknown
   clearApiKey: boolean;
 } {
   const config: Record<string, unknown> = {};
+  if (body.knowledgeAutoCollectEnabled !== undefined) {
+    if (typeof body.knowledgeAutoCollectEnabled !== "boolean") throw new Error("聊天知识候选自动收集开关必须是布尔值。");
+    config.knowledgeAutoCollectEnabled = body.knowledgeAutoCollectEnabled;
+  }
   if (body.knowledgeAssistantEnabled !== undefined) {
     if (typeof body.knowledgeAssistantEnabled !== "boolean") throw new Error("知识处理助手开关必须是布尔值。");
     config.knowledgeAssistantEnabled = body.knowledgeAssistantEnabled;
