@@ -67,7 +67,7 @@ async function addEvent(characterId: string, globalScopeId: string, suffix: stri
       data: {
         memoryScopeId: globalScopeId,
         dayKey: "2026-11-08",
-        occurredAt: new Date(now.getTime() + Number(suffix.replace(/\\D/g, "") || 0)),
+        occurredAt: new Date(now.getTime() + Number(suffix.slice(1) || 0)),
         title: `隔离测试经历${suffix}`,
         detail: "仅供社交关系队列测试",
         participants: ["某个好友"],
