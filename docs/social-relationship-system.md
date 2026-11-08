@@ -391,3 +391,13 @@
 - 周期回顾默认间隔为 30 天，可通过 `YILING_SOCIAL_RELATIONSHIP_REVIEW_INTERVAL_DAYS` 设置 1–365 天。该间隔只控制回顾排期，不是关系升级/降级阈值，也不代表到了日期就改变关系。
 - **当前批次不执行评估 AI**：Worker 只维护和恢复队列，不领取后空跑、不创建虚假成功记录、不修改关系阶段或相处状态。下一批完成独立评估配置与执行器后，再把真实评估接入 claim/complete/fail 生命周期。
 - 隔离 DB 验收入口：`yarn test:social-relationship-queue-isolated`，自动创建一次性本地 PostgreSQL 数据库、执行全部迁移和队列断言后 DROP；已接入 `verify:local`。本批尚需本地 DSH 实跑 Prisma、类型检查、队列隔离测试、Lint、构建及现有忆泡数据库回归。
+
+
+### 14.9 独立评估模型配置第一批（2026-11-09）
+
+- 新增角色级关系评估助手配置，沿用 `Character.modelConfig`，不另建 Prisma 配置表；每个角色可以使用不同的评估模型服务。
+- 配置包含服务商选择（服务商仅用于填写地址的快捷预设）、独立模型名、独立 OpenAI 兼容 API 根地址、独立加密 API Key、温度、最大输入 Token 与最大输出 Token。启用时模型、地址、专用 Key 必须齐全；不继承聊天 API 地址，也不回落到聊天、记忆、语境或知识助手凭据。
+- Character DTO 只回传 Key 是否已保存，不回传密文或明文。新增模型列表接口只使用本助手的地址和 Key。
+- 新增成长系统中的关系评估 AI 设置页，角色切换时使旧加载/保存/模型列表响应失效；配置页明确说明本批还未接入评估执行器。
+- **本批仅完成配置层，不调用模型、不处理队列、不修改关系阶段/相处状态。** 本地验收待执行：`yarn test:social-relationship-assessment-config`、`yarn typecheck`、`yarn check:sfc`、`yarn lint`、`yarn build`。
+- 下一批固定执行约束：评估启动时记录 `relationshipVersion` 快照，应用前必须在事务内重新比对；AI 可读取的经历仅从已持久化的本次 `SocialRelationshipAssessmentEvidence` 关联行装配，模型返回的证据 ID 必须属于本次已挂接行，且只有 NEW 证据能作为新变化依据，CONTEXT 仅作背景。
