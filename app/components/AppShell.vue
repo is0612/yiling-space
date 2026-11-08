@@ -22,7 +22,6 @@ import {
   TrendCharts,
   User,
   UserFilled,
-  Connection,
   VideoPlay,
   Notebook,
   Reading,
@@ -132,8 +131,8 @@ const workspaceNavigation: NavigationItem[] = [
 ];
 
 /**
- * 成长系统：九个页面目前只有路由和空白骨架。
- * 页面通过 GrowthPlaceholder 读取统一角色上下文；菜单只登记入口，不读角色、不拉接口。
+ * 成长系统：各模块按阶段接入；角色级页面通过全局角色选择器共享上下文。
+ * 菜单只登记入口，不自行读取角色或拉取业务接口。
  */
 const growthNavigation: NavigationItem[] = [
   { key: "growth", label: "总览", href: "/growth", icon: TrendCharts, exact: true },
