@@ -123,9 +123,9 @@ function isSelfMentioned(event: OnebotResolvedEvent, fallbackSelfId = ""): boole
   const data = event.data as { message?: unknown } | null;
   const message = data?.message;
   if (!Array.isArray(message)) {
-    // 非数组时先认 CQ 码，再退回检查文本里的 @selfId（有的网关把字符串消息拍平了）。
-    return readOnebotMentions(event.data, selfId).some((mention) => mention.target === "self")
-      || event.content.includes(`@${selfId}`);
+    // 字符串消息只认结构化的 CQ at 码；正文里手打的 @QQ 不是点名。
+    // 不能用 event.content.includes() 兜底，否则普通文本也会误触发机器人回复。
+    return readOnebotMentions(event.data, selfId).some((mention) => mention.target === "self");
   }
   // 只认真正的 at 段：正文里手打的「@123」不是点名，不能把她叫出来。
   return readOnebotMentions(event.data, selfId).some((mention) => mention.target === "self");
