@@ -36,7 +36,7 @@ try {
       usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
     });
   };
-  const result = await analyzePrivateKnowledgeCandidate(runtime, "小鲸鱼i", [
+  const result = await analyzePrivateKnowledgeCandidate(runtime, "某个好友", [
     message("什么是 TypeScript 的泛型？能解释一下吗？", "m1"),
     message("这是另一个好友的内容，不应被传入。", "m2"),
   ]);

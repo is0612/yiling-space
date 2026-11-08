@@ -329,7 +329,7 @@ export async function analyzePrivateKnowledgeCandidate(
     });
     if (!response.ok) throw new ContextAssistantError();
     const body: unknown = await response.json();
-    usage = readModelUsage(body);
+    usage = readModelUsage(body) ?? undefined;
     const choices = record(body).choices;
     const choice = record(Array.isArray(choices) ? choices[0] : null);
     if (choice.finish_reason === "length") throw new ContextAssistantError(usage);
