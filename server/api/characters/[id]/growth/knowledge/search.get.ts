@@ -17,7 +17,7 @@ export default defineEventHandler(async (event) => {
     where: { characterId, status: "ACTIVE" },
     orderBy: { updatedAt: "desc" },
     take: 300,
-    select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, updatedAt: true },
+    select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, sourceType: true, sourceRef: true, updatedAt: true },
   });
   return { items: rankKnowledgeItems(q, rows, 8) };
 });
