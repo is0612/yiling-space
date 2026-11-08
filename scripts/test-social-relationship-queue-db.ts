@@ -266,7 +266,69 @@ try {
   });
   check("新租约仍能正常完成", afterNewFinish === "PAUSED");
 
-  console.log("\n[6] 角色隔离与默认间隔");
+  console.log("\n[6] 执行中新增 generation 后失败仍保留新任务");
+  await addEvent(charB.id, charB.globalScopeId, "B3", [`msg-b3-${runId}`]);
+  const leaseWithIncomingGeneration = await claimNextSocialRelationshipAssessmentTask(prisma, {
+    workerId: "queue-worker-fail-with-new-data",
+    scopeId: scopeB,
+    now,
+  });
+  assert(leaseWithIncomingGeneration);
+  await addEvent(charB.id, charB.globalScopeId, "B4", [`msg-b4-${runId}`]);
+  const failedWithNewGeneration = await failSocialRelationshipAssessmentTask(
+    prisma, leaseWithIncomingGeneration, new Error("旧批次失败，新批次仍待处理"), now,
+  );
+  const queuedAfterFailure = await readTask(scopeB);
+  check("运行期间新增 generation 后，即使当前批失败也直接排队下一代",
+    failedWithNewGeneration === "QUEUED" && queuedAfterFailure.status === "QUEUED"
+      && queuedAfterFailure.generation > leaseWithIncomingGeneration.generation
+      && queuedAfterFailure.attemptCount === 0);
+  const leaseAfterFailure = await claimNextSocialRelationshipAssessmentTask(prisma, {
+    workerId: "queue-worker-after-new-data-failure",
+    scopeId: scopeB,
+    now,
+  });
+  assert(leaseAfterFailure);
+  check("失败后领取的是包含新经历的最新 generation",
+    leaseAfterFailure.generation === queuedAfterFailure.generation);
+  await completeSocialRelationshipAssessmentTask(prisma, leaseAfterFailure, { now });
+
+  console.log("\n[7] 租约过期时若已有新 generation，恢复为 QUEUED");
+  await addEvent(charB.id, charB.globalScopeId, "B5", [`msg-b5-${runId}`]);
+  const expiredWithIncomingGeneration = await claimNextSocialRelationshipAssessmentTask(prisma, {
+    workerId: "queue-worker-expired-with-new-data",
+    scopeId: scopeB,
+    now,
+  });
+  assert(expiredWithIncomingGeneration);
+  await addEvent(charB.id, charB.globalScopeId, "B6", [`msg-b6-${runId}`]);
+  await prisma.socialRelationshipAssessmentTask.update({
+    where: { scopeId: scopeB },
+    data: { leaseExpiresAt: new Date(now.getTime() - 1) },
+  });
+  const recoveredWithNewGeneration = await runSocialRelationshipQueueMaintenance(prisma, {
+    now: new Date(now.getTime() + 20_000),
+    reviewIntervalDays: 30,
+  });
+  const queuedAfterLeaseRecovery = await readTask(scopeB);
+  check("过期租约发现有未处理新 generation 时直接 QUEUED，且新一代尝试次数重置",
+    recoveredWithNewGeneration.recoveredLeases === 1
+      && queuedAfterLeaseRecovery.status === "QUEUED"
+      && queuedAfterLeaseRecovery.generation > expiredWithIncomingGeneration.generation
+      && queuedAfterLeaseRecovery.attemptCount === 0);
+  const leaseAfterRecovery = await claimNextSocialRelationshipAssessmentTask(prisma, {
+    workerId: "queue-worker-after-new-data-recovery",
+    scopeId: scopeB,
+    now: new Date(now.getTime() + 20_001),
+  });
+  assert(leaseAfterRecovery);
+  check("租约恢复后领取最新 generation，没有漏掉执行期间新增的经历",
+    leaseAfterRecovery.generation === queuedAfterLeaseRecovery.generation);
+  await completeSocialRelationshipAssessmentTask(prisma, leaseAfterRecovery, {
+    now: new Date(now.getTime() + 20_002),
+  });
+
+  console.log("\n[8] 角色隔离与默认间隔");
   check("同一外部账号在两个角色下仍是两条不同任务",
     scopeA !== scopeB
       && (await prisma.socialRelationshipAssessmentTask.count({ where: { scopeId: { in: [scopeA, scopeB] } } })) === 2);
