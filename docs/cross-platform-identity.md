@@ -221,7 +221,7 @@ group_members(conversationId, characterId, platformUid, displayName,
 
 ### 6.4 页面
 
-`/identities`，菜单名「她的朋友」：按角色切换、搜索昵称/UID/平台、来源分段（全部 / 私聊认识 /
+`/growth/social/friends`（旧 `/identities` 保留重定向），菜单名「好友档案」：按角色切换、搜索昵称/UID/平台、来源分段（全部 / 私聊认识 /
 群里认识）、四个排序维度各自升降、统计格为「认识的人 / 聊过两次以上 / 最近七天有来往」。
 绑定的三个按钮已从页面移除（接口保留备用）。
 
