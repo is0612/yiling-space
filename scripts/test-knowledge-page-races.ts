@@ -206,7 +206,7 @@ async function candidatePostDoesNotTouchNextRole() {
   await adding;
   assert.equal(page.read("rawContent"), "B 正在输入的新内容");
   assert.equal(page.successes.includes("已加入知识候选。"), false);
-  assert.equal(page.requests.length, 1, "A 的操作不能额外触发 B 的列表刷新");
+  assert.equal(page.requests.length, 0, "A 的操作不能额外触发 B 的列表刷新");
   loadB.resolve(workspace("B"));
   await flushMicrotasks();
   page.finish();
@@ -279,7 +279,9 @@ async function staleModelListCannotCrossRole() {
 
   modelsA.resolve({ ok: true, models: ["old-a-model"], message: "已获取 1 个模型。" });
   await fetching;
-  assert.deepEqual(page.read("models"), [], "A 的模型列表不能出现在 B 的设置页");
+  // 页面状态是 vm 沙箱里创建的数组，原型与宿主不同，assert/strict 的 deepEqual 会判两个 [] 不等，
+  // 所以先展开到宿主 realm 再比较（这是沙箱用例的通用坑，不是实现问题）。
+  assert.deepEqual([...page.read<string[]>("models")], [], "A 的模型列表不能出现在 B 的设置页");
   assert.equal(page.read("model"), "model-char-b");
   page.finish();
 }
