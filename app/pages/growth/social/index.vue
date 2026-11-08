@@ -30,6 +30,15 @@ definePageMeta({
       </article>
 
       <article class="social-card">
+        <div class="social-kicker">关系成长 · 建设中</div>
+        <h2>关系评估 AI</h2>
+        <p>关系阶段和相处状态已经有独立数据与评估队列。下一步接入专职评估模型：它只提供建议，是否写入由证据核验和关系版本保护决定。</p>
+        <NuxtLink to="/growth/social/assessment-settings" class="social-action">
+          配置关系评估 AI <span aria-hidden="true">→</span>
+        </NuxtLink>
+      </article>
+
+      <article class="social-card">
         <div class="social-kicker">当前规则</div>
         <h2>交流权限</h2>
         <div class="social-rule">
@@ -54,7 +63,7 @@ definePageMeta({
       <div class="social-section-heading">
         <div>
           <div class="social-kicker">后续逐步建设</div>
-          <h2>让关系真正成长</h2>
+          <h2>关系的自然成长</h2>
         </div>
         <p>先保留清晰边界，不把互动次数直接当成亲密程度。</p>
       </div>
@@ -65,14 +74,14 @@ definePageMeta({
           <span class="social-status">尚未实现</span>
         </article>
         <article class="social-next-card">
-          <h3>关系发展</h3>
-          <p>未来再设计熟悉度、关系阶段和变化依据，并允许用户纠正，避免单纯按聊天次数给人贴标签。</p>
-          <span class="social-status">待设计</span>
+          <h3>关系阶段与相处状态</h3>
+          <p>阶段描述亲疏，相处状态描述近期关系体验；两者分开保存，互动次数不会直接决定阶段。</p>
+          <span class="social-status">数据与队列已接入</span>
         </article>
         <article class="social-next-card">
-          <h3>社交经历</h3>
-          <p>整理重要相遇、共同经历和关系变化；具体经历仍与记忆系统协作，不重复存一份长期记忆。</p>
-          <span class="social-status">待设计</span>
+          <h3>评估证据</h3>
+          <p>每次评估只分析已挂接的经历引用；新证据与历史背景分开，避免把旧经历重复算成新进展。</p>
+          <span class="social-status">下一批实现</span>
         </article>
       </div>
     </section>
