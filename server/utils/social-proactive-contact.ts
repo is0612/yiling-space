@@ -558,6 +558,19 @@ export async function runSocialProactiveContactTick(
           break;
         }
 
+        const activeClaim = await prisma.socialProactiveContactAttempt.findFirst({
+          where: {
+            scopeId: friend.id,
+            status: "SENDING",
+            attemptedAt: { gte: new Date(Date.now() - ATTEMPT_DEDUPE_WINDOW_MS) },
+          },
+          select: { id: true },
+        });
+        if (activeClaim) {
+          results.push({ ...skip("dispatch_in_progress", friendName), groupId: group.groupId });
+          handled = true;
+          break;
+        }
         const claimed = await claimAttempt({
           scopeId: friend.id,
           groupId: group.groupId,
@@ -576,6 +589,22 @@ export async function runSocialProactiveContactTick(
             freshGroup.groupId,
             buildSocialProactiveContactSegments(identity.platformUid, generated.content),
           );
+          // 外部发送已成功，先把审计账本置为 SENT；后续消息转录写库失败也不能让它被再次发送。
+          await prisma.socialProactiveContactAttempt.update({
+            where: { scopeId_dedupeKey: { scopeId: friend.id, dedupeKey } },
+            data: {
+              status: "SENT",
+              reason: "ok",
+              content: generated.content,
+              sentAt: now,
+              metadata: {
+                source: "social-proactive-contact",
+                identityId: identity.id,
+                platformUid: identity.platformUid,
+                conversationId: group.conversationId,
+              },
+            },
+          });
           await prisma.$transaction(async (tx) => {
             await tx.message.create({
               data: {
@@ -595,21 +624,6 @@ export async function runSocialProactiveContactTick(
             await tx.conversation.update({
               where: { id: group.conversationId },
               data: { lastMessageAt: now, consecutiveAiRounds: freshScope.externalIdentity.kind === "AI" ? freshGroup.consecutiveAiRounds + 1 : 0 },
-            });
-            await tx.socialProactiveContactAttempt.update({
-              where: { scopeId_dedupeKey: { scopeId: friend.id, dedupeKey } },
-              data: {
-                status: "SENT",
-                reason: "ok",
-                content: generated.content,
-                sentAt: now,
-                metadata: {
-                  source: "social-proactive-contact",
-                  identityId: identity.id,
-                  platformUid: identity.platformUid,
-                  conversationId: group.conversationId,
-                },
-              },
             });
           });
           results.push({
