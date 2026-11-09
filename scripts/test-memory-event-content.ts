@@ -25,11 +25,13 @@ try {
   assert.equal(result.analysis.events.length, 1, "Context can support new events but cannot produce old-only or unknown-source events.");
   assert.deepEqual(result.analysis.events[0]!.evidenceMessageIds, ["old", "new"]);
   assert.equal(result.analysis.events[0]!.precision, "day", "Explicit day precision must survive non-UTC-midnight timestamps.");
-  assert.equal(result.promptTemplateVersion, "memory-extraction-v8");
+  assert.equal(result.promptTemplateVersion, "memory-extraction-v9");
   const prompt = requests[0]!.messages.find((message) => message.role === "system")!.content;
   assert.match(prompt, /已经发生、明确计划\/约定/u);
   assert.match(prompt, /助手提议和角色扮演/u);
   assert.match(prompt, /本地日期取当天零点再换算成 UTC/u);
+  assert.match(prompt, /相邻前文，按时间顺序排列/u);
+  assert.match(prompt, /保留不确定性，不要编造人物、前因或结果/u);
   const user = JSON.parse(requests[0]!.messages.find((message) => message.role === "user")!.content);
   assert.equal(user.contextMessages[0].content, "今天和小林约去海洋馆。");
   assert.equal(user.contextMessages[0].id, "old");

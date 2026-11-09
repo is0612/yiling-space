@@ -42,7 +42,7 @@ globalThis.fetch = async (url, init) => {
   assert(conversationId);
   assert(prompt.messages.every((message) => conversationById.get(message.id) === conversationId), "Model request mixed conversations");
   const context = prompt.contextMessages ?? [];
-  assert(context.length <= 6);
+  assert(context.length <= 12);
   for (const message of context) {
     assert.equal(conversationById.get(message.id), conversationId, "Context crossed conversation or period");
     assert(new Date(message.occurredAt) >= start && new Date(message.occurredAt) < end);

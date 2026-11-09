@@ -6,6 +6,7 @@ import {
 } from "../server/utils/memory-event-source";
 import { estimateTokens } from "../server/utils/memory-retrieval";
 import { runDailyEventJob } from "../server/utils/memory-worker";
+import { validateMemoryAiOutput } from "../server/utils/memory-ai";
 
 // No dotenv, real database, usage writes, or network: all provider and persistence I/O is mocked.
 const originalFetch = globalThis.fetch;
@@ -24,8 +25,9 @@ const makeRows = (count: number, sameTime = false) => Array.from({ length: count
 }));
 type Progress = { state: string; extractedAt: Date | null; extractedMessageId: string | null; eventCount: number };
 
-function fixture(count: number, sameTime = false) {
+function fixture(count: number, sameTime = false, withContext = false) {
   const rows = makeRows(count, sameTime);
+  const contextQueries: Array<Record<string, unknown>> = [];
   let progress: Progress | null = null;
   let failTransactionAt = 0;
   let transactions = 0;
@@ -39,8 +41,22 @@ function fixture(count: number, sameTime = false) {
       name: "Test", modelConfig: {}, memorySetting: { timezone: "UTC" },
     } }) },
     message: { findMany: async (query: { where: ReturnType<typeof eventMessageWhere>; take: number; orderBy: unknown }) => {
-      // 取材新增的历史上下文查询独立于待消费正序批次；本用例不提供上下文。
-      if (JSON.stringify(query.orderBy).includes("desc")) return [];
+      if (JSON.stringify(query.orderBy).includes("desc")) {
+        contextQueries.push(query);
+        if (!withContext) return [];
+        const where = query.where as unknown as {
+          conversationId: string; occurredAt: { gte: Date; lt: Date };
+          OR: [{ occurredAt: { lt: Date } }, { occurredAt: Date; id: { lt: string } }];
+        };
+        assert.deepEqual(query.orderBy, [{ occurredAt: "desc" }, { id: "desc" }]);
+        assert.equal(query.take, 12);
+        return rows.filter(row => row.conversationId === where.conversationId
+          && row.occurredAt >= where.occurredAt.gte && row.occurredAt < where.occurredAt.lt
+          && (row.occurredAt < where.OR[0].occurredAt.lt
+            || row.occurredAt.getTime() === where.OR[1].occurredAt.getTime() && row.id < where.OR[1].id.lt))
+          .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime() || b.id.localeCompare(a.id))
+          .slice(0, query.take);
+      }
       queries.push(query);
       assert.deepEqual(query.orderBy, [{ occurredAt: "asc" }, { id: "asc" }]);
       assert.equal(query.take, EVENT_MESSAGE_BATCH_SIZE + 1);
@@ -80,7 +96,7 @@ function fixture(count: number, sameTime = false) {
     },
   };
   return {
-    prisma: mock as unknown as PrismaClient, rows, jobs, queries, eventStates,
+    prisma: mock as unknown as PrismaClient, rows, jobs, queries, contextQueries, eventStates,
     progress: () => progress,
     reclaim: () => { leaseRow = { status: "RUNNING", lockedBy: `pagination:claim-${++claims}` }; },
     setProgress: (value: Progress) => { progress = value; },
@@ -89,13 +105,24 @@ function fixture(count: number, sameTime = false) {
 }
 const job = { id: "job", memoryScopeId: "scope", periodStart: start, periodEnd: end, idempotencyKey: "events-final:scope:2026-11-01" };
 const seen: string[] = [];
+type PromptMessage = { id: string; content: string; occurredAt: string };
+const requests: Array<{ messages: PromptMessage[]; contextMessages?: PromptMessage[] }> = [];
+let emitContextOnlyEvent = false;
 globalThis.fetch = async (_url, init) => {
   const body = JSON.parse(String(init?.body));
   const prompt = JSON.parse(body.messages.find((m: { role: string }) => m.role === "user").content);
+  requests.push(prompt);
   seen.push(...prompt.messages.map((m: { id: string }) => m.id));
+  const context = prompt.contextMessages?.[0];
+  const events = emitContextOnlyEvent && context ? [{
+    occurredAt: context.occurredAt, title: "Already recorded context", detail: "Old evidence only",
+    participants: [], keywords: [], evidenceMessageIds: [context.id], confidence: 0.9,
+  }] : [];
+  if (events.length) assert.equal(validateMemoryAiOutput({ summary: "Test summary", events }, [context.id], []).events.length, 1,
+    "the context-only candidate must be valid before the new-evidence filter rejects it");
   return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
     summary: "Test summary", importantEvents: [], factAndPreferenceChanges: [], relationshipChanges: [],
-    goalsAndCommitments: [], unresolvedTopics: [], differencesFromPrevious: [], memoryChanges: [], events: [],
+    goalsAndCommitments: [], unresolvedTopics: [], differencesFromPrevious: [], memoryChanges: [], events,
   }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
 };
 
@@ -104,9 +131,10 @@ try {
   assert.equal(EVENT_AI_INPUT_TOKENS, 4_000);
   assert.equal(EVENT_AI_MESSAGES_PER_REQUEST, 40);
   assert.deepEqual(splitEventMessagesByBudget([]), []);
-  function checkChunks<T extends { id: string; content: string }>(messages: T[]) {
+  function checkChunks<T extends { id: string; content: string; occurredAt?: Date }>(messages: T[], budget = 4_000) {
     const before = JSON.stringify(messages);
-    const chunks = splitEventMessagesByBudget(messages);
+    const chunks = splitEventMessagesByBudget(messages, budget);
+    const effectiveBudget = Number.isFinite(budget) ? Math.min(4_000, Math.max(2_000, budget)) : 4_000;
     const flattened = chunks.flat();
     assert.deepEqual(flattened, messages, "splitting must preserve global order and every complete message exactly once");
     assert.equal(new Set(flattened.map((message) => message.id)).size, messages.length);
@@ -115,7 +143,7 @@ try {
     for (const chunk of chunks) {
       assert(chunk.length > 0 && chunk.length <= 40);
       const tokens = chunk.reduce((sum, message) => sum + estimateTokens(JSON.stringify(message)), 0);
-      assert(tokens <= 4_000 || chunk.length === 1, "only a standalone oversized message may exceed the token budget");
+      assert(tokens <= effectiveBudget || chunk.length === 1, "only a standalone oversized message may exceed the token budget");
     }
     return chunks;
   }
@@ -138,6 +166,27 @@ try {
   assert.deepEqual(oversizedChunks.map((chunk) => chunk.length), [1, 1, 1]);
   assert.equal(oversizedChunks[1]![0]!.content, oversized.content, "an oversized message must be preserved in full");
 
+  const timed = (count: number, gaps: Array<[number, number]> = [], tied = false) => short.slice(0, count).map((row, index) => ({
+    ...row, occurredAt: new Date(start.getTime() + (tied ? 0 : index * 1_000)
+      + gaps.filter(([boundary]) => index >= boundary).reduce((sum, [, gap]) => sum + gap, 0)),
+  }));
+  const lengths = <T>(chunks: T[][]) => chunks.map(chunk => chunk.length);
+  assert.deepEqual(lengths(checkChunks(timed(45, [[24, 300_000], [32, 300_000]]))), [32, 13],
+    "choose the latest qualifying pause in the hard block's latter half");
+  assert.deepEqual(lengths(checkChunks(timed(45, [[20, 299_000]]))), [20, 25], "an exact five-minute gap at the halfway boundary is eligible");
+  assert.deepEqual(lengths(checkChunks(timed(45, [[19, 600_000]]))), [40, 5], "an early pause must not create a tiny block");
+  assert.deepEqual(lengths(checkChunks(timed(45, [[32, 298_999]]))), [40, 5], "a gap below five minutes is not a boundary");
+  assert.deepEqual(lengths(checkChunks(timed(40, [[32, 300_000]]))), [40], "a final hard block must not split at a pause");
+  assert.deepEqual(lengths(checkChunks(timed(81))), [40, 40, 1], "continuous messages retain the hard count boundary");
+  assert.deepEqual(lengths(checkChunks(timed(81, [], true))), [40, 40, 1], "tied timestamps preserve id order and the forty-row cap");
+  const budgetRows = Array.from({ length: 7 }, (_, index) => ({ id: String(index), content: "中".repeat(900) }));
+  assert.deepEqual(lengths(checkChunks(budgetRows, 2_000)), [2, 2, 2, 1]);
+  assert.deepEqual(lengths(checkChunks(budgetRows, 3_000)), [3, 3, 1]);
+  for (const budget of [-1, 0, 1_999]) assert.deepEqual(checkChunks(budgetRows, budget), checkChunks(budgetRows, 2_000));
+  for (const budget of [4_001, Infinity, NaN]) assert.deepEqual(checkChunks(budgetRows, budget), checkChunks(budgetRows));
+  const tokenTimed = budgetRows.map((row, index) => ({ ...row, occurredAt: new Date(start.getTime() + index * 1_000 + (index >= 3 ? 300_000 : 0)) }));
+  assert.deepEqual(lengths(checkChunks(tokenTimed)), [3, 4], "token-limited hard blocks also move to a natural pause");
+
   // Context is optional, bounded, complete, and chronological; an oversized nearest
   // message stops the window instead of skipping to unrelated older context.
   const contextRows = [{ id: "latest", content: "最近" }, { id: "older", content: "前文" }];
@@ -149,6 +198,39 @@ try {
     { id: "recent", content: "中".repeat(600) }, { id: "old", content: "中".repeat(600) },
   ]), contextInput);
   assert.deepEqual(boundedContext.map((row) => row.id), ["recent"]);
+  const longContext = { id: "long-context", content: "中".repeat(2_000) };
+  assert.deepEqual(await loadEventContextMessages(contextPrisma([longContext]), { ...contextInput, newMessageTokens: 0 }), [longContext],
+    "a two-thousand-token nearest message fits intact when new evidence leaves room");
+  assert.deepEqual(await loadEventContextMessages(contextPrisma([longContext]), { ...contextInput, newMessageTokens: 4_000 }), [],
+    "the same nearest message must not be truncated into the minimum context window");
+  for (const newMessageTokens of [0, 2_000, 3_000, 4_000, 9_000]) {
+    const candidates = Array.from({ length: 12 }, (_, index) => ({ id: `ctx-${index}`, content: "中".repeat(450) }));
+    const budget = Math.min(3_000, Math.max(1_000, 5_000 - newMessageTokens));
+    const selected = await loadEventContextMessages(contextPrisma(candidates), { ...contextInput, newMessageTokens });
+    const cost = selected.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0);
+    assert(cost <= budget);
+    assert(cost + estimateTokens(JSON.stringify(candidates[selected.length]!)) > budget, "use all contiguous context that fits");
+    assert.deepEqual(selected, candidates.slice(0, selected.length).reverse());
+  }
+  assert.deepEqual(await loadEventContextMessages(contextPrisma([
+    { id: "near", content: "中".repeat(600) }, longContext, { id: "old-small", content: "old" },
+  ]), { ...contextInput, newMessageTokens: 4_000 }), [{ id: "near", content: "中".repeat(600) }],
+  "stop at a long middle row instead of skipping to older small messages");
+  const isolation = fixture(20, true, true);
+  isolation.rows[0]!.conversationId = "another-conversation";
+  isolation.rows[1]!.occurredAt = new Date(start.getTime() - 1);
+  const isolated = await loadEventContextMessages(isolation.prisma, {
+    ...contextInput, first: isolation.rows[19]!, newMessageTokens: 0,
+  });
+  assert.equal(isolated.length, 12, "context query is capped at twelve even when more rows fit");
+  assert.deepEqual(isolated.map(row => row.id), isolation.rows.slice(7, 19).map(row => row.id),
+    "same-time context uses smaller ids and returns the nearest twelve in chronological order");
+  const contextQuery = isolation.contextQueries[0]!;
+  assert.deepEqual(contextQuery.where, {
+    conversationId: "conversation", occurredAt: { gte: start, lt: end },
+    OR: [{ occurredAt: { lt: isolation.rows[19]!.occurredAt } },
+      { occurredAt: isolation.rows[19]!.occurredAt, id: { lt: isolation.rows[19]!.id } }],
+  }, "context must stay in the conversation, period and strict timestamp/id predecessor window");
 
   // Exactly 960: no phantom continuation; 961: oldest 960 first, one row remains.
   for (const count of [0, 960, 961]) {
@@ -208,13 +290,62 @@ try {
   assert.equal(failing.progress()?.extractedMessageId, id(241));
   assert.equal(failing.progress()?.state, "FINAL");
 
+  // The real worker reserves context before sub-splitting each global block.
+  seen.length = 0;
+  requests.length = 0;
+  const contextual = fixture(9, true, true);
+  contextual.rows[0]!.content = "中".repeat(2_100);
+  contextual.rows.slice(1).forEach(row => { row.content = "新".repeat(600); });
+  const initialProgress: Progress = { state: "DRAFT", eventCount: 0,
+    extractedAt: contextual.rows[0]!.occurredAt, extractedMessageId: contextual.rows[0]!.id };
+  contextual.setProgress(initialProgress);
+  emitContextOnlyEvent = true;
+  const contextualResult = await runDailyEventJob(contextual.prisma, job, end);
+  emitContextOnlyEvent = false;
+  assert.equal(contextualResult.processed && contextualResult.status, "SUCCEEDED",
+    "context-only model events must be removed before persistence (the mock has no event writer)");
+  assert.deepEqual(seen, contextual.rows.slice(1).map(row => row.id), "context must never be consumed again as new evidence");
+  assert(requests.length >= 3, "long available context must shrink the first original block into subrequests");
+  assert(requests[0]!.contextMessages?.some(row => row.id === id(1) && row.content === contextual.rows[0]!.content),
+    "the long nearest context must reach the model intact");
+  for (const request of requests) {
+    const all = [...request.messages, ...(request.contextMessages ?? [])];
+    const tokens = all.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0);
+    assert(tokens <= 5_000 || request.messages.length === 1 && estimateTokens(JSON.stringify(request.messages[0])) > 4_000,
+      `new evidence plus context must share the five-thousand-token budget: ${tokens}`);
+    assert((request.contextMessages?.length ?? 0) <= 12);
+    assert(!request.contextMessages?.some(row => request.messages.some(message => message.id === row.id)));
+  }
+  assert.equal(contextual.progress()?.extractedMessageId, id(9));
+  assert.equal(contextual.progress()?.eventCount, 0, "context-only events must not be recorded again");
+
+  // Failure after context-driven subrequests must replay the whole original global block.
+  const atomic = fixture(9, true, true);
+  atomic.rows.forEach((row, index) => { row.content = contextual.rows[index]!.content; });
+  atomic.setProgress({ ...initialProgress });
+  atomic.failAt(1);
+  seen.length = 0;
+  requests.length = 0;
+  const atomicFailure = await runDailyEventJob(atomic.prisma, job, end);
+  assert.equal(atomicFailure.processed && atomicFailure.status, "RETRY_WAIT");
+  assert(requests.length >= 2, "multiple context-sized requests must complete before the original block transaction");
+  assert.equal(atomic.progress()?.extractedMessageId, id(1), "no child request may advance the original block cursor independently");
+  const replayIds = [...seen];
+  atomic.failAt(0);
+  atomic.reclaim();
+  seen.length = 0;
+  const atomicResume = await runDailyEventJob(atomic.prisma, job, end);
+  assert.equal(atomicResume.processed && atomicResume.status, "SUCCEEDED");
+  assert.deepEqual(seen.slice(0, replayIds.length), replayIds, "retry must replay every subrequest in the failed global block");
+  assert.deepEqual(seen, atomic.rows.slice(1).map(row => row.id));
+
   // Legacy timestamp-only cursor must replay its boundary, not skip every same-time row.
   const legacy = fixture(3, true);
   legacy.setProgress({ state: "DRAFT", eventCount: 0, extractedAt: legacy.rows[0]!.occurredAt, extractedMessageId: null });
   seen.length = 0;
   await runDailyEventJob(legacy.prisma, job, end);
   assert.deepEqual(seen, legacy.rows.map((row) => row.id));
-  console.log("Memory event pagination passed: 4000-token/40-message budgets, mixed lengths, Chinese, intact oversized evidence, ordered exact coverage, 960/961, same-time keysets, atomic cursor, failure resume, legacy cursor, and partial FINAL guard.");
+  console.log("Memory event pagination passed: natural pauses/early gaps/final blocks, clamped 2000–4000-token and 40-message limits, intact evidence, twelve-row contiguous context, shared 5000-token worker budget, context-only event rejection, atomic subrequest replay, 960/961 keysets, failure resume, legacy cursor, and partial FINAL guard.");
 } finally {
   globalThis.fetch = originalFetch;
   for (const [key, value] of Object.entries({ LLM_API_KEY: originalEnv.key, LLM_BASE_URL: originalEnv.base, LLM_MODEL: originalEnv.model })) {

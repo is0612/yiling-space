@@ -28,7 +28,8 @@ import { generateJournalForDay, readJournalJobParams } from "./journal-service";
 import { normalizeFriendAliases } from "./friend-aliases";
 import { MEMORY_JOB_LEASE_MS, lockMemoryJobLease, memoryJobLeaseWhere, MemoryJobLeaseLostError, renewMemoryJobLease, type MemoryJobLease } from "./memory-job-lease";
 import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
-import { splitEventMessagesByBudget, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
+import { estimateTokens } from "./memory-retrieval";
+import { EVENT_AI_INPUT_TOKENS, EVENT_AI_TOTAL_TOKENS, splitEventMessagesByBudget, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
 import { rawMessageCleanupDependencyCutoff } from "./memory-event-cleanup";
 
 /** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
@@ -306,57 +307,67 @@ export async function runDailyEventJob(
         events: Awaited<ReturnType<typeof analyzeMemoryPeriod>>["analysis"]["events"];
         evidence: PeriodSourceMessage[];
       }> = [];
-      for (const group of groups) {
-        const conversationId = group[0]!.conversationId;
-        let knownEvents = knownEventsByConversation.get(conversationId);
-        if (!knownEvents) {
-          const existing = await prisma.memoryEvent.findMany({
-            where: { memoryScopeId: job.memoryScopeId, dayKey, status: "ACTIVE", conversationId },
-            orderBy: { occurredAt: "asc" },
-            take: 40,
-            select: { occurredAt: true, title: true },
+      for (const originalGroup of groups) {
+        const conversationId = originalGroup[0]!.conversationId;
+        // 先查看相邻前文占用，再给新消息分配预算；不把别的会话带进来。
+        const preceding = await loadEventContextMessages(prisma, {
+          conversationId, periodStart: job.periodStart, periodEnd: job.periodEnd,
+          first: originalGroup[0]!, newMessageTokens: 0,
+        });
+        const contextTokens = preceding.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0);
+        const newMessageBudget = Math.min(EVENT_AI_INPUT_TOKENS, EVENT_AI_TOTAL_TOKENS - contextTokens);
+        for (const group of splitEventMessagesByBudget(originalGroup, newMessageBudget)) {
+          let knownEvents = knownEventsByConversation.get(conversationId);
+          if (!knownEvents) {
+            const existing = await prisma.memoryEvent.findMany({
+              where: { memoryScopeId: job.memoryScopeId, dayKey, status: "ACTIVE", conversationId },
+              orderBy: { occurredAt: "asc" },
+              take: 40,
+              select: { occurredAt: true, title: true },
+            });
+            knownEvents = existing.map((event) => ({ occurredAt: event.occurredAt.toISOString(), title: event.title }));
+            knownEventsByConversation.set(conversationId, knownEvents);
+          }
+          const contextRows = await loadEventContextMessages(prisma, {
+            conversationId, periodStart: job.periodStart, periodEnd: job.periodEnd, first: group[0]!,
+            newMessageTokens: group.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0),
           });
-          knownEvents = existing.map((event) => ({ occurredAt: event.occurredAt.toISOString(), title: event.title }));
-          knownEventsByConversation.set(conversationId, knownEvents);
+          const contextMessages: PeriodSourceMessage[] = contextRows.map((row) => {
+            const origin = conversationOriginLabel(row.conversation);
+            return {
+              ...row, origin,
+              isOwner: readSourceMessageIsOwner(row.metadata, { origin, role: row.role }),
+              mentionTargets: readMessageMentionTargets(row.metadata),
+              mentions: readMessageMentions(row.metadata),
+              ...readMessageAuthor(row.metadata),
+              ...readMessageSpeaker(row.metadata),
+            };
+          });
+          // 一个任务可能跨多个会话连续请求模型；每次请求前续租，避免总耗时超过 5 分钟被其他 Worker 误回收。
+          await renewMemoryJobLease(prisma, lease);
+          const aiResult = await analyzeMemoryPeriod({
+            apiKey,
+            apiBaseUrl: chatSettings.apiBaseUrl,
+            model: chatSettings.model,
+            periodStart: job.periodStart.toISOString(),
+            periodEnd: job.periodEnd.toISOString(),
+            timezone: timeZone,
+            scopeType: scope.scopeType,
+            characterName: scope.character.name,
+            messages: group.map(toAiMessage),
+            contextMessages: contextMessages.map(toAiMessage),
+            totalMessageCount: messages.length,
+            omittedMessageCount: Math.max(0, messages.length - group.length),
+            activeMemories: [],
+            previousSnapshotSummary: null,
+            ...(knownEvents.length ? { existingEvents: knownEvents } : {}),
+          });
+          await recordModelUsage({
+            kind: "events", model: chatSettings.model,
+            usage: toUsageTokens(aiResult.usage), characterId: scope.characterId,
+          });
+          results.push({ conversationId, events: aiResult.analysis.events, evidence: [...contextMessages, ...group] });
         }
-        const contextRows = await loadEventContextMessages(prisma, {
-          conversationId, periodStart: job.periodStart, periodEnd: job.periodEnd, first: group[0]!,
-        });
-        const contextMessages: PeriodSourceMessage[] = contextRows.map((row) => {
-          const origin = conversationOriginLabel(row.conversation);
-          return {
-            ...row, origin,
-            isOwner: readSourceMessageIsOwner(row.metadata, { origin, role: row.role }),
-            mentionTargets: readMessageMentionTargets(row.metadata),
-            mentions: readMessageMentions(row.metadata),
-            ...readMessageAuthor(row.metadata),
-            ...readMessageSpeaker(row.metadata),
-          };
-        });
-        // 一个任务可能跨多个会话连续请求模型；每次请求前续租，避免总耗时超过 5 分钟被其他 Worker 误回收。
-        await renewMemoryJobLease(prisma, lease);
-        const aiResult = await analyzeMemoryPeriod({
-          apiKey,
-          apiBaseUrl: chatSettings.apiBaseUrl,
-          model: chatSettings.model,
-          periodStart: job.periodStart.toISOString(),
-          periodEnd: job.periodEnd.toISOString(),
-          timezone: timeZone,
-          scopeType: scope.scopeType,
-          characterName: scope.character.name,
-          messages: group.map(toAiMessage),
-          contextMessages: contextMessages.map(toAiMessage),
-          totalMessageCount: messages.length,
-          omittedMessageCount: Math.max(0, messages.length - group.length),
-          activeMemories: [],
-          previousSnapshotSummary: null,
-          ...(knownEvents.length ? { existingEvents: knownEvents } : {}),
-        });
-        await recordModelUsage({
-          kind: "events", model: chatSettings.model,
-          usage: toUsageTokens(aiResult.usage), characterId: scope.characterId,
-        });
-        results.push({ conversationId, events: aiResult.analysis.events, evidence: [...contextMessages, ...group] });
       }
       /**
        * 每块立刻落库，而不是攒到最后一起写。
