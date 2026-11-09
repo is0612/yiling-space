@@ -440,3 +440,16 @@
 - 扩展关系变化历史，允许同时记录阶段与相处状态的变更、关系版本前后值，并通过唯一 assessmentId 防止同一评估重复应用。
 - 后续实现采纳服务时必须在单个事务中校验角色归属、评估仍待处理、当前 relationshipVersion 与评估快照一致、NEW 证据属于本次评估且未被其他关系变化消费，再更新 MemoryScope 并写入变化历史与证据；拒绝/暂缓不触碰关系字段。
 - 当前仅完成数据模型与执行器的 PENDING 标记，采纳/驳回/暂缓 API、页面操作与专项测试仍在开发中；未完成前不能视为人工确认闭环已上线。
+
+
+### 14.13 人工确认与关系变更第一阶段（2026-11-09）
+
+- 评估记录新增处置状态：NOT_REQUIRED / PENDING / DEFERRED / ACCEPTED / REJECTED / STALE。只有执行成功且结论为 CHANGE 的评估进入 PENDING；MAINTAIN、INSUFFICIENT、REVIEW 不提供直接采纳入口。旧历史默认 NOT_REQUIRED，不伪造待办。
+- 新增追加式 `SocialRelationshipAssessmentReview` 审计：每次暂缓、驳回、采纳，以及因版本变化标记 STALE，均记录操作者、决定、备注和时间。评估记录上的 reviewStatus 只是当前状态快照。
+- 历史 API 返回处置状态和审计记录；历史页对 PENDING / DEFERRED 的有效 CHANGE 提供「采纳并更新关系 / 暂缓 / 驳回」，采纳前明确展示阶段与相处状态的变更前后值并二次确认。
+- 新增 `POST /api/characters/:id/growth/social/assessments/:assessmentId/review`。服务端校验角色归属、评估状态/结论、处置状态；事务内锁定评估记录。暂缓和驳回只写审计，不触碰关系。
+- 采纳时重新比对 relationshipVersion、评估时阶段/状态与当前值；版本不一致则将建议标记 STALE 并保留审计，不修改关系。再次使用过的 NEW 经历不能作为新的变化证据。
+- 关系更新、relationshipVersion +1、`SocialRelationChange` 变更历史（阶段/状态前后值、版本前后值、assessmentId 幂等关联）和证据引用，与 ACCEPTED 审计在同一数据库事务提交。并发更新失败会整体回滚。
+- 新增一次性 PostgreSQL 隔离测试：暂缓后可继续采纳、阶段与状态同时更新、版本递增、变更历史与证据落库、重复处置拒绝、过期建议 STALE、证据重复消费拒绝、驳回不改关系。
+- 测试命令：`yarn test:social-relationship-review-isolated`；已接入 `verify:local` 和 CI。
+- 本批待 DSH 本地验收；人工确认前不会改关系。
