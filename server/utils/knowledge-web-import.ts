@@ -129,7 +129,7 @@ export async function fetchKnowledgeWebPage(rawUrl: string): Promise<ParsedKnowl
     if (reason.includes("UNSUPPORTED_CONTENT_TYPE")) throw new Error("网页只支持 HTML、XHTML 或纯文本内容。");
     if (reason.includes("REDIRECT_LIMIT")) throw new Error("网页重定向次数过多，已停止访问。");
     if (reason.includes("INVALID_PROTOCOL") || reason.includes("INVALID_URL")) throw new Error("只允许有效的 HTTP 或 HTTPS 网页地址。");
-    if (reason.includes("_HTTP_")) throw new Error("网页服务器暂时无法访问：" + reason.match(/_HTTP_\\d+/)?.[0]?.replace("_HTTP_", "HTTP ") + "。");
+    if (reason.includes("_HTTP_")) throw new Error("网页服务器暂时无法访问：" + reason.match(/_HTTP_\d+/)?.[0]?.replace("_HTTP_", "HTTP ") + "。");
     if (reason.includes("_TIMEOUT")) throw new Error("网页连接超时，请稍后重试。");
     throw new Error("无法安全获取该网页，请检查网址或稍后重试。");
   }
