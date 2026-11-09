@@ -44,7 +44,7 @@ const makeCharacter = async (name: string, enabled: boolean) => {
 const enabledCharacter = await makeCharacter("评估助手启用角色", true);
 const disabledCharacter = await makeCharacter("评估助手关闭角色", false);
 const identity = await prisma.externalIdentity.create({
-  data: { platform: "qq-onebot", platformUid: `social-ai-${runId}`, displayName: "测试好友", kind: "PERSON" },
+  data: { platform: "qq-onebot", platformUid: `social-ai-${runId}`, displayName: "测试好友", kind: "HUMAN" },
   select: { id: true },
 });
 const enabledScope = (await ensureExternalIdentityScope(enabledCharacter.id, "qq-onebot", `social-ai-${runId}`, identity.id)).scopeId;
