@@ -18,17 +18,19 @@ type FriendChatPolicy = (typeof CHAT_POLICIES)[number];
 export default defineEventHandler(async (event) => {
   await requireAdminActor(event);
   const scopeId = requireUuid(getRouterParam(event, "id") ?? "", "朋友关系");
-  const body = await readBody<{ identityKind?: unknown; friendChatPolicy?: unknown }>(event).catch(() => null);
+  const body = await readBody<{ identityKind?: unknown; friendChatPolicy?: unknown; proactiveContactEnabled?: unknown }>(event).catch(() => null);
   if (!body) throw createError({ statusCode: 400, statusMessage: "请求内容无效。" });
 
   const hasIdentityKind = Object.prototype.hasOwnProperty.call(body, "identityKind");
   const hasPolicy = Object.prototype.hasOwnProperty.call(body, "friendChatPolicy");
-  if (!hasIdentityKind && !hasPolicy) {
+  const hasProactiveContact = Object.prototype.hasOwnProperty.call(body, "proactiveContactEnabled");
+  if (!hasIdentityKind && !hasPolicy && !hasProactiveContact) {
     throw createError({ statusCode: 400, statusMessage: "至少提供一个要修改的字段。" });
   }
 
   let identityKind: IdentityKind | undefined;
   let friendChatPolicy: FriendChatPolicy | undefined;
+  let proactiveContactEnabled: boolean | undefined;
   if (hasIdentityKind) {
     if (typeof body.identityKind !== "string" || !(IDENTITY_KINDS as readonly string[]).includes(body.identityKind)) {
       throw createError({ statusCode: 400, statusMessage: "身份类型无效。" });
@@ -41,6 +43,12 @@ export default defineEventHandler(async (event) => {
     }
     friendChatPolicy = body.friendChatPolicy as FriendChatPolicy;
   }
+  if (hasProactiveContact) {
+    if (typeof body.proactiveContactEnabled !== "boolean") {
+      throw createError({ statusCode: 400, statusMessage: "主动联系授权必须是布尔值。" });
+    }
+    proactiveContactEnabled = body.proactiveContactEnabled;
+  }
 
   const prisma = getPrisma();
   const scope = await prisma.memoryScope.findUnique({
@@ -49,6 +57,7 @@ export default defineEventHandler(async (event) => {
       id: true,
       scopeType: true,
       friendChatPolicy: true,
+      proactiveContactEnabled: true,
       externalIdentity: {
         select: { id: true, kind: true, kindSource: true },
       },
@@ -66,13 +75,20 @@ export default defineEventHandler(async (event) => {
           select: { kind: true, kindSource: true },
         })
       : { kind: scope.externalIdentity!.kind, kindSource: scope.externalIdentity!.kindSource };
-    const relation = friendChatPolicy
+    const relationPatch = {
+      ...(friendChatPolicy !== undefined ? { friendChatPolicy } : {}),
+      ...(proactiveContactEnabled !== undefined ? { proactiveContactEnabled } : {}),
+    };
+    const relation = Object.keys(relationPatch).length
       ? await tx.memoryScope.update({
           where: { id: scope.id },
-          data: { friendChatPolicy },
-          select: { friendChatPolicy: true },
+          data: relationPatch,
+          select: { friendChatPolicy: true, proactiveContactEnabled: true },
         })
-      : { friendChatPolicy: scope.friendChatPolicy };
+      : {
+          friendChatPolicy: scope.friendChatPolicy,
+          proactiveContactEnabled: scope.proactiveContactEnabled,
+        };
     return { identity, relation };
   });
 
@@ -84,6 +100,7 @@ export default defineEventHandler(async (event) => {
       identityKind: result.identity.kind,
       identityKindSource: result.identity.kindSource,
     } : {}),
-    ...(friendChatPolicy ? { friendChatPolicy: result.relation.friendChatPolicy } : {}),
+    ...(friendChatPolicy !== undefined ? { friendChatPolicy: result.relation.friendChatPolicy } : {}),
+    ...(proactiveContactEnabled !== undefined ? { proactiveContactEnabled: result.relation.proactiveContactEnabled } : {}),
   };
 });

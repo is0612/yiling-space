@@ -79,6 +79,13 @@ enum SocialRelationshipStatus {
   UNOBSERVED
 }
 
+enum SocialProactiveContactAttemptStatus {
+  SENT
+  SKIPPED
+  FAILED
+  EXPIRED
+}
+
 enum SocialRelationshipAssessmentTaskStatus {
   QUEUED
   RUNNING
@@ -382,6 +389,8 @@ model MemoryScope {
   aliases            String[]           @default([])
   /// DEFAULT：真人/未知正常，AI 默认不接话；ALLOW / BLOCK 是这个角色自己的明确选择。
   friendChatPolicy   FriendChatPolicy   @default(DEFAULT)
+  /// 角色是否明确允许系统在合适时机主动联系这位好友；与普通交流权限完全分离。
+  proactiveContactEnabled Boolean          @default(false)
   /// 仅 EXTERNAL_IDENTITY 范围使用；其他范围保持 null。
   relationshipStage  RelationshipStage?
   /// 当前相处状态，与关系亲疏阶段分开；仅 EXTERNAL_IDENTITY 范围使用。
@@ -406,6 +415,7 @@ model MemoryScope {
   socialRelationChanges SocialRelationChange[]
   socialAssessmentTask SocialRelationshipAssessmentTask?
   socialAssessments SocialRelationshipAssessment[]
+  socialProactiveContactAttempts SocialProactiveContactAttempt[]
 
   @@index([characterId, scopeType])
   @@index([characterId, interactionCount])
@@ -669,6 +679,28 @@ model MemoryJob {
 
 /// 将角色级好友关系与全局/群聊忆泡关联。这里只保存引用，不复制事件正文。
 /// 一条忆泡可以涉及多个外部参与者，因此可以分别关联到多条角色级关系。
+/// 好友主动联系尝试账本。记录发送、跳过、失败与过期，不复制社交经历/忆泡正文。
+model SocialProactiveContactAttempt {
+  id          String                              @id @default(uuid()) @db.Uuid
+  scopeId     String                              @db.Uuid
+  status      SocialProactiveContactAttemptStatus
+  reason      String                              @db.VarChar(80)
+  groupId     String?                             @db.VarChar(64)
+  /// 仅成功发送时保存实际发送内容，便于追溯；不保存模型隐式推理。
+  content     String?                             @db.Text
+  /// 可选幂等键：同一关系、同一触发意图不得重复创建尝试。
+  dedupeKey   String?                             @db.VarChar(255)
+  attemptedAt DateTime                            @default(now()) @db.Timestamptz(6)
+  sentAt      DateTime?                           @db.Timestamptz(6)
+  metadata    Json?                               @db.JsonB
+  scope       MemoryScope                         @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+
+  @@unique([scopeId, dedupeKey])
+  @@index([scopeId, attemptedAt])
+  @@index([status, attemptedAt])
+  @@map("social_proactive_contact_attempts")
+}
+
 model SocialExperience {
   id            String      @id @default(uuid()) @db.Uuid
   scopeId       String      @db.Uuid

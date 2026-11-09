@@ -453,3 +453,14 @@
 - 新增一次性 PostgreSQL 隔离测试：暂缓后可继续采纳、阶段与状态同时更新、版本递增、变更历史与证据落库、重复处置拒绝、过期建议 STALE、证据重复消费拒绝、驳回不改关系。
 - 测试命令：`yarn test:social-relationship-review-isolated`；已接入 `verify:local` 和 CI。
 - 本批待 DSH 本地验收；人工确认前不会改关系。
+
+### 10.5 主动联系实现第一步（2026-11-09）
+
+- 已在 `server/utils/social-proactive-contact-policy.ts` 建立独立的纯函数安全闸门，并新增 `yarn test:social-proactive-contact-policy` 专项测试入口。
+- `MemoryScope.proactiveContactEnabled` 是独立的好友级主动联系授权，默认 false；不从 `friendChatPolicy=ALLOW` 推导。新增 `SocialProactiveContactAttempt` 追加式联系尝试账本，记录 SENT / SKIPPED / FAILED / EXPIRED、原因、群号、成功发送内容与时间。
+- 已新增 Prisma 迁移 `20261109120000_social_proactive_contact_foundation`，并扩展好友 PATCH / 列表 API 与「她的朋友」卡片独立开关。
+- 闸门只允许 FRIEND / CLOSE_FRIEND 且 NORMAL 的关系；BLOCK 始终优先，AI 好友还必须明确允许普通交流。
+- 渠道、共同群、群模式、发送前实时成员核验、AI 连续对话上限、角色每日上限与好友冷却均为 fail-closed 条件。
+- **当前已完成：安全策略纯函数、测试代码、授权字段/迁移、好友 API 与页面开关。尚未完成：共同群解析、OneBot 实时成员核验与定向 @ 发送、话题生成、联系审计写入、后台 tick 接入与过期处理。不得视为主动联系功能已上线。**
+- 本地待执行：`yarn prisma validate`、`yarn prisma generate`、`yarn test:social-proactive-contact-policy`、`yarn typecheck`、`yarn check:sfc`、`yarn lint`。完整集成后再补 Prisma 隔离库与真实 QQ 定向 @ 验收。
+
