@@ -422,3 +422,12 @@
 - 模型调用成功/失败均归入 `social-relationship-assistant` 用量类别。失败历史标记 FAILED 并走原队列退避/最大尝试/新 generation 逻辑。
 - **重要边界：本批只生成并保存评估建议，不更新 `MemoryScope.relationshipStage`、`relationshipStatus`、`relationshipVersion`，不写 `SocialRelationChange`。AI 不是裁判，关系变更服务与人工确认 UI 留待后续批次。**
 - 测试新增：输出协议单元测试、隔离数据库 Worker 集成测试（独立凭据、真实经历输入、NEW/CONTEXT 约束、关闭助手不领取、用量记录、不得自动修改关系）；CI 纳入关系评估隔离测试。
+
+
+## 14.12 关系评估历史第一批（2026-11-09）
+
+- 新增角色级评估历史只读 API，先校验角色归属，再按当前角色的 EXTERNAL_IDENTITY 关系范围分页读取；不会跨角色展示其他角色的关系或经历。
+- 新增「关系评估历史」页面，显示评估时间、好友、触发原因、评估时关系快照、AI 建议、结论、观察要点与执行错误。
+- 展开记录可查看本次实际挂接的 NEW / CONTEXT 经历；只读取 SocialRelationshipAssessmentEvidence → SocialExperience → MemoryEvent，不复制或修改记忆正文。
+- 页面使用全局角色选择器，并对角色切换、过期请求和组件卸载做请求版本保护。
+- 本批只读展示，不提供关系修改操作；下一批再增加人工采纳/驳回/暂缓和独立关系变更事务。AI 仍不能直接改关系。
