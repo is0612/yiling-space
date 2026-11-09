@@ -33,7 +33,7 @@ const plain = parseKnowledgeWebContent({
   url: "https://example.com/plain",
   mediaType: "text/plain",
   status: 200,
-  data: Buffer.from("这是一段足够长、可以进入知识候选的纯文本正文。它描述了一个可复用的知识主题。"),
+  data: Buffer.from("这是一段足够长、可以进入知识候选的纯文本正文。它描述了一个可复用的知识主题，并补充了足够的细节，不会被当成导航或错误页。"),
 });
 assert.match(plain.rawContent, /可复用的知识主题/);
 
