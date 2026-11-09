@@ -96,6 +96,7 @@
     "test:knowledge-assistant-config": "tsx scripts/test-knowledge-assistant-config.ts",
     "test:social-relationship-assessment-config": "tsx scripts/test-social-relationship-assessment-config.ts",
     "test:knowledge-retrieval": "tsx scripts/test-knowledge-retrieval.ts",
+    "test:knowledge-relations": "tsx scripts/test-knowledge-relations.ts",
     "test:knowledge-page-races": "tsx scripts/test-knowledge-page-races.ts",
     "test:desktop-conversation-db": "tsx scripts/test-desktop-conversation-db.ts",
     "test:chat-isolated": "tsx scripts/test-chat-isolated.ts",
