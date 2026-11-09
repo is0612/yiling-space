@@ -1123,7 +1123,17 @@ paths:
         （游标之前的消息算已完成），可画确定进度条；`GENERATE_SNAPSHOT` 是一次整段模型调用，
         中间没有可观测态，`done/total` 恒为 `null`，前端只画不确定进度条。
 
-        只返回当前账号名下的任务；刚结束（90 秒内）的任务会保留，面板才显示得出「完成 / 失败」。
+        只返回当前账号名下的任务；未指定角色时保持活动任务及刚结束（90 秒内）的原有口径。
+        指定 characterId 时只返回该角色，并包含最近的 FAILED/CANCELLED/SUCCEEDED/SKIPPED，按 createdAt 倒序最多 20 条，便于重新打开整理窗口查看结果。进度计数最多计算 6 个运行中的任务；其余 done/total 为 null 表示本次未计算，不能据此判断任务没有进展。
+      parameters:
+        - name: characterId
+          in: query
+          description: 可选，仅查询当前账号拥有的指定角色。
+          schema: { type: string, format: uuid }
+        - name: type
+          in: query
+          description: 可选，按任务类型筛选。
+          schema: { type: string, enum: [GENERATE_SNAPSHOT, EXTRACT_EVENTS] }
       responses:
         '200':
           description: 进行中的任务，运行中在前
@@ -1169,8 +1179,12 @@ paths:
                           type: boolean
                           description: 运行中但租约（5 分钟）已过期，领走它的进程可能不在了
                         lastError: { type: string, nullable: true }
+        '400':
+          description: characterId 不是 UUID 或 type 不在允许的任务类型中
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 指定的角色不存在或不属于当前账号
   /characters:
     get:
       tags: [Characters]
@@ -2035,6 +2049,56 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /characters/{characterId}/memory-events/preview:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+    get:
+      tags: [Memories]
+      operationId: previewCharacterMemoryEvents
+      summary: 只读预览手动整理忆泡的待处理范围
+      description: >-
+        仅当前登录用户拥有的角色可读。按角色时区的昨天收口与今天增量、角色全局/主人 USER_PRIVATE/非主人 EXTERNAL_IDENTITY 的 c: 私聊范围，使用当天已提交游标统计未整理消息，按日期、范围、会话聚合。只读计数，不迁移会话、不建范围、不写任务、不调模型。
+        已完成或跳过的昨天收口任务不可由 POST 重排，不计入预览；今天已 FINAL 的范围亦不计入；有效租约运行中的任务不计入，过期任务可计入。昨天 FINAL 但收口任务可新建或重试时仍按游标计数。
+        主人旧 EXTERNAL 私聊在 GET 中不归位，notice 会说明预览未包含这些待归位内容。rows 最多 100 项，totalMessages 为所有可启动目标的实际 COUNT，不受行数截断影响；truncated 表示还有会话行未展示。每个范围/日期执行数据库 COUNT 和有界 groupBy，限制返回行数并不限制数据库扫描成本；不返回消息正文。预览与开始之间若有新消息或 Worker 推进，数量可变化。
+      responses:
+        '200':
+          description: 当前待整理消息统计
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [characterId, characterName, timeZone, checkedAt, totalMessages, rows, truncated, hasLegacyOwnerChats, notice]
+                properties:
+                  characterId: { type: string, format: uuid }
+                  characterName: { type: string }
+                  timeZone: { type: string }
+                  checkedAt: { type: string, format: date-time }
+                  totalMessages: { type: integer, minimum: 0 }
+                  rows:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [key, dayKey, conversationLabel, scopeLabel, pendingMessages]
+                      properties:
+                        key: { type: string, description: 日期、范围与会话组成的稳定展示键 }
+                        dayKey: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+                        conversationLabel: { type: string }
+                        scopeLabel: { type: string }
+                        pendingMessages: { type: integer, minimum: 1 }
+                  truncated: { type: boolean }
+                  hasLegacyOwnerChats: { type: boolean, description: 是否存在开始整理时才归位的主人旧私聊；这些消息未计入本次预览。 }
+                  notice: { type: string, nullable: true }
+        '400':
+          description: 角色 ID 不是有效 UUID
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 角色还没有全局记忆范围
   /characters/{characterId}/memory-events/extract:
     parameters:
       - $ref: '#/components/parameters/CharacterId'

@@ -16,25 +16,20 @@ const characters = useCharacterList();
 /** 总览页不绑定具体角色，跟随侧栏那个「当前角色」；切换角色时地址栏带 ?c=，这里会跟着走。 */
 const { id, character } = useCharacterSelection("/growth/memory");
 
-const { snapshotGenerating, eventExtracting, runSnapshotGeneration, runEventExtraction } = useMemoryActions(
+const extractionDialogOpen = ref(false);
+const { snapshotGenerating, runSnapshotGeneration } = useMemoryActions(
   () => id.value,
   () => character.value?.name ?? "",
 );
 
-/**
- * 任务真的在跑的时候，按钮要一直禁用。
- *
- * `snapshotGenerating` / `eventExtracting` 只覆盖「请求还在等」的那几秒 —— 超时后服务端把响应放回来、
- * 执行转到后台，这时候按钮会恢复，连点第二下就会多排一次队。所以还要读任务表，
- * 让按钮跟着 DB 里的状态走（进度面板本来就在轮询这份数据）。
- */
+/** 阶段总结请求返回后仍可能在执行，以持久化任务状态保持生成按钮禁用。 */
 const { jobs } = useMemoryProgress();
 function running(type: "EXTRACT_EVENTS" | "GENERATE_SNAPSHOT") {
   return jobs.value.some(
     (job) => job.characterId === id.value && job.type === type && isActiveMemoryJob(job.status),
   );
 }
-const eventRunning = computed(() => eventExtracting.value || running("EXTRACT_EVENTS"));
+const eventRunning = computed(() => running("EXTRACT_EVENTS"));
 const snapshotRunning = computed(() => snapshotGenerating.value || running("GENERATE_SNAPSHOT"));
 
 onMounted(() => ensureMemoryProgressPolling());
@@ -56,7 +51,7 @@ onMounted(() => ensureMemoryProgressPolling());
       <div class="memory-quickbar-text">
         <h2>快捷操作</h2>
         <p v-if="character">
-          当前角色「{{ character.name }}」。整理忆泡只处理还没整理过的对话；阶段总结会调模型生成一份总结并更新长期记忆。进度都在右下角，切页面不受影响。
+          当前角色「{{ character.name }}」。整理忆泡会先预览昨天和今天待处理的对话；阶段总结会调用模型并更新长期记忆。已保存进度会保留，后台持续执行依赖 Worker。
         </p>
         <p v-else-if="characters.length">
           先在上方选一个角色，再整理她的记忆。
@@ -69,10 +64,9 @@ onMounted(() => ensureMemoryProgressPolling());
         <button
           type="button"
           class="btn"
-          :disabled="!character || eventRunning"
-          :aria-busy="eventRunning"
-          :title="`把「昨天收口」和「今天增量」排进队列并当场跑一次`"
-          @click="runEventExtraction"
+          :disabled="!character"
+          title="预览昨天和今天待整理的对话，并查看真实任务进度"
+          @click="extractionDialogOpen = true"
         >
           <el-icon
             v-if="eventRunning"
@@ -82,7 +76,7 @@ onMounted(() => ensureMemoryProgressPolling());
           </el-icon>
           <el-icon v-else>
             <MagicStick />
-          </el-icon>{{ eventRunning ? "整理中…" : "整理忆泡" }}
+          </el-icon>{{ eventRunning ? "查看整理进度" : "整理忆泡" }}
         </button>
         <button
           type="button"
@@ -157,6 +151,11 @@ onMounted(() => ensureMemoryProgressPolling());
         </NuxtLink>
       </div>
     </section>
+    <MemoryExtractionDialog
+      v-model="extractionDialogOpen"
+      :character-id="id"
+      :character-name="character?.name ?? ''"
+    />
   </div>
 </template>
 

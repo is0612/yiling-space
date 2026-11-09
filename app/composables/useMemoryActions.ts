@@ -87,7 +87,7 @@ export function useMemoryActions(
       const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
       const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
       if (result.processing) {
-        ElMessage.info("已开始生成阶段总结，进度在右下角；切页面、刷新都不会中断。");
+        ElMessage.info("已开始生成阶段总结，进度在右下角；已保存的进度会保留，服务重启后的自动续跑需要 Worker。");
       } else if (failed) {
         // 失败时周期边界不会推进，这段数据下次还能补上：要说「去重试」而不是「重来」。
         ElMessage.warning(`${failed.message}（这次没有推进周期，去「后台任务」点重试即可）`);
@@ -130,7 +130,7 @@ export function useMemoryActions(
       const failed = result.processed.find((item) => item.status !== "SUCCEEDED" && item.status !== "SKIPPED");
       if (result.processing) {
         // 响应先回来了、执行还在后台跑：不要说成「没有 worker」，那是另一回事。
-        ElMessage.info(`已开始整理 ${result.queued.length} 段，进度在右下角；切页面、刷新都不会中断。`);
+        ElMessage.info(`已开始整理 ${result.queued.length} 段，进度在右下角；已保存的进度会保留，服务重启后的自动续跑需要 Worker。`);
       } else if (result.queued.length === 0) {
         ElMessage.info(result.notice === "running"
           ? "上一次整理正在跑，等它结束再点一次。"

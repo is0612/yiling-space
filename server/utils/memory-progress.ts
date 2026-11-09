@@ -67,20 +67,20 @@ function scopeSuffix(scopeType: string): string {
 
 export async function listMemoryProgress(
   prisma: PrismaClient,
-  options: { ownerId: string; now?: Date },
+  options: { ownerId: string; now?: Date; characterId?: string; type?: "GENERATE_SNAPSHOT" | "EXTRACT_EVENTS" },
 ): Promise<MemoryProgressJob[]> {
   const now = options.now ?? new Date();
   const jobs = await prisma.memoryJob.findMany({
     where: {
-      memoryScope: { is: { character: { is: { ownerId: options.ownerId } } } },
-      type: { in: ["GENERATE_SNAPSHOT", "EXTRACT_EVENTS"] },
-      OR: [
+      memoryScope: { is: { ...(options.characterId ? { characterId: options.characterId } : {}), character: { is: { ownerId: options.ownerId } } } },
+      type: options.type ?? { in: ["GENERATE_SNAPSHOT", "EXTRACT_EVENTS"] },
+      ...(!options.characterId ? { OR: [
         { status: { in: ["QUEUED", "RUNNING", "RETRY_WAIT"] } },
-        // 刚跑完的留一会儿：面板要能显示「完成 / 失败」，而不是凭空消失。
+        // 全局面板仅保留刚结束的任务；角色弹窗可看最近历史失败。
         { completedAt: { gte: new Date(now.getTime() - RECENT_FINISHED_MS) } },
-      ],
+      ] } : {}),
     },
-    orderBy: [{ createdAt: "asc" }],
+    orderBy: [{ createdAt: options.characterId ? "desc" : "asc" }],
     take: 20,
     select: {
       id: true,
