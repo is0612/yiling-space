@@ -454,13 +454,18 @@
 - 测试命令：`yarn test:social-relationship-review-isolated`；已接入 `verify:local` 和 CI。
 - 本批待 DSH 本地验收；人工确认前不会改关系。
 
-### 10.5 主动联系实现第一步（2026-11-09）
+### 10.5 主动联系机制（2026-11-09）
 
-- 已在 `server/utils/social-proactive-contact-policy.ts` 建立独立的纯函数安全闸门，并新增 `yarn test:social-proactive-contact-policy` 专项测试入口。
-- `MemoryScope.proactiveContactEnabled` 是独立的好友级主动联系授权，默认 false；不从 `friendChatPolicy=ALLOW` 推导。新增 `SocialProactiveContactAttempt` 追加式联系尝试账本，记录 SENT / SKIPPED / FAILED / EXPIRED、原因、群号、成功发送内容与时间。
-- 已新增 Prisma 迁移 `20261109120000_social_proactive_contact_foundation`，并扩展好友 PATCH / 列表 API 与「她的朋友」卡片独立开关。
-- 闸门只允许 FRIEND / CLOSE_FRIEND 且 NORMAL 的关系；BLOCK 始终优先，AI 好友还必须明确允许普通交流。
-- 渠道、共同群、群模式、发送前实时成员核验、AI 连续对话上限、角色每日上限与好友冷却均为 fail-closed 条件。
-- **当前已完成：安全策略纯函数、测试代码、授权字段/迁移、好友 API 与页面开关。尚未完成：共同群解析、OneBot 实时成员核验与定向 @ 发送、话题生成、联系审计写入、后台 tick 接入与过期处理。不得视为主动联系功能已上线。**
-- 本地待执行：`yarn prisma validate`、`yarn prisma generate`、`yarn test:social-proactive-contact-policy`、`yarn typecheck`、`yarn check:sfc`、`yarn lint`。完整集成后再补 Prisma 隔离库与真实 QQ 定向 @ 验收。
+- 好友级独立授权：`MemoryScope.proactiveContactEnabled` 默认 false；与 `friendChatPolicy` 分开。好友卡片可单独开启/关闭，普通 `ALLOW` 不会自动授予主动联系许可。
+- 关系闸门：只允许 `FRIEND / CLOSE_FRIEND + NORMAL`；`BLOCK` 始终禁止；AI 好友必须额外明确设置 `friendChatPolicy=ALLOW`。
+- 目标范围：第一版只做 QQ OneBot 共同群定向 @。只接受当前有效的角色绑定、routingKey 仍包含的群，且群模式必须是 `ambient / all`；`mention` 群不主动发言。
+- 成员核验：使用 OneBot `get_group_member_info(no_cache=true)` 在发送前实时核验目标仍在群内。查询失败、目标 UID 不合法或绑定/群模式变化均 fail closed。
+- 内容生成：以好友关系范围的记忆和共同群最近对话为上下文；模型必须给出有依据的自然延续点，否则输出 `-` 并跳过。不为完成任务硬找话题。
+- 频率保护：每角色每天最多 2 次成功主动联系；同一好友成功联系后 7 天冷却；AI-only 群对话达到 3 轮后暂停主动接触 AI 好友；只要群聊有人类参与，连续 AI 轮数清零。
+- 幂等与恢复：每次发送先创建 `SENDING` 占位并用 `(scopeId, dedupeKey)` 唯一约束防重复；发送成功后先落 `SENT` 审计，再补群会话转录。悬挂超过 30 分钟的 `SENDING` 标为 `EXPIRED`，不补发旧意图。发送失败记录 `FAILED`，无话题/无共同群/成员核验失败/闸门拒绝记录 `SKIPPED`。
+- 后台：`scripts/run-proactive.ts` 的常驻 60 秒 tick 独立调用 `runSocialProactiveContactTick`；与私聊主动找话、群冷场开口、空间主动各自隔离，互相失败不影响。
+- 记录展示：`SocialProactiveContactAttempt` 保存状态、原因、群号、消息正文与时间；好友列表卡片显示最近一次尝试状态。
+- 已新增 Prisma 迁移 `20261109120000_social_proactive_contact_foundation`，以及纯函数策略/OneBot @ 段专项测试入口 `yarn test:social-proactive-contact-policy`。
+- **代码已接入，但尚未由用户本地验收。** 本轮未运行 Prisma、TypeScript、SFC、lint、数据库隔离测试或真实 QQ 联调；不能标记为通过。尤其需要在本地验证生成的 Prisma Client 与 OneBot 网关是否支持 `get_group_member_info`。
+- 本地验收命令：`yarn prisma validate`、`yarn prisma generate`、`yarn test:social-proactive-contact-policy`、`yarn typecheck`、`yarn check:sfc`、`yarn lint`。之后再用测试角色/测试好友，在共同 QQ 群实际确认定向 @、撤销授权、BLOCK、退群、冷却、每日上限与 AI 连续对话保护。
 
