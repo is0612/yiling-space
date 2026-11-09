@@ -271,7 +271,7 @@ onBeforeUnmount(() => {
       <div class="model-row">
         <input v-model="model" list="assessment-model-list" placeholder="选择，或直接输入模型名">
         <datalist id="assessment-model-list"><option v-for="name in modelOptions" :key="name" :value="name" /></datalist>
-        <button type="button" :disabled="fetchingModels || saving" @click="fetchModels">{{ fetchingModels ? "获取中…" : "获取模型" }}</button>
+        <button type="button" :disabled="fetchingModels || saving || testing" @click="fetchModels">{{ fetchingModels ? "获取中…" : "获取模型" }}</button>
       </div>
       <div class="numeric-grid">
         <div><label>温度</label><input v-model.number="temperature" type="number" min="0" max="2" step="0.1"></div>
