@@ -7,7 +7,7 @@ import {
 import { setMediaFetchForTest } from "../server/utils/safe-media-download";
 
 const html = `<!doctype html><html><head><title>鲸类知识 &amp; 海洋</title><script>bad script</script><style>.x{display:none}</style></head><body>
-<nav>网站导航</nav><main><h1>蓝鲸</h1><p>蓝鲸是现存体型最大的动物，属于须鲸类。</p><p>它主要以磷虾为食，常通过滤食方式摄取食物。</p></main>
+<nav>网站导航</nav><main><h1>蓝鲸</h1><p>蓝鲸是现存体型最大的动物，属于须鲸类。成年蓝鲸通常以磷虾为主要食物来源，并通过鲸须板过滤海水来摄取大量小型甲壳类生物。</p><p>它们会随季节迁徙，在不同海域觅食和繁殖；研究人员也会结合声学记录、卫星标记与海洋观测来了解蓝鲸的活动规律。</p></main>
 <footer>版权和页脚噪音</footer><script>ignore()</script></body></html>`;
 
 function response(body: string | Uint8Array, status = 200, headers: Record<string, string> = { "content-type": "text/html; charset=utf-8" }) {
