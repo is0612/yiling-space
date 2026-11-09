@@ -7,6 +7,16 @@ import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
 const props = defineProps<{ growthMode?: boolean }>();
 const isGrowthMode = computed(() => props.growthMode === true);
 
+/**
+ * 页头说明跟着模式走。
+ *
+ * 成长模式下「立即 AI 归档」按钮已经移到记忆系统总览，这里再写「点右上角按钮手动跑一次」
+ * 就是指向一个不存在的按钮 —— 说明要和页面上真实存在的东西对上。
+ */
+const pageDescription = computed(() => (isGrowthMode.value
+  ? "自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；想现在跑一次，到「记忆系统总览」点「阶段总结」。手动存档：只把当下这一刻拍成快照，不调模型。"
+  : "自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；本地没起调度器时，点「立即 AI 归档」手动跑一次。手动存档：只把当下这一刻拍成快照，不调模型。"));
+
 const characters = useCharacterList();
 await useCharacterListData();
 
@@ -80,6 +90,22 @@ const totalMessages = computed(() => items.value.reduce((sum, item) => sum + ite
 const autoCount = computed(() => items.value.filter((item) => item.kind !== "MANUAL").length);
 const manualCount = computed(() => items.value.length - autoCount.value);
 const hasFilters = computed(() => Boolean(query.value) || statusFilter.value !== "全部版本状态");
+
+/**
+ * 列表为空时说什么。
+ *
+ * 成长模式下「立即 AI 归档」按钮已经收进记忆系统总览，这里再写「点立即 AI 归档」
+ * 就是让用户找一个不存在的按钮 —— 两种模式分开说。
+ */
+const emptyListText = computed(() => {
+  if (hasFilters.value) return "没有符合条件的阶段总结，换个词或把筛选切回全部。";
+  if (manualCount.value && !showManual.value) {
+    return `这里还没有 AI 总结。另有 ${manualCount.value} 份手动存档被收起，点上面的「手动存档」可以展开。`;
+  }
+  return isGrowthMode.value
+    ? "还没有归档过。到「记忆系统总览」点「阶段总结」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。"
+    : "还没有归档过。点「立即 AI 归档」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。";
+});
 
 const sourceTotal = computed(() => detail.value?.sourceMessages?.length || 0);
 const pagedSources = computed(() => {
@@ -482,10 +508,13 @@ watch(id, () => {
 
 <template>
   <div class="page-wrap">
-    <MemorySectionNavigation v-if="isGrowthMode" active="snapshots" />
+    <MemorySectionNavigation
+      v-if="isGrowthMode"
+      active="snapshots"
+    />
     <PageHeader
       :eyebrow="isGrowthMode ? '成长系统 / 记忆系统 / 阶段总结' : '工作空间 / 阶段总结'"
-      description="自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；本地没起调度器时，点「立即 AI 归档」手动跑一次。手动存档：只把当下这一刻拍成快照，不调模型。"
+      :description="pageDescription"
     >
       <template #actions>
         <button
@@ -497,7 +526,10 @@ watch(id, () => {
         >
           <el-icon><Files /></el-icon>{{ creating ? "存档中…" : "手动存档（不调模型）" }}
         </button>
+        <!-- 成长模式下这个按钮收进记忆系统总览了（那边叫「阶段总结」），
+             同一个动作只留一个显眼入口，避免两个页面各点一半。 -->
         <button
+          v-if="!isGrowthMode"
           type="button"
           class="btn primary"
           :disabled="aiArchiving || !id"
@@ -632,7 +664,7 @@ watch(id, () => {
                   v-if="!filtered.length"
                   class="list-empty"
                 >
-                  {{ hasFilters ? "没有符合条件的阶段总结，换个词或把筛选切回全部。" : manualCount && !showManual ? `这里还没有 AI 总结。另有 ${manualCount} 份手动存档被收起，点上面的「手动存档」可以展开。` : "还没有归档过。点「立即 AI 归档」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。" }}
+                  {{ emptyListText }}
                 </p>
               </template>
             </div>

@@ -408,13 +408,19 @@ await loadDays();
 
 <template>
   <div class="page-wrap">
-    <MemorySectionNavigation v-if="isGrowthMode" active="events" />
+    <MemorySectionNavigation
+      v-if="isGrowthMode"
+      active="events"
+    />
     <PageHeader
       :eyebrow="isGrowthMode ? '成长系统 / 记忆系统' : '工作空间 / 角色记忆'"
       description="一天一行，点开看那天发生了什么。忆泡是整理过的事件，原文是当时的对话。"
     >
       <template #actions>
+        <!-- 成长模式不再放这个按钮：记忆系统的整理入口统一收到总览页，
+             一页点完，不用在两个子页之间找。角色记忆（/days）保持原样。 -->
         <button
+          v-if="!isGrowthMode"
           type="button"
           class="btn primary"
           :disabled="eventExtracting || !id"
@@ -467,7 +473,9 @@ await loadDays();
           v-else-if="!days.length"
           class="muted-note day-empty"
         >
-          还没有整理过任何一天。点击上方「立即整理忆泡」开始整理。
+          {{ isGrowthMode
+            ? "还没有整理过任何一天。到「记忆系统总览」点「整理忆泡」开始整理。"
+            : "还没有整理过任何一天。点击上方「立即整理忆泡」开始整理。" }}
         </div>
         <button
           v-for="day in days"
