@@ -431,3 +431,12 @@
 - 展开记录可查看本次实际挂接的 NEW / CONTEXT 经历；只读取 SocialRelationshipAssessmentEvidence → SocialExperience → MemoryEvent，不复制或修改记忆正文。
 - 页面使用全局角色选择器，并对角色切换、过期请求和组件卸载做请求版本保护。
 - 本批只读展示，不提供关系修改操作；下一批再增加人工采纳/驳回/暂缓和独立关系变更事务。AI 仍不能直接改关系。
+
+
+### 14.13 人工确认与关系变更第一阶段（2026-11-09，开发中）
+
+- 新增评估建议人工处置状态：NOT_REQUIRED / PENDING / DEFERRED / ACCEPTED / REJECTED。只有成功评估且结论为 CHANGE 的建议进入 PENDING；MAINTAIN / INSUFFICIENT / REVIEW 不会被误当成可直接采纳的变更。
+- 新增追加式人工处置审计表，记录操作者、采纳/驳回/暂缓决定、备注和时间；assessment 当前状态仅作为列表筛选快照，审计记录不覆盖。
+- 扩展关系变化历史，允许同时记录阶段与相处状态的变更、关系版本前后值，并通过唯一 assessmentId 防止同一评估重复应用。
+- 后续实现采纳服务时必须在单个事务中校验角色归属、评估仍待处理、当前 relationshipVersion 与评估快照一致、NEW 证据属于本次评估且未被其他关系变化消费，再更新 MemoryScope 并写入变化历史与证据；拒绝/暂缓不触碰关系字段。
+- 当前仅完成数据模型与执行器的 PENDING 标记，采纳/驳回/暂缓 API、页面操作与专项测试仍在开发中；未完成前不能视为人工确认闭环已上线。
