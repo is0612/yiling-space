@@ -1487,6 +1487,9 @@ model KnowledgeItemRevision {
   status     String       @db.VarChar(20)
   sourceType String       @db.VarChar(20)
   sourceRef  Json?        @db.JsonB
+  /// 这条快照是被哪种操作取代的：CONTENT_EDIT（内容编辑）、MERGE（合并）、ARCHIVE（归档）、
+  /// UNARCHIVE（取消归档）、TRASH（移入回收站）、RESTORE（从回收站恢复）。
+  action     String       @default("CONTENT_EDIT") @db.VarChar(20)
   createdAt  DateTime     @default(now()) @db.Timestamptz(6)
   item       KnowledgeItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 

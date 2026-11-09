@@ -55,6 +55,7 @@ export default defineEventHandler(async (event) => {
         itemId: source.id, revision: source.revision, title: source.title, content: source.content,
         category: source.category, tags: source.tags, confidence: source.confidence, status: source.status,
         sourceType: source.sourceType,
+        action: "MERGE",
         sourceRef: source.sourceRef === null ? undefined : source.sourceRef as Prisma.InputJsonValue,
       },
     });
@@ -63,6 +64,7 @@ export default defineEventHandler(async (event) => {
         itemId: target.id, revision: target.revision, title: target.title, content: target.content,
         category: target.category, tags: target.tags, confidence: target.confidence, status: target.status,
         sourceType: target.sourceType,
+        action: "MERGE",
         sourceRef: target.sourceRef === null ? undefined : target.sourceRef as Prisma.InputJsonValue,
       },
     });
