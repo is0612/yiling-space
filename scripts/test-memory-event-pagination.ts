@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import type { PrismaClient } from "../src/generated/prisma/client";
-import { eventMessageWhere, loadEventMessageBatch, EVENT_MESSAGE_BATCH_SIZE } from "../server/utils/memory-event-source";
+import {
+  eventMessageWhere, loadEventMessageBatch, loadEventContextMessages, splitEventMessagesByBudget,
+  EVENT_AI_INPUT_TOKENS, EVENT_AI_MESSAGES_PER_REQUEST, EVENT_MESSAGE_BATCH_SIZE,
+} from "../server/utils/memory-event-source";
+import { estimateTokens } from "../server/utils/memory-retrieval";
 import { runDailyEventJob } from "../server/utils/memory-worker";
 
 // No dotenv, real database, usage writes, or network: all provider and persistence I/O is mocked.
@@ -96,6 +100,56 @@ globalThis.fetch = async (_url, init) => {
 };
 
 try {
+  // These are request limits, independent of the 960-message persistence page.
+  assert.equal(EVENT_AI_INPUT_TOKENS, 4_000);
+  assert.equal(EVENT_AI_MESSAGES_PER_REQUEST, 40);
+  assert.deepEqual(splitEventMessagesByBudget([]), []);
+  function checkChunks<T extends { id: string; content: string }>(messages: T[]) {
+    const before = JSON.stringify(messages);
+    const chunks = splitEventMessagesByBudget(messages);
+    const flattened = chunks.flat();
+    assert.deepEqual(flattened, messages, "splitting must preserve global order and every complete message exactly once");
+    assert.equal(new Set(flattened.map((message) => message.id)).size, messages.length);
+    flattened.forEach((message, index) => assert.equal(message, messages[index], "messages must remain intact"));
+    assert.equal(JSON.stringify(messages), before, "splitting must not mutate its input");
+    for (const chunk of chunks) {
+      assert(chunk.length > 0 && chunk.length <= 40);
+      const tokens = chunk.reduce((sum, message) => sum + estimateTokens(JSON.stringify(message)), 0);
+      assert(tokens <= 4_000 || chunk.length === 1, "only a standalone oversized message may exceed the token budget");
+    }
+    return chunks;
+  }
+  const short = Array.from({ length: 81 }, (_, index) => ({ id: String(index), content: "short" }));
+  assert.deepEqual(checkChunks(short).map((chunk) => chunk.length), [40, 40, 1]);
+  const mixed = [
+    { id: "short-before", content: "short" },
+    { id: "long", content: "x".repeat(12_000) },
+    { id: "short-after", content: "short" },
+    { id: "next-long", content: "y".repeat(8_000) },
+    { id: "last", content: "short" },
+  ];
+  assert.deepEqual(checkChunks(mixed).map((chunk) => chunk.map((message) => message.id)), [
+    ["short-before", "long", "short-after"], ["next-long", "last"],
+  ]);
+  const chinese = Array.from({ length: 5 }, (_, index) => ({ id: String(index), content: "中".repeat(1_500) }));
+  assert.deepEqual(checkChunks(chinese).map((chunk) => chunk.length), [2, 2, 1], "Chinese must use its estimated token cost, not four characters per token");
+  const oversized = { id: "oversized", content: "完整证据".repeat(5_000) };
+  const oversizedChunks = checkChunks([short[0]!, oversized, short[1]!]);
+  assert.deepEqual(oversizedChunks.map((chunk) => chunk.length), [1, 1, 1]);
+  assert.equal(oversizedChunks[1]![0]!.content, oversized.content, "an oversized message must be preserved in full");
+
+  // Context is optional, bounded, complete, and chronological; an oversized nearest
+  // message stops the window instead of skipping to unrelated older context.
+  const contextRows = [{ id: "latest", content: "最近" }, { id: "older", content: "前文" }];
+  const contextInput = { conversationId: "conversation", periodStart: start, periodEnd: end, first: { occurredAt: end, id: "first" } };
+  const contextPrisma = (rows: typeof contextRows) => ({ message: { findMany: async () => rows } }) as unknown as Pick<PrismaClient, "message">;
+  assert.deepEqual(await loadEventContextMessages(contextPrisma(contextRows), contextInput), [...contextRows].reverse());
+  assert.deepEqual(await loadEventContextMessages(contextPrisma([{ id: "huge", content: "中".repeat(2_000) }, ...contextRows]), contextInput), []);
+  const boundedContext = await loadEventContextMessages(contextPrisma([
+    { id: "recent", content: "中".repeat(600) }, { id: "old", content: "中".repeat(600) },
+  ]), contextInput);
+  assert.deepEqual(boundedContext.map((row) => row.id), ["recent"]);
+
   // Exactly 960: no phantom continuation; 961: oldest 960 first, one row remains.
   for (const count of [0, 960, 961]) {
     const f = fixture(count);
@@ -141,13 +195,17 @@ try {
   failing.failAt(2);
   const failed = await runDailyEventJob(failing.prisma, job, end);
   assert.equal(failed.processed && failed.status, "RETRY_WAIT");
-  assert.equal(failing.progress()?.extractedMessageId, id(81)); // current splitter distributes 241 into three 81-row chunks
+  assert.equal(failing.progress()?.extractedMessageId, id(40), "only the first 40-message chunk may commit");
+  assert.deepEqual(seen, failing.rows.slice(0, 80).map((row) => row.id), "the failed second chunk was sent but must not advance the cursor");
   const committed = failing.progress()!.extractedMessageId;
   seen.length = 0;
   failing.failAt(0);
   failing.reclaim();
-  await runDailyEventJob(failing.prisma, job, end);
+  const resumed = await runDailyEventJob(failing.prisma, job, end);
+  assert.equal(resumed.processed && resumed.status, "SUCCEEDED");
   assert.equal(seen[0], id(Number(committed!.slice(-12)) + 1));
+  assert.deepEqual(seen, failing.rows.slice(40).map((row) => row.id), "resume must replay the entire uncommitted chunk and consume the remaining evidence exactly once");
+  assert.equal(failing.progress()?.extractedMessageId, id(241));
   assert.equal(failing.progress()?.state, "FINAL");
 
   // Legacy timestamp-only cursor must replay its boundary, not skip every same-time row.
@@ -156,7 +214,7 @@ try {
   seen.length = 0;
   await runDailyEventJob(legacy.prisma, job, end);
   assert.deepEqual(seen, legacy.rows.map((row) => row.id));
-  console.log("Memory event pagination passed: 960/961, same-time keysets, oldest evidence, atomic cursor, failure resume, legacy cursor, and partial FINAL guard.");
+  console.log("Memory event pagination passed: 4000-token/40-message budgets, mixed lengths, Chinese, intact oversized evidence, ordered exact coverage, 960/961, same-time keysets, atomic cursor, failure resume, legacy cursor, and partial FINAL guard.");
 } finally {
   globalThis.fetch = originalFetch;
   for (const [key, value] of Object.entries({ LLM_API_KEY: originalEnv.key, LLM_BASE_URL: originalEnv.base, LLM_MODEL: originalEnv.model })) {

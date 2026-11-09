@@ -1,4 +1,29 @@
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
+import { estimateTokens } from "./memory-retrieval";
+
+/** 每次请求的新消息预算；系统提示词、已知事件与前文另计。 */
+export const EVENT_AI_INPUT_TOKENS = 4_000;
+export const EVENT_AI_MESSAGES_PER_REQUEST = 40;
+
+/** 正序分块，不取样、不截原文；单条超预算时独立处理，避免静默漏掉证据。 */
+export function splitEventMessagesByBudget<T extends { content: string }>(messages: T[]): T[][] {
+  const chunks: T[][] = [];
+  let chunk: T[] = [];
+  let tokens = 0;
+  for (const message of messages) {
+    // 序列化字段（ID、时间、作者、来源等）也占输入，使用整行的保守估算。
+    const cost = estimateTokens(JSON.stringify(message));
+    if (chunk.length && (chunk.length >= EVENT_AI_MESSAGES_PER_REQUEST || tokens + cost > EVENT_AI_INPUT_TOKENS)) {
+      chunks.push(chunk);
+      chunk = [];
+      tokens = 0;
+    }
+    chunk.push(message);
+    tokens += cost;
+  }
+  if (chunk.length) chunks.push(chunk);
+  return chunks;
+}
 
 export const EVENT_AI_CHUNK_SIZE = 120;
 export const MAX_EVENT_CHUNKS = 8;
@@ -37,7 +62,15 @@ export async function loadEventContextMessages(
       conversation: { select: { externalConversationId: true } },
     },
   });
-  return rows.reverse();
+  const selected: typeof rows = [];
+  let tokens = 0;
+  for (const row of rows) {
+    const cost = estimateTokens(JSON.stringify(row));
+    if (tokens + cost > 1_000) break;
+    selected.push(row);
+    tokens += cost;
+  }
+  return selected.reverse();
 }
 
 export type EventExtractionProgress = {

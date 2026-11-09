@@ -311,7 +311,7 @@ onBeforeUnmount(() => {
               <div class="hero-name-row">
                 <NuxtLink
                   class="hero-name"
-                  :to="`/memory?c=${card.character.id}`"
+                  :to="`/growth/memory/long-term?c=${card.character.id}`"
                 >
                   {{ card.character.name }}
                 </NuxtLink>

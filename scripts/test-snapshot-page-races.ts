@@ -34,12 +34,10 @@ function harness() {
   const bindings = executable.runInContext(createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
-    defineProps: () => ({ growthMode: false }),
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: (sources: Ref | Ref[], callback: () => void) => watchers.push({ sources: Array.isArray(sources) ? sources : [sources], callback }),
     onMounted: () => {}, useCharacterList: () => ({ value: [] }), useCharacterSelection: () => ({ id: role }),
     useMemoryProgress: () => ({ lastFinished: { value: null } }),
-    refreshMemoryProgress: async () => [],
     ElMessage: { error: notify, success: notify, warning: notify, info: notify },
     ElMessageBox: { confirm: () => new Promise((resolve, reject) => confirmations.push({ resolve, reject })) },
     $fetch: (url: string, options?: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
@@ -96,7 +94,7 @@ async function listRaces() {
   assert.equal(page.messages.length, 0);
   page.done();
 }
-const handlers = ["reviewChange", "runAiArchive", "createSnapshot", "regenerateWithAi", "regenerate"];
+const handlers = ["reviewChange", "createSnapshot", "regenerateWithAi", "regenerate"];
 function start(page: ReturnType<typeof harness>, handler: string, selected: ReturnType<typeof snapshot>) {
   return handler === "reviewChange" ? page.call(handler, 0, "ACCEPT", selected.analysis.memoryChangesApplied[0])
     : page.call(handler, selected);
@@ -118,8 +116,8 @@ async function confirmationRaces() {
     page.done(); // No POST is allowed after any of these navigation changes.
   }
 }
-function resultFor(handler: string) {
-  return handler === "runAiArchive" ? { processed: [], skipped: [], pending: 0 } : { id: "new", outcome: "CREATED", duplicate: false };
+function writeResult() {
+  return { id: "new", outcome: "CREATED", duplicate: false };
 }
 async function completionRaces() {
   // AI 重新提炼只排后台任务，不会在 POST 返回后立即刷新列表。
@@ -131,12 +129,12 @@ async function completionRaces() {
     const pending = start(page, handler, selected);
     page.confirm();
     await flush();
-    const path = handler === "reviewChange" ? `${list}/a/review` : handler === "runAiArchive" ? `${list}/generate` : list;
+    const path = handler === "reviewChange" ? `${list}/a/review` : list;
     const request = page.take(path, "POST");
     if (handler === "reviewChange") assert.equal(JSON.stringify(request.options?.body), JSON.stringify({ changeIndex: 0, decision: "ACCEPT" }));
     if (handler === "regenerate" || handler === "regenerateWithAi") assert.equal((request.options?.body as { snapshotId: string }).snapshotId, "a");
     await page.switchRole();
-    if (reject) request.reject(new Error("late write failure")); else request.resolve(resultFor(handler));
+    if (reject) request.reject(new Error("late write failure")); else request.resolve(writeResult());
     await pending;
     assert.equal(page.read<{ id: string }>("detail").id, "b");
     assert.equal(page.read("showManual"), false);
@@ -144,14 +142,14 @@ async function completionRaces() {
     page.done();
   }
   // Navigation while the follow-up refresh is in flight must not restore old detail/source state.
-  for (const handler of ["reviewChange", "runAiArchive", "createSnapshot", "regenerate"]) {
+  for (const handler of ["reviewChange", "createSnapshot", "regenerate"]) {
     const page = harness();
     const selected = snapshot("a");
     await page.call("applyDetail", selected);
     const pending = start(page, handler, selected);
     page.confirm();
     await flush();
-    page.take(handler === "reviewChange" ? `${list}/a/review` : handler === "runAiArchive" ? `${list}/generate` : list, "POST").resolve(resultFor(handler));
+    page.take(handler === "reviewChange" ? `${list}/a/review` : list, "POST").resolve(writeResult());
     await flush();
     const refresh = page.take(list);
     await page.switchRole();
@@ -172,14 +170,13 @@ async function normalFlow() {
     const pending = start(page, handler, selected);
     page.confirm();
     await flush();
-    page.take(handler === "reviewChange" ? `${list}/a/review` : handler === "runAiArchive" ? `${list}/generate` : list, "POST").resolve(resultFor(handler));
+    page.take(handler === "reviewChange" ? `${list}/a/review` : list, "POST").resolve(writeResult());
     await flush();
     if (handler !== "regenerateWithAi") page.take(list).resolve([snapshot("new"), selected]);
     await pending;
     assert.equal(page.messages.length, 1, `normal ${handler} must still succeed`);
     if (handler === "reviewChange") { assert.equal(page.read<{ id: string }>("detail").id, "a"); assert.equal(page.read("sourcesOpen"), true); }
     assert.equal(page.read("creating"), false);
-    assert.equal(page.read("aiArchiving"), false);
     assert.equal(page.read("reviewingKey"), "");
     page.done();
   }
@@ -214,9 +211,9 @@ async function detailCompletionRaces() {
     const pending = start(page, handler, selected);
     page.confirm();
     await flush();
-    const response = page.take(handler === "reviewChange" ? `${list}/a/review` : handler === "runAiArchive" ? `${list}/generate` : list, "POST");
+    const response = page.take(handler === "reviewChange" ? `${list}/a/review` : list, "POST");
     await page.call("selectDetail", snapshot("other"));
-    response.resolve(resultFor(handler));
+    response.resolve(writeResult());
     await pending;
     assert.equal(page.read<{ id: string }>("detail").id, "other");
     assert.equal(page.messages.length, 0);

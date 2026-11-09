@@ -28,7 +28,7 @@ import { generateJournalForDay, readJournalJobParams } from "./journal-service";
 import { normalizeFriendAliases } from "./friend-aliases";
 import { MEMORY_JOB_LEASE_MS, lockMemoryJobLease, memoryJobLeaseWhere, MemoryJobLeaseLostError, renewMemoryJobLease, type MemoryJobLease } from "./memory-job-lease";
 import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
-import { EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
+import { splitEventMessagesByBudget, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
 import { rawMessageCleanupDependencyCutoff } from "./memory-event-cleanup";
 
 /** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
@@ -166,23 +166,6 @@ function validConfidence(change: MemoryChange): boolean {
 }
 
 /**
- * 把一天的消息按时间顺序切成若干块。
- *
- * 输入已由正序游标限定为一批，保持顺序并均分为不超过 maxChunks 块；
- * 剩余消息由下一轮继续，不能在这里对全天取样。
- */
-function splitForEventExtraction<T>(messages: T[], size: number, maxChunks: number): T[][] {
-  if (messages.length <= size) return [messages];
-  const groups = Math.min(Math.ceil(messages.length / size), maxChunks);
-  const perGroup = Math.ceil(messages.length / groups);
-  const chunks: T[][] = [];
-  for (let index = 0; index < messages.length; index += perGroup) {
-    chunks.push(messages.slice(index, index + perGroup));
-  }
-  return chunks;
-}
-
-/**
  * 按天整理忆泡。
  *
  * 和快照任务的区别：不写快照、不碰长期记忆，只把「昨天」这一天里能落到具体时间的事
@@ -311,7 +294,7 @@ export async function runDailyEventJob(
    * 按全局时间顺序切块，再在原块内按会话分别调用模型，避免事件正文混合来源。
    * 原块内全部请求成功后才把事件与原块游标同事务提交，保持全局覆盖。
    */
-  const chunks = splitForEventExtraction(messages, EVENT_AI_CHUNK_SIZE, MAX_EVENT_CHUNKS);
+  const chunks = splitEventMessagesByBudget(messages);
 
   let appliedCount = 0;
   let skippedCount = 0;

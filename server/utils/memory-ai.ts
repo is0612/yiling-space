@@ -736,30 +736,47 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
       : {}),
   };
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    redirect: "error",
-    headers: {
-      authorization: "Bearer " + apiKey,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.1,
-      // 思考型模型会先花掉一部分预算在 reasoning 上：6000 在「一天 120 条消息 + 事件 + 变化」
-      // 这种输入下会把正文截断，表现是 JSON 解析失败（2026-10-31 实测重跑两次都挂在这）。
-      // 宁可多给预算，也别让一份内容正确的输出因为截断被整轮丢掉。
-      max_tokens: 16_000,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt({ emitEvents: input.emitEvents !== false, withPeriodEvents: Boolean(input.periodEvents?.length), emitFriendAliases: input.emitFriendAliases === true, withGlobalMemories: Boolean(input.globalMemories?.length) || input.allowGlobalMemory === true }) },
-        { role: "user", content: JSON.stringify(promptInput) },
-      ],
-    }),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-
-  const responseText = await response.text();
+  const inputMessages = [...input.messages, ...(input.contextMessages ?? [])];
+  const inputScale = `inputMessages=${inputMessages.length}, inputChars=${inputMessages.reduce((total, message) => total + message.content.length, 0)}`;
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let response: Response;
+  let responseText: string;
+  try {
+    [response, responseText] = await Promise.race([
+      (async (): Promise<[Response, string]> => {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          redirect: "error",
+          headers: {
+            authorization: "Bearer " + apiKey,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.1,
+            // 思考型模型的 reasoning 与正文共用输出预算；不自动重试或提高预算。
+            max_tokens: 16_000,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: systemPrompt({ emitEvents: input.emitEvents !== false, withPeriodEvents: Boolean(input.periodEvents?.length), emitFriendAliases: input.emitFriendAliases === true, withGlobalMemories: Boolean(input.globalMemories?.length) || input.allowGlobalMemory === true }) },
+              { role: "user", content: JSON.stringify(promptInput) },
+            ],
+          }),
+          signal: controller.signal,
+        });
+        return [response, await response.text()];
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`LLM_TIMEOUT: 模型请求超过配置的 ${timeoutMs / 1000} 秒（${inputScale}）。`));
+          controller.abort();
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
   if (Buffer.byteLength(responseText, "utf8") > MAX_RESPONSE_BYTES) {
     throw new Error("LLM_RESPONSE_TOO_LARGE: 模型响应超过大小限制。");
   }
@@ -770,14 +787,28 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
 
   let payload: Record<string, unknown>;
   try {
-    payload = JSON.parse(responseText) as Record<string, unknown>;
+    const envelope = asRecord(JSON.parse(responseText));
+    if (!envelope) throw new Error("not an object");
+    payload = envelope;
   } catch {
-    throw new Error("LLM_INVALID_ENVELOPE: 模型服务没有返回有效 JSON。");
+    throw new Error(`LLM_INVALID_ENVELOPE: 模型服务没有返回有效 JSON（finishReason=unknown, ${inputScale}）。`);
   }
   const choices = Array.isArray(payload.choices) ? payload.choices : [];
   const firstChoice = asRecord(choices[0]);
+  // Provider fields are untrusted: never echo arbitrary finish reasons or model text.
+  const rawFinishReason = firstChoice?.finish_reason;
+  const finishReason = typeof rawFinishReason === "string"
+    && ["stop", "length", "content_filter", "tool_calls", "function_call", "eos_token"].includes(rawFinishReason)
+    ? rawFinishReason : "unknown";
+  const diagnostics = `finishReason=${finishReason}, ${inputScale}`;
+  if (finishReason === "length") {
+    throw new Error(`LLM_OUTPUT_TRUNCATED: 模型输出达到长度上限，未能完整返回（${diagnostics}）。`);
+  }
   const message = asRecord(firstChoice?.message);
   const content = message?.content;
+  if (content == null || (typeof content === "string" && !content.trim())) {
+    throw new Error(`LLM_EMPTY_REPLY: 模型没有返回正文（${diagnostics}）。`);
+  }
   let parsed: unknown;
   try {
     if (typeof content !== "string") throw new Error("content is not a string");
@@ -787,7 +818,7 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
     parsed = parseJsonLoose(content, { expect: "object" });
     if (!parsed) throw new Error("not an object");
   } catch {
-    throw new Error("LLM_INVALID_JSON: 模型输出不是有效 JSON。");
+    throw new Error(`LLM_INVALID_JSON: 模型输出不是有效 JSON（${diagnostics}）。`);
   }
 
   const sourceIds = [...input.messages, ...(input.contextMessages ?? [])].map((message) => message.id);

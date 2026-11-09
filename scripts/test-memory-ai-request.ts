@@ -6,6 +6,7 @@ const originalEnv = {
   apiKey: process.env.LLM_API_KEY,
   baseUrl: process.env.LLM_BASE_URL,
   model: process.env.LLM_MODEL,
+  jobTimeout: process.env.LLM_JOB_TIMEOUT_MS,
 };
 const secretApiKey = "sk-memory-test-secret-must-not-appear-in-body";
 const privateProviderUrl = "https://private-memory-provider.example/v1";
@@ -175,7 +176,86 @@ try {
   );
   assert.equal(fetchCalls, callsBeforeMissingKeyTest, "No network request should be made when resolved connection settings are missing.");
 
-  console.log("Memory AI request tests passed: credential isolation, prompt allow-list, and fail-closed provider-key handling.");
+  const privateModelText = "private-model-output-must-not-leak";
+  const diagnosticInput = {
+    ...input,
+    contextMessages: [{ ...input.messages[0]!, id: "context-1", content: "private-context-must-not-leak" }],
+  };
+  const expectedChars = [...diagnosticInput.messages, ...diagnosticInput.contextMessages]
+    .reduce((total, message) => total + message.content.length, 0);
+  function assertSafeError(error: unknown, code: string, finishReason?: string): boolean {
+    assert(error instanceof Error);
+    assert.match(error.message, new RegExp(`^${code}:`));
+    assert(error.message.includes("inputMessages=3"));
+    assert(error.message.includes(`inputChars=${expectedChars}`));
+    if (finishReason) assert(error.message.includes(`finishReason=${finishReason}`));
+    for (const secret of [secretApiKey, privateProviderUrl, privateModelText,
+      ...diagnosticInput.messages.map((message) => message.content), diagnosticInput.contextMessages[0]!.content]) {
+      assert(!error.message.includes(secret), "Diagnostics must not contain credentials or message/model text.");
+    }
+    return true;
+  }
+  const respond = (content: unknown, finishReason: unknown = "stop") => {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{ finish_reason: finishReason, message: { content } }],
+    }));
+  };
+  for (const content of ["", privateModelText, JSON.stringify(analysis)]) {
+    respond(content, "length");
+    await assert.rejects(analyzeMemoryPeriod(diagnosticInput),
+      (error) => assertSafeError(error, "LLM_OUTPUT_TRUNCATED", "length"));
+  }
+  for (const content of ["", " \n\t", null, undefined]) {
+    respond(content);
+    await assert.rejects(analyzeMemoryPeriod(diagnosticInput),
+      (error) => assertSafeError(error, "LLM_EMPTY_REPLY", "stop"));
+  }
+  for (const finishReason of ["stop", privateModelText, "stop\n" + secretApiKey, "x".repeat(10_000), null]) {
+    respond(privateModelText, finishReason);
+    await assert.rejects(analyzeMemoryPeriod(diagnosticInput),
+      (error) => assertSafeError(error, "LLM_INVALID_JSON", finishReason === "stop" ? "stop" : "unknown"));
+  }
+  for (const envelope of ["not-json-" + privateModelText, "null", "[]"]) {
+    globalThis.fetch = async () => new Response(envelope);
+    await assert.rejects(analyzeMemoryPeriod(diagnosticInput),
+      (error) => assertSafeError(error, "LLM_INVALID_ENVELOPE", "unknown"));
+  }
+  respond("```json\n" + JSON.stringify(analysis) + "\n```");
+  assert.equal((await analyzeMemoryPeriod(diagnosticInput)).analysis.summary, analysis.summary);
+
+  // Mock timers preserve the configured 5-second diagnostic while firing quickly.
+  // Fetch and body deliberately ignore abort: the timeout must bound both phases itself.
+  process.env.LLM_JOB_TIMEOUT_MS = "5000";
+  const originalSetTimeout = globalThis.setTimeout;
+  try {
+    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, _delay?: number, ...args: unknown[]) =>
+      originalSetTimeout(callback, 10, ...args)) as typeof setTimeout;
+    for (const phase of ["fetch", "body"] as const) {
+      let signal: AbortSignal | null | undefined;
+      let bodyStarted = false;
+      globalThis.fetch = async (_url, init) => {
+        signal = init?.signal;
+        if (phase === "fetch") return new Promise<Response>(() => {});
+        const response = new Response("");
+        response.text = async () => {
+          bodyStarted = true;
+          return new Promise<string>(() => {});
+        };
+        return response;
+      };
+      await assert.rejects(analyzeMemoryPeriod(diagnosticInput), (error) => {
+        assertSafeError(error, "LLM_TIMEOUT");
+        assert.match((error as Error).message, /5 秒/u);
+        return true;
+      });
+      assert.equal(signal?.aborted, true, "Timeout must abort the provider request.");
+      assert.equal(bodyStarted, phase === "body");
+    }
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+
+  console.log("Memory AI request tests passed: credential isolation, prompt allow-list, timeout through response body, safe truncation/empty/JSON diagnostics, and fenced JSON.");
 } finally {
   globalThis.fetch = originalFetch;
   if (originalEnv.apiKey === undefined) delete process.env.LLM_API_KEY;
@@ -184,4 +264,6 @@ try {
   else process.env.LLM_BASE_URL = originalEnv.baseUrl;
   if (originalEnv.model === undefined) delete process.env.LLM_MODEL;
   else process.env.LLM_MODEL = originalEnv.model;
+  if (originalEnv.jobTimeout === undefined) delete process.env.LLM_JOB_TIMEOUT_MS;
+  else process.env.LLM_JOB_TIMEOUT_MS = originalEnv.jobTimeout;
 }

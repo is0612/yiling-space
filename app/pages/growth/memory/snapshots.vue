@@ -7,5 +7,5 @@ definePageMeta({
 </script>
 
 <template>
-  <SnapshotsWorkspace growth-mode />
+  <SnapshotsWorkspace />
 </template>

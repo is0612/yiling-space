@@ -48,8 +48,7 @@ onMounted(() => ensureMemoryProgressPolling());
       description="管理她记住的内容、每天发生的事，以及一段时间里的成长总结。"
     />
 
-    <!-- 记忆系统只剩这一个操作入口：成长模式下「忆泡日历」「阶段总结」两页的按钮都已收起，
-         想跑就回这一页点。角色记忆（/memory、/days、/snapshots）不受影响。 -->
+    <!-- 忆泡整理与阶段总结生成统一在总览页操作，子页负责查看和维护内容。 -->
     <section
       class="memory-quickbar"
       aria-label="快捷操作"

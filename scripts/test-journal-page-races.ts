@@ -57,6 +57,7 @@ function harness() {
   const bindings = executable.runInContext(createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
+    useRoute: () => ({ query: {} }),
     ref: (initial: unknown) => {
       let value = initial;
       const target = {} as Ref;

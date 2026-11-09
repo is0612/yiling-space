@@ -39,7 +39,7 @@ type PendingRequest = {
   reject: (error: unknown) => void;
 };
 
-function harness(growthMode = false) {
+function harness() {
   const watchers: Array<{ sources: Ref[]; callback: () => void }> = [];
   const timers = new Map<number, () => void>();
   const requests: PendingRequest[] = [];
@@ -49,7 +49,6 @@ function harness(growthMode = false) {
   const bindings = executable.runInContext(createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
-    defineProps: () => ({ growthMode }),
     ref: (value: unknown) => ({ value }),
     computed: (get: () => unknown) => ({ get value() { return get(); } }),
     watch: (sources: Ref | Ref[], callback: () => void) => watchers.push({ sources: Array.isArray(sources) ? sources : [sources], callback }),
@@ -97,7 +96,6 @@ function harness(growthMode = false) {
   async function finishRoleLoad(roleId: string) {
     take(`/api/characters/${roleId}`).resolve({ id: roleId, name: roleId });
     await flush();
-    take(`/api/characters/${roleId}/snapshots`).resolve([]);
     take(`/api/characters/${roleId}/timeline`).resolve(timeline(roleId));
     await flush();
   }
@@ -136,8 +134,8 @@ function assertDetail(page: ReturnType<typeof harness>, id: string) {
   assert.equal(page.read("memoryEditDialogOpen"), true);
 }
 
-async function growthModeOnlyLoadsMemories() {
-  const page = harness(true);
+async function onlyLoadsMemories() {
+  const page = harness();
   assert.equal(page.read("activeFilter"), "长期记忆", "Growth memory view must default to long-term memories only.");
   const loading = page.call("loadCharacter");
   page.take("/api/characters/role-a").resolve({ id: "role-a", name: "角色 A" });
@@ -356,7 +354,7 @@ async function staleGroup() {
   page.done();
 }
 
-for (const test of [growthModeOnlyLoadsMemories, detailOrder, saveDuringDetailLoad, staleSaveCompletion, roleSwitchDetail, roleSwitchSearch, queryChanges, staleTimeline, staleGroup]) {
+for (const test of [onlyLoadsMemories, detailOrder, saveDuringDetailLoad, staleSaveCompletion, roleSwitchDetail, roleSwitchSearch, queryChanges, staleTimeline, staleGroup]) {
   await test();
   console.log(`PASS ${test.name}`);
 }

@@ -7,5 +7,5 @@ definePageMeta({
 </script>
 
 <template>
-  <MemoryWorkspace growth-mode />
+  <MemoryWorkspace />
 </template>

@@ -7,10 +7,11 @@ definePageMeta({
   middleware: [
     (to) => navigateTo(
       {
-        path: "/memory",
-        query: to.query.c ? { c: String(to.query.c) } : {},
+        path: "/growth/memory/long-term",
+        query: { ...to.query },
+        hash: to.hash,
       },
-      { replace: true },
+      { replace: true, redirectCode: 301 },
     ),
   ],
 });

@@ -26,6 +26,7 @@ definePageMeta({
  * 保存条吸底：这页往下滚两屏才到底，主操作不能跟着滚出视野。
  */
 const route = useRoute();
+const router = useRouter();
 const id = computed(() => String(route.params.id || ""));
 
 const character = ref<Character | null>(null);
@@ -238,14 +239,14 @@ const quotaPercent = computed(() => {
 
 const usageKinds = computed(() => Object.entries(dailyUsage.value?.usage.byKind ?? {}));
 
-/** 两个入口各回各家：角色管理页、角色记忆页 */
-const backTarget = computed(() => {
-  if (route.query.from === "characters") return "/characters";
-  return `/memory?c=${id.value}`;
-});
+/** 两个入口各回各家：角色管理页、成长系统的长期记忆页 */
+const backTarget = computed(() => router.resolve({
+  path: route.query.from === "characters" ? "/characters" : "/growth/memory/long-term",
+  query: { ...route.query, c: id.value },
+}).fullPath);
 const backLabel = computed(() => {
   if (route.query.from === "characters") return "返回角色管理";
-  return "返回角色记忆";
+  return "返回长期记忆";
 });
 
 /**

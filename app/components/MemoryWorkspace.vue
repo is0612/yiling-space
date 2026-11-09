@@ -1,11 +1,8 @@
 <script setup lang="ts">
-import { ArrowRight, ArrowDown, Collection, Files, Search, MagicStick, Delete, Loading } from "@element-plus/icons-vue";
+import { ArrowDown, Collection, Search, Delete } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { type Character, type Snapshot, type TimelineEntry, type TimelineType } from "~/utils/mock-data";
+import { type Character, type TimelineEntry, type TimelineType } from "~/utils/mock-data";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
-
-const props = defineProps<{ growthMode?: boolean }>();
-const isGrowthMode = computed(() => props.growthMode === true);
 
 type MemoryCategory = "FACT" | "PREFERENCE" | "RELATIONSHIP" | "COMMITMENT" | "GOAL" | "EVENT" | "SUMMARY" | "OTHER";
 type MemoryDetail = {
@@ -60,11 +57,9 @@ await useCharacterListData();
  * 没带参数时回退到上次选过的角色，再回退到列表第一个。
  * 选择和 /chat 共用一份（同一个 cookie），换页不会跳角色。
  */
-const { id } = useCharacterSelection(isGrowthMode.value ? "/growth/memory/long-term" : "/memory");
+const { id } = useCharacterSelection("/growth/memory/long-term");
 
 const currentCharacter = ref<Character | null>(null);
-const snapshots = ref<Snapshot[]>([]);
-const snapshotCreating = ref(false);
 const memoryDialogOpen = ref(false);
 const memorySaving = ref(false);
 const draftMemoryCategory = ref<MemoryCategory>("FACT");
@@ -97,8 +92,8 @@ const recycleBinEntries = ref<RecycleBinEntry[]>([]);
 const recycleBinBusyIds = ref<string[]>([]);
 
 /**
- * 群聊记录：群聊挂在角色全局记忆范围下，本来就算她的记忆，但时间线只取记忆与总结
- * （`kinds=memory,snapshot`），原始消息不进这条流，所以页面上看不到。
+ * 群聊记录：群聊挂在角色全局记忆范围下，本来就算她的记忆，但时间线只取长期记忆
+ * （`kinds=memory`），原始消息不进这条流，所以页面上看不到。
  * 这里按群号单独拉一份：左列是群，右边是她和群友的往来。
  */
 type GroupChatGroup = {
@@ -160,16 +155,14 @@ const privateChatNextCursor = ref<PrivateChatCursor>(null);
 const selectedPrivateChat = computed(() => privateChatChats.value.find((chat) => chat.conversationId === privateChatSelectedId.value) ?? null);
 /**
  * 统计带用服务端的全量计数，不用「已载入条数」——
- * 这条流默认只载记忆和总结（不含消息），拿载入数当统计会显示成 0。
+ * 这条流只载长期记忆（不含消息），拿载入数当统计会显示成 0。
  */
 const recordedMessageCount = computed(() => timelineCounts.value.message);
 const recordedEventCount = computed(() => timelineCounts.value.event);
 const commitmentCount = computed(() => timelineEntries.value.filter((entry) => entry.type === "memory" && entry.title === "承诺与约定" && entry.tag === "长期记忆").length);
-/** 记忆 + 忆泡 + 总结的总量 vs 实际载入量：差值为「没载进来的更早记录」 */
+/** 长期记忆的总量 vs 实际载入量：差值为「没载进来的更早记录」 */
 const loadedTotal = computed(() => timelineEntries.value.length);
-const knownTotal = computed(() => isGrowthMode.value
-  ? timelineCounts.value.memory
-  : timelineCounts.value.memory + timelineCounts.value.snapshot + timelineCounts.value.memoryEvent);
+const knownTotal = computed(() => timelineCounts.value.memory);
 const truncated = computed(() => knownTotal.value > loadedTotal.value);
 /**
  * 来源筛选，而不是「渠道」筛选：服务端 timeline 的 channel 里混了两个维度 ——
@@ -208,24 +201,14 @@ const emptyCharacter = computed<Character>(() => ({
   latestSnapshot: "暂无总结",
 }));
 const character = computed<Character>(() => currentCharacter.value ?? emptyCharacter.value);
-/** 待生效的归档周期：接口没返 / 旧缓存里是 undefined 都按「没有改动」处理。 */
-const pendingIntervalDays = computed(() => character.value.pendingIntervalDays ?? null);
-const activeFilter = ref(isGrowthMode.value ? "长期记忆" : "全部记录");
-const visibleFilterOptions = computed(() => isGrowthMode.value
-  ? filterOptions.filter((option) => option.type === "memory")
-  : filterOptions);
+const activeFilter = ref("长期记忆");
 const channelFilter = ref(SOURCE_ALL);
 const query = ref("");
 /**
- * 这页是「记忆中枢」，不是聊天记录查看器：主列表默认只放长期记忆和阶段总结。
+ * 这页是「记忆中枢」，不是聊天记录查看器：主列表只放长期记忆。
  * 对话原文走「群聊记录 / 私聊记录」弹窗，否则聊天一多就会把记忆挤出取数窗口。
  */
-const filterOptions = [
-  { label: "全部记录", type: undefined },
-  { label: "长期记忆", type: "memory" as TimelineType },
-  { label: "忆泡", type: "memoryEvent" as TimelineType },
-  { label: "阶段总结", type: "snapshot" as TimelineType },
-];
+const filterOptions = [{ label: "长期记忆", type: "memory" as TimelineType }];
 /**
  * 排序：最新在最前，直接沿用服务端给的顺序。
  *
@@ -328,30 +311,10 @@ function dayExtractedAt(index: number) {
   return clock ? `上次整理 ${clock}` : "";
 }
 
-/**
- * 今天还没有任何条目时的占位行。
- *
- * 日期头是由条目驱动的：今天还没整理出忆泡，列表里就完全看不到「今天」，
- * 用户会以为页面坏了。这里补一行「今天 · 0 条 · 还没整理」，并指向右上角那个按钮。
- * 只在「全部记录 / 忆泡」两个筛选下出现 —— 看「长期记忆」时提忆泡是噪声。
- */
-const showTodayPlaceholder = computed(() => {
-  if (isGrowthMode.value || !todayKey.value) return false;
-  if (activeFilter.value !== "全部记录" && activeFilter.value !== "忆泡") return false;
-  return !filteredEntries.value.some((entry) => dayKeyOf(entry) === todayKey.value);
-});
-const todayPlaceholderNote = computed(() => {
-  const clock = formatClock(timelineDays.value[todayKey.value]?.extractedAt);
-  return clock ? `上次整理 ${clock}` : "还没整理，点右上角「立即整理忆泡」";
-});
-
-/** 筛选 chip 后面跟随的条数：用服务端全量计数，不是「载入了多少条」 */
+/** 筛选计数使用服务端的长期记忆全量计数。 */
 function countFor(label: string) {
   const type = filterOptions.find((option) => option.label === label)?.type;
-  if (type === "memory") return timelineCounts.value.memory;
-  if (type === "snapshot") return timelineCounts.value.snapshot;
-  if (type === "memoryEvent") return timelineCounts.value.memoryEvent;
-  return knownTotal.value;
+  return type === "memory" ? timelineCounts.value.memory : knownTotal.value;
 }
 
 type TimelineResponse = {
@@ -367,9 +330,9 @@ async function loadTimeline(targetCharacterId = id.value) {
   if (targetCharacterId !== id.value) return;
   timelineLoading.value = true;
   try {
-    // kinds 只取记忆、总结与忆泡：额度全给记忆（400 条），消息不再抢窗口
+    // 只取长期记忆：400 条窗口不混入消息、忆泡与阶段总结。
     const result = await $fetch<TimelineResponse>(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/timeline?kinds=${isGrowthMode.value ? "memory" : "memory,snapshot,memoryEvent"}&limit=400`,
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/timeline?kinds=memory&limit=400`,
     );
     if (seq !== timelineRequestSeq || targetCharacterId !== id.value) return;
     timelineEntries.value = result.entries;
@@ -488,27 +451,12 @@ onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
   characterLoadSeq += 1;
   timelineRequestSeq += 1;
-  snapshotRequestSeq += 1;
   searchRequestSeq += 1;
   recycleBinRequestSeq += 1;
   memoryDetailRequestSeq += 1;
   groupChatRequestSeq += 1;
   privateChatRequestSeq += 1;
 });
-
-let snapshotRequestSeq = 0;
-async function loadSnapshots(targetCharacterId = id.value) {
-  const seq = ++snapshotRequestSeq;
-  if (targetCharacterId !== id.value) return;
-  try {
-    const result = await $fetch<Snapshot[]>(`/api/characters/${encodeURIComponent(targetCharacterId)}/snapshots`);
-    if (seq === snapshotRequestSeq && targetCharacterId === id.value) snapshots.value = result;
-  } catch {
-    if (seq !== snapshotRequestSeq || targetCharacterId !== id.value) return;
-    snapshots.value = [];
-    ElMessage.error("阶段总结加载失败，请确认本地数据库已迁移。");
-  }
-}
 
 let characterLoadSeq = 0;
 async function loadCharacter() {
@@ -517,7 +465,6 @@ async function loadCharacter() {
   // 角色列表为空 / 还没解析出 id 时不要发请求，否则会打出无意义的 404 提示
   if (!requestedCharacterId) {
     currentCharacter.value = null;
-    snapshots.value = [];
     timelineEntries.value = [];
     return;
   }
@@ -525,11 +472,10 @@ async function loadCharacter() {
     const result = await $fetch<Character>(`/api/characters/${encodeURIComponent(requestedCharacterId)}`);
     if (seq !== characterLoadSeq || requestedCharacterId !== id.value) return;
     currentCharacter.value = result;
-    await Promise.all([...(isGrowthMode.value ? [] : [loadSnapshots(requestedCharacterId)]), loadTimeline(requestedCharacterId)]);
+    await loadTimeline(requestedCharacterId);
   } catch {
     if (seq !== characterLoadSeq || requestedCharacterId !== id.value) return;
     currentCharacter.value = null;
-    snapshots.value = [];
     timelineEntries.value = [];
     ElMessage.error("加载角色失败，请确认角色仍存在且本地数据库已初始化。");
   }
@@ -876,163 +822,16 @@ function formatSourceTime(value: string) {
     : value;
 }
 /**
- * 和阶段总结页的「手动存档」是同一个动作（同一个 POST），所以名词、确认文案保持一致。
- * 以前这里叫「手动归档」且没有二次确认 —— 名字像「立刻启动自动归档」，误点一次就多一份版本。
- */
-async function manualSnapshot() {
-  if (snapshotCreating.value) return;
-  try {
-    await ElMessageBox.confirm(
-      "只把当下这一刻拍成快照：当前周期内的消息来源 + 全部生效中的长期记忆。不调用模型，也不会触发或替代自动归档。自动归档由调度器在周期结束时排任务、调模型提炼。",
-      "手动存档（不调用模型）",
-      { confirmButtonText: "存档", cancelButtonText: "取消", type: "info" },
-    );
-  } catch {
-    return;
-  }
-
-  snapshotCreating.value = true;
-  try {
-    await $fetch(`/api/characters/${encodeURIComponent(id.value)}/snapshots`, { method: "POST" });
-    await Promise.all([loadSnapshots(), loadTimeline()]);
-    ElMessage.success("已存档。已关联周期内的消息/事件与长期记忆来源；没有调用模型。");
-  } catch (error) {
-    const message = error && typeof error === "object" && "statusMessage" in error
-      ? String(error.statusMessage)
-      : "归档保存失败，请检查数据库连接。";
-    ElMessage.error(message);
-  } finally {
-    snapshotCreating.value = false;
-  }
-}
-
-/**
- * 立即 AI 归档：手动触发「自动归档」跑一次。
- *
- * 本地没起调度器时，周期任务永远不会自己来；这个入口走的是和自动归档同一套队列与幂等键，
- * 所以它不会另造一份总结，只是把「现在」当成周期边界跑一遍。
- */
-const aiArchiving = ref(false);
-async function runAiArchive() {
-  if (aiArchiving.value) return;
-  try {
-    await ElMessageBox.confirm(
-      "现在就跑一次自动归档：调模型提炼最近一个周期的对话，生成阶段总结，并按结果新增 / 更新长期记忆。会产生模型调用费用。",
-      "立即 AI 归档",
-      { confirmButtonText: "开始归档", cancelButtonText: "取消", type: "warning" },
-    );
-  } catch {
-    return;
-  }
-
-  aiArchiving.value = true;
-  try {
-    const result = await $fetch<{
-      queued: string[];
-      skipped: string[];
-      processed: Array<{ status: string; message: string }>;
-      pending: number;
-      advancedTo: string | null;
-      /** 执行超过请求里的等待窗口，已转后台；进度看右下角面板。 */
-      processing?: boolean;
-    }>(`/api/characters/${encodeURIComponent(id.value)}/snapshots/generate`, { method: "POST" });
-
-    void refreshMemoryProgress();
-    await Promise.all([loadSnapshots(), loadTimeline()]);
-
-    const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
-    const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
-    if (result.processing) {
-      ElMessage.info("已开始归档，进度在右下角；切页面、刷新都不会中断。");
-    } else if (failed) {
-      // 失败时周期边界不会推进，这段数据下次还能补上，所以要说清楚去重试而不是重来
-      ElMessage.warning(`${failed.message}（这次没有推进周期，去「后台任务」点重试即可）`);
-    } else if (result.pending > 0) {
-      ElMessage.warning(`还有 ${result.pending} 个归档任务在队列里没跑完，去「后台任务」看一下。`);
-    } else if (ok.length) {
-      ElMessage.success(ok.map((item) => item.message).join("；"));
-    } else if (result.skipped.length) {
-      ElMessage.info(result.skipped.join("；"));
-    } else {
-      ElMessage.info("任务已排队，但没有可执行的 worker；启动 worker 后会继续处理。");
-    }
-  } catch (error) {
-    const message = error && typeof error === "object" && "statusMessage" in error
-      ? String(error.statusMessage)
-      : "归档失败，请检查模型配置与数据库连接。";
-    ElMessage.error(message);
-  } finally {
-    aiArchiving.value = false;
-  }
-}
-
-/**
  * 归档/整理转到后台跑完之后，把列表刷一遍。
  *
  * 面板轮询一直在跑（它读的是任务行），这里只是接住「某个任务刚结束」这个信号：
- * 不刷新的话，页面上的阶段总结和忆泡会停在点击那一刻，看起来像没生效。
+ * 归档可能更新长期记忆，完成后同步时间线内容。
  */
 const { lastFinished } = useMemoryProgress();
 watch(lastFinished, (job) => {
   if (!job || job.characterId !== id.value) return;
-  if (!isGrowthMode.value) void loadSnapshots();
   void loadTimeline();
 });
-
-/**
- * 立即整理忆泡：昨天收口 + 今天增量。
- *
- * 调度器每小时才跑一次，用户点按钮时不该等；服务端会排任务并当场开始执行。
- * 超过几秒还没跑完就先回响应、执行留在后台，所以这里要能接住 `processing`：
- * 结果由右下角面板展示，而不是这一句 toast。
- */
-const eventExtracting = ref(false);
-async function runEventExtraction() {
-  if (eventExtracting.value) return;
-  eventExtracting.value = true;
-  try {
-    const result = await $fetch<{
-      queued: string[];
-      processed: Array<{ status: string; message: string }>;
-      /** 没排任何任务时的原因：上一次还在跑，还是确实没有新对话。 */
-      notice?: "queued" | "running" | "no-new-messages";
-      /** 执行超过请求里的等待窗口，已转后台；进度看右下角面板。 */
-      processing?: boolean;
-    }>(`/api/characters/${encodeURIComponent(id.value)}/memory-events/extract`, { method: "POST" });
-    void refreshMemoryProgress();
-    await loadTimeline();
-    const failed = result.processed.find((item) => item.status !== "SUCCEEDED" && item.status !== "SKIPPED");
-    if (result.processing) {
-      /**
-       * 服务端只等了几秒就把请求放回来了，执行还在后台跑。
-       * 这里不要再说「已排队但没有 worker」—— 那是另一回事。
-       */
-      ElMessage.info(`已开始整理 ${result.queued.length} 段，进度在右下角；切页面、刷新都不会中断。`);
-    } else if (result.queued.length === 0) {
-      /**
-       * 之前这里一律说「昨天和今天还没有对话」。可实际上「上次还在跑」也会走到这一支，
-       * 而上一次失败时更冤 —— 对话明明在，用户却被告知没什么可整理的。
-       * 失败/取消现在会直接重排并当场重跑，走到这里只剩两种真实原因。
-       */
-      ElMessage.info(result.notice === "running"
-        ? "上一次整理正在跑，等它结束再点一次。"
-        : "昨天和今天没有可整理的新对话：已经整理过的不会重复跑一遍。");
-    } else if (failed) {
-      ElMessage.warning(failed.message);
-    } else if (result.processed.length === 0) {
-      ElMessage.info("已排队，但当前没有可执行的 worker；启动 worker 后会继续处理。");
-    } else {
-      ElMessage.success(result.processed.map((item) => item.message).join("；"));
-    }
-  } catch (error) {
-    const message = error && typeof error === "object" && "statusMessage" in error
-      ? String(error.statusMessage)
-      : "整理忆泡失败，请检查本地开发服务器日志。";
-    ElMessage.error(message);
-  } finally {
-    eventExtracting.value = false;
-  }
-}
 
 /**
  * 群聊记录一次只取一个群的消息，切换群时重拉；不传 conversationId 时服务端回最近活跃的那个群。
@@ -1188,13 +987,11 @@ watch(id, () => {
   // Invalidate every in-flight read and discard data tied to the previous character.
   characterLoadSeq += 1;
   timelineRequestSeq += 1;
-  snapshotRequestSeq += 1;
   recycleBinRequestSeq += 1;
   memoryDetailRequestSeq += 1;
   privateChatRequestSeq += 1;
   groupChatRequestSeq += 1;
   currentCharacter.value = null;
-  snapshots.value = [];
   timelineEntries.value = [];
   timelineCounts.value = { message: 0, event: 0, memory: 0, snapshot: 0, memoryEvent: 0 };
   timelineDays.value = {};
@@ -1228,10 +1025,10 @@ watch(id, () => {
 
 <template>
   <div class="page-wrap">
-    <MemorySectionNavigation v-if="isGrowthMode" active="long-term" />
+    <MemorySectionNavigation active="long-term" />
     <PageHeader
-      :eyebrow="isGrowthMode ? '成长系统 / 记忆系统' : '工作空间 / 角色记忆'"
-      :description="isGrowthMode ? '查看、检索和整理她的长期记忆，并追溯每条记忆的来源。' : '通过左下角切换角色，查看它的对话、阶段总结与长期记忆。'"
+      eyebrow="成长系统 / 记忆系统"
+      description="查看、检索和整理她的长期记忆，并追溯每条记忆的来源。"
     >
       <template #actions>
         <button
@@ -1248,43 +1045,6 @@ watch(id, () => {
         >
           新增长期记忆
         </button>
-        <button
-          v-if="!isGrowthMode"
-          type="button"
-          class="btn"
-          :disabled="eventExtracting"
-          :aria-busy="eventExtracting"
-          @click="runEventExtraction"
-        >
-          <el-icon
-            v-if="eventExtracting"
-            class="is-loading"
-          >
-            <Loading />
-          </el-icon>
-          <el-icon v-else>
-            <MagicStick />
-          </el-icon>{{ eventExtracting ? "整理中…" : "立即整理忆泡" }}
-        </button>
-        <button
-          v-if="!isGrowthMode"
-          type="button"
-          class="btn primary"
-          :disabled="aiArchiving || !id"
-          title="等同于自动归档跑一次：排队、调模型、当场执行"
-          @click="runAiArchive"
-        >
-          <el-icon><MagicStick /></el-icon>{{ aiArchiving ? "归档中…" : "立即 AI 归档" }}
-        </button>
-        <button
-          v-if="!isGrowthMode"
-          type="button"
-          class="btn"
-          :disabled="snapshotCreating"
-          @click="manualSnapshot"
-        >
-          <el-icon><Files /></el-icon>{{ snapshotCreating ? "存档中…" : "手动存档（不调模型）" }}
-        </button>
       </template>
     </PageHeader>
 
@@ -1296,27 +1056,6 @@ watch(id, () => {
           <span class="sb-k">长期记忆</span>
           <span class="sb-v">{{ character.memoryCount }}<small>条</small></span>
           <span class="sb-f">承诺与约定 {{ commitmentCount }} 项</span>
-        </div>
-        <div v-if="!isGrowthMode" class="sb-cell">
-          <span class="sb-k">归档周期</span>
-          <!-- 主数字只放「正在生效」的周期。设置页选「下一个周期」保存后，
-               库里是 active=旧值 + pending=新值，这里再拿新值当主数字就会
-               和实际排期对不上。待生效的改动跟在脚注里说清楚。 -->
-          <span class="sb-v">{{ character.intervalDays }}<small>天</small></span>
-          <span class="sb-f sb-f-wrap">
-            <template v-if="pendingIntervalDays !== null">
-              下一次 {{ character.nextSnapshot }} 归档，之后改为 {{ pendingIntervalDays }} 天 ·
-            </template>
-            <template v-else>
-              下一次 {{ character.nextSnapshot }} ·
-            </template>
-            <button
-              type="button"
-              class="ms-link"
-              :disabled="!character.id"
-              @click="navigateTo('/characters/' + character.id + '/settings/memory')"
-            >调整</button>
-          </span>
         </div>
         <div class="sb-cell">
           <span class="sb-k">已记录对话</span>
@@ -1344,10 +1083,10 @@ watch(id, () => {
         </div>
       </div>
 
-      <div class="panel-grid" :class="{ 'panel-grid-growth': isGrowthMode }">
+      <div class="panel-grid panel-grid-growth">
         <section>
           <div class="sec-h">
-            <h2>{{ isSearching ? (isGrowthMode ? "长期记忆检索" : "记忆检索") : (isGrowthMode ? "长期记忆时间线" : "角色记忆时间线") }}</h2>
+            <h2>{{ isSearching ? "长期记忆检索" : "长期记忆时间线" }}</h2>
             <span class="sub">{{ isSearching ? searchTotal + " 条命中" : filteredEntries.length + "/" + timelineEntries.length + " 条" }}</span>
             <button
               v-if="isSearching"
@@ -1364,7 +1103,7 @@ watch(id, () => {
               class="filters"
             >
               <button
-                v-for="option in visibleFilterOptions"
+                v-for="option in filterOptions"
                 :key="option.label"
                 type="button"
                 class="chip"
@@ -1505,13 +1244,6 @@ watch(id, () => {
                 正在加载已保存的时间线记录……
               </div>
               <template v-else>
-                <div
-                  v-if="showTodayPlaceholder"
-                  class="timeline-day timeline-day-empty"
-                >
-                  <span class="timeline-day-label">今天 · 0 条</span>
-                  <span class="timeline-day-meta">{{ todayPlaceholderNote }}</span>
-                </div>
                 <template
                   v-for="(entry, index) in pagedEntries"
                   :key="entry.id"
@@ -1636,42 +1368,6 @@ watch(id, () => {
             </div>
           </div>
         </section>
-
-        <aside v-if="!isGrowthMode" class="side-col">
-          <div class="sec-h">
-            <h2>最近归档</h2>
-            <span class="sub">{{ snapshots.length }} 份</span>
-            <button
-              type="button"
-              class="more"
-              @click="navigateTo('/snapshots?c=' + character.id)"
-            >
-              全部<el-icon><ArrowRight /></el-icon>
-            </button>
-          </div>
-          <div class="card snap-card">
-            <NuxtLink
-              v-for="snapshot in snapshots.slice(0, 2)"
-              :key="snapshot.id"
-              :to="'/snapshots?c=' + character.id"
-              class="snap-row"
-            >
-              <span class="snap-top">
-                <span>{{ snapshot.kind === "MANUAL" ? "手动存档" : "第 " + snapshot.number + " 份阶段总结" }}</span>
-                <span class="muted-note">v{{ snapshot.version }}</span>
-              </span>
-              <span class="snap-sum">{{ snapshot.summary }}</span>
-            </NuxtLink>
-            <div
-              v-if="!snapshots.length"
-              class="card-empty"
-            >
-              <el-icon><Files /></el-icon>
-              <span>还没有保存的总结</span>
-              <span>生成一份阶段总结，或等周期 Worker 跑完，这里会出现版本记录</span>
-            </div>
-          </div>
-        </aside>
       </div>
     </template>
 
@@ -2097,7 +1793,7 @@ watch(id, () => {
 /* 「已记录对话」的链接多了一个：小屏不能再 nowrap，否则「私聊记录」会被整段省略 */
 .sb-f-wrap{overflow:visible;white-space:normal;text-overflow:clip;line-height:1.9}
 
-/* 时间线下面两栏：左时间线 + 右角色栏，比例与概览页一致 */
+/* 长期记忆时间线布局。 */
 .panel-grid{margin-top:0}
 
 /* ── 时间线卡片 ─────────────────────────────────────── */
@@ -2156,18 +1852,6 @@ watch(id, () => {
 .timeline-marker.pill-amber{background:var(--amber-soft);color:#8f5c05}
 .timeline-marker.pill-gray{background:var(--surface-3);color:var(--text-2)}
 
-/* ── 右栏 ──────────────────────────────────────────── */
-/* 右栏现在只剩「最近归档」一块，跟着滚，别在下面留一大片空白 */
-.side-col{position:sticky;top:72px;align-self:start}
-
-/* ── 最近归档 ──────────────────────────────────────── */
-.snap-card{padding:6px}
-.snap-row{display:block;border-radius:8px;padding:10px 12px;transition:background .14s var(--ease)}
-.snap-row + .snap-row{margin-top:2px}
-.snap-row:hover{background:var(--surface-2)}
-.snap-top{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--text-2);font-size:12px;font-weight:600}
-.snap-sum{display:-webkit-box;overflow:hidden;margin-top:5px;color:var(--dim);font-size:12px;line-height:1.7;-webkit-box-orient:vertical;-webkit-line-clamp:2}
-
 /* ── 回收站弹窗 ─────────────────────────────────────── */
 .recycle-intro{margin:0 0 14px;color:var(--dim);font-size:12px;line-height:1.8}
 .recycle-list{display:flex;flex-direction:column;gap:10px;max-height:55vh;overflow:auto}
@@ -2204,8 +1888,6 @@ watch(id, () => {
 .gc-time{color:var(--dim);font-size:12px}
 .gc-text{margin:0;color:var(--text-2);font-size:13px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}
 
-/* 单列时右栏不再吸顶，否则会跟着页面滚到内容之外 */
-@media(max-width:1150px){.side-col{position:static}}
 @media(max-width:640px){
   .tl-card{padding:12px 14px 8px}
   .tl-select{width:100%}
@@ -2215,7 +1897,6 @@ watch(id, () => {
   .gc-item{flex:0 0 150px}
   .gc-msgs{max-height:52vh}
 }
-
 
 /* 成长系统的长期记忆视图不显示阶段总结侧栏，主列表使用完整宽度。 */
 .panel-grid-growth { grid-template-columns: minmax(0, 1fr); }

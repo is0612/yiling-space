@@ -16,6 +16,7 @@ definePageMeta({
  * 两份各自版本、各自编辑/重写；手账的「一句」摘自某一版日记。
  */
 await useCharacterListData();
+const route = useRoute();
 const { id } = useCharacterSelection("/journal");
 const requestFetch = useRequestFetch();
 
@@ -877,7 +878,7 @@ await loadList();
             <footer class="journal-foot journal-foot-cross">
               <NuxtLink
                 class="btn-link"
-                :to="{ path: '/days', query: { c: id } }"
+                :to="{ path: '/growth/memory/events', query: { ...route.query, c: id } }"
               >
                 去看那天的忆泡
               </NuxtLink>

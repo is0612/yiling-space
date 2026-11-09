@@ -25,7 +25,13 @@ type MemorySettings = {
 };
 
 const route = useRoute();
+const router = useRouter();
 const id = computed(() => String(route.params.id || ""));
+const backTarget = computed(() => router.resolve({
+  path: route.query.from === "characters" ? "/characters" : "/growth/memory/long-term",
+  query: { ...route.query, c: id.value },
+}).fullPath);
+const backLabel = computed(() => route.query.from === "characters" ? "返回角色管理" : "返回长期记忆");
 const character = ref<Character>({ ...initialCharacters[0]!, id: "", name: "角色加载中" });
 /**
  * 归档间隔的边界：默认 3 天，最多 8 天（2026-11-03 从 1–365 收紧）。
@@ -258,8 +264,8 @@ watch(id, () => void loadSettings());
     <PageHeader
       :eyebrow="'角色管理 / ' + character.name + ' / 记忆设置'"
       description="控制角色多久归档一次阶段记忆，以及要不要自动整理忆泡。设置保存到 PostgreSQL，由 Scheduler 生成到期任务，再由 Worker 调用角色模型完成 AI 提炼。"
-      :back-to="'/memory?c=' + character.id"
-      back-label="返回角色记忆"
+      :back-to="backTarget"
+      :back-label="backLabel"
     />
 
     <div class="settings-grid">
@@ -406,7 +412,7 @@ watch(id, () => void loadSettings());
             <div class="toggle-copy">
               <strong>自动生成阶段总结与忆泡</strong><p class="form-help">
                 这一项同时管两件事：按周期生成阶段总结，按天整理忆泡。关闭后旧归档与旧忆泡全部保留，
-                阶段总结不再自动生成，忆泡只在角色记忆页手动点「立即整理忆泡」时生成；日记与手账不受影响。
+                阶段总结不再自动生成，忆泡只在「成长系统 → 记忆系统」总览手动点「整理忆泡」时生成；日记与手账不受影响。
                 保存为关闭时，已经排队但还没开始的那类任务会一并作废（正在跑的那一次会跑完）。
               </p>
             </div><el-switch v-model="autoSnapshot" />
@@ -452,7 +458,7 @@ watch(id, () => void loadSettings());
             <span class="rule-number">03</span><div><strong>时区影响计划时间</strong><p>计划会基于角色设定的时区和启用锚点计算。</p></div>
           </div>
           <div class="rule-item">
-            <span class="rule-number">04</span><div><strong>忆泡按天整理</strong><p>忆泡整理的是「昨天发生了什么」，不等归档周期；它和阶段总结共用下面那个「自动生成」开关，关掉后只能手动点「立即整理忆泡」。</p></div>
+            <span class="rule-number">04</span><div><strong>忆泡按天整理</strong><p>忆泡整理的是「昨天发生了什么」，不等归档周期；它和阶段总结共用上面的「自动生成」开关，关掉后只能在「成长系统 → 记忆系统」总览手动点「整理忆泡」。</p></div>
           </div>
         </section>
         <section class="surface panel side-panel">

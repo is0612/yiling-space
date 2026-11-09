@@ -48,11 +48,11 @@ function harness() {
   const requests: PendingRequest[] = [];
   const errors: string[] = [];
   const infos: string[] = [];
-  let progressRefreshes = 0;
   const warnings: string[] = [];
   const successes: string[] = [];
   let roleValue = "role-a";
   const role = {} as Ref;
+  const lastFinished: Ref = { value: null };
   function notify(changed: Ref) {
     for (const watcher of watchers) {
       if (!watcher.sources.includes(changed)) continue;
@@ -78,7 +78,6 @@ function harness() {
   const context = createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
-    defineProps: () => ({ growthMode: false }),
     ref: (initial: unknown) => {
       let value = initial;
       const result = {} as Ref;
@@ -101,8 +100,7 @@ function harness() {
     onBeforeUnmount: (callback: () => void) => { unmount = callback; },
     useCharacterListData: async () => {},
     useCharacterSelection: () => ({ id: role }),
-    useMemoryProgress: () => ({ lastFinished: { value: null } }),
-    refreshMemoryProgress: async () => { progressRefreshes += 1; return []; },
+    useMemoryProgress: () => ({ lastFinished }),
     useCharacterList: () => ({ value: [{ id: "role-a", name: "角色 A" }, { id: "role-b", name: "角色 B" }] }),
     URLSearchParams,
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
@@ -151,7 +149,7 @@ function harness() {
     assert.equal(requests.length, 0, `unsettled requests: ${requests.map((request) => request.url).join(", ")}`);
     assert.equal(errors.length, 0, `unexpected error notifications: ${errors.join(", ")}`);
   }
-  return { read, set, call, take, tickSearch, timers, errors, warnings, successes, infos, get progressRefreshes() { return progressRefreshes; }, finish, unmount: () => unmount?.() };
+  return { finishJob: (characterId: string) => { lastFinished.value = { characterId }; notify(lastFinished); }, read, set, call, take, tickSearch, timers, errors, warnings, successes, infos, finish, unmount: () => unmount?.() };
 }
 
 function day(key: string) {
@@ -303,28 +301,22 @@ async function unmountInvalidatesRequests() {
   page.finish();
 }
 
-async function eventExtractionRefreshesCalendar() {
+async function finishedJobRefreshesCalendar() {
   const page = harness();
-  const pending = page.call("runEventExtraction");
-  const request = page.take("/api/characters/role-a/memory-events/extract", undefined, "POST");
-  request.resolve({
-    queued: ["conversation-a"],
-    processed: [{ status: "SUCCEEDED", message: "整理完成" }],
-  });
-  await flushMicrotasks();
-  assert.equal(page.progressRefreshes, 1, "整理任务提交后应刷新全局进度");
+  page.finishJob("role-b");
+  page.finish(); // Another character's finished job must not refresh this calendar.
+  page.finishJob("role-a");
   const daysRequest = page.take("/api/characters/role-a/days");
   daysRequest.resolve(daysResult("2026-11-08"));
   await flushMicrotasks();
   const detailRequest = page.take("/api/characters/role-a/days/2026-11-08");
   detailRequest.resolve(detailResult("2026-11-08"));
-  await pending;
+  await flushMicrotasks();
   assert.deepEqual(page.read("days"), [day("2026-11-08")], "整理结束后应刷新忆泡日历");
-  assert.deepEqual(page.successes, ["整理完成"]);
   page.finish();
 }
 
-for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests, eventExtractionRefreshesCalendar]) {
+for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests, finishedJobRefreshesCalendar]) {
   await test();
   console.log(`PASS ${test.name}`);
 }

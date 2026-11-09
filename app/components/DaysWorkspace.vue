@@ -11,11 +11,9 @@ import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
  * 数据源是 `memory_event_days`（整理进度）+ `memory_events`（当天的忆泡），
  * 不是从时间线反推的 —— 这样「今天还没整理」也能作为一行出现。
  */
-const props = defineProps<{ growthMode?: boolean }>();
-const isGrowthMode = computed(() => props.growthMode === true);
 
 await useCharacterListData();
-const { id } = useCharacterSelection(isGrowthMode.value ? "/growth/memory/events" : "/days");
+const { id } = useCharacterSelection("/growth/memory/events");
 
 type DayRow = {
   dayKey: string;
@@ -297,50 +295,6 @@ async function loadDetail(dayKey: string, targetCharacterId = id.value, page = e
   }
 }
 
-/**
- * 立即整理忆泡：沿用记忆工作区的提取接口与后台任务机制。
- * 任务超时转后台后由全局进度面板继续展示；完成时刷新当前日历。
- */
-const eventExtracting = ref(false);
-async function runEventExtraction() {
-  const targetCharacterId = id.value;
-  if (!targetCharacterId || eventExtracting.value) return;
-  eventExtracting.value = true;
-  try {
-    const result = await $fetch<{
-      queued: string[];
-      processed: Array<{ status: string; message: string }>;
-      notice?: "queued" | "running" | "no-new-messages";
-      processing?: boolean;
-    }>(`/api/characters/${encodeURIComponent(targetCharacterId)}/memory-events/extract`, { method: "POST" });
-    void refreshMemoryProgress();
-    if (targetCharacterId !== id.value) return;
-    await loadDays(targetCharacterId);
-    const failed = result.processed.find((item) => item.status !== "SUCCEEDED" && item.status !== "SKIPPED");
-    if (result.processing) {
-      ElMessage.info(`已开始整理 ${result.queued.length} 段，进度在右下角；切页面、刷新都不会中断。`);
-    } else if (result.queued.length === 0) {
-      ElMessage.info(result.notice === "running"
-        ? "上一次整理正在跑，等它结束再点一次。"
-        : "昨天和今天没有可整理的新对话：已经整理过的不会重复跑一遍。");
-    } else if (failed) {
-      ElMessage.warning(failed.message);
-    } else if (result.processed.length === 0) {
-      ElMessage.info("已排队，但当前没有可执行的 worker；启动 worker 后会继续处理。");
-    } else {
-      ElMessage.success(result.processed.map((item) => item.message).join("；"));
-    }
-  } catch (error) {
-    if (targetCharacterId !== id.value) return;
-    const message = error && typeof error === "object" && "statusMessage" in error
-      ? String(error.statusMessage)
-      : "整理忆泡失败，请检查本地开发服务器日志。";
-    ElMessage.error(message);
-  } finally {
-    eventExtracting.value = false;
-  }
-}
-
 const { lastFinished } = useMemoryProgress();
 watch(lastFinished, (job) => {
   if (!job || job.characterId !== id.value) return;
@@ -409,28 +363,12 @@ await loadDays();
 <template>
   <div class="page-wrap">
     <MemorySectionNavigation
-      v-if="isGrowthMode"
       active="events"
     />
     <PageHeader
-      :eyebrow="isGrowthMode ? '成长系统 / 记忆系统' : '工作空间 / 角色记忆'"
+      eyebrow="成长系统 / 记忆系统"
       description="一天一行，点开看那天发生了什么。忆泡是整理过的事件，原文是当时的对话。"
-    >
-      <template #actions>
-        <!-- 成长模式不再放这个按钮：记忆系统的整理入口统一收到总览页，
-             一页点完，不用在两个子页之间找。角色记忆（/days）保持原样。 -->
-        <button
-          v-if="!isGrowthMode"
-          type="button"
-          class="btn primary"
-          :disabled="eventExtracting || !id"
-          :aria-busy="eventExtracting"
-          @click="runEventExtraction"
-        >
-          {{ eventExtracting ? "整理中…" : "立即整理忆泡" }}
-        </button>
-      </template>
-    </PageHeader>
+    />
 
     <div
       v-if="!currentCharacter"
@@ -473,9 +411,7 @@ await loadDays();
           v-else-if="!days.length"
           class="muted-note day-empty"
         >
-          {{ isGrowthMode
-            ? "还没有整理过任何一天。到「记忆系统总览」点「整理忆泡」开始整理。"
-            : "还没有整理过任何一天。点击上方「立即整理忆泡」开始整理。" }}
+          还没有整理过任何一天。到「记忆系统总览」点「整理忆泡」开始整理。
         </div>
         <button
           v-for="day in days"

@@ -8,8 +8,6 @@ import {
   ChatDotRound,
   Collection,
   DataAnalysis,
-  Cpu,
-  Calendar,
   ChatLineRound,
   DataBoard,
   MagicStick,
@@ -23,7 +21,6 @@ import {
   User,
   UserFilled,
   VideoPlay,
-  Notebook,
   Reading,
 } from "@element-plus/icons-vue";
 import { readTopbarHeading, type TopbarHeading } from "~/utils/topbar";
@@ -105,28 +102,10 @@ const workspaceNavigation: NavigationItem[] = [
   { key: "home", label: "总览", href: "/", icon: DataBoard },
   { key: "characters", label: "角色管理", href: "/characters", icon: User },
   {
-    key: "memory",
-    label: "角色记忆",
-    href: "/memory",
-    icon: Cpu,
-  },
-  {
-    key: "days",
-    label: "忆泡日历",
-    href: "/days",
-    icon: Notebook,
-  },
-  {
     key: "journal",
     label: "日记手账",
     href: "/journal",
     icon: Reading,
-  },
-  {
-    key: "snapshots",
-    label: "阶段总结",
-    href: "/snapshots",
-    icon: Calendar,
   },
 ];
 
@@ -193,10 +172,6 @@ function isActive(item: NavigationItem) {
       return path === "/";
     case "characters":
       return path === "/characters";
-    case "memory":
-      return path === "/memory" || /^\/characters\/[^/]+\/settings\/memory$/.test(path);
-    case "snapshots":
-      return path === "/snapshots";
     case "bili":
       return path === "/bili" || path.startsWith("/bili/");
     default:

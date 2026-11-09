@@ -33,6 +33,7 @@ definePageMeta({
   topbar: { title: "你的 AI 角色" },
 });
 
+const route = useRoute();
 const characterOperations = createCharacterOperationGuard();
 
 /**
@@ -564,15 +565,18 @@ function runCharacterCommand(command: string) {
           <div class="detail-actions">
             <el-button
               type="primary"
-              @click="navigateTo(`/memory?c=${selected.id}`)"
+              @click="navigateTo({ path: '/growth/memory/long-term', query: { ...route.query, c: selected.id } })"
             >
-              <el-icon><Collection /></el-icon>角色记忆
+              <el-icon><Collection /></el-icon>长期记忆
             </el-button>
             <el-button @click="openProfile(selected)">
               <el-icon><Edit /></el-icon>编辑资料
             </el-button>
             <el-button @click="navigateTo(`/characters/${selected.id}/settings/model?from=characters`)">
               <el-icon><Cpu /></el-icon>模型设置
+            </el-button>
+            <el-button @click="navigateTo({ path: `/characters/${selected.id}/settings/memory`, query: { ...route.query, c: selected.id, from: 'characters' } })">
+              <el-icon><Calendar /></el-icon>记忆设置
             </el-button>
             <el-button @click="navigateTo(`/characters/${selected.id}/settings/stickers`)">
               <el-icon><Picture /></el-icon>表情包

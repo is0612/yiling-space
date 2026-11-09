@@ -5,5 +5,5 @@ definePageMeta({
 </script>
 
 <template>
-  <DaysWorkspace growth-mode />
+  <DaysWorkspace />
 </template>

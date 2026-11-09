@@ -1,27 +1,16 @@
 <script setup lang="ts">
-import { ArrowDown, Calendar, Files, MagicStick, Refresh, Search } from "@element-plus/icons-vue";
+import { ArrowDown, Calendar, Files, Refresh, Search } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character, Snapshot, SnapshotAnalysis, SnapshotSourceMessage } from "~/utils/mock-data";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
 
-const props = defineProps<{ growthMode?: boolean }>();
-const isGrowthMode = computed(() => props.growthMode === true);
-
-/**
- * 页头说明跟着模式走。
- *
- * 成长模式下「立即 AI 归档」按钮已经移到记忆系统总览，这里再写「点右上角按钮手动跑一次」
- * 就是指向一个不存在的按钮 —— 说明要和页面上真实存在的东西对上。
- */
-const pageDescription = computed(() => (isGrowthMode.value
-  ? "自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；想现在跑一次，到「记忆系统总览」点「阶段总结」。手动存档：只把当下这一刻拍成快照，不调模型。"
-  : "自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；本地没起调度器时，点「立即 AI 归档」手动跑一次。手动存档：只把当下这一刻拍成快照，不调模型。"));
+const pageDescription = "自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；想现在跑一次，到「记忆系统总览」点「阶段总结」。手动存档：只把当下这一刻拍成快照，不调模型。";
 
 const characters = useCharacterList();
 await useCharacterListData();
 
-/** 菜单页：当前角色由 ?c= 决定，选择和 /memory 共用一份 cookie */
-const { id } = useCharacterSelection(isGrowthMode.value ? "/growth/memory/snapshots" : "/snapshots");
+/** 菜单页：当前角色由 ?c= 决定，与其他工作区共用角色选择 cookie */
+const { id } = useCharacterSelection("/growth/memory/snapshots");
 
 /** 头像 / 状态 / 归档周期都在角色列表里，不必再单独拉一次角色档案 */
 const current = computed<Character | null>(
@@ -45,7 +34,6 @@ const sourcePage = ref(1);
 const sourcePageSize = ref(10);
 const sourceListEl = ref<HTMLElement | null>(null);
 const creating = ref(false);
-const aiArchiving = ref(false);
 const regeneratingId = ref<string | null>(null);
 const aiRegeneratingId = ref<string | null>(null);
 let listRequest = 0;
@@ -73,7 +61,6 @@ function resetCharacterPage() {
   items.value = [];
   applyDetail(null);
   creating.value = false;
-  aiArchiving.value = false;
   regeneratingId.value = null;
   aiRegeneratingId.value = null;
   reviewingKey.value = "";
@@ -91,20 +78,13 @@ const autoCount = computed(() => items.value.filter((item) => item.kind !== "MAN
 const manualCount = computed(() => items.value.length - autoCount.value);
 const hasFilters = computed(() => Boolean(query.value) || statusFilter.value !== "全部版本状态");
 
-/**
- * 列表为空时说什么。
- *
- * 成长模式下「立即 AI 归档」按钮已经收进记忆系统总览，这里再写「点立即 AI 归档」
- * 就是让用户找一个不存在的按钮 —— 两种模式分开说。
- */
+/** 空列表提示指向总览页的阶段总结操作。 */
 const emptyListText = computed(() => {
   if (hasFilters.value) return "没有符合条件的阶段总结，换个词或把筛选切回全部。";
   if (manualCount.value && !showManual.value) {
     return `这里还没有 AI 总结。另有 ${manualCount.value} 份手动存档被收起，点上面的「手动存档」可以展开。`;
   }
-  return isGrowthMode.value
-    ? "还没有归档过。到「记忆系统总览」点「阶段总结」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。"
-    : "还没有归档过。点「立即 AI 归档」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。";
+  return "还没有归档过。到「记忆系统总览」点「阶段总结」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。";
 });
 
 const sourceTotal = computed(() => detail.value?.sourceMessages?.length || 0);
@@ -329,68 +309,6 @@ async function reviewChange(changeIndex: number, decision: "ACCEPT" | "IGNORE", 
 }
 
 /**
- * 立即归档一次：手动触发「自动归档」。
- *
- * 本地没起调度器时周期任务永远不会自己来，这个按钮就是「现在跑一次」。
- * 服务端走的是和自动归档完全相同的队列与幂等键，所以不会多出一份重复总结。
- */
-async function runAiArchive() {
-  if (!id.value || aiArchiving.value) return;
-  const context = captureOperation("archive");
-  const characterId = context.characterId;
-  const days = current.value?.intervalDays ?? 3;
-  try {
-    await ElMessageBox.confirm(
-      `现在就跑一次自动归档：调模型提炼最近 ${days} 天的对话，生成一份阶段总结，并按结果新增 / 更新长期记忆。会产生模型调用费用。`,
-      "立即 AI 归档",
-      { confirmButtonText: "开始归档", cancelButtonText: "取消", type: "warning" },
-    );
-  } catch {
-    return;
-  }
-
-  if (!operationCurrent(context)) return;
-  aiArchiving.value = true;
-  try {
-    const result = await $fetch<{
-      queued: string[];
-      skipped: string[];
-      processed: Array<{ status: string; message: string }>;
-      pending: number;
-      advancedTo: string | null;
-      /** 执行超过请求里的等待窗口，已转后台；进度看右下角面板。 */
-      processing?: boolean;
-    }>(`/api/characters/${encodeURIComponent(characterId)}/snapshots/generate`, { method: "POST" });
-
-    if (!operationCurrent(context)) return;
-    void refreshMemoryProgress();
-    if (!(await loadSnapshots(undefined, () => operationCurrent(context))) || !operationActive(context)) return;
-
-    const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
-    const ok = result.processed.filter((item) => item.status === "SUCCEEDED");
-    if (result.processing) {
-      // 模型还在跑：不要用「没有 worker」这种话误导，进度在右下角。
-      ElMessage.info("已开始归档，进度在右下角；切页面、刷新都不会中断。");
-    } else if (failed) {
-      // 失败时周期边界不会推进，这段数据下次还能补上，所以要说清楚去重试而不是重来
-      ElMessage.warning(`${failed.message}（这次没有推进周期，去「后台任务」点重试即可）`);
-    } else if (result.pending > 0) {
-      ElMessage.warning(`还有 ${result.pending} 个归档任务在队列里没跑完，去「后台任务」看一下。`);
-    } else if (ok.length) {
-      ElMessage.success(ok.map((item) => item.message).join("；"));
-    } else if (result.skipped.length) {
-      ElMessage.info(result.skipped.join("；"));
-    } else {
-      ElMessage.info("任务已排队，但没有可执行的 worker；启动 worker 后会继续处理。");
-    }
-  } catch (error) {
-    if (operationCurrent(context)) ElMessage.error(errorMessage(error));
-  } finally {
-    if (operationActive(context)) aiArchiving.value = false;
-  }
-}
-
-/**
  * 归档在后台跑完之后刷新列表。
  *
  * 面板轮询跟的是任务行，这里接住「刚结束」这个信号；不刷新的话页面会停在你点的那一刻，
@@ -509,11 +427,10 @@ watch(id, () => {
 <template>
   <div class="page-wrap">
     <MemorySectionNavigation
-      v-if="isGrowthMode"
       active="snapshots"
     />
     <PageHeader
-      :eyebrow="isGrowthMode ? '成长系统 / 记忆系统 / 阶段总结' : '工作空间 / 阶段总结'"
+      eyebrow="成长系统 / 记忆系统 / 阶段总结"
       :description="pageDescription"
     >
       <template #actions>
@@ -525,18 +442,6 @@ watch(id, () => {
           @click="createSnapshot"
         >
           <el-icon><Files /></el-icon>{{ creating ? "存档中…" : "手动存档（不调模型）" }}
-        </button>
-        <!-- 成长模式下这个按钮收进记忆系统总览了（那边叫「阶段总结」），
-             同一个动作只留一个显眼入口，避免两个页面各点一半。 -->
-        <button
-          v-if="!isGrowthMode"
-          type="button"
-          class="btn primary"
-          :disabled="aiArchiving || !id"
-          title="等同于自动归档跑一次：排队、调模型、当场执行"
-          @click="runAiArchive"
-        >
-          <el-icon><MagicStick /></el-icon>{{ aiArchiving ? "归档中…" : "立即 AI 归档" }}
         </button>
       </template>
     </PageHeader>

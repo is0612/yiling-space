@@ -103,7 +103,9 @@ try {
   const first = await runDailyEventJob(prisma, { ...job, periodStart: start, periodEnd: end }, end);
   assert.equal(first.processed && first.status, "RETRY_WAIT");
   const progress = await prisma.memoryEventDay.findUniqueOrThrow({ where: { memoryScopeId_dayKey: { memoryScopeId: scopeId, dayKey: "2026-11-01" } } });
-  assert.equal(progress.extractedMessageId, ids[119], "Failed subgroup must not advance its original global chunk");
+  const firstChunkIds = requests.slice(0, 2).flatMap((request) => request.messages.map((message) => message.id));
+  const firstChunkEnd = Math.max(...firstChunkIds.map((id) => ids.indexOf(id)));
+  assert.equal(progress.extractedMessageId, ids[firstChunkEnd], "Failed subgroup must not advance its original global chunk");
   assert.equal(await prisma.memoryEvent.count({ where: { memoryScopeId: scopeId } }), 2, "Only the first complete chunk may commit");
   failSecondChunk = false;
   await prisma.memoryJob.update({ where: { id: job.id }, data: { status: "RUNNING", lockedBy: `quality:${randomUUID()}`, lockedAt: new Date(end.getTime() + 60_000) } });
@@ -111,9 +113,9 @@ try {
   assert.equal(retried.processed && retried.status, "SUCCEEDED");
   assert(sawContextOnlyAttempt, "Mock must attempt a context-only pseudo event");
   const saved = await prisma.memoryEvent.findMany({ where: { memoryScopeId: scopeId } });
-  assert.equal(saved.length, 6, "Context-only and invalid drafts must not be stored");
+  assert.equal(saved.length, new Set(requests.map((request) => request.messages[0]!.id)).size, "Context-only and invalid drafts must not be stored");
   assert(saved.every((event) => event.title !== "只有前文的伪事件" && event.title !== "无效草稿不能记住"));
-  assert(saved.some((event) => event.sourceMessageIds.some((id) => ids.indexOf(id) < 120) && event.sourceMessageIds.some((id) => ids.indexOf(id) >= 120)), "Apply must retain context evidence from a previous chunk");
+  assert(saved.some((event) => event.sourceMessageIds.some((id) => ids.indexOf(id) <= firstChunkEnd) && event.sourceMessageIds.some((id) => ids.indexOf(id) > firstChunkEnd)), "Apply must retain context evidence from a previous chunk");
   for (const event of saved) {
     assert(event.sourceMessageIds.every((id) => conversationById.get(id) === event.conversationId));
   }
