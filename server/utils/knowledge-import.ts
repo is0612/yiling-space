@@ -33,12 +33,15 @@ export function parseKnowledgeImportFile(input: {
   } catch {
     throw new Error("文件不是有效的 UTF-8 文本，请另存为 UTF-8 后重试。");
   }
-  const rawContent = decoded.replace(/^\\uFEFF/, "").replace(/\\r\\n?/g, "\\n").trim();
+  // 去 BOM、统一换行（CRLF / CR → LF），再掐掉首尾空白。
+  const rawContent = decoded.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim();
   if (!rawContent) throw new Error("文件中没有可导入的文本内容。");
   if (rawContent.length > KNOWLEDGE_IMPORT_MAX_CHARS) {
     throw new Error("单个文件提取后的内容不能超过 20000 个字符，请拆分后导入。");
   }
-  if (/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]/.test(rawContent)) {
+  // C0 控制字符里只放行 \t 和 \n（\r 上一步已归一），其余一律算脏数据。
+  // 注意这里是真实的字符类，别写成 \\u0000 那种字面量 —— 那样会把大写字母和数字误判成控制字符。
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(rawContent)) {
     throw new Error("文件包含不支持的控制字符，请先清理内容。");
   }
 

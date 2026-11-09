@@ -29,11 +29,15 @@ assert.equal(plain.rawContent, "可复用的知识");
 assert.equal(plain.mediaType, "text/plain");
 assert.equal(plain.extension, "txt");
 
+// 回归：数字与大写字母是正常正文，不能被「控制字符」那道校验误伤。
+const ascii = parse("mixed.txt", "ABC 123 hello, 第 2 章。");
+assert.equal(ascii.rawContent, "ABC 123 hello, 第 2 章。", "含数字与大写字母的正文必须正常导入");
+
 rejects("payload.pdf", Buffer.from("not really a pdf"), /只支持/);
 rejects("payload.exe", Buffer.from("bad"), /只支持/);
-rejects("empty.md", Buffer.from("  "), /为空/);
+rejects("empty.md", Buffer.from("  "), /为空|没有可导入/);
 rejects("invalid.txt", Uint8Array.from([0xc3, 0x28]), /UTF-8/);
-rejects("control.txt", Buffer.from("hello\\u0000world"), /控制字符/);
+rejects("control.txt", Buffer.from("hello\u0000world"), /控制字符/);
 rejects("large.txt", Buffer.alloc(KNOWLEDGE_IMPORT_MAX_BYTES + 1, 65), /2 MB/);
 rejects("long.md", Buffer.from("a".repeat(KNOWLEDGE_IMPORT_MAX_CHARS + 1)), /20000/);
 
