@@ -45,6 +45,7 @@ const experience = await prisma.socialExperience.create({
 async function makeAssessment(input: {
   expectedVersion: number;
   fromStage?: "STRANGER" | "ACQUAINTANCE";
+  fromStatus?: "UNOBSERVED" | "NORMAL";
   toStage: "ACQUAINTANCE" | "FRIEND";
   toStatus: "NORMAL" | "DISTANT" | "CONFLICT" | "REPAIRING";
 }) {
@@ -52,7 +53,7 @@ async function makeAssessment(input: {
     data: {
       scopeId, generation: 1, triggerReasons: ["NEW_EXPERIENCE"],
       evaluatedStage: input.fromStage ?? "STRANGER",
-      evaluatedStatus: "UNOBSERVED",
+      evaluatedStatus: input.fromStatus ?? "UNOBSERVED",
       relationshipVersion: input.expectedVersion,
       outcome: "CHANGE",
       suggestedStage: input.toStage,
@@ -124,7 +125,7 @@ try {
 
   console.log("\n[4] 已被其他关系变更消费的 NEW 经历不能重复作为新证据");
   const duplicateEvidenceAssessment = await makeAssessment({
-    expectedVersion: 1, fromStage: "ACQUAINTANCE", toStage: "FRIEND", toStatus: "DISTANT",
+    expectedVersion: 1, fromStage: "ACQUAINTANCE", fromStatus: "NORMAL", toStage: "FRIEND", toStatus: "DISTANT",
   });
   await assert.rejects(() => reviewSocialRelationshipAssessment(prisma, {
     characterId: character.id, assessmentId: duplicateEvidenceAssessment.id, actorUserId: owner.id,
