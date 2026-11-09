@@ -330,9 +330,10 @@ export async function downloadSafeMedia(
     timeoutMs: number;
     headers?: Record<string, string>;
     requiredMimePrefix?: string;
+    allowedMimeTypes?: string[];
   },
-): Promise<{ buffer: Buffer; mime: string }> {
-  const { prefix, maxBytes, timeoutMs, headers, requiredMimePrefix } = options;
+): Promise<{ buffer: Buffer; mime: string; finalUrl: string; status: number }> {
+  const { prefix, maxBytes, timeoutMs, headers, requiredMimePrefix, allowedMimeTypes } = options;
   let currentUrl = validateMediaUrl(rawUrl, prefix);
   const signal = AbortSignal.timeout(timeoutMs);
 
@@ -411,13 +412,14 @@ export async function downloadSafeMedia(
 
       const mime = (response.headers.get("content-type") ?? "")
         .split(";")[0]!.trim().toLowerCase();
-      if (requiredMimePrefix && !mime.startsWith(requiredMimePrefix)) {
-        throw new Error(`${prefix}_NOT_IMAGE`);
+      if ((requiredMimePrefix && !mime.startsWith(requiredMimePrefix))
+        || (allowedMimeTypes && !allowedMimeTypes.includes(mime))) {
+        throw new Error(`${prefix}_UNSUPPORTED_CONTENT_TYPE`);
       }
 
       const buffer = await readLimitedBody(response, maxBytes, prefix);
       if (!buffer.length) throw new Error(`${prefix}_EMPTY`);
-      return { buffer, mime };
+      return { buffer, mime, finalUrl: currentUrl.toString(), status: response.status };
     } catch (error) {
       await cancelBody(response);
       if (blockedDuringConnect) throw new Error(`${prefix}_BLOCKED_HOST`);
