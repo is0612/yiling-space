@@ -4,13 +4,15 @@ CREATE TYPE "SocialRelationshipAssessmentReviewStatus" AS ENUM (
   'PENDING',
   'DEFERRED',
   'ACCEPTED',
-  'REJECTED'
+  'REJECTED',
+  'STALE'
 );
 
 CREATE TYPE "SocialRelationshipAssessmentReviewDecision" AS ENUM (
   'DEFERRED',
   'ACCEPTED',
-  'REJECTED'
+  'REJECTED',
+  'STALE'
 );
 
 ALTER TABLE "social_relationship_assessments"
