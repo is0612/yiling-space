@@ -1,8 +1,8 @@
 import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
-import { requireActorUserId } from "../../../../../../utils/auth";
-import { requireUuid } from "../../../../../../utils/local-api";
-import { getPrisma } from "../../../../../../utils/prisma";
-import { parseKnowledgeRelationDecision } from "../../../../../../utils/knowledge-item-governance";
+import { requireActorUserId } from "../../../../../../../utils/auth";
+import { requireUuid } from "../../../../../../../utils/local-api";
+import { getPrisma } from "../../../../../../../utils/prisma";
+import { parseKnowledgeRelationDecision } from "../../../../../../../utils/knowledge-item-governance";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
@@ -53,8 +53,6 @@ export default defineEventHandler(async (event) => {
         status, resolution,
         resolvedAt: status === "OPEN" ? null : new Date(),
         metadata: {
-          ...(relation.metadata && typeof relation.metadata === "object" && !Array.isArray(relation.metadata)
-            ? relation.metadata as Record<string, unknown> : {}),
           decisionSource: "USER",
           sourceRevision: relation.sourceItem.revision,
           targetRevision: relation.targetItem.revision,
