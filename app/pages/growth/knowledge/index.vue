@@ -475,6 +475,8 @@ async function resolveRelation(item: KnowledgeItem, relation: KnowledgeRelationV
 
 function relationStatusLabel(relation: KnowledgeRelationView) {
   if (relation.resolution === "NEEDS_VERIFICATION") return "待核实";
+  if (relation.resolution === "MERGED") return "已合并";
+  if (relation.resolution === "SOURCE_MERGED") return "源知识已合并";
   return relation.status === "OPEN" ? "待处理" : relation.status === "RESOLVED" ? "已处理" : "已忽略";
 }
 
