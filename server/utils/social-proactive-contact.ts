@@ -397,6 +397,31 @@ export async function runSocialProactiveContactTick(
       }
 
       for (const group of groups) {
+        const dedupeKey = dayKey(now) + ":" + group.groupId + ":" + Math.floor(now.getTime() / ATTEMPT_DEDUPE_WINDOW_MS);
+        // 同一好友/群在本时间窗内已经尝试过（包括「没话说」）就不再重复消耗模型额度。
+        const priorAttempt = await prisma.socialProactiveContactAttempt.findUnique({
+          where: { scopeId_dedupeKey: { scopeId: friend.id, dedupeKey } },
+          select: { status: true },
+        });
+        if (priorAttempt) {
+          lastSkipReason = priorAttempt.status === "SENDING" ? "dispatch_in_progress" : "already_attempted";
+          handled = true;
+          break;
+        }
+        const activeClaim = await prisma.socialProactiveContactAttempt.findFirst({
+          where: {
+            scopeId: friend.id,
+            status: "SENDING",
+            attemptedAt: { gte: new Date(Date.now() - ATTEMPT_DEDUPE_WINDOW_MS) },
+          },
+          select: { id: true },
+        });
+        if (activeClaim) {
+          results.push({ ...skip("dispatch_in_progress", friendName), groupId: group.groupId });
+          handled = true;
+          break;
+        }
+
         const gate = evaluateSocialProactiveContactGate({
           proactiveContactEnabled: true,
           relationshipStage: friend.relationshipStage,
@@ -441,7 +466,6 @@ export async function runSocialProactiveContactTick(
           memories: memories.map((item) => `[${item.category}] ${item.content.slice(0, 180)}`),
           recentLines: group.recentLines,
         });
-        const dedupeKey = `${dayKey(now)}:${group.groupId}:${Math.floor(now.getTime() / ATTEMPT_DEDUPE_WINDOW_MS)}`;
 
         if (generated.error) {
           await recordAttempt({
