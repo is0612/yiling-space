@@ -22,7 +22,10 @@ import { readDailyQuota, recordModelUsage } from "./model-usage";
 import { getPrisma } from "./prisma";
 import { callRawModel } from "./raw-llm";
 import { parseMessage } from "./proactive-prompt";
-import { evaluateSocialProactiveContactGate } from "./social-proactive-contact-policy";
+import {
+  buildSocialProactiveContactSegments,
+  evaluateSocialProactiveContactGate,
+} from "./social-proactive-contact-policy";
 
 const ROLE_DAILY_LIMIT = 2;
 const FRIEND_COOLDOWN_MS = 7 * 24 * 60 * 60_000;
@@ -338,7 +341,7 @@ export async function runSocialProactiveContactTick(
           proactiveContactEnabled: true,
           relationshipStage: { in: ["FRIEND", "CLOSE_FRIEND"] },
           relationshipStatus: "NORMAL",
-          externalIdentity: { is: { platform: "qq-onebot" } },
+          externalIdentity: { is: { platform: "qq-onebot", status: { not: "REVOKED" } } },
         },
         orderBy: [{ lastInteractedAt: "desc" }, { updatedAt: "desc" }],
         take: 30,
@@ -482,7 +485,7 @@ export async function runSocialProactiveContactTick(
             friendChatPolicy: true,
             relationshipStage: true,
             relationshipStatus: true,
-            externalIdentity: { select: { id: true, platformUid: true, kind: true, displayName: true } },
+            externalIdentity: { select: { id: true, platformUid: true, kind: true, displayName: true, status: true } },
           },
         });
         const freshConnections = await loadOnebotConnections().catch(() => [] as OnebotConnectionRecord[]);
@@ -505,6 +508,7 @@ export async function runSocialProactiveContactTick(
           select: { sentAt: true },
         });
         const memberVerified = freshScope?.proactiveContactEnabled === true
+          && freshScope.externalIdentity?.status !== "REVOKED"
           && freshScope.externalIdentity?.platformUid === identity.platformUid
           && Boolean(freshGroup)
           && await verifyOnebotGroupMember(freshGroup!.connection.config, freshGroup!.groupId, identity.platformUid);
@@ -567,10 +571,11 @@ export async function runSocialProactiveContactTick(
         }
 
         try {
-          await sendOnebotGroupMessage(freshGroup.connection.config, freshGroup.groupId, [
-            { type: "at", data: { qq: identity.platformUid } },
-            { type: "text", data: { text: ` ${generated.content}` } },
-          ]);
+          await sendOnebotGroupMessage(
+            freshGroup.connection.config,
+            freshGroup.groupId,
+            buildSocialProactiveContactSegments(identity.platformUid, generated.content),
+          );
           await prisma.$transaction(async (tx) => {
             await tx.message.create({
               data: {
