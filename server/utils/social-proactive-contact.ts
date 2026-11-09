@@ -583,12 +583,14 @@ export async function runSocialProactiveContactTick(
           break;
         }
 
+        let outboundSent = false;
         try {
           await sendOnebotGroupMessage(
             freshGroup.connection.config,
             freshGroup.groupId,
             buildSocialProactiveContactSegments(identity.platformUid, generated.content),
           );
+          outboundSent = true;
           // 外部发送已成功，先把审计账本置为 SENT；后续消息转录写库失败也不能让它被再次发送。
           await prisma.socialProactiveContactAttempt.update({
             where: { scopeId_dedupeKey: { scopeId: friend.id, dedupeKey } },
@@ -636,15 +638,17 @@ export async function runSocialProactiveContactTick(
             content: generated.content,
           });
         } catch (error) {
-          await prisma.socialProactiveContactAttempt.update({
-            where: { scopeId_dedupeKey: { scopeId: friend.id, dedupeKey } },
-            data: { status: "FAILED", reason: "send_or_persist_failed" },
-          }).catch(() => undefined);
+          if (!outboundSent) {
+            await prisma.socialProactiveContactAttempt.update({
+              where: { scopeId_dedupeKey: { scopeId: friend.id, dedupeKey } },
+              data: { status: "FAILED", reason: "send_failed" },
+            }).catch(() => undefined);
+          }
           results.push({
             characterId: character.id,
             characterName: character.name,
             status: "failed",
-            reason: "send_or_persist_failed",
+            reason: outboundSent ? "sent_but_transcript_failed" : "send_failed",
             friend: friendName,
             groupId: group.groupId,
             detail: error instanceof Error ? error.message : String(error),
