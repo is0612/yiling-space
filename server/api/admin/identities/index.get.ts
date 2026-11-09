@@ -164,6 +164,11 @@ export default defineEventHandler(async (event) => {
         aliases: true,
         friendChatPolicy: true,
         proactiveContactEnabled: true,
+        socialProactiveContactAttempts: {
+          orderBy: { attemptedAt: "desc" },
+          take: 1,
+          select: { status: true, reason: true, attemptedAt: true, sentAt: true },
+        },
         character: { select: { name: true } },
         externalIdentity: {
           select: { id: true, platform: true, platformUid: true, displayName: true, status: true, linkedUserId: true, kind: true, kindSource: true },
@@ -209,6 +214,14 @@ export default defineEventHandler(async (event) => {
           identityKindSource: identity.kindSource,
           friendChatPolicy: scope.friendChatPolicy,
           proactiveContactEnabled: scope.proactiveContactEnabled,
+          lastProactiveContactAttempt: scope.socialProactiveContactAttempts[0]
+            ? {
+                status: scope.socialProactiveContactAttempts[0].status,
+                reason: scope.socialProactiveContactAttempts[0].reason,
+                attemptedAt: scope.socialProactiveContactAttempts[0].attemptedAt.toISOString(),
+                sentAt: scope.socialProactiveContactAttempts[0].sentAt?.toISOString() ?? null,
+              }
+            : null,
           interactionCount: scope.interactionCount,
           lastInteractedAt: scope.lastInteractedAt?.toISOString() ?? null,
           // 认识的时间＝这条关系建立的时间，也就是第一次遇到这个人。
