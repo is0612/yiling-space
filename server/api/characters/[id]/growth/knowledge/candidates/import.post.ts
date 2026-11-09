@@ -1,4 +1,4 @@
-import { createError, getRouterParam, readMultipartFormData } from "h3";
+import { createError, getRequestHeader, getRouterParam, readMultipartFormData } from "h3";
 import { parseKnowledgeImportFile } from "../../../../../../utils/knowledge-import";
 import { requireActorUserId } from "../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../utils/local-api";
@@ -7,6 +7,10 @@ import { getPrisma } from "../../../../../../utils/prisma";
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
   const characterId = requireUuid(getRouterParam(event, "id") ?? "", "角色");
+  const contentLength = Number(getRequestHeader(event, "content-length") ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > 2 * 1024 * 1024 + 64 * 1024) {
+    throw createError({ statusCode: 413, statusMessage: "上传请求不能超过 2 MB（含少量表单开销）。" });
+  }
   const parts = await readMultipartFormData(event);
   if (!parts?.length) {
     throw createError({ statusCode: 400, statusMessage: "请选择一个 TXT 或 Markdown 文件。" });
