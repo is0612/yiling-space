@@ -110,16 +110,29 @@ export async function fetchKnowledgeWebPage(rawUrl: string): Promise<ParsedKnowl
     if (reason === "IMAGE_INVALID_PROTOCOL") throw new Error("只允许导入 HTTP 或 HTTPS 网页。");
     throw new Error("请输入有效的 HTTP 或 HTTPS 网页地址。");
   }
-  const result = await downloadSafeMedia(url.toString(), {
-    prefix: "IMAGE",
-    maxBytes: KNOWLEDGE_WEB_MAX_BYTES,
-    timeoutMs: KNOWLEDGE_WEB_TIMEOUT_MS,
-    headers: {
-      "user-agent": "YilingSpace-KnowledgeImporter/1.0",
-      accept: "text/html,application/xhtml+xml,text/plain;q=0.9",
-    },
-    allowedMimeTypes: ["text/html", "application/xhtml+xml", "text/plain"],
-  });
+  let result;
+  try {
+    result = await downloadSafeMedia(url.toString(), {
+      prefix: "IMAGE",
+      maxBytes: KNOWLEDGE_WEB_MAX_BYTES,
+      timeoutMs: KNOWLEDGE_WEB_TIMEOUT_MS,
+      headers: {
+        "user-agent": "YilingSpace-KnowledgeImporter/1.0",
+        accept: "text/html,application/xhtml+xml,text/plain;q=0.9",
+      },
+      allowedMimeTypes: ["text/html", "application/xhtml+xml", "text/plain"],
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    if (reason.includes("BLOCKED_HOST")) throw new Error("网页或重定向地址指向本机、内网或保留地址，已阻止访问。");
+    if (reason.includes("TOO_LARGE")) throw new Error("网页响应超过 1.5 MB，已停止下载。");
+    if (reason.includes("UNSUPPORTED_CONTENT_TYPE")) throw new Error("网页只支持 HTML、XHTML 或纯文本内容。");
+    if (reason.includes("REDIRECT_LIMIT")) throw new Error("网页重定向次数过多，已停止访问。");
+    if (reason.includes("INVALID_PROTOCOL") || reason.includes("INVALID_URL")) throw new Error("只允许有效的 HTTP 或 HTTPS 网页地址。");
+    if (reason.includes("_HTTP_")) throw new Error("网页服务器暂时无法访问：" + reason.match(/_HTTP_\\d+/)?.[0]?.replace("_HTTP_", "HTTP ") + "。");
+    if (reason.includes("_TIMEOUT")) throw new Error("网页连接超时，请稍后重试。");
+    throw new Error("无法安全获取该网页，请检查网址或稍后重试。");
+  }
   return parseKnowledgeWebContent({
     url: url.toString(),
     finalUrl: result.finalUrl,
