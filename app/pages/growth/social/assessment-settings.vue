@@ -22,6 +22,7 @@ const character = ref<CharacterSettings | null>(null);
 const loading = ref(false);
 const saving = ref(false);
 const fetchingModels = ref(false);
+const testing = ref(false);
 const model = ref("");
 const apiBaseUrl = ref("");
 const apiKey = ref("");
@@ -36,6 +37,7 @@ let loadVersion = 0;
 let roleVersion = 0;
 let operationVersion = 0;
 let modelFetchVersion = 0;
+let testVersion = 0;
 let pageDisposed = false;
 
 const providerPreset = computed(() => providerByBaseUrl(apiBaseUrl.value) ?? providerByKey(providerKey.value));
@@ -61,6 +63,7 @@ function resetDraft() {
   loading.value = false;
   saving.value = false;
   fetchingModels.value = false;
+  testing.value = false;
 }
 
 function applyProvider(key: string) {
@@ -116,6 +119,7 @@ watch(characterId, nextCharacterId => {
   loadVersion += 1;
   operationVersion += 1;
   modelFetchVersion += 1;
+  testVersion += 1;
   resetDraft();
   if (nextCharacterId) void load(nextCharacterId);
 }, { immediate: true, flush: "sync" });
@@ -168,6 +172,39 @@ async function save(silent = false) {
   }
 }
 
+async function testConnection() {
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  const currentTest = ++testVersion;
+  if (!targetCharacterId || testing.value || saving.value || pageDisposed) return;
+  if (!model.value.trim() || !apiBaseUrl.value.trim()) {
+    ElMessage.warning("请先填写关系评估助手的模型名称和独立 API 地址。");
+    return;
+  }
+  if (!apiKey.value.trim() && !character.value?.socialRelationshipAssessmentAssistantApiKeyConfigured) {
+    ElMessage.warning("请先填写关系评估助手专用 API Key。");
+    return;
+  }
+  if (!await save(true)) return;
+  if (currentTest !== testVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+  testing.value = true;
+  try {
+    const result = await $fetch<{ ok: boolean; message: string; model?: string }>(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/social/assessment-test`,
+      { method: "POST" },
+    );
+    if (currentTest !== testVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    if (result.ok) ElMessage.success(result.message);
+    else ElMessage.warning(result.message);
+  } catch (error) {
+    if (currentTest !== testVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const e = error as { data?: { statusMessage?: string }; message?: string };
+    ElMessage.error(e.data?.statusMessage || e.message || "关系评估助手连接测试失败。");
+  } finally {
+    if (currentTest === testVersion && isCurrentRole(targetCharacterId, expectedRoleVersion)) testing.value = false;
+  }
+}
+
 async function fetchModels() {
   const targetCharacterId = characterId.value;
   const expectedRoleVersion = roleVersion;
@@ -199,6 +236,7 @@ onBeforeUnmount(() => {
   loadVersion += 1;
   operationVersion += 1;
   modelFetchVersion += 1;
+  testVersion += 1;
 });
 </script>
 
@@ -233,7 +271,7 @@ onBeforeUnmount(() => {
       <div class="model-row">
         <input v-model="model" list="assessment-model-list" placeholder="选择，或直接输入模型名">
         <datalist id="assessment-model-list"><option v-for="name in modelOptions" :key="name" :value="name" /></datalist>
-        <button type="button" :disabled="fetchingModels || saving" @click="fetchModels">{{ fetchingModels ? "获取中…" : "获取模型" }}</button>
+        <button type="button" :disabled="fetchingModels || saving || testing" @click="fetchModels">{{ fetchingModels ? "获取中…" : "获取模型" }}</button>
       </div>
       <div class="numeric-grid">
         <div><label>温度</label><input v-model.number="temperature" type="number" min="0" max="2" step="0.1"></div>
@@ -241,7 +279,8 @@ onBeforeUnmount(() => {
         <div><label>最大输出 Token</label><input v-model.number="maxOutputTokens" type="number" min="512" max="8192" step="256"></div>
       </div>
       <div class="actions">
-        <button class="primary" type="button" :disabled="saving || loading" @click="save()">{{ saving ? "保存中…" : "保存设置" }}</button>
+        <button type="button" :disabled="saving || loading || testing || fetchingModels" @click="testConnection">{{ testing ? "测试中…" : "测试连接" }}</button>
+        <button class="primary" type="button" :disabled="saving || loading || testing" @click="save()">{{ saving ? "保存中…" : "保存设置" }}</button>
       </div>
     </section>
   </div>
@@ -268,7 +307,7 @@ button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2
 button:disabled{opacity:.55;cursor:not-allowed}
 .switch-label{display:flex;align-items:center;gap:7px;margin:0;white-space:nowrap}
 .numeric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-.actions{display:flex;justify-content:flex-end;margin-top:22px}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:22px}
 button.primary{background:var(--accent);color:white;border-color:var(--accent);padding-inline:22px}
 @media(max-width:650px){.numeric-grid{grid-template-columns:1fr}.settings-card{padding:16px}.settings-heading{align-items:flex-start;flex-direction:column}}
 </style>

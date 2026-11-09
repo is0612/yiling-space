@@ -55,14 +55,19 @@ try {
     kind: "bili-judge", model: "test-model", characterId,
     usage: { promptTokens: 60, completionTokens: 40, totalTokens: 100 },
   });
+  await recordModelUsage({
+    kind: "social-relationship-assistant", model: "assessment-test-model", characterId,
+    usage: { promptTokens: 10, completionTokens: 15, totalTokens: 25 },
+  });
   // 没有用量的调用不该写入任何行。
   await recordModelUsage({ kind: "chat", model: "test-model", characterId, usage: null });
 
   const usage = await readDailyUsage(characterId, day);
-  assert.equal(usage.totalTokens, 250, "两条记录应累计到 250。");
-  assert.equal(usage.calls, 2, "没有用量的调用不计入次数。");
+  assert.equal(usage.totalTokens, 275, "三条记录应累计到 275。");
+  assert.equal(usage.calls, 3, "没有用量的调用不计入次数。");
   assert.equal(usage.byKind.chat?.totalTokens, 150, "按类别分开统计。");
   assert.equal(usage.byKind["bili-judge"]?.calls, 1, "值班调用单独一类。");
+  assert.equal(usage.byKind["social-relationship-assistant"]?.totalTokens, 25, "关系评估助手用量必须单独分类。");
 
   const exceeded = await readDailyQuota(characterId, { dailyTokenLimit: 200 }, day);
   assert.equal(exceeded.exceeded, true, "用超 200 要判定为超额。");
@@ -70,7 +75,7 @@ try {
 
   const roomLeft = await readDailyQuota(characterId, { dailyTokenLimit: 10_000 }, day);
   assert.equal(roomLeft.exceeded, false, "额度足够时不拦。");
-  assert.equal(roomLeft.remaining, 9_750, "剩余额度要准确。");
+  assert.equal(roomLeft.remaining, 9_725, "剩余额度要准确。");
 
   const unlimited = await readDailyQuota(characterId, {}, day);
   assert.equal(unlimited.exceeded, false, "不配额度永不拦。");
