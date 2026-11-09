@@ -22,6 +22,10 @@ type KnowledgeRelationView = {
 };
 type KnowledgeMergeDraft = {
   sourceItemId: string; targetItemId: string; expectedSourceRevision: number; expectedTargetRevision: number;
+  sourceTitle: string; sourceContent: string; sourceCategory: string; sourceConfidence: number | null; sourceTags: string[];
+  sourceType: string; sourceRef: unknown;
+  targetTitle: string; targetContent: string; targetCategory: string; targetConfidence: number | null; targetTags: string[];
+  targetSourceType: string; targetSourceRef: unknown;
   title: string; content: string; category: string; tagsText: string; confidence: string;
 };
 type Candidate = {
@@ -348,8 +352,8 @@ async function toggleHistory(item: KnowledgeItem) {
 }
 
 function startMerge(
-  source: { id: string; revision: number; status?: string },
-  target: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; revision: number; status?: string },
+  source: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; revision: number; status?: string; sourceType: string; sourceRef: unknown },
+  target: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; revision: number; status?: string; sourceType: string; sourceRef: unknown },
 ) {
   if (source.id === target.id || source.status === "MERGED" || target.status === "MERGED") return;
   mergeDraft.value = {
@@ -357,6 +361,20 @@ function startMerge(
     targetItemId: target.id,
     expectedSourceRevision: source.revision,
     expectedTargetRevision: target.revision,
+    sourceTitle: source.title,
+    sourceContent: source.content,
+    sourceCategory: source.category,
+    sourceConfidence: source.confidence,
+    sourceTags: source.tags,
+    sourceType: source.sourceType,
+    sourceRef: source.sourceRef,
+    targetTitle: target.title,
+    targetContent: target.content,
+    targetCategory: target.category,
+    targetConfidence: target.confidence,
+    targetTags: target.tags,
+    targetSourceType: target.sourceType,
+    targetSourceRef: target.sourceRef,
     title: target.title,
     content: target.content,
     category: target.category,
@@ -561,7 +579,8 @@ function formatDate(value: string) {
               <span class="relation-kind">{{ relation.relationType === 'DUPLICATE' ? '重复' : relation.relationType === 'CONFLICT' ? '冲突' : '合并关系' }} · {{ relationStatusLabel(relation) }}</span>
               <strong>{{ relation.relatedItem.title }}</strong>
               <p>{{ relation.relatedItem.content }}</p>
-              <span class="muted">{{ relation.relatedItem.category }} · 修订 {{ relation.relatedItem.revision }}</span>
+              <span class="muted">{{ relation.relatedItem.category }} · 可信度 {{ relation.relatedItem.confidence === null ? "未标注" : Math.round(relation.relatedItem.confidence * 100) + "%" }} · {{ sourceLabel(relation.relatedItem.sourceType) }} · 修订 {{ relation.relatedItem.revision }}</span>
+              <span v-if="sourceDetails(relation.relatedItem.sourceRef)" class="muted">来源：{{ sourceDetails(relation.relatedItem.sourceRef) }}</span>
               <div v-if="relation.status === 'OPEN' && relation.relationType === 'DUPLICATE'" class="relation-actions">
                 <button :disabled="resolvingRelationIds.includes(relation.id) || mergingKnowledge" @click="startMerge(item, relation.relatedItem)">将当前条目合并到关联知识</button>
                 <button :disabled="resolvingRelationIds.includes(relation.id) || mergingKnowledge" @click="startMerge(relation.relatedItem, item)">将关联条目合并到当前知识</button>
@@ -607,7 +626,23 @@ function formatDate(value: string) {
     <div v-if="mergeDraft" class="merge-overlay" role="dialog" aria-modal="true" aria-label="合并重复知识">
       <section class="merge-dialog">
         <div class="history-heading"><strong>确认合并重复知识</strong><button class="quiet" :disabled="mergingKnowledge" @click="cancelMerge">关闭</button></div>
-        <p class="muted">源条目将标记为已合并并保留历史；目标条目会保存为新版本。请检查并确认最终内容。</p>
+        <p class="muted">源条目将标记为已合并并保留历史；目标条目会保存为新版本。请检查双方内容、来源、可信度和版本，再确认最终内容。</p>
+        <div class="merge-comparison">
+          <article>
+            <strong>源知识 · 将标记为 MERGED · V{{ mergeDraft.expectedSourceRevision }}</strong>
+            <h4>{{ mergeDraft.sourceTitle }}</h4>
+            <p>{{ mergeDraft.sourceContent }}</p>
+            <span>{{ mergeDraft.sourceCategory }} · 可信度 {{ mergeDraft.sourceConfidence === null ? "未标注" : Math.round(mergeDraft.sourceConfidence * 100) + "%" }} · {{ sourceLabel(mergeDraft.sourceType) }}</span>
+            <span v-if="sourceDetails(mergeDraft.sourceRef)">来源：{{ sourceDetails(mergeDraft.sourceRef) }}</span>
+          </article>
+          <article>
+            <strong>目标知识 · 将保留为 ACTIVE · V{{ mergeDraft.expectedTargetRevision }}</strong>
+            <h4>{{ mergeDraft.targetTitle }}</h4>
+            <p>{{ mergeDraft.targetContent }}</p>
+            <span>{{ mergeDraft.targetCategory }} · 可信度 {{ mergeDraft.targetConfidence === null ? "未标注" : Math.round(mergeDraft.targetConfidence * 100) + "%" }} · {{ sourceLabel(mergeDraft.targetSourceType) }}</span>
+            <span v-if="sourceDetails(mergeDraft.targetSourceRef)">来源：{{ sourceDetails(mergeDraft.targetSourceRef) }}</span>
+          </article>
+        </div>
         <label>合并后的标题<input v-model="mergeDraft.title" maxlength="240"></label>
         <label>合并后的正文<textarea v-model="mergeDraft.content" rows="7" maxlength="12000"></textarea></label>
         <div class="editor-grid">
@@ -641,7 +676,14 @@ button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2
 .merge-overlay{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.52);display:flex;align-items:center;justify-content:center;padding:20px}
 .merge-dialog{width:min(720px,100%);max-height:min(90vh,900px);overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 18px 60px rgba(0,0,0,.25)}
 .merge-dialog label{display:flex;flex-direction:column;gap:5px;color:var(--dim);font-size:12px}
+.merge-comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.merge-comparison article{min-width:0;border:1px solid var(--line);border-radius:9px;padding:11px;background:var(--surface-2);display:flex;flex-direction:column;gap:7px}
+.merge-comparison strong{font-size:12px;color:var(--ink)}
+.merge-comparison h4{margin:0;font-size:13px;color:var(--ink)}
+.merge-comparison p{margin:0;font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
+.merge-comparison span{font-size:11px;color:var(--dim);overflow-wrap:anywhere}
 .merge-dialog input,.merge-dialog textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:9px;font:inherit;font-size:13px}
+@media(max-width:600px){.merge-comparison{grid-template-columns:1fr}}
 .candidate-card,.item-card{border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.candidate-raw,.item-card p,.processing-result p{margin:0;color:var(--ink);font-size:13px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}
 .status,.recommendation,.category{font-size:11px;padding:4px 8px;border-radius:20px;background:var(--surface-2);color:var(--dim)}
 .processing-result{border-left:2px solid var(--accent);padding:10px 12px;background:var(--surface-2);border-radius:0 8px 8px 0;display:flex;flex-direction:column;gap:8px}
