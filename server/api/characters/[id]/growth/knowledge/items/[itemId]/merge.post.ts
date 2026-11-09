@@ -100,6 +100,15 @@ export default defineEventHandler(async (event) => {
         data: { status: "RESOLVED", resolution: "MERGED", resolvedAt: new Date() },
       });
     }
+    // Once the source is merged, its other open suggestions can no longer be
+    // acted on independently. Keep them for audit, but close them explicitly.
+    await tx.knowledgeItemRelation.updateMany({
+      where: {
+        characterId, status: "OPEN",
+        OR: [{ sourceItemId: source.id }, { targetItemId: source.id }],
+      },
+      data: { status: "DISMISSED", resolution: "SOURCE_MERGED", resolvedAt: new Date() },
+    });
     const relation = await tx.knowledgeItemRelation.create({
       data: {
         characterId, sourceItemId: source.id, targetItemId: target.id,
