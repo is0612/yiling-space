@@ -110,7 +110,7 @@ export async function fetchKnowledgeWebPage(rawUrl: string): Promise<ParsedKnowl
     if (reason === "IMAGE_INVALID_PROTOCOL") throw new Error("只允许导入 HTTP 或 HTTPS 网页。");
     throw new Error("请输入有效的 HTTP 或 HTTPS 网页地址。");
   }
-  let result;
+  let result: Awaited<ReturnType<typeof downloadSafeMedia>>;
   try {
     result = await downloadSafeMedia(url.toString(), {
       prefix: "IMAGE",
