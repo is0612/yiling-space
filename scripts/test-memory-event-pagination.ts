@@ -193,19 +193,21 @@ try {
   const contextInput = { conversationId: "conversation", periodStart: start, periodEnd: end, first: { occurredAt: end, id: "first" } };
   const contextPrisma = (rows: typeof contextRows) => ({ message: { findMany: async () => rows } }) as unknown as Pick<PrismaClient, "message">;
   assert.deepEqual(await loadEventContextMessages(contextPrisma(contextRows), contextInput), [...contextRows].reverse());
-  assert.deepEqual(await loadEventContextMessages(contextPrisma([{ id: "huge", content: "中".repeat(2_000) }, ...contextRows]), contextInput), []);
+  assert.deepEqual(await loadEventContextMessages(contextPrisma([{ id: "huge", content: "中".repeat(4_000) }, ...contextRows]), contextInput), [],
+    "a nearest row above the context cap stops the window instead of skipping to older rows");
   const boundedContext = await loadEventContextMessages(contextPrisma([
-    { id: "recent", content: "中".repeat(600) }, { id: "old", content: "中".repeat(600) },
+    { id: "recent", content: "中".repeat(1_800) }, { id: "old", content: "中".repeat(1_800) },
   ]), contextInput);
   assert.deepEqual(boundedContext.map((row) => row.id), ["recent"]);
   const longContext = { id: "long-context", content: "中".repeat(2_000) };
   assert.deepEqual(await loadEventContextMessages(contextPrisma([longContext]), { ...contextInput, newMessageTokens: 0 }), [longContext],
     "a two-thousand-token nearest message fits intact when new evidence leaves room");
-  assert.deepEqual(await loadEventContextMessages(contextPrisma([longContext]), { ...contextInput, newMessageTokens: 4_000 }), [],
+  assert.deepEqual(await loadEventContextMessages(contextPrisma([longContext]), { ...contextInput, newMessageTokens: 7_000 }), [],
     "the same nearest message must not be truncated into the minimum context window");
   for (const newMessageTokens of [0, 2_000, 3_000, 4_000, 9_000]) {
     const candidates = Array.from({ length: 12 }, (_, index) => ({ id: `ctx-${index}`, content: "中".repeat(450) }));
-    const budget = Math.min(3_000, Math.max(1_000, 5_000 - newMessageTokens));
+    // 前文与新消息共享 7000 token（= 前文上限 3000 + 新消息上限 4000）。
+    const budget = Math.min(3_000, Math.max(1_000, 7_000 - newMessageTokens));
     const selected = await loadEventContextMessages(contextPrisma(candidates), { ...contextInput, newMessageTokens });
     const cost = selected.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0);
     assert(cost <= budget);
@@ -214,7 +216,7 @@ try {
   }
   assert.deepEqual(await loadEventContextMessages(contextPrisma([
     { id: "near", content: "中".repeat(600) }, longContext, { id: "old-small", content: "old" },
-  ]), { ...contextInput, newMessageTokens: 4_000 }), [{ id: "near", content: "中".repeat(600) }],
+  ]), { ...contextInput, newMessageTokens: 7_000 }), [{ id: "near", content: "中".repeat(600) }],
   "stop at a long middle row instead of skipping to older small messages");
   const isolation = fixture(20, true, true);
   isolation.rows[0]!.conversationId = "another-conversation";
@@ -305,14 +307,15 @@ try {
   assert.equal(contextualResult.processed && contextualResult.status, "SUCCEEDED",
     "context-only model events must be removed before persistence (the mock has no event writer)");
   assert.deepEqual(seen, contextual.rows.slice(1).map(row => row.id), "context must never be consumed again as new evidence");
-  assert(requests.length >= 3, "long available context must shrink the first original block into subrequests");
+  assert.equal(requests.length, 2,
+    "a long context must not shrink the new-evidence block: the subrequest size follows the 4000-token new-message budget, not the context already consumed");
   assert(requests[0]!.contextMessages?.some(row => row.id === id(1) && row.content === contextual.rows[0]!.content),
     "the long nearest context must reach the model intact");
   for (const request of requests) {
     const all = [...request.messages, ...(request.contextMessages ?? [])];
     const tokens = all.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0);
-    assert(tokens <= 5_000 || request.messages.length === 1 && estimateTokens(JSON.stringify(request.messages[0])) > 4_000,
-      `new evidence plus context must share the five-thousand-token budget: ${tokens}`);
+    assert(tokens <= 7_000 || request.messages.length === 1 && estimateTokens(JSON.stringify(request.messages[0])) > 4_000,
+      `new evidence plus context must share the seven-thousand-token budget: ${tokens}`);
     assert((request.contextMessages?.length ?? 0) <= 12);
     assert(!request.contextMessages?.some(row => request.messages.some(message => message.id === row.id)));
   }
@@ -328,7 +331,9 @@ try {
   requests.length = 0;
   const atomicFailure = await runDailyEventJob(atomic.prisma, job, end);
   assert.equal(atomicFailure.processed && atomicFailure.status, "RETRY_WAIT");
-  assert(requests.length >= 2, "multiple context-sized requests must complete before the original block transaction");
+  // The first block is one subrequest: context no longer eats into the new-message budget,
+  // so the eight rows only split on the global block boundary above.
+  assert.equal(requests.length, 1, "the first block must be a single subrequest before its transaction fails");
   assert.equal(atomic.progress()?.extractedMessageId, id(1), "no child request may advance the original block cursor independently");
   const replayIds = [...seen];
   atomic.failAt(0);
@@ -345,7 +350,7 @@ try {
   seen.length = 0;
   await runDailyEventJob(legacy.prisma, job, end);
   assert.deepEqual(seen, legacy.rows.map((row) => row.id));
-  console.log("Memory event pagination passed: natural pauses/early gaps/final blocks, clamped 2000–4000-token and 40-message limits, intact evidence, twelve-row contiguous context, shared 5000-token worker budget, context-only event rejection, atomic subrequest replay, 960/961 keysets, failure resume, legacy cursor, and partial FINAL guard.");
+  console.log("Memory event pagination passed: natural pauses/early gaps/final blocks, clamped 2000–4000-token and 40-message limits, intact evidence, twelve-row contiguous context, shared 7000-token worker budget, context-only event rejection, atomic subrequest replay, 960/961 keysets, failure resume, legacy cursor, and partial FINAL guard.");
 } finally {
   globalThis.fetch = originalFetch;
   for (const [key, value] of Object.entries({ LLM_API_KEY: originalEnv.key, LLM_BASE_URL: originalEnv.base, LLM_MODEL: originalEnv.model })) {

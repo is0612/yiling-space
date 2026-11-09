@@ -5,7 +5,20 @@ import { estimateTokens } from "./memory-retrieval";
 export const EVENT_AI_INPUT_TOKENS = 4_000;
 export const EVENT_AI_MESSAGES_PER_REQUEST = 40;
 export const EVENT_AI_CONTEXT_TOKENS = 3_000;
-export const EVENT_AI_TOTAL_TOKENS = 5_000;
+/**
+ * 前文 + 新消息的共享上限，**必须容得下两者的上限之和**（3000 + 4000）。
+ *
+ * 这里原来是 5000，而前文上限 3000、新消息上限 4000 —— 三个数在纸面上各自成立，
+ * 实际却是「前文只要占满，新消息预算就只剩 2000」。切分的两条约束里 40 条/批先撞线，
+ * 2000 token 一旦成为瓶颈，每批从二十几条掉到十几条：**同样一天的消息，模型调用次数
+ * 直接翻倍**，而调用是串行的、每次还要重新带一遍前文，于是整理看起来越来越慢。
+ * 加上 2026-11-09 的自然边界回退会把接近上限的块再切开，块数还会再多一截。
+ *
+ * 取 7000 = 3000 + 4000，正好等于两个上限之和，不留魔法余量：已知事件（`existingEvents`
+ * 最多 40 条标题）与系统提示词本来就在这个预算之外。放宽它不改变任何抽取语义，
+ * 只是让「前文衔接」不再以牺牲吞吐为代价 —— 单次请求从约 5000 涨到约 7000 token。
+ */
+export const EVENT_AI_TOTAL_TOKENS = 7_000;
 export const EVENT_AI_CONTEXT_MESSAGES = 12;
 export const EVENT_NATURAL_GAP_MS = 5 * 60 * 1_000;
 

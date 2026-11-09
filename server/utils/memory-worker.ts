@@ -29,7 +29,7 @@ import { normalizeFriendAliases } from "./friend-aliases";
 import { MEMORY_JOB_LEASE_MS, lockMemoryJobLease, memoryJobLeaseWhere, MemoryJobLeaseLostError, renewMemoryJobLease, type MemoryJobLease } from "./memory-job-lease";
 import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
 import { estimateTokens } from "./memory-retrieval";
-import { EVENT_AI_INPUT_TOKENS, EVENT_AI_TOTAL_TOKENS, splitEventMessagesByBudget, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
+import { EVENT_AI_CONTEXT_TOKENS, EVENT_AI_INPUT_TOKENS, EVENT_AI_TOTAL_TOKENS, splitEventMessagesByBudget, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
 import { rawMessageCleanupDependencyCutoff } from "./memory-event-cleanup";
 
 /** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
@@ -309,13 +309,18 @@ export async function runDailyEventJob(
       }> = [];
       for (const originalGroup of groups) {
         const conversationId = originalGroup[0]!.conversationId;
-        // 先查看相邻前文占用，再给新消息分配预算；不把别的会话带进来。
-        const preceding = await loadEventContextMessages(prisma, {
-          conversationId, periodStart: job.periodStart, periodEnd: job.periodEnd,
-          first: originalGroup[0]!, newMessageTokens: 0,
-        });
-        const contextTokens = preceding.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0);
-        const newMessageBudget = Math.min(EVENT_AI_INPUT_TOKENS, EVENT_AI_TOTAL_TOKENS - contextTokens);
+        /**
+         * 新消息预算按前文的**上限**预留，不再查一遍实际前文再算。
+         *
+         * `EVENT_AI_INPUT_TOKENS` 已经把新消息封顶在 4000，所以拿实际前文去算，唯一的
+         * 净效果就是把它压到 4000 以下（前文占满 3000 时压到 2000）：每个会话每块多一次
+         * `loadEventContextMessages` 查询，换来的是块数翻倍、模型调用次数翻倍。
+         * 真正的前文仍按每次请求的首条消息单独取，长度不受这里影响。
+         */
+        const newMessageBudget = Math.min(
+          EVENT_AI_INPUT_TOKENS,
+          EVENT_AI_TOTAL_TOKENS - EVENT_AI_CONTEXT_TOKENS,
+        );
         for (const group of splitEventMessagesByBudget(originalGroup, newMessageBudget)) {
           let knownEvents = knownEventsByConversation.get(conversationId);
           if (!knownEvents) {
