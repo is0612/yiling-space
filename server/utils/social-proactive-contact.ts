@@ -460,6 +460,21 @@ export async function runSocialProactiveContactTick(
           continue;
         }
 
+        // 先核验一次群成员，避免对已退群/不在群的人白白调用模型；发送前仍会再核验。
+        const preverified = await verifyOnebotGroupMember(group.connection.config, group.groupId, identity.platformUid);
+        if (!preverified) {
+          lastSkipReason = "target_not_verified";
+          await recordAttempt({
+            scopeId: friend.id,
+            status: "SKIPPED",
+            reason: "target_not_verified",
+            groupId: group.groupId,
+            dedupeKey,
+          });
+          handled = true;
+          break;
+        }
+
         const memories = await prisma.memoryItem.findMany({
           where: { memoryScopeId: friend.id, status: "ACTIVE", deletedAt: null },
           orderBy: [{ importance: "desc" }, { updatedAt: "desc" }],
