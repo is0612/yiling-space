@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Refresh } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 
 definePageMeta({ topbar: { title: "关系评估历史" } });
 
@@ -33,6 +33,8 @@ type Assessment = {
   modelName: string | null;
   promptVersion: string | null;
   status: string;
+  reviewStatus: string;
+  reviewedAt: string | null;
   error: string | null;
   startedAt: string;
   completedAt: string | null;
@@ -50,6 +52,7 @@ const pageNumber = ref(1);
 const total = ref(0);
 const totalPages = ref(1);
 const expanded = ref<string[]>([]);
+const reviewingIds = ref<string[]>([]);
 let requestVersion = 0;
 let roleVersion = 0;
 let disposed = false;
@@ -62,6 +65,10 @@ const STATUS_LABELS: Record<string, string> = {
 };
 const OUTCOME_LABELS: Record<string, string> = {
   CHANGE: "建议调整", MAINTAIN: "维持现状", INSUFFICIENT: "证据不足", REVIEW: "需要复核",
+};
+const REVIEW_STATUS_LABELS: Record<string, string> = {
+  NOT_REQUIRED: "无需处置", PENDING: "待人工确认", DEFERRED: "已暂缓",
+  ACCEPTED: "已采纳", REJECTED: "已驳回", STALE: "建议已过期",
 };
 const TRIGGER_LABELS: Record<string, string> = {
   NEW_EXPERIENCE: "新经历", PERIODIC_REVIEW: "定期回顾", EXISTING_EXPERIENCE_RECOVERY: "历史经历补评",
@@ -106,6 +113,37 @@ async function load(target = characterId.value, requestedPage = pageNumber.value
 }
 function toggle(id: string) {
   expanded.value = expanded.value.includes(id) ? expanded.value.filter(value => value !== id) : [...expanded.value, id];
+}
+
+async function review(item: Assessment, decision: "ACCEPTED" | "REJECTED" | "DEFERRED") {
+  if (reviewingIds.value.includes(item.id)) return;
+  const title = decision === "ACCEPTED" ? "采纳这条关系建议？" : decision === "REJECTED" ? "驳回这条关系建议？" : "暂缓处理这条建议？";
+  let message = decision === "ACCEPTED"
+    ? `关系将从「${stage(item.currentRelationship.stage)} / ${status(item.currentRelationship.status)}」调整为「${stage(item.suggestedStage)} / ${status(item.suggestedStatus)}」。这会立即写入关系并留下变更记录。`
+    : decision === "REJECTED"
+      ? "驳回后不会修改好友关系，这条建议会保留在历史中。"
+      : "暂缓后不会修改好友关系，你可以之后再回来处理。";
+  try {
+    await ElMessageBox.confirm(message, title, { type: decision === "ACCEPTED" ? "warning" : "info", confirmButtonText: title.replace("？", ""), cancelButtonText: "取消" });
+  } catch { return; }
+  reviewingIds.value = [...reviewingIds.value, item.id];
+  try {
+    const result = await $fetch<{ applied: boolean; stale?: boolean }>(
+      `/api/characters/${encodeURIComponent(characterId.value)}/growth/social/assessments/${encodeURIComponent(item.id)}/review`,
+      { method: "POST", body: { decision } },
+    );
+    if (result.stale) ElMessage.warning("关系已经变化，这条建议已过期，没有修改关系。");
+    else if (decision === "ACCEPTED" && result.applied) ElMessage.success("已采纳建议并更新关系。");
+    else if (decision === "REJECTED") ElMessage.success("已驳回建议，关系保持不变。");
+    else ElMessage.success("已暂缓建议，之后仍可继续处理。");
+    await load();
+  } catch (error) {
+    const e = error as { data?: { statusMessage?: string }; message?: string };
+    ElMessage.error(e.data?.statusMessage || e.message || "处理关系建议失败。");
+    await load();
+  } finally {
+    reviewingIds.value = reviewingIds.value.filter(id => id !== item.id);
+  }
 }
 watch(characterId, target => {
   roleVersion += 1;
@@ -158,6 +196,14 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
         </div>
         <p v-if="item.reason" class="reason">{{ item.reason }}</p>
         <p v-if="item.error" class="error-text">执行失败：{{ item.error }}</p>
+        <div class="review-row">
+          <span class="review-status" :class="'review-' + item.reviewStatus.toLowerCase()">{{ REVIEW_STATUS_LABELS[item.reviewStatus] || item.reviewStatus }}</span>
+          <div v-if="item.status === 'SUCCEEDED' && item.outcome === 'CHANGE' && ['PENDING', 'DEFERRED'].includes(item.reviewStatus)" class="review-actions">
+            <el-button size="small" type="primary" :loading="reviewingIds.includes(item.id)" :disabled="reviewingIds.includes(item.id)" @click="review(item, 'ACCEPTED')">采纳并更新关系</el-button>
+            <el-button size="small" :disabled="reviewingIds.includes(item.id)" @click="review(item, 'DEFERRED')">暂缓</el-button>
+            <el-button size="small" text type="danger" :disabled="reviewingIds.includes(item.id)" @click="review(item, 'REJECTED')">驳回</el-button>
+          </div>
+        </div>
         <div v-if="observations(item.observations).observations?.length" class="observations">
           <strong>观察要点</strong>
           <ul><li v-for="(note, index) in observations(item.observations).observations" :key="index">{{ note }}</li></ul>
@@ -212,6 +258,10 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
 .relationship-grid>div{display:grid;gap:5px;padding:10px;border-radius:8px;background:var(--surface-2)}
 .relationship-grid small{color:var(--dim);font-size:10px}
 .relationship-grid strong{color:var(--ink);font-size:13px}
+.review-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:12px}
+.review-status{font-size:11px;color:var(--dim)}
+.review-pending{color:var(--warning,#b7791f)}.review-deferred{color:var(--dim)}.review-accepted{color:var(--success,#0d9488)}.review-rejected,.review-stale{color:var(--dim)}
+.review-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .reason{margin:14px 0 0;color:var(--text-2,var(--ink));font-size:13px;line-height:1.8;white-space:pre-wrap}
 .error-text{color:var(--danger,#dc2626);font-size:12px}
 .observations{margin-top:12px;color:var(--text-2,var(--ink));font-size:12px}
