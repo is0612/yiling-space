@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { evaluateSocialProactiveContactGate, type SocialProactiveContactGateInput } from "../server/utils/social-proactive-contact-policy";
+import {
+  buildSocialProactiveContactSegments,
+  evaluateSocialProactiveContactGate,
+  type SocialProactiveContactGateInput,
+} from "../server/utils/social-proactive-contact-policy";
 
 const now = new Date("2026-11-09T12:00:00.000Z");
 const base: SocialProactiveContactGateInput = {
@@ -55,3 +59,11 @@ assert.equal(gate({
 }).reason, "ok", "刚好到冷却边界时放行");
 
 console.log("social-proactive-contact-policy: 全部通过");
+
+assert.deepEqual(buildSocialProactiveContactSegments("123456789", "  最近还好吗？  "), [
+  { type: "at", data: { qq: "123456789" } },
+  { type: "text", data: { text: " 最近还好吗？" } },
+]);
+assert.throws(() => buildSocialProactiveContactSegments("[CQ:at,qq=123456789]", "你好"), /invalid_target_qq/);
+assert.throws(() => buildSocialProactiveContactSegments("123456789", "  "), /empty_contact_content/);
+
