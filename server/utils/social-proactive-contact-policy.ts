@@ -25,6 +25,8 @@ export type SocialProactiveContactGateInput = {
   hasCommonGroup: boolean;
   /** 选中的共同群是否仍允许机器人主动发言。 */
   groupMode: SocialContactGroupMode | null;
+  /** 沿用该共同群的安静时段，避免深夜主动打扰。 */
+  quietHours: boolean;
   /** 发送前通过 OneBot 实时查询确认目标仍在群内。 */
   targetMemberVerified: boolean;
   /** 目标是 AI 时，当前群会话连续 AI 轮数。 */
@@ -69,6 +71,7 @@ export type SocialProactiveContactGateResult = {
     | "channel_unavailable"
     | "no_common_group"
     | "group_mode_forbids"
+    | "quiet_hours"
     | "target_not_verified"
     | "ai_dialogue_limit"
     | "daily_limit"
@@ -105,6 +108,7 @@ export function evaluateSocialProactiveContactGate(
   if (input.groupMode !== "ambient" && input.groupMode !== "all") {
     return { allowed: false, reason: "group_mode_forbids" };
   }
+  if (input.quietHours) return { allowed: false, reason: "quiet_hours" };
   if (!input.targetMemberVerified) return { allowed: false, reason: "target_not_verified" };
 
   if (
