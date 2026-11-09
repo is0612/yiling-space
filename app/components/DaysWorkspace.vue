@@ -237,15 +237,17 @@ async function loadDays(targetCharacterId = id.value) {
     today.value = result.today;
     timeZone.value = result.timeZone || "Asia/Shanghai";
 
-    const nextSelected = result.days.some((day) => day.dayKey === selected.value)
-      ? selected.value
+    const previousSelected = selected.value;
+    const nextSelected = result.days.some((day) => day.dayKey === previousSelected)
+      ? previousSelected
       : result.days[0]?.dayKey ?? "";
-    if (nextSelected !== selected.value) {
-      selected.value = nextSelected;
-      // selected watcher owns loading the newly selected day's detail.
-    } else if (nextSelected) {
-      // The selection did not change, so its watcher will not run.
-      void loadDetail(nextSelected, targetCharacterId);
+    if (nextSelected !== previousSelected) selected.value = nextSelected;
+    if (nextSelected) {
+      // 详情必须在 setup 里等到，而不是丢给 watcher 补载：watcher 只在客户端冲刷，
+      // SSR 首帧会停在「没有详情」的空分支，浏览器水合时客户端已是 loading 分支，
+      // 于是报 Hydration node mismatch。
+      // 刷新同一天时保留当前页；换到新的一天则回到第 1 页。
+      await loadDetail(nextSelected, targetCharacterId, nextSelected === previousSelected ? eventsPage.value : 1);
     } else {
       detailRequestSeq += 1;
       detail.value = null;
@@ -323,15 +325,19 @@ watch(id, () => {
   if (searchTimer) clearTimeout(searchTimer);
   void loadDays(id.value);
 });
-watch(selected, (dayKey) => {
+/**
+ * 点击左侧日期切换选中日。
+ *
+ * 不再用 `watch(selected)` 去追详情：watcher 只在客户端冲刷，SSR 首帧拿不到，
+ * 水合时两边分支对不上；而且程序化改 `selected`（首屏、搜索、换角色）也会被连带触发。
+ * 现在只有用户点击才走这里，首屏和刷新都由 `loadDays` 自己 await。
+ */
+function selectDay(dayKey: string) {
+  if (!dayKey || dayKey === selected.value) return;
+  selected.value = dayKey;
   eventsPage.value = 1;
-  if (dayKey) void loadDetail(dayKey, id.value, 1);
-  else {
-    detailRequestSeq += 1;
-    detail.value = null;
-    detailLoading.value = false;
-  }
-});
+  void loadDetail(dayKey, id.value, 1);
+}
 // 搜索：300ms 防抖。输入变化的当下就让旧请求失效，而不是等下一个请求发出。
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 watch(searchQuery, () => {
@@ -419,7 +425,7 @@ await loadDays();
           type="button"
           class="day-item"
           :class="{ active: day.dayKey === selected }"
-          @click="selected = day.dayKey"
+          @click="selectDay(day.dayKey)"
         >
           <span class="day-item-label">{{ dayLabel(day.dayKey) }}</span>
           <span class="day-item-meta">

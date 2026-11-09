@@ -38,9 +38,12 @@ type PendingRequest = {
 
 function harness() {
   /**
-   * Vue 的 `watch` 回调签名是 `(新值, 旧值)`，页面里的 `watch(selected, (dayKey) => …)` 就靠这个入参取日期。
+   * Vue 的 `watch` 回调签名是 `(新值, 旧值)`，与页面里 `watch(id, …)` / `watch(searchQuery, …)` 一致。
    * 以前的桩调用 `callback()` 不传参，`dayKey` 永远是 `undefined`，于是选日期后从不发详情请求 ——
    * 测试看起来在测竞态，实际测的是一个被桩削掉的分支。
+   *
+   * 注意：选日期不再走 `watch(selected)`（水合期 SSR/CSR 分支不一致），用户点击改由 `selectDay` 处理，
+   * 首屏由 `loadDays` 自己 await 详情。切日相关的用例直接调 `selectDay`。
    */
   type Watcher = { sources: Ref[]; callback: (...args: unknown[]) => void; previous: unknown[] };
   const watchers: Watcher[] = [];
@@ -242,10 +245,11 @@ async function rapidRoleSwitches() {
   page.finish();
 }
 
-async function staleSelectedDay() {  const page = harness();
-  page.set("selected", "2026-11-04");
+async function staleSelectedDay() {
+  const page = harness();
+  page.call("selectDay", "2026-11-04");
   const old = page.take("/api/characters/role-a/days/2026-11-04");
-  page.set("selected", "2026-11-05");
+  page.call("selectDay", "2026-11-05");
   const current = page.take("/api/characters/role-a/days/2026-11-05");
   old.resolve(detailResult("2026-11-04"));
   await flushMicrotasks();
@@ -320,4 +324,4 @@ for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSel
   await test();
   console.log(`PASS ${test.name}`);
 }
-console.log("days page async race regressions passed (actual DaysWorkspace.vue handlers and watchers)");
+console.log("days page async race regressions passed (actual DaysWorkspace.vue handlers)");
