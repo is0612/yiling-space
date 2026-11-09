@@ -48,6 +48,8 @@ assert.equal(gate({ groupMode: "mention" }).reason, "group_mode_forbids");
 assert.equal(gate({ groupMode: null }).reason, "group_mode_forbids",
   "未知群模式必须 fail closed");
 assert.equal(gate({ quietHours: true }).reason, "quiet_hours",
+  "沿用群安静时段，深夜不主动打扰");
+assert.equal(gate({ quietHours: true }).reason, "quiet_hours",
   "共同群的安静时段内不主动联系");
 assert.equal(gate({ targetMemberVerified: false }).reason, "target_not_verified",
   "不能用历史群成员记录代替发送前核验");
@@ -64,6 +66,10 @@ assert.equal(gate({
 assert.deepEqual(buildSocialProactiveContactSegments("123456789", "  最近还好吗？  "), [
   { type: "at", data: { qq: "123456789" } },
   { type: "text", data: { text: " 最近还好吗？" } },
+]);
+assert.deepEqual(buildSocialProactiveContactSegments("123456789", "第一行\\n第二行"), [
+  { type: "at", data: { qq: "123456789" } },
+  { type: "text", data: { text: " 第一行 第二行" } },
 ]);
 assert.throws(() => buildSocialProactiveContactSegments("[CQ:at,qq=123456789]", "你好"), /invalid_target_qq/);
 assert.throws(() => buildSocialProactiveContactSegments("123456789", "  "), /empty_contact_content/);
