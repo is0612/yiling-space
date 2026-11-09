@@ -32,6 +32,12 @@ type Friend = {
   identityKindSource: "AUTO" | "MANUAL";
   friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK";
   proactiveContactEnabled: boolean;
+  lastProactiveContactAttempt: {
+    status: "SENDING" | "SENT" | "SKIPPED" | "FAILED" | "EXPIRED";
+    reason: string;
+    attemptedAt: string;
+    sentAt: string | null;
+  } | null;
   interactionCount: number;
   lastInteractedAt: string | null;
   knownSince: string;
@@ -127,6 +133,19 @@ function formatDateTime(value: string | null) {
   if (Number.isNaN(date.getTime())) return "—";
   const pad = (input: number) => String(input).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function proactiveAttemptLabel(friend: Friend) {
+  const attempt = friend.lastProactiveContactAttempt;
+  if (!attempt) return "暂无联系记录";
+  const labels: Record<typeof attempt.status, string> = {
+    SENDING: "发送中",
+    SENT: "已发送",
+    SKIPPED: "已跳过",
+    FAILED: "发送失败",
+    EXPIRED: "已过期",
+  };
+  return `${labels[attempt.status]} · ${formatDateTime(attempt.sentAt ?? attempt.attemptedAt)}`;
 }
 
 /** 头像只放一个字：昵称取首字，没有昵称就取 UID 首位。真头像取不到时也回落到这里。 */
@@ -954,6 +973,12 @@ onMounted(() => load(1));
             <div>
               <dt>认识于</dt>
               <dd>{{ formatDateTime(friend.knownSince) }}</dd>
+            </div>
+            <div>
+              <dt>主动联系</dt>
+              <dd :class="{ 'is-muted': !friend.lastProactiveContactAttempt }">
+                {{ proactiveAttemptLabel(friend) }}
+              </dd>
             </div>
           </dl>
         </article>
