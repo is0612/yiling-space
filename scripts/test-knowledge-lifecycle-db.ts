@@ -214,6 +214,39 @@ try {
   assert.ok(!trashIds.includes(searchable.id), "回收站不能列出 ACTIVE 知识");
   assert.ok(!trashIds.includes(cyclical.id), "回收站不能列出 ACTIVE 知识");
 
+  // 归档区和回收站都使用服务端分页；搜索必须在分页前过滤，且计数对应当前搜索结果。
+  const archivedBatch = await Promise.all(Array.from({ length: 31 }, (_, index) =>
+    makeItem(characterAId, `归档分页专用-${index.toString().padStart(2, "0")}`),
+  ));
+  for (const item of archivedBatch) {
+    await call("POST", itemPath(characterAId, item.id, "archive"), session.token, { expectedRevision: 1 });
+  }
+  const archivePageOne = await call("GET", `/characters/${characterAId}/growth/knowledge?itemStatus=ARCHIVED&page=1&q=归档分页专用`, session.token);
+  const archivePageTwo = await call("GET", `/characters/${characterAId}/growth/knowledge?itemStatus=ARCHIVED&page=2&q=归档分页专用`, session.token);
+  assert.equal((archivePageOne.body.items as Json[]).length, 30, "归档第一页应最多返回 30 条");
+  assert.equal((archivePageTwo.body.items as Json[]).length, 1, "归档第二页应返回剩余条目");
+  assert.equal((archivePageOne.body.itemPagination as Json).total, 31, "归档分页总数应反映搜索后的条目数");
+  assert.equal((archivePageTwo.body.itemPagination as Json).page, 2);
+  const archiveSearch = await call("GET", `/characters/${characterAId}/growth/knowledge?itemStatus=ARCHIVED&q=归档分页专用-30`, session.token);
+  assert.equal((archiveSearch.body.items as Json[]).length, 1, "归档搜索应在分页前过滤");
+  assert.equal((archiveSearch.body.itemPagination as Json).total, 1);
+
+  const trashBatch = await Promise.all(Array.from({ length: 31 }, (_, index) =>
+    makeItem(characterAId, `回收站分页专用-${index.toString().padStart(2, "0")}`),
+  ));
+  for (const item of trashBatch) {
+    await call("POST", itemPath(characterAId, item.id, "trash"), session.token, { expectedRevision: 1 });
+  }
+  const trashPageOne = await call("GET", `/characters/${characterAId}/growth/knowledge/trash?page=1&q=回收站分页专用`, session.token);
+  const trashPageTwo = await call("GET", `/characters/${characterAId}/growth/knowledge/trash?page=2&q=回收站分页专用`, session.token);
+  assert.equal((trashPageOne.body.items as Json[]).length, 30, "回收站第一页应最多返回 30 条");
+  assert.equal((trashPageTwo.body.items as Json[]).length, 1, "回收站第二页应返回剩余条目");
+  assert.equal((trashPageOne.body.pagination as Json).total, 31, "回收站分页总数应反映搜索后的条目数");
+  assert.equal((trashPageTwo.body.pagination as Json).page, 2);
+  const trashSearch = await call("GET", `/characters/${characterAId}/growth/knowledge/trash?q=回收站分页专用-30`, session.token);
+  assert.equal((trashSearch.body.items as Json[]).length, 1, "回收站搜索应在分页前过滤");
+  assert.equal((trashSearch.body.pagination as Json).total, 1);
+
   // ---------------------------------------------------------------------------
   // 6. 永久删除：状态限制 + 二次确认。
   // ---------------------------------------------------------------------------
