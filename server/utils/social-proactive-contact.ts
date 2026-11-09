@@ -339,6 +339,7 @@ export async function runSocialProactiveContactTick(
     }
 
     let handled = false;
+    let lastSkipReason = "no_eligible_common_group";
     for (const friend of friends) {
       const identity = friend.externalIdentity;
       if (!identity || !/^\d{5,15}$/u.test(identity.platformUid)) continue;
@@ -346,7 +347,16 @@ export async function runSocialProactiveContactTick(
       const lastContactAt = friend.socialProactiveContactAttempts[0]?.sentAt ?? null;
 
       const groups = await findCommonGroups(character.id, identity.platformUid, connections);
-      if (!groups.length) continue;
+      if (!groups.length) {
+        lastSkipReason = "no_common_group";
+        await recordAttempt({
+          scopeId: friend.id,
+          status: "SKIPPED",
+          reason: "no_common_group",
+          dedupeKey: `${dayKey(now)}:no-group:${Math.floor(now.getTime() / ATTEMPT_DEDUPE_WINDOW_MS)}`,
+        });
+        continue;
+      }
 
       for (const group of groups) {
         const gate = evaluateSocialProactiveContactGate({
@@ -368,10 +378,17 @@ export async function runSocialProactiveContactTick(
           cooldownMs: FRIEND_COOLDOWN_MS,
           now,
         });
-        if (gate.reason === "friend_cooldown" || gate.reason === "ai_dialogue_limit") {
+        if (!gate.allowed && gate.reason !== "target_not_verified") {
+          lastSkipReason = gate.reason;
+          await recordAttempt({
+            scopeId: friend.id,
+            status: "SKIPPED",
+            reason: gate.reason,
+            groupId: group.groupId,
+            dedupeKey: `${dayKey(now)}:${group.groupId}:${Math.floor(now.getTime() / ATTEMPT_DEDUPE_WINDOW_MS)}`,
+          });
           continue;
         }
-        if (!gate.allowed && gate.reason !== "target_not_verified") continue;
 
         const memories = await prisma.memoryItem.findMany({
           where: { memoryScopeId: friend.id, status: "ACTIVE", deletedAt: null },
@@ -578,7 +595,7 @@ export async function runSocialProactiveContactTick(
       }
       if (handled) break;
     }
-    if (!handled) results.push(skip("no_eligible_common_group"));
+    if (!handled) results.push(skip(lastSkipReason));
   }
 
   return results;
