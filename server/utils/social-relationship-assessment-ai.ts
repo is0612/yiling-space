@@ -160,7 +160,7 @@ async function callAssessment(runtime: SocialRelationshipAssessmentRuntime, inpu
     headers: { authorization: "Bearer " + runtime.apiKey, "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({
       model: runtime.model, temperature: runtime.temperature, max_tokens: runtime.maxOutputTokens,
-      messages: buildMessages(input), response_format: { type: "json_object" },
+      messages: buildMessages(input),
     }),
     signal: AbortSignal.timeout(60_000),
   });
