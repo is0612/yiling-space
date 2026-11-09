@@ -385,6 +385,46 @@ async function revisionConflictClosesStaleEditor() {
   assert.equal(page.requests.length, 0);
 }
 
+/** 12. 候选关联确认使用当前角色与候选ID，并在成功后刷新状态。 */
+async function candidateRelationConfirmationRefreshesWorkspace() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("initial"));
+  await flushMicrotasks();
+  const candidate = {
+    id: "candidate-a",
+    sourceType: "MANUAL",
+    sourceRef: null,
+    rawContent: "知识候选",
+    status: "REVIEW",
+    processingError: null,
+    processedAt: null,
+    createdAt: "2026-11-09",
+    relatedItems: [{ id: "item-a", title: "已有知识", content: "已有正文", category: "GENERAL", tags: [], revision: 2 }],
+    processedResult: {
+      isKnowledge: true,
+      recommendation: "DUPLICATE",
+      title: "候选标题",
+      content: "候选正文",
+      category: "GENERAL",
+      tags: [],
+      confidence: 0.9,
+      reason: "内容相似",
+      relatedItemIds: ["item-a"],
+      confirmedRelatedItemIds: [],
+    },
+  };
+  const saving = page.call("toggleCandidateRelation", candidate, candidate.relatedItems[0]);
+  const post = page.take("/api/characters/char-a/growth/knowledge/candidates/candidate-a/relations", "POST");
+  assert.deepEqual(post.options?.body, { targetItemId: "item-a", confirmed: true });
+  post.resolve({ confirmedRelatedItemIds: ["item-a"] });
+  await flushMicrotasks();
+  const refresh = page.take("/api/characters/char-a/growth/knowledge");
+  refresh.resolve(workspace("after relation confirmation"));
+  await saving;
+  assert.ok(page.successes.includes("已确认这条关联。"));
+  page.finish();
+}
+
 async function main() {
   const tests = [
     ["知识列表切角色竞态", knowledgeListSwitchRace],
@@ -398,6 +438,7 @@ async function main() {
     ["版本历史不跨角色显示", knowledgeHistoryDoesNotCrossRole],
     ["旧知识编辑响应不污染新角色", staleKnowledgeEditCannotTouchNextRole],
     ["版本冲突关闭过期草稿", revisionConflictClosesStaleEditor],
+    ["候选关联确认后刷新工作区", candidateRelationConfirmationRefreshesWorkspace],
   ] as const;
   for (const [name, test] of tests) {
     await test();
