@@ -362,6 +362,19 @@ function setProactiveContactEnabled(friend: Friend, enabled: boolean) {
   void patchFriend(friend, { proactiveContactEnabled: enabled });
 }
 
+function proactiveContactAttemptLabel(friend: Friend): string {
+  const attempt = friend.lastProactiveContactAttempt;
+  if (!attempt) return "";
+  const labels: Record<Friend["lastProactiveContactAttempt"]["status"], string> = {
+    SENDING: "正在发送",
+    SENT: "已发送",
+    SKIPPED: "已跳过",
+    FAILED: "发送失败",
+    EXPIRED: "已过期",
+  };
+  return `最近主动联系：${labels[attempt.status]} · ${formatDateTime(attempt.sentAt ?? attempt.attemptedAt)}`;
+}
+
 /**
  * 多选：给「很少聊的那几个人」准备的一次性清理。
  *
@@ -956,6 +969,13 @@ onMounted(() => load(1));
             </label>
             <p class="friend-save-state">
               {{ saveStateLabel(friend.scopeId) }}
+            </p>
+            <p
+              v-if="friend.lastProactiveContactAttempt"
+              class="friend-save-state"
+              :title="friend.lastProactiveContactAttempt.reason"
+            >
+              {{ proactiveContactAttemptLabel(friend) }}
             </p>
           </div>
 
