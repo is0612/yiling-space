@@ -49,8 +49,8 @@ export function buildSocialProactiveContactSegments(userId: string, content: str
   data: { qq: string } | { text: string };
 }> {
   const qq = userId.trim();
-  const text = content.trim().replace(/\\s*\\n+\\s*/gu, " ").slice(0, 200);
-  if (!/^\\d{5,15}$/u.test(qq)) throw new Error("invalid_target_qq");
+  const text = content.trim().replace(/\s*\n+\s*/gu, " ").slice(0, 200);
+  if (!/^\d{5,15}$/u.test(qq)) throw new Error("invalid_target_qq");
   if (!text) throw new Error("empty_contact_content");
   return [
     { type: "at", data: { qq } },
