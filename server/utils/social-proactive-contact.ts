@@ -142,7 +142,7 @@ async function findCommonGroups(
     const linked = bindingId ? byBinding.get(bindingId) : undefined;
     const externalId = conversation.externalConversationId ?? "";
     const groupId = externalId.startsWith("g:") ? externalId.slice(2) : "";
-    if (!linked || !conversation.channelBinding || conversation.channelBinding.status !== "ACTIVE") continue;
+    if (!bindingId || !linked || !conversation.channelBinding || conversation.channelBinding.status !== "ACTIVE") continue;
     if (!/^\d{5,15}$/u.test(groupId) || !bindingAcceptsGroup(linked.binding.routingKey, groupId)) continue;
     // 不把机器人自己的账号误当成可联系好友。
     if (platformUid === linked.connection.accountQq) continue;
@@ -531,6 +531,7 @@ export async function runSocialProactiveContactTick(
         const freshGroup = freshGroups.find((item) =>
           item.groupId === group.groupId && item.conversationId === group.conversationId
         );
+        const freshIdentity = freshScope?.externalIdentity;
         const freshSentToday = await prisma.socialProactiveContactAttempt.count({
           where: {
             status: "SENT",
@@ -548,7 +549,7 @@ export async function runSocialProactiveContactTick(
           && freshScope.externalIdentity?.platformUid === identity.platformUid
           && Boolean(freshGroup)
           && await verifyOnebotGroupMember(freshGroup!.connection.config, freshGroup!.groupId, identity.platformUid);
-        if (!freshScope || !freshScope.externalIdentity || !freshGroup || !memberVerified) {
+        if (!freshScope || !freshIdentity || !freshGroup || !memberVerified) {
           await recordAttempt({
             scopeId: friend.id,
             status: "SKIPPED",
@@ -566,14 +567,14 @@ export async function runSocialProactiveContactTick(
           proactiveContactEnabled: freshScope.proactiveContactEnabled,
           relationshipStage: freshScope.relationshipStage,
           relationshipStatus: freshScope.relationshipStatus,
-          identityKind: freshScope.externalIdentity.kind,
+          identityKind: freshIdentity.kind,
           friendChatPolicy: freshScope.friendChatPolicy,
           channelAvailable: true,
           hasCommonGroup: true,
           groupMode: freshGroup.groupMode,
           quietHours: inQuietHours(new Date(), freshGroup),
           targetMemberVerified: true,
-          targetIsAi: freshScope.externalIdentity.kind === "AI",
+          targetIsAi: freshIdentity.kind === "AI",
           consecutiveAiRounds: freshGroup.consecutiveAiRounds,
           maxConsecutiveAiRounds: MAX_AI_ROUNDS,
           sentToday: freshSentToday,
@@ -662,7 +663,7 @@ export async function runSocialProactiveContactTick(
             });
             await tx.conversation.update({
               where: { id: group.conversationId },
-              data: { lastMessageAt: now, consecutiveAiRounds: freshScope.externalIdentity.kind === "AI" ? freshGroup.consecutiveAiRounds + 1 : 0 },
+              data: { lastMessageAt: now, consecutiveAiRounds: freshIdentity.kind === "AI" ? freshGroup.consecutiveAiRounds + 1 : 0 },
             });
           });
           results.push({
