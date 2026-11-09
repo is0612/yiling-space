@@ -74,5 +74,4 @@ assert.deepEqual(buildSocialProactiveContactSegments("123456789", "第一行\\n�
 assert.throws(() => buildSocialProactiveContactSegments("[CQ:at,qq=123456789]", "你好"), /invalid_target_qq/);
 assert.throws(() => buildSocialProactiveContactSegments("123456789", "  "), /empty_contact_content/);
 
-
 console.log("social-proactive-contact-policy: 全部通过");
