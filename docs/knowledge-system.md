@@ -186,6 +186,53 @@
 - 只有 ACTIVE 条目参与默认知识检索；归档条目仍可在管理界面查看并恢复。
 - 归档、恢复均记录操作者与时间，并采用版本/状态并发校验。
 
+#### 第一阶段实现（2026-11-09）
+
+**状态模型**：`ACTIVE` / `ARCHIVED` / `TRASHED` / `MERGED`，四态写进 `knowledge_items_status_check` 约束，防止拼写漂移。
+
+| 操作 | 起点 | 终点 | 说明 |
+| --- | --- | --- | --- |
+| 归档 | ACTIVE | ARCHIVED | 退出检索，可随时取消归档 |
+| 取消归档 | ARCHIVED | ACTIVE | 重新参与检索 |
+| 移入回收站 | ACTIVE | TRASHED | 退出检索，可恢复或永久删除 |
+| 从回收站恢复 | TRASHED | ACTIVE | 重新参与检索 |
+
+`MERGED` 只能由合并事务产生，没有人工入口；不允许恢复、归档或移入回收站。归档不经过回收站，`ARCHIVED → TRASHED` 必须先把知识取消归档，避免「两步删」被一步绕过。
+
+**Schema 变更**：`knowledge_item_revisions` 增加 `action VARCHAR(20) NOT NULL DEFAULT 'CONTENT_EDIT'`，取值 `CONTENT_EDIT / MERGE / ARCHIVE / UNARCHIVE / TRASH / RESTORE`，并加 CHECK 约束。迁移 `20261109160000_knowledge_item_lifecycle` 同时给 `knowledge_items.status` 加 CHECK。历史行统一回填为 `CONTENT_EDIT`（该字段引入之前无法区分，不做时间窗猜测式回填）。
+
+**快照语义**：一次生命周期操作 = 一条快照 + 版本号 +1。快照记录的是**变更前**的完整状态（标题/正文/分类/标签/可信度/来源/状态），`revision` 取变更前版本号，与内容编辑、合并保持一致：第 N 行代表被第 N+1 版取代的那一版。合并事务的两条快照标记为 `action=MERGE`，生命周期快照标记为对应操作，因此历史里能一眼区分「内容改了什么」与「状态怎么变的」。
+
+**API 清单**（均在 `/api/characters/{id}/growth/knowledge` 下，全部要求登录且校验角色归属）：
+
+| 方法 | 路径 | 请求体 | 成功 |
+| --- | --- | --- | --- |
+| POST | `/items/{itemId}/archive` | `{ expectedRevision }` | `{ item, message }` |
+| POST | `/items/{itemId}/unarchive` | `{ expectedRevision }` | `{ item, message }` |
+| POST | `/items/{itemId}/trash` | `{ expectedRevision }` | `{ item, message }` |
+| POST | `/items/{itemId}/restore` | `{ expectedRevision }` | `{ item, message }` |
+| GET | `/trash` | — | `{ characterId, items, itemCount }` |
+| DELETE | `/items/{itemId}` | `{ expectedRevision, confirm: "PERMANENT_DELETE" }` | `{ ok, deletedRelations, deletedRevisions, message }` |
+| DELETE | `/candidates/{candidateId}` | — | `{ ok, candidateId, deletedStatus, knowledgeItemId, knowledgeItemRetained }` |
+| POST | `/candidates/purge-dismissed` | `{}` | `{ ok, deletedCount }` |
+
+状态转换统一在 `server/utils/knowledge-lifecycle.ts` 里：读当前行 → 校验起点状态 → 校验 `expectedRevision` → **条件更新**（`where` 同时带状态与 revision，`count !== 1` 即 409）→ 写快照。读与写之间被抢先改动时，条件更新会失败，保证并发下只有一个请求成功。错误码：角色/知识不存在或跨角色 404；状态不允许、revision 过期、并发生效失败 409；请求体多余字段或格式错误 400。
+
+**永久删除的三重闸门**：
+1. 只允许 `TRASHED`，其它状态一律 409；
+2. 必须带 `confirm: "PERMANENT_DELETE"`，字段名与取值都写死，缺少或写错都是 400；
+3. 存在任何 `MERGED_INTO` 关系（作为源或目标）即拒绝，保护合并审计链。
+
+事务内按「普通关系 → 版本历史 → 知识主体」顺序显式清理，最后一步 `deleteMany` 仍带 `status = TRASHED` 条件兜底。虽然 `knowledge_item_relations` 与 `knowledge_item_revisions` 外键都是级联删除，显式清理仍保留：一是让删除范围在代码里可读，二是避免未来外键行为变化时留下孤立关系。
+
+**候选清理边界**：`KnowledgeItem.candidateId` 是 `onDelete: SetNull`，因此删除 ACCEPTED 候选只会让入库知识解除指向，正文、来源、版本历史都留在知识自己身上。单条删除拒绝 `PROCESSING` / `ACCEPTING`（避免后台任务写到一半失去宿主）；批量清理的 `where` 写死 `status = DISMISSED` 且 `knowledgeItem.is: null`，待处理、待复核、已入库候选都不会被带动。候选删除不可恢复。
+
+**检索隔离**：`knowledge_items` 的读取入口一律带显式状态过滤——聊天侧 `pipeline.ts` 的 `loadKnowledge`、`search.get.ts`、`index.get.ts` 默认列表都只取 `ACTIVE`。归档与回收站知识天然不会进入检索；`/trash` 只返回当前角色的 `TRASHED`。永久删除只接受用户会话，没有任何 AI 助手调用路径。
+
+**本阶段不做**：页面与交互、定时清理、正式知识批量永久删除、自动删除候选关联的正式知识、社交关系系统的改动。
+
+**测试**：`yarn test:knowledge-lifecycle-isolated` 自建一次性数据库（`yiling_knowledge_lifecycle_test_*`）跑完整迁移后执行，结束后删库，不触碰真实知识。覆盖：四种合法转换（含快照 action 与状态）、非法转换、过期 revision 与同版本并发、归档/回收站不参与检索、恢复后可检索、永久删除的状态与确认限制、MERGED_INTO 审计链保护、删除后关系与历史零残留、删除候选不删正式知识、批量清理不误删、跨角色与未登录拒绝。
+
 ### 后续来源接入
 
 - 在维护与溯源能力稳定后，再建设文档批量导入和网页来源采集。
