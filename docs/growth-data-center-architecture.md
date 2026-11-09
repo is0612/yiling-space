@@ -1,7 +1,8 @@
 # 统一成长数据中心架构设计
 
-> 状态：架构方案（待评审，尚未进入数据库实现）
+> 状态：架构方案（已对照现有租约 / 幂等实现复核，尚未进入数据库实现）
 > 日期：2026-11-09
+> 复核：第 3、6、13 节已按 `memory-job-lease.ts`、`social-relationship-queue.ts`、`memory-worker.ts`、`watchdog.ts` 的实际行为校对，租约与消费者幂等两处给出了具体参照物
 > 适用范围：忆灵空间成长系统
 
 ## 1. 目标与非目标
@@ -50,7 +51,8 @@
 | `SocialRelationshipAssessmentEvidence` | 评估关联 NEW / CONTEXT 经历 | 保留评估证据与范围约束 |
 | `SocialRelationChange` | 关系变化历史 | 社交领域自己的业务历史 |
 | `AuditLog` | 操作审计 | 复用通用操作审计，不替代领域历史 |
-| `MemoryJob` 及社交评估任务机制 | 任务状态、幂等、租约/重试等模式 | 参考并复用现有任务执行基础，不把 MemoryJob 改成通用任务表 |
+| `MemoryJob` 租约（`memory-job-lease.ts`） | 单行领取、`lockedAt` 5 分钟过期加显式续租、`lockedBy` 兼任 fencing token、手动回收 | 只借用「条件 UPDATE 校验 token」的写法；不借用单行领取与清理分支的表锁 |
+| 社交评估任务租约（`social-relationship-queue.ts`） | `leaseToken` + `leaseExpiresAt` + `fencingToken` + `FOR UPDATE SKIP LOCKED` 批量领取，领取时顺带回收过期 | 投递表以此为准，字段命名与领取 SQL 直接沿用 |
 | `KnowledgeItem` 及知识生命周期模型 | 正式知识、候选、版本和关联 | 知识领域继续拥有知识数据 |
 
 ### 3.2 关键结论
@@ -60,6 +62,8 @@
 3. 社交关系阶段、相处状态、评估历史和人工采纳规则属于社交领域所有权。其他领域只能通过授权接口读取，不能直接写社交表。
 4. `AuditLog` 是操作审计，不应取代 `SocialRelationChange` 等领域历史。
 5. 现有专用任务队列证明项目已有可靠异步任务经验，但没有发现可直接复用的通用领域 Outbox / Delivery 事件中心。因此需要补齐跨领域事件投递能力。
+6. 但「同事务写一行队列记录」的代码形状已有两处先例：`memory-worker.ts` 的 chunk 事务里 `applyMemoryEvents`，以及 `social-experiences.ts` 插入 `SocialExperience` 后在同一 `tx` 里 `enqueueSocialRelationshipAssessment`。事件中心是把这个形状抽成通用约定，不是从零发明一套机制。
+7. 现有两套租约语义不同，不能混用：`MemoryJob` 靠 `lockedAt` 加 5 分钟过期并允许续租，`lockedBy` 就是执行权 token，没有独立的过期列；社交评估任务有 `leaseToken` / `leaseExpiresAt` / `fencingToken` / 代际。投递表是「事件 × 消费者」的行量级，应按后者设计。另需注意 `memory-job-lease.ts` 文件头「租约不会续期」的注释已经过时——同文件的 `renewMemoryJobLease` 与 `memory-worker.ts` 每次模型请求前的续租都在用，照注释设计会做出「长模型调用必然被回收」的投递表。
 
 ## 4. 领域所有权与边界
 
@@ -106,25 +110,41 @@
 | `payload` | 最小必要元数据，不放聊天正文 |
 | `idempotencyKey` | 来源侧幂等键，防止重复发布 |
 
+`idempotencyKey` 必须由业务身份推出（例如 `memory.event.created:{memoryEventId}`），不能是随机 UUID；否则重复执行的任务块会发布出两条「不同」的事件。发布侧再叠一层 `skipDuplicates` 兜住整块重跑。
+
 ### 6.2 投递记录
 
 事件记录与消费者投递状态分离。一个事件可以被多个消费者独立处理。
 
 投递记录至少需要表达：
 
-- eventId、consumerKey；
-- 状态：待处理、处理中、成功、等待重试、终止失败；
-- attemptCount、nextAttemptAt；
-- leaseToken / lockedAt / lockedBy（按现有任务租约模式确定字段）；
-- lastError、processedAt、createdAt、updatedAt。
+| 字段 | 含义 |
+|---|---|
+| `eventId` / `consumerKey` | 事件与消费者，联合唯一 |
+| `status` | QUEUED / RUNNING / SUCCEEDED / RETRY_WAIT / FAILED / SKIPPED / CANCELLED |
+| `attemptCount` / `maxAttempts` | 与现有任务表同名同义，逐行带上限 |
+| `runAt` | 下次可领取时间；沿用现有命名，不叫 nextAttemptAt |
+| `leaseToken` / `leaseExpiresAt` / `fencingToken` | 执行权、显式过期与 fencing |
+| `lockedAt` / `lockedBy` | `lockedAt` 记最近一次领取或续租时间；`lockedBy` 只放 workerId 供展示，不参与判定 |
+| `lastError` / `processedAt` / `createdAt` / `updatedAt` | 失败原因、完成时间与审计时间 |
 
-数据库唯一约束应保证同一个 `eventId + consumerKey` 只有一条投递记录。消费者处理成功后才确认完成；失败按退避策略重试；过期租约可被安全回收。旧租约持有者不得覆盖新持有者的结果。
+字段与命名以 `SocialRelationshipAssessmentTask` 为准（`prisma/schema.prisma`）。不要照 `MemoryJob`：它用 `lockedBy` 兼任 token，且没有显式过期列，撑不住投递表的并发要求。
+
+状态必须包含 `SKIPPED`。消费者判断「本领域不订阅 / 不值得处理」时需要终态落点，否则只剩两种错法：白重试到失败，或把「没处理」记成成功。`CANCELLED` 用于订阅移除或事件已被后续事件取代。
+
+领取实现以 `claimNextSocialRelationshipAssessmentTask` 为准：同事务内先回收过期，再 `FOR UPDATE SKIP LOCKED` 批量领取并 `fencingToken + 1`。不要照搬 `memory-worker.ts` 清理任务分支里的 `LOCK TABLE ... IN EXCLUSIVE MODE`，那是为了独占表内全部任务，搬到投递表上会把并发领取串行化。
+
+数据库唯一约束应保证同一个 `eventId + consumerKey` 只有一条投递记录，写入一律用 `skipDuplicates` / `ON CONFLICT DO NOTHING`（理由见 6.3）。消费者处理成功后才确认完成；失败按退避策略重试；过期租约可被安全回收。旧租约持有者不得覆盖新持有者的结果。
 
 ### 6.3 事务与可靠性
 
 - 领域数据变更与 Outbox 事件写入必须在同一个数据库事务中提交。
+- 消费者的业务写入与投递状态置 SUCCEEDED 必须在同一个事务中，且事务第一条语句是校验 `leaseToken` / `fencingToken` 的条件 UPDATE，靠它把行锁持有到提交。`lockMemoryJobLease` 的注释已经把这条写成硬要求，直接沿用。若改成「业务写完再更新投递状态」，会出现业务已提交、确认未落，重投后重复写。
+- Outbox 与扇出投递行必须用 `skipDuplicates` / `ON CONFLICT DO NOTHING` 写入。任务失败后整块事务重跑是常态（`RETRY_WAIT` 分支），普通 insert 撞唯一键会把整个业务事务打回滚，结果是一条事件都发不出去。项目里已有正确先例可照抄。
+- Outbox 与投递行的插入放在事务末尾、业务写入与既有行锁之后，单次 `createMany` 完成。项目有明确的加锁顺序纪律（按 scopeId 排序取 `FOR UPDATE`、清理任务先取表锁），新增插入不应改变这个顺序，也不应额外获取业务表的行锁。
+- 批量回填路径（历史忆泡重生成、社交经历回填脚本）需要关闭发布或按批次抑制。一次回填会产出数百条投递；订阅方若调模型，会把角色当日额度烧穿并连带影响对话。
 - Worker 从持久化事件表领取工作，而不是依赖仅存在于进程内存的 emit / callback。
-- 消费者必须幂等：同一事件重试不得重复创建成长结论或重复累计经历。
+- 消费者必须幂等：同一事件重试不得重复创建成长结论或重复累计经历。具体契约见 6.5——投递行唯一约束只挡并发，挡不住重投。
 - 事件投递与业务处理分开；模型调用等耗时操作不应占用数据库事务。
 - 事件中心只负责通知和投递，不负责替消费者解释事件或调用所有 AI 助手。
 - 复用现有调度、租约、重试和 watchdog 模式；不要把专用 MemoryJob 直接改造成跨领域队列。
@@ -142,12 +162,29 @@
 
 事件目录先保持小而稳定；没有实际消费者的事件不必提前实现。
 
+### 6.5 消费者幂等契约
+
+投递行的 `unique(eventId, consumerKey)` 只保证「同一条事件不会被两个执行者同时处理」，**不保证业务结果只写一次**：业务已提交、确认还没落的时候进程挂掉，重投的还是同一条 eventId，投递行唯一约束完全不起作用。
+
+所以幂等必须分两层：
+
+1. 投递层：唯一约束加租约 fencing，避免并发重复处理。
+2. 业务层：消费者的终态写入自带唯一键。项目里两种写法都已存在，优先第一种：
+   - 来源证据自然键：如 `SocialExperience.sourceKey` 取证据消息 ID 集合的 sha256，配 `@@unique([scopeId, sourceKey])`；
+   - 来源标识键：`(consumerKey, sourceEventId)`，或沿用现有的 `idempotencyKey @unique`。
+
+只用事件 ID 不够：`memory.event.created` 与 `memory.event.updated` 是两条事件、指向同一个对象，事件级去重拦不住同一个结论被写两遍。
+
+反例：`MemoryItem.dedupeKey` 不能当消费幂等键。它可空，且键被占用时会故意写 NULL（`memory-change-apply.ts`），语义是「允许同内容再出现一次」。拿它做幂等依据，重投时会安静地多写一行，测试还不容易发现。
+
+验收方式见第 13 节：模拟「业务已提交、投递未确认」后重放，断言业务行数与模型用量行数都不变。
+
 ## 7. 授权领域读取 API
 
 跨领域交互采用“通知 + 读取”：
 
 1. 消费者收到事件，取得事件 ID、角色 ID、来源领域和对象引用。
-2. 消费者判断本领域是否订阅、是否值得处理。
+2. 消费者判断本领域是否订阅、是否值得处理；判定不处理时把投递置为 `SKIPPED` 并留下判定依据，不要用重试或成功表达「没处理」。
 3. 如需详情，通过来源领域的服务接口读取。
 4. 来源领域验证角色、范围、状态和读取权限后返回最小必要数据。
 5. 消费者将自己的结论和来源引用写入本领域数据，不直接修改来源领域。
@@ -228,7 +265,7 @@
 | Evidence Reference | 来源引用和状态追溯 | 先统一接口，不急于通用表 |
 | Audit Center | 操作审计 | 复用 AuditLog，按需补充关联信息 |
 | Lifecycle | 归档、删除、撤销与引用失效语义 | 由来源领域掌握最终决定权 |
-| Task Infrastructure | 异步任务、租约、重试、幂等 | 复用现有实现模式，不重造队列 |
+| Task Infrastructure | 异步任务、租约、重试、幂等 | 投递表与领取沿用社交评估任务那套（`leaseToken` / `leaseExpiresAt` / `fencingToken` / `SKIP LOCKED`），worker 循环沿用 `scripts/run-memory-worker.ts` 的多流水线结构，不重造进程模型与队列语义 |
 
 ## 12. 第一阶段实施范围
 
@@ -238,11 +275,14 @@
 
 1. 在代码中确认可信 Character Context 的解析入口和服务端权限边界。
 2. 定义领域事件类型、版本和最小事件信封。
-3. 设计并实现 Outbox 事件表与消费者投递表（最终字段以 Prisma 现状审查和迁移评审为准）。
-4. 实现事务内发布、Worker 领取、租约保护、重试和幂等。
-5. 实现最小领域读取接口约定及一个真实只读消费者示例。
-6. 补充可观测性：待投递数、失败数、重试次数、最早积压时间和最近错误。
-7. 编写隔离数据库测试和角色隔离测试。
+3. 设计并实现 Outbox 事件表与消费者投递表。字段、状态枚举与领取实现按 6.2 的参照物（`SocialRelationshipAssessmentTask` 与 `claimNextSocialRelationshipAssessmentTask`），最终以 Prisma 迁移评审为准。
+4. 实现事务内发布、Worker 领取、租约保护、重试和幂等；发布与扇出写入一律 `skipDuplicates`，消费者确认与业务写入同事务。
+5. 确定 Event Worker 的启动路径：并入 `worker:watch` 循环，同步改 `scripts/launch.mjs`、`docs/deployment.md` 与运维说明。只写指标不够——默认安装只起 `yarn dev`，消费者不跑时页面一切正常，事件在库里越积越多。
+6. 定义订阅关系的存放位置（代码常量还是表），并据此确定「新增消费者是否补投历史事件」。
+7. 定义已成功投递行的保留天数与清理方式，避免表随运行时间无限增长。
+8. 实现最小领域读取接口约定及一个真实只读消费者示例。
+9. 补充可观测性：待投递数、失败数、重试次数、最早积压时间和最近错误；并给 `watchdog` 增加投递类判定（积压无人领取、卡在运行中），判定阈值与现有 5 分钟租约口径对齐。
+10. 编写隔离数据库测试和角色隔离测试，脚本注册进 `verify:local`。
 
 ### 12.2 第一阶段暂不做
 
@@ -252,17 +292,21 @@
 - 不一次性创建五个新领域的 Prisma 模型。
 - 不实现全局 AI Agent 调度器。
 - 不默认让每条事件触发模型调用。
+- 不做新增消费者时对历史事件的补投，第一阶段只处理订阅之后产生的事件。
+- 不让批量回填脚本发布事件：回填期间关闭发布，避免一次重生成就打出数百条投递。
 
 ## 13. 第一阶段验收标准
 
 ### 事件可靠性
 
 - 领域数据与事件记录同事务提交；事务回滚时两者都不存在。
-- 同一业务操作重复提交不会生成重复事件。
+- 消费者的业务写入与投递确认同事务；事务首条语句持有租约行锁，旧租约持有者无法提交。
+- 同一业务操作重复提交不会生成重复事件；整块任务重跑时不会因 Outbox 唯一键冲突导致事务回滚。
 - Worker 崩溃或进程重启后，未完成事件仍可继续处理。
-- 同一事件同一消费者不会重复产生业务结果。
+- 同一事件同一消费者不会重复产生业务结果；断言方式是模拟「业务已提交、确认未落」后重放，业务行数与模型用量行数均不变。
 - 过期租约可以回收；旧租约持有者不能确认或覆盖新租约结果。
 - 失败按退避策略重试，达到上限后可观测、可人工恢复。
+- 判定不处理的投递落到 `SKIPPED` 并带判定依据，不被计为成功，也不进入无限重试。
 
 ### 角色与权限隔离
 
@@ -281,19 +325,26 @@
 ### 工程质量
 
 - Prisma migration 可在空数据库和现有数据库正确执行。
-- 新增隔离 DB 测试覆盖事务、幂等、租约、重试、角色隔离和生命周期。
+- 新增隔离 DB 测试覆盖事务、幂等、租约、重试、角色隔离和生命周期，脚本注册进 `package.json` 的 `verify:local`。
 - 相关 typecheck、SFC、lint、专项测试通过。
 - 现有记忆、社交和知识专项测试不回归。
+
+### 运行与可观测性
+
+- Event Worker 的启动路径已写入启动脚本与部署文档，默认安装路径下消费者确实会被拉起。
+- `watchdog` 能判定投递积压无人领取、卡在运行中两类失效，阈值与现有租约口径一致。
+- 已成功投递行有清理策略与保留天数，不随运行时间无限增长。
 
 ## 14. 后续推进顺序
 
 1. 评审本文，冻结第一阶段事件契约和访问边界。
-2. 在独立分支实现 Event Center 最小闭环。
-3. 先用一个低风险、只读的真实消费者验证端到端流程。
-4. 让记忆系统发布首批事件并提供授权读取。
-5. 社交系统按需接入，不改变其关系决策权和人工采纳规则。
-6. 知识系统接入事件和授权查询。
-7. 再逐个建设偏好、语料、状态、反思与成长、目标与愿望系统。
+2. 确认 Event Worker 的启动路径与 `watchdog` 判定，再动表结构：消费者不跑时，事件中心不会自己报错。
+3. 在独立分支实现 Event Center 最小闭环。
+4. 先用一个低风险、只读的真实消费者验证端到端流程。
+5. 让记忆系统发布首批事件并提供授权读取。
+6. 社交系统按需接入，不改变其关系决策权和人工采纳规则。
+7. 知识系统接入事件和授权查询。
+8. 再逐个建设偏好、语料、状态、反思与成长、目标与愿望系统。
 
 ---
 
