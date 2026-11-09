@@ -87,6 +87,8 @@ const characterId = computed(() => activeCharacter.value?.id ?? "");
 const loading = ref(false);
 const savingCandidate = ref(false);
 const importingFile = ref(false);
+const importingWeb = ref(false);
+const webImportUrl = ref("");
 const importFileInput = ref<HTMLInputElement | null>(null);
 const rawContent = ref("");
 const keyword = ref("");
@@ -267,6 +269,8 @@ watch(characterId, (nextCharacterId: string) => {
   busyIds.value = [];
   savingCandidate.value = false;
   importingFile.value = false;
+  importingWeb.value = false;
+  webImportUrl.value = "";
   if (importFileInput.value) importFileInput.value.value = "";
   editingItemId.value = "";
   editDraft.value = { title: "", content: "", category: "", tagsText: "", confidence: "" };
@@ -361,6 +365,30 @@ async function importDocument(event: Event) {
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) importingFile.value = false;
     if (input) input.value = "";
+  }
+}
+
+async function importWebPage() {
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  const url = webImportUrl.value.trim();
+  if (!targetCharacterId || !url || importingWeb.value || pageDisposed) return;
+  importingWeb.value = true;
+  try {
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/web-import`,
+      { method: "POST", body: { url } },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    webImportUrl.value = "";
+    ElMessage.success("网页正文已加入知识候选，请运行知识处理助手整理。");
+    await load(targetCharacterId);
+  } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const e = error as { data?: { statusMessage?: string } };
+    ElMessage.error(e.data?.statusMessage || "网页导入失败。");
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) importingWeb.value = false;
   }
 }
 
@@ -1098,6 +1126,14 @@ function formatDate(value: string) {
         <div><strong>从文件导入</strong><p class="muted">首批支持 UTF-8 的 TXT、Markdown 文件，单个文件不超过 2 MB、正文不超过 20000 字。</p></div>
         <input ref="importFileInput" type="file" accept=".txt,.md,text/plain,text/markdown" :disabled="importingFile" @change="importDocument">
         <span v-if="importingFile" class="muted">正在导入…</span>
+      </div>
+      <div class="import-panel">
+        <div><strong>从网页导入</strong><p class="muted">输入公开网页地址，系统会提取正文并保存来源信息。仅创建候选，不会直接入库。</p></div>
+        <div class="web-import-controls">
+          <input v-model="webImportUrl" type="url" inputmode="url" maxlength="2048" placeholder="https://example.com/article" :disabled="importingWeb">
+          <button type="button" class="primary" :disabled="importingWeb || !webImportUrl.trim()" @click="importWebPage">{{ importingWeb ? "采集中…" : "导入网页" }}</button>
+        </div>
+        <span v-if="importingWeb" class="muted">正在安全抓取网页（最多 15 秒）…</span>
       </div>
     </section>
 
