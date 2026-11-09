@@ -68,6 +68,10 @@ export default defineEventHandler(async (event) => {
             },
           },
         },
+        reviews: {
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: { decision: true, note: true, createdAt: true },
+        },
         evidence: {
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           select: {
@@ -125,6 +129,11 @@ export default defineEventHandler(async (event) => {
       status: row.status,
       reviewStatus: row.reviewStatus,
       reviewedAt: row.reviewedAt?.toISOString() ?? null,
+      reviews: row.reviews.map(review => ({
+        decision: review.decision,
+        note: review.note,
+        createdAt: review.createdAt.toISOString(),
+      })),
       error: row.error,
       startedAt: row.startedAt.toISOString(),
       completedAt: row.completedAt?.toISOString() ?? null,
