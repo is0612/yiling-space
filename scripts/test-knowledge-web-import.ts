@@ -79,6 +79,7 @@ try {
     if (url === "https://1.1.1.1/start") return response("", 302, { location: "https://8.8.4.4/final" });
     if (url === "https://8.8.4.4/final") return response(html);
     if (url === "https://8.8.8.8/wrong-type") return response("nope", 200, { "content-type": "application/pdf" });
+    if (url === "https://8.8.8.8/too-large") return new Response(Buffer.alloc(KNOWLEDGE_WEB_MAX_BYTES + 1, 65), { headers: { "content-type": "text/html" } });
     return response("not found", 404, { "content-type": "text/plain" });
   }) as never);
 
@@ -87,7 +88,7 @@ try {
   assert.match(fetched.rawContent, /蓝鲸/);
 
   requests = [];
-  await assert.rejects(() => fetchKnowledgeWebPage("https://8.8.8.8/redirect"), /BLOCKED_HOST/);
+  await assert.rejects(() => fetchKnowledgeWebPage("https://8.8.8.8/redirect"), /阻止访问/);
   assert.deepEqual(requests, ["https://8.8.8.8/redirect"], "重定向到 loopback 必须在发出第二次请求前拦截");
 
   requests = [];
@@ -95,7 +96,8 @@ try {
   assert.equal(redirected.finalUrl, "https://8.8.4.4/final");
   assert.deepEqual(requests, ["https://1.1.1.1/start", "https://8.8.4.4/final"]);
 
-  await assert.rejects(() => fetchKnowledgeWebPage("https://8.8.8.8/wrong-type"), /UNSUPPORTED_CONTENT_TYPE/);
+  await assert.rejects(() => fetchKnowledgeWebPage("https://8.8.8.8/wrong-type"), /只支持/);
+  await assert.rejects(() => fetchKnowledgeWebPage("https://8.8.8.8/too-large"), /超过 1.5 MB/);
   await assert.rejects(() => fetchKnowledgeWebPage("file:///etc/passwd"), /HTTP 或 HTTPS/);
 } finally {
   setMediaFetchForTest(null);
