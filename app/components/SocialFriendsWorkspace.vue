@@ -31,6 +31,7 @@ type Friend = {
   identityKind: "UNKNOWN" | "HUMAN" | "AI";
   identityKindSource: "AUTO" | "MANUAL";
   friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK";
+  proactiveContactEnabled: boolean;
   interactionCount: number;
   lastInteractedAt: string | null;
   knownSince: string;
@@ -296,14 +297,18 @@ function saveStateLabel(scopeId: string) {
  * 改一个字段就 PATCH 一次，带序号防乱序：连点两下时只认最后一次的响应，
  * 否则先发的请求后回来，会把界面上新的选择又改回旧值。
  */
-async function patchFriend(friend: Friend, patch: { identityKind?: Friend["identityKind"]; friendChatPolicy?: Friend["friendChatPolicy"] }) {
+async function patchFriend(friend: Friend, patch: {
+  identityKind?: Friend["identityKind"];
+  friendChatPolicy?: Friend["friendChatPolicy"];
+  proactiveContactEnabled?: boolean;
+}) {
   const scopeId = friend.scopeId;
   const token = (saveTokens.get(scopeId) ?? 0) + 1;
   saveTokens.set(scopeId, token);
   markSaveState(scopeId, "saving");
   try {
     const response = await $fetch<
-      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy">> & { scopeId: string }
+      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy" | "proactiveContactEnabled">> & { scopeId: string }
     >(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
     if (saveTokens.get(scopeId) !== token) return;
     friends.value = friends.value.map((item) => (item.scopeId === scopeId ? { ...item, ...response } : item));
@@ -329,6 +334,13 @@ function setChatPolicy(friend: Friend, policy: Friend["friendChatPolicy"]) {
   if (friend.friendChatPolicy === policy) return;
   friend.friendChatPolicy = policy;
   void patchFriend(friend, { friendChatPolicy: policy });
+}
+
+/** 主动联系许可独立于普通交流权限；BLOCK 仍由服务端安全闸门优先处理。 */
+function setProactiveContactEnabled(friend: Friend, enabled: boolean) {
+  if (friend.proactiveContactEnabled === enabled) return;
+  friend.proactiveContactEnabled = enabled;
+  void patchFriend(friend, { proactiveContactEnabled: enabled });
 }
 
 /**
@@ -911,6 +923,18 @@ onMounted(() => load(1));
                 {{ option.label }}
               </label>
             </div>
+            <label
+              class="friend-opt"
+              :class="{ 'is-on': friend.proactiveContactEnabled }"
+              title="单独允许她主动联系这位好友；仍受关系阶段、禁止交流、共同群和频率保护限制"
+            >
+              <input
+                type="checkbox"
+                :checked="friend.proactiveContactEnabled"
+                @change="setProactiveContactEnabled(friend, ($event.target as HTMLInputElement).checked)"
+              >
+              主动联系 {{ friend.proactiveContactEnabled ? "已允许" : "未授权" }}
+            </label>
             <p class="friend-save-state">
               {{ saveStateLabel(friend.scopeId) }}
             </p>
