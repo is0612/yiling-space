@@ -144,6 +144,8 @@ async function findCommonGroups(
     const groupId = externalId.startsWith("g:") ? externalId.slice(2) : "";
     if (!linked || !conversation.channelBinding || conversation.channelBinding.status !== "ACTIVE") continue;
     if (!/^\d{5,15}$/u.test(groupId) || !bindingAcceptsGroup(linked.binding.routingKey, groupId)) continue;
+    // 不把机器人自己的账号误当成可联系好友。
+    if (platformUid === linked.connection.accountQq) continue;
 
     const groupSettings = groupChatForGroup(linked.binding.groupChat, linked.binding.groupChatModes, groupId);
     const mode = groupSettings.mode;
