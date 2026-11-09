@@ -36,6 +36,20 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 409, statusMessage: "知识内容已发生变化，请刷新双方内容后重新确认合并。" });
     }
 
+    const duplicateLink = await tx.knowledgeItemRelation.findFirst({
+      where: {
+        characterId, relationType: "DUPLICATE", status: "OPEN",
+        OR: [
+          { sourceItemId: source.id, targetItemId: target.id },
+          { sourceItemId: target.id, targetItemId: source.id },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!duplicateLink) {
+      throw createError({ statusCode: 409, statusMessage: "这两条知识没有待处理的重复关系，请刷新后重新检查。" });
+    }
+
     const sourceSnapshot = tx.knowledgeItemRevision.create({
       data: {
         itemId: source.id, revision: source.revision, title: source.title, content: source.content,
