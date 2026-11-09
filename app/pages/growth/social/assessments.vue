@@ -35,6 +35,7 @@ type Assessment = {
   status: string;
   reviewStatus: string;
   reviewedAt: string | null;
+  reviews: { decision: string; note: string | null; createdAt: string }[];
   error: string | null;
   startedAt: string;
   completedAt: string | null;
@@ -69,6 +70,9 @@ const OUTCOME_LABELS: Record<string, string> = {
 const REVIEW_STATUS_LABELS: Record<string, string> = {
   NOT_REQUIRED: "无需处置", PENDING: "待人工确认", DEFERRED: "已暂缓",
   ACCEPTED: "已采纳", REJECTED: "已驳回", STALE: "建议已过期",
+};
+const REVIEW_DECISION_LABELS: Record<string, string> = {
+  ACCEPTED: "人工采纳", REJECTED: "人工驳回", DEFERRED: "暂缓处理", STALE: "系统标记过期",
 };
 const TRIGGER_LABELS: Record<string, string> = {
   NEW_EXPERIENCE: "新经历", PERIODIC_REVIEW: "定期回顾", EXISTING_EXPERIENCE_RECOVERY: "历史经历补评",
@@ -204,6 +208,13 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
             <el-button size="small" text type="danger" :disabled="reviewingIds.includes(item.id)" @click="review(item, 'REJECTED')">驳回</el-button>
           </div>
         </div>
+        <div v-if="item.reviews.length" class="review-history">
+          <strong>人工处理记录</strong>
+          <div v-for="(entry, index) in item.reviews" :key="index" class="review-history-item">
+            <span>{{ REVIEW_DECISION_LABELS[entry.decision] || entry.decision }} · {{ dateTime(entry.createdAt) }}</span>
+            <p v-if="entry.note">{{ entry.note }}</p>
+          </div>
+        </div>
         <div v-if="observations(item.observations).observations?.length" class="observations">
           <strong>观察要点</strong>
           <ul><li v-for="(note, index) in observations(item.observations).observations" :key="index">{{ note }}</li></ul>
@@ -262,6 +273,8 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
 .review-status{font-size:11px;color:var(--dim)}
 .review-pending{color:var(--warning,#b7791f)}.review-deferred{color:var(--dim)}.review-accepted{color:var(--success,#0d9488)}.review-rejected,.review-stale{color:var(--dim)}
 .review-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.review-history{display:grid;gap:6px;margin-top:10px;padding:10px;border-radius:8px;background:var(--surface-2);font-size:11px;color:var(--dim)}
+.review-history-item p{margin:3px 0 0;color:var(--text-2,var(--ink));white-space:pre-wrap}
 .reason{margin:14px 0 0;color:var(--text-2,var(--ink));font-size:13px;line-height:1.8;white-space:pre-wrap}
 .error-text{color:var(--danger,#dc2626);font-size:12px}
 .observations{margin-top:12px;color:var(--text-2,var(--ink));font-size:12px}
