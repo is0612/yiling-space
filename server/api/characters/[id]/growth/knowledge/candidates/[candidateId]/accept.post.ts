@@ -65,7 +65,10 @@ export default defineEventHandler(async (event) => {
         throw createError({ statusCode: 409, statusMessage: "已确认的关联知识发生变化，请重新检查候选后再入库。" });
       }
       for (const target of activeTargets) {
-        const [sourceItemId, targetItemId] = [created.id, target.id].sort();
+        // 对称关系落库前固定条目顺序，避免 A→B 与 B→A 各存一条。
+        // 直接比较两个 ID，不走数组排序，省掉一次可能为 undefined 的取值。
+        const sourceItemId = created.id < target.id ? created.id : target.id;
+        const targetItemId = created.id < target.id ? target.id : created.id;
         await tx.knowledgeItemRelation.upsert({
           where: {
             characterId_sourceItemId_targetItemId_relationType: {
