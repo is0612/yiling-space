@@ -81,7 +81,7 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-async function loadRecentLines(conversationId: string): Promise<string[]> {
+async function loadRecentLines(conversationId: string, characterName: string): Promise<string[]> {
   const rows = await getPrisma().message.findMany({
     where: { conversationId, role: { in: ["USER", "ASSISTANT"] } },
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
@@ -92,13 +92,15 @@ async function loadRecentLines(conversationId: string): Promise<string[]> {
     const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
       ? row.metadata as Record<string, unknown>
       : {};
-    const author = asText(metadata.authorName) || (row.role === "ASSISTANT" ? "小鲸鱼" : "群友");
+    // 自己说的话用当前角色的名字标注，别写死某个名字 —— 一个库里有多个角色。
+    const author = asText(metadata.authorName) || (row.role === "ASSISTANT" ? characterName : "群友");
     return `${author}：${row.content.slice(0, 180)}`;
   });
 }
 
 async function findCommonGroups(
   characterId: string,
+  characterName: string,
   platformUid: string,
   connections: readonly OnebotConnectionRecord[],
 ): Promise<CommonGroup[]> {
@@ -158,7 +160,7 @@ async function findCommonGroups(
       quietStart: groupSettings.quietStart,
       quietEnd: groupSettings.quietEnd,
       consecutiveAiRounds: conversation.consecutiveAiRounds,
-      recentLines: await loadRecentLines(conversation.id),
+      recentLines: await loadRecentLines(conversation.id, characterName),
     });
   }
   return groups;
@@ -380,7 +382,7 @@ export async function runSocialProactiveContactTick(
       const friendName = identity.displayName?.trim() || identity.platformUid;
       const lastContactAt = friend.socialProactiveContactAttempts[0]?.sentAt ?? null;
 
-      const groups = await findCommonGroups(character.id, identity.platformUid, connections);
+      const groups = await findCommonGroups(character.id, character.name, identity.platformUid, connections);
       if (!groups.length) {
         lastSkipReason = "no_common_group";
         await recordAttempt({
@@ -526,7 +528,7 @@ export async function runSocialProactiveContactTick(
         });
         const freshConnections = await loadOnebotConnections().catch(() => [] as OnebotConnectionRecord[]);
         const freshGroups = freshScope?.externalIdentity
-          ? await findCommonGroups(character.id, freshScope.externalIdentity.platformUid, freshConnections)
+          ? await findCommonGroups(character.id, character.name, freshScope.externalIdentity.platformUid, freshConnections)
           : [];
         const freshGroup = freshGroups.find((item) =>
           item.groupId === group.groupId && item.conversationId === group.conversationId
@@ -596,19 +598,8 @@ export async function runSocialProactiveContactTick(
           break;
         }
 
-        const activeClaim = await prisma.socialProactiveContactAttempt.findFirst({
-          where: {
-            scopeId: friend.id,
-            status: "SENDING",
-            attemptedAt: { gte: new Date(Date.now() - ATTEMPT_DEDUPE_WINDOW_MS) },
-          },
-          select: { id: true },
-        });
-        if (activeClaim) {
-          results.push({ ...skip("dispatch_in_progress", friendName), groupId: group.groupId });
-          handled = true;
-          break;
-        }
+        // 在途检查只保留循环开头那一处：`claimAttempt` 靠 scopeId+dedupeKey 唯一键
+        // 原子占位，真并发时它会返回 false 并记为 duplicate_attempt，这里再查一次是多余的。
         const claimed = await claimAttempt({
           scopeId: friend.id,
           groupId: group.groupId,
