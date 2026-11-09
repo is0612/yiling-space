@@ -13,14 +13,22 @@ type KnowledgeResult = {
   confidence: number;
   reason: string;
   relatedItemIds: string[];
+  confirmedRelatedItemIds?: string[];
+};
+type KnowledgeRelatedItem = { id: string; title: string; content: string; category: string; tags: string[]; revision: number };
+type KnowledgeRelationView = {
+  id: string; relationType: string; status: string; resolution: string | null; metadata: unknown; updatedAt: string;
+  relatedItem: { id: string; title: string; content: string; category: string; status: string; revision: number };
 };
 type Candidate = {
   id: string; sourceType: string; sourceRef: unknown; rawContent: string; status: string;
   processedResult: KnowledgeResult | null; processingError: string | null; processedAt: string | null; createdAt: string;
+  relatedItems: KnowledgeRelatedItem[];
 };
 type KnowledgeItem = {
   id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null;
   status: string; sourceType: string; sourceRef: unknown; revision: number; createdAt: string; updatedAt: string;
+  relations: KnowledgeRelationView[];
 };
 type KnowledgeItemRevision = {
   id: string; revision: number; title: string; content: string; category: string; tags: string[];
@@ -184,6 +192,33 @@ async function acceptCandidate(candidate: Candidate) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     const e = error as { data?: { statusMessage?: string } };
     ElMessage.error(e.data?.statusMessage || "入库失败。");
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      busyIds.value = busyIds.value.filter(id => id !== candidate.id);
+    }
+  }
+}
+
+async function toggleCandidateRelation(candidate: Candidate, target: KnowledgeRelatedItem) {
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || !isCurrentRole(targetCharacterId, expectedRoleVersion) || busyIds.value.includes(candidate.id)) return;
+  const current = candidate.processedResult?.confirmedRelatedItemIds ?? [];
+  const confirmed = !current.includes(target.id);
+  busyIds.value = [...busyIds.value, candidate.id];
+  try {
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/relations`,
+      { method: "POST", body: { targetItemId: target.id, confirmed } },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    ElMessage.success(confirmed ? "已确认这条关联。" : "已取消这条关联。");
+    await load(targetCharacterId);
+  } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const e = error as { data?: { statusMessage?: string } };
+    ElMessage.error(e.data?.statusMessage || "调整关联失败。");
+    await load(targetCharacterId);
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
       busyIds.value = busyIds.value.filter(id => id !== candidate.id);
@@ -357,6 +392,26 @@ function formatDate(value: string) {
             <p>{{ candidate.processedResult.content }}</p>
             <div class="tag-row"><span v-for="tag in candidate.processedResult.tags" :key="tag" class="tag">{{ tag }}</span><span class="muted">可信度 {{ Math.round(candidate.processedResult.confidence * 100) }}%</span></div>
             <p class="reason">{{ candidate.processedResult.reason }}</p>
+            <div v-if="candidate.processedResult.recommendation === 'DUPLICATE' || candidate.processedResult.recommendation === 'CONFLICT'" class="suggested-relations">
+              <div class="relation-heading">
+                <strong>{{ candidate.processedResult.recommendation === 'DUPLICATE' ? '疑似重复知识' : '可能存在冲突的知识' }}</strong>
+                <span class="muted">由助手提出，需你逐条确认</span>
+              </div>
+              <div v-if="!candidate.processedResult.relatedItemIds.length" class="muted">助手没有找到可核验的关联知识条目。</div>
+              <div v-for="target in candidate.relatedItems" :key="target.id" class="suggested-relation">
+                <div class="relation-copy">
+                  <strong>{{ target.title }}</strong>
+                  <p>{{ target.content }}</p>
+                  <span class="muted">{{ target.category }} · 修订 {{ target.revision }}</span>
+                </div>
+                <button
+                  :class="candidate.processedResult.confirmedRelatedItemIds?.includes(target.id) ? 'primary' : ''"
+                  :disabled="busyIds.includes(candidate.id)"
+                  @click="toggleCandidateRelation(candidate, target)"
+                >{{ candidate.processedResult.confirmedRelatedItemIds?.includes(target.id) ? '已确认 · 取消' : '确认关联' }}</button>
+              </div>
+              <div v-if="candidate.processedResult.relatedItemIds.length && !candidate.relatedItems.length" class="muted">建议的知识条目已不存在或不再处于正式状态，请重新处理候选。</div>
+            </div>
           </div>
         </template>
         <div class="candidate-actions">
@@ -376,6 +431,17 @@ function formatDate(value: string) {
         <p>{{ item.content }}</p>
         <div class="tag-row"><span v-for="tag in item.tags" :key="tag" class="tag">{{ tag }}</span><span class="muted">可信度 {{ item.confidence === null ? "未标注" : Math.round(item.confidence * 100) + "%" }}</span><span class="muted">修订 {{ item.revision }}</span></div>
         <div class="item-date">来源：{{ sourceLabel(item.sourceType) }}<span v-if="sourceDetails(item.sourceRef)"> · {{ sourceDetails(item.sourceRef) }}</span><br>更新于 {{ formatDate(item.updatedAt) }}</div>
+        <div v-if="item.relations.length" class="saved-relations">
+          <strong>关联知识</strong>
+          <div v-for="relation in item.relations" :key="relation.id" class="saved-relation">
+            <div class="relation-copy">
+              <span class="relation-kind">{{ relation.relationType === 'DUPLICATE' ? '重复' : relation.relationType === 'CONFLICT' ? '冲突' : '合并关系' }} · {{ relation.status === 'OPEN' ? '待处理' : relation.status === 'RESOLVED' ? '已处理' : '已忽略' }}</span>
+              <strong>{{ relation.relatedItem.title }}</strong>
+              <p>{{ relation.relatedItem.content }}</p>
+              <span class="muted">{{ relation.relatedItem.category }} · 修订 {{ relation.relatedItem.revision }}</span>
+            </div>
+          </div>
+        </div>
         <div class="item-actions">
           <button :disabled="savingItem" @click="editingItemId === item.id ? cancelEdit() : startEdit(item)">{{ editingItemId === item.id ? "取消编辑" : "编辑知识" }}</button>
           <button @click="toggleHistory(item)">{{ historyItemId === item.id ? "收起历史" : "版本历史" }}</button>
@@ -426,6 +492,9 @@ button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2
 .result-top strong,.item-heading h3{color:var(--ink);font-size:14px}.reason,.error-text{font-size:12px;color:var(--dim);margin:0;line-height:1.6}.error-text{color:var(--danger,#c65b5b)}
 .tag-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.tag{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:3px 8px}
 .candidate-actions{display:flex;justify-content:flex-end;gap:8px}.item-heading h3{margin:0}.item-card p{white-space:pre-wrap}.item-date{font-size:11px;color:var(--dim);text-align:right}
+.suggested-relations,.saved-relations{display:flex;flex-direction:column;gap:9px;padding:11px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+.relation-heading,.suggested-relation{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.relation-heading strong,.saved-relations>strong{font-size:12px;color:var(--ink)}
+.suggested-relation,.saved-relation{padding-top:9px;border-top:1px solid var(--line)}.relation-copy{min-width:0;display:flex;flex:1;flex-direction:column;gap:5px}.relation-copy strong{font-size:13px;color:var(--ink)}.relation-copy p{margin:0;color:var(--dim);font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.relation-kind{font-size:11px;color:var(--dim)}
 .item-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .item-editor,.history-panel{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2)}
 .item-editor label{display:flex;flex-direction:column;gap:5px;color:var(--dim);font-size:12px}
