@@ -15,6 +15,7 @@ const base: SocialProactiveContactGateInput = {
   channelAvailable: true,
   hasCommonGroup: true,
   groupMode: "ambient",
+  quietHours: false,
   targetMemberVerified: true,
   targetIsAi: false,
   consecutiveAiRounds: 0,
@@ -46,6 +47,8 @@ assert.equal(gate({ hasCommonGroup: false }).reason, "no_common_group");
 assert.equal(gate({ groupMode: "mention" }).reason, "group_mode_forbids");
 assert.equal(gate({ groupMode: null }).reason, "group_mode_forbids",
   "未知群模式必须 fail closed");
+assert.equal(gate({ quietHours: true }).reason, "quiet_hours",
+  "共同群的安静时段内不主动联系");
 assert.equal(gate({ targetMemberVerified: false }).reason, "target_not_verified",
   "不能用历史群成员记录代替发送前核验");
 assert.equal(gate({ targetIsAi: true, consecutiveAiRounds: 3 }).reason, "ai_dialogue_limit");
