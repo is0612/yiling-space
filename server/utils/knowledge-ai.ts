@@ -78,6 +78,12 @@ function cleanText(value: unknown, max: number): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
+export function filterKnowledgeRelatedItemIds(value: unknown, allowedItemIds: Iterable<string>): string[] {
+  const allowed = new Set(allowedItemIds);
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((id): id is string => typeof id === "string" && allowed.has(id)))].slice(0, 20);
+}
+
 export async function processKnowledgeWithAssistant(input: {
   runtime: KnowledgeAssistantRuntime;
   characterId: string;
@@ -167,8 +173,6 @@ export async function processKnowledgeWithAssistant(input: {
       ? Math.min(1, Math.max(0, data.confidence))
       : 0.5,
     reason: cleanText(data.reason, 2000),
-    relatedItemIds: Array.isArray(data.relatedItemIds)
-      ? [...new Set(data.relatedItemIds.filter((id): id is string => typeof id === "string"))].slice(0, 20)
-      : [],
+    relatedItemIds: filterKnowledgeRelatedItemIds(data.relatedItemIds, existingKnowledge.map(item => item.id)),
   };
 }
