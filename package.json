@@ -194,7 +194,8 @@
     "test:social-relationship-assessment-isolated": "tsx scripts/test-social-relationship-assessment-isolated.ts",
     "test:social-relationship-queue-isolated": "tsx scripts/test-social-relationship-queue-isolated.ts",
     "test:knowledge-versioning": "tsx scripts/test-knowledge-versioning.ts",
-    "test:knowledge-revisions-isolated": "tsx scripts/test-knowledge-revisions-isolated.ts"
+    "test:knowledge-revisions-isolated": "tsx scripts/test-knowledge-revisions-isolated.ts",
+    "test:knowledge-governance": "tsx scripts/test-knowledge-governance.ts"
   },
   "dependencies": {
     "@audio/decode-amr": "^1.3.1",
