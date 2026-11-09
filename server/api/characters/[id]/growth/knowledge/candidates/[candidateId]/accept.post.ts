@@ -48,6 +48,42 @@ export default defineEventHandler(async (event) => {
         sourceType: candidate.sourceType, sourceRef: candidate.sourceRef === null ? undefined : candidate.sourceRef as Prisma.InputJsonValue,
       },
     });
+
+    const recommendation = result.recommendation;
+    const suggestedIds = Array.isArray(result.relatedItemIds)
+      ? result.relatedItemIds.filter((id): id is string => typeof id === "string")
+      : [];
+    const confirmedIds = Array.isArray(result.confirmedRelatedItemIds)
+      ? [...new Set(result.confirmedRelatedItemIds.filter((id): id is string => typeof id === "string" && suggestedIds.includes(id)))]
+      : [];
+    if (confirmedIds.length && (recommendation === "DUPLICATE" || recommendation === "CONFLICT")) {
+      const activeTargets = await tx.knowledgeItem.findMany({
+        where: { id: { in: confirmedIds }, characterId, status: "ACTIVE" },
+        select: { id: true },
+      });
+      if (activeTargets.length !== confirmedIds.length) {
+        throw createError({ statusCode: 409, statusMessage: "已确认的关联知识发生变化，请重新检查候选后再入库。" });
+      }
+      for (const target of activeTargets) {
+        const [sourceItemId, targetItemId] = [created.id, target.id].sort();
+        await tx.knowledgeItemRelation.upsert({
+          where: {
+            characterId_sourceItemId_targetItemId_relationType: {
+              characterId, sourceItemId, targetItemId, relationType: recommendation,
+            },
+          },
+          create: {
+            characterId, sourceItemId, targetItemId, relationType: recommendation,
+            metadata: {
+              origin: "KNOWLEDGE_CANDIDATE",
+              candidateId,
+              reason: typeof result.reason === "string" ? result.reason.slice(0, 2000) : "",
+            },
+          },
+          update: {},
+        });
+      }
+    }
     await tx.knowledgeCandidate.update({
       where: { id: candidateId },
       data: { status: "ACCEPTED" },
