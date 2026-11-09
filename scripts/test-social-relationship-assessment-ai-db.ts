@@ -65,7 +65,7 @@ async function addExperience(characterGlobalScopeId: string, relationshipScopeId
 }
 
 const firstExperience = await addExperience(
-  enabledCharacter.globalScopeId, enabledScope, "朋友主动帮助小鲸鱼", "对方在小鲸鱼遇到困难时主动提供了具体帮助，之后双方表达了感谢。", `event-a-${runId}`,
+  enabledCharacter.globalScopeId, enabledScope, "朋友主动帮助我们的角色", "对方在我们的角色遇到困难时主动提供了具体帮助，之后双方表达了感谢。", `event-a-${runId}`,
 );
 await prisma.$transaction(tx => enqueueSocialRelationshipAssessment(tx, {
   scopeId: enabledScope, reason: "NEW_EXPERIENCE",
@@ -114,7 +114,7 @@ try {
   assert.equal(requests.length, 1);
   assert.equal(requests[0]!.authorization, "Bearer isolated-assessment-secret");
   const sentMessages = requests[0]!.body.messages as Array<{ role: string; content: string }>;
-  assert(sentMessages.some(message => message.content.includes("对方在小鲸鱼遇到困难时主动提供了具体帮助")));
+  assert(sentMessages.some(message => message.content.includes("对方在我们的角色遇到困难时主动提供了具体帮助")));
   const firstAssessment = await prisma.socialRelationshipAssessment.findUniqueOrThrow({
     where: { id: firstRun.assessmentId },
     include: { evidence: true },

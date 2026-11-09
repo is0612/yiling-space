@@ -7,7 +7,7 @@ import { Client } from "pg";
 /**
  * 知识生命周期隔离验收：
  * 建一个一次性数据库 → 跑完整迁移 → 在库里跑 test-knowledge-lifecycle-db.ts → 删库。
- * 全程不碰小鲸鱼的真实知识库。
+ * 全程不碰真实角色的知识库。
  */
 const source = new URL(process.env.DATABASE_URL ?? "");
 assert(["localhost", "127.0.0.1", "[::1]"].includes(source.hostname),
