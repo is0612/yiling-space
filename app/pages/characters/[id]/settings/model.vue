@@ -143,6 +143,7 @@ const KIND_LABELS: Record<string, string> = {
   "memory-assistant": "记忆助手",
   "context-assistant": "语境助手",
   "knowledge-assistant": "知识处理助手",
+  "social-relationship-assistant": "关系评估助手",
   other: "其他",
 };
 
