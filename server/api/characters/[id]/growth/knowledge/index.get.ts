@@ -43,7 +43,7 @@ export default defineEventHandler(async (event) => {
       select: {
         id: true, sourceItemId: true, targetItemId: true, relationType: true, status: true, resolution: true, metadata: true, createdAt: true, updatedAt: true,
         sourceItem: { select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, status: true, revision: true, sourceType: true, sourceRef: true } },
-        targetItem: { select: { id: true, title: true, content: true, category: true, status: true, revision: true } },
+        targetItem: { select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, status: true, revision: true, sourceType: true, sourceRef: true } },
       },
     }),
   ]);
