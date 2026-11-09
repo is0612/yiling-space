@@ -163,6 +163,7 @@ export default defineEventHandler(async (event) => {
         lastInteractedAt: true,
         aliases: true,
         friendChatPolicy: true,
+        proactiveContactEnabled: true,
         character: { select: { name: true } },
         externalIdentity: {
           select: { id: true, platform: true, platformUid: true, displayName: true, status: true, linkedUserId: true, kind: true, kindSource: true },
@@ -207,6 +208,7 @@ export default defineEventHandler(async (event) => {
           identityKind: identity.kind,
           identityKindSource: identity.kindSource,
           friendChatPolicy: scope.friendChatPolicy,
+          proactiveContactEnabled: scope.proactiveContactEnabled,
           interactionCount: scope.interactionCount,
           lastInteractedAt: scope.lastInteractedAt?.toISOString() ?? null,
           // 认识的时间＝这条关系建立的时间，也就是第一次遇到这个人。
