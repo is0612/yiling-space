@@ -109,6 +109,7 @@ try {
   console.log("\n[1] 启用助手的关系任务调用独立模型并保存建议");
   const firstRun = await processNextSocialRelationshipAssessmentTask(prisma, { workerId: `social-ai-worker-${runId}` });
   assert.equal(firstRun.processed, true);
+  assert(firstRun.assessmentId, "成功执行必须生成评估历史 ID");
   assert.equal(firstRun.outcome, "CHANGE");
   assert.equal(requests.length, 1);
   assert.equal(requests[0]!.authorization, "Bearer isolated-assessment-secret");
@@ -138,6 +139,7 @@ try {
   }));
   const secondRun = await processNextSocialRelationshipAssessmentTask(prisma, { workerId: `social-ai-worker-${runId}` });
   assert.equal(secondRun.processed, true);
+  assert(secondRun.assessmentId, "第二次执行必须生成评估历史 ID");
   assert.equal(secondRun.outcome, "REVIEW", "模型只引用 CONTEXT 时，CHANGE 应被降为 REVIEW");
   const secondAssessment = await prisma.socialRelationshipAssessment.findUniqueOrThrow({
     where: { id: secondRun.assessmentId },
