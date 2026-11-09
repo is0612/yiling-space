@@ -1,4 +1,5 @@
 import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
+import type { Prisma } from "../../../../../../../src/generated/prisma/client";
 import { requireActorUserId } from "../../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../../utils/prisma";
@@ -53,10 +54,12 @@ export default defineEventHandler(async (event) => {
         status, resolution,
         resolvedAt: status === "OPEN" ? null : new Date(),
         metadata: {
+          ...(relation.metadata && typeof relation.metadata === "object" && !Array.isArray(relation.metadata)
+            ? relation.metadata as Prisma.JsonObject : {}),
           decisionSource: "USER",
           sourceRevision: relation.sourceItem.revision,
           targetRevision: relation.targetItem.revision,
-        },
+        } as Prisma.InputJsonValue,
       },
     });
     if (updated.count !== 1) {
