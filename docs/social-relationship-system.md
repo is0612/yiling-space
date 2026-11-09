@@ -467,5 +467,5 @@
 - 记录展示：`SocialProactiveContactAttempt` 保存状态、原因、群号、消息正文与时间；好友列表卡片显示最近一次尝试状态。
 - 已新增 Prisma 迁移 `20261109120000_social_proactive_contact_foundation`，以及纯函数策略/OneBot @ 段专项测试入口 `yarn test:social-proactive-contact-policy`。
 - **代码已接入，但尚未由用户本地验收。** 本轮未运行 Prisma、TypeScript、SFC、lint、数据库隔离测试或真实 QQ 联调；不能标记为通过。尤其需要在本地验证生成的 Prisma Client 与 OneBot 网关是否支持 `get_group_member_info`。
-- 本地验收命令：`yarn prisma validate`、`yarn prisma generate`、`yarn test:social-proactive-contact-policy`、`yarn typecheck`、`yarn check:sfc`、`yarn lint`。之后再用测试角色/测试好友，在共同 QQ 群实际确认定向 @、撤销授权、BLOCK、退群、冷却、每日上限与 AI 连续对话保护。
+- 本地验收命令：`yarn prisma validate`、`yarn prisma migrate deploy`、`yarn prisma generate`、`yarn test:social-proactive-contact-policy`、`yarn typecheck`、`yarn check:sfc`、`yarn lint`。之后再用测试角色/测试好友，在共同 QQ 群实际确认定向 @、撤销授权、BLOCK、退群、冷却、每日上限与 AI 连续对话保护。
 
