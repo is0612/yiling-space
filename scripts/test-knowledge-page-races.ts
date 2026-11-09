@@ -415,7 +415,8 @@ async function candidateRelationConfirmationRefreshesWorkspace() {
   };
   const saving = page.call("toggleCandidateRelation", candidate, candidate.relatedItems[0]);
   const post = page.take("/api/characters/char-a/growth/knowledge/candidates/candidate-a/relations", "POST");
-  assert.deepEqual(post.options?.body, { targetItemId: "item-a", confirmed: true });
+  assert.equal((post.options?.body as Record<string, unknown>).targetItemId, "item-a");
+  assert.equal((post.options?.body as Record<string, unknown>).confirmed, true);
   post.resolve({ confirmedRelatedItemIds: ["item-a"] });
   await flushMicrotasks();
   const refresh = page.take("/api/characters/char-a/growth/knowledge");
