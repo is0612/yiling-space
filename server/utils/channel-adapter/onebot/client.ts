@@ -619,3 +619,31 @@ export async function callOnebotAction(
   // 返回 data（message_id 之类），目前只有收藏表情要拿它回读校验；其余调用方忽略即可。
   return (payload as { data?: unknown } | null)?.data;
 }
+
+
+/**
+ * 发送前实时核验某个 QQ 号是否仍在指定群里。
+ *
+ * 历史 group_members 只代表「曾经在群里发过言」，不能证明当前仍是群成员。
+ * OneBot 查询失败、返回形状不完整或 UID 不匹配时一律返回 false，调用方必须跳过发送。
+ */
+export async function verifyOnebotGroupMember(
+  config: OnebotConnectionConfig,
+  groupId: string,
+  userId: string,
+): Promise<boolean> {
+  if (!/^\\d{5,15}$/u.test(groupId) || !/^\\d{5,15}$/u.test(userId)) return false;
+  try {
+    const data = await callOnebotAction(config, "get_group_member_info", {
+      group_id: Number(groupId),
+      user_id: Number(userId),
+      no_cache: true,
+    });
+    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+    const record = data as { group_id?: unknown; user_id?: unknown };
+    return String(record.group_id ?? "") === groupId
+      && String(record.user_id ?? "") === userId;
+  } catch {
+    return false;
+  }
+}
