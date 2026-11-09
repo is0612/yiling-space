@@ -11,6 +11,7 @@ import { readModelUsage, recordModelUsage } from "./model-usage";
 import {
   claimNextSocialRelationshipAssessmentTask,
   completeSocialRelationshipAssessmentTask,
+  enqueueSocialRelationshipAssessment,
   failSocialRelationshipAssessmentTask,
 } from "./social-relationship-queue";
 
@@ -220,11 +221,17 @@ export async function processNextSocialRelationshipAssessmentTask(
 
     const inputCutoffAt = new Date();
     const maxEvidence = Math.max(3, Math.min(16, Math.floor(runtime.maxInputTokens / 1_200)));
-    const [fresh, contextual, previous] = await Promise.all([
+    const [remainingNewCount, fresh, contextual, previous] = await Promise.all([
+      prisma.socialExperience.count({
+        where: {
+          scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE" },
+          usedInAssessments: { none: { assessment: { status: "SUCCEEDED" } } },
+        },
+      }),
       prisma.socialExperience.findMany({
         where: {
           scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE" },
-          usedInAssessments: { none: { kind: "NEW", assessment: { status: "SUCCEEDED" } } },
+          usedInAssessments: { none: { assessment: { status: "SUCCEEDED" } } },
         },
         include: { memoryEvent: { select: { occurredAt: true, title: true, detail: true, participants: true, confidence: true } } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: Math.min(12, maxEvidence),
@@ -315,6 +322,12 @@ export async function processNextSocialRelationshipAssessmentTask(
         reason: "评估期间关系版本已变化，本次建议已作废并标记为待人工复核。 " + suggestion.reason,
         cautionFlags: [...suggestion.cautionFlags, "RELATIONSHIP_VERSION_CHANGED"],
       } : suggestion;
+      if (remainingNewCount > fresh.length) {
+        await enqueueSocialRelationshipAssessment(tx, {
+          scopeId: lease.scopeId,
+          reason: "EXISTING_EXPERIENCE_RECOVERY",
+        });
+      }
       await tx.socialRelationshipAssessment.update({
         where: { id: assessmentId },
         data: {
