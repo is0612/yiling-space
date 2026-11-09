@@ -22,6 +22,7 @@ import { readDailyQuota, recordModelUsage } from "./model-usage";
 import { getPrisma } from "./prisma";
 import { callRawModel } from "./raw-llm";
 import { parseMessage } from "./proactive-prompt";
+import { inQuietHours } from "./proactive-settings";
 import {
   buildSocialProactiveContactSegments,
   evaluateSocialProactiveContactGate,
@@ -60,6 +61,8 @@ type CommonGroup = {
   bindingId: string;
   connection: OnebotConnectionRecord;
   groupMode: "mention" | "ambient" | "all";
+  quietStart: string;
+  quietEnd: string;
   consecutiveAiRounds: number;
   recentLines: string[];
 };
@@ -152,7 +155,8 @@ async function findCommonGroups(
     if (!linked || !conversation.channelBinding || conversation.channelBinding.status !== "ACTIVE") continue;
     if (!/^\d{5,15}$/u.test(groupId) || !bindingAcceptsGroup(linked.binding.routingKey, groupId)) continue;
 
-    const mode = groupChatForGroup(linked.binding.groupChat, linked.binding.groupChatModes, groupId).mode;
+    const groupSettings = groupChatForGroup(linked.binding.groupChat, linked.binding.groupChatModes, groupId);
+    const mode = groupSettings.mode;
     if (mode !== "ambient" && mode !== "all") continue;
 
     groups.push({
@@ -161,6 +165,8 @@ async function findCommonGroups(
       bindingId,
       connection: linked.connection,
       groupMode: mode,
+      quietStart: groupSettings.quietStart,
+      quietEnd: groupSettings.quietEnd,
       consecutiveAiRounds: conversation.consecutiveAiRounds,
       recentLines: await loadRecentLines(conversation.id),
     });
@@ -431,6 +437,7 @@ export async function runSocialProactiveContactTick(
           channelAvailable: true,
           hasCommonGroup: true,
           groupMode: group.groupMode,
+          quietHours: inQuietHours(now, group),
           targetMemberVerified: false,
           targetIsAi: identity.kind === "AI",
           consecutiveAiRounds: group.consecutiveAiRounds,
@@ -559,6 +566,7 @@ export async function runSocialProactiveContactTick(
           channelAvailable: true,
           hasCommonGroup: true,
           groupMode: freshGroup.groupMode,
+          quietHours: inQuietHours(new Date(), freshGroup),
           targetMemberVerified: true,
           targetIsAi: freshScope.externalIdentity.kind === "AI",
           consecutiveAiRounds: freshGroup.consecutiveAiRounds,
