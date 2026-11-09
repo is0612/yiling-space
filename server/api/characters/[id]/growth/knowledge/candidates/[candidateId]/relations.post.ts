@@ -1,8 +1,8 @@
 import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import { Prisma } from "../../../../../../../../src/generated/prisma/client";
-import { requireActorUserId } from "../../../../../../../../utils/auth";
-import { requireUuid } from "../../../../../../../../utils/local-api";
-import { getPrisma } from "../../../../../../../../utils/prisma";
+import { requireActorUserId } from "../../../../../../../utils/auth";
+import { requireUuid } from "../../../../../../../utils/local-api";
+import { getPrisma } from "../../../../../../../utils/prisma";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -18,10 +18,7 @@ export default defineEventHandler(async (event) => {
   const targetItemId = requireUuid(typeof body.targetItemId === "string" ? body.targetItemId : "", "关联知识");
   const prisma = getPrisma();
 
-  const character = await prisma.character.findFirst({
-    where: { id: characterId, ownerId },
-    select: { id: true },
-  });
+  const character = await prisma.character.findFirst({ where: { id: characterId, ownerId }, select: { id: true } });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
   const candidate = await prisma.knowledgeCandidate.findFirst({
@@ -30,7 +27,7 @@ export default defineEventHandler(async (event) => {
   });
   if (!candidate) throw createError({ statusCode: 404, statusMessage: "知识候选不存在。" });
   if (candidate.status !== "REVIEW") {
-    throw createError({ statusCode: 409, statusMessage: "只有待确认的知识候选可以建立关联。" });
+    throw createError({ statusCode: 409, statusMessage: "只有待确认的知识候选可以确认关联。" });
   }
 
   const result = asRecord(candidate.processedResult);
@@ -47,37 +44,20 @@ export default defineEventHandler(async (event) => {
 
   const target = await prisma.knowledgeItem.findFirst({
     where: { id: targetItemId, characterId, status: "ACTIVE" },
-    select: { id: true, title: true },
+    select: { id: true, title: true, content: true, category: true, tags: true, revision: true },
   });
   if (!target) throw createError({ statusCode: 404, statusMessage: "关联知识不存在或已不处于正式状态。" });
 
-  // DUPLICATE / CONFLICT 是无向关系，统一 ID 顺序，避免 A-B 与 B-A 重复。
-  const [sourceItemId, normalizedTargetId] = [candidateId, targetItemId].sort();
-  const relationType = recommendation;
-  const metadata = {
-    origin: "KNOWLEDGE_CANDIDATE",
-    candidateId,
-    reason: typeof result.reason === "string" ? result.reason.slice(0, 2000) : "",
-  } satisfies Prisma.InputJsonObject;
-
-  const where = {
-    characterId_sourceItemId_targetItemId_relationType: {
-      characterId,
-      sourceItemId,
-      targetItemId: normalizedTargetId,
-      relationType,
-    },
-  };
-  const relation = await prisma.knowledgeItemRelation.upsert({
-    where,
-    create: {
-      characterId,
-      sourceItemId,
-      targetItemId: normalizedTargetId,
-      relationType,
-      metadata,
-    },
-    update: {},
+  const confirmed = Array.isArray(result.confirmedRelatedItemIds)
+    ? result.confirmedRelatedItemIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const confirmedRelatedItemIds = [...new Set([...confirmed, targetItemId])];
+  const nextResult = { ...result, confirmedRelatedItemIds };
+  const updated = await prisma.knowledgeCandidate.updateMany({
+    where: { id: candidateId, characterId, status: "REVIEW" },
+    data: { processedResult: nextResult as Prisma.InputJsonObject },
   });
-  return { relation, target };
+  if (!updated.count) throw createError({ statusCode: 409, statusMessage: "候选状态已变化，请刷新后重试。" });
+
+  return { target, relationType: recommendation, confirmedRelatedItemIds };
 });
