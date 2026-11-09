@@ -86,6 +86,8 @@ const { character: activeCharacter } = useCharacterSelection(route.path);
 const characterId = computed(() => activeCharacter.value?.id ?? "");
 const loading = ref(false);
 const savingCandidate = ref(false);
+const importingFile = ref(false);
+const importFileInput = ref<HTMLInputElement | null>(null);
 const rawContent = ref("");
 const keyword = ref("");
 const data = ref<WorkspaceData>({ candidates: [], items: [], candidateCount: 0, itemCount: 0 });
@@ -264,6 +266,8 @@ watch(characterId, (nextCharacterId: string) => {
   rawContent.value = "";
   busyIds.value = [];
   savingCandidate.value = false;
+  importingFile.value = false;
+  if (importFileInput.value) importFileInput.value.value = "";
   editingItemId.value = "";
   editDraft.value = { title: "", content: "", category: "", tagsText: "", confidence: "" };
   savingItem.value = false;
@@ -325,6 +329,38 @@ async function addCandidate() {
     ElMessage.error(e.data?.statusMessage || "添加候选失败。");
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) savingCandidate.value = false;
+  }
+}
+
+async function importDocument(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!file || !targetCharacterId || importingFile.value || pageDisposed) return;
+  if (file.size > 2 * 1024 * 1024) {
+    ElMessage.error("单个文件不能超过 2 MB。");
+    input.value = "";
+    return;
+  }
+  const form = new FormData();
+  form.append("file", file, file.name);
+  importingFile.value = true;
+  try {
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/import`,
+      { method: "POST", body: form },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    ElMessage.success("文件已加入知识候选，请运行知识处理助手整理。");
+    await load(targetCharacterId);
+  } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const e = error as { data?: { statusMessage?: string } };
+    ElMessage.error(e.data?.statusMessage || "文件导入失败。");
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) importingFile.value = false;
+    if (input) input.value = "";
   }
 }
 
@@ -1058,6 +1094,11 @@ function formatDate(value: string) {
       <div class="section-heading"><div><span class="eyebrow">COLLECT</span><h2>添加知识候选</h2></div></div>
       <textarea v-model="rawContent" rows="4" maxlength="20000" placeholder="把她接触到、值得整理的知识放在这里。可以是一段解释、资料摘录或一个概念……" />
       <div class="section-actions"><span class="muted">{{ rawContent.length }} / 20000</span><button class="primary" :disabled="savingCandidate || !rawContent.trim()" @click="addCandidate">{{ savingCandidate ? "添加中…" : "加入候选" }}</button></div>
+      <div class="import-panel">
+        <div><strong>从文件导入</strong><p class="muted">首批支持 UTF-8 的 TXT、Markdown 文件，单个文件不超过 2 MB、正文不超过 20000 字。</p></div>
+        <input ref="importFileInput" type="file" accept=".txt,.md,text/plain,text/markdown" :disabled="importingFile" @change="importDocument">
+        <span v-if="importingFile" class="muted">正在导入…</span>
+      </div>
     </section>
 
     <section v-if="characterId && activeTab === 'library'" class="knowledge-section">
@@ -1312,6 +1353,9 @@ function formatDate(value: string) {
 textarea,.search-input{width:100%;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--ink);padding:11px 12px;font:inherit;resize:vertical}
 .section-actions{display:flex;align-items:center;justify-content:space-between}
 .pagination{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;padding-top:4px}
+.import-panel{display:grid;gap:10px;padding:14px;border:1px dashed var(--line);border-radius:12px;background:var(--surface-muted)}
+.import-panel p{margin:5px 0 0}
+.import-panel input{max-width:100%;font:inherit}
 button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:8px 12px;font:inherit;font-size:12px;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}button.primary{background:var(--accent);color:white;border-color:var(--accent)}button.quiet{border-color:transparent;background:transparent;color:var(--dim)}button.danger{background:var(--red,#c92b41);border-color:var(--red,#c92b41);color:white}button.danger-quiet{background:transparent;border-color:var(--line);color:var(--red-text,#8e2739)}
 .knowledge-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:8px}
 /* 选中态不只靠颜色：加重字重 + 描边 + 独立底色，灰度下也能分辨 */

@@ -216,6 +216,9 @@ jobs:
 
       # 其余纯逻辑/数据库测试：以前只在本地 verify:local 里跑，CI 漏了 30 个。
       # 合成一条，避免 workflow 里堆三十个 step，也避免和 verify:local 漂移。
+      - name: 知识文档导入安全解析测试
+        run: yarn run test:knowledge-import
+
       - name: 其余单元与集成测试
         run: yarn run test:unit-suite
 
