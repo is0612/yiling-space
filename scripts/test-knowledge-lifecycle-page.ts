@@ -85,7 +85,7 @@ async function openArchiveTab(page: Page, items: unknown[]) {
     "归档列表",
   );
   const workspaceRequest = page.take(BASE);
-  archive.resolve({ items });
+  archive.resolve({ items, itemPagination: { page: 1, pageSize: 30, total: items.length, pageCount: 1 } });
   workspaceRequest.resolve(workspace([]));
   await flushMicrotasks();
   return archive;
@@ -95,7 +95,7 @@ async function openTrashTab(page: Page, items: unknown[]) {
   page.call("selectTab", "trash");
   const trash = page.take(`${BASE}/trash`);
   const workspaceRequest = page.take(BASE);
-  trash.resolve({ characterId: "char-a", items, itemCount: items.length });
+  trash.resolve({ characterId: "char-a", items, itemCount: items.length, pagination: { page: 1, pageSize: 30, total: items.length, pageCount: 1 } });
   workspaceRequest.resolve(workspace([]));
   await flushMicrotasks();
   return trash;
@@ -110,10 +110,10 @@ async function settleRefresh(page: Page, tab: "library" | "archive" | "trash") {
       request => (request.options?.query as Record<string, unknown> | undefined)?.itemStatus === "ARCHIVED",
       "归档列表刷新",
     );
-    archive.resolve({ items: [] });
+    archive.resolve({ items: [], itemPagination: { page: 1, pageSize: 30, total: 0, pageCount: 1 } });
   }
   if (tab === "trash") {
-    page.take(`${BASE}/trash`).resolve({ characterId: "char-a", items: [], itemCount: 0 });
+    page.take(`${BASE}/trash`).resolve({ characterId: "char-a", items: [], itemCount: 0, pagination: { page: 1, pageSize: 30, total: 0, pageCount: 1 } });
   }
   await flushMicrotasks();
 }
@@ -415,6 +415,58 @@ async function operationFailureKeepsDialogForRetry() {
 // ---------------------------------------------------------------------------
 // 7. 角色切换竞态：旧角色数据/提示/刷新都不能落到新角色
 // ---------------------------------------------------------------------------
+async function archiveAndTrashSearchPagination() {
+  const page = buildPageHarness(PAGE);
+  await bootstrap(page, [libraryEntry("active-1")]);
+  page.set("keyword", "星云");
+  page.call("selectTab", "archive");
+  const archiveFirst = page.takeMatching(
+    request => (request.options?.query as Record<string, unknown> | undefined)?.itemStatus === "ARCHIVED",
+    "归档搜索第一页",
+  );
+  const workspaceFirst = page.take(BASE);
+  assert.equal(archiveFirst.options?.query?.q, "星云");
+  assert.equal(archiveFirst.options?.query?.page, 1);
+  archiveFirst.resolve({ items: [entry("archive-1", "ARCHIVED")], itemPagination: { page: 1, pageSize: 30, total: 31, pageCount: 2 } });
+  workspaceFirst.resolve(workspace([]));
+  await flushMicrotasks();
+
+  page.call("changeArchivePage", 2);
+  const archiveSecond = page.takeMatching(
+    request => (request.options?.query as Record<string, unknown> | undefined)?.itemStatus === "ARCHIVED",
+    "归档搜索第二页",
+  );
+  const workspaceSecond = page.take(BASE);
+  assert.equal(archiveSecond.options?.query?.q, "星云");
+  assert.equal(archiveSecond.options?.query?.page, 2);
+  archiveSecond.resolve({ items: [entry("archive-31", "ARCHIVED")], itemPagination: { page: 2, pageSize: 30, total: 31, pageCount: 2 } });
+  workspaceSecond.resolve(workspace([]));
+  await flushMicrotasks();
+  assert.equal(page.read("archivePage"), 2);
+  assert.equal(page.read("archiveTotalCount"), 31);
+
+  page.call("selectTab", "trash");
+  const trashFirst = page.take(`${BASE}/trash`);
+  const workspaceTrash = page.take(BASE);
+  assert.equal(trashFirst.options?.query?.q, "星云");
+  assert.equal(trashFirst.options?.query?.page, 1);
+  trashFirst.resolve({ characterId: "char-a", items: [entry("trash-1", "TRASHED")], itemCount: 31, pagination: { page: 1, pageSize: 30, total: 31, pageCount: 2 } });
+  workspaceTrash.resolve(workspace([]));
+  await flushMicrotasks();
+
+  page.call("changeTrashPage", 2);
+  const trashSecond = page.take(`${BASE}/trash`);
+  const workspaceTrashSecond = page.take(BASE);
+  assert.equal(trashSecond.options?.query?.q, "星云");
+  assert.equal(trashSecond.options?.query?.page, 2);
+  trashSecond.resolve({ characterId: "char-a", items: [entry("trash-31", "TRASHED")], itemCount: 31, pagination: { page: 2, pageSize: 30, total: 31, pageCount: 2 } });
+  workspaceTrashSecond.resolve(workspace([]));
+  await flushMicrotasks();
+  assert.equal(page.read("trashPage"), 2);
+  assert.equal(page.read("trashTotalCount"), 31);
+  page.finish();
+}
+
 async function staleArchiveListDoesNotCrossRole() {
   const page = buildPageHarness(PAGE);
   await bootstrap(page, [libraryEntry("a-active")]);
@@ -429,7 +481,7 @@ async function staleArchiveListDoesNotCrossRole() {
 
   page.switchRole("char-b");
   const loadB = page.take("/api/characters/char-b/growth/knowledge");
-  archiveA.resolve({ items: [entry("a-archived", "ARCHIVED")] });
+  archiveA.resolve({ items: [entry("a-archived", "ARCHIVED")], itemPagination: { page: 1, pageSize: 30, total: 1, pageCount: 1 } });
   await flushMicrotasks();
   assert.deepEqual(plain<unknown[]>(page.read("archivedItems")), [], "A 的归档数据不能出现在 B 的页面");
   assert.equal(page.read("activeTab"), "library", "切角色回到知识库分区");
@@ -582,6 +634,7 @@ async function main() {
     ["待处理候选不会被批量清理", pendingCandidatesAreNeverBatchDeleted],
     ["409 冲突提示并刷新最新数据", revisionConflictReportsAndRefreshes],
     ["非 409 失败保留确认框可重试", operationFailureKeepsDialogForRetry],
+    ["归档与回收站搜索和分页参数正确", archiveAndTrashSearchPagination],
     ["旧角色归档列表不跨角色", staleArchiveListDoesNotCrossRole],
     ["在途生命周期操作不污染新角色", inFlightLifecycleDoesNotTouchNextRole],
     ["加载失败与空列表状态", loadFailureAndEmptyStates],
