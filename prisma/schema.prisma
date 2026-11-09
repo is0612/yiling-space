@@ -106,12 +106,14 @@ enum SocialRelationshipAssessmentReviewStatus {
   DEFERRED
   ACCEPTED
   REJECTED
+  STALE
 }
 
 enum SocialRelationshipAssessmentReviewDecision {
   DEFERRED
   ACCEPTED
   REJECTED
+  STALE
 }
 
 enum SocialRelationshipAssessmentEvidenceKind {
