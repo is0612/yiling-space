@@ -42,23 +42,9 @@ type SocialContactCharacter = {
   modelConfig: unknown;
 };
 
-type SocialContactCandidate = {
-  scopeId: string;
-  identityId: string;
-  platformUid: string;
-  displayName: string | null;
-  identityKind: "UNKNOWN" | "HUMAN" | "AI";
-  friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK";
-  relationshipStage: "STRANGER" | "ACQUAINTANCE" | "FRIEND" | "CLOSE_FRIEND" | null;
-  relationshipStatus: "NORMAL" | "DISTANT" | "CONFLICT" | "REPAIRING" | "UNOBSERVED" | null;
-  lastContactAt: Date | null;
-  character: SocialContactCharacter;
-};
-
 type CommonGroup = {
   groupId: string;
   conversationId: string;
-  bindingId: string;
   connection: OnebotConnectionRecord;
   groupMode: "mention" | "ambient" | "all";
   quietStart: string;
@@ -162,7 +148,6 @@ async function findCommonGroups(
     groups.push({
       groupId,
       conversationId: conversation.id,
-      bindingId,
       connection: linked.connection,
       groupMode: mode,
       quietStart: groupSettings.quietStart,
