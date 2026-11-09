@@ -100,6 +100,20 @@ enum SocialRelationshipAssessmentOutcome {
   REVIEW
 }
 
+enum SocialRelationshipAssessmentReviewStatus {
+  NOT_REQUIRED
+  PENDING
+  DEFERRED
+  ACCEPTED
+  REJECTED
+}
+
+enum SocialRelationshipAssessmentReviewDecision {
+  DEFERRED
+  ACCEPTED
+  REJECTED
+}
+
 enum SocialRelationshipAssessmentEvidenceKind {
   NEW
   CONTEXT
@@ -678,11 +692,17 @@ model SocialRelationChange {
   scopeId        String           @db.Uuid
   fromStage      RelationshipStage
   toStage        RelationshipStage
+  fromStatus     SocialRelationshipStatus?
+  toStatus       SocialRelationshipStatus?
+  relationshipVersionBefore Int?
+  relationshipVersionAfter  Int?
+  assessmentId   String?          @unique @db.Uuid
   reason         String           @db.Text
-  /// 防止同一评估结果重试时重复写入阶段变化。
+  /// 防止同一评估结果重试时重复写入关系变化。
   idempotencyKey String           @unique @db.VarChar(500)
   createdAt      DateTime         @default(now()) @db.Timestamptz(6)
   scope          MemoryScope      @relation(fields: [scopeId], references: [id], onDelete: Cascade)
+  assessment     SocialRelationshipAssessment? @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
   evidence       SocialRelationChangeEvidence[]
 
   @@index([scopeId, createdAt])
@@ -753,18 +773,39 @@ model SocialRelationshipAssessment {
   promptVersion      String?                                 @db.VarChar(80)
   inputCutoffAt      DateTime?                               @db.Timestamptz(6)
   status             SocialRelationshipAssessmentStatus      @default(RUNNING)
+  reviewStatus       SocialRelationshipAssessmentReviewStatus @default(NOT_REQUIRED)
+  reviewedAt         DateTime?                               @db.Timestamptz(6)
+  reviewedByUserId   String?                                 @db.Uuid
   error              String?                                 @db.Text
   startedAt          DateTime                                @default(now()) @db.Timestamptz(6)
   completedAt        DateTime?                               @db.Timestamptz(6)
   createdAt          DateTime                                @default(now()) @db.Timestamptz(6)
   scope              MemoryScope                             @relation(fields: [scopeId], references: [id], onDelete: Cascade)
   evidence           SocialRelationshipAssessmentEvidence[]
+  reviews            SocialRelationshipAssessmentReview[]
+  appliedChange      SocialRelationChange?
 
   @@unique([id, scopeId])
   @@index([scopeId, createdAt])
   @@index([scopeId, relationshipVersion])
   @@index([status, createdAt])
+  @@index([reviewStatus, createdAt])
   @@map("social_relationship_assessments")
+}
+
+/// 人工对关系评估建议的每一次处置审计；暂缓、驳回、采纳均追加记录，不覆盖历史。
+model SocialRelationshipAssessmentReview {
+  id             String                                      @id @default(uuid()) @db.Uuid
+  assessmentId   String                                      @db.Uuid
+  reviewerUserId String                                      @db.Uuid
+  decision       SocialRelationshipAssessmentReviewDecision
+  note           String?                                     @db.Text
+  createdAt      DateTime                                    @default(now()) @db.Timestamptz(6)
+  assessment     SocialRelationshipAssessment                @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@index([assessmentId, createdAt])
+  @@index([reviewerUserId, createdAt])
+  @@map("social_relationship_assessment_reviews")
 }
 
 /// 评估引用的经历。NEW 是本轮新增证据，CONTEXT 仅作背景；复用限制由后续证据服务核验。
