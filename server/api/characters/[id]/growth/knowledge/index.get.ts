@@ -19,24 +19,31 @@ export default defineEventHandler(async (event) => {
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
   const query = getQuery(event);
   const candidateStatus = typeof query.candidateStatus === "string" ? query.candidateStatus : undefined;
-  const itemStatus = typeof query.itemStatus === "string" ? query.itemStatus : "ACTIVE";
+  const itemStatus = query.itemStatus === "ARCHIVED" ? "ARCHIVED" : "ACTIVE";
   const keyword = typeof query.q === "string" ? query.q.trim().slice(0, 100) : "";
-  const [rawCandidates, rawItems, candidateCount, itemCount, relations] = await Promise.all([
+  const itemPage = itemStatus === "ARCHIVED" ? Math.max(1, Math.min(10000, Number.parseInt(String(query.page ?? "1"), 10) || 1)) : 1;
+  const itemPageSize = itemStatus === "ARCHIVED" ? 30 : 100;
+  const itemWhere = {
+    characterId,
+    status: itemStatus,
+    ...(keyword ? { OR: [{ title: { contains: keyword, mode: "insensitive" as const } }, { content: { contains: keyword, mode: "insensitive" as const } }, { tags: { has: keyword } }] } : {}),
+  };
+  const [rawCandidates, rawItems, candidateCount, itemCount, filteredItemCount, relations] = await Promise.all([
     prisma.knowledgeCandidate.findMany({
       where: { characterId, ...(candidateStatus ? { status: candidateStatus } : {}) },
       orderBy: { createdAt: "desc" }, take: 50,
       select: { id: true, sourceType: true, sourceRef: true, rawContent: true, status: true, processedResult: true, processingError: true, processedAt: true, createdAt: true, updatedAt: true },
     }),
     prisma.knowledgeItem.findMany({
-      where: {
-        characterId, status: itemStatus,
-        ...(keyword ? { OR: [{ title: { contains: keyword, mode: "insensitive" } }, { content: { contains: keyword, mode: "insensitive" } }, { tags: { has: keyword } }] } : {}),
-      },
-      orderBy: { updatedAt: "desc" }, take: 100,
+      where: itemWhere,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      skip: (itemPage - 1) * itemPageSize,
+      take: itemPageSize,
       select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, status: true, sourceType: true, sourceRef: true, revision: true, createdAt: true, updatedAt: true },
     }),
     prisma.knowledgeCandidate.count({ where: { characterId, status: "PENDING" } }),
     prisma.knowledgeItem.count({ where: { characterId, status: "ACTIVE" } }),
+    prisma.knowledgeItem.count({ where: itemWhere }),
     prisma.knowledgeItemRelation.findMany({
       where: { characterId },
       orderBy: { updatedAt: "desc" },
@@ -84,5 +91,16 @@ export default defineEventHandler(async (event) => {
         relatedItem: relation.sourceItemId === item.id ? relation.targetItem : relation.sourceItem,
       })),
   }));
-  return { candidates, items, candidateCount, itemCount };
+  return {
+    candidates,
+    items,
+    candidateCount,
+    itemCount,
+    itemPagination: {
+      page: itemPage,
+      pageSize: itemPageSize,
+      total: filteredItemCount,
+      pageCount: Math.max(1, Math.ceil(filteredItemCount / itemPageSize)),
+    },
+  };
 });
