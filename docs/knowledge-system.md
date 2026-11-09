@@ -152,6 +152,7 @@
 新增角色隔离的知识关联记录，至少记录 characterId、sourceItemId、targetItemId、relationType（DUPLICATE / CONFLICT / MERGED_INTO）、status（OPEN / RESOLVED / DISMISSED）、处置方式、创建/处置时间及必要的来源快照元数据。
 
 - DUPLICATE 与 CONFLICT 是对称关系：服务端规范化条目 ID 顺序并防止自关联/重复边；MERGED_INTO 是有方向的 source → target。
+- 对称关系的去重不依赖应用层自觉：数据库在 `(characterId, LEAST(sourceItemId, targetItemId), GREATEST(sourceItemId, targetItemId), relationType)` 上建了部分唯一索引（仅覆盖 DUPLICATE / CONFLICT），A→B 与 B→A 同时写入会被直接拒绝。MERGED_INTO 不受该索引影响，仍保持有向语义。
 - 两端条目必须属于同一 characterId；跨角色关联一律拒绝。条目 ID 必须由服务端验证，不接受模型直接创建的关联。
 - 关联不能替代来源或版本历史。合并后源条目保留为可追溯记录，状态从 ACTIVE 转为 MERGED，不物理删除；目标条目仍为 ACTIVE。
 - 正式检索只查 ACTIVE，因此 MERGED 源条目不再单独召回；关系详情仍可回溯到源条目、来源和历史版本。
