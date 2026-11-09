@@ -50,6 +50,8 @@ export default defineEventHandler(async (event) => {
         modelName: true,
         promptVersion: true,
         status: true,
+        reviewStatus: true,
+        reviewedAt: true,
         error: true,
         startedAt: true,
         completedAt: true,
@@ -65,6 +67,10 @@ export default defineEventHandler(async (event) => {
               select: { platform: true, platformUid: true, displayName: true, kind: true },
             },
           },
+        },
+        reviews: {
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: { decision: true, note: true, createdAt: true },
         },
         evidence: {
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -121,6 +127,13 @@ export default defineEventHandler(async (event) => {
       modelName: row.modelName,
       promptVersion: row.promptVersion,
       status: row.status,
+      reviewStatus: row.reviewStatus,
+      reviewedAt: row.reviewedAt?.toISOString() ?? null,
+      reviews: row.reviews.map(review => ({
+        decision: review.decision,
+        note: review.note,
+        createdAt: review.createdAt.toISOString(),
+      })),
       error: row.error,
       startedAt: row.startedAt.toISOString(),
       completedAt: row.completedAt?.toISOString() ?? null,

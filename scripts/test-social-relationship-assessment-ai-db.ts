@@ -120,6 +120,7 @@ try {
     include: { evidence: true },
   });
   assert.equal(firstAssessment.status, "SUCCEEDED");
+  assert.equal(firstAssessment.reviewStatus, "PENDING", "有效 CHANGE 建议应进入人工待确认状态");
   assert.equal(firstAssessment.outcome, "CHANGE");
   assert.equal(firstAssessment.suggestedStage, "ACQUAINTANCE");
   assert(firstAssessment.evidence.some(item => item.experienceId === firstExperience.id && item.kind === "NEW"));
