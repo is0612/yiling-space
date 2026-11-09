@@ -1392,6 +1392,7 @@ textarea,.search-input{width:100%;border:1px solid var(--line);border-radius:9px
 .import-panel{display:grid;gap:10px;padding:14px;border:1px dashed var(--line);border-radius:12px;background:var(--surface-muted)}
 .import-panel p{margin:5px 0 0}
 .import-panel input{max-width:100%;font:inherit}
+.web-import-controls{display:flex;gap:8px;align-items:center;min-width:0}.web-import-controls input{flex:1;min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);padding:9px 10px;font:inherit;font-size:13px}.web-import-controls button{flex-shrink:0}@media(max-width:560px){.web-import-controls{align-items:stretch;flex-direction:column}.web-import-controls button{width:100%}}
 button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:8px 12px;font:inherit;font-size:12px;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}button.primary{background:var(--accent);color:white;border-color:var(--accent)}button.quiet{border-color:transparent;background:transparent;color:var(--dim)}button.danger{background:var(--red,#c92b41);border-color:var(--red,#c92b41);color:white}button.danger-quiet{background:transparent;border-color:var(--line);color:var(--red-text,#8e2739)}
 .knowledge-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:8px}
 /* 选中态不只靠颜色：加重字重 + 描边 + 独立底色，灰度下也能分辨 */
