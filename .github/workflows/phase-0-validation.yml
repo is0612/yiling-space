@@ -228,6 +228,9 @@ jobs:
       - name: 社交关系任务队列隔离测试
         run: yarn run test:social-relationship-queue-isolated
 
+      - name: 社交关系评估助手与 AI 执行器隔离测试
+        run: yarn run test:social-relationship-assessment-isolated
+
       - name: B站 命令目录与解析层测试
         run: yarn run test:bili-runner && yarn run test:bili-schema
 
