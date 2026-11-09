@@ -58,8 +58,6 @@ assert.equal(gate({
   lastContactAt: new Date(now.getTime() - 60 * 60_000),
 }).reason, "ok", "刚好到冷却边界时放行");
 
-console.log("social-proactive-contact-policy: 全部通过");
-
 assert.deepEqual(buildSocialProactiveContactSegments("123456789", "  最近还好吗？  "), [
   { type: "at", data: { qq: "123456789" } },
   { type: "text", data: { text: " 最近还好吗？" } },
@@ -67,3 +65,5 @@ assert.deepEqual(buildSocialProactiveContactSegments("123456789", "  最近还�
 assert.throws(() => buildSocialProactiveContactSegments("[CQ:at,qq=123456789]", "你好"), /invalid_target_qq/);
 assert.throws(() => buildSocialProactiveContactSegments("123456789", "  "), /empty_contact_content/);
 
+
+console.log("social-proactive-contact-policy: 全部通过");
