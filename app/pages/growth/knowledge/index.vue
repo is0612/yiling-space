@@ -17,8 +17,12 @@ type KnowledgeResult = {
 };
 type KnowledgeRelatedItem = { id: string; title: string; content: string; category: string; tags: string[]; revision: number };
 type KnowledgeRelationView = {
-  id: string; relationType: string; status: string; resolution: string | null; metadata: unknown; updatedAt: string;
-  relatedItem: { id: string; title: string; content: string; category: string; status: string; revision: number };
+  id: string; sourceItemId: string; targetItemId: string; relationType: string; status: string; resolution: string | null; metadata: unknown; updatedAt: string;
+  relatedItem: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; status: string; revision: number; sourceType: string; sourceRef: unknown };
+};
+type KnowledgeMergeDraft = {
+  sourceItemId: string; targetItemId: string; expectedSourceRevision: number; expectedTargetRevision: number;
+  title: string; content: string; category: string; tagsText: string; confidence: string;
 };
 type Candidate = {
   id: string; sourceType: string; sourceRef: unknown; rawContent: string; status: string;
@@ -51,6 +55,9 @@ const savingItem = ref(false);
 const historyItemId = ref("");
 const historyLoading = ref(false);
 const historyItems = ref<KnowledgeItemRevision[]>([]);
+const mergeDraft = ref<KnowledgeMergeDraft | null>(null);
+const mergingKnowledge = ref(false);
+const resolvingRelationIds = ref<string[]>([]);
 let historyRequestVersion = 0;
 
 let loadVersion = 0;
@@ -114,6 +121,9 @@ watch(characterId, (nextCharacterId: string) => {
   historyLoading.value = false;
   historyItems.value = [];
   historyRequestVersion += 1;
+  mergeDraft.value = null;
+  mergingKnowledge.value = false;
+  resolvingRelationIds.value = [];
   loading.value = false;
   if (nextCharacterId) void load(nextCharacterId);
 }, { immediate: true, flush: "sync" });
@@ -337,6 +347,119 @@ async function toggleHistory(item: KnowledgeItem) {
   }
 }
 
+function startMerge(
+  source: { id: string; revision: number },
+  target: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; revision: number },
+) {
+  if (source.id === target.id || source.status === "MERGED" || target.status === "MERGED") return;
+  mergeDraft.value = {
+    sourceItemId: source.id,
+    targetItemId: target.id,
+    expectedSourceRevision: source.revision,
+    expectedTargetRevision: target.revision,
+    title: target.title,
+    content: target.content,
+    category: target.category,
+    tagsText: target.tags.join(", "),
+    confidence: target.confidence === null ? "" : String(target.confidence),
+  };
+}
+
+function cancelMerge() {
+  if (mergingKnowledge.value) return;
+  mergeDraft.value = null;
+}
+
+async function submitMerge() {
+  const draft = mergeDraft.value;
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!draft || !targetCharacterId || mergingKnowledge.value || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+  const rawConfidence = draft.confidence.trim();
+  const confidence = rawConfidence ? Number(rawConfidence) : null;
+  if (confidence !== null && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
+    ElMessage.error("可信度必须是 0 到 1 之间的数字，留空表示未标注。");
+    return;
+  }
+  const tags = draft.tagsText.split(/[，,]/).map(tag => tag.trim()).filter(Boolean);
+  mergingKnowledge.value = true;
+  busyIds.value = [...new Set([...busyIds.value, draft.sourceItemId, draft.targetItemId])];
+  try {
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/items/${encodeURIComponent(draft.sourceItemId)}/merge`,
+      {
+        method: "POST",
+        body: {
+          targetItemId: draft.targetItemId,
+          expectedSourceRevision: draft.expectedSourceRevision,
+          expectedTargetRevision: draft.expectedTargetRevision,
+          title: draft.title,
+          content: draft.content,
+          category: draft.category,
+          tags,
+          confidence,
+        },
+      },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    ElMessage.success("重复知识已合并，源条目和双方历史均已保留。");
+    mergeDraft.value = null;
+    await load(targetCharacterId);
+  } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const e = error as { data?: { statusMessage?: string; statusCode?: number } };
+    ElMessage.error(e.data?.statusMessage || "合并知识失败。");
+    if (e.data?.statusCode === 409) {
+      mergeDraft.value = null;
+      await load(targetCharacterId);
+    }
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      mergingKnowledge.value = false;
+      busyIds.value = busyIds.value.filter(id => id !== draft.sourceItemId && id !== draft.targetItemId);
+    }
+  }
+}
+
+async function resolveRelation(item: KnowledgeItem, relation: KnowledgeRelationView, action: "CONFIRM_CONFLICT" | "NEEDS_VERIFICATION" | "KEEP_SEPARATE" | "DISMISS") {
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || relation.status !== "OPEN" || resolvingRelationIds.value.includes(relation.id)
+    || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+  const sourceRevision = relation.sourceItemId === item.id ? item.revision : relation.relatedItem.revision;
+  const targetRevision = relation.targetItemId === item.id ? item.revision : relation.relatedItem.revision;
+  resolvingRelationIds.value = [...resolvingRelationIds.value, relation.id];
+  try {
+    await $fetch(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/relations/${encodeURIComponent(relation.id)}/resolve`,
+      { method: "POST", body: { action, expectedSourceRevision: sourceRevision, expectedTargetRevision: targetRevision } },
+    );
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const messages: Record<typeof action, string> = {
+      CONFIRM_CONFLICT: "已确认冲突，双方知识均予以保留。",
+      NEEDS_VERIFICATION: "已标记待核实。",
+      KEEP_SEPARATE: "已保留为两条独立知识。",
+      DISMISS: "已忽略这条关联建议。",
+    };
+    ElMessage.success(messages[action]);
+    await load(targetCharacterId);
+  } catch (error) {
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const e = error as { data?: { statusMessage?: string } };
+    ElMessage.error(e.data?.statusMessage || "处置知识关联失败。");
+    await load(targetCharacterId);
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+      resolvingRelationIds.value = resolvingRelationIds.value.filter(id => id !== relation.id);
+    }
+  }
+}
+
+function relationStatusLabel(relation: KnowledgeRelationView) {
+  if (relation.resolution === "NEEDS_VERIFICATION") return "待核实";
+  return relation.status === "OPEN" ? "待处理" : relation.status === "RESOLVED" ? "已处理" : "已忽略";
+}
+
 function sourceLabel(sourceType: string) { return ({ MANUAL: "手动录入", CHAT: "聊天来源", IMPORT: "资料导入" } as Record<string,string>)[sourceType] ?? sourceType; }
 function sourceDetails(value: unknown) { return value ? JSON.stringify(value) : ""; }
 function statusLabel(status: string) {
@@ -435,10 +558,21 @@ function formatDate(value: string) {
           <strong>关联知识</strong>
           <div v-for="relation in item.relations" :key="relation.id" class="saved-relation">
             <div class="relation-copy">
-              <span class="relation-kind">{{ relation.relationType === 'DUPLICATE' ? '重复' : relation.relationType === 'CONFLICT' ? '冲突' : '合并关系' }} · {{ relation.status === 'OPEN' ? '待处理' : relation.status === 'RESOLVED' ? '已处理' : '已忽略' }}</span>
+              <span class="relation-kind">{{ relation.relationType === 'DUPLICATE' ? '重复' : relation.relationType === 'CONFLICT' ? '冲突' : '合并关系' }} · {{ relationStatusLabel(relation) }}</span>
               <strong>{{ relation.relatedItem.title }}</strong>
               <p>{{ relation.relatedItem.content }}</p>
               <span class="muted">{{ relation.relatedItem.category }} · 修订 {{ relation.relatedItem.revision }}</span>
+              <div v-if="relation.status === 'OPEN' && relation.relationType === 'DUPLICATE'" class="relation-actions">
+                <button :disabled="resolvingRelationIds.includes(relation.id) || mergingKnowledge" @click="startMerge(item, relation.relatedItem)">将当前条目合并到关联知识</button>
+                <button :disabled="resolvingRelationIds.includes(relation.id) || mergingKnowledge" @click="startMerge(relation.relatedItem, item)">将关联条目合并到当前知识</button>
+                <button :disabled="resolvingRelationIds.includes(relation.id)" @click="resolveRelation(item, relation, 'KEEP_SEPARATE')">保留为独立知识</button>
+                <button class="quiet" :disabled="resolvingRelationIds.includes(relation.id)" @click="resolveRelation(item, relation, 'DISMISS')">忽略</button>
+              </div>
+              <div v-if="relation.status === 'OPEN' && relation.relationType === 'CONFLICT'" class="relation-actions">
+                <button :disabled="resolvingRelationIds.includes(relation.id)" @click="resolveRelation(item, relation, 'CONFIRM_CONFLICT')">确认冲突并保留双方</button>
+                <button :disabled="resolvingRelationIds.includes(relation.id)" @click="resolveRelation(item, relation, 'NEEDS_VERIFICATION')">标记待核实</button>
+                <button class="quiet" :disabled="resolvingRelationIds.includes(relation.id)" @click="resolveRelation(item, relation, 'DISMISS')">忽略</button>
+              </div>
             </div>
           </div>
         </div>
@@ -470,6 +604,23 @@ function formatDate(value: string) {
         </div>
       </article>
     </section>
+    <div v-if="mergeDraft" class="merge-overlay" role="dialog" aria-modal="true" aria-label="合并重复知识">
+      <section class="merge-dialog">
+        <div class="history-heading"><strong>确认合并重复知识</strong><button class="quiet" :disabled="mergingKnowledge" @click="cancelMerge">关闭</button></div>
+        <p class="muted">源条目将标记为已合并并保留历史；目标条目会保存为新版本。请检查并确认最终内容。</p>
+        <label>合并后的标题<input v-model="mergeDraft.title" maxlength="240"></label>
+        <label>合并后的正文<textarea v-model="mergeDraft.content" rows="7" maxlength="12000"></textarea></label>
+        <div class="editor-grid">
+          <label>分类<input v-model="mergeDraft.category" maxlength="40"></label>
+          <label>可信度（0–1，留空表示未标注）<input v-model="mergeDraft.confidence" type="number" min="0" max="1" step="0.01"></label>
+        </div>
+        <label>标签（用逗号分隔）<input v-model="mergeDraft.tagsText" maxlength="1000"></label>
+        <div class="item-actions">
+          <button :disabled="mergingKnowledge" @click="cancelMerge">取消</button>
+          <button class="primary" :disabled="mergingKnowledge || !mergeDraft.title.trim() || !mergeDraft.content.trim() || !mergeDraft.category.trim()" @click="submitMerge">{{ mergingKnowledge ? "合并中…" : "确认合并并保存新版本" }}</button>
+        </div>
+      </section>
+    </div>
     <div v-if="loading" class="loading-note">正在同步知识数据…</div>
   </div>
 </template>
@@ -486,6 +637,11 @@ function formatDate(value: string) {
 textarea,.search-input{width:100%;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--ink);padding:11px 12px;font:inherit;resize:vertical}
 .section-actions{display:flex;align-items:center;justify-content:space-between}
 button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:8px 12px;font:inherit;font-size:12px;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}button.primary{background:var(--accent);color:white;border-color:var(--accent)}button.quiet{border-color:transparent;background:transparent;color:var(--dim)}
+.relation-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.merge-overlay{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.52);display:flex;align-items:center;justify-content:center;padding:20px}
+.merge-dialog{width:min(720px,100%);max-height:min(90vh,900px);overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:0 18px 60px rgba(0,0,0,.25)}
+.merge-dialog label{display:flex;flex-direction:column;gap:5px;color:var(--dim);font-size:12px}
+.merge-dialog input,.merge-dialog textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:9px;font:inherit;font-size:13px}
 .candidate-card,.item-card{border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.candidate-raw,.item-card p,.processing-result p{margin:0;color:var(--ink);font-size:13px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}
 .status,.recommendation,.category{font-size:11px;padding:4px 8px;border-radius:20px;background:var(--surface-2);color:var(--dim)}
 .processing-result{border-left:2px solid var(--accent);padding:10px 12px;background:var(--surface-2);border-radius:0 8px 8px 0;display:flex;flex-direction:column;gap:8px}
