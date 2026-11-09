@@ -52,14 +52,12 @@ export const GROUP_CHAT_DEFAULTS: GroupChatSettings = {
 
 const MODES: readonly GroupChatMode[] = ["mention", "ambient", "all"];
 
-export {
-  isAiOnlyGroupRound,
-  MAX_CONSECUTIVE_AI_ROUNDS,
-  nextConsecutiveAiRounds,
-  shouldBlockFriendSpeaker,
-  shouldPauseAiOnlyRound,
-} from "../../friend-chat-policy";
-export type { FriendChatPolicy, FriendIdentityKind } from "../../friend-chat-policy";
+/**
+ * 这里曾经顺手 re-export 了 `friend-chat-policy` 的一批函数和类型，图的是
+ * 「群聊相关的东西从一个文件拿」。但 Nuxt 自动导入会扫 `server/utils` 下所有导出，
+ * 同名导出就成了 `WARN Duplicated imports`，而且每次构建刷 7 条。
+ * 现在需要这些判断的文件直接 import `friend-chat-policy`，这里不再转发。
+ */
 
 /**
  * 按群覆盖的模式：`{ "<群号>": "mention" | "ambient" | "all" }`。

@@ -19,8 +19,8 @@ import { verifyOnebotGroupMember, sendOnebotGroupMessage } from "./channel-adapt
 import {
   groupChatForGroup,
   groupChatDayStart,
-  MAX_CONSECUTIVE_AI_ROUNDS,
 } from "./channel-adapter/onebot/group-chat";
+import { MAX_CONSECUTIVE_AI_ROUNDS } from "./friend-chat-policy";
 import { resolveCharacterApiKey } from "./credential-encryption";
 import { readDailyQuota, recordModelUsage } from "./model-usage";
 import { getPrisma } from "./prisma";

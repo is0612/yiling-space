@@ -29,12 +29,14 @@ import {
   groupChatWindowMs,
   isClarificationMessage,
   mentionsCharacterName,
+} from "./group-chat";
+import {
   isAiOnlyGroupRound,
-  shouldBlockFriendSpeaker,
-  shouldPauseAiOnlyRound,
   MAX_CONSECUTIVE_AI_ROUNDS,
   nextConsecutiveAiRounds,
-} from "./group-chat";
+  shouldBlockFriendSpeaker,
+  shouldPauseAiOnlyRound,
+} from "../../friend-chat-policy";
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
 import { GROUP_MUTE_MS, createGroupMuteStore, isQuietRequest, isResumeRequest } from "./group-mute";
 import { createGroupActivityRecorder } from "../../group-activity";

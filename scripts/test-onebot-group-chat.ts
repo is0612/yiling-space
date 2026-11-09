@@ -17,16 +17,18 @@ import {
   groupChatWindowMs,
   isClarificationMessage,
   isGroupId,
-  isAiOnlyGroupRound,
   mentionsCharacterName,
-  shouldBlockFriendSpeaker,
-  shouldPauseAiOnlyRound,
-  nextConsecutiveAiRounds,
-  MAX_CONSECUTIVE_AI_ROUNDS,
   readGroupChatModeOverrides,
   resolveGroupChatSettings,
   type GroupChatGateInput,
 } from "../server/utils/channel-adapter/onebot/group-chat";
+import {
+  isAiOnlyGroupRound,
+  MAX_CONSECUTIVE_AI_ROUNDS,
+  nextConsecutiveAiRounds,
+  shouldBlockFriendSpeaker,
+  shouldPauseAiOnlyRound,
+} from "../server/utils/friend-chat-policy";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
