@@ -165,6 +165,33 @@ async function findCommonGroups(
   return groups;
 }
 
+/** 幂等占位：先用唯一键抢占本轮联系，再执行外部发送，避免多 worker 同时 @ 同一个人。 */
+async function claimAttempt(input: {
+  scopeId: string;
+  groupId: string;
+  dedupeKey: string;
+  now: Date;
+}): Promise<boolean> {
+  try {
+    await getPrisma().socialProactiveContactAttempt.create({
+      data: {
+        scopeId: input.scopeId,
+        status: "SENDING",
+        reason: "dispatching",
+        groupId: input.groupId,
+        dedupeKey: input.dedupeKey,
+        attemptedAt: input.now,
+        metadata: { source: "social-proactive-contact" },
+      },
+    });
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Unique constraint")) return false;
+    throw error;
+  }
+}
+
 async function recordAttempt(input: {
   scopeId: string;
   status: "SENT" | "SKIPPED" | "FAILED" | "EXPIRED";
@@ -262,6 +289,14 @@ export async function runSocialProactiveContactTick(
 ): Promise<SocialProactiveContactResult[]> {
   const prisma = getPrisma();
   const now = new Date();
+  // 进程若在占位后崩溃，30 分钟后将悬挂中的尝试标记过期；绝不在恢复时补发旧消息。
+  await prisma.socialProactiveContactAttempt.updateMany({
+    where: {
+      status: "SENDING",
+      attemptedAt: { lt: new Date(now.getTime() - ATTEMPT_DEDUPE_WINDOW_MS) },
+    },
+    data: { status: "EXPIRED", reason: "dispatch_lease_expired" },
+  });
   const connections = await loadOnebotConnections().catch(() => [] as OnebotConnectionRecord[]);
   const characters = await prisma.character.findMany({
     where: {
@@ -519,6 +554,18 @@ export async function runSocialProactiveContactTick(
           break;
         }
 
+        const claimed = await claimAttempt({
+          scopeId: friend.id,
+          groupId: group.groupId,
+          dedupeKey,
+          now: new Date(),
+        });
+        if (!claimed) {
+          results.push({ ...skip("duplicate_attempt", friendName), groupId: group.groupId });
+          handled = true;
+          break;
+        }
+
         try {
           await sendOnebotGroupMessage(freshGroup.connection.config, freshGroup.groupId, [
             { type: "at", data: { qq: identity.platformUid } },
@@ -544,15 +591,12 @@ export async function runSocialProactiveContactTick(
               where: { id: group.conversationId },
               data: { lastMessageAt: now, consecutiveAiRounds: freshScope.externalIdentity.kind === "AI" ? freshGroup.consecutiveAiRounds + 1 : 0 },
             });
-            await tx.socialProactiveContactAttempt.create({
+            await tx.socialProactiveContactAttempt.update({
+              where: { scopeId_dedupeKey: { scopeId: friend.id, dedupeKey } },
               data: {
-                scopeId: friend.id,
                 status: "SENT",
                 reason: "ok",
-                groupId: group.groupId,
                 content: generated.content,
-                dedupeKey,
-                attemptedAt: now,
                 sentAt: now,
                 metadata: {
                   source: "social-proactive-contact",
@@ -573,12 +617,9 @@ export async function runSocialProactiveContactTick(
             content: generated.content,
           });
         } catch (error) {
-          await recordAttempt({
-            scopeId: friend.id,
-            status: "FAILED",
-            reason: "send_or_persist_failed",
-            groupId: group.groupId,
-            dedupeKey,
+          await prisma.socialProactiveContactAttempt.update({
+            where: { scopeId_dedupeKey: { scopeId: friend.id, dedupeKey } },
+            data: { status: "FAILED", reason: "send_or_persist_failed" },
           }).catch(() => undefined);
           results.push({
             characterId: character.id,
