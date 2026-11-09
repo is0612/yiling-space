@@ -412,8 +412,10 @@ export async function downloadSafeMedia(
 
       const mime = (response.headers.get("content-type") ?? "")
         .split(";")[0]!.trim().toLowerCase();
-      if ((requiredMimePrefix && !mime.startsWith(requiredMimePrefix))
-        || (allowedMimeTypes && !allowedMimeTypes.includes(mime))) {
+      if (requiredMimePrefix && !mime.startsWith(requiredMimePrefix)) {
+        throw new Error(`${prefix}_NOT_IMAGE`);
+      }
+      if (allowedMimeTypes && !allowedMimeTypes.includes(mime)) {
         throw new Error(`${prefix}_UNSUPPORTED_CONTENT_TYPE`);
       }
 
