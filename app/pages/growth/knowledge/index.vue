@@ -1029,7 +1029,7 @@ function formatDate(value: string) {
               :checked="selectedCandidateIds.includes(candidate.id)"
               @change="toggleCandidateSelection(candidate)"
             >
-            <span>选择这条候选</span>
+            <span>选择</span>
           </label>
           <span class="status">{{ statusLabel(candidate.status) }} · {{ sourceLabel(candidate.sourceType) }}</span><span class="muted">{{ formatDate(candidate.createdAt) }}</span>
         </div>

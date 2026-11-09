@@ -271,7 +271,11 @@
 
 **测试**：新增 `yarn test:knowledge-lifecycle-page`（19 项），沿用脚本级 harness。覆盖：三分区只展示对应状态、四种生命周期操作的请求契约与刷新、归档→回收站两步与新 revision、永久删除的二次确认与口令、合并审计链禁止永久删除、候选单条/多选批量删除、待处理候选不被误删、409 反馈与刷新、非 409 失败保留确认框、角色切换竞态、加载失败与空列表、Tab 焦点落点计算、模板与弹窗组件静态断言。`scripts/test-knowledge-lifecycle-db.ts` 增加回收站 `canPermanentlyDelete` 的接口断言（合并审计链条目 false、普通条目 true）。
 
-**未覆盖**：真实浏览器中的点击、焦点循环、长文排版与窄屏换行仍未人工验收；本机 PostgreSQL 未启动，本轮没有执行 `yarn test:knowledge-lifecycle-isolated`，因此新增的派生字段断言属于「已写未跑」；归档区与回收站暂无搜索与分页（回收站接口上限 100 条）；不提供自动清理与定时永久删除。
+**验收结果（2026-11-09 晚）**：`yarn test:knowledge-lifecycle-isolated` 在本机隔离库通过（含 `canPermanentlyDelete` 派生字段断言）；`yarn build` 通过；浏览器人工验收用「临时库 + 无头 Chrome 真按键」跑通 15 项：焦点进入弹窗（落在「取消」）、Tab / Shift+Tab 各 6 次不逃出、Esc 关闭后焦点回到触发按钮、375px 下确认框与回收站/知识库列表均无横向溢出、合并审计链条目永久删除禁用且说明可读、候选批量条数量文案正确。截图留存在本机临时目录（未入库）。
+
+**仍未覆盖**：归档区与回收站暂无搜索与分页（回收站接口上限 100 条）；不提供自动清理与定时永久删除；真实浏览器的触屏手势与屏幕阅读器未测。
+
+**环境注意**：本机执行 `yarn verify:local` 时，`prisma generate` 会在环境的安全删除守卫处被拦（一次要删 52 个生成文件，超过阈值 50），且被拦会把 `src/generated/prisma/client.ts` 截成 0 字节，需要重新 `yarn db:generate` 恢复。完整 `verify:local` 本轮未跑完，改用「单独 generate + 剩余链路」的方式验证。
 
 
 ### 后续来源接入
