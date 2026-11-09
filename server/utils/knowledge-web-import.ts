@@ -35,6 +35,7 @@ function decodeHtmlEntities(value: string): string {
 
 function cleanExtractedText(value: string): string {
   return decodeHtmlEntities(value)
+    .replace(/^\uFEFF/, "")
     .replace(/\u00a0/g, " ")
     .replace(/[\t\f\v ]+/g, " ")
     .replace(/ *\n */g, "\n")
@@ -51,7 +52,8 @@ function extractHtml(html: string): { title: string; rawContent: string } {
   // 先移除不可见/非正文区域，再把常见块级元素转换成段落边界。
   const text = html
     .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(script|style|noscript|svg|canvas|iframe|object|template|nav|footer|header|aside|form|button)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ")
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/gi, " ")
+    .replace(/<(script|style|noscript|svg|canvas|iframe|object|template|nav|footer|header|aside|form|button)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, " ")
     .replace(/<(br|hr)\b[^>]*>/gi, "\n")
     .replace(/<\/(p|div|article|section|main|h[1-6]|li|blockquote|tr|pre)\s*>/gi, "\n\n")
     .replace(/<[^>]+>/g, " ");
