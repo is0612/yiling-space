@@ -373,20 +373,6 @@ export async function runSocialProactiveContactTick(
         }
         if (!gate.allowed && gate.reason !== "target_not_verified") continue;
 
-        // 先做一次实时群成员查询；查不到、格式不对、目标已退群，一律不发送。
-        const memberVerified = await verifyOnebotGroupMember(group.connection.config, group.groupId, identity.platformUid);
-        if (!memberVerified) {
-          const dedupeKey = `${dayKey(now)}:${group.groupId}:${Math.floor(now.getTime() / ATTEMPT_DEDUPE_WINDOW_MS)}`;
-          await recordAttempt({
-            scopeId: friend.id,
-            status: "SKIPPED",
-            reason: "target_not_verified",
-            groupId: group.groupId,
-            dedupeKey,
-          });
-          continue;
-        }
-
         const memories = await prisma.memoryItem.findMany({
           where: { memoryScopeId: friend.id, status: "ACTIVE", deletedAt: null },
           orderBy: [{ importance: "desc" }, { updatedAt: "desc" }],
@@ -435,23 +421,71 @@ export async function runSocialProactiveContactTick(
           break;
         }
 
-        // 发之前再过一次所有策略闸门，尤其是群模式/关系状态/冷却/每日上限。
+        // 模型生成期间好友可能退群、管理员可能改群模式、用户也可能撤销授权。
+        // 因此发送前重新读取关系和 OneBot 绑定，不能沿用 tick 开始时的旧快照。
+        const freshScope = await prisma.memoryScope.findUnique({
+          where: { id: friend.id },
+          select: {
+            proactiveContactEnabled: true,
+            friendChatPolicy: true,
+            relationshipStage: true,
+            relationshipStatus: true,
+            externalIdentity: { select: { id: true, platformUid: true, kind: true, displayName: true } },
+          },
+        });
+        const freshConnections = await loadOnebotConnections().catch(() => [] as OnebotConnectionRecord[]);
+        const freshGroups = freshScope?.externalIdentity
+          ? await findCommonGroups(character.id, freshScope.externalIdentity.platformUid, freshConnections)
+          : [];
+        const freshGroup = freshGroups.find((item) =>
+          item.groupId === group.groupId && item.conversationId === group.conversationId
+        );
+        const freshSentToday = await prisma.socialProactiveContactAttempt.count({
+          where: {
+            status: "SENT",
+            sentAt: { gte: groupChatDayStart(new Date()) },
+            scope: { characterId: character.id },
+          },
+        });
+        const freshLastContact = await prisma.socialProactiveContactAttempt.findFirst({
+          where: { scopeId: friend.id, status: "SENT", sentAt: { not: null } },
+          orderBy: { sentAt: "desc" },
+          select: { sentAt: true },
+        });
+        const memberVerified = freshScope?.proactiveContactEnabled === true
+          && freshScope.externalIdentity?.platformUid === identity.platformUid
+          && Boolean(freshGroup)
+          && await verifyOnebotGroupMember(freshGroup!.connection.config, freshGroup!.groupId, identity.platformUid);
+        if (!freshScope || !freshScope.externalIdentity || !freshGroup || !memberVerified) {
+          await recordAttempt({
+            scopeId: friend.id,
+            status: "SKIPPED",
+            reason: "target_not_verified",
+            groupId: group.groupId,
+            dedupeKey,
+          });
+          results.push({ ...skip("target_not_verified", friendName), groupId: group.groupId });
+          handled = true;
+          break;
+        }
+
+        // 发之前再过一次所有策略闸门，尤其是重新授权、关系状态、群模式、冷却与每日上限。
         const finalGate = evaluateSocialProactiveContactGate({
-          proactiveContactEnabled: true,
-          relationshipStage: friend.relationshipStage,
-          relationshipStatus: friend.relationshipStatus,
-          identityKind: identity.kind,
-          friendChatPolicy: friend.friendChatPolicy,
+          proactiveContactEnabled: freshScope.proactiveContactEnabled,
+          relationshipStage: freshScope.relationshipStage,
+          relationshipStatus: freshScope.relationshipStatus,
+          identityKind: freshScope.externalIdentity.kind,
+          friendChatPolicy: freshScope.friendChatPolicy,
           channelAvailable: true,
           hasCommonGroup: true,
-          groupMode: group.groupMode,
+          groupMode: freshGroup.groupMode,
           targetMemberVerified: true,
-          targetIsAi: identity.kind === "AI",
-          consecutiveAiRounds: group.consecutiveAiRounds,
+          targetIsAi: freshScope.externalIdentity.kind === "AI",
+          consecutiveAiRounds: freshGroup.consecutiveAiRounds,
           maxConsecutiveAiRounds: MAX_AI_ROUNDS,
-          sentToday,
+          sentToday: freshSentToday,
           dailyLimit: ROLE_DAILY_LIMIT,
-          lastContactAt,
+          lastContactAt: freshLastContact?.sentAt ?? null,
           cooldownMs: FRIEND_COOLDOWN_MS,
           now: new Date(),
         });
@@ -469,7 +503,7 @@ export async function runSocialProactiveContactTick(
         }
 
         try {
-          await sendOnebotGroupMessage(group.connection.config, group.groupId, [
+          await sendOnebotGroupMessage(freshGroup.connection.config, freshGroup.groupId, [
             { type: "at", data: { qq: identity.platformUid } },
             { type: "text", data: { text: ` ${generated.content}` } },
           ]);
@@ -491,7 +525,7 @@ export async function runSocialProactiveContactTick(
             });
             await tx.conversation.update({
               where: { id: group.conversationId },
-              data: { lastMessageAt: now, consecutiveAiRounds: group.consecutiveAiRounds + (identity.kind === "AI" ? 1 : 0) },
+              data: { lastMessageAt: now, consecutiveAiRounds: freshScope.externalIdentity.kind === "AI" ? freshGroup.consecutiveAiRounds + 1 : 0 },
             });
             await tx.socialProactiveContactAttempt.create({
               data: {
