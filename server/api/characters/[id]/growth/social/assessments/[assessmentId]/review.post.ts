@@ -31,8 +31,5 @@ export default defineEventHandler(async (event) => {
     decision: decision as SocialRelationshipReviewDecision,
     note: cleanNote(body?.note),
   });
-  if ("stale" in result && result.stale) {
-    throw createError({ statusCode: 409, statusMessage: "这条建议已过期，已标记为过期，没有修改关系。请等待新评估。" });
-  }
   return result;
 });
