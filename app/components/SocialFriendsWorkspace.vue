@@ -365,7 +365,7 @@ function setProactiveContactEnabled(friend: Friend, enabled: boolean) {
 function proactiveContactAttemptLabel(friend: Friend): string {
   const attempt = friend.lastProactiveContactAttempt;
   if (!attempt) return "";
-  const labels: Record<Friend["lastProactiveContactAttempt"]["status"], string> = {
+  const labels: Record<NonNullable<Friend["lastProactiveContactAttempt"]>["status"], string> = {
     SENDING: "正在发送",
     SENT: "已发送",
     SKIPPED: "已跳过",
