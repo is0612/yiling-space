@@ -632,7 +632,7 @@ export async function verifyOnebotGroupMember(
   groupId: string,
   userId: string,
 ): Promise<boolean> {
-  if (!/^\\d{5,15}$/u.test(groupId) || !/^\\d{5,15}$/u.test(userId)) return false;
+  if (!/^\d{5,15}$/u.test(groupId) || !/^\d{5,15}$/u.test(userId)) return false;
   try {
     const data = await callOnebotAction(config, "get_group_member_info", {
       group_id: Number(groupId),

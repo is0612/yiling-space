@@ -40,6 +40,24 @@ export type SocialProactiveContactGateInput = {
   now: Date;
 };
 
+/**
+ * 构造 OneBot v11 的安全 @ 消息段。QQ 号必须是纯数字，正文必须非空。
+ * 把 at 段与文本段分开，绝不拼接原始 CQ 码，避免昵称/正文被解释成协议控制段。
+ */
+export function buildSocialProactiveContactSegments(userId: string, content: string): Array<{
+  type: "at" | "text";
+  data: { qq: string } | { text: string };
+}> {
+  const qq = userId.trim();
+  const text = content.trim().replace(/\\s*\\n+\\s*/gu, " ").slice(0, 200);
+  if (!/^\\d{5,15}$/u.test(qq)) throw new Error("invalid_target_qq");
+  if (!text) throw new Error("empty_contact_content");
+  return [
+    { type: "at", data: { qq } },
+    { type: "text", data: { text: ` ${text}` } },
+  ];
+}
+
 export type SocialProactiveContactGateResult = {
   allowed: boolean;
   reason:
