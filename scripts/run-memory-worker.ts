@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
 import { processNextMemoryJob } from "../server/utils/memory-worker";
 import { runSocialRelationshipQueueMaintenance } from "../server/utils/social-relationship-queue";
+import { processNextSocialRelationshipAssessmentTask } from "../server/utils/social-relationship-assessment-ai";
 
 const prisma = getPrisma();
 const watch = process.argv.includes("--watch");
@@ -31,6 +32,24 @@ try {
       process.stderr.write(JSON.stringify({
         at: new Date().toISOString(),
         event: "social-relationship-queue-error",
+        error: error instanceof Error ? error.message : String(error),
+      }) + "\n");
+      if (!watch) process.exitCode = 1;
+    }
+
+    try {
+      const socialAssessment = await processNextSocialRelationshipAssessmentTask(prisma, { workerId });
+      if (socialAssessment.processed) {
+        process.stdout.write(JSON.stringify({
+          at: new Date().toISOString(),
+          event: "social-relationship-assessment-processed",
+          ...socialAssessment,
+        }) + "\n");
+      }
+    } catch (error) {
+      process.stderr.write(JSON.stringify({
+        at: new Date().toISOString(),
+        event: "social-relationship-assessment-error",
         error: error instanceof Error ? error.message : String(error),
       }) + "\n");
       if (!watch) process.exitCode = 1;
