@@ -84,21 +84,12 @@ export default defineEventHandler(async (event) => {
     }
     await Promise.all([sourceSnapshot, targetSnapshot]);
 
-    const duplicateRelations = await tx.knowledgeItemRelation.findMany({
-      where: {
-        characterId, relationType: "DUPLICATE", status: "OPEN",
-        OR: [
-          { sourceItemId: source.id, targetItemId: target.id },
-          { sourceItemId: target.id, targetItemId: source.id },
-        ],
-      },
-      select: { id: true },
+    const closedDuplicate = await tx.knowledgeItemRelation.updateMany({
+      where: { id: duplicateLink.id, characterId, status: "OPEN" },
+      data: { status: "RESOLVED", resolution: "MERGED", resolvedAt: new Date() },
     });
-    if (duplicateRelations.length) {
-      await tx.knowledgeItemRelation.updateMany({
-        where: { id: { in: duplicateRelations.map(relation => relation.id) }, status: "OPEN" },
-        data: { status: "RESOLVED", resolution: "MERGED", resolvedAt: new Date() },
-      });
+    if (closedDuplicate.count !== 1) {
+      throw createError({ statusCode: 409, statusMessage: "重复关系刚刚发生变化，未执行合并，请刷新后重试。" });
     }
     // Once the source is merged, its other open suggestions can no longer be
     // acted on independently. Keep them for audit, but close them explicitly.
