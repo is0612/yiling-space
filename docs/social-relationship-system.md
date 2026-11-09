@@ -410,3 +410,15 @@
 - 成功与失败测试均按 `social-relationship-assistant` 单独记录用量；失败请求没有 usage 时记录 0 token 诊断元数据，不混入聊天或其他助手统计。
 - 设置页新增「测试连接」按钮；先保存当前草稿，再调用服务端测试；角色切换或页面卸载会使迟到的测试响应失效。
 - 本批仍不接入评估任务 Worker，不创建评估历史、不写关系阶段或相处状态。连接成功只证明模型接口可响应，不代表关系评估协议已上线。
+
+
+### 14.11 关系评估 AI 执行器第一批（2026-11-09）
+
+- 新增专职执行器，使用角色级关系评估助手的独立模型、独立 API 地址与专用加密 Key；不回落聊天/记忆/语境/知识助手或环境变量凭据。
+- 本地 Worker 每轮在队列维护后尝试领取一条评估任务。领取 SQL 只选择已启用关系评估助手的角色；未启用的任务保持 QUEUED，不消耗重试次数。
+- 输入由社交系统装配：当前角色与好友关系阶段/相处状态/版本、有限的互动背景、触发原因、最近未成功消费的 NEW 经历、少量已评估 CONTEXT 和上次评估摘要。经历只沿 SocialExperience → MemoryEvent 读取，不复制正文到社交表。
+- 每次真实评估先创建 RUNNING 历史，再创建本次 NEW / CONTEXT 证据关联；模型输出的证据 ID 会被限制为本次已挂接的真实经历 ID。CHANGE 必须引用至少一条 NEW；只引用 CONTEXT 的变化建议被降为 REVIEW；没有可用经历时不调用模型，保存 INSUFFICIENT。
+- 保存结果时重新检查任务 leaseToken / fencingToken 和 relationshipVersion。租约失效拒绝旧执行者提交；关系版本在模型调用期间变化则建议被降为 REVIEW 并清空可执行建议。
+- 模型调用成功/失败均归入 `social-relationship-assistant` 用量类别。失败历史标记 FAILED 并走原队列退避/最大尝试/新 generation 逻辑。
+- **重要边界：本批只生成并保存评估建议，不更新 `MemoryScope.relationshipStage`、`relationshipStatus`、`relationshipVersion`，不写 `SocialRelationChange`。AI 不是裁判，关系变更服务与人工确认 UI 留待后续批次。**
+- 测试新增：输出协议单元测试、隔离数据库 Worker 集成测试（独立凭据、真实经历输入、NEW/CONTEXT 约束、关闭助手不领取、用量记录、不得自动修改关系）；CI 纳入关系评估隔离测试。
