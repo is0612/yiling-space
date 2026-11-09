@@ -432,9 +432,14 @@ async function knowledgeMergeUsesBothOptimisticRevisions() {
   page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("initial"));
   await flushMicrotasks();
   const item = page.read<{ items: Array<{ id: string; title: string; content: string; category: string; tags: string[]; confidence: number; status: string; revision: number }> }>("data").items[0]!;
-  await page.call("startMerge", { id: "source-item", revision: 4, status: "ACTIVE" }, {
+  await page.call("startMerge", {
+    id: "source-item", revision: 4, status: "ACTIVE", title: "源知识",
+    content: "源知识原文", category: "GENERAL", tags: ["源标签"], confidence: 0.8,
+    sourceType: "CHAT", sourceRef: { messageIds: ["source-message"] },
+  }, {
     id: item.id, title: item.title, content: item.content, category: item.category,
     tags: item.tags, confidence: item.confidence, revision: 1, status: "ACTIVE",
+    sourceType: "MANUAL", sourceRef: { note: "target source" },
   });
   page.set("mergeDraft", {
     sourceItemId: "source-item", targetItemId: item.id,
