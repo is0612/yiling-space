@@ -104,6 +104,12 @@ const archivedItems = ref<KnowledgeEntry[]>([]);
 const trashItems = ref<KnowledgeEntry[]>([]);
 const archiveLoaded = ref(false);
 const trashLoaded = ref(false);
+const archivePage = ref(1);
+const trashPage = ref(1);
+const archivePageCount = ref(1);
+const trashPageCount = ref(1);
+const archiveTotalCount = ref(0);
+const trashTotalCount = ref(0);
 const selectedCandidateIds = ref<string[]>([]);
 const confirmDialog = ref<ConfirmState | null>(null);
 const actionBusy = ref(false);
@@ -138,8 +144,8 @@ const allDismissedSelected = computed(
 );
 const knowledgeTabs = computed(() => [
   { key: "library" as KnowledgeTab, label: "知识库", count: data.value.itemCount, known: true },
-  { key: "archive" as KnowledgeTab, label: "归档知识", count: archivedItems.value.length, known: archiveLoaded.value },
-  { key: "trash" as KnowledgeTab, label: "回收站", count: trashItems.value.length, known: trashLoaded.value },
+  { key: "archive" as KnowledgeTab, label: "归档知识", count: archiveTotalCount.value, known: archiveLoaded.value },
+  { key: "trash" as KnowledgeTab, label: "回收站", count: trashTotalCount.value, known: trashLoaded.value },
 ]);
 
 /**
@@ -175,20 +181,40 @@ async function load(
       { query: requestedKeyword ? { q: requestedKeyword } : {} },
     );
     const archivePromise = requestedTab === "archive"
-      ? $fetch<{ items: KnowledgeEntry[] }>(base, { query: { itemStatus: "ARCHIVED" } })
+      ? $fetch<{ items: KnowledgeEntry[]; itemPagination: { page: number; pageSize: number; total: number; pageCount: number } }>(
+          base,
+          { query: { itemStatus: "ARCHIVED", ...(requestedKeyword ? { q: requestedKeyword } : {}), page: archivePage.value } },
+        )
       : null;
     const trashPromise = requestedTab === "trash"
-      ? $fetch<{ items: KnowledgeEntry[] }>(`${base}/trash`)
+      ? $fetch<{ items: KnowledgeEntry[]; pagination: { page: number; pageSize: number; total: number; pageCount: number } }>(
+          `${base}/trash`,
+          { query: { ...(requestedKeyword ? { q: requestedKeyword } : {}), page: trashPage.value } },
+        )
       : null;
     const [workspace, archived, trash] = await Promise.all([workspacePromise, archivePromise, trashPromise]);
     if (requestVersion !== loadVersion || !isCurrentRole(requestedCharacterId, requestedRoleVersion)) return;
     data.value = workspace;
+    if (archived && archivePage.value > archived.itemPagination.pageCount) {
+      archivePage.value = archived.itemPagination.pageCount;
+      void load(requestedCharacterId, requestedKeyword, requestedTab);
+      return;
+    }
+    if (trash && trashPage.value > trash.pagination.pageCount) {
+      trashPage.value = trash.pagination.pageCount;
+      void load(requestedCharacterId, requestedKeyword, requestedTab);
+      return;
+    }
     if (archived) {
       archivedItems.value = (archived.items ?? []).filter(item => item.status === "ARCHIVED");
+      archiveTotalCount.value = archived.itemPagination.total;
+      archivePageCount.value = archived.itemPagination.pageCount;
       archiveLoaded.value = true;
     }
     if (trash) {
       trashItems.value = (trash.items ?? []).filter(item => item.status === "TRASHED");
+      trashTotalCount.value = trash.pagination.total;
+      trashPageCount.value = trash.pagination.pageCount;
       trashLoaded.value = true;
     }
     // 候选被删除后，选择集合里不能留下已经不存在的 ID。
@@ -203,6 +229,18 @@ async function load(
       loading.value = false;
     }
   }
+}
+
+function changeArchivePage(page: number) {
+  if (page < 1 || page > archivePageCount.value || page === archivePage.value || loading.value) return;
+  archivePage.value = page;
+  void load(characterId.value, keyword.value.trim(), "archive");
+}
+
+function changeTrashPage(page: number) {
+  if (page < 1 || page > trashPageCount.value || page === trashPage.value || loading.value) return;
+  trashPage.value = page;
+  void load(characterId.value, keyword.value.trim(), "trash");
 }
 
 function selectTab(tab: KnowledgeTab) {
@@ -241,13 +279,23 @@ watch(characterId, (nextCharacterId: string) => {
   trashItems.value = [];
   archiveLoaded.value = false;
   trashLoaded.value = false;
+  archivePage.value = 1;
+  trashPage.value = 1;
+  archivePageCount.value = 1;
+  trashPageCount.value = 1;
+  archiveTotalCount.value = 0;
+  trashTotalCount.value = 0;
   selectedCandidateIds.value = [];
   confirmDialog.value = null;
   actionBusy.value = false;
   loading.value = false;
   if (nextCharacterId) void load(nextCharacterId);
 }, { immediate: true, flush: "sync" });
-watch(keyword, () => { void load(); });
+watch(keyword, () => {
+  archivePage.value = 1;
+  trashPage.value = 1;
+  void load();
+});
 
 onBeforeUnmount(() => {
   pageDisposed = true;
@@ -1135,9 +1183,10 @@ function formatDate(value: string) {
       </article>
     </section>
     <section v-if="characterId && activeTab === 'archive'" class="knowledge-section">
-      <div class="section-heading"><div><span class="eyebrow">ARCHIVE</span><h2>归档知识</h2></div><span class="muted">{{ archivedItems.length }} 条</span></div>
+      <div class="section-heading"><div><span class="eyebrow">ARCHIVE</span><h2>归档知识</h2></div><span class="muted">{{ archiveTotalCount }} 条</span></div>
       <p class="muted">归档会保留正文、来源和版本历史，但不再参与正常检索。需要时可以随时恢复到知识库。</p>
-      <div v-if="!archivedItems.length" class="empty-state">还没有归档知识。知识库里的条目归档后会出现在这里。</div>
+      <input v-model="keyword" class="search-input" placeholder="搜索归档知识标题、内容或标签">
+      <div v-if="!archivedItems.length" class="empty-state">{{ keyword.trim() ? "没有找到匹配的归档知识。" : "还没有归档知识。知识库里的条目归档后会出现在这里。" }}</div>
       <article v-for="item in archivedItems" :key="item.id" class="item-card">
         <div class="item-heading"><h3>{{ item.title }}</h3><div class="entry-badges"><span class="state-badge">已归档</span><span class="category">{{ item.category }}</span></div></div>
         <p>{{ item.content }}</p>
@@ -1148,12 +1197,18 @@ function formatDate(value: string) {
           <button type="button" class="danger-quiet" :disabled="actionBusy" @click="requestArchivedTrash(item)">移入回收站</button>
         </div>
       </article>
+      <div v-if="archivePageCount > 1" class="pagination">
+        <button type="button" :disabled="loading || archivePage <= 1" @click="changeArchivePage(archivePage - 1)">上一页</button>
+        <span class="muted">第 {{ archivePage }} / {{ archivePageCount }} 页 · 共 {{ archiveTotalCount }} 条</span>
+        <button type="button" :disabled="loading || archivePage >= archivePageCount" @click="changeArchivePage(archivePage + 1)">下一页</button>
+      </div>
     </section>
 
     <section v-if="characterId && activeTab === 'trash'" class="knowledge-section">
-      <div class="section-heading"><div><span class="eyebrow">RECYCLE</span><h2>回收站</h2></div><span class="muted">{{ trashItems.length }} 条</span></div>
+      <div class="section-heading"><div><span class="eyebrow">RECYCLE</span><h2>回收站</h2></div><span class="muted">{{ trashTotalCount }} 条</span></div>
       <p class="muted">回收站里的知识不参与检索。可以恢复到知识库，也可以永久删除；永久删除后无法恢复。</p>
-      <div v-if="!trashItems.length" class="empty-state">回收站是空的。移入回收站的知识会保留在这里，直到你恢复或永久删除。</div>
+      <input v-model="keyword" class="search-input" placeholder="搜索回收站标题、内容或标签">
+      <div v-if="!trashItems.length" class="empty-state">{{ keyword.trim() ? "没有找到匹配的回收站知识。" : "回收站是空的。移入回收站的知识会保留在这里，直到你恢复或永久删除。" }}</div>
       <article v-for="item in trashItems" :key="item.id" class="item-card">
         <div class="item-heading"><h3>{{ item.title }}</h3><div class="entry-badges"><span class="state-badge">回收站</span><span class="category">{{ item.category }}</span></div></div>
         <p>{{ item.content }}</p>
@@ -1175,6 +1230,11 @@ function formatDate(value: string) {
           >永久删除</button>
         </div>
       </article>
+      <div v-if="trashPageCount > 1" class="pagination">
+        <button type="button" :disabled="loading || trashPage <= 1" @click="changeTrashPage(trashPage - 1)">上一页</button>
+        <span class="muted">第 {{ trashPage }} / {{ trashPageCount }} 页 · 共 {{ trashTotalCount }} 条</span>
+        <button type="button" :disabled="loading || trashPage >= trashPageCount" @click="changeTrashPage(trashPage + 1)">下一页</button>
+      </div>
     </section>
 
     <AccessibleDialog
@@ -1251,6 +1311,7 @@ function formatDate(value: string) {
 .section-heading,.candidate-top,.result-top,.item-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.section-heading h2{font-size:17px;margin:3px 0 0;color:var(--ink)}.muted{font-size:12px;color:var(--dim)}
 textarea,.search-input{width:100%;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);color:var(--ink);padding:11px 12px;font:inherit;resize:vertical}
 .section-actions{display:flex;align-items:center;justify-content:space-between}
+.pagination{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;padding-top:4px}
 button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:8px 12px;font:inherit;font-size:12px;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}button.primary{background:var(--accent);color:white;border-color:var(--accent)}button.quiet{border-color:transparent;background:transparent;color:var(--dim)}button.danger{background:var(--red,#c92b41);border-color:var(--red,#c92b41);color:white}button.danger-quiet{background:transparent;border-color:var(--line);color:var(--red-text,#8e2739)}
 .knowledge-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:8px}
 /* 选中态不只靠颜色：加重字重 + 描边 + 独立底色，灰度下也能分辨 */
