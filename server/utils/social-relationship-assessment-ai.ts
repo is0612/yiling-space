@@ -156,15 +156,24 @@ function buildMessages(input: PromptInput): Array<{ role: "system" | "user"; con
 }
 
 async function callAssessment(runtime: SocialRelationshipAssessmentRuntime, input: PromptInput, characterId: string, assessmentId: string) {
-  const response = await fetch(buildChatCompletionsEndpoint(runtime.apiBaseUrl), {
+  let response: Response;
+  try {
+    response = await fetch(buildChatCompletionsEndpoint(runtime.apiBaseUrl), {
     method: "POST", redirect: "error",
     headers: { authorization: "Bearer " + runtime.apiKey, "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify({
       model: runtime.model, temperature: runtime.temperature, max_tokens: runtime.maxOutputTokens,
       messages: buildMessages(input),
     }),
-    signal: AbortSignal.timeout(60_000),
-  });
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch {
+    await recordModelUsage({
+      kind: "social-relationship-assistant", model: runtime.model, characterId,
+      metadata: { operation: "relationship-assessment", assessmentId, success: false, error: "network-or-timeout" },
+    });
+    throw new Error("关系评估助手连接失败，请检查网络或服务商状态。");
+  }
   if (!response.ok) {
     await recordModelUsage({
       kind: "social-relationship-assistant", model: runtime.model, characterId,
@@ -307,6 +316,7 @@ export async function processNextSocialRelationshipAssessmentTask(
         };
 
     const finishedAt = new Date();
+    let savedOutcome: Outcome = suggestion.outcome;
     await prisma.$transaction(async tx => {
       const validLease = await tx.$queryRawUnsafe<Array<{ id: string }>>(
         'SELECT "id" FROM "social_relationship_assessment_tasks" WHERE "id" = $1::uuid AND "status" = \'RUNNING\'::"SocialRelationshipAssessmentTaskStatus" AND "lockedBy" = $2 AND "leaseToken" = $3::uuid AND "fencingToken" = $4 AND "leaseExpiresAt" > $5 FOR UPDATE',
@@ -328,6 +338,7 @@ export async function processNextSocialRelationshipAssessmentTask(
           reason: "EXISTING_EXPERIENCE_RECOVERY",
         });
       }
+      savedOutcome = finalResult.outcome;
       await tx.socialRelationshipAssessment.update({
         where: { id: assessmentId },
         data: {
@@ -346,7 +357,7 @@ export async function processNextSocialRelationshipAssessmentTask(
       });
       await completeSocialRelationshipAssessmentTask(tx as Prisma.TransactionClient, lease, { now: finishedAt });
     });
-    return { processed: true, message: "关系评估完成；只保存建议，没有自动修改关系。", assessmentId, outcome: suggestion.outcome };
+    return { processed: true, message: "关系评估完成；只保存建议，没有自动修改关系。", assessmentId, outcome: savedOutcome };
   } catch (error) {
     const message = error instanceof Error ? error.message : "关系评估执行失败。";
     try {
