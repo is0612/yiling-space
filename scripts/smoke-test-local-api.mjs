@@ -599,10 +599,12 @@ const settingsAfterManualSnapshot = await request(`/api/characters/${created.id}
 assert(settingsAfterManualSnapshot.nextSnapshotAt === scheduledNextSnapshotAt, "Manual snapshots must not reset the automatic schedule.");
 
 const snapshotList = await request(`/api/characters/${created.id}/snapshots`);
-assert(Array.isArray(snapshotList) && snapshotList.length === 1, "GET snapshots must return the created snapshot.");
-assert(snapshotList[0].id === createdSnapshot.id, "Snapshot list did not return the created snapshot.");
-assert(snapshotList[0].status === "当前版本", "The first snapshot should be current.");
-assert(snapshotList[0].messages === 3, "A manual snapshot should link the three persisted messages in its time range.");
+assert(Array.isArray(snapshotList.items) && snapshotList.total === 1 && snapshotList.items.length === 1, "GET snapshots must return a paginated list with the created snapshot.");
+assert(snapshotList.page === 1 && snapshotList.pageSize > 0 && snapshotList.totalPages === 1, "Snapshot list must expose page metadata.");
+assert(snapshotList.items[0].id === createdSnapshot.id, "Snapshot list did not return the created snapshot.");
+assert(snapshotList.items[0].status === "当前版本", "The first snapshot should be current.");
+assert(snapshotList.items[0].messages === 3, "A manual snapshot should link the three persisted messages in its time range.");
+assert(!("sourceMessages" in snapshotList.items[0]) && !("analysis" in snapshotList.items[0]), "The list must not inline source messages or the AI analysis.");
 
 const regeneratedSnapshot = await request(`/api/characters/${created.id}/snapshots`, {
   method: "POST",
@@ -611,9 +613,9 @@ const regeneratedSnapshot = await request(`/api/characters/${created.id}/snapsho
 assert(typeof regeneratedSnapshot.id === "string" && regeneratedSnapshot.id !== createdSnapshot.id, "Regeneration must create a new snapshot version.");
 
 const snapshotHistory = await request(`/api/characters/${created.id}/snapshots`);
-assert(snapshotHistory.length === 2, "Regeneration must preserve the old snapshot version.");
-assert(snapshotHistory.some((snapshot) => snapshot.id === createdSnapshot.id && snapshot.status === "已被替代"), "The previous snapshot must be marked as superseded.");
-assert(snapshotHistory.some((snapshot) => snapshot.id === regeneratedSnapshot.id && snapshot.version === 2 && snapshot.status === "当前版本"), "The regenerated version must be current and increment to version 2.");
+assert(snapshotHistory.items.length === 2 && snapshotHistory.total === 2, "Regeneration must preserve the old snapshot version.");
+assert(snapshotHistory.items.some((snapshot) => snapshot.id === createdSnapshot.id && snapshot.status === "已被替代"), "The previous snapshot must be marked as superseded.");
+assert(snapshotHistory.items.some((snapshot) => snapshot.id === regeneratedSnapshot.id && snapshot.version === 2 && snapshot.status === "当前版本"), "The regenerated version must be current and increment to version 2.");
 
 const timelineAfterSnapshots = await request(`/api/characters/${created.id}/timeline`);
 assert(Array.isArray(timelineAfterSnapshots.entries) && timelineAfterSnapshots.entries.length === 6, "The real timeline should include the saved memory, three messages, and both snapshot versions.");
@@ -629,14 +631,15 @@ const trashedMemory = await request(`/api/memories/${createdMemory.id}/trash`, {
 assert(trashedMemory.status === "TRASHED" && trashedMemory.statusBeforeTrash === "ACTIVE", "Moving a memory to trash should retain its prior status.");
 assert(typeof trashedMemory.deletedAt === "string", "Trashed memory should record its deletion time.");
 const trashList = await request(`/api/characters/${created.id}/memories/trash`);
-assert(trashList.some((memory) => memory.id === createdMemory.id && memory.content === `CI 已修改记忆 ${unique}`), "Recycle-bin API should return the soft-deleted memory.");
+assert(Array.isArray(trashList.items) && trashList.total >= 1 && trashList.page === 1, "Recycle-bin API must return a paginated list.");
+assert(trashList.items.some((memory) => memory.id === createdMemory.id && memory.content === `CI 已修改记忆 ${unique}`), "Recycle-bin API should return the soft-deleted memory.");
 const timelineWithoutTrashedMemory = await request(`/api/characters/${created.id}/timeline`);
 assert(!timelineWithoutTrashedMemory.entries.some((entry) => entry.id === `memory:${createdMemory.id}`), "Trashed memories must not appear in the active timeline.");
 assert(timelineWithoutTrashedMemory.entries.length === 5, "Moving a memory to trash should preserve messages and both snapshot versions.");
 
 const restoredFromTrash = await request(`/api/memories/${createdMemory.id}/restore`, { method: "POST" });
 assert(restoredFromTrash.status === "ACTIVE" && restoredFromTrash.statusBeforeTrash === null && restoredFromTrash.deletedAt === null, "Restoring a memory should return it to its prior status and clear trash metadata.");
-assert((await request(`/api/characters/${created.id}/memories/trash`)).every((memory) => memory.id !== createdMemory.id), "Restored memory should disappear from the recycle bin.");
+assert((await request(`/api/characters/${created.id}/memories/trash`)).items.every((memory) => memory.id !== createdMemory.id), "Restored memory should disappear from the recycle bin.");
 assert((await request(`/api/characters/${created.id}/timeline`)).entries.some((entry) => entry.id === `memory:${createdMemory.id}`), "Restored memory should return to the timeline.");
 
 await request(`/api/memories/${createdMemory.id}/trash`, { method: "POST" });
@@ -644,11 +647,11 @@ const permanentDelete = await request(`/api/memories/${createdMemory.id}`, { met
 assert(permanentDelete.permanentlyDeleted === true, "Permanent deletion should remove the current memory item.");
 assert(permanentDelete.snapshotsPreserved === true && permanentDelete.preservedSnapshotReferences >= 2, "Permanent deletion must preserve historical snapshot source records.");
 const finalTrashList = await request(`/api/characters/${created.id}/memories/trash`);
-assert(finalTrashList.every((memory) => memory.id !== createdMemory.id), "Permanently deleted memory should no longer exist in the recycle bin.");
+assert(finalTrashList.items.every((memory) => memory.id !== createdMemory.id), "Permanently deleted memory should no longer exist in the recycle bin.");
 const timelineAfterPermanentDelete = await request(`/api/characters/${created.id}/timeline`);
 assert(!timelineAfterPermanentDelete.entries.some((entry) => entry.id === `memory:${createdMemory.id}`), "Permanently deleted memory should not appear in the timeline.");
 const snapshotsAfterPermanentDelete = await request(`/api/characters/${created.id}/snapshots`);
-assert(snapshotsAfterPermanentDelete.length === 2, "Permanent deletion must not rewrite or remove existing snapshot versions.");
+assert(snapshotsAfterPermanentDelete.items.length === 2, "Permanent deletion must not rewrite or remove existing snapshot versions.");
 const missingMemoryResponse = await fetch(new URL(`/api/memories/${createdMemory.id}`, baseUrl));
 assert(missingMemoryResponse.status === 404, "Permanently deleted memory should no longer be addressable.");
 
@@ -677,12 +680,15 @@ const workerTaskList = await request("/api/tasks");
 assert(workerTaskList.items.some((task) => task.status === "SUCCEEDED"), "Task API should show worker-completed tasks.");
 assert(workerTaskList.items.some((task) => task.status === "SKIPPED"), "Task API should show skipped empty-period tasks.");
 const snapshotsAfterWorker = await request(`/api/characters/${created.id}/snapshots`);
-assert(snapshotsAfterWorker.length === 3, "Worker should add one automatic snapshot without rewriting the two manual snapshot versions.");
-const aiSnapshot = snapshotsAfterWorker.find((snapshot) => snapshot.generatedBy === "llm");
+assert(snapshotsAfterWorker.items.length === 3, "Worker should add one automatic snapshot without rewriting the two manual snapshot versions.");
+const aiSnapshot = snapshotsAfterWorker.items.find((snapshot) => snapshot.generatedBy === "llm");
 assert(aiSnapshot && typeof aiSnapshot.id === "string", "Worker should create an AI-generated snapshot through the configured local model endpoint.");
 assert(aiSnapshot.summary.includes("CI 模拟模型已分析"), "The saved snapshot should contain the model-generated period summary.");
-assert(Array.isArray(aiSnapshot.analysis?.importantEvents) && aiSnapshot.analysis.importantEvents.length === 1, "The snapshot should persist structured AI event extraction and its evidence.");
-const appliedAiMemory = aiSnapshot.analysis?.memoryChangesApplied.find((change) => change.result === "CREATED" && typeof change.memoryItemId === "string");
+// AI 提炼结果只走详情接口：列表只带计数，不再把整份分析塞进一页里。
+const aiSnapshotDetail = await request(`/api/characters/${created.id}/snapshots/${aiSnapshot.id}`);
+assert(aiSnapshotDetail.id === aiSnapshot.id, "Snapshot detail must be addressable on its own.");
+assert(Array.isArray(aiSnapshotDetail.analysis?.importantEvents) && aiSnapshotDetail.analysis.importantEvents.length === 1, "The snapshot should persist structured AI event extraction and its evidence.");
+const appliedAiMemory = aiSnapshotDetail.analysis?.memoryChangesApplied.find((change) => change.result === "CREATED" && typeof change.memoryItemId === "string");
 assert(appliedAiMemory?.memoryItemId, "The AI snapshot should report its persisted long-term memory change.");
 const tracedAiMemory = await request(`/api/memories/${appliedAiMemory.memoryItemId}`);
 assert(tracedAiMemory.sourceMessageId === tracedAiMemory.sourceMessage?.id, "Each AI-created memory should expose its direct original-message reference.");
@@ -712,17 +718,27 @@ for (let attempt = 0; attempt < 5; attempt += 1) {
 }
 assert(aiRegenerationResult?.status === "SUCCEEDED" && typeof aiRegenerationResult.snapshotId === "string", "Worker should process the AI regeneration job.");
 const snapshotsAfterAiRegeneration = await request(`/api/characters/${created.id}/snapshots`);
-const regeneratedAiSnapshot = snapshotsAfterAiRegeneration.find((snapshot) => snapshot.id === aiRegenerationResult.snapshotId);
+const regeneratedAiSnapshot = snapshotsAfterAiRegeneration.items.find((snapshot) => snapshot.id === aiRegenerationResult.snapshotId);
 assert(regeneratedAiSnapshot?.kind === "AUTOMATIC" && regeneratedAiSnapshot.version === 2 && regeneratedAiSnapshot.status === "当前版本", "AI regeneration should create version 2 as the current automatic snapshot.");
-assert(snapshotsAfterAiRegeneration.some((snapshot) => snapshot.id === aiSnapshot.id && snapshot.status === "已被替代"), "AI regeneration must preserve and supersede the original version.");
-assert(regeneratedAiSnapshot.analysis?.memoryChangesApplied.some((change) => change.result === "NOT_APPLIED_REGENERATION"), "Regeneration should disclose proposed memory changes without silently applying them to current long-term memory.");
+assert(snapshotsAfterAiRegeneration.items.some((snapshot) => snapshot.id === aiSnapshot.id && snapshot.status === "已被替代"), "AI regeneration must preserve and supersede the original version.");
+const regeneratedAiSnapshotDetail = await request(`/api/characters/${created.id}/snapshots/${regeneratedAiSnapshot.id}`);
+assert(regeneratedAiSnapshotDetail.analysis?.memoryChangesApplied.some((change) => change.result === "NOT_APPLIED_REGENERATION"), "Regeneration should disclose proposed memory changes without silently applying them to current long-term memory.");
 // 审核清单是最需要人判断的一份数据，证据 ID 必须能在本快照的来源消息里逐条对上。
-const regeneratedSourceIds = new Set((regeneratedAiSnapshot.sourceMessages || []).map((source) => source.id));
+const regeneratedSources = await request(`/api/characters/${created.id}/snapshots/${regeneratedAiSnapshot.id}/sources?page=1&pageSize=50`);
+assert(regeneratedSources.total > 0 && regeneratedSources.items.length === regeneratedSources.total, "Snapshot sources endpoint must page through the original messages.");
+assert(regeneratedSources.items[0].index === 1, "Snapshot sources must carry their global position for evidence references.");
+const regeneratedSourceIds = new Set(regeneratedSources.items.map((source) => source.id));
 assert(
-  (regeneratedAiSnapshot.analysis?.memoryChangesApplied || [])
+  (regeneratedAiSnapshotDetail.analysis?.memoryChangesApplied || [])
     .filter((change) => change.result === "NOT_APPLIED_REGENERATION")
     .every((change) => (change.evidenceMessageIds || []).every((messageId) => regeneratedSourceIds.has(messageId))),
   "Regeneration review entries must only keep evidence IDs present in the snapshot's own source messages.",
+);
+assert(
+  (regeneratedAiSnapshotDetail.analysis?.memoryChangesApplied || [])
+    .flatMap((change) => change.evidenceMessageIds || [])
+    .every((messageId) => regeneratedAiSnapshotDetail.evidenceIndex?.[messageId] >= 1),
+  "Evidence IDs must map back to their position in the paginated source list.",
 );
 
 const queuedCancelableRegeneration = await request(`/api/characters/${created.id}/snapshots`, {
@@ -744,7 +760,7 @@ for (let attempt = 0; attempt < 5; attempt += 1) {
 }
 assert(retriedRegenerationResult?.status === "SUCCEEDED", "Worker should process a manually re-queued regeneration task.");
 const finalSnapshotHistory = await request(`/api/characters/${created.id}/snapshots`);
-assert(finalSnapshotHistory.some((snapshot) => snapshot.id === retriedRegenerationResult.snapshotId && snapshot.version === 3 && snapshot.status === "当前版本"), "Retried regeneration should advance the same logical snapshot to version 3.");
+assert(finalSnapshotHistory.items.some((snapshot) => snapshot.id === retriedRegenerationResult.snapshotId && snapshot.version === 3 && snapshot.status === "当前版本"), "Retried regeneration should advance the same logical snapshot to version 3.");
 
 const latestList = await request("/api/characters");
 assert(latestList.some((character) => character.id === created.id && character.name === edited.name), "Character changes did not appear in the list.");

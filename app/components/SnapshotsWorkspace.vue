@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowDown, Calendar, Files, Refresh, Search } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import type { Character, Snapshot, SnapshotAnalysis, SnapshotSourceMessage } from "~/utils/mock-data";
+import type { Character, Snapshot, SnapshotAnalysis, SnapshotDetail, SnapshotSourceMessage } from "~/utils/mock-data";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
 
 const pageDescription = "自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；想现在跑一次，到「记忆系统总览」点「阶段总结」。手动存档：只把当下这一刻拍成快照，不调模型。";
@@ -17,31 +17,71 @@ const current = computed<Character | null>(
   () => characters.value.find((item) => item.id === id.value) ?? null,
 );
 
+/**
+ * 三个接口各管一段，跟普通后台一致：
+ * - 列表：一页摘要（计数 / 状态 / 待审核条数），筛选、搜索、翻页都在服务端；
+ * - 详情：点开某一版才取 AI 提炼结果；
+ * - 来源：展开「来源消息与原文」才取，那一块自己翻页。
+ */
+type SnapshotPage = {
+  items: Snapshot[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  counts: { automatic: number; manual: number; current: number; superseded: number };
+  stats: { messages: number; latestDate: string | null; automatic: number; manual: number };
+};
+type SnapshotSourcePage = {
+  items: SnapshotSourceMessage[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+/** 一页 10 份：左栏列表自己滚，翻页也不会把右栏顶走 */
+const PAGE_SIZE = 10;
+const SOURCE_PAGE_SIZE = 10;
+
 const items = ref<Snapshot[]>([]);
 const loading = ref(true);
+const page = ref(1);
+const total = ref(0);
+const totalPages = ref(1);
+const counts = ref({ automatic: 0, manual: 0, current: 0, superseded: 0 });
+const stats = ref<{ messages: number; latestDate: string | null; automatic: number; manual: number }>({ messages: 0, latestDate: null, automatic: 0, manual: 0 });
+
 const query = ref("");
 const statusFilter = ref("全部版本状态");
 /** 手动存档默认收起：它不是总结，混在列表里只会把 AI 总结挤下去 */
 const showManual = ref(false);
-const detail = ref<Snapshot | null>(null);
-/** 来源消息默认收起：这是一页要读总结的页面，6 条原文常驻会把提炼结果挤到看不见 */
+
+const detail = ref<SnapshotDetail | null>(null);
+const detailLoading = ref(false);
+
+/** 来源消息默认收起，展开时才请求；一次一页，分页器仍用服务端的 total。 */
 const sourcesOpen = ref(false);
-/**
- * 来源消息分页：跨度大的总结会挂上百条原文，全量渲染会把页脚和「重新提炼」
- * 顶到很远的位置，展开一次就得滚半天。这里只渲染当前一页，编号仍走全量序号。
- */
+const sourcesLoading = ref(false);
+const sourceItems = ref<SnapshotSourceMessage[]>([]);
 const sourcePage = ref(1);
-const sourcePageSize = ref(10);
+const sourceTotal = ref(0);
+const sourceTotalPages = ref(1);
 const sourceListEl = ref<HTMLElement | null>(null);
+
 const creating = ref(false);
 const regeneratingId = ref<string | null>(null);
 const aiRegeneratingId = ref<string | null>(null);
+const reviewingKey = ref("");
 let listRequest = 0;
 let characterEpoch = 0;
 let detailVersion = 0;
+let detailRequest = 0;
+let sourceRequest = 0;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
 const operationTokens = new Map<string, symbol>();
 
-/** 确认框属于打开时的角色和版本；切走再切回来也不能复活旧操作。 */
+/** 确认框属于打开时的角色、版本和详情；切走再切回来也不能复活旧操作。 */
 function captureOperation(name: string) {
   const token = Symbol(name);
   operationTokens.set(name, token);
@@ -57,8 +97,15 @@ function operationCurrent(context: ReturnType<typeof captureOperation>) {
 function resetCharacterPage() {
   characterEpoch++;
   listRequest++;
+  detailRequest++;
+  sourceRequest++;
   operationTokens.clear();
   items.value = [];
+  page.value = 1;
+  total.value = 0;
+  totalPages.value = 1;
+  counts.value = { automatic: 0, manual: 0, current: 0, superseded: 0 };
+  stats.value = { messages: 0, latestDate: null, automatic: 0, manual: 0 };
   applyDetail(null);
   creating.value = false;
   regeneratingId.value = null;
@@ -67,16 +114,11 @@ function resetCharacterPage() {
 }
 
 const statusOptions = ["全部版本状态", "当前版本", "已被替代"];
-const kindItems = computed(() => showManual.value ? items.value : items.value.filter((item) => item.kind !== "MANUAL"));
-const filtered = computed(() => kindItems.value.filter((item) => {
-  const queryMatches = !query.value || `${item.summary} ${item.range} ${titleOf(item)}`.toLowerCase().includes(query.value.toLowerCase());
-  const statusMatches = statusFilter.value === "全部版本状态" || item.status === statusFilter.value;
-  return queryMatches && statusMatches;
-}));
-const totalMessages = computed(() => items.value.reduce((sum, item) => sum + item.messages, 0));
-const autoCount = computed(() => items.value.filter((item) => item.kind !== "MANUAL").length);
-const manualCount = computed(() => items.value.length - autoCount.value);
-const hasFilters = computed(() => Boolean(query.value) || statusFilter.value !== "全部版本状态");
+const totalMessages = computed(() => stats.value.messages);
+/** 统计带用全量口径（不随搜索/筛选变化）；芯片计数跟着当前关键词走。 */
+const autoCount = computed(() => stats.value.automatic);
+const manualCount = computed(() => stats.value.manual);
+const hasFilters = computed(() => Boolean(query.value.trim()) || statusFilter.value !== "全部版本状态");
 
 /** 空列表提示指向总览页的阶段总结操作。 */
 const emptyListText = computed(() => {
@@ -87,25 +129,19 @@ const emptyListText = computed(() => {
   return "还没有归档过。到「记忆系统总览」点「阶段总结」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。";
 });
 
-const sourceTotal = computed(() => detail.value?.sourceMessages?.length || 0);
-const pagedSources = computed(() => {
-  const start = (sourcePage.value - 1) * sourcePageSize.value;
-  return (detail.value?.sourceMessages || []).slice(start, start + sourcePageSize.value);
-});
-/** 分页后仍按全量位置编号，「依据 #3」和列表里的 #3 才是同一条 */
-const sourceRange = computed(() => {
-  if (!sourceTotal.value) return "";
-  const start = (sourcePage.value - 1) * sourcePageSize.value + 1;
-  const end = Math.min(sourcePage.value * sourcePageSize.value, sourceTotal.value);
-  return `${start}–${end}`;
-});
-
+function statusParam() {
+  return statusFilter.value === "当前版本" ? "CURRENT" : statusFilter.value === "已被替代" ? "SUPERSEDED" : "";
+}
 function countFor(status: string) {
-  return status === "全部版本状态" ? kindItems.value.length : kindItems.value.filter((item) => item.status === status).length;
+  if (status === "当前版本") return counts.value.current;
+  if (status === "已被替代") return counts.value.superseded;
+  return showManual.value ? counts.value.automatic + counts.value.manual : counts.value.automatic;
 }
 function resetFilters() {
   query.value = "";
   statusFilter.value = "全部版本状态";
+  page.value = 1;
+  void loadSnapshots({ page: 1 });
 }
 function statusTone(status: Snapshot["status"]) {
   return status === "当前版本" ? "pill-green" : "pill-gray";
@@ -119,72 +155,177 @@ function titleOf(snapshot: Snapshot) {
   return snapshot.label || (snapshot.kind === "MANUAL" ? "存档" : "第 " + snapshot.number + " 份");
 }
 
-/**
- * 选中一份总结。来源消息的默认开合按内容决定：
- * 有 AI 提炼结果时它是「依据」，收起；只有结构化记录时原文就是内容本身，摊开 ——
- * 否则整张详情卡只剩两行字，右边空一大片。
- */
-function applyDetail(next: Snapshot | null) {
-  detailVersion++;
-  detail.value = next;
-  sourcesOpen.value = Boolean(next) && !next?.analysis;
-  sourcePage.value = 1;
-}
-
 /** 换页后回到列表顶部：一页 10 条也有近千像素，停在原地会以为没翻动 */
 watch(sourcePage, (next) => {
   if (next > 1) sourceListEl.value?.scrollIntoView({ block: "start", behavior: "smooth" });
 });
 
-/** 收起存档时，右栏不能还停在刚被收起的那个存档上 */
-watch(showManual, (on) => {
-  if (on || detail.value?.kind !== "MANUAL") return;
-  const next = filtered.value[0];
-  if (next) applyDetail(next);
-});
-
-/** 换页大小、或重新拉取后条数变少时，别停在已经不存在的页码上 */
-watch([sourceTotal, sourcePageSize], () => {
-  const maxPage = Math.max(1, Math.ceil(sourceTotal.value / sourcePageSize.value));
-  if (sourcePage.value > maxPage) sourcePage.value = maxPage;
-});
-
-async function loadSnapshots(selectedId?: string, stillCurrent: () => boolean = () => true) {
+/**
+ * 列表请求。
+ *
+ * `selectedId` 只在「写操作完成后要停在同一份」时传；普通翻页/筛选不传，
+ * 让右侧落到当前页第一份，避免停在一份已经不在列表里的总结上。
+ */
+async function loadSnapshots(options: { page?: number; selectedId?: string; refreshDetail?: boolean } = {}) {
   const characterId = id.value;
   const request = ++listRequest;
   const version = detailVersion;
-  const isCurrent = () => request === listRequest && characterId === id.value && stillCurrent();
+  const isCurrent = () => request === listRequest && characterId === id.value;
   if (!characterId) {
     items.value = [];
-    applyDetail(null);
+    total.value = 0;
+    totalPages.value = 1;
     loading.value = false;
-    return;
+    applyDetail(null);
+    return false;
   }
+  const targetPage = options.page ?? page.value;
   loading.value = true;
   try {
-    const result = await $fetch<Snapshot[]>(`/api/characters/${encodeURIComponent(characterId)}/snapshots`);
-    if (!isCurrent()) return;
-    items.value = result;
-    /**
-     * 默认选中「列表里看得见的第一条」。以前直接取 result[0]：
-     * 存档被收起时，右栏却在展示一份列表里找不到的存档，读起来像串了页。
-     */
-    const visible = showManual.value ? result : result.filter((item) => item.kind !== "MANUAL");
-    const keepId = detailVersion === version ? selectedId : detail.value?.id;
-    applyDetail((keepId ? result.find((item) => item.id === keepId) : undefined) || visible[0] || result[0] || null);
+    const params = new URLSearchParams({ page: String(targetPage), pageSize: String(PAGE_SIZE) });
+    if (statusParam()) params.set("status", statusParam());
+    if (!showManual.value) params.set("kind", "AUTOMATIC");
+    const keyword = query.value.trim();
+    if (keyword) params.set("q", keyword);
+    const result = await $fetch<SnapshotPage>(
+      `/api/characters/${encodeURIComponent(characterId)}/snapshots?${params.toString()}`,
+    );
+    if (!isCurrent()) return false;
+    items.value = result.items;
+    total.value = result.total;
+    page.value = result.page;
+    totalPages.value = result.totalPages;
+    counts.value = result.counts;
+    stats.value = result.stats;
+
+    const keepId = options.selectedId ?? (detailVersion === version ? detail.value?.id : undefined);
+    const target = (keepId ? result.items.find((item) => item.id === keepId) : undefined) || result.items[0] || null;
+    if (!target) {
+      applyDetail(null);
+      return true;
+    }
+    // 同一份且不要求刷新时沿用已有详情：翻页不该让右侧闪一下。
+    if (!options.refreshDetail && detail.value?.id === target.id) return true;
+    await loadDetail(target.id, isCurrent);
     return true;
   } catch {
-    if (!isCurrent()) return;
+    if (!isCurrent()) return false;
     items.value = [];
+    total.value = 0;
+    totalPages.value = 1;
     applyDetail(null);
     ElMessage.error("阶段总结加载失败，请确认本地数据库已迁移。");
+    return false;
   } finally {
     if (request === listRequest && characterId === id.value) loading.value = false;
   }
 }
 
+/** 详情：AI 提炼结果单独取，列表里没有它。 */
+async function loadDetail(snapshotId: string, stillActive: () => boolean = () => true) {
+  const request = ++detailRequest;
+  const characterId = id.value;
+  // 换成另一份时先清空：否则右侧会短暂显示上一份的正文，看起来像串了页。
+  if (detail.value && detail.value.id !== snapshotId) applyDetail(null);
+  detailLoading.value = true;
+  try {
+    const result = await $fetch<SnapshotDetail>(
+      `/api/characters/${encodeURIComponent(characterId)}/snapshots/${encodeURIComponent(snapshotId)}`,
+    );
+    if (request !== detailRequest || characterId !== id.value || !stillActive()) return false;
+    applyDetail(result);
+    return true;
+  } catch {
+    if (request !== detailRequest || characterId !== id.value) return false;
+    if (!stillActive()) return false;
+    ElMessage.error("阶段总结详情读取失败，请检查本地开发服务器日志。");
+    return false;
+  } finally {
+    if (request === detailRequest) detailLoading.value = false;
+  }
+}
+
+/**
+ * 选中一份总结。来源消息的默认开合按内容决定：
+ * 有 AI 提炼结果时它是「依据」，收起；只有结构化记录时原文就是内容本身，摊开 ——
+ * 否则整张详情卡只剩两行字，右边空一大片。
+ */
+function applyDetail(next: SnapshotDetail | null) {
+  const changed = next?.id !== detail.value?.id;
+  detailVersion++;
+  detail.value = next;
+  sourcesOpen.value = Boolean(next) && !next?.analysis;
+  sourcePage.value = 1;
+  sourceItems.value = [];
+  sourceTotal.value = 0;
+  sourceTotalPages.value = 1;
+  sourceRequest += 1;
+  if (changed) sourcesLoading.value = false;
+  if (sourcesOpen.value && next) void loadSources(1);
+}
+
 function selectDetail(snapshot: Snapshot) {
-  applyDetail(snapshot);
+  if (detail.value?.id === snapshot.id && !detailLoading.value) return;
+  void loadDetail(snapshot.id);
+}
+
+/** 来源原文：展开时才请求，翻页也只在弹开的这一块里换。 */
+async function loadSources(targetPage = 1) {
+  const snapshot = detail.value;
+  if (!snapshot) return;
+  const characterId = id.value;
+  const request = ++sourceRequest;
+  sourcesLoading.value = true;
+  try {
+    const result = await $fetch<SnapshotSourcePage>(
+      `/api/characters/${encodeURIComponent(characterId)}/snapshots/${encodeURIComponent(snapshot.id)}/sources?page=${targetPage}&pageSize=${SOURCE_PAGE_SIZE}`,
+    );
+    if (request !== sourceRequest || characterId !== id.value || detail.value?.id !== snapshot.id) return;
+    sourceItems.value = result.items;
+    sourceTotal.value = result.total;
+    sourcePage.value = result.page;
+    sourceTotalPages.value = result.totalPages;
+  } catch {
+    if (request !== sourceRequest || detail.value?.id !== snapshot.id) return;
+    sourceItems.value = [];
+    sourceTotal.value = 0;
+    sourceTotalPages.value = 1;
+    ElMessage.error("来源消息读取失败，请检查本地开发服务器日志。");
+  } finally {
+    if (request === sourceRequest) sourcesLoading.value = false;
+  }
+}
+
+function toggleSources() {
+  sourcesOpen.value = !sourcesOpen.value;
+  if (sourcesOpen.value && !sourceItems.value.length) void loadSources(1);
+}
+
+function changeSourcePage(next: number) {
+  if (next === sourcePage.value) return;
+  sourcePage.value = next;
+  void loadSources(next);
+}
+
+/** 筛选是服务端参数：点一下就是一页新数据，不在本地过滤。 */
+function setStatusFilter(next: string) {
+  if (statusFilter.value === next) return;
+  statusFilter.value = next;
+  page.value = 1;
+  void loadSnapshots({ page: 1 });
+}
+
+function setShowManual(next: boolean) {
+  if (showManual.value === next) return;
+  showManual.value = next;
+  page.value = 1;
+  void loadSnapshots({ page: 1 });
+}
+
+function changePage(next: number) {
+  if (next === page.value) return;
+  page.value = next;
+  void loadSnapshots({ page: next });
 }
 
 function errorMessage(error: unknown) {
@@ -194,20 +335,12 @@ function errorMessage(error: unknown) {
 }
 
 /**
- * 依据消息不再直接甩 8 位内部 id：按它在来源列表里的序号显示成 #2、#4，
- * 和下面的「来源消息」逐条编号对得上，人也不用去数哈希。
+ * 依据消息按它在来源列表里的序号显示成 #2、#4。
+ * 序号由服务端按全量顺序给（`evidenceIndex`），翻到第几页都对得上。
  */
 function evidenceLabel(ids: string[]) {
-  const sources = detail.value?.sourceMessages || [];
-  return ids.map((sourceId) => {
-    const index = sources.findIndex((source) => source.id === sourceId);
-    return index >= 0 ? `#${index + 1}` : sourceId.slice(0, 8);
-  }).join("、");
-}
-function sourceIndex(sourceId: string) {
-  const sources = detail.value?.sourceMessages || [];
-  const index = sources.findIndex((source) => source.id === sourceId);
-  return index >= 0 ? index + 1 : null;
+  const index = detail.value?.evidenceIndex || {};
+  return ids.map((sourceId) => index[sourceId] ? `#${index[sourceId]}` : sourceId.slice(0, 8)).join("、");
 }
 function sourceRoleLabel(source: SnapshotSourceMessage) {
   if (source.eventType !== "message") return "平台事件";
@@ -246,8 +379,7 @@ function memoryChangeLabel(action: string, result: string, reviewDecision?: "ACC
  * 否则跑完之后唯一的线索只有 v2，人不会点进去翻到最后一块。
  */
 function pendingReviewCount(snapshot: Snapshot) {
-  const changes = snapshot.analysis?.memoryChangesApplied || [];
-  return changes.filter((item) => item.result === "NOT_APPLIED_REGENERATION" && !item.reviewDecision).length;
+  return snapshot.pendingReview || 0;
 }
 
 type MemoryChangeRow = SnapshotAnalysis["memoryChangesApplied"][number];
@@ -267,19 +399,17 @@ function reviewResultMessage(decision: "ACCEPT" | "IGNORE", outcome: string | nu
 
 /** 采纳会真的写库，先按变更类型说清楚会发生什么 */
 function confirmAccept(item: MemoryChangeRow) {
-  const detail = item.action === "ADD"
+  const hint = item.action === "ADD"
     ? "会把这条作为新的长期记忆写入，角色之后就可能提到它。"
     : item.action === "UPDATE"
       ? "会新建这条记忆，并把下面那条「当前记忆」标记为已被替代。"
       : "会把下面那条「当前记忆」标记为失效，之后不再参与检索。";
-  return ElMessageBox.confirm(detail, "采纳这条建议", {
+  return ElMessageBox.confirm(hint, "采纳这条建议", {
     confirmButtonText: "采纳",
     cancelButtonText: "取消",
     type: "warning",
   }).then(() => true).catch(() => false);
 }
-
-const reviewingKey = ref("");
 
 async function reviewChange(changeIndex: number, decision: "ACCEPT" | "IGNORE", item: MemoryChangeRow) {
   if (!id.value || !detail.value || reviewingKey.value || !reviewPending(item)
@@ -300,7 +430,12 @@ async function reviewChange(changeIndex: number, decision: "ACCEPT" | "IGNORE", 
     ElMessage.success(reviewResultMessage(decision, result.outcome));
     // 刷新后保持原来选中哪一份、以及来源消息是开还是收。
     const keepSources = sourcesOpen.value;
-    if (await loadSnapshots(snapshotId, () => operationCurrent(context)) && operationActive(context)) sourcesOpen.value = keepSources;
+    if (await loadSnapshots({ selectedId: snapshotId, refreshDetail: true }) && operationActive(context)) {
+      if (keepSources && !sourcesOpen.value) {
+        sourcesOpen.value = true;
+        await loadSources(1);
+      }
+    }
   } catch (error) {
     if (operationCurrent(context)) ElMessage.error(errorMessage(error));
   } finally {
@@ -317,7 +452,7 @@ async function reviewChange(changeIndex: number, decision: "ACCEPT" | "IGNORE", 
 const { lastFinished } = useMemoryProgress();
 watch(lastFinished, (job) => {
   if (!job || job.characterId !== id.value) return;
-  void loadSnapshots();
+  void loadSnapshots({ refreshDetail: true });
 });
 
 async function createSnapshot() {
@@ -341,7 +476,8 @@ async function createSnapshot() {
     if (!operationCurrent(context)) return;
     // 刚存的那份如果被默认收起，用户会以为没存上
     showManual.value = true;
-    if (!(await loadSnapshots(result.id, () => operationCurrent(context))) || !operationActive(context)) return;
+    page.value = 1;
+    if (!(await loadSnapshots({ page: 1, selectedId: result.id, refreshDetail: true })) || !operationActive(context)) return;
     ElMessage.success("已存档到 PostgreSQL，关联了周期内可用的消息来源；没有调用模型。");
   } catch (error) {
     if (operationCurrent(context)) ElMessage.error(errorMessage(error));
@@ -351,7 +487,7 @@ async function createSnapshot() {
 }
 
 async function regenerateWithAi(snapshot: Snapshot) {
-  if (!id.value || detail.value !== snapshot || aiRegeneratingId.value) return;
+  if (!id.value || detail.value?.id !== snapshot.id || aiRegeneratingId.value) return;
   const context = captureOperation("aiRegenerate");
   const characterId = context.characterId;
   const snapshotId = snapshot.id;
@@ -386,7 +522,7 @@ async function regenerateWithAi(snapshot: Snapshot) {
 }
 
 async function regenerate(snapshot: Snapshot) {
-  if (!id.value || detail.value !== snapshot || regeneratingId.value) return;
+  if (!id.value || detail.value?.id !== snapshot.id || regeneratingId.value) return;
   const context = captureOperation("regenerate");
   const characterId = context.characterId;
   const snapshotId = snapshot.id;
@@ -408,7 +544,8 @@ async function regenerate(snapshot: Snapshot) {
       body: { snapshotId },
     });
     if (!operationCurrent(context)) return;
-    if (!(await loadSnapshots(result.id, () => operationCurrent(context))) || !operationActive(context)) return;
+    page.value = 1;
+    if (!(await loadSnapshots({ page: 1, selectedId: result.id, refreshDetail: true })) || !operationActive(context)) return;
     ElMessage.success("新版本已写入数据库，旧版本仍保留。");
   } catch (error) {
     if (operationCurrent(context)) ElMessage.error(errorMessage(error));
@@ -417,10 +554,27 @@ async function regenerate(snapshot: Snapshot) {
   }
 }
 
-onMounted(() => void loadSnapshots());
+watch(query, () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    page.value = 1;
+    void loadSnapshots({ page: 1 });
+  }, 300);
+});
+
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
+  characterEpoch++;
+  listRequest++;
+  detailRequest++;
+  sourceRequest++;
+});
+
+onMounted(() => void loadSnapshots({ page: 1 }));
 watch(id, () => {
   resetCharacterPage();
-  void loadSnapshots();
+  void loadSnapshots({ page: 1 });
 }, { flush: "sync" });
 </script>
 
@@ -468,8 +622,8 @@ watch(id, () => {
         </div>
         <div class="sb-cell">
           <span class="sb-k">最近生成</span>
-          <span class="sb-v">{{ items[0] ? items[0].date.slice(5, 10) : "—" }}</span>
-          <span class="sb-f">{{ items[0] ? items[0].date.slice(0, 4) + " 年归档" : "还没有归档过" }}</span>
+          <span class="sb-v">{{ stats.latestDate ? stats.latestDate.slice(5, 10) : "—" }}</span>
+          <span class="sb-f">{{ stats.latestDate ? stats.latestDate.slice(0, 4) + " 年归档" : "还没有归档过" }}</span>
         </div>
       </div>
 
@@ -477,7 +631,7 @@ watch(id, () => {
         <section>
           <div class="sec-h">
             <h2>归档时间线</h2>
-            <span class="sub">{{ filtered.length }}/{{ items.length }} 份</span>
+            <span class="sub">{{ total }} 份</span>
           </div>
           <div class="card list-card">
             <div class="filters">
@@ -487,7 +641,7 @@ watch(id, () => {
                 type="button"
                 class="chip"
                 :class="{ on: statusFilter === option }"
-                @click="statusFilter = option"
+                @click="setStatusFilter(option)"
               >
                 {{ option === "全部版本状态" ? "全部" : option }}<span class="n">{{ countFor(option) }}</span>
               </button>
@@ -497,7 +651,7 @@ watch(id, () => {
                 class="chip manual-chip"
                 :class="{ on: showManual }"
                 :title="showManual ? '当前显示手动存档' : '手动存档不调模型，默认收起'"
-                @click="showManual = !showManual"
+                @click="setShowManual(!showManual)"
               >
                 <el-icon><Files /></el-icon>手动存档<span class="n">{{ manualCount }}</span>
               </button>
@@ -506,7 +660,7 @@ watch(id, () => {
               <el-input
                 v-model="query"
                 clearable
-                placeholder="搜索总结、时间段或编号……"
+                placeholder="搜索总结内容……"
                 class="list-search"
               >
                 <template #prefix>
@@ -533,7 +687,7 @@ watch(id, () => {
               </template>
               <template v-else>
                 <button
-                  v-for="snapshot in filtered"
+                  v-for="snapshot in items"
                   :key="snapshot.id"
                   type="button"
                   class="snap-row"
@@ -566,13 +720,23 @@ watch(id, () => {
                   </span>
                 </button>
                 <p
-                  v-if="!filtered.length"
+                  v-if="!items.length"
                   class="list-empty"
                 >
                   {{ emptyListText }}
                 </p>
               </template>
             </div>
+            <PagerBar
+              v-if="total > 0"
+              :page="page"
+              :total="total"
+              :total-pages="totalPages"
+              :page-size="PAGE_SIZE"
+              unit="份"
+              flush
+              @update:page="changePage"
+            />
           </div>
         </section>
 
@@ -604,8 +768,14 @@ watch(id, () => {
                 {{ detail.summary }}
               </p>
 
+              <div
+                v-if="detailLoading"
+                class="d-note"
+              >
+                <el-icon><Files /></el-icon>正在读取这一版的提炼结果……
+              </div>
               <section
-                v-if="detail.analysis"
+                v-else-if="detail.analysis"
                 class="d-sec"
               >
                 <div class="d-sec-h">
@@ -776,7 +946,7 @@ watch(id, () => {
                   type="button"
                   class="src-toggle"
                   :aria-expanded="sourcesOpen"
-                  @click="sourcesOpen = !sourcesOpen"
+                  @click="toggleSources"
                 >
                   <el-icon
                     class="src-caret"
@@ -786,22 +956,28 @@ watch(id, () => {
                   </el-icon>
                   来源消息与原文
                   <span class="src-count">
-                    {{ detail.sourceMessages?.length || 0 }} 条<template v-if="sourceTotal > sourcePageSize"> · 第 {{ sourceRange }} 条</template>
+                    {{ detail.messages }} 条<template v-if="sourcesOpen && sourceTotal > SOURCE_PAGE_SIZE"> · 第 {{ (sourcePage - 1) * SOURCE_PAGE_SIZE + 1 }}–{{ Math.min(sourcePage * SOURCE_PAGE_SIZE, sourceTotal) }} 条</template>
                   </span>
                 </button>
 
                 <div
-                  v-if="sourcesOpen && detail.sourceMessages?.length"
+                  v-if="sourcesOpen"
                   ref="sourceListEl"
                   class="src-list"
                 >
+                  <div
+                    v-if="sourcesLoading && !sourceItems.length"
+                    class="list-empty"
+                  >
+                    正在读取来源消息……
+                  </div>
                   <article
-                    v-for="source in pagedSources"
+                    v-for="source in sourceItems"
                     :key="source.id"
                     class="src-item"
                   >
                     <div class="src-top">
-                      <span class="src-no">#{{ sourceIndex(source.id) }}</span>
+                      <span class="src-no">#{{ source.index }}</span>
                       <span
                         class="pill"
                         :class="sourceTone(source)"
@@ -822,33 +998,26 @@ watch(id, () => {
                       {{ source.content }}
                     </p>
                   </article>
-                </div>
-                <div
-                  v-if="sourcesOpen && sourceTotal > sourcePageSize"
-                  class="src-pager"
-                >
-                  <el-pagination
-                    v-model:current-page="sourcePage"
-                    v-model:page-size="sourcePageSize"
+                  <PagerBar
+                    v-if="sourceTotalPages > 1"
+                    :page="sourcePage"
                     :total="sourceTotal"
-                    :page-sizes="[10, 20, 50]"
-                    :pager-count="5"
-                    layout="sizes, prev, pager, next"
-                    size="small"
-                    background
+                    :total-pages="sourceTotalPages"
+                    :page-size="SOURCE_PAGE_SIZE"
+                    flush
+                    @update:page="changeSourcePage"
                   />
+                  <!--
+                    这里必须独立 v-if，不能 v-else-if：加载完成后条数为 0 时，
+                    仍要说清「没有可追溯的原始消息」。
+                  -->
+                  <p
+                    v-if="!sourcesLoading && !sourceTotal"
+                    class="list-empty"
+                  >
+                    没有可追溯的原始消息，可能是旧版本、纯记忆归档，或来源消息已被清理。
+                  </p>
                 </div>
-                <!--
-                  这里必须独立 v-if，不能 v-else-if：分页器插在上面之后，
-                  v-else-if 会挂到分页器的条件上 —— 来源不足一页（≤10 条，最常见的情况）
-                  时原文照常渲染，下面却多出一句「没有可追溯的原始消息」。
-                -->
-                <p
-                  v-if="sourcesOpen && !sourceTotal"
-                  class="list-empty"
-                >
-                  没有可追溯的原始消息，可能是旧版本、纯记忆归档，或来源消息已被清理。
-                </p>
               </section>
 
               <footer class="d-foot">
@@ -879,7 +1048,7 @@ watch(id, () => {
               </footer>
             </template>
 
-            <template v-else-if="loading">
+            <template v-else-if="loading || detailLoading">
               <div
                 v-for="n in 4"
                 :key="n"
@@ -923,7 +1092,7 @@ watch(id, () => {
 .reset-link{border:0;border-radius:6px;background:none;padding:2px 4px;color:var(--brand-strong);font-size:12px;font-weight:600;cursor:pointer}
 .reset-link:hover{text-decoration:underline}
 /* 左栏列表自己滚，别让几十份归档把右栏详情推到视口外 */
-.snap-list{display:flex;max-height:calc(100dvh - 300px);flex-direction:column;gap:2px;margin-top:8px;overflow:auto}
+.snap-list{display:flex;max-height:calc(100dvh - 340px);flex-direction:column;gap:2px;margin-top:8px;overflow:auto}
 .snap-row{display:flex;width:100%;flex-direction:column;gap:5px;border:0;border-radius:8px;background:none;padding:10px 10px 11px;text-align:left;cursor:pointer;transition:background .14s var(--ease)}
 .snap-row:hover{background:var(--surface-2)}
 .snap-row.on{background:var(--brand-soft);box-shadow:inset 2px 0 0 var(--brand)}
@@ -991,8 +1160,6 @@ watch(id, () => {
 .src-more:hover{text-decoration:underline}
 .src-conv{margin:6px 0 0;overflow:hidden;color:var(--dim);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 .src-preview{display:-webkit-box;overflow:hidden;margin:5px 0 0;color:var(--text-2);font-size:14px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:3}
-/* 分页器贴右、极轻：它是翻页工具，不该和原文抢视线 */
-.src-pager{display:flex;justify-content:flex-end;margin-top:10px}
 
 /* ── 详情页脚 ──────────────────────────────────────── */
 .d-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px;border-top:1px solid var(--surface-3);padding-top:14px}

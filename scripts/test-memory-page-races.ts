@@ -7,6 +7,10 @@ import ts from "typescript";
 /** Run the current page code, not a second implementation of its request guards.
  * No Nuxt server, browser, database, real timers, or network requests are needed.
  * Run: yarn tsx scripts/test-memory-page-races.ts
+ *
+ * 长期记忆列表现在是一页一条请求（页码 / 关键词 / 范围都在服务端），
+ * 统计数字走 `/memory-stats`。这里守住三件事：迟到的列表不能覆盖新角色或新关键词、
+ * 写操作完成后刷新的是当前页、详情弹窗的竞态和以前一样。
  */
 const pagePath = new URL("../app/components/MemoryWorkspace.vue", import.meta.url);
 const sfc = readFileSync(pagePath, "utf8");
@@ -60,7 +64,7 @@ function harness() {
     URLSearchParams,
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: (id: number) => timers.delete(id),
-    ElMessage: { error: (message: string) => errors.push(message) },
+    ElMessage: { error: (message: string) => errors.push(message), success: () => {}, warning: () => {}, info: () => {} },
     $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
       requests.push({ url, options, resolve, reject });
     }),
@@ -82,11 +86,17 @@ function harness() {
     assert.equal(typeof bindings[name], "function", `missing page handler: ${name}`);
     return (bindings[name] as (...args: unknown[]) => Promise<void>)(...args);
   }
+  function match(path: string, params: Record<string, string> = {}) {
+    const found = requests.findIndex((request) => {
+      const url = new URL(request.url, "http://test.local");
+      if (url.pathname !== path) return false;
+      return Object.entries(params).every(([key, value]) => url.searchParams.get(key) === value);
+    });
+    assert.ok(found >= 0, `expected pending request: ${path} ${JSON.stringify(params)}`);
+    return requests.splice(found, 1)[0]!;
+  }
   function take(path: string, query?: string) {
-    const index = requests.findIndex((request) => new URL(request.url, "http://test.local").pathname === path
-      && (query === undefined || new URL(request.url, "http://test.local").searchParams.get("q") === query));
-    assert.ok(index >= 0, `expected pending request: ${path}${query ? ` q=${query}` : ""}`);
-    return requests.splice(index, 1)[0]!;
+    return match(path, query === undefined ? {} : { q: query });
   }
   function tickSearch() {
     const callbacks = [...timers.values()];
@@ -96,14 +106,15 @@ function harness() {
   async function finishRoleLoad(roleId: string) {
     take(`/api/characters/${roleId}`).resolve({ id: roleId, name: roleId });
     await flush();
-    take(`/api/characters/${roleId}/timeline`).resolve(timeline(roleId));
+    take(`/api/characters/${roleId}/memories`).resolve(list(roleId));
+    take(`/api/characters/${roleId}/memory-stats`).resolve(stats(roleId));
     await flush();
   }
   function done() {
     assert.equal(requests.length, 0, `unsettled requests: ${requests.map((request) => request.url).join(", ")}`);
     assert.equal(errors.length, 0, `unexpected error notifications: ${errors.join(", ")}`);
   }
-  return { read, set, call, take, tickSearch, finishRoleLoad, done, errors, timers };
+  return { read, set, call, match, take, tickSearch, finishRoleLoad, done, errors, timers, requests };
 }
 
 function detail(id: string) {
@@ -111,12 +122,29 @@ function detail(id: string) {
     sourceMessage: { id: `message-${id}`, content: `source-${id}` },
     sourceSnapshot: { id: `snapshot-${id}`, summary: `summary-${id}` } };
 }
-function timeline(id: string) {
-  return { entries: [{ id }], counts: { message: 1, event: 2, memory: 3, snapshot: 4, memoryEvent: 5 },
-    days: [{ dayKey: id, state: "FINAL", eventCount: 5, extractedAt: null }], today: id };
+function row(id: string) {
+  return {
+    id, category: "FACT", content: `content-${id}`, status: "ACTIVE", scopeType: "CHARACTER_GLOBAL",
+    importance: 0.5, validTo: null, createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-02T00:00:00.000Z",
+  };
 }
-function search(id: string, nextCursor: string | null = null) {
-  return { items: [{ id, content: `result-${id}` }], total: id === "b" ? 2 : 1, nextCursor };
+function list(id: string, options: { total?: number; page?: number; totalPages?: number } = {}) {
+  return {
+    items: [row(id)],
+    total: options.total ?? 1,
+    page: options.page ?? 1,
+    pageSize: 10,
+    totalPages: options.totalPages ?? 1,
+  };
+}
+function trash(id: string) {
+  return {
+    id, category: "FACT", content: `trashed-${id}`, status: "TRASHED", statusBeforeTrash: "ACTIVE",
+    deletedAt: "2026-11-08T00:00:00.000Z", createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-08T00:00:00.000Z",
+  };
+}
+function stats(id: string) {
+  return { memory: id === "role-b" ? 7 : 3, commitment: 1, message: 10, event: 2, snapshot: 4, memoryEvent: 5 };
 }
 function group(id: string) {
   return { groups: [{ conversationId: id, label: id }], selectedConversationId: id, messages: [{ id: `message-${id}` }] };
@@ -136,18 +164,21 @@ function assertDetail(page: ReturnType<typeof harness>, id: string) {
 
 async function onlyLoadsMemories() {
   const page = harness();
-  assert.equal(page.read("activeFilter"), "长期记忆", "Growth memory view must default to long-term memories only.");
   const loading = page.call("loadCharacter");
   page.take("/api/characters/role-a").resolve({ id: "role-a", name: "角色 A" });
   await flush();
-  const timelineRequest = page.take("/api/characters/role-a/timeline");
-  assert.equal(new URL(timelineRequest.url, "http://test.local").searchParams.get("kinds"), "memory",
-    "Growth memory view must request only long-term memory timeline entries.");
-  timelineRequest.resolve(timeline("role-a"));
+  const listRequest = page.take("/api/characters/role-a/memories");
+  const url = new URL(listRequest.url, "http://test.local");
+  assert.equal(url.searchParams.get("page"), "1", "The list must ask the server for a page, not a 400-row window.");
+  assert.equal(url.searchParams.has("q"), false, "An empty search box must not send a keyword.");
+  listRequest.resolve(list("role-a"));
+  page.take("/api/characters/role-a/memory-stats").resolve(stats("role-a"));
   await loading;
-  equal(page.read("timelineEntries"), [{ id: "role-a" }]);
-  assert.equal(page.read("knownTotal"), 3, "Growth memory counts must exclude snapshots and memory events.");
-  page.done(); // Growth memory view must not request snapshots.
+  equal(page.read("memoryRows"), [row("role-a")]);
+  assert.equal(page.read("memoryTotal"), 1);
+  assert.equal(page.read("recordedMessageCount"), 10);
+  assert.equal(page.read("commitmentCount"), 1);
+  page.done(); // No timeline call: the page only needs its own page of memories + counters.
 }
 
 async function detailOrder() {
@@ -208,6 +239,8 @@ async function staleSaveCompletion() {
     await second;
     if (rejectOld) saveResponse.reject(new Error("old save failed"));
     else saveResponse.resolve({});
+    await flush();
+    // 保存期间换了详情：写入会落库，但刷新被 detailSeq 挡住，不会把结果画到 b 上。
     await save;
     assertDetail(page, "b");
     assert.equal(page.read("memoryEditSaving"), false);
@@ -235,87 +268,82 @@ async function roleSwitchDetail() {
   }
 }
 
-async function roleSwitchSearch() {
+async function roleSwitchList() {
   const page = harness();
+  void page.call("loadCharacter");
+  await page.finishRoleLoad("role-a");
   page.set("query", "  favorite tea  ");
   page.tickSearch();
   const old = page.take("/api/characters/role-a/memories", "favorite tea");
   page.set("id", "role-b");
-  const current = page.take("/api/characters/role-b/memories", "favorite tea");
   assert.equal(page.timers.size, 0, "role watcher must cancel the old debounce");
-  old.resolve(search("a"));
+  const characterRequest = page.take("/api/characters/role-b");
+  old.resolve(list("stale"));
   await flush();
-  equal(page.read("searchRows"), []);
-  assert.equal(page.read("searchLoading"), true);
-  current.resolve(search("b", "cursor-b"));
+  equal(page.read("memoryRows"), [], "a stale page must not repopulate the new role");
+  characterRequest.resolve({ id: "role-b", name: "role-b" });
   await flush();
-  equal(page.read("searchRows"), search("b").items);
-  assert.equal(page.read("searchTotal"), 2);
-  assert.equal(page.read("searchCursor"), "cursor-b");
-  await page.finishRoleLoad("role-b");
+  // 换角色会清空搜索词，所以新请求不带 q。
+  const current = page.take("/api/characters/role-b/memories");
+  const url = new URL(current.url, "http://test.local");
+  assert.equal(url.searchParams.has("q"), false);
+  current.resolve(list("role-b"));
+  page.take("/api/characters/role-b/memory-stats").resolve(stats("role-b"));
+  await flush();
+  equal(page.read("memoryRows"), [row("role-b")]);
+  assert.equal(page.read<{ memory: number }>("memoryStats").memory, 7, "counters must follow the new role");
   page.done();
 }
 
 async function queryChanges() {
-  for (const rejectOld of [false, true]) {
-    const page = harness();
-    page.set("query", "old query");
-    page.tickSearch();
-    const old = page.take("/api/characters/role-a/memories", "old query");
-    page.set("query", "new query");
-    // Old response arrives during the debounce, before the next request starts.
-    if (rejectOld) old.reject(new Error("old query failed"));
-    else old.resolve(search("a"));
-    await flush();
-    equal(page.read("searchRows"), []);
-    page.tickSearch();
-    page.take("/api/characters/role-a/memories", "new query").resolve(search("b", "cursor-b"));
-    await flush();
-    equal(page.read("searchRows"), search("b").items);
-    const olderPage = page.call("runSearch", false);
-    const pagination = page.take("/api/characters/role-a/memories", "new query");
-    assert.equal(new URL(pagination.url, "http://test.local").searchParams.get("cursor"), "cursor-b");
-    page.set("query", "");
-    pagination.resolve(search("stale page"));
-    await olderPage;
-    equal(page.read("searchRows"), []);
-    assert.equal(page.read("searchTotal"), 0);
-    assert.equal(page.read("searchCursor"), null);
-    assert.equal(page.read("searchLoading"), false);
-    page.done();
-  }
+  const page = harness();
+  void page.call("loadCharacter");
+  await page.finishRoleLoad("role-a");
+  page.set("query", "old query");
+  page.tickSearch();
+  const old = page.take("/api/characters/role-a/memories", "old query");
+  page.set("query", "new query");
+  // Old response arrives during the debounce, before the next request starts.
+  old.resolve(list("a"));
+  await flush();
+  equal(page.read("memoryRows"), [row("role-a")], "a response for the previous keyword must be dropped");
+  page.tickSearch();
+  const fresh = page.take("/api/characters/role-a/memories", "new query");
+  fresh.resolve(list("b", { total: 2 }));
+  await flush();
+  equal(page.read("memoryRows"), [row("b")]);
+  assert.equal(page.read("memoryTotal"), 2);
+
+  // 范围筛选是服务端参数：改一次就是一次带 scope 的请求。
+  page.call("changeScope", "USER_PRIVATE");
+  const scoped = page.match("/api/characters/role-a/memories", { scope: "USER_PRIVATE", q: "new query" });
+  scoped.resolve(list("c"));
+  await flush();
+  equal(page.read("memoryRows"), [row("c")]);
+  page.done();
 }
 
-async function staleTimeline() {
+async function stalePage() {
   for (const rejectOld of [false, true]) {
     const page = harness();
-    const old = page.call("loadTimeline");
-    const oldResponse = page.take("/api/characters/role-a/timeline");
-    const current = page.call("loadTimeline");
-    if (rejectOld) oldResponse.reject(new Error("stale timeline failed"));
-    else oldResponse.resolve(timeline("old"));
+    void page.call("loadCharacter");
+    await page.finishRoleLoad("role-a");
+    const old = page.call("loadMemories", 1);
+    const oldResponse = page.take("/api/characters/role-a/memories");
+    const current = page.call("loadMemories", 2);
+    const currentResponse = page.match("/api/characters/role-a/memories", { page: "2" });
+    if (rejectOld) oldResponse.reject(new Error("stale page failed"));
+    else oldResponse.resolve(list("old", { page: 1 }));
     await old;
-    equal(page.read("timelineEntries"), []);
-    assert.equal(page.read("timelineLoading"), true);
-    page.take("/api/characters/role-a/timeline").resolve(timeline("new"));
+    equal(page.read("memoryRows"), [row("role-a")]);
+    assert.equal(page.read("memoryLoading"), true, "old finally must not stop the newer loading");
+    currentResponse.resolve(list("new", { page: 2, total: 20, totalPages: 2 }));
     await current;
-    equal(page.read("timelineEntries"), [{ id: "new" }]);
-    equal(page.read("timelineCounts"), timeline("new").counts);
-    equal(page.read("timelineDays"), { new: timeline("new").days[0] });
-    assert.equal(page.read("todayKey"), "new");
-    assert.equal(page.read("timelineLoading"), false);
+    equal(page.read("memoryRows"), [row("new")]);
+    assert.equal(page.read("memoryPage"), 2);
+    assert.equal(page.read("memoryLoading"), false);
     page.done();
   }
-  const page = harness();
-  const old = page.call("loadTimeline");
-  const response = page.take("/api/characters/role-a/timeline");
-  page.set("id", "role-b");
-  await page.finishRoleLoad("role-b");
-  response.resolve(timeline("role-a"));
-  await old;
-  equal(page.read("timelineEntries"), [{ id: "role-b" }]);
-  assert.equal(page.read("todayKey"), "role-b");
-  page.done();
 }
 
 async function staleGroup() {
@@ -354,7 +382,54 @@ async function staleGroup() {
   page.done();
 }
 
-for (const test of [onlyLoadsMemories, detailOrder, saveDuringDetailLoad, staleSaveCompletion, roleSwitchDetail, roleSwitchSearch, queryChanges, staleTimeline, staleGroup]) {
+/**
+ * 回收站也分页：打开回到第 1 页，翻页只换这一页，恢复/删除后按当前页刷新。
+ */
+async function recycleBinPaging() {
+  const page = harness();
+  void page.call("loadCharacter");
+  await page.finishRoleLoad("role-a");
+
+  const opening = page.call("openRecycleBin");
+  const first = page.match("/api/characters/role-a/memories/trash", { page: "1", pageSize: "10" });
+  first.resolve({ items: [trash("a")], total: 12, page: 1, pageSize: 10, totalPages: 2 });
+  await opening;
+  assert.equal(page.read<unknown[]>("recycleBinEntries").length, 1);
+  assert.equal(page.read("recycleBinTotal"), 12);
+  assert.equal(page.read("recycleBinTotalPages"), 2);
+
+  page.call("changeRecycleBinPage", 2);
+  page.match("/api/characters/role-a/memories/trash", { page: "2", pageSize: "10" }).resolve({
+    items: [trash("b")], total: 12, page: 2, pageSize: 10, totalPages: 2,
+  });
+  await flush();
+  equal(page.read("recycleBinEntries"), [trash("b")]);
+  assert.equal(page.read("recycleBinPage"), 2);
+
+  // 再打开一次必须回到第 1 页：停在上次翻到的页会让人以为只剩这些。
+  const reopen = page.call("openRecycleBin");
+  page.match("/api/characters/role-a/memories/trash", { page: "1", pageSize: "10" }).resolve({
+    items: [trash("a")], total: 12, page: 1, pageSize: 10, totalPages: 2,
+  });
+  await reopen;
+  assert.equal(page.read("recycleBinPage"), 1);
+
+  // 迟到的第 2 页不能覆盖重新打开后的第 1 页。
+  const stale = page.call("loadRecycleBin", 2);
+  const staleResponse = page.match("/api/characters/role-a/memories/trash", { page: "2", pageSize: "10" });
+  const fresh = page.call("loadRecycleBin", 1);
+  const freshResponse = page.match("/api/characters/role-a/memories/trash", { page: "1", pageSize: "10" });
+  staleResponse.resolve({ items: [trash("b")], total: 12, page: 2, pageSize: 10, totalPages: 2 });
+  await stale;
+  equal(page.read("recycleBinEntries"), [trash("a")], "stale trash page must be dropped");
+  freshResponse.resolve({ items: [trash("c")], total: 1, page: 1, pageSize: 10, totalPages: 1 });
+  await fresh;
+  equal(page.read("recycleBinEntries"), [trash("c")]);
+  assert.equal(page.read("recycleBinLoading"), false);
+  page.done();
+}
+
+for (const test of [onlyLoadsMemories, detailOrder, saveDuringDetailLoad, staleSaveCompletion, roleSwitchDetail, roleSwitchList, queryChanges, stalePage, staleGroup, recycleBinPaging]) {
   await test();
   console.log(`PASS ${test.name}`);
 }

@@ -320,7 +320,54 @@ async function finishedJobRefreshesCalendar() {
   page.finish();
 }
 
-for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests, finishedJobRefreshesCalendar]) {
+
+/**
+ * 「查看当天原文」是独立接口：点开才请求，收起再点开用已经取到的那一份。
+ * 以前它跟忆泡一起返回，一天聊得多的时候点开日期就要传几百条原文。
+ */
+async function originalsLoadedOnDemand() {
+  const page = harness();
+  const loading = page.call("loadDays", "role-a");
+  page.take("/api/characters/role-a/days").resolve(daysResult("2026-11-05"));
+  await flushMicrotasks();
+  page.take("/api/characters/role-a/days/2026-11-05").resolve(detailResult("2026-11-05"));
+  await loading;
+  assert.equal(page.read("showMessages"), false);
+  assert.equal(page.read<unknown[]>("messageGroups").length, 0, "详情不该再带原文");
+  assert.equal(page.read("totalMessages"), 0);
+
+  page.call("toggleMessages");
+  const first = page.take("/api/characters/role-a/days/2026-11-05/messages");
+  first.resolve({
+    dayKey: "2026-11-05",
+    timeZone: "Asia/Shanghai",
+    messageGroups: [{ id: "c1", title: "私聊", total: 3, messages: [] }],
+    totalMessages: 3,
+  });
+  await flushMicrotasks();
+  assert.equal(page.read("showMessages"), true);
+  assert.equal(page.read("totalMessages"), 3);
+  assert.equal(page.read<unknown[]>("messageGroups").length, 1);
+  assert.equal(page.read("messagesLoadedFor"), "2026-11-05");
+
+  page.call("toggleMessages");
+  assert.equal(page.read("showMessages"), false);
+  page.call("toggleMessages");
+  await flushMicrotasks();
+  assert.equal(page.read("showMessages"), true);
+  page.finish(); // 没有新请求：收起再展开用的是已经取到的那一份。
+
+  // 换一天：清空上一天的原文，重新打开时再请求。
+  page.call("selectDay", "2026-11-04");
+  page.take("/api/characters/role-a/days/2026-11-04").resolve(detailResult("2026-11-04"));
+  await flushMicrotasks();
+  assert.equal(page.read("showMessages"), false);
+  assert.equal(page.read<unknown[]>("messageGroups").length, 0);
+  assert.equal(page.read("messagesLoadedFor"), "");
+  page.finish();
+}
+
+for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests, finishedJobRefreshesCalendar, originalsLoadedOnDemand]) {
   await test();
   console.log(`PASS ${test.name}`);
 }

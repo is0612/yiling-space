@@ -6,6 +6,16 @@
 
 旧独立菜单已移除，`/memory`、`/days`、`/snapshots` 保留为对应成长页面的重定向，传递角色参数、其他查询参数和页内锚点。角色的记忆周期、时区、自动生成与原文保留配置仍在角色设置 `/characters/{id}/settings/memory`。此清理只调整页面入口和旧视图代码，不迁移或删除数据，不移除 API、底层服务与仍在使用的共享组件。
 
+## 接口分层与分页（2026-11-09）
+
+记忆页不再「一个接口一把梭」：列表只给一行能显示的字段，重内容按需取。
+
+- **长期记忆**：`GET /characters/{id}/memories?page&pageSize&q&category&status&scope` 页码分页，筛选与翻页都在服务端；统计带的几个数字走 `GET /characters/{id}/memory-stats`，不再为两行统计拉整条时间线。回收站 `GET /characters/{id}/memories/trash` 同样分页。
+- **阶段总结**：`GET /characters/{id}/snapshots` 只返回分页摘要（计数、状态、待审核条数）与 `counts` / `stats`，**不含** `analysis` 与 `sourceMessages`；点开某一版才请求 `GET /characters/{id}/snapshots/{snapshotId}` 取 AI 提炼结果；展开「来源消息与原文」才请求 `GET /characters/{id}/snapshots/{snapshotId}/sources`（自身分页，`index` 是全量序号）。
+- **忆泡日历**：`GET /characters/{id}/days/{dayKey}` 只给当天的忆泡；点「查看当天原文」才请求 `GET /characters/{id}/days/{dayKey}/messages`（不分页，按会话分组，每个会话取当天最近 200 条）。
+
+分页带来两个口径要求：**「第 N 份」必须按全量自动归档算**，不能只看当前页；**「依据 #3」必须由服务端按全量来源顺序算好**（详情里的 `evidenceIndex`），因为前端手里只有一页。长期记忆页也因此从「按天分组的时间线」改为平铺列表 + 翻页条——分页之后按天统计只剩页内条数，那是假数字。
+
 ## 整理预览与进度
 
 「整理忆泡」先打开弹窗，通过只读 `GET /characters/{id}/memory-events/preview` 展示本次手动操作可处理的昨天收口与今天增量，按角色时区、会话与记忆范围统计游标后的消息数。预览不调用模型、不写任务、不迁移主人旧私聊；待归位的主人旧私聊会单独提示，正式开始仍由原 POST 执行归位。展示最多 100 行，总消息数仍按实际范围累计；不支持勾选子范围，开始会按原接口处理整个手动范围，历史积压仍需调度器排期或任务监控处理。

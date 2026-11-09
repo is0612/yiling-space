@@ -1965,8 +1965,8 @@ paths:
     get:
       tags: [Memories]
       operationId: getCharacterMemoryDay
-      summary: 某一天的忆泡与当天原文
-      description: 忆泡是整理过的事件，原文是当时的对话；两者都受同一套范围隔离约束。忆泡按 occurredAt、id 升序分页，每页固定 20 条；原文按会话分组，每个会话最多返回最近 200 条，单条正文截断 500 字。
+      summary: 某一天的忆泡（分页）
+      description: 忆泡是整理过的事件，按 occurredAt、id 升序分页，每页固定 20 条。当天原文不再随这里返回：页面上展开「查看当天原文」时才请求 `/characters/{characterId}/days/{dayKey}/messages`，两者受同一套范围隔离约束。
       parameters:
         - name: page
           in: query
@@ -1979,7 +1979,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [day, events, messageGroups, usage, timeZone, eventsTotal, eventsPage, eventsPageSize, eventsTotalPages]
+                required: [day, events, usage, timeZone, eventsTotal, eventsPage, eventsPageSize, eventsTotalPages]
                 properties:
                   timeZone: { type: string, example: "Asia/Shanghai", description: 角色配置的 IANA 时区 }
                   eventsTotal: { type: integer, minimum: 0, description: 当天实际忆泡总数，包含已隐藏的忆泡 }
@@ -2021,6 +2021,37 @@ paths:
                           description: 这条忆泡的全部证据消息 id（按时间升序）；`sourceMessageId` 只是第一条
                           items: { type: string }
                         scope: { type: string, enum: [character, private, external], description: external 表示 EXTERNAL_IDENTITY 范围 }
+        '400':
+          description: dayKey 不是 YYYY-MM-DD
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /characters/{characterId}/days/{dayKey}/messages:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+      - name: dayKey
+        in: path
+        required: true
+        description: 当地日期，格式 YYYY-MM-DD
+        schema: { type: string, example: "2026-10-31" }
+    get:
+      tags: [Memories]
+      operationId: getCharacterMemoryDayMessages
+      summary: 某一天的对话原文（按会话分组）
+      description: 点开「查看当天原文」才请求。不分页：原文按会话分组，每个会话最多返回最近 200 条，单条正文截断 500 字，`total` 是该会话当天真实条数。
+      responses:
+        '200':
+          description: 当天原文
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dayKey, timeZone, messageGroups, totalMessages]
+                properties:
+                  dayKey: { type: string, example: "2026-10-31" }
+                  timeZone: { type: string, example: "Asia/Shanghai" }
+                  totalMessages: { type: integer, minimum: 0, description: 当天原文总数（各会话 total 之和） }
                   messageGroups:
                     type: array
                     description: 当天原文，按会话分组（群聊标题为「QQ群 <群号>」）
@@ -2049,6 +2080,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+
   /characters/{characterId}/memory-events/preview:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
@@ -2733,66 +2765,131 @@ paths:
     get:
       tags: [Memories]
       operationId: listCharacterMemoryTrash
-      summary: 获取角色记忆回收站（本地开发）
+      summary: 获取角色记忆回收站（本地开发，分页）
+      description: 只列软删除的长期记忆，按 deletedAt 倒序分页。
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         '200':
-          description: 回收站条目列表
+          description: 回收站条目分页列表
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  required: [id, category, content, status, statusBeforeTrash, deletedAt]
-                  properties:
-                    id: { type: string, format: uuid }
-                    category: { type: string, enum: [FACT, PREFERENCE, RELATIONSHIP, COMMITMENT, GOAL, EVENT, SUMMARY, OTHER] }
-                    content: { type: string }
-                    status: { type: string, enum: [TRASHED] }
-                    statusBeforeTrash: { type: string, nullable: true, enum: [ACTIVE, SUPERSEDED, ARCHIVED, INVALIDATED] }
-                    deletedAt: { type: string, nullable: true, format: date-time }
-                    createdAt: { type: string, format: date-time }
-                    updatedAt: { type: string, format: date-time }
+                type: object
+                required: [items, total, page, pageSize, totalPages]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, category, content, status, statusBeforeTrash, deletedAt]
+                      properties:
+                        id: { type: string, format: uuid }
+                        category: { type: string, enum: [FACT, PREFERENCE, RELATIONSHIP, COMMITMENT, GOAL, EVENT, SUMMARY, OTHER] }
+                        content: { type: string }
+                        status: { type: string, enum: [TRASHED] }
+                        statusBeforeTrash: { type: string, nullable: true, enum: [ACTIVE, SUPERSEDED, ARCHIVED, INVALIDATED] }
+                        deletedAt: { type: string, nullable: true, format: date-time }
+                        createdAt: { type: string, format: date-time }
+                        updatedAt: { type: string, format: date-time }
+                  total: { type: integer }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  totalPages: { type: integer }
         '403':
           description: 该接口仅限本地开发环境
         '404':
           $ref: '#/components/responses/NotFound'
+
   /characters/{characterId}/snapshots:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
       tags: [Snapshots]
-      summary: 获取快照列表
+      summary: 阶段总结列表（分页）
+      description: >-
+        列表只返回一行要显示的字段（计数、状态、待审核条数），不含 AI 提炼结果与来源原文。
+        点开某一版走 `/characters/{characterId}/snapshots/{snapshotId}`；
+        「来源消息与原文」走 `/characters/{characterId}/snapshots/{snapshotId}/sources`，展开才请求、自己分页。
+        筛选、搜索、翻页都在服务端完成。
       parameters:
-        - name: scopeId
+        - name: page
           in: query
-          schema: { type: string, format: uuid }
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
         - name: status
           in: query
+          description: 不传 = 全部
+          schema: { type: string, enum: [CURRENT, SUPERSEDED] }
+        - name: kind
+          in: query
+          description: 不传 = 全部
+          schema: { type: string, enum: [AUTOMATIC, MANUAL] }
+        - name: q
+          in: query
+          description: 按总结正文模糊搜索
           schema: { type: string }
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/PageSize'
       responses:
         '200':
           description: 快照分页列表
           content:
             application/json:
               schema:
-                allOf:
-                  - $ref: '#/components/schemas/ApiResponse'
-                  - type: object
+                type: object
+                required: [items, total, page, pageSize, totalPages, counts, stats]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, number, label, version, date, range, summary, events, messages, status, statusTone, kind, pendingReview]
+                      properties:
+                        id: { type: string }
+                        number: { type: integer, description: 自动归档序号；手动存档恒为 0 }
+                        label: { type: string, example: 第 3 份 }
+                        version: { type: integer }
+                        date: { type: string, example: "2026-11-05 09:00" }
+                        range: { type: string, example: "2026-11-01 — 2026-11-05" }
+                        summary: { type: string }
+                        events: { type: integer }
+                        messages: { type: integer, description: 可追溯的原始消息条数 }
+                        status: { type: string, enum: [当前版本, 已被替代] }
+                        statusTone: { type: string, enum: [green, gray] }
+                        kind: { type: string, enum: [AUTOMATIC, MANUAL] }
+                        generatedBy: { type: string }
+                        reviewRejected: { type: integer }
+                        pendingReview: { type: integer, description: 重新提炼留下、还没人处置的审核建议条数 }
+                  total: { type: integer }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  totalPages: { type: integer }
+                  counts:
+                    type: object
+                    required: [automatic, manual, current, superseded]
                     properties:
-                      data:
-                        type: object
-                        properties:
-                          items:
-                            type: array
-                            items: { $ref: '#/components/schemas/MemorySnapshot' }
-                          page: { type: integer }
-                          pageSize: { type: integer }
-                          total: { type: integer }
+                      automatic: { type: integer }
+                      manual: { type: integer }
+                      current: { type: integer }
+                      superseded: { type: integer }
+                  stats:
+                    type: object
+                    required: [messages, latestDate, automatic, manual]
+                    properties:
+                      messages: { type: integer, description: 该角色全部快照覆盖的原始消息数 }
+                      latestDate: { type: string, nullable: true, example: "2026-11-05 09:00" }
+                      automatic: { type: integer, description: 全量口径，不随搜索/翻页变化 }
+                      manual: { type: integer }
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
     post:
       tags: [Snapshots]
       summary: 生成手动快照或排入自动 AI 快照重新提炼
@@ -2847,6 +2944,104 @@ paths:
           description: 该快照不能以当前模式重新生成
         '503':
           description: 模型未配置
+  /characters/{characterId}/snapshots/{snapshotId}:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+      - name: snapshotId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Snapshots]
+      summary: 单份阶段总结详情（含 AI 提炼结果）
+      description: 点开列表里某一版才请求。返回摘要字段 + `analysis`（重要事件、事实与偏好变化、关系、目标承诺、待跟进话题、与上一版的差异、长期记忆变化与审核建议）+ `evidenceIndex`（依据消息 id → 来源列表序号）。来源原文不在这里。
+      responses:
+        '200':
+          description: 阶段总结详情
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, version, summary, status, kind, evidenceIndex]
+                properties:
+                  id: { type: string, format: uuid }
+                  number: { type: integer }
+                  label: { type: string }
+                  version: { type: integer }
+                  date: { type: string }
+                  range: { type: string }
+                  summary: { type: string }
+                  events: { type: integer }
+                  messages: { type: integer }
+                  status: { type: string, enum: [当前版本, 已被替代] }
+                  statusTone: { type: string, enum: [green, gray] }
+                  kind: { type: string, enum: [AUTOMATIC, MANUAL] }
+                  model:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      provider: { type: string }
+                      promptTemplateVersion: { type: string }
+                  reviewRejected: { type: integer }
+                  pendingReview: { type: integer }
+                  analysis: { type: object, description: 结构化提炼结果；旧版/手动存档可能没有 }
+                  evidenceIndex:
+                    type: object
+                    description: 依据消息 id → 在来源列表里的序号（1 起）。来源分页后靠它对上「依据 #3」。
+                    additionalProperties: { type: integer }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /characters/{characterId}/snapshots/{snapshotId}/sources:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+      - name: snapshotId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Snapshots]
+      summary: 阶段总结的来源消息与原文（分页）
+      description: 页面上展开「来源消息与原文」才请求。按来源记录创建顺序升序分页，`index` 是全量序号，翻到第几页都指同一条。
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        '200':
+          description: 来源消息分页
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, page, pageSize, totalPages]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [index, id, role, eventType, content, occurredAt]
+                      properties:
+                        index: { type: integer, minimum: 1, description: 在整份来源里的序号 }
+                        id: { type: string }
+                        role: { type: string, enum: [SYSTEM, USER, ASSISTANT, TOOL] }
+                        eventType: { type: string }
+                        content: { type: string }
+                        occurredAt: { type: string, format: date-time }
+                        conversationTitle: { type: string, nullable: true }
+                  total: { type: integer }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  totalPages: { type: integer }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /characters/{characterId}/snapshots/generate:
     parameters:
       - $ref: '#/components/parameters/CharacterId'

@@ -186,6 +186,8 @@ export type SnapshotAnalysis = {
 };
 
 export type SnapshotSourceMessage = {
+  /** 在整份来源里的序号（1 起）；来源消息分页后由服务端给，不再靠数组下标猜 */
+  index?: number;
   id: string;
   role: string;
   eventType: string;
@@ -194,6 +196,7 @@ export type SnapshotSourceMessage = {
   conversationTitle: string | null;
 };
 
+/** 列表行：只带一行能显示的字段，不含 AI 提炼结果与来源原文。 */
 export type Snapshot = {
   id: string;
   number: number;
@@ -210,9 +213,16 @@ export type Snapshot = {
   kind?: "AUTOMATIC" | "MANUAL";
   generatedBy?: string;
   model?: { name?: string; provider?: string; promptTemplateVersion?: string };
-  analysis?: SnapshotAnalysis;
   reviewRejected?: number;
-  sourceMessages?: SnapshotSourceMessage[];
+  /** 待人工处置的审核建议条数；列表角标直接用它 */
+  pendingReview?: number;
+};
+
+/** 详情：摘要 + AI 提炼结果；来源原文走 `/snapshots/{id}/sources` 分页接口。 */
+export type SnapshotDetail = Snapshot & {
+  analysis?: SnapshotAnalysis;
+  /** 依据消息 id → 来源列表里的序号；「依据 #3」靠它，不依赖当前这一页 */
+  evidenceIndex?: Record<string, number>;
 };
 
 export type DemoTask = {

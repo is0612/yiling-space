@@ -1,4 +1,4 @@
-import { toMemorySnapshotDtos, type MemorySnapshotDto } from "./memory-snapshot-dto";
+import { toMemorySnapshotDtos, type MemorySnapshotSummaryDto } from "./memory-snapshot-dto";
 
 export type MemoryTimelineEntryDto = {
   id: string;
@@ -166,7 +166,7 @@ export function toMemoryTimelineDtos(input: {
     });
   }
 
-  const snapshotDtos: MemorySnapshotDto[] = toMemorySnapshotDtos(input.snapshots, timeZone);
+  const snapshotDtos: MemorySnapshotSummaryDto[] = toMemorySnapshotDtos(input.snapshots, timeZone);
   const snapshotsById = new Map(input.snapshots.map((snapshot) => [snapshot.id, snapshot]));
   for (const snapshot of snapshotDtos) {
     const source = snapshotsById.get(snapshot.id);

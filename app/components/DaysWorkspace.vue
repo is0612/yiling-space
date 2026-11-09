@@ -57,7 +57,6 @@ const eventsPage = ref(1);
 const detail = ref<{
   day: DayRow | null;
   events: DayEvent[];
-  messageGroups: DayMessageGroup[];
   usage: { calls: number; tokens: number };
   timeZone: string;
   /** 当天忆泡总数（含已隐藏），分页控件用。 */
@@ -66,8 +65,20 @@ const detail = ref<{
   eventsPageSize: number;
   eventsTotalPages: number;
 } | null>(null);
+/**
+ * 当天原文：点「查看当天原文」才请求。
+ *
+ * 以前它跟忆泡一起返回，一天聊得多的时候（单群一天两千条）点开日期就要传几百条原文；
+ * 页面上默认只看忆泡，这部分数据其实是白拿的。现在按需取，且不分页 ——
+ * 「当天原文」本来就是一天的完整语义。
+ */
+const messageGroups = ref<DayMessageGroup[]>([]);
+const messageTotal = ref(0);
+const messagesLoading = ref(false);
+const messagesLoadedFor = ref("");
+let messagesRequestSeq = 0;
 /** 原文总数：按会话分组后要自己加总。用当天真实条数，不是「载进来的条数」。 */
-const totalMessages = computed(() => (detail.value?.messageGroups ?? []).reduce((sum, group) => sum + (group.total ?? group.messages.length), 0));
+const totalMessages = computed(() => messageTotal.value);
 /**
  * 原文里这句话是谁说的。
  *
@@ -252,6 +263,7 @@ async function loadDays(targetCharacterId = id.value) {
       detailRequestSeq += 1;
       detail.value = null;
       detailLoading.value = false;
+      resetMessages();
     }
   } catch {
     if (seq !== daysRequestSeq || targetCharacterId !== id.value || keyword !== searchQuery.value.trim()) return;
@@ -274,7 +286,6 @@ async function loadDetail(dayKey: string, targetCharacterId = id.value, page = e
     const result = await $fetch<{
       day: DayRow | null;
       events: DayEvent[];
-      messageGroups: DayMessageGroup[];
       usage: { calls: number; tokens: number };
       timeZone: string;
       eventsTotal: number;
@@ -287,7 +298,7 @@ async function loadDetail(dayKey: string, targetCharacterId = id.value, page = e
     detail.value = result;
     eventsPage.value = result.eventsPage;
     timeZone.value = result.timeZone || timeZone.value || "Asia/Shanghai";
-    showMessages.value = false;
+    resetMessages();
   } catch {
     if (seq !== detailRequestSeq || targetCharacterId !== id.value || dayKey !== selected.value) return;
     detail.value = null;
@@ -295,6 +306,51 @@ async function loadDetail(dayKey: string, targetCharacterId = id.value, page = e
   } finally {
     if (seq === detailRequestSeq) detailLoading.value = false;
   }
+}
+
+/** 换日期就丢掉上一天的原文：留着会在新一天下面短暂显示别人的对话。 */
+function resetMessages() {
+  messagesRequestSeq += 1;
+  showMessages.value = false;
+  messagesLoading.value = false;
+  messageGroups.value = [];
+  messageTotal.value = 0;
+  messagesLoadedFor.value = "";
+}
+
+async function loadMessages(dayKey: string, targetCharacterId = id.value) {
+  if (!dayKey || !targetCharacterId || targetCharacterId !== id.value) return;
+  const seq = ++messagesRequestSeq;
+  messagesLoading.value = true;
+  try {
+    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/days/${encodeURIComponent(dayKey)}/messages`;
+    const result = await $fetch<{
+      dayKey: string;
+      timeZone: string;
+      messageGroups: DayMessageGroup[];
+      totalMessages: number;
+    }>(url);
+    if (seq !== messagesRequestSeq || targetCharacterId !== id.value || dayKey !== selected.value) return;
+    messageGroups.value = result.messageGroups;
+    messageTotal.value = result.totalMessages;
+    messagesLoadedFor.value = dayKey;
+  } catch {
+    if (seq !== messagesRequestSeq || targetCharacterId !== id.value || dayKey !== selected.value) return;
+    messageGroups.value = [];
+    messageTotal.value = 0;
+    messagesLoadedFor.value = "";
+    ElMessage.error("当天原文读取失败，请检查本地开发服务器日志。");
+  } finally {
+    if (seq === messagesRequestSeq) messagesLoading.value = false;
+  }
+}
+
+/** 展开才请求；收起只是不显示，已经取到的原文保留着，再点开不用重新拉。 */
+function toggleMessages() {
+  showMessages.value = !showMessages.value;
+  if (!showMessages.value) return;
+  if (messagesLoadedFor.value === selected.value) return;
+  void loadMessages(selected.value);
 }
 
 const { lastFinished } = useMemoryProgress();
@@ -318,6 +374,7 @@ watch(id, () => {
   detail.value = null;
   loading.value = false;
   detailLoading.value = false;
+  resetMessages();
   editOpen.value = false;
   editing.value = null;
   editSaving.value = false;
@@ -350,6 +407,7 @@ watch(searchQuery, () => {
   selected.value = "";
   detail.value = null;
   detailLoading.value = false;
+  resetMessages();
   loading.value = true;
   searchTimer = setTimeout(() => {
     searchTimer = null;
@@ -360,6 +418,7 @@ onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
   daysRequestSeq += 1;
   detailRequestSeq += 1;
+  messagesRequestSeq += 1;
   editSaveSeq += 1;
 });
 
@@ -563,16 +622,28 @@ await loadDays();
             <button
               type="button"
               class="btn"
-              @click="showMessages = !showMessages"
+              @click="toggleMessages"
             >
-              {{ showMessages ? "收起原文" : `查看当天原文（${totalMessages} 条）` }}
+              {{ showMessages ? "收起原文" : messagesLoadedFor === selected ? `查看当天原文（${totalMessages} 条）` : "查看当天原文" }}
             </button>
             <div
               v-if="showMessages"
               class="original-list"
             >
+              <p
+                v-if="messagesLoading && !messageGroups.length"
+                class="muted-note original-empty"
+              >
+                正在读取当天原文……
+              </p>
+              <p
+                v-else-if="!messageGroups.length"
+                class="muted-note original-empty"
+              >
+                这一天没有可追溯的对话原文。
+              </p>
               <template
-                v-for="group in detail.messageGroups"
+                v-for="group in messageGroups"
                 :key="group.id"
               >
                 <p class="original-group">
@@ -683,6 +754,7 @@ await loadDays();
 .archived-title { font-size: 13px; color: var(--faint); }
 .day-originals { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 14px; }
 .original-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.original-empty { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); }
 .original-group { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
 .original-group-n { font-weight: 400; color: var(--faint); font-size: 12px; }
 .original-line { display: flex; gap: 8px; font-size: 13px; line-height: 1.7; }

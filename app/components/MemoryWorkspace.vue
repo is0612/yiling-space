@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowDown, Collection, Search, Delete } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { type Character, type TimelineEntry, type TimelineType } from "~/utils/mock-data";
+import { type Character } from "~/utils/mock-data";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
 
 type MemoryCategory = "FACT" | "PREFERENCE" | "RELATIONSHIP" | "COMMITMENT" | "GOAL" | "EVENT" | "SUMMARY" | "OTHER";
@@ -27,6 +27,32 @@ type MemoryDetail = {
     version: number;
     status: string;
   } | null;
+};
+type MemoryRow = {
+  id: string;
+  category: string;
+  content: string;
+  status: string;
+  scopeType: string;
+  importance: number;
+  validTo: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+type MemoryPage = {
+  items: MemoryRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+type MemoryStats = {
+  memory: number;
+  commitment: number;
+  message: number;
+  event: number;
+  snapshot: number;
+  memoryEvent: number;
 };
 type RecycleBinEntry = {
   id: string;
@@ -77,23 +103,43 @@ const conversationDialogOpen = ref(false);
 const conversationSaving = ref(false);
 const draftConversationTitle = ref("");
 const draftTranscript = ref("");
-const timelineEntries = ref<TimelineEntry[]>([]);
-/** 服务端直接数的全量条数（不受「只载最近 N 条」影响） */
-const timelineCounts = ref({ message: 0, event: 0, memory: 0, snapshot: 0, memoryEvent: 0 });
-/** 每天的整理进度（按角色时区）：日期头显示「上次整理几点」、今天是否还在长。 */
-type TimelineDay = { dayKey: string; state: "DRAFT" | "FINAL"; eventCount: number; extractedAt: string | null };
-const timelineDays = ref<Record<string, TimelineDay>>({});
-/** 角色时区里的「今天」，由服务端给，前端不自己算。 */
-const todayKey = ref("");
-const timelineLoading = ref(false);
+
+/**
+ * 长期记忆列表：一页一条请求，分页 / 搜索 / 范围筛选都在服务端。
+ *
+ * 以前是 `/timeline?kinds=memory&limit=400` 拉 400 条，再在页面上切「加载更多」——
+ * 翻不回去、也不知道总共多少条。现在这一页只拿当前页，页码由服务端给。
+ */
+const PAGE_SIZE = 10;
+const memoryRows = ref<MemoryRow[]>([]);
+const memoryTotal = ref(0);
+const memoryPage = ref(1);
+const memoryTotalPages = ref(1);
+const memoryLoading = ref(false);
+const query = ref("");
+/** 范围筛选和原来下拉里的「记忆范围」同一档，不再从返回数据里反推选项 */
+const scopeFilter = ref<"ALL" | "CHARACTER_GLOBAL" | "USER_PRIVATE" | "EXTERNAL_IDENTITY">("ALL");
+const scopeOptions = [
+  { label: "全部范围", value: "ALL" },
+  { label: "长期记忆", value: "CHARACTER_GLOBAL" },
+  { label: "私人记忆", value: "USER_PRIVATE" },
+  { label: "外部身份", value: "EXTERNAL_IDENTITY" },
+] as const;
+/** 统计带用的几个计数（单独一个接口，不跟着每页列表来回传） */
+const memoryStats = ref<MemoryStats>({ memory: 0, commitment: 0, message: 0, event: 0, snapshot: 0, memoryEvent: 0 });
 const recycleBinOpen = ref(false);
 const recycleBinLoading = ref(false);
 const recycleBinEntries = ref<RecycleBinEntry[]>([]);
+/** 回收站也会长：一次只取一页，跟长期记忆列表同一套参数。 */
+const RECYCLE_PAGE_SIZE = 10;
+const recycleBinPage = ref(1);
+const recycleBinTotal = ref(0);
+const recycleBinTotalPages = ref(1);
 const recycleBinBusyIds = ref<string[]>([]);
 
 /**
- * 群聊记录：群聊挂在角色全局记忆范围下，本来就算她的记忆，但时间线只取长期记忆
- * （`kinds=memory`），原始消息不进这条流，所以页面上看不到。
+ * 群聊记录：群聊挂在角色全局记忆范围下，本来就算她的记忆，但长期记忆列表只取记忆条目，
+ * 原始消息不进这条流，所以页面上看不到。
  * 这里按群号单独拉一份：左列是群，右边是她和群友的往来。
  */
 type GroupChatGroup = {
@@ -153,32 +199,12 @@ const privateChatSelectedId = ref("");
 const privateChatHasMore = ref(false);
 const privateChatNextCursor = ref<PrivateChatCursor>(null);
 const selectedPrivateChat = computed(() => privateChatChats.value.find((chat) => chat.conversationId === privateChatSelectedId.value) ?? null);
-/**
- * 统计带用服务端的全量计数，不用「已载入条数」——
- * 这条流只载长期记忆（不含消息），拿载入数当统计会显示成 0。
- */
-const recordedMessageCount = computed(() => timelineCounts.value.message);
-const recordedEventCount = computed(() => timelineCounts.value.event);
-const commitmentCount = computed(() => timelineEntries.value.filter((entry) => entry.type === "memory" && entry.title === "承诺与约定" && entry.tag === "长期记忆").length);
-/** 长期记忆的总量 vs 实际载入量：差值为「没载进来的更早记录」 */
-const loadedTotal = computed(() => timelineEntries.value.length);
-const knownTotal = computed(() => timelineCounts.value.memory);
-const truncated = computed(() => knownTotal.value > loadedTotal.value);
-/**
- * 来源筛选，而不是「渠道」筛选：服务端 timeline 的 channel 里混了两个维度 ——
- * 真实渠道（连接名 / 本地会话）和长期记忆的范围（长期记忆 / 私人记忆）。
- * 挤在一个没有标签的下拉里，选「长期记忆」实际筛出的是「所有非私人记忆条目」。
- * 这里按维度分组；阶段总结的「全部渠道」是跨渠道汇总，仍按通配处理。
- */
-const SOURCE_ALL = "全部来源";
-const SOURCE_WILDCARD = "全部渠道";
-const MEMORY_SCOPE_SOURCES = new Set(["长期记忆", "私人记忆"]);
-const realChannelOptions = computed(() => [...new Set(timelineEntries.value
-  .map((entry) => entry.channel)
-  .filter((channel) => channel !== SOURCE_WILDCARD && !MEMORY_SCOPE_SOURCES.has(channel)))].sort());
-const memoryScopeOptions = computed(() => [...new Set(timelineEntries.value
-  .map((entry) => entry.channel)
-  .filter((channel) => MEMORY_SCOPE_SOURCES.has(channel)))].sort());
+
+/** 统计带用的计数全部来自 `/memory-stats`，不拿「这一页的条数」当统计。 */
+const recordedMessageCount = computed(() => memoryStats.value.message);
+const recordedEventCount = computed(() => memoryStats.value.event);
+const commitmentCount = computed(() => memoryStats.value.commitment);
+
 /**
  * 角色档案还没到 / 读取失败时的占位。
  * 以前这里 spread 了 initialCharacters[0]，于是兜底会捎上示例角色的头像、色调和人设；
@@ -201,178 +227,11 @@ const emptyCharacter = computed<Character>(() => ({
   latestSnapshot: "暂无总结",
 }));
 const character = computed<Character>(() => currentCharacter.value ?? emptyCharacter.value);
-const activeFilter = ref("长期记忆");
-const channelFilter = ref(SOURCE_ALL);
-const query = ref("");
-/**
- * 这页是「记忆中枢」，不是聊天记录查看器：主列表只放长期记忆。
- * 对话原文走「群聊记录 / 私聊记录」弹窗，否则聊天一多就会把记忆挤出取数窗口。
- */
-const filterOptions = [{ label: "长期记忆", type: "memory" as TimelineType }];
+
 /**
  * 排序：最新在最前，直接沿用服务端给的顺序。
- *
- * `/timeline` 已经按真实时间戳倒序取回（忆泡看 occurredAt、记忆看 updatedAt、
- * 总结看 createdAt），跨天与同一天都是准确的。这里只筛选、不重排：
- * 以前默认「同一天里忆泡整类排在记忆前面」，于是 09:00 的忆泡压在 23:00 刚更新过的
- * 记忆上方，看着就不像时间线；而 `time` 是给人看的字符串（记忆 `2026/11/05 14:20`、
- * 总结 `2026-11-05`），拿它比大小等于按格式排、不是按时间排。
+ * 记忆按 `updatedAt` 倒序、同时间按 id，翻页边界不会重复或漏条。
  */
-const filteredEntries = computed(() => {
-  const type = filterOptions.find((option) => option.label === activeFilter.value)?.type;
-  return timelineEntries.value.filter((entry) => {
-    const typeMatches = !type || entry.type === type;
-    const sourceMatches = channelFilter.value === SOURCE_ALL
-      || entry.channel === SOURCE_WILDCARD
-      || entry.channel === channelFilter.value;
-    const textMatches = !query.value || `${entry.title} ${entry.summary} ${entry.source}`.toLowerCase().includes(query.value.toLowerCase());
-    return typeMatches && sourceMatches && textMatches;
-  });
-});
-
-/** 时间线一屏只放一页，避免 20+ 条把页面拉成 2700px 的长卷 */
-const PAGE_SIZE = 10;
-const visibleCount = ref(PAGE_SIZE);
-const pagedEntries = computed(() => filteredEntries.value.slice(0, visibleCount.value));
-watch([activeFilter, channelFilter, query], () => {
-  visibleCount.value = PAGE_SIZE;
-});
-
-/**
- * 按天分组：条目按时间倒序，「同一天」一定是连续的，所以只需要判断这一天变了没有。
- * 日期直接用服务端渲染好的 time 前缀（已经按角色时区格式化），前端不再重算时区。
- */
-function dayKeyOf(entry: TimelineEntry) {
-  // 记忆条目用 zh-CN（2026/10/29），快照用 en-CA（2026-10-29）—— 不归一化会把同一天拆成两组。
-  return entry.time.slice(0, 10).replace(/\//g, "-");
-}
-const dayStats = computed(() => {
-  const map = new Map<string, { count: number; draft: number }>();
-  // 统计用「筛选后的全部条目」，不是当前这一页：一天被分页截断时，
-  // 日期头仍应显示这一天真实有几条，而不是本页看到的几条。
-  for (const entry of filteredEntries.value) {
-    const key = dayKeyOf(entry);
-    const row = map.get(key) ?? { count: 0, draft: 0 };
-    row.count += 1;
-    if (entry.type === "memoryEvent" && entry.tag === "还在记") row.draft += 1;
-    map.set(key, row);
-  }
-  return map;
-});
-function isDayStart(index: number) {
-  if (index === 0) return true;
-  const current = pagedEntries.value[index];
-  const previous = pagedEntries.value[index - 1];
-  return Boolean(current && previous) && dayKeyOf(current!) !== dayKeyOf(previous!);
-}
-/** 日期键加减天数（跨月/跨年都按 UTC 日历算，不碰时区）。 */
-function shiftDayKey(key: string, delta: number) {
-  const [year, month, day] = key.split("-").map(Number);
-  if (!year || !month || !day) return key;
-  const shifted = new Date(Date.UTC(year, month - 1, day + delta));
-  const y = shifted.getUTCFullYear();
-  const m = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(shifted.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-function dayLabelAt(index: number) {
-  const entry = pagedEntries.value[index];
-  if (!entry) return "";
-  const key = dayKeyOf(entry);
-  const stats = dayStats.value.get(key);
-  const suffix = stats ? ` · ${stats.count} 条` : "";
-  // 「今天 / 昨天」按服务端给的角色时区算，前端不自己猜。
-  if (todayKey.value && key === todayKey.value) return `今天${suffix}`;
-  if (todayKey.value && key === shiftDayKey(todayKey.value, -1)) return `昨天${suffix}`;
-  const [year, month, day] = key.split("-");
-  const label = year && month && day
-    ? `${year} 年 ${Number(month)} 月 ${Number(day)} 日`
-    : key;
-  return label + suffix;
-}
-function dayHasDraftAt(index: number) {
-  const entry = pagedEntries.value[index];
-  if (!entry) return false;
-  return (dayStats.value.get(dayKeyOf(entry))?.draft ?? 0) > 0;
-}
-/** 最近的整理时刻：让人知道「今天这几条」有多新。 */
-function formatClock(iso: string | null | undefined) {
-  if (!iso) return "";
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "";
-  const hour = String(at.getHours()).padStart(2, "0");
-  const minute = String(at.getMinutes()).padStart(2, "0");
-  return `${hour}:${minute}`;
-}
-function dayExtractedAt(index: number) {
-  const entry = pagedEntries.value[index];
-  if (!entry) return "";
-  const clock = formatClock(timelineDays.value[dayKeyOf(entry)]?.extractedAt);
-  return clock ? `上次整理 ${clock}` : "";
-}
-
-/** 筛选计数使用服务端的长期记忆全量计数。 */
-function countFor(label: string) {
-  const type = filterOptions.find((option) => option.label === label)?.type;
-  return type === "memory" ? timelineCounts.value.memory : knownTotal.value;
-}
-
-type TimelineResponse = {
-  entries: TimelineEntry[];
-  counts: { message: number; event: number; memory: number; snapshot: number; memoryEvent: number };
-  days: TimelineDay[];
-  today: string;
-};
-
-let timelineRequestSeq = 0;
-async function loadTimeline(targetCharacterId = id.value) {
-  const seq = ++timelineRequestSeq;
-  if (targetCharacterId !== id.value) return;
-  timelineLoading.value = true;
-  try {
-    // 只取长期记忆：400 条窗口不混入消息、忆泡与阶段总结。
-    const result = await $fetch<TimelineResponse>(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/timeline?kinds=memory&limit=400`,
-    );
-    if (seq !== timelineRequestSeq || targetCharacterId !== id.value) return;
-    timelineEntries.value = result.entries;
-    timelineCounts.value = result.counts;
-    timelineDays.value = Object.fromEntries(result.days.map((day) => [day.dayKey, day]));
-    todayKey.value = result.today;
-  } catch {
-    if (seq !== timelineRequestSeq || targetCharacterId !== id.value) return;
-    timelineEntries.value = [];
-    timelineCounts.value = { message: 0, event: 0, memory: 0, snapshot: 0, memoryEvent: 0 };
-    timelineDays.value = {};
-    todayKey.value = "";
-    ElMessage.error("记忆时间线读取失败，请检查本地开发服务器日志。");
-  } finally {
-    if (seq === timelineRequestSeq) timelineLoading.value = false;
-  }
-}
-
-// ── 全库检索 ────────────────────────────────────────────────
-/**
- * 时间线只载最近 400 条，所以「找三个月前那条偏好」必须走服务端。
- * 搜索框一有内容就切换到检索模式（列表换成检索结果），清空即回到时间线。
- * 游标翻页由服务端给，前端只管往后追加。
- */
-type MemoryRow = {
-  id: string;
-  category: string;
-  content: string;
-  status: string;
-  scopeType: string;
-  importance: number;
-  validTo: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-const searchRows = ref<MemoryRow[]>([]);
-const searchTotal = ref(0);
-const searchCursor = ref<string | null>(null);
-const searchLoading = ref(false);
 const isSearching = computed(() => query.value.trim().length > 0);
 
 const MEMORY_STATUS_TONE: Record<string, string> = {
@@ -388,11 +247,12 @@ function memoryStatusTone(status: string) {
 function memoryCategoryLabel(category: string) {
   return memoryCategoryOptions.find((option) => option.value === category)?.label ?? category;
 }
+/** 列表里的时间是溯源信息，要能看出「哪天几点改的」 */
 function formatMemoryTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "时间未知"
-    : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(date);
+    : new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 /** 记忆范围的三档（和 MemoryScopeType 对齐，别把 EXTERNAL_IDENTITY 也念成「长期记忆」） */
 const MEMORY_SCOPE_LABELS: Record<string, string> = {
@@ -404,54 +264,88 @@ function memoryScopeLabel(scopeType: string) {
   return MEMORY_SCOPE_LABELS[scopeType] ?? "长期记忆";
 }
 
-let searchRequestSeq = 0;
-function resetSearch() {
-  searchRequestSeq += 1;
-  searchRows.value = [];
-  searchTotal.value = 0;
-  searchCursor.value = null;
-  searchLoading.value = false;
-}
+let listRequestSeq = 0;
+let statsRequestSeq = 0;
 
-async function runSearch(reset: boolean) {
-  if (!isSearching.value) return;
-  if (!reset && !searchCursor.value) return;
-  const seq = ++searchRequestSeq;
-  const targetCharacterId = id.value;
-  const targetQuery = query.value.trim();
-  searchLoading.value = true;
+async function loadMemories(targetPage = memoryPage.value) {
+  const requestedCharacterId = id.value;
+  if (!requestedCharacterId) {
+    memoryRows.value = [];
+    memoryTotal.value = 0;
+    memoryPage.value = 1;
+    memoryTotalPages.value = 1;
+    memoryLoading.value = false;
+    return;
+  }
+  const seq = ++listRequestSeq;
+  const keyword = query.value.trim();
+  memoryLoading.value = true;
   try {
-    const params = new URLSearchParams({ limit: "30", q: targetQuery });
-    if (!reset && searchCursor.value) params.set("cursor", searchCursor.value);
-    const result = await $fetch<{ items: MemoryRow[]; total: number; nextCursor: string | null }>(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/memories?${params.toString()}`,
+    const params = new URLSearchParams({ page: String(targetPage), pageSize: String(PAGE_SIZE) });
+    if (keyword) params.set("q", keyword);
+    if (scopeFilter.value !== "ALL") params.set("scope", scopeFilter.value);
+    const result = await $fetch<MemoryPage>(
+      `/api/characters/${encodeURIComponent(requestedCharacterId)}/memories?${params.toString()}`,
     );
-    if (seq !== searchRequestSeq || targetCharacterId !== id.value || targetQuery !== query.value.trim()) return;
-    searchRows.value = reset ? result.items : [...searchRows.value, ...result.items];
-    searchTotal.value = result.total;
-    searchCursor.value = result.nextCursor;
+    if (seq !== listRequestSeq || requestedCharacterId !== id.value || keyword !== query.value.trim()) return;
+    memoryRows.value = result.items;
+    memoryTotal.value = result.total;
+    memoryPage.value = result.page;
+    memoryTotalPages.value = result.totalPages;
   } catch {
-    if (seq !== searchRequestSeq || targetCharacterId !== id.value || targetQuery !== query.value.trim()) return;
-    if (reset) resetSearch();
-    ElMessage.error("记忆检索失败，请检查本地开发服务器日志。");
+    if (seq !== listRequestSeq || requestedCharacterId !== id.value) return;
+    memoryRows.value = [];
+    memoryTotal.value = 0;
+    memoryTotalPages.value = 1;
+    ElMessage.error("长期记忆读取失败，请检查本地开发服务器日志。");
   } finally {
-    if (seq === searchRequestSeq) searchLoading.value = false;
+    if (seq === listRequestSeq) memoryLoading.value = false;
   }
 }
 
+async function loadStats(targetCharacterId = id.value) {
+  const seq = ++statsRequestSeq;
+  if (!targetCharacterId || targetCharacterId !== id.value) return;
+  try {
+    const result = await $fetch<MemoryStats>(
+      `/api/characters/${encodeURIComponent(targetCharacterId)}/memory-stats`,
+    );
+    if (seq === statsRequestSeq && targetCharacterId === id.value) memoryStats.value = result;
+  } catch {
+    if (seq !== statsRequestSeq || targetCharacterId !== id.value) return;
+    memoryStats.value = { memory: 0, commitment: 0, message: 0, event: 0, snapshot: 0, memoryEvent: 0 };
+  }
+}
+
+/** 筛选是服务端参数：点一下就是一次新请求，不再本地过滤一整批。 */
+function changePage(next: number) {
+  if (next === memoryPage.value) return;
+  memoryPage.value = next;
+  void loadMemories(next);
+}
+function changeScope(next: string) {
+  const value = next as typeof scopeFilter.value;
+  if (scopeFilter.value === value) return;
+  scopeFilter.value = value;
+  memoryPage.value = 1;
+  void loadMemories(1);
+}
 /** 防抖 300ms：找一条记忆不该每敲一个字打一次库 */
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 watch(query, () => {
   if (searchTimer) clearTimeout(searchTimer);
-  resetSearch();
-  if (!isSearching.value) return;
-  searchTimer = setTimeout(() => void runSearch(true), 300);
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    memoryPage.value = 1;
+    void loadMemories(1);
+  }, 300);
 });
+
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
   characterLoadSeq += 1;
-  timelineRequestSeq += 1;
-  searchRequestSeq += 1;
+  listRequestSeq += 1;
+  statsRequestSeq += 1;
   recycleBinRequestSeq += 1;
   memoryDetailRequestSeq += 1;
   groupChatRequestSeq += 1;
@@ -459,24 +353,28 @@ onBeforeUnmount(() => {
 });
 
 let characterLoadSeq = 0;
+/** 写操作（新增 / 编辑 / 归档 / 删除）之后统一刷新：当前页 + 统计带。 */
+async function refreshMemoryPage() {
+  await Promise.all([loadMemories(), loadStats()]);
+}
 async function loadCharacter() {
   const requestedCharacterId = id.value;
   const seq = ++characterLoadSeq;
   // 角色列表为空 / 还没解析出 id 时不要发请求，否则会打出无意义的 404 提示
   if (!requestedCharacterId) {
     currentCharacter.value = null;
-    timelineEntries.value = [];
+    memoryRows.value = [];
     return;
   }
   try {
     const result = await $fetch<Character>(`/api/characters/${encodeURIComponent(requestedCharacterId)}`);
     if (seq !== characterLoadSeq || requestedCharacterId !== id.value) return;
     currentCharacter.value = result;
-    await loadTimeline(requestedCharacterId);
+    await Promise.all([loadMemories(1), loadStats(requestedCharacterId)]);
   } catch {
     if (seq !== characterLoadSeq || requestedCharacterId !== id.value) return;
     currentCharacter.value = null;
-    timelineEntries.value = [];
+    memoryRows.value = [];
     ElMessage.error("加载角色失败，请确认角色仍存在且本地数据库已初始化。");
   }
 }
@@ -502,8 +400,9 @@ async function saveMemory() {
     draftMemoryContent.value = "";
     draftMemoryCategory.value = "FACT";
     draftMemoryScope.value = "character";
+    memoryPage.value = 1;
     await loadCharacter();
-    ElMessage.success("长期记忆已保存到数据库，并加入时间线。");
+    ElMessage.success("长期记忆已保存到数据库，并加入列表。");
   } catch (error) {
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
@@ -516,7 +415,7 @@ async function saveMemory() {
 
 /**
  * 打开某条记忆的详情（内容 + 来源）。
- * 时间线行和检索结果都走这里：时间线行的 id 是 `memory:<uuid>`，检索结果直接就是 uuid。
+ * 列表行的 id 就是记忆条目 id，详情走 `/api/memories/{id}`。
  */
 let memoryDetailRequestSeq = 0;
 async function openMemoryDetail(memoryId: string) {
@@ -549,9 +448,8 @@ async function openMemoryDetail(memoryId: string) {
   }
 }
 
-function openMemoryEditor(entry: TimelineEntry) {
-  const memoryId = entry.id.startsWith("memory:") ? entry.id.slice("memory:".length) : "";
-  void openMemoryDetail(memoryId);
+function openMemoryEditor(row: MemoryRow) {
+  void openMemoryDetail(row.id);
 }
 
 /** 来源区的说话人标签：消息按角色，平台事件单独标 */
@@ -596,7 +494,7 @@ async function saveEditedMemory() {
     });
     if (targetCharacterId !== id.value || targetMemoryId !== editingMemoryId.value || detailSeq !== memoryDetailRequestSeq) return;
     memoryEditDialogOpen.value = false;
-    await loadCharacter();
+    await refreshMemoryPage();
     ElMessage.success("长期记忆已更新。已有阶段总结会保留生成时的历史内容。");
   } catch (error) {
     if (targetCharacterId !== id.value || targetMemoryId !== editingMemoryId.value || detailSeq !== memoryDetailRequestSeq) return;
@@ -609,9 +507,8 @@ async function saveEditedMemory() {
   }
 }
 
-async function setMemoryStatus(entry: TimelineEntry, status: "active" | "archived" | "invalidated") {
-  const memoryId = entry.id.startsWith("memory:") ? entry.id.slice("memory:".length) : "";
-  if (!memoryId) return;
+async function setMemoryStatus(row: MemoryRow, status: "active" | "archived" | "invalidated") {
+  if (!row.id) return;
 
   const actionLabel = status === "archived" ? "归档" : status === "invalidated" ? "标记失效" : "恢复为有效";
   try {
@@ -625,11 +522,11 @@ async function setMemoryStatus(entry: TimelineEntry, status: "active" | "archive
   }
 
   try {
-    await $fetch(`/api/memories/${encodeURIComponent(memoryId)}`, {
+    await $fetch(`/api/memories/${encodeURIComponent(row.id)}`, {
       method: "PATCH",
       body: { status },
     });
-    await loadCharacter();
+    await refreshMemoryPage();
     ElMessage.success(`记忆已${actionLabel}。`);
   } catch (error) {
     const message = error && typeof error === "object" && "statusMessage" in error
@@ -640,12 +537,12 @@ async function setMemoryStatus(entry: TimelineEntry, status: "active" | "archive
 }
 
 /** 行内「更多」菜单：状态类操作收进菜单，一行只留「编辑」+ 一个入口 */
-async function runMemoryCommand(entry: TimelineEntry, command: string) {
+async function runMemoryCommand(row: MemoryRow, command: string) {
   if (command === "trash") {
-    await moveMemoryToTrash(entry);
+    await moveMemoryToTrash(row);
     return;
   }
-  await setMemoryStatus(entry, command as "active" | "archived" | "invalidated");
+  await setMemoryStatus(row, command as "active" | "archived" | "invalidated");
 }
 
 function memoryStatusText(status: string | null | undefined) {
@@ -664,42 +561,59 @@ function formatRecycleDate(value: string | null) {
 }
 
 let recycleBinRequestSeq = 0;
-async function loadRecycleBin(targetCharacterId = id.value) {
+async function loadRecycleBin(targetPage = recycleBinPage.value, targetCharacterId = id.value) {
   const seq = ++recycleBinRequestSeq;
   if (targetCharacterId !== id.value) return;
   recycleBinLoading.value = true;
   try {
-    const result = await $fetch<RecycleBinEntry[]>(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/memories/trash`,
-    );
-    if (seq === recycleBinRequestSeq && targetCharacterId === id.value) recycleBinEntries.value = result;
+    const result = await $fetch<{
+      items: RecycleBinEntry[];
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+    }>(`/api/characters/${encodeURIComponent(targetCharacterId)}/memories/trash?page=${targetPage}&pageSize=${RECYCLE_PAGE_SIZE}`);
+    if (seq !== recycleBinRequestSeq || targetCharacterId !== id.value) return;
+    recycleBinEntries.value = result.items;
+    recycleBinTotal.value = result.total;
+    recycleBinPage.value = result.page;
+    recycleBinTotalPages.value = result.totalPages;
   } catch {
     if (seq !== recycleBinRequestSeq || targetCharacterId !== id.value) return;
     recycleBinEntries.value = [];
+    recycleBinTotal.value = 0;
+    recycleBinTotalPages.value = 1;
     ElMessage.error("回收站加载失败，请检查本地开发服务器日志。");
   } finally {
     if (seq === recycleBinRequestSeq) recycleBinLoading.value = false;
   }
 }
 
+/** 打开总回到第 1 页：停在上次翻到的那页会让人以为回收站里只剩这些。 */
 async function openRecycleBin() {
   recycleBinOpen.value = true;
-  await loadRecycleBin();
+  recycleBinPage.value = 1;
+  await loadRecycleBin(1);
 }
 
-async function moveMemoryToTrash(entry: TimelineEntry) {
-  const memoryId = entry.id.startsWith("memory:") ? entry.id.slice("memory:".length) : "";
-  if (!memoryId) return;
+function changeRecycleBinPage(next: number) {
+  if (next === recycleBinPage.value) return;
+  recycleBinPage.value = next;
+  void loadRecycleBin(next);
+}
+
+async function moveMemoryToTrash(row: MemoryRow) {
+  if (!row.id) return;
   try {
     await ElMessageBox.confirm(
-      "这条记忆将从主时间线和当前长期记忆集合中移出，但不会被立即永久删除。你可以在回收站中恢复。已有阶段总结会保留生成时的历史副本。",
+      "这条记忆将从当前长期记忆集合中移出，但不会被立即永久删除。你可以在回收站中恢复。已有阶段总结会保留生成时的历史副本。",
       "移入记忆回收站",
       { confirmButtonText: "移入回收站", cancelButtonText: "取消", type: "warning" },
     );
   } catch { return; }
   try {
-    await $fetch(`/api/memories/${encodeURIComponent(memoryId)}/trash`, { method: "POST" });
-    await loadCharacter();
+    await $fetch(`/api/memories/${encodeURIComponent(row.id)}/trash`, { method: "POST" });
+    await refreshMemoryPage();
     if (recycleBinOpen.value) await loadRecycleBin();
     ElMessage.success("记忆已移入回收站，可随时恢复。");
   } catch (error) {
@@ -715,7 +629,7 @@ async function restoreTrashedMemory(memory: RecycleBinEntry) {
   recycleBinBusyIds.value.push(memory.id);
   try {
     await $fetch(`/api/memories/${encodeURIComponent(memory.id)}/restore`, { method: "POST" });
-    await Promise.all([loadRecycleBin(), loadCharacter()]);
+    await Promise.all([loadRecycleBin(), refreshMemoryPage()]);
     ElMessage.success(`记忆已恢复为“${memoryStatusText(memory.statusBeforeTrash)}”状态。`);
   } catch (error) {
     const message = error && typeof error === "object" && "statusMessage" in error
@@ -742,7 +656,7 @@ async function permanentlyDeleteMemory(memory: RecycleBinEntry) {
       `/api/memories/${encodeURIComponent(memory.id)}`,
       { method: "DELETE" },
     );
-    await Promise.all([loadRecycleBin(), loadCharacter()]);
+    await Promise.all([loadRecycleBin(), refreshMemoryPage()]);
     ElMessage.success(`当前记忆条目已永久删除；保留了 ${result.preservedSnapshotReferences} 条历史来源记录，既有阶段总结未被改写。`);
   } catch (error) {
     const message = error && typeof error === "object" && "statusMessage" in error
@@ -797,8 +711,8 @@ async function saveConversation() {
     conversationDialogOpen.value = false;
     draftConversationTitle.value = "";
     draftTranscript.value = "";
-    await loadCharacter();
-    ElMessage.success(`已保存 ${result.messageCount} 条对话消息并刷新时间线。${result.timestampsEstimated ? "消息时间按录入顺序估算。" : ""}`);
+    await refreshMemoryPage();
+    ElMessage.success(`已保存 ${result.messageCount} 条对话消息并刷新统计。${result.timestampsEstimated ? "消息时间按录入顺序估算。" : ""}`);
   } catch (error) {
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
@@ -809,12 +723,6 @@ async function saveConversation() {
   }
 }
 
-function toneFor(tagTone: string) {
-  return ({ green: "pill-green", purple: "pill-purple", blue: "pill-blue", amber: "pill-amber", gray: "pill-gray" } as Record<string, string>)[tagTone] || "pill-gray";
-}
-function markerFor(type: TimelineType) {
-  return type === "message" ? "对" : type === "memory" ? "忆" : type === "snapshot" ? "档" : "事";
-}
 function formatSourceTime(value: string) {
   const date = new Date(value);
   return Number.isFinite(date.getTime())
@@ -825,12 +733,12 @@ function formatSourceTime(value: string) {
  * 归档/整理转到后台跑完之后，把列表刷一遍。
  *
  * 面板轮询一直在跑（它读的是任务行），这里只是接住「某个任务刚结束」这个信号：
- * 归档可能更新长期记忆，完成后同步时间线内容。
+ * 归档可能更新长期记忆，完成后同步列表内容与统计。
  */
 const { lastFinished } = useMemoryProgress();
 watch(lastFinished, (job) => {
   if (!job || job.characterId !== id.value) return;
-  void loadTimeline();
+  void refreshMemoryPage();
 });
 
 /**
@@ -986,17 +894,24 @@ onMounted(() => void loadCharacter());
 watch(id, () => {
   // Invalidate every in-flight read and discard data tied to the previous character.
   characterLoadSeq += 1;
-  timelineRequestSeq += 1;
+  listRequestSeq += 1;
+  statsRequestSeq += 1;
   recycleBinRequestSeq += 1;
   memoryDetailRequestSeq += 1;
   privateChatRequestSeq += 1;
   groupChatRequestSeq += 1;
   currentCharacter.value = null;
-  timelineEntries.value = [];
-  timelineCounts.value = { message: 0, event: 0, memory: 0, snapshot: 0, memoryEvent: 0 };
-  timelineDays.value = {};
-  resetSearch();
+  memoryRows.value = [];
+  memoryTotal.value = 0;
+  memoryPage.value = 1;
+  memoryTotalPages.value = 1;
+  memoryStats.value = { memory: 0, commitment: 0, message: 0, event: 0, snapshot: 0, memoryEvent: 0 };
+  query.value = "";
+  scopeFilter.value = "ALL";
   recycleBinEntries.value = [];
+  recycleBinPage.value = 1;
+  recycleBinTotal.value = 0;
+  recycleBinTotalPages.value = 1;
   recycleBinOpen.value = false;
   recycleBinLoading.value = false;
   memoryDialogOpen.value = false;
@@ -1004,9 +919,7 @@ watch(id, () => {
   memoryEditLoading.value = false;
   editingMemoryId.value = "";
   draftEditMemoryContent.value = "";
-  channelFilter.value = SOURCE_ALL;
   if (searchTimer) clearTimeout(searchTimer);
-  if (isSearching.value) void runSearch(true);
   // 换角色时两个记录抽屉都必须关掉，否则会停在上一只鱼的记录上。
   groupChatOpen.value = false;
   groupChatGroups.value = [];
@@ -1054,14 +967,14 @@ watch(id, () => {
       <div class="card stat-band">
         <div class="sb-cell">
           <span class="sb-k">长期记忆</span>
-          <span class="sb-v">{{ character.memoryCount }}<small>条</small></span>
+          <span class="sb-v">{{ memoryStats.memory }}<small>条</small></span>
           <span class="sb-f">承诺与约定 {{ commitmentCount }} 项</span>
         </div>
         <div class="sb-cell">
           <span class="sb-k">已记录对话</span>
-          <span class="sb-v">{{ timelineLoading ? "—" : recordedMessageCount }}<small>条</small></span>
+          <span class="sb-v">{{ recordedMessageCount }}<small>条</small></span>
           <span class="sb-f sb-f-wrap">
-            平台事件 {{ timelineLoading ? "—" : recordedEventCount }} 项 ·
+            平台事件 {{ recordedEventCount }} 项 ·
             <button
               type="button"
               class="ms-link"
@@ -1086,38 +999,23 @@ watch(id, () => {
       <div class="panel-grid panel-grid-growth">
         <section>
           <div class="sec-h">
-            <h2>{{ isSearching ? "长期记忆检索" : "长期记忆时间线" }}</h2>
-            <span class="sub">{{ isSearching ? searchTotal + " 条命中" : filteredEntries.length + "/" + timelineEntries.length + " 条" }}</span>
+            <h2>{{ isSearching ? "长期记忆检索" : "长期记忆" }}</h2>
+            <span class="sub">{{ isSearching ? memoryTotal + " 条命中" : "共 " + memoryTotal + " 条" }}</span>
             <button
               v-if="isSearching"
               type="button"
               class="more"
               @click="query = ''"
             >
-              回到时间线
+              清空搜索
             </button>
           </div>
           <div class="card tl-card">
-            <div
-              v-if="!isSearching"
-              class="filters"
-            >
-              <button
-                v-for="option in filterOptions"
-                :key="option.label"
-                type="button"
-                class="chip"
-                :class="{ on: activeFilter === option.label }"
-                @click="activeFilter = option.label"
-              >
-                {{ option.label }}<span class="n">{{ countFor(option.label) }}</span>
-              </button>
-            </div>
             <div class="tl-tools">
               <el-input
                 v-model="query"
                 clearable
-                placeholder="搜索全部记忆（不受时间线条数限制）……"
+                placeholder="按内容搜索全部长期记忆……"
                 class="tl-search"
               >
                 <template #prefix>
@@ -1125,37 +1023,17 @@ watch(id, () => {
                 </template>
               </el-input>
               <el-select
-                v-if="!isSearching && (realChannelOptions.length || memoryScopeOptions.length)"
-                v-model="channelFilter"
+                :model-value="scopeFilter"
                 class="tl-select"
-                aria-label="按来源筛选时间线"
+                aria-label="按记忆范围筛选"
+                @update:model-value="(value: string) => changeScope(value)"
               >
                 <el-option
-                  :label="SOURCE_ALL"
-                  :value="SOURCE_ALL"
+                  v-for="option in scopeOptions"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
                 />
-                <el-option-group
-                  v-if="realChannelOptions.length"
-                  label="渠道"
-                >
-                  <el-option
-                    v-for="channel in realChannelOptions"
-                    :key="channel"
-                    :label="channel"
-                    :value="channel"
-                  />
-                </el-option-group>
-                <el-option-group
-                  v-if="memoryScopeOptions.length"
-                  label="记忆范围"
-                >
-                  <el-option
-                    v-for="channel in memoryScopeOptions"
-                    :key="channel"
-                    :label="channel"
-                    :value="channel"
-                  />
-                </el-option-group>
               </el-select>
               <button
                 type="button"
@@ -1165,23 +1043,17 @@ watch(id, () => {
                 <el-icon><Delete /></el-icon>回收站
               </button>
             </div>
-            <!-- 检索模式：结果来自全库，不受时间线那 400 条的限制 -->
-            <div
-              v-if="isSearching"
-              class="timeline"
-            >
-              <div class="search-head">
-                <span>在全部 {{ timelineCounts.memory }} 条长期记忆里按内容查（含已被替代与已失效的）</span>
-              </div>
+
+            <div class="timeline">
               <div
-                v-if="searchLoading && !searchRows.length"
+                v-if="memoryLoading && !memoryRows.length"
                 class="tl-loading"
               >
-                正在检索……
+                正在读取长期记忆……
               </div>
               <template v-else>
                 <article
-                  v-for="row in searchRows"
+                  v-for="row in memoryRows"
                   :key="row.id"
                   class="timeline-item"
                 >
@@ -1204,166 +1076,79 @@ watch(id, () => {
                         :class="memoryStatusTone(row.status)"
                       >{{ memoryStatusText(row.status) }}</span>
                       <span>{{ memoryScopeLabel(row.scopeType) }}</span>
-                      <button
-                        type="button"
-                        class="row-more"
-                        @click="openMemoryDetail(row.id)"
+                      <span
+                        v-if="row.status === 'ACTIVE'"
+                        class="timeline-importance"
+                      >重要度 {{ row.importance.toFixed(2) }}</span>
+                    </div>
+                    <!-- 行内只留「编辑 + 更多」：原来 4 个链接常显，其中 2 个破坏性，
+                     每行都在喊。状态类操作收进菜单，默认不占视线。 -->
+                    <div class="memory-actions">
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        @click="openMemoryEditor(row)"
                       >
-                        来源
-                      </button>
+                        编辑
+                      </el-button>
+                      <el-dropdown
+                        trigger="click"
+                        placement="bottom-end"
+                        @command="runMemoryCommand(row, String($event))"
+                      >
+                        <button
+                          type="button"
+                          class="row-more"
+                        >
+                          更多<el-icon><ArrowDown /></el-icon>
+                        </button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <template v-if="row.status === 'ACTIVE'">
+                              <el-dropdown-item command="archived">
+                                归档
+                              </el-dropdown-item>
+                              <el-dropdown-item command="invalidated">
+                                标记失效
+                              </el-dropdown-item>
+                            </template>
+                            <el-dropdown-item
+                              v-else
+                              command="active"
+                            >
+                              恢复有效
+                            </el-dropdown-item>
+                            <el-dropdown-item
+                              command="trash"
+                              divided
+                              style="color:var(--red)"
+                            >
+                              移入回收站
+                            </el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
                     </div>
                   </div>
                 </article>
-                <button
-                  v-if="searchCursor"
-                  type="button"
-                  class="load-more"
-                  :disabled="searchLoading"
-                  @click="runSearch(false)"
-                >
-                  {{ searchLoading ? "加载中……" : "加载更多" }}
-                </button>
                 <div
-                  v-if="!searchRows.length"
-                  class="card-empty"
-                >
-                  <el-icon><Search /></el-icon>
-                  <span>没有匹配的记忆</span>
-                  <span>换个关键词，或清空搜索框回到时间线。</span>
-                </div>
-              </template>
-            </div>
-            <div
-              v-else
-              class="timeline"
-            >
-              <div
-                v-if="timelineLoading"
-                class="tl-loading"
-              >
-                正在加载已保存的时间线记录……
-              </div>
-              <template v-else>
-                <template
-                  v-for="(entry, index) in pagedEntries"
-                  :key="entry.id"
-                >
-                  <div
-                    v-if="isDayStart(index)"
-                    class="timeline-day"
-                  >
-                    <span class="timeline-day-label">{{ dayLabelAt(index) }}</span>
-                    <span
-                      v-if="dayExtractedAt(index)"
-                      class="timeline-day-meta"
-                    >{{ dayExtractedAt(index) }}</span>
-                    <span
-                      v-if="dayHasDraftAt(index)"
-                      class="timeline-day-draft"
-                    >还在记</span>
-                  </div>
-                  <article
-                    class="timeline-item"
-                  >
-                    <div
-                      class="timeline-marker"
-                      :class="toneFor(entry.tagTone)"
-                    >
-                      {{ markerFor(entry.type) }}
-                    </div>
-                    <div class="timeline-content">
-                      <div class="timeline-heading">
-                        <span class="timeline-title">{{ entry.title }}</span><span class="muted-note">{{ entry.time }}</span>
-                      </div>
-                      <p class="timeline-summary">
-                        {{ entry.summary }}
-                      </p>
-                      <div class="timeline-meta">
-                        <span
-                          class="pill"
-                          :class="toneFor(entry.tagTone)"
-                        >{{ entry.tag }}</span><span v-if="entry.channel !== entry.tag">{{ entry.channel }}</span><span>{{ entry.source }}</span><span
-                          v-if="entry.type === 'memory' && entry.importance !== undefined"
-                          class="timeline-importance"
-                        >重要度 {{ entry.importance.toFixed(2) }}</span>
-                      </div>
-                      <!-- 行内只留「编辑 + 更多」：原来 4 个链接常显，其中 2 个破坏性，
-                       每行都在喊。状态类操作收进菜单，默认不占视线。 -->
-                      <div
-                        v-if="entry.type === 'memory'"
-                        class="memory-actions"
-                      >
-                        <el-button
-                          link
-                          type="primary"
-                          size="small"
-                          @click="openMemoryEditor(entry)"
-                        >
-                          编辑
-                        </el-button>
-                        <el-dropdown
-                          trigger="click"
-                          placement="bottom-end"
-                          @command="runMemoryCommand(entry, String($event))"
-                        >
-                          <button
-                            type="button"
-                            class="row-more"
-                          >
-                            更多<el-icon><ArrowDown /></el-icon>
-                          </button>
-                          <template #dropdown>
-                            <el-dropdown-menu>
-                              <template v-if="entry.tag === '长期记忆'">
-                                <el-dropdown-item command="archived">
-                                  归档
-                                </el-dropdown-item>
-                                <el-dropdown-item command="invalidated">
-                                  标记失效
-                                </el-dropdown-item>
-                              </template>
-                              <el-dropdown-item
-                                v-else
-                                command="active"
-                              >
-                                恢复有效
-                              </el-dropdown-item>
-                              <el-dropdown-item
-                                command="trash"
-                                divided
-                                style="color:var(--red)"
-                              >
-                                移入回收站
-                              </el-dropdown-item>
-                            </el-dropdown-menu>
-                          </template>
-                        </el-dropdown>
-                      </div>
-                    </div>
-                  </article>
-                </template>
-                <p
-                  v-if="truncated"
-                  class="tl-note"
-                >
-                  这里只列最近 {{ loadedTotal }} 条（共 {{ knownTotal }} 条长期记忆）。更早的用上面的搜索框查。
-                </p>
-                <button
-                  v-if="filteredEntries.length > visibleCount"
-                  type="button"
-                  class="load-more"
-                  @click="visibleCount += PAGE_SIZE"
-                >
-                  加载更多（还有 {{ filteredEntries.length - visibleCount }} 条）
-                </button>
-                <div
-                  v-if="!filteredEntries.length"
+                  v-if="!memoryRows.length"
                   class="card-empty"
                 >
                   <el-icon><Collection /></el-icon>
-                  <span>{{ timelineEntries.length ? "没有匹配的记录" : "还没有已保存的记录" }}</span>
-                  <span>{{ timelineEntries.length ? "换个筛选条件或清空搜索词再试一次" : "保存长期记忆之后，这里会按时间顺序出现对应条目" }}</span>
+                  <span>{{ isSearching ? "没有匹配的记忆" : "还没有长期记忆" }}</span>
+                  <span>{{ isSearching ? "换个关键词，或清空搜索框回到完整列表" : "保存长期记忆之后，这里会按时间倒序出现对应条目" }}</span>
                 </div>
+                <PagerBar
+                  v-if="memoryTotal > 0"
+                  :page="memoryPage"
+                  :total="memoryTotal"
+                  :total-pages="memoryTotalPages"
+                  :page-size="PAGE_SIZE"
+                  flush
+                  @update:page="changePage"
+                />
               </template>
             </div>
           </div>
@@ -1411,7 +1196,7 @@ watch(id, () => {
           />
         </el-form-item>
         <div class="info-callout">
-          <span>保存后会写入 PostgreSQL，并立即出现在角色记忆时间线中。角色全局记忆在本角色所有对话中都可检索；私人记忆只在你自己和这个角色对话时使用，不会混入其他用户。</span>
+          <span>保存后会写入 PostgreSQL，并立即出现在角色记忆列表中。角色全局记忆在本角色所有对话中都可检索；私人记忆只在你自己和这个角色对话时使用，不会混入其他用户。</span>
         </div>
       </el-form>
       <template #footer>
@@ -1623,6 +1408,15 @@ watch(id, () => {
           </div>
         </article>
       </div>
+      <!-- 翻页条留在滚动区外面：列表滚到哪儿，「上一页 / 下一页」都还在原位 -->
+      <PagerBar
+        v-if="!recycleBinLoading && recycleBinTotal > 0"
+        :page="recycleBinPage"
+        :total="recycleBinTotal"
+        :total-pages="recycleBinTotalPages"
+        :page-size="RECYCLE_PAGE_SIZE"
+        @update:page="changeRecycleBinPage"
+      />
       <template #footer>
         <el-button @click="recycleBinOpen = false">
           关闭
@@ -1630,7 +1424,7 @@ watch(id, () => {
       </template>
     </el-dialog>
 
-    <!-- 群聊记录：群聊也算她的记忆，但不进时间线，单独一个抽屉按群号翻 -->
+    <!-- 群聊记录：群聊也算她的记忆，但不进长期记忆列表，单独一个抽屉按群号翻 -->
     <el-drawer
       v-model="groupChatOpen"
       title="群聊记录"
@@ -1793,15 +1587,15 @@ watch(id, () => {
 /* 「已记录对话」的链接多了一个：小屏不能再 nowrap，否则「私聊记录」会被整段省略 */
 .sb-f-wrap{overflow:visible;white-space:normal;text-overflow:clip;line-height:1.9}
 
-/* 长期记忆时间线布局。 */
+/* 长期记忆列表布局。 */
 .panel-grid{margin-top:0}
 
-/* ── 时间线卡片 ─────────────────────────────────────── */
+/* ── 列表卡片 ───────────────────────────────────────── */
 .tl-card{padding:14px 18px 10px}
 .tl-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .tl-search{min-width:170px;flex:1}
 .tl-select{width:132px;flex:none}
-/* 回收站是「管这批记忆」的工具，排在搜索/渠道后面，不做成第三个控件的样子 */
+/* 回收站是「管这批记忆」的工具，排在搜索/范围后面，不做成第三个控件的样子 */
 .tool-link{display:inline-flex;flex:none;align-items:center;gap:4px;height:32px;padding:0 6px;border:0;background:none;color:var(--dim);font-size:12px;font-weight:600;cursor:pointer}
 .tool-link:hover{color:var(--brand-strong)}
 .tool-link .el-icon{font-size:14px}
@@ -1816,15 +1610,11 @@ watch(id, () => {
 /* 记忆正文是全页要读的东西，12px 太紧了；跟标题同为 14px，靠字重和明度分层 */
 .timeline-summary{font-size:14px;line-height:1.7}
 .timeline-meta{color:var(--dim)}
-/* 重要度：只在记忆条目上出现。排序改动看不见就没法核对，所以把它摆出来。 */
+/* 重要度：只在生效中的记忆上出现。排序改动看不见就没法核对，所以把它摆出来。 */
 .timeline-importance{color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
 
 .load-more{width:100%;margin-top:4px;border:0;border-radius:8px;background:none;padding:12px 0;color:var(--dim);font-size:12px;font-weight:600;cursor:pointer;transition:background .14s var(--ease),color .14s var(--ease)}
 .load-more:hover{background:var(--surface-2);color:var(--brand-strong)}
-/* 截断说明：只在「库里比载入的多」时出现，别让人以为记忆丢了 */
-.tl-note{margin:8px 0 0;border-radius:8px;background:var(--surface-2);padding:8px 10px;color:var(--dim);font-size:12px;line-height:1.7}
-/* 检索模式的头：一句话说明检索范围，别让人以为在搜总结 */
-.search-head{margin:2px 0 10px;border-radius:8px;background:var(--surface-2);padding:7px 10px;color:var(--dim);font-size:12px;line-height:1.7}
 /* 记忆溯源：弹窗底部的「她是怎么记住的」 */
 .mem-src{margin-top:14px;border-top:1px solid var(--surface-3);padding-top:12px}
 .mem-src-h{margin:0 0 6px;color:var(--text-2);font-size:12px;font-weight:700}
