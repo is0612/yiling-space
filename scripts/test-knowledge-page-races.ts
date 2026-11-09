@@ -92,6 +92,47 @@ async function candidatePostDoesNotTouchNextRole() {
   page.finish();
 }
 
+
+/** 网页导入必须提交当前角色 URL，成功后清空输入并刷新候选工作区。 */
+async function webpageImportCreatesCandidateForCurrentRole() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("initial"));
+  await flushMicrotasks();
+  page.set("webImportUrl", "https://example.com/knowledge");
+  const importing = page.call("importWebPage");
+  const post = page.take("/api/characters/char-a/growth/knowledge/candidates/web-import", "POST");
+  assert.equal((post.options?.body as Record<string, unknown>).url, "https://example.com/knowledge");
+  post.resolve({ candidate: { id: "web-candidate" } });
+  await flushMicrotasks();
+  const refresh = page.take("/api/characters/char-a/growth/knowledge");
+  refresh.resolve(workspace("after webpage import"));
+  await importing;
+  assert.equal(page.read("webImportUrl"), "");
+  assert.ok(page.successes.includes("网页正文已加入知识候选，请运行知识处理助手整理。"));
+  page.finish();
+}
+
+/** A 角色网页抓取晚回来时，不得清空 B 的 URL、提示成功或刷新 B 的候选列表。 */
+async function staleWebpageImportCannotTouchNextRole() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("A"));
+  await flushMicrotasks();
+  page.set("webImportUrl", "https://a.example.com/article");
+  const importingA = page.call("importWebPage");
+  const postA = page.take("/api/characters/char-a/growth/knowledge/candidates/web-import", "POST");
+  page.switchRole("char-b");
+  const loadB = page.take("/api/characters/char-b/growth/knowledge");
+  page.set("webImportUrl", "https://b.example.com/article");
+  postA.resolve({ candidate: { id: "candidate-a" } });
+  await importingA;
+  assert.equal(page.read("webImportUrl"), "https://b.example.com/article");
+  assert.equal(page.successes.includes("网页正文已加入知识候选，请运行知识处理助手整理。"), false);
+  assert.equal(page.requests.length, 0, "A 的旧响应不能刷新 B 的候选列表");
+  loadB.resolve(workspace("B"));
+  await flushMicrotasks();
+  page.finish();
+}
+
 /** 4. A→B→A 快速切换时，第一次 A 的慢配置不能覆盖第二次 A 的新配置。 */
 async function settingsLoadUsesRoleGeneration() {
   const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
@@ -376,6 +417,8 @@ async function main() {
     ["知识列表切角色竞态", knowledgeListSwitchRace],
     ["知识搜索最后请求生效", knowledgeSearchLastRequestWins],
     ["候选提交不污染新角色", candidatePostDoesNotTouchNextRole],
+    ["网页导入创建当前角色候选", webpageImportCreatesCandidateForCurrentRole],
+    ["旧网页导入响应不污染新角色", staleWebpageImportCannotTouchNextRole],
     ["设置页 A-B-A 代际隔离", settingsLoadUsesRoleGeneration],
     ["旧保存响应不覆盖新角色", staleSettingsSaveCannotMutateNextRole],
     ["旧模型列表不跨角色写入", staleModelListCannotCrossRole],
