@@ -16,7 +16,11 @@ import {
   type OnebotConnectionRecord,
 } from "./channel-adapter/onebot/configure";
 import { verifyOnebotGroupMember, sendOnebotGroupMessage } from "./channel-adapter/onebot/client";
-import { groupChatForGroup, groupChatDayStart } from "./channel-adapter/onebot/group-chat";
+import {
+  groupChatForGroup,
+  groupChatDayStart,
+  MAX_CONSECUTIVE_AI_ROUNDS,
+} from "./channel-adapter/onebot/group-chat";
 import { resolveCharacterApiKey } from "./credential-encryption";
 import { readDailyQuota, recordModelUsage } from "./model-usage";
 import { getPrisma } from "./prisma";
@@ -30,7 +34,7 @@ import {
 
 const ROLE_DAILY_LIMIT = 2;
 const FRIEND_COOLDOWN_MS = 7 * 24 * 60 * 60_000;
-const MAX_AI_ROUNDS = 3;
+const MAX_AI_ROUNDS = MAX_CONSECUTIVE_AI_ROUNDS;
 const ATTEMPT_DEDUPE_WINDOW_MS = 30 * 60_000;
 const MAX_CONTEXT_LINES = 8;
 
@@ -143,7 +147,6 @@ async function findCommonGroups(
 
     const groupSettings = groupChatForGroup(linked.binding.groupChat, linked.binding.groupChatModes, groupId);
     const mode = groupSettings.mode;
-    if (mode !== "ambient" && mode !== "all") continue;
 
     groups.push({
       groupId,
