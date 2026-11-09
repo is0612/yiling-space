@@ -2,7 +2,7 @@
  * 社交关系评估任务队列。
  *
  * 本模块只负责经历触发、合并、定期回顾、任务领取与租约状态；不调用模型，也不直接修改关系阶段。
- * 当前 Worker 只运行维护/恢复逻辑。等独立评估能力完成后，再把评估器接到 claim/complete/fail 生命周期。
+ * 独立评估执行器通过 claim/complete/fail 生命周期消费任务；本模块本身不调用模型，也不修改关系阶段。
  */
 
 import { randomUUID } from "node:crypto";
@@ -317,7 +317,7 @@ type ClaimedTaskRow = {
 
 export async function claimNextSocialRelationshipAssessmentTask(
   prisma: PrismaClient,
-  options: { workerId?: string; scopeId?: string; now?: Date; leaseMs?: number } = {},
+  options: { workerId?: string; scopeId?: string; now?: Date; leaseMs?: number; requireAssistantEnabled?: boolean } = {},
 ): Promise<SocialRelationshipAssessmentLease | null> {
   const now = options.now ?? new Date();
   const workerId = options.workerId ?? `social-assessment-worker-${process.pid}`;
@@ -325,6 +325,7 @@ export async function claimNextSocialRelationshipAssessmentTask(
   const leaseMs = Math.max(1_000, Math.trunc(options.leaseMs ?? SOCIAL_RELATIONSHIP_TASK_LEASE_MS));
   const leaseExpiresAt = new Date(now.getTime() + leaseMs);
   const scopeFilter = options.scopeId ? Prisma.sql`AND task."scopeId" = ${options.scopeId}::uuid` : Prisma.empty;
+  const enabledFilter = options.requireAssistantEnabled ? Prisma.raw("AND character.\"modelConfig\" ->> 'socialRelationshipAssessmentAssistantEnabled' = 'true'") : Prisma.empty;
 
   return prisma.$transaction(async (tx) => {
     await recoverExpiredLeasesInTransaction(tx, now, SOCIAL_RELATIONSHIP_QUEUE_BATCH_SIZE);
@@ -335,6 +336,7 @@ export async function claimNextSocialRelationshipAssessmentTask(
         INNER JOIN "memory_scopes" AS scope
           ON scope."id" = task."scopeId"
          AND scope."scopeType" = 'EXTERNAL_IDENTITY'
+        INNER JOIN "characters" AS character ON character."id" = scope."characterId"
         WHERE task."status" IN (
             'QUEUED'::"SocialRelationshipAssessmentTaskStatus",
             'RETRY_WAIT'::"SocialRelationshipAssessmentTaskStatus"
@@ -342,6 +344,7 @@ export async function claimNextSocialRelationshipAssessmentTask(
           AND task."runAt" <= ${now}
           AND task."attemptCount" < task."maxAttempts"
           ${scopeFilter}
+          ${enabledFilter}
         ORDER BY task."priority" DESC, task."runAt" ASC, task."createdAt" ASC, task."id" ASC
         LIMIT 1
         FOR UPDATE OF task SKIP LOCKED
@@ -419,7 +422,7 @@ export async function renewSocialRelationshipAssessmentLease(
  * 不会覆盖新触发；否则进入 PAUSED 并安排下一次定期回顾。
  */
 export async function completeSocialRelationshipAssessmentTask(
-  prisma: PrismaClient,
+  prisma: PrismaClient | Prisma.TransactionClient,
   lease: SocialRelationshipAssessmentLease,
   options: { now?: Date; reviewIntervalDays?: number } = {},
 ): Promise<"QUEUED" | "PAUSED"> {
@@ -462,7 +465,7 @@ export async function completeSocialRelationshipAssessmentTask(
 }
 
 export async function failSocialRelationshipAssessmentTask(
-  prisma: PrismaClient,
+  prisma: PrismaClient | Prisma.TransactionClient,
   lease: SocialRelationshipAssessmentLease,
   error: unknown,
   now: Date = new Date(),
