@@ -2,7 +2,7 @@
  * 社交关系评估任务队列。
  *
  * 本模块只负责经历触发、合并、定期回顾、任务领取与租约状态；不调用模型，也不直接修改关系阶段。
- * 当前 Worker 只运行维护/恢复逻辑。等独立评估能力完成后，再把评估器接到 claim/complete/fail 生命周期。
+ * 独立评估执行器通过 claim/complete/fail 生命周期消费任务；本模块本身不调用模型，也不修改关系阶段。
  */
 
 import { randomUUID } from "node:crypto";
