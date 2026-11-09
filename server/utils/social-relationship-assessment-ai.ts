@@ -338,11 +338,15 @@ export async function processNextSocialRelationshipAssessmentTask(
     const message = error instanceof Error ? error.message : "关系评估执行失败。";
     try {
       await prisma.$transaction(async tx => {
+        const validLease = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+          'SELECT "id" FROM "social_relationship_assessment_tasks" WHERE "id" = $1::uuid AND "status" = $5::"SocialRelationshipAssessmentTaskStatus" AND "lockedBy" = $2 AND "leaseToken" = $3::uuid AND "fencingToken" = $4 AND "leaseExpiresAt" > NOW() FOR UPDATE',
+          lease.taskId, lease.workerId, lease.leaseToken, lease.fencingToken, "RUNNING",
+        );
         if (assessmentId) await tx.socialRelationshipAssessment.updateMany({
           where: { id: assessmentId, status: "RUNNING" },
           data: { status: "FAILED", error: message.slice(0, 4_000), completedAt: new Date() },
         });
-        await failSocialRelationshipAssessmentTask(tx as Prisma.TransactionClient, lease, error);
+        if (validLease.length) await failSocialRelationshipAssessmentTask(tx as Prisma.TransactionClient, lease, error);
       });
     } catch (finishError) {
       if (!(finishError instanceof Error && finishError.message.includes("租约已失效"))) {
