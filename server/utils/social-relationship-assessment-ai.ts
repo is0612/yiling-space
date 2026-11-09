@@ -344,8 +344,9 @@ export async function processNextSocialRelationshipAssessmentTask(
         where: { id: assessmentId },
         data: {
           outcome: finalResult.outcome, suggestedStage: finalResult.suggestedStage,
-          suggestedStatus: finalResult.suggestedStatus, reason: finalResult.reason,
-          confidence: finalResult.confidence,
+          suggestedStatus: finalResult.suggestedStatus,
+          reviewStatus: finalResult.outcome === "CHANGE" ? "PENDING" : "NOT_REQUIRED",
+          reason: finalResult.reason, confidence: finalResult.confidence,
           observations: {
             observations: finalResult.observations,
             evidenceExperienceIds: finalResult.evidenceExperienceIds,
