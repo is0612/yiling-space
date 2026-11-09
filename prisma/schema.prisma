@@ -263,6 +263,7 @@ model Character {
   catchphrases      CharacterCatchphrase[]
   knowledgeCandidates KnowledgeCandidate[]
   knowledgeItems     KnowledgeItem[]
+  knowledgeRelations KnowledgeItemRelation[]
 
   @@index([ownerId, status])
   @@index([originCharacterId])
@@ -1465,6 +1466,8 @@ model KnowledgeItem {
   character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
   candidate   KnowledgeCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
   revisions   KnowledgeItemRevision[]
+  relationsFrom KnowledgeItemRelation[] @relation("KnowledgeRelationSource")
+  relationsTo   KnowledgeItemRelation[] @relation("KnowledgeRelationTarget")
 
   @@index([characterId, status, updatedAt])
   @@index([characterId, category, status])
@@ -1490,4 +1493,31 @@ model KnowledgeItemRevision {
   @@unique([itemId, revision])
   @@index([itemId, createdAt])
   @@map("knowledge_item_revisions")
+}
+
+
+/// 正式知识之间经人工确认或待处理的重复/冲突关系。条目本身与来源不会因建立关系而被覆盖。
+model KnowledgeItemRelation {
+  id             String       @id @default(uuid()) @db.Uuid
+  characterId    String       @db.Uuid
+  sourceItemId   String       @db.Uuid
+  targetItemId   String       @db.Uuid
+  /// DUPLICATE / CONFLICT 为对称关系；MERGED_INTO 为 source → target 的有向归并关系。
+  relationType   String       @db.VarChar(20)
+  /// OPEN / RESOLVED / DISMISSED
+  status         String       @default("OPEN") @db.VarChar(20)
+  resolution     String?      @db.VarChar(40)
+  metadata       Json?        @db.JsonB
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(6)
+  resolvedAt     DateTime?    @db.Timestamptz(6)
+  character      Character    @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  sourceItem     KnowledgeItem @relation("KnowledgeRelationSource", fields: [sourceItemId], references: [id], onDelete: Cascade)
+  targetItem     KnowledgeItem @relation("KnowledgeRelationTarget", fields: [targetItemId], references: [id], onDelete: Cascade)
+
+  @@unique([characterId, sourceItemId, targetItemId, relationType])
+  @@index([characterId, status, createdAt])
+  @@index([sourceItemId, status])
+  @@index([targetItemId, status])
+  @@map("knowledge_item_relations")
 }
