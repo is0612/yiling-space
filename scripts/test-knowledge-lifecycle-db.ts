@@ -290,12 +290,15 @@ try {
 
   // 回收站接口的展示派生字段：给页面禁用「永久删除」按钮用，
   // 与上面的接口校验是两回事，页面判断不能替代服务端重新检查。
-  const trashWithAudit = await call("GET", `/characters/${characterAId}/growth/knowledge/trash`, session.token);
+  // 回收站按 30 条分页，前面批量造的归档/回收站数据会把早期条目挤出首页，
+  // 所以这里按标题检索，不依赖条目落在第几页。
+  const trashWithAudit = await call("GET", `/characters/${characterAId}/growth/knowledge/trash?q=合并目标`, session.token);
   const auditRow = (trashWithAudit.body.items as Json[]).find(row => row.id === mergedTarget.id);
   assert.equal(auditRow?.canPermanentlyDelete, false, "参与合并审计链的条目必须标记为不可永久删除");
-  const plainTrashRow = (trashWithAudit.body.items as Json[]).find(row => row.id === trashedItem.id);
+  const trashWithPlain = await call("GET", `/characters/${characterAId}/growth/knowledge/trash?q=回收站里的条目`, session.token);
+  const plainTrashRow = (trashWithPlain.body.items as Json[]).find(row => row.id === trashedItem.id);
   assert.equal(plainTrashRow?.canPermanentlyDelete, true, "普通回收站条目应当标记为可永久删除");
-  assert.ok((trashWithAudit.body.items as Json[]).every(row => typeof row.canPermanentlyDelete === "boolean"),
+  assert.ok((trashWithPlain.body.items as Json[]).every(row => typeof row.canPermanentlyDelete === "boolean"),
     "回收站每个条目都必须带 canPermanentlyDelete");
 
   // ---------------------------------------------------------------------------
