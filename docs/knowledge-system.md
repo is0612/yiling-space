@@ -385,3 +385,32 @@
 - 本批等待 DSH 本地验收与 CI。真实浏览器上传交互也需要在浏览器中确认。
 
 下一批计划：网页来源采集。网页正文同样只进入 IMPORT 候选；服务端必须限制协议、私网/本机地址、DNS 重绑定、重定向次数、响应体大小、内容类型和超时，并保留最终 URL、抓取时间、内容哈希与来源快照。网页正文属于不可信数据，提示知识处理助手忽略页面内的指令注入。
+
+
+
+## 来源接入第二批：网页来源采集（2026-11-09，开发分支待验收）
+
+- 知识候选区新增网页导入入口，输入 HTTP/HTTPS URL 后由服务端采集，不依赖浏览器端抓取。
+- 新增 `server/utils/knowledge-web-import.ts`：支持 HTML、XHTML 与纯文本；提取标题和正文，移除 script/style/nav/footer/header/aside/form 等非正文区域，规范化空白与常见 HTML 实体。
+- **SSRF 防护复用统一安全下载器**：仅允许 HTTP/HTTPS；拒绝 localhost、内网、link-local、保留地址及带凭据 URL；DNS 的全部 A/AAAA 结果必须是公网地址；实际 socket 连接时再次解析、校验并固定 IP，防止 DNS rebinding；每次重定向重新校验，最多 5 跳。
+- 下载限制：15 秒总超时、1.5 MB 实际响应体上限、只允许 `text/html` / `application/xhtml+xml` / `text/plain`。响应体按流读取，不能只依赖 Content-Length。
+- 候选来源快照记录 `kind=WEB`、原始 URL、最终 URL、标题、媒体类型、HTTP 状态、字节数、SHA-256、抓取时间和 `untrustedExternalContent=true`。网页正文只创建 `sourceType=IMPORT` 候选，不自动处理、不直接入库。
+- 知识处理助手系统提示明确将网页/外部文件正文视为不可信数据；页面中要求改变规则、泄露信息、调用工具或执行操作的文字只能作为被分析内容，不能作为指令。
+- 页面角色切换会清空 URL 输入和导入状态；请求返回前若角色已切换，旧结果不会污染新角色工作区。
+- 新增 `yarn test:knowledge-web-import`，覆盖正文抽取、标题/实体解码、噪音移除、纯文本、非法编码、空/短正文、超大响应、私网地址、重定向到 loopback、合法重定向与不支持 MIME。
+- 新增 `yarn test:knowledge-regression`，集中执行知识助手配置、文件/网页导入、检索、关系、版本、合并冲突治理、生命周期、页面竞态和私聊候选边界回归；网页专项测试也已接入 `verify:local` 与 `test:unit-suite`。
+- 本批未新增 Prisma 模型或迁移；未接入 Event Center，也未改变记忆/社交/知识之间的数据所有权。
+
+**本地 DSH 验收（开发分支尚未执行）：**
+
+1. `yarn prisma validate`
+2. `yarn prisma generate`
+3. `yarn test:knowledge-regression`
+4. `yarn typecheck`
+5. `yarn check:sfc`
+6. `yarn lint`
+7. `yarn build`
+
+浏览器人工验收：公开 HTTPS 文章能进入 IMPORT 候选并展示来源快照；候选仍需知识处理助手和用户确认才会入库；切换角色时输入和请求状态清空。安全边界专项测试覆盖 localhost/私网与重定向拦截，不能通过导入功能访问内网服务。
+
+本轮完成后，知识系统的下一步是整体回归和缺口修复；统一成长数据中心 Event Center 不属于本分支范围。
