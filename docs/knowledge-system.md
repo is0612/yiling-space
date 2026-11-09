@@ -227,6 +227,7 @@
 8. `yarn check:sfc`
 9. `yarn lint`
 10. `yarn build`
+11. `yarn test:knowledge-governance-page`（页面交互层，脚本级）
 
 浏览器验收重点：
 - DUPLICATE 关系可双向选择目标；最终正文经用户确认后才提交。
@@ -235,3 +236,24 @@
 - CONFLICT 确认或待核实时双方原文、来源、ACTIVE 状态不变；忽略操作也不修改知识本体。
 - 过期 revision、跨角色 ID、无待处理 DUPLICATE 关系、错误关系类型均被拒绝。
 - 快速切换角色时，合并草稿和请求结果不串角色。
+
+#### 6. 页面交互层自动化（`yarn test:knowledge-governance-page`）
+
+**测试机制与限制**：本项目没有引入浏览器自动化（无 Playwright / Cypress / jsdom）。页面测试沿用既有的「抽出 SFC 的 `<script>`，用 TypeScript 转译后在 `node:vm` 里执行，把 Nuxt 自动导入（`ref` / `computed` / `watch` / `useCharacterSelection` / `ElMessage` / `$fetch`）替换成可控替身」的脚本级 harness（已抽到 `scripts/lib/page-harness.ts`，供 `test:knowledge-page-races` 与本测试共用）。
+
+它验证的是**页面脚本逻辑、请求契约和模板绑定**，不是真实浏览器行为：没有 DOM 渲染、没有真实点击、没有焦点与可见性、没有布局与样式断言。模板断言用静态文本匹配，只能证明「哪个按钮绑定了哪个函数、传了哪些实参」。
+
+覆盖范围（14 项）：
+- 关联状态文案：待处理 / 已合并 / 源知识已合并 / 待核实 / 已处理 / 已忽略 六种都必须有独立文案。
+- 双向合并入口：`startMerge(item, relatedItem)` 与 `startMerge(relation.relatedItem, item)` 生成的草稿必须互换 source/target，双方 revision 各自取自对应条目。
+- 合并对照框：源与目标的标题、正文、分类、可信度、标签、来源类型、来源快照、版本号都必须进入草稿；目标可信度为 null 时可编辑框留空而不是 0。
+- 合并提交字段：请求体键集合必须与服务端 `parseKnowledgeMergeInput` 的允许集合完全一致（多一个字段即 400），并通过真实解析函数验证可被接受；`targetItemId`、双方 revision、用户最终确认的标题/正文/分类、逗号拆分后的标签、数字型可信度逐项断言。
+- 冲突三操作：`CONFIRM_CONFLICT` / `NEEDS_VERIFICATION` / `DISMISS` 各自携带正确 action，并按当前条目在关系中真实是 source 还是 target 决定 `expectedSourceRevision` / `expectedTargetRevision` 的顺序（两个方向都测）。
+- 幂等与状态：已处置关系不重复发请求；非法可信度不发请求且保留草稿。
+- 角色切换：合并草稿、合并中标记、处置中列表、busy 列表全部清空；合并请求在途中切角色后，旧响应不得提示成功、不得触发新角色刷新。
+- 失败反馈：409 提示服务端原因、关闭草稿并刷新；非 409 失败保留用户已输入的草稿；关系处置失败提示并刷新。
+- 模板绑定：两个合并入口只出现在 `OPEN + DUPLICATE` 区块内，三个冲突操作只出现在 `OPEN + CONFLICT` 区块内，合并提交按钮在标题/正文/分类为空时禁用。
+
+**仍未覆盖（真实浏览器验收缺口）**：按钮点击是否真的触发、弹层是否真的可见、长文对照框的实际排版与滚动、移动端窄屏下的按钮换行、键盘操作与焦点管理、以及页面与真实后端的联调。这些必须在浏览器里人工确认，脚本级测试不能替代。
+
+该测试全部使用内存模拟数据，不连接数据库、不读写任何真实知识条目。
