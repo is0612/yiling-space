@@ -348,8 +348,8 @@ async function toggleHistory(item: KnowledgeItem) {
 }
 
 function startMerge(
-  source: { id: string; revision: number },
-  target: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; revision: number },
+  source: { id: string; revision: number; status?: string },
+  target: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; revision: number; status?: string },
 ) {
   if (source.id === target.id || source.status === "MERGED" || target.status === "MERGED") return;
   mergeDraft.value = {
