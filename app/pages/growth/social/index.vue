@@ -32,9 +32,12 @@ definePageMeta({
       <article class="social-card">
         <div class="social-kicker">关系成长 · 建设中</div>
         <h2>关系评估 AI</h2>
-        <p>关系阶段和相处状态已经有独立数据与评估队列。下一步接入专职评估模型：它只提供建议，是否写入由证据核验和关系版本保护决定。</p>
+        <p>关系阶段和相处状态已经有独立数据、评估队列和专职评估执行器。AI 只提供建议，关系不会被自动修改。</p>
         <NuxtLink to="/growth/social/assessment-settings" class="social-action">
           配置关系评估 AI <span aria-hidden="true">→</span>
+        </NuxtLink>
+        <NuxtLink to="/growth/social/assessments" class="social-action">
+          查看关系评估历史与证据 <span aria-hidden="true">→</span>
         </NuxtLink>
       </article>
 
