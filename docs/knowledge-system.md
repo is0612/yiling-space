@@ -202,3 +202,36 @@
 - 正式知识库读取接口附带已有关系及对端知识摘要，页面可在知识条目下查看重复、冲突或合并关系及关系状态。
 - 新增页面竞态专项覆盖候选关联确认请求及成功后的工作区刷新。
 - 当前仍未实现重复知识合并事务和冲突处置流程；正式关系记录目前只负责展示，不能在此页面直接合并或裁决冲突。需经本地测试和浏览器验收后再标记完成。
+
+
+## 第二批实现进度：人工合并与冲突处置（2026-11-09，待本地验收）
+
+- 新增正式知识合并 API。只能合并同一角色下两条 ACTIVE 知识，且必须存在待处理的 DUPLICATE 关系；请求必须提交双方当前 revision 和用户确认后的完整目标内容。
+- 合并事务会同时保存源条目和目标条目的旧版本快照；目标条目更新为用户确认的标题、正文、分类、标签和可信度并递增 revision；源条目状态改为 MERGED 并递增 revision；创建有方向的 MERGED_INTO 关系。目标原有 sourceType/sourceRef 不被覆盖，源条目本身、来源和历史均不物理删除。
+- 合并时，源条目与目标条目之间的 DUPLICATE 关系标记为已合并；源条目关联的其他待处理建议会关闭为 SOURCE_MERGED，避免已合并条目留下无法继续操作的 OPEN 关系。
+- 新增重复/冲突关系处置 API。DUPLICATE 支持合并、保留为独立知识、忽略；CONFLICT 支持确认冲突并保留双方、标记待核实、忽略。待核实保持 OPEN 并记录 NEEDS_VERIFICATION；其他处置不修改双方知识正文、来源或状态。
+- 所有操作都校验角色归属、关系类型、条目状态和双方 revision；过期请求返回 409。合并涉及的快照、目标更新、源条目状态和归并关系在同一事务内提交。
+- 知识页面已加入双向合并入口和合并确认编辑框；默认预填目标知识内容，用户可在最终提交前修改。重复关系可保留独立或忽略；冲突关系可确认、待核实或忽略。角色切换会清空合并草稿和在途操作状态。
+- 新增 `yarn test:knowledge-governance`、`yarn test:knowledge-governance-isolated`；页面竞态测试增加合并提交和冲突处置的双方 revision 断言。
+- 本次未新增数据库迁移；复用既有 KnowledgeItemRevision 与 KnowledgeItemRelation。**上述代码尚待 DSH 本地验收和浏览器人工验收，不应提前标记为完成。**
+
+本轮 DSH 验收建议在拉取最新 main 后执行：
+
+1. `yarn prisma validate`
+2. `yarn prisma generate`
+3. `yarn test:knowledge-governance`
+4. `yarn test:knowledge-governance-isolated`
+5. `yarn test:knowledge-relations`
+6. `yarn test:knowledge-page-races`
+7. `yarn typecheck`
+8. `yarn check:sfc`
+9. `yarn lint`
+10. `yarn build`
+
+浏览器验收重点：
+- DUPLICATE 关系可双向选择目标；最终正文经用户确认后才提交。
+- 合并后源条目不再作为 ACTIVE 知识检索，目标条目 revision +1；双方旧版本、来源信息和 MERGED_INTO 方向关系均可追溯。
+- 其他指向源条目的待处理建议被明确关闭，不留下无法操作的 OPEN 关系。
+- CONFLICT 确认或待核实时双方原文、来源、ACTIVE 状态不变；忽略操作也不修改知识本体。
+- 过期 revision、跨角色 ID、无待处理 DUPLICATE 关系、错误关系类型均被拒绝。
+- 快速切换角色时，合并草稿和请求结果不串角色。
