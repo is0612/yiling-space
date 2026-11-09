@@ -453,3 +453,12 @@
 - 新增一次性 PostgreSQL 隔离测试：暂缓后可继续采纳、阶段与状态同时更新、版本递增、变更历史与证据落库、重复处置拒绝、过期建议 STALE、证据重复消费拒绝、驳回不改关系。
 - 测试命令：`yarn test:social-relationship-review-isolated`；已接入 `verify:local` 和 CI。
 - 本批待 DSH 本地验收；人工确认前不会改关系。
+
+### 10.5 主动联系实现第一步（2026-11-09）
+
+- 已在 `server/utils/social-proactive-contact-policy.ts` 建立独立的纯函数安全闸门，并新增 `yarn test:social-proactive-contact-policy` 专项测试入口。
+- 闸门明确区分好友级主动联系授权与既有 `friendChatPolicy`：普通 `ALLOW` 不会自动授予主动联系；`BLOCK` 始终优先。
+- 只允许关系阶段为 FRIEND / CLOSE_FRIEND、相处状态为 NORMAL 的关系进入候选；AI 好友还必须已有明确的 `friendChatPolicy=ALLOW`。
+- 渠道、共同群、群模式、发送前实时成员核验、AI 连续对话上限、角色每日上限与好友冷却均为 fail-closed 条件。
+- **当前只完成纯函数闸门和测试代码，尚未接入好友授权 UI、数据库字段/迁移、共同群解析、OneBot 实时成员核验、定向 @ 发送、联系审计与后台 tick。不得视为主动联系功能已上线。**
+- 本地待执行：`yarn test:social-proactive-contact-policy`。后续集成完成后再补 Prisma 隔离库、OneBot 定向 @ 与本地全量验收。
