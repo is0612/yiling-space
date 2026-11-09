@@ -1,9 +1,9 @@
 import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import type { Prisma } from "../../../../../../../src/generated/prisma/client";
-import { requireActorUserId } from "../../../../../../utils/auth";
-import { requireUuid } from "../../../../../../utils/local-api";
-import { getPrisma } from "../../../../../../utils/prisma";
-import { parseKnowledgeMergeInput } from "../../../../../../utils/knowledge-item-governance";
+import { requireActorUserId } from "../../../../../../../utils/auth";
+import { requireUuid } from "../../../../../../../utils/local-api";
+import { getPrisma } from "../../../../../../../utils/prisma";
+import { parseKnowledgeMergeInput } from "../../../../../../../utils/knowledge-item-governance";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
