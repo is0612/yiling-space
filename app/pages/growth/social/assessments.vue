@@ -122,7 +122,7 @@ function toggle(id: string) {
 async function review(item: Assessment, decision: "ACCEPTED" | "REJECTED" | "DEFERRED") {
   if (reviewingIds.value.includes(item.id)) return;
   const title = decision === "ACCEPTED" ? "采纳这条关系建议？" : decision === "REJECTED" ? "驳回这条关系建议？" : "暂缓处理这条建议？";
-  let message = decision === "ACCEPTED"
+  const message = decision === "ACCEPTED"
     ? `关系将从「${stage(item.currentRelationship.stage)} / ${status(item.currentRelationship.status)}」调整为「${stage(item.suggestedStage)} / ${status(item.suggestedStatus)}」。这会立即写入关系并留下变更记录。`
     : decision === "REJECTED"
       ? "驳回后不会修改好友关系，这条建议会保留在历史中。"
