@@ -255,6 +255,16 @@ try {
   assert.ok(await prisma.knowledgeItemRelation.findFirst({ where: { relationType: "MERGED_INTO", targetItemId: mergedTarget.id } }),
     "被拒绝时审计关系必须完整");
 
+  // 回收站接口的展示派生字段：给页面禁用「永久删除」按钮用，
+  // 与上面的接口校验是两回事，页面判断不能替代服务端重新检查。
+  const trashWithAudit = await call("GET", `/characters/${characterAId}/growth/knowledge/trash`, session.token);
+  const auditRow = (trashWithAudit.body.items as Json[]).find(row => row.id === mergedTarget.id);
+  assert.equal(auditRow?.canPermanentlyDelete, false, "参与合并审计链的条目必须标记为不可永久删除");
+  const plainTrashRow = (trashWithAudit.body.items as Json[]).find(row => row.id === trashedItem.id);
+  assert.equal(plainTrashRow?.canPermanentlyDelete, true, "普通回收站条目应当标记为可永久删除");
+  assert.ok((trashWithAudit.body.items as Json[]).every(row => typeof row.canPermanentlyDelete === "boolean"),
+    "回收站每个条目都必须带 canPermanentlyDelete");
+
   // ---------------------------------------------------------------------------
   // 8. 永久删除后：关系与版本历史清理干净，不留孤立数据。
   // ---------------------------------------------------------------------------

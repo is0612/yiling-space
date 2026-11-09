@@ -100,6 +100,15 @@ return { ${names.join(", ")} };
     assert.ok(index >= 0, `expected pending request: ${method ?? "GET"} ${pathname}`);
     return requests.splice(index, 1)[0]!;
   }
+  /**
+   * 按谓词取请求：同一个路径带不同 query 时（如列表 ?itemStatus=ARCHIVED），
+   * 只靠路径会取错对象。谓词可以读 request.options.query 精确挑。
+   */
+  function takeMatching(predicate: (request: PendingRequest) => boolean, label = "matching"): PendingRequest {
+    const index = requests.findIndex(predicate);
+    assert.ok(index >= 0, `expected pending request: ${label}（现有：${requests.map((request) => request.url).join(", ")}）`);
+    return requests.splice(index, 1)[0]!;
+  }
   function switchRole(id: string) {
     const previous = role.value.id;
     role.value = { id, name: `角色 ${id}` };
@@ -123,7 +132,7 @@ return { ${names.join(", ")} };
     }
   }
 
-  return { read, set, call, take, switchRole, triggerKeyword, unmount, requests, errors, warnings, successes, finish };
+  return { read, set, call, take, takeMatching, switchRole, triggerKeyword, unmount, requests, errors, warnings, successes, finish };
 }
 
 export async function flushMicrotasks() {

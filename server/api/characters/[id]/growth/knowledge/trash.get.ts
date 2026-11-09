@@ -25,5 +25,23 @@ export default defineEventHandler(async (event) => {
       status: true, sourceType: true, sourceRef: true, revision: true, createdAt: true, updatedAt: true,
     },
   });
-  return { characterId, items, itemCount: items.length };
+
+  // `canPermanentlyDelete` 只是给页面用的展示派生字段：条目只要作为 MERGED_INTO 的
+  // 源或目标出现过，就属于合并审计链，页面据此禁用「永久删除」并给出说明。
+  // 前端判断不可信，永久删除接口仍会在事务内重新检查同一关系，见 knowledge-lifecycle.ts。
+  const itemIds = items.map(item => item.id);
+  const auditRelations = itemIds.length
+    ? await prisma.knowledgeItemRelation.findMany({
+        where: {
+          characterId,
+          relationType: "MERGED_INTO",
+          OR: [{ sourceItemId: { in: itemIds } }, { targetItemId: { in: itemIds } }],
+        },
+        select: { sourceItemId: true, targetItemId: true },
+      })
+    : [];
+  const auditedItemIds = new Set(auditRelations.flatMap(relation => [relation.sourceItemId, relation.targetItemId]));
+  const rows = items.map(item => ({ ...item, canPermanentlyDelete: !auditedItemIds.has(item.id) }));
+
+  return { characterId, items: rows, itemCount: rows.length };
 });
