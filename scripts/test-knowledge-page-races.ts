@@ -426,6 +426,66 @@ async function candidateRelationConfirmationRefreshesWorkspace() {
   page.finish();
 }
 
+/** 13. 合并提交必须携带双方 revision 与用户确认后的完整正文，成功后刷新。 */
+async function knowledgeMergeUsesBothOptimisticRevisions() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("initial"));
+  await flushMicrotasks();
+  const item = page.read<{ items: Array<{ id: string; title: string; content: string; category: string; tags: string[]; confidence: number; status: string; revision: number }> }>("data").items[0]!;
+  await page.call("startMerge", { id: "source-item", revision: 4, status: "ACTIVE" }, {
+    id: item.id, title: item.title, content: item.content, category: item.category,
+    tags: item.tags, confidence: item.confidence, revision: 1, status: "ACTIVE",
+  });
+  page.set("mergeDraft", {
+    sourceItemId: "source-item", targetItemId: item.id,
+    expectedSourceRevision: 4, expectedTargetRevision: 1,
+    title: "最终标题", content: "用户确认的完整正文", category: "SCIENCE",
+    tagsText: "天文学, 相对论", confidence: "0.95",
+  });
+  const merging = page.call("submitMerge");
+  const post = page.take("/api/characters/char-a/growth/knowledge/items/source-item/merge", "POST");
+  const body = post.options?.body as Record<string, unknown>;
+  assert.equal(body.expectedSourceRevision, 4);
+  assert.equal(body.expectedTargetRevision, 1);
+  assert.equal(body.title, "最终标题");
+  assert.equal(body.content, "用户确认的完整正文");
+  assert.deepEqual([...(body.tags as string[])], ["天文学", "相对论"]);
+  post.resolve({ source: { status: "MERGED" }, target: { revision: 2 } });
+  await flushMicrotasks();
+  const refresh = page.take("/api/characters/char-a/growth/knowledge");
+  refresh.resolve(workspace("after merge"));
+  await merging;
+  assert.equal(page.read("mergeDraft"), null);
+  assert.ok(page.successes.includes("重复知识已合并，源条目和双方历史均已保留。"));
+  page.finish();
+}
+
+/** 14. 关系处置按真实 source/target 方向携带双方 revision。 */
+async function relationDecisionUsesEndpointRevisions() {
+  const page = buildPageHarness("../app/pages/growth/knowledge/index.vue");
+  page.take("/api/characters/char-a/growth/knowledge").resolve(workspace("initial"));
+  await flushMicrotasks();
+  const item = page.read<{ items: Array<{ id: string; revision: number }> }>("data").items[0]!;
+  const relation = {
+    id: "relation-1", sourceItemId: "source-item", targetItemId: item.id,
+    relationType: "CONFLICT", status: "OPEN", resolution: null, metadata: null, updatedAt: "2026-11-09",
+    relatedItem: { id: "source-item", title: "另一条知识", content: "另一条正文", category: "GENERAL", tags: [], confidence: null, status: "ACTIVE", revision: 7, sourceType: "MANUAL", sourceRef: null },
+  };
+  const resolving = page.call("resolveRelation", item, relation, "CONFIRM_CONFLICT");
+  const post = page.take("/api/characters/char-a/growth/knowledge/relations/relation-1/resolve", "POST");
+  const body = post.options?.body as Record<string, unknown>;
+  assert.equal(body.action, "CONFIRM_CONFLICT");
+  assert.equal(body.expectedSourceRevision, 7);
+  assert.equal(body.expectedTargetRevision, 1);
+  post.resolve({ relation: { status: "RESOLVED" } });
+  await flushMicrotasks();
+  const refresh = page.take("/api/characters/char-a/growth/knowledge");
+  refresh.resolve(workspace("after decision"));
+  await resolving;
+  assert.ok(page.successes.includes("已确认冲突，双方知识均予以保留。"));
+  page.finish();
+}
+
 async function main() {
   const tests = [
     ["知识列表切角色竞态", knowledgeListSwitchRace],
@@ -440,6 +500,8 @@ async function main() {
     ["旧知识编辑响应不污染新角色", staleKnowledgeEditCannotTouchNextRole],
     ["版本冲突关闭过期草稿", revisionConflictClosesStaleEditor],
     ["候选关联确认后刷新工作区", candidateRelationConfirmationRefreshesWorkspace],
+    ["知识合并携带双方版本号与确认正文", knowledgeMergeUsesBothOptimisticRevisions],
+    ["关系处置携带正确端点版本号", relationDecisionUsesEndpointRevisions],
   ] as const;
   for (const [name, test] of tests) {
     await test();
