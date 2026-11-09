@@ -1,8 +1,8 @@
 import { createError, getRouterParam, getQuery } from "h3";
-import { requireActorUserId } from "../../../../../../utils/auth";
-import { readPageQuery, buildPage } from "../../../../../../utils/pagination";
-import { requireUuid } from "../../../../../../utils/local-api";
-import { getPrisma } from "../../../../../../utils/prisma";
+import { requireActorUserId } from "../../../../../utils/auth";
+import { readPageQuery, buildPage } from "../../../../../utils/pagination";
+import { requireUuid } from "../../../../../utils/local-api";
+import { getPrisma } from "../../../../../utils/prisma";
 
 const DEFAULT_PAGE_SIZE = 12;
 
