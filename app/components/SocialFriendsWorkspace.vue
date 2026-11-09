@@ -145,7 +145,29 @@ function proactiveAttemptLabel(friend: Friend) {
     FAILED: "发送失败",
     EXPIRED: "已过期",
   };
-  return `${labels[attempt.status]} · ${formatDateTime(attempt.sentAt ?? attempt.attemptedAt)}`;
+  const reasons: Record<string, string> = {
+    no_common_group: "没有共同群",
+    group_mode_forbids: "群设置为仅 @ 回复",
+    quiet_hours: "群安静时段",
+    target_not_verified: "无法确认好友仍在群内",
+    nothing_to_say: "暂时没有自然话题",
+    friend_cooldown: "好友冷却中",
+    ai_dialogue_limit: "AI 连续对话保护",
+    daily_limit: "今日次数已达上限",
+    not_authorized: "未授权",
+    relationship_not_close: "关系还不够熟",
+    relationship_not_healthy: "关系状态不适合",
+    friend_blocked: "已禁止交流",
+    model_error: "模型调用失败",
+    send_failed: "消息发送失败",
+    sent_but_transcript_failed: "已发送，转录写入失败",
+    dispatch_lease_expired: "发送中断，已过期",
+    already_attempted: "本时间窗已尝试",
+    dispatch_in_progress: "发送处理中",
+  };
+  const reason = attempt.reason === "ok" ? "" : reasons[attempt.reason] ?? attempt.reason;
+  const when = formatDateTime(attempt.sentAt ?? attempt.attemptedAt);
+  return [labels[attempt.status], reason, when].filter(Boolean).join(" · ");
 }
 
 /** 头像只放一个字：昵称取首字，没有昵称就取 UID 首位。真头像取不到时也回落到这里。 */
