@@ -164,6 +164,7 @@ function proactiveAttemptLabel(friend: Friend) {
     dispatch_lease_expired: "发送中断，已过期",
     already_attempted: "本时间窗已尝试",
     dispatch_in_progress: "发送处理中",
+    dispatching: "正在发送",
   };
   const reason = attempt.reason === "ok" ? "" : reasons[attempt.reason] ?? attempt.reason;
   const when = formatDateTime(attempt.sentAt ?? attempt.attemptedAt);
