@@ -1,5 +1,5 @@
 -- Separate proactive-contact authorization from the ordinary friend chat policy.
-CREATE TYPE "SocialProactiveContactAttemptStatus" AS ENUM ('SENT', 'SKIPPED', 'FAILED', 'EXPIRED');
+CREATE TYPE "SocialProactiveContactAttemptStatus" AS ENUM ('SENDING', 'SENT', 'SKIPPED', 'FAILED', 'EXPIRED');
 
 ALTER TABLE "memory_scopes"
   ADD COLUMN "proactiveContactEnabled" BOOLEAN NOT NULL DEFAULT false;
