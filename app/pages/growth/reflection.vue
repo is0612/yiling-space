@@ -272,7 +272,6 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
 <template>
   <div class="page-wrap reflection-page">
     <PageHeader
-      eyebrow="成长系统 / 反思与成长"
       description="回看经历，分清事实与推断，再决定哪些值得留下。"
     />
     <el-empty
@@ -693,12 +692,13 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
 .records-toolbar, .run-heading, .suggestion-heading, .reflection-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .record-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .record-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.reflection-run { padding: 24px; min-width: 0; }
+.reflection-intro, .reflection-run { border: 0; border-radius: 12px; box-shadow: none; }
+.reflection-run { padding: 22px; min-width: 0; }
 .run-heading h3 { margin: 6px 0 0; color: #30463f; font-size: 18px; }
 .run-meta { display: flex; gap: 8px 18px; flex-wrap: wrap; margin: 15px 0; color: var(--dim); font-size: 12px; }
 .run-failure { display: grid; gap: 12px; justify-items: start; }
 .reflection-empty { margin: 20px 0 3px; color: var(--dim); font-size: 14px; line-height: 1.8; }
-.suggestion-card { margin-top: 18px; padding: 20px; border: 1px solid #e1e9e5; border-radius: 12px; background: #fcfdfc; }
+.suggestion-card { margin-top: 18px; padding: 20px; border: 0; border-radius: 12px; background: var(--surface-2); }
 .suggestion-heading h4 { margin: 0; color: #30463f; font-size: 16px; line-height: 1.6; }
 .reflection-reasoning { display: grid; gap: 14px; margin: 20px 0; }
 .reflection-reasoning div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 16px; }
@@ -706,7 +706,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
 .reflection-reasoning dd { margin: 0; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
 .reflection-sources { border-top: 1px solid #e8eeea; padding-top: 14px; }
 .reflection-sources summary { cursor: pointer; font-size: 12px; color: #647b71; line-height: 1.8; }
-.source-card { padding: 14px; margin-top: 12px; border-radius: 8px; background: #f1f5f2; }
+.source-card { padding: 14px; margin-top: 12px; border-radius: 8px; background: var(--surface); }
 .source-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .source-heading strong { font-size: 13px; }
 .source-card blockquote { margin: 12px 0; padding-left: 12px; border-left: 2px solid #bacfc3; font-size: 13px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }

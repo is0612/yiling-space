@@ -92,6 +92,7 @@ const draftMemoryCategory = ref<MemoryCategory>("FACT");
 const draftMemoryContent = ref("");
 const draftMemoryScope = ref<"character" | "private">("character");
 const memoryEditDialogOpen = ref(false);
+const memoryReadOnly = ref(false);
 const memoryEditLoading = ref(false);
 const memoryEditSaving = ref(false);
 const editingMemoryId = ref("");
@@ -117,6 +118,22 @@ const memoryPage = ref(1);
 const memoryTotalPages = ref(1);
 const memoryLoading = ref(false);
 const query = ref("");
+const categoryFilter = ref<MemoryCategory | "ALL">("ALL");
+const statusFilter = ref("ALL");
+const hasFilters = computed(() => isSearching.value || scopeFilter.value !== "ALL" || categoryFilter.value !== "ALL" || statusFilter.value !== "ALL");
+function resetFilters() {
+  query.value = "";
+  scopeFilter.value = "ALL";
+  categoryFilter.value = "ALL";
+  statusFilter.value = "ALL";
+  memoryPage.value = 1;
+  if (searchTimer) clearTimeout(searchTimer);
+  void loadMemories(1);
+}
+function changeFilter() {
+  memoryPage.value = 1;
+  void loadMemories(1);
+}
 /** 范围筛选和原来下拉里的「记忆范围」同一档，不再从返回数据里反推选项 */
 const scopeFilter = ref<"ALL" | "CHARACTER_GLOBAL" | "USER_PRIVATE" | "EXTERNAL_IDENTITY">("ALL");
 const scopeOptions = [
@@ -284,6 +301,8 @@ async function loadMemories(targetPage = memoryPage.value) {
     const params = new URLSearchParams({ page: String(targetPage), pageSize: String(PAGE_SIZE) });
     if (keyword) params.set("q", keyword);
     if (scopeFilter.value !== "ALL") params.set("scope", scopeFilter.value);
+    if (categoryFilter.value !== "ALL") params.set("category", categoryFilter.value);
+    if (statusFilter.value !== "ALL") params.set("status", statusFilter.value);
     const result = await $fetch<MemoryPage>(
       `/api/characters/${encodeURIComponent(requestedCharacterId)}/memories?${params.toString()}`,
     );
@@ -449,6 +468,11 @@ async function openMemoryDetail(memoryId: string) {
 }
 
 function openMemoryEditor(row: MemoryRow) {
+  memoryReadOnly.value = false;
+  void openMemoryDetail(row.id);
+}
+function viewMemorySource(row: MemoryRow) {
+  memoryReadOnly.value = true;
   void openMemoryDetail(row.id);
 }
 
@@ -908,6 +932,8 @@ watch(id, () => {
   memoryStats.value = { memory: 0, commitment: 0, message: 0, event: 0, snapshot: 0, memoryEvent: 0 };
   query.value = "";
   scopeFilter.value = "ALL";
+  categoryFilter.value = "ALL";
+  statusFilter.value = "ALL";
   recycleBinEntries.value = [];
   recycleBinPage.value = 1;
   recycleBinTotal.value = 0;
@@ -940,20 +966,21 @@ watch(id, () => {
   <div class="page-wrap">
     <MemorySectionNavigation active="long-term" />
     <PageHeader
-      eyebrow="成长系统 / 记忆系统"
       description="查看、检索和整理她的长期记忆，并追溯每条记忆的来源。"
     >
       <template #actions>
         <button
           type="button"
           class="btn"
+          :disabled="!id || !characters.length"
           @click="conversationDialogOpen = true"
         >
           录入对话
         </button>
         <button
           type="button"
-          class="btn"
+          class="btn primary"
+          :disabled="!id || !characters.length"
           @click="memoryDialogOpen = true"
         >
           新增长期记忆
@@ -996,6 +1023,9 @@ watch(id, () => {
         </div>
       </div>
 
+      <div class="memory-scope-guide">
+        <el-icon><Collection /></el-icon><span><strong>{{ character.name }}的长期记忆</strong> · 角色全局用于本角色的对话，私人记忆只在你的私人对话中使用。</span>
+      </div>
       <div class="panel-grid panel-grid-growth">
         <section>
           <div class="sec-h">
@@ -1035,6 +1065,33 @@ watch(id, () => {
                   :value="option.value"
                 />
               </el-select>
+              <el-select
+                v-model="statusFilter"
+                class="tl-select"
+                aria-label="按记忆状态筛选"
+                @change="changeFilter"
+              >
+                <el-option
+                  label="全部状态"
+                  value="ALL"
+                />
+                <el-option
+                  label="有效"
+                  value="ACTIVE"
+                />
+                <el-option
+                  label="已替代"
+                  value="SUPERSEDED"
+                />
+                <el-option
+                  label="已归档"
+                  value="ARCHIVED"
+                />
+                <el-option
+                  label="已失效"
+                  value="INVALIDATED"
+                />
+              </el-select>
               <button
                 type="button"
                 class="tool-link"
@@ -1044,7 +1101,44 @@ watch(id, () => {
               </button>
             </div>
 
-            <div class="timeline">
+            <div
+              class="memory-category-tabs"
+              aria-label="记忆分类"
+            >
+              <button
+                type="button"
+                :class="{ active: categoryFilter === 'ALL' }"
+                :aria-pressed="categoryFilter === 'ALL'"
+                @click="categoryFilter = 'ALL'; changeFilter()"
+              >
+                全部分类
+              </button>
+              <button
+                v-for="option in memoryCategoryOptions"
+                :key="option.value"
+                type="button"
+                :class="{ active: categoryFilter === option.value }"
+                :aria-pressed="categoryFilter === option.value"
+                @click="categoryFilter = option.value; changeFilter()"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <div class="filter-summary">
+              <span>{{ hasFilters ? '筛选结果' : '全部记忆' }} · {{ memoryTotal }} 条 <span class="filter-order">按最近更新排序</span></span>
+              <el-button
+                v-if="hasFilters"
+                link
+                type="primary"
+                @click="resetFilters"
+              >
+                重置筛选
+              </el-button>
+            </div>
+            <div
+              class="timeline"
+              :aria-busy="memoryLoading"
+            >
               <div
                 v-if="memoryLoading && !memoryRows.length"
                 class="tl-loading"
@@ -1061,7 +1155,7 @@ watch(id, () => {
                     class="timeline-marker"
                     :class="memoryStatusTone(row.status)"
                   >
-                    忆
+                    {{ memoryCategoryLabel(row.category).slice(0, 1) }}
                   </div>
                   <div class="timeline-content">
                     <div class="timeline-heading">
@@ -1084,6 +1178,14 @@ watch(id, () => {
                     <!-- 行内只留「编辑 + 更多」：原来 4 个链接常显，其中 2 个破坏性，
                      每行都在喊。状态类操作收进菜单，默认不占视线。 -->
                     <div class="memory-actions">
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        @click="viewMemorySource(row)"
+                      >
+                        查看内容与来源
+                      </el-button>
                       <el-button
                         link
                         type="primary"
@@ -1137,8 +1239,21 @@ watch(id, () => {
                   class="card-empty"
                 >
                   <el-icon><Collection /></el-icon>
-                  <span>{{ isSearching ? "没有匹配的记忆" : "还没有长期记忆" }}</span>
-                  <span>{{ isSearching ? "换个关键词，或清空搜索框回到完整列表" : "保存长期记忆之后，这里会按时间倒序出现对应条目" }}</span>
+                  <span>{{ hasFilters ? "没有符合条件的记忆" : "还没有长期记忆" }}</span>
+                  <span>{{ hasFilters ? "试试其他关键词，或重置筛选查看全部记忆" : "手动添加一条记忆，或从总览生成阶段总结，让重要内容沉淀下来" }}</span>
+                  <el-button
+                    v-if="hasFilters"
+                    @click="resetFilters"
+                  >
+                    重置筛选
+                  </el-button>
+                  <el-button
+                    v-else
+                    type="primary"
+                    @click="memoryDialogOpen = true"
+                  >
+                    添加第一条记忆
+                  </el-button>
                 </div>
                 <PagerBar
                   v-if="memoryTotal > 0"
@@ -1155,6 +1270,18 @@ watch(id, () => {
         </section>
       </div>
     </template>
+
+    <el-empty
+      v-if="!characters.length"
+      description="还没有角色，创建角色后即可管理它的记忆"
+    >
+      <NuxtLink
+        to="/characters"
+        class="btn primary"
+      >
+        前往创建角色
+      </NuxtLink>
+    </el-empty>
 
     <el-dialog
       v-model="memoryDialogOpen"
@@ -1215,8 +1342,8 @@ watch(id, () => {
 
     <el-dialog
       v-model="memoryEditDialogOpen"
-      title="编辑长期记忆"
-      width="min(560px, 94vw)"
+      :title="memoryReadOnly ? '记忆内容与来源' : '编辑长期记忆'"
+      width="min(680px, 94vw)"
       :close-on-click-modal="!memoryEditSaving"
     >
       <div
@@ -1229,7 +1356,16 @@ watch(id, () => {
         v-else
         label-position="top"
       >
-        <el-form-item label="记忆分类">
+        <div
+          v-if="memoryReadOnly"
+          class="memory-reading"
+        >
+          <span class="pill pill-purple">{{ memoryCategoryLabel(draftEditMemoryCategory) }}</span><p>{{ draftEditMemoryContent }}</p>
+        </div>
+        <el-form-item
+          v-if="!memoryReadOnly"
+          label="记忆分类"
+        >
           <el-select
             v-model="draftEditMemoryCategory"
             style="width:100%"
@@ -1242,7 +1378,10 @@ watch(id, () => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="记忆内容">
+        <el-form-item
+          v-if="!memoryReadOnly"
+          label="记忆内容"
+        >
           <el-input
             v-model="draftEditMemoryContent"
             type="textarea"
@@ -1292,9 +1431,18 @@ watch(id, () => {
       </el-form>
       <template #footer>
         <el-button @click="memoryEditDialogOpen = false">
-          取消
+          {{ memoryReadOnly ? '关闭' : '取消' }}
         </el-button>
         <el-button
+          v-if="memoryReadOnly"
+          type="primary"
+          :disabled="memoryEditLoading"
+          @click="memoryReadOnly = false"
+        >
+          编辑这条记忆
+        </el-button>
+        <el-button
+          v-else
           type="primary"
           :loading="memoryEditSaving"
           :disabled="memoryEditLoading"
@@ -1690,4 +1838,42 @@ watch(id, () => {
 
 /* 成长系统的长期记忆视图不显示阶段总结侧栏，主列表使用完整宽度。 */
 .panel-grid-growth { grid-template-columns: minmax(0, 1fr); }
+.stat-band { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 20px 22px; }
+.sb-cell + .sb-cell { border-left: 1px solid var(--line); padding-left: 24px; }
+.tl-card { padding: 18px 22px 10px; }
+.tl-tools { gap: 10px; }
+.tl-search { flex-basis: 240px; }
+.tl-select { width: 140px; }
+.filter-summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 46px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+.filter-order { margin-left: 12px; }
+.timeline-item { margin: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 20px 0; }
+.timeline-item:last-of-type { border-bottom: 0; }
+.timeline-item:hover { background: transparent; }
+.timeline-summary { margin: 10px 0; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
+.timeline-importance { color: var(--dim); }
+.memory-actions { justify-content: flex-end; margin-top: 0; }
+@media (max-width: 900px) { .stat-band { gap: 18px; } .sb-cell + .sb-cell { padding-left: 18px; } .tl-search { flex-basis: 100%; } .tl-select { flex: 1; min-width: 130px; } }
+@media (max-width: 640px) { .stat-band { grid-template-columns: 1fr; padding: 18px; } .sb-cell + .sb-cell { border-left: 0; border-top: 1px solid var(--line); padding: 16px 0 0; } .tl-card { padding: 14px; } .filter-order { display: none; } .timeline-heading { flex-wrap: wrap; } }
+
+.memory-scope-guide { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 18px; color: var(--dim); font-size: 12px; line-height: 1.9; }
+.memory-scope-guide .el-icon { flex: none; margin-top: 4px; color: var(--brand-strong); }
+.memory-scope-guide strong { color: var(--text-2); font-weight: 600; }
+.memory-category-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 16px 0 4px; }
+.memory-category-tabs button { flex: none; border: 1px solid transparent; border-radius: 7px; background: var(--surface-2); padding: 7px 11px; color: var(--dim); font: inherit; font-size: 12px; cursor: pointer; }
+.memory-category-tabs button:hover { color: var(--brand-strong); }
+.memory-category-tabs button.active { border-color: var(--brand-line); background: var(--brand-soft); color: var(--brand-strong); font-weight: 600; }
+.memory-category-tabs button:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.timeline { gap: 12px; padding-top: 16px; }
+.timeline-item { border: 0; border-radius: 12px; background: var(--surface-2); padding: 18px; }
+.timeline-item:last-of-type { border-bottom: 0; }
+.timeline-item:hover { background: var(--surface-3); }
+.timeline-summary { color: var(--text-2); max-width: 90ch; font-size: 15px; }
+.timeline-marker { width: 36px; height: 36px; border-radius: 10px; }
+.memory-actions { gap: 14px; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.memory-reading { padding: 2px 0 8px; }
+.memory-reading p { margin: 16px 0 0; color: var(--text-2); font-size: 15px; line-height: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mem-src { border-radius: 10px; background: var(--surface-2); border-top: 0; padding: 16px; }
+.mem-src-h { font-size: 13px; margin-bottom: 12px; }
+.mem-src-body { background: var(--surface); max-height: 300px; }
+@media (max-width: 640px) { .timeline-item { padding: 14px; gap: 10px; } .timeline-marker { display: none; } .memory-actions { justify-content: flex-start; flex-wrap: wrap; } }
 </style>

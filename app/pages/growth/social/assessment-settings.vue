@@ -242,46 +242,146 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-wrap assessment-settings">
-    <PageHeader eyebrow="成长系统 / 社交系统" description="为社交关系评估配置独立模型服务。API 地址与 Key 不继承任何其他助手的设置。" />
+    <PageHeader description="为社交关系评估配置独立模型服务。API 地址与 Key 不继承任何其他助手的设置。" />
     <div class="settings-toolbar">
-      <NuxtLink to="/growth/social">← 返回社交系统</NuxtLink>
-      <span v-if="character?.socialRelationshipAssessmentAssistantApiKeyConfigured" class="saved-key">独立 API Key 已加密保存</span>
-      <span v-else class="missing-key">尚未保存 API Key</span>
+      <NuxtLink to="/growth/social">
+        ← 返回社交系统
+      </NuxtLink>
+      <span
+        v-if="character?.socialRelationshipAssessmentAssistantApiKeyConfigured"
+        class="saved-key"
+      >独立 API Key 已加密保存</span>
+      <span
+        v-else
+        class="missing-key"
+      >尚未保存 API Key</span>
     </div>
-    <section v-if="!characterId" class="settings-card">请先在侧栏选择一个角色。</section>
-    <section v-else class="settings-card">
+    <section
+      v-if="!characterId"
+      class="settings-card"
+    >
+      请先在侧栏选择一个角色。
+    </section>
+    <section
+      v-else
+      class="settings-card"
+    >
       <div class="settings-heading">
         <div><span class="eyebrow">SOCIAL RELATIONSHIP ASSESSMENT</span><h2>关系评估 AI</h2></div>
-        <label class="switch-label"><input v-model="enabled" type="checkbox"> 启用评估配置</label>
+        <label class="switch-label"><input
+          v-model="enabled"
+          type="checkbox"
+        > 启用评估配置</label>
       </div>
-      <p class="hint">它读取当前角色的有效社交经历并生成建议。后台 Worker 已接入评估执行；AI 不会直接修改关系阶段或相处状态，采纳前会再次核验证据和关系版本。</p>
+      <p class="hint">
+        它读取当前角色的有效社交经历并生成建议。后台 Worker 已接入评估执行；AI 不会直接修改关系阶段或相处状态，采纳前会再次核验证据和关系版本。
+      </p>
       <label>服务商</label>
-      <select v-model="providerKey" @change="applyProvider(providerKey)">
-        <option v-for="provider in MODEL_PROVIDERS" :key="provider.key" :value="provider.key">{{ provider.name }}</option>
+      <select
+        v-model="providerKey"
+        @change="applyProvider(providerKey)"
+      >
+        <option
+          v-for="provider in MODEL_PROVIDERS"
+          :key="provider.key"
+          :value="provider.key"
+        >
+          {{ provider.name }}
+        </option>
       </select>
       <label>API 地址</label>
       <div class="model-row">
-        <input v-model="apiBaseUrl" placeholder="https://api.example.com/v1">
-        <a v-if="providerConsoleUrl" :href="providerConsoleUrl" target="_blank" rel="noopener noreferrer">去 {{ providerLabel }} 开放平台</a>
+        <input
+          v-model="apiBaseUrl"
+          placeholder="https://api.example.com/v1"
+        >
+        <a
+          v-if="providerConsoleUrl"
+          :href="providerConsoleUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+        >去 {{ providerLabel }} 开放平台</a>
       </div>
       <label>独立 API Key</label>
-      <input v-model="apiKey" type="password" autocomplete="new-password" placeholder="输入新 Key；留空表示保持已保存的 Key">
-      <p class="hint">Key 只在服务端加密保存。此处不会读取或回显原文，也不会回落到聊天、记忆、语境或知识助手的 Key。</p>
+      <input
+        v-model="apiKey"
+        type="password"
+        autocomplete="new-password"
+        placeholder="输入新 Key；留空表示保持已保存的 Key"
+      >
+      <p class="hint">
+        Key 只在服务端加密保存。此处不会读取或回显原文，也不会回落到聊天、记忆、语境或知识助手的 Key。
+      </p>
       <label>模型名称</label>
       <div class="model-row">
-        <input v-model="model" list="assessment-model-list" placeholder="选择，或直接输入模型名">
-        <datalist id="assessment-model-list"><option v-for="name in modelOptions" :key="name" :value="name" /></datalist>
-        <button type="button" :disabled="fetchingModels || saving || testing" @click="fetchModels">{{ fetchingModels ? "获取中…" : "获取模型" }}</button>
+        <input
+          v-model="model"
+          list="assessment-model-list"
+          placeholder="选择，或直接输入模型名"
+        >
+        <datalist id="assessment-model-list">
+          <option
+            v-for="name in modelOptions"
+            :key="name"
+            :value="name"
+          />
+        </datalist>
+        <button
+          type="button"
+          :disabled="fetchingModels || saving || testing"
+          @click="fetchModels"
+        >
+          {{ fetchingModels ? "获取中…" : "获取模型" }}
+        </button>
       </div>
       <div class="numeric-grid">
-        <div><label>温度</label><input v-model.number="temperature" type="number" min="0" max="2" step="0.1"></div>
-        <div><label>最大输入 Token</label><input v-model.number="maxInputTokens" type="number" min="4096" max="32768" step="1024"></div>
-        <div><label>最大输出 Token</label><input v-model.number="maxOutputTokens" type="number" min="1024" max="8192" step="256"></div>
+        <div>
+          <label>温度</label><input
+            v-model.number="temperature"
+            type="number"
+            min="0"
+            max="2"
+            step="0.1"
+          >
+        </div>
+        <div>
+          <label>最大输入 Token</label><input
+            v-model.number="maxInputTokens"
+            type="number"
+            min="4096"
+            max="32768"
+            step="1024"
+          >
+        </div>
+        <div>
+          <label>最大输出 Token</label><input
+            v-model.number="maxOutputTokens"
+            type="number"
+            min="1024"
+            max="8192"
+            step="256"
+          >
+        </div>
       </div>
-      <p class="hint">「最大输出 Token」要把模型的思考过程一起算进去：思考型模型常常先花 1500~2000 tokens 才开始写正文，给 2048 会被截断成空回复。评估反复失败时先把这项调到 4096 以上，或换一个非思考模型。</p>
+      <p class="hint">
+        「最大输出 Token」要把模型的思考过程一起算进去：思考型模型常常先花 1500~2000 tokens 才开始写正文，给 2048 会被截断成空回复。评估反复失败时先把这项调到 4096 以上，或换一个非思考模型。
+      </p>
       <div class="actions">
-        <button type="button" :disabled="saving || loading || testing || fetchingModels" @click="testConnection">{{ testing ? "测试中…" : "测试连接" }}</button>
-        <button class="primary" type="button" :disabled="saving || loading || testing" @click="save()">{{ saving ? "保存中…" : "保存设置" }}</button>
+        <button
+          type="button"
+          :disabled="saving || loading || testing || fetchingModels"
+          @click="testConnection"
+        >
+          {{ testing ? "测试中…" : "测试连接" }}
+        </button>
+        <button
+          class="primary"
+          type="button"
+          :disabled="saving || loading || testing"
+          @click="save()"
+        >
+          {{ saving ? "保存中…" : "保存设置" }}
+        </button>
       </div>
     </section>
   </div>
@@ -294,9 +394,9 @@ onBeforeUnmount(() => {
 .saved-key,.missing-key{font-size:12px}
 .saved-key{color:var(--success,var(--accent))}
 .missing-key{color:var(--dim)}
-.settings-card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:22px;max-width:820px}
+.settings-card{border:0;border-radius:12px;background:var(--surface);box-shadow:none;padding:22px;max-width:820px}
 .settings-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
-.eyebrow{font-size:11px;letter-spacing:.08em;color:var(--dim)}
+.eyebrow{font-size:12px;letter-spacing:.08em;color:var(--dim)}
 h2{margin:5px 0 0;font-size:18px;color:var(--ink)}
 .hint{color:var(--dim);font-size:13px;line-height:1.7;margin:10px 0 18px}
 label{display:block;color:var(--ink);font-size:13px;margin:14px 0 7px}

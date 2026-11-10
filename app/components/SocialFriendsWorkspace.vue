@@ -648,7 +648,6 @@ onMounted(() => load(1));
 <template>
   <div class="page-wrap fr-a">
     <PageHeader
-      eyebrow="成长系统 / 社交系统 / 好友档案"
       description="私聊来访、群里见过的人都会记录下来。可以手动标记真人 / AI，并按当前角色决定她是否与对方交流。"
     >
       <template #actions>
@@ -1224,9 +1223,11 @@ onMounted(() => load(1));
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0 24px;
   margin-bottom: var(--sp-4);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 12px;
   background: var(--surface);
-  padding: 16px 20px 17px;
+  box-shadow: none;
+  padding: 22px;
 }
 .band-cell { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .band-k { color: var(--dim); font-size: 12px; }
@@ -1246,9 +1247,11 @@ onMounted(() => load(1));
 .friend-card {
   display: flex;
   flex-direction: column;
-  border-radius: 10px;
+  border: 0;
+  border-radius: 12px;
   background: var(--surface);
-  padding: 14px 16px 13px;
+  box-shadow: none;
+  padding: 22px;
 }
 .friend-card.is-skeleton { gap: 10px; padding-bottom: 18px; }
 
@@ -1297,7 +1300,7 @@ onMounted(() => load(1));
 .alias-editor { margin-top: 9px; border-radius: 8px; background: var(--surface-2); padding: 9px 11px 10px; }
 .alias-editor input { width: 100%; border: 0; background: none; color: var(--text); font-size: 13px; line-height: 1.6; outline: none; }
 .alias-editor input::placeholder { color: var(--faint); }
-.alias-hint { margin: 5px 0 0; color: var(--dim); font-size: 11px; line-height: 1.6; }
+.alias-hint { margin: 5px 0 0; color: var(--dim); font-size: 12px; line-height: 1.6; }
 .alias-actions { display: flex; gap: 8px; margin-top: 7px; }
 .alias-actions button { height: 26px; border: 0; border-radius: 6px; padding: 0 11px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .alias-save { background: var(--brand); color: #fff; }
@@ -1319,7 +1322,7 @@ onMounted(() => load(1));
   background: var(--brand);
   padding: 0 5px;
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -1329,7 +1332,7 @@ onMounted(() => load(1));
 .suggest-desc { margin: 0 0 12px; color: var(--dim); font-size: 13px; line-height: 1.7; }
 .suggest-loading, .suggest-empty { padding: 24px 0; color: var(--dim); font-size: 13px; text-align: center; }
 .suggest-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; max-height: 50vh; overflow-y: auto; }
-.suggest-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-radius: 10px; background: var(--surface-2); padding: 12px 14px; }
+.suggest-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border: 0; border-radius: 12px; background: var(--surface-2); box-shadow: none; padding: 12px 14px; }
 .suggest-main { min-width: 0; flex: 1; }
 .suggest-alias { color: var(--text); font-size: 15px; font-weight: 700; }
 .suggest-for { margin-left: 8px; color: var(--dim); font-size: 12px; }
@@ -1402,9 +1405,11 @@ onMounted(() => load(1));
   align-items: center;
   gap: 12px;
   margin-bottom: var(--sp-4);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 12px;
   background: var(--surface);
-  padding: 10px 16px;
+  box-shadow: none;
+  padding: 22px;
 }
 .sel-count { color: var(--text-2); font-size: 14px; font-weight: 600; }
 .sel-count b { color: var(--brand-strong); font-variant-numeric: tabular-nums; }
@@ -1515,9 +1520,11 @@ onMounted(() => load(1));
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
+  border: 0;
+  border-radius: 12px;
   background: var(--surface);
-  padding: 32px 24px;
+  box-shadow: none;
+  padding: 22px;
   text-align: center;
 }
 .empty-icon {
@@ -1543,7 +1550,10 @@ onMounted(() => load(1));
   .seg { max-width: 100%; overflow-x: auto; }
 }
 @media (max-width: 560px) {
-  .band { gap: 0 12px; padding: 14px 16px 15px; }
+  .band { gap: 0 12px; }
   .band-f { display: none; }
+}
+@media (max-width: 650px) {
+  .band, .friend-card, .friend-card.is-skeleton, .sel-bar, .empty-block { padding: 16px; }
 }
 </style>

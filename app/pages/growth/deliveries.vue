@@ -216,7 +216,6 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; deta
 <template>
   <div class="page-wrap delivery-page">
     <PageHeader
-      eyebrow="成长系统 / 事件投递"
       description="查看当前角色的领域事件投递、积压与恢复记录。"
     />
     <el-empty
@@ -507,7 +506,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; deta
 
 <style scoped>
 .delivery-page { font-size: 14px; }
-.delivery-overview, .delivery-list { margin-top: 18px; padding: 20px; }
+.delivery-overview, .delivery-list { margin-top: 18px; padding: 22px; border: 0; border-radius: 12px; box-shadow: none; }
 .delivery-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .delivery-heading strong { font-size: 16px; }
 .delivery-heading p { margin: 4px 0 0; color: var(--dim); }

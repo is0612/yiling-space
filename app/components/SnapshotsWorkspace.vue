@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character, Snapshot, SnapshotAnalysis, SnapshotDetail, SnapshotSourceMessage } from "~/utils/mock-data";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
 
-const pageDescription = "自动归档：调模型提炼对话与长期记忆，周期到了由调度器自动跑；想现在跑一次，到「记忆系统总览」点「阶段总结」。手动存档：只把当下这一刻拍成快照，不调模型。";
+const pageDescription = "回看每个周期的经历、变化与约定，沿着来源了解每一份总结。";
 
 const characters = useCharacterList();
 await useCharacterListData();
@@ -59,6 +59,33 @@ const showManual = ref(false);
 
 const detail = ref<SnapshotDetail | null>(null);
 const detailLoading = ref(false);
+const detailPanelEl = ref<HTMLElement | null>(null);
+const overviewLink = computed(() => ({ path: "/growth/memory", query: id.value ? { c: id.value } : {} }));
+const readingSections = computed(() => {
+  const analysis = detail.value?.analysis;
+  if (!analysis) return [];
+  return [
+    { key: "events", label: "重要事件", count: analysis.importantEvents.length },
+    { key: "facts", label: "事实与偏好", count: analysis.factAndPreferenceChanges.length },
+    { key: "relationships", label: "关系变化", count: analysis.relationshipChanges.length },
+    { key: "goals", label: "目标与承诺", count: analysis.goalsAndCommitments.length },
+    { key: "topics", label: "待跟进", count: analysis.unresolvedTopics.length },
+    { key: "differences", label: "阶段变化", count: analysis.differencesFromPrevious.length },
+    { key: "review", label: "记忆与审核", count: analysis.memoryChangesApplied.length },
+  ].filter((section) => section.count > 0);
+});
+function jumpToSection(key: string) {
+  detailPanelEl.value?.querySelector<HTMLElement>(`[data-reading-section="${key}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+async function openSelectedDetail(snapshot: Snapshot) {
+  const epoch = characterEpoch;
+  selectDetail(snapshot);
+  // 窄屏列表在详情上方；明确点选后定位阅读区（含加载态），自动选中与翻页不跳动页面。
+  await nextTick();
+  if (epoch === characterEpoch && window.matchMedia("(max-width: 980px)").matches) {
+    detailPanelEl.value?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+}
 
 /** 来源消息默认收起，展开时才请求；一次一页，分页器仍用服务端的 total。 */
 const sourcesOpen = ref(false);
@@ -126,7 +153,7 @@ const emptyListText = computed(() => {
   if (manualCount.value && !showManual.value) {
     return `这里还没有 AI 总结。另有 ${manualCount.value} 份手动存档被收起，点上面的「手动存档」可以展开。`;
   }
-  return "还没有归档过。到「记忆系统总览」点「阶段总结」现在就调模型跑一次；「手动存档」只留一份不调模型的快照。";
+  return "生成阶段总结，回顾这一周期的经历与变化。手动存档只保留记录副本，不包含 AI 提炼结果。";
 });
 
 function statusParam() {
@@ -584,10 +611,16 @@ watch(id, () => {
       active="snapshots"
     />
     <PageHeader
-      eyebrow="成长系统 / 记忆系统 / 阶段总结"
       :description="pageDescription"
     >
       <template #actions>
+        <NuxtLink
+          :to="overviewLink"
+          class="btn primary"
+          :aria-disabled="!current"
+        >
+          前往生成总结
+        </NuxtLink>
         <button
           type="button"
           class="btn"
@@ -627,6 +660,9 @@ watch(id, () => {
         </div>
       </div>
 
+      <div class="archive-tip">
+        <el-icon><Files /></el-icon><span>AI 总结记录经历与变化；手动存档只保存记录副本，不调用模型。重新提炼会创建新版本，历史仍可查阅。</span>
+      </div>
       <div class="snap-grid">
         <section>
           <div class="sec-h">
@@ -692,7 +728,8 @@ watch(id, () => {
                   type="button"
                   class="snap-row"
                   :class="{ on: detail?.id === snapshot.id }"
-                  @click="selectDetail(snapshot)"
+                  :aria-pressed="detail?.id === snapshot.id"
+                  @click="openSelectedDetail(snapshot)"
                 >
                   <span class="snap-row-top">
                     <span class="snap-row-title">{{ titleOf(snapshot) }} <span class="snap-row-ver">v{{ snapshot.version }}</span></span>
@@ -712,6 +749,7 @@ watch(id, () => {
                       >{{ snapshot.status }}</span>
                     </span>
                   </span>
+                  <span class="snap-row-period">{{ snapshot.range }}</span>
                   <span class="snap-row-sum">{{ snapshot.summary }}</span>
                   <span class="snap-row-meta">
                     <el-icon><Calendar /></el-icon>{{ snapshot.date.slice(5, 16) }} ·
@@ -719,12 +757,27 @@ watch(id, () => {
                     <template v-else>这个周期没有可归档的内容</template>
                   </span>
                 </button>
-                <p
+                <div
                   v-if="!items.length"
-                  class="list-empty"
+                  class="list-empty snapshot-empty"
                 >
-                  {{ emptyListText }}
-                </p>
+                  <el-icon><Files /></el-icon>
+                  <strong>{{ hasFilters ? "没有匹配的总结" : "这一段经历，还等着被整理" }}</strong>
+                  <p>{{ emptyListText }}</p>
+                  <el-button
+                    v-if="hasFilters"
+                    @click="resetFilters"
+                  >
+                    重置筛选
+                  </el-button>
+                  <NuxtLink
+                    v-else
+                    :to="overviewLink"
+                    class="btn"
+                  >
+                    前往生成第一份总结
+                  </NuxtLink>
+                </div>
               </template>
             </div>
             <PagerBar
@@ -740,7 +793,12 @@ watch(id, () => {
           </div>
         </section>
 
-        <section>
+        <section
+          ref="detailPanelEl"
+          class="detail-panel"
+          aria-label="阶段总结阅读区"
+          tabindex="-1"
+        >
           <div class="sec-h">
             <h2>阶段总结详情</h2>
             <span class="sub">{{ detail ? "v" + detail.version : "未选择" }}</span>
@@ -760,10 +818,35 @@ watch(id, () => {
                   >{{ detail.status }}</span>
                 </span>
               </header>
-              <!-- 四个数字收成一行：原来四行「标签 …… 值」各带一条分隔线，占了 120px -->
-              <p class="d-meta">
-                {{ detail.range }} · 生成于 {{ detail.date }} · 覆盖 {{ detail.messages }} 条消息 · {{ detail.events }} 个事件
-              </p>
+              <dl class="detail-facts">
+                <div><dt>覆盖周期</dt><dd>{{ detail.range }}</dd></div>
+                <div><dt>生成时间</dt><dd>{{ detail.date }}</dd></div>
+                <div><dt>当前阅读</dt><dd>版本 v{{ detail.version }} · {{ detail.messages }} 条消息 · {{ detail.events }} 个事件</dd></div>
+              </dl>
+              <nav
+                v-if="readingSections.length"
+                class="reading-nav"
+                aria-label="总结章节定位"
+              >
+                <span>快速定位</span>
+                <button
+                  v-for="section in readingSections"
+                  :key="section.key"
+                  type="button"
+                  @click="jumpToSection(section.key)"
+                >
+                  {{ section.label }}<small>{{ section.count }}</small>
+                </button>
+                <button
+                  type="button"
+                  @click="jumpToSection('sources')"
+                >
+                  来源原文
+                </button>
+              </nav>
+              <h3 class="summary-label">
+                本期摘要
+              </h3>
               <p class="d-summary">
                 {{ detail.summary }}
               </p>
@@ -788,6 +871,7 @@ watch(id, () => {
 
                 <div
                   v-if="detail.analysis.importantEvents.length"
+                  data-reading-section="events"
                   class="a-block"
                 >
                   <h4>重要事件</h4>
@@ -804,6 +888,7 @@ watch(id, () => {
 
                 <div
                   v-if="detail.analysis.factAndPreferenceChanges.length"
+                  data-reading-section="facts"
                   class="a-block"
                 >
                   <h4>事实与偏好变化</h4>
@@ -820,6 +905,7 @@ watch(id, () => {
 
                 <div
                   v-if="detail.analysis.relationshipChanges.length"
+                  data-reading-section="relationships"
                   class="a-block"
                 >
                   <h4>关系变化</h4>
@@ -835,6 +921,7 @@ watch(id, () => {
 
                 <div
                   v-if="detail.analysis.goalsAndCommitments.length"
+                  data-reading-section="goals"
                   class="a-block"
                 >
                   <h4>目标与承诺</h4>
@@ -851,6 +938,7 @@ watch(id, () => {
 
                 <div
                   v-if="detail.analysis.unresolvedTopics.length"
+                  data-reading-section="topics"
                   class="a-block"
                 >
                   <h4>待跟进话题</h4>
@@ -866,6 +954,7 @@ watch(id, () => {
 
                 <div
                   v-if="detail.analysis.differencesFromPrevious.length"
+                  data-reading-section="differences"
                   class="a-block"
                 >
                   <h4>相较上一份总结</h4>
@@ -881,6 +970,7 @@ watch(id, () => {
 
                 <div
                   v-if="detail.analysis.memoryChangesApplied.length"
+                  data-reading-section="review"
                   class="a-block"
                 >
                   <h4>
@@ -941,7 +1031,10 @@ watch(id, () => {
                 {{ detail.kind === "MANUAL" ? "这是一份手动存档：只保存了当时的消息来源与长期记忆副本，没有 AI 提炼结果。要 AI 总结这段时间，用自动归档。" : "这是一份旧版总结，保存的是结构化记录；AI 提炼结果会显示在这里。" }}
               </p>
 
-              <section class="d-sec">
+              <section
+                class="d-sec"
+                data-reading-section="sources"
+              >
                 <button
                   type="button"
                   class="src-toggle"
@@ -1060,12 +1153,23 @@ watch(id, () => {
               v-else
               class="list-empty"
             >
-              从左侧点一份阶段总结，这里会展开摘要、AI 提炼结果与来源原文。
+              {{ hasFilters ? "调整筛选后，选择一份总结开始阅读。" : "选择一份阶段总结，查看本期摘要、变化与来源依据。" }}
             </p>
           </div>
         </section>
       </div>
     </template>
+    <el-empty
+      v-else
+      description="创建角色后，即可查看它的阶段总结与历史版本"
+    >
+      <NuxtLink
+        to="/characters"
+        class="btn primary"
+      >
+        前往创建角色
+      </NuxtLink>
+    </el-empty>
   </div>
 </template>
 
@@ -1167,15 +1271,67 @@ watch(id, () => {
 .d-action{flex:none}
 .d-action .el-icon{margin-right:2px}
 
-/* ── 响应式 ────────────────────────────────────────── */
-@media(max-width:1150px){
+/* 列表保留选中上下文，正文留足行宽；窄屏选中后定位到阅读区。 */
+.stat-band{padding:20px 22px;gap:16px 24px}
+.sb-f{white-space:normal;line-height:1.7}
+.archive-tip{display:flex;align-items:flex-start;gap:8px;margin-bottom:20px;color:var(--dim);font-size:12px;line-height:1.8}
+.archive-tip .el-icon{flex:none;margin-top:3px}
+.snap-grid{grid-template-columns:minmax(290px,360px) minmax(0,1fr);gap:20px}
+.snap-grid > section{min-width:0}
+.list-card{padding:14px 12px 8px}
+.filters{gap:7px;flex-wrap:wrap}
+.manual-chip{margin-left:0}
+.snap-list{max-height:max(280px,calc(100dvh - 390px));gap:5px;margin-top:12px;overscroll-behavior:contain}
+.snap-row{gap:9px;padding:14px 12px;border:1px solid transparent}
+.snap-row.on{border-color:var(--brand-line);box-shadow:inset 3px 0 0 var(--brand)}
+.snap-row-top{align-items:flex-start;flex-wrap:wrap}
+.snap-row-tags{flex-wrap:wrap;gap:5px}
+.snap-row-period{color:var(--text-2);font-size:12px;line-height:1.6}
+.snap-row-meta{flex-wrap:wrap;line-height:1.7}
+.snap-row:focus-visible,.reading-nav button:focus-visible,.src-toggle:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
+.detail-panel{scroll-margin-top:90px}
+.detail-card{padding:26px 28px 22px}
+.d-head{align-items:flex-start;flex-wrap:wrap}
+.d-head h2{font-size:21px;line-height:1.6;overflow-wrap:anywhere}
+.detail-facts{display:grid;gap:7px;margin:16px 0 0;border-radius:10px;background:var(--surface-2);padding:14px 16px}
+.detail-facts > div{display:flex;align-items:baseline;gap:14px;min-width:0}
+.detail-facts dt{flex:none;width:48px;color:var(--dim);font-size:12px}
+.detail-facts dd{margin:0;color:var(--text-2);font-size:12px;line-height:1.8;overflow-wrap:anywhere}
+.reading-nav{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:18px 0 24px}
+.reading-nav > span{color:var(--dim);font-size:12px;margin-right:4px}
+.reading-nav button{display:inline-flex;align-items:center;gap:5px;min-height:30px;border:0;border-radius:6px;background:var(--surface-2);padding:4px 9px;color:var(--text-2);font:inherit;font-size:12px;cursor:pointer}
+.reading-nav button:hover{background:var(--brand-soft);color:var(--brand-strong)}
+.reading-nav small{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.summary-label{margin:22px 0 0;color:var(--text-2);font-size:13px;font-weight:650}
+.d-summary{margin-top:10px;font-size:15px;line-height:2}
+.a-block,.d-sec{scroll-margin-top:90px}
+.a-block + .a-block{margin-top:26px}
+.a-block h4{font-size:14px;margin-bottom:12px;line-height:1.7}
+.a-item{padding:14px 16px}
+.a-item p{line-height:1.95;color:var(--text-2)}
+.a-item + .a-item{margin-top:8px}
+.a-foot,.src-top{flex-wrap:wrap}
+.a-prev{flex-wrap:wrap;gap:4px 8px}
+.src-toggle{flex-wrap:wrap;text-align:left;line-height:1.8}
+.snapshot-empty{display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px 16px}
+.snapshot-empty > .el-icon{font-size:28px;color:var(--dim)}
+.snapshot-empty strong{color:var(--text-2);font-size:14px;line-height:1.7}
+.snapshot-empty p{margin:0;font-size:12px;line-height:1.9}
+@media(max-width:980px){
   .snap-grid{grid-template-columns:minmax(0,1fr)}
+  .snap-list{max-height:350px}
+  .stat-band{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:640px){
-  .stat-band{padding:14px}
-  .sb-f{white-space:normal}
-  .detail-card{padding:16px 14px 14px}
+  .stat-band{padding:16px;gap:18px}
+  .detail-card{padding:20px 16px 16px}
+  .detail-facts{padding:12px}
+  .detail-facts > div{gap:10px}
+  .d-head h2{font-size:18px}
   .d-foot{flex-direction:column;align-items:stretch}
   .d-action{width:100%}
+  .src-time{flex:1 1 130px}
+  .a-actions{margin-left:0;flex-wrap:wrap}
+  .a-rejected{display:block;margin-left:0}
 }
 </style>

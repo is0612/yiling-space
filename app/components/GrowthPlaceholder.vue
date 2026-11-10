@@ -2,7 +2,7 @@
 /**
  * 成长系统各页的共用骨架。
  *
- * 标题归顶栏；这里负责 crumb、说明和统一的当前角色上下文。
+ * 标题归顶栏；这里负责说明和统一的当前角色上下文。
  * 各成长页不再自行解析 query / cookie，也不各自维护角色选择状态。
  * 具体业务数据仍由后续阶段按模块接入，本组件不预置业务结构。
  */
@@ -30,7 +30,6 @@ const unavailableMessage = computed(() => {
 <template>
   <div class="page-wrap">
     <PageHeader
-      :eyebrow="eyebrow"
       :description="description"
     />
 
@@ -84,8 +83,8 @@ const unavailableMessage = computed(() => {
   gap: 12px;
   margin: 18px 0;
   padding: 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border: 0;
+  border-radius: 12px;
   background: var(--surface);
 }
 .growth-character-avatar {
@@ -113,7 +112,7 @@ const unavailableMessage = computed(() => {
   color: var(--dim);
   font-size: 12px;
 }
-.growth-blank { padding: 26px 22px; }
+.growth-blank { padding: 26px 22px; border: 0; border-radius: 12px; box-shadow: none; }
 .growth-blank-empty {
   display: flex;
   align-items: center;

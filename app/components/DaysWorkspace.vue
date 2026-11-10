@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Calendar, Search, ArrowLeft, ArrowRight, Document } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character } from "~/utils/mock-data";
 import { formatDayClock } from "~/utils/day-time";
@@ -105,6 +106,15 @@ function originalCountLabel(group: DayMessageGroup) {
 }
 const detailLoading = ref(false);
 const showMessages = ref(false);
+const selectedDayIndex = computed(() => days.value.findIndex(day => day.dayKey === selected.value));
+function adjacentDay(offset: number) {
+  const day = days.value[selectedDayIndex.value + offset];
+  if (day) selectDay(day.dayKey);
+}
+function weekdayOf(dayKey: string) {
+  const date = new Date(`${dayKey}T12:00:00Z`);
+  return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { weekday: "long", timeZone: "UTC" }).format(date);
+}
 
 // 每次新请求都会推进序号；角色、日期或搜索条件变化时，旧响应只能被丢弃。
 let daysRequestSeq = 0;
@@ -514,9 +524,24 @@ await loadDays();
       active="events"
     />
     <PageHeader
-      eyebrow="成长系统 / 记忆系统"
-      description="一天一行，点开看那天发生了什么。忆泡是整理过的事件，原文是当时的对话。"
-    />
+      description="沿着日期回看经历，让每一天的人、事和对话都有迹可循。"
+    >
+      <template #actions>
+        <NuxtLink
+          :to="{ path: '/growth/memory', query: { c: id } }"
+          class="btn"
+        >
+          前往整理忆泡 <span aria-hidden="true">↗</span>
+        </NuxtLink>
+      </template>
+    </PageHeader>
+    <div
+      v-if="currentCharacter"
+      class="day-context"
+    >
+      <span><el-icon><Calendar /></el-icon>{{ currentCharacter.name }}的经历档案</span>
+      <span>日期与时间按 {{ timeZone }} 显示</span>
+    </div>
 
     <div
       v-if="!currentCharacter"
@@ -539,10 +564,14 @@ await loadDays();
         <el-input
           v-model="searchQuery"
           class="day-search"
-          size="small"
-          placeholder="搜忆泡标题或详情"
+          placeholder="搜索经历、人物或关键词"
+          aria-label="搜索忆泡标题和详情"
           clearable
-        />
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
         <div
           v-if="searchActive"
           class="muted-note day-empty"
@@ -559,7 +588,15 @@ await loadDays();
           v-else-if="!days.length"
           class="muted-note day-empty"
         >
-          还没有整理过任何一天。到「记忆系统总览」点「整理忆泡」开始整理。
+          {{ searchActive ? '没有找到相关经历，试试其他关键词。' : '还没有整理过的经历，前往总览整理忆泡后，这里就会留下记录。' }}
+          <el-button
+            v-if="searchActive"
+            link
+            type="primary"
+            @click="searchQuery = ''"
+          >
+            清空搜索
+          </el-button>
         </div>
         <button
           v-for="day in days"
@@ -567,9 +604,11 @@ await loadDays();
           type="button"
           class="day-item"
           :class="{ active: day.dayKey === selected }"
+          :aria-current="day.dayKey === selected ? 'date' : undefined"
           @click="selectDay(day.dayKey)"
         >
-          <span class="day-item-label">{{ dayLabel(day.dayKey) }}</span>
+          <span class="day-date-tile"><strong>{{ Number(day.dayKey.slice(8, 10)) }}</strong><span>{{ Number(day.dayKey.slice(5, 7)) }} 月</span></span>
+          <span class="day-date-copy"><span class="day-item-label">{{ dayLabel(day.dayKey) }}</span><span class="day-weekday">{{ day.dayKey.slice(0, 4) }} · {{ weekdayOf(day.dayKey) }}</span></span>
           <span class="day-item-meta">
             {{ day.eventCount }} 条
             <span
@@ -600,7 +639,28 @@ await loadDays();
         </div>
         <template v-else-if="detail">
           <header class="day-detail-head">
-            <h2>{{ dayLabel(detail.day?.dayKey ?? selected) }}</h2>
+            <div class="day-title-row">
+              <div><span class="day-detail-kicker">{{ selected }} · {{ weekdayOf(selected) }}</span><h2>{{ dayLabel(detail.day?.dayKey ?? selected) }}的经历</h2></div>
+              <div
+                class="day-stepper"
+                aria-label="切换当前页日期"
+              >
+                <el-button
+                  :icon="ArrowLeft"
+                  :disabled="selectedDayIndex < 0 || selectedDayIndex >= days.length - 1"
+                  aria-label="当前页更早一天"
+                  title="当前页更早一天"
+                  @click="adjacentDay(1)"
+                />
+                <el-button
+                  :icon="ArrowRight"
+                  :disabled="selectedDayIndex <= 0"
+                  aria-label="当前页更新一天"
+                  title="当前页更新一天"
+                  @click="adjacentDay(-1)"
+                />
+              </div>
+            </div>
             <span class="muted-note">
               {{ detail.eventsTotal }} 条忆泡
               <template v-if="detail.day?.extractedAt"> · 上次整理 {{ clockOf(detail.day.extractedAt) }}</template>
@@ -608,6 +668,16 @@ await loadDays();
                 · 整理 {{ detail.usage.calls }} 次 · {{ formatTokens(detail.usage.tokens) }} tokens
               </template>
             </span>
+            <div class="day-detail-toolbar">
+              <span>{{ detail.day?.state === 'FINAL' ? '已完成整理' : detail.day?.state === 'DRAFT' ? '尚未收口，可继续整理' : '尚无整理进度' }} · 当前页 {{ activeEvents.length }} 条可见忆泡</span><el-button
+                link
+                type="primary"
+                :icon="Document"
+                @click="toggleMessages"
+              >
+                {{ showMessages ? '收起当天原文' : '查看当天原文' }}
+              </el-button>
+            </div>
           </header>
 
           <div
@@ -819,7 +889,7 @@ await loadDays();
     <el-dialog
       v-model="editOpen"
       title="编辑忆泡"
-      width="520px"
+      width="min(560px, 94vw)"
     >
       <el-form
         label-width="72px"
@@ -919,4 +989,48 @@ await loadDays();
 @media (max-width: 900px) {
   .day-layout { grid-template-columns: 1fr; }
 }
+.day-context { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin: 0 0 16px; color: var(--dim); font-size: 12px; }
+.day-context > span:first-child { display: inline-flex; align-items: center; gap: 7px; color: var(--text-2); font-weight: 500; }
+.card { border: 0; border-radius: 12px; box-shadow: none; }
+.day-layout { grid-template-columns: 290px minmax(0, 1fr); align-items: start; margin-top: 0; }
+.day-list { position: sticky; top: 20px; padding: 18px 14px; max-height: calc(100dvh - 130px); overflow-y: auto; }
+.day-list-head { padding: 0 4px; }
+.day-list-head h2 { margin: 0; }
+.day-search { margin: 10px 0; }
+.day-item { min-height: 78px; padding: 10px 8px; gap: 10px; flex: none; }
+.day-item.active { border-color: var(--brand-line); background: var(--brand-soft); }
+.day-date-tile { display: flex; width: 44px; min-height: 52px; flex: none; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border-radius: 9px; background: var(--surface-2); color: var(--text-2); }
+.day-date-tile strong { font-size: 21px; font-weight: 600; line-height: 1.1; }
+.day-date-tile > span { font-size: 12px; }
+.active .day-date-tile { background: var(--surface); color: var(--brand-strong); }
+.day-date-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 6px; }
+.day-item-label { font-weight: 600; }
+.day-weekday { font-size: 12px; color: var(--dim); }
+.day-item-meta { flex-direction: column; align-items: flex-end; color: var(--dim); }
+.day-detail { padding: 24px 28px; min-height: 440px; }
+.day-detail-head { display: block; border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 18px; }
+.day-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.day-detail-kicker { color: var(--dim); font-size: 12px; }
+.day-detail-head h2 { margin: 8px 0 0; font-size: 23px; }
+.day-detail-head > .muted-note { display: block; color: var(--dim); line-height: 1.9; }
+.day-stepper { display: flex; flex: none; gap: 6px; }
+.day-stepper .el-button { margin: 0; padding: 8px; }
+.day-detail-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 14px; border-radius: 8px; background: var(--surface-2); padding: 10px 12px; color: var(--dim); font-size: 12px; }
+.event-card { position: relative; border-top: 0; border-left: 1px solid var(--line); margin-left: 5px; padding: 0 0 26px 22px; }
+.event-card::before { content: ''; position: absolute; top: 5px; left: -5px; width: 9px; height: 9px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px var(--surface); }
+.event-head { color: var(--dim); flex-wrap: wrap; }
+.event-time { color: var(--brand-strong); font-variant-numeric: tabular-nums; }
+.event-title { margin: 10px 0 8px; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.event-detail { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.95; white-space: pre-wrap; overflow-wrap: anywhere; }
+.event-meta { color: var(--dim); margin-top: 12px; line-height: 1.8; }
+.event-actions { align-items: center; justify-content: flex-end; flex-wrap: wrap; border-radius: 8px; background: var(--surface-2); padding: 8px 12px; margin-top: 14px; }
+.day-originals { border-top-style: solid; }
+.original-list { border-radius: 10px; background: var(--surface-2); padding: 16px; }
+.original-group { flex-wrap: wrap; }
+.original-line { border-radius: 8px; background: var(--surface); padding: 10px 12px; margin: 0; }
+.original-text { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.original-role, .original-group-n, .archived-title { color: var(--dim); }
+.day-item:focus-visible, .btn-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+@media (max-width: 1050px) { .day-layout { grid-template-columns: 245px minmax(0, 1fr); gap: 14px; } .day-detail { padding: 20px; } }
+@media (max-width: 760px) { .day-layout { grid-template-columns: 1fr; } .day-list { position: static; max-height: 350px; } .day-detail { padding: 18px; } .day-detail-head h2 { font-size: 20px; } .event-card { padding-left: 16px; } .original-line { flex-direction: column; gap: 4px; } .original-role { flex-basis: auto; } }
 </style>

@@ -184,41 +184,124 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-wrap knowledge-settings">
-    <PageHeader eyebrow="成长系统 / 知识系统" description="为知识整理配置独立模型。这里的 API Key 不会与聊天模型、记忆助手或语境助手共用。" />
+    <PageHeader description="为知识整理配置独立模型。这里的 API Key 不会与聊天模型、记忆助手或语境助手共用。" />
     <div class="settings-toolbar">
-      <NuxtLink :to="`/growth/knowledge?c=${characterId}`">← 返回知识系统</NuxtLink>
-      <span v-if="character?.knowledgeAssistantApiKeyConfigured" class="saved-key">独立 API Key 已加密保存</span>
-      <span v-else class="missing-key">尚未保存 API Key</span>
+      <NuxtLink :to="`/growth/knowledge?c=${characterId}`">
+        ← 返回知识系统
+      </NuxtLink>
+      <span
+        v-if="character?.knowledgeAssistantApiKeyConfigured"
+        class="saved-key"
+      >独立 API Key 已加密保存</span>
+      <span
+        v-else
+        class="missing-key"
+      >尚未保存 API Key</span>
     </div>
-    <section v-if="!characterId" class="settings-card">请先在侧栏选择一个角色。</section>
-    <section v-else class="settings-card">
+    <section
+      v-if="!characterId"
+      class="settings-card"
+    >
+      请先在侧栏选择一个角色。
+    </section>
+    <section
+      v-else
+      class="settings-card"
+    >
       <div class="settings-heading">
         <div><span class="eyebrow">KNOWLEDGE ASSISTANT</span><h2>知识处理助手</h2></div>
-        <label class="switch-label"><input v-model="enabled" type="checkbox"> 启用助手</label>
+        <label class="switch-label"><input
+          v-model="enabled"
+          type="checkbox"
+        > 启用助手</label>
       </div>
-      <p class="hint">助手负责判断候选是否值得保存、整理内容、识别重复与冲突。处理结果先进入待确认，不会自行写入正式知识库。</p>
+      <p class="hint">
+        助手负责判断候选是否值得保存、整理内容、识别重复与冲突。处理结果先进入待确认，不会自行写入正式知识库。
+      </p>
       <div class="collection-option">
-        <label class="switch-label"><input v-model="autoCollectEnabled" type="checkbox"> 从聊天中自动发现知识候选</label>
-        <p class="hint">此开关只控制是否保存聊天知识候选：开启后，群聊和好友私聊中识别到的可复用知识原文会进入候选箱，仍需知识处理助手整理并由你确认；关闭时不保存聊天候选。私聊会先经过本地规则预筛。无论此开关状态，只要语境助手已启用，系统仍可按需检索正式知识库；未确认候选不会参与检索。</p>
+        <label class="switch-label"><input
+          v-model="autoCollectEnabled"
+          type="checkbox"
+        > 从聊天中自动发现知识候选</label>
+        <p class="hint">
+          此开关只控制是否保存聊天知识候选：开启后，群聊和好友私聊中识别到的可复用知识原文会进入候选箱，仍需知识处理助手整理并由你确认；关闭时不保存聊天候选。私聊会先经过本地规则预筛。无论此开关状态，只要语境助手已启用，系统仍可按需检索正式知识库；未确认候选不会参与检索。
+        </p>
       </div>
       <label>模型名称</label>
       <div class="model-row">
-        <input v-model="model" list="knowledge-model-list" placeholder="例如 deepseek-chat">
-        <datalist id="knowledge-model-list"><option v-for="name in models" :key="name" :value="name" /></datalist>
-        <button type="button" :disabled="fetchingModels || saving" @click="fetchModels">{{ fetchingModels ? "获取中…" : "获取模型" }}</button>
+        <input
+          v-model="model"
+          list="knowledge-model-list"
+          placeholder="例如 deepseek-chat"
+        >
+        <datalist id="knowledge-model-list">
+          <option
+            v-for="name in models"
+            :key="name"
+            :value="name"
+          />
+        </datalist>
+        <button
+          type="button"
+          :disabled="fetchingModels || saving"
+          @click="fetchModels"
+        >
+          {{ fetchingModels ? "获取中…" : "获取模型" }}
+        </button>
       </div>
       <label>API 地址（留空时沿用角色聊天 API 地址）</label>
-      <input v-model="apiBaseUrl" placeholder="https://api.example.com/v1">
+      <input
+        v-model="apiBaseUrl"
+        placeholder="https://api.example.com/v1"
+      >
       <label>独立 API Key</label>
-      <input v-model="apiKey" type="password" autocomplete="new-password" placeholder="输入新 Key；留空表示保持已保存的 Key">
-      <div class="hint">Key 仅在服务端加密保存，页面不会读取或回显原文。更换服务商时请填写对应服务商的 Key。</div>
+      <input
+        v-model="apiKey"
+        type="password"
+        autocomplete="new-password"
+        placeholder="输入新 Key；留空表示保持已保存的 Key"
+      >
+      <div class="hint">
+        Key 仅在服务端加密保存，页面不会读取或回显原文。更换服务商时请填写对应服务商的 Key。
+      </div>
       <div class="numeric-grid">
-        <div><label>温度</label><input v-model.number="temperature" type="number" min="0" max="2" step="0.1"></div>
-        <div><label>最大输入 Token</label><input v-model.number="maxInputTokens" type="number" min="4096" max="32768" step="1024"></div>
-        <div><label>最大输出 Token</label><input v-model.number="maxOutputTokens" type="number" min="512" max="8192" step="256"></div>
+        <div>
+          <label>温度</label><input
+            v-model.number="temperature"
+            type="number"
+            min="0"
+            max="2"
+            step="0.1"
+          >
+        </div>
+        <div>
+          <label>最大输入 Token</label><input
+            v-model.number="maxInputTokens"
+            type="number"
+            min="4096"
+            max="32768"
+            step="1024"
+          >
+        </div>
+        <div>
+          <label>最大输出 Token</label><input
+            v-model.number="maxOutputTokens"
+            type="number"
+            min="512"
+            max="8192"
+            step="256"
+          >
+        </div>
       </div>
       <div class="actions">
-        <button class="primary" type="button" :disabled="saving || loading" @click="save()">{{ saving ? "保存中…" : "保存设置" }}</button>
+        <button
+          class="primary"
+          type="button"
+          :disabled="saving || loading"
+          @click="save()"
+        >
+          {{ saving ? "保存中…" : "保存设置" }}
+        </button>
       </div>
     </section>
   </div>
@@ -231,9 +314,9 @@ onBeforeUnmount(() => {
 .saved-key,.missing-key{font-size:12px}
 .saved-key{color:var(--success,var(--accent))}
 .missing-key{color:var(--dim)}
-.settings-card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:22px;max-width:820px}
+.settings-card{border:0;border-radius:12px;box-shadow:none;background:var(--surface);padding:22px;max-width:820px}
 .settings-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
-.eyebrow{font-size:11px;letter-spacing:.08em;color:var(--dim)}
+.eyebrow{font-size:12px;letter-spacing:.08em;color:var(--dim)}
 h2{margin:5px 0 0;font-size:18px;color:var(--ink)}
 .hint{color:var(--dim);font-size:13px;line-height:1.7;margin:10px 0 18px}
 label{display:block;color:var(--ink);font-size:13px;margin:14px 0 7px}
@@ -242,7 +325,7 @@ input:not([type=checkbox]){width:100%;min-width:0;border:1px solid var(--line);b
 button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:9px 13px;cursor:pointer;white-space:nowrap}
 button:disabled{opacity:.55;cursor:not-allowed}
 .switch-label{display:flex;align-items:center;gap:7px;margin:0;white-space:nowrap}
-.collection-option{border:1px solid var(--line);border-radius:9px;padding:12px;background:var(--surface-2)}
+.collection-option{border:0;border-radius:12px;box-shadow:none;padding:16px;background:var(--surface-2)}
 .collection-option .hint{margin:8px 0 0}
 .numeric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .actions{display:flex;justify-content:flex-end;margin-top:22px}
