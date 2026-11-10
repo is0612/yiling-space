@@ -5,6 +5,7 @@ import { getPrisma } from "../server/utils/prisma";
 import { publishGrowthEvent } from "../server/utils/growth-event-center";
 import {
   claimNextGrowthEventDelivery,
+  cleanupGrowthEvents,
   failGrowthEventDelivery,
   processNextGrowthEventDelivery,
   renewGrowthEventDeliveryLease,
@@ -108,6 +109,10 @@ try {
   assert.equal(duplicate.eventId, first.eventId);
   assert.equal(await prisma.growthEvent.count({ where: { id: first.eventId } }), 1);
   assert.equal(await prisma.growthEventDelivery.count({ where: { eventId: first.eventId } }), 1);
+  await assert.rejects(() => prisma.$transaction(tx => publishGrowthEvent(tx, {
+    ...input,
+    eventType: "memory.event.updated",
+  })), /幂等键冲突/, "同一幂等键不能被复用于不同事件类型");
 
   console.log("\n[3] Gateway 严格按 Character 隔离来源读取");
   const found = await prisma.$transaction(tx => readMemoryEventReference(tx, characterA.id, source.id));
@@ -169,6 +174,16 @@ try {
   });
   assert.equal(secondDelivery.status, "RETRY_WAIT");
   assert.match(secondDelivery.lastError ?? "", /temporary consumer failure/);
+
+  console.log("\\n[7] 成功事件保留期清理，失败事件继续保留");
+  const removed = await cleanupGrowthEvents(prisma, {
+    now: new Date(Date.now() + 31 * 24 * 60 * 60 * 1000),
+    retentionDays: 30,
+  });
+  assert.equal(removed, 1, "只清理已成功且超过保留期的事件");
+  assert.equal(await prisma.growthEvent.findUnique({ where: { id: first.eventId } }), null);
+  assert(await prisma.growthEvent.findUnique({ where: { id: secondEvent.eventId } }),
+    "仍有待重试投递的事件必须保留");
 
   console.log("Growth Event Center DB integration tests passed.");
 } finally {
