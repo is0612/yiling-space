@@ -1,6 +1,6 @@
 # 统一成长数据中心架构设计
 
-> 状态：第一阶段基础设施实现中（PR #29；Outbox、投递 Worker、首个只读消费者、Watchdog 与保留清理已落地，待 CI 和本地验收）
+> 状态：第一阶段基础设施已合入 main，本地验收及并发回归通过；验收修复待提交，CI 结果待确认。
 > 日期：2026-11-10
 > 复核：第 3、6、13 节已按 `memory-job-lease.ts`、`social-relationship-queue.ts`、`memory-worker.ts`、`watchdog.ts` 的实际行为校对，租约与消费者幂等两处给出了具体参照物
 > 适用范围：忆灵空间成长系统
@@ -367,3 +367,5 @@
 - 增加 `yarn growth:event:retry <deliveryId>` 运维恢复命令，只允许 FAILED → QUEUED；恢复与 SYSTEM 审计同事务，重置 attemptCount 但不重置 fencingToken。
 - 共享 Worker 已接入默认「启动忆灵空间」启动器（可用 `YILING_WORKER_DISABLED=1` 关闭），也继续兼容 `worker:watch` 与 QQ 链路启动方式；多个 Worker 依赖 `SKIP LOCKED` 与 fencing 安全并行。
 - 新增隔离数据库测试覆盖事务回滚、发布幂等、跨角色来源读取、租约过期回收、旧租约 fencing、消费者成功/失败与保留清理；CI 已接入该测试入口。
+- 本地验收修复：回收时间算术显式使用 `timestamptz`；每次领取最多回收 100 条过期投递，按到期时间与 ID 排序并使用 `FOR UPDATE SKIP LOCKED`，回收更新再次核对状态与到期时间。被其它事务持锁的投递留给后续轮次，避免阻塞无关投递。
+- Watchdog 的事件等待时长从本轮 `runAt` 起算，退避刚结束或人工恢复刚入队的旧事件不应立即报积压。共享 Worker 仍每轮处理一条事件，后续社交/记忆长任务会影响投递吞吐；当前第一阶段不改变这一调度方式。

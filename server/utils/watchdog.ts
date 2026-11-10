@@ -371,7 +371,7 @@ export async function collectWatchdogFindings(
       COUNT(*) FILTER (
         WHERE delivery."status" = 'FAILED'::"GrowthEventDeliveryStatus"
       )::int AS "failedCount",
-      MIN(delivery."createdAt") FILTER (
+      MIN(delivery."runAt") FILTER (
         WHERE delivery."status" IN (
           'QUEUED'::"GrowthEventDeliveryStatus",
           'RETRY_WAIT'::"GrowthEventDeliveryStatus"

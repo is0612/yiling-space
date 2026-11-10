@@ -9,6 +9,7 @@ import {
 const RETRY_BASE_MS = 60_000;
 const RETRY_MAX_MS = 6 * 60 * 60 * 1000;
 const ERROR_MAX_CHARS = 2_000;
+const EXPIRED_LEASE_RECLAIM_BATCH_SIZE = 100;
 
 export type GrowthEventDeliveryLease = {
   deliveryId: string;
@@ -42,8 +43,9 @@ export function growthEventRetryDelayMs(attemptCount: number): number {
 }
 
 /**
- * 单次领取：先回收过期租约，再用 SKIP LOCKED 领取一条投递。
- * 过期租约由下一轮领取回收；旧执行者因 leaseToken/fencingToken 不匹配不能确认。
+ * 单次领取：最多回收 100 条过期租约，再用 SKIP LOCKED 领取一条投递。
+ * 回收与领取都跳过已被其它事务持锁的行，避免一个慢事务阻塞全部 Worker。
+ * 未回收的租约留给后续轮次；旧执行者因 leaseToken/fencingToken 不匹配不能确认。
  */
 export async function claimNextGrowthEventDelivery(
   prisma: PrismaClient,
@@ -74,26 +76,37 @@ export async function claimNextGrowthEventDelivery(
     createdAt: Date;
     payload: Prisma.JsonValue;
   }>>`
-    WITH expired AS (
-      UPDATE "growth_event_deliveries"
+    WITH expired_candidates AS (
+      SELECT delivery."id"
+      FROM "growth_event_deliveries" AS delivery
+      WHERE delivery."status" = 'RUNNING'::"GrowthEventDeliveryStatus"
+        AND (delivery."leaseExpiresAt" IS NULL OR delivery."leaseExpiresAt" <= ${now})
+      ORDER BY delivery."leaseExpiresAt" ASC NULLS FIRST, delivery."id" ASC
+      LIMIT ${EXPIRED_LEASE_RECLAIM_BATCH_SIZE}
+      FOR UPDATE SKIP LOCKED
+    ),
+    expired AS (
+      UPDATE "growth_event_deliveries" AS delivery
       SET
         "status" = CASE
-          WHEN "attemptCount" < "maxAttempts" THEN 'RETRY_WAIT'::"GrowthEventDeliveryStatus"
+          WHEN delivery."attemptCount" < delivery."maxAttempts" THEN 'RETRY_WAIT'::"GrowthEventDeliveryStatus"
           ELSE 'FAILED'::"GrowthEventDeliveryStatus"
         END,
-        "runAt" = ${now} + (
-          LEAST(21600000, 60000 * POWER(2, LEAST(GREATEST("attemptCount" - 1, 0), 16)))
+        "runAt" = ${now}::timestamptz + (
+          LEAST(21600000, 60000 * POWER(2, LEAST(GREATEST(delivery."attemptCount" - 1, 0), 16)))
           * INTERVAL '1 millisecond'
         ),
         "lockedAt" = NULL,
         "lockedBy" = NULL,
         "leaseToken" = NULL,
         "leaseExpiresAt" = NULL,
-        "lastError" = COALESCE("lastError", '成长事件执行租约已过期，系统已回收。'),
+        "lastError" = COALESCE(delivery."lastError", '成长事件执行租约已过期，系统已回收。'),
         "updatedAt" = ${now}
-      WHERE "status" = 'RUNNING'::"GrowthEventDeliveryStatus"
-        AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= ${now})
-      RETURNING "id"
+      FROM expired_candidates
+      WHERE delivery."id" = expired_candidates."id"
+        AND delivery."status" = 'RUNNING'::"GrowthEventDeliveryStatus"
+        AND (delivery."leaseExpiresAt" IS NULL OR delivery."leaseExpiresAt" <= ${now})
+      RETURNING delivery."id"
     ),
     candidate AS (
       SELECT delivery."id"

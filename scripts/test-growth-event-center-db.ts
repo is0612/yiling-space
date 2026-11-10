@@ -16,7 +16,10 @@ import { GROWTH_EVENT_HANDLERS } from "../server/utils/growth-event-consumers";
 import { readMemoryEventReference } from "../server/utils/growth-domain-gateway";
 import { collectWatchdogFindings } from "../server/utils/watchdog";
 
-const databaseName = new URL(process.env.DATABASE_URL ?? "postgres://localhost/none").pathname.replace(/^\//, "");
+const databaseUrl = new URL(process.env.DATABASE_URL ?? "postgres://localhost/none");
+assert(["localhost", "127.0.0.1", "[::1]"].includes(databaseUrl.hostname),
+  "成长事件集成测试仅允许连接本机 PostgreSQL。");
+const databaseName = databaseUrl.pathname.replace(/^\//, "");
 assert(/^yiling_growth_event_test_[a-f0-9]{32}$/.test(databaseName),
   `拒绝执行：当前库「${databaseName}」不是一次性成长事件测试库。`);
 
@@ -112,6 +115,11 @@ try {
   assert.equal(duplicate.eventId, first.eventId);
   assert.equal(await prisma.growthEvent.count({ where: { id: first.eventId } }), 1);
   assert.equal(await prisma.growthEventDelivery.count({ where: { eventId: first.eventId } }), 1);
+  const concurrentDuplicates = await Promise.all(Array.from({ length: 4 }, () =>
+    prisma.$transaction(tx => publishGrowthEvent(tx, input)),
+  ));
+  assert(concurrentDuplicates.every(result => !result.created && result.eventId === first.eventId));
+  assert.equal(await prisma.growthEventDelivery.count({ where: { eventId: first.eventId } }), 1);
   await assert.rejects(() => prisma.$transaction(tx => publishGrowthEvent(tx, {
     ...input,
     eventType: "memory.event.updated",
@@ -177,8 +185,22 @@ try {
     payload: { sourceId: secondSource.id },
   }));
   const failed = await processNextGrowthEventDelivery(prisma, {
-    "growth.memory-source-integrity": async () => { throw new Error("temporary consumer failure"); },
+    "growth.memory-source-integrity": async (tx) => {
+      await tx.auditLog.create({
+        data: {
+          actorType: "SYSTEM",
+          characterId: characterA.id,
+          action: "growth.test.rollback",
+          entityType: "GrowthEvent",
+          entityId: secondEvent.eventId,
+        },
+      });
+      throw new Error("temporary consumer failure");
+    },
   }, { workerId: `worker-fail-${suffix}` });
+  assert.equal(await prisma.auditLog.count({
+    where: { action: "growth.test.rollback", entityId: secondEvent.eventId },
+  }), 0, "消费者先写后失败时，业务写入必须与确认事务一起回滚");
   assert.equal(failed.processed, true);
   assert.equal(failed.status, "RETRY_WAIT");
   const secondDelivery = await prisma.growthEventDelivery.findUniqueOrThrow({
