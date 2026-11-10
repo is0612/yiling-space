@@ -392,6 +392,7 @@ const fakeTx = {
     },
   },
   auditLog: { create: async () => ({}) },
+  $executeRaw: async () => 1,
 } as unknown as MemoryApplyTx;
 const applyContext = { memoryScopeId: "scope", characterId: "character", snapshotId: null, timeZone: TZ, state: "FINAL" as const };
 const applyDraft = async (at: Date, conversationId: string, title = collisionTitle) => {
