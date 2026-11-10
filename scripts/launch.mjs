@@ -514,7 +514,7 @@ function pipeWithPrefix(stream, label) {
   });
 }
 
-function runDev(yarnCmd, devUrl) {
+function runDev(yarnCmd, devUrl, runtimeEnv) {
   const useYarn = Boolean(yarnCmd);
   const cmd = useYarn ? yarnCmd : "npx";
   const args = useYarn ? ["dev"] : ["nuxt", "dev", "--open"];
@@ -530,11 +530,11 @@ function runDev(yarnCmd, devUrl) {
     // 默认启动共享 Worker，确保本地默认启动路径也会消费记忆、社交和成长事件队列。
     // 只想启动 Web 时可设置 YILING_WORKER_DISABLED=1。
     let worker = null;
-    if (process.env.YILING_WORKER_DISABLED !== "1") {
+    if (runtimeEnv.YILING_WORKER_DISABLED !== "1") {
       worker = spawn(process.execPath, tsxArgs("scripts/run-memory-worker.ts", "--watch"), {
         cwd: ROOT,
         stdio: ["ignore", "pipe", "pipe"],
-        env: process.env,
+        env: runtimeEnv,
       });
       pipeWithPrefix(worker.stdout, "worker");
       pipeWithPrefix(worker.stderr, "worker");
@@ -550,7 +550,7 @@ function runDev(yarnCmd, devUrl) {
       cwd: ROOT,
       stdio: "inherit",
       shell: true,
-      env: { ...process.env, FORCE_COLOR: "1" },
+      env: { ...runtimeEnv, FORCE_COLOR: "1" },
     });
     let settled = false;
     const stopWorker = () => {
@@ -635,7 +635,7 @@ async function main() {
   }
 
   step(4, "开始运行");
-  return runDev(yarnCmd, devUrl);
+  return runDev(yarnCmd, devUrl, { ...env, ...process.env });
 }
 
 try {
