@@ -209,6 +209,7 @@
     "test:growth-event-center": "tsx scripts/test-growth-event-center.ts",
     "test:growth-event-center-db": "tsx scripts/test-growth-event-center-db.ts",
     "test:growth-event-center-isolated": "tsx scripts/test-growth-event-center-isolated.ts",
+    "growth:event:retry": "tsx scripts/retry-growth-event-delivery.ts",
     "test:knowledge-regression": "yarn run test:knowledge-assistant-config && yarn run test:knowledge-import && yarn run test:knowledge-web-import && yarn run test:knowledge-retrieval && yarn run test:knowledge-relations && yarn run test:knowledge-versioning && yarn run test:knowledge-revisions-isolated && yarn run test:knowledge-governance && yarn run test:knowledge-governance-isolated && yarn run test:knowledge-lifecycle-isolated && yarn run test:knowledge-page-races && yarn run test:knowledge-governance-page && yarn run test:knowledge-lifecycle-page && yarn run test:private-knowledge-candidate"
   },
   "dependencies": {
