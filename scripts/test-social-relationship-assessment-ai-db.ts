@@ -160,6 +160,16 @@ try {
   assert(secondAssessment.evidence.some(item => item.experienceId === firstExperience.id && item.kind === "CONTEXT"));
   assert(secondAssessment.evidence.some(item => item.experienceId === secondExperience.id && item.kind === "NEW"));
 
+  console.log("\n[2b] 恢复派发没有新证据时不重复创建历史或调用模型");
+  const historyBefore = await prisma.socialRelationshipAssessment.count({ where: { scopeId: enabledScope } });
+  await prisma.$transaction(tx => enqueueSocialRelationshipAssessment(tx, { scopeId: enabledScope, reason: "EXISTING_EXPERIENCE_RECOVERY" }));
+  const duplicateRun = await processNextSocialRelationshipAssessmentTask(prisma, { workerId: `duplicate-${runId}` });
+  assert.equal(duplicateRun.processed, true);
+  assert.equal(duplicateRun.assessmentId, undefined);
+  assert.equal(requests.length, 2);
+  assert.equal(await prisma.socialRelationshipAssessment.count({ where: { scopeId: enabledScope } }), historyBefore);
+  assert.equal((await prisma.socialRelationshipAssessmentTask.findUniqueOrThrow({ where: { scopeId: enabledScope } })).status, "PAUSED");
+
   console.log("\n[3] 关闭助手的任务不领取、不消耗重试次数");
   const disabledRun = await processNextSocialRelationshipAssessmentTask(prisma, { workerId: `social-ai-worker-${runId}` });
   assert.equal(disabledRun.processed, false);
@@ -172,6 +182,14 @@ try {
     where: { characterId: enabledCharacter.id, kind: "social-relationship-assistant" },
   });
   assert.equal(usage.length, 2, "两次评估调用均应计入独立用量类别");
+
+  console.log("\n[3b] 明确周期回顾仍允许读取历史经历");
+  outputs.push({ outcome: "MAINTAIN", suggestedStage: "STRANGER", suggestedStatus: "UNOBSERVED", reason: "定期回顾保持现状。", confidence: 0.8, observations: [], evidenceExperienceIds: [], newEvidenceExperienceIds: [], needsMoreEvidence: false, cautionFlags: [] });
+  await prisma.$transaction(tx => enqueueSocialRelationshipAssessment(tx, { scopeId: enabledScope, reason: "PERIODIC_REVIEW" }));
+  const periodicRun = await processNextSocialRelationshipAssessmentTask(prisma, { workerId: `periodic-${runId}` });
+  assert(periodicRun.assessmentId);
+  assert.equal(periodicRun.outcome, "MAINTAIN");
+  assert.equal(requests.length, 3);
   console.log("\n[4] 模型执行期间来源归档或改写后，结果降为不可采纳REVIEW");
   for (const mutation of ["archive", "content"] as const) {
     const changing = await addExperience(enabledCharacter.globalScopeId, enabledScope, `变更中来源${mutation}`, "生成模型请求时的证据正文。", `changing-${mutation}-${runId}`);

@@ -375,6 +375,12 @@ export async function processNextSocialRelationshipAssessmentTask(
         select: { outcome: true, suggestedStage: true, suggestedStatus: true, reason: true, observations: true },
       }),
     ]);
+    // 恢复/重复派发可能只剩已成功评估过的上下文；没有新经历时完成队列即可。
+    // 明确的周期回顾仍允许重看旧经历，不能与重复派发混为一谈。
+    if (!fresh.length && previous && !lease.triggerReasons.includes("PERIODIC_REVIEW")) {
+      await completeSocialRelationshipAssessmentTask(prisma, lease);
+      return { processed: true, message: "这些经历已完成评估，本次没有新证据，已跳过重复评估。" };
+    }
     const currentStage = scope.relationshipStage ?? "STRANGER";
     const currentStatus = scope.relationshipStatus ?? "UNOBSERVED";
     const evidence: EvidenceInput[] = [
