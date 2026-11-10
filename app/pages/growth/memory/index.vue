@@ -134,23 +134,6 @@ onMounted(() => ensureMemoryProgressPolling());
       </NuxtLink>
     </section>
 
-    <section class="memory-overview-tools">
-      <div>
-        <h2>常用入口</h2>
-        <p>执行动作在上面，这里只负责跳到对应页面细看。</p>
-      </div>
-      <div class="memory-overview-shortcuts">
-        <NuxtLink to="/growth/memory/long-term">
-          新增 / 编辑长期记忆
-        </NuxtLink>
-        <NuxtLink to="/growth/memory/events">
-          看每天整理出的忆泡
-        </NuxtLink>
-        <NuxtLink to="/growth/memory/snapshots">
-          查看与管理历史总结
-        </NuxtLink>
-      </div>
-    </section>
     <MemoryExtractionDialog
       v-model="extractionDialogOpen"
       :character-id="id"
@@ -241,52 +224,10 @@ onMounted(() => ensureMemoryProgressPolling());
   font-size: 13px;
   font-weight: 600;
 }
-.memory-overview-tools {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  margin-top: 18px;
-  border-radius: 12px;
-  background: var(--surface, #fff);
-  padding: 18px 20px;
-}
-.memory-overview-tools h2 {
-  margin: 0;
-  color: var(--text-2);
-  font-size: 14px;
-}
-.memory-overview-tools p {
-  margin: 6px 0 0;
-  color: var(--dim);
-  font-size: 12px;
-}
-.memory-overview-shortcuts {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.memory-overview-shortcuts a {
-  display: inline-flex;
-  min-height: 34px;
-  align-items: center;
-  border-radius: 7px;
-  background: var(--surface-2, #f6f7fb);
-  padding: 0 11px;
-  color: var(--text-2);
-  font-size: 12px;
-  text-decoration: none;
-}
-.memory-overview-shortcuts a:hover {
-  color: var(--accent, #0d9488);
-}
 @media (max-width: 900px) {
   .memory-quickbar { flex-direction: column; align-items: stretch; }
   .memory-quickbar-actions { justify-content: flex-start; }
   .memory-overview-grid { grid-template-columns: 1fr; }
   .memory-overview-card { min-height: 180px; }
-  .memory-overview-tools { flex-direction: column; }
-  .memory-overview-shortcuts { justify-content: flex-start; }
 }
 </style>
