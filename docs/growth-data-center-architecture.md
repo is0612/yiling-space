@@ -362,7 +362,7 @@
 - 订阅采用代码常量，发布时快照化；第一阶段不回补订阅启用前的历史事件。
 - 默认每个消费者最多尝试 5 次，租约 5 分钟；成功/跳过/取消事件保留 30 天后清理，失败和未完成投递保留。
 - 第一批已接入 Worker 投递循环，并增加首个只读消费者 `growth.memory-source-integrity`：收到 `memory.event.created` 后，通过角色限定的记忆领域 Gateway 验证来源忆泡；不复制正文、不调用模型、不修改领域数据。
-- 记忆系统在忆泡真实创建的同一事务中发布 `memory.event.created`；社交系统在 SocialExperience 真正新插入的同一事务中发布 `social.experience.created`（当前尚无社交订阅者）。重复业务键不会重复发布。
+- 记忆系统在忆泡真实创建的同一事务中发布 `memory.event.created`，由首个只读消费者校验来源引用；社交经历事件暂不发布，因为当前没有实际订阅者，避免制造无消费者的投递历史。重复业务键不会重复发布。
 - Watchdog 已增加事件投递积压、运行中超时和重试上限告警；成功/跳过/取消事件在 30 天后清理，含未完成或 FAILED 投递的事件保留。
 - 增加 `yarn growth:event:retry <deliveryId>` 运维恢复命令，只允许 FAILED → QUEUED；恢复与 SYSTEM 审计同事务，重置 attemptCount 但不重置 fencingToken。
 - 共享 Worker 已接入默认「启动忆灵空间」启动器（可用 `YILING_WORKER_DISABLED=1` 关闭），也继续兼容 `worker:watch` 与 QQ 链路启动方式；多个 Worker 依赖 `SKIP LOCKED` 与 fencing 安全并行。
