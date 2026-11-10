@@ -21,6 +21,7 @@ try {
   for (const [entry, args] of [
     ["node_modules/prisma/build/index.js", ["migrate", "deploy"]],
     ["node_modules/tsx/dist/cli.mjs", ["scripts/test-reflection-db.ts"]],
+    ["node_modules/tsx/dist/cli.mjs", ["scripts/test-growth-overview-db.ts"]],
   ] as const) {
     const result = spawnSync(process.execPath, [entry, ...args], { env, stdio: "inherit" });
     if (result.error) throw result.error;
