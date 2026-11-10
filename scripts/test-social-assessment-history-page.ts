@@ -65,5 +65,7 @@ async function setup() { const page = buildPageHarness(path); page.take(base()).
 }
 const source = readFileSync(new URL(path, import.meta.url), "utf8");
 assert(!source.includes("ElMessageBox")); assert(!source.includes("v-html")); assert(!/font-size:\s*(?:[0-9]|1[01])px/.test(source));
+assert(source.includes("评估时关系"));
+assert(source.includes("relation(item.evaluatedStage, item.evaluatedStatus)"), "Historical comparisons must use the evaluated relationship, not today's current state.");
 assert(source.includes('v-if="loadError"')); assert(source.includes("!loadError && !rows.length")); assert(source.includes("本轮新经历")); assert(source.includes("历史背景"));
 console.log("Social assessment history page: 9 real-script groups passed (role ABA, controlled review confirmation, late response, errors, filters, status gates and overflow).");

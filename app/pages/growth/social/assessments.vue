@@ -275,7 +275,7 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
           </p>
           <template v-else>
             <div class="relationship-comparison">
-              <div><span>当前关系</span><strong>{{ relation(item.currentRelationship.stage, item.currentRelationship.status) }}</strong></div><span
+              <div><span>评估时关系</span><strong>{{ relation(item.evaluatedStage, item.evaluatedStatus) }}</strong></div><span
                 class="comparison-arrow"
                 aria-hidden="true"
               >→</span><div><span>本次建议</span><strong>{{ item.suggestedStage || item.suggestedStatus ? relation(item.suggestedStage, item.suggestedStatus) : '未提出关系调整' }}</strong></div>

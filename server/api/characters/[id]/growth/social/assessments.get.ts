@@ -3,8 +3,7 @@ import { requireActorUserId } from "../../../../../utils/auth";
 import { readPageQuery, buildPage } from "../../../../../utils/pagination";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
-import { readSocialHistoryFilter, socialHistoryFilterWhere } from "../../../../../utils/social-assessment-history";
-import { hashSocialAssessmentSource, readSocialAssessmentSourceManifest } from "../../../../../utils/social-assessment-evidence";
+import { readSocialHistoryFilter, socialHistoryFilterWhere, socialAssessmentAvailability } from "../../../../../utils/social-assessment-history";
 
 const DEFAULT_PAGE_SIZE = 12;
 
@@ -87,6 +86,8 @@ export default defineEventHandler(async (event) => {
             experience: {
               select: {
                 id: true,
+                scopeId: true,
+                assessmentDispatchStatus: true,
                 memoryEvent: {
                   select: {
                     id: true,
@@ -112,25 +113,11 @@ export default defineEventHandler(async (event) => {
     prisma.socialRelationshipAssessment.count({ where: { ...base, status: "RUNNING" } }),
   ]);
 
-  const availability = (row: typeof rows[number]) => {
-    if (row.status !== "SUCCEEDED" || row.outcome !== "CHANGE" || !["PENDING", "DEFERRED"].includes(row.reviewStatus)) return { canReview: false, staleReason: null };
-    if (row.relationshipVersion !== row.scope.relationshipVersion || row.evaluatedStage !== row.scope.relationshipStage || row.evaluatedStatus !== row.scope.relationshipStatus) return { canReview: false, staleReason: "当前关系已变化，请重新评估。" };
-    const data = row.observations && typeof row.observations === "object" && !Array.isArray(row.observations) ? row.observations as Record<string, unknown> : {};
-    const cited = Array.isArray(data.evidenceExperienceIds) ? data.evidenceExperienceIds.filter((id): id is string => typeof id === "string") : [];
-    const manifest = readSocialAssessmentSourceManifest(data.sourceManifest);
-    const sources = new Map(manifest.map(source => [source.experienceId, source]));
-    const hasNew = Array.isArray(data.newEvidenceExperienceIds) && data.newEvidenceExperienceIds.some(id => typeof id === "string" && row.evidence.some(item => item.kind === "NEW" && item.experience.id === id));
-    const valid = hasNew && cited.length > 0 && cited.every(id => {
-      const old = sources.get(id); const current = row.evidence.find(item => item.experience.id === id)?.experience.memoryEvent;
-      return old && current && current.status === "ACTIVE" && old.memoryEventId === current.id && old.sourceScopeId === current.memoryScopeId && old.sourceHash === hashSocialAssessmentSource(current);
-    });
-    return { canReview: Boolean(valid), staleReason: valid ? null : "来源已变化、缺失或旧记录未保存版本证据，请重新评估；仍可驳回或暂缓。" };
-  };
   return {
     filter,
     summary: { all, actionable, accepted, failed, running },
     ...buildPage(rows.map((row) => ({
-      ...availability(row),
+      ...socialAssessmentAvailability(row),
       id: row.id,
       scopeId: row.scope.id,
       friend: {
@@ -169,7 +156,7 @@ export default defineEventHandler(async (event) => {
       startedAt: row.startedAt.toISOString(),
       completedAt: row.completedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
-      evidence: row.evidence.map((item) => ({
+      evidence: row.evidence.filter(item => item.experience.scopeId === row.scope.id).map((item) => ({
         id: item.experience.id,
         kind: item.kind,
         occurredAt: item.experience.memoryEvent.occurredAt.toISOString(),

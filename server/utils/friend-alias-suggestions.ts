@@ -24,6 +24,10 @@ export type FriendAliasSuggestionDto = {
   platformUid: string;
 };
 
+export function pendingFriendAliasWhere(characterId?: string): Prisma.FriendAliasSuggestionWhereInput {
+  return { status: "PENDING", scope: { scopeType: "EXTERNAL_IDENTITY", externalIdentityId: { not: null }, ...(characterId ? { characterId } : {}) } };
+}
+
 const SUGGESTION_SELECT = {
   id: true,
   scopeId: true,
@@ -59,6 +63,6 @@ export function toSuggestionDto(row: SuggestionRow): FriendAliasSuggestionDto {
 /** 待审条数：朋友页顶部角标用。 */
 export async function countPendingSuggestions(characterId: string): Promise<number> {
   return getPrisma().friendAliasSuggestion.count({
-    where: { status: "PENDING", scope: { characterId } },
+    where: pendingFriendAliasWhere(characterId),
   });
 }

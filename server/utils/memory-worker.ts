@@ -1215,6 +1215,7 @@ export async function processNextMemoryJob(
         select: {
           id: true,
           scopeType: true,
+          externalIdentityId: true,
           characterId: true,
           character: { select: { name: true, modelConfig: true, memorySetting: { select: { timezone: true } } } },
         },
@@ -1511,7 +1512,7 @@ export async function processNextMemoryJob(
       // 用 createMany + skipDuplicates：同一条（含已否掉的 REJECTED）不再重复落库，
       // 否则用户否掉的外号下个周期又被提回来、弹窗永远清不空。
       // 失败静默 —— 快照本身已经成功，起外号是搭便车，不该因为它把整份快照判失败。
-      const aliasRows = aiResult.analysis.friendAliases
+      const aliasRows = (scope.scopeType === "EXTERNAL_IDENTITY" && scope.externalIdentityId ? aiResult.analysis.friendAliases : [])
         .map((suggestion) => {
           const normalized = normalizeFriendAliases(suggestion.alias);
           const alias = normalized.aliases[0];

@@ -1,7 +1,7 @@
 import { getQuery } from "h3";
 import { requireAdminActor } from "../../../../utils/auth";
 import { getPrisma } from "../../../../utils/prisma";
-import { toSuggestionDto } from "../../../../utils/friend-alias-suggestions";
+import { pendingFriendAliasWhere, toSuggestionDto } from "../../../../utils/friend-alias-suggestions";
 
 /**
  * 待审备注列表：她（在快照提炼时）想给朋友起的叫法，等用户点头。
@@ -19,10 +19,7 @@ export default defineEventHandler(async (event) => {
 
   const prisma = getPrisma();
   const rows = await prisma.friendAliasSuggestion.findMany({
-    where: {
-      status: "PENDING",
-      ...(characterId ? { scope: { characterId } } : {}),
-    },
+    where: pendingFriendAliasWhere(characterId),
     orderBy: [{ createdAt: "desc" }, { id: "asc" }],
     take: 100,
     select: {

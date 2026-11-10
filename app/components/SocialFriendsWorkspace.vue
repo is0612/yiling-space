@@ -565,11 +565,16 @@ const suggestions = ref<Suggestion[]>([]);
 const suggestionsLoading = ref(false);
 const resolvingSuggestionId = ref("");
 let suggestionRequestSequence = 0;
+let suggestionResolveSequence = 0;
+const suggestionsError = ref("");
 
 async function openSuggestions() {
   const requestId = ++suggestionRequestSequence;
   const requestedCharacterId = activeCharacterId.value;
+  if (!requestedCharacterId) return;
   suggestionDialogOpen.value = true;
+  suggestions.value = [];
+  suggestionsError.value = "";
   suggestionsLoading.value = true;
   try {
     const response = await $fetch<{ items: Suggestion[] }>("/api/admin/identities/aliases/suggestions", {
@@ -579,7 +584,7 @@ async function openSuggestions() {
     suggestions.value = response.items;
   } catch (error) {
     if (requestId !== suggestionRequestSequence) return;
-    ElMessage.error(readErrorMessage(error, "读取待审备注失败。"));
+    suggestionsError.value = readErrorMessage(error, "读取待审备注失败。");
   } finally {
     if (requestId === suggestionRequestSequence) suggestionsLoading.value = false;
   }
@@ -587,25 +592,26 @@ async function openSuggestions() {
 
 async function resolveSuggestion(suggestion: Suggestion, approve: boolean) {
   if (resolvingSuggestionId.value) return;
+  const characterId = activeCharacterId.value;
+  const sequence = ++suggestionResolveSequence;
+  const current = () => sequence === suggestionResolveSequence && characterId === activeCharacterId.value;
   resolvingSuggestionId.value = suggestion.id;
   try {
-    await $fetch(`/api/admin/identities/aliases/suggestions/${suggestion.id}`, {
+    const result = await $fetch<{ aliases: string[] }>(`/api/admin/identities/aliases/suggestions/${suggestion.id}`, {
       method: "POST",
       body: { approve },
     });
+    if (!current()) return;
     suggestions.value = suggestions.value.filter((item) => item.id !== suggestion.id);
     pendingSuggestions.value = Math.max(0, pendingSuggestions.value - 1);
     // 同意了就把这条叫法即时反映到卡片上，用户不用等下次刷新才知道生效了。
     if (approve) {
-      const friend = friends.value.find((item) => item.scopeId === suggestion.scopeId);
-      if (friend && !friend.aliases.includes(suggestion.alias)) {
-        applyAliases(suggestion.scopeId, [...friend.aliases, suggestion.alias]);
-      }
+      applyAliases(suggestion.scopeId, result.aliases);
     }
   } catch (error) {
-    ElMessage.error(readErrorMessage(error, "操作没成功。"));
+    if (current()) ElMessage.error(readErrorMessage(error, "操作没成功。"));
   } finally {
-    resolvingSuggestionId.value = "";
+    if (current()) resolvingSuggestionId.value = "";
   }
 }
 
@@ -619,6 +625,8 @@ watch(id, (nextId, previousId) => {
     searchTimer = null;
   }
   suggestionRequestSequence += 1;
+  suggestionResolveSequence += 1;
+  resolvingSuggestionId.value = "";
   suggestionDialogOpen.value = false;
   suggestions.value = [];
   suggestionsLoading.value = false;
@@ -637,6 +645,8 @@ onBeforeUnmount(() => {
   // 让卸载前仍在途的列表 / 待审备注请求失效，避免迟到响应继续改状态。
   loadSequence += 1;
   suggestionRequestSequence += 1;
+  suggestionResolveSequence += 1;
+  resolvingSuggestionId.value = "";
   if (searchTimer) clearTimeout(searchTimer);
   for (const timer of saveTimers.values()) clearTimeout(timer);
   saveTimers.clear();
@@ -1043,13 +1053,22 @@ onMounted(() => load(1));
       class="suggest-dialog"
     >
       <p class="suggest-desc">
-        她回想自己平时怎么叫这些人，想出来的叫法先放在这里。你点头才写进备注，点「不用」就删掉，她不会再提。
+        她回想自己平时怎么叫这些人，想出来的叫法先放在这里。你点头才写进备注，点「不用」会保留拒绝记录，避免同一建议再次出现。
       </p>
       <div
         v-if="suggestionsLoading"
         class="suggest-loading"
       >
         正在读取…
+      </div>
+      <div
+        v-else-if="suggestionsError"
+        class="suggest-empty"
+        role="alert"
+      >
+        {{ suggestionsError }}<el-button @click="openSuggestions">
+          重新读取
+        </el-button>
       </div>
       <div
         v-else-if="!suggestions.length"

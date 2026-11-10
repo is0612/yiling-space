@@ -1102,6 +1102,51 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: 仅管理员可访问
+  /admin/identities/aliases/suggestions:
+    get:
+      tags: [Auth]
+      summary: 读取有效好友范围的待审备注（仅管理员）
+      description: 仅返回 PENDING 且范围为 EXTERNAL_IDENTITY、关联平台身份非空的建议；按创建时间倒序最多返回 100 条。全局及私人范围的无对象建议不计入好友页待审角标。
+      parameters:
+        - in: query
+          name: characterId
+          schema: { type: string, format: uuid }
+          description: 不传时读取全部角色的有效好友建议
+      responses:
+        '200':
+          description: items 为建议列表，含 id、scopeId、alias、reason、status、createdAt、friendName、platform、platformUid
+        '403':
+          description: 仅管理员可访问
+  /admin/identities/aliases/suggestions/{id}:
+    post:
+      tags: [Auth]
+      summary: 采纳或拒绝一条待审备注（仅管理员）
+      description: 同一好友范围加行锁串行审核；仅处理 PENDING。采纳按备注归一化、去本名与最多 8 条的规则保存，返回实际 aliases。拒绝保留 REJECTED 行防止重复建议，不删除历史。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approve]
+              properties:
+                approve: { type: boolean }
+      responses:
+        '200':
+          description: 返回 id、status 和实际保存的 aliases
+        '400':
+          description: approve 非布尔值或 ID 无效
+        '404':
+          description: 建议不存在
+        '409':
+          description: 已处理、无有效好友对象、与本名重复或备注达到上限
+        '403':
+          description: 仅管理员可访问
   /admin/identities:
     get:
       tags: [Auth]
@@ -3874,8 +3919,8 @@ paths:
         仅角色拥有者可读，他人角色404；按createdAt DESC,id DESC分页。
         执行状态、模型结论和人工处置分别返回，失败/运行中不是成功结论。
         ACTIONABLE包含SUCCEEDED CHANGE且PENDING/DEFERRED，仅表示可处置，不保证可采纳。
-        canReview是采纳可用性的只读提示；关系版本或引用来源失效、旧记录没有来源版本证据时为false。
-        服务器采纳事务内再次校验。跨角色来源正文不返回；归档但同角色来源可追溯展示，不能采纳。
+        canReview是采纳可用性的只读提示；按采纳事务校验引用与NEW经历的并集，关系版本、经历所属好友、派发状态或来源失效、旧记录没有完整来源版本证据时为false。
+        服务器采纳事务内再次校验。跨角色及错挂其他好友经历的来源正文不返回；归档但同角色同好友来源可追溯展示，不能采纳。
         同一generation可能包含多次执行尝试，历史保留每次结果，不会静默删除失败记录。
       parameters:
         - $ref: '#/components/parameters/Page'

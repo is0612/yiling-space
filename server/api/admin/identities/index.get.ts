@@ -3,6 +3,7 @@ import type { Prisma } from "../../../../src/generated/prisma/client";
 import { requireAdminActor } from "../../../utils/auth";
 import { buildPage, readPageQuery } from "../../../utils/pagination";
 import { getPrisma } from "../../../utils/prisma";
+import { countPendingSuggestions } from "../../../utils/friend-alias-suggestions";
 
 /**
  * 「她的朋友」：某个角色遇到过的某个人。
@@ -181,7 +182,7 @@ export default defineEventHandler(async (event) => {
       where: { ...baseWhere, lastInteractedAt: { gte: new Date(Date.now() - WEEK_MS) } },
     }),
     prisma.memoryScope.groupBy({ by: ["firstSource"], where: baseWhere, _count: { _all: true } }),
-    prisma.friendAliasSuggestion.count({ where: { status: "PENDING", scope: { characterId: activeCharacterId } } }),
+    countPendingSuggestions(activeCharacterId),
   ]);
 
   const totalForCharacter = countByCharacter.get(activeCharacterId) ?? 0;
