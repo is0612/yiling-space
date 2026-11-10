@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 
-definePageMeta({ topbar: { title: "反思与成长" } });
+definePageMeta({ topbar: { title: "反思系统" } });
 
 type SourceRef = { key: string; type: "memory" | "knowledge" | "snapshot"; id: string; title: string; hash: string; excerpt: string };
 type SuggestionStatus = "PENDING" | "ACCEPTED" | "REJECTED" | "DEFERRED";

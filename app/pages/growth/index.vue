@@ -34,8 +34,8 @@ const domains = [
   { title: "社交", description: "好友、重要经历与关系评估", icon: "♧", href: "/growth/social" },
   { title: "知识", description: "候选整理、知识库与来源", icon: "◇", href: "/growth/knowledge" },
   { title: "偏好", description: "她自己的喜恶、兴趣与形成依据", icon: "♡", href: "/growth/preferences" },
-  { title: "表达习惯", description: "语气、用词、句子长短与适用场景", icon: "✎", href: "/growth/language" },
-  { title: "目标与愿望", description: "想做的事、追加进展与状态历史", icon: "◎", href: "/growth/goals" },
+  { title: "语言系统", description: "语气、用词、句子长短与适用场景", icon: "✎", href: "/growth/language" },
+  { title: "愿望系统", description: "想做的事、追加进展与状态历史", icon: "◎", href: "/growth/goals" },
 ];
 function roleHref(path: string) {
   const allowed = ["/growth/reflection", "/growth/knowledge", "/growth/social/assessments", "/growth/memory", "/growth/social", "/growth/memory/snapshots", "/growth/deliveries", "/growth/preferences", "/growth/language", "/growth/goals"];

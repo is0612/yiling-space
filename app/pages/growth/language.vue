@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 
-definePageMeta({ topbar: { title: "语料 / 表达习惯" } });
+definePageMeta({ topbar: { title: "语言系统" } });
 type Kind = "TONE" | "WORDING" | "LENGTH";
 type Status = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";
 type SourceType = "MEMORY_EVENT" | "REFLECTION_SUGGESTION";
