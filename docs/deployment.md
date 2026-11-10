@@ -110,7 +110,7 @@ Web 服务与后台进程写标准输出。部署到容器或 systemd 时，由�
 - 跟着 QQ 链路一起起：`yarn onebot:stack`（或双击 `scripts/start-qq.bat`）会在同一窗口里再起一个 `--watch` 实例，日志前缀 `[watchdog]`；它自己崩了不影响 QQ 收发，但会留下 `watchdog-exited` 一行。不想要就设 `YILING_WATCHDOG_DISABLED=1`
 - 验证：`yarn test:watchdog`
 
-**判出「卡在运行中」之后怎么解**：租约 5 分钟且**不续期**（`server/utils/memory-job-lease.ts`），过期只说明领走这条任务的进程已经不在了 —— 可能是 Worker，也可能是一次网页请求（比如在页面上点「立即提取忆泡」，请求被 `yarn dev` 重启打断）。回收发生在「下一次有人领取任务」时（`reclaimExpiredMemoryJobs`），所以**整机没有 Worker 在跑时不会自动回收**，任务会一直显示「运行中」：
+**判出「卡在运行中」之后怎么解**：租约窗口是 5 分钟（`server/utils/memory-job-lease.ts`），忆泡任务在每次模型请求前续期。过期表示没有及时续期，需要检查执行进程、数据库或运行环境是否停滞，不能单凭过期断言进程已经退出。网页请求中的执行可能被 `yarn dev` 重启打断。回收发生在「下一次有人领取任务」时（`reclaimExpiredMemoryJobs`），所以**整机没有 Worker 在跑时不会自动回收**，任务会一直显示「运行中」：
 
 - 要它自动走：`yarn worker:watch` 一起来就会立刻把这批过期任务打回队列；
 - 只想解这一条：任务监控里对那条点「回收并重新入队」（`POST /tasks/{taskId}/retry`，运行中但有租约过期的任务才放行，写审计 `memory_job.manual_retry` + `recoveredLease`）。
@@ -126,7 +126,13 @@ yarn worker:run        # 单次执行一条任务
 yarn worker:watch      # 常驻消费队列
 ```
 
-Worker 也会跟着 QQ 链路一起起（`yarn onebot:stack` / 双击 `scripts/start-qq.bat`，日志前缀 `[worker]`），和 watchdog 并列——它最容易漏起，漏了只会等 watchdog 报 `worker_stalled`。不想要就设 `YILING_WORKER_DISABLED=1`。
+Worker 会跟着网页一键启动器（根目录启动批处理）和 QQ 链路（`yarn onebot:stack` / `scripts/start-qq.bat`）一起启动。网页已经在运行时，再运行一键启动器仍会补起 Worker，并保留当前窗口守护它。`YILING_WORKER_DISABLED=1` 可关闭这两个启动器附带的 Worker。
+
+两个入口共用本机守护模块：以仓库绝对路径派生回环监听锁，同一仓库的两个启动器只启动一个受管 Worker；另一个待命，锁释放后接管。锁端口若被无关程序占用会明确报错，不会误认成 Worker。Worker 异常退出后按 5 秒至 60 秒退避重启；正常退出启动器时先给 Worker 5 秒退出，再强制结束并释放锁。任务恢复仍由数据库租约和消息游标负责。
+
+该去重只覆盖这两个启动入口；手动 `yarn worker:watch`、其它仓库副本或其它机器的 Worker 仍可独立运行，任务领取互斥由数据库保证。受管 Worker 额外预加载 IPC 父进程守卫：启动器被强制终止或控制台关闭时，IPC 断开使 Worker 立即退出，未完成任务留待数据库租约回收；手动 Worker 不加载此守卫。生产部署仍应使用 systemd、容器或其它系统守护工具。启动器不会自动启动 Scheduler，自动排期仍需要 `yarn scheduler:watch`。
+
+验证本机守护：`node scripts/test-memory-worker-supervisor.mjs`（仅运行临时假 Worker，不连接数据库或调用模型）。
 
 间隔可用 `YILING_MEMORY_SCHEDULER_INTERVAL_MS`（最小 5000）与 `YILING_MEMORY_WORKER_INTERVAL_MS`（最小 1000）调整。
 

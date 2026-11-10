@@ -35,6 +35,8 @@ let sawContextOnlyAttempt = false;
 globalThis.fetch = async (url, init) => {
   assert.match(String(url), /^http:\/\/127\.0\.0\.1:4010\//, "No paid model request is allowed");
   const body = JSON.parse(String(init?.body));
+  const system = body.messages.find((message: { role: string }) => message.role === "system").content;
+  assert(!system.includes('"memoryChanges"'), "Daily jobs must use the event-only contract");
   const prompt: Prompt = JSON.parse(body.messages.find((message: { role: string }) => message.role === "user").content);
   requests.push(prompt);
   const first = prompt.messages[0]!;
@@ -122,7 +124,17 @@ try {
   const finalProgress = await prisma.memoryEventDay.findUniqueOrThrow({ where: { memoryScopeId_dayKey: { memoryScopeId: scopeId, dayKey: "2026-11-01" } } });
   assert.equal(finalProgress.extractedMessageId, ids[359]);
   assert.equal(finalProgress.state, "FINAL");
-  console.log("Isolated PostgreSQL event extraction quality passed: conversation requests, prior-chunk context, context-only rejection, atomic failed chunk retry, full long-message tail.");
+  const usages = await prisma.modelUsage.findMany({ where: { characterId, kind: "events" }, select: { metadata: true } });
+  assert.equal(usages.length, requests.length, "Every successful or failed request must leave one diagnostic record");
+  const metadata = usages.map(row => row.metadata as Record<string, unknown>);
+  assert(metadata.some(row => row.status === "failed" && row.reason === "http_error"));
+  assert(metadata.some(row => row.status === "success"));
+  for (const row of metadata) {
+    assert.equal(row.promptTemplateVersion, "memory-events-v1");
+    for (const field of ["durationMs", "batchReadMs", "contextReadMs"]) assert(typeof row[field] === "number" && Number(row[field]) >= 0);
+    assert(!JSON.stringify(row).includes("isolated evidence"));
+  }
+  console.log("Isolated PostgreSQL event extraction quality passed: conversation requests, prior-chunk context, context-only rejection, atomic failed chunk retry, full long-message tail and per-request diagnostics.");
 } finally {
   globalThis.fetch = originalFetch;
   await prisma.$disconnect();

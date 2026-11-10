@@ -5,8 +5,8 @@
  * 做四件事，任一步失败就明确告诉你卡在哪、下一步该敲什么：
  *   1. 环境自检：Node 版本、.env、yarn（没有就自动装）、依赖、Prisma Client
  *   2. 数据库：连不上就试着把 Docker 容器拉起来，等到端口真正可连
- *   3. 已经在跑？那就只打开浏览器，不重复起第二个 dev server
- *   4. 起 nuxt dev（自带 --open，就绪后自动开浏览器）
+ *   3. 检查已有 Web，补起或复用独立记忆 Worker
+ *   4. 起 nuxt dev（自带 --open）；Web 已有时只开浏览器并保留 Worker 守护窗口
  *
  * 项目相关的东西一律从仓库自己身上读（package.json / docker-compose.yml / .env），
  * 所以把这个脚本连 .bat 一起复制到 yiling-space 这类同构项目里就能直接用。
@@ -19,6 +19,7 @@ import { existsSync, readFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { superviseMemoryWorker } from "./memory-worker-supervisor.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -562,6 +563,8 @@ async function main() {
 
   step(3, `检查 ${port} 端口`);
   const running = await findRunningDevServer(devUrl);
+  const worker = await superviseMemoryWorker({ root: ROOT, env: { ...process.env, ...env } });
+  try {
   if (running) {
     ok(`服务已经在跑：${running}`);
     const opened = openBrowser(running);
@@ -573,6 +576,14 @@ async function main() {
           : "  不用再起一个。要重启就先关掉原来的那个窗口。",
       ),
     );
+    if (!worker.disabled) {
+      console.log(dim("  此窗口继续守护记忆 Worker；Ctrl+C 停止本窗口持有的 Worker，已有网页服务继续运行。"));
+      await new Promise((resolve) => {
+        const stop = () => { process.off("SIGINT", stop); process.off("SIGTERM", stop); resolve(); };
+        process.once("SIGINT", stop);
+        process.once("SIGTERM", stop);
+      });
+    }
     return 0;
   }
   if (await pingPort("127.0.0.1", port)) {
@@ -581,8 +592,11 @@ async function main() {
     ok("端口空闲");
   }
 
-  step(4, "开始运行");
-  return runDev(yarnCmd, devUrl);
+  step(4, "开始运行（网页 + 记忆 Worker）");
+  return await runDev(yarnCmd, devUrl);
+  } finally {
+    await worker.stop();
+  }
 }
 
 try {

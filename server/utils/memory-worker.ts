@@ -247,6 +247,7 @@ export async function runDailyEventJob(
     return finish("SKIPPED", `${dayKey} 的忆泡已经收口。`);
   }
   // 按范围全局正序读取，不能复用快照的「最新消息取样」。时间戳相同用 id 续读。
+  const batchReadStartedAt = Date.now();
   const batch = await loadEventMessageBatch(prisma, {
     memoryScopeId: job.memoryScopeId,
     privateOnly: scope.scopeType === "EXTERNAL_IDENTITY",
@@ -254,6 +255,7 @@ export async function runDailyEventJob(
     periodEnd: job.periodEnd,
     progress: day,
   });
+  const batchReadMs = Date.now() - batchReadStartedAt;
   const messages: PeriodSourceMessage[] = batch.messages.map((row) => {
     const origin = conversationOriginLabel(row.conversation);
     return {
@@ -333,6 +335,7 @@ export async function runDailyEventJob(
             knownEvents = existing.map((event) => ({ occurredAt: event.occurredAt.toISOString(), title: event.title }));
             knownEventsByConversation.set(conversationId, knownEvents);
           }
+          const contextReadStartedAt = Date.now();
           const contextRows = await loadEventContextMessages(prisma, {
             conversationId, periodStart: job.periodStart, periodEnd: job.periodEnd, first: group[0]!,
             newMessageTokens: group.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0),
@@ -348,9 +351,14 @@ export async function runDailyEventJob(
               ...readMessageSpeaker(row.metadata),
             };
           });
+          const contextReadMs = Date.now() - contextReadStartedAt;
           // 一个任务可能跨多个会话连续请求模型；每次请求前续租，避免总耗时超过 5 分钟被其他 Worker 误回收。
           await renewMemoryJobLease(prisma, lease);
-          const aiResult = await analyzeMemoryPeriod({
+          const callStartedAt = Date.now();
+          let aiResult: Awaited<ReturnType<typeof analyzeMemoryPeriod>>;
+          try {
+            aiResult = await analyzeMemoryPeriod({
+            mode: "events",
             apiKey,
             apiBaseUrl: chatSettings.apiBaseUrl,
             model: chatSettings.model,
@@ -366,10 +374,25 @@ export async function runDailyEventJob(
             activeMemories: [],
             previousSnapshotSummary: null,
             ...(knownEvents.length ? { existingEvents: knownEvents } : {}),
-          });
+            });
+          } catch (error) {
+            // 只记本地白名单错误码；供应商文本、正文与凭据不得进入普通日志。
+            const code = error instanceof Error ? /^LLM_([A-Z_]+):/.exec(error.message)?.[1] : undefined;
+            const reason = code && ["TIMEOUT", "HTTP_ERROR", "INVALID_BASE_URL", "NOT_CONFIGURED", "RESPONSE_TOO_LARGE",
+              "INVALID_ENVELOPE", "OUTPUT_TRUNCATED", "EMPTY_REPLY", "INVALID_JSON", "INVALID_RESPONSE"].includes(code)
+              ? code.toLowerCase() : "request_failed";
+            await recordModelUsage({ kind: "events", model: chatSettings.model, characterId: scope.characterId,
+              conversationId, metadata: { status: "failed", reason, durationMs: Date.now() - callStartedAt,
+                attempts: 1, inputMessages: group.length, contextMessages: contextMessages.length,
+                batchReadMs, contextReadMs, chunk: index + 1, promptTemplateVersion: "memory-events-v1" } });
+            throw error;
+          }
           await recordModelUsage({
             kind: "events", model: chatSettings.model,
-            usage: toUsageTokens(aiResult.usage), characterId: scope.characterId,
+            usage: toUsageTokens(aiResult.usage), characterId: scope.characterId, conversationId,
+            metadata: { status: "success", durationMs: aiResult.durationMs, attempts: 1,
+              inputMessages: group.length, contextMessages: contextMessages.length, batchReadMs, contextReadMs,
+              chunk: index + 1, eventCount: aiResult.analysis.events.length, promptTemplateVersion: aiResult.promptTemplateVersion },
           });
           results.push({ conversationId, events: aiResult.analysis.events, evidence: [...contextMessages, ...group] });
         }
@@ -383,6 +406,7 @@ export async function runDailyEventJob(
        */
       const chunkEnd = chunk[chunk.length - 1]!;
       // 证据产出与游标同事务：失败不推进，重试不会越过未提交的块。
+      const saveStartedAt = Date.now();
       const result = await prisma.$transaction(async (tx) => {
         await lockMemoryJobLease(tx, lease);
         const applied = { applied: [] as Array<{ id: string; title: string; occurredAt: string; conversationId: string }>, skipped: 0 };
@@ -423,7 +447,8 @@ export async function runDailyEventJob(
       console.log(
         `[events] ${dayKey} 第 ${index + 1}/${chunks.length} 块：`
         + `输入 ${chunk.length} 条（本批 ${messages.length} 条），`
-        + `${groups.length} 个会话请求，模型给 ${results.reduce((sum, group) => sum + group.events.length, 0)} 条，落库 ${result.applied.length} 条`,
+        + `${groups.length} 个会话请求，模型给 ${results.reduce((sum, group) => sum + group.events.length, 0)} 条，落库 ${result.applied.length} 条，`
+        + `读取 ${batchReadMs}ms，保存 ${Date.now() - saveStartedAt}ms`,
       );
     }
   } catch (error) {
