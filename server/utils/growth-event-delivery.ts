@@ -331,3 +331,70 @@ export async function cleanupGrowthEvents(
   `;
   return deleted.length;
 }
+
+
+/**
+ * 管理员/运维手动恢复已达到重试上限的投递。
+ * 状态切换与 SYSTEM 审计同事务；fencingToken 保持单调递增，attemptCount 从新一轮归零。
+ */
+export async function retryFailedGrowthEventDelivery(
+  prisma: PrismaClient,
+  deliveryId: string,
+  now: Date = new Date(),
+): Promise<{
+  deliveryId: string;
+  eventId: string;
+  characterId: string;
+  consumerKey: string;
+  previousAttemptCount: number;
+} | null> {
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{
+      deliveryId: string;
+      eventId: string;
+      characterId: string;
+      consumerKey: string;
+      previousAttemptCount: number;
+    }>>`
+      UPDATE "growth_event_deliveries" AS delivery
+      SET
+        "status" = 'QUEUED'::"GrowthEventDeliveryStatus",
+        "attemptCount" = 0,
+        "runAt" = ${now},
+        "lockedAt" = NULL,
+        "lockedBy" = NULL,
+        "leaseToken" = NULL,
+        "leaseExpiresAt" = NULL,
+        "processedAt" = NULL,
+        "updatedAt" = ${now}
+      FROM "growth_events" AS event
+      WHERE delivery."id" = ${deliveryId}::uuid
+        AND delivery."eventId" = event."id"
+        AND delivery."status" = 'FAILED'::"GrowthEventDeliveryStatus"
+      RETURNING
+        delivery."id" AS "deliveryId",
+        delivery."eventId",
+        event."characterId",
+        delivery."consumerKey",
+        0::int AS "previousAttemptCount"
+    `;
+    const row = rows[0];
+    if (!row) return null;
+
+    await tx.auditLog.create({
+      data: {
+        actorType: "SYSTEM",
+        characterId: row.characterId,
+        action: "growth.event_delivery.manual_retry",
+        entityType: "GrowthEventDelivery",
+        entityId: row.deliveryId,
+        details: {
+          eventId: row.eventId,
+          consumerKey: row.consumerKey,
+          retryQueuedAt: now.toISOString(),
+        },
+      },
+    });
+    return row;
+  });
+}
