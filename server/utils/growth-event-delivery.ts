@@ -193,7 +193,7 @@ export async function renewGrowthEventDeliveryLease(
 export async function completeGrowthEventDelivery(
   prisma: PrismaClient,
   lease: GrowthEventDeliveryLease,
-  handler: GrowthEventDeliveryHandler | null,
+  handler: GrowthEventDeliveryHandler,
   now: Date,
 ): Promise<"SUCCEEDED" | "SKIPPED"> {
   return prisma.$transaction(async (tx) => {
@@ -211,7 +211,7 @@ export async function completeGrowthEventDelivery(
     `;
     if (locked !== 1) throw new GrowthEventDeliveryLeaseLostError();
 
-    const result = handler ? await handler(tx, lease.event) : { skipReason: "没有注册对应的成长事件消费者。" };
+    const result = await handler(tx, lease.event);
     const skipReason = result && "skipReason" in result ? result.skipReason : undefined;
     const skipped = skipReason !== undefined;
     const status = skipped ? "SKIPPED" : "SUCCEEDED";
@@ -279,7 +279,8 @@ export async function processNextGrowthEventDelivery(
   const lease = await claimNextGrowthEventDelivery(prisma, options);
   if (!lease) return { processed: false };
   try {
-    const handler = handlers[lease.consumerKey] ?? null;
+    const handler = handlers[lease.consumerKey];
+    if (!handler) throw new Error(`成长事件消费者未注册：${lease.consumerKey}`);
     const status = await completeGrowthEventDelivery(prisma, lease, handler, options.now ?? new Date());
     return { processed: true, deliveryId: lease.deliveryId, consumerKey: lease.consumerKey, status };
   } catch (error) {
