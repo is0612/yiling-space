@@ -10,6 +10,7 @@ import {
   failGrowthEventDelivery,
   processNextGrowthEventDelivery,
   renewGrowthEventDeliveryLease,
+  retryFailedGrowthEventDelivery,
 } from "../server/utils/growth-event-delivery";
 import { GROWTH_EVENT_HANDLERS } from "../server/utils/growth-event-consumers";
 import { readMemoryEventReference } from "../server/utils/growth-domain-gateway";
@@ -205,13 +206,43 @@ try {
   assert.equal(skippedDelivery.status, "SKIPPED");
   assert.match(skippedDelivery.lastError ?? "", /来源忆泡不存在/);
 
-  console.log("\\n[8] Watchdog 能识别角色范围内的成长事件积压");
+  console.log("\\n[8] FAILED 投递可审计地手动恢复");
+  const manualSource = await createMemoryEvent("手动恢复");
+  const manualEvent = await prisma.$transaction(tx => publishGrowthEvent(tx, {
+    ...input,
+    aggregateId: manualSource.id,
+    occurredAt: manualSource.occurredAt,
+    idempotencyKey: `memory.event.created:${manualSource.id}`,
+    payload: { sourceId: manualSource.id },
+  }));
+  const manualDelivery = await prisma.growthEventDelivery.findUniqueOrThrow({
+    where: { eventId_consumerKey: { eventId: manualEvent.eventId, consumerKey: "growth.memory-source-integrity" } },
+  });
+  await prisma.growthEventDelivery.update({
+    where: { id: manualDelivery.id },
+    data: { status: "FAILED", attemptCount: 5, lastError: "terminal failure" },
+  });
+  const retried = await retryFailedGrowthEventDelivery(prisma, manualDelivery.id);
+  assert.equal(retried?.previousAttemptCount, 5);
+  assert.equal(retried?.characterId, characterA.id);
+  assert.equal(await retryFailedGrowthEventDelivery(prisma, manualDelivery.id), null,
+    "同一 FAILED 投递只能被手动恢复一次");
+  const requeued = await prisma.growthEventDelivery.findUniqueOrThrow({ where: { id: manualDelivery.id } });
+  assert.equal(requeued.status, "QUEUED");
+  assert.equal(requeued.attemptCount, 0);
+  assert.equal(requeued.fencingToken, manualDelivery.fencingToken, "恢复不能重置 fencing 单调序列");
+  assert.equal(requeued.lastError, "terminal failure", "保留上次错误直到新执行者领取");
+  assert(await prisma.auditLog.findFirst({
+    where: { action: "growth.event_delivery.manual_retry", entityId: manualDelivery.id },
+  }), "手动恢复必须写 SYSTEM 审计");
+
+  console.log("\\n[9] Watchdog 能识别角色范围内的成长事件积压");
   const findings = await collectWatchdogFindings(prisma, new Date(Date.now() + 2 * 60 * 60 * 1000));
   assert(findings.some(finding =>
     finding.code === "growth_event_worker_stalled" && finding.characterId === characterA.id,
   ), "已到期的重试投递积压应定位到所属角色");
 
-  console.log("\\n[9] 成功事件保留期清理，失败事件继续保留");
+  console.log("\\n[10] 成功事件保留期清理，失败事件继续保留");
   const removed = await cleanupGrowthEvents(prisma, {
     now: new Date(Date.now() + 31 * 24 * 60 * 60 * 1000),
     retentionDays: 30,
@@ -221,6 +252,8 @@ try {
   assert.equal(await prisma.growthEvent.findUnique({ where: { id: missingEvent.eventId } }), null);
   assert(await prisma.growthEvent.findUnique({ where: { id: secondEvent.eventId } }),
     "仍有待重试投递的事件必须保留");
+  assert(await prisma.growthEvent.findUnique({ where: { id: manualEvent.eventId } }),
+    "手动恢复后仍在队列中的事件必须保留");
 
   console.log("Growth Event Center DB integration tests passed.");
 } finally {
