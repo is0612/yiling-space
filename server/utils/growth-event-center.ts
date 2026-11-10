@@ -39,6 +39,7 @@ export type GrowthEventPublishResult = {
 };
 
 export const GROWTH_EVENT_MAX_ATTEMPTS = 5;
+export const GROWTH_EVENT_MAX_PAYLOAD_BYTES = 8 * 1024;
 export const GROWTH_EVENT_LEASE_MS = 5 * 60 * 1000;
 export const GROWTH_EVENT_SUCCESS_RETENTION_DAYS = 30;
 
@@ -74,12 +75,17 @@ export function normalizeGrowthEventInput(input: GrowthEventInput): GrowthEventI
   if (!(input.occurredAt instanceof Date) || !Number.isFinite(input.occurredAt.getTime())) {
     throw new Error("成长事件发生时间无效。");
   }
-  if (input.payload !== undefined) {
-    try {
-      JSON.stringify(input.payload);
-    } catch {
-      throw new Error("成长事件 payload 必须是可序列化 JSON。");
-    }
+  let payloadJson: string;
+  try {
+    payloadJson = JSON.stringify(input.payload ?? {});
+  } catch {
+    throw new Error("成长事件 payload 必须是可序列化 JSON。");
+  }
+  if (Buffer.byteLength(payloadJson, "utf8") > GROWTH_EVENT_MAX_PAYLOAD_BYTES) {
+    throw new Error("成长事件 payload 超过 8 KB；请只传来源引用和最小必要元数据。");
+  }
+  if (!eventType.startsWith(sourceDomain + ".")) {
+    throw new Error("成长事件类型必须以来源领域作为前缀。");
   }
   return {
     ...input,
