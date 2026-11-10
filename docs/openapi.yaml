@@ -23,6 +23,143 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /characters/{characterId}/growth/preferences:
+    get:
+      tags: [Characters]
+      summary: 分页搜索当前角色的偏好与候选
+      description: 仅角色拥有者可读；角色自己的偏好与他人的私人喜好分离。来源快照不表示来源仍有效。
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: q, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: status, in: query, schema: { type: string, enum: [ALL, PENDING, ACTIVE, DISABLED, REJECTED], default: ALL } }
+      responses:
+        '200':
+          description: items 为偏好数组，pagination 为 page/pageSize/total/pageCount
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CharacterPreference' } }
+                  pagination: { type: object, additionalProperties: true }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或条目不存在或无权访问 }
+        '409': { description: 版本冲突、状态冲突或来源已变更失效 }
+    post:
+      tags: [Characters]
+      summary: 手动创建偏好或保存有来源的待确认候选
+      description: 最多5条来源。仅当前角色公开ACTIVE忆泡和ACCEPTED反思建议可用；来源指纹事务内校验。有来源只能PENDING，手动可明确ACTIVE。版本与审计同事务。
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind, topic, reason]
+              properties:
+                kind: { type: string, enum: [LIKE, DISLIKE, INTEREST] }
+                topic: { type: string, minLength: 1, maxLength: 100 }
+                reason: { type: string, minLength: 1, maxLength: 1000 }
+                status: { type: string, enum: [PENDING, ACTIVE], default: PENDING }
+                sources: { type: array, minItems: 1, maxItems: 5, items: { $ref: '#/components/schemas/PreferenceSourceRef' } }
+      responses:
+        '200': { description: preference 为新偏好及revision1 }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或条目不存在或无权访问 }
+        '409': { description: 版本冲突、状态冲突或来源已变更失效 }
+  /characters/{characterId}/growth/preferences/sources:
+    get:
+      tags: [Characters]
+      summary: 分页选择当前角色的公开偏好依据
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: q, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: type, in: query, schema: { type: string, enum: [MEMORY_EVENT, REFLECTION_SUGGESTION], default: MEMORY_EVENT } }
+      responses:
+        '200': { description: 'items 包含 type/id/title/summary/hash/occurredAt；pagination 包含 page/pageSize/total/pageCount。summary 最多600字。' }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或条目不存在或无权访问 }
+        '409': { description: 版本冲突、状态冲突或来源已变更失效 }
+  /characters/{characterId}/growth/preferences/suggest:
+    post:
+      tags: [Characters]
+      summary: 用户明确调用聊天模型提出一条偏好草稿
+      description: 不创建候选或正式偏好。只读所选1至5条公开来源摘要，调用前后校验指纹，最多60秒；使用角色聊天配置和每日额度，other/source=preference-suggestion记账。模型证据不足可返回null；不透传供应商错误。
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [sources]
+              properties:
+                sources: { type: array, minItems: 1, maxItems: 5, items: { $ref: '#/components/schemas/PreferenceSourceRef' } }
+      responses:
+        '200': { description: 'suggestion 为 {kind,topic,reason} 或 null；仍须人工保存及确认' }
+        '429': { description: 今日额度已用完 }
+        '502': { description: 模型调用或解析失败 }
+        '503': { description: 模型未配置 }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或条目不存在或无权访问 }
+        '409': { description: 版本冲突、状态冲突或来源已变更失效 }
+  /characters/{characterId}/growth/preferences/{preferenceId}:
+    patch:
+      tags: [Characters]
+      summary: 编辑偏好或人工确认、驳回、停用与重新启用
+      description: expectedRevision为当前版本。EDIT不改变状态；ACTIVATE仅PENDING或DISABLED，REJECT仅PENDING，DISABLE仅ACTIVE。首次采纳重新验证来源，已生效记录独立于来源生命周期。状态操作不得同时编辑内容。无变化编辑不新增版本；冲突返回409。
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: preferenceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedRevision, operation]
+              properties:
+                expectedRevision: { type: integer, minimum: 1 }
+                operation: { type: string, enum: [EDIT, ACTIVATE, REJECT, DISABLE] }
+                kind: { type: string, enum: [LIKE, DISLIKE, INTEREST] }
+                topic: { type: string, minLength: 1, maxLength: 100 }
+                reason: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        '200': { description: preference 为更新后的偏好 }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或条目不存在或无权访问 }
+        '409': { description: 版本冲突、状态冲突或来源已变更失效 }
+  /characters/{characterId}/growth/preferences/{preferenceId}/history:
+    get:
+      tags: [Characters]
+      summary: 分页读取偏好的追加式完整版本历史
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: preferenceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: q, in: query, schema: { type: string, maxLength: 100 } }
+      responses:
+        '200': { description: 'items 为每次操作结果的完整快照，含 revision/action/kind/topic/reason/status/sourceType/sourceRefs/actorId/createdAt；版本倒序。pagination 含 page/pageSize/total/pageCount。' }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或条目不存在或无权访问 }
+        '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/usage/logs:
     get:
       tags: [Characters]
@@ -5227,6 +5364,40 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    PreferenceSourceRef:
+      type: object
+      additionalProperties: false
+      required: [type, id, hash]
+      properties:
+        type: { type: string, enum: [MEMORY_EVENT, REFLECTION_SUGGESTION] }
+        id: { type: string, format: uuid }
+        hash: { type: string, pattern: '^[a-f0-9]{64}$' }
+    CharacterPreference:
+      type: object
+      required: [id, characterId, kind, topic, reason, status, revision, sourceType, sourceRefs, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        characterId: { type: string, format: uuid }
+        kind: { type: string, enum: [LIKE, DISLIKE, INTEREST] }
+        topic: { type: string, maxLength: 100 }
+        reason: { type: string, maxLength: 1000 }
+        status: { type: string, enum: [PENDING, ACTIVE, REJECTED, DISABLED] }
+        revision: { type: integer, minimum: 1 }
+        sourceType: { type: string, enum: [MANUAL, SOURCES] }
+        sourceRefs:
+          type: array
+          maxItems: 5
+          items:
+            type: object
+            required: [type, id, hash, title, summary]
+            properties:
+              type: { type: string, enum: [MEMORY_EVENT, REFLECTION_SUGGESTION] }
+              id: { type: string, format: uuid }
+              hash: { type: string, pattern: '^[a-f0-9]{64}$' }
+              title: { type: string }
+              summary: { type: string, maxLength: 600 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     ReflectionSource:
       type: object
       required: [key, type, id, hash, title, excerpt]

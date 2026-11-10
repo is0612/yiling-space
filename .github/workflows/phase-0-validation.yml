@@ -126,6 +126,9 @@ jobs:
       - name: 生成 Prisma Client
         run: yarn run db:generate
 
+      - name: 偏好系统与页面回归
+        run: yarn test:preferences && yarn test:preferences-page && yarn test:preferences-isolated
+
       - name: 应用初始数据库迁移
         run: yarn run db:migrate:deploy
 

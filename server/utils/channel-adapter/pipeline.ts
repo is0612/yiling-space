@@ -1,3 +1,4 @@
+import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../preference-retrieval";
 import { randomUUID } from "node:crypto";
 import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
@@ -1640,6 +1641,7 @@ async function runChannelTurn(input: {
   const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
+  const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage).catch(() => []);
   const turnId = randomUUID();
 
   // Formal knowledge lookup is shared by group and private paths and is always character-scoped.
@@ -2064,6 +2066,7 @@ async function runChannelTurn(input: {
         });
       },
       chatInput: {
+        preferences,
         characterName: character.name,
         characterPrompt: character.basePrompt.slice(0, 12_000),
         ...(!useTranscript && messages[0]!.speaker ? { speaker: messages[0]!.speaker } : {}),
@@ -2322,6 +2325,8 @@ async function runChannelTurn(input: {
             promptTemplateVersion: generated.promptTemplateVersion,
             usedMemoryIds: generated.usedMemoryIds,
             usedSnapshotIds: generated.usedSnapshotIds,
+            usedPreferenceIds: generated.usedPreferenceIds ?? [],
+            usedPreferences: usedPreferenceSnapshots(preferences, generated.usedPreferenceIds ?? []),
             ...(generated.usedRawMessageIds.length ? { usedRawMessageIds: generated.usedRawMessageIds } : {}),
             ...(generated.usedEventIds.length ? { usedEventIds: generated.usedEventIds } : {}),
             ...(generated.usedCatchphraseIds.length ? { usedCatchphraseIds: generated.usedCatchphraseIds } : {}),

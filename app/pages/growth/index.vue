@@ -33,9 +33,10 @@ const domains = [
   { title: "记忆", description: "经历、长期记忆与阶段总结", icon: "▤", href: "/growth/memory" },
   { title: "社交", description: "好友、重要经历与关系评估", icon: "♧", href: "/growth/social" },
   { title: "知识", description: "候选整理、知识库与来源", icon: "◇", href: "/growth/knowledge" },
+  { title: "偏好", description: "她自己的喜恶、兴趣与形成依据", icon: "♡", href: "/growth/preferences" },
 ];
 function roleHref(path: string) {
-  const allowed = ["/growth/reflection", "/growth/knowledge", "/growth/social/assessments", "/growth/memory", "/growth/social", "/growth/memory/snapshots", "/growth/deliveries"];
+  const allowed = ["/growth/reflection", "/growth/knowledge", "/growth/social/assessments", "/growth/memory", "/growth/social", "/growth/memory/snapshots", "/growth/deliveries", "/growth/preferences"];
   const base = path.split(/[?#]/)[0] ?? "";
   const safe = allowed.includes(base) ? base : "/growth/reflection";
   return `${safe}?c=${encodeURIComponent(characterId.value)}`;
@@ -362,7 +363,7 @@ onBeforeUnmount(() => { disposed = true; roleGeneration += 1; requestVersion += 
               <span class="overview-domain-icon">{{ domain.icon }}</span><div><strong>{{ domain.title }}</strong><small>{{ domain.description }}</small></div><span class="overview-arrow">↗</span>
             </NuxtLink>
           </div><p class="overview-future">
-            后续逐步接入：偏好 · 状态 · 表达习惯 · 目标与愿望　<span>当前不展示虚构进度</span>
+            后续逐步接入：状态 · 表达习惯 · 目标与愿望　<span>当前不展示虚构进度</span>
           </p>
         </section>
         <footer class="overview-footer">

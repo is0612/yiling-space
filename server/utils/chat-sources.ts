@@ -19,6 +19,7 @@ export type StoredChatSnapshotSource = {
 export type StoredChatSources = {
   memories: StoredChatMemorySource[];
   snapshots: StoredChatSnapshotSource[];
+  preferences?: Array<{ id: string; kind: string; topic: string; reason: string; revision: number }>;
 };
 
 const EMPTY_SOURCES: StoredChatSources = { memories: [], snapshots: [] };
@@ -63,5 +64,13 @@ export function readStoredChatSources(metadata: unknown): StoredChatSources {
         }];
       }).slice(0, 12)
     : [];
-  return { memories, snapshots };
+  const preferences = Array.isArray(sourceRoot.preferences) ? sourceRoot.preferences.flatMap(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== "string" || typeof row.kind !== "string" || !["LIKE", "DISLIKE", "INTEREST"].includes(row.kind)
+      || typeof row.topic !== "string" || typeof row.reason !== "string" || typeof row.revision !== "number"
+      || !Number.isSafeInteger(row.revision) || row.revision < 1) return [];
+    return [{ id: row.id, kind: row.kind, topic: row.topic.slice(0, 100), reason: row.reason.slice(0, 1000), revision: row.revision }];
+  }).slice(0, 6) : [];
+  return { memories, snapshots, ...(preferences.length ? { preferences } : {}) };
 }

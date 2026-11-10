@@ -301,6 +301,7 @@ model Character {
   growthEvents       GrowthEvent[]
   memoryKnowledgeRequests MemoryKnowledgeCandidateRequest[]
   reflectionRuns ReflectionRun[]
+  preferences CharacterPreference[]
   growthImportIdentities CharacterGrowthImportIdentity[]
 
   @@index([ownerId, status])
@@ -1750,6 +1751,46 @@ model GrowthEvent {
   @@index([characterId, createdAt])
   @@index([sourceDomain, eventType, createdAt])
   @@map("growth_events")
+}
+
+/// 角色自己的稳定喜好，与用户偏好长期记忆分开；来源快照无外键，采纳后独立保留。
+model CharacterPreference {
+  id String @id @default(uuid()) @db.Uuid
+  characterId String @db.Uuid
+  kind String @db.VarChar(20)
+  topic String @db.VarChar(100)
+  reason String @db.VarChar(1000)
+  status String @default("PENDING") @db.VarChar(20)
+  revision Int @default(1)
+  sourceType String @default("MANUAL") @db.VarChar(20)
+  sourceRefs Json @default("[]") @db.JsonB
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  revisions CharacterPreferenceRevision[]
+
+  @@index([characterId, status, updatedAt])
+  @@map("character_preferences")
+}
+
+/// 每次成功操作后的完整快照，只追加；第一版也有 CREATE 记录。
+model CharacterPreferenceRevision {
+  id String @id @default(uuid()) @db.Uuid
+  preferenceId String @db.Uuid
+  revision Int
+  action String @db.VarChar(20)
+  kind String @db.VarChar(20)
+  topic String @db.VarChar(100)
+  reason String @db.VarChar(1000)
+  status String @db.VarChar(20)
+  sourceType String @db.VarChar(20)
+  sourceRefs Json @db.JsonB
+  actorId String @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  preference CharacterPreference @relation(fields: [preferenceId], references: [id], onDelete: Cascade)
+
+  @@unique([preferenceId, revision])
+  @@map("character_preference_revisions")
 }
 
 /// 每个事件 × 消费者一条独立投递状态；租约采用 fencing，避免过期执行者提交结果。

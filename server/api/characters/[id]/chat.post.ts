@@ -1,3 +1,4 @@
+import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../../../utils/preference-retrieval";
 import { createHash, randomUUID } from "node:crypto";
 import { createError, getRouterParam, readBody, setResponseStatus } from "h3";
 import { type ConversationContextMessage } from "../../../utils/chat-reply";
@@ -419,6 +420,7 @@ export default defineEventHandler(async (event) => {
   const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
+  const preferences = await loadPreferencesForPrompt(prisma, characterId, message).catch(() => []);
   const turnId = randomUUID();
   const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }]);
   let generated;
@@ -595,6 +597,7 @@ export default defineEventHandler(async (event) => {
         });
       },
       chatInput: {
+        preferences,
         characterName: character.name,
         characterPrompt: character.basePrompt.slice(0, 12_000),
         styleExamples: (character.styleExamples ?? "").slice(0, 8000),
@@ -670,6 +673,7 @@ export default defineEventHandler(async (event) => {
     })),
   ];
   const usedSources = {
+    preferences: usedPreferenceSnapshots(preferences, generated.usedPreferenceIds ?? []),
     memories: allMemorySources.filter((memory, index, all) => usedMemoryIds.has(memory.id)
       && all.findIndex((candidate) => candidate.id === memory.id) === index)
       .map(({ id, category, content, scope }) => ({ id, category, content, scope })),
@@ -723,6 +727,7 @@ export default defineEventHandler(async (event) => {
           usedSnapshotIds: generated.usedSnapshotIds,
           usedRawMessageIds: generated.usedRawMessageIds,
           usedCatchphraseIds: generated.usedCatchphraseIds,
+          usedPreferenceIds: generated.usedPreferenceIds ?? [],
           usedSources,
           usage: generated.usage ?? {},
         },
