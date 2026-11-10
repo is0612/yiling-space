@@ -237,6 +237,9 @@ try {
   console.log("\n[5] 租约过期恢复与 fencing");
   const staleLease = await claimNextSocialRelationshipAssessmentTask(prisma, { workerId: "queue-worker-stale", scopeId: scopeB, now });
   assert(staleLease);
+  const orphanedAssessment = await prisma.socialRelationshipAssessment.create({ data: {
+    scopeId: scopeB, generation: staleLease.generation, evaluatedStage: "STRANGER", evaluatedStatus: "UNOBSERVED", relationshipVersion: 0, status: "RUNNING",
+  } });
   await prisma.socialRelationshipAssessmentTask.update({
     where: { scopeId: scopeB },
     data: { leaseExpiresAt: new Date(now.getTime() - 1) },
@@ -246,6 +249,8 @@ try {
     reviewIntervalDays: 30,
   });
   const afterRecovery = await readTask(scopeB);
+  const endedOrphan = await prisma.socialRelationshipAssessment.findUniqueOrThrow({ where: { id: orphanedAssessment.id } });
+  check("过期任务对应旧运行中评估历史结束，不再永久显示运行中", endedOrphan.status === "FAILED" && endedOrphan.completedAt !== null);
   check("租约过期任务恢复为 RETRY_WAIT，清除旧租约并保留恢复原因",
     recovered.recoveredLeases === 1 && afterRecovery.status === "RETRY_WAIT"
       && afterRecovery.leaseToken === null && afterRecovery.lockedBy === null

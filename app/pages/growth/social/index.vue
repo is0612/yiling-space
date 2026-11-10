@@ -1,228 +1,145 @@
 <script setup lang="ts">
-definePageMeta({
-  topbar: { title: "社交关系系统" },
-});
+import { Avatar, Connection, DocumentChecked, Setting } from "@element-plus/icons-vue";
+
+definePageMeta({ topbar: { title: "社交系统" } });
+const route = useRoute();
+const { character: activeCharacter } = useCharacterSelection(route.path);
+const characterId = computed(() => activeCharacter.value?.id ?? "");
+function roleHref(path: string) {
+  return characterId.value ? `${path}?c=${encodeURIComponent(characterId.value)}` : path;
+}
+const entries = [
+  { title: "好友档案", kicker: "认识谁 · 怎样交流", description: "查看她认识的人、互动记录与备注，管理身份分类和交流权限。", href: "/growth/social/friends", action: "管理好友", icon: Avatar },
+  { title: "关系评估历史", kicker: "为什么变化 · 由你决定", description: "查看每次评估的结论和真实证据，审阅关系阶段与相处状态的变化建议。", href: "/growth/social/assessments", action: "查看评估与建议", icon: DocumentChecked },
+  { title: "评估设置", kicker: "何时评估 · 使用什么模型", description: "配置关系评估助手的独立模型、凭据与调用预算，启用后由后台处理任务。", href: "/growth/social/assessment-settings", action: "配置评估助手", icon: Setting },
+];
 </script>
 
 <template>
   <div class="page-wrap social-page">
     <PageHeader
-      eyebrow="成长系统 / 社交关系系统"
-      description="管理她认识的人、对对方的判断，以及她应该怎样回应不同对象。"
+      eyebrow="成长系统 / 社交系统"
+      description="认识她身边的人，回看共同经历，认真决定一段关系的变化。"
     />
-
-    <section class="social-current">
-      <article class="social-card social-card-primary">
-        <div class="social-kicker">已接入 · 好友档案</div>
-        <h2>她的朋友</h2>
-        <p>
-          这里已经记录她在 QQ、B站等渠道遇到的人。可以查看平台身份、昵称、认识来源、互动情况，
-          也可以给对方添加她自己的备注。
+    <section class="social-intro">
+      <div>
+        <span class="social-kicker">每段关系，都有自己的来处</span>
+        <h1>从一次相遇，到彼此熟悉。</h1>
+        <p v-if="activeCharacter">
+          当前角色「{{ activeCharacter.name }}」。好友关系、交流权限与评估记录均随角色分别保存。
         </p>
-        <ul>
-          <li>同一个平台账号跨角色共享身份档案，各角色的关系分别保存。</li>
-          <li>身份可标记为未知、真人或 AI；手动确认后不会被普通互动覆盖。</li>
-          <li>可以按当前角色决定默认处理、允许交流或禁止交流。</li>
-        </ul>
-        <NuxtLink to="/growth/social/friends" class="social-action">
-          打开好友档案与交流管理 <span aria-hidden="true">→</span>
-        </NuxtLink>
-      </article>
-
-      <article class="social-card">
-        <div class="social-kicker">关系成长 · 建设中</div>
-        <h2>关系评估 AI</h2>
-        <p>关系阶段和相处状态已经有独立数据、评估队列和专职评估执行器。AI 只提供建议，关系不会被自动修改。</p>
-        <NuxtLink to="/growth/social/assessment-settings" class="social-action">
-          配置关系评估 AI <span aria-hidden="true">→</span>
-        </NuxtLink>
-        <NuxtLink to="/growth/social/assessments" class="social-action">
-          查看关系评估历史与证据 <span aria-hidden="true">→</span>
-        </NuxtLink>
-      </article>
-
-      <article class="social-card">
-        <div class="social-kicker">当前规则</div>
-        <h2>交流权限</h2>
-        <div class="social-rule">
-          <strong>默认</strong>
-          <span>真人正常回应，AI 默认不主动接话。</span>
-        </div>
-        <div class="social-rule">
-          <strong>允许交流</strong>
-          <span>为指定对象开启交流，即使对方是 AI 也可以互动。</span>
-        </div>
-        <div class="social-rule">
-          <strong>禁止交流</strong>
-          <span>当前角色不回应指定对象；规则会在群聊接收和批次发送前检查。</span>
-        </div>
-        <p class="social-footnote">
-          身份判断是平台账号级的；交流权限是角色级的。同一个 AI 可以被一个角色允许、被另一个角色屏蔽。
+        <p v-else>
+          请先从全局角色选择器选一个角色，再查看她的好友与评估记录。
         </p>
+      </div>
+      <el-icon
+        class="social-intro-icon"
+        aria-hidden="true"
+      >
+        <Connection />
+      </el-icon>
+    </section>
+
+    <section
+      class="social-entry-grid"
+      aria-label="社交功能入口"
+    >
+      <article
+        v-for="entry in entries"
+        :key="entry.href"
+        class="social-card"
+      >
+        <div class="social-card-top">
+          <el-icon
+            class="social-entry-icon"
+            aria-hidden="true"
+          >
+            <component :is="entry.icon" />
+          </el-icon>
+          <span class="social-kicker">{{ entry.kicker }}</span>
+        </div>
+        <h2>{{ entry.title }}</h2>
+        <p>{{ entry.description }}</p>
+        <NuxtLink
+          :to="roleHref(entry.href)"
+          class="social-action"
+        >
+          {{ entry.action }} <span aria-hidden="true">→</span>
+        </NuxtLink>
       </article>
     </section>
 
-    <section class="social-next">
+    <section
+      class="social-guidance"
+      aria-label="如何理解关系评估"
+    >
       <div class="social-section-heading">
         <div>
-          <div class="social-kicker">后续逐步建设</div>
-          <h2>关系的自然成长</h2>
+          <span class="social-kicker">从经历到建议</span>
+          <h2>看懂建议，再决定是否采纳。</h2>
         </div>
-        <p>先保留清晰边界，不把互动次数直接当成亲密程度。</p>
+        <p>互动次数是一份记录，不是亲密度分数。</p>
       </div>
-      <div class="social-next-grid">
-        <article class="social-next-card">
-          <h3>身份自动识别建议</h3>
-          <p>优先使用渠道提供的可信身份标记；证据不足时保持未知，只给出建议，不覆盖人工确认。</p>
-          <span class="social-status">尚未实现</span>
-        </article>
-        <article class="social-next-card">
-          <h3>关系阶段与相处状态</h3>
-          <p>阶段描述亲疏，相处状态描述近期关系体验；两者分开保存，互动次数不会直接决定阶段。</p>
-          <span class="social-status">数据与队列已接入</span>
-        </article>
-        <article class="social-next-card">
-          <h3>评估证据</h3>
-          <p>每次评估只分析已挂接的经历引用；新证据与历史背景分开，避免把旧经历重复算成新进展。</p>
-          <span class="social-status">下一批实现</span>
-        </article>
-      </div>
+      <ol class="social-steps">
+        <li>
+          <span class="step-number">01</span>
+          <div><h3>留下共同经历</h3><p>重要社交经历引用已有忆泡，不另造一份事实。不同角色与同一账号的关系各自独立。</p></div>
+        </li>
+        <li>
+          <span class="step-number">02</span>
+          <div><h3>区分新证据与背景</h3><p>NEW 是本轮新经历，CONTEXT 是历史背景。旧经历不能反复当作新的关系进展。</p></div>
+        </li>
+        <li>
+          <span class="step-number">03</span>
+          <div><h3>人工审阅变化</h3><p>AI 只给建议；采纳后才更新关系并留痕。关系已变化的过期建议不能继续应用。</p></div>
+        </li>
+      </ol>
+    </section>
+
+    <section
+      class="social-boundaries"
+      aria-label="身份与交流规则"
+    >
+      <article class="social-rule-card">
+        <h2>身份分类，不等于关系阶段。</h2>
+        <p>真人、AI、未知描述对方的身份；陌生、认识、朋友、好朋友描述她与对方的关系。身份分类不会直接决定关系亲疏，人工确认的身份不会被普通互动覆盖。</p>
+      </article>
+      <article class="social-rule-card">
+        <h2>交流权限，由当前角色单独决定。</h2>
+        <p>在好友档案中选择默认处理、允许交流或禁止交流。允许 AI 互动不代表关系自动升级；禁止交流也不是删除好友经历。</p>
+      </article>
     </section>
   </div>
 </template>
 
 <style scoped>
-.social-page {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-.social-current {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
-  gap: 14px;
-}
-.social-card,
-.social-next-card {
-  min-width: 0;
-  border-radius: 12px;
-  background: var(--surface, #fff);
-  padding: 20px;
-}
-.social-card-primary {
-  border: 1px solid var(--line, #e8eaf0);
-}
-.social-kicker {
-  color: var(--dim);
-  font-size: 12px;
-  letter-spacing: .04em;
-}
-.social-card h2,
-.social-section-heading h2 {
-  margin: 12px 0 8px;
-  color: var(--text-2);
-  font-size: 17px;
-  font-weight: 650;
-}
-.social-card p,
-.social-next-card p,
-.social-section-heading > p {
-  margin: 0;
-  color: var(--dim);
-  font-size: 13px;
-  line-height: 1.85;
-}
-.social-card ul {
-  display: grid;
-  gap: 8px;
-  margin: 16px 0 0;
-  padding-left: 18px;
-  color: var(--text-2);
-  font-size: 13px;
-  line-height: 1.75;
-}
-.social-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 20px;
-  color: var(--accent, #0d9488);
-  font-size: 13px;
-  font-weight: 650;
-  text-decoration: none;
-}
-.social-action:hover {
-  text-decoration: underline;
-}
-.social-rule {
-  display: grid;
-  gap: 4px;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--line, #e8eaf0);
-}
-.social-rule strong {
-  color: var(--text-2);
-  font-size: 13px;
-}
-.social-rule span {
-  color: var(--dim);
-  font-size: 12px;
-  line-height: 1.7;
-}
-.social-footnote {
-  margin-top: 14px !important;
-  font-size: 12px !important;
-}
-.social-next {
-  border-radius: 12px;
-  background: var(--surface, #fff);
-  padding: 20px;
-}
-.social-section-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 14px;
-}
-.social-section-heading h2 {
-  margin-bottom: 0;
-}
-.social-section-heading > p {
-  max-width: 360px;
-  text-align: right;
-}
-.social-next-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-.social-next-card {
-  background: var(--surface-2, #f6f7fb);
-  padding: 16px;
-}
-.social-next-card h3 {
-  margin: 0 0 8px;
-  color: var(--text-2);
-  font-size: 14px;
-}
-.social-status {
-  display: inline-block;
-  margin-top: 14px;
-  color: var(--dim);
-  font-size: 11px;
-}
-@media (max-width: 900px) {
-  .social-current,
-  .social-next-grid {
-    grid-template-columns: 1fr;
-  }
-  .social-section-heading {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .social-section-heading > p {
-    text-align: left;
-  }
-}
+.social-page { display: flex; flex-direction: column; gap: 24px; }
+.social-intro { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 28px; border-radius: 10px; background: var(--surface); border-left: 3px solid var(--brand); }
+.social-kicker { color: var(--dim); font-size: 12px; }
+.social-intro h1 { margin: 10px 0; color: var(--text); font-size: 26px; font-weight: 650; line-height: 1.5; }
+.social-intro p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.8; }
+.social-intro-icon { flex: none; width: 72px; height: 72px; border-radius: 50%; color: var(--brand-strong); background: var(--brand-soft); font-size: 32px; }
+.social-entry-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.social-card { min-width: 0; display: flex; flex-direction: column; padding: 24px; border-radius: 10px; background: var(--surface); }
+.social-card-top { display: flex; align-items: center; gap: 12px; }
+.social-entry-icon { flex: none; width: 36px; height: 36px; border-radius: 8px; color: var(--brand-strong); background: var(--brand-soft); font-size: 20px; }
+.social-card h2, .social-section-heading h2 { margin: 18px 0 10px; color: var(--text); font-size: 18px; font-weight: 600; line-height: 1.5; }
+.social-card p, .social-steps p, .social-rule-card p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.85; }
+.social-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 24px; color: var(--brand-strong); font-size: 14px; font-weight: 600; text-decoration: none; }
+.social-action:hover { text-decoration: underline; }
+.social-guidance { padding: 24px; border-radius: 10px; background: var(--surface); }
+.social-section-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 24px; }
+.social-section-heading h2 { margin-top: 8px; margin-bottom: 0; }
+.social-section-heading > p { margin: 0; color: var(--dim); font-size: 12px; }
+.social-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; padding: 0; margin: 0; list-style: none; }
+.social-steps li { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.step-number { color: var(--brand-strong); background: var(--brand-soft); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
+.social-steps h3 { margin: 4px 0 8px; color: var(--text-2); font-size: 14px; font-weight: 600; }
+.social-steps p { font-size: 12px; }
+.social-boundaries { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.social-rule-card { padding: 20px 24px; border: 1px solid var(--line); border-radius: 10px; }
+.social-rule-card h2 { margin: 0 0 8px; color: var(--text-2); font-size: 14px; font-weight: 600; }
+.social-rule-card p { font-size: 12px; }
+@media (max-width: 1000px) { .social-entry-grid, .social-steps { grid-template-columns: 1fr; } .social-card { padding: 20px; } .social-section-heading { align-items: flex-start; flex-direction: column; gap: 12px; } }
+@media (max-width: 640px) { .social-page { gap: 16px; } .social-intro { padding: 20px; } .social-intro h1 { font-size: 22px; } .social-intro-icon { display: none; } .social-boundaries { grid-template-columns: 1fr; } .social-guidance { padding: 20px; } }
 </style>

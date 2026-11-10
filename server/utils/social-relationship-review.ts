@@ -1,5 +1,6 @@
 import { createError } from "h3";
 import type { PrismaClient } from "../../src/generated/prisma/client";
+import { validateSocialAssessmentSourceManifest } from "./social-assessment-evidence";
 
 export type SocialRelationshipReviewDecision = "ACCEPTED" | "REJECTED" | "DEFERRED";
 
@@ -92,6 +93,14 @@ export async function reviewSocialRelationshipAssessment(
       : {};
     const suggestedNewIds = new Set(asStringList(observationData.newEvidenceExperienceIds));
     const candidateIds = assessment.evidence.map(item => item.experienceId).filter(id => suggestedNewIds.has(id));
+    const citedIds = [...new Set([...asStringList(observationData.evidenceExperienceIds), ...candidateIds])];
+    if (!await validateSocialAssessmentSourceManifest(tx, characterId, scope.id, observationData.sourceManifest, citedIds)) {
+      await tx.socialRelationshipAssessmentReview.create({
+        data: { assessmentId, reviewerUserId: actorUserId, decision: "STALE", note: "来源已失效、范围或内容变化，或旧评估未保存来源版本；请重新评估。" },
+      });
+      await tx.socialRelationshipAssessment.update({ where: { id: assessmentId }, data: { reviewStatus: "STALE", reviewedAt: now, reviewedByUserId: actorUserId } });
+      return { decision, reviewStatus: "STALE", applied: false, stale: true };
+    }
     if (!candidateIds.length) {
       throw createError({ statusCode: 409, statusMessage: "本次评估没有可用于关系变化的 NEW 经历证据。" });
     }

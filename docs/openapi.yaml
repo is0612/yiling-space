@@ -3724,6 +3724,112 @@ paths:
                             uncachedCalls: { type: integer, minimum: 0, description: 窗口内没有缓存明细的调用数 }
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /characters/{characterId}/growth/social/assessments:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+    get:
+      tags: [Characters]
+      operationId: listSocialAssessmentHistory
+      summary: 查询社交系统的关系评估历史
+      description: |
+        仅角色拥有者可读，他人角色404；按createdAt DESC,id DESC分页。
+        执行状态、模型结论和人工处置分别返回，失败/运行中不是成功结论。
+        ACTIONABLE包含SUCCEEDED CHANGE且PENDING/DEFERRED，仅表示可处置，不保证可采纳。
+        canReview是采纳可用性的只读提示；关系版本或引用来源失效、旧记录没有来源版本证据时为false。
+        服务器采纳事务内再次校验。跨角色来源正文不返回；归档但同角色来源可追溯展示，不能采纳。
+        同一generation可能包含多次执行尝试，历史保留每次结果，不会静默删除失败记录。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 12 }
+        - name: filter
+          in: query
+          schema: { type: string, enum: [ALL, ACTIONABLE, ACCEPTED, REJECTED, STALE, FAILED, RUNNING], default: ALL }
+      responses:
+        '200':
+          description: 分页历史与当前角色全量计数
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, page, pageSize, totalPages, hasMore, filter, summary]
+                properties:
+                  filter: { type: string }
+                  total: { type: integer }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  totalPages: { type: integer }
+                  hasMore: { type: boolean }
+                  summary:
+                    type: object
+                    required: [all, actionable, accepted, failed, running]
+                    properties:
+                      all: { type: integer }
+                      actionable: { type: integer }
+                      accepted: { type: integer }
+                      failed: { type: integer }
+                      running: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, scopeId, friend, currentRelationship, generation, status, reviewStatus, evidence, reviews, canReview, staleReason]
+                      properties:
+                        id: { type: string, format: uuid }
+                        scopeId: { type: string, format: uuid }
+                        generation: { type: integer }
+                        status: { type: string, enum: [RUNNING, SUCCEEDED, FAILED] }
+                        outcome: { type: string, nullable: true }
+                        reviewStatus: { type: string }
+                        canReview: { type: boolean, description: 当前来源和关系版本允许采纳 }
+                        staleReason: { type: string, nullable: true }
+                        friend: { type: object, additionalProperties: true }
+                        currentRelationship: { type: object, additionalProperties: true }
+                        evidence: { type: array, items: { type: object, additionalProperties: true } }
+                        reviews: { type: array, items: { type: object, additionalProperties: true } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /characters/{characterId}/growth/social/assessments/{assessmentId}/review:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+      - name: assessmentId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Characters]
+      operationId: reviewSocialAssessment
+      summary: 人工采纳、驳回或暂缓关系变化建议
+      description: 仅SUCCEEDED CHANGE的PENDING/DEFERRED可处置。采纳事务校验角色/关系版本与被引用来源的ACTIVE状态、原范围和内容hash；失效写STALE审计并返回stale=true，关系不变。旧记录缺manifest不能采纳。驳回与暂缓不改关系。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [ACCEPTED, REJECTED, DEFERRED] }
+                note: { type: string, maxLength: 1000 }
+      responses:
+        '200':
+          description: 已处置或已标记来源/版本失效
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decision: { type: string }
+                  reviewStatus: { type: string }
+                  applied: { type: boolean }
+                  stale: { type: boolean }
+                  changeId: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: 已处理、非变化建议或并发版本冲突 }
   /characters/{characterId}/growth/overview:
     parameters:
       - $ref: '#/components/parameters/CharacterId'

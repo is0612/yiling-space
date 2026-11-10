@@ -1,4 +1,4 @@
-# 社交关系系统：现状与实施边界
+# 社交系统：现状与实施边界
 
 更新日期：2026-11-08
 
@@ -479,4 +479,12 @@
 - 已新增 Prisma 迁移 `20261109120000_social_proactive_contact_foundation`，以及纯函数策略/OneBot @ 段专项测试入口 `yarn test:social-proactive-contact-policy`。
 - **代码已接入，但尚未由用户本地验收。** 本轮未运行 Prisma、TypeScript、SFC、lint、数据库隔离测试或真实 QQ 联调；不能标记为通过。尤其需要在本地验证生成的 Prisma Client 与 OneBot 网关是否支持 `get_group_member_info`。
 - 本地验收命令：`yarn prisma validate`、`yarn prisma migrate deploy`、`yarn prisma generate`、`yarn test:social-proactive-contact-policy`、`yarn typecheck`、`yarn check:sfc`、`yarn lint`。之后再用测试角色/测试好友，在共同 QQ 群实际确认定向 @、撤销授权、BLOCK、退群、冷却、每日上限与 AI 连续对话保护。
+
+## 关系评估历史修复与社交系统命名（2026-11-10）
+
+- 用户界面统一称“社交系统”，业务模型和既有路由继续沿用social-relationship命名。总览按已实现的好友、评估历史、独立模型设置组织，不再误报执行器/证据尚未上线；导航携带当前角色。
+- 历史页分开显示执行状态、模型结论和人工处置，提供全部/待处理/已采纳/已驳回/已过期/失败/运行中筛选及角色全量摘要。相同代次可有多次尝试，历史不自动删除真实失败记录。
+- 受控确认弹窗在打开时固定角色和评估ID，角色切换/筛选/翻页/关闭/卸载会作废旧动作，避免切换后向新角色提交或弹旧响应提示。查询错误独立显示，不伪装成空历史。
+- 评估记录保存服务端来源清单与内容hash；模型执行期间来源变更降为REVIEW，采纳时再核来源状态、角色、原范围及版本，失效或旧记录无来源版本时记STALE且不改关系。旧记录仍可驳回/暂缓，需新评估才能采纳。
+- 历史API过滤跨角色错配来源，返回canReview/staleReason作提示，最终安全判断仍在采纳事务。任务租约回收同时将旧RUNNING历史结束为FAILED，避免进程中断留下永久运行中卡片。
 

@@ -648,7 +648,7 @@ onMounted(() => load(1));
 <template>
   <div class="page-wrap fr-a">
     <PageHeader
-      eyebrow="成长系统 / 社交关系系统 / 好友档案"
+      eyebrow="成长系统 / 社交系统 / 好友档案"
       description="私聊来访、群里见过的人都会记录下来。可以手动标记真人 / AI，并按当前角色决定她是否与对方交流。"
     >
       <template #actions>

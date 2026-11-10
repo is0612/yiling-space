@@ -172,6 +172,25 @@ try {
     where: { characterId: enabledCharacter.id, kind: "social-relationship-assistant" },
   });
   assert.equal(usage.length, 2, "两次评估调用均应计入独立用量类别");
+  console.log("\n[4] 模型执行期间来源归档或改写后，结果降为不可采纳REVIEW");
+  for (const mutation of ["archive", "content"] as const) {
+    const changing = await addExperience(enabledCharacter.globalScopeId, enabledScope, `变更中来源${mutation}`, "生成模型请求时的证据正文。", `changing-${mutation}-${runId}`);
+    const row = await prisma.socialExperience.findUniqueOrThrow({ where: { id: changing.id } });
+    globalThis.fetch = (async () => {
+      await prisma.memoryEvent.update({ where: { id: row.memoryEventId }, data: mutation === "archive" ? { status: "ARCHIVED" } : { detail: "请求发出后证据正文已更改。" } });
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        outcome: "CHANGE", suggestedStage: "FRIEND", suggestedStatus: "NORMAL", reason: "模型基于旧来源提出变化。", confidence: 0.9, observations: [],
+        evidenceExperienceIds: [changing.id], newEvidenceExperienceIds: [changing.id], needsMoreEvidence: false, cautionFlags: [],
+      }) } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    await prisma.$transaction(tx => enqueueSocialRelationshipAssessment(tx, { scopeId: enabledScope, reason: "NEW_EXPERIENCE" }));
+    const result = await processNextSocialRelationshipAssessmentTask(prisma, { workerId: `source-change-${mutation}` });
+    assert(result.assessmentId);
+    const saved = await prisma.socialRelationshipAssessment.findUniqueOrThrow({ where: { id: result.assessmentId } });
+    assert.equal(saved.outcome, "REVIEW"); assert.equal(saved.reviewStatus, "NOT_REQUIRED");
+    assert.equal(saved.suggestedStage, null); assert.equal(saved.suggestedStatus, null);
+    assert.equal((await prisma.memoryScope.findUniqueOrThrow({ where: { id: enabledScope } })).relationshipVersion, 0);
+  }
   console.log("社交关系评估 AI 数据库集成测试通过。");
 } finally {
   globalThis.fetch = originalFetch;

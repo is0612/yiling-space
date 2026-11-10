@@ -139,6 +139,7 @@ export async function enqueueSocialRelationshipAssessment(
 
 type ExpiredTaskRow = {
   id: string;
+  scopeId: string;
   attemptCount: number;
   maxAttempts: number;
   fencingToken: number;
@@ -153,7 +154,7 @@ async function recoverExpiredLeasesInTransaction(
   batchSize: number,
 ): Promise<{ recovered: number; failed: number }> {
   const expired = await tx.$queryRaw<ExpiredTaskRow[]>`
-    SELECT "id", "attemptCount", "maxAttempts", "fencingToken", "leaseToken",
+    SELECT "id", "scopeId", "attemptCount", "maxAttempts", "fencingToken", "leaseToken",
       "generation", "processedGeneration"
     FROM "social_relationship_assessment_tasks"
     WHERE "status" = 'RUNNING'::"SocialRelationshipAssessmentTaskStatus"
@@ -197,6 +198,10 @@ async function recoverExpiredLeasesInTransaction(
         AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= ${now})
     `;
     if (changed !== 1) continue;
+    await tx.socialRelationshipAssessment.updateMany({
+      where: { scopeId: task.scopeId, status: "RUNNING" },
+      data: { status: "FAILED", completedAt: now, error: "执行租约已过期，旧执行已结束；任务将按队列规则恢复。" },
+    });
     if (retry) recovered += 1;
     else failed += 1;
   }

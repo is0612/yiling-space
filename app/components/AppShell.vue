@@ -116,7 +116,7 @@ const workspaceNavigation: NavigationItem[] = [
 const growthNavigation: NavigationItem[] = [
   { key: "growth", label: "总览", href: "/growth", icon: TrendCharts, exact: true },
   { key: "growth-memory", label: "记忆系统", href: "/growth/memory", icon: Collection },
-  { key: "growth-social", label: "社交关系系统", href: "/growth/social", icon: Avatar },
+  { key: "growth-social", label: "社交系统", href: "/growth/social", icon: Avatar },
   { key: "growth-preferences", label: "偏好系统", href: "/growth/preferences", icon: Star },
   { key: "growth-language", label: "语料 / 表达习惯", href: "/growth/language", icon: ChatDotRound },
   { key: "growth-state", label: "状态系统", href: "/growth/state", icon: Odometer },

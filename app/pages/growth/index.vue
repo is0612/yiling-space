@@ -31,7 +31,7 @@ const stats = [
 const typeLabels = { reflection: "反思", knowledge: "知识", relationship: "社交", snapshot: "记忆" };
 const domains = [
   { title: "记忆", description: "经历、长期记忆与阶段总结", icon: "▤", href: "/growth/memory" },
-  { title: "社交关系", description: "好友、重要经历与关系评估", icon: "♧", href: "/growth/social" },
+  { title: "社交", description: "好友、重要经历与关系评估", icon: "♧", href: "/growth/social" },
   { title: "知识", description: "候选整理、知识库与来源", icon: "◇", href: "/growth/knowledge" },
 ];
 function roleHref(path: string) {

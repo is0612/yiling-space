@@ -242,9 +242,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-wrap assessment-settings">
-    <PageHeader eyebrow="成长系统 / 社交关系系统" description="为社交关系评估配置独立模型服务。API 地址与 Key 不继承任何其他助手的设置。" />
+    <PageHeader eyebrow="成长系统 / 社交系统" description="为社交关系评估配置独立模型服务。API 地址与 Key 不继承任何其他助手的设置。" />
     <div class="settings-toolbar">
-      <NuxtLink to="/growth/social">← 返回社交关系系统</NuxtLink>
+      <NuxtLink to="/growth/social">← 返回社交系统</NuxtLink>
       <span v-if="character?.socialRelationshipAssessmentAssistantApiKeyConfigured" class="saved-key">独立 API Key 已加密保存</span>
       <span v-else class="missing-key">尚未保存 API Key</span>
     </div>
@@ -254,7 +254,7 @@ onBeforeUnmount(() => {
         <div><span class="eyebrow">SOCIAL RELATIONSHIP ASSESSMENT</span><h2>关系评估 AI</h2></div>
         <label class="switch-label"><input v-model="enabled" type="checkbox"> 启用评估配置</label>
       </div>
-      <p class="hint">它只负责阅读系统挂接给本次评估的关系经历，并输出结构化建议。AI 不会直接修改关系阶段或相处状态；结果还要经过证据核验和关系版本保护。当前批次只接入配置，评估执行器将在后续批次上线。</p>
+      <p class="hint">它读取当前角色的有效社交经历并生成建议。后台 Worker 已接入评估执行；AI 不会直接修改关系阶段或相处状态，采纳前会再次核验证据和关系版本。</p>
       <label>服务商</label>
       <select v-model="providerKey" @change="applyProvider(providerKey)">
         <option v-for="provider in MODEL_PROVIDERS" :key="provider.key" :value="provider.key">{{ provider.name }}</option>

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
 import { ensureExternalIdentityScope } from "../server/utils/identity-scope";
 import { reviewSocialRelationshipAssessment } from "../server/utils/social-relationship-review";
+import { collectSocialAssessmentSourceManifest } from "../server/utils/social-assessment-evidence";
 
 const databaseName = new URL(process.env.DATABASE_URL ?? "postgres://localhost/none").pathname.replace(/^\//, "");
 assert(/^yiling_social_review_test_[a-f0-9]{32}$/.test(databaseName),
@@ -59,7 +60,7 @@ async function makeAssessment(input: {
       suggestedStage: input.toStage,
       suggestedStatus: input.toStatus,
       reason: "测试关系建议：存在明确的互相支持经历。",
-      observations: { newEvidenceExperienceIds: [experience.id] },
+      observations: { newEvidenceExperienceIds: [experience.id], evidenceExperienceIds: [experience.id], sourceManifest: await collectSocialAssessmentSourceManifest(prisma, character.id, scopeId, [experience.id]) },
       status: "SUCCEEDED", reviewStatus: "PENDING", completedAt: new Date(),
       evidence: { create: [{ experienceId: experience.id, kind: "NEW" }] },
     },
@@ -150,6 +151,26 @@ try {
   assert.equal(scope.relationshipStatus, "NORMAL");
   assert.equal(scope.relationshipVersion, 1);
 
+  console.log("\n[6] 来源归档、改写、移动及无版本旧记录均标STALE且不改关系");
+  for (const mutation of ["archive", "content", "scope", "missing-manifest"] as const) {
+    const fresh = await prisma.memoryEvent.create({ data: { memoryScopeId: globalScope.id, dayKey: "2026-11-10", occurredAt: new Date(), title: "来源有效性", detail: "待审核的原始证据。", dedupeKey: `validity-${mutation}-${runId}` } });
+    const item = await prisma.socialExperience.create({ data: { scopeId, memoryEventId: fresh.id, sourceKey: `validity-${mutation}-${runId}` } });
+    const sourceManifest = await collectSocialAssessmentSourceManifest(prisma, character.id, scopeId, [item.id]);
+    const pending = await prisma.socialRelationshipAssessment.create({ data: {
+      scopeId, generation: 2, evaluatedStage: "ACQUAINTANCE", evaluatedStatus: "NORMAL", relationshipVersion: 1,
+      outcome: "CHANGE", suggestedStage: "FRIEND", suggestedStatus: "NORMAL", status: "SUCCEEDED", reviewStatus: "PENDING",
+      observations: { newEvidenceExperienceIds: [item.id], evidenceExperienceIds: [item.id], ...(mutation === "missing-manifest" ? {} : { sourceManifest }) },
+      evidence: { create: [{ experienceId: item.id, kind: "NEW" }] },
+    } });
+    if (mutation === "archive") await prisma.memoryEvent.update({ where: { id: fresh.id }, data: { status: "ARCHIVED" } });
+    if (mutation === "content") await prisma.memoryEvent.update({ where: { id: fresh.id }, data: { detail: "原始证据已经改变。" } });
+    if (mutation === "scope") await prisma.memoryEvent.update({ where: { id: fresh.id }, data: { memoryScopeId: scopeId } });
+    const result = await reviewSocialRelationshipAssessment(prisma, { characterId: character.id, assessmentId: pending.id, actorUserId: owner.id, decision: "ACCEPTED", note: null });
+    assert.equal(result.reviewStatus, "STALE", mutation);
+    assert.equal(result.applied, false);
+    assert.equal(await prisma.socialRelationChange.count({ where: { assessmentId: pending.id } }), 0);
+    assert.equal((await prisma.memoryScope.findUniqueOrThrow({ where: { id: scopeId } })).relationshipVersion, 1);
+  }
   console.log("社交关系人工确认数据库集成测试通过。");
 } finally {
   await prisma.socialRelationshipAssessmentReview.deleteMany({ where: { assessment: { scopeId } } });

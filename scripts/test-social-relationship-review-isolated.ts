@@ -8,11 +8,12 @@ import { Client } from "pg";
 const source = new URL(process.env.DATABASE_URL ?? "");
 assert(["localhost", "127.0.0.1", "[::1]"].includes(source.hostname),
   "Isolated tests require a local PostgreSQL host.");
+source.pathname = "/postgres";
 const databaseName = `yiling_social_review_test_${randomUUID().replaceAll("-", "")}`;
 assert(/^yiling_social_review_test_[a-f0-9]{32}$/.test(databaseName));
 const target = new URL(source);
 target.pathname = `/${databaseName}`;
-const admin = new Client({ connectionString: source.toString() });
+const admin = new Client({ connectionString: source.toString(), connectionTimeoutMillis: 5_000 });
 await admin.connect();
 let created = false;
 try {
@@ -26,6 +27,7 @@ try {
   };
   run("node_modules/prisma/build/index.js", ["migrate", "deploy"]);
   run("node_modules/tsx/dist/cli.mjs", ["scripts/test-social-relationship-review-db.ts"]);
+  run("node_modules/tsx/dist/cli.mjs", ["scripts/test-social-history-api-db.ts"]);
   console.log("Isolated social relationship human review checks passed.");
 } finally {
   try {

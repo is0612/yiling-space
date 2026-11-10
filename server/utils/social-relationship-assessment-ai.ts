@@ -6,6 +6,7 @@
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { resolveCharacterSocialRelationshipAssessmentAssistantApiKey } from "./credential-encryption";
+import { buildSocialAssessmentSourceManifest, validateSocialAssessmentSourceManifest } from "./social-assessment-evidence";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, recordModelUsage } from "./model-usage";
 import {
@@ -345,27 +346,27 @@ export async function processNextSocialRelationshipAssessmentTask(
     const [remainingNewCount, fresh, contextual, previous] = await Promise.all([
       prisma.socialExperience.count({
         where: {
-          scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE" },
+          scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE", memoryScope: { characterId: scope.characterId } },
           assessmentDispatchStatus: { in: ["LEGACY", "QUEUED"] },
           usedInAssessments: { none: { assessment: { status: "SUCCEEDED" } } },
         },
       }),
       prisma.socialExperience.findMany({
         where: {
-          scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE" },
+          scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE", memoryScope: { characterId: scope.characterId } },
           assessmentDispatchStatus: { in: ["LEGACY", "QUEUED"] },
           usedInAssessments: { none: { assessment: { status: "SUCCEEDED" } } },
         },
-        include: { memoryEvent: { select: { occurredAt: true, title: true, detail: true, participants: true, confidence: true } } },
+        include: { memoryEvent: { select: { id: true, memoryScopeId: true, occurredAt: true, title: true, detail: true, participants: true, confidence: true } } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: Math.min(12, maxEvidence),
       }),
       prisma.socialExperience.findMany({
         where: {
-          scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE" },
+          scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE", memoryScope: { characterId: scope.characterId } },
           assessmentDispatchStatus: { in: ["LEGACY", "QUEUED"] },
           usedInAssessments: { some: { assessment: { status: "SUCCEEDED" } } },
         },
-        include: { memoryEvent: { select: { occurredAt: true, title: true, detail: true, participants: true, confidence: true } } },
+        include: { memoryEvent: { select: { id: true, memoryScopeId: true, occurredAt: true, title: true, detail: true, participants: true, confidence: true } } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: Math.min(6, Math.max(2, Math.floor(maxEvidence / 2))),
       }),
       prisma.socialRelationshipAssessment.findFirst({
@@ -388,6 +389,7 @@ export async function processNextSocialRelationshipAssessmentTask(
         participants: item.memoryEvent.participants.slice(0, 8), confidence: item.memoryEvent.confidence,
       })),
     ];
+    const sourceManifest = buildSocialAssessmentSourceManifest([...fresh, ...contextual.filter(item => !fresh.some(candidate => candidate.id === item.id))]);
     const previousAssessment = previous ? {
       outcome: previous.outcome, suggestedStage: previous.suggestedStage, suggestedStatus: previous.suggestedStatus,
       reason: previous.reason?.slice(0, 800) ?? null, observations: previous.observations,
@@ -407,6 +409,7 @@ export async function processNextSocialRelationshipAssessmentTask(
           relationshipVersion: scope.relationshipVersion,
           modelProvider: "openai-compatible", modelName: runtime.model,
           promptVersion: PROMPT_VERSION, inputCutoffAt, status: "RUNNING",
+          observations: { sourceManifest },
           ...(evidence.length ? { evidence: { create: evidence.map(item => ({ experienceId: item.id, kind: item.kind })) } } : {}),
         },
         select: { id: true },
@@ -442,10 +445,13 @@ export async function processNextSocialRelationshipAssessmentTask(
         where: { id: lease.scopeId }, select: { relationshipVersion: true },
       });
       const stale = latestScope.relationshipVersion !== scope.relationshipVersion;
-      const finalResult = stale ? {
+      const sourceValid = !suggestion.evidenceExperienceIds.length || await validateSocialAssessmentSourceManifest(
+        tx, scope.characterId, lease.scopeId, sourceManifest, suggestion.evidenceExperienceIds,
+      );
+      const finalResult = stale || !sourceValid ? {
         ...suggestion, outcome: "REVIEW" as const, suggestedStage: null, suggestedStatus: null,
-        reason: "评估期间关系版本已变化，本次建议已作废并标记为待人工复核。 " + suggestion.reason,
-        cautionFlags: [...suggestion.cautionFlags, "RELATIONSHIP_VERSION_CHANGED"],
+        reason: (stale ? "评估期间关系版本已变化，本次建议已作废并标记为待人工复核。 " : "评估期间来源已失效、移动或内容改变，本次建议不能采纳。 ") + suggestion.reason,
+        cautionFlags: [...suggestion.cautionFlags, ...(stale ? ["RELATIONSHIP_VERSION_CHANGED"] : []), ...(!sourceValid ? ["SOURCE_EVIDENCE_CHANGED"] : [])],
       } : suggestion;
       if (remainingNewCount > fresh.length) {
         await enqueueSocialRelationshipAssessment(tx, {
@@ -462,6 +468,7 @@ export async function processNextSocialRelationshipAssessmentTask(
           reviewStatus: finalResult.outcome === "CHANGE" ? "PENDING" : "NOT_REQUIRED",
           reason: finalResult.reason, confidence: finalResult.confidence,
           observations: {
+            sourceManifest,
             observations: finalResult.observations,
             evidenceExperienceIds: finalResult.evidenceExperienceIds,
             newEvidenceExperienceIds: finalResult.newEvidenceExperienceIds,

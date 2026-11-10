@@ -3,6 +3,8 @@ import { requireActorUserId } from "../../../../../utils/auth";
 import { readPageQuery, buildPage } from "../../../../../utils/pagination";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
+import { readSocialHistoryFilter, socialHistoryFilterWhere } from "../../../../../utils/social-assessment-history";
+import { hashSocialAssessmentSource, readSocialAssessmentSourceManifest } from "../../../../../utils/social-assessment-evidence";
 
 const DEFAULT_PAGE_SIZE = 12;
 
@@ -15,19 +17,23 @@ export default defineEventHandler(async (event) => {
   });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
-  const { page, pageSize, skip } = readPageQuery(getQuery(event), {
+  const query = getQuery(event);
+  const filter = readSocialHistoryFilter(query.filter);
+  const { page, pageSize, skip } = readPageQuery(query, {
     defaultPageSize: DEFAULT_PAGE_SIZE,
     maxPageSize: 50,
   });
-  const where = {
+  const base = {
     scope: {
       characterId,
+      character: { ownerId },
       scopeType: "EXTERNAL_IDENTITY" as const,
       externalIdentityId: { not: null },
     },
   };
+  const where = { ...base, ...socialHistoryFilterWhere(filter) };
   const prisma = getPrisma();
-  const [total, rows] = await Promise.all([
+  const [total, rows, all, actionable, accepted, failed, running] = await Promise.all([
     prisma.socialRelationshipAssessment.count({ where }),
     prisma.socialRelationshipAssessment.findMany({
       where,
@@ -73,6 +79,7 @@ export default defineEventHandler(async (event) => {
           select: { decision: true, note: true, createdAt: true },
         },
         evidence: {
+          where: { experience: { scope: { characterId }, memoryEvent: { memoryScope: { characterId } } } },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           select: {
             id: true,
@@ -82,6 +89,8 @@ export default defineEventHandler(async (event) => {
                 id: true,
                 memoryEvent: {
                   select: {
+                    id: true,
+                    memoryScopeId: true,
                     occurredAt: true,
                     title: true,
                     detail: true,
@@ -96,10 +105,32 @@ export default defineEventHandler(async (event) => {
         },
       },
     }),
+    prisma.socialRelationshipAssessment.count({ where: base }),
+    prisma.socialRelationshipAssessment.count({ where: { ...base, ...socialHistoryFilterWhere("ACTIONABLE") } }),
+    prisma.socialRelationshipAssessment.count({ where: { ...base, reviewStatus: "ACCEPTED" } }),
+    prisma.socialRelationshipAssessment.count({ where: { ...base, status: "FAILED" } }),
+    prisma.socialRelationshipAssessment.count({ where: { ...base, status: "RUNNING" } }),
   ]);
 
+  const availability = (row: typeof rows[number]) => {
+    if (row.status !== "SUCCEEDED" || row.outcome !== "CHANGE" || !["PENDING", "DEFERRED"].includes(row.reviewStatus)) return { canReview: false, staleReason: null };
+    if (row.relationshipVersion !== row.scope.relationshipVersion || row.evaluatedStage !== row.scope.relationshipStage || row.evaluatedStatus !== row.scope.relationshipStatus) return { canReview: false, staleReason: "当前关系已变化，请重新评估。" };
+    const data = row.observations && typeof row.observations === "object" && !Array.isArray(row.observations) ? row.observations as Record<string, unknown> : {};
+    const cited = Array.isArray(data.evidenceExperienceIds) ? data.evidenceExperienceIds.filter((id): id is string => typeof id === "string") : [];
+    const manifest = readSocialAssessmentSourceManifest(data.sourceManifest);
+    const sources = new Map(manifest.map(source => [source.experienceId, source]));
+    const hasNew = Array.isArray(data.newEvidenceExperienceIds) && data.newEvidenceExperienceIds.some(id => typeof id === "string" && row.evidence.some(item => item.kind === "NEW" && item.experience.id === id));
+    const valid = hasNew && cited.length > 0 && cited.every(id => {
+      const old = sources.get(id); const current = row.evidence.find(item => item.experience.id === id)?.experience.memoryEvent;
+      return old && current && current.status === "ACTIVE" && old.memoryEventId === current.id && old.sourceScopeId === current.memoryScopeId && old.sourceHash === hashSocialAssessmentSource(current);
+    });
+    return { canReview: Boolean(valid), staleReason: valid ? null : "来源已变化、缺失或旧记录未保存版本证据，请重新评估；仍可驳回或暂缓。" };
+  };
   return {
+    filter,
+    summary: { all, actionable, accepted, failed, running },
     ...buildPage(rows.map((row) => ({
+      ...availability(row),
       id: row.id,
       scopeId: row.scope.id,
       friend: {
