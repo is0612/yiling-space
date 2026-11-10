@@ -46,7 +46,9 @@ export const GROWTH_EVENT_SUCCESS_RETENTION_DAYS = 30;
  * 订阅在代码中显式声明，新增订阅只影响此后发布的事件。
  * 第一阶段不回补历史事件，避免上线消费者时瞬间触发历史任务。
  */
-export const GROWTH_EVENT_SUBSCRIPTIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({});
+export const GROWTH_EVENT_SUBSCRIPTIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "memory.event.created": ["growth.memory-source-integrity"],
+});
 
 const EVENT_TYPE_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 const DOMAIN_SET = new Set<GrowthEventDomain>([
