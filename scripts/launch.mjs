@@ -495,6 +495,25 @@ function openBrowser(url) {
   return true;
 }
 
+function tsxArgs(script, ...args) {
+  const tsxCli = path.join(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
+  return existsSync(tsxCli)
+    ? [tsxCli, script, ...args]
+    : ["--import", "tsx", script, ...args];
+}
+
+/** 后台进程输出带前缀，和开发服务器共用启动窗口。 */
+function pipeWithPrefix(stream, label) {
+  if (!stream) return;
+  let buffer = "";
+  stream.on("data", (chunk) => {
+    buffer += chunk.toString("utf8");
+    const lines = buffer.split("\\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) if (line.trim()) console.log(`[${label}] ${line}`);
+  });
+}
+
 function runDev(yarnCmd, devUrl) {
   const useYarn = Boolean(yarnCmd);
   const cmd = useYarn ? yarnCmd : "npx";
@@ -508,22 +527,56 @@ function runDev(yarnCmd, devUrl) {
   console.log("");
 
   return new Promise((resolve) => {
+    // 默认启动共享 Worker，确保本地默认启动路径也会消费记忆、社交和成长事件队列。
+    // 只想启动 Web 时可设置 YILING_WORKER_DISABLED=1。
+    let worker = null;
+    if (process.env.YILING_WORKER_DISABLED !== "1") {
+      worker = spawn(process.execPath, tsxArgs("scripts/run-memory-worker.ts", "--watch"), {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: process.env,
+      });
+      pipeWithPrefix(worker.stdout, "worker");
+      pipeWithPrefix(worker.stderr, "worker");
+      worker.once("error", (err) => console.error(red(`[worker] 启动失败：${err.message}`)));
+      worker.once("exit", (code) => {
+        if (code !== 0 && code !== null) console.error(red(`[worker] 已退出，退出码 ${code}`));
+      });
+    } else {
+      warn("YILING_WORKER_DISABLED=1：本次不启动后台 Worker");
+    }
+
     const child = spawn(cmd, args, {
       cwd: ROOT,
       stdio: "inherit",
       shell: true,
       env: { ...process.env, FORCE_COLOR: "1" },
     });
-    // Ctrl+C 在本控制台会同时发给子进程，这里只做兜底，不做二次转发。
+    let settled = false;
+    const stopWorker = () => {
+      if (worker && !worker.killed) worker.kill("SIGTERM");
+    };
+    // Ctrl+C 在本控制台会同时发给子进程；Worker 不继承控制台输入，所以单独收尾。
     const forward = (signal) => {
       if (!child.killed) child.kill(signal);
+      stopWorker();
     };
     process.once("SIGINT", () => forward("SIGINT"));
     process.once("SIGTERM", () => forward("SIGTERM"));
-    child.once("exit", (code, signal) => resolve(signal ? 0 : (code ?? 1)));
+    child.once("exit", (code, signal) => {
+      stopWorker();
+      if (!settled) {
+        settled = true;
+        resolve(signal ? 0 : (code ?? 1));
+      }
+    });
     child.once("error", (err) => {
-      console.error(red(`起不来：${err.message}`));
-      resolve(1);
+      stopWorker();
+      if (!settled) {
+        settled = true;
+        console.error(red(`起不来：${err.message}`));
+        resolve(1);
+      }
     });
   });
 }
