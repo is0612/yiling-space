@@ -349,6 +349,9 @@ export async function retryFailedGrowthEventDelivery(
   previousAttemptCount: number;
 } | null> {
   return prisma.$transaction(async (tx) => {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deliveryId)) {
+      throw new Error("成长事件投递 ID 必须是 UUID。");
+    }
     const rows = await tx.$queryRaw<Array<{
       deliveryId: string;
       eventId: string;
@@ -356,27 +359,34 @@ export async function retryFailedGrowthEventDelivery(
       consumerKey: string;
       previousAttemptCount: number;
     }>>`
-      UPDATE "growth_event_deliveries" AS delivery
-      SET
-        "status" = 'QUEUED'::"GrowthEventDeliveryStatus",
-        "attemptCount" = 0,
-        "runAt" = ${now},
-        "lockedAt" = NULL,
-        "lockedBy" = NULL,
-        "leaseToken" = NULL,
-        "leaseExpiresAt" = NULL,
-        "processedAt" = NULL,
-        "updatedAt" = ${now}
-      FROM "growth_events" AS event
-      WHERE delivery."id" = ${deliveryId}::uuid
-        AND delivery."eventId" = event."id"
-        AND delivery."status" = 'FAILED'::"GrowthEventDeliveryStatus"
-      RETURNING
-        delivery."id" AS "deliveryId",
-        delivery."eventId",
-        event."characterId",
-        delivery."consumerKey",
-        0::int AS "previousAttemptCount"
+      WITH candidate AS (
+        SELECT delivery."id", delivery."attemptCount"
+        FROM "growth_event_deliveries" AS delivery
+        WHERE delivery."id" = ${deliveryId}::uuid
+          AND delivery."status" = 'FAILED'::"GrowthEventDeliveryStatus"
+        FOR UPDATE
+      ),
+      updated AS (
+        UPDATE "growth_event_deliveries" AS delivery
+        SET
+          "status" = 'QUEUED'::"GrowthEventDeliveryStatus",
+          "attemptCount" = 0,
+          "runAt" = ${now},
+          "lockedAt" = NULL,
+          "lockedBy" = NULL,
+          "leaseToken" = NULL,
+          "leaseExpiresAt" = NULL,
+          "processedAt" = NULL,
+          "updatedAt" = ${now}
+        FROM candidate, "growth_events" AS event
+        WHERE delivery."id" = candidate."id"
+          AND delivery."eventId" = event."id"
+        RETURNING delivery."id" AS "deliveryId", delivery."eventId",
+          event."characterId", delivery."consumerKey"
+      )
+      SELECT updated.*, candidate."attemptCount" AS "previousAttemptCount"
+      FROM updated
+      INNER JOIN candidate ON candidate."id" = updated."deliveryId"
     `;
     const row = rows[0];
     if (!row) return null;
