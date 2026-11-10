@@ -33,6 +33,7 @@ try {
           }) + "\n");
         }
       } catch (error) {
+        lastGrowthEventCleanupAt = Date.now();
         process.stderr.write(JSON.stringify({
           at: new Date().toISOString(),
           event: "growth-event-retention-error",
