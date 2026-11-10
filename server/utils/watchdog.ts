@@ -7,8 +7,8 @@
  *
  * 这里只做判定，不调模型、不写库：
  * - 判定是纯函数（`evaluateWatchdog`），阈值都是常量，测试可以钉死；
- * - 取数在 `collectWatchdogFindings`，只读现有表（`memory_jobs` / `memory_snapshots`），
- *   不新增表、不新增迁移。
+ * - 取数在 `collectWatchdogFindings`，只读现有任务、快照、值班和成长事件投递表；
+ *   不写入状态，也不为 Watchdog 自己新增表。
  *
  * 注意判定边界：模型没配置时任务本来就该留在队列里（那是产品决策），
  * 这时不能报「Worker 没在跑」—— 页面已有「未配置模型」的提示，报两遍只会让人以为坏了两处。
