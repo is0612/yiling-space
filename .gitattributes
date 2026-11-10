@@ -1,0 +1,9 @@
+# 换行约定。
+#
+# .bat 必须是 CRLF：用 LF 存的批处理在 cmd 里会被拆错行（if(...) 块整段失效，
+# 报 "was unexpected at this time"），而用户只会看到一堆乱码。仓库统一按 Windows 存。
+#
+# 其余文件保持 LF（仓库原有习惯，Docker/Linux 侧不受影响）。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

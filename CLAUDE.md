@@ -48,6 +48,10 @@
     - 实验型（A/B 对照某个提示词写法、量「对话示例到底有没有用」这种）：结论一旦落地，重跑只是在同一批输入上重复同样的数字。脚本挪到 `.data/notes/`（整个目录已被忽略，本地留档、不进仓库），结论写进 `docs/` 或记忆日志；不要留在 `scripts/` 里假装是工具。
     - 命名要如实：`probe-name-stance.ts` 被改写成「对话示例」实验之后名字没跟着改，几天后没人说得清它到底测什么。一次性脚本带日期后缀（`xxx.2026-11-06.ts`）。
     - 提醒：`probe-*` 打的是真模型，成本按「组数 × 用例数 × 遍数」算。跑之前先估一下次数，别在调试循环里反复跑。
+24. **两个版本：开发版（仓库 + `启动忆灵空间.bat`）给自己，使用版（镜像 + `docker-compose.prod.yml`）给别人。** 使用版是 `yarn build` 的 `.output` 加 tsx 直跑的 Worker，由 `scripts/launch-prod.mjs` 启动，容器启动时自动 `prisma migrate deploy`（这就是对方的「数据库更新」）。发布走 `node scripts/docker-pack.mjs`，细节见 `docs/使用版打包与分发.md`。
+    - 两套**绝不能共用同一个数据库**：两个 Worker 会重复消费同一批任务，两个 OneBot/B站适配器会重复收发同一条消息。使用版靠独立的项目名、容器名、卷名和端口（默认 8801）隔开。
+    - 不要给 `docker-compose.prod.yml` 加 `build: .`：那等于在对方机器上编译源码，使用版就退化成开发版了。
+    - 镜像必须带 `server/`、`scripts/`、`src/generated/prisma` 和完整 `node_modules`（含 `tsx`、`prisma`）。只发 `.output` 的镜像会「网页能开、记忆不更新」，这是最难查的那种故障。
 
 ## 当前仓库状态
 

@@ -1,0 +1,71 @@
+# 使用版（生产）编排：只运行已构建好的镜像，不在对方机器上编译任何代码。
+#
+# 与开发版的隔离（两套可以同时装在同一台机器上，互不影响）：
+#   开发版：项目目录 + yarn dev（3000）+ 5434 数据库 + 容器 yiling-space-db
+#   使用版：镜像 + 本文件（8801）+ 内部数据库（不对外映射端口）+ 容器 yiling-space-app / yiling-space-postgres
+#
+# 铁律：两个版本绝不能指向同一个数据库。两个 Worker 会重复消费同一批记忆任务，
+# 两个 OneBot/B站适配器会重复收发同一条消息。
+#
+# 启动：双击「启动忆灵空间-使用版.bat」，或
+#       docker compose -f docker-compose.prod.yml up -d
+# 更新：双击「更新到最新版.bat」（镜像 + 数据库结构一起更新）
+
+name: yiling-space-prod
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: yiling-space-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yiling_hub}
+      POSTGRES_USER: ${POSTGRES_USER:-yiling_hub}
+      # 使用版的数据库只在内网可见（没映射端口），密码用于应用连接。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先在 .env 里设置 POSTGRES_PASSWORD（或从 prod.env.example 复制一份）}
+      TZ: Asia/Shanghai
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # 宿主的 backups 目录：更新前自动导出、手动备份都写这里。
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-yiling_hub} -d ${POSTGRES_DB:-yiling_hub}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    # 默认不发布端口：数据库只给 app 用。需要从宿主直连排查时再加
+    # ports: ["127.0.0.1:5435:5432"]
+
+  app:
+    image: ${YILING_IMAGE:-yiling-space:latest}
+    container_name: yiling-space-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      NITRO_HOST: 0.0.0.0
+      # 覆盖 .env 里那份本机开发用的连接串：容器内数据库名是 db。
+      DATABASE_URL: postgresql://${POSTGRES_USER:-yiling_hub}:${POSTGRES_PASSWORD:?缺少 POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-yiling_hub}?schema=public
+      # 生产构建本来就不用 localhost 免登录回退，这里再显式关一次，避免误配。
+      YILING_ALLOW_DEV_OWNER_BYPASS: "false"
+      YILING_LOCAL_API_ENABLED: "false"
+    ports:
+      # 只绑定本机回环。要让同局域网的人访问，改成 "0.0.0.0:${APP_PORT:-8801}:3000"，
+      # 并给管理员账号设一个真正的密码。
+      - "127.0.0.1:${APP_PORT:-8801}:3000"
+    volumes:
+      # credentials-encryption.key 在这里：换镜像更新不会丢，删卷才会丢。
+      - app_data:/app/.data
+      - ./backups:/backups
+    stop_grace_period: 30s
+
+volumes:
+  pg_data:
+    name: yiling_space_prod_pg_data
+  app_data:
+    name: yiling_space_prod_app_data

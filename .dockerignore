@@ -1,0 +1,37 @@
+# 构建镜像时不需要进上下文的东西。
+# 注意：不要把 server/ scripts/ src/ prisma/ 排除掉 —— 使用版的后台 Worker
+# 是用 tsx 直接跑 TypeScript 源码的，缺了这些镜像里就没有记忆提炼和关系评估。
+
+node_modules
+.nuxt
+.output
+.nitro
+.cache
+
+.git
+.github
+.gitignore
+
+.data
+.tmp
+backups
+dist
+docs
+
+*.log
+*.dump
+*.tar
+*.tar.gz
+
+.env
+.env.*
+!.env.example
+!prod.env.example
+
+# 使用版分发包/启动脚本属于宿主侧，不进镜像
+启动*.bat
+更新*.bat
+使用说明.md
+docker-compose*.yml
+Dockerfile
+.dockerignore
