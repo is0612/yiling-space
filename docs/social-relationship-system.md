@@ -454,6 +454,17 @@
 - 测试命令：`yarn test:social-relationship-review-isolated`；已接入 `verify:local` 和 CI。
 - 本批待 DSH 本地验收；人工确认前不会改关系。
 
+### 14.14 评估输出预算与失败死行修复（2026-11-10）
+
+- 现场：25 条评估全部 FAILED，错误一律是「关系评估助手没有返回可解析的 JSON 结果」；`model_usages` 里这些调用的 `completionTokens` 恒等于 2048、`reasoningTokens` 达 1723~2048。判定为**思考型模型（deepseek-flash）把 `max_tokens` 先花在思考上，正文还没开始写就被截断（`finish_reason=length`，`content` 为空）**，解析必然失败；退避重试三次是同一个确定结果，于是同一位好友在历史页留下 3~5 张一模一样的失败卡片，任务用尽重试后停在 FAILED。
+- 执行器修复：默认输出预算从 2048 提到 4096，下限从 512 提到 1024（思考过程本身就要 1500~2000 tokens）；读到 `finish_reason=length` 时抬预算重试**一次**（3 倍且不低于默认值、上限 8192），空正文和半截 JSON 两种情况都走这条路。
+- 正文提取兼容 `content` 为字符串与 `[{ type: "text", text }]` 片段数组两种形态（新增纯函数 `readAssessmentReply`，有单测）；响应体不是 JSON 时单独报错，不再落进「不可解析」。
+- 失败信息改为可诊断：区分「思考吃光预算（finish_reason=length，附思考 token 数）」「没有正文（附 finish_reason）」「正文不是 JSON（附 finish_reason 与字数）」，并在用量 `metadata` 里补 `maxTokens` / `finishReason` / `reasoningTokens`。
+- 队列自愈：周期回顾的扫描条件从只认 PAUSED 改为 PAUSED + FAILED，用尽重试的任务到期后会被重新排队并重置尝试次数，不再只依赖「下一条新经历」唤醒（否则模型侧问题修好后那些任务仍是永久死行）。
+- 设置页「最大输出 Token」默认值与下限同步调整，并加了一条说明思考型模型预算的提示。
+- 存量清理：新增 `yarn clean:social-assessment-failures`（默认只报告，`--apply` 才执行）。它按好友汇总失败卡片、列出 FAILED 任务数并检查角色输出预算，`--apply` 时删除 `status=FAILED` 的评估行（证据行由数据库级联清理）并把 FAILED 任务重新排队，成功记录与人工处置审计不受影响。
+- 验收：`yarn test:social-relationship-assessment-ai`（新增片段数组 / 截断 / 空响应用例）、`yarn test:social-relationship-queue-isolated`（新增「用尽重试的 FAILED 任务到期后被回顾重新拉起」）、`yarn test:social-relationship-assessment-isolated`、`yarn check:sfc`、服务端 `tsc`、相关文件 eslint 均通过。真实模型对比调用确认同一提示在 2048 与 6144 预算下都能返回完整 JSON；生产那批失败的推理长度已顶到 2048 上限，需在客户端重启 Worker 后按新逻辑重跑。
+
 ### 10.5 主动联系机制（2026-11-09）
 
 - 好友级独立授权：`MemoryScope.proactiveContactEnabled` 默认 false；与 `friendChatPolicy` 分开。好友卡片可单独开启/关闭，普通 `ALLOW` 不会自动授予主动联系许可。

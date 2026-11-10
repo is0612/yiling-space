@@ -30,7 +30,7 @@ const providerKey = ref("custom");
 const enabled = ref(false);
 const temperature = ref(0.1);
 const maxInputTokens = ref(16384);
-const maxOutputTokens = ref(2048);
+const maxOutputTokens = ref(4096);
 const models = ref<string[]>([]);
 
 let loadVersion = 0;
@@ -58,7 +58,7 @@ function resetDraft() {
   enabled.value = false;
   temperature.value = 0.1;
   maxInputTokens.value = 16384;
-  maxOutputTokens.value = 2048;
+  maxOutputTokens.value = 4096;
   models.value = [];
   loading.value = false;
   saving.value = false;
@@ -102,7 +102,7 @@ async function load(targetCharacterId: string) {
     enabled.value = data.socialRelationshipAssessmentAssistantEnabled === true;
     temperature.value = data.socialRelationshipAssessmentAssistantTemperature ?? 0.1;
     maxInputTokens.value = data.socialRelationshipAssessmentAssistantMaxInputTokens ?? 16384;
-    maxOutputTokens.value = data.socialRelationshipAssessmentAssistantMaxOutputTokens ?? 2048;
+    maxOutputTokens.value = data.socialRelationshipAssessmentAssistantMaxOutputTokens ?? 4096;
     apiKey.value = "";
     models.value = [];
   } catch {
@@ -276,8 +276,9 @@ onBeforeUnmount(() => {
       <div class="numeric-grid">
         <div><label>温度</label><input v-model.number="temperature" type="number" min="0" max="2" step="0.1"></div>
         <div><label>最大输入 Token</label><input v-model.number="maxInputTokens" type="number" min="4096" max="32768" step="1024"></div>
-        <div><label>最大输出 Token</label><input v-model.number="maxOutputTokens" type="number" min="512" max="8192" step="256"></div>
+        <div><label>最大输出 Token</label><input v-model.number="maxOutputTokens" type="number" min="1024" max="8192" step="256"></div>
       </div>
+      <p class="hint">「最大输出 Token」要把模型的思考过程一起算进去：思考型模型常常先花 1500~2000 tokens 才开始写正文，给 2048 会被截断成空回复。评估反复失败时先把这项调到 4096 以上，或换一个非思考模型。</p>
       <div class="actions">
         <button type="button" :disabled="saving || loading || testing || fetchingModels" @click="testConnection">{{ testing ? "测试中…" : "测试连接" }}</button>
         <button class="primary" type="button" :disabled="saving || loading || testing" @click="save()">{{ saving ? "保存中…" : "保存设置" }}</button>

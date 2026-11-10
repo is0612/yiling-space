@@ -343,6 +343,27 @@ try {
     resolveSocialRelationshipReviewIntervalDays("") === 30
       && resolveSocialRelationshipReviewIntervalDays("0") === 30
       && resolveSocialRelationshipReviewIntervalDays("45") === 45);
+
+  console.log("\n[9] 用尽重试的 FAILED 任务到期后会被回顾重新拉起");
+  const failedSnapshot = await readTask(scopeA);
+  await prisma.socialRelationshipAssessmentTask.update({
+    where: { scopeId: scopeA },
+    data: {
+      status: "FAILED",
+      attemptCount: 3,
+      maxAttempts: 3,
+      lastError: "关系评估助手没有返回可解析的 JSON 结果。",
+      // 上一代已处理，才是「失败后用尽重试」的真实状态；否则会走「执行期间来了新代」那条路。
+      processedGeneration: failedSnapshot.generation,
+      nextReviewAt: new Date(now.getTime() - 1_000),
+    },
+  });
+  const revived = await runSocialRelationshipQueueMaintenance(prisma, { now, reviewIntervalDays: 30 });
+  const revivedA = await readTask(scopeA);
+  check("FAILED 任务到期后重新排队并重置尝试次数，不再永久卡死",
+    revived.periodicQueued === 1 && revivedA.status === "QUEUED"
+      && revivedA.attemptCount === 0 && revivedA.lastError === null
+      && revivedA.triggerReasons.includes("PERIODIC_REVIEW"));
 } finally {
   await prisma.socialRelationshipAssessmentTask.deleteMany({ where: { scopeId: { in: [scopeA, scopeB] } } });
   await prisma.socialExperience.deleteMany({ where: { scopeId: { in: [scopeA, scopeB] } } });

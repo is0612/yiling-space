@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   filterAssessmentEvidenceIds,
   normalizeSocialRelationshipAssessmentSuggestion,
+  readAssessmentReply,
 } from "../server/utils/social-relationship-assessment-ai";
 
 const freshId = "fresh-experience";
@@ -78,4 +79,36 @@ const insufficient = normalizeSocialRelationshipAssessmentSuggestion({
 assert.equal(insufficient.suggestedStage, null, "证据不足时不能留下关系阶段建议");
 assert.equal(insufficient.suggestedStatus, null, "证据不足时不能留下相处状态建议");
 assert.equal(insufficient.confidence, 1, "信心值限制在 0..1");
+
+/**
+ * 正文提取要认两种形态：
+ * - `content` 是字符串（标准 OpenAI 兼容）；
+ * - `content` 是 `[{ type: "text", text: "…" }]` 片段数组（部分兼容层这么回）。
+ * 只认字符串时，第二种会被读成空正文，然后统一报「没有返回可解析的 JSON」——
+ * 明明模型答对了，却看起来像模型什么都没说。
+ */
+const arrayContent = readAssessmentReply({
+  choices: [{
+    finish_reason: "stop",
+    message: { content: [{ type: "text", text: '{"outcome":' }, { type: "text", text: '"MAINTAIN"}' }] },
+  }],
+  usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, completion_tokens_details: { reasoning_tokens: 4 } },
+});
+assert.equal(arrayContent.content, '{"outcome":"MAINTAIN"}', "片段数组形式的正文必须拼回完整 JSON");
+assert.equal(arrayContent.finishReason, "stop");
+assert.equal(arrayContent.reasoningTokens, 4, "思考 token 数要带出来，用于解释「预算被思考吃光」");
+
+const truncatedReply = readAssessmentReply({
+  choices: [{ finish_reason: "length", message: { content: "" } }],
+  usage: { prompt_tokens: 4188, completion_tokens: 2048, total_tokens: 6236, completion_tokens_details: { reasoning_tokens: 2048 } },
+});
+assert.equal(truncatedReply.content, "", "思考吃光预算时正文为空");
+assert.equal(truncatedReply.finishReason, "length", "截断原因必须能被读到，才能触发抬预算重试");
+assert.equal(truncatedReply.reasoningTokens, 2_048);
+assert.deepEqual(
+  readAssessmentReply(null),
+  { content: "", finishReason: "", reasoningTokens: 0 },
+  "空响应不能抛异常，要落到可解释的失败路径",
+);
+
 console.log("社交关系评估 AI 协议单元测试通过。");

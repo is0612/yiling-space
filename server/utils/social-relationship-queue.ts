@@ -206,7 +206,8 @@ async function recoverExpiredLeasesInTransaction(
 /**
  * 本地 Worker 每轮运行的维护工作：
  * 1. 为历史回填或旧数据中尚无任务的经历补建队列项；
- * 2. 将到期且上一代已处理的 PAUSED 任务排入下一次定期回顾；
+ * 2. 将到期且上一代已处理的 PAUSED / FAILED 任务排入下一次定期回顾（FAILED 借此自我修复，
+ *    不会因为用尽重试次数而永久停在死行状态）；
  * 3. 回收租约过期的 RUNNING 任务。
  *
  * 不领取、不完成评估任务；避免在评估 AI 尚未接入时制造虚假的「成功」。
@@ -272,7 +273,13 @@ export async function runSocialRelationshipQueueMaintenance(
       WITH due AS (
         SELECT "id"
         FROM "social_relationship_assessment_tasks"
-        WHERE "status" = 'PAUSED'::"SocialRelationshipAssessmentTaskStatus"
+        -- FAILED 也要进这个轮次：用尽重试的任务如果只等「下一条新经历」，
+        -- 模型侧问题（比如思考吃光输出预算）修好之后它们仍然是永久死行 —— 谁也不会
+        -- 为了让一次评估重跑而专门去聊两句。到期的回顾本来就要重看这段关系，顺手复活最省事。
+        WHERE "status" IN (
+            'PAUSED'::"SocialRelationshipAssessmentTaskStatus",
+            'FAILED'::"SocialRelationshipAssessmentTaskStatus"
+          )
           AND "nextReviewAt" IS NOT NULL
           AND "nextReviewAt" <= ${now}
           AND "generation" <= "processedGeneration"

@@ -35,7 +35,9 @@ export function readSocialRelationshipAssessmentAssistantSettingsPatch(
   for (const [field, min, max, integer] of [
     ["Temperature", 0, 2, false],
     ["MaxInputTokens", 4_096, 32_768, true],
-    ["MaxOutputTokens", 512, 8_192, true],
+    // 下限从 512 提到 1024：思考型模型的思考过程本身就要 1500~2000 tokens，
+    // 给 512 必然是「空正文 + finish_reason=length」，等于让每次评估注定失败。
+    ["MaxOutputTokens", 1_024, 8_192, true],
   ] as const) {
     const raw = body[`socialRelationshipAssessmentAssistant${field}`];
     if (raw === undefined) continue;
