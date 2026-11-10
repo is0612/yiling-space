@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
 import { processNextMemoryJob } from "../server/utils/memory-worker";
 import { processNextGrowthEventDelivery } from "../server/utils/growth-event-delivery";
+import { GROWTH_EVENT_HANDLERS } from "../server/utils/growth-event-consumers";
 import { runSocialRelationshipQueueMaintenance } from "../server/utils/social-relationship-queue";
 import { processNextSocialRelationshipAssessmentTask } from "../server/utils/social-relationship-assessment-ai";
 
@@ -20,7 +21,7 @@ process.on("SIGTERM", () => { running = false; });
 try {
   do {
     try {
-      const growthEvent = await processNextGrowthEventDelivery(prisma, {}, { workerId });
+      const growthEvent = await processNextGrowthEventDelivery(prisma, GROWTH_EVENT_HANDLERS, { workerId });
       if (growthEvent.processed) {
         process.stdout.write(JSON.stringify({
           at: new Date().toISOString(),
