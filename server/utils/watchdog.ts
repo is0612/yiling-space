@@ -14,7 +14,7 @@
  * 这时不能报「Worker 没在跑」—— 页面已有「未配置模型」的提示，报两遍只会让人以为坏了两处。
  */
 
-import type { PrismaClient } from "../../src/generated/prisma/client";
+import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
 import { parseDutyInput } from "./channel-adapter/bili/configure";
 import { isChatModelConfigured } from "./chat-model-config";
 
@@ -30,7 +30,13 @@ export type WatchdogFindingCode =
   /** 自动归档开着，却长期没有产出新总结。 */
   | "snapshot_silent"
   /** B站 值班开着，但很久没跑过一轮（适配器没跑 / CLI 不可用）。 */
-  | "duty_silent";
+  | "duty_silent"
+  /** 成长事件投递长时间无人领取。 */
+  | "growth_event_worker_stalled"
+  /** 成长事件投递租约超时，执行者未能完成或回收。 */
+  | "growth_event_delivery_stuck"
+  /** 成长事件达到最大尝试次数，等待人工排查。 */
+  | "growth_event_delivery_failed";
 
 export type WatchdogFinding = {
   code: WatchdogFindingCode;
@@ -62,6 +68,14 @@ export type WatchdogCharacterFacts = {
   oldestQueuedAt: Date | null;
   /** 最早一条 RUNNING 任务的锁定时间；超期即说明没人回收。 */
   stuckLockedAt: Date | null;
+  /** 成长事件投递：QUEUED / RUNNING / RETRY_WAIT。 */
+  growthEventPendingCount?: number;
+  /** 成长事件达到最大尝试次数后的 FAILED 数量。 */
+  growthEventFailedCount?: number;
+  /** 已到 runAt 的最早待领取投递。 */
+  growthEventOldestQueuedAt?: Date | null;
+  /** 最早一条 RUNNING 投递的锁定时间。 */
+  growthEventStuckLockedAt?: Date | null;
   /** B站 值班：没有可用绑定或没开值班时为 null。 */
   duty?: {
     /** 每天轮次上限；0 = 关。 */
@@ -93,8 +107,7 @@ const DAY = 24 * HOUR;
 
 export const WATCHDOG_THRESHOLDS = {
   /**
-   * Worker 的租约是 5 分钟（`memory-job-lease.ts` 的 `MEMORY_JOB_LEASE_MS`，与 Worker 回收共用）。
-   * 租约**不续期**：过期只说明领走它的进程已经不在了。给到 3 倍宽限，避免刚好卡在边界上误报。
+   * 记忆任务租约是 5 分钟且会续租；这里给到 3 倍宽限，避免正常长任务在续租边界上误报。
    */
   stuckLockMs: 15 * MINUTE,
   /** 队列里最老的一条等了这么久还没人认领：Worker 不在，或者它卡在别的地方。 */
@@ -109,6 +122,8 @@ export const WATCHDOG_THRESHOLDS = {
    * 自动刷关着时根本没有自动执行者，不在这条的判定范围里（见 `evaluateDutySilence`）。
    */
   dutySilentMs: 3 * DAY,
+  growthEventStuckLockMs: 15 * MINUTE,
+  growthEventBacklogMs: 30 * MINUTE,
 } as const;
 
 function describeDuration(ms: number): string {
@@ -136,7 +151,7 @@ function evaluateMemoryPipeline(now: number, character: WatchdogCharacterFacts):
       code: "task_stuck",
       severity: "err",
       message: `有任务卡在「运行中」，${describeDuration(stuckFor)}没被回收`,
-      detail: "租约 5 分钟且不续期：过期只说明领走这条任务的进程（Worker，或起它的那次网页请求）已经不在了。"
+      detail: "租约 5 分钟并由 Worker 续租；超过三倍宽限仍未推进，说明 Worker 或发起该任务的执行路径可能已中断。"
         + "回收发生在「下一次有人领取任务」的时候，所以整机没有 Worker 在跑时它会一直卡着 —— "
         + "启动 yarn worker:watch，或在任务监控里对它点「回收并重新入队」。",
     };
@@ -209,6 +224,47 @@ function evaluateDutySilence(now: number, character: WatchdogCharacterFacts): Wa
   };
 }
 
+/**
+ * Event Center 是独立于模型配置的投递管线：首个只读消费者不调用模型，
+ * 因此不能沿用 memory worker 的「未配置模型时不报积压」豁免。
+ */
+function evaluateGrowthEventPipeline(now: number, character: WatchdogCharacterFacts): WatchdogFinding[] {
+  const base = { characterId: character.id, characterName: character.name };
+  const pending = character.growthEventPendingCount ?? 0;
+  const failed = character.growthEventFailedCount ?? 0;
+  const stuckFor = character.growthEventStuckLockedAt ? now - character.growthEventStuckLockedAt.getTime() : 0;
+  const backlogFor = character.growthEventOldestQueuedAt ? now - character.growthEventOldestQueuedAt.getTime() : 0;
+
+  if (stuckFor > WATCHDOG_THRESHOLDS.growthEventStuckLockMs) {
+    return [{
+      ...base,
+      code: "growth_event_delivery_stuck",
+      severity: "err",
+      message: `成长事件投递卡在「运行中」已有 ${describeDuration(stuckFor)}`,
+      detail: "投递租约为 5 分钟，Worker 会回收过期租约；检查 worker:watch 日志和对应消费者错误。",
+    }];
+  }
+  if (pending > 0 && backlogFor > WATCHDOG_THRESHOLDS.growthEventBacklogMs) {
+    return [{
+      ...base,
+      code: "growth_event_worker_stalled",
+      severity: "err",
+      message: `成长事件已有 ${describeDuration(backlogFor)}无人领取`,
+      detail: "存在已到执行时间的事件投递，但共享 Worker 没有领取；检查 yarn worker:watch 是否运行。",
+    }];
+  }
+  if (failed > 0) {
+    return [{
+      ...base,
+      code: "growth_event_delivery_failed",
+      severity: "warn",
+      message: `有 ${failed} 条成长事件投递已达到重试上限`,
+      detail: "失败投递会保留用于排查，不会自动删除；检查事件类型、消费者日志和最后错误。",
+    }];
+  }
+  return [];
+}
+
 export function evaluateWatchdog(input: WatchdogInput): WatchdogFinding[] {
   const findings: WatchdogFinding[] = [];
   const now = input.now.getTime();
@@ -217,6 +273,7 @@ export function evaluateWatchdog(input: WatchdogInput): WatchdogFinding[] {
     if (memory) findings.push(memory);
     const duty = evaluateDutySilence(now, character);
     if (duty) findings.push(duty);
+    findings.push(...evaluateGrowthEventPipeline(now, character));
   }
   return findings;
 }
@@ -296,6 +353,40 @@ export async function collectWatchdogFindings(
     buckets.set(characterId, bucket);
   }
 
+  const characterIds = characters.map((character) => character.id);
+  const growthEventGroups = await prisma.$queryRaw<Array<{
+    characterId: string;
+    pendingCount: number;
+    failedCount: number;
+    oldestQueuedAt: Date | null;
+    stuckLockedAt: Date | null;
+  }>>(Prisma.sql`
+    SELECT
+      event."characterId",
+      COUNT(*) FILTER (WHERE delivery."status" IN (
+        'QUEUED'::"GrowthEventDeliveryStatus",
+        'RUNNING'::"GrowthEventDeliveryStatus",
+        'RETRY_WAIT'::"GrowthEventDeliveryStatus"
+      ))::int AS "pendingCount",
+      COUNT(*) FILTER (
+        WHERE delivery."status" = 'FAILED'::"GrowthEventDeliveryStatus"
+      )::int AS "failedCount",
+      MIN(delivery."createdAt") FILTER (
+        WHERE delivery."status" IN (
+          'QUEUED'::"GrowthEventDeliveryStatus",
+          'RETRY_WAIT'::"GrowthEventDeliveryStatus"
+        ) AND delivery."runAt" <= ${now}
+      ) AS "oldestQueuedAt",
+      MIN(delivery."lockedAt") FILTER (
+        WHERE delivery."status" = 'RUNNING'::"GrowthEventDeliveryStatus"
+      ) AS "stuckLockedAt"
+    FROM "growth_event_deliveries" AS delivery
+    INNER JOIN "growth_events" AS event ON event."id" = delivery."eventId"
+    WHERE event."characterId" IN (${Prisma.join(characterIds.map((id) => Prisma.sql`${id}::uuid`))})
+    GROUP BY event."characterId"
+  `);
+  const growthEventBuckets = new Map(growthEventGroups.map((row) => [row.characterId, row]));
+
   // B站 值班：绑定挂在角色上，值班开关写在**连接**的 metadata 里（不是绑定 config）。
   const biliBindings = await prisma.characterChannelBinding.findMany({
     where: {
@@ -361,6 +452,10 @@ export async function collectWatchdogFindings(
       failedTaskCount: bucket.failed,
       oldestQueuedAt: bucket.oldestQueuedAt,
       stuckLockedAt: bucket.stuckLockedAt,
+      growthEventPendingCount: growthEventBuckets.get(character.id)?.pendingCount ?? 0,
+      growthEventFailedCount: growthEventBuckets.get(character.id)?.failedCount ?? 0,
+      growthEventOldestQueuedAt: growthEventBuckets.get(character.id)?.oldestQueuedAt ?? null,
+      growthEventStuckLockedAt: growthEventBuckets.get(character.id)?.stuckLockedAt ?? null,
       duty: dutyByCharacter.get(character.id) ?? null,
     };
   });
