@@ -190,7 +190,7 @@ export async function renewGrowthEventDeliveryLease(
  * 随后才执行领域内的短读/写，最后在同一事务内确认 SUCCEEDED/SKIPPED。
  * 模型调用与其它长耗时 I/O 不允许放进 handler。
  */
-async function finishGrowthEventDelivery(
+export async function completeGrowthEventDelivery(
   prisma: PrismaClient,
   lease: GrowthEventDeliveryLease,
   handler: GrowthEventDeliveryHandler | null,
@@ -280,7 +280,7 @@ export async function processNextGrowthEventDelivery(
   if (!lease) return { processed: false };
   try {
     const handler = handlers[lease.consumerKey] ?? null;
-    const status = await finishGrowthEventDelivery(prisma, lease, handler, options.now ?? new Date());
+    const status = await completeGrowthEventDelivery(prisma, lease, handler, options.now ?? new Date());
     return { processed: true, deliveryId: lease.deliveryId, consumerKey: lease.consumerKey, status };
   } catch (error) {
     if (error instanceof GrowthEventDeliveryLeaseLostError) throw error;
