@@ -112,7 +112,7 @@ Web 服务与后台进程写标准输出。部署到容器或 systemd 时，由�
 - 跟着 QQ 链路一起起：`yarn onebot:stack`（或双击 `scripts/start-qq.bat`）会在同一窗口里再起一个 `--watch` 实例，日志前缀 `[watchdog]`；它自己崩了不影响 QQ 收发，但会留下 `watchdog-exited` 一行。不想要就设 `YILING_WATCHDOG_DISABLED=1`
 - 验证：`yarn test:watchdog`
 
-**判出「卡在运行中」之后怎么解**：租约 5 分钟且**不续期**（`server/utils/memory-job-lease.ts`），过期只说明领走这条任务的进程已经不在了 —— 可能是 Worker，也可能是一次网页请求（比如在页面上点「立即提取忆泡」，请求被 `yarn dev` 重启打断）。回收发生在「下一次有人领取任务」时（`reclaimExpiredMemoryJobs`），所以**整机没有 Worker 在跑时不会自动回收**，任务会一直显示「运行中」：
+**判出「卡在运行中」之后怎么解**：租约 5 分钟且会**显式续租**（`server/utils/memory-job-lease.ts`），过期只说明领走这条任务的进程已经不在了 —— 可能是 Worker，也可能是一次网页请求（比如在页面上点「立即提取忆泡」，请求被 `yarn dev` 重启打断）。回收发生在「下一次有人领取任务」时（`reclaimExpiredMemoryJobs`），所以**整机没有 Worker 在跑时不会自动回收**，任务会一直显示「运行中」：
 
 - 要它自动走：`yarn worker:watch` 一起来就会立刻把这批过期任务打回队列；
 - 只想解这一条：任务监控里对那条点「回收并重新入队」（`POST /tasks/{taskId}/retry`，运行中但有租约过期的任务才放行，写审计 `memory_job.manual_retry` + `recoveredLease`）。
@@ -128,7 +128,7 @@ yarn worker:run        # 单次执行一条任务
 yarn worker:watch      # 常驻消费队列
 ```
 
-Worker 也会跟着 QQ 链路一起起（`yarn onebot:stack` / 双击 `scripts/start-qq.bat`，日志前缀 `[worker]`），和 watchdog 并列。它消费记忆任务、社交关系评估任务和成长事件投递；Watchdog 分别报告记忆任务积压与成长事件积压/卡住/达到重试上限。不想要就设 `YILING_WORKER_DISABLED=1`。
+双击根目录「启动忆灵空间」时，`scripts/launch.mjs` 默认会与 Nuxt 一起启动共享 Worker；只想启动 Web 可设置 `YILING_WORKER_DISABLED=1`。Worker 也会跟着 QQ 链路一起起（`yarn onebot:stack` / 双击 `scripts/start-qq.bat`，日志前缀 `[worker]`），和 watchdog 并列。它消费记忆任务、社交关系评估任务和成长事件投递；Watchdog 分别报告记忆任务积压与成长事件积压/卡住/达到重试上限。不想要就设 `YILING_WORKER_DISABLED=1`。
 
 间隔可用 `YILING_MEMORY_SCHEDULER_INTERVAL_MS`（最小 5000）与 `YILING_MEMORY_WORKER_INTERVAL_MS`（最小 1000）调整。
 
