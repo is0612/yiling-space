@@ -82,7 +82,7 @@ export async function claimNextGrowthEventDelivery(
         END,
         "runAt" = CASE
           WHEN "attemptCount" < "maxAttempts"
-            THEN ${now} + (${growthEventRetryDelayMs(1)} * INTERVAL '1 millisecond')
+            THEN ${now} + (LEAST(21600000, 60000 * POWER(2, LEAST(GREATEST("attemptCount" - 1, 0), 16))) * INTERVAL '1 millisecond')
           ELSE "runAt"
         END,
         "lockedAt" = NULL,
@@ -212,9 +212,10 @@ async function finishGrowthEventDelivery(
     if (locked !== 1) throw new GrowthEventDeliveryLeaseLostError();
 
     const result = handler ? await handler(tx, lease.event) : { skipReason: "没有注册对应的成长事件消费者。" };
-    const skipped = Boolean(result && "skipReason" in result);
+    const skipReason = result && "skipReason" in result ? result.skipReason : null;
+    const skipped = Boolean(skipReason);
     const status = skipped ? "SKIPPED" : "SUCCEEDED";
-    const reason = skipped ? result.skipReason.slice(0, ERROR_MAX_CHARS) : null;
+    const reason = skipReason ? skipReason.slice(0, ERROR_MAX_CHARS) : null;
     const changed = await tx.$executeRaw`
       UPDATE "growth_event_deliveries"
       SET "status" = ${status}::"GrowthEventDeliveryStatus",
