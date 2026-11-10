@@ -9,7 +9,8 @@ Yiling Space 由两部分组成：
 - **Web 服务**（Nuxt/Nitro）：`yarn build` 后 `node .output/server/index.mjs`（或 `yarn start`），对外提供页面与 `/api`。
 - **后台进程**（独立运行，与 Web 服务解耦）：
   - `yarn scheduler:run`：按周期边界把快照/清理任务入队。
-  - `yarn worker:run`：领取并执行记忆任务（调用模型）。
+  - `yarn worker:run`：单轮处理记忆任务、社交关系评估和统一成长事件投递；事件消费者只在自身需要时调用领域读取接口。
+  - `yarn worker:watch`：常驻运行上述共享 Worker，并每小时清理超过 30 天且所有消费者均已终态的成长事件。
   - `yarn onebot:run`：QQ 小号（OneBot v11）渠道适配器（长连接收消息并回复）。
   - `yarn bili:run`：B站 值班适配器（谷时调度 + 被动回复）。部署细节见 `docs/B站值班服务器部署清单.md`。
 
@@ -126,10 +127,20 @@ yarn worker:run        # 单次执行一条任务
 yarn worker:watch      # 常驻消费队列
 ```
 
-Worker 也会跟着 QQ 链路一起起（`yarn onebot:stack` / 双击 `scripts/start-qq.bat`，日志前缀 `[worker]`），和 watchdog 并列——它最容易漏起，漏了只会等 watchdog 报 `worker_stalled`。不想要就设 `YILING_WORKER_DISABLED=1`。
+Worker 也会跟着 QQ 链路一起起（`yarn onebot:stack` / 双击 `scripts/start-qq.bat`，日志前缀 `[worker]`），和 watchdog 并列。它消费记忆任务、社交关系评估任务和成长事件投递；Watchdog 分别报告记忆任务积压与成长事件积压/卡住/达到重试上限。不想要就设 `YILING_WORKER_DISABLED=1`。
 
 间隔可用 `YILING_MEMORY_SCHEDULER_INTERVAL_MS`（最小 5000）与 `YILING_MEMORY_WORKER_INTERVAL_MS`（最小 1000）调整。
 
 Worker 配置模型后会调用 LLM 对周期对话做结构化总结，验证来源消息 ID，再把快照、长期记忆新增/更新/失效和审计记录放进**同一个数据库事务**。模型未配置时保留队列任务；失败按退避策略重试。
 
 验证：`yarn test:scheduler`（周期边界）、`yarn test:scheduler-db`（幂等与清理）、`yarn test:memory-ai`（来源校验）。
+
+
+## 10. 统一成长事件中心
+
+- 事件与投递状态分别保存在 `growth_events` / `growth_event_deliveries`，按 `Character.id` 隔离。
+- 事件只存来源领域、事件类型/版本、聚合对象引用、时间、最小 payload 和稳定幂等键，不复制聊天正文。
+- 领域写入与 Outbox 事件必须在同一数据库事务内；消费者通过角色限定的领域 Gateway 读取来源。
+- `worker:watch` 统一领取事件投递，租约 5 分钟、带 fencing token；失败指数退避，最多 5 次。SKIPPED 是明确终态，不算成功，也不重试。
+- 成功、跳过或取消的事件在 30 天后清理；只要存在未完成或 FAILED 投递，事件就保留供恢复和排查。
+- Watchdog 检查已到期积压、运行中超时与达到重试上限的投递。详情见 `docs/growth-data-center-architecture.md`。
