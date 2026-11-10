@@ -151,4 +151,24 @@ const bothPipelines = run({
 });
 assert.deepEqual(codes(bothPipelines), ["scheduler_stalled", "duty_silent"], "两个独立管线各自一条，不能只报一个。");
 
-console.log("[watchdog] 18 组判定通过");
+// ── 9. Event Center 投递管线独立监控 ────────────────────
+// 它不依赖模型配置；不能因为角色没配 LLM 就忽略只读事件投递。
+assert.deepEqual(codes(run({
+  growthEventPendingCount: 1,
+  growthEventOldestQueuedAt: ago(45 * MINUTE),
+  modelConfigured: false,
+})), ["growth_event_worker_stalled"]);
+assert.deepEqual(codes(run({
+  growthEventPendingCount: 1,
+  growthEventOldestQueuedAt: ago(10 * MINUTE),
+})), []);
+assert.deepEqual(codes(run({
+  growthEventPendingCount: 1,
+  growthEventStuckLockedAt: ago(40 * MINUTE),
+})), ["growth_event_delivery_stuck"]);
+const failedGrowthEvent = run({ growthEventFailedCount: 2 });
+assert.deepEqual(codes(failedGrowthEvent), ["growth_event_delivery_failed"]);
+assert.equal(failedGrowthEvent[0]!.severity, "warn");
+assert.match(failedGrowthEvent[0]!.detail, /最后错误/);
+
+console.log("[watchdog] 22 组判定通过");
