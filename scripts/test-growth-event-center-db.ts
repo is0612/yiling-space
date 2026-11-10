@@ -186,19 +186,39 @@ try {
   assert.equal(secondDelivery.status, "RETRY_WAIT");
   assert.match(secondDelivery.lastError ?? "", /temporary consumer failure/);
 
-  console.log("\\n[7] Watchdog 能识别角色范围内的成长事件积压");
+  console.log("\\n[7] 来源已不存在时明确 SKIPPED，不进入重试");
+  const missingSourceId = randomUUID();
+  const missingEvent = await prisma.$transaction(tx => publishGrowthEvent(tx, {
+    ...input,
+    aggregateId: missingSourceId,
+    occurredAt: new Date(),
+    idempotencyKey: `memory.event.created:${missingSourceId}`,
+    payload: { sourceId: missingSourceId },
+  }));
+  const skipped = await processNextGrowthEventDelivery(prisma, GROWTH_EVENT_HANDLERS, {
+    workerId: `worker-skip-${suffix}`,
+  });
+  assert.equal(skipped.status, "SKIPPED");
+  const skippedDelivery = await prisma.growthEventDelivery.findUniqueOrThrow({
+    where: { eventId_consumerKey: { eventId: missingEvent.eventId, consumerKey: "growth.memory-source-integrity" } },
+  });
+  assert.equal(skippedDelivery.status, "SKIPPED");
+  assert.match(skippedDelivery.lastError ?? "", /来源忆泡不存在/);
+
+  console.log("\\n[8] Watchdog 能识别角色范围内的成长事件积压");
   const findings = await collectWatchdogFindings(prisma, new Date(Date.now() + 2 * 60 * 60 * 1000));
   assert(findings.some(finding =>
     finding.code === "growth_event_worker_stalled" && finding.characterId === characterA.id,
   ), "已到期的重试投递积压应定位到所属角色");
 
-  console.log("\\n[8] 成功事件保留期清理，失败事件继续保留");
+  console.log("\\n[9] 成功事件保留期清理，失败事件继续保留");
   const removed = await cleanupGrowthEvents(prisma, {
     now: new Date(Date.now() + 31 * 24 * 60 * 60 * 1000),
     retentionDays: 30,
   });
-  assert.equal(removed, 1, "只清理已成功且超过保留期的事件");
+  assert.equal(removed, 2, "只清理已成功/跳过且超过保留期的事件");
   assert.equal(await prisma.growthEvent.findUnique({ where: { id: first.eventId } }), null);
+  assert.equal(await prisma.growthEvent.findUnique({ where: { id: missingEvent.eventId } }), null);
   assert(await prisma.growthEvent.findUnique({ where: { id: secondEvent.eventId } }),
     "仍有待重试投递的事件必须保留");
 
