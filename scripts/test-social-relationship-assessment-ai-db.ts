@@ -209,6 +209,18 @@ try {
     assert.equal(saved.suggestedStage, null); assert.equal(saved.suggestedStatus, null);
     assert.equal((await prisma.memoryScope.findUniqueOrThrow({ where: { id: enabledScope } })).relationshipVersion, 0);
   }
+  console.log("\n[5] 6144思考截断后提高预算一次并保存完整建议");
+  const configured = await prisma.character.findUniqueOrThrow({ where: { id: enabledCharacter.id } });
+  await prisma.character.update({ where: { id: enabledCharacter.id }, data: { modelConfig: { ...(configured.modelConfig as Record<string, unknown>), socialRelationshipAssessmentAssistantMaxOutputTokens: 6144 } } });
+  const retryBudgets: number[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    retryBudgets.push(JSON.parse(String(init?.body)).max_tokens);
+    return new Response(JSON.stringify({ choices: [{ finish_reason: retryBudgets.length === 1 ? "length" : "stop", message: { content: retryBudgets.length === 1 ? "" : JSON.stringify({ outcome: "MAINTAIN", reason: "完整结果", evidenceExperienceIds: [] }) } }], usage: { prompt_tokens: 10, completion_tokens: retryBudgets.length === 1 ? 6144 : 20, total_tokens: retryBudgets.length === 1 ? 6154 : 30, completion_tokens_details: { reasoning_tokens: retryBudgets.length === 1 ? 6144 : 0 } } }), { status: 200 });
+  }) as typeof fetch;
+  await prisma.$transaction(tx => enqueueSocialRelationshipAssessment(tx, { scopeId: enabledScope, reason: "PERIODIC_REVIEW" }));
+  const retried = await processNextSocialRelationshipAssessmentTask(prisma, { workerId: `budget-${runId}` });
+  assert.equal(retried.outcome, "MAINTAIN");
+  assert.deepEqual(retryBudgets, [6144, 18432]);
   console.log("社交关系评估 AI 数据库集成测试通过。");
 } finally {
   globalThis.fetch = originalFetch;

@@ -11,9 +11,15 @@ function item(id = "assessment-a", extra: Record<string, unknown> = {}) {
     status: "SUCCEEDED", reviewStatus: "PENDING", reviewedAt: null, reviews: [], error: null, startedAt: "2026-11-10T00:00:00Z", completedAt: "2026-11-10T00:00:01Z", createdAt: "2026-11-10T00:00:00Z", evidence: [], canReview: true, staleReason: null, ...extra };
 }
 function list(items = [item()], page = 1, totalPages = 1) { return { items, total: items.length, page, pageSize: 12, totalPages, hasMore: false, summary: { all: 3, actionable: 1, accepted: 1, failed: 1, running: 0 } }; }
-async function setup() { const page = buildPageHarness(path); page.take(base()).resolve(list()); await flushMicrotasks(); return page; }
+function buildFlatPage() {
+  const page = buildPageHarness(path);
+  page.take(base()).resolve({ items: [], total: 0, page: 1, pageSize: 12, totalPages: 1, summary: list().summary });
+  page.call("changeView", "records");
+  return page;
+}
+async function setup() { const page = buildFlatPage(); page.take(base()).resolve(list()); await flushMicrotasks(); return page; }
 {
-  const page = buildPageHarness(path); const old = page.take(base()); page.switchRole("char-b"); const b = page.take(base("char-b")); page.switchRole("char-a"); const fresh = page.take(base());
+  const page = buildFlatPage(); const old = page.take(base()); page.switchRole("char-b"); const b = page.take(base("char-b")); page.switchRole("char-a"); const fresh = page.take(base());
   old.resolve(list([item("old")])); b.reject(new Error("old")); await flushMicrotasks(); assert.equal(page.read<unknown[]>("rows").length, 0); assert.equal(page.read("loadError"), "");
   fresh.resolve(list([item("fresh")])); await flushMicrotasks(); assert.equal(page.read<Array<{id:string}>>("rows")[0]!.id, "fresh"); page.finish();
 }

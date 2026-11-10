@@ -16,12 +16,28 @@ type Assessment = {
   error: string | null; startedAt: string; completedAt: string | null; createdAt: string; evidence: Evidence[];
   canReview: boolean; staleReason: string | null;
 };
+type PersonGroup = {
+  scopeId: string; friend: Assessment["friend"]; currentRelationship: Assessment["currentRelationship"];
+  assessmentCount: number; matchingCount: number;
+  latestAssessment: Pick<Assessment, "id" | "status" | "outcome" | "reviewStatus" | "createdAt"> | null;
+  changes: { id: string; fromStage: string; toStage: string; fromStatus: string | null; toStatus: string | null; createdAt: string }[];
+  changeCount: number;
+};
+type PeopleResult = { items: PersonGroup[]; total: number; page: number; pageSize: number; totalPages: number; summary: Summary };
 type Summary = { all: number; actionable: number; accepted: number; failed: number; running: number };
 type PageResult = { items: Assessment[]; total: number; page: number; pageSize: number; totalPages: number; hasMore: boolean; summary: Summary };
 const route = useRoute();
 const { character: activeCharacter } = useCharacterSelection(route.path);
 const characterId = computed(() => activeCharacter.value?.id ?? "");
 const rows = ref<Assessment[]>([]);
+const view = ref<"people" | "records">("people");
+const groups = ref<PersonGroup[]>([]);
+const selectedScope = ref("");
+const selectedPerson = ref<PersonGroup | null>(null);
+const peoplePage = ref(1);
+const peopleTotal = ref(0);
+const peopleTotalPages = ref(1);
+const showingPeople = computed(() => view.value === "people" && !selectedScope.value);
 const loading = ref(false);
 const loadError = ref("");
 const pageNumber = ref(1);
@@ -83,24 +99,68 @@ function errorText(error: unknown, fallback: string) {
 async function load(requestedPage = pageNumber.value, corrected = false) {
   const role = characterId.value;
   const generation = roleVersion;
+  const scope = selectedScope.value;
+  const selectedView = view.value;
   const version = ++requestVersion;
   rows.value = []; summary.value = null; total.value = 0; totalPages.value = 1; expanded.value = []; loadError.value = "";
   loading.value = Boolean(role) && !disposed;
   if (!role || disposed) return;
-  const isCurrent = () => current(role, generation) && requestVersion === version;
+  const isCurrent = () => current(role, generation) && requestVersion === version && selectedScope.value === scope && view.value === selectedView;
   try {
-    const result = await $fetch<PageResult>(api(role), { query: { page: requestedPage, pageSize: 12, filter: filter.value } });
+    const result = await $fetch<PageResult>(api(role), { query: { page: requestedPage, pageSize: 12, filter: filter.value, ...(scope ? { scopeId: scope } : {}) } });
     if (!isCurrent()) return;
     if (!corrected && requestedPage > Math.max(1, result.totalPages)) {
       pageNumber.value = Math.max(1, result.totalPages);
       await load(pageNumber.value, true);
       return;
     }
-    rows.value = result.items; summary.value = result.summary; total.value = result.total;
+    rows.value = scope ? result.items.filter(item => item.scopeId === scope) : result.items;
+    const latestRelationship = rows.value.find(item => item.scopeId === scope)?.currentRelationship;
+    if (selectedPerson.value?.scopeId === scope && latestRelationship) selectedPerson.value = { ...selectedPerson.value, currentRelationship: latestRelationship };
+    summary.value = result.summary; total.value = result.total;
     pageNumber.value = result.page; totalPages.value = Math.max(1, result.totalPages);
   } catch (error) {
     if (isCurrent()) loadError.value = errorText(error, "读取评估历史失败，请重试。当前不能确认历史记录和计数。");
   } finally { if (isCurrent()) loading.value = false; }
+}
+async function loadPeople(requestedPage = peoplePage.value, corrected = false) {
+  const role = characterId.value; const generation = roleVersion; const version = ++requestVersion;
+  groups.value = []; rows.value = []; summary.value = null; peopleTotal.value = 0; peopleTotalPages.value = 1;
+  loading.value = Boolean(role) && !disposed; loadError.value = "";
+  if (!role || disposed) return;
+  const isCurrent = () => current(role, generation) && version === requestVersion && showingPeople.value;
+  try {
+    const result = await $fetch<PeopleResult>(api(role), { query: { view: "people", page: requestedPage, pageSize: 12, filter: filter.value } });
+    if (!isCurrent()) return;
+    if (!corrected && requestedPage > Math.max(1, result.totalPages)) { peoplePage.value = Math.max(1, result.totalPages); await loadPeople(peoplePage.value, true); return; }
+    groups.value = result.items; summary.value = result.summary; peopleTotal.value = result.total;
+    peoplePage.value = result.page; peopleTotalPages.value = Math.max(1, result.totalPages);
+  } catch (error) { if (isCurrent()) loadError.value = errorText(error, "读取好友评估汇总失败，请重试。"); }
+  finally { if (isCurrent()) loading.value = false; }
+}
+function refresh() { return showingPeople.value ? loadPeople() : load(); }
+function changeView(value: "people" | "records") {
+  if (view.value === value && !selectedScope.value) return;
+  closeReview(); requestVersion += 1; view.value = value; selectedScope.value = ""; selectedPerson.value = null;
+  rows.value = []; groups.value = []; expanded.value = []; pageNumber.value = 1; peoplePage.value = 1;
+  void refresh();
+}
+function openPerson(person: PersonGroup) {
+  if (!showingPeople.value || !groups.value.some(row => row.scopeId === person.scopeId)) return;
+  closeReview(); requestVersion += 1; selectedScope.value = person.scopeId; selectedPerson.value = person;
+  rows.value = []; pageNumber.value = 1; void load(1);
+}
+function backToPeople() {
+  closeReview(); requestVersion += 1; selectedScope.value = ""; selectedPerson.value = null; rows.value = []; expanded.value = [];
+  void loadPeople();
+}
+function changePeoplePage(value: number) { closeReview(); peoplePage.value = value; void loadPeople(value); }
+function latestLabel(person: PersonGroup) {
+  const latest = person.latestAssessment;
+  if (!latest) return "暂无评估";
+  if (latest.status === "FAILED") return "执行失败";
+  if (latest.status === "RUNNING") return "评估中";
+  return latest.outcome ? OUTCOMES[latest.outcome] ?? latest.outcome : "未形成结论";
 }
 function closeReview() { confirmationVersion += 1; reviewOpen.value = false; reviewTarget.value = null; reviewError.value = ""; reviewNote.value = ""; reviewingIds.value = []; }
 function review(item: Assessment, decision: Decision) {
@@ -134,13 +194,13 @@ async function confirmReview() {
     await load();
   } finally { if (isCurrent()) reviewingIds.value = []; }
 }
-function changeFilter(value: Filter) { if (filter.value === value) return; filter.value = value; pageNumber.value = 1; closeReview(); void load(1); }
+function changeFilter(value: Filter) { if (filter.value === value) return; filter.value = value; pageNumber.value = 1; peoplePage.value = 1; closeReview(); void refresh(); }
 function changePage(value: number) { closeReview(); pageNumber.value = value; void load(value); }
 function toggle(id: string) { expanded.value = expanded.value.includes(id) ? expanded.value.filter(value => value !== id) : [...expanded.value, id]; }
 watch(characterId, () => {
   roleVersion += 1; requestVersion += 1; closeReview(); pageNumber.value = 1; filter.value = "ALL";
-  rows.value = []; summary.value = null; total.value = 0; totalPages.value = 1; expanded.value = []; loading.value = false; loadError.value = "";
-  void load(1);
+  rows.value = []; groups.value = []; selectedScope.value = ""; selectedPerson.value = null; peoplePage.value = 1; peopleTotal.value = 0; peopleTotalPages.value = 1; summary.value = null; total.value = 0; totalPages.value = 1; expanded.value = []; loading.value = false; loadError.value = "";
+  void refresh();
 }, { immediate: true, flush: "sync" });
 onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; closeReview(); });
 </script>
@@ -169,7 +229,7 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
       </NuxtLink>
     </nav>
     <PageHeader
-      description="回看每次关系评估的结果与依据，由你决定是否采纳。执行失败、建议结论和人工处置分别保留。"
+      description="按好友查看当前关系与实际变化，展开后回看每次评估的结果和依据。建议与已发生的变化分别展示。"
     />
     <el-empty
       v-if="!characterId"
@@ -181,10 +241,38 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
           <div><h2>{{ activeCharacter?.name }}的评估历史</h2><p>建议不会自动改变关系；采纳时服务端会再次核对版本与来源。</p></div><el-button
             :icon="Refresh"
             :loading="loading"
-            @click="load()"
+            @click="refresh()"
           >
             刷新
           </el-button>
+        </div>
+        <div
+          class="view-switch"
+          aria-label="评估历史显示方式"
+        >
+          <el-button
+            :type="view === 'people' ? 'primary' : 'default'"
+            :aria-pressed="view === 'people'"
+            @click="changeView('people')"
+          >
+            按好友汇总
+          </el-button>
+          <el-button
+            :type="view === 'records' ? 'primary' : 'default'"
+            :aria-pressed="view === 'records'"
+            @click="changeView('records')"
+          >
+            逐次记录
+          </el-button>
+        </div>
+        <div
+          v-if="selectedPerson"
+          class="person-drilldown"
+        >
+          <el-button @click="backToPeople">
+            返回好友汇总
+          </el-button>
+          <div><strong>{{ selectedPerson.friend.displayName || '未命名好友' }}的评估记录</strong><p>{{ rows.length ? '当前关系' : '汇总读取时关系' }}：{{ relation(selectedPerson.currentRelationship.stage, selectedPerson.currentRelationship.status) }} · 各次建议以评估时的版本为准。</p></div>
         </div>
         <div
           class="history-filters"
@@ -212,7 +300,7 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
         <template #default>
           <el-button
             size="small"
-            @click="load()"
+            @click="refresh()"
           >
             重新读取
           </el-button>
@@ -227,6 +315,80 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
           :rows="4"
           animated
         /><p>正在读取当前角色的评估历史…</p>
+      </section>
+      <section
+        v-else-if="!loadError && showingPeople"
+        class="people-list"
+      >
+        <el-empty
+          v-if="!groups.length"
+          description="当前筛选下没有好友评估记录。"
+        />
+        <article
+          v-for="person in groups"
+          :key="person.scopeId"
+          class="card person-card"
+        >
+          <header class="assessment-top">
+            <div>
+              <h2>{{ person.friend.displayName || '未命名好友' }}</h2><p class="muted">
+                {{ person.friend.platform || '未知平台' }} · {{ person.friend.platformUid }}
+              </p>
+            </div><el-tag type="success">
+              当前：{{ relation(person.currentRelationship.stage, person.currentRelationship.status) }}
+            </el-tag>
+          </header>
+          <p class="person-count">
+            共 {{ person.assessmentCount }} 次评估<span v-if="filter !== 'ALL'"> · 当前筛选 {{ person.matchingCount }} 次</span> · 实际关系变化 {{ person.changeCount }} 次
+          </p>
+          <section
+            class="accepted-changes"
+            aria-label="已发生的关系变化"
+          >
+            <h3>实际关系变化</h3>
+            <p
+              v-if="!person.changes.length"
+              class="muted"
+            >
+              尚无已保存的关系变化，评估建议不会作为变化展示。
+            </p>
+            <ol v-else>
+              <li
+                v-for="change in person.changes"
+                :key="change.id"
+              >
+                <strong>{{ relation(change.fromStage, change.fromStatus) }} → {{ relation(change.toStage, change.toStatus) }}</strong><time>{{ dateTime(change.createdAt) }}</time>
+              </li>
+            </ol>
+            <p
+              v-if="person.changeCount > person.changes.length"
+              class="muted"
+            >
+              展示最近 {{ person.changes.length }} 次变化（按时间顺序），共 {{ person.changeCount }} 次；更早记录未在此展开。
+            </p>
+          </section>
+          <footer class="card-footer">
+            <span>最近评估：{{ latestLabel(person) }} · {{ dateTime(person.latestAssessment?.createdAt ?? null) }}</span><el-button
+              type="primary"
+              @click="openPerson(person)"
+            >
+              查看 {{ person.assessmentCount }} 次评估
+            </el-button>
+          </footer>
+        </article>
+        <div
+          v-if="groups.length"
+          class="pagination"
+        >
+          <span>共 {{ peopleTotal }} 位好友 · 第 {{ peoplePage }} / {{ peopleTotalPages }} 页</span><el-pagination
+            :current-page="peoplePage"
+            :page-size="12"
+            :total="peopleTotal"
+            layout="prev, pager, next"
+            :disabled="loading"
+            @current-change="changePeoplePage"
+          />
+        </div>
       </section>
       <el-empty
         v-else-if="!loadError && !rows.length"
@@ -443,5 +605,5 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
 <style scoped>
 .assessment-history{display:flex;flex-direction:column;gap:20px}.social-nav{display:flex;gap:8px;flex-wrap:wrap}.social-nav a{padding:8px 14px;border-radius:8px;color:var(--dim);text-decoration:none;font-size:14px}.social-nav .active{background:var(--brand-soft);color:var(--brand-strong);font-weight:600}.assessment-history .card{border:0;border-radius:12px;background:var(--surface);box-shadow:none;padding:22px}.history-heading,.assessment-top,.result-heading,.card-footer,.evidence-heading,.pagination{display:flex;align-items:center;justify-content:space-between;gap:16px}.history-heading h2,.assessment-top h2{font-size:18px;margin:0}.history-heading p,.assessment-top p{margin:6px 0 0;color:var(--dim);font-size:12px}.history-filters{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}.history-filters .el-button{margin:0}.assessment-list{display:grid;gap:16px}.status-stack,.review-actions{display:flex;gap:8px;flex-wrap:wrap}.result-heading{margin:20px 0 14px}.result-heading h3{font-size:16px;margin:0}.result-heading time,.card-footer,.technical,.evidence-item time,.review-history-item time{font-size:12px;color:var(--dim)}.relationship-comparison{display:grid;grid-template-columns:1fr 24px 1fr;align-items:center;gap:14px;background:var(--surface-2);border-radius:8px;padding:16px}.relationship-comparison>div{display:grid;gap:7px}.relationship-comparison span{color:var(--dim);font-size:12px}.relationship-comparison strong{font-size:14px;font-weight:600}.comparison-arrow{text-align:center}.reason{color:var(--text-2);font-size:14px;line-height:1.85;white-space:pre-wrap}.muted{color:var(--dim);font-size:12px}.review-actions{margin-top:18px}.card-footer{padding-top:16px;margin-top:20px;border-top:1px solid var(--line)}.expanded-details{display:grid;gap:20px;margin-top:16px}.expanded-details h4{font-size:14px;margin:0 0 10px}.expanded-details ul{margin:0;padding-left:20px;font-size:14px;line-height:1.8}.evidence-item{border:0;border-radius:12px;background:var(--surface-2);box-shadow:none;padding:16px;margin-top:10px}.evidence-heading strong{font-size:14px}.evidence-item time{display:block;margin-top:6px}.evidence-item p,.review-history-item p{font-size:14px;line-height:1.8;white-space:pre-wrap;margin:9px 0 0}.source-warning{color:var(--amber);font-size:12px!important}.review-history-item{border-left:2px solid var(--line);padding:10px 14px;margin-top:8px}.review-history-item strong{font-size:12px;margin-right:12px}.technical{background:var(--surface-2);padding:12px 16px;border-radius:8px}.technical summary{cursor:pointer}.technical p{margin:8px 0}.pagination{padding:8px 0;font-size:12px;color:var(--dim)}.loading-state{padding:24px}.loading-state p{font-size:12px;color:var(--dim)}
 @media(max-width:650px){.assessment-history .card{padding:16px}.history-heading,.assessment-top,.result-heading,.pagination{align-items:flex-start;flex-direction:column;gap:10px}.relationship-comparison{grid-template-columns:1fr}.comparison-arrow{transform:rotate(90deg)}.evidence-heading{align-items:flex-start;flex-wrap:wrap}.social-nav a{padding:7px 10px}.review-actions .el-button{margin:0}}
-.assessment-history .review-history-item{border:0;border-radius:12px;background:var(--surface-2);box-shadow:none;padding:16px;margin-top:10px}
+.view-switch{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}.view-switch .el-button{margin:0}.person-drilldown{display:flex;gap:16px;align-items:center;margin-top:18px;padding:14px;background:var(--surface-2);border-radius:8px}.person-drilldown strong{font-size:14px}.person-drilldown p,.person-count{font-size:12px;color:var(--dim);line-height:1.7}.people-list{display:grid;gap:16px}.person-count{margin:16px 0}.accepted-changes{background:var(--surface-2);padding:16px;border-radius:8px}.accepted-changes h3{font-size:14px;margin:0 0 12px}.accepted-changes ol{margin:0;padding-left:20px}.accepted-changes li{font-size:14px;line-height:1.7;margin:8px 0;overflow-wrap:anywhere}.accepted-changes time{display:block;font-size:12px;color:var(--dim)}.person-card h2{overflow-wrap:anywhere}.person-card .card-footer{flex-wrap:wrap}.person-drilldown{flex-wrap:wrap}.assessment-history .review-history-item{border:0;border-radius:12px;background:var(--surface-2);box-shadow:none;padding:16px;margin-top:10px}
 </style>

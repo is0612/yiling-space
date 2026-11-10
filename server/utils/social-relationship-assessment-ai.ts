@@ -3,6 +3,7 @@
  * 只读取已落库的 SocialExperience / MemoryEvent，生成不可自动执行的结构化建议。
  * 本模块绝不更新 relationshipStage / relationshipStatus。
  */
+import { resolveSocialAssessmentOutputBudget, nextSocialAssessmentOutputBudget } from "./social-assessment-budget";
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { resolveCharacterSocialRelationshipAssessmentAssistantApiKey } from "./credential-encryption";
@@ -23,13 +24,9 @@ const PROMPT_VERSION = "social-relationship-assessment-v1";
  * 踩过的坑（2026-11-10）：`deepseek-flash` 是思考型模型，它把 `max_tokens` 先花在思考上。
  * 默认的 2048 被思考吃光（`reasoning_tokens` 实测 1723~2048），`content` 整个是空的，
  * 于是解析必然失败，退避重试三次仍是同一个结果 —— 25 条评估全是「没有返回可解析的 JSON」。
- * 所以按 4096 起步（`max_tokens` 只在真用到时计费，给宽不会变贵），并留下截断后抬预算重试。
+ * 所以默认按 8192 起步（`max_tokens` 只在真用到时计费，给宽不会变贵），并留下截断后抬预算重试。
  */
-const DEFAULT_OUTPUT_TOKENS = 4_096;
-const MIN_OUTPUT_TOKENS = 1_024;
-const OUTPUT_TOKEN_CEILING = 8_192;
-/** 被 `finish_reason=length` 截断时抬预算的倍数：只重试一次，最多到上限。 */
-const TRUNCATION_RETRY_FACTOR = 3;
+
 const STAGES = ["STRANGER", "ACQUAINTANCE", "FRIEND", "CLOSE_FRIEND"] as const;
 const STATUSES = ["NORMAL", "DISTANT", "CONFLICT", "REPAIRING", "UNOBSERVED"] as const;
 const OUTCOMES = ["CHANGE", "MAINTAIN", "INSUFFICIENT", "REVIEW"] as const;
@@ -77,12 +74,7 @@ export async function resolveSocialRelationshipAssessmentRuntime(configValue: un
       model, apiKey, apiBaseUrl,
       temperature: bounded(config.socialRelationshipAssessmentAssistantTemperature, 0.2, 0, 2),
       maxInputTokens: Math.round(bounded(config.socialRelationshipAssessmentAssistantMaxInputTokens, 12_288, 4_096, 32_768)),
-      maxOutputTokens: Math.round(bounded(
-        config.socialRelationshipAssessmentAssistantMaxOutputTokens,
-        DEFAULT_OUTPUT_TOKENS,
-        MIN_OUTPUT_TOKENS,
-        OUTPUT_TOKEN_CEILING,
-      )),
+      maxOutputTokens: resolveSocialAssessmentOutputBudget(config.socialRelationshipAssessmentAssistantMaxOutputTokens),
     };
   } catch {
     return null;
@@ -220,7 +212,7 @@ function spentLabel(reply: AssessmentReply): string {
  */
 function emptyReplyMessage(reply: AssessmentReply): string {
   if (reply.finishReason === "length") {
-    return `关系评估助手的思考过程占满了输出预算，正文还没输出就被截断（finish_reason=length，${spentLabel(reply)}）。`
+    return `关系评估助手的思考过程占满了输出预算，正文还没输出就被截断（finish_reason=length，${spentLabel(reply)}，本次请求预算 ${reply.maxTokens} tokens）。`
       + "请在关系评估 AI 设置里调大最大输出 Token，或改用非思考模型。";
   }
   return `关系评估助手没有返回正文（finish_reason=${reply.finishReason || "未知"}，${spentLabel(reply)}）。`;
@@ -295,13 +287,14 @@ async function callAssessment(runtime: SocialRelationshipAssessmentRuntime, inpu
    *
    * 截断的表现有两种：正文空（思考吃光了预算），或正文是半截 JSON（写到一半被切断）。
    * 两种都救不回来，但预算抬上去通常一次就够 —— 比让整轮评估直接失败划算得多。
-   * 只重试一次：真到 8192 还截断，那是模型/协议不匹配，重试只会重复烧钱。
+   * 只重试一次：真到配置上限仍截断，那是模型/协议不匹配，重试只会重复烧钱。
    */
-  if (reply.finishReason === "length" && reply.maxTokens < OUTPUT_TOKEN_CEILING) {
+  const retryBudget = nextSocialAssessmentOutputBudget(reply.maxTokens);
+  if (reply.finishReason === "length" && retryBudget !== null) {
     reply = await requestAssessment(
       runtime, input, characterId, assessmentId,
       // 至少给到默认预算：配置成 1024 的人被截断时，只翻到 3072 还是可能不够。
-      Math.min(Math.max(reply.maxTokens * TRUNCATION_RETRY_FACTOR, DEFAULT_OUTPUT_TOKENS), OUTPUT_TOKEN_CEILING),
+      retryBudget,
     );
   }
   if (!reply.content) throw new Error(emptyReplyMessage(reply));

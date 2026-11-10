@@ -1,4 +1,14 @@
 import assert from "node:assert/strict";
+import { resolveSocialAssessmentOutputBudget, nextSocialAssessmentOutputBudget } from "../server/utils/social-assessment-budget";
+
+assert.equal(resolveSocialAssessmentOutputBudget(undefined), 8192);
+assert.equal(resolveSocialAssessmentOutputBudget(16384), 16384);
+assert.equal(resolveSocialAssessmentOutputBudget(99999), 32768);
+assert.equal(nextSocialAssessmentOutputBudget(2048), 8192);
+assert.equal(nextSocialAssessmentOutputBudget(6144), 18432);
+assert.equal(nextSocialAssessmentOutputBudget(8192), 24576);
+assert.equal(nextSocialAssessmentOutputBudget(16384), 32768);
+assert.equal(nextSocialAssessmentOutputBudget(32768), null);
 import {
   filterAssessmentEvidenceIds,
   normalizeSocialRelationshipAssessmentSuggestion,

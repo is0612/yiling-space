@@ -29,6 +29,7 @@ try {
   run("node_modules/prisma/build/index.js", ["migrate", "deploy"]);
   run("node_modules/tsx/dist/cli.mjs", ["scripts/test-social-relationship-assessment-db.ts"]);
   run("node_modules/tsx/dist/cli.mjs", ["scripts/test-social-relationship-assessment-ai-db.ts"]);
+  run("node_modules/tsx/dist/cli.mjs", ["scripts/test-social-assessment-groups-db.ts"]);
   console.log("Isolated social relationship assessment database checks passed.");
 } finally {
   try {

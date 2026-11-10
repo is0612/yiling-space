@@ -1,3 +1,4 @@
+import { resolveSocialAssessmentOutputBudget } from "./social-assessment-budget";
 import { resolveChatModelSettings } from "./chat-model-config";
 import { resolveEmojiFrequency } from "./emoji-frequency";
 import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemoryItemLimit, resolveRecentMessageLimit } from "./memory-retrieval";
@@ -319,7 +320,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
     socialRelationshipAssessmentAssistantModel,
     socialRelationshipAssessmentAssistantTemperature: typeof config.socialRelationshipAssessmentAssistantTemperature === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantTemperature) ? Math.min(2, Math.max(0, config.socialRelationshipAssessmentAssistantTemperature)) : 0.1,
     socialRelationshipAssessmentAssistantMaxInputTokens: typeof config.socialRelationshipAssessmentAssistantMaxInputTokens === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.socialRelationshipAssessmentAssistantMaxInputTokens))) : 16_384,
-    socialRelationshipAssessmentAssistantMaxOutputTokens: typeof config.socialRelationshipAssessmentAssistantMaxOutputTokens === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.socialRelationshipAssessmentAssistantMaxOutputTokens))) : 2_048,
+    socialRelationshipAssessmentAssistantMaxOutputTokens: resolveSocialAssessmentOutputBudget(config.socialRelationshipAssessmentAssistantMaxOutputTokens),
     socialRelationshipAssessmentAssistantApiBaseUrl,
     socialRelationshipAssessmentAssistantApiKeyConfigured,
     socialRelationshipAssessmentAssistantConfigured: Boolean(socialRelationshipAssessmentAssistantModel && socialRelationshipAssessmentAssistantApiBaseUrl && socialRelationshipAssessmentAssistantApiKeyConfigured),

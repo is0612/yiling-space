@@ -4,6 +4,7 @@ import { readPageQuery, buildPage } from "../../../../../utils/pagination";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
 import { readSocialHistoryFilter, socialHistoryFilterWhere, socialAssessmentAvailability } from "../../../../../utils/social-assessment-history";
+import { listSocialAssessmentGroups, readSocialAssessmentView } from "../../../../../utils/social-assessment-groups";
 
 const DEFAULT_PAGE_SIZE = 12;
 
@@ -18,6 +19,11 @@ export default defineEventHandler(async (event) => {
 
   const query = getQuery(event);
   const filter = readSocialHistoryFilter(query.filter);
+  const view = readSocialAssessmentView(query.view);
+  const scopeId = query.scopeId === undefined ? undefined : requireUuid(typeof query.scopeId === "string" ? query.scopeId : "", "好友关系");
+  if (scopeId && !await getPrisma().memoryScope.findFirst({
+    where: { id: scopeId, characterId, character: { ownerId }, scopeType: "EXTERNAL_IDENTITY", externalIdentityId: { not: null } }, select: { id: true },
+  })) throw createError({ statusCode: 404, statusMessage: "好友关系不存在。" });
   const { page, pageSize, skip } = readPageQuery(query, {
     defaultPageSize: DEFAULT_PAGE_SIZE,
     maxPageSize: 50,
@@ -30,8 +36,19 @@ export default defineEventHandler(async (event) => {
       externalIdentityId: { not: null },
     },
   };
-  const where = { ...base, ...socialHistoryFilterWhere(filter) };
+  const where = { ...base, ...(scopeId ? { scopeId } : {}), ...socialHistoryFilterWhere(filter) };
   const prisma = getPrisma();
+  if (view === "people") {
+    const [groups, all, actionable, accepted, failed, running] = await Promise.all([
+      listSocialAssessmentGroups(prisma, { characterId, ownerId, scopeId, filter, page, pageSize, skip }),
+      prisma.socialRelationshipAssessment.count({ where: base }),
+      prisma.socialRelationshipAssessment.count({ where: { ...base, ...socialHistoryFilterWhere("ACTIONABLE") } }),
+      prisma.socialRelationshipAssessment.count({ where: { ...base, reviewStatus: "ACCEPTED" } }),
+      prisma.socialRelationshipAssessment.count({ where: { ...base, status: "FAILED" } }),
+      prisma.socialRelationshipAssessment.count({ where: { ...base, status: "RUNNING" } }),
+    ]);
+    return { view, filter, summary: { all, actionable, accepted, failed, running }, ...groups };
+  }
   const [total, rows, all, actionable, accepted, failed, running] = await Promise.all([
     prisma.socialRelationshipAssessment.count({ where }),
     prisma.socialRelationshipAssessment.findMany({

@@ -30,7 +30,7 @@ const providerKey = ref("custom");
 const enabled = ref(false);
 const temperature = ref(0.1);
 const maxInputTokens = ref(16384);
-const maxOutputTokens = ref(4096);
+const maxOutputTokens = ref(8192);
 const models = ref<string[]>([]);
 
 let loadVersion = 0;
@@ -58,7 +58,7 @@ function resetDraft() {
   enabled.value = false;
   temperature.value = 0.1;
   maxInputTokens.value = 16384;
-  maxOutputTokens.value = 4096;
+  maxOutputTokens.value = 8192;
   models.value = [];
   loading.value = false;
   saving.value = false;
@@ -102,7 +102,7 @@ async function load(targetCharacterId: string) {
     enabled.value = data.socialRelationshipAssessmentAssistantEnabled === true;
     temperature.value = data.socialRelationshipAssessmentAssistantTemperature ?? 0.1;
     maxInputTokens.value = data.socialRelationshipAssessmentAssistantMaxInputTokens ?? 16384;
-    maxOutputTokens.value = data.socialRelationshipAssessmentAssistantMaxOutputTokens ?? 4096;
+    maxOutputTokens.value = data.socialRelationshipAssessmentAssistantMaxOutputTokens ?? 8192;
     apiKey.value = "";
     models.value = [];
   } catch {
@@ -358,13 +358,13 @@ onBeforeUnmount(() => {
             v-model.number="maxOutputTokens"
             type="number"
             min="1024"
-            max="8192"
+            max="32768"
             step="256"
           >
         </div>
       </div>
       <p class="hint">
-        「最大输出 Token」要把模型的思考过程一起算进去：思考型模型常常先花 1500~2000 tokens 才开始写正文，给 2048 会被截断成空回复。评估反复失败时先把这项调到 4096 以上，或换一个非思考模型。
+        输出预算包含思考与正文，思考型模型可能用完 6144 Token 仍未输出正文。建议从 8192 开始，必要时调至 16384 或 32768（需服务商支持）；截断时系统最多提高预算重试一次，上限 32768。若服务商限制更低，请换非思考模型。提高预算也可能增加实际费用。
       </p>
       <div class="actions">
         <button

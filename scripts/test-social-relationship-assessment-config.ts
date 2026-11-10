@@ -35,6 +35,7 @@ for (const body of [
   { socialRelationshipAssessmentAssistantMaxInputTokens: 4095 },
   { socialRelationshipAssessmentAssistantMaxInputTokens: 4096.5 },
   { socialRelationshipAssessmentAssistantMaxOutputTokens: 511 },
+  { socialRelationshipAssessmentAssistantMaxOutputTokens: 32769 },
   { clearSocialRelationshipAssessmentAssistantApiKey: 1 },
 ]) assert.throws(() => readSocialRelationshipAssessmentAssistantSettingsPatch(body));
 
@@ -73,7 +74,7 @@ assert.equal(dto.socialRelationshipAssessmentAssistantConfigured, false);
 assert.equal(dto.socialRelationshipAssessmentAssistantApiKeyConfigured, false);
 assert.equal(dto.socialRelationshipAssessmentAssistantTemperature, 0.1);
 assert.equal(dto.socialRelationshipAssessmentAssistantMaxInputTokens, 16384);
-assert.equal(dto.socialRelationshipAssessmentAssistantMaxOutputTokens, 2048);
+assert.equal(dto.socialRelationshipAssessmentAssistantMaxOutputTokens, 8192);
 
 const configuredDto = toCharacterDto({
   ...character,

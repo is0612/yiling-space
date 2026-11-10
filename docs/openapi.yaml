@@ -4237,6 +4237,10 @@ paths:
         canReview是采纳可用性的只读提示；按采纳事务校验引用与NEW经历的并集，关系版本、经历所属好友、派发状态或来源失效、旧记录没有完整来源版本证据时为false。
         服务器采纳事务内再次校验。跨角色及错挂其他好友经历的来源正文不返回；归档但同角色同好友来源可追溯展示，不能采纳。
         同一generation可能包含多次执行尝试，历史保留每次结果，不会静默删除失败记录。
+        view=people按好友关系scopeId分组，并在服务器按不同scope分页，total为符合筛选的好友数；同名不同账号不合并。
+        分组按最近匹配评估时间倒序、scopeId升序；assessmentCount为该好友全部评估数，matchingCount为本筛选匹配数，latestAssessment为该好友最新评估（不限筛选）。
+        changes只来自已落库的SocialRelationChange，不把模型建议当作真实关系进展；最多最近20条，按时间正序返回，changeCount给出完整数量。
+        scopeId可限定当前角色内的一个好友用于展开明细；格式错误400，他人或非好友范围404；summary仍为当前角色全部记录计数，不随scopeId或filter变化。
       parameters:
         - $ref: '#/components/parameters/Page'
         - name: pageSize
@@ -4245,6 +4249,13 @@ paths:
         - name: filter
           in: query
           schema: { type: string, enum: [ALL, ACTIONABLE, ACCEPTED, REJECTED, STALE, FAILED, RUNNING], default: ALL }
+        - name: view
+          in: query
+          schema: { type: string, enum: [records, people], default: records }
+        - name: scopeId
+          in: query
+          description: 当前角色的好友关系范围，仅用于限定明细，不接受昵称归并。
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: 分页历史与当前角色全量计数
@@ -4273,8 +4284,35 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [id, scopeId, friend, currentRelationship, generation, status, reviewStatus, evidence, reviews, canReview, staleReason]
+                      description: records返回完整评估记录；people返回按好友关系汇总和真实变化记录。
                       properties:
+                        assessmentCount: { type: integer, description: people视图该好友全部评估数 }
+                        matchingCount: { type: integer, description: people视图该好友符合筛选的评估数 }
+                        latestAssessment:
+                          type: object
+                          nullable: true
+                          description: people视图最新评估的轻量信息，不返回证据正文。
+                          properties:
+                            id: { type: string, format: uuid }
+                            status: { type: string }
+                            outcome: { type: string, nullable: true }
+                            reviewStatus: { type: string }
+                            createdAt: { type: string, format: date-time }
+                        changeCount: { type: integer, description: people视图真实关系变化总数 }
+                        changes:
+                          type: array
+                          maxItems: 20
+                          description: people视图最近20条真实变化按时间正序，changeCount更大时应提示截断。
+                          items:
+                            type: object
+                            required: [id, fromStage, toStage, fromStatus, toStatus, createdAt]
+                            properties:
+                              id: { type: string, format: uuid }
+                              fromStage: { type: string }
+                              toStage: { type: string }
+                              fromStatus: { type: string, nullable: true }
+                              toStatus: { type: string, nullable: true }
+                              createdAt: { type: string, format: date-time }
                         id: { type: string, format: uuid }
                         scopeId: { type: string, format: uuid }
                         generation: { type: integer }
