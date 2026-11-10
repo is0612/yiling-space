@@ -289,3 +289,44 @@ export async function processNextGrowthEventDelivery(
     return { processed: true, deliveryId: lease.deliveryId, consumerKey: lease.consumerKey, status };
   }
 }
+
+
+/**
+ * 只清理超过保留期、且所有消费者都已到终态的事件。
+ * FAILED / RETRY_WAIT / RUNNING / QUEUED 事件保留，方便恢复与追查；
+ * 无订阅者的事件在保留期后也可清理。删除事件由外键级联清除其投递行。
+ */
+export async function cleanupGrowthEvents(
+  prisma: PrismaClient,
+  options: { now?: Date; retentionDays?: number; batchSize?: number } = {},
+): Promise<number> {
+  const now = options.now ?? new Date();
+  const retentionDays = Math.max(1, Math.trunc(options.retentionDays ?? 30));
+  const batchSize = Math.max(1, Math.min(2_000, Math.trunc(options.batchSize ?? 500)));
+  const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
+  const deleted = await prisma.$queryRaw<Array<{ id: string }>>`
+    WITH candidates AS (
+      SELECT event."id"
+      FROM "growth_events" AS event
+      WHERE event."createdAt" < ${cutoff}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM "growth_event_deliveries" AS delivery
+          WHERE delivery."eventId" = event."id"
+            AND delivery."status" NOT IN (
+              'SUCCEEDED'::"GrowthEventDeliveryStatus",
+              'SKIPPED'::"GrowthEventDeliveryStatus",
+              'CANCELLED'::"GrowthEventDeliveryStatus"
+            )
+        )
+      ORDER BY event."createdAt" ASC, event."id" ASC
+      LIMIT ${batchSize}
+      FOR UPDATE SKIP LOCKED
+    )
+    DELETE FROM "growth_events" AS event
+    USING candidates
+    WHERE event."id" = candidates."id"
+    RETURNING event."id"
+  `;
+  return deleted.length;
+}
