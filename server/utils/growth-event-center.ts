@@ -121,8 +121,10 @@ export async function publishGrowthEvent(
   if (inserted === 0) {
     const existing = await tx.$queryRaw<Array<{
       id: string; eventType: string; schemaVersion: number; aggregateType: string; aggregateId: string;
+      occurredAt: Date; payloadMatches: boolean;
     }>>`
-      SELECT "id", "eventType", "schemaVersion", "aggregateType", "aggregateId"
+      SELECT "id", "eventType", "schemaVersion", "aggregateType", "aggregateId",
+        "occurredAt", ("payload" = ${payload}::jsonb) AS "payloadMatches"
       FROM "growth_events"
       WHERE "characterId" = ${input.characterId}::uuid
         AND "sourceDomain" = ${input.sourceDomain}
@@ -136,6 +138,8 @@ export async function publishGrowthEvent(
       || row.schemaVersion !== input.schemaVersion
       || row.aggregateType !== input.aggregateType
       || row.aggregateId !== input.aggregateId
+      || row.occurredAt.getTime() !== input.occurredAt.getTime()
+      || !row.payloadMatches
     ) {
       throw new Error("成长事件幂等键冲突：同一业务键对应了不同事件主体。");
     }
