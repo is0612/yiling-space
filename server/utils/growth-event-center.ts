@@ -50,6 +50,7 @@ export const GROWTH_EVENT_SUCCESS_RETENTION_DAYS = 30;
 export const GROWTH_EVENT_SUBSCRIPTIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "memory.event.created": ["growth.memory-source-integrity"],
   "social.experience.created": ["social.relationship-assessment-dispatch"],
+  "memory.knowledge-candidate.requested": ["knowledge.memory-candidate-create"],
 });
 
 const EVENT_TYPE_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;

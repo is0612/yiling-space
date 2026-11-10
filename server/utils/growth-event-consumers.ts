@@ -2,6 +2,7 @@ import type { GrowthEventDeliveryHandler } from "./growth-event-delivery";
 import { readMemoryEventReference } from "./growth-domain-gateway";
 import { readSocialExperienceReference } from "./social-experience-gateway";
 import { dispatchSocialExperienceAssessment } from "./social-experiences";
+import { createKnowledgeCandidateFromMemoryRequest } from "./knowledge-memory-candidates";
 
 /**
  * 第一位真实只读消费者：验证忆泡来源引用仍属于事件中的 Character。
@@ -35,5 +36,12 @@ export const GROWTH_EVENT_HANDLERS: Readonly<Record<string, GrowthEventDeliveryH
       characterId: event.characterId, experienceId: source.id,
     });
     if ("skipReason" in result) return result;
+  },
+  "knowledge.memory-candidate-create": async (tx, event) => {
+    if (event.sourceDomain !== "memory" || event.eventType !== "memory.knowledge-candidate.requested"
+      || event.aggregateType !== "MemoryKnowledgeCandidateRequest" || event.schemaVersion !== 1) {
+      return { skipReason: "事件协议与知识候选请求不匹配。" };
+    }
+    return createKnowledgeCandidateFromMemoryRequest(tx, { characterId: event.characterId, requestId: event.aggregateId });
   },
 };

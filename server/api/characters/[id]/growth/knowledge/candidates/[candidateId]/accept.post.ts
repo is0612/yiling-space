@@ -3,6 +3,7 @@ import type { Prisma } from "../../../../../../../../src/generated/prisma/client
 import { requireActorUserId } from "../../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../../utils/prisma";
+import { requireValidMemoryKnowledgeCandidateSource } from "../../../../../../../utils/knowledge-memory-candidates";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -33,6 +34,7 @@ export default defineEventHandler(async (event) => {
   const confidence = typeof result.confidence === "number" && Number.isFinite(result.confidence)
     ? Math.min(1, Math.max(0, result.confidence)) : null;
   const outcome = await prisma.$transaction(async (tx) => {
+    await requireValidMemoryKnowledgeCandidateSource(tx, candidate);
     const claimed = await tx.knowledgeCandidate.updateMany({
       where: { id: candidateId, characterId, status: "REVIEW" },
       data: { status: "ACCEPTING" },

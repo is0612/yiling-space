@@ -299,6 +299,7 @@ model Character {
   knowledgeItems     KnowledgeItem[]
   knowledgeRelations KnowledgeItemRelation[]
   growthEvents       GrowthEvent[]
+  memoryKnowledgeRequests MemoryKnowledgeCandidateRequest[]
 
   @@index([ownerId, status])
   @@index([originCharacterId])
@@ -1522,6 +1523,33 @@ model JournalRevision {
 
 /// 知识候选：收集到但尚未正式入库的原始知识线索。
 /// 候选保留来源和处理结果；只有明确接受后才会生成 KnowledgeItem。
+enum MemoryKnowledgeRequestStatus {
+  PENDING
+  CREATED
+  SKIPPED
+}
+
+/// 人工选择公开忆泡摘录后请求知识候选；独立于 Outbox 保留期和候选删除。
+model MemoryKnowledgeCandidateRequest {
+  id            String @id @default(uuid()) @db.Uuid
+  characterId   String @db.Uuid
+  memoryEventId String @db.Uuid
+  excerpt       String @db.Text
+  sourceHash    String @db.VarChar(64)
+  reason        String @db.VarChar(240)
+  status        MemoryKnowledgeRequestStatus @default(PENDING)
+  candidateId   String? @db.Uuid
+  growthEventId String? @db.Uuid
+  skipReason    String? @db.VarChar(500)
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(6)
+  character     Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([characterId, memoryEventId])
+  @@index([characterId, status, createdAt])
+  @@map("memory_knowledge_candidate_requests")
+}
+
 model KnowledgeCandidate {
   id               String    @id @default(uuid()) @db.Uuid
   characterId      String    @db.Uuid

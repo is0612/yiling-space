@@ -1067,8 +1067,14 @@ function relationStatusLabel(relation: KnowledgeRelationView) {
   return relation.status === "OPEN" ? "待处理" : relation.status === "RESOLVED" ? "已处理" : "已忽略";
 }
 
-function sourceLabel(sourceType: string) { return ({ MANUAL: "手动录入", CHAT: "聊天来源", IMPORT: "资料导入" } as Record<string,string>)[sourceType] ?? sourceType; }
-function sourceDetails(value: unknown) { return value ? JSON.stringify(value) : ""; }
+function sourceLabel(sourceType: string) { return ({ MANUAL: "手动录入", CHAT: "聊天来源", IMPORT: "资料导入", MEMORY_EVENT: "忆泡摘录（人工提出）" } as Record<string,string>)[sourceType] ?? sourceType; }
+function sourceDetails(value: unknown) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const ref = value as Record<string, unknown>;
+    if (ref.kind === "MEMORY_EVENT") return `公开忆泡 ${String(ref.memoryEventId ?? "")}；整理与采纳前会重新校验来源，正式入库后独立保留。`;
+  }
+  return value ? JSON.stringify(value) : "";
+}
 function statusLabel(status: string) {
   return ({ PENDING: "待处理", PROCESSING: "处理中", REVIEW: "待确认", FAILED: "处理失败", ACCEPTED: "已入库", DISMISSED: "已忽略" } as Record<string,string>)[status] ?? status;
 }

@@ -1850,6 +1850,58 @@ paths:
           description: 该接口仅限本地开发环境
         '404':
           $ref: '#/components/responses/NotFound'
+  /characters/{characterId}/memory-events/{eventId}/knowledge-candidate:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+      - name: eventId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Memories]
+      operationId: requestMemoryKnowledgeCandidate
+      summary: 从公开忆泡人工提出知识候选
+      description: |
+        仅角色拥有者可操作，来源必须为ACTIVE且属于该角色CHARACTER_GLOBAL范围，私人/外部身份范围返回404。
+        摘录trim后必须是当前detail的连续原文，长度按JavaScript UTF-16字符计。
+        一角色一来源只允许一个请求，包括SKIPPED、候选已删除后的请求；重复提交返回既有结果而不覆盖摘录。
+        请求和最小Outbox同事务保存，后台仅创建PENDING候选，不调用模型、不正式入库。消费前来源失效或标题/详情hash变化则SKIPPED。
+        候选处理及采纳前重查来源；已创建候选保留摘录供拥有者查看/删除，正式知识在明确采纳后独立保留。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [excerpt]
+              properties:
+                excerpt: { type: string, minLength: 20, maxLength: 2000 }
+                reason: { type: string, maxLength: 240, default: '' }
+      responses:
+        '200':
+          description: 已创建请求或返回原请求状态，不代表候选已正式入库
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, eventId, status, candidateId, created]
+                properties:
+                  requestId: { type: string, format: uuid }
+                  eventId: { type: string, format: uuid, nullable: true }
+                  status: { type: string, enum: [PENDING, CREATED, SKIPPED] }
+                  candidateId: { type: string, format: uuid, nullable: true }
+                  created: { type: boolean }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 非同源或跨站写入被拒绝
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 摘录不属于当前来源或来源内容已变化
   /characters/{characterId}/memory-events/{eventId}:
     parameters:
       - $ref: '#/components/parameters/CharacterId'

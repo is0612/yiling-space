@@ -5,6 +5,7 @@ import { requireActorUserId } from "../../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../../utils/prisma";
 import { Prisma } from "../../../../../../../../src/generated/prisma/client";
+import { requireValidMemoryKnowledgeCandidateSource } from "../../../../../../../utils/knowledge-memory-candidates";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
@@ -21,9 +22,12 @@ export default defineEventHandler(async (event) => {
   if (candidate.status === "ACCEPTED" || candidate.status === "DISMISSED") {
     throw createError({ statusCode: 409, statusMessage: "这条候选已经完成处置，不能再次处理。" });
   }
-  const claimed = await prisma.knowledgeCandidate.updateMany({
-    where: { id: candidateId, characterId, status: { in: ["PENDING", "FAILED", "REVIEW"] } },
-    data: { status: "PROCESSING", processingError: null, processedResult: Prisma.DbNull, processedAt: null },
+  const claimed = await prisma.$transaction(async tx => {
+    await requireValidMemoryKnowledgeCandidateSource(tx, candidate);
+    return tx.knowledgeCandidate.updateMany({
+      where: { id: candidateId, characterId, status: { in: ["PENDING", "FAILED", "REVIEW"] } },
+      data: { status: "PROCESSING", processingError: null, processedResult: Prisma.DbNull, processedAt: null },
+    });
   });
   if (!claimed.count) throw createError({ statusCode: 409, statusMessage: "这条候选正在处理中，请稍后刷新。" });
   try {
@@ -39,10 +43,13 @@ export default defineEventHandler(async (event) => {
     const result = await processKnowledgeWithAssistant({
       runtime, characterId, candidateId, candidateContent: candidate.rawContent, existingItems,
     });
-    const updated = await prisma.knowledgeCandidate.update({
-      where: { id: candidateId },
-      data: { status: "REVIEW", processedResult: result as unknown as Prisma.InputJsonValue, processingError: null, processedAt: new Date() },
-      select: { id: true, status: true, processedResult: true, processedAt: true },
+    const updated = await prisma.$transaction(async tx => {
+      await requireValidMemoryKnowledgeCandidateSource(tx, candidate);
+      return tx.knowledgeCandidate.update({
+        where: { id: candidateId },
+        data: { status: "REVIEW", processedResult: result as unknown as Prisma.InputJsonValue, processingError: null, processedAt: new Date() },
+        select: { id: true, status: true, processedResult: true, processedAt: true },
+      });
     });
     return { candidate: updated };
   } catch (error) {

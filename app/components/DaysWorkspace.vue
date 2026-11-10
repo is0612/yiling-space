@@ -120,6 +120,85 @@ const editSaving = ref(false);
 const editing = ref<DayEvent | null>(null);
 const form = ref({ title: "", detail: "", place: "", participants: "" });
 
+const knowledgeOpen = ref(false);
+const knowledgeSaving = ref(false);
+const knowledgeEvent = ref<DayEvent | null>(null);
+const knowledgeForm = ref({ excerpt: "", reason: "" });
+const knowledgeError = ref("");
+let knowledgeRequestSeq = 0;
+let knowledgeContextSeq = 0;
+
+type KnowledgeRequestResult = {
+  requestId: string; eventId: string | null; status: "PENDING" | "CREATED" | "SKIPPED";
+  candidateId: string | null; created: boolean;
+};
+function canRequestKnowledge(event: DayEvent) {
+  return event.scope === "character" && event.status === "ACTIVE";
+}
+function closeKnowledgeRequest() {
+  knowledgeRequestSeq += 1;
+  knowledgeOpen.value = false;
+  knowledgeSaving.value = false;
+  knowledgeEvent.value = null;
+  knowledgeForm.value = { excerpt: "", reason: "" };
+  knowledgeError.value = "";
+}
+function openKnowledgeRequest(event: DayEvent) {
+  if (!canRequestKnowledge(event) || detailLoading.value || !detail.value?.events.some(item => item.id === event.id && canRequestKnowledge(item))) return;
+  closeKnowledgeRequest();
+  knowledgeContextSeq = detailRequestSeq;
+  knowledgeEvent.value = event;
+  knowledgeOpen.value = true;
+}
+async function submitKnowledgeRequest() {
+  const target = knowledgeEvent.value;
+  const characterId = id.value;
+  const dayKey = selected.value;
+  if (!target || !knowledgeOpen.value || knowledgeSaving.value || !characterId || !dayKey) return;
+  if (knowledgeContextSeq !== detailRequestSeq || !canRequestKnowledge(target)) return;
+  const current = detail.value?.events.find(item => item.id === target.id);
+  if (!current || !canRequestKnowledge(current)) return;
+  const excerpt = knowledgeForm.value.excerpt.trim();
+  const reason = knowledgeForm.value.reason.trim();
+  knowledgeError.value = "";
+  if (excerpt.length < 20 || excerpt.length > 2000) {
+    knowledgeError.value = "请选择或填写 20～2000 字的原文摘录。";
+    return;
+  }
+  if (!current.detail.includes(excerpt)) {
+    knowledgeError.value = "摘录必须是这条忆泡详情中的一段连续原文，不能改写或拼接。";
+    return;
+  }
+  if (reason.length > 240) {
+    knowledgeError.value = "提出理由不能超过 240 字。";
+    return;
+  }
+  const seq = ++knowledgeRequestSeq;
+  const contextSeq = detailRequestSeq;
+  const isCurrent = () => seq === knowledgeRequestSeq && contextSeq === detailRequestSeq
+    && characterId === id.value && dayKey === selected.value && knowledgeOpen.value
+    && knowledgeEvent.value?.id === target.id;
+  knowledgeSaving.value = true;
+  try {
+    const url: string = `/api/characters/${encodeURIComponent(characterId)}/memory-events/${encodeURIComponent(target.id)}/knowledge-candidate`;
+    const result = await $fetch<KnowledgeRequestResult>(url, { method: "POST", body: { excerpt, reason } });
+    if (!isCurrent()) return;
+    closeKnowledgeRequest();
+    if (result.status === "SKIPPED") ElMessage.info("该请求已跳过，未自动生成或入库知识。可到知识页面查看已有候选。");
+    else if (result.status === "CREATED") ElMessage.success("该请求已处理，请到知识页面整理与确认候选；未自动入库。");
+    else ElMessage.success(result.created
+      ? "请求已提交，等待后台派发。请稍后到知识页面整理与确认候选；不会自动调用模型或入库。"
+      : "该摘录已有待处理请求，请等待后台派发，稍后到知识页面整理与确认。");
+  } catch (error) {
+    if (!isCurrent()) return;
+    const value = error as { data?: { statusMessage?: string }; statusMessage?: string };
+    knowledgeError.value = value.data?.statusMessage ?? value.statusMessage ?? "提交失败，请稍后重试。";
+  } finally {
+    if (isCurrent()) knowledgeSaving.value = false;
+  }
+}
+
+
 function openEdit(event: DayEvent) {
   editing.value = event;
   form.value = {
@@ -277,6 +356,7 @@ async function loadDays(targetCharacterId = id.value) {
 }
 
 async function loadDetail(dayKey: string, targetCharacterId = id.value, page = eventsPage.value) {
+  closeKnowledgeRequest();
   const seq = ++detailRequestSeq;
   if (!targetCharacterId || targetCharacterId !== id.value || !dayKey) return;
   detailLoading.value = true;
@@ -360,6 +440,7 @@ watch(lastFinished, (job) => {
 });
 
 watch(id, () => {
+  closeKnowledgeRequest();
   // 角色切换时作废旧角色的所有在途请求，并清空不属于新角色的页面状态。
   daysRequestSeq += 1;
   detailRequestSeq += 1;
@@ -398,6 +479,7 @@ function selectDay(dayKey: string) {
 // 搜索：300ms 防抖。输入变化的当下就让旧请求失效，而不是等下一个请求发出。
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 watch(searchQuery, () => {
+  closeKnowledgeRequest();
   if (searchTimer) clearTimeout(searchTimer);
   daysRequestSeq += 1;
   detailRequestSeq += 1;
@@ -415,6 +497,7 @@ watch(searchQuery, () => {
   }, 300);
 });
 onBeforeUnmount(() => {
+  closeKnowledgeRequest();
   if (searchTimer) clearTimeout(searchTimer);
   daysRequestSeq += 1;
   detailRequestSeq += 1;
@@ -564,6 +647,14 @@ await loadDays();
               <span v-if="event.participants.length">相关：{{ event.participants.join("、") }}</span>
             </div>
             <div class="event-actions">
+              <el-button
+                v-if="canRequestKnowledge(event)"
+                link
+                type="primary"
+                @click="openKnowledgeRequest(event)"
+              >
+                提出知识候选
+              </el-button>
               <button
                 type="button"
                 class="btn-link"
@@ -665,6 +756,67 @@ await loadDays();
     </div>
 
     <el-dialog
+      :model-value="knowledgeOpen"
+      title="提出知识候选"
+      width="min(620px, 94vw)"
+      @update:model-value="value => { if (!value) closeKnowledgeRequest(); }"
+    >
+      <p class="muted-note knowledge-note">
+        请从这条公开忆泡中选择值得学习的一段原文。提交后由后台派发，请到知识页面整理与确认；不会自动调用模型或入库。
+        每条忆泡仅可提出一次，跳过或删除候选后不会自动重建。来源失效或变更将阻止继续整理与采纳；已生成的候选可自行删除，明确入库后的知识独立保留。
+      </p>
+      <template v-if="knowledgeEvent">
+        <p class="knowledge-source-title">
+          {{ knowledgeEvent.title }}
+        </p>
+        <p class="knowledge-source">
+          {{ knowledgeEvent.detail }}
+        </p>
+      </template>
+      <el-form label-position="top">
+        <el-form-item label="原文摘录（20～2000 字）">
+          <el-input
+            v-model="knowledgeForm.excerpt"
+            type="textarea"
+            :rows="5"
+            :maxlength="2000"
+            show-word-limit
+            placeholder="选择上方一段连续原文后复制到这里，或直接填写原文；不要改写或拼接"
+          />
+        </el-form-item>
+        <el-form-item label="提出理由（可选）">
+          <el-input
+            v-model="knowledgeForm.reason"
+            type="textarea"
+            :rows="2"
+            :maxlength="240"
+            show-word-limit
+            placeholder="简短说明这段内容为什么值得成为知识候选"
+          />
+        </el-form-item>
+      </el-form>
+      <el-alert
+        v-if="knowledgeError"
+        :title="knowledgeError"
+        type="error"
+        :closable="false"
+        show-icon
+      />
+      <template #footer>
+        <el-button @click="closeKnowledgeRequest">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="knowledgeSaving"
+          @click="submitKnowledgeRequest"
+        >
+          确认提交请求
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
       v-model="editOpen"
       title="编辑忆泡"
       width="520px"
@@ -720,6 +872,9 @@ await loadDays();
 </template>
 
 <style scoped>
+.knowledge-note { margin: 0 0 14px; font-size: 13px; line-height: 1.7; }
+.knowledge-source-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.knowledge-source { max-height: 220px; overflow: auto; white-space: pre-wrap; user-select: text; margin: 0 0 16px; padding: 12px; background: var(--surface-2); border-radius: 8px; font-size: 13px; line-height: 1.8; }
 .day-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 18px; margin-top: 18px; }
 .day-list { padding: 16px; display: flex; flex-direction: column; gap: 6px; }
 .day-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }

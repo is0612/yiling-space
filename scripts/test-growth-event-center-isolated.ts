@@ -32,6 +32,7 @@ try {
   run("node_modules/tsx/dist/cli.mjs", ["scripts/test-growth-event-center-concurrency-db.ts"]);
   run("node_modules/tsx/dist/cli.mjs", ["scripts/test-social-experience-events-db.ts"]);
   run("node_modules/tsx/dist/cli.mjs", ["scripts/test-growth-delivery-monitor-db.ts"]);
+  run("node_modules/tsx/dist/cli.mjs", ["scripts/test-memory-knowledge-events-db.ts"]);
   console.log("Isolated Growth Event Center checks passed; business database was not used.");
 } finally {
   try {
