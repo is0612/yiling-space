@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
 import {
   GROWTH_EVENT_LEASE_MS,
+  GROWTH_EVENT_SUCCESS_RETENTION_DAYS,
   type GrowthEventEnvelope,
 } from "./growth-event-center";
 
@@ -301,7 +302,7 @@ export async function cleanupGrowthEvents(
   options: { now?: Date; retentionDays?: number; batchSize?: number } = {},
 ): Promise<number> {
   const now = options.now ?? new Date();
-  const retentionDays = Math.max(1, Math.trunc(options.retentionDays ?? 30));
+  const retentionDays = Math.max(1, Math.trunc(options.retentionDays ?? GROWTH_EVENT_SUCCESS_RETENTION_DAYS));
   const batchSize = Math.max(1, Math.min(2_000, Math.trunc(options.batchSize ?? 500)));
   const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
   const deleted = await prisma.$queryRaw<Array<{ id: string }>>`
