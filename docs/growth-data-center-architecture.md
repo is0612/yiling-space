@@ -1,7 +1,7 @@
 # 统一成长数据中心架构设计
 
-> 状态：架构方案（已对照现有租约 / 幂等实现复核，尚未进入数据库实现）
-> 日期：2026-11-09
+> 状态：第一阶段基础设施实现中（PR #29；Outbox、投递 Worker、首个只读消费者、Watchdog 与保留清理已落地，待 CI 和本地验收）
+> 日期：2026-11-10
 > 复核：第 3、6、13 节已按 `memory-job-lease.ts`、`social-relationship-queue.ts`、`memory-worker.ts`、`watchdog.ts` 的实际行为校对，租约与消费者幂等两处给出了具体参照物
 > 适用范围：忆灵空间成长系统
 
@@ -360,7 +360,7 @@
 - 投递状态包含 QUEUED / RUNNING / SUCCEEDED / RETRY_WAIT / FAILED / SKIPPED / CANCELLED；租约字段采用社交评估队列的 leaseToken / leaseExpiresAt / fencingToken 口径。
 - 新增事务内 `publishGrowthEvent(tx, input)`。业务事务回滚时 Outbox 一起回滚；重复业务键返回既有事件，不重复扇出。
 - 订阅采用代码常量，发布时快照化；第一阶段不回补订阅启用前的历史事件。
-- 默认每个消费者最多尝试 5 次，租约 5 分钟；成功投递保留 30 天后清理（清理实现待接入）。
+- 默认每个消费者最多尝试 5 次，租约 5 分钟；成功/跳过/取消事件保留 30 天后清理，失败和未完成投递保留。
 - 第一批已接入 Worker 投递循环，并增加首个只读消费者 `growth.memory-source-integrity`：收到 `memory.event.created` 后，通过角色限定的记忆领域 Gateway 验证来源忆泡；不复制正文、不调用模型、不修改领域数据。
 - 记忆系统在忆泡真实创建的同一事务中发布 `memory.event.created`；社交系统在 SocialExperience 真正新插入的同一事务中发布 `social.experience.created`（当前尚无社交订阅者）。重复业务键不会重复发布。
 - Watchdog 已增加事件投递积压、运行中超时和重试上限告警；成功/跳过/取消事件在 30 天后清理，含未完成或 FAILED 投递的事件保留。
