@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import type { Prisma } from "../../src/generated/prisma/client";
 import { readExternalParticipantRefs } from "./participant-names";
 import { enqueueSocialRelationshipAssessment } from "./social-relationship-queue";
+import { publishGrowthEvent } from "./growth-event-center";
 
 export function buildSocialExperienceSourceKey(sourceMessageIds: readonly string[]): string | null {
   const ids = [...new Set(sourceMessageIds.map((id) => id.trim()).filter(Boolean))].sort();
@@ -66,12 +67,29 @@ export async function linkMemoryEventToSocialExperiences(
   const created = await tx.socialExperience.createManyAndReturn({
     data,
     skipDuplicates: true,
-    select: { scopeId: true },
+    select: { id: true, scopeId: true, createdAt: true },
   });
   for (const scopeId of new Set(created.map((row) => row.scopeId))) {
     await enqueueSocialRelationshipAssessment(tx, {
       scopeId,
       reason: "NEW_EXPERIENCE",
+    });
+  }
+
+  for (const experience of created) {
+    await publishGrowthEvent(tx, {
+      characterId: input.characterId,
+      sourceDomain: "social",
+      eventType: "social.experience.created",
+      aggregateType: "SocialExperience",
+      aggregateId: experience.id,
+      occurredAt: experience.createdAt,
+      idempotencyKey: `social.experience.created:${experience.id}`,
+      payload: {
+        sourceId: experience.id,
+        sourceType: "SocialExperience",
+        scopeId: experience.scopeId,
+      },
     });
   }
   return created.length;
