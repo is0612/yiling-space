@@ -12,6 +12,7 @@ import {
 } from "../server/utils/growth-event-delivery";
 import { GROWTH_EVENT_HANDLERS } from "../server/utils/growth-event-consumers";
 import { readMemoryEventReference } from "../server/utils/growth-domain-gateway";
+import { collectWatchdogFindings } from "../server/utils/watchdog";
 
 const databaseName = new URL(process.env.DATABASE_URL ?? "postgres://localhost/none").pathname.replace(/^\//, "");
 assert(/^yiling_growth_event_test_[a-f0-9]{32}$/.test(databaseName),
@@ -175,7 +176,13 @@ try {
   assert.equal(secondDelivery.status, "RETRY_WAIT");
   assert.match(secondDelivery.lastError ?? "", /temporary consumer failure/);
 
-  console.log("\\n[7] 成功事件保留期清理，失败事件继续保留");
+  console.log("\\n[7] Watchdog 能识别角色范围内的成长事件积压");
+  const findings = await collectWatchdogFindings(prisma, new Date(Date.now() + 2 * 60 * 60 * 1000));
+  assert(findings.some(finding =>
+    finding.code === "growth_event_worker_stalled" && finding.characterId === characterA.id,
+  ), "已到期的重试投递积压应定位到所属角色");
+
+  console.log("\\n[8] 成功事件保留期清理，失败事件继续保留");
   const removed = await cleanupGrowthEvents(prisma, {
     now: new Date(Date.now() + 31 * 24 * 60 * 60 * 1000),
     retentionDays: 30,
