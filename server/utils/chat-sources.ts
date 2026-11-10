@@ -19,6 +19,8 @@ export type StoredChatSnapshotSource = {
 export type StoredChatSources = {
   memories: StoredChatMemorySource[];
   snapshots: StoredChatSnapshotSource[];
+  goals?: import("./goal-retrieval").ConversationGoal[];
+  expressionHabits?: Array<{ id: string; kind: string; content: string; context: string; revision: number }>;
   preferences?: Array<{ id: string; kind: string; topic: string; reason: string; revision: number }>;
 };
 
@@ -72,5 +74,24 @@ export function readStoredChatSources(metadata: unknown): StoredChatSources {
       || !Number.isSafeInteger(row.revision) || row.revision < 1) return [];
     return [{ id: row.id, kind: row.kind, topic: row.topic.slice(0, 100), reason: row.reason.slice(0, 1000), revision: row.revision }];
   }).slice(0, 6) : [];
-  return { memories, snapshots, ...(preferences.length ? { preferences } : {}) };
+  const expressionHabits = Array.isArray(sourceRoot.expressionHabits) ? sourceRoot.expressionHabits.flatMap(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== "string" || typeof row.kind !== "string" || !["TONE", "WORDING", "LENGTH"].includes(row.kind)
+      || typeof row.content !== "string" || typeof row.context !== "string" || typeof row.revision !== "number"
+      || !Number.isSafeInteger(row.revision) || row.revision < 1) return [];
+    return [{ id: row.id, kind: row.kind, content: row.content.slice(0, 300), context: row.context.slice(0, 200), revision: row.revision }];
+  }).slice(0, 6) : [];
+  const goals = Array.isArray(sourceRoot.goals) ? sourceRoot.goals.flatMap(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== "string" || typeof row.kind !== "string" || !["GOAL", "WISH"].includes(row.kind)
+      || typeof row.title !== "string" || typeof row.description !== "string" || row.status !== "ACTIVE"
+      || typeof row.revision !== "number" || !Number.isSafeInteger(row.revision) || row.revision < 1) return [];
+    const progress = row.latestProgress && typeof row.latestProgress === "object" && !Array.isArray(row.latestProgress) ? row.latestProgress as Record<string, unknown> : null;
+    return [{ id: row.id, kind: row.kind, title: row.title.slice(0, 100), description: row.description.slice(0, 400), status: row.status, revision: row.revision,
+      ...(progress && typeof progress.content === "string" && typeof progress.createdAt === "string" ? { latestProgress: { content: progress.content.slice(0, 200), createdAt: progress.createdAt } } : {}),
+    }];
+  }).slice(0, 4) : [];
+  return { memories, snapshots, ...(preferences.length ? { preferences } : {}), ...(expressionHabits.length ? { expressionHabits } : {}), ...(goals.length ? { goals } : {}) };
 }

@@ -1,3 +1,5 @@
+import { loadGoalsForPrompt, usedGoalSnapshots } from "../goal-retrieval";
+import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../expression-habit-retrieval";
 import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../preference-retrieval";
 import { randomUUID } from "node:crypto";
 import { createModelTurnDetail } from "../model-turn-detail";
@@ -1641,6 +1643,8 @@ async function runChannelTurn(input: {
   const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
+  const goals = await loadGoalsForPrompt(prisma, character.id, currentMessage).catch(() => []);
+  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, character.id, currentMessage).catch(() => []);
   const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage).catch(() => []);
   const turnId = randomUUID();
 
@@ -2067,6 +2071,8 @@ async function runChannelTurn(input: {
       },
       chatInput: {
         preferences,
+        expressionHabits,
+        goals,
         characterName: character.name,
         characterPrompt: character.basePrompt.slice(0, 12_000),
         ...(!useTranscript && messages[0]!.speaker ? { speaker: messages[0]!.speaker } : {}),
@@ -2326,6 +2332,10 @@ async function runChannelTurn(input: {
             usedMemoryIds: generated.usedMemoryIds,
             usedSnapshotIds: generated.usedSnapshotIds,
             usedPreferenceIds: generated.usedPreferenceIds ?? [],
+            usedExpressionHabitIds: generated.usedExpressionHabitIds ?? [],
+            usedGoalIds: generated.usedGoalIds ?? [],
+            usedGoals: usedGoalSnapshots(goals, generated.usedGoalIds ?? []),
+            usedExpressionHabits: usedExpressionHabitSnapshots(expressionHabits, generated.usedExpressionHabitIds ?? []),
             usedPreferences: usedPreferenceSnapshots(preferences, generated.usedPreferenceIds ?? []),
             ...(generated.usedRawMessageIds.length ? { usedRawMessageIds: generated.usedRawMessageIds } : {}),
             ...(generated.usedEventIds.length ? { usedEventIds: generated.usedEventIds } : {}),

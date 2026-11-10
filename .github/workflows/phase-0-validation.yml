@@ -126,6 +126,12 @@ jobs:
       - name: 生成 Prisma Client
         run: yarn run db:generate
 
+      - name: 目标与愿望回归
+        run: yarn test:goals && yarn test:goals-page && yarn test:goals-isolated
+
+      - name: 表达习惯与页面回归
+        run: yarn test:expression-habits && yarn test:expression-habits-page && yarn test:expression-habits-isolated
+
       - name: 偏好系统与页面回归
         run: yarn test:preferences && yarn test:preferences-page && yarn test:preferences-isolated
 

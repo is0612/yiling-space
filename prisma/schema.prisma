@@ -302,6 +302,8 @@ model Character {
   memoryKnowledgeRequests MemoryKnowledgeCandidateRequest[]
   reflectionRuns ReflectionRun[]
   preferences CharacterPreference[]
+  expressionHabits CharacterExpressionHabit[]
+  goals CharacterGoal[]
   growthImportIdentities CharacterGrowthImportIdentity[]
 
   @@index([ownerId, status])
@@ -1818,4 +1820,104 @@ model GrowthEventDelivery {
   @@index([status, leaseExpiresAt])
   @@index([eventId, status])
   @@map("growth_event_deliveries")
+}
+
+/// 表达行为描述与逐字梗语录分开；来源只作依据，不复制为角色人设。
+model CharacterExpressionHabit {
+  id String @id @default(uuid()) @db.Uuid
+  characterId String @db.Uuid
+  kind String @db.VarChar(20)
+  content String @db.VarChar(300)
+  context String @default("") @db.VarChar(200)
+  reason String @db.VarChar(1000)
+  status String @default("PENDING") @db.VarChar(20)
+  revision Int @default(1)
+  sourceType String @default("MANUAL") @db.VarChar(20)
+  sourceRefs Json @default("[]") @db.JsonB
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  revisions CharacterExpressionHabitRevision[]
+
+  @@index([characterId, status, updatedAt])
+  @@map("character_expression_habits")
+}
+
+/// 每次成功操作的结果版本与审计同事务追加。
+model CharacterExpressionHabitRevision {
+  id String @id @default(uuid()) @db.Uuid
+  habitId String @db.Uuid
+  revision Int
+  action String @db.VarChar(20)
+  kind String @db.VarChar(20)
+  content String @db.VarChar(300)
+  context String @db.VarChar(200)
+  reason String @db.VarChar(1000)
+  status String @db.VarChar(20)
+  sourceType String @db.VarChar(20)
+  sourceRefs Json @db.JsonB
+  actorId String @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  habit CharacterExpressionHabit @relation(fields: [habitId], references: [id], onDelete: Cascade)
+
+  @@unique([habitId, revision])
+  @@map("character_expression_habit_revisions")
+}
+
+/// 角色自己的目标与愿望，状态变更必须由用户确认。
+model CharacterGoal {
+  id String @id @default(uuid()) @db.Uuid
+  characterId String @db.Uuid
+  kind String @db.VarChar(20)
+  title String @db.VarChar(100)
+  description String @db.VarChar(1000)
+  reason String @db.VarChar(1000)
+  status String @default("PENDING") @db.VarChar(20)
+  revision Int @default(1)
+  sourceType String @default("MANUAL") @db.VarChar(20)
+  sourceRefs Json @default("[]") @db.JsonB
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  revisions CharacterGoalRevision[]
+  progress CharacterGoalProgress[]
+
+  @@index([characterId, status, updatedAt])
+  @@map("character_goals")
+}
+
+model CharacterGoalRevision {
+  id String @id @default(uuid()) @db.Uuid
+  goalId String @db.Uuid
+  revision Int
+  action String @db.VarChar(20)
+  kind String @db.VarChar(20)
+  title String @db.VarChar(100)
+  description String @db.VarChar(1000)
+  reason String @db.VarChar(1000)
+  status String @db.VarChar(20)
+  sourceType String @db.VarChar(20)
+  sourceRefs Json @db.JsonB
+  actorId String @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  goal CharacterGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([goalId, revision])
+  @@map("character_goal_revisions")
+}
+
+/// 进展只追加；请求指纹保证网络重试不重复记账。
+model CharacterGoalProgress {
+  id String @id @default(uuid()) @db.Uuid
+  goalId String @db.Uuid
+  requestKey String @db.Uuid
+  payloadHash String @db.VarChar(64)
+  content String @db.VarChar(1000)
+  sourceRefs Json @default("[]") @db.JsonB
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  goal CharacterGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([goalId, requestKey])
+  @@index([goalId, createdAt])
+  @@map("character_goal_progress")
 }

@@ -1,3 +1,5 @@
+import { loadGoalsForPrompt, usedGoalSnapshots } from "../../../utils/goal-retrieval";
+import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../../../utils/expression-habit-retrieval";
 import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../../../utils/preference-retrieval";
 import { createHash, randomUUID } from "node:crypto";
 import { createError, getRouterParam, readBody, setResponseStatus } from "h3";
@@ -420,6 +422,8 @@ export default defineEventHandler(async (event) => {
   const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
+  const goals = await loadGoalsForPrompt(prisma, characterId, message).catch(() => []);
+  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, characterId, message).catch(() => []);
   const preferences = await loadPreferencesForPrompt(prisma, characterId, message).catch(() => []);
   const turnId = randomUUID();
   const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }]);
@@ -598,6 +602,8 @@ export default defineEventHandler(async (event) => {
       },
       chatInput: {
         preferences,
+        expressionHabits,
+        goals,
         characterName: character.name,
         characterPrompt: character.basePrompt.slice(0, 12_000),
         styleExamples: (character.styleExamples ?? "").slice(0, 8000),
@@ -673,6 +679,8 @@ export default defineEventHandler(async (event) => {
     })),
   ];
   const usedSources = {
+    goals: usedGoalSnapshots(goals, generated.usedGoalIds ?? []),
+    expressionHabits: usedExpressionHabitSnapshots(expressionHabits, generated.usedExpressionHabitIds ?? []),
     preferences: usedPreferenceSnapshots(preferences, generated.usedPreferenceIds ?? []),
     memories: allMemorySources.filter((memory, index, all) => usedMemoryIds.has(memory.id)
       && all.findIndex((candidate) => candidate.id === memory.id) === index)
@@ -728,6 +736,8 @@ export default defineEventHandler(async (event) => {
           usedRawMessageIds: generated.usedRawMessageIds,
           usedCatchphraseIds: generated.usedCatchphraseIds,
           usedPreferenceIds: generated.usedPreferenceIds ?? [],
+          usedExpressionHabitIds: generated.usedExpressionHabitIds ?? [],
+          usedGoalIds: generated.usedGoalIds ?? [],
           usedSources,
           usage: generated.usage ?? {},
         },
