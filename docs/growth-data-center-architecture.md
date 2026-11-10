@@ -363,4 +363,6 @@
 - 默认每个消费者最多尝试 5 次，租约 5 分钟；成功投递保留 30 天后清理（清理实现待接入）。
 - 第一批已接入 Worker 投递循环，并增加首个只读消费者 `growth.memory-source-integrity`：收到 `memory.event.created` 后，通过角色限定的记忆领域 Gateway 验证来源忆泡；不复制正文、不调用模型、不修改领域数据。
 - 记忆系统在忆泡真实创建的同一事务中发布 `memory.event.created`；社交系统在 SocialExperience 真正新插入的同一事务中发布 `social.experience.created`（当前尚无社交订阅者）。重复业务键不会重复发布。
-- Watchdog、成功投递保留清理和完整隔离数据库回归仍在后续小批次接入，当前不宣称第一阶段端到端收尾。
+- Watchdog 已增加事件投递积压、运行中超时和重试上限告警；成功/跳过/取消事件在 30 天后清理，含未完成或 FAILED 投递的事件保留。
+- 共享 Worker 已接入默认「启动忆灵空间」启动器（可用 `YILING_WORKER_DISABLED=1` 关闭），也继续兼容 `worker:watch` 与 QQ 链路启动方式；多个 Worker 依赖 `SKIP LOCKED` 与 fencing 安全并行。
+- 新增隔离数据库测试覆盖事务回滚、发布幂等、跨角色来源读取、租约过期回收、旧租约 fencing、消费者成功/失败与保留清理；CI 已接入该测试入口。
