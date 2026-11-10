@@ -2,6 +2,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
 import { processNextMemoryJob } from "../server/utils/memory-worker";
+import { processNextGrowthEventDelivery } from "../server/utils/growth-event-delivery";
 import { runSocialRelationshipQueueMaintenance } from "../server/utils/social-relationship-queue";
 import { processNextSocialRelationshipAssessmentTask } from "../server/utils/social-relationship-assessment-ai";
 
@@ -18,6 +19,25 @@ process.on("SIGTERM", () => { running = false; });
 
 try {
   do {
+    try {
+      const growthEvent = await processNextGrowthEventDelivery(prisma, {}, { workerId });
+      if (growthEvent.processed) {
+        process.stdout.write(JSON.stringify({
+          at: new Date().toISOString(),
+          event: "growth-event-delivery-processed",
+          ...growthEvent,
+        }) + "\n");
+      }
+    } catch (error) {
+      // 事件中心故障不能阻断记忆与社交的专用流水线。
+      process.stderr.write(JSON.stringify({
+        at: new Date().toISOString(),
+        event: "growth-event-delivery-error",
+        error: error instanceof Error ? error.message : String(error),
+      }) + "\n");
+      if (!watch) process.exitCode = 1;
+    }
+
     try {
       const socialQueue = await runSocialRelationshipQueueMaintenance(prisma);
       if (socialQueue.backfilled || socialQueue.periodicQueued || socialQueue.recoveredLeases || socialQueue.failedLeases) {
