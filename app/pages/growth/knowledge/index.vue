@@ -115,6 +115,16 @@ const trashPageCount = ref(1);
 const archiveTotalCount = ref(0);
 const trashTotalCount = ref(0);
 const selectedCandidateIds = ref<string[]>([]);
+const workspaceView = ref<"candidates" | "library">("candidates");
+const collectorOpen = ref(false);
+const candidateFilter = ref("TODO");
+const candidateKeyword = ref("");
+const selectedProcessIds = ref<string[]>([]);
+const batchRunning = ref(false);
+const batchStopRequested = ref(false);
+const batchProgress = ref({ total: 0, completed: 0, succeeded: 0, failed: 0 });
+const batchFailures = ref<Array<{ id: string; message: string }>>([]);
+const expandedCandidateIds = ref<string[]>([]);
 const confirmDialog = ref<ConfirmState | null>(null);
 const actionBusy = ref(false);
 let historyRequestVersion = 0;
@@ -139,6 +149,34 @@ function knowledgeBase(targetCharacterId: string) {
 
 /** 知识库只显示 ACTIVE；接口层面已经过滤，这里再挡一次，避免查询参数出错时混入其它状态。 */
 const libraryItems = computed(() => (data.value.items ?? []).filter(item => item.status === "ACTIVE"));
+const candidateFilters = [
+  { value: "TODO", label: "待整理", statuses: ["PENDING", "FAILED"] },
+  { value: "REVIEW", label: "待确认", statuses: ["REVIEW"] },
+  { value: "PROCESSING", label: "处理中", statuses: ["PROCESSING"] },
+  { value: "ACCEPTED", label: "已入库", statuses: ["ACCEPTED"] },
+  { value: "DISMISSED", label: "已忽略", statuses: ["DISMISSED"] },
+  { value: "ALL", label: "全部", statuses: [] },
+];
+const visibleCandidates = computed(() => {
+  const statuses = candidateFilters.find(filter => filter.value === candidateFilter.value)?.statuses ?? [];
+  const query = candidateKeyword.value.trim().toLocaleLowerCase();
+  return data.value.candidates.filter(candidate => (!statuses.length || statuses.includes(candidate.status))
+    && (!query || [candidate.rawContent, candidate.processedResult?.title ?? ""].some(text => text.toLocaleLowerCase().includes(query))));
+});
+const processableCandidates = computed(() => visibleCandidates.value.filter(candidate => ["PENDING", "FAILED", "REVIEW"].includes(candidate.status) && !busyIds.value.includes(candidate.id)));
+const selectedProcessCandidates = computed(() => processableCandidates.value.filter(candidate => selectedProcessIds.value.includes(candidate.id)));
+const allProcessSelected = computed(() => processableCandidates.value.length > 0 && selectedProcessCandidates.value.length === processableCandidates.value.length);
+function toggleProcessSelection(id: string) {
+  if (batchRunning.value) return;
+  selectedProcessIds.value = selectedProcessIds.value.includes(id) ? selectedProcessIds.value.filter(value => value !== id) : [...selectedProcessIds.value, id];
+}
+function toggleAllProcess() {
+  if (batchRunning.value) return;
+  selectedProcessIds.value = allProcessSelected.value ? [] : processableCandidates.value.map(candidate => candidate.id);
+}
+function toggleCandidateExpanded(id: string) {
+  expandedCandidateIds.value = expandedCandidateIds.value.includes(id) ? expandedCandidateIds.value.filter(value => value !== id) : [...expandedCandidateIds.value, id];
+}
 const dismissedCandidates = computed(() => (data.value.candidates ?? []).filter(candidate => candidate.status === "DISMISSED"));
 const selectedDismissedCandidates = computed(
   () => dismissedCandidates.value.filter(candidate => selectedCandidateIds.value.includes(candidate.id)),
@@ -294,6 +332,16 @@ watch(characterId, (nextCharacterId: string) => {
   archiveTotalCount.value = 0;
   trashTotalCount.value = 0;
   selectedCandidateIds.value = [];
+  selectedProcessIds.value = [];
+  expandedCandidateIds.value = [];
+  candidateFilter.value = "TODO";
+  candidateKeyword.value = "";
+  workspaceView.value = "candidates";
+  collectorOpen.value = false;
+  batchRunning.value = false;
+  batchStopRequested.value = false;
+  batchProgress.value = { total: 0, completed: 0, succeeded: 0, failed: 0 };
+  batchFailures.value = [];
   confirmDialog.value = null;
   actionBusy.value = false;
   loading.value = false;
@@ -392,10 +440,59 @@ async function importWebPage() {
   }
 }
 
+/** 快照当前所选，逐条复用已有鉴权与原子认领接口；停止仅影响尚未开始的条目。 */
+async function runBatchCandidates() {
+  const targetCharacterId = characterId.value;
+  const expectedRoleVersion = roleVersion;
+  if (!targetCharacterId || pageDisposed || batchRunning.value || busyIds.value.length || actionBusy.value) return;
+  const candidates = [...(selectedProcessCandidates.value.length ? selectedProcessCandidates.value : processableCandidates.value)];
+  if (!candidates.length) return;
+  batchRunning.value = true;
+  batchStopRequested.value = false;
+  batchFailures.value = [];
+  batchProgress.value = { total: candidates.length, completed: 0, succeeded: 0, failed: 0 };
+  try {
+    for (const candidate of candidates) {
+      if (!isCurrentRole(targetCharacterId, expectedRoleVersion) || batchStopRequested.value) break;
+      busyIds.value = [...busyIds.value, candidate.id];
+      try {
+        const response = await $fetch<{ candidate: Pick<Candidate, "status" | "processedResult" | "processedAt"> }>(
+          knowledgeBase(targetCharacterId) + "/candidates/" + encodeURIComponent(candidate.id) + "/process",
+          { method: "POST" },
+        );
+        if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+        const current = data.value.candidates.find(item => item.id === candidate.id);
+        if (current) Object.assign(current, response.candidate, { processingError: null });
+        batchProgress.value.succeeded += 1;
+      } catch (error) {
+        if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+        const e = error as { data?: { statusMessage?: string } };
+        batchFailures.value.push({ id: candidate.id, message: e.data?.statusMessage || "知识处理失败。" });
+        batchProgress.value.failed += 1;
+      } finally {
+        if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
+          busyIds.value = busyIds.value.filter(id => id !== candidate.id);
+          batchProgress.value.completed += 1;
+        }
+      }
+    }
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const unfinishedIds = candidates.slice(batchProgress.value.completed).map(candidate => candidate.id);
+    selectedProcessIds.value = [...batchFailures.value.map(item => item.id), ...unfinishedIds];
+    await load(targetCharacterId);
+    if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
+    const message = `${batchStopRequested.value ? "已停止后续整理" : "整理完成"}：成功 ${batchProgress.value.succeeded} 条，失败 ${batchProgress.value.failed} 条。请在待确认中检查建议。`;
+    if (batchProgress.value.failed) ElMessage.warning(message);
+    else ElMessage.success(message);
+  } finally {
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) batchRunning.value = false;
+  }
+}
+
 async function runCandidate(candidate: Candidate) {
   const targetCharacterId = characterId.value;
   const expectedRoleVersion = roleVersion;
-  if (!targetCharacterId || pageDisposed || busyIds.value.includes(candidate.id)) return;
+  if (!targetCharacterId || pageDisposed || busyIds.value.includes(candidate.id) || batchRunning.value) return;
   busyIds.value = [...busyIds.value, candidate.id];
   try {
     await $fetch(
@@ -1103,13 +1200,18 @@ function formatDate(value: string) {
     </section>
     <p v-else class="knowledge-empty">当前没有可用角色，请先创建角色或从左下角选择角色。</p>
 
-    <section class="knowledge-flow" aria-label="知识处理流程">
-      <article v-for="stage in [{n:'01',t:'收集',d:'从交流、资料或手动录入发现知识线索。'},{n:'02',t:'处理',d:'提炼内容，检查重复、冲突和不确定性。'},{n:'03',t:'确认入库',d:'检查处理结果，由你决定是否正式保存。'},{n:'04',t:'检索',d:'需要时按问题召回相关知识。'}]" :key="stage.n" class="knowledge-stage">
-        <span class="stage-number">{{ stage.n }}</span><h2>{{ stage.t }}</h2><p>{{ stage.d }}</p>
-      </article>
-    </section>
+    <div v-if="characterId" class="workspace-toolbar">
+      <el-radio-group v-model="workspaceView" aria-label="知识工作区">
+        <el-radio-button value="candidates">候选整理</el-radio-button>
+        <el-radio-button value="library">正式知识库</el-radio-button>
+      </el-radio-group>
+      <div class="workspace-toolbar-actions">
+        <el-button :disabled="loading" @click="load()">刷新</el-button>
+        <el-button type="primary" @click="workspaceView = 'candidates'; activeTab = 'library'; collectorOpen = !collectorOpen">{{ collectorOpen ? "收起添加" : "添加知识" }}</el-button>
+      </div>
+    </div>
 
-    <nav v-if="characterId" class="knowledge-tabs" aria-label="知识分区">
+    <nav v-if="characterId && workspaceView === 'library'" class="knowledge-tabs" aria-label="知识分区">
       <button
         v-for="tab in knowledgeTabs"
         :key="tab.key"
@@ -1124,7 +1226,7 @@ function formatDate(value: string) {
       </button>
     </nav>
 
-    <section v-if="characterId && activeTab === 'library'" class="knowledge-section">
+    <section v-if="characterId && workspaceView === 'candidates' && collectorOpen" class="knowledge-section">
       <div class="section-heading"><div><span class="eyebrow">COLLECT</span><h2>添加知识候选</h2></div></div>
       <textarea v-model="rawContent" rows="4" maxlength="20000" placeholder="把她接触到、值得整理的知识放在这里。可以是一段解释、资料摘录或一个概念……" />
       <div class="section-actions"><span class="muted">{{ rawContent.length }} / 20000</span><button class="primary" :disabled="savingCandidate || !rawContent.trim()" @click="addCandidate">{{ savingCandidate ? "添加中…" : "加入候选" }}</button></div>
@@ -1143,17 +1245,38 @@ function formatDate(value: string) {
       </div>
     </section>
 
-    <section v-if="characterId && activeTab === 'library'" class="knowledge-section">
+    <section v-if="characterId && workspaceView === 'candidates'" class="knowledge-section">
       <div class="section-heading"><div><span class="eyebrow">INBOX</span><h2>知识候选</h2></div><span class="muted">{{ data.candidates.length }} 条</span></div>
-      <div v-if="dismissedCandidates.length" class="candidate-batch">
+      <p class="muted">收集 → 助手整理 → 确认入库。批量整理会逐条调用知识助手，请保持页面打开；切换角色后不再开始后续条目。</p>
+      <div class="candidate-filters">
+        <el-radio-group v-model="candidateFilter" aria-label="候选状态" :disabled="batchRunning">
+          <el-radio-button v-for="filter in candidateFilters" :key="filter.value" :value="filter.value">{{ filter.label }} · {{ data.candidates.filter(candidate => !filter.statuses.length || filter.statuses.includes(candidate.status)).length }}</el-radio-button>
+        </el-radio-group>
+        <el-input v-model="candidateKeyword" clearable placeholder="搜索当前候选原文或整理标题" aria-label="搜索候选" />
+      </div>
+      <div class="candidate-batch">
+        <el-checkbox :model-value="allProcessSelected" :indeterminate="selectedProcessCandidates.length > 0 && !allProcessSelected" :disabled="batchRunning || !processableCandidates.length" @change="toggleAllProcess">全选可整理项</el-checkbox>
+        <span class="muted">已选 {{ selectedProcessCandidates.length }} / 可整理 {{ processableCandidates.length }} 条</span>
+        <el-button type="primary" :loading="batchRunning" :disabled="loading || actionBusy || busyIds.length > 0 || !processableCandidates.length" @click="runBatchCandidates">{{ selectedProcessCandidates.length ? '批量整理所选（' + selectedProcessCandidates.length + '）' : '批量整理当前列表' }}</el-button>
+        <el-button v-if="batchRunning" :disabled="batchStopRequested" @click="batchStopRequested = true">{{ batchStopRequested ? '本条完成后停止' : '停止后续整理' }}</el-button>
+      </div>
+      <div v-if="batchProgress.total" class="batch-progress" role="status" aria-live="polite">
+        <div class="section-heading"><strong>{{ batchRunning ? '正在逐条整理' : '本次整理结果' }}</strong><span>{{ batchProgress.completed }} / {{ batchProgress.total }} · 成功 {{ batchProgress.succeeded }} · 失败 {{ batchProgress.failed }}</span></div>
+        <el-progress :percentage="Math.round(batchProgress.completed / batchProgress.total * 100)" :status="batchRunning ? undefined : batchProgress.failed ? 'warning' : batchProgress.completed === batchProgress.total ? 'success' : undefined" />
+        <el-button v-if="!batchRunning && batchProgress.succeeded" text type="primary" @click="candidateFilter = 'REVIEW'">查看待确认建议</el-button>
+        <details v-if="batchFailures.length"><summary>查看失败原因（{{ batchFailures.length }}）</summary><p v-for="failure in batchFailures" :key="failure.id">{{ data.candidates.find(candidate => candidate.id === failure.id)?.rawContent.slice(0, 60) || '候选' }}：{{ failure.message }}</p></details>
+      </div>
+      <p class="muted">显示最近 {{ data.candidates.length }} 条候选；批量操作仅作用于当前筛选列表，待确认项可重新整理。</p>
+      <div v-if="candidateFilter === 'DISMISSED' && dismissedCandidates.length" class="candidate-batch">
         <button type="button" class="quiet" :disabled="actionBusy" @click="toggleSelectAllDismissed">{{ allDismissedSelected ? "取消全选" : "全选已忽略" }}</button>
         <span class="muted">已忽略 {{ dismissedCandidates.length }} 条 · 已选 {{ selectedDismissedCandidates.length }} 条</span>
         <button type="button" class="primary" :disabled="actionBusy || !selectedDismissedCandidates.length" @click="requestBatchDeleteCandidates">删除所选（{{ selectedDismissedCandidates.length }} 条）</button>
         <button type="button" :disabled="actionBusy" @click="requestPurgeDismissedCandidates">清理全部已忽略（{{ dismissedCandidates.length }} 条）</button>
       </div>
-      <div v-if="!data.candidates.length" class="empty-state">暂时没有知识候选。你可以手动添加一条知识线索。</div>
-      <article v-for="candidate in data.candidates" :key="candidate.id" class="candidate-card">
+      <div v-if="!visibleCandidates.length" class="empty-state">{{ loading ? "正在读取候选…" : data.candidates.length ? "当前筛选下没有候选，试试其他状态或关键词。" : "暂时没有知识候选，点击上方「添加知识」录入文字、文件或网页。" }}</div>
+      <article v-for="candidate in visibleCandidates" :key="candidate.id" class="candidate-card">
         <div class="candidate-top">
+          <el-checkbox v-if="['PENDING', 'FAILED', 'REVIEW'].includes(candidate.status)" :model-value="selectedProcessIds.includes(candidate.id)" :disabled="batchRunning || busyIds.includes(candidate.id)" :aria-label="'选择候选：' + candidate.rawContent.slice(0, 40)" @change="toggleProcessSelection(candidate.id)" />
           <label v-if="candidate.status === 'DISMISSED'" class="candidate-select">
             <input
               type="checkbox"
@@ -1164,7 +1287,8 @@ function formatDate(value: string) {
           </label>
           <span class="status">{{ statusLabel(candidate.status) }} · {{ sourceLabel(candidate.sourceType) }}</span><span class="muted">{{ formatDate(candidate.createdAt) }}</span>
         </div>
-        <p class="candidate-raw">{{ candidate.rawContent }}</p>
+        <p class="candidate-raw" :class="{ 'is-collapsed': candidate.rawContent.length > 280 && !expandedCandidateIds.includes(candidate.id) }">{{ candidate.rawContent }}</p>
+        <el-button v-if="candidate.rawContent.length > 280" text type="primary" class="expand-raw" :aria-expanded="expandedCandidateIds.includes(candidate.id)" @click="toggleCandidateExpanded(candidate.id)">{{ expandedCandidateIds.includes(candidate.id) ? '收起原文' : '展开完整原文' }}</el-button>
         <p v-if="candidate.processingError" class="error-text">{{ candidate.processingError }}</p>
         <template v-if="candidate.processedResult">
           <div class="processing-result">
@@ -1195,15 +1319,15 @@ function formatDate(value: string) {
           </div>
         </template>
         <div class="candidate-actions">
-          <button v-if="candidate.status === 'PENDING' || candidate.status === 'FAILED' || candidate.status === 'REVIEW'" :disabled="busyIds.includes(candidate.id)" @click="runCandidate(candidate)">{{ busyIds.includes(candidate.id) ? "处理中…" : candidate.status === "REVIEW" ? "重新处理" : "交给助手整理" }}</button>
-          <button v-if="candidate.status === 'REVIEW' && candidate.processedResult?.isKnowledge" class="primary" :disabled="busyIds.includes(candidate.id)" @click="acceptCandidate(candidate)">确认入库</button>
-          <button v-if="candidate.status !== 'ACCEPTED' && candidate.status !== 'DISMISSED' && candidate.status !== 'PROCESSING'" class="quiet" @click="dismissCandidate(candidate)">忽略</button>
-          <button class="quiet" :disabled="!canDeleteCandidate(candidate) || actionBusy" @click="requestDeleteCandidate(candidate)">删除候选</button>
+          <button v-if="candidate.status === 'PENDING' || candidate.status === 'FAILED' || candidate.status === 'REVIEW'" :disabled="batchRunning || busyIds.includes(candidate.id)" @click="runCandidate(candidate)">{{ busyIds.includes(candidate.id) ? "处理中…" : candidate.status === "REVIEW" ? "重新处理" : "交给助手整理" }}</button>
+          <button v-if="candidate.status === 'REVIEW' && candidate.processedResult?.isKnowledge" class="primary" :disabled="batchRunning || busyIds.includes(candidate.id)" @click="acceptCandidate(candidate)">确认入库</button>
+          <button v-if="candidate.status !== 'ACCEPTED' && candidate.status !== 'DISMISSED' && candidate.status !== 'PROCESSING'" class="quiet" :disabled="batchRunning || busyIds.includes(candidate.id)" @click="dismissCandidate(candidate)">忽略</button>
+          <button class="quiet" :disabled="batchRunning || busyIds.includes(candidate.id) || !canDeleteCandidate(candidate) || actionBusy" @click="requestDeleteCandidate(candidate)">删除候选</button>
         </div>
       </article>
     </section>
 
-    <section v-if="characterId && activeTab === 'library'" class="knowledge-section">
+    <section v-if="characterId && workspaceView === 'library' && activeTab === 'library'" class="knowledge-section">
       <div class="section-heading"><div><span class="eyebrow">LIBRARY</span><h2>正式知识库</h2></div><span class="muted">{{ data.itemCount }} 条</span></div>
       <input v-model="keyword" class="search-input" placeholder="搜索标题、内容或标签">
       <div v-if="!libraryItems.length" class="empty-state">还没有正式知识。候选经过处理并由你确认后，才会出现在这里。</div>
@@ -1265,7 +1389,7 @@ function formatDate(value: string) {
         </div>
       </article>
     </section>
-    <section v-if="characterId && activeTab === 'archive'" class="knowledge-section">
+    <section v-if="characterId && workspaceView === 'library' && activeTab === 'archive'" class="knowledge-section">
       <div class="section-heading"><div><span class="eyebrow">ARCHIVE</span><h2>归档知识</h2></div><span class="muted">{{ archiveTotalCount }} 条</span></div>
       <p class="muted">归档会保留正文、来源和版本历史，但不再参与正常检索。需要时可以随时恢复到知识库。</p>
       <input v-model="keyword" class="search-input" placeholder="搜索归档知识标题、内容或标签">
@@ -1287,7 +1411,7 @@ function formatDate(value: string) {
       </div>
     </section>
 
-    <section v-if="characterId && activeTab === 'trash'" class="knowledge-section">
+    <section v-if="characterId && workspaceView === 'library' && activeTab === 'trash'" class="knowledge-section">
       <div class="section-heading"><div><span class="eyebrow">RECYCLE</span><h2>回收站</h2></div><span class="muted">{{ trashTotalCount }} 条</span></div>
       <p class="muted">回收站里的知识不参与检索。可以恢复到知识库，也可以永久删除；永久删除后无法恢复。</p>
       <input v-model="keyword" class="search-input" placeholder="搜索回收站标题、内容或标签">
@@ -1384,10 +1508,17 @@ function formatDate(value: string) {
 </template>
 
 <style scoped>
+.workspace-toolbar,.workspace-toolbar-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.candidate-filters{display:flex;flex-direction:column;gap:12px}.candidate-filters :deep(.el-radio-group){gap:6px;flex-wrap:wrap}.candidate-filters :deep(.el-radio-button__inner){border:1px solid var(--line);border-radius:7px;font-size:12px;box-shadow:none}
+.batch-progress{padding:14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:10px;font-size:13px}.batch-progress p{overflow-wrap:anywhere}.batch-progress summary{cursor:pointer}
+.candidate-raw.is-collapsed{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}.expand-raw{align-self:flex-start;margin:0;padding:0;height:auto}
+.knowledge-page :deep(.el-checkbox__label){font-size:12px}.candidate-top{flex-wrap:wrap}.candidate-actions{flex-wrap:wrap}
+@media(max-width:600px){.workspace-toolbar{align-items:stretch;flex-direction:column}.batch-progress .section-heading{align-items:flex-start;flex-direction:column}.candidate-filters :deep(.el-radio-button__inner){padding:8px}}
+
 .knowledge-page{display:flex;flex-direction:column;gap:16px}
 .settings-link{color:var(--accent);font-size:13px;text-decoration:none}
 .knowledge-context{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:12px 16px}
-.knowledge-context-copy{display:flex;flex-direction:column;gap:3px}.knowledge-context-copy span,.eyebrow,.stage-number{color:var(--dim);font-size:11px}.knowledge-context-copy strong{color:var(--ink);font-size:14px}
+.knowledge-context-copy{display:flex;flex-direction:column;gap:3px}.knowledge-context-copy span,.eyebrow,.stage-number{color:var(--dim);font-size:12px}.knowledge-context-copy strong{color:var(--ink);font-size:14px}
 .knowledge-context-note{margin-left:auto;color:var(--dim);font-size:12px}.knowledge-count{font-size:12px;color:var(--dim);background:var(--surface-2);padding:5px 9px;border-radius:20px}
 .knowledge-flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.knowledge-stage{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:15px;min-width:0}.knowledge-stage h2{font-size:15px;margin:7px 0;color:var(--ink)}.knowledge-stage p{font-size:12px;line-height:1.7;color:var(--dim);margin:0}
 .knowledge-section{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:18px;display:flex;flex-direction:column;gap:12px}
@@ -1405,15 +1536,15 @@ button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2
 .knowledge-tabs .knowledge-tab{display:inline-flex;align-items:center;gap:7px;border:1px solid transparent;border-radius:8px;background:transparent;padding:7px 11px;color:var(--dim);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
 .knowledge-tabs .knowledge-tab:hover:not(.is-on){border-color:var(--line);background:var(--surface-2)}
 .knowledge-tabs .knowledge-tab.is-on{background:var(--surface);border-color:var(--line-strong);color:var(--ink);font-weight:700}
-.knowledge-tabs .tab-count{font-size:11px;font-weight:600;color:var(--dim);background:var(--surface-2);border-radius:20px;padding:2px 7px}
+.knowledge-tabs .tab-count{font-size:12px;font-weight:600;color:var(--dim);background:var(--surface-2);border-radius:20px;padding:2px 7px}
 .knowledge-tabs .knowledge-tab.is-on .tab-count{background:var(--brand-soft);color:var(--brand-strong)}
 .candidate-batch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px dashed var(--line-strong);border-radius:9px;background:var(--surface-2);padding:9px 11px}
 .candidate-batch .muted{margin-right:auto}
 .candidate-select{display:inline-flex;align-items:center;gap:6px;margin-right:auto;color:var(--dim);font-size:12px;cursor:pointer}
 .entry-badges{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.state-badge{font-size:11px;padding:4px 8px;border-radius:20px;border:1px solid var(--line-strong);background:var(--surface-2);color:var(--ink)}
+.state-badge{font-size:12px;padding:4px 8px;border-radius:20px;border:1px solid var(--line-strong);background:var(--surface-2);color:var(--ink)}
 .audit-note{display:flex;align-items:flex-start;gap:7px;margin:0;border:1px solid var(--amber-line,#ecd9b4);border-radius:8px;background:var(--amber-soft,#fdf6e7);padding:9px 11px;color:var(--amber,#8f5c05);font-size:12px;line-height:1.6}
-.audit-mark{flex:none;display:inline-flex;width:16px;height:16px;align-items:center;justify-content:center;border-radius:50%;background:var(--amber,#8f5c05);color:white;font-size:11px;font-weight:700}
+.audit-mark{flex:none;display:inline-flex;width:16px;height:16px;align-items:center;justify-content:center;border-radius:50%;background:var(--amber,#8f5c05);color:white;font-size:12px;font-weight:700}
 .confirm-message{margin:0;color:var(--ink);font-size:13px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}
 .confirm-warning{margin:0;border-left:2px solid var(--red,#c92b41);border-radius:0 8px 8px 0;background:var(--red-soft,#fdecee);padding:9px 11px;color:var(--red-text,#8e2739);font-size:12px;line-height:1.6}
 .relation-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
@@ -1425,18 +1556,18 @@ button{border:1px solid var(--line);border-radius:8px;background:var(--surface-2
 .merge-comparison strong{font-size:12px;color:var(--ink)}
 .merge-comparison h4{margin:0;font-size:13px;color:var(--ink)}
 .merge-comparison p{margin:0;font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
-.merge-comparison span{font-size:11px;color:var(--dim);overflow-wrap:anywhere}
+.merge-comparison span{font-size:12px;color:var(--dim);overflow-wrap:anywhere}
 .merge-body input,.merge-body textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);padding:9px;font:inherit;font-size:13px}
 @media(max-width:600px){.merge-comparison{grid-template-columns:1fr}}
 .candidate-card,.item-card{border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}.candidate-raw,.item-card p,.processing-result p{margin:0;color:var(--ink);font-size:13px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}
-.status,.recommendation,.category{font-size:11px;padding:4px 8px;border-radius:20px;background:var(--surface-2);color:var(--dim)}
+.status,.recommendation,.category{font-size:12px;padding:4px 8px;border-radius:20px;background:var(--surface-2);color:var(--dim)}
 .processing-result{border-left:2px solid var(--accent);padding:10px 12px;background:var(--surface-2);border-radius:0 8px 8px 0;display:flex;flex-direction:column;gap:8px}
 .result-top strong,.item-heading h3{color:var(--ink);font-size:14px}.reason,.error-text{font-size:12px;color:var(--dim);margin:0;line-height:1.6}.error-text{color:var(--danger,#c65b5b)}
-.tag-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.tag{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:3px 8px}
-.candidate-actions{display:flex;justify-content:flex-end;gap:8px}.item-heading h3{margin:0}.item-card p{white-space:pre-wrap}.item-date{font-size:11px;color:var(--dim);text-align:right}
+.tag-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.tag{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:3px 8px}
+.candidate-actions{display:flex;justify-content:flex-end;gap:8px}.item-heading h3{margin:0}.item-card p{white-space:pre-wrap}.item-date{font-size:12px;color:var(--dim);text-align:right}
 .suggested-relations,.saved-relations{display:flex;flex-direction:column;gap:9px;padding:11px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
 .relation-heading,.suggested-relation{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.relation-heading strong,.saved-relations>strong{font-size:12px;color:var(--ink)}
-.suggested-relation,.saved-relation{padding-top:9px;border-top:1px solid var(--line)}.relation-copy{min-width:0;display:flex;flex:1;flex-direction:column;gap:5px}.relation-copy strong{font-size:13px;color:var(--ink)}.relation-copy p{margin:0;color:var(--dim);font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.relation-kind{font-size:11px;color:var(--dim)}
+.suggested-relation,.saved-relation{padding-top:9px;border-top:1px solid var(--line)}.relation-copy{min-width:0;display:flex;flex:1;flex-direction:column;gap:5px}.relation-copy strong{font-size:13px;color:var(--ink)}.relation-copy p{margin:0;color:var(--dim);font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.relation-kind{font-size:12px;color:var(--dim)}
 .item-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .item-editor,.history-panel{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2)}
 .item-editor label{display:flex;flex-direction:column;gap:5px;color:var(--dim);font-size:12px}
