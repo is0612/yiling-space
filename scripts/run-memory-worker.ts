@@ -7,6 +7,7 @@ import { GROWTH_EVENT_HANDLERS } from "../server/utils/growth-event-consumers";
 import { createGrowthEventRunner, resolveGrowthEventIdleIntervalMs } from "../server/utils/growth-event-runner";
 import { runSocialRelationshipQueueMaintenance } from "../server/utils/social-relationship-queue";
 import { processNextSocialRelationshipAssessmentTask } from "../server/utils/social-relationship-assessment-ai";
+import { processNextReflectionRun } from "../server/utils/reflection-worker";
 
 const prisma = getPrisma();
 const watch = process.argv.includes("--watch");
@@ -55,6 +56,13 @@ const runner = createGrowthEventRunner({
       }
     } catch (error) {
       reportError("social-relationship-assessment-error", error);
+    }
+    if (signal.aborted) return;
+    try {
+      const reflection = await processNextReflectionRun(prisma, { workerId });
+      if (reflection.processed) process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event: "reflection-processed", ...reflection }) + "\n");
+    } catch (error) {
+      reportError("reflection-error", error);
     }
     if (signal.aborted) return;
     try {

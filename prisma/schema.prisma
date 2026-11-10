@@ -300,6 +300,7 @@ model Character {
   knowledgeRelations KnowledgeItemRelation[]
   growthEvents       GrowthEvent[]
   memoryKnowledgeRequests MemoryKnowledgeCandidateRequest[]
+  reflectionRuns ReflectionRun[]
 
   @@index([ownerId, status])
   @@index([originCharacterId])
@@ -1548,6 +1549,68 @@ model MemoryKnowledgeCandidateRequest {
   @@unique([characterId, memoryEventId])
   @@index([characterId, status, createdAt])
   @@map("memory_knowledge_candidate_requests")
+}
+
+enum ReflectionRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum ReflectionSuggestionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  DEFERRED
+}
+
+model ReflectionRun {
+  id String @id @default(uuid()) @db.Uuid
+  characterId String @db.Uuid
+  requestKey String @db.Uuid
+  periodStart DateTime @db.Timestamptz(6)
+  periodEnd DateTime @db.Timestamptz(6)
+  status ReflectionRunStatus @default(QUEUED)
+  attemptCount Int @default(0)
+  maxAttempts Int @default(3)
+  runAt DateTime @default(now()) @db.Timestamptz(6)
+  leaseToken String? @db.Uuid
+  leaseExpiresAt DateTime? @db.Timestamptz(6)
+  fencingToken Int @default(0)
+  lastError String? @db.VarChar(500)
+  model String? @db.VarChar(120)
+  promptVersion String? @db.VarChar(80)
+  completedAt DateTime? @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  suggestions ReflectionSuggestion[]
+
+  @@unique([characterId, requestKey])
+  @@index([status, runAt])
+  @@index([characterId, createdAt])
+  @@map("reflection_runs")
+}
+
+model ReflectionSuggestion {
+  id String @id @default(uuid()) @db.Uuid
+  runId String @db.Uuid
+  title String @db.VarChar(200)
+  observation String @db.Text
+  inference String @db.Text
+  recommendation String @db.Text
+  sourceRefs Json @db.JsonB
+  status ReflectionSuggestionStatus @default(PENDING)
+  reviewNote String? @db.VarChar(500)
+  reviewedAt DateTime? @db.Timestamptz(6)
+  acceptedAt DateTime? @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  run ReflectionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, status])
+  @@map("reflection_suggestions")
 }
 
 model KnowledgeCandidate {
