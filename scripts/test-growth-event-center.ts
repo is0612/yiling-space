@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { growthEventRetryDelayMs } from "../server/utils/growth-event-delivery";
 import {
   GROWTH_EVENT_LEASE_MS,
   GROWTH_EVENT_MAX_ATTEMPTS,
@@ -22,10 +23,15 @@ const normalized = normalizeGrowthEventInput(valid);
 assert.equal(normalized.schemaVersion, 1);
 assert.equal(normalized.eventType, "memory.event.created");
 assert.deepEqual(normalized.payload, valid.payload);
-assert.deepEqual(listGrowthEventSubscribers("memory.event.created"), []);
+assert.deepEqual(listGrowthEventSubscribers("memory.event.created"), ["growth.memory-source-integrity"]);
+assert.deepEqual(listGrowthEventSubscribers("social.experience.created"), []);
 assert.equal(GROWTH_EVENT_LEASE_MS, 5 * 60 * 1000);
 assert.equal(GROWTH_EVENT_MAX_ATTEMPTS, 5);
 assert.equal(GROWTH_EVENT_SUCCESS_RETENTION_DAYS, 30);
+assert.equal(growthEventRetryDelayMs(1), 60_000);
+assert.equal(growthEventRetryDelayMs(2), 120_000);
+assert.equal(growthEventRetryDelayMs(3), 240_000);
+assert.equal(growthEventRetryDelayMs(99), 6 * 60 * 60 * 1000);
 
 const invalidCases: Array<[string, Record<string, unknown>]> = [
   ["empty character", { characterId: " " }],
