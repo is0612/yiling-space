@@ -349,3 +349,16 @@
 ---
 
 **架构原则总结：统一的是身份、协作协议、证据追溯和可靠基础设施；保持独立的是各领域的数据所有权、业务规则和生命周期。**
+
+
+## 第一阶段实施记录（2026-11-10）
+
+### 第一批：Outbox 契约与持久化骨架
+
+- 新增 `GrowthEvent` 与 `GrowthEventDelivery`，角色统一使用 `Character.id`；事件与投递状态分表。
+- 事件信封只保存来源领域、稳定事件名、schemaVersion、聚合对象引用、发生时间、最小 JSON payload 和来源侧幂等键，不存聊天正文。
+- 投递状态包含 QUEUED / RUNNING / SUCCEEDED / RETRY_WAIT / FAILED / SKIPPED / CANCELLED；租约字段采用社交评估队列的 leaseToken / leaseExpiresAt / fencingToken 口径。
+- 新增事务内 `publishGrowthEvent(tx, input)`。业务事务回滚时 Outbox 一起回滚；重复业务键返回既有事件，不重复扇出。
+- 订阅采用代码常量，发布时快照化；第一阶段不回补订阅启用前的历史事件。
+- 默认每个消费者最多尝试 5 次，租约 5 分钟；成功投递保留 30 天后清理（清理实现待接入）。
+- 当前第一批只落地契约与 Outbox 写入骨架；Worker、消费者、Watchdog、保留清理和领域发布点在后续小批次接入，未宣称端到端闭环已完成。
