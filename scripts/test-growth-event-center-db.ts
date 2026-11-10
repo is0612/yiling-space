@@ -162,7 +162,8 @@ try {
   const failed = await processNextGrowthEventDelivery(prisma, {
     "growth.memory-source-integrity": async () => { throw new Error("temporary consumer failure"); },
   }, { workerId: `worker-fail-${suffix}` });
-  assert.equal(failed.eventId, undefined);
+  assert.equal(failed.processed, true);
+  assert.equal(failed.status, "RETRY_WAIT");
   const secondDelivery = await prisma.growthEventDelivery.findUniqueOrThrow({
     where: { eventId_consumerKey: { eventId: secondEvent.eventId, consumerKey: "growth.memory-source-integrity" } },
   });
@@ -171,6 +172,7 @@ try {
 
   console.log("Growth Event Center DB integration tests passed.");
 } finally {
+  await prisma.memoryScope.deleteMany({ where: { characterId: { in: [characterA.id, characterB.id] } } });
   await prisma.character.deleteMany({ where: { ownerId: owner.id } });
   await prisma.user.delete({ where: { id: owner.id } });
   await prisma.$disconnect();
