@@ -52,6 +52,7 @@ export const GROWTH_EVENT_SUBSCRIPTIONS: Readonly<Record<string, readonly string
 });
 
 const EVENT_TYPE_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
+const CHARACTER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DOMAIN_SET = new Set<GrowthEventDomain>([
   "memory", "social", "knowledge", "preference", "corpus", "state", "reflection", "goal",
 ]);
@@ -65,7 +66,7 @@ export function normalizeGrowthEventInput(input: GrowthEventInput): GrowthEventI
   const idempotencyKey = input.idempotencyKey.trim();
   const schemaVersion = input.schemaVersion ?? 1;
 
-  if (!characterId) throw new Error("成长事件必须关联角色。");
+  if (!CHARACTER_ID_PATTERN.test(characterId)) throw new Error("成长事件必须关联有效的 Character.id。");
   if (!DOMAIN_SET.has(sourceDomain)) throw new Error("成长事件来源领域无效。");
   if (!EVENT_TYPE_PATTERN.test(eventType) || eventType.length > 120) throw new Error("成长事件类型格式无效。");
   if (!aggregateType || aggregateType.length > 120) throw new Error("成长事件聚合类型无效。");
