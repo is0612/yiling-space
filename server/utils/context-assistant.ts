@@ -23,9 +23,53 @@ export type PreviousWorkingContext = {
   evidence: Array<{ id: string; role: "USER" | "ASSISTANT"; content: string; speaker?: string; isOwner?: boolean; occurredAt: string }>;
 };
 
+/**
+ * 语境助手默认预算。
+ *
+ * `maxOutputTokens` 只表达**可见输出预算**（实测一段 JSON 约 374 token，2048 很宽），
+ * 不是发给接口的 `max_tokens`：思考 token 也计入后者，真实请求值见 `resolveOutputBudget`。
+ */
 export const CONTEXT_ASSISTANT_DEFAULTS = {
   temperature: 0.1, maxInputTokens: 16_384, maxOutputTokens: 2_048,
 } as const;
+
+/**
+ * 这个模型认不认 `thinking` / `reasoning_effort`。
+ *
+ * 与 `chat-reply.ts` 的 `isThinkingModel` 同一套判断：认不出是 DeepSeek 就整段不发 ——
+ * OpenAI 官方接口收到未知字段直接 400，那比「不生效」更糟。
+ */
+function thinkingModel(model: string, apiBaseUrl: string): boolean {
+  return /deepseek/i.test(model) || /deepseek/i.test(apiBaseUrl);
+}
+
+/**
+ * 思考档位。
+ *
+ * 语境助手要的是「读懂」而不是「推导」：分辨谁在跟谁说话需要一点反事实推理，
+ * 但不需要 2700 token 的思维链 —— 实测思考 900 与 4800 的轮次，摘要长度、
+ * 证据条数、记忆来源数完全一致。`low` 保留判断力，把思考量压到千以内。
+ */
+const CONTEXT_REASONING_EFFORT = "low";
+
+/**
+ * 思考余量。
+ *
+ * `max_tokens` 是「思考 + 正文」的总预算。只按正文长短给的 2048 会在思考阶段就被打成
+ * `finish_reason=length`，正文一个字都没有 —— 这是此前 41% 的调用被迫整包重发的原因。
+ * 同一个坑 `chat-reply.ts`（`THINKING_MIN_TOKENS`）与 `raw-llm.ts` 都记过。
+ */
+const CONTEXT_THINKING_HEADROOM = 4_096;
+/** 配置侧允许的最大可见预算，与 `readContextAssistantSettingsPatch` 的校验范围一致。 */
+const CONTEXT_CONFIGURED_MAX_TOKENS = 8_192;
+/** 请求预算上限。`low` 档思考 < 1.5k、正文 < 1k，即便翻倍重试也到不了这里。 */
+const CONTEXT_MAX_TOKENS_CEILING = 16_384;
+
+/** 实际发给接口的输出预算：配置的可见预算 + 思考余量（`max_tokens` 只在真用到时计费）。 */
+function resolveOutputBudget(configured: number, thinking: boolean): number {
+  const visible = Math.round(bounded(configured, CONTEXT_ASSISTANT_DEFAULTS.maxOutputTokens, 512, CONTEXT_CONFIGURED_MAX_TOKENS));
+  return Math.min(CONTEXT_MAX_TOKENS_CEILING, visible + (thinking ? CONTEXT_THINKING_HEADROOM : 0));
+}
 
 /** Safe to log: never contains provider bodies, prompts, credentials or a nested cause. */
 export class ContextAssistantError extends Error {
@@ -280,14 +324,19 @@ export async function analyzeGroupContext(
     const payload = publicInput(chatInput, runtime.maxInputTokens, previous);
     const endpoint = buildChatCompletionsEndpoint(runtime.apiBaseUrl);
     const signal = AbortSignal.timeout(45_000); // Shared deadline includes the optional retry.
-    let outputBudget = Math.round(bounded(runtime.maxOutputTokens, 2_048, 512, 8_192));
+    const thinking = thinkingModel(runtime.model, runtime.apiBaseUrl);
+    // temperature 在思考模式下不生效（DeepSeek 明确说了不报错也不生效），照传只为非 DeepSeek 网关仍按配置走。
+    // 非思考模型重试不越过用户配置的上限；思考模型才额外允许思考余量那一截。
+    const budgetCeiling = thinking ? CONTEXT_MAX_TOKENS_CEILING : CONTEXT_CONFIGURED_MAX_TOKENS;
+    let budget = resolveOutputBudget(runtime.maxOutputTokens, thinking);
     for (let attempt = 0; attempt < 2; attempt++) {
       const response = await fetch(endpoint, {
         method: "POST", redirect: "error", signal,
         headers: { authorization: "Bearer " + runtime.apiKey, "content-type": "application/json" },
         body: JSON.stringify({
-          model: runtime.model, temperature: runtime.temperature, max_tokens: outputBudget,
+          model: runtime.model, temperature: runtime.temperature, max_tokens: budget,
           response_format: { type: "json_object" },
+          ...(thinking ? { thinking: { type: "enabled" }, reasoning_effort: CONTEXT_REASONING_EFFORT } : {}),
           messages: [{ role: "system", content: SYSTEM }, { role: "user", content: JSON.stringify(payload) }],
         }),
       });
@@ -297,7 +346,10 @@ export async function analyzeGroupContext(
       const choices = record(body).choices;
       const choice = record(Array.isArray(choices) ? choices[0] : null);
       if (choice.finish_reason === "length") {
-        if (attempt === 0 && outputBudget < 8_192) { outputBudget = Math.min(8_192, outputBudget * 2); continue; }
+        if (attempt === 0 && budget < budgetCeiling) {
+          budget = Math.min(budgetCeiling, budget * 2);
+          continue;
+        }
         throw new ContextAssistantError();
       }
       const content = record(choice.message).content;
@@ -355,13 +407,18 @@ export async function analyzePrivateKnowledgeCandidate(
   }
   let usage: ModelUsageTokens | undefined;
   try {
+    const thinking = thinkingModel(runtime.model, runtime.apiBaseUrl);
+    // 这一条只判定「要不要查知识库」，正文更短；预算同样按「可见 + 思考余量」给，
+    // 否则 1024 会在思考阶段被吃空，JSON 根本没写完。
+    const budget = resolveOutputBudget(Math.min(1_024, Math.max(512, runtime.maxOutputTokens)), thinking);
     const response = await fetch(buildChatCompletionsEndpoint(runtime.apiBaseUrl), {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(45_000),
       headers: { authorization: "Bearer " + runtime.apiKey, "content-type": "application/json" },
       body: JSON.stringify({
         model: runtime.model, temperature: runtime.temperature,
-        max_tokens: Math.min(1_024, Math.max(512, runtime.maxOutputTokens)),
+        max_tokens: budget,
         response_format: { type: "json_object" },
+        ...(thinking ? { thinking: { type: "enabled" }, reasoning_effort: CONTEXT_REASONING_EFFORT } : {}),
         messages: [{ role: "system", content: PRIVATE_KNOWLEDGE_SYSTEM }, { role: "user", content: JSON.stringify(payload) }],
       }),
     });

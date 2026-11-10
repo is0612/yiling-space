@@ -2204,10 +2204,10 @@ watch(id, () => void loadCharacter());
               </div>
               <div class="knob">
                 <div class="knob-label">
-                  最大输出 Token
+                  正文输出 Token
                 </div>
                 <p class="field-help">
-                  默认 2048。语境助手输出的最大 Token 数。范围 512–8192。
+                  默认 2048。这一格只算返回的正文，模型的思考消耗由程序另外补足、不占此额度，所以填小了不会把分析截断。实测一段分析正文约 374 Token。范围 512–8192。
                 </p>
                 <div class="knob-ctl">
                   <el-input-number
@@ -2216,7 +2216,7 @@ watch(id, () => void loadCharacter());
                     :min="512"
                     :max="8192"
                     :step="256"
-                    aria-label="语境助手最大输出 Token"
+                    aria-label="语境助手正文输出 Token"
                   />
                 </div>
               </div>

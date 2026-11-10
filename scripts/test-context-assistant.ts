@@ -39,7 +39,7 @@ const valid = { summary: "群友正在讲给另一只鱼听的教学示例，引
 function modelResponse(content: unknown = valid, finishReason = "stop", withUsage = true): Response {
   return Response.json({ choices: [{ message: { content: typeof content === "string" ? content : JSON.stringify(content) }, finish_reason: finishReason }], ...(withUsage ? { usage } : {}) });
 }
-type RequestBody = { model: string; max_tokens: number; response_format: { type: string }; messages: Array<{ role: string; content: string }> };
+type RequestBody = { model: string; max_tokens: number; response_format: { type: string }; thinking?: { type: string }; reasoning_effort?: string; messages: Array<{ role: string; content: string }> };
 type PublicBody = {
   characterName: string; currentTime: string; currentMessage: string; contextClipped: boolean;
   transcript: Array<{ id?: string; content: string; mentions?: Array<Record<string, unknown>>; [key: string]: unknown }>;
@@ -49,6 +49,8 @@ type PublicBody = {
 };
 const originalFetch = globalThis.fetch;
 let calls = 0;
+/** 请求断言用的模型名：思考模型那一组要换成 DeepSeek 才走 `thinking` 分支。 */
+let expectedModel = "context-model";
 let requests: RequestBody[] = [];
 let publicBodies: PublicBody[] = [];
 let handler: () => Response | Promise<Response> = () => modelResponse();
@@ -63,7 +65,7 @@ globalThis.fetch = async (url, options) => {
   const body = JSON.parse(String(options?.body)) as RequestBody;
   requests.push(body);
   assert.equal(body.response_format.type, "json_object");
-  assert.equal(body.model, "context-model");
+  assert.equal(body.model, expectedModel);
   assert.deepEqual(body.messages.map(row => row.role), ["system", "user"]);
   assert(!JSON.stringify(body.messages).includes("SECRET_"), "Private fields and secrets must never enter either prompt.");
   publicBodies.push(JSON.parse(body.messages[1]!.content) as PublicBody);
@@ -185,6 +187,21 @@ try {
   reset(() => modelResponse("", "length"));
   await safeFailure(() => analyzeGroupContext({ ...runtime, maxOutputTokens: 8_192 }, input), 120);
   assert.equal(calls, 1);
+  /**
+   * 思考模型：`max_tokens` 是「思考 + 正文」的总预算，配置值只表达**可见**预算。
+   * 两者混为一谈时，2048 会在思考阶段就被吃空、正文为空，只能整包重发。
+   */
+  expectedModel = "deepseek-flash";
+  reset(() => modelResponse());
+  await analyzeGroupContext({ ...runtime, model: "deepseek-flash" }, input);
+  assert.equal(requests[0]!.max_tokens, 6_144, "DeepSeek 必须为思考留出余量，否则正文一个字都写不出来。");
+  assert.deepEqual(requests[0]!.thinking, { type: "enabled" });
+  assert.equal(requests[0]!.reasoning_effort, "low", "语境助手只需读懂，不需要高强度思维链。");
+  reset(() => modelResponse());
+  expectedModel = "context-model";
+  await analyzeGroupContext(runtime, input);
+  assert(!("thinking" in requests[0]!), "认不出是 DeepSeek 就整段不发，避免 OpenAI 接口 400。");
+  assert.equal(requests[0]!.max_tokens, CONTEXT_ASSISTANT_DEFAULTS.maxOutputTokens, "非思考模型不加余量。");
   reset(() => calls === 1 ? modelResponse("", "length") : new Response("SECRET_SECOND_FAILURE", { status: 500 }));
   await safeFailure(() => analyzeGroupContext(runtime, input), 120);
   reset(() => modelResponse(valid, "stop", false));
