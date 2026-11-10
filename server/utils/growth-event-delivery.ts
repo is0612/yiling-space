@@ -80,11 +80,10 @@ export async function claimNextGrowthEventDelivery(
           WHEN "attemptCount" < "maxAttempts" THEN 'RETRY_WAIT'::"GrowthEventDeliveryStatus"
           ELSE 'FAILED'::"GrowthEventDeliveryStatus"
         END,
-        "runAt" = CASE
-          WHEN "attemptCount" < "maxAttempts"
-            THEN ${now} + (LEAST(21600000, 60000 * POWER(2, LEAST(GREATEST("attemptCount" - 1, 0), 16))) * INTERVAL '1 millisecond')
-          ELSE "runAt"
-        END,
+        "runAt" = ${now} + (
+          LEAST(21600000, 60000 * POWER(2, LEAST(GREATEST("attemptCount" - 1, 0), 16)))
+          * INTERVAL '1 millisecond'
+        ),
         "lockedAt" = NULL,
         "lockedBy" = NULL,
         "leaseToken" = NULL,
