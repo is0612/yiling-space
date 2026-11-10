@@ -1,0 +1,177 @@
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { getPrisma } from "../server/utils/prisma";
+import { publishGrowthEvent } from "../server/utils/growth-event-center";
+import {
+  claimNextGrowthEventDelivery,
+  failGrowthEventDelivery,
+  processNextGrowthEventDelivery,
+  renewGrowthEventDeliveryLease,
+} from "../server/utils/growth-event-delivery";
+import { GROWTH_EVENT_HANDLERS } from "../server/utils/growth-event-consumers";
+import { readMemoryEventReference } from "../server/utils/growth-domain-gateway";
+
+const databaseName = new URL(process.env.DATABASE_URL ?? "postgres://localhost/none").pathname.replace(/^\//, "");
+assert(/^yiling_growth_event_test_[a-f0-9]{32}$/.test(databaseName),
+  `拒绝执行：当前库「${databaseName}」不是一次性成长事件测试库。`);
+
+const prisma = getPrisma();
+const suffix = randomUUID().replaceAll("-", "").slice(0, 16);
+const owner = await prisma.user.create({
+  data: { username: `growth-event-${suffix}`, passwordHash: "x", role: "USER", status: "ACTIVE" },
+  select: { id: true },
+});
+const characterA = await prisma.character.create({
+  data: {
+    ownerId: owner.id,
+    name: "成长事件测试角色 A",
+    basePrompt: "isolated test",
+    memoryScopes: { create: { scopeType: "CHARACTER_GLOBAL", scopeKey: `growth-event-a:${suffix}` } },
+  },
+  select: { id: true },
+});
+const characterB = await prisma.character.create({
+  data: {
+    ownerId: owner.id,
+    name: "成长事件测试角色 B",
+    basePrompt: "isolated test",
+    memoryScopes: { create: { scopeType: "CHARACTER_GLOBAL", scopeKey: `growth-event-b:${suffix}` } },
+  },
+  select: { id: true },
+});
+const scopeA = await prisma.memoryScope.findFirstOrThrow({
+  where: { characterId: characterA.id, scopeType: "CHARACTER_GLOBAL" },
+  select: { id: true },
+});
+
+async function createMemoryEvent(title: string) {
+  return prisma.memoryEvent.create({
+    data: {
+      memoryScopeId: scopeA.id,
+      dayKey: "2026-11-10",
+      occurredAt: new Date("2026-11-10T00:00:00.000Z"),
+      title,
+      detail: "只用于验证事件 Outbox，不包含任何真实用户内容。",
+      dedupeKey: `growth-event:${suffix}:${title}`,
+    },
+    select: { id: true, occurredAt: true },
+  });
+}
+
+try {
+  console.log("\n[1] 领域数据与 Outbox 同事务回滚");
+  const rollbackKey = `rollback:${suffix}`;
+  await assert.rejects(() => prisma.$transaction(async (tx) => {
+    const row = await tx.memoryEvent.create({
+      data: {
+        memoryScopeId: scopeA.id,
+        dayKey: "2026-11-10",
+        occurredAt: new Date(),
+        title: "事务回滚测试",
+        detail: "rollback",
+        dedupeKey: rollbackKey,
+      },
+      select: { id: true, occurredAt: true },
+    });
+    await publishGrowthEvent(tx, {
+      characterId: characterA.id,
+      sourceDomain: "memory",
+      eventType: "memory.event.created",
+      aggregateType: "MemoryEvent",
+      aggregateId: row.id,
+      occurredAt: row.occurredAt,
+      idempotencyKey: `memory.event.created:${row.id}`,
+      payload: { sourceId: row.id },
+    });
+    throw new Error("rollback expected");
+  }), /rollback expected/);
+  assert.equal(await prisma.memoryEvent.count({ where: { dedupeKey: rollbackKey } }), 0);
+  assert.equal(await prisma.growthEvent.count({ where: { characterId: characterA.id } }), 0);
+
+  console.log("\n[2] 新事件幂等发布与消费者扇出");
+  const source = await createMemoryEvent("幂等发布");
+  const input = {
+    characterId: characterA.id,
+    sourceDomain: "memory" as const,
+    eventType: "memory.event.created",
+    aggregateType: "MemoryEvent",
+    aggregateId: source.id,
+    occurredAt: source.occurredAt,
+    idempotencyKey: `memory.event.created:${source.id}`,
+    payload: { sourceId: source.id, sourceType: "MemoryEvent" },
+  };
+  const first = await prisma.$transaction(tx => publishGrowthEvent(tx, input));
+  const duplicate = await prisma.$transaction(tx => publishGrowthEvent(tx, input));
+  assert.equal(first.created, true);
+  assert.equal(duplicate.created, false);
+  assert.equal(duplicate.eventId, first.eventId);
+  assert.equal(await prisma.growthEvent.count({ where: { id: first.eventId } }), 1);
+  assert.equal(await prisma.growthEventDelivery.count({ where: { eventId: first.eventId } }), 1);
+
+  console.log("\n[3] Gateway 严格按 Character 隔离来源读取");
+  const found = await prisma.$transaction(tx => readMemoryEventReference(tx, characterA.id, source.id));
+  const crossRole = await prisma.$transaction(tx => readMemoryEventReference(tx, characterB.id, source.id));
+  assert.equal(found?.id, source.id);
+  assert.equal(found?.characterId, characterA.id);
+  assert.equal(crossRole, null);
+
+  console.log("\n[4] 过期租约回收、fencing 与旧执行者保护");
+  const firstLease = await claimNextGrowthEventDelivery(prisma, { workerId: `worker-a-${suffix}` });
+  assert(firstLease);
+  assert.equal(firstLease.eventId, first.eventId);
+  assert.equal(firstLease.attemptCount, 1);
+  const expiredAt = new Date(firstLease.leaseExpiresAt.getTime() + 1);
+  const noImmediateRetry = await claimNextGrowthEventDelivery(prisma, {
+    workerId: `worker-b-${suffix}`, now: expiredAt,
+  });
+  assert.equal(noImmediateRetry, null, "租约回收后必须按退避时间等待");
+  const recovered = await prisma.growthEventDelivery.findUniqueOrThrow({
+    where: { id: firstLease.deliveryId },
+  });
+  assert.equal(recovered.status, "RETRY_WAIT");
+  assert.equal(recovered.leaseToken, null);
+  await assert.rejects(
+    () => renewGrowthEventDeliveryLease(prisma, firstLease, new Date(expiredAt.getTime() + 1)),
+    /租约已失效/,
+  );
+  assert.equal(await failGrowthEventDelivery(prisma, firstLease, new Error("stale"), new Date(expiredAt.getTime() + 1)), null);
+
+  console.log("\n[5] 只读消费者重试后成功确认");
+  const retryAt = new Date(recovered.runAt.getTime() + 1);
+  const processed = await processNextGrowthEventDelivery(prisma, GROWTH_EVENT_HANDLERS, {
+    workerId: `worker-b-${suffix}`, now: retryAt,
+  });
+  assert.equal(processed.processed, true);
+  assert.equal(processed.status, "SUCCEEDED");
+  const completed = await prisma.growthEventDelivery.findUniqueOrThrow({
+    where: { id: firstLease.deliveryId },
+  });
+  assert.equal(completed.status, "SUCCEEDED");
+  assert(completed.processedAt);
+
+  console.log("\n[6] 消费者异常进入退避重试");
+  const secondSource = await createMemoryEvent("失败重试");
+  const secondEvent = await prisma.$transaction(tx => publishGrowthEvent(tx, {
+    ...input,
+    aggregateId: secondSource.id,
+    occurredAt: secondSource.occurredAt,
+    idempotencyKey: `memory.event.created:${secondSource.id}`,
+    payload: { sourceId: secondSource.id },
+  }));
+  const failed = await processNextGrowthEventDelivery(prisma, {
+    "growth.memory-source-integrity": async () => { throw new Error("temporary consumer failure"); },
+  }, { workerId: `worker-fail-${suffix}` });
+  assert.equal(failed.eventId, undefined);
+  const secondDelivery = await prisma.growthEventDelivery.findUniqueOrThrow({
+    where: { eventId_consumerKey: { eventId: secondEvent.eventId, consumerKey: "growth.memory-source-integrity" } },
+  });
+  assert.equal(secondDelivery.status, "RETRY_WAIT");
+  assert.match(secondDelivery.lastError ?? "", /temporary consumer failure/);
+
+  console.log("Growth Event Center DB integration tests passed.");
+} finally {
+  await prisma.character.deleteMany({ where: { ownerId: owner.id } });
+  await prisma.user.delete({ where: { id: owner.id } });
+  await prisma.$disconnect();
+}
