@@ -5,6 +5,7 @@ import {
 } from "./memory-ai";
 import { localDayKey } from "./memory-event-time";
 import { linkMemoryEventToSocialExperiences } from "./social-experiences";
+import { publishGrowthEvent } from "./growth-event-center";
 
 /**
  * 单条长期记忆变更的落库逻辑。
@@ -620,6 +621,17 @@ export async function applyMemoryEvents(
             snapshotId: ctx.snapshotId,
           },
         },
+      });
+
+      await publishGrowthEvent(tx, {
+        characterId: ctx.characterId,
+        sourceDomain: "memory",
+        eventType: "memory.event.created",
+        aggregateType: "MemoryEvent",
+        aggregateId: created.id,
+        occurredAt,
+        idempotencyKey: `memory.event.created:${created.id}`,
+        payload: { sourceId: created.id, sourceType: "MemoryEvent", state: ctx.state },
       });
     } catch (error) {
       // Only an actual unique-key race is a duplicate. Storage/audit failures must
