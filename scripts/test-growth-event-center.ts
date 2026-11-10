@@ -36,6 +36,7 @@ assert.equal(growthEventRetryDelayMs(99), 6 * 60 * 60 * 1000);
 
 const invalidCases: Array<[string, Record<string, unknown>]> = [
   ["empty character", { characterId: " " }],
+  ["invalid character id", { characterId: "character-id" }],
   ["unknown domain", { sourceDomain: "other" }],
   ["invalid event type", { eventType: "Memory Event Created" }],
   ["event type source mismatch", { eventType: "social.experience.created" }],
