@@ -67,6 +67,12 @@ async function addExperience(characterGlobalScopeId: string, relationshipScopeId
 const firstExperience = await addExperience(
   enabledCharacter.globalScopeId, enabledScope, "朋友主动帮助我们的角色", "对方在我们的角色遇到困难时主动提供了具体帮助，之后双方表达了感谢。", `event-a-${runId}`,
 );
+const pendingExperience = await addExperience(
+  enabledCharacter.globalScopeId, enabledScope, "待派发经历", "PENDING_EVIDENCE_MUST_NOT_REACH_MODEL", `pending-${runId}`,
+);
+await prisma.socialExperience.update({
+  where: { id: pendingExperience.id }, data: { assessmentDispatchStatus: "PENDING" },
+});
 await prisma.$transaction(tx => enqueueSocialRelationshipAssessment(tx, {
   scopeId: enabledScope, reason: "NEW_EXPERIENCE",
 }));
@@ -115,6 +121,8 @@ try {
   assert.equal(requests[0]!.authorization, "Bearer isolated-assessment-secret");
   const sentMessages = requests[0]!.body.messages as Array<{ role: string; content: string }>;
   assert(sentMessages.some(message => message.content.includes("对方在我们的角色遇到困难时主动提供了具体帮助")));
+  assert(!sentMessages.some(message => message.content.includes("PENDING_EVIDENCE_MUST_NOT_REACH_MODEL")),
+    "尚未派发的经历不能提前进入模型输入");
   const firstAssessment = await prisma.socialRelationshipAssessment.findUniqueOrThrow({
     where: { id: firstRun.assessmentId },
     include: { evidence: true },
@@ -124,6 +132,7 @@ try {
   assert.equal(firstAssessment.outcome, "CHANGE");
   assert.equal(firstAssessment.suggestedStage, "ACQUAINTANCE");
   assert(firstAssessment.evidence.some(item => item.experienceId === firstExperience.id && item.kind === "NEW"));
+  assert(firstAssessment.evidence.every(item => item.experienceId !== pendingExperience.id));
   const unchangedScope = await prisma.memoryScope.findUniqueOrThrow({ where: { id: enabledScope } });
   assert.equal(unchangedScope.relationshipStage, "STRANGER", "AI 不得自动修改关系阶段");
   assert.equal(unchangedScope.relationshipStatus, "UNOBSERVED", "AI 不得自动修改相处状态");

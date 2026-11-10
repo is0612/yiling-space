@@ -25,7 +25,7 @@ assert.equal(normalized.schemaVersion, 1);
 assert.equal(normalized.eventType, "memory.event.created");
 assert.deepEqual(normalized.payload, valid.payload);
 assert.deepEqual(listGrowthEventSubscribers("memory.event.created"), ["growth.memory-source-integrity"]);
-assert.deepEqual(listGrowthEventSubscribers("social.experience.created"), []);
+assert.deepEqual(listGrowthEventSubscribers("social.experience.created"), ["social.relationship-assessment-dispatch"]);
 assert.equal(GROWTH_EVENT_LEASE_MS, 5 * 60 * 1000);
 assert.equal(GROWTH_EVENT_MAX_ATTEMPTS, 5);
 assert.equal(GROWTH_EVENT_SUCCESS_RETENTION_DAYS, 30);

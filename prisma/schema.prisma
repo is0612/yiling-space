@@ -713,12 +713,20 @@ model SocialProactiveContactAttempt {
   @@map("social_proactive_contact_attempts")
 }
 
+enum SocialExperienceAssessmentDispatchStatus {
+  LEGACY
+  PENDING
+  QUEUED
+}
+
 model SocialExperience {
   id            String      @id @default(uuid()) @db.Uuid
   scopeId       String      @db.Uuid
   memoryEventId String      @db.Uuid
   /// 基于该经历的底层证据消息 ID 集合计算，避免不同记忆范围重复提炼同一批消息时重复累计。
   sourceKey     String      @db.VarChar(64)
+  /// LEGACY 沿用历史补偿；实时经历由事件消费者原子地 PENDING → QUEUED。
+  assessmentDispatchStatus SocialExperienceAssessmentDispatchStatus @default(LEGACY)
   createdAt     DateTime    @default(now()) @db.Timestamptz(6)
   scope         MemoryScope @relation(fields: [scopeId], references: [id], onDelete: Cascade)
   memoryEvent   MemoryEvent @relation(fields: [memoryEventId], references: [id], onDelete: Cascade)

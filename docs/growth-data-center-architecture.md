@@ -1,6 +1,6 @@
 # 统一成长数据中心架构设计
 
-> 状态：第一阶段基础设施已合入 main，本地验收及并发回归通过；验收修复待提交，CI 结果待确认。
+> 状态：第一阶段基础设施及验收修复已本地提交；社交事件接入已实现，本地类型、专项隔离回归与构建通过，CI 结果待确认。
 > 日期：2026-11-10
 > 复核：第 3、6、13 节已按 `memory-job-lease.ts`、`social-relationship-queue.ts`、`memory-worker.ts`、`watchdog.ts` 的实际行为校对，租约与消费者幂等两处给出了具体参照物
 > 适用范围：忆灵空间成长系统
@@ -362,10 +362,18 @@
 - 订阅采用代码常量，发布时快照化；第一阶段不回补订阅启用前的历史事件。
 - 默认每个消费者最多尝试 5 次，租约 5 分钟；成功/跳过/取消事件保留 30 天后清理，失败和未完成投递保留。
 - 第一批已接入 Worker 投递循环，并增加首个只读消费者 `growth.memory-source-integrity`：收到 `memory.event.created` 后，通过角色限定的记忆领域 Gateway 验证来源忆泡；不复制正文、不调用模型、不修改领域数据。
-- 记忆系统在忆泡真实创建的同一事务中发布 `memory.event.created`，由首个只读消费者校验来源引用；社交经历事件暂不发布，因为当前没有实际订阅者，避免制造无消费者的投递历史。重复业务键不会重复发布。
+- 记忆系统在忆泡真实创建的同一事务中发布 `memory.event.created`，由首个只读消费者校验来源引用；新增社交经历同时发布 `social.experience.created`，由 `social.relationship-assessment-dispatch` 消费者经社交领域服务派发关系评估任务。重复业务键不会重复发布。
 - Watchdog 已增加事件投递积压、运行中超时和重试上限告警；成功/跳过/取消事件在 30 天后清理，含未完成或 FAILED 投递的事件保留。
 - 增加 `yarn growth:event:retry <deliveryId>` 运维恢复命令，只允许 FAILED → QUEUED；恢复与 SYSTEM 审计同事务，重置 attemptCount 但不重置 fencingToken。
 - 共享 Worker 已接入默认「启动忆灵空间」启动器（可用 `YILING_WORKER_DISABLED=1` 关闭），也继续兼容 `worker:watch` 与 QQ 链路启动方式；多个 Worker 依赖 `SKIP LOCKED` 与 fencing 安全并行。
 - 新增隔离数据库测试覆盖事务回滚、发布幂等、跨角色来源读取、租约过期回收、旧租约 fencing、消费者成功/失败与保留清理；CI 已接入该测试入口。
 - 本地验收修复：回收时间算术显式使用 `timestamptz`；每次领取最多回收 100 条过期投递，按到期时间与 ID 排序并使用 `FOR UPDATE SKIP LOCKED`，回收更新再次核对状态与到期时间。被其它事务持锁的投递留给后续轮次，避免阻塞无关投递。
 - Watchdog 的事件等待时长从本轮 `runAt` 起算，退避刚结束或人工恢复刚入队的旧事件不应立即报积压。共享 Worker 仍每轮处理一条事件，后续社交/记忆长任务会影响投递吞吐；当前第一阶段不改变这一调度方式。
+
+### 第二批：社交经历事件接入
+
+- 实时 `SocialExperience` 新建为 `PENDING`，同事务发布 `social.experience.created`；事件只携带经历引用，幂等键为 `social.experience.created:{experienceId}`。原来的同步直接排关系评估任务已移除。
+- 消费者先读取角色限定的社交 DTO，再调用领域服务；服务条件更新 `PENDING → QUEUED` 并排入原有关系评估队列。标记、任务 generation 递增与投递确认同事务，失败全部回滚。`QUEUED` 表示已经派发，不代表评估任务当前状态；重复事件与保留清理后的旧业务重放都不会重复递增。
+- 领域读取与更新均同时检查关系 scope 和来源忆泡所属角色。来源已删除或跨角色引用时投递 `SKIPPED`；归档来源仍可派发，但评估器只读取 ACTIVE 来源。
+- 既有行及历史回填默认 `LEGACY`，保持旧数据恢复路径，不回补成长事件。队列维护只依据 `LEGACY/QUEUED` 经历补缺失任务；评估器也只读取这两类经历，`PENDING` 不会提前进入评估证据。
+- 单个 FAILED 事件保持 `PENDING`，人工恢复后仍由消费者派发；取消投递不会由维护逻辑绕过。无新增公开 HTTP 接口，不改变关系阶段判断、人工采纳或模型配置规则。

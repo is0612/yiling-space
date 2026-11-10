@@ -235,12 +235,14 @@ export async function processNextSocialRelationshipAssessmentTask(
       prisma.socialExperience.count({
         where: {
           scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE" },
+          assessmentDispatchStatus: { in: ["LEGACY", "QUEUED"] },
           usedInAssessments: { none: { assessment: { status: "SUCCEEDED" } } },
         },
       }),
       prisma.socialExperience.findMany({
         where: {
           scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE" },
+          assessmentDispatchStatus: { in: ["LEGACY", "QUEUED"] },
           usedInAssessments: { none: { assessment: { status: "SUCCEEDED" } } },
         },
         include: { memoryEvent: { select: { occurredAt: true, title: true, detail: true, participants: true, confidence: true } } },
@@ -249,6 +251,7 @@ export async function processNextSocialRelationshipAssessmentTask(
       prisma.socialExperience.findMany({
         where: {
           scopeId: lease.scopeId, createdAt: { lte: inputCutoffAt }, memoryEvent: { status: "ACTIVE" },
+          assessmentDispatchStatus: { in: ["LEGACY", "QUEUED"] },
           usedInAssessments: { some: { assessment: { status: "SUCCEEDED" } } },
         },
         include: { memoryEvent: { select: { occurredAt: true, title: true, detail: true, participants: true, confidence: true } } },

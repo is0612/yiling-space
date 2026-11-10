@@ -65,8 +65,8 @@ function addDays(date: Date, days: number): Date {
 }
 
 /**
- * 在 SocialExperience 写入所在事务中调用。
- * 同一 scope 只保留一行任务；每个真正新插入的经历递增 generation。
+ * 在社交领域派发事务中调用；实时经历由事件消费者调用，历史补偿保留原路径。
+ * 同一 scope 只保留一行任务；新的有效触发递增 generation。
  * RUNNING 时保留当前租约，只把 generation 增加，当前批完成后自然会排下一代。
  */
 export async function enqueueSocialRelationshipAssessment(
@@ -258,6 +258,10 @@ export async function runSocialRelationshipQueueMaintenance(
         LEFT JOIN "social_relationship_assessment_tasks" AS task
           ON task."scopeId" = experience."scopeId"
         WHERE task."id" IS NULL
+          AND experience."assessmentDispatchStatus" IN (
+            'LEGACY'::"SocialExperienceAssessmentDispatchStatus",
+            'QUEUED'::"SocialExperienceAssessmentDispatchStatus"
+          )
         ORDER BY experience."scopeId" ASC
         LIMIT ${batchSize}
       ) AS missing

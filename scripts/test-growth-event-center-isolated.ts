@@ -30,6 +30,7 @@ try {
   run("node_modules/prisma/build/index.js", ["migrate", "deploy"]);
   run("node_modules/tsx/dist/cli.mjs", ["scripts/test-growth-event-center-db.ts"]);
   run("node_modules/tsx/dist/cli.mjs", ["scripts/test-growth-event-center-concurrency-db.ts"]);
+  run("node_modules/tsx/dist/cli.mjs", ["scripts/test-social-experience-events-db.ts"]);
   console.log("Isolated Growth Event Center checks passed; business database was not used.");
 } finally {
   try {

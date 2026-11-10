@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
 import { ensureExternalIdentityScope } from "../server/utils/identity-scope";
 import { linkMemoryEventToSocialExperiences } from "../server/utils/social-experiences";
+import { processNextGrowthEventDelivery } from "../server/utils/growth-event-delivery";
+import { GROWTH_EVENT_HANDLERS } from "../server/utils/growth-event-consumers";
 import {
   claimNextSocialRelationshipAssessmentTask,
   completeSocialRelationshipAssessmentTask,
@@ -62,7 +64,7 @@ const scopeA = (await ensureExternalIdentityScope(charA.id, "qq-onebot", `queue-
 const scopeB = (await ensureExternalIdentityScope(charB.id, "qq-onebot", `queue-${runId}`, identity.id)).scopeId;
 
 async function addEvent(characterId: string, globalScopeId: string, suffix: string, sourceIds: string[]) {
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const event = await tx.memoryEvent.create({
       data: {
         memoryScopeId: globalScopeId,
@@ -85,6 +87,11 @@ async function addEvent(characterId: string, globalScopeId: string, suffix: stri
     });
     return { eventId: event.id, created };
   });
+  for (let index = 0; index < result.created; index += 1) {
+    const delivery = await processNextGrowthEventDelivery(prisma, GROWTH_EVENT_HANDLERS, { workerId: "social-queue-test" });
+    assert.equal(delivery.status, "SUCCEEDED");
+  }
+  return result;
 }
 
 async function readTask(scopeId: string) {
@@ -92,7 +99,7 @@ async function readTask(scopeId: string) {
 }
 
 try {
-  console.log("\n[1] 新经历写入与任务触发同事务、重复经历不重复增加代数");
+  console.log("\n[1] 新经历与事件同事务、消费后触发队列，重复经历不重复增加代数");
   const firstSource = [`msg-a1-${runId}`, `msg-a2-${runId}`];
   const first = await addEvent(charA.id, charA.globalScopeId, "A1", firstSource);
   const taskA1 = await readTask(scopeA);
