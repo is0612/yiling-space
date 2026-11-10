@@ -6,6 +6,7 @@ import { publishGrowthEvent } from "../server/utils/growth-event-center";
 import {
   claimNextGrowthEventDelivery,
   cleanupGrowthEvents,
+  completeGrowthEventDelivery,
   failGrowthEventDelivery,
   processNextGrowthEventDelivery,
   renewGrowthEventDeliveryLease,
@@ -145,11 +146,20 @@ try {
 
   console.log("\n[5] 只读消费者重试后成功确认");
   const retryAt = new Date(recovered.runAt.getTime() + 1);
-  const processed = await processNextGrowthEventDelivery(prisma, GROWTH_EVENT_HANDLERS, {
+  const secondLease = await claimNextGrowthEventDelivery(prisma, {
     workerId: `worker-b-${suffix}`, now: retryAt,
   });
-  assert.equal(processed.processed, true);
-  assert.equal(processed.status, "SUCCEEDED");
+  assert(secondLease);
+  assert(secondLease.fencingToken > firstLease.fencingToken);
+  await assert.rejects(
+    () => completeGrowthEventDelivery(prisma, firstLease, GROWTH_EVENT_HANDLERS["growth.memory-source-integrity"]!, retryAt),
+    /租约已失效/,
+    "旧执行者不能确认新租约持有者的投递",
+  );
+  const completedStatus = await completeGrowthEventDelivery(
+    prisma, secondLease, GROWTH_EVENT_HANDLERS["growth.memory-source-integrity"]!, retryAt,
+  );
+  assert.equal(completedStatus, "SUCCEEDED");
   const completed = await prisma.growthEventDelivery.findUniqueOrThrow({
     where: { id: firstLease.deliveryId },
   });
