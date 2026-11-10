@@ -136,7 +136,8 @@ export type OverviewLatestSnapshot = {
 };
 
 export type OverviewWatchdogFinding = {
-  code: "task_stuck" | "worker_stalled" | "scheduler_stalled" | "snapshot_silent" | "duty_silent";
+  code: "task_stuck" | "worker_stalled" | "scheduler_stalled" | "snapshot_silent" | "duty_silent"
+    | "growth_event_worker_stalled" | "growth_event_delivery_stuck" | "growth_event_delivery_failed";
   severity: "err" | "warn";
   characterId: string;
   characterName: string;
