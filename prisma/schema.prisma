@@ -301,6 +301,7 @@ model Character {
   growthEvents       GrowthEvent[]
   memoryKnowledgeRequests MemoryKnowledgeCandidateRequest[]
   reflectionRuns ReflectionRun[]
+  growthImportIdentities CharacterGrowthImportIdentity[]
 
   @@index([ownerId, status])
   @@index([originCharacterId])
@@ -1613,6 +1614,20 @@ model ReflectionSuggestion {
 
   @@index([runId, status])
   @@map("reflection_suggestions")
+}
+
+/// Stable identities for portable growth rows; no executable task state is stored here.
+model CharacterGrowthImportIdentity {
+  id String @id @default(uuid()) @db.Uuid
+  characterId String @db.Uuid
+  domain String @db.VarChar(80)
+  originId String @db.Uuid
+  localId String @db.Uuid
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([characterId, domain, originId])
+  @@unique([characterId, domain, localId])
+  @@map("character_growth_import_identities")
 }
 
 model KnowledgeCandidate {

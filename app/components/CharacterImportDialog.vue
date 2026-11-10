@@ -12,6 +12,7 @@ import type { Character } from "~/utils/mock-data";
  * 真正的字段校验在服务端（`server/utils/character-portable.ts`）。这里只做够用的预览，
  * 不重复实现一套规则，否则两边迟早会长歪。
  */
+type GrowthCounts = Record<string, number>;
 type BundleCounts = {
   memories: number;
   privateMemories: number;
@@ -27,6 +28,7 @@ type BundleCounts = {
   friendMemories: number;
   /** 朋友们名下的备注（她私底下的叫法）总条数；v2 及更早的卡没有这一段。 */
   friendAliases?: number;
+  growth?: GrowthCounts;
 };
 
 type BundlePreview = {
@@ -50,6 +52,7 @@ type BundleAdded = {
   journalRevisions: number;
   catchphrases: number;
   friends: number;
+  growth?: GrowthCounts;
 };
 
 /** 与服务端 `CHARACTER_BUNDLE_MAX_BYTES` 保持一致：日记/手账的历史版本让它变大了。 */
@@ -146,6 +149,7 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
     friends: typeof declared.friends === "number" ? declared.friends : friends.length,
     friendMemories: typeof declared.friendMemories === "number" ? declared.friendMemories : friendMemories,
     friendAliases: typeof declared.friendAliases === "number" ? declared.friendAliases : friendAliases,
+    growth: Object.fromEntries(Object.entries(asRecord(asRecord(asRecord(source).growth).tables)).map(([key, rows]) => [key, asArray(rows).length])),
   };
 }
 
@@ -197,6 +201,18 @@ const friendNote = computed(() => {
 });
 
 /** 合并成功后要说清「补进去多少」：条数全为 0 也有意义（本机已经全有了）。 */
+function describeGrowth(counts: GrowthCounts = {}): string {
+  const groups: Array<[string, string[]]> = [
+    ["条知识及候选", ["knowledgeCandidates", "knowledgeItems"]],
+    ["条知识历史与关联", ["knowledgeRevisions", "knowledgeRelations"]],
+    ["条社交关系与历史", ["socialRelationships", "socialExperiences", "socialAssessments", "socialReviews", "socialChanges", "socialChangeEvidence", "socialAssessmentEvidence"]],
+    ["条反思与建议", ["reflectionRuns", "reflectionSuggestions"]],
+    ["条成长事件与投递历史", ["growthEvents", "growthDeliveries"]],
+  ];
+  return groups.map(([label, keys]) => { const count = keys.reduce((sum, key) => sum + (counts[key] ?? 0), 0); return count ? `${count} ${label}` : ""; }).filter(Boolean).join("、");
+}
+const growthNote = computed(() => describeGrowth(preview.value?.counts.growth));
+
 function describeAdded(added: BundleAdded): string {
   const parts: string[] = [];
   if (added.memories) parts.push(`${added.memories} 条记忆`);
@@ -207,6 +223,8 @@ function describeAdded(added: BundleAdded): string {
   else if (added.journals) parts.push(`${added.journals} 天日记手账`);
   if (added.catchphrases) parts.push(`${added.catchphrases} 条梗`);
   if (added.friends) parts.push(`${added.friends} 位朋友`);
+  const growth = describeGrowth(added.growth);
+  if (growth) parts.push(growth);
   return parts.length ? `新增 ${parts.join("、")}` : "没有新内容（本机已经全有了）";
 }
 
@@ -289,12 +307,14 @@ async function submit() {
       mode: "new" | "merge";
       counts: BundleCounts;
       added: BundleAdded;
+      warnings?: string[];
     }>(url, { method: "POST", body: payload.value });
     emit("imported", result.character);
     emit("update:modelValue", false);
     ElMessage.success(result.mode === "merge"
       ? `已并进「${result.character.name}」：${describeAdded(result.added)}。`
       : `已导入「${result.character.name}」。到「模型设置」填 API Key 就能开始对话。`);
+    if (result.warnings?.length) ElMessage.warning({ message: [...new Set(result.warnings)].join("；"), duration: 10_000, showClose: true });
   } catch (error) {
     errorMessage.value = readError(error, "导入失败，请稍后重试。");
   } finally {
@@ -328,7 +348,7 @@ function formatExportedAt(value: string | null): string {
   >
     <p class="lead">
       导入会优先识别同源角色：找到一个时可直接合并，找到多个时由你选择目标；也可以新建副本。没有来源信息的旧卡会作为新角色导入。
-      包里是人设、记忆、忆泡、忆泡日历、日记手账（含历史版本）、梗和阶段总结；表情包与 API Key 不在包内，新机器上重新同步 / 重新填写即可。
+      包里是人设、记忆、忆泡、忆泡日历、日记手账（含历史版本）、梗、阶段总结，以及 v5 的知识、社交、反思成长与成长事件历史；未完成任务会归档，不自动执行。表情包与 API Key 不在包内，新机器上重新同步 / 重新填写即可。
     </p>
 
     <input
@@ -509,6 +529,12 @@ function formatExportedAt(value: string | null): string {
         对方的 QQ 号会留在本机；同一个人若已存在，会沿用已有身份，不会重复建。
       </p>
 
+      <p
+        v-if="growthNote"
+        class="friend-note"
+      >
+        成长内容：{{ growthNote }}。来源会映射到本机；未完成任务和投递按历史归档，不会自动执行。
+      </p>
       <p
         v-if="(preview.counts.journalRevisions ?? 0) > 0"
         class="friend-note"

@@ -54,6 +54,7 @@ export async function retryReflection(prisma: PrismaClient, input: { ownerId: st
     if (!character.length) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
     const run = await tx.reflectionRun.findFirst({ where: { id: input.runId, characterId: input.characterId } });
     if (!run) throw createError({ statusCode: 404, statusMessage: "反思任务不存在。" });
+    if (await tx.characterGrowthImportIdentity.findUnique({ where: { characterId_domain_localId: { characterId: input.characterId, domain: "reflectionRun", localId: run.id } } })) throw createError({ statusCode: 409, statusMessage: "导入的反思仅作历史留档，请重新发起一次反思。" });
     if (await tx.reflectionRun.count({ where: { characterId: input.characterId, status: { in: ["QUEUED", "RUNNING"] } } })) throw createError({ statusCode: 409, statusMessage: "当前角色已有待执行反思。" });
     const changed = await tx.reflectionRun.updateMany({ where: { id: run.id, status: "FAILED" }, data: { status: "QUEUED", attemptCount: 0, runAt: new Date(), leaseToken: null, leaseExpiresAt: null, completedAt: null } });
     if (!changed.count) throw createError({ statusCode: 409, statusMessage: "仅失败任务可以重新排队。" });

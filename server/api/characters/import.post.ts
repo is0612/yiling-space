@@ -43,5 +43,6 @@ export default defineEventHandler(async (event) => {
     mode: result.mode,
     counts: result.counts,
     added: result.added,
+    warnings: result.warnings,
   };
 });

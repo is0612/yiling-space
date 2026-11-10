@@ -1271,6 +1271,7 @@ paths:
                   mode: { type: string, enum: [new, merge], description: new = 新建角色；merge = 并进 target }
                   counts: { $ref: '#/components/schemas/CharacterCardCounts' }
                   added: { $ref: '#/components/schemas/CharacterImportAdded' }
+                  warnings: { type: array, items: { type: string }, description: 成长任务归档、隐私过滤与失效来源提示 }
         '200':
           description: 合并成功（并进已有角色），返回该角色与本次实际新增的条数
           content:
@@ -1283,6 +1284,7 @@ paths:
                   mode: { type: string, enum: [new, merge] }
                   counts: { $ref: '#/components/schemas/CharacterCardCounts' }
                   added: { $ref: '#/components/schemas/CharacterImportAdded' }
+                  warnings: { type: array, items: { type: string }, description: 成长任务归档、隐私过滤与失效来源提示 }
         '400':
           description: 不是角色卡、格式版本过高或字段非法（`statusMessage` 给出具体是哪一条）
           content:
@@ -5602,7 +5604,7 @@ components:
       required: [format, formatVersion, character]
       properties:
         format: { type: string, enum: [yiling-space.character] }
-        formatVersion: { type: integer, minimum: 1, maximum: 3, description: '1 = 初版；2 = 加忆泡日历与日记手账；3 = 加朋友的备注（aliases）。高于 3 的卡会被拒绝。' }
+        formatVersion: { type: integer, minimum: 1, maximum: 5, description: '1 = 初版；2 = 日历与日记；3 = 朋友备注；4 = 记忆血缘；5 = 成长领域。v1–v4兼容读取，v5必须含growth。' }
         exportedAt: { type: string, format: date-time }
         exportedBy: { type: string, enum: [yiling-space] }
         origin:
@@ -5799,7 +5801,35 @@ components:
                     structuredContent: { type: object, additionalProperties: true }
                     generatedAt: { type: string, format: date-time, nullable: true }
                     createdAt: { type: string, format: date-time }
+        growth: { $ref: '#/components/schemas/CharacterCardGrowth' }
         counts: { $ref: '#/components/schemas/CharacterCardCounts' }
+    CharacterCardGrowth:
+      type: object
+      required: [version, tables]
+      additionalProperties: false
+      description: 'v5成长段，逐表字段白名单、枚举/日期/UUID/引用校验，以server/utils/character-growth-portable.ts的schemas为字段约束。每表最多4000条，总计最多20000条，整卡32MB；超限拒绝而不静默截断。所有id是稳定迁移身份而非导入端数据库主键。知识只含可验证的MANUAL/IMPORT/全局MEMORY_EVENT来源，CHAT不随卡片导出。social仅在含朋友时导出。失效反思来源标valid=false；分享型导出跳过失效建议。未完成任务归档，租约、凭据、已验证身份和可执行队列不恢复。'
+      properties:
+        version: { type: integer, enum: [1] }
+        warnings: { type: array, maxItems: 100, items: { type: string, maxLength: 500 } }
+        tables:
+          type: object
+          additionalProperties: false
+          properties:
+            knowledgeCandidates: { type: array, maxItems: 4000, items: { type: object } }
+            knowledgeItems: { type: array, maxItems: 4000, items: { type: object } }
+            knowledgeRevisions: { type: array, maxItems: 4000, items: { type: object } }
+            knowledgeRelations: { type: array, maxItems: 4000, items: { type: object } }
+            socialRelationships: { type: array, maxItems: 4000, items: { type: object } }
+            socialExperiences: { type: array, maxItems: 4000, items: { type: object } }
+            socialAssessments: { type: array, maxItems: 4000, items: { type: object } }
+            socialReviews: { type: array, maxItems: 4000, items: { type: object } }
+            socialChanges: { type: array, maxItems: 4000, items: { type: object } }
+            socialChangeEvidence: { type: array, maxItems: 4000, items: { type: object } }
+            socialAssessmentEvidence: { type: array, maxItems: 4000, items: { type: object } }
+            reflectionRuns: { type: array, maxItems: 4000, items: { type: object } }
+            reflectionSuggestions: { type: array, maxItems: 4000, items: { type: object } }
+            growthEvents: { type: array, maxItems: 4000, items: { type: object } }
+            growthDeliveries: { type: array, maxItems: 4000, items: { type: object } }
     CharacterCardCounts:
       type: object
       required: [memories, privateMemories, events, snapshots, catchphrases, friends, friendMemories]
@@ -5814,6 +5844,7 @@ components:
         catchphrases: { type: integer }
         friends: { type: integer, description: 带走的朋友数；`?friends=0` 时为 0 }
         friendMemories: { type: integer, description: 朋友名下的记忆总条数，不含朋友本人以外的角色记忆 }
+        growth: { type: object, additionalProperties: { type: integer, minimum: 0 }, description: 成长段15张表的实际记录数，键同growth.tables }
         friendAliases: { type: integer, description: 朋友们名下的备注（她私底下的叫法）总条数；v2 及更早的卡没有这一段，按 0 处理 }
     CharacterImportAdded:
       type: object
@@ -5828,6 +5859,7 @@ components:
         journalRevisions: { type: integer }
         catchphrases: { type: integer }
         friends: { type: integer }
+        growth: { type: object, additionalProperties: { type: integer, minimum: 0 }, description: 本次实际新增成长记录分表计数 }
     ContextAssistantSettings:
       type: object
       description: 语境助手独立模型配置；默认关闭。地址留空跟随聊天地址，API Key 永不回落聊天或记忆助手凭据。

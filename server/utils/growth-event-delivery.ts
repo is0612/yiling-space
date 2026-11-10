@@ -382,6 +382,10 @@ export async function retryFailedGrowthEventDelivery(
         INNER JOIN "characters" AS character ON character."id" = source_event."characterId"
         WHERE delivery."id" = ${deliveryId}::uuid
           AND delivery."status" = 'FAILED'::"GrowthEventDeliveryStatus"
+          AND NOT EXISTS (
+            SELECT 1 FROM "character_growth_import_identities" AS imported
+            WHERE imported."characterId" = character."id" AND imported."domain" = 'growthEventDelivery' AND imported."localId" = delivery."id"
+          )
           AND (${actor?.ownerId ?? null}::uuid IS NULL OR (
             character."ownerId" = ${actor?.ownerId ?? null}::uuid
             AND character."id" = ${actor?.characterId ?? null}::uuid

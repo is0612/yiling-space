@@ -28,6 +28,8 @@ import { buildExternalIdentityScopeKey } from "./identity-scope";
 import { normalizeFriendAliases } from "./friend-aliases";
 import { buildUserPrivateScopeKey } from "./memory-scope-access";
 import { getPrisma } from "./prisma";
+import { loadCharacterGrowth, importCharacterGrowth } from "./character-growth-transfer";
+import { emptyCharacterGrowthBundle, growthCounts } from "./character-growth-portable";
 
 export type CharacterExportResult = {
   bundle: CharacterBundle;
@@ -160,6 +162,13 @@ export async function loadCharacterExportBundle(input: {
     catchphrases: character.catchphrases,
     now,
   });
+
+  bundle.growth = await loadCharacterGrowth({ characterId: input.characterId, ownerId: input.ownerId, includeFriends,
+    eventIds: new Set(bundle.events.filter(row => row.scope === "character").flatMap(row => row.originId ? [row.originId] : [])),
+    snapshotIds: new Set(bundle.snapshots.filter(row => row.scope === "character").flatMap(row => row.originId ? [row.originId] : [])),
+    friends: bundle.friends,
+  });
+  bundle.counts.growth = growthCounts(bundle.growth);
 
   await prisma.auditLog.create({
     data: {
@@ -387,6 +396,7 @@ export type CharacterImportAdded = {
   journalRevisions: number;
   catchphrases: number;
   friends: number;
+  growth?: ReturnType<typeof growthCounts>;
 };
 
 export type CharacterImportResult = {
@@ -397,6 +407,7 @@ export type CharacterImportResult = {
   counts: CharacterBundleCounts;
   /** 实际写进库的条数。新建时等于 counts；合并时是新增量，0 表示「这份卡里没有新东西」。 */
   added: CharacterImportAdded;
+  warnings: string[];
 };
 
 /** 事务里的 Prisma 客户端。新建与合并共用同一批写入函数，避免两套去重规则长歪。 */
@@ -417,6 +428,7 @@ function emptyAdded(): CharacterImportAdded {
     journalRevisions: 0,
     catchphrases: 0,
     friends: 0,
+    growth: growthCounts(emptyCharacterGrowthBundle()),
   };
 }
 
@@ -941,6 +953,7 @@ async function createCharacterFromBundle(input: {
   const globalSnapshots = bundle.snapshots.filter((item) => item.scope === "character");
   const privateSnapshots = bundle.snapshots.filter((item) => item.scope === "private");
   const added = emptyAdded();
+  const warnings: string[] = [];
 
   /**
    * 超时放宽：一张满配卡要写几千条记忆、几百位朋友（每位几次往返），
@@ -1059,6 +1072,10 @@ async function createCharacterFromBundle(input: {
       added.snapshots += await insertSnapshots(tx, friendScope.id, friend.snapshots, false);
     }
 
+    const growthResult = await importCharacterGrowth(tx, { characterId, ownerId, bundle: bundle.growth, mode: "new", friends: bundle.friends });
+    added.growth = growthResult.added;
+    warnings.push(...growthResult.warnings);
+
     await tx.auditLog.create({
       data: {
         actorType: "USER",
@@ -1087,7 +1104,7 @@ async function createCharacterFromBundle(input: {
     });
   }, { timeout: 180_000, maxWait: 15_000 });
 
-  return { characterId, name, mode: "new", counts: bundle.counts, added };
+  return { characterId, name, mode: "new", counts: bundle.counts, added, warnings };
 }
 
 /**
@@ -1143,6 +1160,7 @@ async function mergeCharacterCard(input: {
   const globalSnapshots = bundle.snapshots.filter((item) => item.scope === "character");
   const privateSnapshots = bundle.snapshots.filter((item) => item.scope === "private");
   const added = emptyAdded();
+  const warnings: string[] = [];
 
   await prisma.$transaction(async (tx) => {
     // 兼容迁移前创建的原生角色：若它本身就是同步根，补齐为自己的实例 ID。
@@ -1302,6 +1320,10 @@ async function mergeCharacterCard(input: {
       added.snapshots += await insertSnapshots(tx, friendScopeId, friend.snapshots, true);
     }
 
+    const growthResult = await importCharacterGrowth(tx, { characterId: target.id, ownerId, bundle: bundle.growth, mode: "merge", friends: bundle.friends });
+    added.growth = growthResult.added;
+    warnings.push(...growthResult.warnings);
+
     await tx.auditLog.create({
       data: {
         actorType: "USER",
@@ -1321,5 +1343,5 @@ async function mergeCharacterCard(input: {
     });
   }, { timeout: 180_000, maxWait: 15_000 });
 
-  return { characterId: target.id, name: target.name, mode: "merge", counts: bundle.counts, added };
+  return { characterId: target.id, name: target.name, mode: "merge", counts: bundle.counts, added, warnings };
 }

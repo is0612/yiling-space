@@ -54,7 +54,7 @@ export async function collectReflectionSources(prisma: Database, characterId: st
 
 function validRef(value: unknown): value is ReflectionSourceRef {
   const ref = record(value);
-  return ["memory", "knowledge", "snapshot"].includes(String(ref.type)) && typeof ref.id === "string" && UUID.test(ref.id)
+  return ref.valid !== false && ["memory", "knowledge", "snapshot"].includes(String(ref.type)) && typeof ref.id === "string" && UUID.test(ref.id)
     && ref.key === `${ref.type}:${ref.id}` && typeof ref.hash === "string" && /^[a-f0-9]{64}$/.test(ref.hash);
 }
 /** Must be called inside the final/review transaction; locks are held until commit. */

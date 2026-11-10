@@ -208,6 +208,8 @@
     "test:knowledge-import": "tsx scripts/test-knowledge-import.ts",
     "test:social-proactive-contact-policy": "tsx scripts/test-social-proactive-contact-policy.ts",
     "test:knowledge-web-import": "tsx scripts/test-knowledge-web-import.ts",
+    "test:character-growth": "tsx scripts/test-character-growth-portable.ts && tsx scripts/test-character-growth-transfer.ts",
+    "test:character-growth-isolated": "tsx scripts/test-character-growth-isolated.ts",
     "test:growth-overview-page": "tsx scripts/test-growth-overview-page.ts",
     "test:reflection": "tsx scripts/test-reflection-output.ts && tsx scripts/test-reflection-page-races.ts && yarn run test:growth-overview-page",
     "test:reflection-isolated": "tsx scripts/test-reflection-isolated.ts",

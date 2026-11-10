@@ -1,0 +1,45 @@
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { randomUUID, createHash } from "node:crypto";
+import { getPrisma } from "../server/utils/prisma";
+import { retryReflection } from "../server/utils/reflection-service";
+import { importCharacterCard, loadCharacterExportBundle } from "../server/utils/character-transfer";
+const target = new URL(process.env.DATABASE_URL ?? "");
+assert(["localhost", "127.0.0.1", "[::1]"].includes(target.hostname) && /yiling_growth_card_test_/.test(target.pathname));
+const prisma = getPrisma(); const roles: string[] = []; let ownerId = "";
+try {
+ const owner = await prisma.user.create({ data: { username: `growth-full-${randomUUID()}`, passwordHash: "test-only" } }); ownerId = owner.id;
+ const source = await prisma.character.create({ data: { ownerId, name: "成长整卡回环", basePrompt: "测试", memorySetting: { create: {} } } }); roles.push(source.id);
+ await prisma.character.update({ where: { id: source.id }, data: { originCharacterId: source.id } });
+ const scope = await prisma.memoryScope.create({ data: { characterId: source.id, scopeType: "CHARACTER_GLOBAL", scopeKey: randomUUID() } });
+ const eventId = randomUUID();
+ const event = await prisma.memoryEvent.create({ data: { id: eventId, originId: eventId, memoryScopeId: scope.id, dayKey: "2026-11-10", title: "公开实践", detail: "核对公开资料", occurredAt: new Date(), dedupeKey: randomUUID() } });
+ const candidate = await prisma.knowledgeCandidate.create({ data: { characterId: source.id, sourceType: "MANUAL", rawContent: "公开知识", status: "ACCEPTED" } });
+ await prisma.knowledgeItem.create({ data: { characterId: source.id, candidateId: candidate.id, title: "资料核验", content: "核验来源再形成结论" } });
+ await prisma.knowledgeItem.create({ data: { characterId: source.id, sourceType: "CHAT", title: "不携带", content: "PRIVATE_CHAT_MARKER" } });
+ const run = await prisma.reflectionRun.create({ data: { characterId: source.id, requestKey: randomUUID(), status: "RUNNING", periodStart: new Date(Date.now()-86400000), periodEnd: new Date() } });
+ await prisma.reflectionSuggestion.create({ data: { runId: run.id, title: "继续核验", observation: "来源有核验", inference: "可能有帮助", recommendation: "继续核验", sourceRefs: [{ key: `memory:${event.id}`, type: "memory", id: event.id, hash: createHash("sha256").update(JSON.stringify([event.title,event.detail])).digest("hex"), title: event.title, excerpt: event.detail }] } });
+ const exported = await loadCharacterExportBundle({ characterId: source.id, ownerId, includeFriends: false }); assert(exported); assert.equal(exported.bundle.formatVersion,5); assert(!JSON.stringify(exported.bundle).includes("PRIVATE_CHAT_MARKER"));
+ const imported = await importCharacterCard({ raw: exported.bundle, ownerId }); roles.push(imported.characterId);
+ assert.equal(await prisma.knowledgeItem.count({where:{characterId:imported.characterId}}),1);
+ const importedRun = await prisma.reflectionRun.findFirstOrThrow({where:{characterId:imported.characterId}});
+ assert.equal(importedRun.status,"FAILED");
+ await assert.rejects(() => retryReflection(prisma, { ownerId, characterId: imported.characterId, runId: importedRun.id }), error => typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === 409);
+ const before = await prisma.characterGrowthImportIdentity.count({where:{characterId:imported.characterId}});
+ const merged = await importCharacterCard({ raw: exported.bundle, ownerId, targetCharacterId: imported.characterId });
+ assert.equal(merged.mode,"merge"); assert(Object.values(merged.added.growth ?? {}).every(n=>n===0));
+ assert.equal(await prisma.characterGrowthImportIdentity.count({where:{characterId:imported.characterId}}),before);
+ const returned = await loadCharacterExportBundle({characterId:imported.characterId,ownerId,includeFriends:false}); assert(returned);
+ const back = await importCharacterCard({raw:returned.bundle,ownerId,targetCharacterId:source.id});
+ assert(Object.values(back.added.growth ?? {}).every(n=>n===0));
+ console.log("Full growth card DB checks passed: v5 export/import, CHAT exclusion, interrupted-run archival, idempotent merge and A-B-A stable identity.");
+} finally {
+ await prisma.growthEvent.deleteMany({where:{characterId:{in:roles}}});
+ await prisma.reflectionRun.deleteMany({where:{characterId:{in:roles}}});
+ await prisma.knowledgeItem.deleteMany({where:{characterId:{in:roles}}});
+ await prisma.knowledgeCandidate.deleteMany({where:{characterId:{in:roles}}});
+ await prisma.memoryScope.deleteMany({where:{characterId:{in:roles}}});
+ await prisma.character.deleteMany({where:{id:{in:roles}}});
+ if(ownerId) await prisma.user.delete({where:{id:ownerId}});
+ await prisma.$disconnect();
+}

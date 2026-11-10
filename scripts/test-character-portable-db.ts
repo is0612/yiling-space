@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
+import { emptyCharacterGrowthBundle } from "../server/utils/character-growth-portable";
 import { buildUserPrivateScopeKey } from "../server/utils/memory-scope-access";
 import {
   importCharacterCard,
@@ -601,7 +602,7 @@ async function main() {
     summary: "只属于主人的阶段总结", structuredContent: { private: true },
   };
   const snapshotCard = {
-    ...bundle, memories: [], events: [], eventDays: [], journals: [], friends: [], catchphrases: [],
+    ...bundle, growth: emptyCharacterGrowthBundle(), memories: [], events: [], eventDays: [], journals: [], friends: [], catchphrases: [],
     snapshots: [privateSnapshot],
   };
   for (const withMemory of [false, true]) {

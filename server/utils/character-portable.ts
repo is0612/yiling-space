@@ -5,7 +5,8 @@
  * 渠道 Token、任务队列和工作日志。整库 dump 里那些东西既带不走（换台机器连不上原来的
  * QQ 网关），也不该带到别人电脑上（别人的私聊和凭据）。
  *
- * 因此包里只有七类内容，且每类都做过取舍：
+ * 内容按领域做取舍：
+ *   - v5 成长：知识、社交评估与证据、反思结论、成长事件与投递历史（执行状态归档）
  *   - 人设：name / basePrompt / styleExamples / userAddress + 少量模型参数
  *   - 记忆：CHARACTER_GLOBAL 与**导出者自己的** USER_PRIVATE 长期记忆
  *   - 忆泡：发生过什么（事实层）
@@ -33,6 +34,7 @@
  */
 
 import { createError } from "h3";
+import { emptyCharacterGrowthBundle, parseCharacterGrowthBundle, growthCounts, type CharacterGrowthBundle } from "./character-growth-portable";
 import { dropAliasesMatchingName, normalizeFriendAliases } from "./friend-aliases";
 
 // 格式标识沿用改名前的 `yiling-hub.character`：它是角色卡的对外契约，
@@ -46,8 +48,9 @@ export const CHARACTER_BUNDLE_FORMAT = "yiling-hub.character";
  * 是她对这段关系的一部分理解，不是可选的展示字段。v3 卡给老程序读会被上面那条
  * 版本检查拦下 —— 让老程序明说「导不进来」，好过它默默把备注丢掉、导完还像成功。
  * v4 增加长期记忆、忆泡、阶段总结的跨设备 originId；v1–v3 仍兼容，缺少身份时由导入端补发。
+ * v5 增加成长领域及稳定迁移身份，旧卡按空成长内容读取；新卡必须声明成长段。
  */
-export const CHARACTER_BUNDLE_VERSION = 4;
+export const CHARACTER_BUNDLE_VERSION = 5;
 /** 导入包最大字节数：够 4000 条记忆 + 600 篇总结 + 1500 篇手账，再大基本是塞了别的东西。 */
 export const CHARACTER_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -309,6 +312,7 @@ export type CharacterBundleCounts = {
   friendMemories: number;
   /** 朋友们名下的备注（她私底下的叫法）总条数。为 0 时导入预览可以放心说「没有备注」。 */
   friendAliases: number;
+  growth?: ReturnType<typeof growthCounts>;
 };
 
 export type CharacterBundle = {
@@ -331,6 +335,7 @@ export type CharacterBundle = {
   journals: CharacterBundleJournal[];
   catchphrases: CharacterBundleCatchphrase[];
   friends: CharacterBundleFriend[];
+  growth: CharacterGrowthBundle;
   counts: CharacterBundleCounts;
 };
 
@@ -500,6 +505,7 @@ function buildCounts(bundle: Omit<CharacterBundle, "counts">): CharacterBundleCo
     friends: bundle.friends.length,
     friendMemories: bundle.friends.reduce((total, friend) => total + friend.memories.length, 0),
     friendAliases: bundle.friends.reduce((total, friend) => total + friend.aliases.length, 0),
+    growth: growthCounts(bundle.growth),
   };
 }
 
@@ -667,6 +673,7 @@ export type BundleBuildInput = {
     memoryItems?: MemorySource[];
     snapshots?: SnapshotSource[];
   }>;
+  growth?: CharacterGrowthBundle;
   catchphrases?: Array<{ phrase: string; usage: string; enabled: boolean; source: string }>;
   now?: Date;
 };
@@ -813,6 +820,7 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
       source: item.source || "manual",
     })),
     friends,
+    growth: input.growth ?? emptyCharacterGrowthBundle(),
   };
 
   return { ...payload, counts: buildCounts(payload) };
@@ -832,6 +840,7 @@ export type ParsedCharacterBundle = {
   journals: CharacterBundleJournal[];
   catchphrases: CharacterBundleCatchphrase[];
   friends: CharacterBundleFriend[];
+  growth: CharacterGrowthBundle;
   counts: CharacterBundleCounts;
   exportedAt: string | null;
 };
@@ -1247,6 +1256,15 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     seenFriendKeys.add(key);
   }
 
+  if (version >= 5 && body.growth === undefined) bad("v5角色卡缺少成长数据段。");
+  if (version < 5 && body.growth !== undefined) bad("成长数据需要v5角色卡，不能以旧版本静默导入。");
+  const growth = version >= 5 ? parseCharacterGrowthBundle(body.growth, {
+    eventIds: new Set(events.filter(item => item.scope === "character").flatMap(item => item.originId ? [item.originId] : [])),
+    snapshotIds: new Set(snapshots.filter(item => item.scope === "character").flatMap(item => item.originId ? [item.originId] : [])),
+    friends: seenFriendKeys,
+    includeFriends: friends.length > 0,
+  }) : emptyCharacterGrowthBundle();
+
   const payload: Omit<CharacterBundle, "counts"> = {
     format: CHARACTER_BUNDLE_FORMAT,
     formatVersion: version,
@@ -1263,6 +1281,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     journals,
     catchphrases,
     friends,
+    growth,
   };
 
   return {
@@ -1278,6 +1297,7 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     journals,
     catchphrases,
     friends,
+    growth,
     counts: buildCounts(payload),
     exportedAt: payload.exportedAt || null,
   };
