@@ -145,3 +145,4 @@ Worker 配置模型后会调用 LLM 对周期对话做结构化总结，验证�
 - `worker:watch` 统一领取事件投递，租约 5 分钟、带 fencing token；失败指数退避，最多 5 次。SKIPPED 是明确终态，不算成功，也不重试。
 - 成功、跳过或取消的事件在 30 天后清理；只要存在未完成或 FAILED 投递，事件就保留供恢复和排查。
 - Watchdog 检查已到期积压、运行中超时与达到重试上限的投递。详情见 `docs/growth-data-center-architecture.md`。
+- 只有明确排查后才手动恢复终态失败投递：`yarn growth:event:retry <deliveryId>`。命令只接受 `FAILED`，将新一轮 attemptCount 归零、保留 fencingToken 单调序列，并写入 `SYSTEM` 审计；重复执行不会重复入队。
