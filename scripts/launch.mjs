@@ -56,7 +56,9 @@ const APP_LABEL = CONFIG.cnName ? `${CONFIG.cnName} · ${EN_NAME}` : EN_NAME;
 const YARN_VERSION = /^yarn@(\d+\.\d+\.\d+)/.exec(PKG.packageManager ?? "")?.[1] ?? "1.22.22";
 
 const TOTAL_STEPS = 4;
-const DEFAULT_PORT = 3000;
+const PRODUCTION = process.argv.includes('--production');
+const REBUILD = process.argv.includes('--rebuild');
+const DEFAULT_PORT = PRODUCTION ? 8801 : 3000;
 
 /* ---------- 输出 ---------- */
 const COLOR = process.env.NO_COLOR !== "1" && process.stdout.isTTY;
@@ -522,11 +524,56 @@ function runDev(yarnCmd, devUrl, runtimeEnv) {
   });
 }
 
+function buildProduction(yarnCmd, env) {
+  if (!REBUILD && existsSync(path.join(ROOT, '.output/server/index.mjs'))) return;
+  console.log('      正在编译生产页面，完成后日常启动直接复用构建结果…');
+  const result = spawnSync(yarnCmd ? 'yarn build' : 'npx nuxt build', {
+    cwd: ROOT, stdio: 'inherit', shell: true,
+    env: { ...process.env, ...env, NODE_ENV: 'production' },
+  });
+  if (result.status !== 0) throw new Error('生产构建失败，未启动网页。修复后重新运行使用版启动入口。');
+}
+
+async function runProduction(url, env) {
+  const runtimeEnv = { ...process.env, ...env, NODE_ENV: 'production', PORT: new URL(url).port, NITRO_HOST: '127.0.0.1' };
+  console.log(`▶ 使用现有本地数据启动生产模式：${url}`);
+  console.log('  账号和密码沿用原数据库；本地 .env 与 .data 不变。Ctrl+C 停止。');
+  const child = spawn(process.execPath, ['scripts/local-production-entry.mjs'], { cwd: ROOT, env: runtimeEnv, stdio: 'inherit' });
+  const forward = () => { if (child.exitCode === null) child.kill('SIGTERM'); };
+  process.once('SIGINT', forward);
+  process.once('SIGTERM', forward);
+  let ended = false;
+  const exit = new Promise((resolve) => {
+    child.once('exit', code => { ended = true; resolve(code ?? 1); });
+    child.once('error', error => { ended = true; console.error(error.message); resolve(1); });
+  });
+  const deadline = Date.now() + 60_000;
+  let ready = false;
+  while (!ended && Date.now() < deadline) {
+    try {
+      const response = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1500) });
+      if (response.ok) { ready = true; break; }
+    } catch { /* wait for Nitro */ }
+    await sleep(500);
+  }
+  if (ready) { ok('生产网页已就绪'); openBrowser(url); }
+  else if (!ended) {
+    forward();
+    process.off('SIGINT', forward);
+    process.off('SIGTERM', forward);
+    throw new Error('生产网页未在60秒内就绪，请查看上面的错误。');
+  }
+  try { return await exit; } finally {
+    process.off('SIGINT', forward);
+    process.off('SIGTERM', forward);
+  }
+}
+
 /* ---------- 主流程 ---------- */
 async function main() {
   console.log("");
   console.log(cyan(`  ${APP_LABEL}`));
-  console.log(dim(`  一键启动：环境自检 → 数据库 → 开发服务器　${dim(`(${PROJECT_NAME})`)}`));
+  console.log(dim(`  一键启动：环境自检 → 本地数据库 → ${PRODUCTION ? '生产网页（沿用已有账号与数据）' : '开发服务器'}　(${PROJECT_NAME})`));
   console.log("");
 
   step(1, "环境自检");
@@ -535,14 +582,14 @@ async function main() {
   const env = loadEnv();
   ok(".env 已就位");
 
-  const port = Number(env.PORT || env.NUXT_PORT || 0) || DEFAULT_PORT;
+  const port = Number(PRODUCTION ? env.YILING_PRODUCTION_PORT : (env.PORT || env.NUXT_PORT)) || DEFAULT_PORT;
   const devUrl = `http://127.0.0.1:${port}`;
 
   // 搬去新仓库时先体检一遍：只看推导出来的参数对不对，不动数据库、不起服务。
   if (process.env.LAUNCH_DRY_RUN === "1") {
     ok(`项目名 ${PROJECT_NAME}（显示为 ${APP_LABEL}）`);
     ok(`数据库容器 ${detectDbContainer()}`);
-    ok(`开发端口 ${port}　·　Prisma 生成物 ${findPrismaClient() ?? "未找到（启动时会补生成）"}`);
+    ok(`${PRODUCTION ? '生产' : '开发'}端口 ${port}　·　Prisma 生成物 ${findPrismaClient() ?? "未找到（启动时会补生成）"}`);
     console.log("");
     console.log(dim("  LAUNCH_DRY_RUN=1：只体检，没连数据库、没起服务。"));
     return 0;
@@ -555,8 +602,12 @@ async function main() {
   await ensureDatabase(env);
 
   step(3, `检查 ${port} 端口`);
-  const running = await findRunningDevServer(devUrl);
-  const worker = await superviseMemoryWorker({ root: ROOT, env: { ...process.env, ...env } });
+  if (PRODUCTION && await pingPort('127.0.0.1', port)) {
+    throw new Error(`生产端口 ${port} 已被占用。请先关闭此前的网页窗口或独立 Docker 使用版，再重新启动。`);
+  }
+  if (PRODUCTION) buildProduction(yarnCmd, env);
+  const running = PRODUCTION ? null : await findRunningDevServer(devUrl);
+  const worker = await superviseMemoryWorker({ root: ROOT, env: { ...process.env, ...env, ...(PRODUCTION ? { NODE_ENV: 'production' } : {}) } });
   try {
   if (running) {
     ok(`服务已经在跑：${running}`);
@@ -586,7 +637,9 @@ async function main() {
   }
 
   step(4, "开始运行（网页 + 共享 Worker）");
-  return await runDev(yarnCmd, devUrl, { ...process.env, ...env });
+  return PRODUCTION
+    ? await runProduction(devUrl, env)
+    : await runDev(yarnCmd, devUrl, { ...process.env, ...env });
   } finally {
     await worker.stop();
   }

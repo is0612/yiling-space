@@ -189,6 +189,8 @@ C:\Users\<用户名>\AppData\Local\Docker\wsl\disk\docker_data.vhdx
 
 ## 4. 备份数据库
 
+源码目录的使用版启动入口使用 `scripts/launch.mjs --production`，更新入口使用 `--production --rebuild`：沿用原 `.env`、数据库和 `.data`，不重建账号或更改密码。下文的 `backup-db.ps1` 同样适用于本机生产模式。另行分发的 Docker 包才使用 `scripts/usage-desktop.ps1` 和独立数据卷，更新前备份数据库、应用数据卷、配置及原镜像标识。恢复时不能只恢复数据库而丢掉解密密钥。具体区别见[使用版打包与分发](使用版打包与分发.md)。
+
 从仓库根目录运行（或直接双击 `scripts\backup-db.bat`）：
 
 ```powershell

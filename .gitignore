@@ -25,6 +25,8 @@ backups/*
 backups/*.sql
 *.dump
 *.backup
+updates/*.tar
+updates/*.tar.gz
 
 # 设计审计截图与原型稿：本地留着看，但不入库——里面有真实聊天记录、QQ 号、群号和用量数据
 design/

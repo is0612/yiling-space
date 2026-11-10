@@ -44,7 +44,7 @@ services:
       db:
         condition: service_healthy
     env_file:
-      - .env
+      - ${YILING_ENV_FILE:-.env}
     environment:
       NODE_ENV: production
       PORT: "3000"

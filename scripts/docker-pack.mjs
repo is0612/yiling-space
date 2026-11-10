@@ -78,6 +78,8 @@ if (!skipBuild) {
 } else {
   const inspect = spawnSync("docker", ["image", "inspect", tagLatest], { stdio: "ignore", shell: process.platform === "win32" });
   if (inspect.status !== 0) fail(`本地没有 ${tagLatest}，去掉 --skip-build 重新构建。`);
+  // --skip-build 也必须保证两个 tag 指向同一镜像，避免导出旧版本或缺少版本 tag。
+  run("docker", ["tag", tagLatest, tagVersion]);
   ok(`复用已有镜像 ${tagLatest}`);
 }
 
@@ -100,6 +102,11 @@ const envTemplate = readFileSync(path.join(ROOT, "prod.env.example"), "utf8")
   .replace("__ADMIN_PASSWORD__", adminPassword);
 writeFileSync(path.join(outDir, "prod.env.example"), envTemplate, "utf8");
 
+mkdirSync(path.join(outDir, "scripts"), { recursive: true });
+const desktopScript = readFileSync(path.join(ROOT, "scripts", "usage-desktop.ps1"), "utf8").replace(/^\uFEFF/, "");
+// Windows PowerShell 5.1 needs BOM to read Chinese correctly.
+writeFileSync(path.join(outDir, "scripts", "usage-desktop.ps1"), "\uFEFF" + desktopScript, "utf8");
+
 for (const file of ["docker-compose.prod.yml", "启动忆灵空间-使用版.bat", "更新到最新版.bat"]) {
   cpSync(path.join(ROOT, file), path.join(outDir, file));
 }
@@ -121,7 +128,7 @@ const readme = `# Yiling Space 使用版 ${version}
 
 ## 装什么
 
-只需要 **Docker Desktop**（Windows / macOS 都行）。不需要 Node、不需要 git、不需要改任何代码。
+双击启动脚本适用于 **Windows + Docker Desktop**。不需要 Node、不需要 git、不需要改任何代码。
 
 ## 第一次使用
 
@@ -141,14 +148,14 @@ const readme = `# Yiling Space 使用版 ${version}
 
 ## 更新到新版本
 
-把新版本的发布包里的 \`updates\\yiling-space-*.tar.gz\` 放进本目录的 \`updates\\\`，然后双击
+把新版本的发布包里的 \`updates\\yiling-space-*.tar\` 放进本目录的 \`updates\\\`，然后双击
 **更新到最新版.bat**。它会：
 
-1. 先导出一份数据库备份到 \`backups\\pre-update-<时间>.dump\`；
-2. 加载新镜像；
+1. 暂停应用，导出并校验数据库备份，同时备份应用数据卷（解密密钥、素材）与配置；备份失败停止更新；
+2. 按版本号选择最高的一份本地镜像包并加载，加载失败停止更新；
 3. 重启容器，容器启动时自动执行 \`prisma migrate deploy\`——**数据库结构跟着更新，不用你手动跑 SQL**。
 
-更新不会动 \`.env\`（管理员密码、端口都保留），也不会动数据卷（聊天记录、记忆、角色都在）。
+更新保留 \`.env\` 与数据卷；迁移会更新数据库结构。只有 app 容器健康且网页健康接口可访问才报告成功。脚本不会从 GitHub 下载源码；请先提供新版本镜像包。失败后请保留全部备份，迁移后不能只切回旧镜像当作回滚。
 
 ## 常用命令
 

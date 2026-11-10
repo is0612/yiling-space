@@ -3,6 +3,8 @@
 # 是用 tsx 直接跑 TypeScript 源码的，缺了这些镜像里就没有记忆提炼和关系评估。
 
 node_modules
+.venv
+.workbuddy
 .nuxt
 .output
 .nitro
