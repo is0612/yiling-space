@@ -361,4 +361,6 @@
 - 新增事务内 `publishGrowthEvent(tx, input)`。业务事务回滚时 Outbox 一起回滚；重复业务键返回既有事件，不重复扇出。
 - 订阅采用代码常量，发布时快照化；第一阶段不回补订阅启用前的历史事件。
 - 默认每个消费者最多尝试 5 次，租约 5 分钟；成功投递保留 30 天后清理（清理实现待接入）。
-- 当前第一批只落地契约与 Outbox 写入骨架；Worker、消费者、Watchdog、保留清理和领域发布点在后续小批次接入，未宣称端到端闭环已完成。
+- 第一批已接入 Worker 投递循环，并增加首个只读消费者 `growth.memory-source-integrity`：收到 `memory.event.created` 后，通过角色限定的记忆领域 Gateway 验证来源忆泡；不复制正文、不调用模型、不修改领域数据。
+- 记忆系统在忆泡真实创建的同一事务中发布 `memory.event.created`；社交系统在 SocialExperience 真正新插入的同一事务中发布 `social.experience.created`（当前尚无社交订阅者）。重复业务键不会重复发布。
+- Watchdog、成功投递保留清理和完整隔离数据库回归仍在后续小批次接入，当前不宣称第一阶段端到端收尾。
