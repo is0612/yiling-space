@@ -11,6 +11,7 @@ Yiling Space 由两部分组成：
   - `yarn scheduler:run`：按周期边界把快照/清理任务入队。
   - `yarn worker:run`：单轮处理记忆任务、社交关系评估和统一成长事件投递；事件消费者只在自身需要时调用领域读取接口。
   - `yarn worker:watch`：常驻运行上述共享 Worker，并每小时清理超过 30 天且所有消费者均已终态的成长事件。
+  - 双击根目录「启动忆灵空间」时，`scripts/launch.mjs` 默认会同时启动 `worker:watch`；只想启动 Web 可设置 `YILING_WORKER_DISABLED=1`。
   - `yarn onebot:run`：QQ 小号（OneBot v11）渠道适配器（长连接收消息并回复）。
   - `yarn bili:run`：B站 值班适配器（谷时调度 + 被动回复）。部署细节见 `docs/B站值班服务器部署清单.md`。
 
@@ -102,7 +103,7 @@ Web 服务与后台进程写标准输出。部署到容器或 systemd 时，由�
 
 ## 8. 停滞检测（Watchdog）
 
-进程活着不等于任务在走。`yarn watchdog:run` 只读不写地判五件事：任务卡在「运行中」没人回收、队列有活没人认领、该归档却没排任务、自动归档长期零产出、B站 值班开着但三天没跑过一轮。总览页顶部的报警条用的是同一份判定（`server/utils/watchdog.ts`），结论可以直接对上「排期没跑」还是「Worker 没跑」。
+进程活着不等于任务在走。`yarn watchdog:run` 只读不写地检查记忆任务卡住/积压/未排期/长期零产出、B站 值班长期未运行，以及成长事件投递积压/卡住/达到重试上限。总览页顶部的报警条用的是同一份判定（`server/utils/watchdog.ts`），结论可以直接对上「排期没跑」还是「Worker 没跑」。
 
 值班那条是独立流水线：记忆停着不代表值班没跑，反过来也一样，所以两者会各报一条。
 
