@@ -81,6 +81,8 @@ const tables: [string, boolean, () => Promise<number>][] = [
   ["messages", false, () => prisma.message.count({ where: { conversation: { characterId: { in: idList } } } })],
   ["memory_items", false, () => prisma.memoryItem.count({ where: { memoryScope: { characterId: { in: idList } } } })],
   ["memory_events", false, () => prisma.memoryEvent.count({ where: { memoryScope: { characterId: { in: idList } } } })],
+  ["growth_events", false, () => prisma.growthEvent.count({ where: { characterId: { in: idList } } })],
+  ["growth_event_deliveries", false, () => prisma.growthEventDelivery.count({ where: { event: { characterId: { in: idList } } } })],
   ["memory_snapshots", false, () => prisma.memorySnapshot.count({ where: { memoryScope: { characterId: { in: idList } } } })],
   ["memory_jobs", false, () => prisma.memoryJob.count({ where: { memoryScope: { characterId: { in: idList } } } })],
   ["character_stickers", false, () => prisma.characterSticker.count({ where: { characterId: { in: idList } } })],
