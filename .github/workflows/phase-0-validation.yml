@@ -237,6 +237,9 @@ jobs:
       - name: 社交关系人工确认事务隔离测试
         run: yarn run test:social-relationship-review-isolated
 
+      - name: 统一成长事件中心事务与租约隔离测试
+        run: yarn run test:growth-event-center-isolated
+
       - name: B站 命令目录与解析层测试
         run: yarn run test:bili-runner && yarn run test:bili-schema
 

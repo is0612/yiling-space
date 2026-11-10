@@ -95,6 +95,16 @@ enum SocialRelationshipAssessmentTaskStatus {
   PAUSED
 }
 
+enum GrowthEventDeliveryStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  RETRY_WAIT
+  FAILED
+  SKIPPED
+  CANCELLED
+}
+
 enum SocialRelationshipAssessmentStatus {
   RUNNING
   SUCCEEDED
@@ -288,6 +298,7 @@ model Character {
   knowledgeCandidates KnowledgeCandidate[]
   knowledgeItems     KnowledgeItem[]
   knowledgeRelations KnowledgeItemRelation[]
+  growthEvents       GrowthEvent[]
 
   @@index([ownerId, status])
   @@index([originCharacterId])
@@ -1599,4 +1610,55 @@ model KnowledgeItemRelation {
   @@index([sourceItemId, status])
   @@index([targetItemId, status])
   @@map("knowledge_item_relations")
+}
+
+
+/// 跨领域事件 Outbox。只保存最小通知元数据，不复制聊天正文或领域主体。
+model GrowthEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  characterId    String   @db.Uuid
+  sourceDomain   String   @db.VarChar(40)
+  eventType      String   @db.VarChar(120)
+  schemaVersion  Int      @default(1)
+  aggregateType  String   @db.VarChar(120)
+  aggregateId    String   @db.VarChar(255)
+  occurredAt     DateTime @db.Timestamptz(6)
+  payload        Json     @default("{}") @db.JsonB
+  /// 来源领域推导出的稳定业务键；同一业务变化重复执行时必须得到相同值。
+  idempotencyKey String   @db.VarChar(255)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  character      Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  deliveries     GrowthEventDelivery[]
+
+  @@unique([characterId, sourceDomain, idempotencyKey])
+  @@index([characterId, createdAt])
+  @@index([sourceDomain, eventType, createdAt])
+  @@map("growth_events")
+}
+
+/// 每个事件 × 消费者一条独立投递状态；租约采用 fencing，避免过期执行者提交结果。
+model GrowthEventDelivery {
+  id             String                   @id @default(uuid()) @db.Uuid
+  eventId        String                   @db.Uuid
+  consumerKey    String                   @db.VarChar(120)
+  status         GrowthEventDeliveryStatus @default(QUEUED)
+  attemptCount   Int                      @default(0)
+  maxAttempts    Int                      @default(5)
+  runAt          DateTime                 @default(now()) @db.Timestamptz(6)
+  lockedAt       DateTime?                @db.Timestamptz(6)
+  lockedBy       String?                  @db.VarChar(255)
+  leaseToken     String?                  @db.Uuid
+  leaseExpiresAt DateTime?                @db.Timestamptz(6)
+  fencingToken   Int                      @default(0)
+  lastError      String?                  @db.Text
+  processedAt    DateTime?                @db.Timestamptz(6)
+  createdAt      DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime                 @updatedAt @db.Timestamptz(6)
+  event          GrowthEvent              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, consumerKey])
+  @@index([status, runAt])
+  @@index([status, leaseExpiresAt])
+  @@index([eventId, status])
+  @@map("growth_event_deliveries")
 }

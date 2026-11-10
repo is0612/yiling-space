@@ -496,34 +496,27 @@ function openBrowser(url) {
   return true;
 }
 
-function runDev(yarnCmd, devUrl) {
-  const useYarn = Boolean(yarnCmd);
-  const cmd = useYarn ? yarnCmd : "npx";
-  const args = useYarn ? ["dev"] : ["nuxt", "dev", "--open"];
-
+function runDev(yarnCmd, devUrl, runtimeEnv) {
+  const cmd = yarnCmd || "npx";
+  const args = yarnCmd ? ["dev"] : ["nuxt", "dev", "--open"];
   console.log("");
-  console.log(`${cyan("▶")} 启动开发服务器：${dim(`${cmd} ${args.join(" ")}`)}`);
-  console.log(`  ${dim(`地址 ${devUrl}　·　Ctrl+C 或关掉窗口即停止`)}`);
+  console.log(cyan("▶ 启动开发服务器：") + dim(cmd + " " + args.join(" ")));
+  console.log(dim("  地址 " + devUrl + " · Ctrl+C 或关掉窗口即停止"));
   const qqScript = path.join(ROOT, "scripts", "start-qq.bat");
-  if (existsSync(qqScript)) console.log(`  ${dim("QQ 群链路是另一个脚本：scripts\\start-qq.bat")}`);
+  if (existsSync(qqScript)) console.log(dim("  QQ 群链路是另一个脚本：scripts/start-qq.bat"));
   console.log("");
-
+  // Worker 由 main 中的统一守护入口管理，包含记忆、社交和成长事件消费。
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
-      cwd: ROOT,
-      stdio: "inherit",
-      shell: true,
-      env: { ...process.env, FORCE_COLOR: "1" },
+      cwd: ROOT, stdio: "inherit", shell: true,
+      env: { ...runtimeEnv, FORCE_COLOR: "1" },
     });
-    // Ctrl+C 在本控制台会同时发给子进程，这里只做兜底，不做二次转发。
-    const forward = (signal) => {
-      if (!child.killed) child.kill(signal);
-    };
+    const forward = (signal) => { if (!child.killed) child.kill(signal); };
     process.once("SIGINT", () => forward("SIGINT"));
     process.once("SIGTERM", () => forward("SIGTERM"));
     child.once("exit", (code, signal) => resolve(signal ? 0 : (code ?? 1)));
     child.once("error", (err) => {
-      console.error(red(`起不来：${err.message}`));
+      console.error(red("起不来：" + err.message));
       resolve(1);
     });
   });
@@ -592,8 +585,8 @@ async function main() {
     ok("端口空闲");
   }
 
-  step(4, "开始运行（网页 + 记忆 Worker）");
-  return await runDev(yarnCmd, devUrl);
+  step(4, "开始运行（网页 + 共享 Worker）");
+  return await runDev(yarnCmd, devUrl, { ...process.env, ...env });
   } finally {
     await worker.stop();
   }

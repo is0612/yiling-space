@@ -9,7 +9,9 @@ Yiling Space 由两部分组成：
 - **Web 服务**（Nuxt/Nitro）：`yarn build` 后 `node .output/server/index.mjs`（或 `yarn start`），对外提供页面与 `/api`。
 - **后台进程**（独立运行，与 Web 服务解耦）：
   - `yarn scheduler:run`：按周期边界把快照/清理任务入队。
-  - `yarn worker:run`：领取并执行记忆任务（调用模型）。
+  - `yarn worker:run`：单轮处理记忆任务、社交关系评估和统一成长事件投递；事件消费者只在自身需要时调用领域读取接口。
+  - `yarn worker:watch`：常驻运行上述共享 Worker，并每小时清理超过 30 天且所有消费者均已终态的成长事件。
+  - 双击根目录「启动忆灵空间」时，`scripts/launch.mjs` 默认会同时启动 `worker:watch`；只想启动 Web 可设置 `YILING_WORKER_DISABLED=1`。
   - `yarn onebot:run`：QQ 小号（OneBot v11）渠道适配器（长连接收消息并回复）。
   - `yarn bili:run`：B站 值班适配器（谷时调度 + 被动回复）。部署细节见 `docs/B站值班服务器部署清单.md`。
 
@@ -101,7 +103,7 @@ Web 服务与后台进程写标准输出。部署到容器或 systemd 时，由�
 
 ## 8. 停滞检测（Watchdog）
 
-进程活着不等于任务在走。`yarn watchdog:run` 只读不写地判五件事：任务卡在「运行中」没人回收、队列有活没人认领、该归档却没排任务、自动归档长期零产出、B站 值班开着但三天没跑过一轮。总览页顶部的报警条用的是同一份判定（`server/utils/watchdog.ts`），结论可以直接对上「排期没跑」还是「Worker 没跑」。
+进程活着不等于任务在走。`yarn watchdog:run` 只读不写地检查记忆任务卡住/积压/未排期/长期零产出、B站 值班长期未运行，以及成长事件投递积压/卡住/达到重试上限。总览页顶部的报警条用的是同一份判定（`server/utils/watchdog.ts`），结论可以直接对上「排期没跑」还是「Worker 没跑」。
 
 值班那条是独立流水线：记忆停着不代表值班没跑，反过来也一样，所以两者会各报一条。
 
@@ -132,6 +134,8 @@ Worker 会跟着网页一键启动器（根目录启动批处理）和 QQ 链路
 
 该去重只覆盖这两个启动入口；手动 `yarn worker:watch`、其它仓库副本或其它机器的 Worker 仍可独立运行，任务领取互斥由数据库保证。受管 Worker 额外预加载 IPC 父进程守卫：启动器被强制终止或控制台关闭时，IPC 断开使 Worker 立即退出，未完成任务留待数据库租约回收；手动 Worker 不加载此守卫。生产部署仍应使用 systemd、容器或其它系统守护工具。启动器不会自动启动 Scheduler，自动排期仍需要 `yarn scheduler:watch`。
 
+共享 Worker 消费记忆任务、社交关系评估任务和成长事件投递；Watchdog 分别报告记忆任务积压与成长事件积压、卡住、达到重试上限。
+
 验证本机守护：`node scripts/test-memory-worker-supervisor.mjs`（仅运行临时假 Worker，不连接数据库或调用模型）。
 
 间隔可用 `YILING_MEMORY_SCHEDULER_INTERVAL_MS`（最小 5000）与 `YILING_MEMORY_WORKER_INTERVAL_MS`（最小 1000）调整。
@@ -139,3 +143,14 @@ Worker 会跟着网页一键启动器（根目录启动批处理）和 QQ 链路
 Worker 配置模型后会调用 LLM 对周期对话做结构化总结，验证来源消息 ID，再把快照、长期记忆新增/更新/失效和审计记录放进**同一个数据库事务**。模型未配置时保留队列任务；失败按退避策略重试。
 
 验证：`yarn test:scheduler`（周期边界）、`yarn test:scheduler-db`（幂等与清理）、`yarn test:memory-ai`（来源校验）。
+
+
+## 10. 统一成长事件中心
+
+- 事件与投递状态分别保存在 `growth_events` / `growth_event_deliveries`，按 `Character.id` 隔离。
+- 事件只存来源领域、事件类型/版本、聚合对象引用、时间、最小 payload 和稳定幂等键，不复制聊天正文。
+- 领域写入与 Outbox 事件必须在同一数据库事务内；消费者通过角色限定的领域 Gateway 读取来源。
+- `worker:watch` 统一领取事件投递，租约 5 分钟、带 fencing token；失败指数退避，最多 5 次。SKIPPED 是明确终态，不算成功，也不重试。
+- 成功、跳过或取消的事件在 30 天后清理；只要存在未完成或 FAILED 投递，事件就保留供恢复和排查。
+- Watchdog 检查已到期积压、运行中超时与达到重试上限的投递。详情见 `docs/growth-data-center-architecture.md`。
+- 只有明确排查后才手动恢复终态失败投递：`yarn growth:event:retry <deliveryId>`。命令只接受 `FAILED`，将新一轮 attemptCount 归零、保留 fencingToken 单调序列，并写入 `SYSTEM` 审计；重复执行不会重复入队。

@@ -1,7 +1,7 @@
 # 统一成长数据中心架构设计
 
-> 状态：架构方案（已对照现有租约 / 幂等实现复核，尚未进入数据库实现）
-> 日期：2026-11-09
+> 状态：第一阶段基础设施实现中（PR #29；Outbox、投递 Worker、首个只读消费者、Watchdog 与保留清理已落地，待 CI 和本地验收）
+> 日期：2026-11-10
 > 复核：第 3、6、13 节已按 `memory-job-lease.ts`、`social-relationship-queue.ts`、`memory-worker.ts`、`watchdog.ts` 的实际行为校对，租约与消费者幂等两处给出了具体参照物
 > 适用范围：忆灵空间成长系统
 
@@ -349,3 +349,21 @@
 ---
 
 **架构原则总结：统一的是身份、协作协议、证据追溯和可靠基础设施；保持独立的是各领域的数据所有权、业务规则和生命周期。**
+
+
+## 第一阶段实施记录（2026-11-10）
+
+### 第一批：Outbox 契约与持久化骨架
+
+- 新增 `GrowthEvent` 与 `GrowthEventDelivery`，角色统一使用 `Character.id`；事件与投递状态分表。
+- 事件信封只保存来源领域、稳定事件名、schemaVersion、聚合对象引用、发生时间、最小 JSON payload 和来源侧幂等键，不存聊天正文。
+- 投递状态包含 QUEUED / RUNNING / SUCCEEDED / RETRY_WAIT / FAILED / SKIPPED / CANCELLED；租约字段采用社交评估队列的 leaseToken / leaseExpiresAt / fencingToken 口径。
+- 新增事务内 `publishGrowthEvent(tx, input)`。业务事务回滚时 Outbox 一起回滚；重复业务键返回既有事件，不重复扇出。
+- 订阅采用代码常量，发布时快照化；第一阶段不回补订阅启用前的历史事件。
+- 默认每个消费者最多尝试 5 次，租约 5 分钟；成功/跳过/取消事件保留 30 天后清理，失败和未完成投递保留。
+- 第一批已接入 Worker 投递循环，并增加首个只读消费者 `growth.memory-source-integrity`：收到 `memory.event.created` 后，通过角色限定的记忆领域 Gateway 验证来源忆泡；不复制正文、不调用模型、不修改领域数据。
+- 记忆系统在忆泡真实创建的同一事务中发布 `memory.event.created`，由首个只读消费者校验来源引用；社交经历事件暂不发布，因为当前没有实际订阅者，避免制造无消费者的投递历史。重复业务键不会重复发布。
+- Watchdog 已增加事件投递积压、运行中超时和重试上限告警；成功/跳过/取消事件在 30 天后清理，含未完成或 FAILED 投递的事件保留。
+- 增加 `yarn growth:event:retry <deliveryId>` 运维恢复命令，只允许 FAILED → QUEUED；恢复与 SYSTEM 审计同事务，重置 attemptCount 但不重置 fencingToken。
+- 共享 Worker 已接入默认「启动忆灵空间」启动器（可用 `YILING_WORKER_DISABLED=1` 关闭），也继续兼容 `worker:watch` 与 QQ 链路启动方式；多个 Worker 依赖 `SKIP LOCKED` 与 fencing 安全并行。
+- 新增隔离数据库测试覆盖事务回滚、发布幂等、跨角色来源读取、租约过期回收、旧租约 fencing、消费者成功/失败与保留清理；CI 已接入该测试入口。

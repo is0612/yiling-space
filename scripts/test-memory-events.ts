@@ -392,8 +392,9 @@ const fakeTx = {
     },
   },
   auditLog: { create: async () => ({}) },
+  $executeRaw: async () => 1,
 } as unknown as MemoryApplyTx;
-const applyContext = { memoryScopeId: "scope", characterId: "character", snapshotId: null, timeZone: TZ, state: "FINAL" as const };
+const applyContext = { memoryScopeId: "scope", characterId: "00000000-0000-4000-8000-000000000001", snapshotId: null, timeZone: TZ, state: "FINAL" as const };
 const applyDraft = async (at: Date, conversationId: string, title = collisionTitle) => {
   const message = { id: `message-${conversationId}`, occurredAt: at, conversationId };
   return applyMemoryEvents(fakeTx, applyContext, [{
