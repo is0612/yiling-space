@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
 import { encryptApiKey } from "../server/utils/credential-encryption";
-import { listReflectionRuns, requestReflection, reviewReflectionSuggestion, retryReflection } from "../server/utils/reflection-service";
+import { deleteReflections, listReflectionRuns, requestReflection, reviewReflectionSuggestion, retryReflection } from "../server/utils/reflection-service";
 import { collectReflectionSources, processNextReflectionRun, type ReflectionSource } from "../server/utils/reflection-worker";
 
 const url = new URL(process.env.DATABASE_URL ?? "");
@@ -76,8 +76,8 @@ async function memory(f: Fixture, scopeId = f.globalScopeId, detail = "公开反
 function request(f: Fixture, requestKey = randomUUID(), days = 7) { return requestReflection(prisma, { ownerId: f.ownerId, characterId: f.characterId, requestKey, days }); }
 function work(workerId = "reflection-test") { return processNextReflectionRun(prisma, { workerId }); }
 async function generate(f: Fixture, count = 1) {
-  await memory(f);
-  respond = sources => ({ suggestions: Array.from({ length: count }, (_, index) => suggestion(sources, `建议${index + 1}`)) });
+  for (let index = 0; index < count; index++) await memory(f);
+  respond = sources => ({ suggestions: Array.from({ length: count }, (_, index) => suggestion(sources.slice(index, index + 1), `建议${index + 1}`)) });
   const result = await request(f);
   assert.equal((await work()).status, "SUCCEEDED");
   return prisma.reflectionRun.findUniqueOrThrow({ where: { id: result.run.id }, include: { suggestions: true } });
@@ -129,6 +129,39 @@ try {
       const refs = item.sourceRefs as Array<{ key: string; hash: string }>;
       assert(refs.length > 0 && refs.every(ref => requests.at(-1)!.sources.some(source => source.key === ref.key && source.hash === ref.hash)));
     }
+  });
+
+  await scenario("unchanged evidence reuses results across request keys and windows; changed evidence can reflect again", async f => {
+    const first = await generate(f);
+    for (const decision of ["DEFERRED", "REJECTED"] as const) {
+      await review(f, first.suggestions[0]!.id, decision);
+      const repeated = await Promise.all([request(f), request(f, randomUUID(), 14), request(f, randomUUID(), 30)]);
+      assert(repeated.every(result => !result.created && result.run.id === first.id));
+      assert.equal(requests.length, f.before + 1);
+      assert.equal(await prisma.reflectionRun.count({ where: { characterId: f.characterId } }), 1);
+    }
+    const ref = (first.suggestions[0]!.sourceRefs as Array<{ id: string }>)[0]!;
+    await prisma.memoryEvent.update({ where: { id: ref.id }, data: { detail: "新增核验结果，原来的判断需要调整。" } });
+    const next = await request(f); assert(next.created);
+    assert.equal((await work()).status, "SUCCEEDED");
+    assert.equal(await prisma.reflectionSuggestion.count({ where: { runId: next.run.id } }), 1);
+  });
+
+  await scenario("new evidence cannot resurrect suggestions based only on previously accepted evidence", async f => {
+    const first = await generate(f);
+    await review(f, first.suggestions[0]!.id, "ACCEPTED");
+    const oldId = (first.suggestions[0]!.sourceRefs as Array<{ id: string }>)[0]!.id;
+    const fresh = await memory(f);
+    respond = sources => ({ suggestions: [
+      suggestion(sources.filter(ref => ref.id === oldId), "换了说法的旧建议"),
+      suggestion(sources.filter(ref => ref.id === fresh.id), "新增证据建议"),
+      suggestion(sources.filter(ref => ref.id === fresh.id), "本轮重复建议"),
+    ] });
+    const next = await request(f); assert(next.created);
+    assert.equal((await work()).status, "SUCCEEDED");
+    const suggestions = await prisma.reflectionSuggestion.findMany({ where: { runId: next.run.id } });
+    assert.deepEqual(suggestions.map(row => row.title), ["新增证据建议"]);
+    assert.equal((await request(f)).run.id, next.run.id);
   });
 
   await scenario("empty evidence succeeds without model calls; forged source suggestions are discarded entirely", async f => {
@@ -225,6 +258,7 @@ try {
 
   await scenario("two workers claim once and long fetch holds no transaction blocking another review", async f => {
     const previous = await generate(f);
+    await memory(f);
     const started = deferred(); const release = deferred();
     respond = async sources => { started.resolve(); await release.promise; return { suggestions: [suggestion(sources)] }; };
     const next = await request(f);
@@ -239,5 +273,45 @@ try {
     } finally { release.resolve(); await guarded(Promise.all(workers)); }
   });
 
-  console.log("Reflection DB tests passed: domain authorization, source-backed model output, empty/forged sources, review audit, retry/backoff, expiry/fencing, concurrent claim and nonblocking model I/O.");
+  await scenario("deletion is owner-scoped, cascades accepted conclusions, preserves evidence and permits regeneration", async f => {
+    const run = await generate(f);
+    await review(f, run.suggestions[0]!.id, "ACCEPTED");
+    await assert.rejects(() => deleteReflections(prisma, { ownerId: f.foreignOwnerId, characterId: f.characterId, runId: run.id }), error => status(error, 404));
+    await assert.rejects(() => deleteReflections(prisma, { ownerId: f.ownerId, characterId: f.foreignCharacterId, runId: run.id }), error => status(error, 404));
+    const deleted = await deleteReflections(prisma, { ownerId: f.ownerId, characterId: f.characterId, runId: run.id });
+    assert.deepEqual(deleted, { deletedRuns: 1, deletedSuggestions: 1 });
+    assert.equal(await prisma.reflectionSuggestion.count({ where: { runId: run.id } }), 0);
+    assert.equal(await prisma.memoryEvent.count({ where: { memoryScopeId: f.globalScopeId } }), 1);
+    assert.equal(await prisma.auditLog.count({ where: { entityId: run.id, action: "reflection.deleted" } }), 1);
+    await assert.rejects(() => deleteReflections(prisma, { ownerId: f.ownerId, characterId: f.characterId, runId: run.id }), error => status(error, 404));
+    assert((await request(f)).created);
+    assert.equal((await work()).status, "SUCCEEDED");
+  });
+
+  await scenario("clear cancels queued runs, is role-scoped and succeeds on empty history", async f => {
+    await generate(f); await memory(f); await request(f);
+    const foreign = await prisma.reflectionRun.create({ data: { characterId: f.foreignCharacterId, requestKey: randomUUID(), periodStart: new Date(Date.now() - 86_400_000), periodEnd: new Date() } });
+    const input = { ownerId: f.ownerId, characterId: f.characterId };
+    assert.deepEqual(await deleteReflections(prisma, input), { deletedRuns: 2, deletedSuggestions: 1 });
+    assert.equal(await prisma.reflectionRun.count({ where: { characterId: f.characterId } }), 0);
+    assert(await prisma.reflectionRun.findUnique({ where: { id: foreign.id } }));
+    assert.deepEqual(await deleteReflections(prisma, input), { deletedRuns: 0, deletedSuggestions: 0 });
+    assert.equal(await prisma.auditLog.count({ where: { characterId: f.characterId, action: "reflection.cleared" } }), 2);
+  });
+
+  await scenario("deleting a running task fences out its in-flight model result", async f => {
+    await memory(f);
+    const started = deferred(); const release = deferred();
+    respond = async sources => { started.resolve(); await release.promise; return { suggestions: [suggestion(sources)] }; };
+    const requested = await request(f); const worker = work();
+    try {
+      await guarded(started.promise);
+      assert.deepEqual(await deleteReflections(prisma, { ownerId: f.ownerId, characterId: f.characterId, runId: requested.run.id }), { deletedRuns: 1, deletedSuggestions: 0 });
+      release.resolve(); assert.equal((await guarded(worker)).status, undefined);
+      assert.equal(await prisma.reflectionRun.count({ where: { characterId: f.characterId } }), 0);
+      assert.equal(await prisma.reflectionSuggestion.count({ where: { runId: requested.run.id } }), 0);
+    } finally { release.resolve(); await guarded(worker); }
+  });
+
+  console.log("Reflection DB tests passed: deletion/clear isolation and fencing, domain authorization, source-backed model output, empty/forged sources, review audit, retry/backoff, expiry/fencing, concurrent claim and nonblocking model I/O.");
 } finally { globalThis.fetch = originalFetch; await prisma.$disconnect(); }

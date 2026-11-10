@@ -3877,6 +3877,51 @@ paths:
         '403': { description: 跨站或非同源写入被拒绝 }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: 请求编号冲突或已有执行中反思 }
+    delete:
+      tags: [Characters]
+      operationId: clearReflections
+      summary: 清空当前角色的全部反思与成长结论
+      description: 仅拥有者可操作，他人角色404。事务内删除所有状态的反思任务并级联删除建议和已接受的成长结论，保留来源资料、模型用量和历史审计。排队任务取消，运行中旧结果不能重新写入；已发出的模型请求可能仍计费。删除后相同来源可重新反思。清空与USER审计同事务，空记录返回0。
+      responses:
+        '200':
+          description: 已清空
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deletedRuns, deletedSuggestions]
+                properties:
+                  deletedRuns: { type: integer, minimum: 0 }
+                  deletedSuggestions: { type: integer, minimum: 0 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: 跨站或非同源写入被拒绝 }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /characters/{characterId}/growth/reflections/{runId}:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+      - name: runId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [Characters]
+      operationId: deleteReflection
+      summary: 删除一次反思及其全部建议和成长结论
+      description: 仅拥有者可操作，任务必须属于当前角色，否则404。支持所有任务状态；事务锁协调排队、重试与Worker提交，删除后旧结果不能复活。级联删除本次建议与成长结论，保留来源、用量与审计；写入USER删除审计。重复删除返回404。删除后相同来源可重新反思，已发出的模型请求可能仍计费。
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deletedRuns, deletedSuggestions]
+                properties:
+                  deletedRuns: { type: integer, enum: [1] }
+                  deletedSuggestions: { type: integer, minimum: 0 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: 跨站或非同源写入被拒绝 }
+        '404': { $ref: '#/components/responses/NotFound' }
   /characters/{characterId}/growth/reflections/{runId}/retry:
     parameters:
       - $ref: '#/components/parameters/CharacterId'

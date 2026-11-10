@@ -1581,6 +1581,7 @@ model ReflectionRun {
   lastError String? @db.VarChar(500)
   model String? @db.VarChar(120)
   promptVersion String? @db.VarChar(80)
+  sourcesHash String? @db.VarChar(64)
   completedAt DateTime? @db.Timestamptz(6)
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
@@ -1589,6 +1590,7 @@ model ReflectionRun {
 
   @@unique([characterId, requestKey])
   @@index([status, runAt])
+  @@index([characterId, sourcesHash])
   @@index([characterId, createdAt])
   @@map("reflection_runs")
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { parseJsonLoose } from "../server/utils/loose-json";
-import { normalizeReflectionSuggestions, type ReflectionSource } from "../server/utils/reflection-worker";
+import { dedupeReflectionSuggestions, reflectionSourcesHash, normalizeReflectionSuggestions, type ReflectionSource } from "../server/utils/reflection-worker";
 
 const source: ReflectionSource = {
   key: "memory:6c66d8c4-80a8-4b84-9c20-1b9bb72a09b4", type: "memory",
@@ -36,4 +36,11 @@ assert.deepEqual(normalizeReflectionSuggestions({ suggestions: [valid] }, [{ ...
 assert.deepEqual(normalizeReflectionSuggestions({ suggestions: [valid] }, [{ ...source, id: "invalid" }]), []);
 const fenced = `\`\`\`json\n${JSON.stringify({ suggestions: [valid] })}\n\`\`\``;
 assert.equal(normalizeReflectionSuggestions(parseJsonLoose(fenced, { expect: "object" }), [source]).length, 1);
-console.log("Reflection output checks passed: bounds, empty results, strict root, fabricated reference rejection, canonical hashes and fenced JSON; no database/model calls.");
+const changed = { ...source, hash: "b".repeat(64) };
+assert.equal(reflectionSourcesHash([source, changed]), reflectionSourcesHash([changed, source]));
+assert.notEqual(reflectionSourcesHash([source]), reflectionSourcesHash([changed]));
+assert.deepEqual(dedupeReflectionSuggestions([result], [[source]]), []);
+assert.equal(dedupeReflectionSuggestions([result, { ...result, title: "不同措辞" }], []).length, 1);
+assert.equal(dedupeReflectionSuggestions([{ ...result, sourceRefs: [changed] }], [[source]]).length, 1);
+assert.equal(dedupeReflectionSuggestions([result], [null, {}]).length, 1);
+console.log("Reflection output checks passed: bounds, empty results, strict root, fabricated reference rejection, canonical hashes, evidence deduplication and fenced JSON; no database/model calls.");

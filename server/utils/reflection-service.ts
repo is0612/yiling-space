@@ -1,7 +1,7 @@
 import { createError } from "h3";
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { buildPage } from "./pagination";
-import { validateReflectionSourceRefs } from "./reflection-worker";
+import { collectReflectionSources, reflectionSourcesHash, validateReflectionSourceRefs } from "./reflection-worker";
 
 const runInclude = { suggestions: { orderBy: [{ createdAt: "asc" as const }, { id: "asc" as const }] } };
 export function parseReflectionRequest(value: unknown) {
@@ -39,7 +39,11 @@ export async function requestReflection(prisma: PrismaClient, input: { ownerId: 
       return { run: publicRun(existing), created: false };
     }
     if (await tx.reflectionRun.findFirst({ where: { characterId: input.characterId, status: { in: ["QUEUED", "RUNNING"] } }, select: { id: true } })) throw createError({ statusCode: 409, statusMessage: "当前角色已有待执行或运行中的反思，请先等待完成。" });
-    const run = await tx.reflectionRun.create({ data: { characterId: input.characterId, requestKey: parsed.requestKey, periodStart: new Date(now.getTime() - parsed.days * 86_400_000), periodEnd: now }, include: runInclude });
+    const periodStart = new Date(now.getTime() - parsed.days * 86_400_000);
+    const sourcesHash = reflectionSourcesHash(await collectReflectionSources(tx, input.characterId, periodStart, now));
+    const completed = await tx.reflectionRun.findFirst({ where: { characterId: input.characterId, status: "SUCCEEDED", sourcesHash }, include: runInclude, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+    if (completed) return { run: publicRun(completed), created: false };
+    const run = await tx.reflectionRun.create({ data: { characterId: input.characterId, requestKey: parsed.requestKey, periodStart, periodEnd: now, sourcesHash }, include: runInclude });
     await tx.auditLog.create({ data: { actorType: "USER", actorId: input.ownerId, characterId: input.characterId, action: "reflection.requested", entityType: "ReflectionRun", entityId: run.id, details: { days: parsed.days } } });
     return { run: publicRun(run), created: true };
   });
@@ -57,6 +61,28 @@ export async function retryReflection(prisma: PrismaClient, input: { ownerId: st
     return { run: publicRun(await tx.reflectionRun.findUniqueOrThrow({ where: { id: run.id }, include: runInclude })) };
   });
 }
+export async function deleteReflections(prisma: PrismaClient, input: { ownerId: string; characterId: string; runId?: string }) {
+  return prisma.$transaction(async tx => {
+    // Share the request/retry lock order, then lock runs against worker completion.
+    const character = await tx.$queryRaw<Array<{ id: string }>>`SELECT "id" FROM "characters" WHERE "id"=${input.characterId}::uuid AND "ownerId"=${input.ownerId}::uuid FOR UPDATE`;
+    if (!character.length) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
+    const runs = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "reflection_runs" WHERE "characterId"=${input.characterId}::uuid
+        AND (${input.runId ?? null}::uuid IS NULL OR "id"=${input.runId ?? null}::uuid)
+      ORDER BY "id" FOR UPDATE
+    `;
+    if (input.runId && !runs.length) throw createError({ statusCode: 404, statusMessage: "反思任务不存在。" });
+    const ids = runs.map(run => run.id);
+    const deletedSuggestions = await tx.reflectionSuggestion.count({ where: { runId: { in: ids } } });
+    const deleted = await tx.reflectionRun.deleteMany({ where: { characterId: input.characterId, id: { in: ids } } });
+    // Cascading deletion also removes accepted conclusions. Missing runs fence out old workers.
+    await tx.auditLog.create({ data: { actorType: "USER", actorId: input.ownerId, characterId: input.characterId,
+      action: input.runId ? "reflection.deleted" : "reflection.cleared", entityType: input.runId ? "ReflectionRun" : "Character", entityId: input.runId ?? input.characterId,
+      details: { deletedRuns: deleted.count, deletedSuggestions } } });
+    return { deletedRuns: deleted.count, deletedSuggestions };
+  });
+}
+
 export function parseReflectionReview(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw createError({ statusCode: 400, statusMessage: "审核内容无效。" });
   const body = value as Record<string, unknown>;

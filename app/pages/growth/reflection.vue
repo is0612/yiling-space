@@ -45,6 +45,11 @@ const reviewSaving = ref(false);
 const reviewError = ref("");
 const reviewTarget = ref<(ActionTarget & { title: string; decision: Decision }) | null>(null);
 const reviewNote = ref("");
+const deleteOpen = ref(false);
+const deleteSaving = ref(false);
+const deleteError = ref("");
+const deleteTarget = ref<(ActionTarget & { all: boolean; label: string }) | null>(null);
+const deletingRoles = new Set<string>();
 let generation = 0;
 let listVersion = 0;
 let confirmationVersion = 0;
@@ -120,10 +125,10 @@ function changePage(value: number) { page.value = value; runs.value = []; void l
 function setView(value: "all" | "accepted") { view.value = value; }
 function closeConfirmations() {
   confirmationVersion += 1;
-  createOpen.value = false; retryOpen.value = false; reviewOpen.value = false;
-  createSaving.value = false; retrySaving.value = false; reviewSaving.value = false;
-  createTarget.value = null; retryTarget.value = null; reviewTarget.value = null;
-  createError.value = ""; retryError.value = ""; reviewError.value = ""; reviewNote.value = "";
+  createOpen.value = false; retryOpen.value = false; reviewOpen.value = false; deleteOpen.value = false;
+  createSaving.value = false; retrySaving.value = false; reviewSaving.value = false; deleteSaving.value = false;
+  createTarget.value = null; retryTarget.value = null; reviewTarget.value = null; deleteTarget.value = null;
+  createError.value = ""; retryError.value = ""; reviewError.value = ""; reviewNote.value = ""; deleteError.value = "";
 }
 function changeDays(value: number) {
   if (value !== 7 && value !== 14 && value !== 30) return;
@@ -148,14 +153,14 @@ async function confirmCreate() {
   createSaving.value = true;
   createError.value = "";
   try {
-    await $fetch<{ run: ReflectionRun; created: boolean }>(api(target.role), {
+    const result = await $fetch<{ run: ReflectionRun; created: boolean }>(api(target.role), {
       method: "POST", body: { requestKey: target.id, days: selectedDays },
     });
     if (!isActionCurrent(target)) return;
     requestKey.value = newRequestKey();
     closeConfirmations();
     page.value = 1;
-    ElMessage.success("反思请求已提交，请刷新查看执行进度；建议仍需你审阅。");
+    ElMessage.success(!result.created && result.run.status === "SUCCEEDED" ? "资料没有变化，已复用之前的反思结果，不会重复生成建议。" : "反思请求已提交，请刷新查看执行进度；建议仍需你审阅。");
     await load();
   } catch (error) {
     if (!isActionCurrent(target)) return;
@@ -219,6 +224,41 @@ async function confirmReview() {
   }
 }
 
+function openDelete(run?: ReflectionRun) {
+  const role = characterId.value;
+  if (!role || disposed || deletingRoles.has(role) || (!run && total.value <= 0)) return;
+  closeConfirmations();
+  deleteTarget.value = { role, generation, sequence: confirmationVersion, id: run?.id ?? "", all: !run,
+    label: run ? `${shortDate(run.periodStart)} — ${shortDate(run.periodEnd)} 的阶段反思` : "当前角色的全部反思记录" };
+  deleteOpen.value = true;
+}
+async function confirmDelete() {
+  const target = deleteTarget.value;
+  if (!target || !deleteOpen.value || deleteSaving.value || deletingRoles.has(target.role) || !isActionCurrent(target)) return;
+  deleteSaving.value = true;
+  deleteError.value = "";
+  deletingRoles.add(target.role);
+  try {
+    const result = await $fetch<{ deletedRuns: number; deletedSuggestions: number }>(target.all ? api(target.role) : `${api(target.role)}/${encodeURIComponent(target.id)}`, { method: "DELETE" });
+    if (!isActionCurrent(target)) return;
+    closeConfirmations();
+    // Invalidate older list reads immediately, including a last-page read issued before deletion.
+    listVersion += 1;
+    page.value = 1;
+    runs.value = [];
+    total.value = Math.max(0, total.value - result.deletedRuns);
+    requestKey.value = "";
+    ElMessage.success(`已删除 ${result.deletedRuns} 次反思及 ${result.deletedSuggestions} 条建议（包括成长结论）。相同来源可重新发起反思。`);
+    await load();
+  } catch (error) {
+    if (!isActionCurrent(target)) return;
+    deleteError.value = errorText(error, "删除结果未确认，请刷新核对后重试。");
+  } finally {
+    deletingRoles.delete(target.role);
+    if (isActionCurrent(target)) deleteSaving.value = false;
+  }
+}
+
 watch(characterId, () => {
   generation += 1; listVersion += 1;
   closeConfirmations();
@@ -244,7 +284,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
         <div class="intro-copy">
           <span class="section-kicker">阶段回望</span>
           <h2>{{ activeCharacter.name }}，这段时间有什么变化？</h2>
-          <p>反思只在你主动发起时运行。系统读取当前角色的公开事实、已确认知识与阶段总结，形成带来源的建议，交给你审阅。</p>
+          <p>反思只在你主动发起时运行。系统读取当前角色的公开事实、已确认知识与阶段总结，形成带来源的建议，交给你审阅。资料未变化时复用已有结果；新一轮只保留有新增或修改证据的建议。</p>
           <div class="intro-actions">
             <el-select
               :model-value="days"
@@ -300,12 +340,23 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
               成长结论 · 本页 {{ acceptedCount }}
             </el-radio-button>
           </el-radio-group>
-          <el-button
-            :loading="loading"
-            @click="load"
-          >
-            刷新记录
-          </el-button>
+          <div class="record-actions">
+            <el-button
+              :loading="loading"
+              @click="load"
+            >
+              刷新记录
+            </el-button>
+            <el-button
+              v-if="total > 0"
+              type="danger"
+              plain
+              :disabled="deleteSaving"
+              @click="openDelete()"
+            >
+              清空全部反思
+            </el-button>
+          </div>
         </div>
         <p
           v-if="view === 'accepted'"
@@ -342,9 +393,19 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
           >
             <header class="run-heading">
               <div><span class="section-kicker">{{ shortDate(run.periodStart) }} — {{ shortDate(run.periodEnd) }}</span><h3>阶段反思</h3></div>
-              <el-tag :type="runTone(run.status)">
-                {{ runLabels[run.status] }}
-              </el-tag>
+              <div class="record-actions">
+                <el-tag :type="runTone(run.status)">
+                  {{ runLabels[run.status] }}
+                </el-tag>
+                <el-button
+                  type="danger"
+                  text
+                  :disabled="deleteSaving"
+                  @click="openDelete(run)"
+                >
+                  删除本次反思
+                </el-button>
+              </div>
             </header>
             <div class="run-meta">
               <span>提交于 {{ dateTime(run.createdAt) }}</span><span>尝试 {{ run.attemptCount }} / {{ run.maxAttempts }}</span><span v-if="run.model">模型 {{ run.model }}</span><span v-if="run.promptVersion">版本 {{ run.promptVersion }}</span>
@@ -576,6 +637,42 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
         </el-button>
       </template>
     </el-dialog>
+    <el-dialog
+      :model-value="deleteOpen"
+      :title="deleteTarget?.all ? '清空全部反思' : '删除本次反思'"
+      width="min(540px, 94vw)"
+      @update:model-value="value => { if (!value) closeConfirmations(); }"
+    >
+      <p class="dialog-copy">
+        将删除角色 <strong>{{ activeCharacter?.name }}</strong> 的{{ deleteTarget?.label }}。
+      </p>
+      <el-alert
+        title="删除包括所有建议、审核记录与已保存的成长结论，且不可撤销。正在排队或运行的反思也会删除，后台旧结果不会恢复这些记录。"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <p class="muted-note">
+        删除后，相同来源可重新发起反思；原始记忆、知识与阶段总结保留。
+      </p>
+      <el-alert
+        v-if="deleteError"
+        :title="deleteError"
+        type="error"
+        :closable="false"
+      />
+      <template #footer>
+        <el-button @click="closeConfirmations">
+          取消
+        </el-button><el-button
+          type="danger"
+          :loading="deleteSaving"
+          @click="confirmDelete"
+        >
+          {{ deleteTarget?.all ? '确认清空全部' : '确认删除' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -594,6 +691,8 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
 .reflection-summary span { color: var(--dim); font-size: 12px; }
 .reflection-records, .run-list { display: grid; gap: 16px; min-width: 0; }
 .records-toolbar, .run-heading, .suggestion-heading, .reflection-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.record-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.record-actions :deep(.el-button + .el-button) { margin-left: 0; }
 .reflection-run { padding: 24px; min-width: 0; }
 .run-heading h3 { margin: 6px 0 0; color: #30463f; font-size: 18px; }
 .run-meta { display: flex; gap: 8px 18px; flex-wrap: wrap; margin: 15px 0; color: var(--dim); font-size: 12px; }
