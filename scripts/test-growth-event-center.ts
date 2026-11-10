@@ -3,6 +3,7 @@ import { growthEventRetryDelayMs } from "../server/utils/growth-event-delivery";
 import {
   GROWTH_EVENT_LEASE_MS,
   GROWTH_EVENT_MAX_ATTEMPTS,
+  GROWTH_EVENT_MAX_PAYLOAD_BYTES,
   GROWTH_EVENT_SUCCESS_RETENTION_DAYS,
   listGrowthEventSubscribers,
   normalizeGrowthEventInput,
@@ -37,6 +38,8 @@ const invalidCases: Array<[string, Record<string, unknown>]> = [
   ["empty character", { characterId: " " }],
   ["unknown domain", { sourceDomain: "other" }],
   ["invalid event type", { eventType: "Memory Event Created" }],
+  ["event type source mismatch", { eventType: "social.experience.created" }],
+  ["oversized payload", { payload: { text: "x".repeat(GROWTH_EVENT_MAX_PAYLOAD_BYTES) } }],
   ["empty aggregate", { aggregateType: "" }],
   ["empty aggregate id", { aggregateId: "" }],
   ["empty idempotency key", { idempotencyKey: "" }],
