@@ -347,13 +347,15 @@ export async function cleanupGrowthEvents(
 
 
 /**
- * 管理员/运维手动恢复已达到重试上限的投递。
- * 状态切换与 SYSTEM 审计同事务；fencingToken 保持单调递增，attemptCount 从新一轮归零。
+ * 角色所有者或 CLI 运维手动恢复已达到重试上限的投递。
+ * HTTP 路径必须传 actor，在 SQL 内约束角色归属并写 USER 审计；CLI 写 SYSTEM 审计。
+ * 状态切换与审计同事务，fencingToken 保持单调递增，attemptCount 从新一轮归零。
  */
 export async function retryFailedGrowthEventDelivery(
   prisma: PrismaClient,
   deliveryId: string,
   now: Date = new Date(),
+  actor?: { ownerId: string; characterId: string },
 ): Promise<{
   deliveryId: string;
   eventId: string;
@@ -371,13 +373,20 @@ export async function retryFailedGrowthEventDelivery(
       characterId: string;
       consumerKey: string;
       previousAttemptCount: number;
+      previousLastError: string | null;
     }>>`
       WITH candidate AS (
-        SELECT delivery."id", delivery."attemptCount"
+        SELECT delivery."id", delivery."attemptCount", delivery."lastError"
         FROM "growth_event_deliveries" AS delivery
+        INNER JOIN "growth_events" AS source_event ON source_event."id" = delivery."eventId"
+        INNER JOIN "characters" AS character ON character."id" = source_event."characterId"
         WHERE delivery."id" = ${deliveryId}::uuid
           AND delivery."status" = 'FAILED'::"GrowthEventDeliveryStatus"
-        FOR UPDATE
+          AND (${actor?.ownerId ?? null}::uuid IS NULL OR (
+            character."ownerId" = ${actor?.ownerId ?? null}::uuid
+            AND character."id" = ${actor?.characterId ?? null}::uuid
+          ))
+        FOR UPDATE OF delivery
       ),
       updated AS (
         UPDATE "growth_event_deliveries" AS delivery
@@ -397,7 +406,8 @@ export async function retryFailedGrowthEventDelivery(
         RETURNING delivery."id" AS "deliveryId", delivery."eventId",
           event."characterId", delivery."consumerKey"
       )
-      SELECT updated.*, candidate."attemptCount" AS "previousAttemptCount"
+      SELECT updated.*, candidate."attemptCount" AS "previousAttemptCount",
+        candidate."lastError" AS "previousLastError"
       FROM updated
       INNER JOIN candidate ON candidate."id" = updated."deliveryId"
     `;
@@ -406,7 +416,8 @@ export async function retryFailedGrowthEventDelivery(
 
     await tx.auditLog.create({
       data: {
-        actorType: "SYSTEM",
+        actorType: actor ? "USER" : "SYSTEM",
+        actorId: actor?.ownerId,
         characterId: row.characterId,
         action: "growth.event_delivery.manual_retry",
         entityType: "GrowthEventDelivery",
@@ -415,9 +426,13 @@ export async function retryFailedGrowthEventDelivery(
           eventId: row.eventId,
           consumerKey: row.consumerKey,
           retryQueuedAt: now.toISOString(),
+          previousStatus: "FAILED",
+          previousAttemptCount: row.previousAttemptCount,
+          previousLastError: row.previousLastError,
         },
       },
     });
-    return row;
+    const { previousLastError: _previousLastError, ...result } = row;
+    return result;
   });
 }

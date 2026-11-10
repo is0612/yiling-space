@@ -150,7 +150,11 @@ Worker 配置模型后会调用 LLM 对周期对话做结构化总结，验证�
 - 事件与投递状态分别保存在 `growth_events` / `growth_event_deliveries`，按 `Character.id` 隔离。
 - 事件只存来源领域、事件类型/版本、聚合对象引用、时间、最小 payload 和稳定幂等键，不复制聊天正文。
 - 领域写入与 Outbox 事件必须在同一数据库事务内；消费者通过角色限定的领域 Gateway 读取来源。
-- `worker:watch` 统一领取事件投递，租约 5 分钟、带 fencing token；失败指数退避，最多 5 次。SKIPPED 是明确终态，不算成功，也不重试。
+- `worker:watch` 在同一进程内启动独立事件消费循环，不等待社交/记忆模型任务完成。每批最多连续处理 20 条；满批后通过零延时等待让出事件循环并继续查数据库，未领到任务或领取异常时等待 5 秒。`YILING_GROWTH_EVENT_IDLE_INTERVAL_MS` 可改空闲等待（1000–60000 毫秒，非法值回退 5000），独立于 `YILING_MEMORY_WORKER_INTERVAL_MS`。
+- 每条消费仍从持久数据库领取，租约 5 分钟、带 fencing token；同一进程的事件循环内不并发领取。失败指数退避，最多 5 次。SKIPPED 是明确终态，不算成功，也不重试。
+- 保留清理由独立循环启动时执行一次，以后每小时执行一次，每次最多删除 500 条事件；异常只记日志，不停止消费或原社交/记忆轮。不会为了清空积压在一小时内重复清理批次。
+- SIGINT/SIGTERM 会停止后续领取并清除等待计时器，等待正在进行的事件、清理或模型任务完成，再断开 Prisma；不会取消已经开始的数据库调用或模型请求。强制终止进程仍靠原有数据库租约恢复。
+- `worker:run` 单次执行一批最多 20 条事件、一次有界清理，以及原有社交维护/社交评估/记忆轮各一次；任一流水线抛错会使单次命令退出码为 1，其余流水线继续执行。纯调度回归：`yarn tsx scripts/test-growth-event-runner.ts`（不连接数据库、不调用模型）。
 - 成功、跳过或取消的事件在 30 天后清理；只要存在未完成或 FAILED 投递，事件就保留供恢复和排查。
 - Watchdog 检查已到期积压、运行中超时与达到重试上限的投递。详情见 `docs/growth-data-center-architecture.md`。
 - 只有明确排查后才手动恢复终态失败投递：`yarn growth:event:retry <deliveryId>`。命令只接受 `FAILED`，将新一轮 attemptCount 归零、保留 fencingToken 单调序列，并写入 `SYSTEM` 审计；重复执行不会重复入队。

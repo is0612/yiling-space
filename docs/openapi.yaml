@@ -3672,6 +3672,133 @@ paths:
                             uncachedCalls: { type: integer, minimum: 0, description: 窗口内没有缓存明细的调用数 }
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /characters/{characterId}/growth/deliveries:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+    get:
+      tags: [Tasks]
+      operationId: listGrowthDeliveries
+      summary: 查询角色的成长事件投递与积压
+      description: 仅角色所有者可读；他人角色统一404。稳定排序createdAt DESC,id DESC，统计覆盖该角色全部状态。只返回运维字段，不返回payload或leaseToken。queueDelayMs从本轮runAt起算，仅等待状态有效；分页及统计在并发写入下可能变化。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: status
+          in: query
+          schema: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, SKIPPED, CANCELLED] }
+      responses:
+        '200':
+          description: 角色投递分页与状态汇总
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, page, pageSize, totalPages, hasMore, summary]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/GrowthDelivery' }
+                  total: { type: integer }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  totalPages: { type: integer }
+                  hasMore: { type: boolean }
+                  summary:
+                    type: object
+                    required: [statusCounts, readyCount, stuckCount, oldestReadyAt]
+                    properties:
+                      statusCounts:
+                        type: object
+                        additionalProperties: { type: integer, minimum: 0 }
+                        description: 七个投递状态的计数，空状态为0。
+                      readyCount: { type: integer, minimum: 0 }
+                      stuckCount: { type: integer, minimum: 0 }
+                      oldestReadyAt: { type: string, format: date-time, nullable: true }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /characters/{characterId}/growth/deliveries/{deliveryId}:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+      - name: deliveryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Tasks]
+      operationId: readGrowthDelivery
+      summary: 读取角色投递详情与最近50条人工恢复审计
+      description: 仅角色所有者可读；投递不属于该角色时404，不返回其它角色信息。审计按createdAt DESC,id DESC排列。
+      responses:
+        '200':
+          description: 投递及恢复审计
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/GrowthDelivery'
+                  - type: object
+                    required: [audits]
+                    properties:
+                      audits:
+                        type: array
+                        maxItems: 50
+                        items:
+                          type: object
+                          required: [id, actorType, actorId, createdAt, details]
+                          properties:
+                            id: { type: string, format: uuid }
+                            actorType: { type: string }
+                            actorId: { type: string, format: uuid, nullable: true }
+                            createdAt: { type: string, format: date-time }
+                            details: { type: object, nullable: true, additionalProperties: true }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /characters/{characterId}/growth/deliveries/{deliveryId}/retry:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+      - name: deliveryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Tasks]
+      operationId: retryGrowthDelivery
+      summary: 角色所有者恢复已失败的成长事件投递
+      description: 只接受FAILED，状态切换与USER审计同事务，保留上次错误及fencing序列，尝试次数归零。审计记录操作者、原错误和原尝试次数；不允许恢复正常或过期RUNNING，不绕过Worker租约回收。并发恢复最多一次成功。
+      responses:
+        '200':
+          description: 已重新排队
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deliveryId, eventId, characterId, consumerKey, previousAttemptCount]
+                properties:
+                  deliveryId: { type: string, format: uuid }
+                  eventId: { type: string, format: uuid }
+                  characterId: { type: string, format: uuid }
+                  consumerKey: { type: string }
+                  previousAttemptCount: { type: integer }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 跨站或非同源写入被拒绝
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 非FAILED或状态已被其它请求改变
   /tasks:
     get:
       tags: [Tasks]
@@ -4680,6 +4807,32 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    GrowthDelivery:
+      type: object
+      required: [id, eventId, consumerKey, status, attemptCount, maxAttempts, runAt, lockedAt, lockedBy, leaseExpiresAt, fencingToken, lastError, processedAt, createdAt, updatedAt, eventType, sourceDomain, aggregateType, aggregateId, occurredAt, leaseExpired, queueDelayMs]
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        consumerKey: { type: string }
+        status: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, SKIPPED, CANCELLED] }
+        attemptCount: { type: integer, minimum: 0 }
+        maxAttempts: { type: integer, minimum: 1 }
+        runAt: { type: string, format: date-time }
+        lockedAt: { type: string, format: date-time, nullable: true }
+        lockedBy: { type: string, nullable: true }
+        leaseExpiresAt: { type: string, format: date-time, nullable: true }
+        fencingToken: { type: integer, minimum: 0 }
+        lastError: { type: string, nullable: true }
+        processedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        eventType: { type: string }
+        sourceDomain: { type: string }
+        aggregateType: { type: string }
+        aggregateId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        leaseExpired: { type: boolean }
+        queueDelayMs: { type: integer, minimum: 0 }
     JournalRevision:
       type: object
       description: 日记或手账的一个完整版本。DIARY 是叙事正文；HANDBOOK 是结构化记录（正文 + 想法 + 一句 + 标签）。
