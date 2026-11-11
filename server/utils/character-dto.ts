@@ -1,3 +1,4 @@
+import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { resolveSocialAssessmentOutputBudget } from "./social-assessment-budget";
 import { resolveChatModelSettings } from "./chat-model-config";
 import { resolveEmojiFrequency } from "./emoji-frequency";
@@ -289,9 +290,9 @@ export function toCharacterDto(input: unknown): CharacterDto {
     chatApiKeySource: chatSettings.apiKeySource,
     memoryAssistantEnabled: config.memoryAssistantEnabled === true,
     memoryAssistantModel,
-    memoryAssistantTemperature: typeof config.memoryAssistantTemperature === "number" && Number.isFinite(config.memoryAssistantTemperature) ? Math.min(2, Math.max(0, config.memoryAssistantTemperature)) : 0.1,
-    memoryAssistantMaxInputTokens: typeof config.memoryAssistantMaxInputTokens === "number" && Number.isFinite(config.memoryAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.memoryAssistantMaxInputTokens))) : 12_288,
-    memoryAssistantMaxOutputTokens: typeof config.memoryAssistantMaxOutputTokens === "number" && Number.isFinite(config.memoryAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.memoryAssistantMaxOutputTokens))) : 2_048,
+    memoryAssistantTemperature: typeof config.memoryAssistantTemperature === "number" && Number.isFinite(config.memoryAssistantTemperature) ? Math.min(2, Math.max(0, config.memoryAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.memory.temperature,
+    memoryAssistantMaxInputTokens: typeof config.memoryAssistantMaxInputTokens === "number" && Number.isFinite(config.memoryAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.memoryAssistantMaxInputTokens))) : MODEL_PURPOSE_DEFAULTS.memory.maxInputTokens,
+    memoryAssistantMaxOutputTokens: typeof config.memoryAssistantMaxOutputTokens === "number" && Number.isFinite(config.memoryAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.memoryAssistantMaxOutputTokens))) : MODEL_PURPOSE_DEFAULTS.memory.maxOutputTokens,
     memoryAssistantApiBaseUrl: typeof config.memoryAssistantApiBaseUrl === "string"
       ? config.memoryAssistantApiBaseUrl
       : "",
@@ -299,9 +300,9 @@ export function toCharacterDto(input: unknown): CharacterDto {
     memoryAssistantConfigured: Boolean(memoryAssistantModel && memoryAssistantApiKeyConfigured),
     contextAssistantEnabled: config.contextAssistantEnabled === true,
     contextAssistantModel,
-    contextAssistantTemperature: typeof config.contextAssistantTemperature === "number" && Number.isFinite(config.contextAssistantTemperature) ? Math.min(2, Math.max(0, config.contextAssistantTemperature)) : 0.1,
-    contextAssistantMaxInputTokens: typeof config.contextAssistantMaxInputTokens === "number" && Number.isFinite(config.contextAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.contextAssistantMaxInputTokens))) : 16_384,
-    contextAssistantMaxOutputTokens: typeof config.contextAssistantMaxOutputTokens === "number" && Number.isFinite(config.contextAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.contextAssistantMaxOutputTokens))) : 2_048,
+    contextAssistantTemperature: typeof config.contextAssistantTemperature === "number" && Number.isFinite(config.contextAssistantTemperature) ? Math.min(2, Math.max(0, config.contextAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.context.temperature,
+    contextAssistantMaxInputTokens: typeof config.contextAssistantMaxInputTokens === "number" && Number.isFinite(config.contextAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.contextAssistantMaxInputTokens))) : MODEL_PURPOSE_DEFAULTS.context.maxInputTokens,
+    contextAssistantMaxOutputTokens: typeof config.contextAssistantMaxOutputTokens === "number" && Number.isFinite(config.contextAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.contextAssistantMaxOutputTokens))) : MODEL_PURPOSE_DEFAULTS.context.maxOutputTokens,
     contextAssistantApiBaseUrl: typeof config.contextAssistantApiBaseUrl === "string"
       ? config.contextAssistantApiBaseUrl
       : "",
@@ -310,16 +311,16 @@ export function toCharacterDto(input: unknown): CharacterDto {
     knowledgeAutoCollectEnabled: config.knowledgeAutoCollectEnabled === true,
     knowledgeAssistantEnabled: config.knowledgeAssistantEnabled === true,
     knowledgeAssistantModel,
-    knowledgeAssistantTemperature: typeof config.knowledgeAssistantTemperature === "number" && Number.isFinite(config.knowledgeAssistantTemperature) ? Math.min(2, Math.max(0, config.knowledgeAssistantTemperature)) : 0.1,
-    knowledgeAssistantMaxInputTokens: typeof config.knowledgeAssistantMaxInputTokens === "number" && Number.isFinite(config.knowledgeAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.knowledgeAssistantMaxInputTokens))) : 12_288,
-    knowledgeAssistantMaxOutputTokens: typeof config.knowledgeAssistantMaxOutputTokens === "number" && Number.isFinite(config.knowledgeAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.knowledgeAssistantMaxOutputTokens))) : 2_048,
+    knowledgeAssistantTemperature: typeof config.knowledgeAssistantTemperature === "number" && Number.isFinite(config.knowledgeAssistantTemperature) ? Math.min(2, Math.max(0, config.knowledgeAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.knowledge.temperature,
+    knowledgeAssistantMaxInputTokens: typeof config.knowledgeAssistantMaxInputTokens === "number" && Number.isFinite(config.knowledgeAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.knowledgeAssistantMaxInputTokens))) : MODEL_PURPOSE_DEFAULTS.knowledge.maxInputTokens,
+    knowledgeAssistantMaxOutputTokens: typeof config.knowledgeAssistantMaxOutputTokens === "number" && Number.isFinite(config.knowledgeAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.knowledgeAssistantMaxOutputTokens))) : MODEL_PURPOSE_DEFAULTS.knowledge.maxOutputTokens,
     knowledgeAssistantApiBaseUrl: typeof config.knowledgeAssistantApiBaseUrl === "string" ? config.knowledgeAssistantApiBaseUrl : "",
     knowledgeAssistantApiKeyConfigured,
     knowledgeAssistantConfigured: Boolean(knowledgeAssistantModel && knowledgeAssistantApiKeyConfigured),
     socialRelationshipAssessmentAssistantEnabled: config.socialRelationshipAssessmentAssistantEnabled === true,
     socialRelationshipAssessmentAssistantModel,
-    socialRelationshipAssessmentAssistantTemperature: typeof config.socialRelationshipAssessmentAssistantTemperature === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantTemperature) ? Math.min(2, Math.max(0, config.socialRelationshipAssessmentAssistantTemperature)) : 0.1,
-    socialRelationshipAssessmentAssistantMaxInputTokens: typeof config.socialRelationshipAssessmentAssistantMaxInputTokens === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.socialRelationshipAssessmentAssistantMaxInputTokens))) : 16_384,
+    socialRelationshipAssessmentAssistantTemperature: typeof config.socialRelationshipAssessmentAssistantTemperature === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantTemperature) ? Math.min(2, Math.max(0, config.socialRelationshipAssessmentAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.social.temperature,
+    socialRelationshipAssessmentAssistantMaxInputTokens: typeof config.socialRelationshipAssessmentAssistantMaxInputTokens === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.socialRelationshipAssessmentAssistantMaxInputTokens))) : MODEL_PURPOSE_DEFAULTS.social.maxInputTokens,
     socialRelationshipAssessmentAssistantMaxOutputTokens: resolveSocialAssessmentOutputBudget(config.socialRelationshipAssessmentAssistantMaxOutputTokens),
     socialRelationshipAssessmentAssistantApiBaseUrl,
     socialRelationshipAssessmentAssistantApiKeyConfigured,

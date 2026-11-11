@@ -1,3 +1,4 @@
+import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { isIP } from "node:net";
 import { isCharacterApiKeySaved } from "./credential-encryption";
 
@@ -21,7 +22,7 @@ export type ResolvedChatModelSettings = {
   apiKeySource: "character" | "environment" | "missing";
 };
 
-const DEFAULT_TEMPERATURE = 0.7;
+const DEFAULT_TEMPERATURE = MODEL_PURPOSE_DEFAULTS.chat.temperature;
 /**
  * 默认输出上限。
  *
@@ -29,7 +30,7 @@ const DEFAULT_TEMPERATURE = 0.7;
  * （实测一轮 35~2200，提示词越长越高）。1800 在复杂问题上会被思考吃空、正文为空，
  * 表现成「她这轮没说话」—— 而不给宽的下限省不下钱：max_tokens 只在真用到时计费。
  */
-const DEFAULT_MAX_TOKENS = 4096;
+const DEFAULT_MAX_TOKENS = MODEL_PURPOSE_DEFAULTS.chat.maxOutputTokens;
 const MIN_MAX_TOKENS = 256;
 const MAX_MAX_TOKENS = 8192;
 const MAX_MODEL_LENGTH = 120;

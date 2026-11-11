@@ -33,12 +33,10 @@ const domains = [
   { title: "记忆", description: "经历、长期记忆与阶段总结", icon: "▤", href: "/growth/memory" },
   { title: "社交", description: "好友、重要经历与关系评估", icon: "♧", href: "/growth/social" },
   { title: "知识", description: "候选整理、知识库与来源", icon: "◇", href: "/growth/knowledge" },
-  { title: "偏好", description: "她自己的喜恶、兴趣与形成依据", icon: "♡", href: "/growth/preferences" },
   { title: "语言系统", description: "语气、用词、句子长短与适用场景", icon: "✎", href: "/growth/language" },
-  { title: "愿望系统", description: "想做的事、追加进展与状态历史", icon: "◎", href: "/growth/goals" },
 ];
 function roleHref(path: string) {
-  const allowed = ["/growth/reflection", "/growth/knowledge", "/growth/social/assessments", "/growth/memory", "/growth/social", "/growth/memory/snapshots", "/growth/deliveries", "/growth/preferences", "/growth/language", "/growth/goals"];
+  const allowed = ["/growth/reflection", "/growth/knowledge", "/growth/social/assessments", "/growth/memory", "/growth/social", "/growth/memory/snapshots", "/growth/deliveries", "/growth/language"];
   const base = path.split(/[?#]/)[0] ?? "";
   const safe = allowed.includes(base) ? base : "/growth/reflection";
   return `${safe}?c=${encodeURIComponent(characterId.value)}`;
@@ -364,9 +362,7 @@ onBeforeUnmount(() => { disposed = true; roleGeneration += 1; requestVersion += 
             >
               <span class="overview-domain-icon">{{ domain.icon }}</span><div><strong>{{ domain.title }}</strong><small>{{ domain.description }}</small></div><span class="overview-arrow">↗</span>
             </NuxtLink>
-          </div><p class="overview-future">
-            后续逐步接入：状态系统　<span>当前不展示虚构进度</span>
-          </p>
+          </div>
         </section>
         <footer class="overview-footer">
           <span :class="{ 'overview-warning': overview.delivery.failed > 0 || overview.delivery.stuck > 0 }"><template v-if="overview.delivery.failed || overview.delivery.stuck">投递需关注：{{ overview.delivery.failed }} 条失败 · {{ overview.delivery.stuck }} 条过期租约</template><template v-else>投递当前未记录失败或过期租约</template> · {{ overview.delivery.ready }} 条已到执行时间 <NuxtLink :to="roleHref('/growth/deliveries')">查看投递记录</NuxtLink></span><span>统计截至 {{ formatDate(overview.generatedAt) }} · 无综合成长分数</span>

@@ -572,7 +572,7 @@ function runCharacterCommand(command: string) {
             <el-button @click="openProfile(selected)">
               <el-icon><Edit /></el-icon>编辑资料
             </el-button>
-            <el-button @click="navigateTo(`/characters/${selected.id}/settings/model?from=characters`)">
+            <el-button @click="navigateTo(`/models?c=${encodeURIComponent(selected.id)}&from=characters`)">
               <el-icon><Cpu /></el-icon>模型设置
             </el-button>
             <el-button @click="navigateTo({ path: `/characters/${selected.id}/settings/memory`, query: { ...route.query, c: selected.id, from: 'characters' } })">
@@ -774,7 +774,7 @@ function runCharacterCommand(command: string) {
                 link
                 type="primary"
                 size="small"
-                @click="navigateTo(`/characters/${selected.id}/settings/model?from=characters`)"
+                @click="navigateTo(`/models?c=${encodeURIComponent(selected.id)}&from=characters`)"
               >
                 配置语境助手模型
               </el-button>
@@ -823,7 +823,7 @@ function runCharacterCommand(command: string) {
                 link
                 type="primary"
                 size="small"
-                @click="navigateTo(`/characters/${selected.id}/settings/model?from=characters`)"
+                @click="navigateTo(`/models?c=${encodeURIComponent(selected.id)}&from=characters`)"
               >
                 配置记忆助手模型
               </el-button>

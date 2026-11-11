@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import { MODEL_PURPOSE_DEFAULTS } from "../shared/utils/model-purpose-defaults";
+import { resolveChatModelSettings } from "../server/utils/chat-model-config";
+import { MEMORY_ASSISTANT_DEFAULTS } from "../server/utils/memory-assistant";
+import { CONTEXT_ASSISTANT_DEFAULTS } from "../server/utils/context-assistant";
+import { resolveSocialRelationshipAssessmentRuntime } from "../server/utils/social-relationship-assessment-ai";
+import { SOCIAL_ASSESSMENT_OUTPUT_DEFAULT } from "../server/utils/social-assessment-budget";
+import { resolveKnowledgeAssistantRuntime } from "../server/utils/knowledge-ai";
+import { encryptApiKey } from "../server/utils/credential-encryption";
+import { toCharacterDto } from "../server/utils/character-dto";
+import { ASR_PRESET, VOICE_PRESET } from "../app/utils/voice-provider-preset";
+assert.equal(resolveChatModelSettings({}).temperature, MODEL_PURPOSE_DEFAULTS.chat.temperature);
+assert.equal(resolveChatModelSettings({}).maxTokens, MODEL_PURPOSE_DEFAULTS.chat.maxOutputTokens);
+assert.deepEqual(MEMORY_ASSISTANT_DEFAULTS, MODEL_PURPOSE_DEFAULTS.memory);
+assert.deepEqual(CONTEXT_ASSISTANT_DEFAULTS, MODEL_PURPOSE_DEFAULTS.context);
+assert.equal(SOCIAL_ASSESSMENT_OUTPUT_DEFAULT, MODEL_PURPOSE_DEFAULTS.social.maxOutputTokens);
+const encrypted = await encryptApiKey("purpose-default-test");
+const socialConfig = { socialRelationshipAssessmentAssistantEnabled: true, socialRelationshipAssessmentAssistantModel: "test", socialRelationshipAssessmentAssistantApiBaseUrl: "https://api.example.com/v1", socialRelationshipAssessmentAssistantApiKeyEncrypted: encrypted };
+const social = await resolveSocialRelationshipAssessmentRuntime(socialConfig);
+assert.equal(social?.temperature, MODEL_PURPOSE_DEFAULTS.social.temperature);
+assert.equal(social?.maxInputTokens, MODEL_PURPOSE_DEFAULTS.social.maxInputTokens);
+assert.equal((await resolveSocialRelationshipAssessmentRuntime({ ...socialConfig, socialRelationshipAssessmentAssistantTemperature: 0, socialRelationshipAssessmentAssistantMaxOutputTokens: 2048 }))?.temperature, 0);
+const config = { knowledgeAssistantEnabled: true, knowledgeAssistantModel: "test-model", knowledgeAssistantApiKeyEncrypted: encrypted };
+assert.equal((await resolveKnowledgeAssistantRuntime(config, "https://api.example.com/v1"))?.maxOutputTokens, 4096);
+assert.equal((await resolveKnowledgeAssistantRuntime({ ...config, knowledgeAssistantMaxOutputTokens: 2048, knowledgeAssistantTemperature: 0 }, "https://api.example.com/v1"))?.maxOutputTokens, 2048);
+const record = { id: "test", name: "角色", avatar: null, basePrompt: "", styleExamples: "", userAddress: "", status: "ACTIVE" as const, modelConfig: {}, updatedAt: new Date(), memorySetting: null, channelBindings: [], memoryScopes: [] };
+const dto = toCharacterDto(record);
+for (const [prefix, purpose] of [["memory", "memory"], ["context", "context"], ["knowledge", "knowledge"], ["socialRelationshipAssessment", "social"]] as const) {
+  assert.equal(Reflect.get(dto, `${prefix}AssistantTemperature`), MODEL_PURPOSE_DEFAULTS[purpose].temperature);
+  assert.equal(Reflect.get(dto, `${prefix}AssistantMaxInputTokens`), MODEL_PURPOSE_DEFAULTS[purpose].maxInputTokens);
+  assert.equal(Reflect.get(dto, `${prefix}AssistantMaxOutputTokens`), MODEL_PURPOSE_DEFAULTS[purpose].maxOutputTokens);
+}
+assert.equal(toCharacterDto({ ...record, modelConfig: { knowledgeAssistantTemperature: 0, knowledgeAssistantMaxOutputTokens: 1024 } }).knowledgeAssistantTemperature, 0);
+assert.equal(VOICE_PRESET.breeze.voice, "", "Cloned voice IDs must never be fabricated");
+assert.notEqual(ASR_PRESET.minimax.model, VOICE_PRESET.minimax.model, "TTS and ASR keep protocol-specific models");
+console.log("Purpose defaults: UI/runtime/DTO agreement, explicit saved values and zero temperature preserved, voice protocols remain distinct passed.");

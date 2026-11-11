@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
+import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 
 type PendingRequest = {
   url: string;
@@ -15,7 +16,7 @@ type PendingRequest = {
   reject: (error: unknown) => void;
 };
 
-export function buildPageHarness(relativePath: string) {
+export function buildPageHarness(relativePath: string, options: { props?: Record<string, unknown>; globals?: Record<string, unknown> } = {}) {
   // 调用方传入的路径相对 scripts/（如 "../app/pages/xxx.vue"），
   // 这里以 scripts/ 为基准解析，与 harness 自身所在目录无关。
   const pagePath = new URL(relativePath, new URL("../", import.meta.url));
@@ -54,7 +55,10 @@ return { ${names.join(", ")} };
   const successes: string[] = [];
   const unmountCallbacks: Array<() => void> = [];
   const context = createContext({
+    MODEL_PURPOSE_DEFAULTS,
     definePageMeta: () => {},
+    defineProps: () => options.props ?? { get characterId() { return role.value.id; }, embedded: true },
+    defineExpose: () => {},
     useRoute: () => ({ path: relativePath }),
     useCharacterSelection: () => ({ character: role }),
     ref: (value: unknown) => ({ value }),
@@ -76,6 +80,7 @@ return { ${names.join(", ")} };
     $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
       requests.push({ url, options, resolve, reject });
     }),
+    ...options.globals,
   });
   const executable = new Script(compiled.outputText, { filename: relativePath + ".actual-script.js" });
   const bindings = executable.runInContext(context) as Record<string, unknown>;
@@ -112,8 +117,9 @@ return { ${names.join(", ")} };
   function switchRole(id: string) {
     const previous = role.value.id;
     role.value = { id, name: `角色 ${id}` };
-    assert.ok(watchers[0], "role watcher must be registered first");
-    watchers[0]!.callback(id, previous);
+    const roleWatcher = watchers.find(entry => entry.source === bindings.characterId) ?? watchers[0];
+    assert.ok(roleWatcher, "role watcher must be registered");
+    roleWatcher.callback(id, previous);
   }
   function triggerKeyword() {
     const keyword = bindings.keyword;

@@ -80,7 +80,7 @@ function observationNotes(value: unknown): string[] {
   const notes = (value as { observations?: unknown }).observations;
   return Array.isArray(notes) ? notes.filter((item): item is string => typeof item === "string") : [];
 }
-function roleHref(path: string) { return `${path}?c=${encodeURIComponent(characterId.value)}`; }
+function roleHref(path: string) { return `${path}${path.includes("?") ? "&" : "?"}c=${encodeURIComponent(characterId.value)}`; }
 function api(role: string) { return `/api/characters/${encodeURIComponent(role)}/growth/social/assessments`; }
 function current(role: string, generation: number) { return !disposed && characterId.value === role && roleVersion === generation; }
 function canAct(item: Assessment) { return item.status === "SUCCEEDED" && item.outcome === "CHANGE" && ["PENDING", "DEFERRED"].includes(item.reviewStatus); }
@@ -224,7 +224,7 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
       >
         评估历史
       </NuxtLink>
-      <NuxtLink :to="roleHref('/growth/social/assessment-settings')">
+      <NuxtLink :to="roleHref('/models?section=social')">
         评估设置
       </NuxtLink>
     </nav>

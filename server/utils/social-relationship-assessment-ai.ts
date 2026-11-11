@@ -3,6 +3,7 @@
  * 只读取已落库的 SocialExperience / MemoryEvent，生成不可自动执行的结构化建议。
  * 本模块绝不更新 relationshipStage / relationshipStatus。
  */
+import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { resolveSocialAssessmentOutputBudget, nextSocialAssessmentOutputBudget } from "./social-assessment-budget";
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
@@ -72,8 +73,8 @@ export async function resolveSocialRelationshipAssessmentRuntime(configValue: un
     if (!apiKey) return null;
     return {
       model, apiKey, apiBaseUrl,
-      temperature: bounded(config.socialRelationshipAssessmentAssistantTemperature, 0.2, 0, 2),
-      maxInputTokens: Math.round(bounded(config.socialRelationshipAssessmentAssistantMaxInputTokens, 12_288, 4_096, 32_768)),
+      temperature: bounded(config.socialRelationshipAssessmentAssistantTemperature, MODEL_PURPOSE_DEFAULTS.social.temperature, 0, 2),
+      maxInputTokens: Math.round(bounded(config.socialRelationshipAssessmentAssistantMaxInputTokens, MODEL_PURPOSE_DEFAULTS.social.maxInputTokens, 4_096, 32_768)),
       maxOutputTokens: resolveSocialAssessmentOutputBudget(config.socialRelationshipAssessmentAssistantMaxOutputTokens),
     };
   } catch {

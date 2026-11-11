@@ -1,3 +1,4 @@
+import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { startAssistantRequest, type AssistantRequestObserver } from "./assistant-request-diagnostics";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { resolveCharacterContextAssistantApiKey } from "./credential-encryption";
@@ -30,9 +31,7 @@ export type PreviousWorkingContext = {
  * `maxOutputTokens` 只表达**可见输出预算**（实测一段 JSON 约 374 token，2048 很宽），
  * 不是发给接口的 `max_tokens`：思考 token 也计入后者，真实请求值见 `resolveOutputBudget`。
  */
-export const CONTEXT_ASSISTANT_DEFAULTS = {
-  temperature: 0.1, maxInputTokens: 16_384, maxOutputTokens: 2_048,
-} as const;
+export const CONTEXT_ASSISTANT_DEFAULTS = MODEL_PURPOSE_DEFAULTS.context;
 
 /**
  * 这个模型认不认 `thinking` / `reasoning_effort`。

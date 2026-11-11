@@ -1,5 +1,6 @@
+import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 /** Shared API, DTO, UI and runtime limits. Reasoning and visible JSON share output tokens. */
-export const SOCIAL_ASSESSMENT_OUTPUT_DEFAULT = 8192;
+export const SOCIAL_ASSESSMENT_OUTPUT_DEFAULT = MODEL_PURPOSE_DEFAULTS.social.maxOutputTokens;
 export const SOCIAL_ASSESSMENT_OUTPUT_MIN = 1024;
 export const SOCIAL_ASSESSMENT_OUTPUT_MAX = 32768;
 export function resolveSocialAssessmentOutputBudget(value: unknown): number {

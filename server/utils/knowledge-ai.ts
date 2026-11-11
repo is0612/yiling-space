@@ -1,3 +1,4 @@
+import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { resolveCharacterKnowledgeAssistantApiKey } from "./credential-encryption";
 import { parseJsonLoose } from "./loose-json";
@@ -50,9 +51,9 @@ export async function resolveKnowledgeAssistantRuntime(
     model,
     apiKey,
     apiBaseUrl,
-    temperature: bounded(config.knowledgeAssistantTemperature, 0.1, 0, 2),
-    maxInputTokens: Math.round(bounded(config.knowledgeAssistantMaxInputTokens, 12_288, 4_096, 32_768)),
-    maxOutputTokens: Math.round(bounded(config.knowledgeAssistantMaxOutputTokens, 2_048, 512, 8_192)),
+    temperature: bounded(config.knowledgeAssistantTemperature, MODEL_PURPOSE_DEFAULTS.knowledge.temperature, 0, 2),
+    maxInputTokens: Math.round(bounded(config.knowledgeAssistantMaxInputTokens, MODEL_PURPOSE_DEFAULTS.knowledge.maxInputTokens, 4_096, 32_768)),
+    maxOutputTokens: Math.round(bounded(config.knowledgeAssistantMaxOutputTokens, MODEL_PURPOSE_DEFAULTS.knowledge.maxOutputTokens, 512, 8_192)),
   };
 }
 

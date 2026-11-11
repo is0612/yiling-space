@@ -6,12 +6,12 @@ const route = useRoute();
 const { character: activeCharacter } = useCharacterSelection(route.path);
 const characterId = computed(() => activeCharacter.value?.id ?? "");
 function roleHref(path: string) {
-  return characterId.value ? `${path}?c=${encodeURIComponent(characterId.value)}` : path;
+  return characterId.value ? `${path}${path.includes("?") ? "&" : "?"}c=${encodeURIComponent(characterId.value)}` : path;
 }
 const entries = [
   { title: "好友档案", kicker: "认识谁 · 怎样交流", description: "查看她认识的人、互动记录与备注，管理身份分类和交流权限。", href: "/growth/social/friends", action: "管理好友", icon: Avatar },
   { title: "关系评估历史", kicker: "为什么变化 · 由你决定", description: "查看每次评估的结论和真实证据，审阅关系阶段与相处状态的变化建议。", href: "/growth/social/assessments", action: "查看评估与建议", icon: DocumentChecked },
-  { title: "评估设置", kicker: "何时评估 · 使用什么模型", description: "配置关系评估助手的独立模型、凭据与调用预算，启用后由后台处理任务。", href: "/growth/social/assessment-settings", action: "配置评估助手", icon: Setting },
+  { title: "评估设置", kicker: "何时评估 · 使用什么模型", description: "配置关系评估助手的独立模型、凭据与调用预算，启用后由后台处理任务。", href: "/models?section=social", action: "配置评估助手", icon: Setting },
 ];
 </script>
 

@@ -135,7 +135,7 @@ async function staleWebpageImportCannotTouchNextRole() {
 
 /** 4. A→B→A 快速切换时，第一次 A 的慢配置不能覆盖第二次 A 的新配置。 */
 async function settingsLoadUsesRoleGeneration() {
-  const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
+  const page = buildPageHarness("../app/components/KnowledgeAssistantSettings.vue");
   const firstA = page.take("/api/characters/char-a");
 
   page.switchRole("char-b");
@@ -156,7 +156,7 @@ async function settingsLoadUsesRoleGeneration() {
 
 /** 5. A 角色的慢保存响应不能覆盖 B 的表单，也不能清除 B 新输入的 API Key。 */
 async function staleSettingsSaveCannotMutateNextRole() {
-  const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
+  const page = buildPageHarness("../app/components/KnowledgeAssistantSettings.vue");
   page.take("/api/characters/char-a").resolve(characterSettings("char-a"));
   await flushMicrotasks();
 
@@ -183,7 +183,7 @@ async function staleSettingsSaveCannotMutateNextRole() {
 
 /** 6. 旧角色的获取模型请求不能把旧模型列表写入新角色。 */
 async function staleModelListCannotCrossRole() {
-  const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
+  const page = buildPageHarness("../app/components/KnowledgeAssistantSettings.vue");
   page.take("/api/characters/char-a").resolve(characterSettings("char-a"));
   await flushMicrotasks();
 
@@ -209,7 +209,7 @@ async function staleModelListCannotCrossRole() {
 
 /** 7. 页面卸载后，在途读取不再写状态或弹提示。 */
 async function unmountedSettingsLoadIsIgnored() {
-  const page = buildPageHarness("../app/pages/growth/knowledge/settings.vue");
+  const page = buildPageHarness("../app/components/KnowledgeAssistantSettings.vue");
   const pending = page.take("/api/characters/char-a");
   page.unmount();
   pending.reject(new Error("late failure"));

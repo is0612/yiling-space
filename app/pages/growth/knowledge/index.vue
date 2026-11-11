@@ -1190,7 +1190,7 @@ function formatDate(value: string) {
       <template #actions>
         <NuxtLink
           class="settings-link"
-          :to="`/growth/knowledge/settings?c=${characterId}`"
+          :to="`/models?c=${encodeURIComponent(characterId)}&section=knowledge`"
         >
           知识助手设置 ↗
         </NuxtLink>

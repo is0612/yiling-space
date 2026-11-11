@@ -1,3 +1,4 @@
+import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { startAssistantRequest, type AssistantRequestObserver } from "./assistant-request-diagnostics";
 import type { AssistantTurnContext } from "./assistant-turn-context";
 import { runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
@@ -60,7 +61,7 @@ export function memoryAssistantTurnSource(source: MemoryAssistantCandidate): Tur
   };
 }
 
-export const MEMORY_ASSISTANT_DEFAULTS = { temperature: 0.1, maxInputTokens: 12_288, maxOutputTokens: 2_048 } as const;
+export const MEMORY_ASSISTANT_DEFAULTS = MODEL_PURPOSE_DEFAULTS.memory;
 export type MemoryAssistantRuntime = {
   model: string; apiKey: string; apiBaseUrl: string;
   temperature: number; maxInputTokens: number; maxOutputTokens: number;
