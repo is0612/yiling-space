@@ -584,6 +584,9 @@ paths:
         本轮群消息只保留入模的成员代号化文本；群聊详情不包含私人记忆来源。
         私聊详情仅对当前角色主人开放，不提供给群聊模型或群消息发送链路。
         回应说明是模型可选提供的简短用户可见说明，缺失时不编造。success仅表示模型阶段完成，不代表发送成功。
+        detail.version仍为1；新增可选collaboration仅群聊保存，旧记录缺失不回填也不能理解为零请求。
+        collaboration经白名单重新校验，最多4阶段、每阶段1或2操作、每操作16条HTTP终态；不含身份、查询、Key、错误原文或推理。
+        reportedAttempts按实际保留的attempts长度重算；usageReported仅表示至少一个有效token字段（含显式零值），不代表完整费用或全部用量分项。
       parameters:
         - name: characterId
           in: path
@@ -610,6 +613,50 @@ paths:
                     properties:
                       version: { type: integer, enum: [1] }
                       groupChat: { type: boolean }
+                      collaboration:
+                        type: object
+                        additionalProperties: false
+                        required: [version, elapsedMs, stages]
+                        properties:
+                          version: { type: integer, enum: [1] }
+                          elapsedMs: { type: integer, minimum: 0, maximum: 3600000 }
+                          stages:
+                            type: array
+                            maxItems: 4
+                            items:
+                              type: object
+                              additionalProperties: false
+                              required: [stage, limit, logicalCalls, budgetRejections, skipped, operations]
+                              properties:
+                                stage: { type: string, enum: [context, memory, knowledge, response] }
+                                limit: { type: integer, minimum: 1, maximum: 2 }
+                                logicalCalls: { type: integer, minimum: 0, maximum: 2 }
+                                budgetRejections: { type: integer, minimum: 0, maximum: 1000 }
+                                skipped: { type: string, nullable: true, enum: [not_enabled, not_needed, null] }
+                                operations:
+                                  type: array
+                                  maxItems: 2
+                                  items:
+                                    type: object
+                                    additionalProperties: false
+                                    required: [state, durationMs, reportedAttempts, rejectedDiagnostics, attempts]
+                                    properties:
+                                      state: { type: string, enum: [running, success, no_sources, failed, budget_exhausted] }
+                                      durationMs: { type: integer, minimum: 0, maximum: 3600000 }
+                                      reportedAttempts: { type: integer, minimum: 0, maximum: 16 }
+                                      rejectedDiagnostics: { type: integer, minimum: 0, maximum: 1000 }
+                                      attempts:
+                                        type: array
+                                        maxItems: 16
+                                        items:
+                                          type: object
+                                          additionalProperties: false
+                                          required: [status, durationMs, usageReported]
+                                          properties:
+                                            status: { type: string, enum: [success, failed, timeout, http_error, invalid_response, truncated] }
+                                            durationMs: { type: integer, minimum: 0, maximum: 3600000 }
+                                            usageReported: { type: boolean }
+                                            finishReason: { type: string, enum: [stop, length, content_filter, unknown] }
                       messages:
                         type: array
                         maxItems: 20

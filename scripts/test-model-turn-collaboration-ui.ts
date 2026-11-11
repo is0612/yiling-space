@@ -1,0 +1,35 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createContext, Script } from "node:vm";
+import ts from "typescript";
+
+const source = readFileSync(new URL("../app/components/ModelTurnDetail.vue", import.meta.url), "utf8");
+const setup = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1];
+assert(setup);
+const parsed = ts.createSourceFile("component.ts", setup, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+const statements = parsed.statements.filter(statement => !ts.isImportDeclaration(statement));
+const body = statements.map(statement => statement.getText(parsed)).join("\n");
+const script = ts.transpileModule(`(function(){${body};return {collaboration,duration,reportedAttempts,stageLabel,attemptLabels,operationLabels};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
+const props: { result: { detail: { collaboration?: unknown } } } = { result: { detail: {} } };
+const bindings = new Script(script).runInContext(createContext({ defineProps: () => props, computed: (get: () => unknown) => Object.defineProperty({}, "value", { get }), Intl })) as {
+  collaboration: { value: unknown }; duration(value: number): string;
+  reportedAttempts(stage: unknown): number; stageLabel(stage: unknown): string;
+  attemptLabels: Record<string, string>; operationLabels: Record<string, string>;
+};
+assert.equal(bindings.collaboration.value, undefined, "Old records have no fabricated diagnostics");
+assert.equal(bindings.duration(42), "42 毫秒"); assert.equal(bindings.duration(1234), "1.23 秒");
+assert.equal(bindings.stageLabel({ skipped: "not_enabled", operations: [] }), "未启用");
+assert.equal(bindings.stageLabel({ skipped: "not_needed", operations: [] }), "本轮无需执行");
+assert.equal(bindings.stageLabel({ skipped: null, operations: [], budgetRejections: 0 }), "未记录执行");
+assert.equal(bindings.stageLabel({ skipped: null, operations: [], budgetRejections: 1 }), "逻辑额度已用尽");
+assert.equal(bindings.stageLabel({ skipped: null, operations: [{ state: "failed" }, { state: "success" }] }), "失败 / 完成");
+assert.equal(bindings.reportedAttempts({ operations: [{ reportedAttempts: 2 }, { reportedAttempts: 1 }] }), 3);
+for (const key of ["success", "failed", "timeout", "http_error", "invalid_response", "truncated"]) assert(bindings.attemptLabels[key]);
+for (const key of ["running", "success", "no_sources", "failed", "budget_exhausted"]) assert(bindings.operationLabels[key]);
+props.result.detail.collaboration = { version: 1, elapsedMs: 1500, stages: [] };
+assert.equal((bindings.collaboration.value as { elapsedMs: number }).elapsedMs, 1500);
+for (const text of ["旧记录未保存协作诊断", "已报告 HTTP 尝试", "逻辑执行", "已报告请求次数不等于供应商账单", "用量缺失，费用未知", "不代表所有用量分项或费用完整", "不据此判断实际请求为零", "本轮消息", "语境理解", "记忆检索", "回应结果"]) assert(source.includes(text), text);
+assert(source.includes('v-if="collaboration"'));
+assert(source.includes("stage.budgetRejections")); assert(source.includes("operation.rejectedDiagnostics"));
+assert(!source.includes("v-html")); assert(!/font-size:\s*(?:[0-9]|1[01])px/.test(source));
+console.log("Model turn collaboration UI: legacy absence, stage states, logical/reported attempts, durations, incomplete usage warnings and preserved original sections passed (script-level, no DOM).");

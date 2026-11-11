@@ -1,3 +1,4 @@
+import { startAssistantRequest, type AssistantRequestObserver } from "./assistant-request-diagnostics";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { resolveCharacterContextAssistantApiKey } from "./credential-encryption";
 import type { ConversationReplyInput } from "./chat-reply";
@@ -316,7 +317,7 @@ function addUsage(a: ModelUsageTokens | undefined, b: ModelUsageTokens | null): 
 
 /** Read-only advisory call. The caller owns fallback, accounting and any subsequent reply. */
 export async function analyzeGroupContext(
-  runtime: MemoryAssistantRuntime, chatInput: ConversationReplyInput, previous?: PreviousWorkingContext,
+  runtime: MemoryAssistantRuntime, chatInput: ConversationReplyInput, previous?: PreviousWorkingContext, onAttempt?: AssistantRequestObserver,
 ): Promise<{ analysis: ContextAnalysis; usage?: ModelUsageTokens }> {
   let usage: ModelUsageTokens | undefined;
   try {
@@ -330,6 +331,9 @@ export async function analyzeGroupContext(
     const budgetCeiling = thinking ? CONTEXT_MAX_TOKENS_CEILING : CONTEXT_CONFIGURED_MAX_TOKENS;
     let budget = resolveOutputBudget(runtime.maxOutputTokens, thinking);
     for (let attempt = 0; attempt < 2; attempt++) {
+      const diagnostic = startAssistantRequest(onAttempt);
+      let body: unknown;
+      try {
       const response = await fetch(endpoint, {
         method: "POST", redirect: "error", signal,
         headers: { authorization: "Bearer " + runtime.apiKey, "content-type": "application/json" },
@@ -340,12 +344,16 @@ export async function analyzeGroupContext(
           messages: [{ role: "system", content: SYSTEM }, { role: "user", content: JSON.stringify(payload) }],
         }),
       });
-      if (!response.ok) throw new ContextAssistantError();
-      const body: unknown = await response.json();
+      if (!response.ok) { diagnostic.complete("http_error"); throw new ContextAssistantError(); }
+      try { body = await response.json(); } catch (error) {
+        diagnostic.complete(error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "timeout" : "invalid_response");
+        throw error;
+      }
       usage = addUsage(usage, readModelUsage(body));
       const choices = record(body).choices;
       const choice = record(Array.isArray(choices) ? choices[0] : null);
       if (choice.finish_reason === "length") {
+        diagnostic.complete("truncated", body);
         if (attempt === 0 && budget < budgetCeiling) {
           budget = Math.min(budgetCeiling, budget * 2);
           continue;
@@ -355,7 +363,12 @@ export async function analyzeGroupContext(
       const content = record(choice.message).content;
       if (typeof content !== "string") throw new ContextAssistantError();
       const analysis = readAnalysis(parseJsonLoose(content, { expect: "object" }), payload);
+      diagnostic.complete("success", body);
       return { analysis, ...(usage ? { usage } : {}) };
+      } catch (error) {
+        diagnostic.complete(error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "timeout" : body === undefined ? "failed" : "invalid_response", body);
+        throw error;
+      }
     }
     throw new ContextAssistantError();
   } catch {

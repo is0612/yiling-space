@@ -6,12 +6,31 @@ export type TurnMessage = {
   content: string;
   occurredAt?: string;
 };
+export type TurnCollaboration = {
+  version: 1;
+  elapsedMs: number;
+  stages: Array<{
+    stage: "context" | "memory" | "knowledge" | "response";
+    limit: number; logicalCalls: number; budgetRejections: number;
+    skipped: "not_enabled" | "not_needed" | null;
+    operations: Array<{
+      state: "running" | "success" | "no_sources" | "failed" | "budget_exhausted";
+      durationMs: number; reportedAttempts: number; rejectedDiagnostics: number;
+      attempts: Array<{
+        status: "success" | "failed" | "timeout" | "http_error" | "invalid_response" | "truncated";
+        durationMs: number; usageReported: boolean;
+        finishReason?: "stop" | "length" | "content_filter" | "unknown";
+      }>;
+    }>;
+  }>;
+};
 export type ModelTurnDetailResponse = {
   turnId: string;
   createdAt: string;
   detail: {
     version: 1;
     groupChat: boolean;
+    collaboration?: TurnCollaboration;
     messages: TurnMessage[];
     context: {
       status: "not_enabled" | "not_applicable" | "success" | "failed";
@@ -49,6 +68,17 @@ const props = defineProps<{
   result: ModelTurnDetailResponse;
 }>();
 const detail = computed(() => props.result.detail);
+const collaboration = computed(() => detail.value.collaboration);
+const collaborationStages = { context: "语境分析", memory: "记忆筛选", knowledge: "知识查询", response: "回复生成" };
+const operationLabels = { running: "运行中", success: "完成", no_sources: "无相关来源", failed: "失败", budget_exhausted: "逻辑额度已用尽" };
+const attemptLabels = { success: "请求成功", failed: "请求失败", timeout: "请求超时", http_error: "HTTP 错误", invalid_response: "响应格式无效", truncated: "输出被截断" };
+function duration(value: number) { return value < 1000 ? `${Math.round(value)} 毫秒` : `${(value / 1000).toFixed(2)} 秒`; }
+function reportedAttempts(stage: TurnCollaboration["stages"][number]) { return stage.operations.reduce((sum, operation) => sum + operation.reportedAttempts, 0); }
+function stageLabel(stage: TurnCollaboration["stages"][number]) {
+  if (stage.skipped) return stage.skipped === "not_enabled" ? "未启用" : "本轮无需执行";
+  if (!stage.operations.length) return stage.budgetRejections ? "逻辑额度已用尽" : "未记录执行";
+  return stage.operations.map(operation => operationLabels[operation.state]).join(" / ");
+}
 const contextLabels = {
   not_enabled: "未启用语境助手",
   not_applicable: "本轮不适用语境助手",
@@ -212,6 +242,99 @@ function messageAuthor(message: TurnMessage) {
       </p>
     </section>
 
+    <section class="turn-section collaboration-section">
+      <h3>助手协作诊断</h3>
+      <template v-if="collaboration">
+        <p class="empty-text">
+          本轮协作耗时 {{ duration(collaboration.elapsedMs) }}。逻辑执行是一个处理阶段，已报告 HTTP 尝试包含该阶段中的重试；知识查询可以只查数据库。
+        </p>
+        <el-alert
+          title="已报告请求次数不等于供应商账单"
+          description="请求诊断可能不完整。用量已返回只表示响应含有效 Token 字段，不代表所有用量分项或费用完整；缺失用量不能当作免费。"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+        <ol class="record-list">
+          <li
+            v-for="stage in collaboration.stages"
+            :key="stage.stage"
+            class="record-card"
+          >
+            <div class="record-meta">
+              <strong>{{ collaborationStages[stage.stage] }}</strong>
+              <el-tag type="info">
+                {{ stageLabel(stage) }}
+              </el-tag>
+              <span>逻辑执行 {{ stage.logicalCalls }} / {{ stage.limit }}</span>
+              <span>已报告 HTTP 尝试 {{ reportedAttempts(stage) }}</span>
+            </div>
+            <p
+              v-if="stage.budgetRejections"
+              class="diagnostic-warning"
+            >
+              因逻辑额度拒绝 {{ stage.budgetRejections }} 次，不代表模型请求失败。
+            </p>
+            <div
+              v-for="(operation, operationIndex) in stage.operations"
+              :key="operationIndex"
+              class="collaboration-operation"
+            >
+              <div class="record-meta">
+                <strong>第 {{ operationIndex + 1 }} 次逻辑执行</strong>
+                <span>{{ operationLabels[operation.state] }} · {{ duration(operation.durationMs) }}</span>
+              </div>
+              <p
+                v-if="operation.rejectedDiagnostics"
+                class="diagnostic-warning"
+              >
+                有 {{ operation.rejectedDiagnostics }} 条诊断未采纳，请求统计可能不完整。
+              </p>
+              <ol
+                v-if="operation.attempts.length"
+                class="attempt-list"
+              >
+                <li
+                  v-for="(attempt, attemptIndex) in operation.attempts"
+                  :key="attemptIndex"
+                >
+                  <div class="record-meta">
+                    <span>请求 {{ attemptIndex + 1 }}</span>
+                    <el-tag
+                      :type="attempt.status === 'success' ? 'success' : 'warning'"
+                      size="small"
+                    >
+                      {{ attemptLabels[attempt.status] }}
+                    </el-tag>
+                    <span>{{ duration(attempt.durationMs) }}</span>
+                    <el-tag
+                      :type="attempt.usageReported ? 'info' : 'warning'"
+                      size="small"
+                    >
+                      {{ attempt.usageReported ? '用量字段已返回' : '用量缺失，费用未知' }}
+                    </el-tag>
+                    <span v-if="attempt.finishReason">结束标记：{{ attempt.finishReason }}</span>
+                  </div>
+                </li>
+              </ol>
+              <p
+                v-else
+                class="empty-text"
+              >
+                未保存模型 HTTP 尝试诊断，不据此判断实际请求为零。
+              </p>
+            </div>
+          </li>
+        </ol>
+      </template>
+      <p
+        v-else
+        class="empty-text"
+      >
+        旧记录未保存协作诊断，或本入口尚未接入；不能据此判断没有助手调用。
+      </p>
+    </section>
+
     <section class="turn-section">
       <h3>回应结果</h3>
       <div class="record-meta">
@@ -255,6 +378,10 @@ function messageAuthor(message: TurnMessage) {
 .record-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
 .record-meta strong { color: var(--text-2); }
 .plain-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.collaboration-section .el-alert { margin-top: 12px; }
+.collaboration-operation { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--el-border-color-light); }
+.attempt-list { display: flex; flex-direction: column; gap: 8px; list-style: none; padding: 0; margin: 10px 0 0; }
+.diagnostic-warning { color: var(--el-color-warning-dark-2); font-size: 12px; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
   .turn-section { padding: 12px; }
 }

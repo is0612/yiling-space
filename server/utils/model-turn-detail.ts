@@ -1,12 +1,16 @@
+import { sanitizeAssistantTurnDiagnostics, type AssistantTurnDiagnostics } from "./assistant-turn-diagnostics";
+
 export type TurnEvidence = { id?: string; member?: string; speaker?: string; content: string; occurredAt?: string };
 export type TurnSource = { id: string; type: "memory" | "snapshot" | "event" | "message"; scope: "character" | "private"; title?: string; content: string; occurredAt?: string };
 export type TurnDetailPatch = {
+  collaboration?: unknown;
   context?: { status: "not_enabled" | "not_applicable" | "success" | "failed"; summary?: string; participation?: "invited" | "observing" | "uncertain"; uncertainty?: string; evidence?: TurnEvidence[] };
   memory?: { status: "not_needed" | "not_enabled" | "no_sources" | "failed" | "success"; query?: string; candidateCount?: number; sources?: TurnSource[] };
   response?: { action: "reply" | "silent"; reply: string; explanation?: string };
 };
 export type ModelTurnDetail = {
   version: 1; groupChat: boolean; messages: TurnEvidence[];
+  collaboration?: AssistantTurnDiagnostics;
   context: NonNullable<TurnDetailPatch["context"]>;
   memory: NonNullable<TurnDetailPatch["memory"]>;
   response: { status: "success" | "failed"; action?: "reply" | "silent"; reply?: string; explanation?: string };
@@ -27,6 +31,7 @@ function evidence(value: unknown): TurnEvidence[] {
 export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   const raw = object(value), context = object(raw.context), memory = object(raw.memory), response = object(raw.response);
   const groupChat = raw.groupChat === true;
+  const collaboration = groupChat ? sanitizeAssistantTurnDiagnostics(raw.collaboration) : undefined;
   const sources: TurnSource[] = (Array.isArray(memory.sources) ? memory.sources : []).slice(0, 8).flatMap(item => {
     const row = object(item);
     if (!["memory", "snapshot", "event", "message"].includes(String(row.type)) || !["character", "private"].includes(String(row.scope)) || (groupChat && row.scope !== "character")) return [];
@@ -36,6 +41,7 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   });
   return {
     version: 1, groupChat, messages: evidence(raw.messages),
+    ...(collaboration ? { collaboration } : {}),
     context: {
       status: ["not_enabled", "not_applicable", "success", "failed"].includes(String(context.status)) ? context.status as ModelTurnDetail["context"]["status"] : "not_enabled",
       summary: text(context.summary, 1600), uncertainty: text(context.uncertainty, 400),
@@ -60,6 +66,7 @@ export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence
   const detail: ModelTurnDetail = { version: 1, groupChat, messages, context: { status: groupChat ? "not_enabled" : "not_applicable" }, memory: { status: "not_needed" }, response: { status: "failed" } };
   return {
     update(patch: TurnDetailPatch) {
+      if (patch.collaboration !== undefined && groupChat) detail.collaboration = sanitizeAssistantTurnDiagnostics(patch.collaboration);
       if (patch.context) detail.context = patch.context;
       if (patch.memory) detail.memory = patch.memory;
       if (patch.response) detail.response = { status: "success", ...patch.response };

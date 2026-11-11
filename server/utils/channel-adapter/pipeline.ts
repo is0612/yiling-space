@@ -2,6 +2,7 @@ import { loadGoalsForPrompt, usedGoalSnapshots } from "../goal-retrieval";
 import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../expression-habit-retrieval";
 import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../preference-retrieval";
 import { randomUUID } from "node:crypto";
+import { createAssistantTurnContext } from "../assistant-turn-context";
 import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
 import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem } from "../chat-reply";
@@ -1769,6 +1770,22 @@ async function runChannelTurn(input: {
       ...readStoredSpeaker(row.metadata),
     })),
   } : undefined;
+  // Create only after role/routing and readable scopes have been resolved on the server.
+  // This object never enters chatInput, provider prompts, stored messages or public API output.
+  const collaboration = isGroup && input.platform === "qq-onebot"
+    ? createAssistantTurnContext({
+        turnId,
+        identity: { characterId: character.id, channel: "qq-group", channelBindingId: input.bindingId,
+          conversationKey: input.externalConversationId, readableScopeIds, allowPrivate: false },
+        evidenceIds: [...new Set([
+          ...messages.map(item => item.externalMessageId),
+          ...backgroundLines.map(item => item.id),
+          ...(input.group?.analysisBackground ?? []).map(item => item.id),
+          ...recentMessages.map(item => item.id),
+          ...(previousWorkingContext?.evidence ?? []).map(item => item.id),
+        ].filter((id): id is string => typeof id === "string" && Boolean(id)))],
+      })
+    : undefined;
   let pendingWorkingContext: { summary: string; evidenceMessageIds: string[] } | undefined;
   const turnDetail = createModelTurnDetail(isGroup, messages.map(item => ({
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
@@ -1778,6 +1795,7 @@ async function runChannelTurn(input: {
   const generationStartedAt = Date.now();
   try {
     generated = await generateGroupContextReply({
+      ...(collaboration ? { turnContext: collaboration } : {}),
       assistant: memoryAssistant,
       onTurnDetail: turnDetail.update,
       contextAssistant: contextRuntime,
@@ -2148,6 +2166,7 @@ async function runChannelTurn(input: {
       },
     });
   } catch (error) {
+    if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot() });
     await recordModelUsage({
       kind: "channel", model: chatSettings.model, characterId: input.characterId,
       channelBindingId: input.bindingId,
@@ -2156,6 +2175,7 @@ async function runChannelTurn(input: {
     return { status: "ignored", reason: (error instanceof Error ? error.message : "model_error").slice(0, 200) };
   }
 
+  if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot() });
   turnDetail.update({ response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation } });
   const generationDurationMs = Date.now() - generationStartedAt;
   // 在落消息/发送前保存模型阶段结果，渠道发送失败也能从助手日志打开本轮详情。

@@ -237,6 +237,9 @@ jobs:
       - name: 一次性数据库隔离测试
         run: yarn run test:isolated
 
+      - name: 助手协作诊断保存与权限隔离测试
+        run: yarn run test:assistant-collaboration-isolated
+
       - name: 社交关系任务队列隔离测试
         run: yarn run test:social-relationship-queue-isolated
 

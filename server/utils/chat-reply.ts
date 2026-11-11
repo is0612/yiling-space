@@ -1,3 +1,4 @@
+import { startAssistantRequest } from "./assistant-request-diagnostics";
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
 import { buildChatTimeContext, CHAT_TIME_ZONE_DEFAULT } from "./chat-time-context";
 import type { ConversationMessageMention } from "./conversation-message";
@@ -987,7 +988,7 @@ function readGroupDecision(
   };
 }
 
-export async function generateConversationReply(input: ConversationReplyInput): Promise<ConversationReplyResult> {
+export async function generateConversationReply(input: ConversationReplyInput, onAttempt?: import("./assistant-request-diagnostics").AssistantRequestObserver): Promise<ConversationReplyResult> {
   const apiKey = input.apiKey?.trim() || process.env.LLM_API_KEY?.trim();
   const model = input.model?.trim() || process.env.LLM_MODEL?.trim();
   if (!apiKey || !model) {
@@ -1388,6 +1389,9 @@ export async function generateConversationReply(input: ConversationReplyInput): 
      */
     forceThinkingOff = false,
   ): Promise<ConversationReplyResult> => {
+    const diagnostic = startAssistantRequest(onAttempt);
+    let diagnosticPayload: unknown;
+    try {
     let response: Response;
     try {
       response = await fetch(endpoint, {
@@ -1474,6 +1478,7 @@ export async function generateConversationReply(input: ConversationReplyInput): 
        * 只重试一次（`sendThinking` 传 false 后不再进这一支），400 若是别的原因照常抛。
        */
       if (sendThinking && response.status === 400 && Object.keys(thinkingFields).length > 0) {
+        diagnostic.complete("http_error");
         return requestReply(useTemperature, repair, false);
       }
       throw new Error("LLM_HTTP_ERROR: 模型服务返回 HTTP " + response.status + "。请检查 API 地址、Key 和模型权限。");
@@ -1482,9 +1487,11 @@ export async function generateConversationReply(input: ConversationReplyInput): 
     let responsePayload: unknown;
     try {
       responsePayload = await response.json();
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) diagnostic.complete("timeout");
       throw new Error("LLM_INVALID_RESPONSE: 模型服务没有返回有效的 JSON 响应。");
     }
+    diagnosticPayload = responsePayload;
     const payload = asRecord(responsePayload);
     const choices = payload && Array.isArray(payload.choices) ? payload.choices : [];
     const firstChoice = asRecord(choices[0]);
@@ -1611,6 +1618,15 @@ export async function generateConversationReply(input: ConversationReplyInput): 
       ...base,
       ...(memoryAssistantQuery.length >= 3 ? { memoryAssistantQuery } : {}),
     };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      diagnostic.complete(message.startsWith("LLM_TIMEOUT") ? "timeout"
+        : message.startsWith("LLM_HTTP_ERROR") ? "http_error"
+        : message.startsWith("LLM_INVALID_RESPONSE") ? "invalid_response" : "failed", diagnosticPayload);
+      throw error;
+    } finally {
+      diagnostic.complete("success", diagnosticPayload);
+    }
   };
 
   /**

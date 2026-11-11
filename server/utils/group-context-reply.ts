@@ -1,3 +1,5 @@
+import type { AssistantTurnContext } from "./assistant-turn-context";
+import { executeAssistantGroupTurn, runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
 import type { TurnDetailPatch } from "./model-turn-detail";
 import { generateConversationReply, type ConversationKnowledgeItem, type ConversationReplyInput } from "./chat-reply";
 import { analyzeGroupContext, ContextAssistantError, type ContextAnalysis, type PreviousWorkingContext } from "./context-assistant";
@@ -12,7 +14,8 @@ import {
 import type { ModelUsageTokens } from "./model-usage";
 
 /** 单轮有界流程：分析一次 → 最多检索一次 → 角色最终决定；不执行分析器提出的其他动作。 */
-export async function generateGroupContextReply(input: {
+type GroupContextReplyInput = {
+  turnContext?: AssistantTurnContext;
   chatInput: ConversationReplyInput;
   assistant: MemoryAssistantRuntime | null;
   contextAssistant?: MemoryAssistantRuntime | null;
@@ -30,11 +33,26 @@ export async function generateGroupContextReply(input: {
     usage?: ModelUsageTokens;
     status: string;
   }) => Promise<void>;
-}): Promise<ConversationReplyWithMemoryAssistant> {
+};
+export async function generateGroupContextReply(input: GroupContextReplyInput): Promise<ConversationReplyWithMemoryAssistant> {
+  if (!input.chatInput.groupChat || !input.turnContext) return generateGroupContextReplyInternal(input);
+  // Snapshot data before validation/keying: deferred execution must never observe caller mutations.
+  const captured: GroupContextReplyInput = { ...input,
+    chatInput: snapshotAssistantTurnData(input.chatInput), assistant: snapshotAssistantTurnData(input.assistant),
+    contextAssistant: snapshotAssistantTurnData(input.contextAssistant), candidates: snapshotAssistantTurnData(input.candidates),
+    analysisBackground: snapshotAssistantTurnData(input.analysisBackground), previousWorkingContext: snapshotAssistantTurnData(input.previousWorkingContext),
+  };
+  validateAssistantTurnEvidence(input.turnContext, captured.chatInput, captured.analysisBackground, captured.previousWorkingContext);
+  return executeAssistantGroupTurn(input.turnContext, { chatInput: captured.chatInput, assistant: captured.assistant, contextAssistant: captured.contextAssistant, candidates: captured.candidates, analysisBackground: captured.analysisBackground, previousWorkingContext: captured.previousWorkingContext }, () => generateGroupContextReplyInternal(captured));
+}
+async function generateGroupContextReplyInternal(input: GroupContextReplyInput): Promise<ConversationReplyWithMemoryAssistant> {
+  const turnContext = input.chatInput.groupChat ? input.turnContext : undefined;
   const report = (detail: TurnDetailPatch) => {
     try { input.onTurnDetail?.(detail); } catch { /* Diagnostics never affect generation. */ }
   };
   if (!input.contextAssistant || !input.chatInput.groupChat) {
+    skipAssistantTurnStage(turnContext, "context", "not_enabled");
+    skipAssistantTurnStage(turnContext, "knowledge", "not_needed");
     report({ context: { status: input.chatInput.groupChat ? "not_enabled" : "not_applicable" } });
     return generateConversationReplyWithMemoryAssistant(input);
   }
@@ -44,11 +62,14 @@ export async function generateGroupContextReply(input: {
   };
   let analysis: ContextAnalysis;
   try {
-    const result = await analyzeGroupContext(input.contextAssistant, {
+    const result = await runAssistantTurnStage(turnContext, "context", "group-context", { chatInput: input.chatInput, runtime: input.contextAssistant, background: input.analysisBackground, previous: input.previousWorkingContext }, observer => analyzeGroupContext(input.contextAssistant!, {
       ...input.chatInput,
       groupBackground: input.analysisBackground ?? input.chatInput.groupBackground,
-    }, input.previousWorkingContext);
-    analysis = result.analysis;
+    }, input.previousWorkingContext, observer));
+    analysis = turnContext ? { ...result.analysis, evidenceMessageIds: result.analysis.evidenceMessageIds.filter(id => turnContext.hasEvidence(id)),
+      ...(result.analysis.workingEvidenceMessageIds ? { workingEvidenceMessageIds: result.analysis.workingEvidenceMessageIds.filter(id => turnContext.hasEvidence(id)) } : {}),
+      ...(result.analysis.knowledgeCandidate ? { knowledgeCandidate: { ...result.analysis.knowledgeCandidate, evidenceMessageIds: result.analysis.knowledgeCandidate.evidenceMessageIds.filter(id => turnContext.hasEvidence(id)) } } : {}),
+    } : result.analysis;
     await record({ kind: "context-assistant", model: input.contextAssistant.model, usage: result.usage, status: "success" });
   } catch (error) {
     report({ context: { status: "failed" } });
@@ -56,6 +77,7 @@ export async function generateGroupContextReply(input: {
       kind: "context-assistant", model: input.contextAssistant.model,
       ...(error instanceof ContextAssistantError ? { usage: error.usage } : {}), status: "failed",
     });
+    skipAssistantTurnStage(turnContext, "knowledge", "not_needed");
     return generateConversationReplyWithMemoryAssistant(input);
   }
 
@@ -105,18 +127,16 @@ export async function generateGroupContextReply(input: {
     memoryStatus = "unavailable";
     if (input.assistant) {
       try {
-        // 群内检索只允许全局范围，检索器外再做一次边界校验。
-        const candidates = (input.loadCandidates
-          ? await input.loadCandidates(analysis.memoryQuery)
-          : input.candidates).filter(source => source.scope === "character");
-        if (candidates.length) {
-          const result = await callMemoryAssistant(input.assistant, analysis.memoryQuery, candidates);
-          sources = result.sources;
-          memoryStatus = sources.length ? "success" : "no_sources";
-          await record({ kind: "memory-assistant", model: input.assistant.model, usage: result.usage, status: memoryStatus });
-        } else {
-          memoryStatus = "no_sources";
-        }
+        const result = await runAssistantTurnStage(turnContext, "memory", analysis.memoryQuery, { chatInput: input.chatInput, assistant: input.assistant, candidates: input.candidates, query: analysis.memoryQuery }, async observer => {
+          // Recheck public scope even when a trusted loader accidentally returns private candidates.
+          const candidates = (input.loadCandidates ? await input.loadCandidates(analysis.memoryQuery!) : input.candidates).filter(source => source.scope === "character");
+          if (!candidates.length) return { sources: [] as MemoryAssistantCandidate[], status: "no_sources" as const };
+          const selected = await callMemoryAssistant(input.assistant!, analysis.memoryQuery!, candidates, observer);
+          const status = selected.sources.length ? "success" as const : "no_sources" as const;
+          await record({ kind: "memory-assistant", model: input.assistant!.model, usage: selected.usage, status });
+          return { sources: selected.sources, status };
+        }, result => result.sources.length === 0);
+        sources = [...result.sources]; memoryStatus = result.status;
       } catch (error) {
         memoryStatus = "failed";
         const usage = error !== null && typeof error === "object" && "usage" in error
@@ -126,6 +146,7 @@ export async function generateGroupContextReply(input: {
     }
   }
 
+  if (!analysis.memoryQuery || !input.assistant) skipAssistantTurnStage(turnContext, "memory", !input.assistant ? "not_enabled" : "not_needed");
   report({ memory: { status: !analysis.memoryQuery ? "not_needed" : !input.assistant ? "not_enabled"
     : memoryStatus === "failed" ? "failed" : sources.length ? "success" : "no_sources",
     ...(analysis.memoryQuery ? { query: analysis.memoryQuery } : {}), sources: sources.map(memoryAssistantTurnSource) } });
@@ -136,7 +157,7 @@ export async function generateGroupContextReply(input: {
     knowledgeStatus = "unavailable";
     if (input.loadKnowledge) {
       try {
-        knowledgeItems = await input.loadKnowledge(analysis.knowledgeQuery);
+        knowledgeItems = await runAssistantTurnStage(turnContext, "knowledge", analysis.knowledgeQuery, { query: analysis.knowledgeQuery, chatInput: input.chatInput }, () => input.loadKnowledge!(analysis.knowledgeQuery!), items => items.length === 0);
         knowledgeStatus = knowledgeItems.length ? "success" : "no_sources";
       } catch {
         knowledgeStatus = "failed";
@@ -144,6 +165,7 @@ export async function generateGroupContextReply(input: {
     }
   }
 
+  if (!analysis.knowledgeQuery || !input.loadKnowledge) skipAssistantTurnStage(turnContext, "knowledge", !input.loadKnowledge ? "not_enabled" : "not_needed");
   const original = input.chatInput;
   // 大背景留给分析器，角色拿到本轮原话、被引用证据和少量最近互动。
   const background = currentSources
@@ -153,7 +175,7 @@ export async function generateGroupContextReply(input: {
     const ids = new Set(base.map(item => item.id));
     return [...base, ...extra.filter(item => !ids.has(item.id))];
   };
-  return generateConversationReply({
+  const finalInput: ConversationReplyInput = {
     ...original,
     allowSilent: true,
     groupBackground: background,
@@ -188,5 +210,6 @@ export async function generateGroupContextReply(input: {
       id: s.id, role: s.role ?? "USER", content: s.content ?? "", occurredAt: s.occurredAt ?? "",
       scope: s.scope, ...(s.speaker ? { speaker: s.speaker } : {}), isOwner: s.isOwner === true,
     }))),
-  });
+  };
+  return runAssistantTurnStage(turnContext, "response", "group-final", finalInput, observer => generateConversationReply(finalInput, observer));
 }

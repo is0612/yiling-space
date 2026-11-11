@@ -1,3 +1,6 @@
+import { startAssistantRequest, type AssistantRequestObserver } from "./assistant-request-diagnostics";
+import type { AssistantTurnContext } from "./assistant-turn-context";
+import { runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
 import type { TurnDetailPatch, TurnSource } from "./model-turn-detail";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import {
@@ -448,6 +451,7 @@ export async function callMemoryAssistant(
   config: MemoryAssistantRuntime,
   query: string,
   candidates: readonly MemoryAssistantCandidate[],
+  onAttempt?: AssistantRequestObserver,
 ): Promise<{
   sources: MemoryAssistantCandidate[];
   model: string;
@@ -473,6 +477,7 @@ export async function callMemoryAssistant(
   let totalUsage: ModelUsageTokens | undefined;
   let lastFinishReason = "";
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const diagnostic = startAssistantRequest(onAttempt);
     let response: Response;
     try {
       response = await fetch(endpoint, {
@@ -499,6 +504,7 @@ export async function callMemoryAssistant(
     } catch (error) {
       const timedOut = error instanceof Error
         && (error.name === "TimeoutError" || error.name === "AbortError");
+      diagnostic.complete(timedOut ? "timeout" : "failed");
       throw new MemoryAssistantRequestError({
         reason: timedOut ? "timeout" : "network_error",
         attempts: attempt,
@@ -508,6 +514,7 @@ export async function callMemoryAssistant(
     }
 
     if (!response.ok) {
+      diagnostic.complete("http_error");
       throw new MemoryAssistantRequestError({
         reason: "http_error",
         attempts: attempt,
@@ -520,7 +527,8 @@ export async function callMemoryAssistant(
     let payload: unknown;
     try {
       payload = await response.json();
-    } catch {
+    } catch (error) {
+      diagnostic.complete(error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "timeout" : "invalid_response");
       throw new MemoryAssistantRequestError({
         reason: "invalid_json",
         attempts: attempt,
@@ -544,6 +552,7 @@ export async function callMemoryAssistant(
     totalUsage = mergeModelUsage(totalUsage, readModelUsage(payload) ?? undefined);
 
     if (lastFinishReason === "length") {
+      diagnostic.complete("truncated", payload);
       if (attempt < 2) {
         console.warn("[memory-assistant] retry_truncated", {
           attempt,
@@ -564,6 +573,7 @@ export async function callMemoryAssistant(
     }
 
     if (!choices.length || !content.trim()) {
+      diagnostic.complete("invalid_response", payload);
       throw new MemoryAssistantRequestError({
         reason: choices.length ? "empty_content" : "missing_choices",
         attempts: attempt,
@@ -577,6 +587,7 @@ export async function callMemoryAssistant(
       ? parsed as Record<string, unknown>
       : {};
     if (!Array.isArray(parsedRecord.sourceKeys)) {
+      diagnostic.complete("invalid_response", payload);
       throw new MemoryAssistantRequestError({
         reason: "invalid_output",
         attempts: attempt,
@@ -584,6 +595,7 @@ export async function callMemoryAssistant(
         finishReason: lastFinishReason || undefined,
       });
     }
+    diagnostic.complete("success", payload);
     const model = typeof record.model === "string" && record.model.trim()
       ? record.model.trim().slice(0, 200)
       : config.model;
@@ -676,22 +688,29 @@ export function buildDeterministicTimelineMemoryQuery(message: string): string |
 }
 
 export async function generateConversationReplyWithMemoryAssistant(input: {
+  turnContext?: AssistantTurnContext;
   chatInput: ConversationReplyInput;
   assistant: MemoryAssistantRuntime | null;
   candidates: MemoryAssistantCandidate[];
   loadCandidates?: (query: string, options?: { participantName?: string; deterministicTimeline: boolean }) => Promise<MemoryAssistantCandidate[]>;
   onTurnDetail?: (detail: TurnDetailPatch) => void;
 }): Promise<ConversationReplyWithMemoryAssistant> {
+  const turnContext = input.chatInput.groupChat ? input.turnContext : undefined;
+  if (turnContext) {
+    input = { ...input, chatInput: snapshotAssistantTurnData(input.chatInput), assistant: snapshotAssistantTurnData(input.assistant), candidates: snapshotAssistantTurnData(input.candidates) };
+    validateAssistantTurnEvidence(turnContext, input.chatInput);
+  }
   const report = (memory: NonNullable<TurnDetailPatch["memory"]>) => {
     try { input.onTurnDetail?.({ memory }); } catch { /* Diagnostics never affect generation. */ }
   };
   const assistantAvailable = Boolean(input.assistant && (input.loadCandidates || input.candidates.length > 0));
 
-  const first = await generateConversationReply({
+  const firstInput: ConversationReplyInput = {
     ...input.chatInput,
     memoryAssistantAvailable: assistantAvailable,
     memoryAssistantEvidenceProvided: false,
-  });
+  };
+  const first = await runAssistantTurnStage(turnContext, "response", "legacy-first", firstInput, observer => generateConversationReply(firstInput, observer));
   const { memoryAssistantQuery: modelMemoryAssistantQuery, ...firstResult } = first;
   const deterministicQuery = !modelMemoryAssistantQuery
     ? buildDeterministicTimelineMemoryQuery(input.chatInput.currentMessage)
@@ -699,6 +718,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   const memoryAssistantQuery = modelMemoryAssistantQuery || deterministicQuery || "";
   const forcedTimelineLookup = Boolean(deterministicQuery);
   if (!assistantAvailable || !input.assistant || !memoryAssistantQuery || first.action === "silent") {
+    skipAssistantTurnStage(turnContext, "memory", !input.assistant ? "not_enabled" : "not_needed");
     report({ status: !input.assistant ? "not_enabled" : first.action === "silent" ? "not_needed" : !assistantAvailable ? "no_sources" : "not_needed",
       ...(memoryAssistantQuery && first.action !== "silent" ? { query: memoryAssistantQuery } : {}) });
     return firstResult;
@@ -720,78 +740,42 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
 
   const startedAt = Date.now();
   let candidates = input.candidates;
-  if (input.loadCandidates) {
-    try {
-      // 人物名只从主人原始问题解析一次；不能从记忆助手生成的模板查询串反向解析。
-      const participantName = parseEventParticipantQuery(input.chatInput.currentMessage);
-      candidates = await input.loadCandidates(memoryAssistantQuery, {
-        ...(participantName ? { participantName } : {}),
-        deterministicTimeline: forcedTimelineLookup,
-      });
-    } catch {
-      report({ status: "failed", query: memoryAssistantQuery, candidateCount: 0 });
-      warnMemoryAssistantFailure("candidate_load_failed", {
-        queryLength: memoryAssistantQuery.length,
-        durationMs: Date.now() - startedAt,
-      });
-      return {
-        ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_FAILED_REPLY),
-        memoryAssistantModel: input.assistant.model,
-        memoryAssistantStatus: "failed",
-        memoryAssistantFailureReason: "candidate_load_failed",
-        memoryAssistantAttempts: 0,
-      };
-    }
-  }
-  if (input.chatInput.groupChat) {
-    candidates = candidates.filter((candidate) => candidate.scope === "character");
-  }
-  if (!candidates.length) {
-    report({ status: "no_sources", query: memoryAssistantQuery, candidateCount: 0, sources: [] });
-    warnMemoryAssistantFailure("empty_candidates", {
-      queryLength: memoryAssistantQuery.length,
-      candidateCount: 0,
-      attempts: 0,
-      durationMs: Date.now() - startedAt,
-    });
-    if (contextAlreadyAnswers) {
-      return { ...firstResult, memoryAssistantStatus: "context_answered" };
-    }
-    return {
-      ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_NO_SOURCE_REPLY),
-      memoryAssistantModel: input.assistant.model,
-      memoryAssistantStatus: "no_sources",
-      memoryAssistantFailureReason: "empty_candidates",
-      memoryAssistantAttempts: 0,
-    };
-  }
-
+  let candidateLoadFailed = false;
   let retrieval: Awaited<ReturnType<typeof callMemoryAssistant>>;
   try {
-    retrieval = await callMemoryAssistant(input.assistant, memoryAssistantQuery, candidates);
+    const selection = await runAssistantTurnStage(turnContext, "memory", memoryAssistantQuery, { chatInput: input.chatInput, assistant: input.assistant, candidates: input.candidates, forcedTimelineLookup }, async observer => {
+      if (input.loadCandidates) {
+        try {
+          const participantName = parseEventParticipantQuery(input.chatInput.currentMessage);
+          candidates = await input.loadCandidates(memoryAssistantQuery, { ...(participantName ? { participantName } : {}), deterministicTimeline: forcedTimelineLookup });
+        } catch (error) { candidateLoadFailed = true; throw error; }
+      }
+      if (input.chatInput.groupChat) candidates = candidates.filter(candidate => candidate.scope === "character");
+      if (!candidates.length) return { candidateCount: 0, retrieval: null };
+      return { candidateCount: candidates.length, retrieval: await callMemoryAssistant(input.assistant!, memoryAssistantQuery, candidates, observer) };
+    }, selected => !selected.retrieval?.sources.length);
+    if (!selection.retrieval) {
+      report({ status: "no_sources", query: memoryAssistantQuery, candidateCount: 0, sources: [] });
+      warnMemoryAssistantFailure("empty_candidates", { queryLength: memoryAssistantQuery.length, candidateCount: 0, attempts: 0, durationMs: Date.now() - startedAt });
+      if (contextAlreadyAnswers) return { ...firstResult, memoryAssistantStatus: "context_answered" };
+      return { ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_NO_SOURCE_REPLY), memoryAssistantModel: input.assistant.model,
+        memoryAssistantStatus: "no_sources", memoryAssistantFailureReason: "empty_candidates", memoryAssistantAttempts: 0 };
+    }
+    retrieval = selection.retrieval;
   } catch (error) {
-    report({ status: "failed", query: memoryAssistantQuery, candidateCount: candidates.length });
-    const failure = error instanceof MemoryAssistantRequestError
-      ? error
-      : new MemoryAssistantRequestError({ reason: "request_failed", attempts: 1 });
-    warnMemoryAssistantFailure(failure.reason, {
-      queryLength: memoryAssistantQuery.length,
-      candidateCount: candidates.length,
-      attempts: failure.attempts,
-      ...(failure.finishReason ? { finishReason: failure.finishReason } : {}),
-      ...(failure.httpStatus ? { httpStatus: failure.httpStatus } : {}),
-      durationMs: Date.now() - startedAt,
-    });
-    return {
-      ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_FAILED_REPLY),
-      memoryAssistantModel: input.assistant.model,
-      memoryAssistantStatus: "failed",
-      memoryAssistantFailureReason: failure.reason,
-      memoryAssistantAttempts: failure.attempts,
-      ...(failure.finishReason ? { memoryAssistantFinishReason: failure.finishReason } : {}),
-      ...(failure.httpStatus ? { memoryAssistantHttpStatus: failure.httpStatus } : {}),
-      ...(failure.usage ? { memoryAssistantUsage: failure.usage } : {}),
-    };
+    report({ status: "failed", query: memoryAssistantQuery, candidateCount: candidateLoadFailed ? 0 : candidates.length });
+    if (candidateLoadFailed) {
+      warnMemoryAssistantFailure("candidate_load_failed", { queryLength: memoryAssistantQuery.length, durationMs: Date.now() - startedAt });
+      return { ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_FAILED_REPLY), memoryAssistantModel: input.assistant.model,
+        memoryAssistantStatus: "failed", memoryAssistantFailureReason: "candidate_load_failed", memoryAssistantAttempts: 0 };
+    }
+    const failure = error instanceof MemoryAssistantRequestError ? error : new MemoryAssistantRequestError({ reason: "request_failed", attempts: 1 });
+    warnMemoryAssistantFailure(failure.reason, { queryLength: memoryAssistantQuery.length, candidateCount: candidates.length, attempts: failure.attempts,
+      ...(failure.finishReason ? { finishReason: failure.finishReason } : {}), ...(failure.httpStatus ? { httpStatus: failure.httpStatus } : {}), durationMs: Date.now() - startedAt });
+    return { ...withMemoryAssistantFallbackReply(firstResult, MEMORY_ASSISTANT_FAILED_REPLY), memoryAssistantModel: input.assistant.model,
+      memoryAssistantStatus: "failed", memoryAssistantFailureReason: failure.reason, memoryAssistantAttempts: failure.attempts,
+      ...(failure.finishReason ? { memoryAssistantFinishReason: failure.finishReason } : {}), ...(failure.httpStatus ? { memoryAssistantHttpStatus: failure.httpStatus } : {}),
+      ...(failure.usage ? { memoryAssistantUsage: failure.usage } : {}) };
   }
 
   report({ status: retrieval.sources.length ? "success" : "no_sources", query: memoryAssistantQuery,
@@ -873,7 +857,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
     }));
 
   try {
-    const final = await generateConversationReply({
+    const finalInput: ConversationReplyInput = {
       ...input.chatInput,
       memories: appendUnique(input.chatInput.memories, extraMemories),
       snapshots: appendUnique(input.chatInput.snapshots, extraSnapshots),
@@ -881,7 +865,8 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
       rawMessages: appendUnique(input.chatInput.rawMessages ?? [], extraRawMessages),
       memoryAssistantAvailable: false,
       memoryAssistantEvidenceProvided: true,
-    });
+    };
+    const final = await runAssistantTurnStage(turnContext, "response", "legacy-final", finalInput, observer => generateConversationReply(finalInput, observer));
     return {
       ...final,
       usage: mergeModelUsage(first.usage, final.usage),
