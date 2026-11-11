@@ -613,6 +613,35 @@ paths:
                     properties:
                       version: { type: integer, enum: [1] }
                       groupChat: { type: boolean }
+                      growthReads:
+                        type: array
+                        maxItems: 4
+                        description: 群聊可选读取诊断；旧记录缺失不当作零读取。provided表示已选入上下文，不保证后续HTTP已发出。counts仅为本次有限候选，usedIds仅为模型自报白名单引用；知识暂未回传引用。
+                        items:
+                          type: object
+                          additionalProperties: false
+                          required: [domain, status, candidateCount, matchedCount, selectedCount, budgetExcludedCount, limitExcludedCount, candidateLimitReached, provided, usedIds]
+                          properties:
+                            domain: { type: string, enum: [knowledge, preferences, language, goals] }
+                            status: { type: string, enum: [not_needed, no_match, failed, budget_excluded, provided] }
+                            candidateCount: { type: integer, minimum: 0, maximum: 1000 }
+                            matchedCount: { type: integer, minimum: 0, maximum: 1000 }
+                            selectedCount: { type: integer, minimum: 0, maximum: 1000 }
+                            budgetExcludedCount: { type: integer, minimum: 0, maximum: 1000 }
+                            limitExcludedCount: { type: integer, minimum: 0, maximum: 1000 }
+                            candidateLimitReached: { type: boolean, description: 取数达到候选上限，不证明全库还有更多匹配 }
+                            provided:
+                              type: array
+                              maxItems: 8
+                              items:
+                                type: object
+                                additionalProperties: false
+                                required: [id]
+                                properties:
+                                  id: { type: string, maxLength: 120 }
+                                  revision: { type: integer, minimum: 1 }
+                                  updatedAt: { type: string, format: date-time }
+                            usedIds: { type: array, maxItems: 8, items: { type: string, maxLength: 120 } }
                       collaboration:
                         type: object
                         additionalProperties: false

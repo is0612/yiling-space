@@ -12,6 +12,11 @@ import { generateGroupContextReply } from "../server/utils/group-context-reply";
 import { recordModelUsage, toUsageTokens } from "../server/utils/model-usage";
 import type { ConversationReplyInput } from "../server/utils/chat-reply";
 import type { MemoryAssistantRuntime } from "../server/utils/memory-assistant";
+import { loadPreferencesForPrompt } from "../server/utils/preference-retrieval";
+import { loadExpressionHabitsForPrompt } from "../server/utils/expression-habit-retrieval";
+import { loadGoalsForPrompt } from "../server/utils/goal-retrieval";
+import { rankKnowledgeItems } from "../server/utils/knowledge-retrieval";
+import { createGrowthReadDiagnostic, reconcileGrowthReadUsage, type GrowthReadDiagnostic } from "../server/utils/growth-read-diagnostics";
 
 const database = new URL(process.env.DATABASE_URL ?? "");
 assert(["localhost", "127.0.0.1", "[::1]"].includes(database.hostname));
@@ -23,7 +28,9 @@ const prisma = getPrisma();
 const originalFetch = globalThis.fetch;
 const users: string[] = []; const roles: string[] = [];
 let api: http.Server | undefined;
-let mode: "success" | "failed" = "success";
+let mode: "success" | "failed" | "silent" = "success";
+let growthFixture: { preference: string; language: string; goal: string; knowledge: string; foreign: string[] };
+const growthQuery = "电影 cinema";
 let contextCalls = 0, responseCalls = 0;
 const modelRequests: Array<{ model: string; body: string }> = [];
 const runtime: MemoryAssistantRuntime = { model: "context-mock", apiKey: "isolated-context-secret", apiBaseUrl: "https://collaboration-model.invalid/v1", temperature: 0.1, maxInputTokens: 16384, maxOutputTokens: 2048 };
@@ -35,35 +42,57 @@ globalThis.fetch = (async (input, init) => {
   const body = JSON.parse(String(init?.body)) as { model: string };
   modelRequests.push({ model: body.model, body: String(init?.body) });
   assert(!String(init?.body).includes("PRIVATE_SOURCE_SENTINEL"));
+  for (const id of growthFixture?.foreign ?? []) assert(!String(init?.body).includes(id), "Foreign role growth may not reach the model");
   if (body.model === "context-mock") {
     contextCalls++;
     if (mode === "success" && contextCalls === 1) return provider("", "length");
-    return provider(JSON.stringify({ summary: "询问公开电影经历", evidenceMessageIds: ["current"], participation: "invited", ...(mode === "success" ? { memoryQuery: "之前讨论的电影" } : {}) }));
+    return provider(JSON.stringify({ summary: "询问公开电影经历", evidenceMessageIds: ["current"], participation: "invited", ...(mode === "success" ? { memoryQuery: "之前讨论的电影", knowledgeQuery: "cinema" } : {}) }));
   }
   if (body.model === "memory-mock") return provider('{"sourceKeys":["memory/public","memory/private","invented"]}');
   assert.equal(body.model, "character-mock"); responseCalls++;
   if (mode === "failed") return new Response("provider-error-secret", { status: 503 });
-  if (responseCalls === 1) return provider("not-json");
-  return provider('{"action":"reply","reply":"之前谈过那部电影。","usedMemoryIds":["public"],"usedSnapshotIds":[],"usedEventIds":[],"usedRawMessageIds":[]}', "stop", false);
+  if (mode === "success" && responseCalls === 1) return provider("not-json");
+  return provider(JSON.stringify({ action: mode === "silent" ? "silent" : "reply", reply: mode === "silent" ? "" : "之前谈过那部电影。",
+    usedMemoryIds: ["public"], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [],
+    usedPreferenceIds: [growthFixture.preference, "invented"], usedExpressionHabitIds: [growthFixture.language, "invented"], usedGoalIds: [growthFixture.goal, "invented"],
+  }), "stop", false);
 }) as typeof fetch;
 
-async function saveTurn(characterId: string, scopeId: string, shouldFail = false) {
-  mode = shouldFail ? "failed" : "success"; contextCalls = 0; responseCalls = 0;
+async function saveTurn(characterId: string, scopeId: string, requestedMode: typeof mode = "success") {
+  mode = requestedMode; const shouldFail = requestedMode === "failed"; contextCalls = 0; responseCalls = 0;
+  const reads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();
+  const observe = (entry: GrowthReadDiagnostic) => { reads.set(entry.domain, entry); };
+  observe(createGrowthReadDiagnostic("knowledge"));
+  const preferences = await loadPreferencesForPrompt(prisma, characterId, growthQuery, observe);
+  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, characterId, growthQuery, observe);
+  const goals = await loadGoalsForPrompt(prisma, characterId, growthQuery, observe);
+  assert.deepEqual(preferences.map(row => row.id), [growthFixture.preference]);
+  assert.deepEqual(expressionHabits.map(row => row.id), [growthFixture.language]);
+  assert.deepEqual(goals.map(row => row.id), [growthFixture.goal]);
+  const loadKnowledge = async (query: string) => {
+    // Real bounded DB read + existing ranker; this test does not execute the whole channel pipeline.
+    const rows = await prisma.knowledgeItem.findMany({ where: { characterId, status: "ACTIVE" }, orderBy: { updatedAt: "desc" }, take: 300 });
+    const selected = rankKnowledgeItems(query, rows, 8);
+    observe(createGrowthReadDiagnostic("knowledge", { status: selected.length ? "provided" : "no_match", candidateCount: rows.length, matchedCount: selected.length, selectedCount: selected.length,
+      provided: selected.map(row => ({ id: row.id, updatedAt: row.updatedAt.toISOString() })) }));
+    return selected.map(({ id, title, content, category, tags, confidence, sourceType }) => ({ id, title, content, category, tags, confidence, sourceType }));
+  };
   const turnId = randomUUID();
   const context = createAssistantTurnContext({ turnId, identity: { characterId, channel: "qq-group", channelBindingId: randomUUID(), conversationKey: "g:synthetic", readableScopeIds: [scopeId], allowPrivate: false }, evidenceIds: ["current"] });
   const detail = createModelTurnDetail(true, [{ id: "current", content: "之前讨论的电影呢" }]);
-  const chatInput: ConversationReplyInput = { groupChat: true, allowSilent: true, characterName: "协作隔离测试角色", characterPrompt: "自然交流", model: "character-mock", apiKey: "isolated-chat-secret", apiBaseUrl: runtime.apiBaseUrl, thinking: false, currentMessage: "之前讨论的电影呢", transcript: [{ id: "current", content: "之前讨论的电影呢" }], recentMessages: [], memories: [], snapshots: [] };
+  const chatInput: ConversationReplyInput = { groupChat: true, allowSilent: true, characterName: "协作隔离测试角色", characterPrompt: "自然交流", model: "character-mock", apiKey: "isolated-chat-secret", apiBaseUrl: runtime.apiBaseUrl, thinking: false, preferences, expressionHabits, goals, currentMessage: "之前讨论的电影呢", transcript: [{ id: "current", content: "之前讨论的电影呢" }], recentMessages: [], memories: [], snapshots: [] };
   let failure: unknown;
   try {
-    const generated = await generateGroupContextReply({ chatInput, turnContext: context, contextAssistant: runtime, assistant: { ...runtime, model: "memory-mock", apiKey: "isolated-memory-secret" }, candidates: [
+    const generated = await generateGroupContextReply({ chatInput, loadKnowledge, turnContext: context, contextAssistant: runtime, assistant: { ...runtime, model: "memory-mock", apiKey: "isolated-memory-secret" }, candidates: [
       { id: "public", sourceKey: "memory/public", sourceType: "memory", scope: "character", relevanceScore: 1, category: "FACT", content: "公开电影经历" },
       { id: "private", sourceKey: "memory/private", sourceType: "memory", scope: "private", relevanceScore: 1, category: "FACT", content: "PRIVATE_SOURCE_SENTINEL" },
     ], onTurnDetail: detail.update, recordAssistantUsage: async entry => recordModelUsage({ characterId, kind: entry.kind, model: entry.model, usage: entry.usage, metadata: { turnId, status: entry.status } }) });
-    detail.update({ response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation }, collaboration: context.snapshot() });
+    detail.update({ response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation }, collaboration: context.snapshot(),
+      growthReads: reconcileGrowthReadUsage([...reads.values()], { preferences: generated.usedPreferenceIds, language: generated.usedExpressionHabitIds, goals: generated.usedGoalIds }, generated.action === "silent") });
     await recordModelUsage({ characterId, kind: "channel", model: generated.model, usage: toUsageTokens(generated.usage), metadata: { turnId, status: "success", turnDetail: detail.serialize() } });
   } catch (error) {
     failure = error;
-    detail.update({ collaboration: context.snapshot() });
+    detail.update({ collaboration: context.snapshot(), growthReads: [...reads.values()] });
     await recordModelUsage({ characterId, kind: "channel", model: "character-mock", metadata: { turnId, status: "failed", turnDetail: detail.serialize() } });
   }
   assert.equal(Boolean(failure), shouldFail);
@@ -81,6 +110,17 @@ try {
     const character = await prisma.character.create({ data: { ownerId, name: "协作隔离测试角色", basePrompt: "测试" } }); roles.push(character.id);
   }
   const scope = await prisma.memoryScope.create({ data: { characterId: roles[0]!, scopeType: "CHARACTER_GLOBAL", scopeKey: randomUUID() } });
+  const preference = await prisma.characterPreference.create({ data: { characterId: roles[0]!, kind: "LIKE", topic: "cinema", reason: "公开电影偏好", status: "ACTIVE", revision: 3 } });
+  const language = await prisma.characterExpressionHabit.create({ data: { characterId: roles[0]!, kind: "TONE", content: "讨论电影时简洁自然", context: "cinema", reason: "人工确认", status: "ACTIVE", revision: 4 } });
+  const goal = await prisma.characterGoal.create({ data: { characterId: roles[0]!, kind: "WISH", title: "cinema discussion", description: "看电影后记录想法", reason: "人工确认", status: "ACTIVE", revision: 5 } });
+  const knowledge = await prisma.knowledgeItem.create({ data: { characterId: roles[0]!, title: "cinema terminology", content: "公开电影知识", category: "GENERAL", sourceType: "MANUAL", status: "ACTIVE" } });
+  const foreignPreference = await prisma.characterPreference.create({ data: { characterId: roles[2]!, kind: "LIKE", topic: "cinema", reason: "FOREIGN_GROWTH_SENTINEL", status: "ACTIVE" } });
+  const foreignLanguage = await prisma.characterExpressionHabit.create({ data: { characterId: roles[2]!, kind: "TONE", content: "FOREIGN_GROWTH_SENTINEL", context: "cinema", reason: "人工确认", status: "ACTIVE" } });
+  const foreignGoal = await prisma.characterGoal.create({ data: { characterId: roles[2]!, kind: "GOAL", title: "cinema", description: "FOREIGN_GROWTH_SENTINEL", reason: "人工确认", status: "ACTIVE" } });
+  growthFixture = { preference: preference.id, language: language.id, goal: goal.id, knowledge: knowledge.id, foreign: [foreignPreference.id, foreignLanguage.id, foreignGoal.id] };
+  await prisma.characterPreference.create({ data: { characterId: roles[0]!, kind: "LIKE", topic: "cinema", reason: "候选不入模", status: "PENDING" } });
+  await prisma.characterExpressionHabit.create({ data: { characterId: roles[0]!, kind: "TONE", content: "停用不入模", context: "cinema", reason: "人工确认", status: "DISABLED" } });
+  await prisma.characterGoal.create({ data: { characterId: roles[0]!, kind: "GOAL", title: "cinema", description: "暂停不入模", reason: "人工确认", status: "PAUSED" } });
   const ownerSession = await createSession({ userId: users[0]! });
   const foreignSession = await createSession({ userId: users[1]! });
   const app = createApp(); const router = createRouter();
@@ -105,6 +145,16 @@ try {
   assert.deepEqual(mainStage.operations[0]!.attempts.map(attempt => attempt.status), ["invalid_response", "success"]);
   assert.equal(mainStage.operations[0]!.attempts[1]!.usageReported, false);
   assert.deepEqual((data.detail.memory.sources ?? []).map(source => source.id), ["public"]);
+  const growth = data.detail.growthReads!; assert.equal(growth.length, 4);
+  for (const [domain, id, revision] of [["preferences", preference.id, 3], ["language", language.id, 4], ["goals", goal.id, 5]] as const) {
+    const read = growth.find(row => row.domain === domain)!;
+    assert.equal(read.status, "provided"); assert.deepEqual(read.provided, [{ id, revision }]); assert.deepEqual(read.usedIds, [id]);
+    assert.equal(read.candidateCount, 1); assert.equal(read.selectedCount, 1);
+  }
+  const knowledgeRead = growth.find(row => row.domain === "knowledge")!;
+  assert.deepEqual(knowledgeRead.provided, [{ id: knowledge.id, updatedAt: knowledge.updatedAt.toISOString() }]);
+  assert.deepEqual(knowledgeRead.usedIds, [], "Knowledge has no model-used-ID protocol");
+  assert(!JSON.stringify(growth).includes("invented")); assert(!JSON.stringify(data).includes("FOREIGN_GROWTH_SENTINEL"));
   const linked = await read(roles[0]!, success.assistantId); assert.equal(linked.status, 200);
   assert.equal((await linked.json() as DetailResponse).turnId, success.turnId);
   for (const secret of ["isolated-chat-secret", "isolated-context-secret", "isolated-memory-secret", "PRIVATE_SOURCE_SENTINEL", "provider-error-secret"]) assert(!JSON.stringify(data).includes(secret));
@@ -124,8 +174,9 @@ try {
   await recordModelUsage({ characterId: roles[0]!, kind: "channel", model: "legacy", metadata: { turnId: legacyTurn, turnDetail: detailJson("旧记录") } });
   const legacy = await prisma.modelUsage.findFirstOrThrow({ where: { characterId: roles[0]!, model: "legacy" } });
   const legacyResponse = await read(roles[0]!, legacy.id); assert.equal(legacyResponse.status, 200);
-  assert.equal((await legacyResponse.json() as DetailResponse).detail.collaboration, undefined);
-  const failed = await saveTurn(roles[0]!, scope.id, true);
+  const legacyDetail = (await legacyResponse.json() as DetailResponse).detail;
+  assert.equal(legacyDetail.collaboration, undefined); assert.equal(legacyDetail.growthReads, undefined);
+  const failed = await saveTurn(roles[0]!, scope.id, "failed");
   const failedResponse = await read(roles[0]!, failed.mainId); assert.equal(failedResponse.status, 200);
   const failure = await failedResponse.json() as DetailResponse;
   assert.equal(failure.detail.response.status, "failed");
@@ -134,6 +185,14 @@ try {
   assert.deepEqual(failedStage.operations[0]!.attempts.map(attempt => attempt.status), ["http_error"]);
   assert.equal(failedStage.operations[0]!.attempts[0]!.usageReported, false);
   assert(!JSON.stringify(failure).includes("provider-error-secret"));
+  assert.equal(failure.detail.growthReads?.filter(row => row.status === "provided").length, 3);
+  assert(failure.detail.growthReads?.every(row => row.usedIds.length === 0));
+  const silent = await saveTurn(roles[0]!, scope.id, "silent");
+  const silentResponse = await read(roles[0]!, silent.mainId); assert.equal(silentResponse.status, 200);
+  const silentDetail = (await silentResponse.json() as DetailResponse).detail;
+  assert.equal(silentDetail.response.action, "silent");
+  assert.equal(silentDetail.growthReads?.filter(row => row.status === "provided").length, 3);
+  assert(silentDetail.growthReads?.every(row => row.usedIds.length === 0), "Silence must clear even model-reported used IDs");
   assert(modelRequests.length > 0);
   console.log("Assistant collaboration DB integration passed; actual handler/session/DB used, provider calls intercepted.");
 } finally {

@@ -1,3 +1,4 @@
+import { createGrowthReadDiagnostic, reconcileGrowthReadUsage, type GrowthReadDiagnostic } from "../growth-read-diagnostics";
 import { loadGoalsForPrompt, usedGoalSnapshots } from "../goal-retrieval";
 import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../expression-habit-retrieval";
 import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../preference-retrieval";
@@ -1644,23 +1645,39 @@ async function runChannelTurn(input: {
   const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
-  const goals = await loadGoalsForPrompt(prisma, character.id, currentMessage).catch(() => []);
-  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, character.id, currentMessage).catch(() => []);
-  const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage).catch(() => []);
+  const growthReads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();
+  const observeGrowthRead = isGroup && input.platform === "qq-onebot"
+    ? (entry: GrowthReadDiagnostic) => { growthReads.set(entry.domain, entry); }
+    : undefined;
+  if (observeGrowthRead) observeGrowthRead(createGrowthReadDiagnostic("knowledge"));
+  const goals = await loadGoalsForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
+  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
+  const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
   const turnId = randomUUID();
 
   // Formal knowledge lookup is shared by group and private paths and is always character-scoped.
   const loadKnowledge = async (searchQuery: string): Promise<ConversationKnowledgeItem[]> => {
+    try {
     const rows = await prisma.knowledgeItem.findMany({
       where: { characterId: input.characterId, status: "ACTIVE" },
       orderBy: { updatedAt: "desc" },
       take: 300,
       select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, sourceType: true, updatedAt: true },
     });
-    return rankKnowledgeItems(searchQuery, rows, 8).map(item => ({
+    const selected = rankKnowledgeItems(searchQuery, rows, 8);
+    // Diagnostics rank the same bounded candidate slice without issuing another query.
+    const matchedCount = observeGrowthRead ? rows.reduce((count, row) => count + (rankKnowledgeItems(searchQuery, [row], 1).length ? 1 : 0), 0) : 0;
+    observeGrowthRead?.(createGrowthReadDiagnostic("knowledge", { status: selected.length ? "provided" : "no_match", candidateCount: rows.length,
+      matchedCount, selectedCount: selected.length, limitExcludedCount: Math.max(0, matchedCount - selected.length), candidateLimitReached: rows.length === 300,
+      provided: selected.map(item => ({ id: item.id, updatedAt: new Date(item.updatedAt).toISOString() })) }));
+    return selected.map(item => ({
       id: item.id, title: item.title, content: item.content, category: item.category,
       tags: item.tags, confidence: item.confidence, sourceType: item.sourceType,
     }));
+    } catch (error) {
+      observeGrowthRead?.(createGrowthReadDiagnostic("knowledge", { status: "failed" }));
+      throw error;
+    }
   };
 
   // One private analyzer call can both request a knowledge lookup and nominate candidate evidence.
@@ -2166,7 +2183,7 @@ async function runChannelTurn(input: {
       },
     });
   } catch (error) {
-    if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot() });
+    if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: [...growthReads.values()] });
     await recordModelUsage({
       kind: "channel", model: chatSettings.model, characterId: input.characterId,
       channelBindingId: input.bindingId,
@@ -2175,7 +2192,9 @@ async function runChannelTurn(input: {
     return { status: "ignored", reason: (error instanceof Error ? error.message : "model_error").slice(0, 200) };
   }
 
-  if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot() });
+  if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: reconcileGrowthReadUsage([...growthReads.values()], {
+    preferences: generated.usedPreferenceIds, language: generated.usedExpressionHabitIds, goals: generated.usedGoalIds,
+  }, generated.action === "silent") });
   turnDetail.update({ response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation } });
   const generationDurationMs = Date.now() - generationStartedAt;
   // 在落消息/发送前保存模型阶段结果，渠道发送失败也能从助手日志打开本轮详情。

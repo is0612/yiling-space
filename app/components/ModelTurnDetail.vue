@@ -24,6 +24,14 @@ export type TurnCollaboration = {
     }>;
   }>;
 };
+export type GrowthReadDiagnostic = {
+  domain: "preferences" | "language" | "goals" | "knowledge";
+  status: "not_needed" | "no_match" | "failed" | "budget_excluded" | "provided";
+  candidateCount: number; matchedCount: number; selectedCount: number;
+  budgetExcludedCount: number; limitExcludedCount: number; candidateLimitReached: boolean;
+  provided: Array<{ id: string; revision?: number; updatedAt?: string }>;
+  usedIds: string[];
+};
 export type ModelTurnDetailResponse = {
   turnId: string;
   createdAt: string;
@@ -31,6 +39,7 @@ export type ModelTurnDetailResponse = {
     version: 1;
     groupChat: boolean;
     collaboration?: TurnCollaboration;
+    growthReads?: GrowthReadDiagnostic[];
     messages: TurnMessage[];
     context: {
       status: "not_enabled" | "not_applicable" | "success" | "failed";
@@ -69,6 +78,17 @@ const props = defineProps<{
 }>();
 const detail = computed(() => props.result.detail);
 const collaboration = computed(() => detail.value.collaboration);
+const growthReads = computed(() => detail.value.growthReads);
+const growthDomains = { preferences: "偏好", language: "语言习惯", goals: "愿望", knowledge: "知识" };
+const growthReadStatuses = { not_needed: "本轮无需读取", no_match: "没有匹配条目", failed: "读取失败", budget_excluded: "匹配条目未选入", provided: "已选入模型上下文" };
+function growthReferenceLabel(read: GrowthReadDiagnostic) {
+  if (read.domain === "knowledge") return "知识暂未回传引用";
+  return read.usedIds.length ? `模型自报引用 ${read.usedIds.length} 条` : "未记录模型自报引用，不代表未受影响";
+}
+function growthVersion(item: GrowthReadDiagnostic["provided"][number]) {
+  const versions = [item.revision !== undefined ? `版本 ${item.revision}` : "", item.updatedAt ? `更新时间 ${formatTime(item.updatedAt)}` : ""].filter(Boolean);
+  return versions.length ? versions.join(" · ") : "未保存版本标记";
+}
 const collaborationStages = { context: "语境分析", memory: "记忆筛选", knowledge: "知识查询", response: "回复生成" };
 const operationLabels = { running: "运行中", success: "完成", no_sources: "无相关来源", failed: "失败", budget_exhausted: "逻辑额度已用尽" };
 const attemptLabels = { success: "请求成功", failed: "请求失败", timeout: "请求超时", http_error: "HTTP 错误", invalid_response: "响应格式无效", truncated: "输出被截断" };
@@ -335,6 +355,90 @@ function messageAuthor(message: TurnMessage) {
       </p>
     </section>
 
+    <section class="turn-section growth-read-section">
+      <h3>成长数据读取与引用</h3>
+      <template v-if="growthReads">
+        <p class="empty-text">
+          仅本次有限候选，不代表全库。选入上下文与模型自报引用分别记录；选入不保证请求已成功发出，模型自报引用也不证明实际影响。
+        </p>
+        <ol
+          v-if="growthReads.length"
+          class="record-list"
+        >
+          <li
+            v-for="read in growthReads"
+            :key="read.domain"
+            class="record-card"
+          >
+            <div class="record-meta">
+              <strong>{{ growthDomains[read.domain] }}</strong>
+              <el-tag
+                :type="read.status === 'failed' ? 'warning' : read.status === 'provided' ? 'success' : 'info'"
+                size="small"
+              >
+                {{ growthReadStatuses[read.status] }}
+              </el-tag>
+              <span>候选 {{ read.candidateCount }} 条</span>
+              <span>匹配 {{ read.matchedCount }} 条</span>
+              <span>选入 {{ read.selectedCount }} 条</span>
+            </div>
+            <p class="empty-text">
+              预算未选入 {{ read.budgetExcludedCount }} 条 · 条数上限未选入 {{ read.limitExcludedCount }} 条
+            </p>
+            <p
+              v-if="read.candidateLimitReached"
+              class="diagnostic-warning"
+            >
+              本次候选读取已达上限，未读取部分不计入上述统计。
+            </p>
+            <template v-if="read.provided.length">
+              <h4>已选入的条目与版本</h4>
+              <ul class="growth-reference-list">
+                <li
+                  v-for="item in read.provided"
+                  :key="item.id"
+                >
+                  <span>条目 {{ shortId(item.id) }}</span> · {{ growthVersion(item) }}
+                </li>
+              </ul>
+            </template>
+            <p
+              v-else
+              class="empty-text"
+            >
+              本轮未保存提供条目清单。
+            </p>
+            <p class="empty-text">
+              {{ growthReferenceLabel(read) }}
+            </p>
+            <ul
+              v-if="read.domain !== 'knowledge' && read.usedIds.length"
+              class="growth-reference-list"
+            >
+              <li
+                v-for="id in read.usedIds"
+                :key="id"
+              >
+                条目 {{ shortId(id) }}
+              </li>
+            </ul>
+          </li>
+        </ol>
+        <p
+          v-else
+          class="empty-text"
+        >
+          本轮已接入读取诊断，但未保存领域结果；不据此判断候选或引用为零。
+        </p>
+      </template>
+      <p
+        v-else
+        class="empty-text"
+      >
+        旧记录未保存成长数据读取诊断，或本入口尚未接入；不据此判断没有读取或引用。
+      </p>
+    </section>
+
     <section class="turn-section">
       <h3>回应结果</h3>
       <div class="record-meta">
@@ -382,6 +486,7 @@ function messageAuthor(message: TurnMessage) {
 .collaboration-operation { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--el-border-color-light); }
 .attempt-list { display: flex; flex-direction: column; gap: 8px; list-style: none; padding: 0; margin: 10px 0 0; }
 .diagnostic-warning { color: var(--el-color-warning-dark-2); font-size: 12px; overflow-wrap: anywhere; }
+.growth-reference-list { margin: 8px 0 0; padding-left: 20px; color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
   .turn-section { padding: 12px; }
 }

@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import { createGrowthReadDiagnostic, reconcileGrowthReadUsage, sanitizeGrowthReadDiagnostics } from "../server/utils/growth-read-diagnostics";
+import { createModelTurnDetail, readModelTurnDetail } from "../server/utils/model-turn-detail";
+const read = createGrowthReadDiagnostic("preferences", { status: "provided", candidateCount: 5, matchedCount: 3, selectedCount: 1, budgetExcludedCount: 2, provided: [{ id: "preference-1", revision: 4 }] });
+const usage = reconcileGrowthReadUsage([read], { preferences: ["preference-1", "invented", "preference-1"] });
+assert.deepEqual(usage[0]!.usedIds, ["preference-1"]);
+assert.deepEqual(reconcileGrowthReadUsage([read], { preferences: ["preference-1"] }, true)[0]!.usedIds, []);
+const detail = createModelTurnDetail(true, []); detail.update({ growthReads: usage });
+assert.deepEqual(readModelTurnDetail(detail.serialize())!.growthReads, usage);
+assert.equal(readModelTurnDetail(JSON.stringify({ version: 1, groupChat: true }))!.growthReads, undefined);
+const privateDetail = createModelTurnDetail(false, []); privateDetail.update({ growthReads: usage }); assert.equal(readModelTurnDetail(privateDetail.serialize())!.growthReads, undefined);
+const unsafe = sanitizeGrowthReadDiagnostics([{ ...read, query: "secret", provided: [{ id: "preference-1", revision: 4, content: "must-not-copy" }], usedIds: ["invented", "preference-1"] }, { ...read }, { domain: ["goals"], status: "provided" }])!;
+assert.equal(unsafe.length, 1); assert(!JSON.stringify(unsafe).includes("secret")); assert(!JSON.stringify(unsafe).includes("must-not-copy")); assert.deepEqual(unsafe[0]!.usedIds, ["preference-1"]);
+console.log("Growth read diagnostics: bounded references, source whitelist, self-reported usage, silence, legacy and private exclusion passed.");

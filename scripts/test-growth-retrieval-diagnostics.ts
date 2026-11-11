@@ -1,0 +1,52 @@
+import assert from "node:assert/strict";
+import type { PrismaClient } from "../src/generated/prisma/client";
+import type { GrowthReadDiagnostic } from "../server/utils/growth-read-diagnostics";
+import { selectPreferencesForPrompt, loadPreferencesForPrompt, type PreferenceSearchRecord } from "../server/utils/preference-retrieval";
+import { selectExpressionHabitsForPrompt, loadExpressionHabitsForPrompt, type ExpressionHabitSearchRecord } from "../server/utils/expression-habit-retrieval";
+import { selectGoalsForPrompt, loadGoalsForPrompt, type GoalSearchRecord } from "../server/utils/goal-retrieval";
+
+const diagnostics: GrowthReadDiagnostic[] = [];
+const observe = (entry: GrowthReadDiagnostic) => diagnostics.push(entry);
+const latest = () => diagnostics.at(-1)!;
+const prefs: PreferenceSearchRecord[] = Array.from({ length: 8 }, (_, i) => ({ id: `pref-${i}`, kind: "LIKE", topic: "星空", reason: "持续关注", revision: i + 1, status: "ACTIVE" }));
+const language: ExpressionHabitSearchRecord[] = Array.from({ length: 8 }, (_, i) => ({ id: `language-${i}`, kind: "TONE", content: "自然说话", context: "", revision: 1, status: "ACTIVE" }));
+const goals: GoalSearchRecord[] = Array.from({ length: 7 }, (_, i) => ({ id: `goal-${i}`, kind: "GOAL", title: "星空观测", description: "认识星座", status: "ACTIVE", revision: 1 }));
+const withPref = selectPreferencesForPrompt("聊聊星空", prefs, 10000, observe);
+assert.deepEqual(withPref, selectPreferencesForPrompt("聊聊星空", prefs, 10000));
+assert.equal(latest().status, "provided"); assert.equal(latest().candidateCount, 8); assert.equal(latest().matchedCount, 8);
+assert.equal(latest().selectedCount, 6); assert.equal(latest().limitExcludedCount, 2); assert.equal(latest().budgetExcludedCount, 0);
+assert.deepEqual(latest().provided, withPref.map(({ id, revision }) => ({ id, revision })));
+assert.deepEqual(latest().usedIds, []); assert(!JSON.stringify(latest()).includes("星空"));
+assert.doesNotThrow(() => selectPreferencesForPrompt("星空", prefs, 10000, () => { throw Error("observer"); }));
+selectPreferencesForPrompt("星空", prefs, 0, observe); assert.equal(latest().status, "budget_excluded"); assert.equal(latest().budgetExcludedCount, 8); assert.equal(latest().selectedCount, 0);
+selectPreferencesForPrompt("你好", prefs, 600, observe); assert.equal(latest().status, "no_match"); assert.equal(latest().matchedCount, 0);
+selectPreferencesForPrompt("🙂", prefs, 600, observe); assert.equal(latest().status, "not_needed");
+const mixed = [{ ...prefs[0]!, id: "a-large", reason: "长".repeat(1000) }, { ...prefs[1]!, id: "b-small" }];
+assert.equal(selectPreferencesForPrompt("星空", mixed, 200, observe).length, 1); assert.equal(latest().status, "provided"); assert.equal(latest().budgetExcludedCount, 1);
+selectExpressionHabitsForPrompt("🙂", language, 10000, observe); assert.equal(latest().domain, "language"); assert.equal(latest().status, "provided"); assert.equal(latest().limitExcludedCount, 2);
+assert.deepEqual(selectExpressionHabitsForPrompt("🙂", language, 10000), selectExpressionHabitsForPrompt("🙂", language, 10000, observe));
+selectExpressionHabitsForPrompt("🙂", [{ ...language[0]!, context: "复杂解释" }], 800, observe); assert.equal(latest().status, "no_match");
+selectExpressionHabitsForPrompt("你好", language, 1, observe); assert.equal(latest().status, "budget_excluded"); assert.equal(latest().budgetExcludedCount, 8);
+selectGoalsForPrompt("星空", goals, 10000, observe); assert.equal(latest().domain, "goals"); assert.equal(latest().selectedCount, 4); assert.equal(latest().limitExcludedCount, 3);
+assert.deepEqual(selectGoalsForPrompt("星空", goals, 10000), selectGoalsForPrompt("星空", goals, 10000, observe));
+selectGoalsForPrompt("🙂", goals, 1000, observe); assert.equal(latest().status, "not_needed");
+selectGoalsForPrompt("无关话题", goals, 1000, observe); assert.equal(latest().status, "no_match");
+selectGoalsForPrompt("星空", goals, 1, observe); assert.equal(latest().status, "budget_excluded"); assert.equal(latest().budgetExcludedCount, 7);
+
+let queries = 0; let lastArgs: Record<string, unknown> = {};
+const fake = (rows: unknown[], fail?: Error) => ({ characterPreference: { findMany: async (args: Record<string, unknown>) => { queries++; lastArgs = args; if (fail) throw fail; return rows; } }, characterExpressionHabit: { findMany: async (args: Record<string, unknown>) => { queries++; lastArgs = args; if (fail) throw fail; return rows; } }, characterGoal: { findMany: async (args: Record<string, unknown>) => { queries++; lastArgs = args; if (fail) throw fail; return rows; } } }) as unknown as PrismaClient;
+const empty = fake([]);
+await loadPreferencesForPrompt(empty, "role-a", "🙂", observe); await loadGoalsForPrompt(empty, "role-a", "🙂", observe); assert.equal(queries, 0);
+await loadExpressionHabitsForPrompt(empty, "role-a", "🙂", observe); assert.equal(queries, 1); assert.equal(latest().status, "no_match");
+for (const load of [loadPreferencesForPrompt, loadExpressionHabitsForPrompt, loadGoalsForPrompt]) {
+  const original = Error("database-secret-must-not-copy");
+  await assert.rejects(load(fake([], original), "role-a", "星空", observe), error => error === original);
+  assert.equal(latest().status, "failed"); assert(!JSON.stringify(latest()).includes("database-secret"));
+  await assert.rejects(load(fake([], original), "role-a", "星空", () => { throw Error("diagnostic-failure"); }), error => error === original);
+}
+await loadPreferencesForPrompt(fake(Array.from({ length: 100 }, (_, i) => ({ ...prefs[0]!, id: `pref-${i}` }))), "role-a", "星空", observe);
+assert.equal(latest().candidateLimitReached, true); assert.equal(latest().candidateCount, 100); assert.equal(lastArgs.take, 100);
+assert.equal((lastArgs.where as { characterId: string }).characterId, "role-a");
+await loadExpressionHabitsForPrompt(fake(language), "role-b", "🙂", observe); assert.equal(latest().candidateLimitReached, false); assert.equal((lastArgs.where as { characterId: string }).characterId, "role-b");
+await loadGoalsForPrompt(fake(goals), "role-c", "星空", observe); assert.equal(latest().candidateLimitReached, false);
+console.log("Growth retrieval diagnostics: unchanged outputs, budget/limit accounting, minimal references, optional safe observers, general-language reads, capped candidates and original DB failures passed (no database/model calls).");

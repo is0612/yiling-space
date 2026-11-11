@@ -74,7 +74,7 @@
     "test:memory-assistant": "tsx scripts/test-memory-assistant.ts",
     "test:owner-timeline-retrieval": "tsx scripts/test-owner-timeline-retrieval.ts",
     "test:model-call-logs": "tsx scripts/test-model-call-logs.ts",
-    "test:model-turn-detail": "tsx scripts/test-model-turn-detail.ts && tsx scripts/test-assistant-turn-diagnostics.ts && tsx scripts/test-model-turn-collaboration-ui.ts",
+    "test:model-turn-detail": "tsx scripts/test-model-turn-detail.ts && tsx scripts/test-assistant-turn-diagnostics.ts && tsx scripts/test-model-turn-collaboration-ui.ts && tsx scripts/test-growth-read-diagnostics.ts && tsx scripts/test-growth-retrieval-diagnostics.ts && tsx scripts/test-growth-read-diagnostics-ui.ts",
     "test:assistant-collaboration-isolated": "tsx scripts/test-assistant-collaboration-isolated.ts",
     "test:assistant-turn-context": "tsx scripts/test-assistant-turn-context.ts && tsx scripts/test-assistant-request-diagnostics.ts",
     "test:context-assistant": "yarn run test:assistant-turn-context && tsx scripts/test-context-assistant.ts && tsx scripts/test-group-context-reply.ts && tsx scripts/test-group-turn-context.ts && tsx scripts/test-conversation-working-context.ts && tsx scripts/test-message-history-coverage.ts && yarn run test:private-knowledge-candidate",

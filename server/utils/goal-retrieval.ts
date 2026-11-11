@@ -1,33 +1,40 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import { preferenceQueryTerms } from "./preference-retrieval";
+import { createGrowthReadDiagnostic, reportGrowthRead, type GrowthReadObserver } from "./growth-read-diagnostics";
 
 export type ConversationGoal = {
   id: string; kind: string; title: string; description: string; status: string; revision: number;
   latestProgress?: { content: string; createdAt: string };
 };
 export type GoalSearchRecord = Omit<ConversationGoal, "latestProgress"> & { progress?: Array<{ content: string; createdAt: Date | string }> };
-export function selectGoalsForPrompt(query: string, rows: readonly GoalSearchRecord[], budget = 1000): ConversationGoal[] {
+export function selectGoalsForPrompt(query: string, rows: readonly GoalSearchRecord[], budget = 1000, onDiagnostic?: GrowthReadObserver): ConversationGoal[] {
   const terms = preferenceQueryTerms(query);
-  if (!terms.length) return [];
+  if (!terms.length) { reportGrowthRead(onDiagnostic, createGrowthReadDiagnostic("goals", { candidateCount: rows.length })); return []; }
   const ranked = rows.filter(row => row.status === "ACTIVE").map(row => ({ row, score: terms.reduce((sum, term) =>
     sum + (row.title.toLowerCase().includes(term) ? 5 : 0) + (row.description.toLowerCase().includes(term) ? 1 : 0), 0),
   })).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.row.id.localeCompare(b.row.id));
-  const output: ConversationGoal[] = []; let used = 2;
+  const output: ConversationGoal[] = []; let used = 2; let budgetExcludedCount = 0; let limitExcludedCount = 0;
   for (const { row } of ranked) {
+    if (output.length >= 4) { limitExcludedCount++; continue; }
     const last = row.progress?.[0];
     const item: ConversationGoal = { id: row.id, kind: row.kind, title: row.title, description: row.description.slice(0, 400), status: row.status, revision: row.revision,
       ...(last ? { latestProgress: { content: last.content.slice(0, 200), createdAt: new Date(last.createdAt).toISOString() } } : {}),
     };
     const cost = JSON.stringify(item).length + 1;
-    if (used + cost > Math.max(0, budget)) continue;
+    if (used + cost > Math.max(0, budget)) { budgetExcludedCount++; continue; }
     output.push(item); used += cost;
-    if (output.length >= 4) break;
   }
+  reportGrowthRead(onDiagnostic, createGrowthReadDiagnostic("goals", {
+    status: output.length ? "provided" : ranked.length && budgetExcludedCount ? "budget_excluded" : "no_match",
+    candidateCount: rows.length, matchedCount: ranked.length, selectedCount: output.length,
+    budgetExcludedCount, limitExcludedCount, provided: output.map(({ id, revision }) => ({ id, revision })),
+  }));
   return output;
 }
-export async function loadGoalsForPrompt(prisma: PrismaClient, characterId: string, query: string): Promise<ConversationGoal[]> {
+export async function loadGoalsForPrompt(prisma: PrismaClient, characterId: string, query: string, onDiagnostic?: GrowthReadObserver): Promise<ConversationGoal[]> {
   const terms = preferenceQueryTerms(query);
-  if (!terms.length) return [];
+  if (!terms.length) { reportGrowthRead(onDiagnostic, createGrowthReadDiagnostic("goals")); return []; }
+  try {
   const rows = await prisma.characterGoal.findMany({
     where: { characterId, status: "ACTIVE", OR: terms.flatMap(term => [
       { title: { contains: term, mode: "insensitive" as const } }, { description: { contains: term, mode: "insensitive" as const } },
@@ -36,7 +43,11 @@ export async function loadGoalsForPrompt(prisma: PrismaClient, characterId: stri
       progress: { orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1, select: { content: true, createdAt: true } },
     },
   });
-  return selectGoalsForPrompt(query, rows);
+  return selectGoalsForPrompt(query, rows, 1000, onDiagnostic ? entry => reportGrowthRead(onDiagnostic, { ...entry, candidateLimitReached: rows.length === 100 }) : undefined);
+  } catch (error) {
+    reportGrowthRead(onDiagnostic, createGrowthReadDiagnostic("goals", { status: "failed" }));
+    throw error;
+  }
 }
 export function usedGoalSnapshots(items: readonly ConversationGoal[], ids: readonly string[]) {
   const allowed = new Set(ids); return items.filter(item => allowed.has(item.id)).map(item => ({ ...item }));
