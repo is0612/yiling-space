@@ -157,7 +157,7 @@
     "test:onebot-group-chat": "tsx scripts/test-onebot-group-chat.ts",
     "test:onebot-group-context": "tsx scripts/test-onebot-group-context.ts",
     "test:onebot-panel": "tsx scripts/test-onebot-panel.ts",
-    "test:qq-chain": "tsx scripts/test-qq-channel-chain.ts",
+    "test:qq-chain": "tsx scripts/test-qq-channel-chain.ts && tsx scripts/test-qq-account-runtime-page.ts && tsx scripts/test-onebot-account-availability.ts",
     "test:proactive": "tsx scripts/test-proactive.ts",
     "test:proactive-db": "tsx scripts/test-proactive-db.ts",
     "test:group-initiative": "tsx scripts/test-group-initiative.ts",

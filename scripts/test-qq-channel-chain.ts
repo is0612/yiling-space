@@ -9,7 +9,10 @@
  */
 
 import assert from "node:assert/strict";
-import { chainToneAt, resolveChainRoot, type ChainConditions } from "../app/utils/qq-channel";
+import { readFileSync } from "node:fs";
+import { Script, createContext } from "node:vm";
+import ts from "typescript";
+import { chainToneAt, resolveChainRoot, selectRuntimeConnection, type ChainConditions } from "../app/utils/qq-channel";
 
 const allOk: ChainConditions = { accountOk: true, gatewayOk: true, adapterOk: true, bindingOk: true };
 const rootOf = (patch: Partial<ChainConditions>) => resolveChainRoot({ ...allOk, ...patch });
@@ -57,5 +60,26 @@ assert.equal(chainToneAt(1, 3, true), "live", "断点之前的健康段落仍是
 const nothingOk: ChainConditions = { accountOk: false, gatewayOk: false, adapterOk: false, bindingOk: false };
 assert.equal(resolveChainRoot(nothingOk), 1, "全崩时从链路最上游报起。");
 assert.equal(tones(1, nothingOk), "idle,break,idle,idle");
+
+const waiting: ChainConditions = { ...nothingOk, waitingLogin: true };
+assert.equal(resolveChainRoot(waiting), -2, "Known logged-out account is waiting, not a failed gateway");
+assert.equal(tones(-2, waiting), "idle,idle,idle,idle");
+const multiple = [{ id: "logged-out", status: "ERROR" }, { id: "connected", status: "CONNECTED" }];
+assert.equal(selectRuntimeConnection(multiple)?.id, "connected");
+assert.equal(selectRuntimeConnection(multiple, "logged-out")?.id, "logged-out");
+assert.equal(selectRuntimeConnection(multiple, "missing")?.id, "connected");
+assert.equal(selectRuntimeConnection([]), null);
+
+const component = readFileSync(new URL("../app/components/QqChannelChain.vue", import.meta.url), "utf8");
+const setup = component.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]!;
+const parsed = ts.createSourceFile("chain.ts", setup, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+const body = parsed.statements.filter(statement => !ts.isImportDeclaration(statement)).map(statement => statement.getText(parsed)).join("\n");
+const code = ts.transpileModule(`(function(){${body};return {rootIndex,hops,verdict,allGood,fix,gatewayState};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
+const props = { connection: { appId: "synthetic", displayName: "待登录账号", status: "ERROR" }, binding: { characterName: "角色", routingKey: null, groupChat: { mode: "ambient" } }, adapter: { running: true }, snowluma: { running: true, installed: true, panelPort: 5099, home: "test" }, gateway: { reachable: true, host: "localhost", port: 3001, wsUrl: "ws://localhost:3001", accountState: "waiting_login" }, ready: true, panelUrl: "http://localhost:5099" };
+const view = new Script(code).runInContext(createContext({ defineProps: () => props, defineEmits: () => () => {}, computed: (get: () => unknown) => Object.defineProperty({}, "value", { get }), chainToneAt, resolveChainRoot })) as { rootIndex: { value: number }; hops: { value: Array<{ tone: string }> }; verdict: { value: { text: string; tone: string } }; allGood: { value: boolean }; fix: { value: { detail: string } } };
+assert.equal(view.rootIndex.value, -2); assert.equal(view.allGood.value, false, "Shared reachable port cannot make a logged-out account look connected");
+assert.equal(view.verdict.value.tone, "idle"); assert.equal(view.verdict.value.text, "当前账号未登录，暂不连接");
+assert.equal(view.hops.value.map(item => item.tone).join(","), "idle,idle,idle,idle");
+assert.match(view.fix.value.detail, /其他已登录账号不受影响/);
 
 console.log("QQ 链路轨测试通过：全通、网关断点、适配器断点（关键回归）、号离线、未绑角色、断点后置灰、全崩取上游。");

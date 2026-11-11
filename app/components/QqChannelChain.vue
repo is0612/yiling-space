@@ -26,7 +26,7 @@ type ChainBinding = {
 };
 type ChainAdapter = { running: boolean; pid?: number; startedAt?: string };
 type ChainSnowluma = { installed: boolean; running: boolean; panelPort: number; home: string };
-type ChainGateway = { wsUrl: string; host: string; port: number; reachable: boolean };
+type ChainGateway = { wsUrl: string; host: string; port: number; reachable: boolean; connectionId?: string; accountState?: "waiting_login" | "ready" | "unknown" };
 
 const props = defineProps<{
   connection: ChainConnection | null;
@@ -55,6 +55,7 @@ const STATUS_LABEL: Record<string, string> = {
   DISABLED: "已停用",
 };
 
+const waitingLogin = computed(() => props.gateway?.accountState === "waiting_login");
 const accountOn = computed(() => props.connection?.status === "CONNECTED");
 const gatewayOn = computed(() => props.gateway?.reachable === true);
 const adapterOn = computed(() => props.adapter?.running === true);
@@ -75,6 +76,7 @@ const anyRunning = computed(() => adapterOn.value || props.snowluma?.running ===
 const rootIndex = computed(() => {
   if (!props.ready || !props.connection) return -1;
   return resolveChainRoot({
+    waitingLogin: waitingLogin.value,
     accountOk: accountOn.value,
     gatewayOk: gatewayOn.value,
     adapterOk: adapterOn.value,
@@ -85,6 +87,7 @@ const rootIndex = computed(() => {
 const gatewayState = computed(() => {
   // 运行时状态还没回来时说「检查中」——这时候说「没读到地址」是冤的，地址可能填得好好的
   if (!props.ready) return "检查中";
+  if (waitingLogin.value) return "等待此账号登录";
   const { gateway, snowluma } = props;
   if (!gateway) return "没读到地址";
   if (gateway.reachable) return "端口在听";
@@ -102,7 +105,7 @@ const hops = computed(() => {
       name: "QQ 小号",
       short: "小号",
       fact: props.connection?.appId ? `QQ ${props.connection.appId}` : "未填 QQ 号",
-      state: STATUS_LABEL[props.connection?.status ?? ""] ?? "未知",
+      state: waitingLogin.value ? "等待登录" : STATUS_LABEL[props.connection?.status ?? ""] ?? "未知",
       mono: true,
     },
     {
@@ -144,6 +147,7 @@ const hops = computed(() => {
  */
 const verdict = computed(() => {
   if (!props.ready) return { text: "检查中", tone: "idle" };
+  if (waitingLogin.value) return { text: "当前账号未登录，暂不连接", tone: "idle" };
   const root = rootIndex.value;
   if (root === -1) return { text: "四段全通", tone: "live" };
   return { text: `断在${hops.value[root]?.short ?? "中途"}`, tone: "break" };
@@ -171,6 +175,7 @@ const compactFacts = computed(() => {
  */
 const fix = computed(() => {
   const root = rootIndex.value;
+  if (root === -2) return { title: "当前账号未登录，暂不连接", detail: "其他已登录账号不受影响。需要使用这个账号时，先在 QQ 客户端登录，再点重连。", action: { kind: "open-steps" as ChainActionKind, label: "查看登录步骤" } };
   if (root === -1) return null;
 
   if (root === 1) {

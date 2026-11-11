@@ -22,7 +22,7 @@ import {
   Warning,
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import type { ChainActionKind } from "~/utils/qq-channel";
+import { selectRuntimeConnection, type ChainActionKind } from "~/utils/qq-channel";
 import type { Character } from "~/utils/mock-data";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
@@ -101,10 +101,10 @@ const hasConnections = computed(() => connections.value.length > 0);
 const hasLoadError = computed(() => Boolean(error.value));
 
 /**
- * 链路轨只画一条：网关端口、适配器进程本来就是整台机器共用的一份，
- * 多个号时按第一个号画，其余号的差别只在「有没有绑角色」。
+ * 链路轨显示当前操作的账号；未明确选择时优先采用服务端选中的可用账号。
+ * 不按数组首项推断当前账号，各账号的网关状态分别读取。
  */
-const primaryConnection = computed(() => connections.value[0] ?? null);
+const primaryConnection = computed(() => selectRuntimeConnection(connections.value, runtime.value?.selectedConnectionId));
 const primaryBinding = computed(() => primaryConnection.value?.bindings[0] ?? null);
 /**
  * 空间开关是连接级的，但整个设置在弹窗底部，光靠「连接设置」四个字没人猜得到里面还有它。
@@ -255,11 +255,14 @@ type SnowlumaStatus = {
   running: boolean;
   panelPort: number;
 };
+type AccountGateway = { wsUrl: string; host: string; port: number; reachable: boolean; connectionId?: string; accountState?: "waiting_login" | "ready" | "unknown" };
 type RuntimeStatus = {
+  selectedConnectionId?: string | null;
+  gateways?: AccountGateway[];
   adapter: { running: boolean; pid?: number; startedAt?: string };
   snowluma: SnowlumaStatus;
   /** 适配器要连的那个端口通不通；读不到连接配置时为 null */
-  gateway: { wsUrl: string; host: string; port: number; reachable: boolean } | null;
+  gateway: AccountGateway | null;
   /** 人点过「停止」后自动补起会一直关着，直到再点启动/重连 */
   autostart: { paused: boolean; at?: string };
 };
@@ -267,7 +270,9 @@ type RuntimeStatus = {
 const runtime = ref<RuntimeStatus | null>(null);
 const adapterStatus = computed(() => runtime.value?.adapter ?? null);
 const snowluma = computed(() => runtime.value?.snowluma ?? null);
-const gateway = computed(() => runtime.value?.gateway ?? null);
+const gateway = computed(() => runtime.value?.gateways?.find(item => item.connectionId === primaryConnection.value?.id) ?? runtime.value?.gateway ?? null);
+const selectedRuntimeConnectionId = ref("");
+let runtimeRequestVersion = 0;
 /** 运行时状态没拿到之前不判断断点，否则首帧会先闪一下「全部灰掉」 */
 const runtimeReady = computed(() => runtime.value !== null);
 
@@ -337,11 +342,17 @@ const snowlumaSourceLabel = computed(() => {
   }
 });
 
-async function loadRuntime() {
+async function loadRuntime(connectionId?: string) {
+  if (connectionId) selectedRuntimeConnectionId.value = connectionId;
+  const version = ++runtimeRequestVersion;
+  const selectedId = selectedRuntimeConnectionId.value;
   try {
-    runtime.value = await $fetch<RuntimeStatus>("/api/admin/channels/onebot/runtime");
-    if (!homeEditing.value) homeDraft.value = runtime.value.snowluma.home;
+    const result = await $fetch<RuntimeStatus>("/api/admin/channels/onebot/runtime", { query: selectedId ? { connectionId: selectedId } : {} });
+    if (version !== runtimeRequestVersion) return;
+    runtime.value = result;
+    if (!homeEditing.value) homeDraft.value = result.snowluma.home;
   } catch {
+    if (version !== runtimeRequestVersion) return;
     runtime.value = null;
   }
   void loadQuota();
@@ -479,7 +490,8 @@ async function launchAdapter(): Promise<LaunchResult> {
 
 type ProvisionResponse = {
   ok: boolean;
-  reason?: "no-password" | "unreachable" | "bad-password" | "totp" | "rate-limited" | "error";
+  reason?: "no-password" | "unreachable" | "bad-password" | "totp" | "rate-limited" | "error" | "account-not-logged-in";
+  action?: "waiting-login";
   message: string;
   changes: string[];
   warnings: string[];
@@ -504,18 +516,23 @@ function resumePanelAuth() {
   panelAuthPaused.value = false;
 }
 
-async function provisionPanel(quiet = false) {
+async function provisionPanel(quiet = false, connectionId = primaryConnection.value?.id) {
   if (panelProvisioning.value || panelAuthPaused.value) return;
   panelProvisioning.value = true;
   try {
-    const result = await $fetch<ProvisionResponse>("/api/admin/channels/onebot/runtime/provision", { method: "POST" });
-    for (const warning of result.warnings) ElMessage.warning(warning);
+    const result = await $fetch<ProvisionResponse>("/api/admin/channels/onebot/runtime/provision", { method: "POST", ...(connectionId ? { body: { connectionId } } : {}) });
+    for (const warning of result.warnings ?? []) ElMessage.warning(warning);
+    if (result.action === "waiting-login" || result.reason === "account-not-logged-in") {
+      if (!quiet) ElMessage.info(result.message);
+      return result;
+    }
     if (result.ok) {
       if (result.changes.length || !quiet) ElMessage.success(result.message);
     } else {
       if (result.reason === "bad-password" || result.reason === "rate-limited") panelAuthPaused.value = true;
       if (!quiet) ElMessage.warning(result.message);
     }
+    return result;
   } catch (error) {
     if (!quiet) ElMessage.warning(readErrorMessage(error, "自动配节点没成功，可以手动去面板核对。"));
   } finally {
@@ -526,7 +543,7 @@ async function provisionPanel(quiet = false) {
 type HookResponse = {
   ok: boolean;
   /** already=本来就在听；attached=这次挂上了；failed=没挂上 */
-  action: "already" | "attached" | "failed";
+  action: "already" | "attached" | "failed" | "waiting-login";
   message: string;
   /**
    * 失败分类，服务端给的。页面靠它决定「要不要顺手把面板开给用户」：
@@ -563,12 +580,13 @@ const PANEL_NEEDED_REASONS = new Set(["no-password", "bad-password", "totp", "ra
  * 以前只回 boolean，上层只能写死一句「确认这个号正在 QQ 客户端里登录」，最常见的原因
  * （**没填面板密码**，连进程列表都读不到）反而被藏起来了 —— 2026-11-02 就是这么被带偏的。
  */
-async function attachHook(quiet = false): Promise<{ ok: boolean; message: string; reason?: string }> {
+async function attachHook(quiet = false, connectionId = primaryConnection.value?.id): Promise<{ ok: boolean; message: string; reason?: string; action?: HookResponse["action"] }> {
   try {
-    const result = await $fetch<HookResponse>("/api/admin/channels/onebot/runtime/hook", { method: "POST" });
+    const result = await $fetch<HookResponse>("/api/admin/channels/onebot/runtime/hook", { method: "POST", ...(connectionId ? { body: { connectionId } } : {}) });
     if (result.ok) {
       if (result.action === "attached" && !quiet) ElMessage.success(result.message);
-      return { ok: true, message: result.message, reason: result.reason };
+      if (result.action === "waiting-login" && !quiet) ElMessage.info(result.message);
+      return { ok: true, message: result.message, reason: result.reason, action: result.action };
     }
     if (!quiet) ElMessage.warning(result.message);
     return { ok: false, message: result.message, reason: result.reason };
@@ -622,7 +640,8 @@ async function startSnowluma() {
       return;
     }
     // 面板一起来就把节点对齐：这一步以前要人肉登录面板做，而密码忘了就彻底卡住。
-    await provisionPanel();
+    const provisioned = await provisionPanel();
+    if (provisioned?.action === "waiting-login" || provisioned?.reason === "account-not-logged-in") return;
     // 对齐完还得把这个号挂上去 —— 节点只在会话建立后才 listen。QQ 客户端先于面板启动时，
     // hook 不会自己挂，不补这一步就会出现「节点明明配着、3001 却没人听」。
     await attachHook();
@@ -632,7 +651,11 @@ async function startSnowluma() {
       await loadRuntime();
       void loadPanelPassword();
       // 已经在跑也算「一键」的结果：节点没配对的话适配器照样连不上。
-      await provisionPanel(true);
+      const provisioned = await provisionPanel(true);
+      if (provisioned?.action === "waiting-login" || provisioned?.reason === "account-not-logged-in") {
+        ElMessage.info(provisioned.message);
+        return;
+      }
       await attachHook(true);
     } else {
       ElMessage.error(readErrorMessage(error, "启动失败，请手动双击 start.bat。"));
@@ -954,7 +977,11 @@ async function reconnectConnection(connection: QqConnection) {
   connecting.value = true;
   try {
     connectStep.value = "检查链路状态…";
-    await loadRuntime();
+    await loadRuntime(connection.id);
+    if (gateway.value?.accountState === "waiting_login") {
+      ElMessage.info("当前账号未登录，暂不连接。其他已登录账号不受影响，登录后可再次重连。");
+      return;
+    }
 
     // ① 协议端：没在跑就拉起来。它起不来，后面两步都没有意义。
     if (!snowluma.value?.running) {
@@ -973,18 +1000,28 @@ async function reconnectConnection(connection: QqConnection) {
 
     // ② 节点：面板在跑就把 WS/HTTP 对齐，不然适配器连的端口根本没人听。
     connectStep.value = "对齐协议端节点…";
-    await provisionPanel(true);
+    const provisioned = await provisionPanel(true, connection.id);
+    if (provisioned?.action === "waiting-login" || provisioned?.reason === "account-not-logged-in") {
+      ElMessage.info(provisioned.message);
+      await loadRuntime(connection.id);
+      return;
+    }
 
     // ③ QQ 会话：节点配好 ≠ 端口在听。QQ 客户端后启动 / 重登过时 hook 没挂上，
     //    面板只有 WebUI、3001 一个都不 listen —— 这正是「适配器一直在重试 code=1006」的样子。
-    await loadRuntime();
+    await loadRuntime(connection.id);
     if (!gateway.value?.reachable) {
       connectStep.value = "把 QQ 挂到协议端…";
-      const hooked = await attachHook(true);
+      const hooked = await attachHook(true, connection.id);
+      if (hooked.action === "waiting-login" || hooked.reason === "account-not-logged-in") {
+        ElMessage.info(hooked.message);
+        await loadRuntime(connection.id);
+        return;
+      }
       if (!hooked.ok) {
         // 原话照搬服务端的原因：没填面板密码 / 密码不对 / 面板里没有这个号的进程
         // 三种要改的地方完全不同，写死一句「确认 QQ 已登录」只会把人往错的方向带。
-        ElMessage.error(`QQ 没挂上面板（3001 上不会有节点）：${hooked.message}`);
+        ElMessage.error(`当前 QQ 未挂上面板：${hooked.message}`);
         // 密码类 / 面板拒绝挂载：人只能进面板解决，顺手替他开出来
         if (hooked.reason && PANEL_NEEDED_REASONS.has(hooked.reason)) openPanel();
         return;
@@ -1001,7 +1038,7 @@ async function reconnectConnection(connection: QqConnection) {
       }
       connectStep.value = "等适配器连上网关…";
       if (!(await waitForAdapter(Date.now() + 20_000))) {
-        ElMessage.warning("适配器起来了但没连上网关，看一眼它的窗口报什么错（常见是 3001 没人监听）。");
+        ElMessage.warning("适配器已启动，但当前账号尚未连通，请查看该账号的网关状态。");
         return;
       }
     } else {
@@ -1011,7 +1048,7 @@ async function reconnectConnection(connection: QqConnection) {
     }
 
     connectStep.value = "收尾…";
-    await loadRuntime();
+    await loadRuntime(connection.id);
     await refresh();
     ElMessage.success("链路已接通。");
   } catch (error) {
@@ -1347,7 +1384,7 @@ function copyInstallGuide() {
         <NuxtLink
           v-if="exhaustedQuota.length === 1"
           class="btn"
-          :to="`/characters/${exhaustedQuota[0]!.id}/settings/model`"
+          :to="`/models?c=${encodeURIComponent(exhaustedQuota[0]!.id)}&section=chat`"
         >
           调高上限
         </NuxtLink>

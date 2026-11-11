@@ -1,6 +1,8 @@
 import { createError } from "h3";
 import { requireAdminActor } from "../../../../../utils/auth";
-import { loadOnebotConnections, updatePrimaryOnebotCredentials } from "../../../../../utils/channel-adapter/onebot/configure";
+import { updateOnebotConnectionCredentials } from "../../../../../utils/channel-adapter/onebot/configure";
+import { selectOnebotActionConnection } from "../../../../../utils/channel-adapter/onebot/runtime-selection";
+import { readOnebotAccountPresence } from "../../../../../utils/channel-adapter/onebot/account-availability";
 import { portFromUrl, provisionOnebotNodes } from "../../../../../utils/channel-adapter/onebot/panel";
 import { readSnowlumaStatus } from "../../../../../utils/channel-adapter/onebot/runtime";
 
@@ -30,8 +32,7 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  const connections = await loadOnebotConnections();
-  const primary = connections[0];
+  const primary = await selectOnebotActionConnection(event, status.panelPort);
   if (!primary) {
     throw createError({ statusCode: 400, statusMessage: "还没有接进来的 QQ 小号，没有可对齐的节点。" });
   }
@@ -39,6 +40,11 @@ export default defineEventHandler(async (event) => {
   if (!primary.accountQq) {
     throw createError({ statusCode: 400, statusMessage: "这条连接没填 QQ 号，不知道要配哪个号的节点。" });
   }
+
+  const presence = await readOnebotAccountPresence([primary], status.panelPort);
+  if (presence.get(primary.id) === "waiting_login") return { ok: true, action: "waiting-login", reason: "account-not-logged-in",
+    message: "当前账号未登录，暂不配置或连接；其他已登录账号不受影响。", warnings: [], changes: [], uin: primary.accountQq,
+    panelPort: status.panelPort, ports: { ws: portFromUrl(primary.config.wsUrl, 3001), http: portFromUrl(primary.config.httpUrl, 3002) } };
 
   const result = await provisionOnebotNodes({
     password: primary.snowlumaPassword,
@@ -61,7 +67,7 @@ export default defineEventHandler(async (event) => {
    */
   let warnings = result.warnings;
   if (result.adopted && (result.adopted.wsToken || result.adopted.httpToken)) {
-    const saved = await updatePrimaryOnebotCredentials({
+    const saved = await updateOnebotConnectionCredentials(primary.id, {
       accessToken: result.adopted.wsToken,
       httpToken: result.adopted.httpToken,
     }).catch(() => false);

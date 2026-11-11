@@ -3,6 +3,8 @@ import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readOnebotAccountPresence } from "../server/utils/channel-adapter/onebot/account-availability";
+import { readSnowlumaStatus } from "../server/utils/channel-adapter/onebot/runtime";
 import { loadOnebotConnections } from "../server/utils/channel-adapter/onebot/configure";
 import { markOnebotReloadApplied } from "../server/utils/channel-adapter/onebot/runtime";
 import { createOnebotRunner } from "../server/utils/channel-adapter/onebot/runner";
@@ -123,8 +125,37 @@ const ERROR_AFTER_MS = 4000;
 function log(entry: Record<string, unknown>) {
   process.stdout.write(JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
 }
+const waitingAccounts = new Set<string>();
+let presenceCheckedAt = 0;
+let cachedPresence = new Map<string, import("../server/utils/channel-adapter/onebot/account-availability").OnebotAccountPresence>();
+let presenceSignature = "";
+async function loadAvailableConnections() {
+  const records = await loadOnebotConnections();
+  const panel = await readSnowlumaStatus();
+  if (!panel.running) return records;
+  const signature = JSON.stringify(records.map(record => [record.id, record.accountQq, record.reloadRequestedAt]));
+  if (Date.now() - presenceCheckedAt >= 30_000 || signature !== presenceSignature) {
+    cachedPresence = await readOnebotAccountPresence(records, panel.panelPort);
+    presenceCheckedAt = Date.now(); presenceSignature = signature;
+  }
+  const presence = cachedPresence;
+  const available = [];
+  for (const record of records) {
+    if (presence.get(record.id) === "waiting_login") {
+      if (!waitingAccounts.has(record.id)) {
+        waitingAccounts.add(record.id);
+        log({ event: "onebot-account-waiting-login", connectionId: record.id });
+        await prisma.platformConnection.updateMany({ where: { id: record.id, status: { not: "DISABLED" } }, data: { status: "DISCONNECTED" } }).catch(() => undefined);
+      }
+      continue;
+    }
+    waitingAccounts.delete(record.id);
+    available.push(record);
+  }
+  return available;
+}
 const runner = createOnebotRunner({
-  load: loadOnebotConnections,
+  load: loadAvailableConnections,
   shouldStop: () => shutdown.signal.aborted,
   start(record) {
     const controller = new AbortController();

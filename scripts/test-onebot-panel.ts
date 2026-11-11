@@ -9,6 +9,7 @@
  *
  * 跑法：npx tsx scripts/test-onebot-panel.ts
  */
+import { ensureAvailableOnebotAccounts } from "../server/utils/channel-adapter/onebot/autostart";
 import {
   alignNode,
   pickQqProcess,
@@ -162,5 +163,39 @@ run("多个号 → 只挑目标那个", () => {
   const list = [proc({ pid: 7, uin: "10000002" }), proc({ pid: 8, uin: "10000001" })];
   equal(pickQqProcess(list, "10000001")?.pid, 8, "多开时不能挑错");
 });
+
+console.log("多账号补起：未登录账号不阻塞已登录账号，未知身份不注入");
+{
+  const ensured: string[] = [];
+  const connections = [{ id: "offline" }, { id: "logged" }, { id: "unknown" }, { id: "remote-ready" }];
+  const outcome = await ensureAvailableOnebotAccounts(connections, {
+    gatewayReady: async row => row.id === "remote-ready",
+    accountState: row => row.id === "offline" ? "waiting_login" : row.id === "logged" ? "logged_in" : "unknown",
+    ensure: async row => { ensured.push(row.id); return { ready: true, tokensAdopted: true, steps: ["已对齐"] }; },
+  });
+  equal(ensured, ["logged"], "只对精确已登录账号操作节点与会话");
+  equal(outcome.ready, ["logged", "remote-ready"], "后续已登录账号和已就绪远程网关均可继续");
+  equal(outcome.waiting, ["offline"], "未登录为等待，不是失败");
+  equal(outcome.failed, ["unknown"], "未确认身份不允许猜测注入");
+  equal(outcome.reload, ["logged"], "令牌重连只指向对应连接");
+}
+{
+  let operated = 0;
+  const waiting = await ensureAvailableOnebotAccounts([{ id: "optional" }], {
+    gatewayReady: async () => false, accountState: () => "waiting_login",
+    ensure: async () => { operated++; return { ready: false, steps: [] }; },
+  });
+  equal(operated, 0, "全部未登录时不改配置、不注入hook");
+  equal(waiting.failed, [], "单账号未登录也不是故障");
+  equal(waiting.waiting, ["optional"], "等待登录保持明确");
+}
+{
+  const outcome = await ensureAvailableOnebotAccounts([{ id: "bad" }, { id: "good" }], {
+    gatewayReady: async () => false, accountState: () => "logged_in",
+    ensure: async row => { if (row.id === "bad") throw new Error("模拟失败"); return { ready: true, steps: [] }; },
+  });
+  equal(outcome.failed, ["bad"], "一条连接失败独立记录");
+  equal(outcome.ready, ["good"], "不能让前一账号失败阻塞后一账号");
+}
 
 console.log(`\nOneBot 节点对齐测试通过：${checks} 项断言。`);

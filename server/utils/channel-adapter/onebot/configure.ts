@@ -272,17 +272,19 @@ export async function hasPrimaryOnebotConnection(): Promise<boolean> {
  * 写坏了等于把整条渠道弄断，所以：先解密现有 JSON、合并、再加密写回；解不开就只写这几个字段。
  * 返回 false = 没有连接可写，调用方自己决定回退。
  */
-export async function updatePrimaryOnebotCredentials(patch: {
-  snowlumaPassword?: string;
-  accessToken?: string;
-  httpToken?: string;
-}): Promise<boolean> {
+type OnebotCredentialPatch = { snowlumaPassword?: string; accessToken?: string; httpToken?: string };
+export async function updatePrimaryOnebotCredentials(patch: OnebotCredentialPatch): Promise<boolean> {
+  return updateOnebotConnectionCredentials(undefined, patch);
+}
+
+/** Token adoption must write the same account that was provisioned, never another default row. */
+export async function updateOnebotConnectionCredentials(connectionId: string | undefined, patch: OnebotCredentialPatch): Promise<boolean> {
   const entries = Object.entries(patch).filter(([, value]) => typeof value === "string" && value.length > 0);
   if (!entries.length) return true;
 
   const prisma = getPrisma();
   const connection = await prisma.platformConnection.findFirst({
-    where: { platform: ONEBOT_PLATFORM, status: { not: "DISABLED" } },
+    where: { platform: ONEBOT_PLATFORM, status: { not: "DISABLED" }, ...(connectionId ? { id: connectionId } : {}) },
     orderBy: { createdAt: "asc" },
     select: { id: true, credentialsCiphertext: true },
   });

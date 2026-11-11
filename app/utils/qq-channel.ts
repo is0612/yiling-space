@@ -32,6 +32,8 @@ export type ChainConditions = {
   adapterOk: boolean;
   /** 至少绑了一个角色 */
   bindingOk: boolean;
+  /** Known logged-out account is intentionally waiting, not a broken gateway. */
+  waitingLogin?: boolean;
 };
 
 /**
@@ -46,11 +48,18 @@ export type ChainConditions = {
  * 把人指去重新登录 QQ，而他要做的其实是点一下「启动适配器」。
  */
 export function resolveChainRoot(conditions: ChainConditions): number {
+  if (conditions.waitingLogin) return -2;
   if (!conditions.gatewayOk) return 1;
   if (!conditions.adapterOk) return 2;
   if (!conditions.accountOk) return 0;
   if (!conditions.bindingOk) return 3;
   return -1;
+}
+
+/** Match a concrete account first; default to an already-connected account, never nickname. */
+export function selectRuntimeConnection<T extends { id: string; status: string }>(connections: readonly T[], selectedConnectionId?: string | null): T | null {
+  return connections.find(item => item.id === selectedConnectionId)
+    ?? connections.find(item => item.status === "CONNECTED") ?? connections[0] ?? null;
 }
 
 /**
@@ -60,6 +69,7 @@ export function resolveChainRoot(conditions: ChainConditions): number {
  * 照着标红只会让人同时看到三个红点，反而分不清该修哪个。
  */
 export function chainToneAt(index: number, root: number, ok: boolean): ChainTone {
+  if (root === -2) return "idle";
   if (root === -1) return ok ? "live" : "idle";
   if (index === root) return "break";
   if (index > root) return "idle";

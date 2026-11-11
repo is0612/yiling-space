@@ -1,3 +1,6 @@
+import { getQuery } from "h3";
+import { requireUuid } from "../../../../utils/local-api";
+import { readOnebotAccountPresence, chooseOnebotRuntimeConnection } from "../../../../utils/channel-adapter/onebot/account-availability";
 import { requireAdminActor } from "../../../../utils/auth";
 import { readAutoStartPause } from "../../../../utils/channel-adapter/onebot/autostart";
 import { loadOnebotConnections } from "../../../../utils/channel-adapter/onebot/configure";
@@ -29,23 +32,17 @@ export default defineEventHandler(async (event) => {
     readAutoStartPause(),
   ]);
 
-  let gateway: { wsUrl: string; host: string; port: number; reachable: boolean } | null = null;
-  try {
-    const records = await loadOnebotConnections();
-    const record = records[0];
-    const endpoint = record ? parseWsEndpoint(record.config.wsUrl) : null;
-    if (record && endpoint) {
-      gateway = {
-        wsUrl: record.config.wsUrl,
-        host: endpoint.host,
-        port: endpoint.port,
-        reachable: await probeTcp(endpoint.host, endpoint.port),
-      };
-    }
-  } catch {
-    // 读不到连接配置就不显示网关状态，不影响另外两项
-    gateway = null;
-  }
-
-  return { adapter, snowluma, gateway, autostart };
+  const rawId = getQuery(event).connectionId;
+  const requested = rawId === undefined ? undefined : requireUuid(String(rawId), "QQ 连接");
+  const records = await loadOnebotConnections();
+  const presence = snowluma.running ? await readOnebotAccountPresence(records, snowluma.panelPort) : new Map();
+  const gateways = await Promise.all(records.map(async record => {
+    const endpoint = parseWsEndpoint(record.config.wsUrl);
+    const reachable = endpoint ? await probeTcp(endpoint.host, endpoint.port) : false;
+    return { connectionId: record.id, wsUrl: record.config.wsUrl, host: endpoint?.host ?? "", port: endpoint?.port ?? 0, reachable,
+      accountState: presence.get(record.id) === "waiting_login" ? "waiting_login" as const : reachable ? "ready" as const : "unknown" as const };
+  }));
+  const selected = chooseOnebotRuntimeConnection(records, new Set(gateways.filter(item => item.accountState === "ready").map(item => item.connectionId)), requested);
+  const gateway = gateways.find(item => item.connectionId === selected?.id) ?? null;
+  return { adapter, snowluma, gateway, gateways, selectedConnectionId: selected?.id ?? null, autostart };
 });

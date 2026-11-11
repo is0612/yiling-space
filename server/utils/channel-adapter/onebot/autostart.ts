@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadOnebotConnections, requestOnebotReload, updatePrimaryOnebotCredentials } from "./configure";
+import { loadOnebotConnections, requestOnebotReload, updateOnebotConnectionCredentials } from "./configure";
+import { readOnebotAccountPresence } from "./account-availability";
 import {
   panelListProcesses,
   panelLoadHook,
   panelLogin,
   panelRefreshHook,
   pickQqProcess,
-  portFromUrl,
   provisionOnebotNodes,
   type PanelFailureReason,
 } from "./panel";
@@ -82,14 +82,14 @@ export type EnsureResult = {
  * 第一次查询会直接抛错。抛错和「表里没有连接」是两件事：前者该重试，后者才是真的没配。
  * 以前一律 `.catch(() => [])`，结果就是启动时静默退化成「没有可补的连接」，自动补起看着像没生效。
  */
-async function loadPrimaryConnection(): Promise<
-  { ok: true; connection: Awaited<ReturnType<typeof loadOnebotConnections>>[number] | null } | { ok: false; message: string }
+async function loadConfiguredConnections(): Promise<
+  { ok: true; connections: Awaited<ReturnType<typeof loadOnebotConnections>> } | { ok: false; message: string }
 > {
   let lastMessage = "读不到渠道连接。";
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const connections = await loadOnebotConnections();
-      return { ok: true, connection: connections[0] ?? null };
+      return { ok: true, connections };
     } catch (error) {
       lastMessage = error instanceof Error ? error.message : String(error);
       if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -154,14 +154,14 @@ async function waitForPanel(port: number, timeoutMs: number): Promise<boolean> {
 export type AttachResult = {
   ok: boolean;
   /** already=本来就在听；attached=这次挂上了；failed=没挂上 */
-  action: "already" | "attached" | "failed";
+  action: "already" | "attached" | "waiting-login" | "failed";
   message: string;
   /**
    * 失败分类。页面要拿它决定「该不该把面板开给用户」：
    * 密码类的（没填 / 填错 / 两步验证 / 被锁）人必须进面板，其余（面板里没这个号的进程）
    * 开面板也解决不了，不如只把原话说明白。
    */
-  reason?: PanelFailureReason | "no-process" | "load-failed";
+  reason?: PanelFailureReason | "no-process" | "account-not-logged-in" | "load-failed";
 };
 
 export async function attachQqSession(options: {
@@ -188,14 +188,11 @@ export async function attachQqSession(options: {
     const processes = await panelListProcesses(login.session);
     const target = pickQqProcess(processes, options.accountQq);
     if (!target) {
-      const seen = processes.map((item) => item.uin || "未知号").join("、");
       return {
-        ok: false,
-        action: "failed",
-        reason: "no-process",
-        message: processes.length
-          ? `面板只看到 QQ ${seen}，没有 ${options.accountQq} —— 先确认这个号在 QQ 客户端里登着。`
-          : "面板一个 QQ 进程都没发现，先把 QQ 客户端登上去。",
+        ok: true,
+        action: "waiting-login",
+        reason: "account-not-logged-in",
+        message: "这个 QQ 尚未登录，已跳过；其他已登录账号可继续使用。",
       };
     }
 
@@ -252,7 +249,7 @@ async function runEnsure(): Promise<EnsureResult> {
     };
   }
 
-  const loaded = await loadPrimaryConnection();
+  const loaded = await loadConfiguredConnections();
   if (!loaded.ok) {
     return {
       action: "skipped",
@@ -261,8 +258,8 @@ async function runEnsure(): Promise<EnsureResult> {
       message: `读不到渠道连接，这次不补：${loaded.message}`,
     };
   }
-  const primary = loaded.connection;
-  if (!primary) {
+  const connections = loaded.connections;
+  if (!connections.length) {
     return { action: "skipped", reason: "no-connection", steps, message: "还没有接进来的 QQ 小号，不用补。" };
   }
 
@@ -270,20 +267,29 @@ async function runEnsure(): Promise<EnsureResult> {
     readSnowlumaStatus(),
     readOnebotAdapterStatus(),
   ]);
-  const wsEndpoint = parseWsEndpoint(primary.config.wsUrl);
-  const gatewayBefore = wsEndpoint ? await probeTcp(wsEndpoint.host, wsEndpoint.port) : false;
-
-  /*
-   * 「两个进程都在」不等于「链路通了」—— 这是 2026-10-31 那次卡住的真正原因。
-   * SnowLuma 起来了但 QQ 没挂上时只有 WebUI，适配器在跑但其实一直在刷 code=1006；
-   * 只看两个 pid 就判 already-running，等于把「中间没接上」当成「已经好了」。
-   */
-  if (snowlumaBefore.running && adapterBefore.running && gatewayBefore) {
-    return { action: "already-running", steps, message: "链路本来就在跑。" };
+  const gatewayStates = await Promise.all(connections.map(async connection => {
+    const endpoint = parseWsEndpoint(connection.config.wsUrl);
+    return endpoint ? probeTcp(endpoint.host, endpoint.port) : false;
+  }));
+  // Every configured endpoint must be ready before skipping account-specific repair.
+  if (snowlumaBefore.running && adapterBefore.running && gatewayStates.every(Boolean)) {
+    return { action: "already-running", steps, message: "已配置的链路本来就在跑。" };
   }
 
+  // Already usable endpoints remain usable even if this machine cannot start a local panel.
+  const keepAvailableGateways = async (): Promise<EnsureResult | null> => {
+    if (!gatewayStates.some(Boolean)) return null;
+    if (!adapterBefore.running) {
+      const launched = await launchOnebotAdapter();
+      if (!launched.ok) return { action: "partial", reason: "adapter-launch-failed", steps, message: launched.message ?? "适配器启动失败。" };
+      steps.push("启动适配器");
+    }
+    return { action: "started", steps, message: "已就绪的网关可继续使用，其他账号等待登录或网关就绪。" };
+  };
   // ① 协议端。没装就别假装能补 —— 那是「去第 2 步填目录」的事，不是自动化能解决的。
   if (!snowlumaBefore.installed) {
+    const available = await keepAvailableGateways();
+    if (available) return available;
     return {
       action: "skipped",
       reason: "not-installed",
@@ -296,9 +302,13 @@ async function runEnsure(): Promise<EnsureResult> {
     steps.push("启动 SnowLuma");
     const launched = await launchSnowluma();
     if (!launched.ok) {
+      const available = await keepAvailableGateways();
+      if (available) return available;
       return { action: "partial", reason: "gateway-launch-failed", steps, message: launched.message ?? "SnowLuma 启动失败。" };
     }
     if (!(await waitForPanel(snowlumaBefore.panelPort, 40_000))) {
+      const available = await keepAvailableGateways();
+      if (available) return available;
       // 它挂在 QQ 客户端上，客户端没登录时就是这个结果 —— 这不是「重试能好」的故障
       return {
         action: "partial",
@@ -309,90 +319,89 @@ async function runEnsure(): Promise<EnsureResult> {
     }
   }
 
-  // ② 节点。补不上不拦着 —— 适配器起来了页面也会显示「节点没开」，比彻底不动强。
+  // Account presence is exact-match and read-only. An unlogged optional account is not a failure.
   const snowlumaNow = await readSnowlumaStatus();
-  let tokensAdopted = false;
-  if (snowlumaNow.running && primary.accountQq) {
-    const provision = await provisionOnebotNodes({
-      password: primary.snowlumaPassword,
-      uin: primary.accountQq,
-      wsUrl: primary.config.wsUrl,
-      httpUrl: primary.config.httpUrl,
-      wsToken: primary.config.accessToken ?? "",
-      httpToken: primary.config.httpToken ?? "",
-      wsPortFallback: 3001,
-      httpPortFallback: 3002,
-      panelPort: snowlumaNow.panelPort,
-    }).catch(() => null);
-
-    if (provision?.ok) {
-      /*
-       * 从面板抄回来的令牌必须落库，否则这一步等于白抄：下面 ④ 启动的适配器
-       * 读的还是库里那份空令牌（发消息 401），下次进来又会再抄一遍。
-       * 「重连」按钮那条路由 provision.post.ts 落库，自动补起这条也得跟上。
-       */
-      if (provision.adopted && (provision.adopted.wsToken || provision.adopted.httpToken)) {
-        const saved = await updatePrimaryOnebotCredentials({
-          accessToken: provision.adopted.wsToken,
-          httpToken: provision.adopted.httpToken,
-        }).catch(() => false);
-        tokensAdopted = saved;
-        if (!saved) steps.push("面板里的令牌没能写进连接设置，去面板 /config 复制那两个 Token 手动填");
+  const presence = await readOnebotAccountPresence(connections, snowlumaNow.panelPort);
+  const outcome = await ensureAvailableOnebotAccounts(connections, {
+    gatewayReady: async connection => {
+      const endpoint = parseWsEndpoint(connection.config.wsUrl);
+      return endpoint ? probeTcp(endpoint.host, endpoint.port) : false;
+    },
+    accountState: connection => presence.get(connection.id) ?? "unknown",
+    ensure: async connection => {
+      const endpoint = parseWsEndpoint(connection.config.wsUrl);
+      if (!endpoint) return { ready: false, steps: ["连接的 WS 地址无效。"] };
+      // The local panel may never be used to attach a remote gateway's account.
+      if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(endpoint.host)) {
+        return { ready: false, steps: ["远程网关尚未就绪，请在网关所在机器检查登录状态。"] };
       }
-      // 只在真的改过东西时才记一笔，否则每次启动都刷一行噪声
-      if (provision.changes.length) steps.push(`对齐节点：${provision.changes.join("；")}`);
-    } else if (provision) {
-      steps.push(`节点没对齐：${provision.message}`);
-    }
+      const accountSteps: string[] = [];
+      let tokensAdopted = false;
+      const provision = await provisionOnebotNodes({
+        password: connection.snowlumaPassword, uin: connection.accountQq,
+        wsUrl: connection.config.wsUrl, httpUrl: connection.config.httpUrl,
+        wsToken: connection.config.accessToken ?? "", httpToken: connection.config.httpToken ?? "",
+        wsPortFallback: 3001, httpPortFallback: 3002, panelPort: snowlumaNow.panelPort,
+      });
+      if (provision.ok) {
+        if (provision.adopted && (provision.adopted.wsToken || provision.adopted.httpToken)) {
+          tokensAdopted = await updateOnebotConnectionCredentials(connection.id, {
+            accessToken: provision.adopted.wsToken, httpToken: provision.adopted.httpToken,
+          }).catch(() => false);
+          if (!tokensAdopted) accountSteps.push("面板令牌未能写入对应连接，请检查连接设置。");
+        }
+        if (provision.changes.length) accountSteps.push("对齐节点：" + provision.changes.join("；"));
+      } else accountSteps.push("节点未对齐：" + provision.message);
+      const attached = await attachQqSession({ password: connection.snowlumaPassword,
+        accountQq: connection.accountQq, panelPort: snowlumaNow.panelPort, wsUrl: connection.config.wsUrl });
+      if (attached.action === "waiting-login") return { ready: false, waiting: true, steps: accountSteps, tokensAdopted };
+      if (attached.action === "attached") accountSteps.push(attached.message);
+      if (!attached.ok) accountSteps.push(attached.message);
+      return { ready: attached.ok, steps: accountSteps, tokensAdopted };
+    },
+  });
+  steps.push(...outcome.steps);
+  if (!outcome.ready.length) {
+    return { action: outcome.failed.length ? "partial" : "skipped",
+      reason: outcome.failed.length ? "hook-failed" : "account-not-logged-in", steps,
+      message: outcome.failed.length ? "当前没有已就绪的网关，请检查对应账号的链路。" : "QQ 账号尚未登录，等待登录后再连接；无需同时登录全部账号。" };
   }
-
-  /*
-   * ③ QQ 会话（hook）。
-   *
-   * 顺序不能反：节点要**在这个号的会话建立之前**写进配置，面板建会话时才会按它 listen。
-   * 而这一步又必须是「端口没在听」才做 —— 已经在听说明会话好好的，再注入一次等于白白断一下。
-   */
-  const wsNow = parseWsEndpoint(primary.config.wsUrl);
-  if (snowlumaNow.running && wsNow && !(await probeTcp(wsNow.host, wsNow.port))) {
-    steps.push("把 QQ 挂上面板");
-    const attached = await attachQqSession({
-      password: primary.snowlumaPassword,
-      accountQq: primary.accountQq,
-      panelPort: snowlumaNow.panelPort,
-      wsUrl: primary.config.wsUrl,
-    });
-    if (!attached.ok) {
-      return { action: "partial", reason: "hook-failed", steps, message: attached.message };
-    }
-    if (attached.action === "attached") steps.push(attached.message);
-  }
-
-  // ④ 适配器
   const adapterNow = await readOnebotAdapterStatus();
   if (!adapterNow.running) {
     steps.push("启动适配器");
     const launched = await launchOnebotAdapter();
-    if (!launched.ok) {
-      return { action: "partial", reason: "adapter-launch-failed", steps, message: launched.message ?? "适配器启动失败。" };
-    }
-  } else if (tokensAdopted) {
-    /*
-     * 适配器早就在跑了，而它内存里那份配置是「空令牌」的 —— 不叫它重连，
-     * 它会一直拿空令牌去发消息（HTTP 401 / WS 握手失败），看起来像「补了也没用」。
-     * 走的是和页面「重连」按钮同一个标记，由适配器自己轮询消费。
-     */
-    steps.push("通知适配器按新令牌重连");
-    await requestOnebotReload(primary.id).catch(() => false);
+    if (!launched.ok) return { action: "partial", reason: "adapter-launch-failed", steps, message: launched.message ?? "适配器启动失败。" };
+  } else {
+    for (const connectionId of outcome.reload) await requestOnebotReload(connectionId).catch(() => false);
+    if (outcome.reload.length) steps.push("通知适配器按对应连接的新令牌重连");
   }
+  return { action: outcome.failed.length ? "partial" : "started", steps,
+    reason: outcome.waiting.length ? "account-not-logged-in" : undefined,
+    message: "已就绪 " + outcome.ready.length + " 条链路"
+      + (outcome.waiting.length ? "，另有 " + outcome.waiting.length + " 个账号等待登录（不影响已登录账号）" : "")
+      + (outcome.failed.length ? "，" + outcome.failed.length + " 条链路需检查" : "") + "。" };
+}
 
-  const ports = {
-    ws: portFromUrl(primary.config.wsUrl, 3001),
-    http: portFromUrl(primary.config.httpUrl, 3002),
-  };
-
-  return {
-    action: "started",
-    steps,
-    message: steps.length ? `已补起链路（${ports.ws}/${ports.http}）。` : "链路已就绪。",
-  };
+/** Injected account iteration: one optional/unavailable QQ must not block later usable accounts. */
+export async function ensureAvailableOnebotAccounts<T extends { id: string }>(connections: readonly T[], deps: {
+  gatewayReady(connection: T): Promise<boolean>;
+  accountState(connection: T): "logged_in" | "waiting_login" | "unknown";
+  ensure(connection: T): Promise<{ ready: boolean; waiting?: boolean; tokensAdopted?: boolean; steps: string[] }>;
+}) {
+  const result = { ready: [] as string[], waiting: [] as string[], failed: [] as string[], reload: [] as string[], steps: [] as string[] };
+  for (const connection of connections) {
+    try {
+      if (await deps.gatewayReady(connection)) { result.ready.push(connection.id); continue; }
+      const state = deps.accountState(connection);
+      if (state === "waiting_login") { result.waiting.push(connection.id); continue; }
+      if (state !== "logged_in") { result.failed.push(connection.id); result.steps.push("尚未确认账号登录状态，未改动其节点或会话。"); continue; }
+      const account = await deps.ensure(connection);
+      result.steps.push(...account.steps);
+      if (account.tokensAdopted) result.reload.push(connection.id);
+      if (account.ready) result.ready.push(connection.id);
+      else if (account.waiting) result.waiting.push(connection.id);
+      else result.failed.push(connection.id);
+    } catch { result.failed.push(connection.id); result.steps.push("一条账号链路补起失败，已继续检查其他账号。"); }
+  }
+  return result;
 }

@@ -1,7 +1,7 @@
 import { createError } from "h3";
 import { requireAdminActor } from "../../../../../utils/auth";
 import { attachQqSession } from "../../../../../utils/channel-adapter/onebot/autostart";
-import { loadOnebotConnections } from "../../../../../utils/channel-adapter/onebot/configure";
+import { selectOnebotActionConnection } from "../../../../../utils/channel-adapter/onebot/runtime-selection";
 import { parseWsEndpoint, probeTcp, readSnowlumaStatus } from "../../../../../utils/channel-adapter/onebot/runtime";
 
 /**
@@ -26,8 +26,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 409, statusMessage: `面板 ${status.panelPort} 还没应答，等 SnowLuma 起来再挂。` });
   }
 
-  const connections = await loadOnebotConnections();
-  const primary = connections[0];
+  const primary = await selectOnebotActionConnection(event, status.panelPort);
   if (!primary) {
     throw createError({ statusCode: 400, statusMessage: "还没有接进来的 QQ 小号，没有可挂的号。" });
   }

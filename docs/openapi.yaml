@@ -1120,8 +1120,12 @@ paths:
       description: |
         一次返回三件事：SnowLuma（协议端网关，面板端口在听即运行）、
         适配器（yarn onebot:run，靠「我在跑」标记 + pid 探活）、
-        gateway（适配器要连的 WS 端口通不通）。另带 `autostart`：
+        gateway（当前所选连接的 WS 端口状态），gateways为所有连接各自状态，selectedConnectionId为当前选择。默认优先可用连接；query.connectionId显式选择，未知/停用ID返回404。
+        gateway/gateways额外含connectionId与accountState（ready/waiting_login/unknown）；面板精确发现账号缺席才标waiting_login，不将认证失败当成未登录，未登录备用号不影响其他账号。
+        另带 `autostart`：
         人点过「停止」后自动补起会关着，直到再点启动/重连。
+      parameters:
+        - { name: connectionId, in: query, schema: { type: string, format: uuid }, description: 显式选择要诊断的QQ连接 }
       responses:
         '200':
           description: 链路现状
@@ -1133,6 +1137,10 @@ paths:
                   adapter: { type: object, properties: { running: { type: boolean }, pid: { type: integer }, startedAt: { type: string } } }
                   snowluma: { type: object, properties: { home: { type: string }, source: { type: string }, installed: { type: boolean }, running: { type: boolean }, panelPort: { type: integer } } }
                   gateway: { type: object, nullable: true, properties: { wsUrl: { type: string }, host: { type: string }, port: { type: integer }, reachable: { type: boolean } } }
+                  gateways:
+                    type: array
+                    items: { type: object, properties: { connectionId: { type: string, format: uuid }, wsUrl: { type: string }, host: { type: string }, port: { type: integer }, reachable: { type: boolean }, accountState: { type: string, enum: [ready, waiting_login, unknown] } } }
+                  selectedConnectionId: { type: string, format: uuid, nullable: true }
                   autostart: { type: object, properties: { paused: { type: boolean }, at: { type: string } } }
         '401':
           $ref: '#/components/responses/Unauthorized'
@@ -1192,6 +1200,7 @@ paths:
       description: |
         只对齐端口 / 消息格式 / 角色 / 令牌，不碰其他设置。面板没起、密码没填、密码不对都如实返回，
         不做重试（面板按 IP 锁 5 次）。无密码时返回 200 + reason=no-password，不当错误弹。
+        POST可带{connectionId:UUID}指定连接，省略时优先可用账号；显式未知ID404。账号未登录返回ok=true/action=waiting-login/reason=account-not-logged-in及空changes/warnings，不写配置；令牌仅回填所选连接。
       responses:
         '200':
           description: 对齐结果
@@ -1217,8 +1226,8 @@ paths:
         面板在跑 ≠ 3001/3002 在听：两个 OneBot 节点只在这个号的会话建立后才 listen，而会话来自
         注入进 QQ 客户端的 hook。这里用存下的面板密码登录，`GET /api/processes` 里按 `account.uin`
         精确挑出这个号的进程，再 `POST /api/processes/:pid/load` 注入（已注入但会话掉了则 refresh），
-        等 WS 端口起来后返回。挑不到这个号就失败，不会往别的 QQ 里注入。
-        没填密码 / 密码不对 / 号不在线都返回 200 + ok=false，不重试（面板按 IP 锁 5 次）。
+        等 WS 端口起来后返回。挑不到这个号返回ok=true/action=waiting-login/reason=account-not-logged-in，表示暂不连接，其他账号不受影响，不会往别的 QQ 里注入。
+        没填密码 / 密码不对返回 200 + ok=false，不重试（面板按 IP 锁 5 次）。POST可带{connectionId:UUID}，显式ID不允许退回其他账号；省略时优先可用账号。
       responses:
         '200':
           description: 挂载结果
@@ -1228,7 +1237,7 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
-                  action: { type: string, enum: [already, attached, failed] }
+                  action: { type: string, enum: [already, attached, waiting-login, failed] }
                   message: { type: string }
                   uin: { type: string }
                   panelPort: { type: integer }
