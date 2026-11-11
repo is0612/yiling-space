@@ -59,7 +59,7 @@ export default defineEventHandler(async (event) => {
     : 1;
   const events = await prisma.memoryEvent.findMany({
       where: eventWhere,
-      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       skip: (page - 1) * pageSize,
       take: pageSize,
       select: {

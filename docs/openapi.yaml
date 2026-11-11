@@ -2602,7 +2602,7 @@ paths:
       tags: [Memories]
       operationId: getCharacterMemoryDay
       summary: 某一天的忆泡（分页）
-      description: 忆泡是整理过的事件，按 occurredAt、id 升序分页，每页固定 20 条。当天原文不再随这里返回：页面上展开「查看当天原文」时才请求 `/characters/{characterId}/days/{dayKey}/messages`，两者受同一套范围隔离约束。
+      description: 忆泡是整理过的事件，按 occurredAt、id 降序分页（最新事件在前），每页固定 20 条。当天原文不再随这里返回：页面上展开「查看当天原文」时才请求 `/characters/{characterId}/days/{dayKey}/messages`，两者受同一套范围隔离约束。
       parameters:
         - name: page
           in: query

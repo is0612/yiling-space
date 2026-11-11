@@ -345,14 +345,14 @@ try {
     const previous = seenEvents[index - 1]!;
     const current = seenEvents[index]!;
     assert(
-      previous.occurredAt < current.occurredAt || (previous.occurredAt === current.occurredAt && previous.id < current.id),
-      "events must stay ordered by occurredAt then id",
+      previous.occurredAt > current.occurredAt || (previous.occurredAt === current.occurredAt && previous.id > current.id),
+      "events must stay newest-first by occurredAt then id across all pages",
     );
   }
   const archivedSeen = seenEvents.filter((event) => event.status === "ARCHIVED").length;
   assert.equal(archivedSeen, BIG_DAY_ARCHIVED, "archived events must be paginated alongside active ones");
   const archivedOnFirstPage = bigFirst.events.filter((event) => event.status === "ARCHIVED").length;
-  assert.equal(archivedOnFirstPage, 0, "fixture sanity: archived events sit on the later pages");
+  assert.equal(archivedOnFirstPage, 20, "newest-first ordering puts this fixture's latest archived events on the first page");
   const bigCalendarRow = walk20.all.find((row) => row.dayKey === bigDay);
   assert.equal(bigCalendarRow?.eventCount, BIG_DAY_EVENTS, "calendar count must include archived events");
   console.log(`Big day: ${BIG_DAY_EVENTS} events over 7 pages, stable order, ${BIG_DAY_ARCHIVED} archived included in totals.`);
