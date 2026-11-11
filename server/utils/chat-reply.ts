@@ -592,7 +592,10 @@ export type PromptAcquaintances = {
 };
 
 function formatAcquaintanceEntry(entry: CloseFriend, withAliases: boolean): PromptAcquaintance {
-  const last = entry.lastSeenAt;
+  // Request-local immutable snapshots serialize Dates to ISO strings.
+  const rawLast = entry.lastSeenAt;
+  const parsedLast = rawLast ? new Date(rawLast) : null;
+  const last = parsedLast && Number.isFinite(parsedLast.getTime()) ? parsedLast : null;
   const groups = (entry.groups ?? []).map((group) => group.slice(0, 40)).filter(Boolean);
   const aliases = withAliases ? aliasesForPrompt(entry.aliases) : [];
   return {

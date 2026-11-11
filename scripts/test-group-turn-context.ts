@@ -60,6 +60,11 @@ try {
   assert.equal(logical(fallback, "context"), 1); assert.equal(logical(fallback, "memory"), 1); assert.equal(logical(fallback, "response"), 2);
   assert.equal(fallback.snapshot().stages.find(row => row.stage === "context")!.operations[0]!.state, "failed");
 
+  models = []; mode = "success";
+  const withDates = { ...chat, acquaintances: { fromPrivate: [], fromGroups: [{ name: "测试熟人", times: 2, lastSeenAt: new Date("2026-11-01T12:00:00Z"), groups: [] }], inThisGroup: [], totals: { private: 0, group: 1 } } };
+  await generateGroupContextReply({ ...args, turnContext: makeTurn(), chatInput: withDates });
+  assert.deepEqual(models, ["context", "memory", "character"], "Date-backed acquaintance cards must survive the immutable JSON snapshot");
+
   models = []; mode = "empty"; const empty = makeTurn();
   await generateGroupContextReply({ ...args, turnContext: empty });
   assert.equal(empty.snapshot().stages.find(row => row.stage === "memory")!.operations[0]!.state, "no_sources");
