@@ -176,7 +176,6 @@ async function loadLogs() {
   const key = requestKey.value;
   loading.value = true;
   errorMessage.value = "";
-  report.value = null;
   try {
     const response = await $fetch<CallLogsResponse>(`/api/characters/${encodeURIComponent(props.characterId)}/usage/logs`, {
       query: { days: days.value, kind: kind.value || undefined, model: model.value || undefined, page: page.value, pageSize: pageSize.value },
@@ -237,7 +236,7 @@ onBeforeUnmount(() => {
     v-model="opened"
     title="调用日志"
     width="min(1440px, calc(100vw - 32px))"
-    top="5vh"
+    top="4vh"
     class="model-call-logs-dialog"
     append-to-body
   >
@@ -333,7 +332,7 @@ onBeforeUnmount(() => {
           <el-table
             :data="report?.items ?? []"
             row-key="id"
-            max-height="66vh"
+            height="calc(92vh - 260px)"
             :empty-text="loading ? '正在读取调用记录…' : errorMessage ? '日志读取失败，请重试' : '这个范围内还没有调用记录'"
           >
             <el-table-column type="expand">
