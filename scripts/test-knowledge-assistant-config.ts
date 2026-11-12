@@ -21,31 +21,49 @@ for (const body of [
   { knowledgeAssistantMaxInputTokens: 4095 }, { knowledgeAssistantMaxInputTokens: 4096.5 },
   { knowledgeAssistantMaxOutputTokens: 511 }, { knowledgeAssistantMaxOutputTokens: "2048" },
 ]) assert.throws(() => readKnowledgeAssistantSettingsPatch(body));
-assert.throws(() => validateKnowledgeAssistantEnabledConfig({ knowledgeAssistantEnabled: true }), /模型名称/);
-assert.throws(() => validateKnowledgeAssistantEnabledConfig({
-  knowledgeAssistantEnabled: true, knowledgeAssistantModel: "model",
-  chatApiKeyEncrypted: "v1.chat", memoryAssistantApiKeyEncrypted: "v1.memory",
-}), /专用 API Key/);
+
+/**
+ * 2026-11-12：知识处理助手默认开启，模型名 / 地址 / Key 都能留空沿用对话模型。
+ * 「没填模型或 Key」不再拦截，只剩地址合法性。
+ */
+assert.doesNotThrow(() => validateKnowledgeAssistantEnabledConfig({ knowledgeAssistantEnabled: true }));
+assert.doesNotThrow(() => validateKnowledgeAssistantEnabledConfig({}));
 assert.doesNotThrow(() => validateKnowledgeAssistantEnabledConfig({ knowledgeAssistantEnabled: false }));
+assert.doesNotThrow(() => validateKnowledgeAssistantEnabledConfig({ knowledgeAssistantEnabled: true, knowledgeAssistantModel: "model" }));
+assert.throws(
+  () => validateKnowledgeAssistantEnabledConfig({ knowledgeAssistantEnabled: true, knowledgeAssistantApiBaseUrl: "https://10.0.0.1/v1" }),
+  /私有网络|本机地址/,
+);
+
 const encrypted = await encryptApiKey("knowledge-only-test-key");
 assert.equal(await resolveCharacterKnowledgeAssistantApiKey({ knowledgeAssistantApiKeyEncrypted: encrypted }), "knowledge-only-test-key");
-assert.equal(await resolveCharacterKnowledgeAssistantApiKey({ chatApiKeyEncrypted: encrypted, memoryAssistantApiKeyEncrypted: encrypted }), "");
+assert.equal(await resolveCharacterKnowledgeAssistantApiKey({ knowledgeAssistantApiKey: "plain-key" }), "plain-key");
+assert.equal(await resolveCharacterKnowledgeAssistantApiKey({ chatApiKey: "chat-key", memoryAssistantApiKey: "memory-key" }), "");
 assert.equal(isKnowledgeAssistantApiKeySaved({ knowledgeAssistantApiKeyEncrypted: "plaintext" }), false);
 assert.equal(isKnowledgeAssistantApiKeySaved({ knowledgeAssistantApiKeyEncrypted: encrypted }), true);
-validateKnowledgeAssistantEnabledConfig({ ...patch.config, knowledgeAssistantApiKeyEncrypted: encrypted });
+assert.equal(isKnowledgeAssistantApiKeySaved({ knowledgeAssistantApiKey: "plain-key" }), true);
+validateKnowledgeAssistantEnabledConfig({ ...patch.config, knowledgeAssistantApiKey: "key" });
+
 const record = { id: "test", name: "角色", avatar: null, basePrompt: "", styleExamples: "", userAddress: "", status: "ACTIVE" as const, modelConfig: {}, updatedAt: new Date(), memorySetting: null, channelBindings: [], memoryScopes: [] };
 const defaults = toCharacterDto(record);
 assert.equal(defaults.knowledgeAutoCollectEnabled, false);
-assert.equal(defaults.knowledgeAssistantEnabled, false);
+assert.equal(defaults.knowledgeAssistantEnabled, true, "知识处理助手默认开启");
 assert.equal(defaults.knowledgeAssistantConfigured, false);
 assert.equal(defaults.knowledgeAssistantTemperature, 0.1);
 assert.equal(defaults.knowledgeAssistantMaxInputTokens, 12288);
 assert.equal(defaults.knowledgeAssistantMaxOutputTokens, 4096);
 assert.equal(toCharacterDto({ ...record, modelConfig: { knowledgeAssistantMaxOutputTokens: 2048, knowledgeAssistantTemperature: 0 } }).knowledgeAssistantMaxOutputTokens, 2048, "Saved explicit values must remain unchanged");
-const configured = toCharacterDto({ ...record, modelConfig: { ...patch.config, knowledgeAssistantApiKeyEncrypted: encrypted } });
+
+const configured = toCharacterDto({ ...record, modelConfig: { ...patch.config, knowledgeAssistantApiKey: "plain-key" } });
 assert.equal(configured.knowledgeAssistantConfigured, true);
 assert.equal(configured.knowledgeAutoCollectEnabled, true);
 assert.equal(configured.knowledgeAssistantApiKeyConfigured, true);
+assert.equal(configured.knowledgeAssistantApiKey, "plain-key", "明文 Key 应回显给页面");
 assert.equal(Reflect.get(configured, "knowledgeAssistantApiKeyEncrypted"), undefined);
-assert.equal(Reflect.get(configured, "knowledgeAssistantApiKey"), undefined);
-console.log("Knowledge assistant config tests passed: validation, defaults, independent encrypted credentials and safe DTO.");
+
+/** 继承：只配了对话模型的 Key，知识助手也算就绪。 */
+const inherited = toCharacterDto({ ...record, modelConfig: { chatApiKey: "chat-key" } });
+assert.equal(inherited.knowledgeAssistantConfigured, true);
+assert.equal(inherited.knowledgeAssistantApiKey, "");
+
+console.log("Knowledge assistant config tests passed: validation, inherit-by-default, plaintext credentials and DTO echo.");

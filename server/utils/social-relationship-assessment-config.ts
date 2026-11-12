@@ -71,18 +71,12 @@ export function readSocialRelationshipAssessmentAssistantSettingsPatch(
 export function validateSocialRelationshipAssessmentAssistantEnabledConfig(
   config: Record<string, unknown>,
 ): void {
-  if (config.socialRelationshipAssessmentAssistantEnabled !== true) return;
-  if (typeof config.socialRelationshipAssessmentAssistantModel !== "string"
-    || !config.socialRelationshipAssessmentAssistantModel.trim()) {
-    throw new Error("启用关系评估助手前，请先填写独立模型名称。");
-  }
-  if (typeof config.socialRelationshipAssessmentAssistantApiBaseUrl !== "string"
-    || !config.socialRelationshipAssessmentAssistantApiBaseUrl.trim()) {
-    throw new Error("启用关系评估助手前，请先填写独立 API 地址。");
-  }
-  validateChatApiBaseUrl(config.socialRelationshipAssessmentAssistantApiBaseUrl);
-  if (typeof config.socialRelationshipAssessmentAssistantApiKeyEncrypted !== "string"
-    || !config.socialRelationshipAssessmentAssistantApiKeyEncrypted.startsWith("v1.")) {
-    throw new Error("启用关系评估助手前，请先保存关系评估助手专用 API Key。");
-  }
+  if (config.socialRelationshipAssessmentAssistantEnabled === false) return;
+  const base = typeof config.socialRelationshipAssessmentAssistantApiBaseUrl === "string"
+    && config.socialRelationshipAssessmentAssistantApiBaseUrl.trim()
+    ? config.socialRelationshipAssessmentAssistantApiBaseUrl
+    : typeof config.chatApiBaseUrl === "string" && config.chatApiBaseUrl.trim()
+      ? config.chatApiBaseUrl
+      : process.env.LLM_BASE_URL?.trim() || "https://api.openai.com/v1";
+  validateChatApiBaseUrl(base);
 }

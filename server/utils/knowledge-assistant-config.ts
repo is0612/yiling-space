@@ -53,14 +53,12 @@ export function readKnowledgeAssistantSettingsPatch(body: Record<string, unknown
   };
 }
 
+/**
+ * 知识处理助手默认开启，配置可留空沿用对话模型（见 `assistant-inheritance`）。
+ * 这里只校验地址合法性，不再要求「独立模型名 + 独立 Key」。
+ */
 export function validateKnowledgeAssistantEnabledConfig(config: Record<string, unknown>): void {
-  if (config.knowledgeAssistantEnabled !== true) return;
-  if (typeof config.knowledgeAssistantModel !== "string" || !config.knowledgeAssistantModel.trim()) {
-    throw new Error("启用知识处理助手前，请先填写模型名称。");
-  }
-  if (typeof config.knowledgeAssistantApiKeyEncrypted !== "string" || !config.knowledgeAssistantApiKeyEncrypted.startsWith("v1.")) {
-    throw new Error("启用知识处理助手前，请先保存知识处理助手专用 API Key。");
-  }
+  if (config.knowledgeAssistantEnabled === false) return;
   const base = typeof config.knowledgeAssistantApiBaseUrl === "string" && config.knowledgeAssistantApiBaseUrl.trim()
     ? config.knowledgeAssistantApiBaseUrl
     : typeof config.chatApiBaseUrl === "string" && config.chatApiBaseUrl.trim()

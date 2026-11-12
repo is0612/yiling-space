@@ -1,6 +1,6 @@
 import { createError, getRouterParam } from "h3";
-import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../../utils/chat-model-config";
-import { resolveCharacterKnowledgeAssistantApiKey } from "../../../../../utils/credential-encryption";
+import { buildModelsEndpoint } from "../../../../../utils/chat-model-config";
+import { ASSISTANT_FIELDS, resolveAssistantConnection } from "../../../../../utils/assistant-inheritance";
 import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
@@ -15,13 +15,18 @@ export default defineEventHandler(async (event): Promise<ModelsResult> => {
     select: { id: true, modelConfig: true },
   });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
-  const config = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
-    ? character.modelConfig as Record<string, unknown> : {};
-  const chat = resolveChatModelSettings(character.modelConfig);
-  const base = typeof config.knowledgeAssistantApiBaseUrl === "string" && config.knowledgeAssistantApiBaseUrl.trim()
-    ? config.knowledgeAssistantApiBaseUrl.trim() : chat.apiBaseUrl;
-  const key = await resolveCharacterKnowledgeAssistantApiKey(character.modelConfig).catch(() => "");
-  if (!key) return { ok: false, models: [], message: "请先填写并保存知识处理助手独立 API Key。" };
+  const connection = await resolveAssistantConnection(character.modelConfig, ASSISTANT_FIELDS.knowledge);
+  const base = connection.apiBaseUrl;
+  const key = connection.apiKey;
+  if (!key) {
+    return {
+      ok: false,
+      models: [],
+      message: connection.baseUrlSource === "assistant"
+        ? "知识处理助手用了单独的 API 地址，需要单独填写它的 API Key 才能获取模型列表。"
+        : "尚未配置可用的 API Key。请在对话模型里填写 Key，或单独为知识处理助手填一把。",
+    };
+  }
   let endpoint: URL;
   try { endpoint = buildModelsEndpoint(base); }
   catch (error) { return { ok: false, models: [], message: error instanceof Error ? error.message : "API 地址无效。" }; }

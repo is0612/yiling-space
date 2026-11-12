@@ -1,7 +1,7 @@
 import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { startAssistantRequest, type AssistantRequestObserver } from "./assistant-request-diagnostics";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
-import { resolveCharacterContextAssistantApiKey } from "./credential-encryption";
+import { ASSISTANT_FIELDS, resolveAssistantConnection } from "./assistant-inheritance";
 import type { ConversationReplyInput } from "./chat-reply";
 import type { MemoryAssistantRuntime } from "./memory-assistant";
 import { parseJsonLoose } from "./loose-json";
@@ -94,17 +94,17 @@ export async function resolveContextAssistantRuntime(
   configValue: unknown, fallbackBaseUrl: string,
 ): Promise<MemoryAssistantRuntime | null> {
   const config = record(configValue);
-  if (config.contextAssistantEnabled !== true) return null;
-  const model = text(config.contextAssistantModel, 120);
-  if (!model) return null;
+  // 默认开启：配置齐全就能跑，只有显式关闭才跳过。
+  if (config.contextAssistantEnabled === false) return null;
   try {
-    const apiBaseUrl = validateChatApiBaseUrl(text(config.contextAssistantApiBaseUrl, 2_048) || fallbackBaseUrl);
+    const connection = await resolveAssistantConnection(configValue, ASSISTANT_FIELDS.context);
+    if (!connection.model) return null;
+    const apiBaseUrl = validateChatApiBaseUrl(connection.apiBaseUrl || fallbackBaseUrl);
     if (!apiBaseUrl) return null;
-    // No chat / memory assistant / environment credential fallback, even on the same host.
-    const apiKey = await resolveCharacterContextAssistantApiKey(configValue);
-    if (!apiKey) return null;
+    // 地址与对话模型一致时才会继承对话 Key；不一致又没单填，这里就是空 -> 不跑。
+    if (!connection.apiKey) return null;
     return {
-      model, apiKey, apiBaseUrl,
+      model: connection.model, apiKey: connection.apiKey, apiBaseUrl,
       temperature: bounded(config.contextAssistantTemperature, CONTEXT_ASSISTANT_DEFAULTS.temperature, 0, 2),
       maxInputTokens: Math.round(bounded(config.contextAssistantMaxInputTokens, CONTEXT_ASSISTANT_DEFAULTS.maxInputTokens, 4_096, 32_768)),
       maxOutputTokens: Math.round(bounded(config.contextAssistantMaxOutputTokens, CONTEXT_ASSISTANT_DEFAULTS.maxOutputTokens, 512, 8_192)),

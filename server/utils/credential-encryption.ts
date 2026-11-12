@@ -1,3 +1,14 @@
+/**
+ * 凭据存储。
+ *
+ * 2026-11-12 改成明文：加密这层挡不住真威胁（密钥文件 `credentials-encryption.key`
+ * 和数据库放在同一台机器上，拿到库的人基本也拿得到密钥），却挡住了用户自己核对 ——
+ * 「这个助手的 Key 到底填了没、填的是哪把」在页面上永远是空白。
+ * 现在明文存进 modelConfig，页面用密码框显示，至少能看见配了什么。
+ *
+ * 旧密文仍然读得出来（`v1.` 前缀走解密），保证迁移脚本跑完之前存量角色不掉线。
+ * 新增写入一律写明文字段，密文字段只在兼容读取时出现。
+ */
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -70,25 +81,100 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/** 只用来判断「是不是同一个地址」，不做格式校验（那件事归 chat-model-config）。 */
+function normalizeEndpoint(value: string): string {
+  return value.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+const DEFAULT_ENDPOINT = "https://api.openai.com/v1";
+type ApiKeyFieldPair = { plain: string; legacy: string };
+
+/**
+ * 八把 Key 的字段名。新增服务商时在这里补一行，别在各处再手写一遍字符串 ——
+ * 名字写错的表现是「明明填了却说没配」，最难查。
+ */
+export const API_KEY_FIELDS = {
+  chat: { plain: "chatApiKey", legacy: "chatApiKeyEncrypted" },
+  voice: { plain: "voiceApiKey", legacy: "voiceApiKeyEncrypted" },
+  asr: { plain: "asrApiKey", legacy: "asrApiKeyEncrypted" },
+  vision: { plain: "visionApiKey", legacy: "visionApiKeyEncrypted" },
+  memoryAssistant: { plain: "memoryAssistantApiKey", legacy: "memoryAssistantApiKeyEncrypted" },
+  contextAssistant: { plain: "contextAssistantApiKey", legacy: "contextAssistantApiKeyEncrypted" },
+  knowledgeAssistant: { plain: "knowledgeAssistantApiKey", legacy: "knowledgeAssistantApiKeyEncrypted" },
+  socialRelationshipAssessmentAssistant: {
+    plain: "socialRelationshipAssessmentAssistantApiKey",
+    legacy: "socialRelationshipAssessmentAssistantApiKeyEncrypted",
+  },
+} as const satisfies Record<string, ApiKeyFieldPair>;
+
+/**
+ * 读一把 Key：明文优先，退回旧密文。解不开就当没配 ——
+ * 一个损坏的密文不该让整个设置页崩掉。
+ */
+export async function readApiKeyField(configValue: unknown, fields: ApiKeyFieldPair): Promise<string> {
+  const config = asRecord(configValue);
+  const plain = config[fields.plain];
+  if (typeof plain === "string" && plain.trim()) return plain.trim();
+  const legacy = config[fields.legacy];
+  if (typeof legacy !== "string" || !legacy.startsWith("v1.")) return "";
+  try {
+    return (await decryptApiKey(legacy)).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 只读明文字段，不解密。给同步场景（DTO）用：回显需要的是明文，
+ * 而旧密文本来也回显不出来 —— 页面看到「已配置」但输入框空，就是这种情况。
+ */
+export function readApiKeyFieldPlain(configValue: unknown, fields: ApiKeyFieldPair): string {
+  const config = asRecord(configValue);
+  const value = config[fields.plain];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * 是否存过 Key。同步版本：只说「有没有」，不尝试解密 ——
+ * DTO 是同步构建的，为了一个布尔值把它整条链改成 async 不值得。
+ */
+export function isApiKeyFieldSaved(configValue: unknown, fields: ApiKeyFieldPair): boolean {
+  const config = asRecord(configValue);
+  const plain = config[fields.plain];
+  if (typeof plain === "string" && plain.trim()) return true;
+  const legacy = config[fields.legacy];
+  return typeof legacy === "string" && legacy.startsWith("v1.");
+}
+
+/**
+ * 角色自己的对话 Key。
+ *
+ * `effectiveBaseUrl` 是这次真正要请求的地址。角色 Key 只属于角色配置的那个地址：
+ * 换了别家还把这把 Key 发过去只会 401，而报错只写「鉴权失败」，指不到这里。
+ * 所以地址不一致时返回空字符串，让调用方自己决定怎么办。
+ */
 export async function resolveCharacterApiKey(configValue: unknown, effectiveBaseUrl?: string): Promise<string> {
   const config = asRecord(configValue);
-  const encrypted = config.chatApiKeyEncrypted;
-  if (typeof encrypted === "string" && encrypted.startsWith("v1.")) {
-    const decrypted = await decryptApiKey(encrypted);
-    if (decrypted.trim()) return decrypted.trim();
+  const ownKey = await readApiKeyField(configValue, API_KEY_FIELDS.chat);
+  if (ownKey) {
+    const configured = normalizeEndpoint(
+      typeof config.chatApiBaseUrl === "string" && config.chatApiBaseUrl.trim()
+        ? config.chatApiBaseUrl
+        : process.env.LLM_BASE_URL?.trim() || DEFAULT_ENDPOINT,
+    );
+    if (!effectiveBaseUrl || normalizeEndpoint(effectiveBaseUrl) === configured) return ownKey;
+    return "";
   }
 
   const environmentKey = process.env.LLM_API_KEY?.trim() || "";
   if (!environmentKey) return "";
-  // Never send a global fallback key to a different per-character endpoint.
-  const environmentBaseUrl = (process.env.LLM_BASE_URL?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
-  const targetBaseUrl = (effectiveBaseUrl || environmentBaseUrl).replace(/\/+$/, "");
-  return targetBaseUrl === environmentBaseUrl ? environmentKey : "";
+  // 同理：全局兜底 Key 不发给另一家地址。
+  const environmentBaseUrl = normalizeEndpoint(process.env.LLM_BASE_URL?.trim() || DEFAULT_ENDPOINT);
+  return normalizeEndpoint(effectiveBaseUrl || environmentBaseUrl) === environmentBaseUrl ? environmentKey : "";
 }
 
 export function isCharacterApiKeySaved(configValue: unknown): boolean {
-  const config = asRecord(configValue);
-  return typeof config.chatApiKeyEncrypted === "string" && config.chatApiKeyEncrypted.startsWith("v1.");
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.chat);
 }
 
 /**
@@ -99,37 +185,27 @@ export function isCharacterApiKeySaved(configValue: unknown): boolean {
  * 返回空字符串 = 没配（调用方自己去回落环境变量）。
  */
 export async function resolveCharacterVoiceApiKey(configValue: unknown): Promise<string> {
-  const config = asRecord(configValue);
-  const encrypted = config.voiceApiKeyEncrypted;
-  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
-  const decrypted = await decryptApiKey(encrypted);
-  return decrypted.trim();
+  return readApiKeyField(configValue, API_KEY_FIELDS.voice);
 }
 
 export function isVoiceApiKeySaved(configValue: unknown): boolean {
-  const config = asRecord(configValue);
-  return typeof config.voiceApiKeyEncrypted === "string" && config.voiceApiKeyEncrypted.startsWith("v1.");
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.voice);
 }
 
 /**
  * 识别（ASR）专用的 Key。
  *
- * 为什么要有第二把：`voiceApiKeyEncrypted` 是 TTS 与 ASR 共用的，默认假设「一家全包」
+ * 为什么要有第二把：`voiceApiKey` 是 TTS 与 ASR 共用的，默认假设「一家全包」
  * （硅基流动那样）。可一旦合成换成只做合成的服务商（Breeze、OpenAI 官方），
  * 那条共用路径就会把这家的 Key 喂给识别服务商，换回来一个 401 —— 报错里只写
  * 「鉴权失败」，看不出是拿错了 Key。所以识别允许单独填一把，留空才回落到共用的。
  */
 export async function resolveCharacterAsrApiKey(configValue: unknown): Promise<string> {
-  const config = asRecord(configValue);
-  const encrypted = config.asrApiKeyEncrypted;
-  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
-  const decrypted = await decryptApiKey(encrypted);
-  return decrypted.trim();
+  return readApiKeyField(configValue, API_KEY_FIELDS.asr);
 }
 
 export function isAsrApiKeySaved(configValue: unknown): boolean {
-  const config = asRecord(configValue);
-  return typeof config.asrApiKeyEncrypted === "string" && config.asrApiKeyEncrypted.startsWith("v1.");
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.asr);
 }
 
 /**
@@ -142,75 +218,50 @@ export function isAsrApiKeySaved(configValue: unknown): boolean {
  * 返回空字符串 = 没配，调用方自己往环境变量、再往聊天 Key 回落。
  */
 export async function resolveCharacterVisionApiKey(configValue: unknown): Promise<string> {
-  const config = asRecord(configValue);
-  const encrypted = config.visionApiKeyEncrypted;
-  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
-  const decrypted = await decryptApiKey(encrypted);
-  return decrypted.trim();
-}
-
-/**
- * 记忆助手使用独立凭据。这里故意不回落到聊天 Key 或环境变量：
- * 助手可能指向另一家服务商，绝不能把聊天凭据发到另一个 API 地址。
- */
-export async function resolveCharacterMemoryAssistantApiKey(configValue: unknown): Promise<string> {
-  const config = asRecord(configValue);
-  const encrypted = config.memoryAssistantApiKeyEncrypted;
-  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
-  const decrypted = await decryptApiKey(encrypted);
-  return decrypted.trim();
-}
-
-export function isMemoryAssistantApiKeySaved(configValue: unknown): boolean {
-  const config = asRecord(configValue);
-  return typeof config.memoryAssistantApiKeyEncrypted === "string"
-    && config.memoryAssistantApiKeyEncrypted.startsWith("v1.");
-}
-
-/** 语境助手凭据独立保存，不回落聊天、记忆助手或环境变量 Key。 */
-export async function resolveCharacterContextAssistantApiKey(configValue: unknown): Promise<string> {
-  const config = asRecord(configValue);
-  const encrypted = config.contextAssistantApiKeyEncrypted;
-  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
-  return (await decryptApiKey(encrypted)).trim();
-}
-
-export function isContextAssistantApiKeySaved(configValue: unknown): boolean {
-  const config = asRecord(configValue);
-  return typeof config.contextAssistantApiKeyEncrypted === "string"
-    && config.contextAssistantApiKeyEncrypted.startsWith("v1.");
+  return readApiKeyField(configValue, API_KEY_FIELDS.vision);
 }
 
 export function isVisionApiKeySaved(configValue: unknown): boolean {
-  const config = asRecord(configValue);
-  return typeof config.visionApiKeyEncrypted === "string" && config.visionApiKeyEncrypted.startsWith("v1.");
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.vision);
 }
 
+/*
+ * 下面四个助手（记忆 / 语境 / 知识 / 关系评估）在 2026-11-12 之前刻意「不回落到聊天 Key」，
+ * 因为它们可能指向另一家服务商，把聊天凭据发过去必然 401。
+ *
+ * 现在的规则更细：**留空且地址与对话模型一致**时才继承对话 Key（见各运行期的
+ * resolve*AssistantRuntime）。这个函数本身只负责「这把助手 Key 有没有自己存」，
+ * 不掺和继承 —— 继承判断要拿到地址，那是调用方的事。
+ */
 
-/** 知识处理助手使用独立凭据，不回落到聊天、记忆或语境助手 Key。 */
+export async function resolveCharacterMemoryAssistantApiKey(configValue: unknown): Promise<string> {
+  return readApiKeyField(configValue, API_KEY_FIELDS.memoryAssistant);
+}
+
+export function isMemoryAssistantApiKeySaved(configValue: unknown): boolean {
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.memoryAssistant);
+}
+
+export async function resolveCharacterContextAssistantApiKey(configValue: unknown): Promise<string> {
+  return readApiKeyField(configValue, API_KEY_FIELDS.contextAssistant);
+}
+
+export function isContextAssistantApiKeySaved(configValue: unknown): boolean {
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.contextAssistant);
+}
+
 export async function resolveCharacterKnowledgeAssistantApiKey(configValue: unknown): Promise<string> {
-  const config = asRecord(configValue);
-  const encrypted = config.knowledgeAssistantApiKeyEncrypted;
-  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
-  return (await decryptApiKey(encrypted)).trim();
+  return readApiKeyField(configValue, API_KEY_FIELDS.knowledgeAssistant);
 }
 
 export function isKnowledgeAssistantApiKeySaved(configValue: unknown): boolean {
-  const config = asRecord(configValue);
-  return typeof config.knowledgeAssistantApiKeyEncrypted === "string"
-    && config.knowledgeAssistantApiKeyEncrypted.startsWith("v1.");
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.knowledgeAssistant);
 }
 
-/** 社交关系评估助手使用独立凭据，不回落到任何其他模型或环境变量 Key。 */
 export async function resolveCharacterSocialRelationshipAssessmentAssistantApiKey(configValue: unknown): Promise<string> {
-  const config = asRecord(configValue);
-  const encrypted = config.socialRelationshipAssessmentAssistantApiKeyEncrypted;
-  if (typeof encrypted !== "string" || !encrypted.startsWith("v1.")) return "";
-  return (await decryptApiKey(encrypted)).trim();
+  return readApiKeyField(configValue, API_KEY_FIELDS.socialRelationshipAssessmentAssistant);
 }
 
 export function isSocialRelationshipAssessmentAssistantApiKeySaved(configValue: unknown): boolean {
-  const config = asRecord(configValue);
-  return typeof config.socialRelationshipAssessmentAssistantApiKeyEncrypted === "string"
-    && config.socialRelationshipAssessmentAssistantApiKeyEncrypted.startsWith("v1.");
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.socialRelationshipAssessmentAssistant);
 }

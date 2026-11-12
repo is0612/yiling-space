@@ -7,7 +7,7 @@ import type { Character } from "~/utils/mock-data";
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
 import { applyAsrProviderPreset, applyVoiceProviderPreset } from "~/utils/voice-provider-preset";
 
-type ModelSection = "chat" | "voice" | "vision" | "memoryAssistant" | "contextAssistant";
+type ModelSection = "chat" | "voice" | "vision";
 const props = defineProps<{ characterId: string; section?: ModelSection; embedded?: boolean }>();
 const emit = defineEmits<{ (event: "busy-change", busy: boolean): void }>();
 
@@ -103,35 +103,60 @@ const draftVisionModel = ref("");
 const draftVisionApiBaseUrl = ref("");
 const draftVisionApiKey = ref("");
 
-// ── 记忆助手模型：独立地址、模型和 API Key，不借用聊天凭据 ──
+// ── 四个后台助手：默认跟随对话模型 ──
+// 2026-11-12 从「四个独立页签 + 四套连接字段」改成「对话模型页里的四个分节」。
+// 每个助手仍然可以单独覆写服务商 / 地址 / Key / 模型名，留空就沿用上面的对话模型。
+const draftMemoryAssistantEnabled = ref(true);
 const draftMemoryAssistantModel = ref("");
 const draftMemoryAssistantTemperature = ref<number>(MODEL_PURPOSE_DEFAULTS.memory.temperature);
 const draftMemoryAssistantMaxInputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.memory.maxInputTokens);
 const draftMemoryAssistantMaxOutputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.memory.maxOutputTokens);
 const draftMemoryAssistantApiBaseUrl = ref("");
 const draftMemoryAssistantApiKey = ref("");
-const draftMemoryAssistantProviderKey = ref("custom");
-const fetchedMemoryAssistantModels = ref<string[]>([]);
-const fetchingMemoryAssistantModels = ref(false);
+
+const draftContextAssistantEnabled = ref(true);
 const draftContextAssistantModel = ref("");
 const draftContextAssistantTemperature = ref<number>(MODEL_PURPOSE_DEFAULTS.context.temperature);
 const draftContextAssistantMaxInputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.context.maxInputTokens);
 const draftContextAssistantMaxOutputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.context.maxOutputTokens);
 const draftContextAssistantApiBaseUrl = ref("");
 const draftContextAssistantApiKey = ref("");
-const draftContextAssistantProviderKey = ref("custom");
-const fetchedContextAssistantModels = ref<string[]>([]);
-const fetchingContextAssistantModels = ref(false);
+
+const draftKnowledgeAssistantEnabled = ref(true);
+const draftKnowledgeAssistantModel = ref("");
+const draftKnowledgeAssistantTemperature = ref<number>(MODEL_PURPOSE_DEFAULTS.knowledge.temperature);
+const draftKnowledgeAssistantMaxInputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.knowledge.maxInputTokens);
+const draftKnowledgeAssistantMaxOutputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.knowledge.maxOutputTokens);
+const draftKnowledgeAssistantApiBaseUrl = ref("");
+const draftKnowledgeAssistantApiKey = ref("");
+/** 「聊天里自动收集知识候选」：行为开关，不属于模型配置，但一直放在这张卡上最顺手。 */
+const draftKnowledgeAutoCollectEnabled = ref(false);
+
+const draftSocialAssistantEnabled = ref(true);
+const draftSocialAssistantModel = ref("");
+const draftSocialAssistantTemperature = ref<number>(MODEL_PURPOSE_DEFAULTS.social.temperature);
+const draftSocialAssistantMaxInputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.social.maxInputTokens);
+const draftSocialAssistantMaxOutputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.social.maxOutputTokens);
+const draftSocialAssistantApiBaseUrl = ref("");
+const draftSocialAssistantApiKey = ref("");
+
+/** 四个分节各自可能正在「获取模型 / 测试」，保存按钮要一起禁用。 */
+const busyPanelKeys = ref<Set<string>>(new Set());
+function setPanelBusy(key: string, busy: boolean) {
+  const next = new Set(busyPanelKeys.value);
+  if (busy) next.add(key);
+  else next.delete(key);
+  busyPanelKeys.value = next;
+}
+const assistantsBusy = computed(() => busyPanelKeys.value.size > 0);
+
 const testingVision = ref(false);
-const testingMemoryAssistant = ref(false);
-const testingContextAssistant = ref(false);
-const draftContextAssistantEnabled = ref(false);
 /** 图片页「获取模型」拉回来的清单；换地址就作废（两家清单不通用） */
 const fetchedVisionModels = ref<string[]>([]);
 const fetchingVisionModels = ref(false);
-/** 模型设置页签：对话 / 语音 / 图片 / 记忆助手。用 v-show 切换，切换不丢已填表单 */
+/** 模型设置页签：对话 / 语音 / 图片。用 v-show 切换，切换不丢已填表单 */
 const operationBusy = computed(() => saving.value || testing.value || fetchingModels.value || fetchingVoiceModels.value || testingVoice.value
-  || testingVision.value || testingMemoryAssistant.value || fetchingMemoryAssistantModels.value || testingContextAssistant.value || fetchingContextAssistantModels.value || fetchingVisionModels.value);
+  || testingVision.value || assistantsBusy.value || fetchingVisionModels.value);
 watch(operationBusy, busy => emit("busy-change", busy), { immediate: true });
 onBeforeUnmount(() => emit("busy-change", false));
 const activeTab = ref<ModelSection>(props.section ?? "chat");
@@ -213,6 +238,7 @@ function buildDraftSignature(clearSavedSecrets = false) { return JSON.stringify(
   draftMemoryAssistantMaxOutputTokens.value,
   draftMemoryAssistantApiBaseUrl.value.trim(),
   clearSavedSecrets ? "" : draftMemoryAssistantApiKey.value.trim(),
+  draftMemoryAssistantEnabled.value,
   draftContextAssistantEnabled.value,
   draftContextAssistantModel.value.trim(),
   draftContextAssistantTemperature.value,
@@ -220,6 +246,21 @@ function buildDraftSignature(clearSavedSecrets = false) { return JSON.stringify(
   draftContextAssistantMaxOutputTokens.value,
   draftContextAssistantApiBaseUrl.value.trim(),
   clearSavedSecrets ? "" : draftContextAssistantApiKey.value.trim(),
+  draftKnowledgeAssistantEnabled.value,
+  draftKnowledgeAutoCollectEnabled.value,
+  draftKnowledgeAssistantModel.value.trim(),
+  draftKnowledgeAssistantTemperature.value,
+  draftKnowledgeAssistantMaxInputTokens.value,
+  draftKnowledgeAssistantMaxOutputTokens.value,
+  draftKnowledgeAssistantApiBaseUrl.value.trim(),
+  clearSavedSecrets ? "" : draftKnowledgeAssistantApiKey.value.trim(),
+  draftSocialAssistantEnabled.value,
+  draftSocialAssistantModel.value.trim(),
+  draftSocialAssistantTemperature.value,
+  draftSocialAssistantMaxInputTokens.value,
+  draftSocialAssistantMaxOutputTokens.value,
+  draftSocialAssistantApiBaseUrl.value.trim(),
+  clearSavedSecrets ? "" : draftSocialAssistantApiKey.value.trim(),
 ]); }
 const draftSignature = computed(() => buildDraftSignature());
 const dirty = computed(() => savedSignature.value !== "" && draftSignature.value !== savedSignature.value);
@@ -303,31 +344,6 @@ const apiKeyPlaceholder = computed(() => {
 });
 
 const currentProvider = computed(() => providerByKey(draftProviderKey.value));
-const memoryAssistantEffectiveBaseUrl = computed(
-  () => draftMemoryAssistantApiBaseUrl.value.trim() || draftChatApiBaseUrl.value.trim(),
-);
-const memoryAssistantProviderPreset = computed(() => providerByKey(draftMemoryAssistantProviderKey.value));
-const memoryAssistantProviderLabel = computed(() => memoryAssistantProviderPreset.value?.name ?? "自定义");
-const memoryAssistantConsoleUrl = computed(() => memoryAssistantProviderPreset.value?.consoleUrl ?? "");
-const memoryAssistantKeyConfigured = computed(() => character.value?.memoryAssistantApiKeyConfigured === true);
-const memoryAssistantModelOptions = computed(() => buildModelOptions({
-  baseUrl: memoryAssistantEffectiveBaseUrl.value,
-  current: draftMemoryAssistantModel.value,
-  fetched: fetchedMemoryAssistantModels.value,
-}));
-
-const contextAssistantEffectiveBaseUrl = computed(
-  () => draftContextAssistantApiBaseUrl.value.trim() || draftChatApiBaseUrl.value.trim(),
-);
-const contextAssistantProviderPreset = computed(() => providerByKey(draftContextAssistantProviderKey.value));
-const contextAssistantProviderLabel = computed(() => contextAssistantProviderPreset.value?.name ?? "自定义");
-const contextAssistantConsoleUrl = computed(() => contextAssistantProviderPreset.value?.consoleUrl ?? "");
-const contextAssistantKeyConfigured = computed(() => character.value?.contextAssistantApiKeyConfigured === true);
-const contextAssistantModelOptions = computed(() => buildModelOptions({
-  baseUrl: contextAssistantEffectiveBaseUrl.value,
-  current: draftContextAssistantModel.value,
-  fetched: fetchedContextAssistantModels.value,
-}));
 
 // ── 语音模型的计算属性 ──
 const voiceKeyConfigured = computed(() => character.value?.voiceApiKeyConfigured === true);
@@ -407,56 +423,6 @@ watch(draftVisionApiBaseUrl, () => {
   fetchedVisionModels.value = [];
 });
 const visionProviderKey = computed(() => providerByBaseUrl(draftVisionApiBaseUrl.value)?.key ?? "custom");
-
-/** 记忆助手与对话模型同用服务商目录，但 API Key 和模型列表请求完全独立。 */
-function applyMemoryAssistantProvider(key: string) {
-  draftMemoryAssistantProviderKey.value = key;
-  const preset = providerByKey(key);
-  if (!preset?.baseUrl) return;
-  draftMemoryAssistantApiBaseUrl.value = preset.baseUrl;
-
-  const model = draftMemoryAssistantModel.value.trim();
-  const belongsToOther = MODEL_PROVIDERS.some(
-    (provider) => provider.key !== key && provider.models.includes(model),
-  );
-  const nextModel = preset.models[0] ?? "";
-  if (nextModel && (!model || belongsToOther)) {
-    draftMemoryAssistantModel.value = nextModel;
-  } else if (belongsToOther) {
-    modelMessage.info(`${preset.name}没有内置模型清单，点「获取模型」拉取后再选。`);
-  }
-  fetchedMemoryAssistantModels.value = [];
-}
-
-/** 改了记忆助手实际使用的地址（包括跟随对话地址时），旧模型列表就失效。 */
-watch(memoryAssistantEffectiveBaseUrl, (value) => {
-  fetchedMemoryAssistantModels.value = [];
-  draftMemoryAssistantProviderKey.value = providerByBaseUrl(value)?.key ?? "custom";
-});
-function applyContextAssistantProvider(key: string) {
-  draftContextAssistantProviderKey.value = key;
-  const preset = providerByKey(key);
-  if (!preset?.baseUrl) return;
-  draftContextAssistantApiBaseUrl.value = preset.baseUrl;
-
-  const model = draftContextAssistantModel.value.trim();
-  const belongsToOther = MODEL_PROVIDERS.some(
-    (provider) => provider.key !== key && provider.models.includes(model),
-  );
-  const nextModel = preset.models[0] ?? "";
-  if (nextModel && (!model || belongsToOther)) {
-    draftContextAssistantModel.value = nextModel;
-  } else if (belongsToOther) {
-    modelMessage.info(`${preset.name}没有内置模型清单，点「获取模型」拉取后再选。`);
-  }
-  fetchedContextAssistantModels.value = [];
-}
-
-/** 改了语境助手实际使用的地址（包括跟随对话地址时），旧模型列表就失效。 */
-watch(contextAssistantEffectiveBaseUrl, (value) => {
-  fetchedContextAssistantModels.value = [];
-  draftContextAssistantProviderKey.value = providerByBaseUrl(value)?.key ?? "custom";
-});
 
 /**
  * 语音的开放平台入口：和对话模型那块对齐 —— 用户卡住的点不是「填什么」，而是「去哪拿 Key」。
@@ -614,109 +580,8 @@ async function testVision() {
   }
 }
 
-/** 记忆助手「获取模型」只读取它自己的已保存 Key；不会复用对话模型凭据。 */
-async function fetchMemoryAssistantModels() {
-  if (fetchingMemoryAssistantModels.value || testingMemoryAssistant.value || testing.value
-    || testingVision.value || testingVoice.value || saving.value || !character.value) return;
-  fetchingMemoryAssistantModels.value = true;
-  try {
-    const saved = await save(true);
-    if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; models: string[]; message: string; unsupported?: boolean }>(
-      `/api/characters/${encodeURIComponent(id.value)}/chat/memory-assistant/models`,
-    );
-    if (!result.ok) {
-      if (result.unsupported) modelMessage.warning(result.message);
-      else modelMessage.error(result.message);
-      return;
-    }
-    fetchedMemoryAssistantModels.value = result.models;
-    if (!draftMemoryAssistantModel.value.trim() && result.models.length) {
-      draftMemoryAssistantModel.value = result.models[0] ?? "";
-    }
-    modelMessage.success(result.message);
-  } catch (error) {
-    modelMessage.error(readError(error, "获取记忆助手模型列表失败，请检查独立 API 地址和 Key。"));
-  } finally {
-    fetchingMemoryAssistantModels.value = false;
-  }
-}
-
-/** 记忆助手连接测试使用独立凭据；即使尚未开启助手，也可以先验证配置。 */
-async function testMemoryAssistant() {
-  if (testingMemoryAssistant.value || fetchingMemoryAssistantModels.value || testing.value
-    || testingVision.value || testingVoice.value || saving.value || !character.value) return;
-  testingMemoryAssistant.value = true;
-  try {
-    const saved = await save(true);
-    if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; message: string; elapsedMs?: number }>(
-      `/api/characters/${encodeURIComponent(id.value)}/chat/test-memory-assistant-connection`,
-      { method: "POST" },
-    );
-    if (result.ok) {
-      modelMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
-    } else {
-      modelMessage.error(result.message || "记忆助手 API 连通性测试失败。");
-    }
-  } catch (error) {
-    modelMessage.error(readError(error, "记忆助手连接测试失败，请检查独立 API 地址、Key 和模型名称。"));
-  } finally {
-    testingMemoryAssistant.value = false;
-  }
-}
-async function fetchContextAssistantModels() {
-  if (fetchingContextAssistantModels.value || testingContextAssistant.value || testing.value
-    || testingVision.value || testingVoice.value || saving.value || !character.value) return;
-  fetchingContextAssistantModels.value = true;
-  try {
-    const saved = await save(true);
-    if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; models: string[]; message: string; unsupported?: boolean }>(
-      `/api/characters/${encodeURIComponent(id.value)}/chat/context-assistant/models`,
-    );
-    if (!result.ok) {
-      if (result.unsupported) modelMessage.warning(result.message);
-      else modelMessage.error(result.message);
-      return;
-    }
-    fetchedContextAssistantModels.value = result.models;
-    if (!draftContextAssistantModel.value.trim() && result.models.length) {
-      draftContextAssistantModel.value = result.models[0] ?? "";
-    }
-    modelMessage.success(result.message);
-  } catch (error) {
-    modelMessage.error(readError(error, "获取语境助手模型列表失败，请检查独立 API 地址和 Key。"));
-  } finally {
-    fetchingContextAssistantModels.value = false;
-  }
-}
-
-/** 语境助手连接测试使用独立凭据；即使尚未开启助手，也可以先验证配置。 */
-async function testContextAssistant() {
-  if (testingContextAssistant.value || fetchingContextAssistantModels.value || testing.value
-    || testingVision.value || testingVoice.value || saving.value || !character.value) return;
-  testingContextAssistant.value = true;
-  try {
-    const saved = await save(true);
-    if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; message: string; elapsedMs?: number }>(
-      `/api/characters/${encodeURIComponent(id.value)}/chat/test-context-assistant-connection`,
-      { method: "POST" },
-    );
-    if (result.ok) {
-      modelMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
-    } else {
-      modelMessage.error(result.message || "语境助手 API 连通性测试失败。");
-    }
-  } catch (error) {
-    modelMessage.error(readError(error, "语境助手连接测试失败，请检查独立 API 地址、Key 和模型名称。"));
-  } finally {
-    testingContextAssistant.value = false;
-  }
-}
-
-const providerLabel = computed(() => currentProvider.value?.name ?? "自定义");/** 开放平台入口：跟着当前服务商走；自定义没有固定入口，链接就不出现 */
+const providerLabel = computed(() => currentProvider.value?.name ?? "自定义");
+/** 开放平台入口：跟着当前服务商走；自定义没有固定入口，链接就不出现 */
 const consoleUrl = computed(() => currentProvider.value?.consoleUrl ?? "");
 const modelOptions = computed(() => buildModelOptions({
   baseUrl: draftChatApiBaseUrl.value,
@@ -791,7 +656,8 @@ async function loadCharacter() {
     draftChatTemperature.value = data.chatTemperature ?? MODEL_PURPOSE_DEFAULTS.chat.temperature;
     draftChatMaxTokens.value = data.chatMaxTokens ?? MODEL_PURPOSE_DEFAULTS.chat.maxOutputTokens;
     draftChatApiBaseUrl.value = data.chatApiBaseUrl || "https://api.openai.com/v1";
-    draftChatApiKey.value = "";
+    // Key 现在明文回显：输入框默认暗文，至少能看出「配了没有、几位」。
+    draftChatApiKey.value = data.chatApiKey ?? "";
     draftDailyTokenLimit.value = data.dailyTokenLimit ?? 0;
     draftMemoryTokenBudget.value = data.memoryTokenBudget ?? 1800;
     draftSnapshotTokenBudget.value = data.snapshotTokenBudget ?? 2500;
@@ -801,7 +667,7 @@ async function loadCharacter() {
     draftProviderKey.value = providerByBaseUrl(draftChatApiBaseUrl.value)?.key ?? "custom";
     // 语音模型
     draftVoiceProvider.value = data.ttsProvider || "auto";
-    draftVoiceApiKey.value = "";
+    draftVoiceApiKey.value = data.voiceApiKey ?? "";
     draftVoiceApiBaseUrl.value = data.voiceApiBaseUrl ?? "";
     draftVoiceTtsModel.value = data.ttsModel ?? "";
     draftVoiceTtsVoice.value = data.ttsVoice ?? "";
@@ -811,33 +677,47 @@ async function loadCharacter() {
     draftVoiceInstructions.value = data.ttsInstructions ?? "";
     draftAsrProvider.value = data.asrProvider || "auto";
     draftAsrApiBaseUrl.value = data.asrApiBaseUrl ?? "";
-    draftAsrApiKey.value = "";
+    draftAsrApiKey.value = data.asrApiKey ?? "";
     syncAsrFromVoice.value = false;
     // 图片模型
     draftVisionModel.value = data.visionModel ?? "";
     draftVisionApiBaseUrl.value = data.visionApiBaseUrl ?? "";
-    draftVisionApiKey.value = "";
+    draftVisionApiKey.value = data.visionApiKey ?? "";
+
+    // 四个助手：空字符串 = 跟随对话模型，所以原样读进来即可，不做 fallback。
+    draftMemoryAssistantEnabled.value = data.memoryAssistantEnabled !== false;
     draftMemoryAssistantModel.value = data.memoryAssistantModel ?? "";
     draftMemoryAssistantTemperature.value = data.memoryAssistantTemperature ?? MODEL_PURPOSE_DEFAULTS.memory.temperature;
     draftMemoryAssistantMaxInputTokens.value = data.memoryAssistantMaxInputTokens ?? MODEL_PURPOSE_DEFAULTS.memory.maxInputTokens;
     draftMemoryAssistantMaxOutputTokens.value = data.memoryAssistantMaxOutputTokens ?? MODEL_PURPOSE_DEFAULTS.memory.maxOutputTokens;
     draftMemoryAssistantApiBaseUrl.value = data.memoryAssistantApiBaseUrl ?? "";
-    draftMemoryAssistantProviderKey.value = providerByBaseUrl(
-      draftMemoryAssistantApiBaseUrl.value || draftChatApiBaseUrl.value,
-    )?.key ?? "custom";
-    draftMemoryAssistantApiKey.value = "";
-    fetchedMemoryAssistantModels.value = [];
-    draftContextAssistantEnabled.value = data.contextAssistantEnabled === true;
+    draftMemoryAssistantApiKey.value = data.memoryAssistantApiKey ?? "";
+
+    draftContextAssistantEnabled.value = data.contextAssistantEnabled !== false;
     draftContextAssistantModel.value = data.contextAssistantModel ?? "";
     draftContextAssistantTemperature.value = data.contextAssistantTemperature ?? MODEL_PURPOSE_DEFAULTS.context.temperature;
     draftContextAssistantMaxInputTokens.value = data.contextAssistantMaxInputTokens ?? MODEL_PURPOSE_DEFAULTS.context.maxInputTokens;
     draftContextAssistantMaxOutputTokens.value = data.contextAssistantMaxOutputTokens ?? MODEL_PURPOSE_DEFAULTS.context.maxOutputTokens;
     draftContextAssistantApiBaseUrl.value = data.contextAssistantApiBaseUrl ?? "";
-    draftContextAssistantProviderKey.value = providerByBaseUrl(
-      draftContextAssistantApiBaseUrl.value || draftChatApiBaseUrl.value,
-    )?.key ?? "custom";
-    draftContextAssistantApiKey.value = "";
-    fetchedContextAssistantModels.value = [];
+    draftContextAssistantApiKey.value = data.contextAssistantApiKey ?? "";
+
+    draftKnowledgeAssistantEnabled.value = data.knowledgeAssistantEnabled !== false;
+    draftKnowledgeAutoCollectEnabled.value = data.knowledgeAutoCollectEnabled === true;
+    draftKnowledgeAssistantModel.value = data.knowledgeAssistantModel ?? "";
+    draftKnowledgeAssistantTemperature.value = data.knowledgeAssistantTemperature ?? MODEL_PURPOSE_DEFAULTS.knowledge.temperature;
+    draftKnowledgeAssistantMaxInputTokens.value = data.knowledgeAssistantMaxInputTokens ?? MODEL_PURPOSE_DEFAULTS.knowledge.maxInputTokens;
+    draftKnowledgeAssistantMaxOutputTokens.value = data.knowledgeAssistantMaxOutputTokens ?? MODEL_PURPOSE_DEFAULTS.knowledge.maxOutputTokens;
+    draftKnowledgeAssistantApiBaseUrl.value = data.knowledgeAssistantApiBaseUrl ?? "";
+    draftKnowledgeAssistantApiKey.value = data.knowledgeAssistantApiKey ?? "";
+
+    draftSocialAssistantEnabled.value = data.socialRelationshipAssessmentAssistantEnabled !== false;
+    draftSocialAssistantModel.value = data.socialRelationshipAssessmentAssistantModel ?? "";
+    draftSocialAssistantTemperature.value = data.socialRelationshipAssessmentAssistantTemperature ?? MODEL_PURPOSE_DEFAULTS.social.temperature;
+    draftSocialAssistantMaxInputTokens.value = data.socialRelationshipAssessmentAssistantMaxInputTokens ?? MODEL_PURPOSE_DEFAULTS.social.maxInputTokens;
+    draftSocialAssistantMaxOutputTokens.value = data.socialRelationshipAssessmentAssistantMaxOutputTokens ?? MODEL_PURPOSE_DEFAULTS.social.maxOutputTokens;
+    draftSocialAssistantApiBaseUrl.value = data.socialRelationshipAssessmentAssistantApiBaseUrl ?? "";
+    draftSocialAssistantApiKey.value = data.socialRelationshipAssessmentAssistantApiKey ?? "";
+
     fetchedModels.value = [];
     savedSignature.value = draftSignature.value;
     lastSavedAt.value = data.updatedAt ? new Date(data.updatedAt) : null;
@@ -850,6 +730,23 @@ async function loadCharacter() {
   }
 }
 
+/**
+ * 保存成功后把服务端那份明文 Key 回填到输入框。
+ *
+ * 以前 Key 不回传，保存后要把输入框清空（否则「已保存」和输入框里的内容会让人以为是两把）。
+ * 现在明文回显，清空反而制造偏差：用户看不到自己刚配的那把，还以为没存上。
+ */
+function syncKeysFromCharacter(data: Character) {
+  draftChatApiKey.value = data.chatApiKey ?? "";
+  draftVoiceApiKey.value = data.voiceApiKey ?? "";
+  draftAsrApiKey.value = data.asrApiKey ?? "";
+  draftVisionApiKey.value = data.visionApiKey ?? "";
+  draftMemoryAssistantApiKey.value = data.memoryAssistantApiKey ?? "";
+  draftContextAssistantApiKey.value = data.contextAssistantApiKey ?? "";
+  draftKnowledgeAssistantApiKey.value = data.knowledgeAssistantApiKey ?? "";
+  draftSocialAssistantApiKey.value = data.socialRelationshipAssessmentAssistantApiKey ?? "";
+}
+
 /** silent：测试连接和拉取模型都要先保存，那两步不该再弹一次「已保存」 */
 async function save(silent = false): Promise<boolean> {
   if (saving.value || !character.value) return false;
@@ -857,9 +754,6 @@ async function save(silent = false): Promise<boolean> {
     modelMessage.warning("模型名称不能超过 120 个字符。");
     return false;
   }
-  const submittedSignature = buildDraftSignature(true);
-  const submittedKeys = [draftChatApiKey, draftVoiceApiKey, draftAsrApiKey, draftVisionApiKey, draftMemoryAssistantApiKey, draftContextAssistantApiKey]
-    .map(field => ({ field, value: field.value }));
   saving.value = true;
   try {
     const updated = await modelRequest<Character>(`/api/characters/${encodeURIComponent(id.value)}`, {
@@ -896,30 +790,46 @@ async function save(silent = false): Promise<boolean> {
         visionModel: draftVisionModel.value.trim(),
         visionApiBaseUrl: draftVisionApiBaseUrl.value.trim(),
         ...(draftVisionApiKey.value.trim() ? { visionApiKey: draftVisionApiKey.value.trim() } : {}),
-        // 记忆助手模型：独立凭据，Key 留空不改，明确勾选才删除。
+        // 四个助手：空字符串就是「跟随对话模型」，所以原样发过去，不做 fallback。
+        memoryAssistantEnabled: draftMemoryAssistantEnabled.value,
         memoryAssistantModel: draftMemoryAssistantModel.value.trim(),
         memoryAssistantTemperature: draftMemoryAssistantTemperature.value,
         memoryAssistantMaxInputTokens: draftMemoryAssistantMaxInputTokens.value,
         memoryAssistantMaxOutputTokens: draftMemoryAssistantMaxOutputTokens.value,
         memoryAssistantApiBaseUrl: draftMemoryAssistantApiBaseUrl.value.trim(),
-        ...(draftMemoryAssistantApiKey.value.trim()
-          ? { memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim() }
-          : {}),
+        memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim(),
+
         contextAssistantEnabled: draftContextAssistantEnabled.value,
         contextAssistantModel: draftContextAssistantModel.value.trim(),
         contextAssistantTemperature: draftContextAssistantTemperature.value,
         contextAssistantMaxInputTokens: draftContextAssistantMaxInputTokens.value,
         contextAssistantMaxOutputTokens: draftContextAssistantMaxOutputTokens.value,
         contextAssistantApiBaseUrl: draftContextAssistantApiBaseUrl.value.trim(),
-        ...(draftContextAssistantApiKey.value.trim()
-          ? { contextAssistantApiKey: draftContextAssistantApiKey.value.trim() }
-          : {}),
+        contextAssistantApiKey: draftContextAssistantApiKey.value.trim(),
+
+        knowledgeAssistantEnabled: draftKnowledgeAssistantEnabled.value,
+        knowledgeAutoCollectEnabled: draftKnowledgeAutoCollectEnabled.value,
+        knowledgeAssistantModel: draftKnowledgeAssistantModel.value.trim(),
+        knowledgeAssistantTemperature: draftKnowledgeAssistantTemperature.value,
+        knowledgeAssistantMaxInputTokens: draftKnowledgeAssistantMaxInputTokens.value,
+        knowledgeAssistantMaxOutputTokens: draftKnowledgeAssistantMaxOutputTokens.value,
+        knowledgeAssistantApiBaseUrl: draftKnowledgeAssistantApiBaseUrl.value.trim(),
+        knowledgeAssistantApiKey: draftKnowledgeAssistantApiKey.value.trim(),
+
+        socialRelationshipAssessmentAssistantEnabled: draftSocialAssistantEnabled.value,
+        socialRelationshipAssessmentAssistantModel: draftSocialAssistantModel.value.trim(),
+        socialRelationshipAssessmentAssistantTemperature: draftSocialAssistantTemperature.value,
+        socialRelationshipAssessmentAssistantMaxInputTokens: draftSocialAssistantMaxInputTokens.value,
+        socialRelationshipAssessmentAssistantMaxOutputTokens: draftSocialAssistantMaxOutputTokens.value,
+        socialRelationshipAssessmentAssistantApiBaseUrl: draftSocialAssistantApiBaseUrl.value.trim(),
+        socialRelationshipAssessmentAssistantApiKey: draftSocialAssistantApiKey.value.trim(),
       },
     });
     character.value = updated;
-    // Only clear the exact secrets submitted; edits made while PATCH was in flight remain drafts.
-    for (const { field, value } of submittedKeys) if (field.value === value) field.value = "";
-    savedSignature.value = submittedSignature;
+    // 保存成功后把服务端那份明文 Key 回填：否则输入框会停在用户刚敲的内容上，
+    // 和「库里到底是什么」产生偏差。
+    syncKeysFromCharacter(updated);
+    savedSignature.value = draftSignature.value;
     lastSavedAt.value = new Date();
     if (!silent) modelMessage.success("模型设置已保存。");
     await loadUsage();
@@ -932,7 +842,10 @@ async function save(silent = false): Promise<boolean> {
   }
 }
 
-/** 服务端只认已保存的配置（Key 加密存放），所以步调统一为「先存再测 / 先存再拉」 */
+/** 传给四个助手分节：拉模型 / 测试前先落库，那两个接口读的是已保存的配置。 */
+const requestSave = () => save(true);
+
+/** 服务端只认已保存的配置，所以步调统一为「先存再测 / 先存再拉」 */
 async function testConnection() {
   if (testing.value || saving.value || fetchingModels.value || !character.value) return;
   testing.value = true;
@@ -1061,7 +974,7 @@ watch(id, () => void loadCharacter());
       class="ms-grid"
     >
       <div class="ms-main">
-        <!-- 四个页签：对话、语音、图片、记忆助手。 -->
+        <!-- 三个页签：对话、语音、图片。四个后台助手收在对话模型页里。 -->
         <div
           v-if="!embedded"
           class="model-tabs"
@@ -1099,27 +1012,6 @@ watch(id, () => void loadCharacter());
             @click="activeTab = 'vision'"
           >
             图片模型
-          </button>
-          <button
-            id="model-tab-memory-assistant"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab === 'memoryAssistant'"
-            class="model-tab"
-            :class="{ 'is-on': activeTab === 'memoryAssistant' }"
-            @click="activeTab = 'memoryAssistant'"
-          >
-            记忆助手
-          </button>          <button
-            id="model-tab-context-assistant"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab === 'contextAssistant'"
-            class="model-tab"
-            :class="{ 'is-on': activeTab === 'contextAssistant' }"
-            @click="activeTab = 'contextAssistant'"
-          >
-            语境助手
           </button>
         </div>
 
@@ -1235,7 +1127,7 @@ watch(id, () => void loadCharacter());
             <div class="voice-test-bar">
               <el-button
                 :loading="testing"
-                :disabled="saving || testingMemoryAssistant || fetchingMemoryAssistantModels || testingContextAssistant || fetchingContextAssistantModels"
+                :disabled="saving || assistantsBusy"
                 @click="testConnection"
               >
                 <el-icon><Promotion /></el-icon>{{ testing ? "测试中…" : "测试" }}
@@ -1445,6 +1337,102 @@ watch(id, () => void loadCharacter());
               </div>
             </div>
           </section>
+
+          <!--
+            四个后台助手。
+            默认全部跟随上面的对话模型 —— 想换一家再展开填，留空就沿用。
+          -->
+          <AssistantOverridePanel
+            v-model:enabled="draftMemoryAssistantEnabled"
+            v-model:model="draftMemoryAssistantModel"
+            v-model:api-base-url="draftMemoryAssistantApiBaseUrl"
+            v-model:api-key="draftMemoryAssistantApiKey"
+            v-model:temperature="draftMemoryAssistantTemperature"
+            v-model:max-input-tokens="draftMemoryAssistantMaxInputTokens"
+            v-model:max-output-tokens="draftMemoryAssistantMaxOutputTokens"
+            title="记忆助手"
+            hint="从历史候选里挑出可靠来源，给需要回忆的问题提供依据。只有判断上下文不够时才会多调一次模型。"
+            :chat-model="draftChatModel"
+            :chat-api-base-url="draftChatApiBaseUrl"
+            :chat-api-key-configured="character?.chatApiKeyConfigured === true"
+            :models-url="`/api/characters/${encodeURIComponent(id)}/chat/memory-assistant/models`"
+            :test-url="`/api/characters/${encodeURIComponent(id)}/chat/test-memory-assistant-connection`"
+            :request-save="requestSave"
+            :disabled="saving"
+            @busy-change="setPanelBusy('memory', $event)"
+          />
+
+          <AssistantOverridePanel
+            v-model:enabled="draftContextAssistantEnabled"
+            v-model:model="draftContextAssistantModel"
+            v-model:api-base-url="draftContextAssistantApiBaseUrl"
+            v-model:api-key="draftContextAssistantApiKey"
+            v-model:temperature="draftContextAssistantTemperature"
+            v-model:max-input-tokens="draftContextAssistantMaxInputTokens"
+            v-model:max-output-tokens="draftContextAssistantMaxOutputTokens"
+            title="语境助手"
+            hint="读懂群聊里谁在对谁说话，判断要不要补记忆或知识。只做判断，不代替角色发言。"
+            :chat-model="draftChatModel"
+            :chat-api-base-url="draftChatApiBaseUrl"
+            :chat-api-key-configured="character?.chatApiKeyConfigured === true"
+            :models-url="`/api/characters/${encodeURIComponent(id)}/chat/context-assistant/models`"
+            :test-url="`/api/characters/${encodeURIComponent(id)}/chat/test-context-assistant-connection`"
+            :request-save="requestSave"
+            :disabled="saving"
+            @busy-change="setPanelBusy('context', $event)"
+          />
+
+          <AssistantOverridePanel
+            v-model:enabled="draftKnowledgeAssistantEnabled"
+            v-model:model="draftKnowledgeAssistantModel"
+            v-model:api-base-url="draftKnowledgeAssistantApiBaseUrl"
+            v-model:api-key="draftKnowledgeAssistantApiKey"
+            v-model:temperature="draftKnowledgeAssistantTemperature"
+            v-model:max-input-tokens="draftKnowledgeAssistantMaxInputTokens"
+            v-model:max-output-tokens="draftKnowledgeAssistantMaxOutputTokens"
+            title="知识处理助手"
+            hint="整理知识候选、辨别重复与冲突。它给出的建议仍要你确认后才会写进知识库。"
+            :chat-model="draftChatModel"
+            :chat-api-base-url="draftChatApiBaseUrl"
+            :chat-api-key-configured="character?.chatApiKeyConfigured === true"
+            :models-url="`/api/characters/${encodeURIComponent(id)}/growth/knowledge/models`"
+            :request-save="requestSave"
+            :disabled="saving"
+            @busy-change="setPanelBusy('knowledge', $event)"
+          >
+            <div class="field">
+              <div class="field-head">
+                <span class="field-label">聊天里自动收集知识候选</span>
+              </div>
+              <el-switch
+                v-model="draftKnowledgeAutoCollectEnabled"
+                aria-label="聊天里自动收集知识候选"
+              />
+              <p class="field-help">
+                打开后，群里出现可复用的概念或纠正时会先记成候选，不会直接入库。
+              </p>
+            </div>
+          </AssistantOverridePanel>
+
+          <AssistantOverridePanel
+            v-model:enabled="draftSocialAssistantEnabled"
+            v-model:model="draftSocialAssistantModel"
+            v-model:api-base-url="draftSocialAssistantApiBaseUrl"
+            v-model:api-key="draftSocialAssistantApiKey"
+            v-model:temperature="draftSocialAssistantTemperature"
+            v-model:max-input-tokens="draftSocialAssistantMaxInputTokens"
+            v-model:max-output-tokens="draftSocialAssistantMaxOutputTokens"
+            title="关系评估助手"
+            hint="根据共同经历提出关系变化建议。它只产出建议，不会自动改动任何关系状态。"
+            :chat-model="draftChatModel"
+            :chat-api-base-url="draftChatApiBaseUrl"
+            :chat-api-key-configured="character?.chatApiKeyConfigured === true"
+            :models-url="`/api/characters/${encodeURIComponent(id)}/growth/social/assessment-models`"
+            :test-url="`/api/characters/${encodeURIComponent(id)}/growth/social/assessment-test`"
+            :request-save="requestSave"
+            :disabled="saving"
+            @busy-change="setPanelBusy('social', $event)"
+          />
         </div>
 
         <div
@@ -1862,463 +1850,6 @@ watch(id, () => void loadCharacter());
           </section>
         </div>
 
-        <div
-          v-show="activeTab === 'memoryAssistant'"
-          class="model-pane"
-        >
-          <section class="brick">
-            <div class="brick-head">
-              <div class="brick-head-txt">
-                <div class="brick-heading">
-                  <h2 class="brick-title">
-                    记忆助手
-                  </h2>
-                </div>
-              </div>
-            </div>
-
-            <div class="fields">
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">服务商</span>
-                </div>
-                <el-select
-                  v-model="draftMemoryAssistantProviderKey"
-                  class="field-ctl"
-                  aria-label="记忆助手服务商"
-                  placeholder="选择服务商，自动填好 API 地址"
-                  @change="applyMemoryAssistantProvider"
-                >
-                  <el-option
-                    v-for="provider in MODEL_PROVIDERS"
-                    :key="provider.key"
-                    :label="provider.name"
-                    :value="provider.key"
-                  />
-                </el-select>
-              </div>
-
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">API 地址</span>
-                  <a
-                    v-if="memoryAssistantConsoleUrl"
-                    class="field-link"
-                    :href="memoryAssistantConsoleUrl"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    去 {{ memoryAssistantProviderLabel }} 开放平台取 Key
-                    <el-icon><TopRight /></el-icon>
-                  </a>
-                </div>
-                <el-input
-                  v-model="draftMemoryAssistantApiBaseUrl"
-                  maxlength="500"
-                  aria-label="记忆助手 API 地址"
-                  :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型地址）'"
-                />
-              </div>
-
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">API Key</span>
-                  <span
-                    class="pill"
-                    :class="memoryAssistantKeyConfigured ? 'pill-green' : 'pill-rose'"
-                  >{{ memoryAssistantKeyConfigured ? "已保存" : "未填写" }}</span>
-                </div>
-                <ApiKeyInput
-                  v-model="draftMemoryAssistantApiKey"
-                  aria-label="记忆助手 API Key"
-                  :placeholder="memoryAssistantKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : '填写记忆助手专用 API Key'"
-                />
-              </div>
-
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">模型名称</span>
-                </div>
-                <div class="model-row">
-                  <el-select
-                    v-model="draftMemoryAssistantModel"
-                    class="model-select"
-                    filterable
-                    allow-create
-                    default-first-option
-                    aria-label="记忆助手模型名称"
-                    placeholder="选择，或直接输入模型名"
-                  >
-                    <el-option
-                      v-for="model in memoryAssistantModelOptions"
-                      :key="model"
-                      :label="model"
-                      :value="model"
-                    />
-                  </el-select>
-                  <el-button
-                    :loading="fetchingMemoryAssistantModels"
-                    :disabled="saving || testing || testingMemoryAssistant || testingVision || testingVoice"
-                    @click="fetchMemoryAssistantModels"
-                  >
-                    <el-icon><Refresh /></el-icon>{{ fetchingMemoryAssistantModels ? "获取中…" : "获取模型" }}
-                  </el-button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="brick">
-            <div class="brick-head">
-              <div class="brick-head-txt">
-                <div class="brick-heading">
-                  <h2 class="brick-title">
-                    检索参数
-                  </h2>
-                  <el-button
-                    text
-                    :disabled="operationBusy"
-                    @click="resetRecommendedMemoryAssistantSettings"
-                  >
-                    恢复筛选推荐
-                  </el-button>
-                </div>
-                <p class="brick-desc">
-                  只筛选有依据的历史来源，使用低温度保持稳定，不生成新的经历。输入预算为估算值，实际 Token 以供应商统计为准。
-                </p>
-              </div>
-            </div>
-            <div class="knob-group">
-              <div class="knob">
-                <div class="knob-label">
-                  温度
-                </div>
-                <p class="field-help">
-                  默认 0.1。较低温度让来源筛选更稳定，范围 0–2。
-                </p>
-                <div class="knob-ctl">
-                  <el-slider
-                    v-model="draftMemoryAssistantTemperature"
-                    class="knob-slider"
-                    :min="0"
-                    :max="2"
-                    :step="0.1"
-                    aria-label="记忆助手温度"
-                  />
-                  <el-input-number
-                    v-model="draftMemoryAssistantTemperature"
-                    class="knob-number narrow"
-                    :min="0"
-                    :max="2"
-                    :step="0.1"
-                    :precision="1"
-                    :controls="false"
-                    aria-label="记忆助手温度数值"
-                  />
-                </div>
-              </div>
-              <div class="knob">
-                <div class="knob-label">
-                  最大输入 Token
-                </div>
-                <p class="field-help">
-                  默认 12288。系统提示词和问题会先预留预算，剩余部分用于候选记忆资料；这是估算上限。范围 4096–32768。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftMemoryAssistantMaxInputTokens"
-                    class="knob-number"
-                    :min="4096"
-                    :max="32768"
-                    :step="1024"
-                    aria-label="记忆助手最大输入 Token"
-                  />
-                </div>
-              </div>
-              <div class="knob">
-                <div class="knob-label">
-                  最大输出 Token
-                </div>
-                <p class="field-help">
-                  默认 2048。首次请求使用约 80%，若响应被截断再使用完整上限；重试不会超过这里设置的值。范围 512–8192。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftMemoryAssistantMaxOutputTokens"
-                    class="knob-number"
-                    :min="512"
-                    :max="8192"
-                    :step="256"
-                    aria-label="记忆助手最大输出 Token"
-                  />
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="brick">
-            <div class="brick-head">
-              <div class="brick-head-txt">
-                <div class="brick-heading">
-                  <h2 class="brick-title">
-                    启用说明
-                  </h2>
-                </div>
-                <p class="brick-desc">
-                  模型配置保存后，还需要到「角色管理」为这个角色打开记忆助手。未配置模型名称或独立 Key 时，开关不可用。
-                  记忆助手只在大肥鱼判断现有上下文不足、需要回看历史细节时才额外调用；普通聊天不会多发一次模型请求。关闭它不会影响大肥鱼现有的记忆检索和正常聊天。
-                </p>
-              </div>
-            </div>
-            <div class="metric-row">
-              <span>模型配置</span>
-              <span class="metric-value">
-                {{ draftMemoryAssistantModel.trim() && character?.memoryAssistantApiKeyConfigured ? "已具备启用条件" : "尚未完整配置" }}
-              </span>
-            </div>
-          </section>
-
-          <section class="brick">
-            <div class="vision-test-bar">
-              <el-button
-                :loading="testingMemoryAssistant"
-                :disabled="saving || testing || testingVision || testingVoice || fetchingMemoryAssistantModels"
-                @click="testMemoryAssistant"
-              >
-                <el-icon><Promotion /></el-icon>{{ testingMemoryAssistant ? "测试中…" : "测试" }}
-              </el-button>
-            </div>
-          </section>
-        </div>
-        <div
-          v-show="activeTab === 'contextAssistant'"
-          class="model-pane"
-        >
-          <section class="brick">
-            <div class="brick-head">
-              <div class="brick-head-txt">
-                <div class="brick-heading">
-                  <h2 class="brick-title">
-                    语境助手
-                  </h2>
-                </div>
-              </div>
-            </div>
-
-            <div class="fields">
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">服务商</span>
-                </div>
-                <el-select
-                  v-model="draftContextAssistantProviderKey"
-                  class="field-ctl"
-                  aria-label="语境助手服务商"
-                  placeholder="选择服务商，自动填好 API 地址"
-                  @change="applyContextAssistantProvider"
-                >
-                  <el-option
-                    v-for="provider in MODEL_PROVIDERS"
-                    :key="provider.key"
-                    :label="provider.name"
-                    :value="provider.key"
-                  />
-                </el-select>
-              </div>
-
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">API 地址</span>
-                  <a
-                    v-if="contextAssistantConsoleUrl"
-                    class="field-link"
-                    :href="contextAssistantConsoleUrl"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    去 {{ contextAssistantProviderLabel }} 开放平台取 Key
-                    <el-icon><TopRight /></el-icon>
-                  </a>
-                </div>
-                <el-input
-                  v-model="draftContextAssistantApiBaseUrl"
-                  maxlength="500"
-                  aria-label="语境助手 API 地址"
-                  :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型地址）'"
-                />
-              </div>
-
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">API Key</span>
-                  <span
-                    class="pill"
-                    :class="contextAssistantKeyConfigured ? 'pill-green' : 'pill-rose'"
-                  >{{ contextAssistantKeyConfigured ? "已保存" : "未填写" }}</span>
-                </div>
-                <ApiKeyInput
-                  v-model="draftContextAssistantApiKey"
-                  aria-label="语境助手 API Key"
-                  :placeholder="contextAssistantKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : '填写语境助手专用 API Key'"
-                />
-              </div>
-
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">模型名称</span>
-                </div>
-                <div class="model-row">
-                  <el-select
-                    v-model="draftContextAssistantModel"
-                    class="model-select"
-                    filterable
-                    allow-create
-                    default-first-option
-                    aria-label="语境助手模型名称"
-                    placeholder="选择，或直接输入模型名"
-                  >
-                    <el-option
-                      v-for="model in contextAssistantModelOptions"
-                      :key="model"
-                      :label="model"
-                      :value="model"
-                    />
-                  </el-select>
-                  <el-button
-                    :loading="fetchingContextAssistantModels"
-                    :disabled="saving || testing || testingContextAssistant || testingVision || testingVoice"
-                    @click="fetchContextAssistantModels"
-                  >
-                    <el-icon><Refresh /></el-icon>{{ fetchingContextAssistantModels ? "获取中…" : "获取模型" }}
-                  </el-button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="brick">
-            <div class="brick-head">
-              <div class="brick-head-txt">
-                <div class="brick-heading">
-                  <h2 class="brick-title">
-                    语境整理参数
-                  </h2>
-                  <el-button
-                    text
-                    :disabled="operationBusy"
-                    @click="resetRecommendedContextAssistantSettings"
-                  >
-                    恢复分析推荐
-                  </el-button>
-                </div>
-                <p class="brick-desc">
-                  理解谁在对谁说话、是否需要检索，低温度保持分析稳定；不代替角色写最终回复。输入预算为估算值，实际 Token 以供应商统计为准。
-                </p>
-              </div>
-            </div>
-            <div class="knob-group">
-              <div class="knob">
-                <div class="knob-label">
-                  温度
-                </div>
-                <p class="field-help">
-                  默认 0.1。较低温度让语境整理更稳定，范围 0–2。
-                </p>
-                <div class="knob-ctl">
-                  <el-slider
-                    v-model="draftContextAssistantTemperature"
-                    class="knob-slider"
-                    :min="0"
-                    :max="2"
-                    :step="0.1"
-                    aria-label="语境助手温度"
-                  />
-                  <el-input-number
-                    v-model="draftContextAssistantTemperature"
-                    class="knob-number narrow"
-                    :min="0"
-                    :max="2"
-                    :step="0.1"
-                    :precision="1"
-                    :controls="false"
-                    aria-label="语境助手温度数值"
-                  />
-                </div>
-              </div>
-              <div class="knob">
-                <div class="knob-label">
-                  最大输入 Token
-                </div>
-                <p class="field-help">
-                  默认 16384。系统提示词和当前对话材料共用此估算输入预算。范围 4096–32768。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftContextAssistantMaxInputTokens"
-                    class="knob-number"
-                    :min="4096"
-                    :max="32768"
-                    :step="1024"
-                    aria-label="语境助手最大输入 Token"
-                  />
-                </div>
-              </div>
-              <div class="knob">
-                <div class="knob-label">
-                  正文输出 Token
-                </div>
-                <p class="field-help">
-                  默认正文预算 2048。兼容的思考模型由程序增加思考余量，但服务商仍可能截断；这里不是供应商最终计费上限。范围 512–8192。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftContextAssistantMaxOutputTokens"
-                    class="knob-number"
-                    :min="512"
-                    :max="8192"
-                    :step="256"
-                    aria-label="语境助手正文输出 Token"
-                  />
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="brick">
-            <div class="brick-head">
-              <div class="brick-head-txt">
-                <div class="brick-heading">
-                  <h2 class="brick-title">
-                    启用说明
-                  </h2>
-                </div>
-                <p class="brick-desc">
-                  模型配置保存后，还需要到「角色管理」为这个角色打开记忆助手。未配置模型名称或独立 Key 时，开关不可用。
-                  记忆助手只在大肥鱼判断现有上下文不足、需要回看历史细节时才额外调用；普通聊天不会多发一次模型请求。关闭它不会影响大肥鱼现有的记忆检索和正常聊天。
-                </p>
-              </div>
-            </div>
-            <div class="metric-row">
-              <span>模型配置</span>
-              <span class="metric-value">
-                {{ draftMemoryAssistantModel.trim() && character?.memoryAssistantApiKeyConfigured ? "已具备启用条件" : "尚未完整配置" }}
-              </span>
-            </div>
-          </section>
-
-          <section class="brick">
-            <div class="vision-test-bar">
-              <el-button
-                :loading="testingContextAssistant"
-                :disabled="saving || testing || testingVision || testingVoice || fetchingContextAssistantModels"
-                @click="testContextAssistant"
-              >
-                <el-icon><Promotion /></el-icon>{{ testingContextAssistant ? "测试中…" : "测试" }}
-              </el-button>
-            </div>
-          </section>
-        </div>
-
         <!-- 吸底操作条：只留保存。测试按钮跟在各自的模型下面，不再从这里统一触发 -->
         <div class="act-bar">
           <span
@@ -2328,7 +1859,7 @@ watch(id, () => void loadCharacter());
           <el-button
             type="primary"
             :loading="saving"
-            :disabled="testing || testingMemoryAssistant || fetchingMemoryAssistantModels || testingContextAssistant || fetchingContextAssistantModels"
+            :disabled="testing || assistantsBusy || fetchingModels"
             @click="save(false)"
           >
             {{ saving ? "保存中…" : "保存设置" }}

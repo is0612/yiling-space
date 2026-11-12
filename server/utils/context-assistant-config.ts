@@ -33,12 +33,17 @@ export function readContextAssistantSettingsPatch(body: Record<string, unknown>)
   };
 }
 
+/**
+ * 语境助手默认开启，且模型名、地址、Key 都可以留空沿用对话模型
+ * （见 `assistant-inheritance`）。所以这里**不再**要求「必须有独立模型名和独立 Key」——
+ * 只校验真填了的地址是不是合法地址，以及空地址时回落到的那一个也合法。
+ */
 export function validateContextAssistantEnabledConfig(config: Record<string, unknown>): void {
-  if (config.contextAssistantEnabled !== true) return;
-  if (typeof config.contextAssistantModel !== "string" || !config.contextAssistantModel.trim()) throw new Error("启用语境助手前，请先填写语境助手模型名称。");
-  if (typeof config.contextAssistantApiKeyEncrypted !== "string" || !config.contextAssistantApiKeyEncrypted.startsWith("v1.")) throw new Error("启用语境助手前，请先保存语境助手专用 API Key。");
+  if (config.contextAssistantEnabled === false) return;
   const base = typeof config.contextAssistantApiBaseUrl === "string" && config.contextAssistantApiBaseUrl.trim()
-    ? config.contextAssistantApiBaseUrl : typeof config.chatApiBaseUrl === "string" && config.chatApiBaseUrl.trim()
-      ? config.chatApiBaseUrl : process.env.LLM_BASE_URL?.trim() || "https://api.openai.com/v1";
+    ? config.contextAssistantApiBaseUrl
+    : typeof config.chatApiBaseUrl === "string" && config.chatApiBaseUrl.trim()
+      ? config.chatApiBaseUrl
+      : process.env.LLM_BASE_URL?.trim() || "https://api.openai.com/v1";
   validateChatApiBaseUrl(base);
 }

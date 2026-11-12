@@ -6,7 +6,8 @@ import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemo
 import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
-import { isAsrApiKeySaved, isContextAssistantApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isSocialRelationshipAssessmentAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved } from "./credential-encryption";
+import { API_KEY_FIELDS, isAsrApiKeySaved, isContextAssistantApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isSocialRelationshipAssessmentAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved, readApiKeyFieldPlain } from "./credential-encryption";
+import { ASSISTANT_FIELDS, summarizeAssistantConnection } from "./assistant-inheritance";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 
 function positiveNumber(value: unknown): number {
@@ -44,15 +45,18 @@ export type CharacterDto = {
   /** 深度思考开关；默认开（跟随 DeepSeek 平台默认）。只在 DeepSeek 系模型上真正生效。 */
   chatThinking: boolean;
   chatApiBaseUrl: string;
+  /** 明文 Key。2026-11-12 起不再加密存储，页面用密码框回显；空 = 没配。 */
+  chatApiKey: string;
   chatApiKeyConfigured: boolean;
   chatApiKeySource: "character" | "environment" | "missing";
-  /** 记忆助手专用模型配置；Key 仅回传是否已保存。 */
+  /** 记忆助手专用模型配置。留空 = 跟随对话模型。 */
   memoryAssistantEnabled: boolean;
   memoryAssistantModel: string;
   memoryAssistantTemperature: number;
   memoryAssistantMaxInputTokens: number;
   memoryAssistantMaxOutputTokens: number;
   memoryAssistantApiBaseUrl: string;
+  memoryAssistantApiKey: string;
   memoryAssistantApiKeyConfigured: boolean;
   memoryAssistantConfigured: boolean;
   contextAssistantEnabled: boolean;
@@ -61,9 +65,10 @@ export type CharacterDto = {
   contextAssistantMaxInputTokens: number;
   contextAssistantMaxOutputTokens: number;
   contextAssistantApiBaseUrl: string;
+  contextAssistantApiKey: string;
   contextAssistantApiKeyConfigured: boolean;
   contextAssistantConfigured: boolean;
-  /** 知识处理助手配置；API Key 只回显是否已保存。 */
+  /** 知识处理助手配置；留空即跟随对话模型。 */
   knowledgeAutoCollectEnabled: boolean;
   knowledgeAssistantEnabled: boolean;
   knowledgeAssistantModel: string;
@@ -71,15 +76,17 @@ export type CharacterDto = {
   knowledgeAssistantMaxInputTokens: number;
   knowledgeAssistantMaxOutputTokens: number;
   knowledgeAssistantApiBaseUrl: string;
+  knowledgeAssistantApiKey: string;
   knowledgeAssistantApiKeyConfigured: boolean;
   knowledgeAssistantConfigured: boolean;
-  /** 关系评估助手独立模型配置；API Key 只回显是否已保存。 */
+  /** 关系评估助手配置；留空即跟随对话模型。 */
   socialRelationshipAssessmentAssistantEnabled: boolean;
   socialRelationshipAssessmentAssistantModel: string;
   socialRelationshipAssessmentAssistantTemperature: number;
   socialRelationshipAssessmentAssistantMaxInputTokens: number;
   socialRelationshipAssessmentAssistantMaxOutputTokens: number;
   socialRelationshipAssessmentAssistantApiBaseUrl: string;
+  socialRelationshipAssessmentAssistantApiKey: string;
   socialRelationshipAssessmentAssistantApiKeyConfigured: boolean;
   socialRelationshipAssessmentAssistantConfigured: boolean;
   /** 每日 token 额度，0 = 不限。 */
@@ -114,7 +121,8 @@ export type CharacterDto = {
   voiceCooldownMinutes: number;
   /** 语音服务地址（页面上填的）；空 = 用环境变量或角色聊天地址。 */
   voiceApiBaseUrl: string;
-  /** 语音 Key 是否已保存（只回显布尔，绝不回显 Key 本身）。 */
+  /** 明文语音 Key；空 = 没配。 */
+  voiceApiKey: string;
   voiceApiKeyConfigured: boolean;
   /** 语音合成模型 / 音色 / 识别模型；空 = 用环境变量。 */
   ttsModel: string;
@@ -130,13 +138,15 @@ export type CharacterDto = {
   ttsSpeed: number;
   /** 识别专用地址；空 = 用环境变量 `VOICE_ASR_BASE_URL` 或语音地址。 */
   asrApiBaseUrl: string;
-  /** 识别专用 Key 是否已保存（合成与识别不是同一家时用）。 */
+  /** 明文识别 Key（合成与识别不是同一家时用）。 */
+  asrApiKey: string;
   asrApiKeyConfigured: boolean;
   /** 看图（图片）模型：空 = 回落到环境变量 / 对话模型，所以"没配"是正常状态。 */
   visionModel: string;
   /** 看图服务地址；空 = 用环境变量或角色聊天地址。 */
   visionApiBaseUrl: string;
-  /** 看图 Key 是否已保存（只回显布尔，绝不回显 Key 本身）。 */
+  /** 明文看图 Key；空 = 没配（会回落到对话模型）。 */
+  visionApiKey: string;
   visionApiKeyConfigured: boolean;
   /** 主动找话设置；未配置过时是默认值（enabled=false）。 */
   proactive: ProactiveSettings;
@@ -219,6 +229,16 @@ export function toCharacterDto(input: unknown): CharacterDto {
   const character = input as CharacterRecord;
   const config = asConfig(character.modelConfig);
   const chatSettings = resolveChatModelSettings(config);
+  /**
+   * 助手的「可用性」不再看有没有独立配置，而是看解析后的连接够不够跑：
+   * 模型名可以继承对话模型，Key 在地址一致时也可以继承（见 assistant-inheritance）。
+   * DTO 只回「自己填了什么」+「最终能不能用」，UI 拿这两个就能显示「跟随对话模型」。
+   */
+  const memoryAssistant = summarizeAssistantConnection(config, ASSISTANT_FIELDS.memory, chatSettings);
+  const contextAssistant = summarizeAssistantConnection(config, ASSISTANT_FIELDS.context, chatSettings);
+  const knowledgeAssistant = summarizeAssistantConnection(config, ASSISTANT_FIELDS.knowledge, chatSettings);
+  const socialAssistant = summarizeAssistantConnection(config, ASSISTANT_FIELDS.socialAssessment, chatSettings);
+
   const memoryAssistantModel = typeof config.memoryAssistantModel === "string"
     ? config.memoryAssistantModel.trim()
     : "";
@@ -286,9 +306,11 @@ export function toCharacterDto(input: unknown): CharacterDto {
     // 默认开（跟随 DeepSeek 平台默认）；只有显式存过 false 才算关。
     chatThinking: config.chatThinking !== false,
     chatApiBaseUrl: chatSettings.apiBaseUrl,
+    chatApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.chat),
     chatApiKeyConfigured: chatSettings.apiKeyConfigured,
     chatApiKeySource: chatSettings.apiKeySource,
-    memoryAssistantEnabled: config.memoryAssistantEnabled === true,
+    // 默认开启：没存过就是开着的，只有显式关过才算关。
+    memoryAssistantEnabled: config.memoryAssistantEnabled !== false,
     memoryAssistantModel,
     memoryAssistantTemperature: typeof config.memoryAssistantTemperature === "number" && Number.isFinite(config.memoryAssistantTemperature) ? Math.min(2, Math.max(0, config.memoryAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.memory.temperature,
     memoryAssistantMaxInputTokens: typeof config.memoryAssistantMaxInputTokens === "number" && Number.isFinite(config.memoryAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.memoryAssistantMaxInputTokens))) : MODEL_PURPOSE_DEFAULTS.memory.maxInputTokens,
@@ -296,9 +318,10 @@ export function toCharacterDto(input: unknown): CharacterDto {
     memoryAssistantApiBaseUrl: typeof config.memoryAssistantApiBaseUrl === "string"
       ? config.memoryAssistantApiBaseUrl
       : "",
+    memoryAssistantApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.memoryAssistant),
     memoryAssistantApiKeyConfigured,
-    memoryAssistantConfigured: Boolean(memoryAssistantModel && memoryAssistantApiKeyConfigured),
-    contextAssistantEnabled: config.contextAssistantEnabled === true,
+    memoryAssistantConfigured: Boolean(memoryAssistant.model && memoryAssistant.hasApiKey),
+    contextAssistantEnabled: config.contextAssistantEnabled !== false,
     contextAssistantModel,
     contextAssistantTemperature: typeof config.contextAssistantTemperature === "number" && Number.isFinite(config.contextAssistantTemperature) ? Math.min(2, Math.max(0, config.contextAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.context.temperature,
     contextAssistantMaxInputTokens: typeof config.contextAssistantMaxInputTokens === "number" && Number.isFinite(config.contextAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.contextAssistantMaxInputTokens))) : MODEL_PURPOSE_DEFAULTS.context.maxInputTokens,
@@ -306,25 +329,28 @@ export function toCharacterDto(input: unknown): CharacterDto {
     contextAssistantApiBaseUrl: typeof config.contextAssistantApiBaseUrl === "string"
       ? config.contextAssistantApiBaseUrl
       : "",
+    contextAssistantApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.contextAssistant),
     contextAssistantApiKeyConfigured,
-    contextAssistantConfigured: Boolean(contextAssistantModel && contextAssistantApiKeyConfigured),
+    contextAssistantConfigured: Boolean(contextAssistant.model && contextAssistant.hasApiKey),
     knowledgeAutoCollectEnabled: config.knowledgeAutoCollectEnabled === true,
-    knowledgeAssistantEnabled: config.knowledgeAssistantEnabled === true,
+    knowledgeAssistantEnabled: config.knowledgeAssistantEnabled !== false,
     knowledgeAssistantModel,
     knowledgeAssistantTemperature: typeof config.knowledgeAssistantTemperature === "number" && Number.isFinite(config.knowledgeAssistantTemperature) ? Math.min(2, Math.max(0, config.knowledgeAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.knowledge.temperature,
     knowledgeAssistantMaxInputTokens: typeof config.knowledgeAssistantMaxInputTokens === "number" && Number.isFinite(config.knowledgeAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.knowledgeAssistantMaxInputTokens))) : MODEL_PURPOSE_DEFAULTS.knowledge.maxInputTokens,
     knowledgeAssistantMaxOutputTokens: typeof config.knowledgeAssistantMaxOutputTokens === "number" && Number.isFinite(config.knowledgeAssistantMaxOutputTokens) ? Math.round(Math.min(8_192, Math.max(512, config.knowledgeAssistantMaxOutputTokens))) : MODEL_PURPOSE_DEFAULTS.knowledge.maxOutputTokens,
     knowledgeAssistantApiBaseUrl: typeof config.knowledgeAssistantApiBaseUrl === "string" ? config.knowledgeAssistantApiBaseUrl : "",
+    knowledgeAssistantApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.knowledgeAssistant),
     knowledgeAssistantApiKeyConfigured,
-    knowledgeAssistantConfigured: Boolean(knowledgeAssistantModel && knowledgeAssistantApiKeyConfigured),
-    socialRelationshipAssessmentAssistantEnabled: config.socialRelationshipAssessmentAssistantEnabled === true,
+    knowledgeAssistantConfigured: Boolean(knowledgeAssistant.model && knowledgeAssistant.hasApiKey),
+    socialRelationshipAssessmentAssistantEnabled: config.socialRelationshipAssessmentAssistantEnabled !== false,
     socialRelationshipAssessmentAssistantModel,
     socialRelationshipAssessmentAssistantTemperature: typeof config.socialRelationshipAssessmentAssistantTemperature === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantTemperature) ? Math.min(2, Math.max(0, config.socialRelationshipAssessmentAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.social.temperature,
     socialRelationshipAssessmentAssistantMaxInputTokens: typeof config.socialRelationshipAssessmentAssistantMaxInputTokens === "number" && Number.isFinite(config.socialRelationshipAssessmentAssistantMaxInputTokens) ? Math.round(Math.min(32_768, Math.max(4_096, config.socialRelationshipAssessmentAssistantMaxInputTokens))) : MODEL_PURPOSE_DEFAULTS.social.maxInputTokens,
     socialRelationshipAssessmentAssistantMaxOutputTokens: resolveSocialAssessmentOutputBudget(config.socialRelationshipAssessmentAssistantMaxOutputTokens),
     socialRelationshipAssessmentAssistantApiBaseUrl,
+    socialRelationshipAssessmentAssistantApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.socialRelationshipAssessmentAssistant),
     socialRelationshipAssessmentAssistantApiKeyConfigured,
-    socialRelationshipAssessmentAssistantConfigured: Boolean(socialRelationshipAssessmentAssistantModel && socialRelationshipAssessmentAssistantApiBaseUrl && socialRelationshipAssessmentAssistantApiKeyConfigured),
+    socialRelationshipAssessmentAssistantConfigured: Boolean(socialAssistant.model && socialAssistant.hasApiKey),
     dailyTokenLimit: positiveNumber(config.dailyTokenLimit),
     memoryTokenBudget: positiveNumber(config.memoryTokenBudget) || MEMORY_TOKEN_BUDGET_DEFAULT,
     snapshotTokenBudget: positiveNumber(config.snapshotTokenBudget) || SNAPSHOT_TOKEN_BUDGET_DEFAULT,
@@ -344,6 +370,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
     voiceChance: resolveVoiceChance(config),
     voiceCooldownMinutes: resolveVoiceCooldownMinutes(config),
     voiceApiBaseUrl: typeof config.voiceApiBaseUrl === "string" ? config.voiceApiBaseUrl : "",
+    voiceApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.voice),
     voiceApiKeyConfigured: isVoiceApiKeySaved(config),
     ttsModel: typeof config.ttsModel === "string" ? config.ttsModel : "",
     ttsVoice: typeof config.ttsVoice === "string" ? config.ttsVoice : "",
@@ -353,9 +380,11 @@ export function toCharacterDto(input: unknown): CharacterDto {
     ttsInstructions: typeof config.ttsInstructions === "string" ? config.ttsInstructions : "",
     ttsSpeed: typeof config.ttsSpeed === "number" ? config.ttsSpeed : 0,
     asrApiBaseUrl: typeof config.asrApiBaseUrl === "string" ? config.asrApiBaseUrl : "",
+    asrApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.asr),
     asrApiKeyConfigured: isAsrApiKeySaved(config),
     visionModel: typeof config.visionModel === "string" ? config.visionModel : "",
     visionApiBaseUrl: typeof config.visionApiBaseUrl === "string" ? config.visionApiBaseUrl : "",
+    visionApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.vision),
     visionApiKeyConfigured: isVisionApiKeySaved(config),
     proactive: resolveProactiveSettings(config),
     groupInitiative: resolveGroupInitiativeSettings(config),

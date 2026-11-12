@@ -1,6 +1,6 @@
 import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
-import { resolveCharacterKnowledgeAssistantApiKey } from "./credential-encryption";
+import { ASSISTANT_FIELDS, resolveAssistantConnection } from "./assistant-inheritance";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, recordModelUsage } from "./model-usage";
 
@@ -27,29 +27,21 @@ export async function resolveKnowledgeAssistantRuntime(
   const config = configValue !== null && typeof configValue === "object" && !Array.isArray(configValue)
     ? configValue as Record<string, unknown>
     : {};
-  if (options.requireEnabled !== false && config.knowledgeAssistantEnabled !== true) return null;
-  const model = typeof config.knowledgeAssistantModel === "string" ? config.knowledgeAssistantModel.trim().slice(0, 120) : "";
-  if (!model) return null;
+  // 默认开启：只有显式关掉才跳过。
+  if (options.requireEnabled !== false && config.knowledgeAssistantEnabled === false) return null;
+  const connection = await resolveAssistantConnection(configValue, ASSISTANT_FIELDS.knowledge).catch(() => null);
+  if (!connection?.model) return null;
   let apiBaseUrl = "";
   try {
-    apiBaseUrl = validateChatApiBaseUrl(
-      typeof config.knowledgeAssistantApiBaseUrl === "string" && config.knowledgeAssistantApiBaseUrl.trim()
-        ? config.knowledgeAssistantApiBaseUrl
-        : fallbackApiBaseUrl,
-    );
+    apiBaseUrl = validateChatApiBaseUrl(connection.apiBaseUrl || fallbackApiBaseUrl);
   } catch {
     return null;
   }
-  let apiKey = "";
-  try {
-    apiKey = await resolveCharacterKnowledgeAssistantApiKey(configValue);
-  } catch {
-    return null;
-  }
-  if (!apiKey) return null;
+  if (!apiBaseUrl) return null;
+  if (!connection.apiKey) return null;
   return {
-    model,
-    apiKey,
+    model: connection.model,
+    apiKey: connection.apiKey,
     apiBaseUrl,
     temperature: bounded(config.knowledgeAssistantTemperature, MODEL_PURPOSE_DEFAULTS.knowledge.temperature, 0, 2),
     maxInputTokens: Math.round(bounded(config.knowledgeAssistantMaxInputTokens, MODEL_PURPOSE_DEFAULTS.knowledge.maxInputTokens, 4_096, 32_768)),

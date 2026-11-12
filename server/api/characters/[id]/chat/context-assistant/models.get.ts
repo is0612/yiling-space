@@ -1,6 +1,6 @@
 import { createError, getRouterParam } from "h3";
-import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../../utils/chat-model-config";
-import { resolveCharacterContextAssistantApiKey } from "../../../../../utils/credential-encryption";
+import { buildModelsEndpoint } from "../../../../../utils/chat-model-config";
+import { ASSISTANT_FIELDS, resolveAssistantConnection } from "../../../../../utils/assistant-inheritance";
 import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
@@ -18,9 +18,8 @@ type ModelsResult = {
 /**
  * 拉取语境助手服务商的模型清单。
  *
- * 地址可以单独配置；留空时跟随本角色的对话 API 地址。
- * API Key 则始终只解密 contextAssistantApiKeyEncrypted，绝不回落到聊天 Key、
- * 环境变量或其他模型服务的凭据。
+ * 地址和 Key 都可以留空沿用对话模型（见 `assistant-inheritance`）：
+ * 只有地址也换了别家时，才必须单独填 Key —— 拿 A 家的 Key 打 B 家只会 401。
  */
 export default defineEventHandler(async (event): Promise<ModelsResult> => {
   const ownerId = await requireActorUserId(event);
@@ -31,28 +30,16 @@ export default defineEventHandler(async (event): Promise<ModelsResult> => {
   });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
-  const config = character.modelConfig !== null
-    && typeof character.modelConfig === "object"
-    && !Array.isArray(character.modelConfig)
-    ? character.modelConfig as Record<string, unknown>
-    : {};
-  const chatSettings = resolveChatModelSettings(character.modelConfig);
-  const configuredBaseUrl = typeof config.contextAssistantApiBaseUrl === "string"
-    ? config.contextAssistantApiBaseUrl.trim()
-    : "";
-  const apiBaseUrl = configuredBaseUrl || chatSettings.apiBaseUrl;
-
-  let apiKey = "";
-  try {
-    apiKey = await resolveCharacterContextAssistantApiKey(character.modelConfig);
-  } catch {
-    return { ok: false, models: [], message: "无法解密语境助手已保存的 API Key。请重新输入并保存。" };
-  }
+  const connection = await resolveAssistantConnection(character.modelConfig, ASSISTANT_FIELDS.context);
+  const apiBaseUrl = connection.apiBaseUrl;
+  const apiKey = connection.apiKey;
   if (!apiKey) {
     return {
       ok: false,
       models: [],
-      message: "尚未填写语境助手独立 API Key。请先填写并保存，再获取模型列表。",
+      message: connection.baseUrlSource === "assistant"
+        ? "语境助手用了单独的 API 地址，需要单独填写它的 API Key 才能获取模型列表。"
+        : "尚未配置可用的 API Key。请在对话模型里填写 Key，或单独为语境助手填一把。",
     };
   }
 

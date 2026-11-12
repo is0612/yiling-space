@@ -33,6 +33,8 @@ export type Character = {
   /** 深度思考开关；默认开（跟随 DeepSeek 平台默认）。只在 DeepSeek 系模型上真正生效。 */
   chatThinking?: boolean;
   chatApiBaseUrl?: string;
+  /** 明文 Key（2026-11-12 起不再加密存储）；空 = 没配。页面用密码框回显。 */
+  chatApiKey?: string;
   chatApiKeyConfigured?: boolean;
   chatApiKeySource?: "character" | "environment" | "missing";
   /** 记忆助手是否启用、模型配置和 Key 保存状态。 */
@@ -45,6 +47,7 @@ export type Character = {
   /** 记忆助手单次检索的最大输出 Token；旧角色缺省为 2048。 */
   memoryAssistantMaxOutputTokens?: number;
   memoryAssistantApiBaseUrl?: string;
+  memoryAssistantApiKey?: string;
   memoryAssistantApiKeyConfigured?: boolean;
   memoryAssistantConfigured?: boolean;
   /** 语境助手是否启用、模型配置和 Key 保存状态。 */
@@ -57,6 +60,7 @@ export type Character = {
   /** 语境助手单次检索的最大输出 Token；旧角色缺省为 2048。 */
   contextAssistantMaxOutputTokens?: number;
   contextAssistantApiBaseUrl?: string;
+  contextAssistantApiKey?: string;
   contextAssistantApiKeyConfigured?: boolean;
   contextAssistantConfigured?: boolean;
   knowledgeAutoCollectEnabled?: boolean;
@@ -66,8 +70,19 @@ export type Character = {
   knowledgeAssistantMaxInputTokens?: number;
   knowledgeAssistantMaxOutputTokens?: number;
   knowledgeAssistantApiBaseUrl?: string;
+  knowledgeAssistantApiKey?: string;
   knowledgeAssistantApiKeyConfigured?: boolean;
   knowledgeAssistantConfigured?: boolean;
+  /** 关系评估助手：同样支持留空跟随对话模型。 */
+  socialRelationshipAssessmentAssistantEnabled?: boolean;
+  socialRelationshipAssessmentAssistantModel?: string;
+  socialRelationshipAssessmentAssistantTemperature?: number;
+  socialRelationshipAssessmentAssistantMaxInputTokens?: number;
+  socialRelationshipAssessmentAssistantMaxOutputTokens?: number;
+  socialRelationshipAssessmentAssistantApiBaseUrl?: string;
+  socialRelationshipAssessmentAssistantApiKey?: string;
+  socialRelationshipAssessmentAssistantApiKeyConfigured?: boolean;
+  socialRelationshipAssessmentAssistantConfigured?: boolean;
   /** 每日 token 额度，0 = 不限。 */
   dailyTokenLimit?: number;
   /** 每次对话注入记忆 / 快照的 token 预算。 */
@@ -100,7 +115,8 @@ export type Character = {
   voiceCooldownMinutes?: number;
   /** 语音服务地址；空 = 用环境变量或角色聊天地址。 */
   voiceApiBaseUrl?: string;
-  /** 语音 Key 是否已保存（只回布尔）。 */
+  /** 明文语音 Key；空 = 没配。 */
+  voiceApiKey?: string;
   voiceApiKeyConfigured?: boolean;
   /** 语音合成模型 / 音色 / 识别模型。 */
   ttsModel?: string;
@@ -117,12 +133,14 @@ export type Character = {
   /** 识别专用：服务商 / 地址 / Key 是否已保存。 */
   asrProvider?: string;
   asrApiBaseUrl?: string;
+  asrApiKey?: string;
   asrApiKeyConfigured?: boolean;
   /** 看图（图片）模型；空 = 回落到环境变量 / 对话模型。 */
   visionModel?: string;
   /** 看图服务地址；空 = 用环境变量或角色聊天地址。 */
   visionApiBaseUrl?: string;
-  /** 看图 Key 是否已保存（只回布尔）。 */
+  /** 明文看图 Key；空 = 没配（会回落到对话模型）。 */
+  visionApiKey?: string;
   visionApiKeyConfigured?: boolean;
   /** 主动找话设置；服务端返回时一定带默认值填充。 */
   proactive?: {

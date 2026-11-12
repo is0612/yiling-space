@@ -3,7 +3,8 @@ import type { Prisma } from "../../../src/generated/prisma/client";
 import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { readCharacterBody, readCharacterProfilePatch } from "../../utils/character-profile-input";
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
-import { encryptApiKey, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
+import { API_KEY_FIELDS, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
+import { ASSISTANT_FIELDS, resolveAssistantConnection } from "../../utils/assistant-inheritance";
 import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
 import { readKnowledgeAssistantSettingsPatch, validateKnowledgeAssistantEnabledConfig } from "../../utils/knowledge-assistant-config";
 import { readSocialRelationshipAssessmentAssistantSettingsPatch, validateSocialRelationshipAssessmentAssistantEnabledConfig } from "../../utils/social-relationship-assessment-config";
@@ -510,50 +511,66 @@ export default defineEventHandler(async (event) => {
 
   if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey || knowledgeAssistantPatch.apiKey || knowledgeAssistantPatch.clearApiKey || socialRelationshipAssessmentAssistantApiKeyPlain || clearSocialRelationshipAssessmentAssistantApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
-    if (clearApiKey) delete nextConfig.chatApiKeyEncrypted;
-    if (chatApiKey) nextConfig.chatApiKeyEncrypted = await encryptApiKey(chatApiKey);
-    // 语音 Key 与聊天 Key 分开两把：语音常常是另一家服务商，
-    // 混用一个字段会导致「换语音服务商时把聊天也换掉」。
-    if (clearVoiceApiKey) delete nextConfig.voiceApiKeyEncrypted;
-    if (voiceApiKeyPlain) nextConfig.voiceApiKeyEncrypted = await encryptApiKey(voiceApiKeyPlain);
-    // 识别是独立一把：合成换成只做合成的服务商之后，共用那把 Key 打识别服务商只会 401。
-    if (clearAsrApiKey) delete nextConfig.asrApiKeyEncrypted;
-    if (asrApiKeyPlain) nextConfig.asrApiKeyEncrypted = await encryptApiKey(asrApiKeyPlain);
-    // 「同语音合成」：在服务端把合成那把复制过来。用户自己填了识别 Key 时以用户为准。
-    if (syncAsrFromVoice && !asrApiKeyPlain && !clearAsrApiKey) {
-      const source = await resolveCharacterVoiceApiKey(nextConfig).catch(() => "");
-      if (source) nextConfig.asrApiKeyEncrypted = await encryptApiKey(source);
-      else console.warn("[voice] 点了「同语音合成」但合成那边没有 Key，识别 Key 保持不变");
-    }
-    // 图片模型的 Key 同理再分开一把，三家可以各是各的。
-    if (clearVisionApiKey) delete nextConfig.visionApiKeyEncrypted;
-    if (visionApiKeyPlain) nextConfig.visionApiKeyEncrypted = await encryptApiKey(visionApiKeyPlain);
-    if (clearMemoryAssistantApiKey) delete nextConfig.memoryAssistantApiKeyEncrypted;
-    if (memoryAssistantApiKeyPlain) {
-      nextConfig.memoryAssistantApiKeyEncrypted = await encryptApiKey(memoryAssistantApiKeyPlain);
+
+    /**
+     * 八把 Key 一律明文写入。
+     *
+     * 以前这里逐个 `encryptApiKey()`，于是同一段「清旧密文 / 写新密文」抄了八遍，
+     * 漏一把的表现是「保存成功但重启后没了」。现在一张表 + 一个循环，
+     * 新增服务商只需在表里加一行。
+     *
+     * 旧密文字段顺手删掉：同一把 Key 存明文和密文两份，读的时候谁优先就成了一场赌博。
+     */
+    const keyWrites = [
+      { fields: API_KEY_FIELDS.chat, value: chatApiKey, clear: clearApiKey },
+      { fields: API_KEY_FIELDS.voice, value: voiceApiKeyPlain, clear: clearVoiceApiKey },
+      { fields: API_KEY_FIELDS.vision, value: visionApiKeyPlain, clear: clearVisionApiKey },
+      { fields: API_KEY_FIELDS.memoryAssistant, value: memoryAssistantApiKeyPlain, clear: clearMemoryAssistantApiKey },
+      { fields: API_KEY_FIELDS.contextAssistant, value: contextAssistantPatch.apiKey, clear: contextAssistantPatch.clearApiKey },
+      { fields: API_KEY_FIELDS.knowledgeAssistant, value: knowledgeAssistantPatch.apiKey, clear: knowledgeAssistantPatch.clearApiKey },
+      {
+        fields: API_KEY_FIELDS.socialRelationshipAssessmentAssistant,
+        value: socialRelationshipAssessmentAssistantApiKeyPlain,
+        clear: clearSocialRelationshipAssessmentAssistantApiKey,
+      },
+    ];
+    for (const write of keyWrites) {
+      delete nextConfig[write.fields.legacy];
+      if (write.clear) delete nextConfig[write.fields.plain];
+      else if (write.value) nextConfig[write.fields.plain] = write.value;
     }
 
-    // 开启前必须具备独立模型和独立 Key。地址可以留空，默认沿用这个角色的聊天 API 地址。
-    // 即使只是修改其他字段，只要当前助手仍处于开启状态，也会再次验证配置完整性。
-    if (nextConfig.memoryAssistantEnabled === true) {
-      const assistantModel = typeof nextConfig.memoryAssistantModel === "string"
-        ? nextConfig.memoryAssistantModel.trim()
-        : "";
-      const assistantKey = nextConfig.memoryAssistantApiKeyEncrypted;
-      if (!assistantModel) {
-        throw createError({ statusCode: 400, statusMessage: "启用记忆助手前，请先在模型设置中填写记忆助手模型名称。" });
+    // 识别是独立一把：合成换成只做合成的服务商之后，共用那把 Key 打识别服务商只会 401。
+    // 「同语音合成」：在服务端把合成那把复制过来，用户自己填了识别 Key 时以用户为准。
+    delete nextConfig[API_KEY_FIELDS.asr.legacy];
+    if (clearAsrApiKey) delete nextConfig[API_KEY_FIELDS.asr.plain];
+    else if (asrApiKeyPlain) nextConfig[API_KEY_FIELDS.asr.plain] = asrApiKeyPlain;
+    else if (syncAsrFromVoice) {
+      const source = await resolveCharacterVoiceApiKey(nextConfig).catch(() => "");
+      if (source) nextConfig[API_KEY_FIELDS.asr.plain] = source;
+      else console.warn("[voice] 点了「同语音合成」但合成那边没有 Key，识别 Key 保持不变");
+    }
+
+    /**
+     * 助手默认开启，所以这里**不再**要求「必须有独立的模型名和独立 Key」——
+     * 那正是「同一个 Key 填五遍」的来源。改成只有当用户这次**明确打开**时，
+     * 才要求能解析出可用连接：留空且地址与对话一致就走继承，够用就放过。
+     *
+     * 不显式打开时完全不拦：新角色还没有对话模型，拦下来会连角色本身都保存不了。
+     * 「配好了没」由 DTO 的 xxxConfigured 布尔告诉页面，由页面提示。
+     */
+    if (body.memoryAssistantEnabled === true) {
+      const connection = await resolveAssistantConnection(nextConfig, ASSISTANT_FIELDS.memory);
+      if (!connection.apiKey) {
+        throw createError({
+          statusCode: 400,
+          statusMessage: connection.baseUrlSource === "assistant"
+            ? "记忆助手用了单独的 API 地址，必须单独填写它的 API Key（不同服务商不共用同一把 Key）。"
+            : "启用记忆助手前，请先配置对话模型的 API Key，或单独填写记忆助手的 Key。",
+        });
       }
-      if (typeof assistantKey !== "string" || !assistantKey.startsWith("v1.")) {
-        throw createError({ statusCode: 400, statusMessage: "启用记忆助手前，请先保存记忆助手专用 API Key。" });
-      }
-      const assistantBaseUrl = typeof nextConfig.memoryAssistantApiBaseUrl === "string"
-        && nextConfig.memoryAssistantApiBaseUrl.trim()
-        ? nextConfig.memoryAssistantApiBaseUrl
-        : typeof nextConfig.chatApiBaseUrl === "string" && nextConfig.chatApiBaseUrl.trim()
-          ? nextConfig.chatApiBaseUrl
-          : process.env.LLM_BASE_URL?.trim() || "https://api.openai.com/v1";
       try {
-        validateChatApiBaseUrl(assistantBaseUrl);
+        validateChatApiBaseUrl(connection.apiBaseUrl);
       } catch (error) {
         throw createError({
           statusCode: 400,
@@ -561,14 +578,7 @@ export default defineEventHandler(async (event) => {
         });
       }
     }
-    if (contextAssistantPatch.clearApiKey) delete nextConfig.contextAssistantApiKeyEncrypted;
-    if (contextAssistantPatch.apiKey) nextConfig.contextAssistantApiKeyEncrypted = await encryptApiKey(contextAssistantPatch.apiKey);
-    if (knowledgeAssistantPatch.clearApiKey) delete nextConfig.knowledgeAssistantApiKeyEncrypted;
-    if (knowledgeAssistantPatch.apiKey) nextConfig.knowledgeAssistantApiKeyEncrypted = await encryptApiKey(knowledgeAssistantPatch.apiKey);
-    if (clearSocialRelationshipAssessmentAssistantApiKey) delete nextConfig.socialRelationshipAssessmentAssistantApiKeyEncrypted;
-    if (socialRelationshipAssessmentAssistantApiKeyPlain) {
-      nextConfig.socialRelationshipAssessmentAssistantApiKeyEncrypted = await encryptApiKey(socialRelationshipAssessmentAssistantApiKeyPlain);
-    }
+    // 语境 / 知识 / 关系评估三把 Key 已在上面那张表里统一写过，这里只做配置校验。
     try {
       validateContextAssistantEnabledConfig(nextConfig);
       validateKnowledgeAssistantEnabledConfig(nextConfig);

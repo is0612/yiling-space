@@ -1,6 +1,6 @@
 import { createError, getRouterParam } from "h3";
 import { buildChatCompletionsEndpoint } from "../../../../../utils/chat-model-config";
-import { resolveCharacterSocialRelationshipAssessmentAssistantApiKey } from "../../../../../utils/credential-encryption";
+import { ASSISTANT_FIELDS, resolveAssistantConnection } from "../../../../../utils/assistant-inheritance";
 import { readModelUsage, recordModelUsage } from "../../../../../utils/model-usage";
 import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
@@ -23,23 +23,19 @@ export default defineEventHandler(async (event): Promise<TestResult> => {
   });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
-  const config = asRecord(character.modelConfig);
-  const model = typeof config.socialRelationshipAssessmentAssistantModel === "string"
-    ? config.socialRelationshipAssessmentAssistantModel.trim()
-    : "";
-  const baseUrl = typeof config.socialRelationshipAssessmentAssistantApiBaseUrl === "string"
-    ? config.socialRelationshipAssessmentAssistantApiBaseUrl.trim()
-    : "";
-  if (!model) return { ok: false, message: "请先保存关系评估助手模型名称。" };
-  if (!baseUrl) return { ok: false, message: "请先保存关系评估助手独立 API 地址。" };
-
-  let apiKey = "";
-  try {
-    apiKey = await resolveCharacterSocialRelationshipAssessmentAssistantApiKey(character.modelConfig);
-  } catch {
-    return { ok: false, message: "关系评估助手 API Key 解密失败，请重新保存专用 Key。" };
+  const connection = await resolveAssistantConnection(character.modelConfig, ASSISTANT_FIELDS.socialAssessment);
+  const model = connection.model;
+  const baseUrl = connection.apiBaseUrl;
+  if (!model) return { ok: false, message: "请先保存关系评估助手模型名称，或先配置对话模型。" };
+  if (!connection.apiKey) {
+    return {
+      ok: false,
+      message: connection.baseUrlSource === "assistant"
+        ? "关系评估助手用了单独的 API 地址，需要单独填写它的 API Key。"
+        : "尚未配置可用的 API Key。请在对话模型里填写 Key，或单独为关系评估助手填一把。",
+    };
   }
-  if (!apiKey) return { ok: false, message: "请先保存关系评估助手专用 API Key。" };
+  const apiKey = connection.apiKey;
 
   let endpoint: URL;
   try {

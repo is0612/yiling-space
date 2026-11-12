@@ -7,7 +7,7 @@ import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-default
 import { resolveSocialAssessmentOutputBudget, nextSocialAssessmentOutputBudget } from "./social-assessment-budget";
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
-import { resolveCharacterSocialRelationshipAssessmentAssistantApiKey } from "./credential-encryption";
+import { ASSISTANT_FIELDS, resolveAssistantConnection } from "./assistant-inheritance";
 import { buildSocialAssessmentSourceManifest, validateSocialAssessmentSourceManifest } from "./social-assessment-evidence";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, recordModelUsage } from "./model-usage";
@@ -63,16 +63,16 @@ function cleanStringList(value: unknown, maxItems: number, maxLength: number): s
 
 export async function resolveSocialRelationshipAssessmentRuntime(configValue: unknown): Promise<SocialRelationshipAssessmentRuntime | null> {
   const config = asRecord(configValue);
-  if (config.socialRelationshipAssessmentAssistantEnabled !== true) return null;
-  const model = cleanText(config.socialRelationshipAssessmentAssistantModel, 120);
-  const baseUrl = cleanText(config.socialRelationshipAssessmentAssistantApiBaseUrl, 500);
-  if (!model || !baseUrl) return null;
+  // 默认开启：只有显式关掉才跳过。
+  if (config.socialRelationshipAssessmentAssistantEnabled === false) return null;
+  const connection = await resolveAssistantConnection(configValue, ASSISTANT_FIELDS.socialAssessment).catch(() => null);
+  if (!connection?.model) return null;
   try {
-    const apiBaseUrl = validateChatApiBaseUrl(baseUrl);
-    const apiKey = await resolveCharacterSocialRelationshipAssessmentAssistantApiKey(configValue);
-    if (!apiKey) return null;
+    const apiBaseUrl = validateChatApiBaseUrl(connection.apiBaseUrl);
+    if (!apiBaseUrl) return null;
+    if (!connection.apiKey) return null;
     return {
-      model, apiKey, apiBaseUrl,
+      model: connection.model, apiKey: connection.apiKey, apiBaseUrl,
       temperature: bounded(config.socialRelationshipAssessmentAssistantTemperature, MODEL_PURPOSE_DEFAULTS.social.temperature, 0, 2),
       maxInputTokens: Math.round(bounded(config.socialRelationshipAssessmentAssistantMaxInputTokens, MODEL_PURPOSE_DEFAULTS.social.maxInputTokens, 4_096, 32_768)),
       maxOutputTokens: resolveSocialAssessmentOutputBudget(config.socialRelationshipAssessmentAssistantMaxOutputTokens),

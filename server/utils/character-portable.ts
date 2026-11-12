@@ -23,7 +23,8 @@
  * 那是站内用户与外部身份的验证结果，换人导入不该跟过去。
  *
  * 明确不带：
- *   - API Key（`chatApiKeyEncrypted` / `voiceApiKeyEncrypted` / `memoryAssistantApiKeyEncrypted`）—— 换机器本来就得重填，
+ *   - API Key（`chatApiKey` / `voiceApiKey` / `memoryAssistantApiKey` …）—— 2026-11-12 起
+ *     modelConfig 里存的是明文，但导出仍然全部剥离：换机器本来就得重填，
  *     而且带出去等于把凭据交给任何拿到这个 json 的人
  *   - 表情包图片：图在 `.data/stickers/<id>/`，换机器后从 QQ 收藏夹重新同步即可
  *   - 会话原文、渠道绑定、任务队列、用量与审计：与具体机器/账号绑定
@@ -356,7 +357,7 @@ export const PORTABLE_MODEL_CONFIG_KEYS = [
   "recentMessageLimit",
 ] as const;
 
-/** 任何以 `v1.` 开头的密文字段都不许进包；这里再按名字兜一层。 */
+/** 任何以 `v1.` 开头的密文字段、以及任何名字像密钥的字段都不许进包；这里再按名字兜一层。 */
 const SECRET_NAME_PATTERN = /(apikey|api_key|token|secret|password|credential)/i;
 const ORIGIN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

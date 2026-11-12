@@ -4,9 +4,7 @@ import type { AssistantTurnContext } from "./assistant-turn-context";
 import { runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
 import type { TurnDetailPatch, TurnSource } from "./model-turn-detail";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
-import {
-  resolveCharacterMemoryAssistantApiKey,
-} from "./credential-encryption";
+import { ASSISTANT_FIELDS, resolveAssistantConnection } from "./assistant-inheritance";
 import {
   rankMemoriesWithBudget,
   rankSnapshotsWithBudget,
@@ -224,7 +222,10 @@ export async function testMemoryAssistantConnection(
   }
 }
 
-/** 只有角色明确开启、独立模型和独立 Key 都可用时，才返回运行配置。 */
+/**
+ * 模型名、地址、Key 都留空时跟随对话模型；只有角色明确关掉才不跑。
+ * 默认开启 —— 「装好就能用」比「每个助手先配一遍 Key」更接近真实需求。
+ */
 export async function resolveMemoryAssistantRuntime(
   configValue: unknown,
   fallbackApiBaseUrl: string,
@@ -233,35 +234,28 @@ export async function resolveMemoryAssistantRuntime(
   const config = configValue !== null && typeof configValue === "object" && !Array.isArray(configValue)
     ? configValue as Record<string, unknown>
     : {};
-  if (options.requireEnabled !== false && config.memoryAssistantEnabled !== true) return null;
+  if (options.requireEnabled !== false && config.memoryAssistantEnabled === false) return null;
 
-  const model = typeof config.memoryAssistantModel === "string"
-    ? config.memoryAssistantModel.trim().slice(0, 120)
-    : "";
-  if (!model) return null;
+  let connection;
+  try {
+    connection = await resolveAssistantConnection(configValue, ASSISTANT_FIELDS.memory);
+  } catch {
+    // 记忆助手配置异常不能影响正常聊天。
+    return null;
+  }
+  if (!connection.model) return null;
 
-  const configuredBaseUrl = typeof config.memoryAssistantApiBaseUrl === "string"
-    ? config.memoryAssistantApiBaseUrl.trim()
-    : "";
   let apiBaseUrl = "";
   try {
-    apiBaseUrl = validateChatApiBaseUrl(configuredBaseUrl || fallbackApiBaseUrl);
+    apiBaseUrl = validateChatApiBaseUrl(connection.apiBaseUrl || fallbackApiBaseUrl);
   } catch {
-    // 记忆助手配置异常不能影响大肥鱼正常聊天。
     return null;
   }
   if (!apiBaseUrl) return null;
+  if (!connection.apiKey) return null;
 
-  let apiKey = "";
-  try {
-    // 这里刻意只解密 memoryAssistantApiKeyEncrypted，绝不回落到聊天 Key 或环境变量。
-    apiKey = await resolveCharacterMemoryAssistantApiKey(configValue);
-  } catch {
-    return null;
-  }
-  if (!apiKey) return null;
   return {
-    model, apiKey, apiBaseUrl,
+    model: connection.model, apiKey: connection.apiKey, apiBaseUrl,
     temperature: resolveBoundedNumber(config.memoryAssistantTemperature, MEMORY_ASSISTANT_DEFAULTS.temperature, 0, 2),
     maxInputTokens: Math.round(resolveBoundedNumber(config.memoryAssistantMaxInputTokens, MEMORY_ASSISTANT_DEFAULTS.maxInputTokens, 4_096, 32_768)),
     maxOutputTokens: Math.round(resolveBoundedNumber(config.memoryAssistantMaxOutputTokens, MEMORY_ASSISTANT_DEFAULTS.maxOutputTokens, 512, 8_192)),
