@@ -1001,6 +1001,18 @@ function buildVoiceSegment(file: string): OnebotSegment[] {
   return [{ type: "record", data: { file } }];
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 分条之间的间隔。随机而不是固定：固定间隔连着发几条，节奏太像程序。
+ * 这个区间是「打完一句抬手再打下一句」的手速，也让网关不至于同时收到三条。
+ */
+function segmentGapMs(): number {
+  return 350 + Math.floor(Math.random() * 550);
+}
+
 
 function createReplySender(
   config: OnebotConnectionConfig,
@@ -1088,7 +1100,39 @@ function createReplySender(
       }
     }
 
-    await send(buildOnebotReplyMessage(reply, options?.replyToMessageId, atQq()));
+    /**
+     * 分条发送：一条一条弹，像真人连着打两三句。
+     *
+     * 为什么要间隔：连着几个 HTTP 调用打过去，网关那边几乎同时到达，QQ 里看是「砰」
+     * 一下冒出三条，而且更容易撞频率风控。三百到九百毫秒的随机间隔刚好是「打完一句
+     * 再打下一句」的手速，也让风控看到的是人的节奏而不是循环。
+     *
+     * **引用和 @ 只挂第一条**：挂在每条上等于每句弹一次提醒（v8 那种写法被用户骂过）。
+     * 后面几条是纯文字 —— 它们属于同一段话，不需要各自交代在回谁。
+     *
+     * 后续条失败了就停手、只记日志：第一条已经发出去了，这一段本来就有头有尾；
+     * 把它变成整轮报错，反倒是「她说了一半，页面上却是红的」。
+     */
+    const replySegments = options?.segments?.length ? options.segments : [reply];
+    if (replySegments.length <= 1) {
+      await send(buildOnebotReplyMessage(reply, options?.replyToMessageId, atQq()));
+    } else {
+      await send(buildOnebotReplyMessage(replySegments[0]!, options?.replyToMessageId, atQq()));
+      console.log("[onebot] 回复分条发送 " + JSON.stringify({
+        segments: replySegments.length,
+        quoted: Boolean(options?.replyToMessageId),
+        at: Boolean(atQq()),
+      }));
+      for (const segment of replySegments.slice(1)) {
+        await sleep(segmentGapMs());
+        try {
+          await send(segment);
+        } catch (error) {
+          console.error("[onebot] 分条发送中断：", error instanceof Error ? error.message : String(error));
+          return;
+        }
+      }
+    }
     /**
      * 表情单独一条消息跟上。三条路，从「最像她本人」到「一定能发出去」：
      *
@@ -1612,6 +1656,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       stickerCatalog: await loadStickerCatalog(binding.characterId),
       // 声明「本渠道能发语音条」：能不能真发由角色开关和判定决定。
       voiceCapable: true,
+      // QQ 的说话习惯就是一句一句弹：声明之后，她可以靠换行把回复拆成几条。
+      segmentCapable: true,
       // 只有真实 @ 与 all 档不允许「想了想还是不说」。
       allowSilent: !gate.mustReply,
       group: {
@@ -1920,6 +1966,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       stickerCatalog: await loadStickerCatalog(binding.characterId),
       // 私聊同样能发语音条：语音在私聊里比在群里更合适（一对一，不用怕刷屏）。
       voiceCapable: true,
+      // 私聊更是「一句一句弹」的地方，模板里那些短回复就是这么来的。
+      segmentCapable: true,
       sendReply,
     });
   };

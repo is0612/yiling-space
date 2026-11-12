@@ -72,6 +72,7 @@ import { readPreviousJournalLine } from "../journal-service";
 import { isSelfFactQuery, loadJournalFacts } from "../journal-facts";
 import { buildGroupActivityContext, isGroupActivityQuery } from "../group-activity-stats";
 import { collectStickersFromTurn } from "../sticker-collect";
+import { splitReplySegments } from "../reply-segments";
 import {
   applyVoiceTranscripts,
   canSpeakReply,
@@ -114,6 +115,17 @@ export type ChannelReplyOptions = {
    * 发不出来就退回发文字 —— 语音是锦上添花，不能成为整轮沉默的原因。
    */
   voice?: boolean;
+  /**
+   * 这一轮要发的文字，按「一条一条弹」拆好的分段（含第一条）。
+   *
+   * 只在渠道声明了 `segmentCapable` 且模型真的换了行时才出现；不传就是单条，
+   * 渠道走原来的路径。**引用和 @ 只能挂在第一条上**（挂在每条上等于每句弹一次提醒），
+   * 表情/语音仍按老规矩接在最后。
+   *
+   * 落库仍是一行 ASSISTANT（`content` 保留换行），所以群限流按「轮」算，
+   * 不会因为拆成三条就把额度吃掉三份。
+   */
+  segments?: string[];
   /**
    * 语音合成参数。由流水线解析好后带下来（含角色自己的 API Key），
    * 这样渠道不必为了合成再查一次库、再解密一次凭据。
@@ -226,6 +238,14 @@ export type ChannelMessageInput = {
    * 与 faceCatalog 同理：流水线不认平台名，只认这份能力声明在不在。
    */
   voiceCapable?: boolean;
+  /**
+   * 这个渠道能不能把一条回复拆成几条消息依次发（QQ 一句一句弹）。
+   *
+   * 和 `voiceCapable` 同一个道理：流水线不认平台名，只认这份能力声明。声明之后，
+   * 提示词才会告诉她「换行 = 另起一条」，发送时 `ChannelReplyOptions.segments`
+   * 才可能带内容。不声明（网页对话）就永远是一整段。
+   */
+  segmentCapable?: boolean;
   sendReply: ChannelReplySender;
 };
 
@@ -490,6 +510,8 @@ export type ChannelBatchInput = {
   allowSilent?: boolean;
   /** 见 `ChannelMessageInput.voiceCapable`。 */
   voiceCapable?: boolean;
+  /** 见 `ChannelMessageInput.segmentCapable`。 */
+  segmentCapable?: boolean;
   /** 群聊上下文；私聊不传。 */
   group?: ChannelGroupTurnContext;
   sendReply: ChannelReplySender;
@@ -833,6 +855,8 @@ async function runChannelTurn(input: {
   /** 群聊上下文；私聊不传。 */
   group?: ChannelGroupTurnContext;
   voiceCapable?: boolean;
+  /** 见 `ChannelMessageInput.segmentCapable`。 */
+  segmentCapable?: boolean;
   sendReply: ChannelReplySender;
 }): Promise<ChannelMessageResult> {
   const prisma = getPrisma();
@@ -2167,6 +2191,8 @@ async function runChannelTurn(input: {
         voiceEnabled: input.voiceCapable === true
           && isVoiceReplyEnabled(character.modelConfig)
           && Boolean(voiceSettings),
+        // 能不能分条发，是渠道的事，不看角色配置 —— QQ 一条一条弹是平台习惯，不是设定。
+        ...(input.segmentCapable ? { segmentedReply: true } : {}),
         ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
         ...(acquaintances ? { acquaintances } : {}),
         recentMessages,
@@ -2239,6 +2265,16 @@ async function runChannelTurn(input: {
       reason: "too_long",
     }));
   }
+  /**
+   * 分条发送：只有渠道声明了能拆、且这一轮不走语音时才拆。
+   *
+   * 语音轮次不拆是硬限制（见上面 `quoteTarget` 那段）：一条语音就是一条消息，
+   * 拆开得合成两遍、发两条语音，那已经不是「一句一句说」而是两条语音条了。
+   * 拆完 `length <= 1` 一律当单条处理 —— 没换行的回复行为一个字节都不变。
+   */
+  const replySegments = replyVoice || !input.segmentCapable
+    ? []
+    : splitReplySegments(generated.reply);
   const conversationId = await prisma.$transaction(async (tx) => {
     let conversation = existingConversation;
     /**
@@ -2384,6 +2420,9 @@ async function runChannelTurn(input: {
             ...(replySticker ? { stickerId: replySticker.id } : {}),
             // 只记「这一条是语音」，不存音频：音频发完就没了，存下来也没法重放给模型。
             ...(replyVoice ? { voice: true } : {}),
+            // 这一轮在 QQ 上弹了几条。content 里保留着换行，这里只留个数方便排查
+            // 「她怎么一下发了三条」—— 单条时不记，免得 metadata 里多一个恒为 1 的字段。
+            ...(replySegments.length > 1 ? { replySegments: replySegments.length } : {}),
           },
         },
         select: { id: true },
@@ -2438,7 +2477,7 @@ async function runChannelTurn(input: {
       ? undefined
       : pickQuoteTarget(generated.groupDecision?.replyToMessageId, messages.at(-1)?.externalMessageId);
     const atTarget = replyVoice ? undefined : generated.groupDecision?.atMessageId;
-    const replyOptions = replyFaces.length || replySticker || replyVoice || quoteTarget || atTarget
+    const replyOptions = replyFaces.length || replySticker || replyVoice || quoteTarget || atTarget || replySegments.length > 1
       ? {
           ...(replyFaces.length ? { faces: replyFaces } : {}),
           ...(replySticker
@@ -2453,6 +2492,8 @@ async function runChannelTurn(input: {
           ...(replyVoice && voiceSettings ? { voice: true, voiceSettings } : {}),
           ...(quoteTarget ? { replyToMessageId: quoteTarget } : {}),
           ...(atTarget ? { atMessageId: atTarget } : {}),
+          // 只有真的拆开了才带，单条时渠道那边连这个字段都看不到。
+          ...(replySegments.length > 1 ? { segments: replySegments } : {}),
         }
       : undefined;
     await input.sendReply(generated.reply, replyOptions);
@@ -2592,6 +2633,7 @@ export async function handleChannelMessage(input: ChannelMessageInput): Promise<
     ...(input.faceCatalog ? { faceCatalog: input.faceCatalog } : {}),
     ...(input.stickerCatalog?.length ? { stickerCatalog: input.stickerCatalog } : {}),
     ...(input.voiceCapable ? { voiceCapable: true } : {}),
+    ...(input.segmentCapable ? { segmentCapable: true } : {}),
     sendReply: input.sendReply,
   });
   // 单条路径不该出现 silent；真出现了就当作没说，别让调用方去处理一个它不可能遇到的状态。
@@ -2612,6 +2654,7 @@ export async function handleChannelBatch(input: ChannelBatchInput): Promise<Chan
     ...(input.stickerCatalog?.length ? { stickerCatalog: input.stickerCatalog } : {}),
     ...(input.group ? { group: input.group } : {}),
     ...(input.voiceCapable ? { voiceCapable: true } : {}),
+    ...(input.segmentCapable ? { segmentCapable: true } : {}),
     allowSilent: input.allowSilent !== false,
     sendReply: input.sendReply,
   });

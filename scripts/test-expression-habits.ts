@@ -43,7 +43,7 @@ try {
   assert.deepEqual(reply.usedExpressionHabitIds, ["scene"]);
   assert.match(captured, /expressionHabits are confirmed tendencies/);
   assert.match(captured, /do not override identity, privacy, facts/);
-  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v56");
+  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v58");
   silent = true;
   assert.deepEqual((await generateConversationReply({ ...input, groupChat: true, allowSilent: true, transcript: [{ id: "msg", speaker: "群友", content: "难过" }] })).usedExpressionHabitIds, []);
 } finally { globalThis.fetch = originalFetch; }

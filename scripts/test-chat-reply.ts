@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { generateConversationReply, STYLE_EXAMPLES_HEADING, type ConversationReplyInput } from "../server/utils/chat-reply";
-import { buildChatTimeContext } from "../server/utils/chat-time-context";
+import { buildChatTimeContext, formatLocalTimestamp } from "../server/utils/chat-time-context";
 
 const originalFetch = globalThis.fetch;
 const secretApiKey = "sk-test-secret-must-not-appear-in-prompt";
@@ -157,7 +157,25 @@ try {
   assert.equal(promptNow.timeZone, "Asia/Shanghai", "没传时区时回落默认时区。");
   assert.match(String(promptNow.local), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, "当地日期时间要是可读格式。");
   assert.match(String(promptNow.weekday), /^周[一二三四五六日]$/, "星期要写成中文，模型才读得顺。");
-  assert.ok(String(promptNow.utc).endsWith("Z"), "UTC 锚点要带时区标记。");
+  assert.equal(
+    "utc" in promptNow,
+    false,
+    "只给本地时间：UTC 与 now.local 同时在场时，模型会拿历史时间戳的 UTC 日期去比，把凌晨刚说的话判成昨天。",
+  );
+  // 2026-11-12 00:38 那轮实况：你说的话 UTC 日期是 11-11，本地是 11-12，
+  // 模型照「相对日期只看 now.local」一比就成了「昨天」。同一刻必须落回同一个本地日期。
+  assert.equal(
+    formatLocalTimestamp("2026-11-12T16:36:00.000Z", "Asia/Shanghai"),
+    "2026-11-13 00:36:00",
+    "本地 00:36 说的话要渲染成当天 00:36，不能留着前一天的 UTC 日期。",
+  );
+  assert.equal(
+    formatLocalTimestamp("2026-11-12T16:36:00.000Z", "Asia/Shanghai").slice(0, 10),
+    formatLocalTimestamp("2026-11-12T16:38:00.000Z", "Asia/Shanghai").slice(0, 10),
+    "两分钟前的话和现在必须同一天。",
+  );
+  assert.equal(formatLocalTimestamp("not-a-date", "Asia/Shanghai"), "", "坏时间返回空串，让调用方整条字段省略。");
+  assert.equal(formatLocalTimestamp(undefined, "Asia/Shanghai"), "", "没有时间就是空串，不能塞一个 today。");
   assert(
     systemMessage.content.includes("now.local"),
     "系统提示词要解释 now 的字段，否则模型不知道这堆时间是干什么的。",
@@ -165,6 +183,12 @@ try {
   assert(
     systemMessage.content.includes("say you have no record"),
     "没有记录时要说清楚，不能编一个听起来合理的故事。",
+  );
+  const promptRecent = promptInput.recentMessages as Array<Record<string, unknown>>;
+  assert.equal(
+    promptRecent[0]?.occurredAt,
+    "2026-10-24 18:00:00",
+    "最近对话也必须是本地时间：她判「刚刚/昨天」时看的就是这一条。",
   );
 
   // 记忆助手触发策略：角色资料、关系、日记与连续追问提示都必须进入主动检索判断。
@@ -263,10 +287,10 @@ try {
   const promptMemories = promptInput.memories as Array<Record<string, unknown>>;
   const promptSnapshots = promptInput.snapshots as Array<Record<string, unknown>>;
   assert.equal(promptMemories[0]?.scope, "character", "Character-global memory keeps its scope label.");
-  assert.equal(promptMemories[0]?.occurredAt, "2026-10-24T10:00:00.000Z", "记忆要带自己的时间，否则「什么时候」答不出来。");
+  assert.equal(promptMemories[0]?.occurredAt, "2026-10-24 18:00:00", "记忆要带自己的时间，否则「什么时候」答不出来。");
   assert.equal(promptSnapshots[0]?.scope, "character", "Character-global snapshot keeps its scope label.");
   const promptEvents = promptInput.events as Array<Record<string, unknown>>;
-  assert.equal(promptEvents[0]?.occurredAt, "2026-10-29T06:00:00.000Z", "忆泡必须带发生时间，「那天」靠它才答得出。");
+  assert.equal(promptEvents[0]?.occurredAt, "2026-10-29 14:00:00", "忆泡必须带发生时间，「那天」靠它才答得出。");
   assert.deepEqual(promptEvents[0]?.participants, ["小明"], "忆泡要带参与者，否则「和谁」答不出来。");
   assert.equal(promptEvents[0]?.place, "北海", "知道地点就要带上。");
   assert(
@@ -275,7 +299,7 @@ try {
     "参与者名单不能被误当成具体发言人或行为人。",
   );
   const promptRaw = promptInput.rawMessages as Array<Record<string, unknown>>;
-  assert.equal(promptRaw[0]?.occurredAt, "2026-10-29T06:00:00.000Z", "原文兜底也要带时间，否则又被当成「很久以前」。");
+  assert.equal(promptRaw[0]?.occurredAt, "2026-10-29 14:00:00", "原文兜底也要带时间，否则又被当成「很久以前」。");
   assert.equal(promptRaw[0]?.scope, "character", "原文同样要带范围标签。");
   assert.equal(
     promptRaw[0]?.speaker,
@@ -1260,6 +1284,51 @@ try {
   assert.equal(explainedSilent.action, "silent");
   assert.equal(explainedSilent.responseExplanation, "这段对话正在询问另一位成员。");
   assert(!JSON.stringify(explainedSilent).includes("HIDDEN_REASONING"));
+  /**
+   * 分条发送（v58）：只有渠道声明了能力，「换行 = 另起一条」才进提示词。
+   *
+   * 三条都要钉住 —— 没有分条规则的渠道（网页对话）一句都不能多；语音轮次也不能多，
+   * 那一轮的正文会被合成成一条语音，让它「分几行说」没有东西可拆。
+   */
+  const captureSystem = (): string =>
+    (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+      .messages.find((item) => item.role === "system")!.content;
+  const SEGMENT_RULE = "each newline in reply as a separate message";
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    capturedBody = typeof init?.body === "string" ? init.body : "";
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ reply: "嗯。\n你也没睡。" }) } }] });
+  };
+
+  capturedBody = "";
+  const segmented = await generateConversationReply({ ...explanationInput, segmentedReply: true });
+  assert(segmented.reply.includes("\n"), "换行必须原样留在 reply 里：拆几条由发送层决定，模型只负责分段。");
+  assert(captureSystem().includes(SEGMENT_RULE), "声明能分条时要写清「换行 = 另一条消息」。");
+  assert(captureSystem().includes("no lists, no numbering"), "不写清「别拿换行排版」，模型会把它当 Markdown 用。");
+
+  capturedBody = "";
+  await generateConversationReply(explanationInput);
+  assert(!captureSystem().includes(SEGMENT_RULE), "没声明能力的渠道（网页对话）不许出现分条规则。");
+
+  capturedBody = "";
+  await generateConversationReply({ ...explanationInput, segmentedReply: true, voiceReply: true });
+  assert(!captureSystem().includes(SEGMENT_RULE), "语音轮次不分条：正文已经是一条语音，没有第二条可发。");
+
+  /**
+   * 群聊那句「就一行」必须跟着通道能力走。
+   *
+   * 线上实测（v57，一轮群聊）：只加分条规则、留着「one short line」，她写出来是
+   * 一行 43 字 + 一行 12 字 —— 分条规则在，但被「就一行」压着，等于没生效。
+   */
+  const groupChatInput: ConversationReplyInput = { ...explanationInput, groupChat: true, allowSilent: true };
+  capturedBody = "";
+  await generateConversationReply(groupChatInput);
+  assert(captureSystem().includes("one short line, like a person"), "不能分条的渠道维持原判据：就一行。");
+  assert(!captureSystem().includes("two or three short lines"), "不能分条时不许说「两三条」。");
+
+  capturedBody = "";
+  await generateConversationReply({ ...groupChatInput, segmentedReply: true });
+  assert(captureSystem().includes("two or three short lines"), "能分条时群聊要允许两三条，否则她会把话挤成一行。");
+  assert(!captureSystem().includes("one short line, like a person"), "能分条时不能再留着「就一行」——两句互相打架。");
 } finally {
   globalThis.fetch = originalFetch;
 }

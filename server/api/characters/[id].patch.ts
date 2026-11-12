@@ -3,7 +3,7 @@ import type { Prisma } from "../../../src/generated/prisma/client";
 import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { readCharacterBody, readCharacterProfilePatch } from "../../utils/character-profile-input";
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
-import { API_KEY_FIELDS, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
+import { API_KEY_FIELDS, applyApiKeyWrites, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
 import { ASSISTANT_FIELDS, resolveAssistantConnection } from "../../utils/assistant-inheritance";
 import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
 import { readKnowledgeAssistantSettingsPatch, validateKnowledgeAssistantEnabledConfig } from "../../utils/knowledge-assistant-config";
@@ -534,11 +534,7 @@ export default defineEventHandler(async (event) => {
         clear: clearSocialRelationshipAssessmentAssistantApiKey,
       },
     ];
-    for (const write of keyWrites) {
-      delete nextConfig[write.fields.legacy];
-      if (write.clear) delete nextConfig[write.fields.plain];
-      else if (write.value) nextConfig[write.fields.plain] = write.value;
-    }
+    await applyApiKeyWrites(nextConfig, keyWrites);
 
     // 识别是独立一把：合成换成只做合成的服务商之后，共用那把 Key 打识别服务商只会 401。
     // 「同语音合成」：在服务端把合成那把复制过来，用户自己填了识别 Key 时以用户为准。

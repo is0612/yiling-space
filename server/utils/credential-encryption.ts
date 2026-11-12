@@ -89,6 +89,51 @@ function normalizeEndpoint(value: string): string {
 const DEFAULT_ENDPOINT = "https://api.openai.com/v1";
 type ApiKeyFieldPair = { plain: string; legacy: string };
 
+export type ApiKeyWrite = { fields: ApiKeyFieldPair; value?: string; clear?: boolean };
+
+/**
+ * 把一次保存里的 Key 变更落到 modelConfig 上。
+ *
+ * 三条不能破的规矩，全是踩出来的：
+ * ① 有新值：写明文字段、删旧密文；
+ * ② 明确清除：两个都删；
+ * ③ 既没新值也没要求清除：**旧密文不能直接删**。存量的 Key 还躺在旧字段里，
+ *    先解密迁成明文再删；解不开（换过机器）就原样留着，等用户重填。
+ *
+ * 2026-11-12 实况：② 之前写成「先无条件 delete legacy，再按需写明文」，于是用户
+ * 保存一次角色，Key 静默消失，整条渠道停在 `model_not_configured`，群里一个字不回。
+ */
+export async function applyApiKeyWrites(
+  config: Record<string, unknown>,
+  writes: readonly ApiKeyWrite[],
+): Promise<void> {
+  for (const write of writes) {
+    if (write.value) {
+      config[write.fields.plain] = write.value;
+      delete config[write.fields.legacy];
+      continue;
+    }
+    if (write.clear) {
+      delete config[write.fields.plain];
+      delete config[write.fields.legacy];
+      continue;
+    }
+    const legacy = config[write.fields.legacy];
+    if (typeof legacy !== "string" || !legacy.startsWith("v1.")) continue;
+    const plainSaved = config[write.fields.plain];
+    if (typeof plainSaved === "string" && plainSaved.trim()) {
+      // 明文已经在：以它为准，旧密文只是残留。
+      delete config[write.fields.legacy];
+      continue;
+    }
+    const migrated = await decryptApiKey(legacy).catch(() => "");
+    if (migrated) {
+      config[write.fields.plain] = migrated;
+      delete config[write.fields.legacy];
+    }
+  }
+}
+
 /**
  * 八把 Key 的字段名。新增服务商时在这里补一行，别在各处再手写一遍字符串 ——
  * 名字写错的表现是「明明填了却说没配」，最难查。

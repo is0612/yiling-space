@@ -35,8 +35,8 @@ export function resolveChatTimeZone(value: unknown): string {
   }
 }
 
-export function buildChatTimeContext(now: Date, timeZone: string): ChatTimeContext {
-  const zone = resolveChatTimeZone(timeZone);
+/** 同一时刻在角色时区里的日期与时刻，只算一次格式化。 */
+function localParts(now: Date, zone: string): { date: string; time: string } {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: zone,
     year: "numeric",
@@ -50,9 +50,44 @@ export function buildChatTimeContext(now: Date, timeZone: string): ChatTimeConte
   const pick = (type: Intl.DateTimeFormatPartTypes): string =>
     parts.find((part) => part.type === type)?.value ?? "";
   return {
+    date: `${pick("year")}-${pick("month")}-${pick("day")}`,
+    time: `${pick("hour")}:${pick("minute")}:${pick("second")}`,
+  };
+}
+
+export function buildChatTimeContext(now: Date, timeZone: string): ChatTimeContext {
+  const zone = resolveChatTimeZone(timeZone);
+  const parts = localParts(now, zone);
+  return {
     timeZone: zone,
-    local: `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}:${pick("second")}`,
+    local: `${parts.date} ${parts.time}`,
     weekday: new Intl.DateTimeFormat("zh-CN", { timeZone: zone, weekday: "short" }).format(now),
     utc: now.toISOString(),
   };
+}
+
+/**
+ * 历史时间戳进提示词时一律换成本地时间。
+ *
+ * 2026-11-12 凌晨 00:38 那轮踩过：`now.local` 是北京时间 11-12，而消息的 `occurredAt`
+ * 是 UTC ISO「2026-11-11T16:38:00.000Z」，提示词又要求「相对日期只看 now.local」。
+ * 模型拿 ISO 的日期部分一比，就把两分钟前说的话判成「昨天」——UTC+8 下凡是本地
+ * 00:00–07:59 说的话，UTC 日期都在前一天，而那正好是深夜聊天的时间。
+ *
+ * 两个表示同时给，模型一定挑错那一个。所以进提示词的时间只留本地这一种，
+ * 不认识的输入返回空串，让调用方整条字段省略，而不是塞一个坏值。
+ */
+export function formatLocalTimestamp(
+  value: string | Date | null | undefined,
+  timeZone: string,
+): string {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  try {
+    const parts = localParts(date, resolveChatTimeZone(timeZone));
+    return `${parts.date} ${parts.time}`;
+  } catch {
+    return "";
+  }
 }
