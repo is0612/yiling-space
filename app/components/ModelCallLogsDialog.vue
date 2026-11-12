@@ -236,252 +236,256 @@ onBeforeUnmount(() => {
   <el-dialog
     v-model="opened"
     title="调用日志"
-    width="min(1120px, calc(100vw - 32px))"
+    width="min(1440px, calc(100vw - 32px))"
     top="5vh"
     class="model-call-logs-dialog"
     append-to-body
   >
     <div class="call-logs">
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        title="这里只记录当前应用的模型使用情况"
-        description="记录数不等于 HTTP 请求次数或 API Key 调用次数，重试可能合并为一条记录。较早的失败或未上报用量的调用可能缺失；这里无法查看服务商账号的其他使用情况或 Key 剩余额度。"
-      />
-      <div class="log-filters">
-        <label class="log-filter">
-          <span>时间范围</span>
-          <el-select
-            v-model="days"
-            aria-label="时间范围"
-            @change="resetPage"
-          >
-            <el-option
-              label="最近 1 天"
-              :value="1"
-            />
-            <el-option
-              label="最近 7 天"
-              :value="7"
-            />
-            <el-option
-              label="最近 30 天"
-              :value="30"
-            />
-          </el-select>
-        </label>
-        <label class="log-filter">
-          <span>用途</span>
-          <el-select
-            v-model="kind"
-            clearable
-            aria-label="用途"
-            placeholder="全部用途"
-            @change="resetPage"
-          >
-            <el-option
-              v-for="value in availableKinds"
-              :key="value"
-              :label="kindLabels[value] ?? '其他用途'"
-              :value="value"
-            />
-          </el-select>
-        </label>
-        <label class="log-filter model-filter">
-          <span>模型</span>
-          <el-select
-            v-model="model"
-            clearable
-            filterable
-            aria-label="模型"
-            placeholder="全部模型"
-            @change="resetPage"
-          >
-            <el-option
-              v-for="value in availableModels"
-              :key="value"
-              :label="value"
-              :value="value"
-            />
-          </el-select>
-        </label>
-        <el-button
-          :icon="Refresh"
-          :loading="loading"
-          @click="loadLogs"
+      <div class="log-main">
+        <el-alert
+          v-if="errorMessage"
+          type="error"
+          :closable="false"
+          show-icon
         >
-          刷新
-        </el-button>
-      </div>
-      <div
-        class="log-summary"
-        aria-live="polite"
-      >
+          <template #title>
+            {{ errorMessage }}
+            <el-button
+              link
+              type="primary"
+              @click="loadLogs"
+            >
+              重试
+            </el-button>
+          </template>
+        </el-alert>
         <div
-          v-for="item in summaries"
-          :key="item.label"
-          class="log-stat"
+          v-loading="loading"
+          class="log-table"
+          :aria-busy="loading"
         >
-          <span>{{ item.label }}</span>
-          <strong>{{ formatNumber(item.value) }}</strong>
+          <el-table
+            :data="report?.items ?? []"
+            row-key="id"
+            max-height="66vh"
+            :empty-text="loading ? '正在读取调用记录…' : errorMessage ? '日志读取失败，请重试' : '这个范围内还没有调用记录'"
+          >
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <dl class="log-details">
+                  <div><dt>用量上报</dt><dd>{{ row.usageReported ? '已上报' : '未上报，Token 与金额不可确认' }}</dd></div>
+                  <div><dt>缓存命中 Token</dt><dd>{{ formatTokens(row as CallLog, row.cacheHitTokens) }}</dd></div>
+                  <div><dt>缓存未命中 Token</dt><dd>{{ formatTokens(row as CallLog, row.cacheMissTokens) }}</dd></div>
+                  <div><dt>思考 Token</dt><dd>{{ formatTokens(row as CallLog, row.reasoningTokens) }}</dd></div>
+                  <div><dt>尝试次数</dt><dd>{{ formatNumber(row.attempts) }}</dd></div>
+                  <div><dt>生成总耗时</dt><dd>{{ formatDuration(row.durationMs) }}（含助手处理与重试）</dd></div>
+                  <div><dt>HTTP 状态</dt><dd>{{ formatNumber(row.httpStatus) }}</dd></div>
+                  <div><dt>结束方式</dt><dd>{{ finishLabel(row.finishReason) }}</dd></div>
+                  <div><dt>结果说明</dt><dd>{{ reasonLabel(row as CallLog) }}</dd></div>
+                </dl>
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="时间"
+              min-width="172"
+            >
+              <template #default="{ row }">
+                {{ formatTime(row.createdAt) }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="用途"
+              min-width="100"
+            >
+              <template #default="{ row }">
+                {{ kindLabels[row.kind] ?? '其他用途' }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              prop="model"
+              label="模型"
+              min-width="160"
+              show-overflow-tooltip
+            />
+            <el-table-column
+              label="结果"
+              width="108"
+            >
+              <template #default="{ row }">
+                <el-tag
+                  :type="statusTypes[row.status as CallLog['status']] ?? 'info'"
+                  effect="light"
+                >
+                  {{ statusLabels[row.status as CallLog['status']] ?? '未知' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="输入 Token"
+              min-width="105"
+              align="right"
+            >
+              <template #default="{ row }">
+                {{ formatTokens(row as CallLog, row.promptTokens) }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="输出 Token"
+              min-width="105"
+              align="right"
+            >
+              <template #default="{ row }">
+                {{ formatTokens(row as CallLog, row.completionTokens) }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="总 Token"
+              min-width="100"
+              align="right"
+            >
+              <template #default="{ row }">
+                {{ formatTokens(row as CallLog, row.totalTokens) }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="估算花费"
+              min-width="115"
+              align="right"
+            >
+              <template #default="{ row }">
+                {{ formatCost(row as CallLog) }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="本轮详情"
+              width="190"
+              fixed="right"
+            >
+              <template #default="{ row }">
+                <el-button
+                  v-if="row.turnId != null"
+                  link
+                  type="primary"
+                  @click="openTurnDetail(row as CallLog)"
+                >
+                  查看本轮详情
+                </el-button>
+                <el-button
+                  v-else
+                  link
+                  disabled
+                >
+                  历史记录未保存详情
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
         </div>
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="pageSize"
+          class="log-pagination"
+          :page-sizes="[20, 50]"
+          :total="total"
+          :disabled="loading || !!errorMessage"
+          layout="total, sizes, prev, pager, next"
+          @size-change="resetPage"
+        />
       </div>
-      <p class="log-note">
-        统计随筛选条件变化，覆盖全部分页。时间为北京时间（Asia/Shanghai）。金额仅为参考估算，缺少用量或未定价时显示 —。
-        <template v-if="report?.summary.usageMissingRecords">
-          其中 {{ formatNumber(report.summary.usageMissingRecords) }} 条记录未上报用量，Token 统计不完整。
-        </template>
-      </p>
-      <el-alert
-        v-if="errorMessage"
-        type="error"
-        :closable="false"
-        show-icon
-      >
-        <template #title>
-          {{ errorMessage }}
+      <aside class="log-side">
+        <div class="log-filters">
+          <label class="log-filter">
+            <span>时间范围</span>
+            <el-select
+              v-model="days"
+              aria-label="时间范围"
+              @change="resetPage"
+            >
+              <el-option
+                label="最近 1 天"
+                :value="1"
+              />
+              <el-option
+                label="最近 7 天"
+                :value="7"
+              />
+              <el-option
+                label="最近 30 天"
+                :value="30"
+              />
+            </el-select>
+          </label>
+          <label class="log-filter">
+            <span>用途</span>
+            <el-select
+              v-model="kind"
+              clearable
+              aria-label="用途"
+              placeholder="全部用途"
+              @change="resetPage"
+            >
+              <el-option
+                v-for="value in availableKinds"
+                :key="value"
+                :label="kindLabels[value] ?? '其他用途'"
+                :value="value"
+              />
+            </el-select>
+          </label>
+          <label class="log-filter">
+            <span>模型</span>
+            <el-select
+              v-model="model"
+              clearable
+              filterable
+              aria-label="模型"
+              placeholder="全部模型"
+              @change="resetPage"
+            >
+              <el-option
+                v-for="value in availableModels"
+                :key="value"
+                :label="value"
+                :value="value"
+              />
+            </el-select>
+          </label>
           <el-button
-            link
-            type="primary"
+            :icon="Refresh"
+            :loading="loading"
             @click="loadLogs"
           >
-            重试
+            刷新
           </el-button>
-        </template>
-      </el-alert>
-      <div
-        v-loading="loading"
-        class="log-table"
-        :aria-busy="loading"
-      >
-        <el-table
-          :data="report?.items ?? []"
-          row-key="id"
-          max-height="440"
-          :empty-text="loading ? '正在读取调用记录…' : errorMessage ? '日志读取失败，请重试' : '这个范围内还没有调用记录'"
+        </div>
+        <div
+          class="log-summary"
+          aria-live="polite"
         >
-          <el-table-column type="expand">
-            <template #default="{ row }">
-              <dl class="log-details">
-                <div><dt>用量上报</dt><dd>{{ row.usageReported ? '已上报' : '未上报，Token 与金额不可确认' }}</dd></div>
-                <div><dt>缓存命中 Token</dt><dd>{{ formatTokens(row as CallLog, row.cacheHitTokens) }}</dd></div>
-                <div><dt>缓存未命中 Token</dt><dd>{{ formatTokens(row as CallLog, row.cacheMissTokens) }}</dd></div>
-                <div><dt>思考 Token</dt><dd>{{ formatTokens(row as CallLog, row.reasoningTokens) }}</dd></div>
-                <div><dt>尝试次数</dt><dd>{{ formatNumber(row.attempts) }}</dd></div>
-                <div><dt>生成总耗时</dt><dd>{{ formatDuration(row.durationMs) }}（含助手处理与重试）</dd></div>
-                <div><dt>HTTP 状态</dt><dd>{{ formatNumber(row.httpStatus) }}</dd></div>
-                <div><dt>结束方式</dt><dd>{{ finishLabel(row.finishReason) }}</dd></div>
-                <div><dt>结果说明</dt><dd>{{ reasonLabel(row as CallLog) }}</dd></div>
-              </dl>
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="时间"
-            min-width="172"
+          <div
+            v-for="item in summaries"
+            :key="item.label"
+            class="log-stat"
           >
-            <template #default="{ row }">
-              {{ formatTime(row.createdAt) }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="用途"
-            min-width="100"
-          >
-            <template #default="{ row }">
-              {{ kindLabels[row.kind] ?? '其他用途' }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="model"
-            label="模型"
-            min-width="160"
-            show-overflow-tooltip
-          />
-          <el-table-column
-            label="结果"
-            width="108"
-          >
-            <template #default="{ row }">
-              <el-tag
-                :type="statusTypes[row.status as CallLog['status']] ?? 'info'"
-                effect="light"
-              >
-                {{ statusLabels[row.status as CallLog['status']] ?? '未知' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="输入 Token"
-            min-width="105"
-            align="right"
-          >
-            <template #default="{ row }">
-              {{ formatTokens(row as CallLog, row.promptTokens) }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="输出 Token"
-            min-width="105"
-            align="right"
-          >
-            <template #default="{ row }">
-              {{ formatTokens(row as CallLog, row.completionTokens) }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="总 Token"
-            min-width="100"
-            align="right"
-          >
-            <template #default="{ row }">
-              {{ formatTokens(row as CallLog, row.totalTokens) }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="估算花费"
-            min-width="115"
-            align="right"
-          >
-            <template #default="{ row }">
-              {{ formatCost(row as CallLog) }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="本轮详情"
-            width="190"
-            fixed="right"
-          >
-            <template #default="{ row }">
-              <el-button
-                v-if="row.turnId != null"
-                link
-                type="primary"
-                @click="openTurnDetail(row as CallLog)"
-              >
-                查看本轮详情
-              </el-button>
-              <el-button
-                v-else
-                link
-                disabled
-              >
-                历史记录未保存详情
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-      <el-pagination
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
-        class="log-pagination"
-        :page-sizes="[20, 50]"
-        :total="total"
-        :disabled="loading || !!errorMessage"
-        layout="total, sizes, prev, pager, next"
-        @size-change="resetPage"
-      />
+            <span>{{ item.label }}</span>
+            <strong>{{ formatNumber(item.value) }}</strong>
+          </div>
+        </div>
+        <p class="log-note">
+          统计随筛选条件变化，覆盖全部分页。时间为北京时间（Asia/Shanghai）。金额仅为参考估算，缺少用量或未定价时显示 —。
+          <template v-if="report?.summary.usageMissingRecords">
+            其中 {{ formatNumber(report.summary.usageMissingRecords) }} 条记录未上报用量，Token 统计不完整。
+          </template>
+        </p>
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="这里只记录当前应用的模型使用情况"
+          description="记录数不等于 HTTP 请求次数或 API Key 调用次数，重试可能合并为一条记录。较早的失败或未上报用量的调用可能缺失；这里无法查看服务商账号的其他使用情况或 Key 剩余额度。"
+        />
+      </aside>
     </div>
   </el-dialog>
   <el-dialog
@@ -538,14 +542,16 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .turn-detail-body { min-height: 150px; max-height: 70vh; overflow-y: auto; font-size: 14px; }
-.call-logs { display: flex; flex-direction: column; gap: 16px; color: var(--text-2); font-size: 14px; }
-.log-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
-.log-filter { display: flex; flex: 1; min-width: 150px; flex-direction: column; gap: 6px; font-size: 12px; }
-.model-filter { flex: 2; min-width: 200px; }
-.log-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.log-stat { display: flex; flex-direction: column; gap: 6px; border-radius: 8px; background: var(--surface-2, #f7f8fa); padding: 14px 16px; }
+.call-logs { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 20px; color: var(--text-2); font-size: 14px; }
+.log-main { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.log-side { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
+.log-filters { display: flex; flex-direction: column; gap: 10px; }
+.log-filter { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.log-filter :deep(.el-select) { width: 100%; }
+.log-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.log-stat { display: flex; flex-direction: column; gap: 4px; border-radius: 8px; background: var(--surface-2, #f7f8fa); padding: 10px 12px; }
 .log-stat span, .log-note { color: var(--dim); font-size: 12px; line-height: 1.7; }
-.log-stat strong { color: var(--text); font-size: 22px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.log-stat strong { color: var(--text); font-size: 18px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .log-note { margin: 0; }
 .log-table { min-height: 130px; }
 .log-table :deep(.el-table) { font-size: 12px; }
@@ -554,8 +560,9 @@ onBeforeUnmount(() => {
 .log-details dt { color: var(--dim); }
 .log-details dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
 .log-pagination { align-self: flex-end; max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
-@media (max-width: 640px) {
-  .log-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 1100px) {
+  .call-logs { grid-template-columns: minmax(0, 1fr); }
+  .log-side { order: -1; }
   .log-details { grid-template-columns: 1fr; padding: 16px; }
   .log-pagination { align-self: stretch; }
 }
