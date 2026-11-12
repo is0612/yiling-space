@@ -34,6 +34,9 @@ export type MemoryProgressJob = {
   eventCount: number | null;
   startedAt: string | null;
   updatedAt: string;
+  runAt: string;
+  attemptCount: number;
+  maxAttempts: number;
   /** 运行中但租约过期：领走它的进程可能已经不在了，面板会标「卡住」。 */
   leaseExpired: boolean;
   lastError: string | null;
@@ -92,6 +95,9 @@ export async function listMemoryProgress(
       periodEnd: true,
       startedAt: true,
       updatedAt: true,
+      runAt: true,
+      attemptCount: true,
+      maxAttempts: true,
       completedAt: true,
       lockedAt: true,
       lastError: true,
@@ -178,6 +184,9 @@ export async function listMemoryProgress(
       eventCount,
       startedAt: job.startedAt?.toISOString() ?? null,
       updatedAt: job.updatedAt.toISOString(),
+      runAt: job.runAt.toISOString(),
+      attemptCount: job.attemptCount,
+      maxAttempts: job.maxAttempts,
       leaseExpired: job.status === "RUNNING" && isMemoryJobLeaseExpired(job.lockedAt, now),
       lastError: job.lastError,
     });

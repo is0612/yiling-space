@@ -129,7 +129,28 @@ export type MemoryAiAnalysis = {
   friendAliases: Array<{ alias: string; reason: string }>;
 };
 
+export type MemoryAiCallDiagnostics = {
+  outputBudget: number;
+  inputMessages: number;
+  inputChars: number;
+  durationMs: number;
+  finishReason: string;
+  status: "success" | "failed";
+  usage?: ModelUsageTokens;
+};
+
+/** One HTTP attempt only; persistent task retries explicitly opt into the larger budget. */
+export function resolveMemoryOutputBudget(previousOutputTruncated = false): number {
+  const configured = Number(process.env.LLM_MEMORY_MAX_OUTPUT_TOKENS);
+  const cap = Number.isFinite(configured) && configured >= 1
+    ? Math.min(32_768, Math.max(1, Math.floor(configured))) : 32_000;
+  return Math.min(previousOutputTruncated ? 32_000 : 16_000, cap);
+}
+
 export type MemoryAiInput = {
+  previousOutputTruncated?: boolean;
+  /** Safe metadata only, emitted once per actual HTTP attempt, including failures. */
+  onDiagnostics?: (diagnostic: MemoryAiCallDiagnostics) => void | Promise<void>;
   /** 按天忆泡只生成事件；默认仍生成完整阶段总结。 */
   mode?: "events";
   apiKey: string;
@@ -181,7 +202,7 @@ export type MemoryAiInput = {
 const MAX_RESPONSE_BYTES = 1_000_000;
 /** v5：忆泡抽取补上 `speaker` / `member`，并要求 participants 不写自己、不写泛称。 */
 /** v6：主人私聊可见全局记忆，支持 `scope: "character"` 写入与跨范围 INVALIDATE。 */
-const TEMPLATE_VERSION = "memory-extraction-v9";
+const TEMPLATE_VERSION = "memory-extraction-v10";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -609,6 +630,7 @@ function systemPrompt(options: {
   }
   lines.push(
     "只输出 JSON，不要 Markdown 代码围栏。所有列表字段必须存在，即使为空。",
+    "输出保持精简：summary 不超过 600 字；importantEvents、factAndPreferenceChanges、relationshipChanges、goalsAndCommitments、unresolvedTopics 各最多 8 条，differencesFromPrevious 最多 6 条；memoryChanges 最多 12 条。每条内容不超过 160 字，changeReason 不超过 80 字；同一结论不要跨栏目反复展开，空栏目写空数组。优先保留有证据的重要变化与更正，不为凑数生成条目；上述限制不适用于 events，不删改输入证据或来源 ID。",
     "JSON 格式：",
     JSON.stringify({
       summary: "周期摘要",
@@ -760,121 +782,146 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
     for (const key of ["activeMemories", "globalMemories", "previousSnapshotSummary", "periodEvents"]) delete fields[key];
   }
   const requestStartedAt = Date.now();
+  const outputBudget = resolveMemoryOutputBudget(input.previousOutputTruncated === true);
+  let attemptUsage: ModelUsageTokens | undefined;
+  let attemptFinishReason = "unknown";
+  let attemptSucceeded = false;
   const inputMessages = [...input.messages, ...(input.contextMessages ?? [])];
   const inputScale = `inputMessages=${inputMessages.length}, inputChars=${inputMessages.reduce((total, message) => total + message.content.length, 0)}`;
-  const controller = new AbortController();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let response: Response;
-  let responseText: string;
   try {
-    [response, responseText] = await Promise.race([
-      (async (): Promise<[Response, string]> => {
-        const response = await fetch(endpoint, {
-          method: "POST",
-          redirect: "error",
-          headers: {
-            authorization: "Bearer " + apiKey,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            temperature: 0.1,
-            // 思考型模型的 reasoning 与正文共用输出预算；不自动重试或提高预算。
-            max_tokens: 16_000,
-            response_format: { type: "json_object" },
-            messages: [
-              { role: "system", content: systemPrompt({ eventsOnly: input.mode === "events", emitEvents: input.mode === "events" || input.emitEvents !== false, withPeriodEvents: Boolean(input.periodEvents?.length), emitFriendAliases: input.emitFriendAliases === true, withGlobalMemories: Boolean(input.globalMemories?.length) || input.allowGlobalMemory === true }) },
-              { role: "user", content: JSON.stringify(promptInput) },
-            ],
-          }),
-          signal: controller.signal,
-        });
-        return [response, await response.text()];
-      })(),
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`LLM_TIMEOUT: 模型请求超过配置的 ${timeoutMs / 1000} 秒（${inputScale}）。`));
-          controller.abort();
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
-  if (Buffer.byteLength(responseText, "utf8") > MAX_RESPONSE_BYTES) {
-    throw new Error("LLM_RESPONSE_TOO_LARGE: 模型响应超过大小限制。");
-  }
-  if (!response.ok) {
-    // Provider error bodies may echo request fragments. Keep raw response text out of task logs.
-    throw new Error("LLM_HTTP_ERROR: 模型服务返回 HTTP " + response.status + "。请检查服务端模型配置和供应商控制台。");
-  }
-
-  let payload: Record<string, unknown>;
-  try {
-    const envelope = asRecord(JSON.parse(responseText));
-    if (!envelope) throw new Error("not an object");
-    payload = envelope;
-  } catch {
-    throw new Error(`LLM_INVALID_ENVELOPE: 模型服务没有返回有效 JSON（finishReason=unknown, ${inputScale}）。`);
-  }
-  const choices = Array.isArray(payload.choices) ? payload.choices : [];
-  const firstChoice = asRecord(choices[0]);
-  // Provider fields are untrusted: never echo arbitrary finish reasons or model text.
-  const rawFinishReason = firstChoice?.finish_reason;
-  const finishReason = typeof rawFinishReason === "string"
-    && ["stop", "length", "content_filter", "tool_calls", "function_call", "eos_token"].includes(rawFinishReason)
-    ? rawFinishReason : "unknown";
-  const diagnostics = `finishReason=${finishReason}, ${inputScale}`;
-  if (finishReason === "length") {
-    throw new Error(`LLM_OUTPUT_TRUNCATED: 模型输出达到长度上限，未能完整返回（${diagnostics}）。`);
-  }
-  const message = asRecord(firstChoice?.message);
-  const content = message?.content;
-  if (content == null || (typeof content === "string" && !content.trim())) {
-    throw new Error(`LLM_EMPTY_REPLY: 模型没有返回正文（${diagnostics}）。`);
-  }
-  let parsed: unknown;
-  try {
-    if (typeof content !== "string") throw new Error("content is not a string");
-    // `response_format: json_object` 只是请求，不是保证：实测最常见的坏输出是套一层
-    // json 围栏，或前面先写一句「好的，这是结果：」。内容和群聊那条一样走宽松解析，
-    // 裸 JSON.parse 会把这类**内容其实全对**的输出判成失败（2026-10-31 群聊整理就是这样挂的）。
-    parsed = parseJsonLoose(content, { expect: "object" });
-    if (!parsed) throw new Error("not an object");
-  } catch {
-    throw new Error(`LLM_INVALID_JSON: 模型输出不是有效 JSON（${diagnostics}）。`);
-  }
-
-  const sourceIds = [...input.messages, ...(input.contextMessages ?? [])].map((message) => message.id);
-  const existingIds = input.activeMemories.map((memory) => memory.id);
-  const globalIds = (input.globalMemories ?? []).map((memory) => memory.id);
-  let analysis: MemoryAiAnalysis;
-  if (input.mode === "events") {
-    const root = asRecord(parsed);
-    if (!root || !Array.isArray(root.events)) {
-      throw new Error(`LLM_INVALID_RESPONSE: 模型没有返回有效的事件数组（${diagnostics}）。`);
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let response: Response;
+    let responseText: string;
+    try {
+      [response, responseText] = await Promise.race([
+        (async (): Promise<[Response, string]> => {
+          const response = await fetch(endpoint, {
+            method: "POST",
+            redirect: "error",
+            headers: {
+              authorization: "Bearer " + apiKey,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              model,
+              temperature: 0.1,
+              // Reasoning shares this budget. Only the caller's persisted length failure raises it.
+              max_tokens: outputBudget,
+              response_format: { type: "json_object" },
+              messages: [
+                { role: "system", content: systemPrompt({ eventsOnly: input.mode === "events", emitEvents: input.mode === "events" || input.emitEvents !== false, withPeriodEvents: Boolean(input.periodEvents?.length), emitFriendAliases: input.emitFriendAliases === true, withGlobalMemories: Boolean(input.globalMemories?.length) || input.allowGlobalMemory === true }) },
+                { role: "user", content: JSON.stringify(promptInput) },
+              ],
+            }),
+            signal: controller.signal,
+          });
+          return [response, await response.text()];
+        })(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error(`LLM_TIMEOUT: 模型请求超过配置的 ${timeoutMs / 1000} 秒（${inputScale}）。`));
+            controller.abort();
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
     }
-    analysis = { summary: "", importantEvents: [], factAndPreferenceChanges: [], relationshipChanges: [],
-      goalsAndCommitments: [], unresolvedTopics: [], differencesFromPrevious: [], memoryChanges: [], friendAliases: [],
-      events: readEventDrafts(root.events, new Set(sourceIds)) };
-  } else {
-    analysis = validateMemoryAiOutput(parsed, sourceIds, existingIds, globalIds);
-  }
-  if (input.contextMessages?.length) {
-    const newMessageIds = new Set(input.messages.map((message) => message.id));
-    analysis.events = analysis.events.filter((event) => event.evidenceMessageIds.some((id) => newMessageIds.has(id)));
-  }
-  // 用量统一走 model-usage 的解析，才能带上缓存命中明细（命中价只有未命中价的几十分之一）。
-  const usage = readModelUsage(payload);
+    if (Buffer.byteLength(responseText, "utf8") > MAX_RESPONSE_BYTES) {
+      throw new Error("LLM_RESPONSE_TOO_LARGE: 模型响应超过大小限制。");
+    }
+    if (!response.ok) {
+      // Provider error bodies may echo request fragments. Keep raw response text out of task logs.
+      throw new Error("LLM_HTTP_ERROR: 模型服务返回 HTTP " + response.status + "。请检查服务端模型配置和供应商控制台。");
+    }
 
-  return {
-    analysis,
-    model,
-    provider: endpoint.origin,
-    promptTemplateVersion: input.mode === "events" ? "memory-events-v1" : TEMPLATE_VERSION,
-    durationMs: Date.now() - requestStartedAt,
-    ...(usage ? { usage } : {}),
-  };
+    let payload: Record<string, unknown>;
+    try {
+      const envelope = asRecord(JSON.parse(responseText));
+      if (!envelope) throw new Error("not an object");
+      payload = envelope;
+    } catch {
+      throw new Error(`LLM_INVALID_ENVELOPE: 模型服务没有返回有效 JSON（finishReason=unknown, ${inputScale}）。`);
+    }
+    const choices = Array.isArray(payload.choices) ? payload.choices : [];
+    const firstChoice = asRecord(choices[0]);
+    // Provider fields are untrusted: never echo arbitrary finish reasons or model text.
+    const rawFinishReason = firstChoice?.finish_reason;
+    const finishReason = typeof rawFinishReason === "string"
+      && ["stop", "length", "content_filter", "tool_calls", "function_call", "eos_token"].includes(rawFinishReason)
+      ? rawFinishReason : "unknown";
+    attemptFinishReason = finishReason;
+    attemptUsage = readModelUsage(payload) ?? undefined;
+    const diagnostics = `finishReason=${finishReason}, ${inputScale}, outputBudget=${outputBudget}`;
+    if (finishReason === "length") {
+      throw new Error(`LLM_OUTPUT_TRUNCATED: 模型输出达到长度上限，未能完整返回（${diagnostics}）。`);
+    }
+    const message = asRecord(firstChoice?.message);
+    const content = message?.content;
+    if (content == null || (typeof content === "string" && !content.trim())) {
+      throw new Error(`LLM_EMPTY_REPLY: 模型没有返回正文（${diagnostics}）。`);
+    }
+    let parsed: unknown;
+    try {
+      if (typeof content !== "string") throw new Error("content is not a string");
+      // `response_format: json_object` 只是请求，不是保证：实测最常见的坏输出是套一层
+      // json 围栏，或前面先写一句「好的，这是结果：」。内容和群聊那条一样走宽松解析，
+      // 裸 JSON.parse 会把这类**内容其实全对**的输出判成失败（2026-10-31 群聊整理就是这样挂的）。
+      parsed = parseJsonLoose(content, { expect: "object" });
+      if (!parsed) throw new Error("not an object");
+    } catch {
+      throw new Error(`LLM_INVALID_JSON: 模型输出不是有效 JSON（${diagnostics}）。`);
+    }
+
+    const sourceIds = [...input.messages, ...(input.contextMessages ?? [])].map((message) => message.id);
+    const existingIds = input.activeMemories.map((memory) => memory.id);
+    const globalIds = (input.globalMemories ?? []).map((memory) => memory.id);
+    let analysis: MemoryAiAnalysis;
+    if (input.mode === "events") {
+      const root = asRecord(parsed);
+      if (!root || !Array.isArray(root.events)) {
+        throw new Error(`LLM_INVALID_RESPONSE: 模型没有返回有效的事件数组（${diagnostics}）。`);
+      }
+      analysis = { summary: "", importantEvents: [], factAndPreferenceChanges: [], relationshipChanges: [],
+        goalsAndCommitments: [], unresolvedTopics: [], differencesFromPrevious: [], memoryChanges: [], friendAliases: [],
+        events: readEventDrafts(root.events, new Set(sourceIds)) };
+    } else {
+      analysis = validateMemoryAiOutput(parsed, sourceIds, existingIds, globalIds);
+    }
+    if (input.contextMessages?.length) {
+      const newMessageIds = new Set(input.messages.map((message) => message.id));
+      analysis.events = analysis.events.filter((event) => event.evidenceMessageIds.some((id) => newMessageIds.has(id)));
+    }
+    // 用量统一走 model-usage 的解析，才能带上缓存命中明细（命中价只有未命中价的几十分之一）。
+    const usage = attemptUsage;
+    attemptSucceeded = true;
+
+    return {
+      analysis,
+      model,
+      provider: endpoint.origin,
+      promptTemplateVersion: input.mode === "events" ? "memory-events-v1" : TEMPLATE_VERSION,
+      durationMs: Date.now() - requestStartedAt,
+      ...(usage ? { usage } : {}),
+    };
+  } catch (error) {
+    // Provider/network exceptions can echo URLs, credentials or evidence. Never forward them.
+    const known = error instanceof Error && /^LLM_[A-Z_]+:/.test(error.message);
+    const safe = known ? error as Error : new Error(`LLM_REQUEST_FAILED: 模型请求失败（${inputScale}）。`);
+    Object.assign(safe, { outputBudget, inputMessages: inputMessages.length,
+      inputChars: inputMessages.reduce((sum, item) => sum + item.content.length, 0),
+      durationMs: Date.now() - requestStartedAt, finishReason: attemptFinishReason,
+      ...(attemptUsage ? { usage: attemptUsage } : {}) });
+    throw safe;
+  } finally {
+    try {
+      await input.onDiagnostics?.({ outputBudget, inputMessages: inputMessages.length,
+        inputChars: inputMessages.reduce((sum, item) => sum + item.content.length, 0),
+        durationMs: Date.now() - requestStartedAt, finishReason: attemptFinishReason,
+        status: attemptSucceeded ? "success" : "failed", ...(attemptUsage ? { usage: attemptUsage } : {}) });
+    } catch { /* Observability must not change a model result. */ }
+  }
 }
 
 export function makeMemoryDedupeKey(category: MemoryCategoryValue, content: string): string {

@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   ensureMemoryProgressPolling,
   isActiveMemoryJob,
+  memoryRetryScheduleLabel,
   refreshMemoryProgress,
   useMemoryProgress,
   type MemoryProgressRow,
@@ -141,7 +142,7 @@ function detail(job: MemoryProgressRow): string {
   if (job.status === "RETRY_WAIT") {
     const reason = job.lastError ? `上次失败：${job.lastError.slice(0, 120)}；` : "";
     const redo = job.type === "EXTRACT_EVENTS" ? "已经落库的分块不会重跑。" : "整段总结会重新调用一次模型。";
-    return `${reason}${redo}到点后由 Worker 领取重试；本地没跑 Worker 时不会自己开始。`;
+    return `${reason}${redo}${memoryRetryScheduleLabel(job, now.value)}`;
   }
   if (job.type === "EXTRACT_EVENTS") {
     if (job.done !== null && job.total !== null) {

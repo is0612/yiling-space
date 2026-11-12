@@ -15,6 +15,7 @@ import {
   MEMORY_PROGRESS_SNAPSHOT_POLL_MS,
   MEMORY_PROGRESS_WAITING_POLL_MS,
   memoryProgressPollDelay,
+  memoryRetryScheduleLabel,
 } from "../app/composables/useMemoryProgress";
 
 const job = (
@@ -95,4 +96,13 @@ assert.equal(
   "只有排队 / 卡住的任务时必须是等待档 —— 这正是「一直调接口」的那次。",
 );
 
-console.log("✓ memory-progress 轮询节奏：忆泡 2s / 阶段总结 5s / 排队 10s / 闲着 15s。");
+const retryAt = Date.parse("2026-11-10T16:00:00Z");
+const retry = { runAt: new Date(retryAt).toISOString(), attemptCount: 1, maxAttempts: 3 };
+assert.match(memoryRetryScheduleLabel(retry, retryAt - 1), /已尝试 1\/3 次；下次尝试 .*（本地时间）；到点后等待执行进程领取/);
+assert.match(memoryRetryScheduleLabel(retry, retryAt + 59_999), /已到重试时间，等待领取/);
+const overdue = memoryRetryScheduleLabel(retry, retryAt + 60_000);
+assert.match(overdue, /已到重试时间，尚未被领取/);
+assert.doesNotMatch(overdue, /没跑 Worker|Worker 未运行/);
+assert.equal(memoryRetryScheduleLabel({}, retryAt), "等待执行进程领取重试。", "旧接口不伪造次数或排期");
+assert.equal(memoryRetryScheduleLabel({ runAt: "bad-date" }, retryAt), "等待执行进程领取重试。");
+console.log("✓ memory-progress 轮询节奏及重试时间、次数、超时未领取、旧接口兼容检查通过。");

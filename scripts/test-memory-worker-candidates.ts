@@ -15,6 +15,7 @@ function job(index: number, characterId = "unconfigured", modelConfig: unknown =
     status: "QUEUED",
     attemptCount: 0,
     maxAttempts: 3,
+    lastError: null as string | null,
     runAt: new Date(now.getTime() - 100_000 + index),
     periodEnd: new Date(now.getTime() - 20_000),
     createdAt: new Date(now.getTime() - 30_000),
@@ -30,6 +31,7 @@ function mockDb(rows: Row[], expectedOwnership: Prisma.MemoryJobWhereInput = own
       async findMany(args: Prisma.MemoryJobFindManyArgs) {
         reads.push(args);
         assert.equal(args.take, 100, "Each database read stays bounded.");
+        assert.equal(args.select?.lastError, true, "Keep the previous failure before the worker clears it on claim.");
         assert.deepEqual(args.orderBy, [{ runAt: "asc" }, { periodEnd: "asc" }, { createdAt: "asc" }, { id: "asc" }]);
         assert.deepEqual(args.where?.type, { in: ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "EXTRACT_EVENTS", "GENERATE_JOURNAL"] });
         assert.deepEqual(args.where?.status, { in: ["QUEUED", "RETRY_WAIT"] });
@@ -114,6 +116,18 @@ try {
   filtered.unchanged();
   const allOwners = mockDb([otherOwner], {});
   assert.equal((await readConfiguredMemoryJobCandidates(allOwners.prisma, now, {})).configuredCandidates[0]?.id, otherOwner.id);
+
+  // Restored plaintext credentials must make retries eligible without resetting their failure cause.
+  const truncated = job(0, "plain-configured", { chatModel: "mock-model", chatApiKey: "sk-mock-not-a-real-key" });
+  truncated.type = "GENERATE_SNAPSHOT";
+  truncated.status = "RETRY_WAIT";
+  truncated.attemptCount = 1;
+  truncated.lastError = "LLM_OUTPUT_TRUNCATED: outputBudget=16000";
+  const retryDb = mockDb([truncated]);
+  const retriable = await readConfiguredMemoryJobCandidates(retryDb.prisma, now, ownership);
+  assert.equal(retriable.configuredCandidates[0]?.lastError, truncated.lastError);
+  assert.equal(retriable.configuredCandidates[0]?.attemptCount, 1);
+  retryDb.unchanged();
 
   // Preserve isMemoryModelConfigured semantics, not a SQL JSON key-presence approximation.
   assert.equal(isMemoryModelConfigured({}), false);

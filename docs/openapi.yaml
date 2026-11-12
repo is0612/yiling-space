@@ -1730,7 +1730,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [id, type, status, characterId, characterName, label, done, total, eventCount, startedAt, updatedAt, leaseExpired, lastError]
+                      required: [id, type, status, characterId, characterName, label, done, total, eventCount, startedAt, updatedAt, runAt, attemptCount, maxAttempts, leaseExpired, lastError]
                       properties:
                         id: { type: string, format: uuid }
                         type:
@@ -1757,6 +1757,12 @@ paths:
                           description: 这一段已写入的忆泡条数；阶段总结没有这个概念
                         startedAt: { type: string, format: date-time, nullable: true }
                         updatedAt: { type: string, format: date-time }
+                        runAt:
+                          type: string
+                          format: date-time
+                          description: 最早可领取时间；到点不代表已执行，不据此推断 Worker 是否运行
+                        attemptCount: { type: integer, minimum: 0 }
+                        maxAttempts: { type: integer, minimum: 1 }
                         leaseExpired:
                           type: boolean
                           description: 运行中但租约（5 分钟）已过期，领走它的进程可能不在了

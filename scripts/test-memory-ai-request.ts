@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { analyzeMemoryPeriod } from "../server/utils/memory-ai";
+import { analyzeMemoryPeriod, resolveMemoryOutputBudget, type MemoryAiCallDiagnostics } from "../server/utils/memory-ai";
 
 const originalFetch = globalThis.fetch;
 const originalEnv = {
@@ -7,6 +7,7 @@ const originalEnv = {
   baseUrl: process.env.LLM_BASE_URL,
   model: process.env.LLM_MODEL,
   jobTimeout: process.env.LLM_JOB_TIMEOUT_MS,
+  outputCap: process.env.LLM_MEMORY_MAX_OUTPUT_TOKENS,
 };
 const secretApiKey = "sk-memory-test-secret-must-not-appear-in-body";
 const privateProviderUrl = "https://private-memory-provider.example/v1";
@@ -83,6 +84,7 @@ const input = {
 };
 
 try {
+  delete process.env.LLM_MEMORY_MAX_OUTPUT_TOKENS;
   const result = await analyzeMemoryPeriod(input);
 
   assert.equal(capturedUrl, privateProviderUrl + "/chat/completions");
@@ -243,11 +245,15 @@ try {
         };
         return response;
       };
-      await assert.rejects(analyzeMemoryPeriod(diagnosticInput), (error) => {
+      const timeoutDiagnostics: MemoryAiCallDiagnostics[] = [];
+      await assert.rejects(analyzeMemoryPeriod({ ...diagnosticInput, onDiagnostics: d => { timeoutDiagnostics.push(d); } }), (error) => {
         assertSafeError(error, "LLM_TIMEOUT");
         assert.match((error as Error).message, /5 秒/u);
         return true;
       });
+      assert.equal(timeoutDiagnostics.length, 1);
+      assert.equal(timeoutDiagnostics[0]?.status, "failed");
+      assert.equal(timeoutDiagnostics[0]?.finishReason, "unknown");
       assert.equal(signal?.aborted, true, "Timeout must abort the provider request.");
       assert.equal(bodyStarted, phase === "body");
     }
@@ -255,6 +261,54 @@ try {
     globalThis.setTimeout = originalSetTimeout;
   }
 
+  const diagnostics: MemoryAiCallDiagnostics[] = [];
+  for (const [cap, retry, expected] of [
+    [undefined, false, 16_000], [undefined, true, 32_000],
+    ["20000", true, 20_000], ["90000", true, 32_000],
+    ["8000", false, 8_000], ["-1", true, 32_000], ["NaN", false, 16_000],
+  ] as const) {
+    if (cap === undefined) delete process.env.LLM_MEMORY_MAX_OUTPUT_TOKENS;
+    else process.env.LLM_MEMORY_MAX_OUTPUT_TOKENS = cap;
+    assert.equal(resolveMemoryOutputBudget(retry), expected);
+    let calls = 0;
+    globalThis.fetch = async (_url, init) => {
+      calls++;
+      assert.equal(JSON.parse(String(init?.body)).max_tokens, expected);
+      assert(!String(init?.body).includes("previousOutputTruncated"));
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(analysis) } }],
+        usage: { prompt_tokens: 15, completion_tokens: 10, total_tokens: 25, completion_tokens_details: { reasoning_tokens: 7 } } }));
+    };
+    await analyzeMemoryPeriod({ ...diagnosticInput, previousOutputTruncated: retry, onDiagnostics: d => { diagnostics.push(d); } });
+    assert.equal(calls, 1, "One invocation never performs hidden HTTP retries.");
+    const d = diagnostics.at(-1)!;
+    assert.equal(d.outputBudget, expected); assert.equal(d.status, "success");
+    assert.equal(d.finishReason, "stop"); assert.equal(d.usage?.reasoningTokens, 7);
+    assert.equal(d.inputChars, expectedChars); assert(d.durationMs >= 0);
+  }
+  delete process.env.LLM_MEMORY_MAX_OUTPUT_TOKENS;
+  for (const failure of ["length", "invalid", "network"] as const) {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      if (failure === "network") throw new Error(secretApiKey + privateModelText);
+      return new Response(JSON.stringify({ choices: [{ finish_reason: failure === "length" ? "length" : "stop",
+        message: { content: privateModelText } }], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } }));
+    };
+    const before = diagnostics.length;
+    await assert.rejects(analyzeMemoryPeriod({ ...diagnosticInput, onDiagnostics: d => { diagnostics.push(d); } }), error => {
+      assertSafeError(error, failure === "length" ? "LLM_OUTPUT_TRUNCATED" : failure === "invalid" ? "LLM_INVALID_JSON" : "LLM_REQUEST_FAILED");
+      assert.equal((error as Error & { outputBudget: number }).outputBudget, 16_000);
+      return true;
+    });
+    assert.equal(calls, 1); assert.equal(diagnostics.length, before + 1);
+    assert.equal(diagnostics.at(-1)!.status, "failed");
+  }
+  respond(JSON.stringify(analysis));
+  await analyzeMemoryPeriod({ ...input, onDiagnostics: async () => { throw new Error("observer failed"); } });
+  const diagnosticText = JSON.stringify(diagnostics);
+  for (const secret of [secretApiKey, privateProviderUrl, privateModelText, diagnosticInput.contextMessages[0]!.content]) {
+    assert(!diagnosticText.includes(secret), "Diagnostic callback contains only safe metadata.");
+  }
   console.log("Memory AI request tests passed: credential isolation, prompt allow-list, timeout through response body, safe truncation/empty/JSON diagnostics, and fenced JSON.");
 } finally {
   globalThis.fetch = originalFetch;
@@ -266,4 +320,6 @@ try {
   else process.env.LLM_MODEL = originalEnv.model;
   if (originalEnv.jobTimeout === undefined) delete process.env.LLM_JOB_TIMEOUT_MS;
   else process.env.LLM_JOB_TIMEOUT_MS = originalEnv.jobTimeout;
+  if (originalEnv.outputCap === undefined) delete process.env.LLM_MEMORY_MAX_OUTPUT_TOKENS;
+  else process.env.LLM_MEMORY_MAX_OUTPUT_TOKENS = originalEnv.outputCap;
 }

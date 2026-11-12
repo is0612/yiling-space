@@ -1029,6 +1029,7 @@ export async function processNextMemoryJob(
 
   let claimedJobId = "";
   let claimedToken = "";
+  let previousOutputTruncated = false;
   for (const candidate of configuredCandidates) {
     if (candidate.attemptCount >= candidate.maxAttempts) {
       await prisma.memoryJob.updateMany({
@@ -1058,6 +1059,8 @@ export async function processNextMemoryJob(
     });
     if (claim.count === 1) {
       claimedJobId = candidate.id;
+      // 领取会清空 lastError；仅上次确实输出截断的任务允许提高输出预算。
+      previousOutputTruncated = candidate.lastError?.startsWith("LLM_OUTPUT_TRUNCATED:") === true;
       // 同一进程再次领取同一任务也必须换 token。
       claimedToken = claimToken;
       break;
@@ -1331,6 +1334,23 @@ export async function processNextMemoryJob(
       throw new Error("角色尚未配置模型 API。请先在角色的「模型设置 → 模型参数」中填写 API Key 与模型名称。");
     }
     const aiResult = await analyzeMemoryPeriod({
+      previousOutputTruncated,
+      onDiagnostics: async (diagnostic) => {
+        await recordModelUsage({
+          kind: "snapshot", model: chatSettings.model, characterId: scope.characterId,
+          usage: toUsageTokens(diagnostic.usage),
+          metadata: {
+            jobId: job.id, attempt: job.attemptCount, status: diagnostic.status,
+            outputBudget: diagnostic.outputBudget, finishReason: diagnostic.finishReason,
+            durationMs: diagnostic.durationMs, inputMessages: diagnostic.inputMessages,
+            inputChars: diagnostic.inputChars,
+            // completionTokens 包括思考；没有供应商思考明细时不伪造正文 token 数。
+            ...(diagnostic.usage?.reasoningTokens !== undefined ? {
+              visibleOutputTokens: Math.max(0, diagnostic.usage.completionTokens - diagnostic.usage.reasoningTokens),
+            } : {}),
+          },
+        });
+      },
       apiKey,
       apiBaseUrl: chatSettings.apiBaseUrl,
       model: chatSettings.model,
@@ -1363,13 +1383,7 @@ export async function processNextMemoryJob(
         : {}),
     });
 
-    // 记账放在事务之前：模型已经调用过，后面事务失败也不能漏掉这笔花费。
-    await recordModelUsage({
-      kind: "snapshot",
-      model: chatSettings.model,
-      usage: toUsageTokens(aiResult.usage),
-      characterId: scope.characterId,
-    });
+    // 调用诊断已在模型响应后、事务前记账；截断失败也记，不重复累计成功请求。
 
     const outcome = await prisma.$transaction(async (tx) => {
       await lockMemoryJobLease(tx, { jobId: job.id, claimToken });

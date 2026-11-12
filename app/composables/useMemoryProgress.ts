@@ -25,9 +25,31 @@ export type MemoryProgressRow = {
   eventCount: number | null;
   startedAt: string | null;
   updatedAt: string;
+  /** Optional while older servers and cached responses are still in use. */
+  runAt?: string;
+  attemptCount?: number;
+  maxAttempts?: number;
   leaseExpired: boolean;
   lastError: string | null;
 };
+
+/** Describe persisted retry scheduling, never infer Worker health from a waiting task. */
+export function memoryRetryScheduleLabel(
+  job: Pick<MemoryProgressRow, "runAt" | "attemptCount" | "maxAttempts">,
+  now = Date.now(),
+): string {
+  const attempts = Number.isInteger(job.attemptCount) && Number.isInteger(job.maxAttempts)
+    ? `已尝试 ${job.attemptCount}/${job.maxAttempts} 次；` : "";
+  const runAt = job.runAt ? new Date(job.runAt).getTime() : NaN;
+  if (!Number.isFinite(runAt)) return `${attempts}等待执行进程领取重试。`;
+  const localTime = new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).format(new Date(runAt));
+  const schedule = `下次尝试 ${localTime}（本地时间）；`;
+  return `${attempts}${schedule}${now - runAt >= 60_000
+    ? "已到重试时间，尚未被领取。"
+    : now >= runAt ? "已到重试时间，等待领取。" : "到点后等待执行进程领取。"}`;
+}
 
 export type MemoryJobFinished = {
   id: string;

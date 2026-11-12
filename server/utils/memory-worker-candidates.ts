@@ -31,6 +31,7 @@ export async function readConfiguredMemoryJobCandidates(
         status: true,
         attemptCount: true,
         maxAttempts: true,
+        lastError: true,
         memoryScope: { select: { characterId: true, character: { select: { modelConfig: true } } } },
       },
     });
