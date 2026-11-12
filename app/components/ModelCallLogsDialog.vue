@@ -243,6 +243,71 @@ onBeforeUnmount(() => {
   >
     <div class="call-logs">
       <div class="log-main">
+        <div class="log-filters">
+          <label class="log-filter">
+            <span>时间范围</span>
+            <el-select
+              v-model="days"
+              aria-label="时间范围"
+              @change="resetPage"
+            >
+              <el-option
+                label="最近 1 天"
+                :value="1"
+              />
+              <el-option
+                label="最近 7 天"
+                :value="7"
+              />
+              <el-option
+                label="最近 30 天"
+                :value="30"
+              />
+            </el-select>
+          </label>
+          <label class="log-filter">
+            <span>用途</span>
+            <el-select
+              v-model="kind"
+              clearable
+              aria-label="用途"
+              placeholder="全部用途"
+              @change="resetPage"
+            >
+              <el-option
+                v-for="value in availableKinds"
+                :key="value"
+                :label="kindLabels[value] ?? '其他用途'"
+                :value="value"
+              />
+            </el-select>
+          </label>
+          <label class="log-filter model-filter">
+            <span>模型</span>
+            <el-select
+              v-model="model"
+              clearable
+              filterable
+              aria-label="模型"
+              placeholder="全部模型"
+              @change="resetPage"
+            >
+              <el-option
+                v-for="value in availableModels"
+                :key="value"
+                :label="value"
+                :value="value"
+              />
+            </el-select>
+          </label>
+          <el-button
+            :icon="Refresh"
+            :loading="loading"
+            @click="loadLogs"
+          >
+            刷新
+          </el-button>
+        </div>
         <el-alert
           v-if="errorMessage"
           type="error"
@@ -394,71 +459,6 @@ onBeforeUnmount(() => {
         />
       </div>
       <aside class="log-side">
-        <div class="log-filters">
-          <label class="log-filter">
-            <span>时间范围</span>
-            <el-select
-              v-model="days"
-              aria-label="时间范围"
-              @change="resetPage"
-            >
-              <el-option
-                label="最近 1 天"
-                :value="1"
-              />
-              <el-option
-                label="最近 7 天"
-                :value="7"
-              />
-              <el-option
-                label="最近 30 天"
-                :value="30"
-              />
-            </el-select>
-          </label>
-          <label class="log-filter">
-            <span>用途</span>
-            <el-select
-              v-model="kind"
-              clearable
-              aria-label="用途"
-              placeholder="全部用途"
-              @change="resetPage"
-            >
-              <el-option
-                v-for="value in availableKinds"
-                :key="value"
-                :label="kindLabels[value] ?? '其他用途'"
-                :value="value"
-              />
-            </el-select>
-          </label>
-          <label class="log-filter">
-            <span>模型</span>
-            <el-select
-              v-model="model"
-              clearable
-              filterable
-              aria-label="模型"
-              placeholder="全部模型"
-              @change="resetPage"
-            >
-              <el-option
-                v-for="value in availableModels"
-                :key="value"
-                :label="value"
-                :value="value"
-              />
-            </el-select>
-          </label>
-          <el-button
-            :icon="Refresh"
-            :loading="loading"
-            @click="loadLogs"
-          >
-            刷新
-          </el-button>
-        </div>
         <div
           class="log-summary"
           aria-live="polite"
@@ -545,8 +545,9 @@ onBeforeUnmount(() => {
 .call-logs { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 20px; color: var(--text-2); font-size: 14px; }
 .log-main { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
 .log-side { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
-.log-filters { display: flex; flex-direction: column; gap: 10px; }
-.log-filter { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.log-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.log-filter { display: flex; flex: 1; min-width: 150px; flex-direction: column; gap: 6px; font-size: 12px; }
+.model-filter { flex: 2; min-width: 200px; }
 .log-filter :deep(.el-select) { width: 100%; }
 .log-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .log-stat { display: flex; flex-direction: column; gap: 4px; border-radius: 8px; background: var(--surface-2, #f7f8fa); padding: 10px 12px; }
@@ -562,7 +563,6 @@ onBeforeUnmount(() => {
 .log-pagination { align-self: flex-end; max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
 @media (max-width: 1100px) {
   .call-logs { grid-template-columns: minmax(0, 1fr); }
-  .log-side { order: -1; }
   .log-details { grid-template-columns: 1fr; padding: 16px; }
   .log-pagination { align-self: stretch; }
 }
