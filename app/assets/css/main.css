@@ -830,7 +830,7 @@ button, input, textarea, select { font: inherit; }
 
 .el-overlay .el-dialog {
   display: flex;
-  max-height: 84vh;
+  max-height: 85vh;
   /* 有几个弹窗写死了 width="500px"，390 视口下会横向溢出，这里兜住 */
   max-width: calc(100vw - 32px);
   flex-direction: column;

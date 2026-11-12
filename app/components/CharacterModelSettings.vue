@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { MODEL_PURPOSE_DEFAULTS } from "#shared/utils/model-purpose-defaults";
-import { CopyDocument, Promotion, Refresh, TopRight } from "@element-plus/icons-vue";
+import { CopyDocument, Promotion, QuestionFilled, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { isImageGenerationModel } from "#shared/utils/vision-models";
 import type { Character } from "~/utils/mock-data";
@@ -52,6 +52,9 @@ const loading = ref(true);
 const saving = ref(false);
 const testing = ref(false);
 const fetchingModels = ref(false);
+const voiceParametersOpen = ref(false);
+const generationParametersOpen = ref(false);
+watch(() => [props.characterId, props.section], () => { generationParametersOpen.value = false; voiceParametersOpen.value = false; });
 
 const draftChatModel = ref("");
 const draftChatTemperature = ref<number>(MODEL_PURPOSE_DEFAULTS.chat.temperature);
@@ -1029,6 +1032,12 @@ watch(id, () => void loadCharacter());
                   </h2>
                 </div>
               </div>
+              <el-button
+                :disabled="saving || testing || fetchingModels || assistantsBusy"
+                @click="generationParametersOpen = true"
+              >
+                生成参数
+              </el-button>
             </div>
 
             <div class="fields">
@@ -1115,34 +1124,34 @@ watch(id, () => void loadCharacter());
                   </el-select>
                   <el-button
                     :loading="fetchingModels"
-                    :disabled="saving || testing"
+                    :disabled="saving || testing || assistantsBusy"
                     @click="fetchModels"
                   >
                     <el-icon><Refresh /></el-icon>{{ fetchingModels ? "获取中…" : "获取模型" }}
                   </el-button>
+                  <el-button
+                    :loading="testing"
+                    :disabled="saving || fetchingModels || assistantsBusy"
+                    @click="testConnection"
+                  >
+                    <el-icon><Promotion /></el-icon>{{ testing ? "测试中…" : "测试" }}
+                  </el-button>
                 </div>
               </div>
             </div>
-
-            <div class="voice-test-bar">
-              <el-button
-                :loading="testing"
-                :disabled="saving || assistantsBusy"
-                @click="testConnection"
-              >
-                <el-icon><Promotion /></el-icon>{{ testing ? "测试中…" : "测试" }}
-              </el-button>
-            </div>
           </section>
 
-          <!-- ③ 生成参数：每个旋钮都是「标签 + 一句为什么 + 控件」 -->
-          <section class="brick">
+          <el-dialog
+            v-model="generationParametersOpen"
+            title="生成参数"
+            width="min(720px, calc(100vw - 32px))"
+            class="ms-a generation-dialog"
+            append-to-body
+          >
             <div class="brick-head">
               <div class="brick-head-txt">
                 <div class="brick-heading">
-                  <h2 class="brick-title">
-                    生成参数
-                  </h2>
+                  <span class="brick-title">对话与记忆预算</span>
                 </div>
                 <p class="brick-desc">
                   面向自然对话：适度保留表达变化，并为回复与思考预留输出空间。恢复推荐只改温度和输出上限，保存后生效。
@@ -1336,14 +1345,19 @@ watch(id, () => void loadCharacter());
                 </div>
               </div>
             </div>
-          </section>
+            <template #footer>
+              <span class="parameter-save-note">修改保留在草稿中，点击页面「保存设置」后生效。</span>
+              <el-button @click="generationParametersOpen = false">
+                完成
+              </el-button>
+            </template>
+          </el-dialog>
 
           <!--
             四个后台助手。
             默认全部跟随上面的对话模型 —— 想换一家再展开填，留空就沿用。
           -->
           <AssistantOverridePanel
-            v-model:enabled="draftMemoryAssistantEnabled"
             v-model:model="draftMemoryAssistantModel"
             v-model:api-base-url="draftMemoryAssistantApiBaseUrl"
             v-model:api-key="draftMemoryAssistantApiKey"
@@ -1363,7 +1377,6 @@ watch(id, () => void loadCharacter());
           />
 
           <AssistantOverridePanel
-            v-model:enabled="draftContextAssistantEnabled"
             v-model:model="draftContextAssistantModel"
             v-model:api-base-url="draftContextAssistantApiBaseUrl"
             v-model:api-key="draftContextAssistantApiKey"
@@ -1383,7 +1396,6 @@ watch(id, () => void loadCharacter());
           />
 
           <AssistantOverridePanel
-            v-model:enabled="draftKnowledgeAssistantEnabled"
             v-model:model="draftKnowledgeAssistantModel"
             v-model:api-base-url="draftKnowledgeAssistantApiBaseUrl"
             v-model:api-key="draftKnowledgeAssistantApiKey"
@@ -1415,7 +1427,6 @@ watch(id, () => void loadCharacter());
           </AssistantOverridePanel>
 
           <AssistantOverridePanel
-            v-model:enabled="draftSocialAssistantEnabled"
             v-model:model="draftSocialAssistantModel"
             v-model:api-base-url="draftSocialAssistantApiBaseUrl"
             v-model:api-key="draftSocialAssistantApiKey"
@@ -1446,18 +1457,27 @@ watch(id, () => void loadCharacter());
                   <h2 class="brick-title">
                     语音合成
                   </h2>
-                  <el-button
-                    text
-                    :disabled="operationBusy"
-                    @click="resetRecommendedVoiceSettings"
+                  <el-tooltip
+                    content="合成回复语音，使用独立的语音服务、模型与音色。推荐语速 1.0。"
+                    placement="top"
+                    :show-after="150"
                   >
-                    恢复标准语速
-                  </el-button>
+                    <button
+                      type="button"
+                      class="help-trigger"
+                      aria-label="查看说明"
+                    >
+                      <el-icon><QuestionFilled /></el-icon>
+                    </button>
+                  </el-tooltip>
                 </div>
-                <p class="purpose-note">
-                  合成回复语音 · 推荐语速 1.0，不改音色与服务商
-                </p>
               </div>
+              <el-button
+                :disabled="operationBusy"
+                @click="voiceParametersOpen = true"
+              >
+                生成参数
+              </el-button>
             </div>
 
             <div class="fields">
@@ -1572,9 +1592,26 @@ watch(id, () => void loadCharacter());
                   >
                     <el-icon><Refresh /></el-icon>{{ fetchingVoiceModels ? "获取中…" : "获取模型" }}
                   </el-button>
+                  <el-button
+                    :loading="testingVoice"
+                    :disabled="saving || fetchingVoiceModels"
+                    @click="testVoice"
+                  >
+                    <el-icon><Promotion /></el-icon>{{ testingVoice ? "测试中…" : "测试" }}
+                  </el-button>
                 </div>
               </div>
+            </div>
+          </section>
 
+          <el-dialog
+            v-model="voiceParametersOpen"
+            title="语音合成 · 生成参数"
+            width="min(640px, calc(100vw - 32px))"
+            class="ms-a generation-dialog"
+            append-to-body
+          >
+            <div class="fields">
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">音色</span>
@@ -1632,18 +1669,19 @@ watch(id, () => void loadCharacter());
                 />
               </div>
             </div>
-
-            <!-- 语音的验证：真合成一句，走完整链路（Key/地址/模型/音色/hex/silk） -->
-            <div class="voice-test-bar">
+            <template #footer>
+              <span class="parameter-save-note">修改保留在草稿中，保存设置后生效。</span>
               <el-button
-                :loading="testingVoice"
-                :disabled="saving || fetchingVoiceModels"
-                @click="testVoice"
+                :disabled="operationBusy"
+                @click="resetRecommendedVoiceSettings"
               >
-                <el-icon><Promotion /></el-icon>{{ testingVoice ? "测试中…" : "测试" }}
+                恢复标准语速
               </el-button>
-            </div>
-          </section>
+              <el-button @click="voiceParametersOpen = false">
+                完成
+              </el-button>
+            </template>
+          </el-dialog>
 
           <!-- 识别和合成是两套配置：Breeze 只做合成，共用一把 Key 只会 401 -->
           <section class="brick">
@@ -1653,6 +1691,19 @@ watch(id, () => void loadCharacter());
                   <h2 class="brick-title">
                     语音识别
                   </h2>
+                  <el-tooltip
+                    content="将收到的语音转为文字，识别与合成可以使用不同服务；「同语音合成」仅同步语音配置，不使用对话模型配置。"
+                    placement="top"
+                    :show-after="150"
+                  >
+                    <button
+                      type="button"
+                      class="help-trigger"
+                      aria-label="查看说明"
+                    >
+                      <el-icon><QuestionFilled /></el-icon>
+                    </button>
+                  </el-tooltip>
                 </div>
               </div>
               <el-button
@@ -1743,6 +1794,19 @@ watch(id, () => void loadCharacter());
                   <h2 class="brick-title">
                     图片模型
                   </h2>
+                  <el-tooltip
+                    content="理解收到的图片，请选择支持视觉理解的模型，不要选择图片生成模型。"
+                    placement="top"
+                    :show-after="150"
+                  >
+                    <button
+                      type="button"
+                      class="help-trigger"
+                      aria-label="查看说明"
+                    >
+                      <el-icon><QuestionFilled /></el-icon>
+                    </button>
+                  </el-tooltip>
                 </div>
               </div>
             </div>
@@ -1785,7 +1849,7 @@ watch(id, () => void loadCharacter());
                   v-model="draftVisionApiBaseUrl"
                   maxlength="500"
                   aria-label="图片 API 地址"
-                  :placeholder="draftChatApiBaseUrl + '（留空 = 跟随对话模型）'"
+                  placeholder="填写图片服务的 API 地址"
                 />
               </div>
 
@@ -1816,7 +1880,7 @@ watch(id, () => void loadCharacter());
                     allow-create
                     default-first-option
                     aria-label="看图模型"
-                    :placeholder="'留空 = 用对话模型（' + (draftChatModel || '未填') + '）'"
+                    placeholder="选择或输入支持视觉理解的模型名称"
                   >
                     <el-option
                       v-for="model in visionModelOptions"
@@ -1833,19 +1897,15 @@ watch(id, () => void loadCharacter());
                   >
                     <el-icon><Refresh /></el-icon>{{ fetchingVisionModels ? "获取中…" : "获取模型" }}
                   </el-button>
+                  <el-button
+                    :loading="testingVision"
+                    :disabled="saving || fetchingVisionModels"
+                    @click="testVision"
+                  >
+                    <el-icon><Promotion /></el-icon>{{ testingVision ? "测试中…" : "测试" }}
+                  </el-button>
                 </div>
               </div>
-            </div>
-
-            <!-- 看图必须实测：只测文本连通性测不出「收下图但没看」 -->
-            <div class="vision-test-bar">
-              <el-button
-                :loading="testingVision"
-                :disabled="saving"
-                @click="testVision"
-              >
-                <el-icon><Promotion /></el-icon>{{ testingVision ? "测试中…" : "测试" }}
-              </el-button>
             </div>
           </section>
         </div>
@@ -1952,36 +2012,6 @@ watch(id, () => void loadCharacter());
             <span class="usage-note">额度用完不会自动清零：统计的是真实花费，调高额度或等次日恢复。</span>
           </div>
         </section>
-
-        <section class="brick">
-          <div class="card-head">
-            <h2>几个要知道的点</h2>
-          </div>
-          <div class="rule">
-            <span class="rule-number">01</span>
-            <div>
-              <strong>Key 不会回传网页</strong>
-              <p>保存后页面只显示「已保存」，原文无法再读出；留空即保持不变。</p>
-            </div>
-          </div>
-          <div class="rule">
-            <span class="rule-number">02</span>
-            <div>
-              <strong>测试与拉取都先保存</strong>
-              <p>两步都用服务端已存的配置发起请求，所以会先写入数据库。</p>
-            </div>
-          </div>
-          <div class="rule">
-            <span class="rule-number">03</span>
-            <div>
-              <strong>内置清单会过期</strong>
-              <p>厂商改名很常见，清单只作起点；能拉取就以拉取结果为准。</p>
-            </div>
-          </div>
-          <p class="side-note">
-            这里的配置只影响该角色在 QQ 上的回复与自动归档提炼，不改变其他角色。
-          </p>
-        </section>
       </aside>
     </div>
   </div>
@@ -2023,7 +2053,9 @@ watch(id, () => void loadCharacter());
    但砖头（标题 + 说明）靠字号与颜色差就能认出来，不再多画一条分隔线 */
 .ms-a .brick { border-radius: 10px; background: var(--surface); padding: var(--sp-5); }
 
-.brick-head { display: flex; align-items: flex-start; gap: var(--sp-4); }
+.help-trigger { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; padding: 2px; background: transparent; color: var(--dim); font-size: 16px; cursor: help; }
+.help-trigger:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.brick-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4); }
 .brick-desc { max-width: 44em; margin: var(--sp-1) 0 0; color: var(--dim); font-size: 12px; line-height: 1.65; }
 /* 行宽用 em 不用 ch：中文一个字也是 1em，62ch 只够放 ~31 个汉字 */
 .ms-a .field-help { max-width: 44em; margin: 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
@@ -2060,7 +2092,11 @@ watch(id, () => void loadCharacter());
 
 /* 模型下拉 + 「获取模型」同行：select 吃掉剩余宽度，按钮不吃 */
 .model-row { display: flex; width: 100%; align-items: center; gap: var(--sp-2); }
-.model-select { min-width: 0; flex: 1; }
+.model-select { min-width: 180px; flex: 1; }
+.model-row > .el-button { margin-left: 0; flex: none; }
+.generation-dialog :deep(.el-dialog__body) { max-height: 65vh; overflow-y: auto; }
+.generation-dialog .knob-group { margin-top: 16px; }
+.parameter-save-note { margin-right: 12px; color: var(--dim); font-size: 12px; line-height: 1.7; }
 
 /* 语音的验证条：按钮 + 一句成本提示，与字段区用上边框隔开 */
 .voice-test-bar, .vision-test-bar { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); border-top: 1px solid var(--surface-3); padding-top: var(--sp-4); }
@@ -2158,10 +2194,6 @@ watch(id, () => void loadCharacter());
 .usage-note { flex: 1; color: var(--dim); font-size: 12px; line-height: 1.6; }
 .side-note { margin: var(--sp-3) 0 0; border-radius: var(--radius-sm); background: var(--surface-2); padding: var(--sp-3); color: var(--dim); font-size: 12px; line-height: 1.7; }
 
-.rule { display: flex; gap: var(--sp-3); margin-top: var(--sp-3); }
-.rule-number { flex: 0 0 auto; color: var(--faint); font: 700 12px/1.7 Consolas, monospace; }
-.rule strong { color: var(--text-2); font-size: 14px; font-weight: 600; }
-.rule p { margin: 3px 0 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
 
 /* 空态：一句话 + 一颗按钮，不围虚线框 */
 .empty-block { border-radius: 10px; background: var(--surface); padding: var(--sp-6) var(--sp-5); }
@@ -2172,7 +2204,6 @@ watch(id, () => void loadCharacter());
 @media (max-width: 1050px) {
   .ms-grid { grid-template-columns: minmax(0, 1fr); }
   .ms-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
-  .ms-side .brick:last-child { grid-column: 1 / -1; }
 }
 @media (max-width: 720px) {
   .ms-a .brick { padding: var(--sp-4); }

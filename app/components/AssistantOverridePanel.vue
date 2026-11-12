@@ -9,7 +9,7 @@
  * 交互上最重要的一条：**留空即跟随对话模型**。占位符直接把对话模型的值写出来
  * （"跟随对话模型：deepseek-chat"），而不是留一句"可留空"让人猜回落到哪。
  */
-import { Refresh, TopRight } from "@element-plus/icons-vue";
+import { Promotion, QuestionFilled, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { MODEL_PROVIDERS, buildModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
 
@@ -29,8 +29,6 @@ const props = withDefaults(defineProps<{
    * 不先保存就会拿旧配置去请求，报错还指向上一版。
    */
   requestSave?: () => Promise<boolean>;
-  /** 是否显示「启用」开关（默认显示） */
-  showEnabled?: boolean;
   /** 是否显示温度 / Token 参数 */
   showNumeric?: boolean;
   disabled?: boolean;
@@ -38,12 +36,10 @@ const props = withDefaults(defineProps<{
   modelsUrl: "",
   testUrl: "",
   requestSave: undefined,
-  showEnabled: true,
   showNumeric: true,
   disabled: false,
 });
 
-const enabled = defineModel<boolean>("enabled", { default: true });
 const model = defineModel<string>("model", { required: true });
 const apiBaseUrl = defineModel<string>("apiBaseUrl", { required: true });
 const apiKey = defineModel<string>("apiKey", { required: true });
@@ -53,6 +49,7 @@ const maxOutputTokens = defineModel<number>("maxOutputTokens", { default: 2048 }
 
 const emit = defineEmits<{ (event: "busy-change", busy: boolean): void }>();
 
+const parametersOpen = ref(false);
 const fetching = ref(false);
 const testing = ref(false);
 const fetched = ref<string[]>([]);
@@ -80,16 +77,6 @@ function applyProvider(key: string) {
   const belongsToOther = MODEL_PROVIDERS.some(p => p.key !== key && p.models.includes(current));
   if (!current || belongsToOther) model.value = preset.models[0] ?? "";
 }
-
-/** 三个继承状态，页面上用一枚小徽标说清楚「现在实际用的是哪套」。 */
-const inheritanceLabel = computed(() => {
-  const parts: string[] = [];
-  if (!model.value.trim()) parts.push("模型");
-  if (!apiBaseUrl.value.trim()) parts.push("地址");
-  if (!apiKey.value.trim() && props.chatApiKeyConfigured && !apiBaseUrl.value.trim()) parts.push("Key");
-  if (!parts.length) return "";
-  return `正在沿用对话模型的${parts.join(" / ")}`;
-});
 
 async function fetchModels() {
   if (fetching.value || !props.modelsUrl) return;
@@ -138,37 +125,40 @@ async function testConnection() {
 </script>
 
 <template>
-  <section
-    class="brick assistant-brick"
-    :class="{ 'is-off': showEnabled && !enabled }"
-  >
+  <section class="brick assistant-brick">
     <div class="brick-head">
       <div class="brick-head-txt">
         <div class="brick-heading">
           <h2 class="brick-title">
             {{ title }}
           </h2>
-          <span
-            v-if="inheritanceLabel"
-            class="pill pill-blue"
-          >{{ inheritanceLabel }}</span>
+          <el-tooltip
+            :content="hint"
+            placement="top"
+            :show-after="150"
+          >
+            <button
+              type="button"
+              class="help-trigger"
+              :aria-label="`了解${title}`"
+            >
+              <el-icon><QuestionFilled /></el-icon>
+            </button>
+          </el-tooltip>
         </div>
-        <p class="brick-note">
-          {{ hint }}
-        </p>
       </div>
-      <el-switch
-        v-if="showEnabled"
-        v-model="enabled"
-        :disabled="disabled"
-        :aria-label="`启用${title}`"
-      />
+      <div class="head-actions">
+        <el-button
+          v-if="showNumeric"
+          :disabled="disabled"
+          @click="parametersOpen = true"
+        >
+          生成参数
+        </el-button>
+      </div>
     </div>
 
-    <div
-      v-if="!showEnabled || enabled"
-      class="fields"
-    >
+    <div class="fields">
       <div class="field">
         <div class="field-head">
           <span class="field-label">服务商</span>
@@ -273,57 +263,101 @@ async function testConnection() {
             :disabled="disabled || testing"
             @click="testConnection"
           >
-            {{ testing ? "测试中…" : "测试" }}
+            <el-icon><Promotion /></el-icon>{{ testing ? "测试中…" : "测试" }}
           </el-button>
         </div>
       </div>
 
-      <template v-if="showNumeric">
-        <div class="field field-row-3">
-          <label class="field-mini">
-            <span class="field-label">温度</span>
-            <el-input-number
-              v-model="temperature"
-              :min="0"
-              :max="2"
-              :step="0.1"
-              :disabled="disabled"
-              controls-position="right"
-            />
-          </label>
-          <label class="field-mini">
-            <span class="field-label">最大输入 Token</span>
-            <el-input-number
-              v-model="maxInputTokens"
-              :min="4096"
-              :max="32768"
-              :step="1024"
-              :disabled="disabled"
-              controls-position="right"
-            />
-          </label>
-          <label class="field-mini">
-            <span class="field-label">最大输出 Token</span>
-            <el-input-number
-              v-model="maxOutputTokens"
-              :min="512"
-              :max="8192"
-              :step="256"
-              :disabled="disabled"
-              controls-position="right"
-            />
-          </label>
-        </div>
-      </template>
-
       <slot />
     </div>
+    <el-dialog
+      v-model="parametersOpen"
+      :title="`${title} · 生成参数`"
+      width="min(560px, calc(100vw - 32px))"
+      append-to-body
+    >
+      <div class="field field-row-3">
+        <label class="field-mini">
+          <span class="field-label">温度</span>
+          <el-input-number
+            v-model="temperature"
+            :min="0"
+            :max="2"
+            :step="0.1"
+            :disabled="disabled"
+            controls-position="right"
+          />
+        </label>
+        <label class="field-mini">
+          <span class="field-label">最大输入 Token</span>
+          <el-input-number
+            v-model="maxInputTokens"
+            :min="4096"
+            :max="32768"
+            :step="1024"
+            :disabled="disabled"
+            controls-position="right"
+          />
+        </label>
+        <label class="field-mini">
+          <span class="field-label">最大输出 Token</span>
+          <el-input-number
+            v-model="maxOutputTokens"
+            :min="512"
+            :max="8192"
+            :step="256"
+            :disabled="disabled"
+            controls-position="right"
+          />
+        </label>
+      </div>
+
+      <template #footer>
+        <div class="parameter-footer">
+          <span>仅修改草稿，保存设置后生效。</span>
+          <el-button
+            type="primary"
+            @click="parametersOpen = false"
+          >
+            完成
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
 <style scoped>
-.assistant-brick.is-off {
-  opacity: 0.6;
+/* Parent scoped form rules cannot reach this component's internal fields. */
+.help-trigger { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; padding: 2px; background: transparent; color: var(--dim); font-size: 16px; cursor: help; }
+.help-trigger:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.brick-head { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.brick-head-txt { min-width: 0; flex: 1; }
+.brick-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.brick-title { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; letter-spacing: -.01em; line-height: 1.4; }
+.head-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
+.fields { display: flex; min-width: 0; flex-direction: column; margin-top: 16px; gap: 16px; }
+.field { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.field-label { color: var(--text-2); font-size: 14px; font-weight: 600; line-height: 1.5; }
+.field-link { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; border-radius: var(--radius-xs); color: var(--brand-strong); font-size: 12px; font-weight: 600; text-decoration: none; }
+.field-link:hover { color: var(--brand-btn-h); text-decoration: underline; }
+.field-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.field-link .el-icon { font-size: 13px; }
+.field-ctl { width: 100%; }
+.model-row { display: flex; width: 100%; align-items: center; gap: 8px; }
+.model-select { min-width: 180px; flex: 1; }
+.model-row > .el-button { flex: none; }
+:deep(.el-button) { height: 36px; margin-left: 0; border-radius: var(--radius-sm); padding: 0 16px; font-size: 14px; font-weight: 600; }
+:deep(.el-button .el-icon) { font-size: 14px; }
+.field-mini :deep(.el-input-number) { width: 100%; }
+.parameter-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.parameter-footer > span { color: var(--dim); font-size: 12px; line-height: 1.7; }
+@media (max-width: 640px) {
+  .brick-head { flex-wrap: wrap; }
+  .model-row { flex-wrap: wrap; }
+  .model-select { flex-basis: 100%; }
+  .field-link { margin-left: 0; }
 }
 
 .field-hint {
