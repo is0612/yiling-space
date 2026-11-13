@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 
-definePageMeta({ topbar: { title: "成长事件投递" } });
+definePageMeta({
+  topbar: {
+    title: "成长事件投递",
+    crumbs: [{ label: "成长总览", to: "/growth" }],
+  },
+});
 
 type DeliveryStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "RETRY_WAIT" | "FAILED" | "SKIPPED" | "CANCELLED";
 type Delivery = {

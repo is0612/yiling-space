@@ -3,8 +3,12 @@ import { Delete, EditPen, MagicStick, Picture } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+// 「角色管理」这一级交给顶栏 crumbs：常驻、滚到哪都能点回去；正文的 crumb 只留角色名 + 本页。
 definePageMeta({
-  topbar: { title: "表情包" },
+  topbar: {
+    title: "表情包",
+    crumbs: [{ label: "角色管理", to: "/characters" }],
+  },
 });
 
 /**
@@ -610,7 +614,7 @@ onMounted(load);
 <template>
   <div class="page-wrap">
     <PageHeader
-      :eyebrow="'角色管理 / ' + (characterName || '角色') + ' / 表情包'"
+      :eyebrow="(characterName || '角色') + ' / 表情包'"
       :description="pageDescription"
       :back-to="'/characters?c=' + id"
       back-label="返回角色列表"

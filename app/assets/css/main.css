@@ -330,7 +330,7 @@ button, input, textarea, select { font: inherit; }
 }
 .topbar-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 /* 页面标题：顶栏左侧，只有一行。标题 18 —— 顶栏只有 56px，再大就撑破。 */
-.topbar-head { min-width: 0; flex: 1; display: flex; align-items: center; }
+.topbar-head { min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px; }
 .topbar-head h1 {
   margin: 0;
   overflow: hidden;
@@ -342,6 +342,22 @@ button, input, textarea, select { font: inherit; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 上级层级：14px（比标题矮一档靠字号 + 颜色区分，不再缩到 12 以下）。
+   末段分隔符也留着，读起来是「角色管理 / 记忆周期设置」一整条，而不是两截 */
+.topbar-crumbs { display: flex; min-width: 0; flex: none; align-items: center; gap: 6px; }
+.topbar-crumb {
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  color: var(--dim);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+a.topbar-crumb { transition: color .14s var(--ease); }
+a.topbar-crumb:hover { color: var(--brand-strong); }
+a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.topbar-crumb.is-plain { color: var(--text-2); }
+.topbar-crumb-sep { flex: none; color: var(--faint); font-size: 14px; }
 /* 顶栏动作：比 .btn 矮一档，跟 32px 的用户胶囊同一水平线 */
 .topbar-refresh {
   display: inline-flex;

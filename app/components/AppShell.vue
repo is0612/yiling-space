@@ -312,6 +312,32 @@ function isActive(item: NavigationItem) {
           v-if="heading"
           class="topbar-head"
         >
+          <nav
+            v-if="heading.crumbs?.length"
+            class="topbar-crumbs"
+            aria-label="所在位置"
+          >
+            <template
+              v-for="(crumb, index) in heading.crumbs"
+              :key="`${crumb.label}-${index}`"
+            >
+              <NuxtLink
+                v-if="crumb.to"
+                :to="crumb.to"
+                class="topbar-crumb"
+              >
+                {{ crumb.label }}
+              </NuxtLink>
+              <span
+                v-else
+                class="topbar-crumb is-plain"
+              >{{ crumb.label }}</span>
+              <span
+                class="topbar-crumb-sep"
+                aria-hidden="true"
+              >/</span>
+            </template>
+          </nav>
           <h1>{{ heading.title }}</h1>
         </div>
         <div class="topbar-right">

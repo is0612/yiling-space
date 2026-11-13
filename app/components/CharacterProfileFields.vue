@@ -167,16 +167,11 @@ onBeforeUnmount(() => {
   gap: 0 28px;
   margin-top: 28px;
 }
-/* 编辑模式只剩「名称 + 人设」：两处都收成单列，并卡在 760px ——
-   输入框和下面的文本框左边缘对齐，也不至于把一行字拉到 1100px 读不动。
-   身份条是浅色底，宽度也得一起收，否则右边会拖出一大片空白砖 */
-.cp-idcard.is-single {
-  grid-template-columns: minmax(0, 1fr);
-  width: 760px;
-  max-width: 100%;
-}
+/* 编辑模式只剩「名称 + 人设」：两处都收成单列，铺满弹窗宽度。
+   弹窗本身已经窄到 840px（见 CharacterProfileDialog），再给字段设上限就会在右侧空出一块板 */
+.cp-idcard.is-single,
 .cp-cols.is-single {
-  grid-template-columns: minmax(0, 760px);
+  grid-template-columns: minmax(0, 1fr);
 }
 .cp-cols :deep(.el-form-item) {
   margin-bottom: 0;

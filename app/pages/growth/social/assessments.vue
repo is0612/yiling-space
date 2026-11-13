@@ -2,7 +2,13 @@
 import { Refresh } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 
-definePageMeta({ topbar: { title: "社交系统 · 评估历史" } });
+// 标题不再自带「社交系统 ·」前缀：那一级现在由顶栏 crumbs 承担，重复写会在同一行出现两次
+definePageMeta({
+  topbar: {
+    title: "评估历史",
+    crumbs: [{ label: "社交系统", to: "/growth/social" }],
+  },
+});
 type Filter = "ALL" | "ACTIONABLE" | "ACCEPTED" | "REJECTED" | "STALE" | "FAILED" | "RUNNING";
 type Decision = "ACCEPTED" | "REJECTED" | "DEFERRED";
 type Evidence = { id: string; kind: "NEW" | "CONTEXT"; occurredAt: string; title: string; detail: string; participants: string[]; confidence: number | null; eventStatus: string };

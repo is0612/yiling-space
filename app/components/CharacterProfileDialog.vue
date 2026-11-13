@@ -96,7 +96,7 @@ async function save() {
   <el-dialog
     v-model="open"
     title="编辑角色资料"
-    width="min(1160px, 96vw)"
+    width="min(840px, 96vw)"
     destroy-on-close
   >
     <el-form

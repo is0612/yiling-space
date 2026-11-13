@@ -4,8 +4,12 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { initialCharacters, type Character } from "~/utils/mock-data";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+// 「角色管理」这一级交给顶栏 crumbs：常驻、滚到哪都能点回去；正文的 crumb 只留角色名 + 本页。
 definePageMeta({
-  topbar: { title: "记忆周期设置" },
+  topbar: {
+    title: "记忆周期设置",
+    crumbs: [{ label: "角色管理", to: "/characters" }],
+  },
 });
 
 type MemorySettings = {
@@ -262,7 +266,7 @@ watch(id, () => void loadSettings());
 <template>
   <div class="page-wrap">
     <PageHeader
-      :eyebrow="'角色管理 / ' + character.name + ' / 记忆设置'"
+      :eyebrow="character.name + ' / 记忆设置'"
       description="控制角色多久归档一次阶段记忆，以及要不要自动整理忆泡。设置保存到 PostgreSQL，由 Scheduler 生成到期任务，再由 Worker 调用角色模型完成 AI 提炼。"
       :back-to="backTarget"
       :back-label="backLabel"
