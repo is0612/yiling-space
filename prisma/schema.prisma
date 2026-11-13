@@ -302,6 +302,7 @@ model Character {
   memoryKnowledgeRequests MemoryKnowledgeCandidateRequest[]
   reflectionRuns ReflectionRun[]
   preferences CharacterPreference[]
+  interactionExperiences InteractionExperience[]
   expressionHabits CharacterExpressionHabit[]
   goals CharacterGoal[]
   growthImportIdentities CharacterGrowthImportIdentity[]
@@ -461,6 +462,9 @@ model Conversation {
   channelBinding         CharacterChannelBinding? @relation(fields: [channelBindingId], references: [id], onDelete: SetNull)
   messages               Message[]
   groupMembers           GroupMember[]
+  interactionExperiences InteractionExperience[]
+  scopedReflectionRuns ReflectionRun[]
+  scopedExpressionHabits CharacterExpressionHabit[]
   memoryEvents           MemoryEvent[]
 
   @@unique([channelBindingId, externalConversationId])
@@ -1570,6 +1574,8 @@ enum ReflectionSuggestionStatus {
 }
 
 model ReflectionRun {
+  conversationId String? @db.Uuid
+  memoryScopeId String? @db.Uuid
   id String @id @default(uuid()) @db.Uuid
   characterId String @db.Uuid
   requestKey String @db.Uuid
@@ -1597,6 +1603,7 @@ model ReflectionRun {
   @@index([characterId, sourcesHash])
   @@index([characterId, createdAt])
   @@map("reflection_runs")
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 }
 
 model ReflectionSuggestion {
@@ -1824,6 +1831,8 @@ model GrowthEventDelivery {
 
 /// 表达行为描述与逐字梗语录分开；来源只作依据，不复制为角色人设。
 model CharacterExpressionHabit {
+  conversationId String? @db.Uuid
+  memoryScopeId String? @db.Uuid
   id String @id @default(uuid()) @db.Uuid
   characterId String @db.Uuid
   kind String @db.VarChar(20)
@@ -1841,10 +1850,13 @@ model CharacterExpressionHabit {
 
   @@index([characterId, status, updatedAt])
   @@map("character_expression_habits")
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 }
 
 /// 每次成功操作的结果版本与审计同事务追加。
 model CharacterExpressionHabitRevision {
+  conversationId String? @db.Uuid
+  memoryScopeId String? @db.Uuid
   id String @id @default(uuid()) @db.Uuid
   habitId String @db.Uuid
   revision Int
@@ -1920,4 +1932,49 @@ model CharacterGoalProgress {
   @@unique([goalId, requestKey])
   @@index([goalId, createdAt])
   @@map("character_goal_progress")
+}
+
+/// Temporary feedback experience. Never shared across conversations.
+model InteractionExperience {
+  id String @id @default(uuid()) @db.Uuid
+  characterId String @db.Uuid
+  conversationId String @db.Uuid
+  memoryScopeId String @db.Uuid
+  assistantMessageId String @db.Uuid
+  feedbackMessageId String @db.Uuid
+  content String @db.VarChar(400)
+  context String @db.VarChar(400)
+  feedbackQuote String @db.VarChar(400)
+  learning Json @default("{}") @db.JsonB
+  evidenceHash String @db.VarChar(64)
+  status String @default("PENDING") @db.VarChar(20)
+  revision Int @default(1)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, assistantMessageId, feedbackMessageId])
+  @@index([characterId, conversationId, memoryScopeId, status])
+  @@map("interaction_experiences")
+}
+
+model InteractionExperienceProgress {
+  conversationId String @id @db.Uuid
+  anchorAt DateTime @default(now()) @db.Timestamptz(6)
+  cursorAt DateTime? @db.Timestamptz(6)
+  cursorId String? @db.Uuid
+  status String @default("QUEUED") @db.VarChar(20)
+  token String? @db.Uuid
+  leaseUntil DateTime? @db.Timestamptz(6)
+  runAt DateTime @default(now()) @db.Timestamptz(6)
+  attempts Int @default(0)
+  lastError String? @db.VarChar(80)
+  updatedAt DateTime @default(now()) @db.Timestamptz(6)
+  @@map("interaction_experience_progress")
+}
+model InteractionExperienceActivation {
+  id Int @id
+  anchorAt DateTime @default(now()) @db.Timestamptz(6)
+  @@map("interaction_experience_activation")
 }

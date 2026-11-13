@@ -98,9 +98,10 @@ export async function loadCharacterGrowth(input: { prisma?: DB; characterId: str
     const evidence = await delegate(db, "socialAssessmentEvidence").findMany({ where: { assessmentId: { in: assessmentIds }, experienceId: { in: exps.map(row => row.id) }, scopeId: { in: scopeIds } }, select: fields(["id", "assessmentId", "experienceId", "scopeId", "kind", "createdAt"]) });
     for (const row of evidence) t.socialAssessmentEvidence.push(portable({ ...row, id: origin("socialAssessmentEvidence", row.id), assessmentId: origin("socialAssessments", row.assessmentId), experienceId: origin("socialExperiences", row.experienceId), scopeId: origin("socialRelationships", row.scopeId) }) as never);
   }
-  const runs = await delegate(db, "reflectionRuns").findMany({ where: { characterId }, select: fields(runFields) });
+  // Card v5 has no conversation mapping: exporting a scoped run would silently globalize it.
+  const runs = await delegate(db, "reflectionRuns").findMany({ where: { characterId, conversationId: null, memoryScopeId: null }, select: fields(runFields) });
   for (const row of runs) t.reflectionRuns.push(portable({ ...pick(row, runFields.filter(key => !["requestKey", "runAt"].includes(key))), id: origin("reflectionRuns", row.id), status: ["QUEUED", "RUNNING"].includes(row.status) ? "FAILED" : row.status, lastError: ["QUEUED", "RUNNING"].includes(row.status) ? "导出时未完成，仅保留历史。" : null, sourcesHash: null }) as never);
-  const suggestions = await delegate(db, "reflectionSuggestions").findMany({ where: { runId: { in: runs.map(row => row.id) }, run: { characterId } }, select: fields(suggestionFields) });
+  const suggestions = await delegate(db, "reflectionSuggestions").findMany({ where: { runId: { in: runs.map(row => row.id) }, run: { characterId, conversationId: null, memoryScopeId: null } }, select: fields(suggestionFields) });
   for (const row of suggestions) {
     const refs = Array.isArray(row.sourceRefs) ? row.sourceRefs.map((value: unknown) => {
       const ref = object(value); let id: string | undefined;
@@ -144,7 +145,15 @@ export async function importCharacterGrowth(tx: Prisma.TransactionClient, input:
   async function identity(table: CharacterGrowthTable, originId: string, localId?: string) {
     const key = { characterId: input.characterId, domain: domains[table], originId };
     const old = await tx.characterGrowthImportIdentity.findUnique({ where: { characterId_domain_originId: key } });
-    const nativeWhere: Record<string, unknown> = table.startsWith("knowledge") && !["knowledgeRevisions"].includes(table) || ["reflectionRuns", "growthEvents"].includes(table) ? { characterId: input.characterId } : table === "knowledgeRevisions" ? { item: { characterId: input.characterId } } : table === "reflectionSuggestions" ? { run: { characterId: input.characterId } } : table === "growthDeliveries" ? { event: { characterId: input.characterId } } : ["socialExperiences", "socialAssessments", "socialChanges"].includes(table) ? { scope: { characterId: input.characterId } } : table === "socialReviews" || table === "socialAssessmentEvidence" ? { assessment: { scope: { characterId: input.characterId } } } : table === "socialChangeEvidence" ? { change: { scope: { characterId: input.characterId } } } : {};
+    if (old && ["reflectionRuns", "reflectionSuggestions"].includes(table)) {
+      const globalWhere = table === "reflectionRuns"
+        ? { characterId: input.characterId, conversationId: null, memoryScopeId: null }
+        : { run: { characterId: input.characterId, conversationId: null, memoryScopeId: null } };
+      const existing = await delegate(tx, table).findMany({ where: { id: old.localId }, select: { id: true }, take: 1 });
+      const global = await delegate(tx, table).findMany({ where: { id: old.localId, ...globalWhere }, select: { id: true }, take: 1 });
+      if (existing.length && !global.length) throw createError({ statusCode: 409, statusMessage: "角色卡反思映射已失效或指向私人范围，不能作为全局内容导入。" });
+    }
+    const nativeWhere: Record<string, unknown> = table === "reflectionRuns" ? { characterId: input.characterId, conversationId: null, memoryScopeId: null } : table === "reflectionSuggestions" ? { run: { characterId: input.characterId, conversationId: null, memoryScopeId: null } } : table.startsWith("knowledge") && !["knowledgeRevisions"].includes(table) || table === "growthEvents" ? { characterId: input.characterId } : table === "knowledgeRevisions" ? { item: { characterId: input.characterId } } : table === "growthDeliveries" ? { event: { characterId: input.characterId } } : ["socialExperiences", "socialAssessments", "socialChanges"].includes(table) ? { scope: { characterId: input.characterId } } : table === "socialReviews" || table === "socialAssessmentEvidence" ? { assessment: { scope: { characterId: input.characterId } } } : table === "socialChangeEvidence" ? { change: { scope: { characterId: input.characterId } } } : {};
     const native = !old && table !== "socialRelationships" ? (await delegate(tx, table).findMany({ where: { id: originId, ...nativeWhere }, select: { id: true }, take: 1 }))[0] : undefined;
     const id = old?.localId ?? localId ?? native?.id ?? randomUUID();
     if (!old) await tx.characterGrowthImportIdentity.create({ data: { ...key, localId: id } });
@@ -213,7 +222,7 @@ export async function importCharacterGrowth(tx: Prisma.TransactionClient, input:
     for (const row of t.socialChangeEvidence) { const changeId = mapped("socialChanges", row.changeId); const experienceId = mapped("socialExperiences", row.experienceId); if (changeId && experienceId) await insert("socialChangeEvidence", row, { changeId, experienceId }); }
     for (const row of t.socialAssessmentEvidence) { const assessmentId = mapped("socialAssessments", row.assessmentId); const experienceId = mapped("socialExperiences", row.experienceId); const scopeId = mapped("socialRelationships", row.scopeId); if (assessmentId && experienceId && scopeId) await insert("socialAssessmentEvidence", row, { assessmentId, experienceId, scopeId }); }
   }
-  for (const row of t.reflectionRuns) await insert("reflectionRuns", row, { characterId: input.characterId, requestKey: await identity("reflectionRuns", row.id), status: row.status === "SUCCEEDED" ? "SUCCEEDED" : "FAILED", sourcesHash: null, runAt: stamp(row.createdAt) });
+  for (const row of t.reflectionRuns) await insert("reflectionRuns", row, { characterId: input.characterId, conversationId: null, memoryScopeId: null, requestKey: await identity("reflectionRuns", row.id), status: row.status === "SUCCEEDED" ? "SUCCEEDED" : "FAILED", sourcesHash: null, runAt: stamp(row.createdAt) });
   const knowledge = await tx.knowledgeItem.findMany({ where: { characterId: input.characterId, id: { in: [...maps.get("knowledgeItems")!.values()] } }, select: { id: true, title: true, content: true, status: true, sourceType: true } });
   for (const row of t.reflectionSuggestions) {
     const runId = mapped("reflectionRuns", row.runId); if (!runId) continue;

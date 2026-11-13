@@ -5,6 +5,8 @@ import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 import { createHash } from "node:crypto";
 import { formatMentionContent, type ConversationMessageMention } from "./conversation-message";
 
+export const MEMORY_EVENTS_TEMPLATE_VERSION = "memory-events-v2";
+
 export const MEMORY_CATEGORIES = [
   "FACT",
   "PREFERENCE",
@@ -603,6 +605,8 @@ function systemPrompt(options: {
       "contextMessages 是同一会话的相邻前文，按时间顺序排列，仅用于理解跨批指代、前因与引用；它可能因预算而不完整。每条新 events 必须至少引用一条 messages 中的新消息，不能只凭 contextMessages 重记旧事。若缺少指代对象或事情尚未说完，保留不确定性，不要编造人物、前因或结果。",
       "**title 和 detail 里提到具体的人时也写名字**（用 `speaker`），不要写「群友」「群主」「对方」—— 事件正文和 participants 对不上时，她以后只能照着正文说「有个群友」，participants 里的名字白记了。只有确实指代一群人（例如「群里好几个人一起起哄」）时才用泛称。",
       "**participants 的三条硬规矩**：① 不要把你自己的名字写进去 —— 你是记事的人，不是「相关人物」；② 群聊里必须写 `speaker` 里那个具体的名字，绝对不要写「群友」「群成员」「对方」「有人」这类泛称 —— 泛称等于没记，过后谁都查不出是谁，提问时也匹配不到；③ 某句话分不清是谁说的，就不要写进 participants，写空数组也比写错人好。",
+      "忆泡记录值得日后回顾的经历，不是逐轮聊天摘要。只有出现具体经历、重要决定或承诺、明确更正、事项进展或结果、会影响后续相处的明确边界时才记录；仅仅她参与了对话、被 @ 或回复过，不足以成事。普通寒暄、戳一戳、表情回应、重复确认、无后续影响的打趣、角色扮演动作和短暂情绪不单独成条；其中若出现明确约定、边界或实际变化，只记那个变化。",
+      "同一会话内围绕同一事项的连续问答、补充解释和重复表达合成一条，汇总证据并保留当前状态，不按消息、回合或称呼拆条。跨批遇到 existingEvents 中已记的事项，只有新增了决定、履行、取消、更正等实质变化才另记进展；仅继续讨论、再次提及或换个说法不新建。不同事项仍分别保留，不设每日凑数指标，也不为减少条数遗漏重要变化；整批都是普通闲聊就返回空数组。",
       "existingEvents 是这一天**已经记录过**的事件：不要重复记录，同一件事换个说法也算重复（例如「发布群公告」和「起草并发布公告」是同一件）。只写确实不同的事。但**不要因为它非空就整体返回空数组** —— 它只用来避免重复，这一段里只要还有没记过的事，就必须照常写出来。",
       "群聊里可能同时有好几个 bot 在活动，别人 (@数字) 或直接说的话**不一定是冲她说的**。写 event 前必须先确认对象：先看 `mentions` 的 target，只有 role=assistant 的消息（她自己说的）、明确叫她名字的话、@ 指向她的消息（target=self），才算「关于她」。如果一条评价/抱怨 @ 的是另一个号码（target=other）、或者上下文显示在说别人的 bot，就不能写成「群友说她/嫌她/夸她」这类事——那件事的主体不是她，也不要写成「对@数字（她本人）说」。判断不出来时宁可不写，也别记成她的事。这条只适用于 origin 以「QQ群 」开头的消息：私聊和本地对话是两个人面对面说话，对方说的每一句都是对她说的，不要因为「没 @ 她、没叫名字」就跳过私聊事件。",
     );
@@ -769,7 +773,7 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
     // 只在按天任务里传（周期快照没有「当天已记录」这个概念）。
     ...(input.existingEvents?.length
       ? {
-          existingEvents: input.existingEvents.slice(0, 40).map((event) => ({
+          existingEvents: input.existingEvents.slice(-40).map((event) => ({
             occurredAt: event.occurredAt,
             title: event.title,
           })),
@@ -901,7 +905,7 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
       analysis,
       model,
       provider: endpoint.origin,
-      promptTemplateVersion: input.mode === "events" ? "memory-events-v1" : TEMPLATE_VERSION,
+      promptTemplateVersion: input.mode === "events" ? MEMORY_EVENTS_TEMPLATE_VERSION : TEMPLATE_VERSION,
       durationMs: Date.now() - requestStartedAt,
       ...(usage ? { usage } : {}),
     };

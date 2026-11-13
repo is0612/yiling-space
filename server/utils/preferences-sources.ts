@@ -40,7 +40,8 @@ export async function loadPreferenceSources(tx: Prisma.TransactionClient, charac
       // Runs are deleted before cascading suggestions; keep the same parent-first order.
       const parents = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT run."id" FROM "reflection_runs" run JOIN "reflection_suggestions" suggestion ON suggestion."runId"=run."id"
-        WHERE suggestion."id"=${ref.id}::uuid AND run."characterId"=${characterId}::uuid FOR SHARE OF run`;
+        WHERE suggestion."id"=${ref.id}::uuid AND run."characterId"=${characterId}::uuid
+         AND run."conversationId" IS NULL AND run."memoryScopeId" IS NULL FOR SHARE OF run`;
       if (parents[0]) {
         const rows = await tx.$queryRaw<Array<{ id: string; title: string; observation: string; inference: string; recommendation: string; sourceRefs: unknown }>>`
           SELECT "id", "title", "observation", "inference", "recommendation", "sourceRefs" FROM "reflection_suggestions"
@@ -61,7 +62,7 @@ export async function listPreferenceSources(prisma: PrismaClient, input: { owner
     const [rows, total] = await Promise.all([prisma.memoryEvent.findMany({ where, orderBy: [{ occurredAt: "desc" }, { id: "desc" }], skip, take: input.pageSize, select: { id: true, title: true, detail: true, occurredAt: true } }), prisma.memoryEvent.count({ where })]);
     return preferencePage(rows.map(row => ({ ...memorySnapshot(row), occurredAt: row.occurredAt })), total, input.page, input.pageSize);
   }
-  const where: Prisma.ReflectionSuggestionWhereInput = { status: "ACCEPTED", run: { characterId: input.characterId }, ...(input.q ? { OR: [{ title: { contains: input.q, mode: "insensitive" } }, { observation: { contains: input.q, mode: "insensitive" } }, { recommendation: { contains: input.q, mode: "insensitive" } }] } : {}) };
+  const where: Prisma.ReflectionSuggestionWhereInput = { status: "ACCEPTED", run: { characterId: input.characterId, conversationId: null, memoryScopeId: null }, ...(input.q ? { OR: [{ title: { contains: input.q, mode: "insensitive" } }, { observation: { contains: input.q, mode: "insensitive" } }, { recommendation: { contains: input.q, mode: "insensitive" } }] } : {}) };
   const [rows, total] = await Promise.all([prisma.reflectionSuggestion.findMany({ where, orderBy: [{ acceptedAt: "desc" }, { id: "desc" }], skip, take: input.pageSize, select: { id: true, title: true, observation: true, inference: true, recommendation: true, sourceRefs: true, acceptedAt: true, createdAt: true } }), prisma.reflectionSuggestion.count({ where })]);
   return preferencePage(rows.map(row => ({ ...reflectionSnapshot(row), occurredAt: row.acceptedAt ?? row.createdAt })), total, input.page, input.pageSize);
 }

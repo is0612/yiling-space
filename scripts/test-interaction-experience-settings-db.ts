@@ -1,0 +1,40 @@
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { createApp, createRouter, toNodeListener } from "h3";
+import { getPrisma } from "../server/utils/prisma";
+import { createSession } from "../server/utils/auth";
+import settingsPatch from "../server/api/characters/[id]/growth/interaction-experiences/settings.patch";
+const database = new URL(process.env.DATABASE_URL ?? "");
+assert(["localhost", "127.0.0.1", "[::1]"].includes(database.hostname));
+assert(/^yiling_memory_test_[a-f0-9]{32}$/.test(database.pathname.slice(1)), "Use the isolated memory runner only");
+const prisma = getPrisma();
+const ownerId = randomUUID(), otherId = randomUUID(), characterId = randomUUID();
+const router = createRouter();
+router.patch("/characters/:id/settings", settingsPatch);
+const app = createApp(); app.use(router);
+const server = createServer(toNodeListener(app));
+try {
+  await prisma.user.createMany({ data: [ownerId, otherId].map(id => ({ id, username: `experience-settings-${id}`, passwordHash: "test-only" })) });
+  await prisma.character.create({ data: { id: characterId, ownerId, name: "Settings test", basePrompt: "test", modelConfig: { model: "preserve-model", memoryTokenBudget: 1800 } } });
+  await prisma.characterMemorySetting.create({ data: { characterId, autoSnapshotEnabled: false } });
+  const session = await createSession({ userId: ownerId }), other = await createSession({ userId: otherId });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert(address && typeof address !== "string");
+  const patch = (body: unknown, token = session.token) => fetch(`http://127.0.0.1:${address.port}/characters/${characterId}/settings`, { method: "PATCH", headers: { cookie: `yiling_session=${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal((await patch({ enabled: true }, other.token)).status, 404);
+  assert.equal((await patch({ enabled: "yes" })).status, 400);
+  assert.equal((await patch({ enabled: true, model: "override" })).status, 400);
+  const enabled = await patch({ enabled: true }); assert.equal(enabled.status, 200); assert.deepEqual(await enabled.json(), { enabled: true });
+  const row = await prisma.character.findUniqueOrThrow({ where: { id: characterId } });
+  assert.deepEqual(row.modelConfig, { model: "preserve-model", memoryTokenBudget: 1800, interactionExperienceAutoEnabled: true });
+  assert.equal((await prisma.characterMemorySetting.findUniqueOrThrow({ where: { characterId } })).autoSnapshotEnabled, false);
+  assert.equal((await patch({ enabled: false })).status, 200);
+  assert.equal(await prisma.auditLog.count({ where: { characterId, action: "interaction_experience.automation_changed" } }), 2);
+  console.log("Automatic interaction settings PostgreSQL checks passed: session ownership, validation, config merge, independent toggle and audit.");
+} finally {
+  if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  await prisma.$disconnect();
+}

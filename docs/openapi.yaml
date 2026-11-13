@@ -23,6 +23,112 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /characters/{characterId}/growth/interaction-experiences:
+    parameters:
+      - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Memories]
+      summary: 查看自动形成的短期互动经验（最近100条，仅角色拥有者）
+      responses:
+        '200': { description: 'items 数组包含 id/content/context/feedbackQuote/learning/status/revision/conversationId/memoryScopeId/createdAt/updatedAt/weight；learning为kind、situation、misunderstanding、correction、nextJudgment，旧卡可为空；自动经验直接ACTIVE，旧人工候选PENDING保留兼容。weight为七天半衰期权重。automation包含enabled、status（WAITING/QUEUED/RUNNING/SUCCEEDED/RETRY_WAIT）、lastError安全代码、nextRunAt、lastCompletedAt。自动处理需常驻Worker，默认不重扫部署锚点之前历史。' }
+        '401': { description: 未登录 }
+        '404': { description: 角色不存在或无权访问 }
+    post:
+      tags: [Memories]
+      summary: 兼容旧版人工发起的经验候选提炼
+      description: 日常经验由后台在对话收尾时自动形成并直接生效，不需要调用本接口或逐条采纳。本接口仅兼容旧版人工候选；校验同会话助手回复与随后USER反馈、期间没有其他助手回复；模型仅判断语义，必须逐字引用反馈。沉默不算反馈，隐私边界拒绝作为临时经验。此人工入口仍保存PENDING，需PATCH采纳才召回；相同证据幂等。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assistantMessageId, feedbackMessageId]
+              properties:
+                assistantMessageId: { type: string, format: uuid }
+                feedbackMessageId: { type: string, format: uuid }
+      responses:
+        '200': { description: 'item 为候选或 null；notice 说明结果。会调用角色模型并记账。' }
+        '400': { description: 证据顺序或输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或来源不存在 }
+        '409': { description: 来源已变化 }
+        '429': { description: 当日额度用完 }
+        '502': { description: 模型响应无效 }
+        '503': { description: 模型未配置 }
+  /characters/{characterId}/growth/interaction-experiences/settings:
+    patch:
+      tags: [Memories]
+      summary: 启用或关闭角色自动形成互动经验
+      description: 仅角色拥有者可操作；独立开关，不改变自动忆泡或阶段总结。合并角色配置并检查并发版本，写审计。关闭阻止新自动整理，已有生效经验仍按原会话召回。
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200': { description: 返回 enabled 布尔值 }
+        '400': { description: 开关输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色不存在或无权操作 }
+        '409': { description: 角色配置并发修改，请刷新重试 }
+  /characters/{characterId}/growth/interaction-experiences/evidence:
+    get:
+      tags: [Memories]
+      summary: 选择当前角色的会话与反馈证据
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: conversationId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: '未指定会话时返回最近50个conversations（id/title/memoryScopeId）；指定时返回其最近100条USER/ASSISTANT messages（id/role/content/occurredAt）。仅角色拥有者可读。' }
+        '400': { description: 会话ID无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色不存在或无权访问 }
+  /characters/{characterId}/growth/interaction-experiences/{experienceId}:
+    patch:
+      tags: [Memories]
+      summary: 编辑、采纳、驳回或停用临时互动经验
+      description: 仅角色拥有者；乐观版本检查。PENDING可ACCEPT或REJECT；ACTIVE可DISABLE。EDIT不改变状态或衰减起点。采纳重新校验反馈证据。所有修改写审计。召回只允许原conversation与原memoryScope，不向其他会话传播。
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: experienceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision, operation]
+              properties:
+                revision: { type: integer, minimum: 1 }
+                operation: { type: string, enum: [EDIT, ACCEPT, REJECT, DISABLE] }
+                content: { type: string, minLength: 1, maxLength: 400 }
+                context: { type: string, minLength: 1, maxLength: 400 }
+                learning:
+                  type: object
+                  nullable: true
+                  additionalProperties: false
+                  required: [kind, situation, misunderstanding, correction, nextJudgment]
+                  description: EDIT可传完整结构，content与context分别从nextJudgment和situation同步；null表示旧卡无结构。理解与判断经验不是永久语言规则。
+                  properties:
+                    kind: { type: string, enum: [UNDERSTANDING, REFERENCE, SITUATION, STRATEGY, EXPRESSION] }
+                    situation: { type: string, minLength: 1, maxLength: 400 }
+                    misunderstanding: { type: string, maxLength: 400 }
+                    correction: { type: string, minLength: 1, maxLength: 400 }
+                    nextJudgment: { type: string, minLength: 1, maxLength: 400 }
+      responses:
+        '200': { description: 返回更新后的item }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或经验不存在 }
+        '409': { description: 状态、版本或证据冲突 }
   /characters/{characterId}/growth/goals:
     get:
       tags: [Characters]
@@ -5889,6 +5995,7 @@ components:
         updatedAt: { type: string, format: date-time }
     CharacterExpressionHabit:
       type: object
+      description: EXPERIENCE_REFLECT为多条跨时段表达经验的待确认派生习惯，固定原conversationId与memoryScopeId，不能通过编辑升级为全局；激活和召回重新校验经验来源。理解或应对纠错不生成此类习惯。
       required: [id, characterId, kind, content, context, reason, status, revision, sourceType, sourceRefs, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
@@ -5899,19 +6006,24 @@ components:
         reason: { type: string, maxLength: 1000 }
         status: { type: string, enum: [PENDING, ACTIVE, REJECTED, DISABLED] }
         revision: { type: integer, minimum: 1 }
-        sourceType: { type: string, enum: [MANUAL, SOURCES] }
+        sourceType: { type: string, enum: [MANUAL, SOURCES, EXPERIENCE_REFLECT] }
+        conversationId: { type: string, format: uuid, nullable: true }
+        memoryScopeId: { type: string, format: uuid, nullable: true }
         sourceRefs:
           type: array
-          maxItems: 5
+          maxItems: 30
+          description: 人工来源最多5条，自动经验反思派生为3至30条经验引用；原文不在多个领域复制。
           items:
-            type: object
-            required: [type, id, hash, title, summary]
-            properties:
-              type: { type: string, enum: [MEMORY_EVENT, REFLECTION_SUGGESTION] }
-              id: { type: string, format: uuid }
-              hash: { type: string, pattern: '^[a-f0-9]{64}$' }
-              title: { type: string }
-              summary: { type: string, maxLength: 600 }
+            oneOf:
+              - type: object
+                required: [type, id, hash, title, summary]
+                properties:
+                  type: { type: string, enum: [MEMORY_EVENT, REFLECTION_SUGGESTION] }
+                  id: { type: string, format: uuid }
+                  hash: { type: string, pattern: '^[a-f0-9]{64}$' }
+                  title: { type: string }
+                  summary: { type: string, maxLength: 600 }
+              - $ref: '#/components/schemas/ReflectionSource'
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     CharacterGoal:
@@ -5948,11 +6060,13 @@ components:
       required: [key, type, id, hash, title, excerpt]
       properties:
         key: { type: string }
-        type: { type: string, enum: [memory, knowledge, snapshot] }
+        type: { type: string, enum: [memory, knowledge, snapshot, experience] }
         id: { type: string, format: uuid }
         hash: { type: string }
         title: { type: string }
-        excerpt: { type: string, maxLength: 600 }
+        excerpt: { type: string, maxLength: 1200 }
+        conversationId: { type: string, format: uuid, description: experience来源限定的原私聊会话 }
+        memoryScopeId: { type: string, format: uuid, description: experience来源限定的原记忆范围 }
     ReflectionSuggestion:
       type: object
       required: [id, runId, title, observation, inference, recommendation, sourceRefs, status, reviewNote, reviewedAt, acceptedAt, createdAt, updatedAt]
@@ -5972,10 +6086,13 @@ components:
         updatedAt: { type: string, format: date-time }
     ReflectionRun:
       type: object
+      description: conversationId与memoryScopeId同时为空表示原角色全局反思；同时有值表示只使用原私聊经验的反思，不得作为角色全局偏好、目标或语言来源。经验积累后由Worker自动排程，复用同一任务状态和重试链。
       required: [id, characterId, requestKey, periodStart, periodEnd, status, attemptCount, maxAttempts, runAt, lastError, model, promptVersion, completedAt, createdAt, updatedAt, suggestions]
       properties:
         id: { type: string, format: uuid }
         characterId: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid, nullable: true }
+        memoryScopeId: { type: string, format: uuid, nullable: true }
         requestKey: { type: string, format: uuid }
         periodStart: { type: string, format: date-time }
         periodEnd: { type: string, format: date-time }

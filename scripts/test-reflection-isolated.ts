@@ -20,6 +20,7 @@ try {
   const env = { ...process.env, DATABASE_URL: target.toString(), LLM_API_KEY: "", LLM_MODEL: "" };
   for (const [entry, args] of [
     ["node_modules/prisma/build/index.js", ["migrate", "deploy"]],
+    ["node_modules/tsx/dist/cli.mjs", ["scripts/test-experience-reflection-db.ts"]],
     ["node_modules/tsx/dist/cli.mjs", ["scripts/test-reflection-db.ts"]],
     ["node_modules/tsx/dist/cli.mjs", ["scripts/test-growth-overview-db.ts"]],
   ] as const) {

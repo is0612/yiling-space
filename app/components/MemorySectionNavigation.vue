@@ -3,13 +3,14 @@ import { Calendar, Collection, Document, Grid } from "@element-plus/icons-vue";
 const route = useRoute();
 const characterQuery = computed(() => route.query.c ? { c: route.query.c } : {});
 withDefaults(defineProps<{
-  active?: "overview" | "long-term" | "events" | "snapshots";
+  active?: "overview" | "long-term" | "events" | "snapshots" | "interaction-experiences";
 }>(), { active: "overview" });
 const sections = [
   { key: "overview", path: "/growth/memory", label: "总览", icon: Grid },
   { key: "long-term", path: "/growth/memory/long-term", label: "长期记忆", icon: Collection },
   { key: "events", path: "/growth/memory/events", label: "忆泡日历", icon: Calendar },
   { key: "snapshots", path: "/growth/memory/snapshots", label: "阶段总结", icon: Document },
+  { key: "interaction-experiences", path: "/growth/memory/interaction-experiences", label: "互动经验", icon: Collection },
 ];
 </script>
 

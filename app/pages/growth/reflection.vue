@@ -3,7 +3,7 @@ import { ElMessage } from "element-plus";
 
 definePageMeta({ topbar: { title: "反思系统" } });
 
-type SourceRef = { key: string; type: "memory" | "knowledge" | "snapshot"; id: string; title: string; hash: string; excerpt: string };
+type SourceRef = { key: string; type: "memory" | "knowledge" | "snapshot" | "experience"; id: string; title: string; hash: string; excerpt: string };
 type SuggestionStatus = "PENDING" | "ACCEPTED" | "REJECTED" | "DEFERRED";
 type Suggestion = {
   id: string; title: string; observation: string; inference: string; recommendation: string;
@@ -14,6 +14,7 @@ type ReflectionRun = {
   id: string; periodStart: string; periodEnd: string; status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
   attemptCount: number; maxAttempts: number; runAt: string; lastError: string | null;
   model: string | null; promptVersion: string | null; createdAt: string; completedAt: string | null;
+  conversationId?: string | null; memoryScopeId?: string | null;
   suggestions: Suggestion[];
 };
 type ListResult = { items: ReflectionRun[]; total: number; page: number; pageSize: number; totalPages: number; hasMore: boolean };
@@ -57,7 +58,7 @@ let disposed = false;
 
 const runLabels: Record<ReflectionRun["status"], string> = { QUEUED: "等待整理", RUNNING: "正在反思", SUCCEEDED: "已完成", FAILED: "执行失败" };
 const suggestionLabels: Record<SuggestionStatus, string> = { PENDING: "待审阅", ACCEPTED: "成长结论", REJECTED: "已驳回", DEFERRED: "已暂缓" };
-const sourceLabels: Record<SourceRef["type"], string> = { memory: "记忆经历", knowledge: "已确认知识", snapshot: "阶段总结" };
+const sourceLabels: Record<SourceRef["type"], string> = { memory: "记忆经历", knowledge: "已确认知识", snapshot: "阶段总结", experience: "本会话经验" };
 const acceptedCount = computed(() => runs.value.reduce((sum, run) => sum + run.suggestions.filter(suggestion => suggestion.status === "ACCEPTED").length, 0));
 const pendingCount = computed(() => runs.value.reduce((sum, run) => sum + run.suggestions.filter(suggestion => suggestion.status === "PENDING" || suggestion.status === "DEFERRED").length, 0));
 const visibleRuns = computed(() => view.value === "accepted" ? runs.value.filter(run => run.suggestions.some(suggestion => suggestion.status === "ACCEPTED")) : runs.value);
@@ -391,7 +392,11 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
             class="card reflection-run"
           >
             <header class="run-heading">
-              <div><span class="section-kicker">{{ shortDate(run.periodStart) }} — {{ shortDate(run.periodEnd) }}</span><h3>阶段反思</h3></div>
+              <div>
+                <span class="section-kicker">{{ shortDate(run.periodStart) }} — {{ shortDate(run.periodEnd) }}</span><h3>{{ run.conversationId ? '本会话经验反思' : '阶段反思' }}</h3><p v-if="run.conversationId">
+                  仅原私聊会话；稳定表达建议仍需在语言系统审核，不会进入群聊。
+                </p>
+              </div>
               <div class="record-actions">
                 <el-tag :type="runTone(run.status)">
                   {{ runLabels[run.status] }}

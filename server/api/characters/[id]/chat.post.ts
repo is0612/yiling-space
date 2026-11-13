@@ -1,3 +1,5 @@
+import { readInteractionExperiences } from "../../../utils/interaction-experiences";
+import { prepareConversationSummary } from "../../../utils/conversation-summary";
 import { loadGoalsForPrompt, usedGoalSnapshots } from "../../../utils/goal-retrieval";
 import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../../../utils/expression-habit-retrieval";
 import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../../../utils/preference-retrieval";
@@ -212,6 +214,7 @@ export default defineEventHandler(async (event) => {
     .reverse()
     .filter((item) => item.role === "USER" || item.role === "ASSISTANT")
     .map((item) => ({
+      id: item.id,
       role: item.role as "USER" | "ASSISTANT",
       content: item.content.slice(0, 1800),
       occurredAt: item.occurredAt.toISOString(),
@@ -423,8 +426,17 @@ export default defineEventHandler(async (event) => {
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
   const goals = await loadGoalsForPrompt(prisma, characterId, message).catch(() => []);
-  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, characterId, message).catch(() => []);
+  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, characterId, message, undefined,
+    existingConversation ? { conversationId: existingConversation.id, memoryScopeId } : undefined).catch(() => []);
   const preferences = await loadPreferencesForPrompt(prisma, characterId, message).catch(() => []);
+  const interactionExperiences = existingConversation ? await readInteractionExperiences(prisma, {
+    characterId, conversationId: existingConversation.id, memoryScopeId, query: message,
+    recentQueries: recentMessages.filter(row => row.role === "USER").slice(-4).map(row => row.content.slice(0, 500)),
+  }).catch(() => { console.warn("[interaction-experience] desktop read unavailable"); return []; }) : [];
+  const conversationSummary = existingConversation ? await prepareConversationSummary(prisma, {
+    characterId, conversationId: existingConversation.id, memoryScopeId, channelBindingId: null,
+    model: chatSettings.model, apiKey, apiBaseUrl: chatSettings.apiBaseUrl,
+  }).catch(() => null) : null;
   const turnId = randomUUID();
   const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }]);
   let generated;
@@ -616,7 +628,9 @@ export default defineEventHandler(async (event) => {
         maxTokens: chatSettings.maxTokens,
         thinking: chatSettings.thinking,
         currentMessage: message,
-        recentMessages,
+        ...(interactionExperiences.length ? { interactionExperiences } : {}),
+        ...(conversationSummary ? { conversationSummary } : {}),
+        recentMessages: conversationSummary ? recentMessages.filter(row => !row.occurredAt || row.occurredAt > conversationSummary.through.occurredAt || (row.occurredAt === conversationSummary.through.occurredAt && (row.id ?? "") > conversationSummary.through.id)) : recentMessages,
         memories,
         snapshots,
         events,

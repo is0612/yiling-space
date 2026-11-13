@@ -35,6 +35,7 @@ try {
       [randomUUID(), "isolated-memory-fixture", "not-a-real-password-hash"]);
   } finally { await fixture.end(); }
   for (const script of [
+    "test-interaction-experiences-db.ts", "test-interaction-experience-settings-db.ts", "test-interaction-experience-automatic-db.ts",
     "test-memory-scheduler-db.ts", "test-memory-events-db.ts", "test-private-chat-events-db.ts",
     "test-memory-event-move-db.ts", "test-owner-private-scope-db.ts", "test-chat-private-memory-db.ts",
     "test-character-portable-db.ts", "test-memory-event-pagination-db.ts", "test-memory-item-lifecycle-db.ts", "test-memory-cleanup-dependency-db.ts", "test-private-chat-pagination-db.ts", "test-event-extraction-quality-db.ts", "test-memory-events-manual-queue-db.ts", "test-snapshot-review-db.ts", "test-memory-job-fencing-db.ts", "test-memory-scheduler-atomic-db.ts", "test-snapshot-generate-db.ts", "test-memory-settings-db.ts", "test-memory-progress-db.ts",

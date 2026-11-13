@@ -1,0 +1,56 @@
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { randomUUID, createHash } from "node:crypto";
+import { getPrisma } from "../server/utils/prisma";
+import { updateInteractionExperience, listInteractionExperiences, readInteractionExperiences } from "../server/utils/interaction-experiences";
+const url = new URL(process.env.DATABASE_URL ?? "");
+assert(["localhost","127.0.0.1","[::1]"].includes(url.hostname));
+assert(/^yiling_memory_test_[a-f0-9]{32}$/.test(url.pathname.slice(1)), "Only the disposable isolated runner database is allowed");
+const prisma = getPrisma();
+const ownerId = randomUUID(); const otherId = randomUUID(); const characterId = randomUUID();
+try {
+ await prisma.user.createMany({data:[ownerId,otherId].map(id=>({id,username:`interaction-${id}`,passwordHash:"test-only"}))});
+ await prisma.character.create({data:{id:characterId,ownerId,name:"Interaction test",basePrompt:"test"}});
+ const publicScope = await prisma.memoryScope.create({data:{characterId,scopeType:"CHARACTER_GLOBAL",scopeKey:`public:${randomUUID()}`}});
+ const privateScope = await prisma.memoryScope.create({data:{characterId,scopeType:"USER_PRIVATE",userId:ownerId,scopeKey:`private:${randomUUID()}`}});
+ const otherScope = await prisma.memoryScope.create({data:{characterId,scopeType:"USER_PRIVATE",userId:otherId,scopeKey:`other:${randomUUID()}`}});
+ const rooms = await Promise.all([publicScope,privateScope,otherScope].map(scope=>prisma.conversation.create({data:{characterId,memoryScopeId:scope.id}})));
+ const now = new Date();
+ async function seed(roomIndex:number, ageDays=0) {
+  const room = rooms[roomIndex]!;
+  const assistant = await prisma.message.create({data:{conversationId:room.id,role:"ASSISTANT",content:"先给结论，再解释方案。",occurredAt:new Date(now.getTime()-2000)}});
+  const feedback = await prisma.message.create({data:{conversationId:room.id,role:"USER",content:"这次先给结论很好，讨论方案就这样。",occurredAt:new Date(now.getTime()-1000)}});
+  const evidenceHash = createHash("sha256").update(JSON.stringify([assistant.content,assistant.occurredAt.toISOString(),feedback.content,feedback.occurredAt.toISOString(),room.memoryScopeId])).digest("hex");
+  const card = await prisma.interactionExperience.create({data:{characterId,conversationId:room.id,memoryScopeId:room.memoryScopeId,assistantMessageId:assistant.id,feedbackMessageId:feedback.id,evidenceHash,feedbackQuote:"先给结论很好",content:"先给结论",context:"讨论方案",createdAt:new Date(now.getTime()-ageDays*86400000)}});
+  return {card,assistant,feedback};
+ }
+ const own = await seed(1);
+ const active = await updateInteractionExperience(prisma,{ownerId,characterId,id:own.card.id,revision:1,operation:"ACCEPT"});
+ assert.equal(active.item.status,"ACTIVE"); assert.equal(active.item.revision,2);
+ await assert.rejects(updateInteractionExperience(prisma,{ownerId,characterId,id:own.card.id,revision:1,operation:"EDIT",content:"先说重点",context:"讨论方案"}),/已修改/);
+ const changed = await seed(0);
+ await prisma.message.update({where:{id:changed.assistant.id},data:{content:"被修改的回复"}});
+ await assert.rejects(updateInteractionExperience(prisma,{ownerId,characterId,id:changed.card.id,revision:1,operation:"ACCEPT"}),/证据已失效/);
+ assert.equal((await prisma.interactionExperience.findUniqueOrThrow({where:{id:changed.card.id}})).status,"PENDING");
+ const forbidden = await seed(2);
+ await assert.rejects(updateInteractionExperience(prisma,{ownerId,characterId,id:forbidden.card.id,revision:1,operation:"ACCEPT"}),/不存在/);
+ const listed = await listInteractionExperiences(prisma,{ownerId,characterId});
+ assert(!listed.items.some(row=>row.id===forbidden.card.id));
+ const recalled = await readInteractionExperiences(prisma,{characterId,conversationId:rooms[1]!.id,memoryScopeId:privateScope.id,query:"讨论方案先给结论",now});
+ assert.equal(recalled[0]?.id,own.card.id);
+ assert.deepEqual(await readInteractionExperiences(prisma,{characterId,conversationId:rooms[0]!.id,memoryScopeId:privateScope.id,query:"讨论方案",now}),[]);
+ assert.deepEqual(await readInteractionExperiences(prisma,{characterId,conversationId:rooms[1]!.id,memoryScopeId:privateScope.id,query:"天气预报",now}),[]);
+ const learning={kind:"UNDERSTANDING",situation:"倾诉时需要倾听",misunderstanding:"把情绪当作方案请求",correction:"只是想说说",nextJudgment:"先辨别对方是否需要建议"};
+ const edited=await updateInteractionExperience(prisma,{ownerId,characterId,id:own.card.id,revision:2,operation:"EDIT",content:"不能覆盖结构",context:"不能覆盖结构",learning});
+ assert.equal(edited.item.content,learning.nextJudgment); assert.equal(edited.item.context,learning.situation);
+ assert.equal((await readInteractionExperiences(prisma,{characterId,conversationId:rooms[1]!.id,memoryScopeId:privateScope.id,query:"心烦得很，陪我待会儿",now}))[0]?.id,own.card.id);
+ const legacy=await updateInteractionExperience(prisma,{ownerId,characterId,id:own.card.id,revision:3,operation:"EDIT",content:"先给结论",context:"讨论方案",learning:null});
+ assert.deepEqual(legacy.item.learning,{});
+ await prisma.interactionExperience.update({where:{id:own.card.id},data:{createdAt:new Date(now.getTime()-70*86400000)}});
+ assert.deepEqual(await readInteractionExperiences(prisma,{characterId,conversationId:rooms[1]!.id,memoryScopeId:privateScope.id,query:"讨论方案先给结论",now}),[]);
+ assert.equal(await prisma.interactionExperience.count({where:{id:own.card.id}}),1,"Decay must not delete records");
+ await prisma.conversation.delete({where:{id:rooms[1]!.id}});
+ assert.equal(await prisma.interactionExperience.count({where:{id:own.card.id}}),0,"Temporary cards cascade with their conversation");
+ assert(await prisma.auditLog.count({where:{characterId,action:"interaction_experience.accept"}}));
+ console.log("Isolated interaction experience PostgreSQL regression passed: model table, evidence acceptance/hash, optimistic version, scope access, relevance/decay, audit and conversation cascade.");
+} finally { await prisma.$disconnect(); }

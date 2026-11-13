@@ -6,7 +6,7 @@ type Kind = "TONE" | "WORDING" | "LENGTH";
 type Status = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";
 type SourceType = "MEMORY_EVENT" | "REFLECTION_SUGGESTION";
 type Source = { type: SourceType; id: string; title: string; summary: string; hash: string; occurredAt?: string };
-type Habit = { id: string; characterId: string; kind: Kind; content: string; context: string; reason: string; status: Status; revision: number; sourceType: "MANUAL" | "SOURCES"; sourceRefs: Source[]; createdAt: string; updatedAt: string };
+type Habit = { id: string; characterId: string; kind: Kind; content: string; context: string; reason: string; status: Status; revision: number; sourceType: "MANUAL" | "SOURCES" | "EXPERIENCE_REFLECT"; conversationId?: string | null; memoryScopeId?: string | null; sourceRefs: Source[]; createdAt: string; updatedAt: string };
 type History = Habit & { action: string };
 type Page<T> = { items: T[]; pagination: { page: number; pageSize: number; total: number; pageCount: number } };
 type Operation = "ACTIVATE" | "REJECT" | "DISABLE";
@@ -289,6 +289,12 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
               {{ statusLabels[item.status] }}
             </el-tag>
           </header>
+          <p
+            v-if="item.conversationId"
+            class="context"
+          >
+            仅原私聊会话 · 来自多次表达经验的待审核建议，启用后也不会进入群聊。
+          </p>
           <p class="context">
             <strong>适用场景：</strong>{{ item.context || '通用；仍需根据当下对话自然使用。' }}
           </p><p class="reason">
@@ -303,7 +309,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
               :key="`${source.type}:${source.id}`"
               class="source-snapshot"
             >
-              <strong>{{ sourceLabels[source.type] }} · {{ source.title }}</strong><p>{{ source.summary }}</p>
+              <strong>{{ sourceLabels[source.type] || '本会话经验' }} · {{ source.title }}</strong><p>{{ source.summary || (source as Source & { excerpt?: string }).excerpt }}</p>
             </div><p class="muted">
               候选确认时会重新核对来源；已确认的表达习惯独立保留。
             </p>

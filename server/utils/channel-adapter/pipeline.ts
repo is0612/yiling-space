@@ -1,3 +1,5 @@
+import { readInteractionExperiences } from "../interaction-experiences";
+import { prepareConversationSummary } from "../conversation-summary";
 import { createGrowthReadDiagnostic, reconcileGrowthReadUsage, type GrowthReadDiagnostic } from "../growth-read-diagnostics";
 import { loadGoalsForPrompt, usedGoalSnapshots } from "../goal-retrieval";
 import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../expression-habit-retrieval";
@@ -1675,7 +1677,8 @@ async function runChannelTurn(input: {
     : undefined;
   if (observeGrowthRead) observeGrowthRead(createGrowthReadDiagnostic("knowledge"));
   const goals = await loadGoalsForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
-  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
+  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, character.id, currentMessage, observeGrowthRead,
+    !isGroup && existingConversation ? { conversationId: existingConversation.id, memoryScopeId: conversationScopeId } : undefined).catch(() => []);
   const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
   const turnId = randomUUID();
 
@@ -1788,6 +1791,15 @@ async function runChannelTurn(input: {
     }
   }
 
+  const interactionExperiences = !isGroup && existingConversation ? await readInteractionExperiences(prisma, {
+    characterId: input.characterId, conversationId: existingConversation.id, memoryScopeId: conversationScopeId, query: currentMessage,
+    recentQueries: recentMessages.filter(row => row.role === "USER").slice(-4).map(row => row.content.slice(0, 500)),
+  }).catch(() => { console.warn("[interaction-experience] private read unavailable"); return []; }) : [];
+  const conversationSummary = !isGroup && existingConversation ? await prepareConversationSummary(prisma, {
+    characterId: input.characterId, conversationId: existingConversation.id, memoryScopeId: conversationScopeId,
+    channelBindingId: input.bindingId, model: chatSettings.model, apiKey, apiBaseUrl: chatSettings.apiBaseUrl,
+    excludeExternalMessageIds: messages.map(row => row.externalMessageId),
+  }).catch(() => null) : null;
   const workingContext = contextRuntime && existingConversation
     ? await loadConversationWorkingContext(prisma, { conversationId: existingConversation.id, characterId: input.characterId }).catch(() => null)
     : null;
@@ -2195,7 +2207,13 @@ async function runChannelTurn(input: {
         ...(input.segmentCapable ? { segmentedReply: true } : {}),
         ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
         ...(acquaintances ? { acquaintances } : {}),
-        recentMessages,
+        ...(interactionExperiences.length ? { interactionExperiences } : {}),
+        ...(conversationSummary ? { conversationSummary } : {}),
+        recentMessages: conversationSummary ? recentMessages.filter(row => {
+          const source = recentStoredMessages.find(item => (item.externalMessageId || item.id) === row.id);
+          return !source || source.occurredAt.toISOString() > conversationSummary.through.occurredAt ||
+            (source.occurredAt.toISOString() === conversationSummary.through.occurredAt && source.id > conversationSummary.through.id);
+        }) : recentMessages,
         // 他在群里说的那几句：单独一路，不并进 recentMessages（见上面 crossChannel 的注释）。
         ...(crossChannel.length ? { crossChannel: { label: "QQ 群", lines: crossChannel } } : {}),
         memories,

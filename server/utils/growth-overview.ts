@@ -20,7 +20,7 @@ export async function readGrowthOverview(prisma: PrismaClient, input: { ownerId:
   return prisma.$transaction(async tx => {
     const character = await tx.character.findFirst({ where: { id: input.characterId, ownerId: input.ownerId }, select: { id: true, name: true } });
     if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
-    const conclusionWhere = { status: "ACCEPTED" as const, acceptedAt: period, run: role };
+    const conclusionWhere = { status: "ACCEPTED" as const, acceptedAt: period, run: { ...role, conversationId: null, memoryScopeId: null } };
     const knowledgeWhere = { ...role, status: "ACTIVE", createdAt: period };
     const changeWhere = { scope: relationScope, createdAt: period };
     const deliveryBase = { event: { is: role } };
@@ -30,7 +30,7 @@ export async function readGrowthOverview(prisma: PrismaClient, input: { ownerId:
       tx.knowledgeItem.count({ where: knowledgeWhere }),
       tx.socialRelationChange.count({ where: changeWhere }),
       tx.reflectionSuggestion.count({ where: conclusionWhere }),
-      tx.reflectionSuggestion.count({ where: { status: { in: ["PENDING", "DEFERRED"] }, run: role } }),
+      tx.reflectionSuggestion.count({ where: { status: { in: ["PENDING", "DEFERRED"] }, run: { ...role, conversationId: null, memoryScopeId: null } } }),
       tx.knowledgeCandidate.count({ where: { ...role, status: { in: ["PENDING", "REVIEW", "FAILED"] } } }),
       tx.socialRelationshipAssessment.count({ where: { scope: relationScope, status: "SUCCEEDED", reviewStatus: { in: ["PENDING", "DEFERRED"] } } }),
       tx.reflectionSuggestion.findMany({ where: conclusionWhere, orderBy: [{ acceptedAt: "desc" }, { id: "desc" }], take: 8,

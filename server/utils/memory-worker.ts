@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import {
   analyzeMemoryPeriod,
+  MEMORY_EVENTS_TEMPLATE_VERSION,
   shouldRejectMemoryAttributedToAnotherTarget,
   type MemoryAiMessage,
   type MemoryChange,
@@ -328,11 +329,11 @@ export async function runDailyEventJob(
           if (!knownEvents) {
             const existing = await prisma.memoryEvent.findMany({
               where: { memoryScopeId: job.memoryScopeId, dayKey, status: "ACTIVE", conversationId },
-              orderBy: { occurredAt: "asc" },
+              orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
               take: 40,
               select: { occurredAt: true, title: true },
             });
-            knownEvents = existing.map((event) => ({ occurredAt: event.occurredAt.toISOString(), title: event.title }));
+            knownEvents = existing.reverse().map((event) => ({ occurredAt: event.occurredAt.toISOString(), title: event.title }));
             knownEventsByConversation.set(conversationId, knownEvents);
           }
           const contextReadStartedAt = Date.now();
@@ -384,7 +385,7 @@ export async function runDailyEventJob(
             await recordModelUsage({ kind: "events", model: chatSettings.model, characterId: scope.characterId,
               conversationId, metadata: { status: "failed", reason, durationMs: Date.now() - callStartedAt,
                 attempts: 1, inputMessages: group.length, contextMessages: contextMessages.length,
-                batchReadMs, contextReadMs, chunk: index + 1, promptTemplateVersion: "memory-events-v1" } });
+                batchReadMs, contextReadMs, chunk: index + 1, promptTemplateVersion: MEMORY_EVENTS_TEMPLATE_VERSION } });
             throw error;
           }
           await recordModelUsage({

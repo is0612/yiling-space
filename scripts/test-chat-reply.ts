@@ -1319,10 +1319,10 @@ try {
   };
 
   await generateConversationReply({ ...explanationInput, emojiFaces: [{ id: "1", name: "微笑" }] });
-  assert(captureSystem().includes("at most one id from availableFaces"));
+  assert(captureSystem().includes("faces (array, at most one available face id)"));
   assert(!captureSystem().includes("Leave empty on most replies"), "face频率由代码额度控制。");
   await generateConversationReply({ ...explanationInput, emojiStickers: [{ id: "sticker", name: "微笑", usage: "开心时" }] });
-  assert(captureSystem().includes("Attach at most one via sticker"));
+  assert(captureSystem().includes("sticker (one available sticker id or null)"));
   assert(captureSystem().includes("vary choices rather than repeating"));
   assert(!captureSystem().includes("One every few replies"), "贴纸不再叠加软频率。");
 
@@ -1364,6 +1364,21 @@ try {
   assert(captureSystem().includes("split into at most three lines"), "分条渠道保留最多三条的协议。");
   assert(!captureSystem().includes("around twenty characters"), "分条协议不能替角色固定每条字数。");
   assert(!captureSystem().includes("one short line, like a person"), "能分条时不能再留着「就一行」——两句互相打架。");
+
+  // v62：共用输出协议只出现一次，direct 不再与本轮回复要求抢决定权。
+  for (const input of [explanationInput, groupChatInput, { ...groupChatInput, allowSilent: false, memoryAssistantAvailable: true }]) {
+    await generateConversationReply(input);
+    const system = captureSystem();
+    assert.equal(system.split("Return only a valid JSON object with:").length - 1, 1);
+    assert.equal(system.split("used*Ids lists only").length - 1, 1);
+    assert.equal(system.split("Reply must be non-empty").length - 1, 1);
+    assert(!system.includes("without contextAnalysis answer rather than staying silent"));
+    if (input.groupChat) {
+      assert(system.includes("The reply requirement below decides whether silence is available"));
+      assert(system.includes("If a reply is required, acknowledge briefly"));
+      assert(system.includes("does not prevent joining an open topic"));
+    }
+  }
 } finally {
   globalThis.fetch = originalFetch;
 }

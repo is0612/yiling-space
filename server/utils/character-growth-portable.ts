@@ -90,6 +90,10 @@ export function growthCounts(bundle: CharacterGrowthBundle): { [K in CharacterGr
 /** Optional top-level context proves that external references are inside this very card. */
 export type CharacterGrowthContext = { eventIds: ReadonlySet<string>; snapshotIds: ReadonlySet<string>; friends: ReadonlySet<string>; includeFriends: boolean };
 export function parseCharacterGrowthBundle(value: unknown, context?: CharacterGrowthContext): CharacterGrowthBundle {
+  // v5 intentionally has no private conversation mapping. Never strip scope fields on import.
+  const rawTables = value && typeof value === "object" ? (value as { tables?: Record<string, unknown> }).tables : undefined;
+  if (Array.isArray(rawTables?.reflectionRuns) && rawTables.reflectionRuns.some(row => row && typeof row === "object" &&
+    ((row as Record<string, unknown>).conversationId != null || (row as Record<string, unknown>).memoryScopeId != null))) fail("私人反思不能导入为全局内容");
   const envelope = object({ warnings: optional(list(text(500), 100)), version: (v: unknown, p: string) => v === 1 ? 1 as const : fail(p), tables: object(Object.fromEntries(Object.entries(schemas).map(([key, schema]) => [key, list(schema as Reader<unknown>, CHARACTER_GROWTH_LIMITS.rowsPerTable)]))) })(value, "growth");
   const bundle = envelope as CharacterGrowthBundle;
   if (Object.values(growthCounts(bundle)).reduce((a, b) => a + b, 0) > CHARACTER_GROWTH_LIMITS.totalRows) fail("总条数超限");

@@ -1,3 +1,4 @@
+import { validateExperienceReflectionRefs, type ExperienceReflectionRef } from "./experience-reflection";
 import { createError } from "h3";
 import type { Prisma, PrismaClient, CharacterExpressionHabit } from "../../src/generated/prisma/client";
 import { parseExpressionHabitCreate, parseExpressionHabitPatch, parseExpressionHabitSources, expressionHabitNextStatus, expressionHabitPage } from "./expression-habits-domain";
@@ -20,6 +21,7 @@ async function snapshot(tx: Prisma.TransactionClient, habit: CharacterExpression
   await tx.characterExpressionHabitRevision.create({ data: {
     habitId: habit.id, revision: habit.revision, action, kind: habit.kind, content: habit.content, context: habit.context,
     reason: habit.reason, status: habit.status, sourceType: habit.sourceType, sourceRefs: habit.sourceRefs as Prisma.InputJsonValue, actorId,
+    conversationId: habit.conversationId, memoryScopeId: habit.memoryScopeId,
   } });
   await tx.auditLog.create({ data: { actorType: "USER", actorId, characterId: habit.characterId,
     action: `expression_habit.${action.toLowerCase()}`, entityType: "CharacterExpressionHabit", entityId: habit.id,
@@ -43,8 +45,12 @@ export async function updateExpressionHabit(prisma: PrismaClient, input: Owner &
     await lockPreferenceOwner(tx, input.ownerId, input.characterId);
     const current = await tx.characterExpressionHabit.findFirst({ where: { id: input.habitId, characterId: input.characterId } });
     if (!current) throw createError({ statusCode: 404, statusMessage: "表达习惯不存在。" });
+    if (current.conversationId && !await tx.conversation.findFirst({ where: { id: current.conversationId, characterId: input.characterId, memoryScopeId: current.memoryScopeId!, memoryScope: { OR: [{ scopeType: "CHARACTER_GLOBAL" }, { scopeType: "USER_PRIVATE", userId: input.ownerId }, { scopeType: "EXTERNAL_IDENTITY", externalIdentity: { status: "VERIFIED", linkedUserId: input.ownerId } }] } }, select: { id: true } })) throw createError({ statusCode: 404, statusMessage: "表达习惯不存在。" });
     if (current.revision !== parsed.expectedRevision) throw createError({ statusCode: 409, statusMessage: "表达习惯已被修改，请刷新后再试。" });
     const status = expressionHabitNextStatus(current.status, parsed.operation);
+    if (parsed.operation === "ACTIVATE" && current.sourceType === "EXPERIENCE_REFLECT") {
+      if (!current.conversationId || !current.memoryScopeId || !await validateExperienceReflectionRefs(tx, input.characterId, current.sourceRefs as unknown as ExperienceReflectionRef[], { conversationId: current.conversationId, memoryScopeId: current.memoryScopeId })) throw createError({ statusCode: 409, statusMessage: "本会话经验来源已失效，不能启用该表达建议。" });
+    }
     if (parsed.operation === "ACTIVATE" && current.status === "PENDING" && current.sourceType === "SOURCES") {
       const raw = Array.isArray(current.sourceRefs) ? current.sourceRefs : [];
       const refs = parseExpressionHabitSources(raw.map(value => {
@@ -65,7 +71,8 @@ export async function updateExpressionHabit(prisma: PrismaClient, input: Owner &
 }
 export async function listExpressionHabits(prisma: PrismaClient, input: Owner & { status: string; q: string; page: number; pageSize: number }) {
   await assertOwner(prisma, input);
-  const where: Prisma.CharacterExpressionHabitWhereInput = { characterId: input.characterId,
+  const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId, memoryScope: { OR: [{ scopeType: "CHARACTER_GLOBAL" }, { scopeType: "USER_PRIVATE", userId: input.ownerId }, { scopeType: "EXTERNAL_IDENTITY", externalIdentity: { status: "VERIFIED", linkedUserId: input.ownerId } }] } }, select: { id: true } });
+  const where: Prisma.CharacterExpressionHabitWhereInput = { characterId: input.characterId, AND: [{ OR: [{ conversationId: null, memoryScopeId: null }, { conversationId: { in: rooms.map(row => row.id) } }] }],
     ...(input.status === "ALL" ? {} : { status: input.status }),
     ...(input.q ? { OR: [{ content: { contains: input.q, mode: "insensitive" } }, { context: { contains: input.q, mode: "insensitive" } }, { reason: { contains: input.q, mode: "insensitive" } }] } : {}) };
   const [items, total] = await Promise.all([prisma.characterExpressionHabit.findMany({ where, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], skip: (input.page - 1) * input.pageSize, take: input.pageSize }), prisma.characterExpressionHabit.count({ where })]);

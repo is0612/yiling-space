@@ -1,0 +1,57 @@
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { randomUUID, createHash } from "node:crypto";
+import { getPrisma } from "../server/utils/prisma";
+import { listPreferenceSources, loadPreferenceSources } from "../server/utils/preferences-sources";
+import { preferenceSourceHash, type PreferenceSourceRef } from "../server/utils/preferences-domain";
+import { loadCharacterGrowth, importCharacterGrowth } from "../server/utils/character-growth-transfer";
+import { parseCharacterGrowthBundle } from "../server/utils/character-growth-portable";
+const url = new URL(process.env.DATABASE_URL ?? "");
+assert(["localhost", "127.0.0.1", "[::1]"].includes(url.hostname));
+assert(/^yiling_scoped_growth_test_[a-f0-9]{32}$/.test(url.pathname.slice(1)), "Use the dedicated disposable runner only");
+const prisma = getPrisma();
+const original = globalThis.fetch;
+globalThis.fetch = (() => { throw new Error("No model or network calls permitted"); }) as typeof fetch;
+try {
+  const owner = await prisma.user.create({ data: { username: `scope-growth-${randomUUID()}`, passwordHash: "test-only" } });
+  const source = await prisma.character.create({ data: { ownerId: owner.id, name: "Source", basePrompt: "test" } });
+  const target = await prisma.character.create({ data: { ownerId: owner.id, name: "Target", basePrompt: "test" } });
+  const scope = await prisma.memoryScope.create({ data: { characterId: source.id, scopeType: "USER_PRIVATE", userId: owner.id, scopeKey: randomUUID() } });
+  const global = await prisma.memoryScope.create({ data: { characterId: source.id, scopeType: "CHARACTER_GLOBAL", scopeKey: randomUUID() } });
+  const conversation = await prisma.conversation.create({ data: { characterId: source.id, memoryScopeId: scope.id } });
+  const event = await prisma.memoryEvent.create({ data: { memoryScopeId: global.id, title: "Public", detail: "Public evidence", dayKey: "2026-11-13", occurredAt: new Date(), dedupeKey: randomUUID() } });
+  const refs = [{ type: "memory", key: `memory:${event.id}`, id: event.id, title: event.title, excerpt: event.detail, hash: createHash("sha256").update(JSON.stringify([event.title, event.detail])).digest("hex") }];
+  const period = { periodStart: new Date(Date.now() - 86400000), periodEnd: new Date(), status: "SUCCEEDED" as const };
+  const publicRun = await prisma.reflectionRun.create({ data: { characterId: source.id, requestKey: randomUUID(), ...period } });
+  const privateRun = await prisma.reflectionRun.create({ data: { characterId: source.id, requestKey: randomUUID(), conversationId: conversation.id, memoryScopeId: scope.id, ...period } });
+  const makeSuggestion = (runId: string, title: string) => prisma.reflectionSuggestion.create({ data: { runId, title, observation: title, inference: "inference", recommendation: "recommendation", sourceRefs: refs, status: "ACCEPTED", acceptedAt: new Date() } });
+  const publicSuggestion = await makeSuggestion(publicRun.id, "Public conclusion");
+  const privateSuggestion = await makeSuggestion(privateRun.id, "PRIVATE_SCOPED_NEVER_EXPORT");
+  const sourceRef = (row: typeof privateSuggestion): PreferenceSourceRef => ({ type: "REFLECTION_SUGGESTION", id: row.id, hash: preferenceSourceHash("REFLECTION_SUGGESTION", row.id, row.title, JSON.stringify([row.observation, row.inference, row.recommendation]), row.sourceRefs) });
+  const options = await listPreferenceSources(prisma, { characterId: source.id, ownerId: owner.id, type: "REFLECTION_SUGGESTION", q: "", page: 1, pageSize: 50 });
+  assert.deepEqual(options.items.map(row => row.id), [publicSuggestion.id]);
+  await prisma.$transaction(tx => loadPreferenceSources(tx, source.id, [sourceRef(publicSuggestion)]));
+  await assert.rejects(prisma.$transaction(tx => loadPreferenceSources(tx, source.id, [sourceRef(privateSuggestion)])), (error: any) => error.statusCode === 409);
+  const privateEvent = await prisma.growthEvent.create({ data: { characterId: source.id, sourceDomain: "reflection", eventType: "reflection.suggestion.created", aggregateType: "ReflectionSuggestion", aggregateId: privateSuggestion.id, occurredAt: new Date(), payload: {}, idempotencyKey: randomUUID() } });
+  await prisma.growthEventDelivery.create({ data: { eventId: privateEvent.id, consumerKey: "test" } });
+  for (const includeFriends of [false, true]) {
+    const bundle = await loadCharacterGrowth({ prisma, characterId: source.id, ownerId: owner.id, includeFriends });
+    assert.deepEqual(bundle.tables.reflectionRuns.map(row => row.id), [publicRun.id]);
+    assert.deepEqual(bundle.tables.reflectionSuggestions.map(row => row.id), [publicSuggestion.id]);
+    assert(!JSON.stringify(bundle).includes("PRIVATE_SCOPED_NEVER_EXPORT"));
+    assert(!bundle.tables.growthEvents.some(row => row.id === privateEvent.id));
+    const poisoned = structuredClone(bundle) as any;
+    poisoned.tables.reflectionRuns[0].conversationId = conversation.id;
+    poisoned.tables.reflectionRuns[0].memoryScopeId = scope.id;
+    assert.throws(() => parseCharacterGrowthBundle(poisoned), /私人反思/);
+    await prisma.$transaction(tx => importCharacterGrowth(tx, { characterId: target.id, ownerId: owner.id, bundle, includeFriends }));
+  }
+  const importedRun = await prisma.reflectionRun.findFirstOrThrow({ where: { characterId: target.id } });
+  assert.equal(importedRun.conversationId, null); assert.equal(importedRun.memoryScopeId, null);
+  const bundle = await loadCharacterGrowth({ prisma, characterId: source.id, ownerId: owner.id, includeFriends: false });
+  const targetScope = await prisma.memoryScope.create({ data: { characterId: target.id, scopeType: "USER_PRIVATE", userId: owner.id, scopeKey: randomUUID() } });
+  const targetRoom = await prisma.conversation.create({ data: { characterId: target.id, memoryScopeId: targetScope.id } });
+  await prisma.reflectionRun.update({ where: { id: importedRun.id }, data: { conversationId: targetRoom.id, memoryScopeId: targetScope.id } });
+  await assert.rejects(prisma.$transaction(tx => importCharacterGrowth(tx, { characterId: target.id, ownerId: owner.id, bundle })), (error: any) => error.statusCode === 409);
+  console.log("Scoped growth boundaries passed: global source list/load reject private reflection; moving/sharing exclude scoped runs, suggestions and events; scoped import rejected; ledger cannot promote private records.");
+} finally { globalThis.fetch = original; await prisma.$disconnect(); }

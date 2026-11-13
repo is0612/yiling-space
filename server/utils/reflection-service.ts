@@ -19,7 +19,8 @@ function publicRun<T extends { leaseToken?: unknown; leaseExpiresAt?: unknown; f
 }
 export async function listReflectionRuns(prisma: PrismaClient, input: { ownerId: string; characterId: string; page: number; pageSize: number }) {
   await own(prisma, input.ownerId, input.characterId);
-  const where = { characterId: input.characterId, character: { ownerId: input.ownerId } };
+  const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId, memoryScope: { OR: [{ scopeType: "CHARACTER_GLOBAL" }, { scopeType: "USER_PRIVATE", userId: input.ownerId }, { scopeType: "EXTERNAL_IDENTITY", externalIdentity: { status: "VERIFIED", linkedUserId: input.ownerId } }] } }, select: { id: true } });
+  const where = { characterId: input.characterId, character: { ownerId: input.ownerId }, OR: [{ conversationId: null, memoryScopeId: null }, { conversationId: { in: rooms.map(row => row.id) } }] };
   const [rows, total] = await Promise.all([
     prisma.reflectionRun.findMany({ where, include: runInclude, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (input.page - 1) * input.pageSize, take: input.pageSize }),
     prisma.reflectionRun.count({ where }),
@@ -41,7 +42,7 @@ export async function requestReflection(prisma: PrismaClient, input: { ownerId: 
     if (await tx.reflectionRun.findFirst({ where: { characterId: input.characterId, status: { in: ["QUEUED", "RUNNING"] } }, select: { id: true } })) throw createError({ statusCode: 409, statusMessage: "当前角色已有待执行或运行中的反思，请先等待完成。" });
     const periodStart = new Date(now.getTime() - parsed.days * 86_400_000);
     const sourcesHash = reflectionSourcesHash(await collectReflectionSources(tx, input.characterId, periodStart, now));
-    const completed = await tx.reflectionRun.findFirst({ where: { characterId: input.characterId, status: "SUCCEEDED", sourcesHash }, include: runInclude, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+    const completed = await tx.reflectionRun.findFirst({ where: { characterId: input.characterId, conversationId: null, memoryScopeId: null, status: "SUCCEEDED", sourcesHash }, include: runInclude, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
     if (completed) return { run: publicRun(completed), created: false };
     const run = await tx.reflectionRun.create({ data: { characterId: input.characterId, requestKey: parsed.requestKey, periodStart, periodEnd: now, sourcesHash }, include: runInclude });
     await tx.auditLog.create({ data: { actorType: "USER", actorId: input.ownerId, characterId: input.characterId, action: "reflection.requested", entityType: "ReflectionRun", entityId: run.id, details: { days: parsed.days } } });
@@ -97,7 +98,10 @@ export async function reviewReflectionSuggestion(prisma: PrismaClient, input: { 
     await own(tx, input.ownerId, input.characterId);
     const suggestion = await tx.reflectionSuggestion.findFirst({ where: { id: input.suggestionId, run: { characterId: input.characterId, character: { ownerId: input.ownerId } } } });
     if (!suggestion) throw createError({ statusCode: 404, statusMessage: "反思建议不存在。" });
+    const run = await tx.reflectionRun.findUniqueOrThrow({ where: { id: suggestion.runId } });
+    if (run.conversationId && !await tx.conversation.findFirst({ where: { id: run.conversationId, characterId: input.characterId, memoryScopeId: run.memoryScopeId!, memoryScope: { OR: [{ scopeType: "CHARACTER_GLOBAL" }, { scopeType: "USER_PRIVATE", userId: input.ownerId }, { scopeType: "EXTERNAL_IDENTITY", externalIdentity: { status: "VERIFIED", linkedUserId: input.ownerId } }] } }, select: { id: true } })) throw createError({ statusCode: 404, statusMessage: "反思建议不存在。" });
     if (!["PENDING", "DEFERRED"].includes(suggestion.status)) throw createError({ statusCode: 409, statusMessage: "该建议已完成处置，请刷新。" });
+    if (input.decision === "ACCEPTED" && run.conversationId && (suggestion.sourceRefs as Array<{conversationId?:string;memoryScopeId?:string}>).some(ref => ref.conversationId !== run.conversationId || ref.memoryScopeId !== run.memoryScopeId)) throw createError({ statusCode: 409, statusMessage: "反思来源范围不一致。" });
     if (input.decision === "ACCEPTED" && !await validateReflectionSourceRefs(tx, input.characterId, suggestion.sourceRefs)) throw createError({ statusCode: 409, statusMessage: "建议来源已失效或变更，不能接受，请重新发起反思。" });
     const now = new Date();
     const changed = await tx.reflectionSuggestion.updateMany({ where: { id: suggestion.id, status: suggestion.status, updatedAt: suggestion.updatedAt }, data: { status: input.decision, reviewNote: input.note || null, reviewedAt: now, acceptedAt: input.decision === "ACCEPTED" ? now : null } });

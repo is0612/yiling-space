@@ -21,6 +21,7 @@
 import type { Prisma } from "../../src/generated/prisma/client";
 import { getPrisma } from "./prisma";
 import { ensureExternalIdentityScope } from "./identity-scope";
+import { readReviewedFriendRelationship, type FriendRelationshipContext } from "../../shared/utils/friend-relationship-context";
 
 export type FriendSource = "PRIVATE" | "GROUP";
 
@@ -185,7 +186,7 @@ export const MAX_FRIEND_SCOPES_PER_CYCLE = 50;
 /** 熟客榜取几个：够回答「跟谁最熟」，又不至于把上百个朋友塞进提示词。 */
 export const CLOSE_FRIEND_LIMIT = 8;
 
-export type CloseFriend = {
+export type CloseFriend = FriendRelationshipContext & {
   name: string;
   times: number;
   lastSeenAt: Date | null;
@@ -240,6 +241,9 @@ const FRIEND_ORDER = [
 ] satisfies Prisma.MemoryScopeOrderByWithRelationInput[];
 
 const FRIEND_SELECT = {
+  relationshipStage: true,
+  relationshipStatus: true,
+  relationshipVersion: true,
   interactionCount: true,
   lastInteractedAt: true,
   firstSource: true,
@@ -257,6 +261,7 @@ const GROUP_LABEL_LIMIT = 2;
 
 function friendRowToEntry(row: FriendRow): CloseFriend {
   return {
+    ...readReviewedFriendRelationship(row),
     name: (row.externalIdentity?.displayName ?? "").trim() || row.externalIdentity?.platformUid || "?",
     times: row.interactionCount,
     lastSeenAt: row.lastInteractedAt,

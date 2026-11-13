@@ -130,7 +130,7 @@ try {
   assert(metadata.some(row => row.status === "failed" && row.reason === "http_error"));
   assert(metadata.some(row => row.status === "success"));
   for (const row of metadata) {
-    assert.equal(row.promptTemplateVersion, "memory-events-v1");
+    assert.equal(row.promptTemplateVersion, "memory-events-v2");
     for (const field of ["durationMs", "batchReadMs", "contextReadMs"]) assert(typeof row[field] === "number" && Number(row[field]) >= 0);
     assert(!JSON.stringify(row).includes("isolated evidence"));
   }

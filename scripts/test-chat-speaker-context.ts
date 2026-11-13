@@ -92,14 +92,16 @@ try {
   assert(system3.includes("Referents and possessives are not you by default"), "群聊系统提示必须说明指代默认不是她。");
   assert(system3.includes("没说你"), "群聊系统提示必须把「澄清」和「挑衅」分开。");
   // 21:00「我的鱼也是成气候了」说的是他自己那条鱼，她接「谁是你的鱼了」。
-  // 所有格和指代并成同一条规矩：判据只有「这一句 @ 了她、或者叫了她的名字没有」。
+  // 区分话题归属与参与权限：没有点名不能冒认主语，但仍可参与开放话题。
   assert(system3.includes("我的鱼 / 我家宝"), "群聊系统提示必须说明「我的X」指的是说话人自己的 bot。");
-  assert(system3.includes("the message is not about you"), "群聊系统提示必须写明：没有 @、没有名字的话不是在说她。");
+  assert(system3.includes("Resolve the subject and addressee"), "群聊必须依据原文区分主语与听者。");
+  assert(system3.includes("does not prevent joining an open topic"), "没有点名也可参与开放话题。");
+  assert(!system3.includes("the message is not about you"), "不能用缺少点名硬判话题归属。");
   assert(system3.includes("A line starting with /"), "群聊系统提示必须说明斜杠命令是发给别的 bot 的，不是骂她。");
   // 22:01「@群友乙 你在群里也可以学习一下她们的表情包」是主人在教群友乙，
   // 她把自己当成被教的那个，回了「学得像不像啊」「这张算及格」。
   // 「@self 不等于在说她」那条是另一面：@你 也可能是「你帮我跟她说一下」。
-  assert(system3.includes("belongs to them"), "群聊系统提示必须说明「有人在教另一个 bot」这段对话不属于她。");
+  assert(system3.includes("belong to them"), "群聊系统提示必须说明「有人在教另一个 bot」这段对话不属于她。");
   assert(system3.includes("Being @self does not make the sentence about you"), "群聊系统提示必须写明：被 @ 也可能是拿她当传话筒，主语是第三人。");
   // 她自己发的表情包下一轮不可见：图只在 metadata，recentMessages 只有文字。
   // hadSticker 把它标出来，她才认得出「那张图是我贴的」。

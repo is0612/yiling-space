@@ -1,4 +1,5 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
+import { validateExperienceReflectionRefs, type ExperienceScope, type ExperienceReflectionRef } from "./experience-reflection";
 import { preferenceQueryTerms } from "./preference-retrieval";
 import { createGrowthReadDiagnostic, reportGrowthRead, type GrowthReadObserver } from "./growth-read-diagnostics";
 
@@ -31,15 +32,20 @@ export function selectExpressionHabitsForPrompt(query: string, rows: readonly Ex
   return selected;
 }
 
-export async function loadExpressionHabitsForPrompt(prisma: PrismaClient, characterId: string, query: string, onDiagnostic?: GrowthReadObserver): Promise<ConversationExpressionHabit[]> {
+export async function loadExpressionHabitsForPrompt(prisma: PrismaClient, characterId: string, query: string, onDiagnostic?: GrowthReadObserver, scope?: ExperienceScope): Promise<ConversationExpressionHabit[]> {
   const terms = preferenceQueryTerms(query);
   try {
   const rows = await prisma.characterExpressionHabit.findMany({
-    where: { characterId, status: "ACTIVE", OR: [{ context: "" }, ...terms.map(term => ({ context: { contains: term, mode: "insensitive" as const } }))] },
+    where: { characterId, status: "ACTIVE", AND: [{ OR: [{ conversationId: null, memoryScopeId: null }, ...(scope ? [{ conversationId: scope.conversationId, memoryScopeId: scope.memoryScopeId }] : [])] }], OR: [{ context: "" }, ...terms.map(term => ({ context: { contains: term, mode: "insensitive" as const } }))] },
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }], take: 100,
-    select: { id: true, kind: true, content: true, context: true, revision: true, status: true },
+    select: { id: true, kind: true, content: true, context: true, revision: true, status: true, sourceType: true, sourceRefs: true },
   });
-  return selectExpressionHabitsForPrompt(query, rows, 800, onDiagnostic ? entry => reportGrowthRead(onDiagnostic, { ...entry, candidateLimitReached: rows.length === 100 }) : undefined);
+  const eligible = [];
+  for (const row of rows) {
+    if (row.sourceType === "EXPERIENCE_REFLECT" && (!scope || !await prisma.$transaction(tx => validateExperienceReflectionRefs(tx, characterId, row.sourceRefs as unknown as ExperienceReflectionRef[], scope)))) continue;
+    eligible.push(row);
+  }
+  return selectExpressionHabitsForPrompt(query, eligible, 800, onDiagnostic ? entry => reportGrowthRead(onDiagnostic, { ...entry, candidateLimitReached: rows.length === 100 }) : undefined);
   } catch (error) {
     reportGrowthRead(onDiagnostic, createGrowthReadDiagnostic("language", { status: "failed" }));
     throw error;
