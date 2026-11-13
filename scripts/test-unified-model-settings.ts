@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import ts from "typescript";
 const main = readFileSync("app/components/CharacterModelSettings.vue", "utf8");
-const page = readFileSync("app/pages/models.vue", "utf8");
-const wrapper = readFileSync("app/pages/characters/[id]/settings/model.vue", "utf8");
+const page = readFileSync("app/pages/characters/[id]/settings/model.vue", "utf8");
+const legacy = readFileSync("app/pages/models.vue", "utf8");
 function scriptOf(source: string) { const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]; assert(script); return ts.createSourceFile("component.ts", script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS); }
 function functionCode(source: string, names: string[]) {
   const parsed = scriptOf(source);
@@ -18,19 +18,25 @@ const code = functionCode(page, ["readSection", "selectSection"]);
 const controller = new Script(ts.transpileModule(`(function(){${code};return {readSection,selectSection};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(createContext({ busy, sections: sections.map(key => ({ key })), section: { value: "chat" }, characterId: { value: "role-a" }, route, router: { replace: (value: unknown) => { navigations.push(value); } } })) as { readSection(value: unknown): string; selectSection(value: string): void };
 assert.equal(controller.readSection("social"), "social"); assert.equal(controller.readSection(["social"]), "chat"); assert.equal(controller.readSection("unknown"), "chat");
 controller.selectSection("chat"); assert.equal(navigations.length, 0);
-controller.selectSection("knowledge"); assert.deepEqual(JSON.parse(JSON.stringify(navigations[0])), { path: "/models", query: { c: "role-a", from: "characters", section: "knowledge" }, hash: "#connection" });
+controller.selectSection("knowledge"); assert.deepEqual(JSON.parse(JSON.stringify(navigations[0])), { path: "/characters/role-a/settings/model", query: { c: "role-a", from: "characters", section: "knowledge" }, hash: "#connection" });
 busy.value = true; controller.selectSection("social"); assert.equal(navigations.length, 1, "Saving panels cannot start a concurrent capability save"); busy.value = false;
-for (const name of sections) assert(page.includes(`key: "${name}"`));
+// 页面上真正的分节只有三个；四个助手已经并进对话模型（2026-11-12），不再是独立 key。
+// `sections` 仍然喂给 vm 里那份 readSection，是为了验证它「按分节表匹配、不认识就回 chat」。
+const realSections = ["chat", "voice", "vision"];
+const mergedSections = ["memoryAssistant", "contextAssistant", "knowledge", "social"];
+for (const name of realSections) assert(page.includes(`key: "${name}"`));
+for (const name of mergedSections) assert(!page.includes(`key: "${name}"`), `${name} 已并入对话模型，不该再有独立分节`);
 assert(page.includes('<KeepAlive :key="characterId">'), "Role switch destroys cached forms; capability switch preserves them");
-assert(page.includes(':is="activeComponent"')); assert(page.includes(':character-id="characterId"')); assert(page.includes("分别保存"));
+assert(page.includes(':is="mainComponent"')); assert(page.includes(':character-id="characterId"')); assert(/\sembedded\s/.test(page), "Panel renders embedded inside the workspace shell");
 assert(main.includes("const id = computed(() => props.characterId)")); assert(!main.includes("definePageMeta("));
-assert(main.includes('v-if="!embedded"')); assert(main.includes('v-show="activeTab === \'chat\'"')); assert(main.includes('v-show="activeTab === \'contextAssistant\'"'));
+assert(main.includes('v-if="!embedded"')); assert(main.includes('v-show="activeTab === \'chat\'"')); assert(main.includes('v-show="activeTab === \'vision\'"'), "Assistant panels are folded into the chat section, vision stays its own panel");
 assert(main.includes('if (disposed || version !== roleVersion) throw new Error("Model settings role changed")'));
 for (const field of ["chatApiKey: draftChatApiKey.value", "voiceApiKey: draftVoiceApiKey.value.trim()", "asrApiKey: draftAsrApiKey.value.trim()", "visionApiKey: draftVisionApiKey.value.trim()", "memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim()", "contextAssistantApiKey: draftContextAssistantApiKey.value.trim()"]) assert(main.includes(field), `Preserve credential save field: ${field}`);
 for (const endpoint of ["/voice/models", "/voice/test-connection", "/vision/test-connection", "/chat/memory-assistant/models", "/chat/context-assistant/models", "/chat/test-connection"]) assert(main.includes(endpoint), endpoint);
-assert(wrapper.includes('path: "/models"')); assert(wrapper.includes("c: String(route.params.id")); assert(wrapper.includes("hash: route.hash"));
+assert(legacy.includes("/settings/model"), "旧 /models 应转到角色下的模型设置页");
+assert(legacy.includes("...route.query")); assert(legacy.includes("hash: route.hash")); assert(legacy.includes("useCharacterSelection"));
 assert(!/font-size:\s*(?:[0-9]|1[01])px/.test(page));
-for (const path of ["app/pages/characters/[id]/settings/model.vue", "app/pages/growth/knowledge/settings.vue", "app/pages/growth/social/assessment-settings.vue"]) {
+for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings.vue", "app/pages/growth/social/assessment-settings.vue"]) {
   assert(readFileSync(path, "utf8").includes("<style scoped>"), "Legacy HMR style-block URLs remain valid after route migration");
 }
 {

@@ -165,6 +165,17 @@ function formatSavedAt(value?: string) {
 }
 
 /**
+ * 模型设置是角色下的子页（`/characters/:id/settings/model`），和记忆周期 / 表情包 / 梗语录同级。
+ * 地址里带角色 ID，就不必再靠 `?c=` 传递上下文；`c` 仍然留着，切角色时顶栏和 cookie 靠它对齐。
+ */
+function modelSettingsPath(id: string) {
+  return {
+    path: `/characters/${encodeURIComponent(id)}/settings/model`,
+    query: { ...route.query, c: id, from: "characters" },
+  };
+}
+
+/**
  * 「编辑资料」= 角色名称/简介/人设的弹窗；模型参数走独立的设置页。
  * 弹窗曾经把九字段（资料 + 服务商 + Key + 模型 + 温度 + Token）全装进去，
  * 在 1440×900 上一屏放不下，而 el-dialog 滚的是整层遮罩，保存按钮会跑到视野外。
@@ -562,7 +573,7 @@ function runCharacterCommand(command: string) {
             <el-button @click="openProfile(selected)">
               <el-icon><Edit /></el-icon>编辑资料
             </el-button>
-            <el-button @click="navigateTo(`/models?c=${encodeURIComponent(selected.id)}&from=characters`)">
+            <el-button @click="navigateTo(modelSettingsPath(selected.id))">
               <el-icon><Cpu /></el-icon>模型设置
             </el-button>
             <el-button @click="navigateTo({ path: `/characters/${selected.id}/settings/memory`, query: { ...route.query, c: selected.id, from: 'characters' } })">
@@ -764,7 +775,7 @@ function runCharacterCommand(command: string) {
                 link
                 type="primary"
                 size="small"
-                @click="navigateTo(`/models?c=${encodeURIComponent(selected.id)}&from=characters`)"
+                @click="navigateTo(modelSettingsPath(selected.id))"
               >
                 配置语境助手模型
               </el-button>
@@ -813,7 +824,7 @@ function runCharacterCommand(command: string) {
                 link
                 type="primary"
                 size="small"
-                @click="navigateTo(`/models?c=${encodeURIComponent(selected.id)}&from=characters`)"
+                @click="navigateTo(modelSettingsPath(selected.id))"
               >
                 配置记忆助手模型
               </el-button>

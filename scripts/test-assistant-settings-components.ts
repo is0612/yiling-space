@@ -54,8 +54,8 @@ assert.equal(
   "四个面板都要拿到对话模型的地址，否则继承提示会是空的",
 );
 
-// 6. 侧边栏只剩三项，助手不再是并列能力
-const models = read("../app/pages/models.vue");
+// 6. 侧边栏只剩三项，助手不再是并列能力（模型设置已并到角色管理下的子页，2026-11-13）
+const models = read("../app/pages/characters/[id]/settings/model.vue");
 assert(models.includes("3 项"), "侧边栏应显示 3 项");
 for (const gone of ["memoryAssistant", "contextAssistant", "knowledge", "social"]) {
   assert(!models.includes(`key: "${gone}"`), `侧边栏不该再有 ${gone} 这一项`);

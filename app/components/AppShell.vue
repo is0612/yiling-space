@@ -6,7 +6,6 @@ import {
   Avatar,
   ChatDotRound,
   Collection,
-  Cpu,
   DataAnalysis,
   ChatLineRound,
   DataBoard,
@@ -99,7 +98,6 @@ async function handleCharacterSwitch(nextId: string) {
 const workspaceNavigation: NavigationItem[] = [
   { key: "home", label: "总览", href: "/", icon: DataBoard },
   { key: "characters", label: "角色管理", href: "/characters", icon: User },
-  { key: "models", label: "模型设置", href: "/models", icon: Cpu },
   {
     key: "journal",
     label: "日记手账",
@@ -167,7 +165,9 @@ function isActive(item: NavigationItem) {
     case "home":
       return path === "/";
     case "characters":
-      return path === "/characters";
+      // 角色设置（模型 / 记忆周期 / 表情包 / 梗语录）都挂在 /characters/:id 下面，
+      // 进到这些子页时侧栏仍应停在「角色管理」这一项
+      return path === "/characters" || path.startsWith("/characters/");
     case "bili":
       return path === "/bili" || path.startsWith("/bili/");
     default:
