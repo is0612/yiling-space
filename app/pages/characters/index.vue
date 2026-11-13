@@ -90,10 +90,11 @@ function selectCharacter(character: Character) {
   selectedId.value = character.id;
 }
 
-/** 方向键在角色卡之间切换：键盘用户不该被迫去摸鼠标。创建卡的右键不该顺手切换选中项。 */
+/** 方向键在角色卡之间切换：键盘用户不该被迫去摸鼠标。创建/导入卡不该顺手切换选中项。 */
 function onTabsKeydown(event: KeyboardEvent) {
   if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
-  if ((event.target as HTMLElement | null)?.classList.contains("is-create")) return;
+  // 用 closest 而不是 target.classList：点到图标时 target 是 <svg>，类名不在它身上
+  if ((event.target as HTMLElement | null)?.closest(".is-add")) return;
   const total = characters.value.length;
   if (total < 2) return;
   event.preventDefault();
@@ -397,21 +398,6 @@ function runCharacterCommand(command: string) {
 
 <template>
   <div class="page-wrap chars-a">
-    <PageHeader
-      eyebrow="工作空间 / 角色管理"
-      description="集中管理不同的人设、模型配置与记忆周期。每个角色都拥有独立的经历和记忆。"
-    >
-      <template #actions>
-        <button
-          type="button"
-          class="btn"
-          @click="importOpen = true"
-        >
-          <el-icon><Upload /></el-icon>导入角色
-        </button>
-      </template>
-    </PageHeader>
-
     <div
       v-if="loading && !characters.length"
       class="char-tabs"
@@ -473,9 +459,6 @@ function runCharacterCommand(command: string) {
     </div>
 
     <template v-else>
-      <!-- 卡片行里除角色之外还有「创建角色」：同一个格子、同一种尺寸，
-           入口不再挂在页头右上角。它是 div 不是 button —— 只是块面，
-           role="button" + tabindex 补回键盘可达（Enter / 空格都能开弹窗） -->
       <div
         class="char-tabs"
         role="group"
@@ -509,7 +492,7 @@ function runCharacterCommand(command: string) {
         </button>
 
         <div
-          class="char-tab is-create"
+          class="char-tab is-add"
           role="button"
           tabindex="0"
           @click="dialogOpen = true"
@@ -518,8 +501,16 @@ function runCharacterCommand(command: string) {
         >
           <el-icon><Plus /></el-icon>创建角色
         </div>
+        <!-- 导入排在列表最末：它和「创建角色」一样是加角色的入口，
+             放回卡片流里，位置跟着角色数量走，不会再孤零零挂在列表下面 -->
+        <button
+          type="button"
+          class="char-tab is-add"
+          @click="importOpen = true"
+        >
+          <el-icon><Upload /></el-icon>导入角色
+        </button>
       </div>
-
       <section
         v-if="selected"
         class="detail"
@@ -547,7 +538,6 @@ function runCharacterCommand(command: string) {
               >未配置模型</span>
             </div>
             <div class="detail-sub">
-              <span class="detail-alias">{{ selected.alias }}</span>
               <span
                 v-if="selected.channels.length"
                 class="detail-meta"
@@ -977,9 +967,9 @@ function runCharacterCommand(command: string) {
 }
 .chars-a .char-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .chars-a .char-tab.is-skeleton { cursor: default; }
-/* 创建卡：虚线 + 透明底，就是为了和「真卡片是白砖」拉开 —— 一眼看出这格是空位而不是角色。
-   高度不用写，grid 的行高会把它拉成和旁边一样高 */
-.chars-a .char-tab.is-create {
+/* 新增卡（创建 / 导入）：虚线 + 透明底，就是为了和「真卡片是白砖」拉开 ——
+   一眼看出这格是动作而不是角色。高度不用写，grid 的行高会把它拉成和旁边一样高 */
+.chars-a .char-tab.is-add {
   justify-content: center;
   gap: var(--sp-2);
   border: 1px dashed var(--line-strong);
@@ -989,9 +979,9 @@ function runCharacterCommand(command: string) {
   font-weight: 600;
   text-align: center;
 }
-.chars-a .char-tab.is-create .el-icon { font-size: 16px; }
-.chars-a .char-tab.is-create:hover,
-.chars-a .char-tab.is-create:focus-visible {
+.chars-a .char-tab.is-add .el-icon { font-size: 16px; }
+.chars-a .char-tab.is-add:hover,
+.chars-a .char-tab.is-add:focus-visible {
   border-color: var(--brand-line);
   background: #fff8fa;
   color: var(--brand-strong);

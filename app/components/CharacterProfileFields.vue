@@ -3,6 +3,11 @@
  * 角色资料的五个字段：名称 / 简介 / 对你的称呼 / 基础人设 / 对话示例。
  * 「编辑角色资料」和「创建角色」两个弹窗共用这一份，别各写一套 —— 版式一改就得改两处。
  *
+ * `mode` 决定给几个字段：
+ *   create —— 五个全给，新建时一次写全。
+ *   edit   —— 只留名称 + 基础人设。简介/称呼/示例只在新建时写一次，
+ *             事后改人设是最常见的操作，把它们一起摆出来只会把编辑框挤成八股。
+ *
  * 版式（沿用早期原型稿的方案 A）：
  *   ① 身份条     —— 名称 + 简介 + 称呼并排装进一张 --surface-2 浅色卡，和下面的长文分开
  *   ② 主次两栏   —— 人设 1.25 列（唯一主体）、对话示例 1 列，并排而不是竖着堆
@@ -12,14 +17,21 @@
  * ⚠️ 编辑框是**固定高度 + 框内自滚**，不是跟着内容长高。
  *   之前那版反过来（autosize，整表滚），是因为双滚动条会并排挤在弹窗右边缘、像套了双层边框。
  *   两栏之后这两条滚动条相距 380px、各自长在一个框上，读起来是「这个框还有内容」，
- *   不再是噪音；于是换回固定高度 —— 弹窗本体不用滚，一屏能看全五个字段。
+ *   不再是噪音；于是换回固定高度 —— 弹窗本体不用滚，一屏能看全所有字段。
  *   改回 autosize 前先想清楚这点，别只看「有没有滚动条」。
  */
+const props = withDefaults(defineProps<{ mode?: "create" | "edit" }>(), { mode: "create" });
+/**
+ * 只有 create 才渲染简介 / 称呼 / 示例。
+ * 三个 model 给默认值而不是 required：edit 不传它们，缺 required 会在控制台刷警告。
+ */
+const showProfileFields = computed(() => props.mode === "create");
+
 const name = defineModel<string>("name", { required: true });
-const description = defineModel<string>("description", { required: true });
-const userAddress = defineModel<string>("userAddress", { required: true });
+const description = defineModel<string>("description", { default: "" });
+const userAddress = defineModel<string>("userAddress", { default: "" });
 const personality = defineModel<string>("personality", { required: true });
-const examples = defineModel<string>("examples", { required: true });
+const examples = defineModel<string>("examples", { default: "" });
 
 /**
  * 窄窗口下两栏会退回竖排，固定高度的框 + 还在滚的弹窗会并排出现两条灰条 ——
@@ -43,7 +55,10 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="cp-fields">
-    <div class="cp-idcard">
+    <div
+      class="cp-idcard"
+      :class="{ 'is-single': !showProfileFields }"
+    >
       <el-form-item
         label="角色名称"
         required
@@ -54,14 +69,20 @@ onBeforeUnmount(() => {
           placeholder="给这个角色起个名字"
         />
       </el-form-item>
-      <el-form-item label="角色简介">
+      <el-form-item
+        v-if="showProfileFields"
+        label="角色简介"
+      >
         <el-input
           v-model="description"
           maxlength="2000"
           placeholder="用一句话描述角色的个性或定位。"
         />
       </el-form-item>
-      <el-form-item label="她对你的称呼">
+      <el-form-item
+        v-if="showProfileFields"
+        label="她对你的称呼"
+      >
         <el-input
           v-model="userAddress"
           maxlength="40"
@@ -71,7 +92,10 @@ onBeforeUnmount(() => {
       </el-form-item>
     </div>
 
-    <div class="cp-cols">
+    <div
+      class="cp-cols"
+      :class="{ 'is-single': !showProfileFields }"
+    >
       <el-form-item>
         <template #label>
           <span class="cp-head">
@@ -91,7 +115,7 @@ onBeforeUnmount(() => {
         </p>
       </el-form-item>
 
-      <el-form-item>
+      <el-form-item v-if="showProfileFields">
         <template #label>
           <span class="cp-head">
             <span class="cp-head-name is-sub">对话示例</span>
@@ -142,6 +166,17 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
   gap: 0 28px;
   margin-top: 28px;
+}
+/* 编辑模式只剩「名称 + 人设」：两处都收成单列，并卡在 760px ——
+   输入框和下面的文本框左边缘对齐，也不至于把一行字拉到 1100px 读不动。
+   身份条是浅色底，宽度也得一起收，否则右边会拖出一大片空白砖 */
+.cp-idcard.is-single {
+  grid-template-columns: minmax(0, 1fr);
+  width: 760px;
+  max-width: 100%;
+}
+.cp-cols.is-single {
+  grid-template-columns: minmax(0, 760px);
 }
 .cp-cols :deep(.el-form-item) {
   margin-bottom: 0;

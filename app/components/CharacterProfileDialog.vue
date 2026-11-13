@@ -3,10 +3,14 @@ import { ElMessage } from "element-plus";
 import type { Character } from "~/utils/mock-data";
 
 /**
- * 编辑角色资料：名称 / 简介 / 对你的称呼 / 人设 / 对话示例。
+ * 编辑角色资料：只改名称和基础人设。
+ *
+ * 简介 / 她对你的称呼 / 对话示例已经从这个弹窗撤掉（只在「创建角色」时写一次），
+ * 所以这里也不再持有它们的草稿，保存时更不会把它们一并提交 ——
+ * 老角色库里的值原样留着，不会因为一次改名被清空。
  *
  * 字段区（身份条 + 主次两栏 + 列头字数）在 `CharacterProfileFields` 里，
- * 「创建角色」弹窗共用同一份，所以版式只在这里维护一次。这个文件只管弹窗外壳：
+ * 「创建角色」弹窗共用同一份，用 `mode` 决定给几个字段。这个文件只管弹窗外壳：
  * 草稿、提交、页脚。
  *
  * 页脚左侧放「上次保存」而不是留白：右下角两个按钮孤零零的，一行 12px 时间戳就够配平。
@@ -14,11 +18,7 @@ import type { Character } from "~/utils/mock-data";
 type ProfileCharacter = {
   id: string;
   name: string;
-  /** 可选：调用方若没有该字段，就不提交，避免把库里的简介清空 */
-  description?: string;
-  userAddress?: string;
   personality?: string;
-  examples?: string;
   /** ISO 时间；有就在页脚左侧显示「上次保存」，没有就不显示 */
   updatedAt?: string;
 };
@@ -40,20 +40,14 @@ const open = computed({
 
 const saving = ref(false);
 const draftName = ref("");
-const draftDescription = ref("");
-const draftUserAddress = ref("");
 const draftPersonality = ref("");
-const draftExamples = ref("");
 
 /** 每次打开都从当前角色重新灌一遍草稿，避免上次没保存的残值留下来 */
 watch(open, (isOpen) => {
   if (!isOpen) return;
   const current = props.character;
   draftName.value = current?.name ?? "";
-  draftDescription.value = current?.description ?? "";
-  draftUserAddress.value = current?.userAddress ?? "";
   draftPersonality.value = current?.personality ?? "";
-  draftExamples.value = current?.examples ?? "";
 }, { immediate: true });
 
 function readError(error: unknown, fallback: string): string {
@@ -83,24 +77,9 @@ async function save() {
   }
   saving.value = true;
   try {
-    const body: Record<string, unknown> = {
-      name,
-      personality: draftPersonality.value.trim(),
-    };
-    // 只在调用方确实带了这个字段时才提交，避免把老数据清空
-    if (props.character.examples !== undefined) {
-      body.examples = draftExamples.value.trim();
-    }
-    if (props.character.description !== undefined) {
-      body.description = draftDescription.value.trim();
-    }
-    // 空值也要提交：清空称呼 = 让她不再特意喊「主人」，不是「这次别改」
-    if (props.character.userAddress !== undefined) {
-      body.userAddress = draftUserAddress.value.trim();
-    }
     const updated = await $fetch<Character>(`/api/characters/${encodeURIComponent(props.character.id)}`, {
       method: "PATCH",
-      body,
+      body: { name, personality: draftPersonality.value.trim() },
     });
     emit("saved", updated);
     open.value = false;
@@ -127,10 +106,8 @@ async function save() {
     >
       <CharacterProfileFields
         v-model:name="draftName"
-        v-model:description="draftDescription"
-        v-model:user-address="draftUserAddress"
         v-model:personality="draftPersonality"
-        v-model:examples="draftExamples"
+        mode="edit"
       />
     </el-form>
 
