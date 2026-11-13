@@ -527,6 +527,11 @@ await loadDays();
       description="沿着日期回看经历，让每一天的人、事和对话都有迹可循。"
     >
       <template #actions>
+        <MemoryEventDuplicates
+          :character-id="id || ''"
+          :day-key="selected"
+          @changed="loadDetail(selected)"
+        />
         <NuxtLink
           :to="{ path: '/growth/memory', query: { c: id } }"
           class="btn"

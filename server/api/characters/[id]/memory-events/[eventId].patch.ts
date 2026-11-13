@@ -34,7 +34,7 @@ export default defineEventHandler(async (event) => {
   const prisma = getPrisma();
 
   const existing = await prisma.memoryEvent.findFirst({
-    where: { id: eventId, memoryScope: { is: { characterId, character: { is: { ownerId } } } } },
+    where: { id: eventId, memoryScope: { is: { characterId, character: { is: { ownerId } }, OR: [{ scopeType: "CHARACTER_GLOBAL" }, { scopeType: "USER_PRIVATE", userId: ownerId, externalIdentityId: null }, { scopeType: "EXTERNAL_IDENTITY", externalIdentity: { is: { status: "VERIFIED", linkedUserId: ownerId } } }] } } },
     select: { id: true, title: true, status: true, memoryScopeId: true },
   });
   if (!existing) throw createError({ statusCode: 404, statusMessage: "忆泡不存在或不属于当前角色。" });
@@ -73,6 +73,12 @@ export default defineEventHandler(async (event) => {
   }
 
   const updated = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM memory_events WHERE id = ${eventId}::uuid FOR UPDATE`;
+    const current = await tx.memoryEvent.findFirst({
+      where: { id: eventId, memoryScope: { is: { characterId, character: { is: { ownerId } }, OR: [{ scopeType: "CHARACTER_GLOBAL" }, { scopeType: "USER_PRIVATE", userId: ownerId, externalIdentityId: null }, { scopeType: "EXTERNAL_IDENTITY", externalIdentity: { is: { status: "VERIFIED", linkedUserId: ownerId } } }] } } },
+      select: { title: true, status: true },
+    });
+    if (!current) throw createError({ statusCode: 404, statusMessage: "忆泡不存在或不可修改。" });
     const result = await tx.memoryEvent.update({
       where: { id: eventId },
       data,
@@ -104,7 +110,7 @@ export default defineEventHandler(async (event) => {
         entityType: "MemoryEvent",
         entityId: eventId,
         details: {
-          before: { title: existing.title, status: existing.status },
+          before: { title: current.title, status: current.status },
           changed: Object.keys(data),
         },
       },

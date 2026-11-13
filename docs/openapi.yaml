@@ -2598,6 +2598,57 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: 摘录不属于当前来源或来源内容已变化
+  /characters/{characterId}/memory-events/duplicates:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+    get:
+      tags: [Memories]
+      operationId: previewMemoryEventDuplicates
+      summary: 只读预览当天忆泡重复候选
+      description: 仅角色所有者可访问；范围为全局、本人私人及已验证绑定本人的外部范围。只比较同范围、同会话（null 不保证同会话）、同日 ACTIVE 记录。标题详情归一相同或共享来源产生候选，不代表语义重复，不调用模型。每日最多500条，最多返回100对，pairsLimited明确提示限制。
+      parameters:
+        - name: dayKey
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: '{dayKey, checkedCount, limit, pairsLimited, pairs:[{keep:{id,title,detail,sourceMessageIds},candidate:{id,title,detail,sourceMessageIds},reason:EXACT_CONTENT|SHARED_SOURCE,token}]}；token为两条状态、内容、范围及来源的指纹。
+        '400':
+          description: 日期无效
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: 当天可访问记录超过500条，拒绝不完整预览
+    post:
+      tags: [Memories]
+      operationId: archiveMemoryEventDuplicate
+      summary: 人工选择隐藏一条候选，保留另一条
+      description: 事务按固定顺序锁定两条记录，重新校验授权、同范围/会话/日期、ACTIVE状态、候选规则与指纹。只将candidate改为ARCHIVED并原子写审计，不合并正文或来源，不改变日进度，不撤销已形成的派生结论。恢复沿用单条PATCH status=ACTIVE。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keepId, candidateId, token]
+              properties:
+                keepId: { type: string, format: uuid }
+                candidateId: { type: string, format: uuid }
+                token: { type: string, pattern: '^[a-f0-9]{64}$' }
+      responses:
+        '200':
+          description: '{candidate:{id,status:ARCHIVED},keepId}'
+        '400':
+          description: 参数无效或两条相同
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 预览过期、已隐藏或不再是候选，需重新检查
   /characters/{characterId}/memory-events/{eventId}:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
@@ -2609,7 +2660,7 @@ paths:
       tags: [Memories]
       operationId: patchCharacterMemoryEvent
       summary: 编辑 / 隐藏 / 恢复一条忆泡
-      description: 只接受描述性字段（title / detail / place / participants / timeOfDay）与 status。**不允许改 `occurredAt` 与来源消息** —— 那等于伪造时间线。隐藏是软删除（status=ARCHIVED），时间线与对话检索都只读 ACTIVE；恢复即传 status=ACTIVE。每次操作写审计日志（memory.event_updated / event_archived / event_restored）。
+      description: 只允许角色所有者操作全局、本人私人及已验证绑定本人的外部范围；事务锁定记录后重验授权。只接受描述性字段（title / detail / place / participants / timeOfDay）与 status。**不允许改 `occurredAt` 与来源消息** —— 那等于伪造时间线。隐藏是软删除（status=ARCHIVED），时间线与对话检索都只读 ACTIVE；恢复即传 status=ACTIVE。每次操作写审计日志（memory.event_updated / event_archived / event_restored）。
       requestBody:
         required: true
         content:

@@ -82,6 +82,8 @@
     "test:context-assistant": "yarn run test:assistant-turn-context && tsx scripts/test-context-assistant.ts && tsx scripts/test-group-context-reply.ts && tsx scripts/test-group-turn-context.ts && tsx scripts/test-conversation-working-context.ts && tsx scripts/test-message-history-coverage.ts && yarn run test:private-knowledge-candidate",
     "test:memory-budget": "tsx scripts/test-memory-budget.ts",
     "test:memory-context": "tsx scripts/test-memory-context.ts",
+    "test:memory-event-duplicates": "tsx scripts/test-memory-event-duplicates.ts",
+    "test:memory-event-duplicates-isolated": "tsx scripts/test-memory-event-duplicates-isolated.ts",
     "test:memory-events": "tsx scripts/test-memory-events.ts",
     "test:memory-events-db": "tsx scripts/test-memory-events-db.ts",
     "test:memory-self-fact-db": "tsx scripts/test-memory-self-fact-db.ts",

@@ -1,0 +1,13 @@
+import assert from "node:assert/strict";
+import { buildDuplicatePairs, duplicateReason, duplicateToken, type DuplicateEvent } from "../server/utils/memory-event-duplicates";
+const a: DuplicateEvent = { id: "a", memoryScopeId: "scope", conversationId: "room", dayKey: "2026-11-13", title: "事件", detail: "详情", status: "ACTIVE", sourceMessageId: "s1", sourceMessageIds: ["s1"] };
+const b = { ...a, id: "b", title: "另一个进展", detail: "新的事情" };
+assert.equal(duplicateReason(a,b), "SHARED_SOURCE");
+assert.equal(duplicateReason(a,{...b,sourceMessageId:null,sourceMessageIds:[]}), null);
+assert.equal(duplicateReason(a,{...b,title:"事 件！",detail:"详 情。"}), "EXACT_CONTENT");
+for (const patch of [{memoryScopeId:"other"},{conversationId:"other"},{dayKey:"2026-11-12"},{status:"ARCHIVED"}]) assert.equal(duplicateReason(a,{...b,...patch}),null);
+assert.equal(duplicateReason(a,a),null);
+for(const patch of [{title:"改"},{detail:"改"},{sourceMessageIds:["s2"]},{status:"ARCHIVED"},{memoryScopeId:"other"}]) assert.notEqual(duplicateToken(a,b),duplicateToken(a,{...b,...patch}));
+assert.equal(buildDuplicatePairs([a,b]).pairs.length,1);
+assert.equal(buildDuplicatePairs(Array.from({length:30},(_,i)=>({...a,id:String(i)}))).pairsLimited,true);
+console.log("memory-event duplicate candidate rules passed");
