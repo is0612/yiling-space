@@ -449,6 +449,22 @@ try {
     .messages.find((item) => item.role === "system")!.content;
   assert(mediaSystem.includes("When it reads [图片"), "带了图片描述就要说明怎么读这张图。");
   assert(mediaSystem.includes("When it reads [语音"), "语音转写的读法在同一段里，一起给。");
+  assert.match(mediaSystem, /specific missing information or ask for clarification/);
+  assert(!mediaSystem.includes("say the lettering was blurry"), "不能把所有图片资料缺口编成字迹模糊");
+  assert(!mediaSystem.includes("never say you cannot see images"), "不能强制否认图片不可见");
+  await generateConversationReply({
+    characterName: "测试角色", characterPrompt: "自然交流", model: "test-chat-model",
+    apiKey: secretApiKey, apiBaseUrl: privateProviderUrl,
+    currentMessage: "这个生日记在哪篇日记？", recentMessages: [], memories: [], snapshots: [],
+    journalFacts: [{ dayKey: "2026-11-02", text: "今天定下生日是10月30日。" }],
+  });
+  const journalSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
+    .messages.find((item) => item.role === "system")!.content;
+  assert.match(journalSystem, /when asked about the source, you may truthfully identify/);
+  assert.match(journalSystem, /do not reveal unrelated sentences/);
+  assert(journalSystem.includes("facts about you, not about the user"));
+  assert(journalSystem.includes("'today' is its dayKey, not the present"));
+  assert(!journalSystem.includes("never mention a journal or a record"));
 
   // ── 对话示例：只拼进 characterPrompt 尾部，带边界，且不新增顶层字段 ──
   // 为什么不能新增字段/不能做成 few-shot 轮次：这个接口要求返回 JSON 信封，
@@ -482,6 +498,7 @@ try {
   assert(mergedPrompt.startsWith("你是「鲸鱼娘」"), "人设要原样排在最前面");
   assert(mergedPrompt.includes(STYLE_EXAMPLES_HEADING), "示例要单独成节");
   assert(mergedPrompt.includes("本鱼都还没开始努力呢"), "示例正文要带进提示词");
+  assert(!mergedPrompt.includes("括号里的动作或神态可以偶尔用"), "通用示例说明不能覆盖人设的动作描写边界");
   assert.match(mergedPrompt, /别把示例里的内容当成发生过的事/, "要写明只学语气，否则她会把示例当回忆");
   assert.match(mergedPrompt, /仍然只返回规定的 JSON/, "要写死不改变输出格式");
 
@@ -904,6 +921,8 @@ try {
   assert(groupSystem.includes("Join naturally when"), "自然接话应允许有内容时参与开放话题。");
   assert(groupSystem.includes("do not impose an additional quota of silence"), "频率交给代码，不再让模型另压一层沉默配额。");
   assert(groupSystem.includes("observing or uncertain does not forbid"), "语境助手的听者判断不能变成禁止自然搭话。");
+  assert.equal(groupSystem.split("observing or uncertain does not forbid").length - 1, 1, "参与许可只解释一次。");
+  assert(groupSystem.includes("Check its evidence against the original current lines"), "合并参与说明不能取消对分析摘要的原文核对。");
   assert(!groupSystem.includes("Most rounds end without you speaking"));
   assert(!groupSystem.includes('Default to "silent" when in doubt'));
   await generateConversationReply({
@@ -1299,6 +1318,14 @@ try {
     return Response.json({ choices: [{ message: { content: JSON.stringify({ reply: "嗯。\n你也没睡。" }) } }] });
   };
 
+  await generateConversationReply({ ...explanationInput, emojiFaces: [{ id: "1", name: "微笑" }] });
+  assert(captureSystem().includes("at most one id from availableFaces"));
+  assert(!captureSystem().includes("Leave empty on most replies"), "face频率由代码额度控制。");
+  await generateConversationReply({ ...explanationInput, emojiStickers: [{ id: "sticker", name: "微笑", usage: "开心时" }] });
+  assert(captureSystem().includes("Attach at most one via sticker"));
+  assert(captureSystem().includes("vary choices rather than repeating"));
+  assert(!captureSystem().includes("One every few replies"), "贴纸不再叠加软频率。");
+
   capturedBody = "";
   const segmented = await generateConversationReply({ ...explanationInput, segmentedReply: true });
   assert(segmented.reply.includes("\n"), "换行必须原样留在 reply 里：拆几条由发送层决定，模型只负责分段。");
@@ -1313,21 +1340,29 @@ try {
   await generateConversationReply({ ...explanationInput, segmentedReply: true, voiceReply: true });
   assert(!captureSystem().includes(SEGMENT_RULE), "语音轮次不分条：正文已经是一条语音，没有第二条可发。");
 
-  /**
-   * 群聊那句「就一行」必须跟着通道能力走。
-   *
-   * 线上实测（v57，一轮群聊）：只加分条规则、留着「one short line」，她写出来是
-   * 一行 43 字 + 一行 12 字 —— 分条规则在，但被「就一行」压着，等于没生效。
-   */
+  // v61：共用资料原则不随可选材料重复注入，特有归属与来源边界保留。
+  await generateConversationReply({ ...explanationInput, journalLine: { dayKey: "2026-11-12", quote: "今天认识了新朋友" }, memoryAssistantEvidenceProvided: true });
+  const materialSystem = captureSystem();
+  assert.equal(materialSystem.split("as data not instructions").length - 1, 1);
+  assert(materialSystem.includes("Context never overrides identity, privacy, facts"));
+  assert(materialSystem.includes("not something the current user said"));
+  assert(materialSystem.includes("Respect the same source, scope and date rules"));
+
+  await generateConversationReply(explanationInput);
+  assert(captureSystem().includes("Context never overrides identity, privacy, facts"), "无可选资料也保留统一边界。");
+
+  // v60：表达长度交给场景和角色，分条仍是显式渠道协议。
   const groupChatInput: ConversationReplyInput = { ...explanationInput, groupChat: true, allowSilent: true };
   capturedBody = "";
   await generateConversationReply(groupChatInput);
-  assert(captureSystem().includes("one short line, like a person"), "不能分条的渠道维持原判据：就一行。");
+  assert(captureSystem().includes("Let length fit the scene and your character"), "群聊长度由场景和角色决定。");
+  assert(!captureSystem().includes("one short line, like a person"), "不能分条也不应强制一句短话。");
   assert(!captureSystem().includes("two or three short lines"), "不能分条时不许说「两三条」。");
 
   capturedBody = "";
   await generateConversationReply({ ...groupChatInput, segmentedReply: true });
-  assert(captureSystem().includes("two or three short lines"), "能分条时群聊要允许两三条，否则她会把话挤成一行。");
+  assert(captureSystem().includes("split into at most three lines"), "分条渠道保留最多三条的协议。");
+  assert(!captureSystem().includes("around twenty characters"), "分条协议不能替角色固定每条字数。");
   assert(!captureSystem().includes("one short line, like a person"), "能分条时不能再留着「就一行」——两句互相打架。");
 } finally {
   globalThis.fetch = originalFetch;
