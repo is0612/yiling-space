@@ -10,6 +10,9 @@ import { readDailyQuota, readModelUsage, recordModelUsage } from "./model-usage"
 import { parseJsonLoose } from "./loose-json";
 
 type Owner = { ownerId: string; characterId: string };
+/** 列表页可筛选的状态。PENDING 只留给旧版手动候选，新经验由后台直接生效。 */
+export const INTERACTION_EXPERIENCE_STATUSES = ["PENDING", "ACTIVE", "REJECTED", "DISABLED"] as const;
+export type InteractionExperienceStatus = (typeof INTERACTION_EXPERIENCE_STATUSES)[number];
 export function interactionReadableScope(ownerId: string) {
   return { OR: [{ scopeType: "CHARACTER_GLOBAL" as const }, { scopeType: "USER_PRIVATE" as const, userId: ownerId, externalIdentityId: null }, { scopeType: "EXTERNAL_IDENTITY" as const, externalIdentity: { status: "VERIFIED" as const, linkedUserId: ownerId } }] };
 }
@@ -77,14 +80,40 @@ export async function generateInteractionExperience(prisma: PrismaClient, input:
     throw createError({ statusCode: 502, statusMessage: "经验生成失败，请检查模型配置后重试。" });
   } finally { await recordModelUsage({ characterId: input.characterId, kind: "other", model: settings.model, usage, metadata: { source: "interaction-experience", status: success ? "success" : "failed" } }).catch(() => undefined); }
 }
-export async function listInteractionExperiences(prisma: PrismaClient, input: Owner) {
+/** 列表查询参数：分页与状态筛选。和偏好 / 表达习惯用同一套规则（1 起、最多 50 条）。 */
+export function parseInteractionExperienceListQuery(query: Record<string, unknown>) {
+  const positive = (value: unknown, fallback: number, max: number) => {
+    if (value === undefined) return fallback;
+    if (typeof value !== "string" || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1 || Number(value) > max) throw createError({ statusCode: 400, statusMessage: "分页参数无效。" });
+    return Number(value);
+  };
+  const page = positive(query.page, 1, 10000);
+  const pageSize = positive(query.pageSize, 20, 50);
+  const status = String(query.status ?? "ALL");
+  if (status !== "ALL" && !(INTERACTION_EXPERIENCE_STATUSES as readonly string[]).includes(status)) throw createError({ statusCode: 400, statusMessage: "互动经验状态筛选无效。" });
+  return { page, pageSize, status: status as InteractionExperienceStatus | "ALL" };
+}
+export async function listInteractionExperiences(prisma: PrismaClient, input: Owner & { page?: number; pageSize?: number; status?: InteractionExperienceStatus | "ALL" }) {
   const character = await owner(prisma, input);
-  const items = await prisma.interactionExperience.findMany({ where: { characterId: input.characterId, conversation: { memoryScope: interactionReadableScope(input.ownerId) } }, orderBy: { createdAt: "desc" }, take: 100 });
-  const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId, memoryScope: interactionReadableScope(input.ownerId) }, select: { id: true } });
-  const progress = await prisma.interactionExperienceProgress.findFirst({ where: { conversationId: { in: rooms.map(row => row.id) } }, orderBy: { updatedAt: "desc" } });
-  const completed = await prisma.auditLog.findFirst({ where: { characterId: input.characterId, action: "interaction_experience.auto_completed", entityId: { in: rooms.map(row => row.id) } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+  const page = input.page ?? 1;
+  const pageSize = input.pageSize ?? 20;
+  const status = input.status ?? "ALL";
+  const readable = interactionReadableScope(input.ownerId);
+  const where: Prisma.InteractionExperienceWhereInput = { characterId: input.characterId, ...(status === "ALL" ? {} : { status }), conversation: { memoryScope: readable } };
+  const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId, memoryScope: readable }, select: { id: true } });
+  const roomIds = rooms.map(row => row.id);
+  const [items, total, progress, completed] = await Promise.all([
+    prisma.interactionExperience.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * pageSize, take: pageSize }),
+    prisma.interactionExperience.count({ where }),
+    prisma.interactionExperienceProgress.findFirst({ where: { conversationId: { in: roomIds } }, orderBy: { updatedAt: "desc" } }),
+    prisma.auditLog.findFirst({ where: { characterId: input.characterId, action: "interaction_experience.auto_completed", entityId: { in: roomIds } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+  ]);
   const config = character.modelConfig as Record<string, unknown> | null;
-  return { items: items.map(row => ({ ...row, weight: interactionExperienceWeight(row.createdAt) })), automation: { enabled: config?.interactionExperienceAutoEnabled === true, status: progress?.status ?? "WAITING", lastError: progress?.lastError ?? null, nextRunAt: progress?.runAt ?? null, lastCompletedAt: completed?.createdAt ?? null } };
+  return {
+    items: items.map(row => ({ ...row, weight: interactionExperienceWeight(row.createdAt) })),
+    pagination: { page, pageSize, total, pageCount: Math.max(1, Math.ceil(total / pageSize)) },
+    automation: { enabled: config?.interactionExperienceAutoEnabled === true, status: progress?.status ?? "WAITING", lastError: progress?.lastError ?? null, nextRunAt: progress?.runAt ?? null, lastCompletedAt: completed?.createdAt ?? null },
+  };
 }
 export async function updateInteractionExperience(prisma: PrismaClient, input: Owner & { id: string; revision: number; operation: string; content?: unknown; context?: unknown; learning?: unknown }) {
   return prisma.$transaction(async tx => {

@@ -13,7 +13,7 @@ import { ensureGroupMemberIdentity } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
 import type { OnebotSegment } from "./types";
-import { fillOnebotImageUrls, sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
+import { fillOnebotImageUrls, resolveOnebotPrivateQuote, sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
 import { parseBindingRoutingKeys, type OnebotBindingRecord, type OnebotConnectionRecord } from "./configure";
 import { ONEBOT_FACES, toOnebotFaceSegments } from "./faces";
 import { handleChannelBatch, handleChannelMessage, buildStoredMessageMetadata, type ChannelReplySender } from "../pipeline";
@@ -1947,7 +1947,9 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         }
       : undefined;
 
+    const quotedMessage = await resolveOnebotPrivateQuote(record.config, event);
     return handleChannelMessage({
+      ...(quotedMessage ? { quotedMessage } : {}),
       platform: ONEBOT_PLATFORM,
       ...(speaker ? { speaker } : {}),
       characterId: binding.characterId,

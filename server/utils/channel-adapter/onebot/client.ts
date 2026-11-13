@@ -17,6 +17,7 @@ import {
   readOnebotImages,
   readOnebotMessageId,
   readOnebotMessageText,
+  readOnebotReplyToId,
   readOnebotUserId,
   readOnebotVoices,
   type OnebotGroupRole,
@@ -237,6 +238,51 @@ export function resolveOnebotEvent(data: unknown): OnebotResolvedEvent | null {
     selfId: String(record?.self_id ?? ""),
     senderRole: readOnebotGroupRole(data),
   };
+}
+
+export type OnebotPrivateQuote = { messageId: string; content?: string; isSelf?: boolean };
+
+/** 回查单条引用；发送者和收件人必须能证明属于当前私聊，缺证据只保留引用 id。 */
+export async function resolveOnebotPrivateQuote(
+  config: OnebotConnectionConfig,
+  event: OnebotResolvedEvent,
+): Promise<OnebotPrivateQuote | undefined> {
+  if (event.messageType !== "private") return undefined;
+  const messageId = readOnebotReplyToId(event.data);
+  if (!messageId) return undefined;
+  const unresolved: OnebotPrivateQuote = { messageId };
+  const id = (value: unknown): string =>
+    (typeof value === "string" || typeof value === "number") && /^\d+$/.test(String(value)) ? String(value) : "";
+  try {
+    const raw = await callOnebotAction(config, "get_msg", { message_id: messageId });
+    if (!raw || typeof raw !== "object") return unresolved;
+    const data = raw as Record<string, unknown>;
+    if (data.message_type !== "private") return unresolved;
+    if (data.message_id !== undefined && String(data.message_id) !== messageId) return unresolved;
+    const peer = id(event.userId);
+    const self = id(event.selfId);
+    if (!peer || !self || peer === self) return unresolved;
+    const senderRecord = data.sender && typeof data.sender === "object" ? data.sender as Record<string, unknown> : undefined;
+    const sender = id(senderRecord?.user_id) || id(data.user_id);
+    const user = id(data.user_id);
+    const target = id(data.target_id);
+    if (sender !== peer && sender !== self) return unresolved;
+    // SnowLuma/get_msg 的 sender 是作者；user_id 可能是作者，也可能是私聊对端。
+    // 自己发送的消息必须另有对端证据，只有 sender=self 绝不能证明属于哪一位好友。
+    if (sender === self) {
+      if (target ? target !== peer : user !== peer) return unresolved;
+      if (user && user !== self && user !== peer) return unresolved;
+    } else {
+      if (target && target !== self) return unresolved;
+      if (user && user !== peer) return unresolved;
+    }
+    const text = readOnebotMessageText(data).trim();
+    if (!text) return unresolved;
+    const content = text.length > 2000 ? `${text.slice(0, 1989)}\n[引用原文已截断]` : text;
+    return { messageId, content, isSelf: sender === self };
+  } catch {
+    return unresolved;
+  }
 }
 
 /**

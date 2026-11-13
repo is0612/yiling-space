@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { validateInteractionEvidence, interactionExperienceWeight, interactionExperienceNextStatus } from "../server/utils/interaction-experience-domain";
-import { parseInteractionSuggestion, interactionExperiencePrompt, readInteractionExperiences, updateInteractionExperience, listInteractionExperiences } from "../server/utils/interaction-experiences";
+import { parseInteractionSuggestion, interactionExperiencePrompt, readInteractionExperiences, updateInteractionExperience, listInteractionExperiences, parseInteractionExperienceListQuery } from "../server/utils/interaction-experiences";
 import type { PrismaClient } from "../src/generated/prisma/client";
 const assistant = { role:"ASSISTANT", conversationId:"room", occurredAt:new Date(1000) };
 const feedback = { role:"USER", conversationId:"room", occurredAt:new Date(2000) };
@@ -27,7 +27,7 @@ let experienceWhere: unknown;
 let writes = 0;
 const serviceMock = {
  character:{findFirst:async()=>({id:"role"})},
- interactionExperience:{findFirst:async (args:unknown)=>{experienceWhere=args;return {id:"card",characterId:"role",conversationId:"room",memoryScopeId:"private",assistantMessageId:"a",feedbackMessageId:"f",feedbackQuote:"这次很好",evidenceHash:"stale-hash",status:"PENDING",revision:1};},findMany:async(args:unknown)=>{experienceWhere=args;return [];},updateMany:async()=>{writes++;return {count:1};}},
+ interactionExperience:{findFirst:async (args:unknown)=>{experienceWhere=args;return {id:"card",characterId:"role",conversationId:"room",memoryScopeId:"private",assistantMessageId:"a",feedbackMessageId:"f",feedbackQuote:"这次很好",evidenceHash:"stale-hash",status:"PENDING",revision:1};},findMany:async(args:unknown)=>{experienceWhere=args;return [];},count:async()=>0,updateMany:async()=>{writes++;return {count:1};}},
  message:{findMany:async()=>[{id:"a",...assistant,content:"已被修改的回复"},{id:"f",...feedback,content:"这次很好"}]},
  conversation:{findFirst:async()=>({id:"room",memoryScopeId:"private"}),findMany:async()=>[]},
   auditLog:{findFirst:async()=>null},
@@ -40,6 +40,14 @@ assert(JSON.stringify(experienceWhere).includes("linkedUserId"),"Review must inc
 await listInteractionExperiences(serviceMock,{ownerId:"owner",characterId:"role"});
 assert(JSON.stringify(experienceWhere).includes('"userId":"owner"'),"List must restrict user-private scope");
 assert(JSON.stringify(experienceWhere).includes('"status":"VERIFIED"'),"Unverified identity must not be readable");
+assert.deepEqual(parseInteractionExperienceListQuery({}),{page:1,pageSize:20,status:"ALL"});
+assert.deepEqual(parseInteractionExperienceListQuery({page:"3",pageSize:"10",status:"DISABLED"}),{page:3,pageSize:10,status:"DISABLED"});
+for(const bad of [{page:"0"},{pageSize:"51"},{page:"abc"},{status:"DELETED"}]) assert.throws(()=>parseInteractionExperienceListQuery(bad),"List query rejects unknown page size, page number or status");
+const pageMock = {character:{findFirst:async()=>({id:"role",modelConfig:null})},conversation:{findMany:async()=>[{id:"room"}]},interactionExperienceProgress:{findFirst:async()=>null},auditLog:{findFirst:async()=>null},interactionExperience:{findMany:async(args:unknown)=>{experienceWhere=args;return [];},count:async()=>0}} as unknown as PrismaClient;
+const listed = await listInteractionExperiences(pageMock,{ownerId:"owner",characterId:"role",page:2,pageSize:20,status:"ACTIVE"});
+assert.deepEqual(listed.pagination,{page:2,pageSize:20,total:0,pageCount:1});
+assert(JSON.stringify(experienceWhere).includes('"skip":20'),"Pagination must skip a full page");
+assert(JSON.stringify(experienceWhere).includes('"status":"ACTIVE"'),"Status filter is pushed to the database, not filtered after the query");
 console.log("Interaction experience tests passed: source order, no silence, quote evidence, privacy boundary, state review, decay, strict room/scope retrieval and service-level stale evidence rejection (mock only).");
 const understanding = {kind:"UNDERSTANDING", situation:"对方倾诉时先倾听", misunderstanding:"把诉说当求方案", correction:"只是想说说", nextJudgment:"辨别情绪需要，不急着建议"};
 assert.deepEqual(parseInteractionSuggestion(JSON.stringify({content:"先辨别需要",context:"倾诉",feedbackQuote:"只是想说说",learning:understanding}),"我只是想说说" ).learning,understanding);

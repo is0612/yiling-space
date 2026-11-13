@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { createAssistantTurnContext } from "../assistant-turn-context";
 import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
-import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem } from "../chat-reply";
+import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem, type ConversationQuotedMessage } from "../chat-reply";
 import {
   formatMentionContent,
   readMessageMentions,
@@ -164,6 +164,7 @@ export type ChannelTurnMessage = {
   authorPlatformUid?: string;
   /** Optional author display name for identity metadata. */
   authorDisplayName?: string;
+  quotedMessage?: ConversationQuotedMessage;
   content: string;
   /** 这条消息 @ 的是谁（self / other / all）。落库给忆泡提炼判断对象用。 */
   mentionTargets?: string[];
@@ -212,6 +213,7 @@ export type ChannelMessageInput = {
     isOwner: boolean;
     ownerDisplayName?: string;
   };
+  quotedMessage?: ConversationQuotedMessage;
   content: string;
   /**
    * 这条消息 @ 的是谁：`self` = 她本人，`other` = 别的群成员/别的 bot，`all` = @全体。
@@ -276,6 +278,7 @@ export function buildStoredMessageMetadata(input: {
     mentions?: ConversationMessageMention[];
     speaker?: { isOwner?: boolean };
     voices?: unknown[];
+    quotedMessage?: ConversationQuotedMessage;
     content: string;
   };
 }): Prisma.InputJsonObject {
@@ -297,6 +300,7 @@ export function buildStoredMessageMetadata(input: {
     ...(message.speaker?.isOwner ? { isOwner: true } : {}),
     // 这条原本是语音条；落库的 content 是转写后的文字（没配 ASR 就还是 `[语音]`）。
     ...(message.voices?.length ? { hasVoice: true } : {}),
+    ...(message.quotedMessage ? { quotedMessage: { ...message.quotedMessage } } : {}),
     ...(isSystemBroadcast(message.content) ? { systemBroadcast: true } : {}),
   };
 }
@@ -2155,6 +2159,7 @@ async function runChannelTurn(input: {
         maxTokens: chatSettings.maxTokens,
         thinking: chatSettings.thinking,
         currentMessage,
+        ...(!isGroup && messages[0]?.quotedMessage ? { quotedMessage: messages[0].quotedMessage } : {}),
         timeZone: chatTimeZone,
         ...(journalLine ? { journalLine } : {}),
         ...(journalFacts.length ? { journalFacts } : {}),
@@ -2644,6 +2649,7 @@ export async function handleChannelMessage(input: ChannelMessageInput): Promise<
       ...(input.authorPlatformUid ? { authorPlatformUid: input.authorPlatformUid } : {}),
       ...(input.authorDisplayName ? { authorDisplayName: input.authorDisplayName } : {}),
       content: input.content,
+      ...(input.quotedMessage ? { quotedMessage: input.quotedMessage } : {}),
       ...(input.images?.length ? { images: input.images } : {}),
       ...(input.voices?.length ? { voices: input.voices } : {}),
       ...(input.speaker ? { speaker: input.speaker } : {}),

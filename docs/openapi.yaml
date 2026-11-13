@@ -28,7 +28,12 @@ paths:
       - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
     get:
       tags: [Memories]
-      summary: 查看自动形成的短期互动经验（最近100条，仅角色拥有者）
+      summary: 分页查看自动形成的短期互动经验（仅角色拥有者）
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: status, in: query, schema: { type: string, enum: [ALL, PENDING, ACTIVE, REJECTED, DISABLED], default: ALL } }
+      description: 返回 pagination（page、pageSize、total、pageCount），按创建时间及ID倒序；非法分页或状态返回400。
       responses:
         '200': { description: 'items 数组包含 id/content/context/feedbackQuote/learning/status/revision/conversationId/memoryScopeId/createdAt/updatedAt/weight；learning为kind、situation、misunderstanding、correction、nextJudgment，旧卡可为空；自动经验直接ACTIVE，旧人工候选PENDING保留兼容。weight为七天半衰期权重。automation包含enabled、status（WAITING/QUEUED/RUNNING/SUCCEEDED/RETRY_WAIT）、lastError安全代码、nextRunAt、lastCompletedAt。自动处理需常驻Worker，默认不重扫部署锚点之前历史。' }
         '401': { description: 未登录 }

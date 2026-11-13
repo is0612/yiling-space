@@ -146,7 +146,7 @@
     "test:catchphrases": "tsx scripts/test-catchphrases.ts",
     "test:system-message": "tsx scripts/test-system-message.ts",
     "catchphrases:import": "tsx scripts/import-catchphrases.ts",
-    "test:onebot-reply": "tsx scripts/test-onebot-reply.ts",
+    "test:onebot-reply": "tsx scripts/test-onebot-reply.ts && tsx scripts/test-onebot-private-quote.ts && tsx scripts/test-private-quote-prompt.ts",
     "test:reply-segments": "tsx scripts/test-reply-segments.ts",
     "test:image-understanding": "tsx scripts/test-image-understanding.ts",
     "test:voice": "tsx scripts/test-voice.ts",
