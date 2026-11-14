@@ -70,7 +70,7 @@
     "onebot:stack": "tsx scripts/start-qq-stack.ts",
     "proactive:run": "tsx scripts/run-proactive.ts",
     "bili:run": "tsx scripts/run-bili-adapter.ts",
-    "test:memory-continuity": "tsx scripts/test-conversation-summary.ts && tsx scripts/test-conversation-summary-prompt.ts && tsx scripts/test-friend-relationship-context.ts && tsx scripts/test-interaction-experiences.ts && tsx scripts/test-interaction-experiences-page.ts",
+    "test:memory-continuity": "tsx scripts/test-raw-llm-bounds.ts && tsx scripts/test-conversation-summary.ts && tsx scripts/test-conversation-summary-prompt.ts && tsx scripts/test-friend-relationship-context.ts && tsx scripts/test-interaction-experiences.ts && tsx scripts/test-interaction-experiences-page.ts",
     "test:memory-retrieval": "tsx scripts/test-memory-retrieval.ts",
     "test:memory-assistant": "tsx scripts/test-memory-assistant.ts",
     "test:owner-timeline-retrieval": "tsx scripts/test-owner-timeline-retrieval.ts",

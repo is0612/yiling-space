@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { prepareConversationSummary, shouldSummarizeConversation } from "../server/utils/conversation-summary";
+import { prepareConversationSummary, refreshConversationSummary, shouldSummarizeConversation } from "../server/utils/conversation-summary";
 import type { PrismaClient } from "../src/generated/prisma/client";
 const now = new Date("2026-11-13T12:00:00Z");
 assert(!shouldSummarizeConversation(3, new Date(0), now));
@@ -10,7 +10,7 @@ let metadata: unknown = { unrelated: true };
 let rows = Array.from({ length: 50 }, (_, n) => ({ id: String(n).padStart(3, "0"), externalMessageId: `ext-${n}`, role: "USER", content: `test ${n}`, occurredAt: new Date(now.getTime() - 100000 + n) }));
 const prisma = { conversation: {
  findFirst: async (q: { where: Record<string, unknown> }) => q.where.memoryScopeId === "private" && q.where.channelBindingId === binding && q.where.characterId === "character" ? { metadata, updatedAt: now } : null,
- updateMany: async (q: { data: { metadata: unknown }; where: Record<string, unknown> }) => { writes++; assert.equal(q.where.updatedAt, now); if (cas) metadata = q.data.metadata; return { count: cas }; },
+ updateMany: async (q: { data: { metadata: unknown }; where: Record<string, unknown> }) => { writes++; assert.deepEqual(q.where.metadata, { equals: metadata }); if (cas) metadata = q.data.metadata; return { count: cas }; },
 }, message: { findMany: async (q: { where: { OR?: Array<{ occurredAt: Date | { gt: Date }; id?: { gt: string } }>; AND?: Array<{ OR: Array<{ externalMessageId: null | { notIn: string[] } }> }> }; take: number }) => {
  const exclude = q.where.AND?.[0]?.OR[1]?.externalMessageId;
  const selected = rows.filter(row => {
@@ -31,26 +31,52 @@ globalThis.fetch = async (_url, init) => {
 const input = { characterId: "character", conversationId: "conversation", memoryScopeId: "private", channelBindingId: null,
  model: "mock", apiKey: "fake", apiBaseUrl: "http://127.0.0.1:4010/v1", now };
 try {
- const result = await prepareConversationSummary(prisma, input);
+ const result = await refreshConversationSummary(prisma, input);
  assert.equal(result?.through.id, "019"); assert.equal(writes, 1); assert.equal(result?.coverage, "partial");
  assert.equal((metadata as Record<string, unknown>).unrelated, true);
  modelFails = true;
- assert.equal((await prepareConversationSummary(prisma, input))?.through.id, "019"); assert.equal(writes, 1);
+ assert.equal((await refreshConversationSummary(prisma, input))?.through.id, "019"); assert.equal(writes, 1);
  modelFails = false; cas = 0;
- assert.equal((await prepareConversationSummary(prisma, input))?.through.id, "019");
+ assert.equal((await refreshConversationSummary(prisma, input))?.through.id, "019");
  cas = 1;
- assert.equal((await prepareConversationSummary(prisma, input))?.through.id, "039");
+ assert.equal((await refreshConversationSummary(prisma, input))?.through.id, "039");
  assert.equal(sourceIds[0], "020", "cursor must continue from unprocessed evidence");
  rows = [];
- assert.equal((await prepareConversationSummary(prisma, input))?.through.id, "039", "source cleanup must preserve checkpoint");
+ assert.equal((await refreshConversationSummary(prisma, input))?.through.id, "039", "source cleanup must preserve checkpoint");
  const before = calls;
- assert.equal(await prepareConversationSummary(prisma, { ...input, memoryScopeId: "other" }), null);
- assert.equal(await prepareConversationSummary(prisma, { ...input, channelBindingId: "other" }), null);
+ assert.equal(await refreshConversationSummary(prisma, { ...input, memoryScopeId: "other" }), null);
+ assert.equal(await refreshConversationSummary(prisma, { ...input, channelBindingId: "other" }), null);
  assert.equal(calls, before);
  metadata = {}; binding = "binding";
  rows = Array.from({ length: 5 }, (_, n) => ({ id: `qq-${n}`, externalMessageId: `ext-${n}`, role: "USER", content: "test", occurredAt: n === 4 ? now : new Date(now.getTime() - 3600000 + n) }));
  const qq = { ...input, channelBindingId: binding, excludeExternalMessageIds: ["ext-4"] };
- assert.equal((await prepareConversationSummary(prisma, qq))?.through.id, "qq-3");
+ assert.equal((await refreshConversationSummary(prisma, qq))?.through.id, "qq-3");
  assert(!sourceIds.includes("qq-4"), "pre-stored current input must not prevent idle closure or be summarized");
- console.log("Conversation summary mocks passed: triggers, cursor continuation, failure/CAS, private scope/binding, cleanup retention and QQ pre-stored input.");
+ let release!: () => void;
+ const blocked = new Promise<void>(resolve => { release = resolve; });
+ const fetchBefore = globalThis.fetch;
+ globalThis.fetch = async (...args) => { await blocked; return fetchBefore(...args); };
+ metadata = {}; rows = Array.from({ length: 25 }, (_, n) => ({ id: `bg-${n}`, externalMessageId: `bg-${n}`, role: "USER", content: "test", occurredAt: now }));
+ const backgroundInput = { ...input, conversationId: "background", channelBindingId: binding };
+ const beforeBackground = calls;
+ assert.equal(await prepareConversationSummary(prisma, backgroundInput), null, "reply returns without waiting for blocked model");
+ assert.equal(await prepareConversationSummary(prisma, backgroundInput), null, "concurrent reads reuse the active refresh");
+ release();
+ await new Promise(resolve => setTimeout(resolve, 20));
+ assert.equal(calls, beforeBackground + 1, "one background call per conversation");
+ await prepareConversationSummary(prisma, backgroundInput);
+ assert.equal(calls, beforeBackground + 1, "cooldown prevents repeated checkpoint attempts on each message");
+ globalThis.fetch = fetchBefore;
+ metadata = {};
+ modelFails = true;
+ const failedInput = { ...backgroundInput, conversationId: "failed-background" };
+ const beforeFailure = calls;
+ await prepareConversationSummary(prisma, failedInput);
+ await new Promise(resolve => setTimeout(resolve, 20));
+ const afterFailure = calls;
+ assert.equal(afterFailure, beforeFailure + 1);
+ await prepareConversationSummary(prisma, failedInput);
+ assert.equal(calls, afterFailure, "failed refresh must not retry on the next message");
+ modelFails = false;
+ console.log("Conversation summary mocks passed: nonblocking refresh, deduplication, cooldown, cursor/CAS and private isolation.");
 } finally { globalThis.fetch = original; }

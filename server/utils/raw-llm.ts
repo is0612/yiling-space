@@ -41,6 +41,12 @@ export type RawModelCall = {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  /** 明确的单次请求硬上限；不传时保留后台超时配置与 timeoutMs 取大的旧行为。 */
+  timeoutCapMs?: number;
+  /** false 时仅向 DeepSeek 官方端点显式关闭思考；不传不改变供应商默认值。 */
+  thinking?: boolean;
+  /** false 时只请求一次，禁用网络重试和空正文截断后的增预算重试。 */
+  retry?: boolean;
   /**
    * 每次 HTTP 请求的用量回调（重试会调两次）。
    * 用回调而不是改返回值：调用点有粗筛/终判/写评论三处，改返回类型会波及全部解析逻辑。
@@ -104,9 +110,13 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
    * 调用方还能用 `input.timeoutMs` 要求更长，两者取大。
    */
   const configuredTimeoutMs = readConfiguredLlmTimeoutMs("job");
-  const timeoutMs = configuredTimeoutMs !== null
+  const configuredOrDefaultTimeoutMs = configuredTimeoutMs !== null
     ? Math.max(configuredTimeoutMs, input.timeoutMs ?? 0)
     : input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = typeof input.timeoutCapMs === "number" && Number.isFinite(input.timeoutCapMs) && input.timeoutCapMs > 0
+    ? Math.min(configuredOrDefaultTimeoutMs, Math.max(1, Math.floor(input.timeoutCapMs)))
+    : configuredOrDefaultTimeoutMs;
+  const isDeepSeekOfficial = endpoint.hostname === "api.deepseek.com";
 
   const temperature = typeof input.temperature === "number" ? input.temperature : 0.3;
   const budget = Math.max(input.maxTokens ?? RAW_MODEL_MIN_TOKENS, 256);
@@ -122,6 +132,7 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
           model,
           temperature,
           max_tokens: maxTokens,
+          ...(input.thinking === false && isDeepSeekOfficial ? { thinking: { type: "disabled" } } : {}),
           messages: [
             { role: "system", content: input.systemPrompt },
             { role: "user", content: input.userPrompt },
@@ -167,7 +178,7 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
         const delay = delays[attempt];
-        if (!message.startsWith("LLM_NETWORK_ERROR") || delay === undefined) throw error;
+        if (input.retry === false || !message.startsWith("LLM_NETWORK_ERROR") || delay === undefined) throw error;
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -175,7 +186,7 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
 
   let attempt = await postWithRetry(budget);
   // 思考型模型被 token 上限截断时，正文整个是空的 —— 翻倍再来一次，别让一整轮白跑。
-  if (!attempt.content && attempt.finishReason === "length" && budget < RETRY_CEILING) {
+  if (input.retry !== false && !attempt.content && attempt.finishReason === "length" && budget < RETRY_CEILING) {
     const retryBudget = Math.min(budget * 3, RETRY_CEILING);
     const retried = await postWithRetry(retryBudget);
     if (retried.content) return retried.content.slice(0, 12_000);

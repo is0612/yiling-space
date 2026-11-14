@@ -249,6 +249,9 @@ function dateTime(value?: string) {
 
       <section class="card experiences-workspace">
         <div class="filters">
+          <div class="workspace-heading">
+            <h2>经验档案</h2><span class="muted">{{ statusOptions.find(option => option.value === status)?.label }} · {{ total }} 条</span>
+          </div>
           <el-radio-group
             :model-value="status"
             aria-label="互动经验状态"
@@ -303,15 +306,19 @@ function dateTime(value?: string) {
                 {{ statusLabel(item.status) }}
               </el-tag>
             </header>
-            <dl
+            <div
               v-if="readLearning(item.learning)"
-              class="learning-details"
+              class="structured-experience"
             >
-              <dt>当时情境</dt><dd>{{ readLearning(item.learning)?.situation || "未记录" }}</dd>
-              <dt>原误解</dt><dd>{{ readLearning(item.learning)?.misunderstanding || "未记录明确误解" }}</dd>
-              <dt>纠正</dt><dd>{{ readLearning(item.learning)?.correction || "未记录" }}</dd>
-              <dt>下次判断</dt><dd>{{ readLearning(item.learning)?.nextJudgment || "未记录" }}</dd>
-            </dl>
+              <details class="experience-evidence">
+                <summary>查看情境与纠正过程</summary>
+                <dl class="learning-details">
+                  <dt>当时情境</dt><dd>{{ readLearning(item.learning)?.situation || "未记录" }}</dd>
+                  <dt>原误解</dt><dd>{{ readLearning(item.learning)?.misunderstanding || "未记录明确误解" }}</dd>
+                  <dt>纠正</dt><dd>{{ readLearning(item.learning)?.correction || "未记录" }}</dd>
+                </dl>
+              </details>
+            </div>
             <p
               v-else
               class="context"
@@ -383,6 +390,8 @@ function dateTime(value?: string) {
 
     <el-dialog
       :model-value="!!editing"
+      width="min(680px, 94vw)"
+      append-to-body
       title="纠正互动经验"
       :close-on-click-modal="!busy"
       :close-on-press-escape="!busy"
@@ -499,21 +508,34 @@ function dateTime(value?: string) {
 
 <style scoped>
 .experience-page { color: var(--text-2); }
+.workspace-heading { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.workspace-heading h2 { margin: 0; font-size: 16px; color: var(--text); }
+.experience-evidence { margin-top: 16px; }
+.experience-evidence summary { display: list-item; width: fit-content; cursor: pointer; color: var(--dim); font-size: 13px; line-height: 1.8; }
+.experience-evidence summary:hover { color: var(--brand); }
+.experience-evidence summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; border-radius: 3px; }
+.experience-evidence[open] summary { color: var(--brand); }
+.structured-experience { min-width: 0; }
 .domain-note { margin: 0 0 18px; border-left: 3px solid var(--brand); padding: 2px 18px; }
 .domain-note p { margin: 6px 0; font-size: 14px; line-height: 1.7; }
 .domain-note p:first-child { color: var(--text-2); }
 .domain-note p:last-child { color: var(--dim); }
+.automation-panel, .experiences-workspace { border: 0; border-radius: 12px; background: var(--surface, #fff); box-shadow: none; }
 .automation-panel { margin-bottom: 18px; padding: 18px 20px; display: grid; gap: 8px; }
 .panel-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .panel-title { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; }
 .panel-sub { max-width: 760px; margin: 5px 0 0; color: var(--dim); font-size: 13px; line-height: 1.7; }
 .panel-note { margin: 0; color: var(--amber); font-size: 12px; line-height: 1.7; }
-.experiences-workspace { margin-bottom: 12px; padding: 20px 22px 22px; display: grid; gap: 16px; min-width: 0; }
-.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
-.experience-list { display: grid; gap: 14px; min-height: 130px; }
-.experience-card { padding: 18px 20px; border-radius: var(--radius); background: var(--surface-2); min-width: 0; }
+.experiences-workspace { margin-bottom: 12px; padding: 0; display: grid; gap: 0; min-width: 0; overflow: hidden; }
+.filters { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; margin: 0; padding: 20px 24px; border-bottom: 1px solid var(--line); }
+.filters :deep(.el-radio-group) { display: flex; flex-wrap: wrap; gap: 4px; }
+.filters :deep(.el-radio-button__inner) { border: 0; border-radius: 6px; box-shadow: none; }
+.experience-list { display: grid; gap: 0; min-height: 180px; }
+.experience-card { padding: 24px; border-bottom: 1px solid var(--line); background: var(--surface); min-width: 0; }
+.experience-card:last-child { border-bottom: 0; }
+.experience-card:hover { background: var(--surface-2); }
 .record-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.record-title { display: flex; align-items: flex-start; gap: 10px; min-width: 0; flex: 1; }
+.record-title { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; flex: 1; max-width: 960px; }
 .record-title h2 { margin: 0; color: var(--text); font-size: 16px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .learning-details { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px 14px; margin: 14px 0 0; }
 .learning-details dt { color: var(--dim); font-size: 12px; line-height: 1.7; }
@@ -523,11 +545,14 @@ blockquote { margin: 12px 0 0; border-radius: var(--radius-sm); background: var(
 .record-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .muted { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
-.pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 16px 24px; border-top: 1px solid var(--line); background: var(--surface-2); }
 .el-select { width: 100%; }
 @media (max-width: 700px) {
-  .experiences-workspace, .experience-card, .automation-panel { padding: 14px; }
-  .record-heading { flex-direction: column; align-items: stretch; }
+  .experience-card, .automation-panel, .filters { padding: 16px; }
+  .filters { align-items: stretch; flex-direction: column; }
+  .record-heading { align-items: flex-start; }
+  .record-heading > .el-tag { flex-shrink: 0; }
+  .pagination { padding: 14px; }
   .record-footer .toolbar { width: 100%; justify-content: flex-start; }
   .learning-details { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
   .learning-details dt { margin-top: 8px; }
