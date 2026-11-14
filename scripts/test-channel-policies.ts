@@ -1,0 +1,13 @@
+import assert from "node:assert/strict";
+import {filterPassiveGroupAt,parseChannelPolicyPatch} from "../server/utils/channel-behavior-policy";
+import {parseEducationDecisions} from "../server/utils/education-transfer";
+import type {PrismaClient} from "../src/generated/prisma/client";
+assert.deepEqual(parseChannelPolicyPatch({operation:"ACTIVATE",expectedRevision:1}),{operation:"ACTIVATE",expectedRevision:1});
+for(const body of [{operation:"EDIT",expectedRevision:1,content:"send"},{operation:"ACTIVATE",expectedRevision:1,kind:"KICK"},{operation:"ACTIVATE",expectedRevision:0}])assert.throws(()=>parseChannelPolicyPatch(body));
+let active=false,failed=false;
+const db={channelBehaviorPolicy:{findFirst:async(q:{where:{characterId:string;kind:string;status:string}})=>{assert.equal(q.where.characterId,"c");assert.equal(q.where.kind,"GROUP_AT_DISABLED");assert.equal(q.where.status,"ACTIVE");if(failed)throw Error("private error");return active?{id:"p"}:null;}}} as unknown as PrismaClient;
+assert.equal(await filterPassiveGroupAt(db,"c","target"),"target");active=true;assert.equal(await filterPassiveGroupAt(db,"c","target"),undefined);failed=true;assert.equal(await filterPassiveGroupAt(db,"c","target"),undefined);
+const channel={domain:"channel",kind:"GROUP_AT_DISABLED",mode:"explicit",intent:"disable_all_passive_group_at",chatScope:"GROUP",content:"安全抽象",context:"",sourceIds:["a"],privacySafe:true,consistent:true};
+assert.equal(parseEducationDecisions(JSON.stringify({candidates:[channel]}),new Set(["a"]))[0]?.domain,"channel");
+for(const patch of [{mode:"repeated"},{intent:"less_at"},{kind:"TIMED_ROLLCALL_DISABLED"},{chatScope:"ALL"}])assert.throws(()=>parseEducationDecisions(JSON.stringify({candidates:[{...channel,...patch}]}),new Set(["a"])));
+console.log("Channel policy pure regression: whitelist, explicit-only, scoped ACTIVE read and at-only failclosed passed.");

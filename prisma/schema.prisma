@@ -303,6 +303,7 @@ model Character {
   reflectionRuns ReflectionRun[]
   preferences CharacterPreference[]
   interactionExperiences InteractionExperience[]
+  channelPolicies ChannelBehaviorPolicy[]
   interactionGuidance CharacterInteractionGuidance[]
   expressionHabits CharacterExpressionHabit[]
   goals CharacterGoal[]
@@ -1833,6 +1834,39 @@ model GrowthEventDelivery {
 }
 
 /// 表达行为描述与逐字梗语录分开；来源只作依据，不复制为角色人设。
+model ChannelBehaviorPolicy {
+  id String @id @default(uuid()) @db.Uuid
+  characterId String @db.Uuid
+  kind String @db.VarChar(32)
+  content String @db.VarChar(200)
+  chatScope String @default("GROUP") @db.VarChar(10)
+  status String @default("PENDING") @db.VarChar(20)
+  revision Int @default(1)
+  sourceRefs Json @default("[]") @db.JsonB
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  revisions ChannelBehaviorPolicyRevision[]
+  @@index([characterId, status])
+  @@map("channel_behavior_policies")
+}
+model ChannelBehaviorPolicyRevision {
+  id String @id @default(uuid()) @db.Uuid
+  policyId String @db.Uuid
+  revision Int
+  action String @db.VarChar(20)
+  kind String @db.VarChar(32)
+  content String @db.VarChar(200)
+  chatScope String @db.VarChar(10)
+  status String @db.VarChar(20)
+  sourceRefs Json @db.JsonB
+  actorId String @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  policy ChannelBehaviorPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  @@unique([policyId, revision])
+  @@map("channel_behavior_policy_revisions")
+}
+
 model CharacterInteractionGuidance {
   id String @id @default(uuid()) @db.Uuid
   characterId String @db.Uuid

@@ -715,6 +715,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
         />
       </template>
     </el-drawer>
+    <ChannelPolicyWorkspace :character-id="characterId" />
   </div>
 </template>
 

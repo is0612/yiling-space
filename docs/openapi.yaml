@@ -23,6 +23,80 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /characters/{id}/growth/channel-policies:
+    get:
+      tags: [Channels]
+      summary: 角色主人读取渠道教育策略候选
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [ALL, PENDING, ACTIVE, DISABLED, REJECTED] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
+      responses:
+        '200':
+          description: 当前角色策略及分页
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ChannelBehaviorPolicy' } }
+                  pagination: { type: object }
+        '401': { description: 未登录 }
+        '404': { description: 无权访问或角色不存在 }
+  /characters/{id}/growth/channel-policies/{policyId}:
+    patch:
+      tags: [Channels]
+      summary: 主人采纳停用或驳回固定渠道策略
+      description: 仅GROUP_AT_DISABLED。仅影响所有QQ绑定的被动群回复at段，引用正文保留，不影响主动好友公告。首次采纳复验explicit来源和当前教育权限，采纳后独立管理。不接受编辑任意action或正文。
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: policyId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation, expectedRevision]
+              properties:
+                operation: { type: string, enum: [ACTIVATE, DISABLE, REJECT] }
+                expectedRevision: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: 已写修订和审计
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  policy: { $ref: '#/components/schemas/ChannelBehaviorPolicy' }
+        '400': { description: 无效白名单字段 }
+        '401': { description: 未登录 }
+        '404': { description: 无权访问或不存在 }
+        '409': { description: 版本来源权限或状态已变化 }
+  /characters/{id}/growth/channel-policies/{policyId}/history:
+    get:
+      tags: [Channels]
+      summary: 主人读取渠道策略历史
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: policyId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
+      responses:
+        '200':
+          description: 策略修订分页
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ChannelBehaviorPolicy' } }
+                  pagination: { type: object }
+        '401': { description: 未登录 }
+        '404': { description: 无权访问或不存在 }
   /characters/{id}/growth/interaction-guidance:
     get:
       tags: [Growth]
@@ -6134,6 +6208,21 @@ components:
               hash: { type: string, pattern: '^[a-f0-9]{64}$' }
               title: { type: string }
               summary: { type: string, maxLength: 600 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ChannelBehaviorPolicy:
+      type: object
+      required: [id, characterId, kind, content, chatScope, status, revision, sourceRefs, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        characterId: { type: string, format: uuid }
+        kind: { type: string, enum: [GROUP_AT_DISABLED] }
+        content: { type: string, enum: ['被动群聊回复不发送 @ 提醒，引用仍保留。'] }
+        chatScope: { type: string, enum: [GROUP] }
+        status: { type: string, enum: [PENDING, ACTIVE, DISABLED, REJECTED] }
+        revision: { type: integer, minimum: 1 }
+        action: { type: string, enum: [CREATE, ACTIVATE, DISABLE, REJECT], description: 仅历史记录 }
+        sourceRefs: { type: array, minItems: 1, maxItems: 30, items: { $ref: '#/components/schemas/EducationTransferSource' } }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     InteractionGuidance:

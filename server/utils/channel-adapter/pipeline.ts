@@ -1,3 +1,4 @@
+import { filterPassiveGroupAt } from "../channel-behavior-policy";
 import { readInteractionGuidance } from "../interaction-guidance";
 import { readInteractionExperiences } from "../interaction-experiences";
 import { prepareConversationSummary } from "../conversation-summary";
@@ -2502,7 +2503,10 @@ async function runChannelTurn(input: {
     const quoteTarget = replyVoice
       ? undefined
       : pickQuoteTarget(generated.groupDecision?.replyToMessageId, messages.at(-1)?.externalMessageId);
-    const atTarget = replyVoice ? undefined : generated.groupDecision?.atMessageId;
+    const requestedAtTarget = replyVoice ? undefined : generated.groupDecision?.atMessageId;
+    const atTarget = input.platform === "qq-onebot" && isGroup
+      ? await filterPassiveGroupAt(prisma, input.characterId, requestedAtTarget)
+      : requestedAtTarget;
     const replyOptions = replyFaces.length || replySticker || replyVoice || quoteTarget || atTarget || replySegments.length > 1
       ? {
           ...(replyFaces.length ? { faces: replyFaces } : {}),
