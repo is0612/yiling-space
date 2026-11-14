@@ -8,6 +8,7 @@ import { createGrowthEventRunner, resolveGrowthEventIdleIntervalMs } from "../se
 import { runSocialRelationshipQueueMaintenance } from "../server/utils/social-relationship-queue";
 import { processNextSocialRelationshipAssessmentTask } from "../server/utils/social-relationship-assessment-ai";
 import { processAutomaticInteractionExperience } from "../server/utils/interaction-experience-automatic";
+import { processEducationTransfer } from "../server/utils/education-transfer";
 import { processNextReflectionRun } from "../server/utils/reflection-worker";
 
 const prisma = getPrisma();
@@ -63,6 +64,11 @@ const runner = createGrowthEventRunner({
       const experience = await processAutomaticInteractionExperience(prisma);
       if (experience.processed) process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event: "interaction-experience-processed", ...experience }) + "\n");
     } catch { reportError("interaction-experience-error", new Error("Automatic experience maintenance unavailable")); }
+    if (signal.aborted) return;
+    try {
+      const education = await processEducationTransfer(prisma);
+      if (education.processed) process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event: "education-transfer-processed", ...education }) + "\n");
+    } catch { reportError("education-transfer-error", new Error("Education transfer unavailable")); }
     if (signal.aborted) return;
     try {
       const reflection = await processNextReflectionRun(prisma, { workerId });

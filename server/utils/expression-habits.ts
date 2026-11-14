@@ -1,3 +1,4 @@
+import { validateEducationTransferRefs } from "./education-transfer";
 import { validateExperienceReflectionRefs, type ExperienceReflectionRef } from "./experience-reflection";
 import { createError } from "h3";
 import type { Prisma, PrismaClient, CharacterExpressionHabit } from "../../src/generated/prisma/client";
@@ -19,7 +20,7 @@ export async function loadExpressionHabitSources(tx: Prisma.TransactionClient, c
 }
 async function snapshot(tx: Prisma.TransactionClient, habit: CharacterExpressionHabit, actorId: string, action: string) {
   await tx.characterExpressionHabitRevision.create({ data: {
-    habitId: habit.id, revision: habit.revision, action, kind: habit.kind, content: habit.content, context: habit.context,
+    habitId: habit.id, revision: habit.revision, action, kind: habit.kind, content: habit.content, context: habit.context, chatScope: habit.chatScope ?? "ALL",
     reason: habit.reason, status: habit.status, sourceType: habit.sourceType, sourceRefs: habit.sourceRefs as Prisma.InputJsonValue, actorId,
     conversationId: habit.conversationId, memoryScopeId: habit.memoryScopeId,
   } });
@@ -33,7 +34,7 @@ export async function createExpressionHabit(prisma: PrismaClient, input: Owner &
     await lockPreferenceOwner(tx, input.ownerId, input.characterId);
     const sourceRefs = parsed.sources.length ? await loadExpressionHabitSources(tx, input.characterId, parsed.sources) : [];
     const habit = await tx.characterExpressionHabit.create({ data: { characterId: input.characterId,
-      kind: parsed.kind, content: parsed.content, context: parsed.context, reason: parsed.reason, status: parsed.status,
+      kind: parsed.kind, content: parsed.content, context: parsed.context, chatScope: parsed.chatScope, reason: parsed.reason, status: parsed.status,
       sourceType: sourceRefs.length ? "SOURCES" : "MANUAL", sourceRefs } });
     await snapshot(tx, habit, input.ownerId, "CREATE");
     return { habit };
@@ -48,6 +49,9 @@ export async function updateExpressionHabit(prisma: PrismaClient, input: Owner &
     if (current.conversationId && !await tx.conversation.findFirst({ where: { id: current.conversationId, characterId: input.characterId, memoryScopeId: current.memoryScopeId!, memoryScope: { OR: [{ scopeType: "CHARACTER_GLOBAL" }, { scopeType: "USER_PRIVATE", userId: input.ownerId }, { scopeType: "EXTERNAL_IDENTITY", externalIdentity: { status: "VERIFIED", linkedUserId: input.ownerId } }] } }, select: { id: true } })) throw createError({ statusCode: 404, statusMessage: "表达习惯不存在。" });
     if (current.revision !== parsed.expectedRevision) throw createError({ statusCode: 409, statusMessage: "表达习惯已被修改，请刷新后再试。" });
     const status = expressionHabitNextStatus(current.status, parsed.operation);
+    if (parsed.operation === "ACTIVATE" && current.status === "PENDING" && current.sourceType === "EDUCATION_TRANSFER") {
+      if (current.conversationId || current.memoryScopeId || !await validateEducationTransferRefs(tx, input.characterId, current.sourceRefs)) throw createError({ statusCode: 409, statusMessage: "教育来源或授权已变化，请重新核对候选。" });
+    }
     if (parsed.operation === "ACTIVATE" && current.sourceType === "EXPERIENCE_REFLECT") {
       if (!current.conversationId || !current.memoryScopeId || !await validateExperienceReflectionRefs(tx, input.characterId, current.sourceRefs as unknown as ExperienceReflectionRef[], { conversationId: current.conversationId, memoryScopeId: current.memoryScopeId })) throw createError({ statusCode: 409, statusMessage: "本会话经验来源已失效，不能启用该表达建议。" });
     }
@@ -60,9 +64,11 @@ export async function updateExpressionHabit(prisma: PrismaClient, input: Owner &
     }
     // After first acceptance, this domain owns the habit independently from historical evidence.
     const kind = parsed.kind ?? current.kind; const content = parsed.content ?? current.content;
+    const chatScope = parsed.chatScope ?? current.chatScope ?? "ALL";
+    if (current.sourceType === "EXPERIENCE_REFLECT" && chatScope === "GROUP") throw createError({ statusCode: 400, statusMessage: "原私聊经验不能扩展到群聊。" });
     const context = parsed.context ?? current.context; const reason = parsed.reason ?? current.reason;
-    if (parsed.operation === "EDIT" && kind === current.kind && content === current.content && context === current.context && reason === current.reason) return { habit: current };
-    const changed = await tx.characterExpressionHabit.updateMany({ where: { id: current.id, characterId: input.characterId, revision: parsed.expectedRevision, status: current.status }, data: { kind, content, context, reason, status, revision: { increment: 1 } } });
+    if (parsed.operation === "EDIT" && kind === current.kind && content === current.content && context === current.context && chatScope === (current.chatScope ?? "ALL") && reason === current.reason) return { habit: current };
+    const changed = await tx.characterExpressionHabit.updateMany({ where: { id: current.id, characterId: input.characterId, revision: parsed.expectedRevision, status: current.status }, data: { kind, content, context, chatScope, reason, status, revision: { increment: 1 } } });
     if (changed.count !== 1) throw createError({ statusCode: 409, statusMessage: "表达习惯刚刚发生变化，请刷新后再试。" });
     const habit = await tx.characterExpressionHabit.findUniqueOrThrow({ where: { id: current.id } });
     await snapshot(tx, habit, input.ownerId, parsed.operation);

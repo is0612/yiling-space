@@ -469,6 +469,12 @@
 - 存量清理：新增 `yarn clean:social-assessment-failures`（默认只报告，`--apply` 才执行）。它按好友汇总失败卡片、列出 FAILED 任务数并检查角色输出预算，`--apply` 时删除 `status=FAILED` 的评估行（证据行由数据库级联清理）并把 FAILED 任务重新排队，成功记录与人工处置审计不受影响。
 - 验收：`yarn test:social-relationship-assessment-ai`（新增片段数组 / 截断 / 空响应用例）、`yarn test:social-relationship-queue-isolated`（新增「用尽重试的 FAILED 任务到期后被回顾重新拉起」）、`yarn test:social-relationship-assessment-isolated`、`yarn check:sfc`、服务端 `tsc`、相关文件 eslint 均通过。真实模型对比调用确认同一提示在 2048 与 6144 预算下都能返回完整 JSON；生产那批失败的推理长度已顶到 2048 上限，需在客户端重启 Worker 后按新逻辑重跑。
 
+### 好友教育授权（2026-11-14）
+
+`MemoryScope.educationEnabled` 默认 false，独立于平台身份、关系阶段、交流权限和主动联系。角色主人通过后台好友卡片显式设置；服务端同时校验管理员会话及该角色 owner，并在事务内记录授权变更审计。模型输出、关系升降级和普通交流设置不推导或覆盖教育权限。同一平台账号在不同角色下分别授权。
+
+授权仅允许该好友新的反馈进入跨场景教育候选流程，不直接采纳正式规则；关闭不撤销已采纳习惯。主人消息由教育处理链路单独确认主人身份，不依靠这个好友开关。角色卡不携带教育权限，新导入朋友保持默认 false，合并本地朋友保留本机授权。迁移 `20261114100000_friend_education_permission` 只新增默认关闭字段，不回填授权；本次不自动应用到真实数据库。
+
 ### 10.5 主动联系机制（2026-11-09）
 
 - 好友级独立授权：`MemoryScope.proactiveContactEnabled` 默认 false；与 `friendChatPolicy` 分开。好友卡片可单独开启/关闭，普通 `ALLOW` 不会自动授予主动联系许可。

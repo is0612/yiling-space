@@ -32,6 +32,7 @@ type Friend = {
   identityKindSource: "AUTO" | "MANUAL";
   friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK";
   proactiveContactEnabled: boolean;
+  educationEnabled: boolean;
   lastProactiveContactAttempt: {
     status: "SENDING" | "SENT" | "SKIPPED" | "FAILED" | "EXPIRED";
     reason: string;
@@ -343,6 +344,7 @@ async function patchFriend(friend: Friend, patch: {
   identityKind?: Friend["identityKind"];
   friendChatPolicy?: Friend["friendChatPolicy"];
   proactiveContactEnabled?: boolean;
+  educationEnabled?: boolean;
 }) {
   const scopeId = friend.scopeId;
   const token = (saveTokens.get(scopeId) ?? 0) + 1;
@@ -350,7 +352,7 @@ async function patchFriend(friend: Friend, patch: {
   markSaveState(scopeId, "saving");
   try {
     const response = await $fetch<
-      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy" | "proactiveContactEnabled">> & { scopeId: string }
+      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy" | "proactiveContactEnabled" | "educationEnabled">> & { scopeId: string }
     >(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
     if (saveTokens.get(scopeId) !== token) return;
     friends.value = friends.value.map((item) => (item.scopeId === scopeId ? { ...item, ...response } : item));
@@ -383,6 +385,12 @@ function setProactiveContactEnabled(friend: Friend, enabled: boolean) {
   if (friend.proactiveContactEnabled === enabled) return;
   friend.proactiveContactEnabled = enabled;
   void patchFriend(friend, { proactiveContactEnabled: enabled });
+}
+
+function setEducationEnabled(friend: Friend, enabled: boolean) {
+  if (friend.educationEnabled === enabled) return;
+  friend.educationEnabled = enabled;
+  void patchFriend(friend, { educationEnabled: enabled });
 }
 
 function proactiveContactAttemptLabel(friend: Friend): string {
@@ -999,6 +1007,15 @@ onMounted(() => load(1));
               >
               主动联系 {{ friend.proactiveContactEnabled ? "已允许" : "未授权" }}
             </label>
+            <el-switch
+              :model-value="friend.educationEnabled"
+              active-text="允许教育此角色"
+              aria-label="允许此好友提出跨场景教育候选"
+              @change="setEducationEnabled(friend, $event === true)"
+            />
+            <p class="friend-save-state">
+              仅影响新教育候选；关闭不会撤销已采纳的习惯。
+            </p>
             <p class="friend-save-state">
               {{ saveStateLabel(friend.scopeId) }}
             </p>

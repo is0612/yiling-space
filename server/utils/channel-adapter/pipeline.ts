@@ -1,3 +1,4 @@
+import { readInteractionGuidance } from "../interaction-guidance";
 import { readInteractionExperiences } from "../interaction-experiences";
 import { prepareConversationSummary } from "../conversation-summary";
 import { createGrowthReadDiagnostic, reconcileGrowthReadUsage, type GrowthReadDiagnostic } from "../growth-read-diagnostics";
@@ -1682,7 +1683,7 @@ async function runChannelTurn(input: {
   if (observeGrowthRead) observeGrowthRead(createGrowthReadDiagnostic("knowledge"));
   const goals = await loadGoalsForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
   const expressionHabits = await loadExpressionHabitsForPrompt(prisma, character.id, currentMessage, observeGrowthRead,
-    !isGroup && existingConversation ? { conversationId: existingConversation.id, memoryScopeId: conversationScopeId } : undefined).catch(() => []);
+    !isGroup && existingConversation ? { conversationId: existingConversation.id, memoryScopeId: conversationScopeId } : undefined, isGroup ? "GROUP" : "PRIVATE").catch(() => []);
   const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
   const turnId = randomUUID();
 
@@ -1795,6 +1796,7 @@ async function runChannelTurn(input: {
     }
   }
 
+  const interactionGuidance = await readInteractionGuidance(prisma, { characterId: input.characterId, query: currentMessage, chatScene: isGroup ? "GROUP" : "PRIVATE" }).catch(() => []);
   const interactionExperiences = !isGroup && existingConversation ? await readInteractionExperiences(prisma, {
     characterId: input.characterId, conversationId: existingConversation.id, memoryScopeId: conversationScopeId, query: currentMessage,
     recentQueries: recentMessages.filter(row => row.role === "USER").slice(-4).map(row => row.content.slice(0, 500)),
@@ -2212,6 +2214,7 @@ async function runChannelTurn(input: {
         ...(input.segmentCapable ? { segmentedReply: true } : {}),
         ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
         ...(acquaintances ? { acquaintances } : {}),
+        ...(interactionGuidance.length ? { interactionGuidance } : {}),
         ...(interactionExperiences.length ? { interactionExperiences } : {}),
         ...(conversationSummary ? { conversationSummary } : {}),
         recentMessages: conversationSummary ? recentMessages.filter(row => {

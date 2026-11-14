@@ -23,6 +23,84 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /characters/{id}/growth/interaction-guidance:
+    get:
+      tags: [Growth]
+      summary: 当前角色的跨会话抽象互动指导（仅角色主人）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [ALL, PENDING, ACTIVE, DISABLED, REJECTED], default: ALL } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200':
+          description: 只列当前角色的指导；私人原文不复制到指导中
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/InteractionGuidance' } }
+                  pagination: { type: object }
+        '401': { description: 未登录 }
+        '404': { description: 无权访问的角色或角色不存在 }
+  /characters/{id}/growth/interaction-guidance/{guidanceId}:
+    patch:
+      tags: [Growth]
+      summary: 主人编辑、采纳、驳回或停用抽象互动指导
+      description: 首次采纳校验私人来源版本及当前教育权限；采纳后指导独立管理。状态变更不能同时编辑内容。不能修改来源或由请求指定生效状态。
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: guidanceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation, expectedRevision]
+              properties:
+                operation: { type: string, enum: [EDIT, ACTIVATE, REJECT, DISABLE] }
+                expectedRevision: { type: integer, minimum: 1 }
+                kind: { type: string, enum: [UNDERSTANDING, REFERENCE, SITUATION, STRATEGY] }
+                content: { type: string, minLength: 1, maxLength: 400 }
+                context: { type: string, minLength: 1, maxLength: 400 }
+                chatScope: { type: string, enum: [ALL, GROUP, PRIVATE] }
+      responses:
+        '200':
+          description: 已保存并记录修订历史
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  guidance: { $ref: '#/components/schemas/InteractionGuidance' }
+        '400': { description: 无效字段或状态操作 }
+        '401': { description: 未登录 }
+        '404': { description: 无权访问或不存在 }
+        '409': { description: 版本、来源或授权已变化 }
+  /characters/{id}/growth/interaction-guidance/{guidanceId}/history:
+    get:
+      tags: [Growth]
+      summary: 当前角色抽象互动指导的修订历史
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: guidanceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200':
+          description: 分页修订记录；历史保留，不授予原始私聊读取权
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/InteractionGuidance' } }
+                  pagination: { type: object }
+        '401': { description: 未登录 }
+        '404': { description: 无权访问或不存在 }
   /characters/{characterId}/growth/interaction-experiences:
     parameters:
       - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -353,6 +431,7 @@ paths:
                 kind: { type: string, enum: [TONE, WORDING, LENGTH] }
                 content: { type: string, minLength: 1, maxLength: 300 }
                 context: { type: string, maxLength: 200, default: '' }
+                chatScope: { type: string, enum: [ALL, GROUP, PRIVATE], default: ALL, description: '真实入口硬过滤；原私聊反思禁止GROUP。' }
                 reason: { type: string, minLength: 1, maxLength: 1000 }
                 status: { type: string, enum: [PENDING, ACTIVE], default: PENDING }
                 sources: { type: array, minItems: 1, maxItems: 5, items: { $ref: '#/components/schemas/PreferenceSourceRef' } }
@@ -426,6 +505,7 @@ paths:
                 kind: { type: string, enum: [TONE, WORDING, LENGTH] }
                 content: { type: string, minLength: 1, maxLength: 300 }
                 context: { type: string, maxLength: 200, default: '' }
+                chatScope: { type: string, enum: [ALL, GROUP, PRIVATE], default: ALL, description: '真实入口硬过滤；原私聊反思禁止GROUP。' }
                 reason: { type: string, minLength: 1, maxLength: 1000 }
       responses:
         '200': { description: habit 为更新后的表达习惯 }
@@ -1703,7 +1783,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [scopeId, characterId, characterName, identityId, platform, platformUid, identityKind, identityKindSource, friendChatPolicy, interactionCount, knownSince, conversationCount]
+                      required: [scopeId, characterId, characterName, identityId, platform, platformUid, identityKind, identityKindSource, friendChatPolicy, educationEnabled, interactionCount, knownSince, conversationCount]
                       properties:
                         scopeId: { type: string, format: uuid }
                         characterId: { type: string, format: uuid }
@@ -1717,6 +1797,7 @@ paths:
                         identityKind: { type: string, enum: [UNKNOWN, HUMAN, AI], description: 平台账号的身份类型 }
                         identityKindSource: { type: string, enum: [AUTO, MANUAL], description: 人工确认优先，自动识别不得覆盖 MANUAL }
                         friendChatPolicy: { type: string, enum: [DEFAULT, ALLOW, BLOCK], description: 当前角色与此对象的交流权限 }
+                        educationEnabled: { type: boolean, default: false, description: 当前角色主人显式授予的教育权限；仅允许新反馈提出跨场景教育候选，不随关系升级或模型结论变化 }
                         aliases: { type: array, items: { type: string } }
                         interactionCount: { type: integer }
                         lastInteractedAt: { type: string, format: date-time, nullable: true }
@@ -1764,7 +1845,9 @@ paths:
       summary: 修改朋友身份与交流权限（仅管理员）
       description: |
         identityKind 更新平台账号级分类，并将来源标记为 MANUAL；
-        friendChatPolicy 只更新本角色与该账号的交流权限。两个字段可单独修改，也可一起提交。
+        friendChatPolicy 只更新本角色与该账号的交流权限。
+        educationEnabled 仅允许当前角色主人（后台管理员且为角色owner）显式设置，默认false，按角色关系隔离；撤销只影响新候选，不撤销已采纳习惯。
+        各字段可单独修改，也可一起提交；响应只包含scopeId和本次实际修改的字段。
         至少传入一个字段，未知字段不会被保存。
       parameters:
         - name: id
@@ -1782,6 +1865,8 @@ paths:
               properties:
                 identityKind: { type: string, enum: [UNKNOWN, HUMAN, AI] }
                 friendChatPolicy: { type: string, enum: [DEFAULT, ALLOW, BLOCK] }
+                educationEnabled: { type: boolean, description: 仅当前角色主人可设置的独立教育权限 }
+                proactiveContactEnabled: { type: boolean }
       responses:
         '200':
           description: 更新后的身份与角色交流策略
@@ -1789,12 +1874,14 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [scopeId, identityKind, identityKindSource, friendChatPolicy]
+                required: [scopeId]
                 properties:
                   scopeId: { type: string, format: uuid }
                   identityKind: { type: string, enum: [UNKNOWN, HUMAN, AI] }
                   identityKindSource: { type: string, enum: [AUTO, MANUAL] }
                   friendChatPolicy: { type: string, enum: [DEFAULT, ALLOW, BLOCK] }
+                  educationEnabled: { type: boolean }
+                  proactiveContactEnabled: { type: boolean }
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -6049,9 +6136,27 @@ components:
               summary: { type: string, maxLength: 600 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    InteractionGuidance:
+      type: object
+      description: 主人审核的抽象理解或应对指导；不含来源摘录。来源引用仅供授权审核追溯，不进入聊天提示词。
+      required: [id, characterId, kind, content, context, chatScope, reason, status, revision, sourceRefs, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        characterId: { type: string, format: uuid }
+        kind: { type: string, enum: [UNDERSTANDING, REFERENCE, SITUATION, STRATEGY] }
+        content: { type: string, minLength: 1, maxLength: 400 }
+        context: { type: string, minLength: 1, maxLength: 400 }
+        chatScope: { type: string, enum: [ALL, GROUP, PRIVATE] }
+        reason: { type: string }
+        status: { type: string, enum: [PENDING, ACTIVE, DISABLED, REJECTED] }
+        revision: { type: integer, minimum: 1 }
+        action: { type: string, enum: [CREATE, EDIT, ACTIVATE, REJECT, DISABLE], description: 仅历史记录返回 }
+        sourceRefs: { type: array, minItems: 1, maxItems: 30, items: { $ref: '#/components/schemas/EducationTransferSource' } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     CharacterExpressionHabit:
       type: object
-      description: EXPERIENCE_REFLECT为多条跨时段表达经验的待确认派生习惯，固定原conversationId与memoryScopeId，不能通过编辑升级为全局；激活和召回重新校验经验来源。理解或应对纠错不生成此类习惯。
+      description: EXPERIENCE_REFLECT仍固定原私聊范围。EDUCATION_TRANSFER为获授权私聊教育提炼的角色全局抽象表达候选，scope为空；仅主人首次采纳时校验来源与当前授权，生效后由语言系统独立管理，群聊不读取来源原文；撤销教育权限不自动停用已采纳规则。
       required: [id, characterId, kind, content, context, reason, status, revision, sourceType, sourceRefs, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
@@ -6059,10 +6164,11 @@ components:
         kind: { type: string, enum: [TONE, WORDING, LENGTH] }
         content: { type: string, maxLength: 300 }
         context: { type: string, maxLength: 200 }
+        chatScope: { type: string, enum: [ALL, GROUP, PRIVATE], default: ALL }
         reason: { type: string, maxLength: 1000 }
         status: { type: string, enum: [PENDING, ACTIVE, REJECTED, DISABLED] }
         revision: { type: integer, minimum: 1 }
-        sourceType: { type: string, enum: [MANUAL, SOURCES, EXPERIENCE_REFLECT] }
+        sourceType: { type: string, enum: [MANUAL, SOURCES, EXPERIENCE_REFLECT, EDUCATION_TRANSFER] }
         conversationId: { type: string, format: uuid, nullable: true }
         memoryScopeId: { type: string, format: uuid, nullable: true }
         sourceRefs:
@@ -6080,8 +6186,30 @@ components:
                   title: { type: string }
                   summary: { type: string, maxLength: 600 }
               - $ref: '#/components/schemas/ReflectionSource'
+              - $ref: '#/components/schemas/EducationTransferSource'
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    EducationTransferSource:
+      type: object
+      description: 私人证据引用仅供主人审核追溯，不进入聊天提示词，不授予原始私聊读取权限。
+      required: [version, type, key, id, hash, conversationId, memoryScopeId, feedbackMessageId, proposer, educationMode]
+      properties:
+        version: { type: integer, enum: [1] }
+        type: { type: string, enum: [experience] }
+        key: { type: string }
+        id: { type: string, format: uuid }
+        hash: { type: string, pattern: '^[a-f0-9]{64}$' }
+        conversationId: { type: string, format: uuid }
+        memoryScopeId: { type: string, format: uuid }
+        feedbackMessageId: { type: string, format: uuid }
+        educationMode: { type: string, enum: [explicit, repeated] }
+        proposer:
+          type: object
+          required: [kind, platform, identity]
+          properties:
+            kind: { type: string, enum: [owner, authorized] }
+            platform: { type: string, enum: [desktop, qq-onebot] }
+            identity: { type: string }
     CharacterGoal:
       type: object
       required: [id, characterId, kind, title, description, reason, status, revision, sourceType, sourceRefs, createdAt, updatedAt]

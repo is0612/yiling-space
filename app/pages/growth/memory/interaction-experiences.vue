@@ -203,6 +203,11 @@ function dateTime(value?: string) {
       </template>
     </PageHeader>
 
+    <InteractionGuidanceWorkspace
+      v-if="characterId"
+      :character-id="characterId"
+    />
+
     <section class="domain-note">
       <p><strong>对话空闲 30 分钟后，后台自动收尾。</strong>有依据才形成经验，并自动生效。</p>
       <p>没有明确反馈，不对回应效果下结论。这是供类似情境参考的经验记忆，不是必须照做的语言规则。经验只在原私聊会话使用，随时间降低召回权重；隐私和明确底线不作为会衰减的临时经验。</p>

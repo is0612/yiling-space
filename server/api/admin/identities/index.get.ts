@@ -165,6 +165,7 @@ export default defineEventHandler(async (event) => {
         aliases: true,
         friendChatPolicy: true,
         proactiveContactEnabled: true,
+        educationEnabled: true,
         socialProactiveContactAttempts: {
           orderBy: { attemptedAt: "desc" },
           take: 1,
@@ -215,6 +216,7 @@ export default defineEventHandler(async (event) => {
           identityKindSource: identity.kindSource,
           friendChatPolicy: scope.friendChatPolicy,
           proactiveContactEnabled: scope.proactiveContactEnabled,
+          educationEnabled: scope.educationEnabled,
           lastProactiveContactAttempt: scope.socialProactiveContactAttempts[0]
             ? {
                 status: scope.socialProactiveContactAttempts[0].status,

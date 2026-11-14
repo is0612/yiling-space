@@ -2,16 +2,17 @@
 import { ElMessage } from "element-plus";
 
 definePageMeta({ topbar: { title: "语言系统" } });
+type ChatScope = "ALL" | "GROUP" | "PRIVATE";
 type Kind = "TONE" | "WORDING" | "LENGTH";
 type Status = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";
 type SourceType = "MEMORY_EVENT" | "REFLECTION_SUGGESTION";
 type Source = { type: SourceType; id: string; title: string; summary: string; hash: string; occurredAt?: string };
-type Habit = { id: string; characterId: string; kind: Kind; content: string; context: string; reason: string; status: Status; revision: number; sourceType: "MANUAL" | "SOURCES" | "EXPERIENCE_REFLECT"; conversationId?: string | null; memoryScopeId?: string | null; sourceRefs: Source[]; createdAt: string; updatedAt: string };
+type Habit = { id: string; characterId: string; kind: Kind; chatScope?: ChatScope; content: string; context: string; reason: string; status: Status; revision: number; sourceType: "MANUAL" | "SOURCES" | "EXPERIENCE_REFLECT" | "EDUCATION_TRANSFER"; conversationId?: string | null; memoryScopeId?: string | null; sourceRefs: Source[]; createdAt: string; updatedAt: string };
 type History = Habit & { action: string };
 type Page<T> = { items: T[]; pagination: { page: number; pageSize: number; total: number; pageCount: number } };
 type Operation = "ACTIVATE" | "REJECT" | "DISABLE";
 type Target = { role: string; generation: number; sequence: number };
-type Draft = { kind: Kind; content: string; context: string; reason: string; activate: boolean };
+type Draft = { kind: Kind; chatScope: ChatScope; content: string; context: string; reason: string; activate: boolean };
 const route = useRoute();
 const { character: activeCharacter } = useCharacterSelection(route.path);
 const characterId = computed(() => activeCharacter.value?.id ?? "");
@@ -20,7 +21,10 @@ const statusLabels: Record<Status, string> = { ACTIVE: "已生效", PENDING: "�
 const sourceLabels: Record<SourceType, string> = { MEMORY_EVENT: "公开忆泡", REFLECTION_SUGGESTION: "已接受反思" };
 const actionLabels: Record<string, string> = { CREATE: "创建", EDIT: "编辑", ACTIVATE: "确认生效", REJECT: "驳回", DISABLE: "停用" };
 const examples: Record<Kind, string> = { TONE: "例如：对方正在难过时，先温和回应，不急着开玩笑。", WORDING: "例如：解释步骤时，多用日常说法，少堆专业术语。", LENGTH: "例如：日常问候简短回应，需要解释时再展开。" };
-const blankDraft = (): Draft => ({ kind: "TONE", content: "", context: "", reason: "", activate: true });
+const chatScopeLabels: Record<ChatScope, string> = { ALL: "所有聊天", GROUP: "仅群聊", PRIVATE: "仅私聊" };
+function normalizedChatScope(value?: ChatScope): ChatScope { return value === "GROUP" || value === "PRIVATE" ? value : "ALL"; }
+function chatScopeLabel(item: Pick<Habit, "conversationId" | "chatScope">): string { return item.conversationId ? "仅原私聊会话" : chatScopeLabels[normalizedChatScope(item.chatScope)]; }
+const blankDraft = (): Draft => ({ kind: "TONE", chatScope: "ALL", content: "", context: "", reason: "", activate: true });
 const keyword = ref(""); const query = ref(""); const status = ref<Status | "ALL">("ACTIVE");
 const items = ref<Habit[]>([]); const page = ref(1); const total = ref(0); const loading = ref(false); const loadError = ref("");
 const editorOpen = ref(false); const editorTarget = ref<(Target & { item: Habit | null }) | null>(null);
@@ -70,7 +74,7 @@ function closeEditor() {
 function openEditor(item: Habit | null = null, mode: "manual" | "sources" = "manual") {
   if (!characterId.value || disposed || (item && (item.characterId !== characterId.value || !["ACTIVE", "PENDING", "DISABLED"].includes(item.status)))) return;
   closeEditor(); editorTarget.value = { role: characterId.value, generation, sequence: editorSequence, item }; editorMode.value = mode;
-  draft.value = { kind: item?.kind ?? "TONE", content: item?.content ?? "", context: item?.context ?? "", reason: item?.reason ?? "", activate: true };
+  draft.value = { kind: item?.kind ?? "TONE", chatScope: item?.conversationId ? "PRIVATE" : normalizedChatScope(item?.chatScope), content: item?.content ?? "", context: item?.context ?? "", reason: item?.reason ?? "", activate: true };
   sourceType.value = "MEMORY_EVENT"; editorOpen.value = true;
   if (!item && mode === "sources") void loadSources();
 }
@@ -118,10 +122,11 @@ async function saveEditor() {
   const content = draft.value.content.trim(); const context = draft.value.context.trim(); const reason = draft.value.reason.trim();
   if (!content || content.length > 300 || context.length > 200 || !reason || reason.length > 1000) { editorError.value = "请填写习惯（1–300 字）与原因（1–1000 字）；适用场景可留空，最多 200 字。"; return; }
   if (!target.item && editorMode.value === "sources" && !selectedSources.value.length) { editorError.value = "请至少选择一个来源，再填写习惯、适用场景与判断依据。"; return; }
+  const chatScope = target.item?.conversationId ? "PRIVATE" : normalizedChatScope(draft.value.chatScope);
   saving.value = true; editorError.value = "";
   try {
-    const body = target.item ? { operation: "EDIT", expectedRevision: target.item.revision, kind: draft.value.kind, content, context, reason }
-      : { kind: draft.value.kind, content, context, reason, status: editorMode.value === "sources" || !draft.value.activate ? "PENDING" : "ACTIVE", ...(editorMode.value === "sources" ? { sources: selectedSources.value.map(({ type, id, hash }) => ({ type, id, hash })) } : {}) };
+    const body = target.item ? { operation: "EDIT", expectedRevision: target.item.revision, kind: draft.value.kind, chatScope, content, context, reason }
+      : { kind: draft.value.kind, chatScope, content, context, reason, status: editorMode.value === "sources" || !draft.value.activate ? "PENDING" : "ACTIVE", ...(editorMode.value === "sources" ? { sources: selectedSources.value.map(({ type, id, hash }) => ({ type, id, hash })) } : {}) };
     await $fetch(target.item ? `${api(target.role)}/${encodeURIComponent(target.item.id)}` : api(target.role), { method: target.item ? "PATCH" : "POST", body });
     if (!editorCurrent(target)) return;
     const nextStatus = target.item?.status ?? (editorMode.value === "sources" || !draft.value.activate ? "PENDING" : "ACTIVE");
@@ -295,6 +300,15 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
           >
             仅原私聊会话 · 来自多次表达经验的待审核建议，启用后也不会进入群聊。
           </p>
+          <p
+            v-if="item.sourceType === 'EDUCATION_TRANSFER'"
+            class="context"
+          >
+            跨场景教育 · 仅共享下方抽象规则、场景和原因。请确认不含私人信息；待确认时不影响任何聊天，采纳后按「{{ chatScopeLabel(item) }}」使用。
+          </p>
+          <p class="context">
+            <strong>适用聊天范围：</strong>{{ chatScopeLabel(item) }}
+          </p>
           <p class="context">
             <strong>适用场景：</strong>{{ item.context || '通用；仍需根据当下对话自然使用。' }}
           </p><p class="reason">
@@ -304,12 +318,19 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
             v-if="item.sourceRefs.length"
             class="source-details"
           >
-            <summary>来源依据 · {{ item.sourceRefs.length }} 条（保存时摘要）</summary><div
+            <summary>来源依据 · {{ item.sourceRefs.length }} 条{{ item.sourceType === 'EDUCATION_TRANSFER' ? '（私人来源仅保留引用，不展示原文）' : '（保存时摘要）' }}</summary><div
               v-for="source in item.sourceRefs"
               :key="`${source.type}:${source.id}`"
               class="source-snapshot"
             >
-              <strong>{{ sourceLabels[source.type] || '本会话经验' }} · {{ source.title }}</strong><p>{{ source.summary || (source as Source & { excerpt?: string }).excerpt }}</p>
+              <template v-if="item.sourceType === 'EDUCATION_TRANSFER'">
+                <strong>已授权私聊教育来源</strong><p class="muted">
+                  原始经验 ID：{{ source.id }}。私人原文不随规则共享。
+                </p>
+              </template>
+              <template v-else>
+                <strong>{{ sourceLabels[source.type] || '本会话经验' }} · {{ source.title }}</strong><p>{{ source.summary || (source as Source & { excerpt?: string }).excerpt }}</p>
+              </template>
             </div><p class="muted">
               候选确认时会重新核对来源；已确认的表达习惯独立保留。
             </p>
@@ -415,6 +436,27 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
               :placeholder="examples[draft.kind]"
               @input="markDraftEdited"
             />
+          </el-form-item>
+          <el-form-item label="适用聊天范围">
+            <el-select
+              v-model="draft.chatScope"
+              :disabled="!!editorTarget.item?.conversationId || saving"
+              aria-label="适用聊天范围"
+              @change="markDraftEdited"
+            >
+              <el-option
+                v-for="(label, value) in chatScopeLabels"
+                :key="value"
+                :label="label"
+                :value="value"
+              />
+            </el-select>
+            <p
+              v-if="editorTarget.item?.conversationId"
+              class="muted"
+            >
+              此习惯固定用于原私聊会话，不能扩展到群聊或其他私聊。
+            </p>
           </el-form-item>
           <el-form-item label="适用场景（可选）">
             <el-input
@@ -587,10 +629,17 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
     >
       <template v-if="actionTarget">
         <h3>{{ kindLabels[actionTarget.item.kind] }} · {{ actionTarget.item.content }}</h3><p class="context">
+          适用聊天范围：{{ chatScopeLabel(actionTarget.item) }}
+        </p><p class="context">
           适用场景：{{ actionTarget.item.context || '通用' }}
         </p><p class="reason">
           {{ actionTarget.item.reason }}
-        </p><p>{{ actionTarget.operation === 'ACTIVATE' ? '确认这属于她的表达习惯？生效后可用于适合的对话场景。待确认候选的来源会重新核验；重新启用保留原有依据。' : actionTarget.operation === 'DISABLE' ? '停用后不再用于对话，记录和历史保留，之后可以重新启用。' : '驳回后不会生效，候选与处置历史仍保留。' }}</p><el-alert
+        </p><el-alert
+          v-if="actionTarget.operation === 'ACTIVATE' && actionTarget.item.sourceType === 'EDUCATION_TRANSFER'"
+          :title="`确认允许当前角色按「${chatScopeLabel(actionTarget.item)}」使用这条抽象表达规则。请核对正文、适用场景与原因均不含私人内容。`"
+          type="warning"
+          :closable="false"
+        /><p>{{ actionTarget.operation === 'ACTIVATE' ? '确认这属于她的表达习惯？生效后可用于适合的对话场景。待确认候选的来源会重新核验；重新启用保留原有依据。' : actionTarget.operation === 'DISABLE' ? '停用后不再用于对话，记录和历史保留，之后可以重新启用。' : '驳回后不会生效，候选与处置历史仍保留。' }}</p><el-alert
           v-if="actionError"
           :title="actionError"
           type="error"
@@ -649,6 +698,8 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
                 {{ statusLabels[entry.status] }}
               </el-tag>
             </div><h3>{{ entry.content }}</h3><p class="context">
+              适用聊天范围：{{ chatScopeLabel(entry) }}
+            </p><p class="context">
               适用场景：{{ entry.context || '通用' }}
             </p><p class="reason">
               {{ entry.reason }}

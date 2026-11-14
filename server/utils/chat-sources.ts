@@ -20,7 +20,7 @@ export type StoredChatSources = {
   memories: StoredChatMemorySource[];
   snapshots: StoredChatSnapshotSource[];
   goals?: import("./goal-retrieval").ConversationGoal[];
-  expressionHabits?: Array<{ id: string; kind: string; content: string; context: string; revision: number }>;
+  expressionHabits?: Array<{ id: string; kind: string; content: string; context: string; revision: number; chatScope?: "ALL" | "GROUP" | "PRIVATE" }>;
   preferences?: Array<{ id: string; kind: string; topic: string; reason: string; revision: number }>;
 };
 
@@ -80,7 +80,7 @@ export function readStoredChatSources(metadata: unknown): StoredChatSources {
     if (typeof row.id !== "string" || typeof row.kind !== "string" || !["TONE", "WORDING", "LENGTH"].includes(row.kind)
       || typeof row.content !== "string" || typeof row.context !== "string" || typeof row.revision !== "number"
       || !Number.isSafeInteger(row.revision) || row.revision < 1) return [];
-    return [{ id: row.id, kind: row.kind, content: row.content.slice(0, 300), context: row.context.slice(0, 200), revision: row.revision }];
+    return [{ id: row.id, kind: row.kind, content: row.content.slice(0, 300), context: row.context.slice(0, 200), ...(typeof row.chatScope === "string" && ["ALL", "GROUP", "PRIVATE"].includes(row.chatScope) ? { chatScope: row.chatScope as "ALL" | "GROUP" | "PRIVATE" } : {}), revision: row.revision }];
   }).slice(0, 6) : [];
   const goals = Array.isArray(sourceRoot.goals) ? sourceRoot.goals.flatMap(item => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];

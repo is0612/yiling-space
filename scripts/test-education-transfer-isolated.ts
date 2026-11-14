@@ -1,0 +1,62 @@
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { Client } from "pg";
+import { getPrisma } from "../server/utils/prisma";
+import { processEducationTransfer } from "../server/utils/education-transfer";
+import { updateExpressionHabit } from "../server/utils/expression-habits";
+import { loadExpressionHabitsForPrompt } from "../server/utils/expression-habit-retrieval";
+const source = new URL(process.env.DATABASE_URL!);
+assert(["localhost", "127.0.0.1", "[::1]"].includes(source.hostname)); source.pathname = "/postgres";
+const name = `yiling_education_test_${randomUUID().replaceAll("-", "")}`;
+assert(/^yiling_education_test_[a-f0-9]{32}$/.test(name));
+const target = new URL(source); target.pathname = `/${name}`;
+const admin = new Client({ connectionString: source.toString() }); await admin.connect();
+let created = false;
+const original = globalThis.fetch;
+try {
+ await admin.query(`CREATE DATABASE "${name}"`); created = true;
+ process.env.DATABASE_URL = target.toString();
+ assert.equal(spawnSync(process.execPath, ["node_modules/prisma/build/index.js", "migrate", "deploy"], { env: process.env, stdio: "inherit" }).status, 0);
+ process.env.LLM_API_KEY = "mock-test-only"; process.env.LLM_MODEL = "mock"; process.env.LLM_BASE_URL = "http://127.0.0.1:4010/v1";
+ const db = getPrisma();
+ try {
+ const owner = await db.user.create({ data: { username: `test-${randomUUID()}`, passwordHash: "not-a-login-hash" } });
+ const character = await db.character.create({ data: { ownerId: owner.id, name: "隔离教育测试", basePrompt: "test", modelConfig: { interactionExperienceAutoEnabled: true } } });
+ const scope = await db.memoryScope.create({ data: { characterId: character.id, scopeType: "USER_PRIVATE", scopeKey: "private", userId: owner.id } });
+ const room = await db.conversation.create({ data: { characterId: character.id, memoryScopeId: scope.id, title: "test" } });
+ const assistant = await db.message.create({ data: { conversationId: room.id, role: "ASSISTANT", content: "示例回复", occurredAt: new Date("2026-11-14T01:00:00Z") } });
+ const feedback = await db.message.create({ data: { conversationId: room.id, role: "USER", content: "以后少用机械反问", occurredAt: new Date("2026-11-14T01:01:00Z") } });
+ const experience = await db.interactionExperience.create({ data: { characterId: character.id, conversationId: room.id, memoryScopeId: scope.id, assistantMessageId: assistant.id, feedbackMessageId: feedback.id, content: "减少机械反问", context: "表达", feedbackQuote: feedback.content, evidenceHash: "a".repeat(64), status: "ACTIVE", learning: { kind: "EXPRESSION", situation: "表达反馈", misunderstanding: "", correction: "减少机械反问", nextJudgment: "自然回应" } } });
+ let calls = 0;
+ globalThis.fetch = async () => { calls++; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ candidates: [{ kind: "WORDING", mode: "explicit", content: "避免机械追加问题，自然回应", sourceIds: [experience.id], privacySafe: true, consistent: true, general: true }] }) } }] })); };
+ const results = await Promise.all([processEducationTransfer(db), processEducationTransfer(db)]);
+ assert.equal(results.filter(result => result.processed).length, 1);
+ assert.equal(calls, 1);
+ const habit = await db.characterExpressionHabit.findFirstOrThrow({ where: { characterId: character.id, sourceType: "EDUCATION_TRANSFER" } });
+ assert.equal(habit.status, "PENDING"); assert.equal(habit.conversationId, null);
+ assert.deepEqual(await loadExpressionHabitsForPrompt(db, character.id, "你好"), []);
+ await updateExpressionHabit(db, { ownerId: owner.id, characterId: character.id, habitId: habit.id, body: { operation: "ACTIVATE", expectedRevision: habit.revision } });
+ const prompt = await loadExpressionHabitsForPrompt(db, character.id, "你好");
+ assert.equal(prompt.length, 1); assert(!JSON.stringify(prompt).includes(experience.id)); assert(!JSON.stringify(prompt).includes(feedback.content));
+ await db.characterExpressionHabit.create({ data: { characterId: character.id, kind: "TONE", content: "群聊表达简洁", context: "", reason: "测试", status: "ACTIVE", chatScope: "GROUP" } });
+ await db.characterExpressionHabit.create({ data: { characterId: character.id, kind: "TONE", content: "私聊表达舒缓", context: "", reason: "测试", status: "ACTIVE", chatScope: "PRIVATE" } });
+ const grouped = await loadExpressionHabitsForPrompt(db, character.id, "私聊", undefined, undefined, "GROUP");
+ const privateRows = await loadExpressionHabitsForPrompt(db, character.id, "群聊", undefined, undefined, "PRIVATE");
+ assert(grouped.some(item => item.content === "群聊表达简洁"));
+ assert(!grouped.some(item => item.content === "私聊表达舒缓"));
+ assert(privateRows.some(item => item.content === "私聊表达舒缓"));
+ assert(!privateRows.some(item => item.content === "群聊表达简洁"));
+ assert((await loadExpressionHabitsForPrompt(db, character.id, "群聊私聊")).every(item => item.chatScope === "ALL"));
+ await db.characterExpressionHabit.update({ where: { id: habit.id }, data: { status: "REJECTED" } });
+ await processEducationTransfer(db, new Date(Date.now() + 600_000));
+ assert.equal(calls, 1, "rejected same evidence must not be processed again");
+ assert.equal(await db.interactionExperience.count({ where: { id: experience.id } }), 1);
+ console.log("Education isolated DB checks passed: SQL/lease, concurrent dedupe, owner candidate, acceptance, group-safe read and rejection persistence.");
+ } finally { await db.$disconnect(); }
+} finally {
+ globalThis.fetch = original;
+ if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+ await admin.end();
+}

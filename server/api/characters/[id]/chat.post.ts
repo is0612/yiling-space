@@ -1,4 +1,5 @@
 import { readInteractionExperiences } from "../../../utils/interaction-experiences";
+import { readInteractionGuidance } from "../../../utils/interaction-guidance";
 import { prepareConversationSummary } from "../../../utils/conversation-summary";
 import { loadGoalsForPrompt, usedGoalSnapshots } from "../../../utils/goal-retrieval";
 import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../../../utils/expression-habit-retrieval";
@@ -427,8 +428,9 @@ export default defineEventHandler(async (event) => {
 
   const goals = await loadGoalsForPrompt(prisma, characterId, message).catch(() => []);
   const expressionHabits = await loadExpressionHabitsForPrompt(prisma, characterId, message, undefined,
-    existingConversation ? { conversationId: existingConversation.id, memoryScopeId } : undefined).catch(() => []);
+    existingConversation ? { conversationId: existingConversation.id, memoryScopeId } : undefined, "PRIVATE").catch(() => []);
   const preferences = await loadPreferencesForPrompt(prisma, characterId, message).catch(() => []);
+  const interactionGuidance = await readInteractionGuidance(prisma, { characterId, query: message, chatScene: "PRIVATE" }).catch(() => []);
   const interactionExperiences = existingConversation ? await readInteractionExperiences(prisma, {
     characterId, conversationId: existingConversation.id, memoryScopeId, query: message,
     recentQueries: recentMessages.filter(row => row.role === "USER").slice(-4).map(row => row.content.slice(0, 500)),
@@ -628,6 +630,7 @@ export default defineEventHandler(async (event) => {
         maxTokens: chatSettings.maxTokens,
         thinking: chatSettings.thinking,
         currentMessage: message,
+        ...(interactionGuidance.length ? { interactionGuidance } : {}),
         ...(interactionExperiences.length ? { interactionExperiences } : {}),
         ...(conversationSummary ? { conversationSummary } : {}),
         recentMessages: conversationSummary ? recentMessages.filter(row => !row.occurredAt || row.occurredAt > conversationSummary.through.occurredAt || (row.occurredAt === conversationSummary.through.occurredAt && (row.id ?? "") > conversationSummary.through.id)) : recentMessages,

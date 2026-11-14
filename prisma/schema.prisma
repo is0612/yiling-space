@@ -303,6 +303,7 @@ model Character {
   reflectionRuns ReflectionRun[]
   preferences CharacterPreference[]
   interactionExperiences InteractionExperience[]
+  interactionGuidance CharacterInteractionGuidance[]
   expressionHabits CharacterExpressionHabit[]
   goals CharacterGoal[]
   growthImportIdentities CharacterGrowthImportIdentity[]
@@ -410,6 +411,8 @@ model MemoryScope {
   friendChatPolicy   FriendChatPolicy   @default(DEFAULT)
   /// 角色是否明确允许系统在合适时机主动联系这位好友；与普通交流权限完全分离。
   proactiveContactEnabled Boolean          @default(false)
+  /// 仅角色主人后台显式授予；允许此好友的新反馈提出跨场景教育候选，不随关系或模型变化。
+  educationEnabled   Boolean             @default(false)
   /// 仅 EXTERNAL_IDENTITY 范围使用；其他范围保持 null。
   relationshipStage  RelationshipStage?
   /// 当前相处状态，与关系亲疏阶段分开；仅 EXTERNAL_IDENTITY 范围使用。
@@ -1830,6 +1833,44 @@ model GrowthEventDelivery {
 }
 
 /// 表达行为描述与逐字梗语录分开；来源只作依据，不复制为角色人设。
+model CharacterInteractionGuidance {
+  id String @id @default(uuid()) @db.Uuid
+  characterId String @db.Uuid
+  kind String @db.VarChar(20)
+  content String @db.VarChar(400)
+  context String @default("") @db.VarChar(400)
+  chatScope String @default("ALL") @db.VarChar(10)
+  status String @default("PENDING") @db.VarChar(20)
+  revision Int @default(1)
+  sourceRefs Json @default("[]") @db.JsonB
+  reason String @db.VarChar(1000)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  revisions CharacterInteractionGuidanceRevision[]
+  @@index([characterId, status, updatedAt])
+  @@map("character_interaction_guidance")
+}
+
+model CharacterInteractionGuidanceRevision {
+  id String @id @default(uuid()) @db.Uuid
+  guidanceId String @db.Uuid
+  revision Int
+  action String @db.VarChar(20)
+  kind String @db.VarChar(20)
+  content String @db.VarChar(400)
+  context String @db.VarChar(400)
+  chatScope String @db.VarChar(10)
+  status String @db.VarChar(20)
+  sourceRefs Json @db.JsonB
+  reason String @db.VarChar(1000)
+  actorId String @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  guidance CharacterInteractionGuidance @relation(fields: [guidanceId], references: [id], onDelete: Cascade)
+  @@unique([guidanceId, revision])
+  @@map("character_interaction_guidance_revisions")
+}
+
 model CharacterExpressionHabit {
   conversationId String? @db.Uuid
   memoryScopeId String? @db.Uuid
@@ -1838,6 +1879,7 @@ model CharacterExpressionHabit {
   kind String @db.VarChar(20)
   content String @db.VarChar(300)
   context String @default("") @db.VarChar(200)
+  chatScope String @default("ALL") @db.VarChar(10)
   reason String @db.VarChar(1000)
   status String @default("PENDING") @db.VarChar(20)
   revision Int @default(1)
@@ -1864,6 +1906,7 @@ model CharacterExpressionHabitRevision {
   kind String @db.VarChar(20)
   content String @db.VarChar(300)
   context String @db.VarChar(200)
+  chatScope String @default("ALL") @db.VarChar(10)
   reason String @db.VarChar(1000)
   status String @db.VarChar(20)
   sourceType String @db.VarChar(20)
