@@ -21,6 +21,9 @@
 | character_memory_settings | 默认与角色级周期设置 | 生效周期与待生效周期分开保存；时区合法；原始消息清理须显式启用 |
 | memory_jobs | 持久化后台任务 | `idempotency_key` 唯一 |
 | onebot_group_announcements | QQ 群公告草稿与发布状态 | 草稿有有效期；`PENDING → PUBLISHING` 原子认领，避免重复发布 |
+| character_expression_habits | 可追溯的表达倾向 | 状态 + 版本历史；聊天范围 ALL / GROUP / PRIVATE；教育派生候选须待确认 |
+| character_interaction_guidance | 跨会话抽象理解与应对指导 | 只存抽象指导与来源引用，不复制私聊原文；主人采纳前不生效；修订版本单独保存 |
+| channel_behavior_policies | 渠道行为策略（如被动群回复禁 @） | 类型白名单；主人审核；正文固定、不可由模型指定；版本历史不覆盖 |
 | audit_logs | 关键管理操作审计 | 不写入密钥或不必要的敏感正文 |
 
 ## 2. 关系概览

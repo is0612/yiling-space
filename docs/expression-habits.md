@@ -11,7 +11,7 @@
 
 ## 数据与审核
 
-新增 `CharacterExpressionHabit` 与 `CharacterExpressionHabitRevision`。类型为 TONE / WORDING / LENGTH，表达内容最多300字、适用场景最多200字（允许为空）、形成原因最多1000字。角色拥有者才能管理相应记录。
+新增 `CharacterExpressionHabit` 与 `CharacterExpressionHabitRevision`。类型为 TONE / WORDING / LENGTH，表达内容最多300字、适用场景最多200字（允许为空）、形成原因最多1000字。聊天范围 `chatScope` 为 ALL / GROUP / PRIVATE（默认 ALL，旧行按 ALL 兼容），由服务端按真实入口筛选，不靠正文里的渠道字样判断。角色拥有者才能管理相应记录。
 
 状态为 PENDING / ACTIVE / REJECTED / DISABLED。手动添加默认待确认，也可明确选择立即生效；从来源形成的候选只能待确认。确认、驳回、停用与重新启用通过独立操作提交，不能与正文编辑混在同一次请求。修改必须携带expectedRevision；竞争更新只有一方成功，另一方返回409。无变化编辑不产生空版本。
 
@@ -25,11 +25,21 @@
 
 ## 聊天应用
 
-桌面对话API和QQ渠道共同读取当前角色ACTIVE习惯。空适用场景代表通用倾向，可参与每轮选择；非空场景使用确定性词项匹配。按场景命中优先排序，候选最多100条，最终最多6条，序列化字符预算800（含数组开销），不额外调用模型精排。
+桌面对话API和QQ渠道共同读取当前角色ACTIVE习惯，并把真实入口传入聊天范围：仅取 `ALL` 与当前场景（`GROUP` / `PRIVATE`）匹配的记录。空适用场景代表通用倾向，可参与每轮选择；非空场景使用确定性词项匹配。按场景命中优先排序，候选最多100条，最终最多6条，序列化字符预算800（含数组开销），不额外调用模型精排。
 
-提示词版本为conversation-retrieval-v55。表达倾向不能覆盖角色身份、隐私、事实、当前明确请求或渠道限制；不要求复述描述，不强塞梗。冲突时结合当前场景处理，不捏造已经完成永久取舍。模型回传usedExpressionHabitIds只认本轮白名单，沉默轮清空；桌面对话将版本快照保存到usedSources.expressionHabits，QQ消息保存usedExpressionHabitIds与usedExpressionHabits，历史接口保留引用。引用来自模型自报，不等同于已验证的行为因果。
+原会话限定（`conversationId` 非空）的记录仍只能在原会话使用，不能通过把范围改成群聊扩大。原会话经验派生习惯固定只在原私聊生效。
+
+提示词版本为conversation-retrieval-v66。表达倾向不能覆盖角色身份、隐私、事实、当前明确请求或渠道限制；不要求复述描述，不强塞梗。冲突时结合当前场景处理，不捏造已经完成永久取舍。模型回传usedExpressionHabitIds只认本轮白名单，沉默轮清空；桌面对话将版本快照保存到usedSources.expressionHabits，QQ消息保存usedExpressionHabitIds与usedExpressionHabits，历史接口保留引用。引用来自模型自报，不等同于已验证的行为因果。
 
 词法场景匹配不能充分理解近义场景；通用习惯较多时只选有界小集，不保证每条每轮都出现。已确认习惯可能存在矛盾，需用户维护。没有自动收集、批量导入、历史回填或角色卡携带，完整数据库备份可保留本领域。
+
+## 跨场景教育候选
+
+已授权私聊反馈经后台 Worker 分析后，可能生成 `sourceType = EDUCATION_TRANSFER` 的待确认习惯：只保存抽象表达倾向、聊天范围、自然场景和固定安全说明，不复制私聊原文、账号或原始原因。明确长期教育可凭一条证据提出；重复型需要不同反馈与跨日条件，不能把无关纠正相加。原经验继续留在原会话，生成的候选全局生效范围为空作用域。
+
+主人可在语言系统查看候选的完整待共享内容与范围，编辑、驳回或确认；首次确认在事务内重验来源指纹和当前教育授权，之后由语言系统独立管理版本。撤权不影响已采纳习惯，但会阻止尚未采纳的候选启用。已采纳习惯的召回不读取来源引用，因此群聊与私聊都不会拿到私人摘录。原会话经验派生习惯仍固定原私聊，范围不能改成群聊。
+
+后台分析有持久化租约与失败重试；只引用旧证据、重复证据不足或领域归属不匹配的建议丢弃不保存，不让整批失败。失败只记录白名单错误码。语义判断（是否长期、是否可跨场景、是否含私人信息）仍需人工审核与真实对话观察。
 
 ## 接口
 
@@ -38,7 +48,8 @@
 ## 验证
 
 - `yarn test:expression-habits`：输入白名单、状态转换、来源候选必须待确认、场景和通用选择、预算、模型引用白名单、沉默与历史回读。
-- `yarn test:expression-habits-page`：13组脚本页面竞态、来源、草稿和版本保护，不代替DOM验收。
-- `yarn test:expression-habits-isolated`：随机本机测试库运行完整72个迁移，覆盖来源与角色隔离、首次确认失效、历史保留、版本并发与审计、分页、级联清理、模拟模型建议无持久化和请求中来源变更409。已实际通过并删除临时库，未向业务库应用迁移。
+- `yarn test:expression-habits-page`：16组脚本页面竞态、来源、草稿、聊天范围和版本保护，不代替DOM验收。
+- `yarn test:expression-habits-isolated`：随机本机测试库运行完整迁移，覆盖来源与角色隔离、首次确认失效、历史保留、版本并发与审计、分页、级联清理、模拟模型建议无持久化和请求中来源变更409。已实际通过并删除临时库，未向业务库应用迁移。
+- 教育相关：`yarn test:education-transfer`（权限、候选解析、审核与范围）、`yarn test:education-transfer-isolated` 与 `yarn test:education-old-evidence-isolated`（一次性数据库验证候选生成、采纳、旧证据不循环）、`yarn test:expression-chat-scope`（范围筛选，正文词不绕过）。
 
 Prisma validate/generate、完整typecheck、偏好与聊天回复回归、75个SFC编译、全量lint（0error/0warning）和生产build已通过。构建仍有既有safe-media-download的BigInt目标环境警告及Vite耗时提示，本批未修改该模块。真实模型语义效果没有验证，未调用付费模型或启动真实渠道。已有服务的浏览器探测返回net::ERR_ABORTED、页面未完成挂载，因此真实点击和窄屏排版仍未完成。
