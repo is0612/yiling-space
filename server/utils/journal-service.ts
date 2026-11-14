@@ -1101,6 +1101,124 @@ export async function readPreviousJournalLine(
   return null;
 }
 
+/** 一篇日记在提示词里的最小形态：只带那天她自己写的东西，不带消息来源、模型和版本号。 */
+export type RecentJournalEntry = {
+  dayKey: string;
+  diary?: string;
+  handbook?: { notes?: string; thought?: string; quote?: string };
+};
+
+/**
+ * 从 revision 行里挑出「每天每种文本的最新一版」。
+ *
+ * 调用方按 version 倒序传进来，这里只保留每个 (journalId, kind) 的第一条：
+ * 旧版和新版一起进提示词，模型会把旧版里的「我还没有 X」当成现状。
+ */
+export function pickLatestJournalTexts(
+  rows: ReadonlyArray<{
+    journalId: string;
+    kind: string;
+    content?: string | null;
+    thought?: string | null;
+    quote?: string | null;
+  }>,
+): Map<string, Omit<RecentJournalEntry, "dayKey">> {
+  const picked = new Map<string, Omit<RecentJournalEntry, "dayKey">>();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const key = `${row.journalId}:${row.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const content = row.content?.trim() ?? "";
+    if (row.kind === "HANDBOOK") {
+      const thought = row.thought?.trim() ?? "";
+      const quote = row.quote?.trim() ?? "";
+      if (!content && !thought && !quote) continue;
+      picked.set(row.journalId, {
+        ...picked.get(row.journalId),
+        handbook: {
+          ...(content ? { notes: content } : {}),
+          ...(thought ? { thought } : {}),
+          ...(quote ? { quote } : {}),
+        },
+      });
+      continue;
+    }
+    if (content) picked.set(row.journalId, { ...picked.get(row.journalId), diary: content });
+  }
+  return picked;
+}
+
+/**
+ * 最近几天她自己写的东西——**只给主人私聊和网页对话**。
+ *
+ * 和 `readPreviousJournalLine` 的分工：那一句是「昨天带走的情绪」，一轮一句；
+ * 这份是「我前几天写了什么」的正文，用于她真的能聊起自己写过的东西。
+ *
+ * 为什么不整篇塞：`chat.post.ts` 那段注释说得对，整篇日记进提示词会把上下文撑爆。
+ * 这里只取最近 `limit` 天，截断在 `chat-reply` 的载荷里做（800 字级），
+ * 并且**永远不进群聊** —— 手账是写给她自己的，群里复述就是泄露。
+ */
+export async function readRecentJournals(
+  prisma: PrismaClient,
+  input: { characterId: string; limit?: number },
+): Promise<RecentJournalEntry[]> {
+  const limit = Math.min(Math.max(Math.trunc(input.limit ?? 2), 1), 3);
+  const globalScope = await prisma.memoryScope.findFirst({
+    where: { characterId: input.characterId, scopeType: "CHARACTER_GLOBAL" },
+    select: { id: true },
+  });
+  if (!globalScope) return [];
+  const journals = await prisma.characterJournal.findMany({
+    where: { memoryScopeId: globalScope.id, status: "ACTIVE" },
+    orderBy: { dayKey: "desc" },
+    take: limit,
+    select: { id: true, dayKey: true },
+  });
+  if (!journals.length) return [];
+  const rows = await prisma.journalRevision.findMany({
+    where: {
+      journalId: { in: journals.map((journal) => journal.id) },
+      kind: { in: ["DIARY", "HANDBOOK"] },
+    },
+    orderBy: [{ version: "desc" }],
+    select: { journalId: true, kind: true, content: true, thought: true, quote: true },
+  });
+  const picked = pickLatestJournalTexts(rows);
+  return journals.flatMap((journal): RecentJournalEntry[] => {
+    const texts = picked.get(journal.id);
+    return texts ? [{ dayKey: journal.dayKey, ...texts }] : [];
+  });
+}
+
+/**
+ * 与 `journalLine` 重复的那一句不必再进正文。
+ *
+ * 昨天那句 quote 同时出现在 `journalLine`（一轮一句）和 `journalRecent[0].handbook.quote`，
+ * 实测是同一串字。同一句一轮出现两次既浪费预算，也容易让她反复念同一句。
+ */
+export function dropDuplicateJournalQuote(
+  entries: readonly RecentJournalEntry[],
+  line: { dayKey: string; quote: string } | null | undefined,
+): RecentJournalEntry[] {
+  const quote = line?.quote.trim();
+  if (!quote) return [...entries];
+  return entries.map((entry) => {
+    if (entry.dayKey !== line!.dayKey) return entry;
+    const handbook = entry.handbook;
+    if (!handbook || handbook.quote?.trim() !== quote) return entry;
+    const rest = {
+      ...(handbook.notes ? { notes: handbook.notes } : {}),
+      ...(handbook.thought ? { thought: handbook.thought } : {}),
+    };
+    return {
+      dayKey: entry.dayKey,
+      ...(entry.diary ? { diary: entry.diary } : {}),
+      ...(Object.keys(rest).length ? { handbook: rest } : {}),
+    };
+  });
+}
+
 /** 页面/接口用的角色日历：今天、昨天都以角色时区为准，不跟浏览器走。 */
 export function journalCalendarContext(now: Date, timeZone: string): {
   timeZone: string;

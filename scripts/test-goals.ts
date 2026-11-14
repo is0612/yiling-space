@@ -38,7 +38,7 @@ globalThis.fetch = async (_input, init) => { captured = String(init?.body); retu
 try {
   const input = { characterName: "角色", characterPrompt: "自然交流", model: "mock", apiKey: "test", apiBaseUrl: "https://mock.example/v1", currentMessage: "星座", recentMessages: [], memories: [], snapshots: [], goals: selected };
   const reply = await generateConversationReply(input);
-  assert.deepEqual(reply.usedGoalIds, ["goal"]); assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v66");
+  assert.deepEqual(reply.usedGoalIds, ["goal"]); assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v67");
   assert.match(captured, /Intention is not execution/); assert.match(captured, /never claim you completed a goal/);
   silent = true;
   assert.deepEqual((await generateConversationReply({ ...input, groupChat: true, allowSilent: true, transcript: [{ id: "msg", speaker: "群友", content: "星座" }] })).usedGoalIds, []);

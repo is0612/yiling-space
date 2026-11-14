@@ -72,7 +72,7 @@ import {
   loadCatchphraseCatalog, markCatchphrasesUsed, pickCatchphraseCatalog, toCatchphrasePromptEntries,
 } from "../catchphrases";
 import { maybeAutoMineCatchphrases } from "../catchphrase-mine";
-import { readPreviousJournalLine } from "../journal-service";
+import { readPreviousJournalLine, readRecentJournals, dropDuplicateJournalQuote } from "../journal-service";
 import { isSelfFactQuery, loadJournalFacts } from "../journal-facts";
 import { buildGroupActivityContext, isGroupActivityQuery } from "../group-activity-stats";
 import { collectStickersFromTurn } from "../sticker-collect";
@@ -1240,6 +1240,19 @@ async function runChannelTurn(input: {
     : null;
 
   /**
+   * 同一扇门里的「她自己写过什么」：最近两天的日记正文 + 当天手账。
+   *
+   * 判据与 `journalLine` 逐字一致：主人私聊才给，群聊和普通好友私聊一律没有。
+   * 一句是她带走的情绪，正文是「我前几天写过什么」——她要能聊起自己写的东西，
+   * 而不是只在被问生日时才从手账里翻出一句。截断在 `chat-reply` 的载荷里做。
+   */
+  const journalRecent = !input.group && messages[0]?.speaker?.isOwner === true
+    ? await readRecentJournals(prisma, { characterId: character.id, limit: 2 })
+        .then((entries) => dropDuplicateJournalQuote(entries, journalLine))
+        .catch(() => [])
+    : [];
+
+  /**
    * 别人的系统播报不进窗口。
    *
    * 群里同时跑几个机器人时，它们对同一条命令各回一次（实测「管理命令仅管理员可用。」
@@ -2165,6 +2178,7 @@ async function runChannelTurn(input: {
         ...(!isGroup && messages[0]?.quotedMessage ? { quotedMessage: messages[0].quotedMessage } : {}),
         timeZone: chatTimeZone,
         ...(journalLine ? { journalLine } : {}),
+        ...(journalRecent.length ? { journalRecent } : {}),
         ...(journalFacts.length ? { journalFacts } : {}),
         ...(groupActivity ? { groupActivity } : {}),
         events,

@@ -12,6 +12,7 @@ import {
   generateJournalForDay,
   persistRevision,
   readPreviousJournalLine,
+  readRecentJournals,
   restoreJournalRevision,
   saveJournalEdit,
 } from "../server/utils/journal-service";
@@ -650,6 +651,45 @@ async function main() {
     actorUserId: ownerId,
   }, prisma);
   assert.equal(blankDiary.ok, false, "空白日记仍要拒绝");
+
+  // 13. 最近日记读取：只取最新一版、跳过 SKIPPED、按日期倒序、limit 夹取。
+  const recentScaffold = await buildJournalScaffold("recent", true);
+  const recentNewDay = "2026-11-14";
+  const recentOldDay = "2026-11-13";
+  const recentNew = await prisma.characterJournal.create({
+    data: { memoryScopeId: recentScaffold.scopeId, dayKey: recentNewDay },
+    select: { id: true },
+  });
+  await prisma.journalRevision.createMany({
+    data: [
+      { journalId: recentNew.id, kind: "DIARY", version: 1, revisionType: "AI_GENERATED", content: "旧版日记" },
+      { journalId: recentNew.id, kind: "DIARY", version: 2, revisionType: "AI_GENERATED", content: "新版日记" },
+      { journalId: recentNew.id, kind: "HANDBOOK", version: 1, revisionType: "AI_GENERATED", content: "## 片段\n- 手账片段", thought: "想法", quote: "一句" },
+    ],
+  });
+  const recentOld = await prisma.characterJournal.create({
+    data: { memoryScopeId: recentScaffold.scopeId, dayKey: recentOldDay },
+    select: { id: true },
+  });
+  await prisma.journalRevision.create({
+    data: { journalId: recentOld.id, kind: "DIARY", version: 1, revisionType: "AI_GENERATED", content: "更早一篇" },
+  });
+  const recentSkipped = await prisma.characterJournal.create({
+    data: { memoryScopeId: recentScaffold.scopeId, dayKey: "2026-11-15", status: "SKIPPED", skipReason: "没有对话" },
+    select: { id: true },
+  });
+  await prisma.journalRevision.create({
+    data: { journalId: recentSkipped.id, kind: "DIARY", version: 1, revisionType: "AI_GENERATED", content: "不该出现" },
+  });
+  const recent = await readRecentJournals(prisma, { characterId: recentScaffold.characterId, limit: 2 });
+  assert.deepEqual(recent.map((entry) => entry.dayKey), [recentNewDay, recentOldDay], "按日期倒序、最多 limit 篇");
+  assert.equal(recent[0]?.diary, "新版日记", "同一份文本只取最新一版");
+  assert.deepEqual(recent[0]?.handbook, { notes: "## 片段\n- 手账片段", thought: "想法", quote: "一句" });
+  assert.equal(recent[1]?.diary, "更早一篇");
+  assert(!recent.some((entry) => entry.diary === "不该出现"), "SKIPPED 的日记不该进提示词");
+  assert.equal((await readRecentJournals(prisma, { characterId: recentScaffold.characterId, limit: 0 })).length, 1, "limit 下限夹到 1");
+  const recentEmpty = await buildJournalScaffold("recent-empty", true);
+  assert.deepEqual(await readRecentJournals(prisma, { characterId: recentEmpty.characterId, limit: 2 }), [], "没有日记时返回空");
 
   // P3-2：隔离 schema 里验证 migration 的状态回填结果。
   await verifyJournalStateMigration();

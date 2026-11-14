@@ -98,7 +98,7 @@
     "test:private-chat-events-db": "tsx scripts/test-private-chat-events-db.ts",
     "test:owner-private-scope-db": "tsx scripts/test-owner-private-scope-db.ts",
     "test:group-scope-db": "tsx scripts/test-group-scope-repair-db.ts",
-    "test:journal": "tsx scripts/test-journal.ts",
+    "test:journal": "tsx scripts/test-journal.ts && tsx scripts/test-journal-recent.ts",
     "test:journal-db": "tsx scripts/test-journal-db.ts",
     "test:journal-flow-db": "tsx scripts/test-journal-flow-db.ts",
     "test:channel-message-metadata": "tsx scripts/test-channel-message-metadata.ts",

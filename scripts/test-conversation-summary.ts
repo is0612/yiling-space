@@ -21,12 +21,13 @@ const prisma = { conversation: {
  return selected.slice(0, q.take);
 } } } as unknown as PrismaClient;
 const original = globalThis.fetch;
-let calls = 0, sourceIds: string[] = [];
+let calls = 0, sourceIds: string[] = [], longSummary = false;
 globalThis.fetch = async (_url, init) => {
  calls++; if (modelFails) throw new Error("mock failure");
  const body = JSON.parse(String(init?.body)); const payload = JSON.parse(body.messages[1].content);
  sourceIds = payload.messages.map((row: { id: string }) => row.id);
- return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: "测试接续摘要" }) } }] }));
+ const summary = longSummary ? `头${"x".repeat(2000)}尾` : "测试接续摘要";
+ return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary }) } }] }));
 };
 const input = { characterId: "character", conversationId: "conversation", memoryScopeId: "private", channelBindingId: null,
  model: "mock", apiKey: "fake", apiBaseUrl: "http://127.0.0.1:4010/v1", now };
@@ -67,6 +68,15 @@ try {
  await prepareConversationSummary(prisma, backgroundInput);
  assert.equal(calls, beforeBackground + 1, "cooldown prevents repeated checkpoint attempts on each message");
  globalThis.fetch = fetchBefore;
+ // 超长摘要不能整条丢弃：截断到 1600 以内，游标必须继续推进（旧实现会永远卡住）。
+ metadata = {}; rows = Array.from({ length: 25 }, (_, n) => ({ id: `long-${n}`, externalMessageId: `long-${n}`, role: "USER", content: "test", occurredAt: now }));
+ longSummary = true;
+ const longResult = await refreshConversationSummary(prisma, { ...input, channelBindingId: binding });
+ const longStored = (metadata as Record<string, unknown>).continuitySummary as { summary: string };
+ assert.equal(longResult?.through.id, "long-19", "oversized summary must still advance the cursor");
+ assert.equal(longStored.summary.length, 1600, "oversized summary is clamped to the 1600-character budget");
+ assert(longStored.summary.endsWith("尾"), "clamping keeps the newest tail");
+ longSummary = false;
  metadata = {};
  modelFails = true;
  const failedInput = { ...backgroundInput, conversationId: "failed-background" };

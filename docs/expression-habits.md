@@ -29,7 +29,7 @@
 
 原会话限定（`conversationId` 非空）的记录仍只能在原会话使用，不能通过把范围改成群聊扩大。原会话经验派生习惯固定只在原私聊生效。
 
-提示词版本为conversation-retrieval-v66。表达倾向不能覆盖角色身份、隐私、事实、当前明确请求或渠道限制；不要求复述描述，不强塞梗。冲突时结合当前场景处理，不捏造已经完成永久取舍。模型回传usedExpressionHabitIds只认本轮白名单，沉默轮清空；桌面对话将版本快照保存到usedSources.expressionHabits，QQ消息保存usedExpressionHabitIds与usedExpressionHabits，历史接口保留引用。引用来自模型自报，不等同于已验证的行为因果。
+提示词版本为conversation-retrieval-v67。表达倾向不能覆盖角色身份、隐私、事实、当前明确请求或渠道限制；不要求复述描述，不强塞梗。冲突时结合当前场景处理，不捏造已经完成永久取舍。模型回传usedExpressionHabitIds只认本轮白名单，沉默轮清空；桌面对话将版本快照保存到usedSources.expressionHabits，QQ消息保存usedExpressionHabitIds与usedExpressionHabits，历史接口保留引用。引用来自模型自报，不等同于已验证的行为因果。
 
 词法场景匹配不能充分理解近义场景；通用习惯较多时只选有界小集，不保证每条每轮都出现。已确认习惯可能存在矛盾，需用户维护。没有自动收集、批量导入、历史回填或角色卡携带，完整数据库备份可保留本领域。
 

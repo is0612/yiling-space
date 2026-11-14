@@ -68,9 +68,16 @@ export async function refreshConversationSummary(prisma: PrismaClient, input: Su
       onUsage: usage => { void recordModelUsage({ kind: "other", metadata: { source: "conversation-summary", coverage: "partial" }, model: input.model, characterId: input.characterId, conversationId: input.conversationId, usage }).catch(() => undefined); },
     });
     const parsed = object(parseJsonLoose(text, { expect: "object" }));
-    if (typeof parsed.summary !== "string" || !parsed.summary.trim() || parsed.summary.length > 1600) return result();
+    if (typeof parsed.summary !== "string" || !parsed.summary.trim()) return result();
+    /**
+     * 超长不能整条丢弃：模型经常写到 2000 字以上（提示词说 1600 也不听），
+     * 丢掉就永远不推进游标，摘要会一直停在几天前，且每轮重复调模型。
+     * 这里保留结尾（较新的结论和未决事项），硬压到 1600 字以内再保存。
+     */
+    const trimmed = parsed.summary.trim();
+    const summary = trimmed.length > 1600 ? `…${trimmed.slice(-1599)}` : trimmed;
     const last = batch[batch.length - 1]!;
-    const next: Summary = { revision: (previous?.revision ?? 0) + 1, summary: parsed.summary.trim(), cursor: { id: last.id, occurredAt: last.occurredAt.toISOString() } };
+    const next: Summary = { revision: (previous?.revision ?? 0) + 1, summary, cursor: { id: last.id, occurredAt: last.occurredAt.toISOString() } };
     const saved = await prisma.conversation.updateMany({ where: { ...where, metadata: { equals: metadata as Prisma.InputJsonObject } },
       data: { metadata: { ...metadata, continuitySummary: next } as Prisma.InputJsonObject } });
     return saved.count === 1 ? { summary: next.summary, through: next.cursor, coverage: "partial" } : result();

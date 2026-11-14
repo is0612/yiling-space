@@ -40,7 +40,7 @@ import { getPrisma } from "../../../utils/prisma";
 import { desktopConversationWhere, DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR, lockActiveDesktopConversationForWrite, throwDeletedDesktopConversationRequest, validateDesktopConversationReplay } from "../../../utils/desktop-conversation";
 import { readMessageIsOwner, readMessageSpeaker } from "../../../utils/conversation-message";
 import { resolveEventParticipantNames, resolveParticipantAccounts } from "../../../utils/participant-names";
-import { readPreviousJournalLine } from "../../../utils/journal-service";
+import { readPreviousJournalLine, readRecentJournals, dropDuplicateJournalQuote } from "../../../utils/journal-service";
 import { isSelfFactQuery, loadJournalFacts } from "../../../utils/journal-facts";
 
 export default defineEventHandler(async (event) => {
@@ -412,6 +412,15 @@ export default defineEventHandler(async (event) => {
     new Date(),
     resolveChatTimeZone(character.memorySetting?.timezone),
   );
+  /**
+   * 最近两天的日记正文：网页对话就是主人自己在聊，她该看得到自己写过什么。
+   *
+   * 只取两天、正文在 `chat-reply` 里按 800 字截断 —— 整本日记进提示词会把上下文撑爆，
+   * 这条界限和上面「一句已经够延续」是同一个理由，只是主人这边可以多给一点。
+   */
+  const journalRecent = await readRecentJournals(prisma, { characterId, limit: 2 })
+    .then((entries) => dropDuplicateJournalQuote(entries, journalLine))
+    .catch(() => []);
   // 生日、名字、外观这类稳定事实只在手账里；群里问得到，网页对话也该问得到。
   const journalFacts = isSelfFactQuery(message)
     ? await loadJournalFacts(prisma, { characterId, query: message }).catch(() => [])
@@ -641,6 +650,7 @@ export default defineEventHandler(async (event) => {
         rawMessages,
         timeZone,
         ...(journalLine ? { journalLine } : {}),
+        ...(journalRecent.length ? { journalRecent } : {}),
         ...(journalFacts.length ? { journalFacts } : {}),
         ...(acquaintances ? { acquaintances } : {}),
         ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
