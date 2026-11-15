@@ -372,6 +372,7 @@ Prisma 的 JSON 过滤器没有 `in`，上面两档写成 `OR` 两个 `equals`�
 - 排序分 = 相关度 × 重要度权重 × 时间衰减 × 召回加成。时间衰减用半衰期（默认 30 天），参照点是 `lastRecalledAt`（上次真被模型引用），没有则回落到 `updatedAt`。衰减下限 0.55 —— 重要的旧事排序靠后但不会消失。
 - 预算装不下时跳过该条而不是截断正文；但**第一条永远放行**，否则一次有相关命中的提问会变成「她什么都不记得」。
 - 预算与条数都可在角色的 `modelConfig` 里覆盖：`memoryTokenBudget`、`snapshotTokenBudget`、`memoryItemLimit`（「模型参数」页可改）。
+- **装配决策的显式化**（哪些来源、各自多少、什么条件跳过）计划收进统一的 `ContextPlan`，见 [上下文装配策略层](context-policy.md)。该文目前是设计稿：现行行为仍以上文代码路径为准，不要按设计稿描述推断已实现能力。
 - 提示词每轮注入「现在」：当地日期时间、星期、IANA 时区与同一时刻的 UTC（`server/utils/chat-time-context.ts`，时区取角色 `CharacterMemorySetting.timezone`，坏值回落 `Asia/Shanghai`）。「前天」「上周」这类相对说法由服务端换算，模型不自己算日期。
 - 长期记忆进提示词时带 `occurredAt`（取 `validFrom`，没有则退回 `createdAt`），快照带 `periodStart` / `periodEnd`。模型被要求用这些日期回答「什么时候」，并且**没有相关记录时必须明说没有**，不得编造日期或用另一段记忆顶替。
 - 提示词里只出现 `scope: "character" | "private"` 语义标签，不发送范围 ID、用户 ID 或 `scopeKey`。模型被要求把 `private` 内容当作当前用户的私人上下文，不得当成共享知识或转述给其他人。
