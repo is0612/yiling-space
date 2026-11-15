@@ -130,6 +130,17 @@ const waitForGroupRoundLog = async (groupId: number, reason: string, timeoutMs =
   return sawGroupRoundLog(groupId, reason);
 };
 
+/**
+ * 某一群最近几轮的批大小，从 `[onebot] 群聊 {...}` 日志里读。
+ *
+ * 只用于失败信息：引用断言红的时候，第一件要分清的事是「她没引用」还是
+ * 「这一轮压根只有一条消息」（后者按规则本来就不该引用）。日志里现成有 `"messages":N`。
+ */
+const groupRoundSizes = (groupId: number): string[] => roundLogs
+  .filter((line) => line.includes("[onebot] 群聊") && line.includes(`"groupId":"${groupId}"`))
+  .map((line) => /"messages":(\d+)/.exec(line)?.[1] ?? "?")
+  .slice(-4);
+
 const children: ChildProcess[] = [];
 try {
   children.push(await spawnServer("scripts/mock-llm-server.mjs", { LLM_MOCK_PORT: "4010", LLM_MOCK_API_KEY: "ci-only" }, "mock-llm-ready"));
@@ -510,31 +521,69 @@ try {
   record.bindings[0]!.replyLimitPerWindow = 2;
 
   /** `mention` 传 `true` = @ 她本人，传数字 = @ 那个 QQ，传 `"all"` = @ 全体。 */
+  type GroupMention = boolean | number | "all";
+  const groupEventOf = (
+    groupId: number,
+    messageId: number,
+    text: string,
+    userId: number,
+    mention: GroupMention,
+  ): Record<string, unknown> => ({
+    post_type: "message",
+    message_type: "group",
+    self_id: 123456789,
+    message_id: messageId,
+    user_id: userId,
+    group_id: groupId,
+    sender: { user_id: userId, nickname: userId === 222 ? "主人" : "群友", role: "member" },
+    message: mention === false
+      ? [{ type: "text", data: { text } }]
+      : [
+        { type: "at", data: { qq: mention === true ? 123456789 : mention } },
+        { type: "text", data: { text } },
+      ],
+  });
+
   const emitToGroup = (
     groupId: number,
     messageId: number,
     text: string,
     userId = 444,
-    mention: boolean | number | "all" = false,
+    mention: GroupMention = false,
   ) => fetch("http://127.0.0.1:4031/__mock/emit", {
     method: "POST",
     headers: { "content-type": "application/json" },
+    body: JSON.stringify({ event: groupEventOf(groupId, messageId, text, userId, mention) }),
+  });
+
+  /**
+   * 一次请求连着推几条群消息 —— 用来构造「同一批里有两条」的前提。
+   *
+   * 攒批是防抖：**最后一条**之后安静满窗口才冲刷。所以「两条在同一批」不是天然的，
+   * 它取决于第二条多快跟上第一条。分两次 HTTP 发时，间隔是一次往返 + 当时的调度延迟，
+   * 本机十几毫秒，CI 上一卡就超过窗口，于是变成两轮（2026-11-15 实测：
+   * 一轮 `"messages":1`，断言「接的不是最新一条时必须引用」直接红）。
+   * 连着推过去，帧间隔是微秒级，前提才成立。
+   */
+  const emitGroupBatch = (
+    messages: ReadonlyArray<{
+      groupId: number;
+      messageId: number;
+      text: string;
+      userId?: number;
+      mention?: GroupMention;
+    }>,
+  ) => fetch("http://127.0.0.1:4031/__mock/emit-batch", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      event: {
-        post_type: "message",
-        message_type: "group",
-        self_id: 123456789,
-        message_id: messageId,
-        user_id: userId,
-        group_id: groupId,
-        sender: { user_id: userId, nickname: userId === 222 ? "主人" : "群友", role: "member" },
-        message: mention === false
-          ? [{ type: "text", data: { text } }]
-          : [
-            { type: "at", data: { qq: mention === true ? 123456789 : mention } },
-            { type: "text", data: { text } },
-          ],
-      },
+      events: messages.map((item) => groupEventOf(
+        item.groupId,
+        item.messageId,
+        item.text,
+        item.userId ?? 444,
+        item.mention ?? false,
+      )),
     }),
   });
 
@@ -719,12 +768,29 @@ try {
     .find((message): message is Array<{ type: string; data: Record<string, unknown> }> =>
       Array.isArray(message) && message.some((segment) => segment.type === type));
 
-  // 同一批里两条：CI_QUOTE_REPLY 那条不是最新，所以该引用；最新那条不需要引用。
-  await emitToGroup(1008, 80, "CI_QUOTE_REPLY 你刚说的那句什么意思", 555, false);
-  await emitToGroup(1008, 81, "对了我明天请假", 556, false);
+  /**
+   * 同一批里两条：CI_QUOTE_REPLY 那条不是最新，所以该引用；最新那条不需要引用。
+   *
+   * 这个断言成立的前提是「两条真的在同一批」—— 攒批是防抖窗口，不是收件箱：
+   * 窗口在这档是 `min(mentionWindowSeconds, 3)` 秒。所以这里做两件事把前提钉住：
+   *   ① 两条用一次请求连着推，帧间隔微秒级（见 `emitGroupBatch`）；
+   *   ② 窗口临时放到该档上限 3 秒，给 CI 的调度抖动留余量，用完还原。
+   * 断言本身不放宽：拆批时那一条**确实**是最新一条，按规则本来就不该引用 ——
+   * 那是「前提没成立」，不是「规则错了」，所以失败信息直接把本轮的批大小打出来。
+   */
+  const quoteWindowBefore = record.bindings[0]!.groupChat.mentionWindowSeconds;
+  record.bindings[0]!.groupChat.mentionWindowSeconds = 3;
+  await emitGroupBatch([
+    { groupId: 1008, messageId: 80, text: "CI_QUOTE_REPLY 你刚说的那句什么意思", userId: 555 },
+    { groupId: 1008, messageId: 81, text: "对了我明天请假", userId: 556 },
+  ]);
   await waitFor(async () => (await assistantCount(1008)) >= 1);
+  record.bindings[0]!.groupChat.mentionWindowSeconds = quoteWindowBefore;
   const quotedSegments = findSegments(await groupSends(1008), "reply");
-  assert.ok(quotedSegments, "接的不是最新一条时必须引用，否则认不出接的是哪句。");
+  assert.ok(
+    quotedSegments,
+    `接的不是最新一条时必须引用，否则认不出接的是哪句。（本轮批大小：${groupRoundSizes(1008).join(",") || "未知"} 条）`,
+  );
   assert.deepEqual(
     quotedSegments.map((segment) => segment.type),
     ["reply", "text"],

@@ -64,6 +64,25 @@ const httpServer = http.createServer(async (req, res) => {
     return json(res, 200, { delivered: wsClients.size });
   }
 
+  /**
+   * 一次请求把多条事件**连着**推给客户端。
+   *
+   * 为什么需要它：群聊攒批是「最后一条之后安静满窗口才冲刷」的防抖。测试要验
+   * 「同一批里的旧消息才引用」，就得让两条几乎同时到 —— 分两次 HTTP 发时，
+   * 间隔取决于当时的机器状态，CI 上偶发就把一批拆成两轮（2026-11-15 实测）。
+   * 这里在同一个 tick 里连着写帧，间隔是微秒级，顺序也跟请求体一致。
+   */
+  if (req.method === "POST" && path === "/__mock/emit-batch") {
+    const body = await readJson(req);
+    const events = Array.isArray(body.events) ? body.events : [];
+    const frames = events.map((event) => JSON.stringify(event));
+    for (const ws of wsClients) {
+      if (ws.readyState !== 1) continue;
+      for (const frame of frames) ws.send(frame);
+    }
+    return json(res, 200, { delivered: wsClients.size, events: frames.length });
+  }
+
   if (req.method === "GET" && path === "/__mock/messages") {
     return json(res, 200, { messages: sentMessages });
   }
