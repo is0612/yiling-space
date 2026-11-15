@@ -33,6 +33,10 @@ type Friend = {
   friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK";
   proactiveContactEnabled: boolean;
   educationEnabled: boolean;
+  /** 她的聊天算不算知识来源；只在角色设成「仅指定成员」时才起作用。 */
+  knowledgeCollectEnabled: boolean;
+  /** 当前角色实际的知识收集范围，用来提示这个开关现在生不生效。 */
+  characterKnowledgeCollectScope: "ALL" | "SELECTED";
   lastProactiveContactAttempt: {
     status: "SENDING" | "SENT" | "SKIPPED" | "FAILED" | "EXPIRED";
     reason: string;
@@ -345,6 +349,7 @@ async function patchFriend(friend: Friend, patch: {
   friendChatPolicy?: Friend["friendChatPolicy"];
   proactiveContactEnabled?: boolean;
   educationEnabled?: boolean;
+  knowledgeCollectEnabled?: boolean;
 }) {
   const scopeId = friend.scopeId;
   const token = (saveTokens.get(scopeId) ?? 0) + 1;
@@ -352,7 +357,7 @@ async function patchFriend(friend: Friend, patch: {
   markSaveState(scopeId, "saving");
   try {
     const response = await $fetch<
-      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy" | "proactiveContactEnabled" | "educationEnabled">> & { scopeId: string }
+      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy" | "proactiveContactEnabled" | "educationEnabled" | "knowledgeCollectEnabled">> & { scopeId: string }
     >(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
     if (saveTokens.get(scopeId) !== token) return;
     friends.value = friends.value.map((item) => (item.scopeId === scopeId ? { ...item, ...response } : item));
@@ -391,6 +396,13 @@ function setEducationEnabled(friend: Friend, enabled: boolean) {
   if (friend.educationEnabled === enabled) return;
   friend.educationEnabled = enabled;
   void patchFriend(friend, { educationEnabled: enabled });
+}
+
+/** 知识来源：只影响「要不要把这个人的聊天记成知识候选」，不影响她怎么回这个人。 */
+function setKnowledgeCollectEnabled(friend: Friend, enabled: boolean) {
+  if (friend.knowledgeCollectEnabled === enabled) return;
+  friend.knowledgeCollectEnabled = enabled;
+  void patchFriend(friend, { knowledgeCollectEnabled: enabled });
 }
 
 function proactiveContactAttemptLabel(friend: Friend): string {
@@ -1015,6 +1027,20 @@ onMounted(() => load(1));
             />
             <p class="friend-save-state">
               仅影响新教育候选；关闭不会撤销已采纳的习惯。
+            </p>
+            <el-switch
+              :model-value="friend.knowledgeCollectEnabled"
+              active-text="作为知识来源"
+              aria-label="把她和这位好友的聊天收进知识候选"
+              @change="setKnowledgeCollectEnabled(friend, $event === true)"
+            />
+            <p class="friend-save-state">
+              <template v-if="friend.characterKnowledgeCollectScope === 'SELECTED'">
+                这个角色只收选定成员的聊天，打开后他的话才会变成知识候选。
+              </template>
+              <template v-else>
+                这个角色现在收所有人的聊天，这个开关暂时不生效；知识设置改成「仅指定成员」后才会用上。
+              </template>
             </p>
             <p class="friend-save-state">
               {{ saveStateLabel(friend.scopeId) }}

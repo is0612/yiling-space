@@ -155,6 +155,8 @@ const draftKnowledgeAssistantApiBaseUrl = ref("");
 const draftKnowledgeAssistantApiKey = ref("");
 /** 「聊天里自动收集知识候选」：行为开关，不属于模型配置，但一直放在这张卡上最顺手。 */
 const draftKnowledgeAutoCollectEnabled = ref(false);
+/** 收谁的聊天：ALL 全体，SELECTED 只收在好友档案里标过「作为知识来源」的人。 */
+const draftKnowledgeCollectScope = ref<"ALL" | "SELECTED">("ALL");
 
 const draftSocialAssistantEnabled = ref(true);
 const draftSocialAssistantModel = ref("");
@@ -303,6 +305,7 @@ function buildDraftSignature() { return JSON.stringify([
   draftContextAssistantApiKey.value.trim(),
   draftKnowledgeAssistantEnabled.value,
   draftKnowledgeAutoCollectEnabled.value,
+  draftKnowledgeCollectScope.value,
   draftKnowledgeAssistantModel.value.trim(),
   draftKnowledgeAssistantTemperature.value,
   draftKnowledgeAssistantMaxInputTokens.value,
@@ -770,6 +773,7 @@ async function loadCharacter() {
 
     draftKnowledgeAssistantEnabled.value = data.knowledgeAssistantEnabled !== false;
     draftKnowledgeAutoCollectEnabled.value = data.knowledgeAutoCollectEnabled === true;
+    draftKnowledgeCollectScope.value = data.knowledgeCollectScope === "SELECTED" ? "SELECTED" : "ALL";
     draftKnowledgeAssistantModel.value = data.knowledgeAssistantModel ?? "";
     draftKnowledgeAssistantTemperature.value = data.knowledgeAssistantTemperature ?? MODEL_PURPOSE_DEFAULTS.knowledge.temperature;
     draftKnowledgeAssistantMaxInputTokens.value = data.knowledgeAssistantMaxInputTokens ?? MODEL_PURPOSE_DEFAULTS.knowledge.maxInputTokens;
@@ -893,6 +897,7 @@ async function save(silent = false): Promise<boolean> {
 
         knowledgeAssistantEnabled: draftKnowledgeAssistantEnabled.value,
         knowledgeAutoCollectEnabled: draftKnowledgeAutoCollectEnabled.value,
+        knowledgeCollectScope: draftKnowledgeCollectScope.value,
         knowledgeAssistantModel: draftKnowledgeAssistantModel.value.trim(),
         knowledgeAssistantTemperature: draftKnowledgeAssistantTemperature.value,
         knowledgeAssistantMaxInputTokens: draftKnowledgeAssistantMaxInputTokens.value,
@@ -1533,6 +1538,31 @@ watch(id, () => void loadCharacter());
               />
               <p class="field-help">
                 打开后，群里出现可复用的概念或纠正时会先记成候选，不会直接入库。
+              </p>
+            </div>
+            <div
+              v-if="draftKnowledgeAutoCollectEnabled"
+              class="field"
+            >
+              <div class="field-head">
+                <span class="field-label">收谁的聊天</span>
+              </div>
+              <el-select
+                v-model="draftKnowledgeCollectScope"
+                class="field-ctl"
+                aria-label="知识候选收谁的聊天"
+              >
+                <el-option
+                  label="所有人"
+                  value="ALL"
+                />
+                <el-option
+                  label="仅指定成员"
+                  value="SELECTED"
+                />
+              </el-select>
+              <p class="field-help">
+                选「仅指定成员」后，只有好友档案里打开「作为知识来源」的人（以及主人自己）说的话才会变成候选。知识一旦入库仍是整个角色共用，不影响检索。
               </p>
             </div>
           </AssistantOverridePanel>

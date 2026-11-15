@@ -1169,6 +1169,16 @@ function sourceDetails(value: unknown) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const ref = value as Record<string, unknown>;
     if (ref.kind === "MEMORY_EVENT") return `公开忆泡 ${String(ref.memoryEventId ?? "")}；整理与采纳前会重新校验来源，正式入库后独立保留。`;
+    // 聊天候选：先让人一眼看出「这是谁说的、在哪说的」。
+    // 原始 JSON 里有 messageIds 和 capturedAt，那些只在排查时有用，摆在这行只会挤掉真正要看的信息。
+    const speakers = Array.isArray(ref.speakers)
+      ? ref.speakers.filter((name): name is string => typeof name === "string" && Boolean(name))
+      : [];
+    if (speakers.length) {
+      const scene = ref.channel === "PRIVATE" ? "私聊" : ref.channel === "GROUP" ? "群聊" : "聊天";
+      const reason = typeof ref.reason === "string" && ref.reason.trim() ? `；理由：${ref.reason.trim().slice(0, 80)}` : "";
+      return `${scene} · ${speakers.join("、")}${reason}`;
+    }
   }
   return value ? JSON.stringify(value) : "";
 }

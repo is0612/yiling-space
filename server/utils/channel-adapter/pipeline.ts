@@ -25,6 +25,7 @@ import { resolveChatTimeZone } from "../chat-time-context";
 import { analyzePrivateKnowledgeCandidate, resolveContextAssistantRuntime, shouldAnalyzePrivateKnowledge } from "../context-assistant";
 import { historyCursorWhere, historyExcludedIds, loadMessageHistoryCoverage } from "../message-history-coverage";
 import { rankKnowledgeItems } from "../knowledge-retrieval";
+import { isGroupKnowledgeSource, isPrivateKnowledgeSource, readKnowledgeCollectScope } from "../knowledge-collect-policy";
 import { generateGroupContextReply } from "../group-context-reply";
 import { loadConversationWorkingContext, saveConversationWorkingContext } from "../conversation-working-context";
 import { parseEventTimeRange } from "../memory-event-time";
@@ -1758,7 +1759,19 @@ async function runChannelTurn(input: {
             privateKnowledgeItems = await loadKnowledge(result.knowledgeQuery).catch(() => []);
           }
 
-          if (modelConfigForKnowledge.knowledgeAutoCollectEnabled === true && result.evidenceMessageIds.length) {
+          const collectScope = readKnowledgeCollectScope(modelConfigForKnowledge);
+          const wantCandidate = modelConfigForKnowledge.knowledgeAutoCollectEnabled === true && result.evidenceMessageIds.length > 0;
+          // 第二道闸门只决定「收谁的」，不碰检索：上面的 knowledgeQuery 照常查。
+          // 判不出来（没有外部身份范围）就不收 —— SELECTED 模式下宁可漏也不要噪音。
+          const allowedSource = wantCandidate
+            ? await isPrivateKnowledgeSource(prisma, {
+                characterId: input.characterId,
+                memoryScopeId: existingConversation?.memoryScopeId ?? conversationScopeId,
+                isOwnerTurn,
+                scope: collectScope,
+              }).catch(() => false)
+            : false;
+          if (allowedSource) {
             // 落库单独兜一层：写库失败不该被算成「模型调用失败」，也不能静默消失 ——
             // 否则线上只是「候选没出现」，没有任何痕迹可查。
             try {
@@ -1860,6 +1873,36 @@ async function runChannelTurn(input: {
       })
     : undefined;
   let pendingWorkingContext: { summary: string; evidenceMessageIds: string[] } | undefined;
+  /**
+   * 群聊候选证据是谁说的。
+   *
+   * 本轮消息直接在内存里认；证据里可能夹着更早的 background 行，那些只能回
+   * `messages` 表按 externalMessageId 查。查不到就不算作者 —— SELECTED 模式下
+   * 「认不出是谁」等于不收：漏一条只是少个候选，认错人会把别人的话记成知识。
+   */
+  const resolveGroupEvidenceAuthors = async (messageIds: string[]) => {
+    const byId = new Map(messages.map(item => [item.externalMessageId, item]));
+    const resolved: Array<{ platformUid: string; isOwner: boolean }> = [];
+    const missing: string[] = [];
+    for (const id of messageIds) {
+      const hit = byId.get(id);
+      if (hit) {
+        resolved.push({ platformUid: (hit.authorPlatformUid || hit.authorOpenId || "").trim(), isOwner: hit.speaker?.isOwner === true });
+        continue;
+      }
+      if (id) missing.push(id);
+    }
+    if (missing.length && existingConversation) {
+      const rows = await prisma.message.findMany({
+        where: { conversationId: existingConversation.id, externalMessageId: { in: missing } },
+        select: { metadata: true },
+      }).catch(() => []);
+      for (const row of rows) {
+        resolved.push({ platformUid: readStoredAuthorOpenId(row.metadata), isOwner: readStoredSpeaker(row.metadata).isOwner });
+      }
+    }
+    return resolved;
+  };
   const turnDetail = createModelTurnDetail(isGroup, messages.map(item => ({
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
@@ -1884,6 +1927,15 @@ async function runChannelTurn(input: {
         const modelConfig = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
           ? character.modelConfig as Record<string, unknown> : {};
         if (modelConfig.knowledgeAutoCollectEnabled !== true) return;
+        // 「收谁的」：SELECTED 模式下，证据里得有被标成知识来源的人（或主人本人）说过话。
+        // 判定用账号不用昵称；这里失败按「不收」处理，别让一次查询异常变成噪音入库。
+        const allowedSource = await isGroupKnowledgeSource(prisma, {
+          characterId: input.characterId,
+          platform: input.platform,
+          evidence: await resolveGroupEvidenceAuthors(candidate.sourceMessageIds),
+          scope: readKnowledgeCollectScope(modelConfig),
+        }).catch(() => false);
+        if (!allowedSource) return;
         const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
         const duplicate = await prisma.knowledgeCandidate.findFirst({
           where: { characterId: input.characterId, sourceType: "CHAT", rawContent: candidate.rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
@@ -1898,8 +1950,10 @@ async function runChannelTurn(input: {
             sourceRef: {
               ...(existingConversation ? { conversationId: existingConversation.id } : {}),
               messageIds: candidate.sourceMessageIds,
+              ...(candidate.speakers?.length ? { speakers: candidate.speakers } : {}),
               reason: candidate.reason,
               capturedAt: new Date().toISOString(),
+              channel: "GROUP",
             } satisfies Prisma.InputJsonObject,
           },
         });

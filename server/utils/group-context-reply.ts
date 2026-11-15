@@ -24,7 +24,7 @@ type GroupContextReplyInput = {
   analysisBackground?: ConversationReplyInput["groupBackground"];
   previousWorkingContext?: PreviousWorkingContext;
   onWorkingContext?: (value: { summary: string; evidenceMessageIds: string[] }) => Promise<void>;
-  onKnowledgeCandidate?: (candidate: { rawContent: string; sourceMessageIds: string[]; reason: string }) => Promise<void>;
+  onKnowledgeCandidate?: (candidate: { rawContent: string; sourceMessageIds: string[]; reason: string; speakers?: string[] }) => Promise<void>;
   loadKnowledge?: (query: string) => Promise<ConversationKnowledgeItem[]>;
   loadCandidates?: (query: string) => Promise<MemoryAssistantCandidate[]>;
   recordAssistantUsage: (entry: {
@@ -117,6 +117,9 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
         rawContent,
         sourceMessageIds: selected.flatMap(line => line.id ? [line.id] : []),
         reason: analysis.knowledgeCandidate.reason,
+        // 只是「谁在说话」的展示名，用来在候选列表里标来源；
+        // 判定是不是知识来源必须用账号（见 knowledge-collect-policy），昵称不作数。
+        speakers: [...new Set(selected.map(line => line.speaker || line.member).filter((name): name is string => Boolean(name)))],
       }).catch(() => undefined);
     }
   }

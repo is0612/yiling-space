@@ -4,6 +4,7 @@ import { requireAdminActor } from "../../../utils/auth";
 import { buildPage, readPageQuery } from "../../../utils/pagination";
 import { getPrisma } from "../../../utils/prisma";
 import { countPendingSuggestions } from "../../../utils/friend-alias-suggestions";
+import { readKnowledgeCollectScope } from "../../../utils/knowledge-collect-policy";
 
 /**
  * 「她的朋友」：某个角色遇到过的某个人。
@@ -166,12 +167,13 @@ export default defineEventHandler(async (event) => {
         friendChatPolicy: true,
         proactiveContactEnabled: true,
         educationEnabled: true,
+        knowledgeCollectEnabled: true,
         socialProactiveContactAttempts: {
           orderBy: { attemptedAt: "desc" },
           take: 1,
           select: { status: true, reason: true, attemptedAt: true, sentAt: true },
         },
-        character: { select: { name: true } },
+        character: { select: { name: true, modelConfig: true } },
         externalIdentity: {
           select: { id: true, platform: true, platformUid: true, displayName: true, status: true, linkedUserId: true, kind: true, kindSource: true },
         },
@@ -217,6 +219,10 @@ export default defineEventHandler(async (event) => {
           friendChatPolicy: scope.friendChatPolicy,
           proactiveContactEnabled: scope.proactiveContactEnabled,
           educationEnabled: scope.educationEnabled,
+          knowledgeCollectEnabled: scope.knowledgeCollectEnabled,
+          // 当前角色是不是「只收选定的人」。不是的话，卡片上那个开关即使打开也不生效，
+          // 页面上得说清楚，否则用户会以为点了没反应。
+          characterKnowledgeCollectScope: readKnowledgeCollectScope(scope.character.modelConfig),
           lastProactiveContactAttempt: scope.socialProactiveContactAttempts[0]
             ? {
                 status: scope.socialProactiveContactAttempts[0].status,

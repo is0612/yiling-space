@@ -64,6 +64,8 @@ export type Character = {
   contextAssistantApiKeyConfigured?: boolean;
   contextAssistantConfigured?: boolean;
   knowledgeAutoCollectEnabled?: boolean;
+  /** 聊天知识候选收谁的：ALL 全体 / SELECTED 仅被标记的好友与主人。 */
+  knowledgeCollectScope?: "ALL" | "SELECTED";
   knowledgeAssistantEnabled?: boolean;
   knowledgeAssistantModel?: string;
   knowledgeAssistantTemperature?: number;

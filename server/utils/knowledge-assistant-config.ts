@@ -1,4 +1,5 @@
 import { validateChatApiBaseUrl } from "./chat-model-config";
+import { KNOWLEDGE_COLLECT_SCOPES } from "./knowledge-collect-policy";
 
 export function readKnowledgeAssistantSettingsPatch(body: Record<string, unknown>): {
   config: Record<string, unknown>;
@@ -9,6 +10,12 @@ export function readKnowledgeAssistantSettingsPatch(body: Record<string, unknown
   if (body.knowledgeAutoCollectEnabled !== undefined) {
     if (typeof body.knowledgeAutoCollectEnabled !== "boolean") throw new Error("聊天知识候选自动收集开关必须是布尔值。");
     config.knowledgeAutoCollectEnabled = body.knowledgeAutoCollectEnabled;
+  }
+  if (body.knowledgeCollectScope !== undefined) {
+    if (typeof body.knowledgeCollectScope !== "string" || !(KNOWLEDGE_COLLECT_SCOPES as readonly string[]).includes(body.knowledgeCollectScope)) {
+      throw new Error("知识收集范围必须是 ALL 或 SELECTED。");
+    }
+    config.knowledgeCollectScope = body.knowledgeCollectScope;
   }
   if (body.knowledgeAssistantEnabled !== undefined) {
     if (typeof body.knowledgeAssistantEnabled !== "boolean") throw new Error("知识处理助手开关必须是布尔值。");

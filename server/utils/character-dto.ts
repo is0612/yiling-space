@@ -8,6 +8,7 @@ import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-se
 import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
 import { API_KEY_FIELDS, isAsrApiKeySaved, isContextAssistantApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isSocialRelationshipAssessmentAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved, readApiKeyFieldPlain } from "./credential-encryption";
 import { ASSISTANT_FIELDS, summarizeAssistantConnection } from "./assistant-inheritance";
+import { readKnowledgeCollectScope } from "./knowledge-collect-policy";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 
 function positiveNumber(value: unknown): number {
@@ -70,6 +71,8 @@ export type CharacterDto = {
   contextAssistantConfigured: boolean;
   /** 知识处理助手配置；留空即跟随对话模型。 */
   knowledgeAutoCollectEnabled: boolean;
+  /** 聊天知识候选收谁的：ALL 全体 / SELECTED 仅被标记的好友与主人。 */
+  knowledgeCollectScope: "ALL" | "SELECTED";
   knowledgeAssistantEnabled: boolean;
   knowledgeAssistantModel: string;
   knowledgeAssistantTemperature: number;
@@ -333,6 +336,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
     contextAssistantApiKeyConfigured,
     contextAssistantConfigured: Boolean(contextAssistant.model && contextAssistant.hasApiKey),
     knowledgeAutoCollectEnabled: config.knowledgeAutoCollectEnabled === true,
+    knowledgeCollectScope: readKnowledgeCollectScope(config),
     knowledgeAssistantEnabled: config.knowledgeAssistantEnabled !== false,
     knowledgeAssistantModel,
     knowledgeAssistantTemperature: typeof config.knowledgeAssistantTemperature === "number" && Number.isFinite(config.knowledgeAssistantTemperature) ? Math.min(2, Math.max(0, config.knowledgeAssistantTemperature)) : MODEL_PURPOSE_DEFAULTS.knowledge.temperature,
