@@ -25,9 +25,12 @@ try {
  const habit=await prisma.characterExpressionHabit.findFirstOrThrow({where:{characterId}});assert.equal(habit.status,'PENDING');assert.equal(habit.conversationId,room.id);
  await updateExpressionHabit(prisma,{ownerId,characterId,habitId:habit.id,body:{operation:'ACTIVATE',expectedRevision:1}});
  assert.equal((await loadExpressionHabitsForPrompt(prisma,characterId,'讨论方案')).length,0);
- assert.equal((await loadExpressionHabitsForPrompt(prisma,characterId,'讨论方案',undefined,{conversationId:room.id,memoryScopeId:scope.id})).length,1);
+ // 反思产出的表达习惯带 chatScope="PRIVATE"（2026-11-14 起）：只在本会话的私聊场景注入，
+ // 不带场景时按 ALL 过滤，所以必须显式传 "PRIVATE"。
+ assert.equal((await loadExpressionHabitsForPrompt(prisma,characterId,'讨论方案',undefined,{conversationId:room.id,memoryScopeId:scope.id},"PRIVATE")).length,1);
+ assert.equal((await loadExpressionHabitsForPrompt(prisma,characterId,'讨论方案',undefined,{conversationId:room.id,memoryScopeId:scope.id},"GROUP")).length,0,"私聊经验不能扩展到群聊");
  const sources=await collectExperienceReflectionSources(prisma,characterId,{conversationId:room.id,memoryScopeId:scope.id},new Date(base-1),new Date());
  await prisma.interactionExperience.update({where:{id:sources[0]!.id},data:{status:'DISABLED'}});
- assert.equal((await loadExpressionHabitsForPrompt(prisma,characterId,'讨论方案',undefined,{conversationId:room.id,memoryScopeId:scope.id})).length,0);
+ assert.equal((await loadExpressionHabitsForPrompt(prisma,characterId,'讨论方案',undefined,{conversationId:room.id,memoryScopeId:scope.id},"PRIVATE")).length,0);
  console.log('Experience reflection language DB chain passed: scoped queue, model execution, PENDING habit, human activation, global exclusion and stale evidence rejection.');
 } finally {globalThis.fetch=original;await prisma.$disconnect();}

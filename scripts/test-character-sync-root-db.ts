@@ -144,8 +144,19 @@ async function importCard(
   return result.body as ImportResult;
 }
 
+/**
+ * `added` 里除了标量计数，还有 `growth` 这种「分表计数」的嵌套对象。
+ * 直接拿对象和 0 比会永远失败，也不能因为它是对象就跳过 ——
+ * 那样「重复合并不长数据」这条断言就漏了成长分表。
+ */
 function assertEmptyAdded(added: ImportResult["added"], label: string): void {
   for (const [key, value] of Object.entries(added)) {
+    if (value && typeof value === "object") {
+      for (const [inner, count] of Object.entries(value as Record<string, unknown>)) {
+        assert.equal(count, 0, `${label}：${key}.${inner} 应为 0，实际 ${count}`);
+      }
+      continue;
+    }
     assert.equal(value, 0, `${label}：${key} 应为 0，实际 ${value}`);
   }
 }
