@@ -54,7 +54,7 @@ export default defineEventHandler(async (event) => {
     select: {
       id: true,
       ownerId: true,
-      memorySetting: { select: { snapshotIntervalDays: true, timezone: true } },
+      memorySetting: { select: { snapshotIntervalDays: true, timezone: true, autoSnapshotEnabled: true } },
       memoryScopes: { select: { id: true, scopeType: true, userId: true } },
     },
   });
@@ -241,7 +241,15 @@ export default defineEventHandler(async (event) => {
       : null;
 
     let advancedTo: Date | null = null;
-    if (desired) {
+    /**
+     * 只有自动归档开着才推进游标。
+     *
+     * 暂停状态下「立即归档一次」是补一段手工总结，不是恢复周期：这时候写进去的边界
+     * 没人接管（调度器只排开启的设置），过几天就变成一条永远过期的记录 ——
+     * 总览页拿它算倒计时，卡片就一直显示「已逾期」。重新开启时设置页会按锚点重算，
+     * 这里不写反而更干净。
+     */
+    if (desired && character.memorySetting?.autoSnapshotEnabled) {
       // 只向前推进，并且用 CAS 避免和服务端调度器互相覆盖。
       const current = await prisma.characterMemorySetting.findUnique({
         where: { characterId },

@@ -359,7 +359,7 @@ onBeforeUnmount(() => {
                   —
                 </template>
               </span>
-              <span class="stat-f">{{ card.character.nextSnapshotAt ? card.character.nextSnapshotLabel : "没有开启自动归档" }}</span>
+              <span class="stat-f">{{ card.character.nextSnapshotAt ? card.character.nextSnapshotLabel : card.character.autoSnapshotEnabled ? "尚未计划" : "自动归档已暂停" }}</span>
             </div>
             <div class="stat">
               <span class="stat-k">角色记忆</span>

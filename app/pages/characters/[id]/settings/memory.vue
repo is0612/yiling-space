@@ -247,6 +247,8 @@ const nextSnapshotPreview = computed(() => {
 });
 
 const savedNextSnapshotLabel = computed(() => {
+  // 暂停时库里可能还留着上一轮的边界，但它不参与调度，别当「计划时间」念出来。
+  if (!savedAutoSnapshot.value) return "已暂停，不参与调度";
   if (!nextSnapshotAt.value) return "尚未安排";
   try {
     return new Intl.DateTimeFormat("zh-CN", {

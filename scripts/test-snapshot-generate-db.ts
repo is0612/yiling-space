@@ -59,6 +59,8 @@ async function fixture(input: {
   archivedEnd: Date;
   messages: Date[];
   nextSnapshotAt: Date;
+  /** 默认开启；E 场景用关闭状态验证「手动归档不动周期游标」。 */
+  autoSnapshotEnabled?: boolean;
 }) {
   const character = await prisma.character.create({
     data: {
@@ -76,7 +78,7 @@ async function fixture(input: {
           anchorAt: new Date(input.archivedEnd.getTime() - 3 * DAY_MS),
           nextSnapshotAt: input.nextSnapshotAt,
           snapshotIntervalDays: 3,
-          autoSnapshotEnabled: true,
+          autoSnapshotEnabled: input.autoSnapshotEnabled ?? true,
         },
       },
       memoryScopes: { create: { scopeType: "CHARACTER_GLOBAL", scopeKey: `generate:${randomUUID()}` } },
@@ -319,7 +321,30 @@ try {
     assert.equal(archived, 1, "后台接手后仍然要落一份归档");
   }
 
-  console.log("Snapshot generate DB regression passed: reused retry keeps the cycle contiguous, targeted worker, no overlapping concurrent periods, single AI regeneration per logical snapshot.");} finally {
+  /**
+   * E. 自动归档关闭时，「立即归档」只补一段总结，不动周期游标。
+   *
+   * 暂停期间推进的边界没人接管（调度器只排开启的设置），过几天就变成一条永远过期的记录：
+   * 总览页拿它算倒计时，卡片会一直显示「已逾期」。恢复周期由设置页按锚点重算。
+   */
+  {
+    const archivedEnd = new Date("2026-11-01T00:00:00Z");
+    const staleBoundary = new Date("2026-10-01T00:00:00Z");
+    const { characterId } = await fixture({
+      archivedEnd,
+      messages: [new Date("2026-11-02T00:00:00Z")],
+      nextSnapshotAt: staleBoundary,
+      autoSnapshotEnabled: false,
+    });
+
+    const result = await generate(characterId);
+    assert.equal(result.processed[0]?.status, "SUCCEEDED", JSON.stringify(result));
+    assert.equal(result.advancedTo, null, "暂停状态下不得推进自动归档边界");
+    const setting = await prisma.characterMemorySetting.findUniqueOrThrow({ where: { characterId } });
+    assert.equal(setting.nextSnapshotAt?.toISOString(), staleBoundary.toISOString(), "库里的边界必须原样保留");
+  }
+
+  console.log("Snapshot generate DB regression passed: reused retry keeps the cycle contiguous, targeted worker, no overlapping concurrent periods, single AI regeneration per logical snapshot, paused auto-archive never advances the cursor.");} finally {
   gate?.release();
   await Promise.all([
     new Promise<void>((resolve) => api.close(() => resolve())),

@@ -219,6 +219,13 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
     const chatSettings = resolveChatModelSettings(character.modelConfig as Record<string, unknown>);
     const tasks = taskCountByCharacter.get(character.id) ?? { pending: 0, failed: 0 };
+    /**
+     * 关掉自动归档后，`nextSnapshotAt` 里可能还留着上一次排出来的边界
+     * （旧版「立即归档」在暂停状态下也会推进它）。那不是「下一次归档」：
+     * 照原样透出去，卡片就会拿一个过期时间算倒计时，永久显示「已逾期」。
+     * 暂停即无计划，游标不外露；重新开启时设置页会按锚点重算。
+     */
+    const scheduledNextSnapshot = setting?.autoSnapshotEnabled ? setting.nextSnapshotAt : null;
 
     return {
       id: character.id,
@@ -230,9 +237,9 @@ export default defineEventHandler(async (event): Promise<OverviewPayload> => {
       intervalDays: setting?.snapshotIntervalDays ?? 3,
       pendingIntervalDays: setting?.pendingSnapshotIntervalDays ?? null,
       autoSnapshotEnabled: setting?.autoSnapshotEnabled ?? false,
-      nextSnapshotAt: setting?.nextSnapshotAt?.toISOString() ?? null,
-      nextSnapshotLabel: setting?.nextSnapshotAt
-        ? formatClock(setting.nextSnapshotAt, timeZone)
+      nextSnapshotAt: scheduledNextSnapshot?.toISOString() ?? null,
+      nextSnapshotLabel: scheduledNextSnapshot
+        ? formatClock(scheduledNextSnapshot, timeZone)
         : setting && !setting.autoSnapshotEnabled
           ? "已暂停"
           : "尚未计划",

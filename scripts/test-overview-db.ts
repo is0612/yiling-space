@@ -183,10 +183,12 @@ try {
     name: "A-正常",
     setting: { intervalDays: 3, nextSnapshotAt: new Date(now.getTime() + HOUR_MS), timezone: "Asia/Shanghai" },
   });
+  // 暂停归档，但库里还留着一条已经过期的边界：旧版「立即归档」在暂停状态下也会推进它。
+  // 总览必须把它读成「已暂停」，不能拿这个时间在卡片上算出一个永久的「已逾期」。
   const a2 = await makeCharacter({
     ownerId: userA.id,
     name: "A-只有手动",
-    setting: { intervalDays: 3, nextSnapshotAt: null, autoSnapshotEnabled: false },
+    setting: { intervalDays: 3, nextSnapshotAt: new Date(now.getTime() - HOUR_MS), autoSnapshotEnabled: false },
   });
   const a3 = await makeCharacter({
     ownerId: userA.id,
@@ -354,6 +356,7 @@ try {
   assert.equal(cardA3.cycle?.missed, true, "已过归档时间必须标记逾期。");
   assert.equal(cardA3.cycle?.dayIndex, 2, "逾期时进度封顶在周期最后一天。");
   assert.equal(cardA2.cycle, null, "没有计划 / 关闭自动归档时不画周期。");
+  assert.equal(cardA2.nextSnapshotAt, null, "关闭自动归档时不得外露残留的归档边界（否则卡片永远显示已逾期）。");
   assert.equal(cardA2.nextSnapshotLabel, "已暂停", "关闭自动归档时标签应为已暂停。");
 
   // 周期起点必须与调度器实际切分的周期一致（固定 24 小时，不随时区/夏令时漂移）。

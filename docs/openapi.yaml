@@ -4029,6 +4029,8 @@ paths:
         只有本次任务全部成功才推进 `nextSnapshotAt`，且按**实际归档到的 `periodEnd` + 间隔**推进
         （不是请求时刻），否则复用旧任务时会跳过还没归档的时间段；有失败或仍在队列时保持原计划，
         这段数据下次还能补上。
+        自动归档处于关闭状态时**不推进** `nextSnapshotAt`：那只是补一段手工总结，不是恢复周期，
+        写进去的边界没人接管，过几天就会变成一条永远过期的记录，被总览读成「归档已逾期」。
       responses:
         '200':
           description: 已尝试归档；处理结果逐条返回
@@ -4421,7 +4423,7 @@ paths:
                         intervalDays: { type: integer, minimum: 1 }
                         pendingIntervalDays: { type: integer, nullable: true, description: 已排期但尚未到生效边界的归档周期；null = 没有待生效改动 }
                         autoSnapshotEnabled: { type: boolean }
-                        nextSnapshotAt: { type: string, nullable: true, format: date-time }
+                        nextSnapshotAt: { type: string, nullable: true, format: date-time, description: 下一次归档边界；自动归档关闭时为 null（库里残留的旧边界不外露） }
                         nextSnapshotLabel: { type: string, description: "MM-DD HH:mm，或「已暂停」「尚未计划」" }
                         latestSnapshotAt: { type: string, nullable: true, format: date-time }
                         latestSnapshotLabel: { type: string, description: "MM-DD，或「暂无快照」" }
