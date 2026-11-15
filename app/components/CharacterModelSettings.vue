@@ -30,7 +30,19 @@ const router = useRouter();
 const id = computed(() => props.characterId);
 let disposed = false;
 let roleVersion = 0;
-watch(id, () => { roleVersion++; }, { flush: "sync" });
+watch(id, () => {
+  roleVersion++;
+  // 旧角色在飞的保存 / 测试 / 拉模型都不属于新角色：把忙碌标记归零，
+  // 否则新页面会一直转圈（旧请求的 finally 已经不再为自己清零）。
+  saving.value = false;
+  testing.value = false;
+  testingVoice.value = false;
+  testingVision.value = false;
+  fetchingModels.value = false;
+  fetchingVoiceModels.value = false;
+  fetchingVisionModels.value = false;
+  loadingUsage.value = false;
+}, { flush: "sync" });
 onBeforeUnmount(() => { disposed = true; roleVersion++; });
 const modelMessage = {
   success: (value: string) => { if (!disposed) ElMessage.success(value); },
@@ -45,6 +57,15 @@ async function modelRequest<T>(url: string, options?: Parameters<typeof $fetch>[
   if (disposed || version !== roleVersion) throw new Error("Model settings role changed");
   return result as T;
 }
+
+/**
+ * 请求发起时的代际。回调里只要它变了（换了角色、或组件已卸载），这次结果就不属于当前页面。
+ *
+ * `modelRequest` 只会对「成功返回但已过期」的响应抛错；网络失败、超时、4xx 仍然原样抛出。
+ * 所以调用方不能只看错误文案判断过期 —— 必须拿发起时的版本号比一次，
+ * 否则旧角色的失败会在新角色页面上清空数据、弹「加载失败」。 */
+function requestGeneration(): number { return roleVersion; }
+function isStaleResponse(generation: number): boolean { return disposed || generation !== roleVersion; }
 
 
 const character = ref<Character | null>(null);
@@ -274,21 +295,26 @@ const USAGE_REFRESH_MIN_MS = 1000;
 
 async function loadUsage(silent = true) {
   if (!id.value || loadingUsage.value) return;
+  const generation = requestGeneration();
   loadingUsage.value = true;
   const startedAt = Date.now();
   try {
     dailyUsage.value = await modelRequest<DailyUsage>(`/api/characters/${encodeURIComponent(id.value)}/usage`);
   } catch (error) {
+    // 旧角色的用量读失败不能把新角色已经显示出来的数字清空。
+    if (isStaleResponse(generation)) return;
     // 载入/保存时顺带刷新，读不到不影响改设置；手动点「刷新用量」才提示
     dailyUsage.value = null;
     if (!silent) modelMessage.error(readError(error, "读取用量失败，请稍后重试。"));
   } finally {
-    // 只有手动点「刷新用量」才压时长；载入页面和保存后的顺带刷新不该拖着
-    if (!silent) {
-      const remaining = USAGE_REFRESH_MIN_MS - (Date.now() - startedAt);
-      if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+    if (!isStaleResponse(generation)) {
+      // 只有手动点「刷新用量」才压时长；载入页面和保存后的顺带刷新不该拖着
+      if (!silent) {
+        const remaining = USAGE_REFRESH_MIN_MS - (Date.now() - startedAt);
+        if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+      }
+      loadingUsage.value = false;
     }
-    loadingUsage.value = false;
   }
 }
 
@@ -510,6 +536,7 @@ const voiceModelOptions = computed(() => {
 
 async function fetchVoiceModels() {
   if (fetchingVoiceModels.value || saving.value || testingVoice.value || !character.value) return;
+  const generation = requestGeneration();
   fetchingVoiceModels.value = true;
   try {
     const saved = await save(true);
@@ -528,14 +555,16 @@ async function fetchVoiceModels() {
     }
     modelMessage.success(result.message);
   } catch (error) {
+    if (isStaleResponse(generation)) return;
     modelMessage.error(readError(error, "获取语音模型列表失败。"));
   } finally {
-    fetchingVoiceModels.value = false;
+    if (!isStaleResponse(generation)) fetchingVoiceModels.value = false;
   }
 }
 
 async function testVoice() {
   if (testingVoice.value || saving.value || fetchingVoiceModels.value || !character.value) return;
+  const generation = requestGeneration();
   testingVoice.value = true;
   try {
     const saved = await save(true);
@@ -550,9 +579,10 @@ async function testVoice() {
       modelMessage.error(result.message);
     }
   } catch (error) {
+    if (isStaleResponse(generation)) return;
     modelMessage.error(readError(error, "语音合成测试失败，请检查服务商、Key、合成模型与音色。"));
   } finally {
-    testingVoice.value = false;
+    if (!isStaleResponse(generation)) testingVoice.value = false;
   }
 }
 
@@ -562,6 +592,7 @@ async function testVoice() {
  */
 async function testVision() {
   if (testingVision.value || saving.value || !character.value) return;
+  const generation = requestGeneration();
   testingVision.value = true;
   try {
     const saved = await save(true);
@@ -577,9 +608,10 @@ async function testVision() {
       modelMessage.error({ message: result.message + (result.detail ? `｜${result.detail.slice(0, 120)}` : ""), duration: 8000 });
     }
   } catch (error) {
+    if (isStaleResponse(generation)) return;
     modelMessage.error(readError(error, "看图测试失败，请检查地址、Key 与模型名。"));
   } finally {
-    testingVision.value = false;
+    if (!isStaleResponse(generation)) testingVision.value = false;
   }
 }
 
@@ -651,6 +683,7 @@ watch(draftChatApiBaseUrl, (value) => {
 });
 
 async function loadCharacter() {
+  const generation = requestGeneration();
   loading.value = true;
   try {
     const data = await modelRequest<Character>(`/api/characters/${encodeURIComponent(id.value)}`);
@@ -726,10 +759,12 @@ async function loadCharacter() {
     lastSavedAt.value = data.updatedAt ? new Date(data.updatedAt) : null;
     await loadUsage();
   } catch {
+    // 切角色 / 卸载后才回来的加载：既不是「角色不存在」，也不该把新角色的数据清空。
+    if (isStaleResponse(generation)) return;
     character.value = null;
     modelMessage.error("加载角色失败，请确认角色仍存在且本地数据库已初始化。");
   } finally {
-    loading.value = false;
+    if (!isStaleResponse(generation)) loading.value = false;
   }
 }
 
@@ -764,6 +799,7 @@ async function save(silent = false): Promise<boolean> {
     draftChatApiKey, draftVoiceApiKey, draftAsrApiKey, draftVisionApiKey,
     draftMemoryAssistantApiKey, draftContextAssistantApiKey, draftKnowledgeAssistantApiKey, draftSocialAssistantApiKey,
   ].map((field) => ({ field, value: field.value }));
+  const generation = requestGeneration();
   saving.value = true;
   try {
     const updated = await modelRequest<Character>(`/api/characters/${encodeURIComponent(id.value)}`, {
@@ -855,10 +891,12 @@ async function save(silent = false): Promise<boolean> {
     await loadUsage();
     return true;
   } catch (error) {
+    // 保存响应回来时已经换了角色：这次保存对当前页面无效，别弹「保存失败」误导人。
+    if (isStaleResponse(generation)) return false;
     modelMessage.error(readError(error, "保存失败，请稍后重试。"));
     return false;
   } finally {
-    saving.value = false;
+    if (!isStaleResponse(generation)) saving.value = false;
   }
 }
 
@@ -868,6 +906,7 @@ const requestSave = () => save(true);
 /** 服务端只认已保存的配置，所以步调统一为「先存再测 / 先存再拉」 */
 async function testConnection() {
   if (testing.value || saving.value || fetchingModels.value || !character.value) return;
+  const generation = requestGeneration();
   testing.value = true;
   try {
     const saved = await save(true);
@@ -882,14 +921,16 @@ async function testConnection() {
       modelMessage.error(result.message || "API 连通性测试失败。");
     }
   } catch (error) {
+    if (isStaleResponse(generation)) return;
     modelMessage.error(readError(error, "API 连通性测试失败，请检查地址、Key 和模型名称。"));
   } finally {
-    testing.value = false;
+    if (!isStaleResponse(generation)) testing.value = false;
   }
 }
 
 async function fetchModels() {
   if (fetchingModels.value || saving.value || testing.value || !character.value) return;
+  const generation = requestGeneration();
   fetchingModels.value = true;
   try {
     const saved = await save(true);
@@ -908,9 +949,10 @@ async function fetchModels() {
     }
     modelMessage.success(result.message);
   } catch (error) {
+    if (isStaleResponse(generation)) return;
     modelMessage.error(readError(error, "获取模型列表失败，请稍后重试。"));
   } finally {
-    fetchingModels.value = false;
+    if (!isStaleResponse(generation)) fetchingModels.value = false;
   }
 }
 
@@ -923,6 +965,7 @@ async function fetchModels() {
  */
 async function fetchVisionModels() {
   if (fetchingVisionModels.value || saving.value || testing.value || testingVision.value || !character.value) return;
+  const generation = requestGeneration();
   fetchingVisionModels.value = true;
   try {
     const saved = await save(true);
@@ -944,9 +987,10 @@ async function fetchVisionModels() {
       + (imageGenCount ? `（其中 ${imageGenCount} 个是画图模型，已标灰：它们只生成图片，不能读图）` : ""),
     );
   } catch (error) {
+    if (isStaleResponse(generation)) return;
     modelMessage.error(readError(error, "获取模型列表失败，请稍后重试。"));
   } finally {
-    fetchingVisionModels.value = false;
+    if (!isStaleResponse(generation)) fetchingVisionModels.value = false;
   }
 }
 

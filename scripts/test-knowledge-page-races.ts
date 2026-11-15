@@ -1,5 +1,33 @@
 import assert from "node:assert/strict";
+import { applyAsrProviderPreset, applyVoiceProviderPreset } from "../app/utils/voice-provider-preset";
+import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "../app/utils/model-catalog";
+import { isImageGenerationModel } from "../shared/utils/vision-models";
 import { buildPageHarness, flushMicrotasks } from "./lib/page-harness";
+
+/**
+ * 合并后的模型设置组件在脚本顶层就会用到服务商目录与预设工具。
+ * harness 会剥掉 import 声明，所以这些纯函数必须显式喂进沙箱 ——
+ * 否则 `loadCharacter` 会在 `providerByBaseUrl(...)` 处抛 ReferenceError，
+ * 表现成「加载角色失败」，掩盖真正的竞态结论。
+ */
+const modelSettingsGlobals = {
+  MODEL_PROVIDERS,
+  buildModelOptions,
+  buildVisionModelOptions,
+  providerByBaseUrl,
+  providerByKey,
+  applyAsrProviderPreset,
+  applyVoiceProviderPreset,
+  isImageGenerationModel,
+};
+
+/** 设置类场景统一走这个入口：换角色要触发 `watch(id, ...)`，首次加载在 onMounted。 */
+function buildSettingsHarness() {
+  return buildPageHarness("../app/components/CharacterModelSettings.vue", {
+    roleSources: ["id"],
+    globals: modelSettingsGlobals,
+  });
+}
 
 function workspace(label: string) {
   return {
@@ -133,9 +161,18 @@ async function staleWebpageImportCannotTouchNextRole() {
   page.finish();
 }
 
+/**
+ * 设置相关的 4 个场景挂到合并后的 `CharacterModelSettings.vue` 上。
+ *
+ * 独立的 `KnowledgeAssistantSettings.vue` 已在 2026-11-12 并进模型设置，原来的 `model` /
+ * `apiBaseUrl` / `apiKey` 三个草稿变成了 `draftKnowledgeAssistant*`；首次加载在 `onMounted`，
+ * 换角色靠 `watch(id, ...)`（`id` 是 `props.characterId` 的 computed），所以 harness 要
+ * 指定 `roleSources: ["id"]` 才能触发到正确的观察者。
+ */
+
 /** 4. A→B→A 快速切换时，第一次 A 的慢配置不能覆盖第二次 A 的新配置。 */
 async function settingsLoadUsesRoleGeneration() {
-  const page = buildPageHarness("../app/components/KnowledgeAssistantSettings.vue");
+  const page = buildSettingsHarness();
   const firstA = page.take("/api/characters/char-a");
 
   page.switchRole("char-b");
@@ -149,19 +186,24 @@ async function settingsLoadUsesRoleGeneration() {
   loadB.resolve(characterSettings("char-b"));
   await flushMicrotasks();
 
-  assert.equal(page.read("model"), "new-a-model");
-  assert.equal(page.read("apiBaseUrl"), "https://char-a.example.com/v1");
+  assert.equal(page.read("draftKnowledgeAssistantModel"), "new-a-model");
+  assert.equal(page.read("draftKnowledgeAssistantApiBaseUrl"), "https://char-a.example.com/v1");
+  // 第二次 A 是当前代际，它自己顺带刷的用量要收尾；过期的那两次不该再发请求。
+  page.take("/api/characters/char-a/usage").resolve({});
+  await flushMicrotasks();
   page.finish();
 }
 
 /** 5. A 角色的慢保存响应不能覆盖 B 的表单，也不能清除 B 新输入的 API Key。 */
 async function staleSettingsSaveCannotMutateNextRole() {
-  const page = buildPageHarness("../app/components/KnowledgeAssistantSettings.vue");
+  const page = buildSettingsHarness();
   page.take("/api/characters/char-a").resolve(characterSettings("char-a"));
   await flushMicrotasks();
+  page.take("/api/characters/char-a/usage").resolve({});
+  await flushMicrotasks();
 
-  page.set("model", "a-custom-model");
-  page.set("apiKey", "A_SECRET");
+  page.set("draftKnowledgeAssistantModel", "a-custom-model");
+  page.set("draftKnowledgeAssistantApiKey", "A_SECRET");
   const saving = page.call<boolean>("save");
   const patchA = page.take("/api/characters/char-a", "PATCH");
   assert.equal((patchA.options?.body as Record<string, unknown>).knowledgeAssistantApiKey, "A_SECRET");
@@ -170,46 +212,57 @@ async function staleSettingsSaveCannotMutateNextRole() {
   const loadB = page.take("/api/characters/char-b");
   loadB.resolve(characterSettings("char-b"));
   await flushMicrotasks();
-  page.set("apiKey", "B_SECRET_NEW");
+  page.take("/api/characters/char-b/usage").resolve({});
+  await flushMicrotasks();
+  page.set("draftKnowledgeAssistantApiKey", "B_SECRET_NEW");
 
   patchA.resolve(characterSettings("char-a", "saved-a-model"));
   assert.equal(await saving, false, "角色切换后旧保存应视为对当前页面无效");
-  assert.equal(page.read("model"), "model-char-b");
-  assert.equal(page.read("apiBaseUrl"), "https://char-b.example.com/v1");
-  assert.equal(page.read("apiKey"), "B_SECRET_NEW");
-  assert.equal(page.successes.includes("知识处理助手设置已保存。"), false);
+  assert.equal(page.read("draftKnowledgeAssistantModel"), "model-char-b");
+  assert.equal(page.read("draftKnowledgeAssistantApiBaseUrl"), "https://char-b.example.com/v1");
+  assert.equal(page.read("draftKnowledgeAssistantApiKey"), "B_SECRET_NEW", "旧保存的响应不能清掉 B 刚输入的 Key");
+  assert.equal(page.successes.includes("模型设置已保存。"), false);
+  assert.deepEqual(page.errors, [], "过期保存不该在 B 的页面上弹「保存失败」");
   page.finish();
 }
 
-/** 6. 旧角色的获取模型请求不能把旧模型列表写入新角色。 */
+/** 6. 旧角色发起的「获取模型」不能把旧模型列表写进新角色。 */
 async function staleModelListCannotCrossRole() {
-  const page = buildPageHarness("../app/components/KnowledgeAssistantSettings.vue");
+  const page = buildSettingsHarness();
   page.take("/api/characters/char-a").resolve(characterSettings("char-a"));
+  await flushMicrotasks();
+  page.take("/api/characters/char-a/usage").resolve({});
   await flushMicrotasks();
 
   const fetching = page.call("fetchModels");
   const saveA = page.take("/api/characters/char-a", "PATCH");
   saveA.resolve(characterSettings("char-a"));
   await flushMicrotasks();
-  const modelsA = page.take("/api/characters/char-a/growth/knowledge/models");
+  // 「获取模型」先落库，保存成功后会顺带刷新一次用量。
+  page.take("/api/characters/char-a/usage").resolve({});
+  await flushMicrotasks();
+  const modelsA = page.take("/api/characters/char-a/chat/models");
 
   page.switchRole("char-b");
   const loadB = page.take("/api/characters/char-b");
   loadB.resolve(characterSettings("char-b"));
+  await flushMicrotasks();
+  page.take("/api/characters/char-b/usage").resolve({});
   await flushMicrotasks();
 
   modelsA.resolve({ ok: true, models: ["old-a-model"], message: "已获取 1 个模型。" });
   await fetching;
   // 页面状态是 vm 沙箱里创建的数组，原型与宿主不同，assert/strict 的 deepEqual 会判两个 [] 不等，
   // 所以先展开到宿主 realm 再比较（这是沙箱用例的通用坑，不是实现问题）。
-  assert.deepEqual([...page.read<string[]>("models")], [], "A 的模型列表不能出现在 B 的设置页");
-  assert.equal(page.read("model"), "model-char-b");
+  assert.deepEqual([...page.read<string[]>("fetchedModels")], [], "A 的模型列表不能出现在 B 的设置页");
+  assert.equal(page.read("draftChatModel"), "", "也不能顺手把 A 的首个模型写进 B 的模型名");
+  assert.deepEqual(page.errors, [], "过期清单不该在 B 的页面上报错");
   page.finish();
 }
 
 /** 7. 页面卸载后，在途读取不再写状态或弹提示。 */
 async function unmountedSettingsLoadIsIgnored() {
-  const page = buildPageHarness("../app/components/KnowledgeAssistantSettings.vue");
+  const page = buildSettingsHarness();
   const pending = page.take("/api/characters/char-a");
   page.unmount();
   pending.reject(new Error("late failure"));

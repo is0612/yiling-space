@@ -58,12 +58,12 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   const parsed = scriptOf(main);
   const draftNames = parsed.statements.filter(ts.isVariableStatement).flatMap(statement => statement.declarationList.declarations).flatMap(declaration => ts.isIdentifier(declaration.name) && declaration.name.text.startsWith("draft") && declaration.name.text !== "draftSignature" ? [declaration.name.text] : []);
   const context: Record<string, unknown> = Object.fromEntries(draftNames.map(name => [name, { value: "" }]));
-  Object.assign(context, { id: { value: "role-a" }, saving: { value: false }, character: { value: {} }, savedSignature: { value: "" }, lastSavedAt: { value: null }, syncAsrFromVoice: { value: false }, modelMessage: { success: () => {}, error: () => {}, warning: () => {} }, readError: () => "error", loadUsage: async () => {} });
+  Object.assign(context, { id: { value: "role-a" }, saving: { value: false }, character: { value: {} }, savedSignature: { value: "" }, lastSavedAt: { value: null }, syncAsrFromVoice: { value: false }, modelMessage: { success: () => {}, error: () => {}, warning: () => {} }, readError: () => "error", loadUsage: async () => {}, disposed: false, roleVersion: 0 });
   let resolveSave!: (value: unknown) => void;
   context.modelRequest = () => new Promise(resolve => { resolveSave = resolve; });
-  // `save` 落库后会用服务端回显回填 Key 输入框，这个函数也得进沙箱，
-  // 否则它在 vm 里是个未定义标识符，save 会一路掉进 catch 返回 false。
-  const actual = new Script(ts.transpileModule(`(function(){${functionCode(main, ["buildDraftSignature", "syncKeysFromCharacter", "save"])};return {save,buildDraftSignature};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(createContext(context)) as { save(silent?: boolean): Promise<boolean>; buildDraftSignature(clear?: boolean): string };
+  // `save` 落库后会用服务端回显回填 Key 输入框，还会按代际判断响应是否过期；
+  // 这些函数都得进沙箱，否则在 vm 里是未定义标识符，save 会一路掉进 catch 返回 false。
+  const actual = new Script(ts.transpileModule(`(function(){${functionCode(main, ["buildDraftSignature", "syncKeysFromCharacter", "requestGeneration", "isStaleResponse", "save"])};return {save,buildDraftSignature};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(createContext(context)) as { save(silent?: boolean): Promise<boolean>; buildDraftSignature(clear?: boolean): string };
   (context.draftChatModel as { value: string }).value = "submitted-model";
   (context.draftChatApiKey as { value: string }).value = "submitted-key";
   const pending = actual.save(true);
