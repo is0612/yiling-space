@@ -96,10 +96,10 @@
 - 本次完成：
   1. **隐私门禁**：`docs/development/PROJECT_PROGRESS.md` 删除全部 Actions 运行编号与硬编码运行链接，改为「提交 SHA + 检查结论 + 失败步骤」；同步删掉 `scripts/privacy-allowlist.txt` 里为运行编号开的两条豁免，并在文件内写明不要再加回来。过期的「正在执行 / 排队中」状态改为已核对的结论。
   2. **冒烟测试**：`scripts/smoke-test-local-api.mjs` 修掉两处让第 53 步必然失败的断言——(a) 读回角色详情时用的是登出步骤里已经注销、并用它验证过「吊销后不再鉴权」的 `sessionCookie`，改为仍有效的 `adminCookie`；(b) 清除 Key 后要求 `chatApiKeyConfigured === false`，但 CI 环境本身配了 `LLM_API_KEY`、角色 Base URL 与之相同，清除角色级 Key 后来源退回 environment，`configured` 仍为 true。改为断言 `chatApiKey === ""` 且来源不再是 `character`，这既守住「不能把清掉的 Key 又回显出来」，也不依赖运行环境有没有 env 兜底。产品要求与鉴权边界均未改动。
-- 提交：本批次一个提交，涉及 `docs/development/PROJECT_PROGRESS.md`、`scripts/privacy-allowlist.txt`、`scripts/smoke-test-local-api.mjs`。
+- 提交：本批次改动集中在 `docs/development/PROJECT_PROGRESS.md`、`scripts/privacy-allowlist.txt`、`scripts/smoke-test-local-api.mjs`。
 - 专项验收：
   - `yarn run check:privacy` —— 通过（1013 个文件）。
-  - 按 CI 相同环境变量，在本机独立数据库上起 mock LLM 与 Nuxt dev 后执行 `scripts/smoke-test-local-api.mjs` —— 通过；覆盖登录取回明文 Key、改其他参数不丢 Key、主动清除、伪造会话 401、跨站 403、连接测试，以及记忆设置延迟生效/取消/立即重算、导入、调度补齐、回收站、私有范围隔离、留存清理、多用户角色隔离。
+  - 按 CI 相同环境变量，在本机独立数据库上起 mock LLM 与 Nuxt dev 后执行 `scripts/smoke-test-local-api.mjs` —— 通过；覆盖登录取回明文 Key、改其他参数不丢 Key、主动清除、伪造会话 401、跨站 403、连接测试，以及记忆设置延迟生效/取消/立即重算、导入、调度补齐、回收站、私有范围隔离、留存清理、多用户角色隔离。注意该脚本假设**干净数据库**（CI 每次新建）：在残留数据的库上重跑会在「Worker should skip empty overdue periods」处失败，那是任务队列里上一轮的旧任务占了 5 次处理预算，不是产品回归。
   - `yarn test:api-key-fields`、`yarn test:chat-model-config`、`yarn test:memory-reliability-isolated` —— 通过。
 - 工程回归：`yarn run check`（lint + check:sfc + check:privacy）通过；类型检查与完整测试矩阵由本轮 CI 复核。
 - CI：本批次提交后由 Actions 复核；未全绿前不关闭本轮收尾。
