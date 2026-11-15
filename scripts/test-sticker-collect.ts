@@ -137,12 +137,26 @@ assert.ok(
 // collectStickersFromTurn 在开关关着时必须一帧不跑（不下载、不调模型）。
 // 这里用一个带 url 的候选验证它直接早退 —— 开关关着，url 再合法也不该被碰。
 const { collectStickersFromTurn } = await import("../server/utils/sticker-collect");
+const { setMediaFetchForTest } = await import("../server/utils/safe-media-download");
 let touched = false;
 const originalFetch = globalThis.fetch;
-globalThis.fetch = async () => {
+/**
+ * 下载器直连 undici 的 fetch（见 `safe-media-download` 顶部注释），只换 `globalThis.fetch`
+ * 拦不住它 —— 请求会真的发到公网，然后统一报 IMAGE_HTTP_404 / 超时。
+ * 所以两处一起装：模型调用走 globalThis，图片下载走注入点。
+ */
+const installNetworkStub = (stub: typeof fetch) => {
+  globalThis.fetch = stub;
+  setMediaFetchForTest(stub as unknown as Parameters<typeof setMediaFetchForTest>[0]);
+};
+const restoreNetworkStub = () => {
+  globalThis.fetch = originalFetch;
+  setMediaFetchForTest(null);
+};
+installNetworkStub(async () => {
   touched = true;
   throw new Error("不该发起的请求");
-};
+});
 await collectStickersFromTurn(
   [{ url: "https://example.com/a.png" }],
   {
@@ -154,7 +168,7 @@ await collectStickersFromTurn(
   },
 );
 assert.equal(touched, false, "开关关着时不能下载、不能调模型。");
-globalThis.fetch = originalFetch;
+restoreNetworkStub();
 
 // ── collectSticker 端到端（mock 网络，不碰真实公网）────────────────────────
 // mock fetch：第一次是 downloadImage 的图（返回 PNG 字节），第二次是视觉模型打标（返回 JSON）。
@@ -163,7 +177,7 @@ globalThis.fetch = originalFetch;
 const { collectSticker } = await import("../server/utils/sticker-collect");
 const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 let callCount = 0;
-globalThis.fetch = async (input: RequestInfo | URL) => {
+installNetworkStub(async (input: RequestInfo | URL) => {
   callCount += 1;
   const url = String(input);
   if (url.includes("example.com/sticker")) {
@@ -180,7 +194,7 @@ globalThis.fetch = async (input: RequestInfo | URL) => {
     choices: [{ message: { content: JSON.stringify({ name: "偷来的图", usage: "群友斗图时" }) } }],
     usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
   }), { status: 200, headers: { "content-type": "application/json" } }) as Response;
-};
+});
 
 // 需要一个开了视觉模型配置 + 开了自动收图的 context。
 // characterId 必须是库里真实存在的角色（外键约束），从库里取第一个。
@@ -230,7 +244,7 @@ const pngA = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 
 const pngB = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7, 7]);
 const pngC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 5, 5, 5]);
 let labelReply = "";
-globalThis.fetch = async (input: RequestInfo | URL) => {
+installNetworkStub(async (input: RequestInfo | URL) => {
   const url = String(input);
   if (url.includes("sticker-a.png") || url.includes("sticker-b.png") || url.includes("sticker-c.png")) {
     const bytes = url.includes("sticker-a") ? pngA : url.includes("sticker-b") ? pngB : pngC;
@@ -244,7 +258,7 @@ globalThis.fetch = async (input: RequestInfo | URL) => {
   return new Response(JSON.stringify({
     choices: [{ message: { content: labelReply } }],
   }), { status: 200, headers: { "content-type": "application/json" } }) as Response;
-};
+});
 
 // a) 模型偷懒，名字直接回「表情包」这种没信息量的词。
 labelReply = JSON.stringify({ name: "表情包", usage: "" });
@@ -295,6 +309,6 @@ try {
 }
 try { await prisma.$disconnect(); } catch { /* ignore */ }
 
-globalThis.fetch = originalFetch;
+restoreNetworkStub();
 
 console.log("偷表情包（sticker-collect）：全部通过");
