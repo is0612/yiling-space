@@ -252,24 +252,26 @@ const KIND_LABELS: Record<string, string> = {
 /**
  * 表单指纹：只收「能看出改过没改过」的值。
  *
- * 只在当前组件内比较六把 Key 的草稿；不上传指纹、不写日志。
- * 保存时用提交快照生成去掉已提交 Key 的签名；请求期间新编辑的 Key 不清空且保持未保存。
+ * 只在当前组件内比较 Key 的草稿；不上传指纹、不写日志。
+ * Key 现在是明文回显的，输入框永远和库里对得上，所以 Key 直接参与指纹，
+ * 不需要「排除 Key」的模式 —— 以前那个 clearSavedSecrets 参数就是为了空输入框时代的
+ * 误判 dirty 准备的，回显改造后没有任何调用方用到，已删除。
  */
-function buildDraftSignature(clearSavedSecrets = false) { return JSON.stringify([
+function buildDraftSignature() { return JSON.stringify([
   draftChatModel.value.trim(),
   draftChatTemperature.value,
   draftChatMaxTokens.value,
   draftChatApiBaseUrl.value.trim(),
-  clearSavedSecrets ? "" : draftChatApiKey.value.trim(),
+  draftChatApiKey.value.trim(),
   draftDailyTokenLimit.value,
   draftMemoryTokenBudget.value,
   draftSnapshotTokenBudget.value,
   draftMemoryItemLimit.value,
   draftRecentMessageLimit.value,
   // 语音模型：Key 只参与当前组件内的草稿比较
-  clearSavedSecrets ? "" : draftVoiceApiKey.value.trim(),
-  clearSavedSecrets ? "" : draftAsrApiKey.value.trim(),
-  clearSavedSecrets ? "" : draftVisionApiKey.value.trim(),
+  draftVoiceApiKey.value.trim(),
+  draftAsrApiKey.value.trim(),
+  draftVisionApiKey.value.trim(),
   draftVoiceProvider.value,
   draftVoiceApiBaseUrl.value.trim(),
   draftVoiceTtsModel.value.trim(),
@@ -290,7 +292,7 @@ function buildDraftSignature(clearSavedSecrets = false) { return JSON.stringify(
   draftMemoryAssistantMaxInputTokens.value,
   draftMemoryAssistantMaxOutputTokens.value,
   draftMemoryAssistantApiBaseUrl.value.trim(),
-  clearSavedSecrets ? "" : draftMemoryAssistantApiKey.value.trim(),
+  draftMemoryAssistantApiKey.value.trim(),
   draftMemoryAssistantEnabled.value,
   draftContextAssistantEnabled.value,
   draftContextAssistantModel.value.trim(),
@@ -298,7 +300,7 @@ function buildDraftSignature(clearSavedSecrets = false) { return JSON.stringify(
   draftContextAssistantMaxInputTokens.value,
   draftContextAssistantMaxOutputTokens.value,
   draftContextAssistantApiBaseUrl.value.trim(),
-  clearSavedSecrets ? "" : draftContextAssistantApiKey.value.trim(),
+  draftContextAssistantApiKey.value.trim(),
   draftKnowledgeAssistantEnabled.value,
   draftKnowledgeAutoCollectEnabled.value,
   draftKnowledgeAssistantModel.value.trim(),
@@ -306,14 +308,14 @@ function buildDraftSignature(clearSavedSecrets = false) { return JSON.stringify(
   draftKnowledgeAssistantMaxInputTokens.value,
   draftKnowledgeAssistantMaxOutputTokens.value,
   draftKnowledgeAssistantApiBaseUrl.value.trim(),
-  clearSavedSecrets ? "" : draftKnowledgeAssistantApiKey.value.trim(),
+  draftKnowledgeAssistantApiKey.value.trim(),
   draftSocialAssistantEnabled.value,
   draftSocialAssistantModel.value.trim(),
   draftSocialAssistantTemperature.value,
   draftSocialAssistantMaxInputTokens.value,
   draftSocialAssistantMaxOutputTokens.value,
   draftSocialAssistantApiBaseUrl.value.trim(),
-  clearSavedSecrets ? "" : draftSocialAssistantApiKey.value.trim(),
+  draftSocialAssistantApiKey.value.trim(),
 ]); }
 const draftSignature = computed(() => buildDraftSignature());
 const dirty = computed(() => savedSignature.value !== "" && draftSignature.value !== savedSignature.value);
