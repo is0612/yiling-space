@@ -29,7 +29,30 @@ const finishedAt = ref(new Map<string, number>());
 /** 成功一闪而过没关系；失败 8 秒就消失，用户只会觉得「怎么没反应」，然后去点重试。 */
 const FINISHED_VISIBLE_MS = 8_000;
 const FAILED_VISIBLE_MS = 60_000;
+/** 转圈最短停留时间：接口 40ms 就回来时，图标一闪反而像没点中。 */
+const REFRESH_MIN_MS = 400;
 let ticker: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 手动刷新。
+ *
+ * 存在的理由不是「轮询不够快」，而是轮询可能已经停摆：接口挂住的那一轮会把面板冻在
+ * 最后一次成功的数据上，看起来就是一个永远不动的进度条。所以这里走 `force`，
+ * 直接掐掉可能挂死的请求重发一次 —— 正常轮询不该被这个按钮替代。
+ */
+const refreshing = ref(false);
+async function refresh() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  const beganAt = Date.now();
+  try {
+    await refreshMemoryProgress({ force: true });
+  } finally {
+    const rest = REFRESH_MIN_MS - (Date.now() - beganAt);
+    if (rest > 0) await new Promise((resolve) => setTimeout(resolve, rest));
+    refreshing.value = false;
+  }
+}
 
 watch(jobs, (next, previous) => {
   const wasActive = new Set((previous ?? []).filter((job) => isActive(job.status)).map((job) => job.id));
@@ -169,12 +192,46 @@ function detail(job: MemoryProgressRow): string {
     </p>
     <header class="progress-head">
       <strong>记忆任务</strong>
-      <NuxtLink
-        to="/tasks"
-        class="progress-link"
-      >
-        任务监控
-      </NuxtLink>
+      <div class="progress-actions">
+        <NuxtLink
+          to="/tasks"
+          class="progress-link"
+        >
+          任务监控
+        </NuxtLink>
+        <button
+          type="button"
+          class="progress-refresh"
+          :class="{ 'is-spinning': refreshing }"
+          :disabled="refreshing"
+          :aria-label="refreshing ? '正在刷新记忆任务进度' : '刷新记忆任务进度'"
+          :title="refreshing ? '正在刷新…' : '刷新进度（面板不动的就点这里）'"
+          @click="refresh"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M21 3v5h-5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+      </div>
     </header>
     <ul class="progress-list">
       <li
@@ -254,12 +311,20 @@ function detail(job: MemoryProgressRow): string {
 
 .progress-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 8px;
   font-size: 14px;
   color: var(--text);
+}
+
+/* 标题和右侧操作组居中而不是基线对齐：图标是方的，按 baseline 摆会往下掉一截。 */
+.progress-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
 }
 
 .progress-link {
@@ -270,6 +335,54 @@ function detail(job: MemoryProgressRow): string {
 
 .progress-link:hover {
   color: var(--brand-strong);
+}
+
+/* 图标靠右贴边：面板本身有 14px 内边距，再往右让 4px 才像「右上角」而不是「贴着字」。 */
+.progress-refresh {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -4px -2px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  transition: color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.progress-refresh svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.progress-refresh:hover:not(:disabled) {
+  background: var(--line);
+  color: var(--brand-strong);
+}
+
+.progress-refresh:focus-visible {
+  outline: 2px solid var(--brand-strong);
+  outline-offset: 1px;
+}
+
+.progress-refresh:disabled {
+  cursor: default;
+}
+
+.progress-refresh.is-spinning {
+  color: var(--brand-strong);
+}
+
+.progress-refresh.is-spinning svg {
+  animation: progress-spin 0.9s linear infinite;
+}
+
+@keyframes progress-spin {
+  to { transform: rotate(360deg); }
 }
 
 .progress-list {
@@ -371,6 +484,12 @@ function detail(job: MemoryProgressRow): string {
     animation: none;
     width: 100%;
     opacity: 0.4;
+  }
+
+  /* 不转圈，但要让「正在刷新」还看得出来：按钮不可点 + 颜色变深已经够。 */
+  .progress-refresh.is-spinning svg {
+    animation: none;
+    opacity: 0.6;
   }
 }
 </style>

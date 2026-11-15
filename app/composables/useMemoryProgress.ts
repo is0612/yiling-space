@@ -92,8 +92,19 @@ export function memoryProgressPollDelay(
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
-let inflight = false;
+/**
+ * 正在飞的请求，存 controller 而不是布尔。
+ *
+ * 布尔值只在 `finally` 里复位 —— 一旦某次 `$fetch` 挂住不返回（dev server 热更新、
+ * 切网络、浏览器把请求挂起），它就永远停在 `true`，此后每次轮询都在门口直接 return
+ * 旧数据，而且全程不报错。面板于是永远显示同一进度、已用时却一秒一秒往上加。
+ * 存 controller 才能主动掐掉那个挂死的请求。
+ */
+let inflight: AbortController | null = null;
 let visibilityBound = false;
+
+/** 一次进度请求最多等这么久。超时就弃掉，让下一轮重新开始，而不是一起卡着。 */
+const PROGRESS_FETCH_TIMEOUT_MS = 8_000;
 
 function progressState() {
   return {
@@ -103,12 +114,26 @@ function progressState() {
   };
 }
 
-export async function refreshMemoryProgress(): Promise<MemoryProgressRow[]> {
-  if (!import.meta.client || inflight) return progressState().jobs.value;
+/**
+ * 拉一次进度。
+ *
+ * `force` 是「人手动点了刷新」：这时候的 inflight 很可能已经挂死，排在它后面等
+ * 等于点了没反应，所以先把旧请求掐掉再发新的。轮询本身不用 force，没必要并发。
+ */
+export async function refreshMemoryProgress(options: { force?: boolean } = {}): Promise<MemoryProgressRow[]> {
   const { jobs, lastFinished, checkedAt } = progressState();
-  inflight = true;
+  if (!import.meta.client) return jobs.value;
+  if (inflight) {
+    if (!options.force) return jobs.value;
+    inflight.abort();
+  }
+  const controller = new AbortController();
+  inflight = controller;
+  const timeout = setTimeout(() => controller.abort(), PROGRESS_FETCH_TIMEOUT_MS);
   try {
-    const result = await $fetch<{ jobs: MemoryProgressRow[]; checkedAt: string }>("/api/memory-progress");
+    const result = await $fetch<{ jobs: MemoryProgressRow[]; checkedAt: string }>("/api/memory-progress", {
+      signal: controller.signal,
+    });
     // 「上一轮还在跑、这一轮结束了」是唯一的完成信号：面板据此标一次完成，页面据此刷新列表。
     const wasActive = new Set(jobs.value.filter((job) => isActiveMemoryJob(job.status)).map((job) => job.id));
     jobs.value = result.jobs;
@@ -126,7 +151,9 @@ export async function refreshMemoryProgress(): Promise<MemoryProgressRow[]> {
   } catch {
     // 进度面板不是关键路径：接口一时失败就保持上一次的数据，不弹错。
   } finally {
-    inflight = false;
+    clearTimeout(timeout);
+    // 只清自己那一次：force 刷新时旧请求的 finally 不能把新的 controller 摘掉。
+    if (inflight === controller) inflight = null;
   }
   return jobs.value;
 }
