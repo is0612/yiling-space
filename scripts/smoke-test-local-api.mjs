@@ -438,11 +438,52 @@ const savedChatSettings = await request(`/api/characters/${created.id}`, {
 assert(savedChatSettings.chatModel === "ci-character-model", "Character model override did not round-trip.");
 assert(savedChatSettings.chatTemperature === 0.4 && savedChatSettings.chatMaxTokens === 1024, "Character temperature/token settings did not round-trip.");
 assert(savedChatSettings.chatApiBaseUrl === "http://127.0.0.1:4010/v1", "Character API Base URL did not round-trip.");
-assert(savedChatSettings.chatApiKeyConfigured === true && savedChatSettings.chatApiKeySource === "character", "The character should report its encrypted API key as configured.");
-assert(!Object.prototype.hasOwnProperty.call(savedChatSettings, "chatApiKey"), "The character DTO must never return an API key.");
-const reloadedChatSettings = await request(`/api/characters/${created.id}`);
+assert(savedChatSettings.chatApiKeyConfigured === true && savedChatSettings.chatApiKeySource === "character", "The character should report its saved API key as configured.");
+/*
+ * 明文 Key 是本仓库明确的产品行为：单管理员部署，登录后在模型设置里查看 / 修改 / 清除。
+ * 所以这里要断言「登录后能读回同一把 Key」，而不是断言「永远不返回」——
+ * 后者是 2026-11-12 改成明文存储之前的老契约，留着会逼着实现把回显藏回掩码。
+ */
+assert(savedChatSettings.chatApiKey === "ci-only", "The logged-in administrator must be able to read the saved plaintext API key.");
+const reloadedChatSettings = await request(`/api/characters/${created.id}`, { headers: { cookie: sessionCookie } });
 assert(reloadedChatSettings.chatModel === "ci-character-model" && reloadedChatSettings.chatMaxTokens === 1024, "Character-specific chat settings did not persist after reloading.");
-assert(reloadedChatSettings.chatApiKeyConfigured === true && !Object.prototype.hasOwnProperty.call(reloadedChatSettings, "chatApiKey"), "The encrypted API Key must remain configured but never be returned.");
+assert(reloadedChatSettings.chatApiKeyConfigured === true, "The saved API key must stay configured after reloading.");
+assert(reloadedChatSettings.chatApiKey === "ci-only", "Reloading the character must keep returning the same plaintext key.");
+
+// 只改别的参数不能顺手把 Key 清空（旧 bug：整表覆盖会让 Key 消失）。
+const unrelatedPatch = await request(`/api/characters/${created.id}`, {
+  method: "PATCH",
+  body: { chatTemperature: 0.45 },
+});
+assert(unrelatedPatch.chatApiKey === "ci-only", "Editing an unrelated setting must not clear the saved API key.");
+
+// 主动清除：清掉之后 configured 要跟着变 false；再写回来，下面连接测试还要用这把 Key。
+const clearedChatSettings = await request(`/api/characters/${created.id}`, {
+  method: "PATCH",
+  body: { clearApiKey: true },
+});
+assert(clearedChatSettings.chatApiKey === "" && clearedChatSettings.chatApiKeyConfigured === false, "An explicit clearApiKey must remove the saved key.");
+const restoredChatSettings = await request(`/api/characters/${created.id}`, {
+  method: "PATCH",
+  body: { chatApiKey: "ci-only" },
+});
+assert(restoredChatSettings.chatApiKey === "ci-only", "Re-saving the key after clearing must round-trip.");
+
+// 未登录（伪造会话）拿不到明文：401，且响应体里不能夹带 Key。
+const forgedSessionResponse = await fetch(new URL(`/api/characters/${created.id}`, baseUrl), {
+  headers: { cookie: "yiling_session=forged-session-token" },
+});
+assert(forgedSessionResponse.status === 401, `A forged session must be rejected with 401, got ${forgedSessionResponse.status}.`);
+const forgedSessionBody = await forgedSessionResponse.text();
+assert(!forgedSessionBody.includes("ci-only"), "A rejected request must not leak the API key in its body.");
+
+// 跨站来源即使带合法 cookie 也被来源守卫挡住，不会把带 Key 的 DTO 送出去。
+const crossSiteDetail = await fetch(new URL(`/api/characters/${created.id}`, baseUrl), {
+  headers: { cookie: sessionCookie, "sec-fetch-site": "cross-site" },
+});
+assert(crossSiteDetail.status === 403, `Cross-site character reads must be rejected, got ${crossSiteDetail.status}.`);
+await crossSiteDetail.arrayBuffer();
+
 const apiTest = await request(`/api/characters/${created.id}/chat/test-connection`, { method: "POST" });
 assert(apiTest.ok === true && apiTest.provider === "127.0.0.1", "API connection test should use the saved URL and decrypted API Key.");
 
