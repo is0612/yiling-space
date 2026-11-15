@@ -2779,7 +2779,7 @@ paths:
           schema: { type: string, format: date }
       responses:
         '200':
-          description: '{dayKey, checkedCount, limit, pairsLimited, pairs:[{keep:{id,title,detail,sourceMessageIds},candidate:{id,title,detail,sourceMessageIds},reason:EXACT_CONTENT|SHARED_SOURCE,token}]}；token为两条状态、内容、范围及来源的指纹。
+          description: '{dayKey, checkedCount, limit, pairsLimited, pairs:[{keep:{id,title,detail,sourceMessageIds},candidate:{id,title,detail,sourceMessageIds},reason:EXACT_CONTENT|SHARED_SOURCE,token}]}；token为两条状态、内容、范围及来源的指纹。'
         '400':
           description: 日期无效
         '401':
