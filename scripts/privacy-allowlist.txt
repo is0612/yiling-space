@@ -40,3 +40,7 @@
 # 本机端口（文档里举「代理占用端口」的例子，不是任何人的账号）
 56435       # qq-onebot-deploy：系统代理残留端口示例
 62614       # bili-desk：死代理端口示例
+
+# GitHub Actions run ID（公开仓库自己的 CI 运行编号，进度总表引用，任何人可在仓库 Actions 页看到）
+43704450639  # docs/development/PROJECT_PROGRESS.md 引用的失败 run
+43705893160  # 同上，文档提交触发的排队中 run
