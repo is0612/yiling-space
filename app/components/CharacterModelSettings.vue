@@ -757,6 +757,13 @@ async function save(silent = false): Promise<boolean> {
     modelMessage.warning("模型名称不能超过 120 个字符。");
     return false;
   }
+  // 提交那一刻的签名，以及每个 Key 输入框的内容：PATCH 在飞的时候用户可能还在打字，
+  // 回来时要能判断「哪些框是用户自己新敲的」，不能拿服务端回显把它们冲掉。
+  const submittedSignature = buildDraftSignature();
+  const submittedKeys = [
+    draftChatApiKey, draftVoiceApiKey, draftAsrApiKey, draftVisionApiKey,
+    draftMemoryAssistantApiKey, draftContextAssistantApiKey, draftKnowledgeAssistantApiKey, draftSocialAssistantApiKey,
+  ].map((field) => ({ field, value: field.value }));
   saving.value = true;
   try {
     const updated = await modelRequest<Character>(`/api/characters/${encodeURIComponent(id.value)}`, {
@@ -828,11 +835,21 @@ async function save(silent = false): Promise<boolean> {
         socialRelationshipAssessmentAssistantApiKey: draftSocialAssistantApiKey.value.trim(),
       },
     });
+    // 请求期间用户改过的草稿不能被回显吞掉，也不能被算成「已保存」。
+    const editedDuringFlight = submittedKeys.some(({ field, value }) => field.value !== value);
+    // 回显会覆盖输入框，先把用户此刻敲的内容留一份，等下按字段还回去。
+    const liveValues = submittedKeys.map(({ field }) => field.value);
     character.value = updated;
     // 保存成功后把服务端那份明文 Key 回填：否则输入框会停在用户刚敲的内容上，
     // 和「库里到底是什么」产生偏差。
     syncKeysFromCharacter(updated);
-    savedSignature.value = draftSignature.value;
+    if (editedDuringFlight) {
+      submittedKeys.forEach(({ field, value }, index) => {
+        if (liveValues[index] !== value) field.value = liveValues[index]!;
+      });
+    }
+    // 没有并发编辑时，回显后的当前状态就是「已保存」；有并发编辑时，已保存的只有提交的那份。
+    savedSignature.value = editedDuringFlight ? submittedSignature : buildDraftSignature();
     lastSavedAt.value = new Date();
     if (!silent) modelMessage.success("模型设置已保存。");
     await loadUsage();

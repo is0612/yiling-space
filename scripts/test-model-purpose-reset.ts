@@ -3,10 +3,13 @@ import { readFileSync } from "node:fs";
 import { createContext, Script } from "node:vm";
 import ts from "typescript";
 import { MODEL_PURPOSE_DEFAULTS } from "../shared/utils/model-purpose-defaults";
+/**
+ * 2026-11-12 的模型设置重构把「知识 / 社交」两个独立设置页并进了 CharacterModelSettings，
+ * 它们的 `resetRecommendedParameters` 一并下线（现在走 AssistantOverridePanel，没有重置按钮）。
+ * 这里只保留仍然存在的重置函数；将来谁再加回某个助手的「恢复推荐值」，也要在这里补一条。
+ */
 const cases = [
   { file: "app/components/CharacterModelSettings.vue", functions: ["resetRecommendedGenerationSettings", "resetRecommendedMemoryAssistantSettings", "resetRecommendedContextAssistantSettings", "resetRecommendedVoiceSettings"] },
-  { file: "app/components/KnowledgeAssistantSettings.vue", functions: ["resetRecommendedParameters"] },
-  { file: "app/components/SocialAssessmentSettings.vue", functions: ["resetRecommendedParameters"] },
 ];
 for (const entry of cases) {
   const source = readFileSync(entry.file, "utf8").match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]!;
