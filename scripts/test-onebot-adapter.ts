@@ -1,5 +1,6 @@
 import "dotenv/config";
 import assert from "node:assert/strict";
+import { mock } from "node:test";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -180,7 +181,7 @@ try {
       metadata: { onebotReloadRequestedAt: "2026-10-29T00:00:00.000Z", keep: { nested: true }, replyOnlyWhenMentioned: false },
     },
   });
-  // 端到端这部分验证的是「消息能不能走通」，所以把群聊策略设成 all（每句都回、不攒批），
+  // 端到端这部分设为 all：每轮必须回复，仍经过短窗口攒批。
   // 攒批与闸门另有 test-onebot-group-chat.ts 专门测。
   const binding = await prisma.characterChannelBinding.create({
     data: { characterId, connectionId, status: "ACTIVE", routingKey: null, config: { groupChatMode: "all" } },
@@ -556,37 +557,6 @@ try {
     body: JSON.stringify({ event: groupEventOf(groupId, messageId, text, userId, mention) }),
   });
 
-  /**
-   * 一次请求连着推几条群消息 —— 用来构造「同一批里有两条」的前提。
-   *
-   * 攒批是防抖：**最后一条**之后安静满窗口才冲刷。所以「两条在同一批」不是天然的，
-   * 它取决于第二条多快跟上第一条。分两次 HTTP 发时，间隔是一次往返 + 当时的调度延迟，
-   * 本机十几毫秒，CI 上一卡就超过窗口，于是变成两轮（2026-11-15 实测：
-   * 一轮 `"messages":1`，断言「接的不是最新一条时必须引用」直接红）。
-   * 连着推过去，帧间隔是微秒级，前提才成立。
-   */
-  const emitGroupBatch = (
-    messages: ReadonlyArray<{
-      groupId: number;
-      messageId: number;
-      text: string;
-      userId?: number;
-      mention?: GroupMention;
-    }>,
-  ) => fetch("http://127.0.0.1:4031/__mock/emit-batch", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      events: messages.map((item) => groupEventOf(
-        item.groupId,
-        item.messageId,
-        item.text,
-        item.userId ?? 444,
-        item.mention ?? false,
-      )),
-    }),
-  });
-
   /** 模拟部分网关把整条消息拍平成字符串，而不是 OneBot 段数组。 */
   const emitRawGroupMessage = (
     groupId: number,
@@ -768,24 +738,25 @@ try {
     .find((message): message is Array<{ type: string; data: Record<string, unknown> }> =>
       Array.isArray(message) && message.some((segment) => segment.type === type));
 
-  /**
-   * 同一批里两条：CI_QUOTE_REPLY 那条不是最新，所以该引用；最新那条不需要引用。
-   *
-   * 这个断言成立的前提是「两条真的在同一批」—— 攒批是防抖窗口，不是收件箱：
-   * 窗口在这档是 `min(mentionWindowSeconds, 3)` 秒。所以这里做两件事把前提钉住：
-   *   ① 两条用一次请求连着推，帧间隔微秒级（见 `emitGroupBatch`）；
-   *   ② 窗口临时放到该档上限 3 秒，给 CI 的调度抖动留余量，用完还原。
-   * 断言本身不放宽：拆批时那一条**确实**是最新一条，按规则本来就不该引用 ——
-   * 那是「前提没成立」，不是「规则错了」，所以失败信息直接把本轮的批大小打出来。
-   */
-  const quoteWindowBefore = record.bindings[0]!.groupChat.mentionWindowSeconds;
-  record.bindings[0]!.groupChat.mentionWindowSeconds = 3;
-  await emitGroupBatch([
-    { groupId: 1008, messageId: 80, text: "CI_QUOTE_REPLY 你刚说的那句什么意思", userId: 555 },
-    { groupId: 1008, messageId: 81, text: "对了我明天请假", userId: 556 },
-  ]);
+  // 冻结攒批定时器，直接走与 WS 相同的 handler 入口。
+  // 两条都确认入缓冲后才推进时钟，不依赖 HTTP/WS 延迟或机器调度速度。
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    for (const event of [
+      groupEventOf(1008, 80, "CI_QUOTE_REPLY 你刚说的那句什么意思", 555, false),
+      groupEventOf(1008, 81, "对了我明天请假", 556, false),
+    ]) {
+      const resolved = resolveOnebotEvent(event);
+      assert(resolved);
+      assert.equal((await handler(resolved)).status, "buffered", "引用测试的两条消息必须先进入缓冲。");
+    }
+    mock.timers.tick(3000);
+  } finally {
+    mock.timers.reset();
+  }
   await waitFor(async () => (await assistantCount(1008)) >= 1);
-  record.bindings[0]!.groupChat.mentionWindowSeconds = quoteWindowBefore;
+  assert.ok(await waitForGroupRoundLog(1008, "all_messages"));
+  assert.deepEqual(groupRoundSizes(1008), ["2"], "引用旧消息的前提是两条消息在同一轮。");
   const quotedSegments = findSegments(await groupSends(1008), "reply");
   assert.ok(
     quotedSegments,
@@ -799,9 +770,9 @@ try {
   assert.equal(String(quotedSegments[0]!.data.id), "80", "引用的是她决定接的那条消息。");
 
   // 回的就是最新一条：模型照惯例给了 replyToMessageId，代码要把它丢掉。
-  await emitToGroup(1009, 90, "CI_QUOTE_REPLY 在吗", 557, false);
-  await waitFor(async () => (await assistantCount(1009)) >= 1);
-  const adjacentSends = (await groupSends(1009)).map((item) => item.body.message as unknown);
+  await emitToGroup(1026, 92, "CI_QUOTE_REPLY 在吗", 557, false);
+  await waitFor(async () => (await assistantCount(1026)) >= 1);
+  const adjacentSends = (await groupSends(1026)).map((item) => item.body.message as unknown);
   const hasQuoteOrAt = (message: unknown) => Array.isArray(message)
     && message.some((segment) => segment.type === "reply" || segment.type === "at");
   assert.ok(adjacentSends.some((message) => typeof message === "string"), "回上一条时正文要按纯文本发。");
