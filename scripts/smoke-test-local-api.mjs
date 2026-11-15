@@ -445,7 +445,13 @@ assert(savedChatSettings.chatApiKeyConfigured === true && savedChatSettings.chat
  * 后者是 2026-11-12 改成明文存储之前的老契约，留着会逼着实现把回显藏回掩码。
  */
 assert(savedChatSettings.chatApiKey === "ci-only", "The logged-in administrator must be able to read the saved plaintext API key.");
-const reloadedChatSettings = await request(`/api/characters/${created.id}`, { headers: { cookie: sessionCookie } });
+/*
+ * 这里必须用**还活着**的会话：上面的登出步骤已经拿 `sessionCookie` 登出，并用它验证过
+ * 「已吊销的 cookie 不再鉴权」。复用那把已注销的 cookie 只会稳定拿到 401，
+ * 看上去像「明文回显坏了」，其实是测试自己拿了一把作废的钥匙。
+ * `adminCookie` 是登录接口新签发的管理员会话，且没有在后续步骤里被吊销。
+ */
+const reloadedChatSettings = await request(`/api/characters/${created.id}`, { headers: { cookie: adminCookie } });
 assert(reloadedChatSettings.chatModel === "ci-character-model" && reloadedChatSettings.chatMaxTokens === 1024, "Character-specific chat settings did not persist after reloading.");
 assert(reloadedChatSettings.chatApiKeyConfigured === true, "The saved API key must stay configured after reloading.");
 assert(reloadedChatSettings.chatApiKey === "ci-only", "Reloading the character must keep returning the same plaintext key.");
@@ -457,17 +463,33 @@ const unrelatedPatch = await request(`/api/characters/${created.id}`, {
 });
 assert(unrelatedPatch.chatApiKey === "ci-only", "Editing an unrelated setting must not clear the saved API key.");
 
-// 主动清除：清掉之后 configured 要跟着变 false；再写回来，下面连接测试还要用这把 Key。
+// 主动清除：清掉之后角色自己那把 Key 必须消失；再写回来，下面连接测试还要用这把 Key。
 const clearedChatSettings = await request(`/api/characters/${created.id}`, {
   method: "PATCH",
   body: { clearApiKey: true },
 });
-assert(clearedChatSettings.chatApiKey === "" && clearedChatSettings.chatApiKeyConfigured === false, "An explicit clearApiKey must remove the saved key.");
+assert(
+  clearedChatSettings.chatApiKey === "",
+  `An explicit clearApiKey must remove the character's own key, got chatApiKey="${clearedChatSettings.chatApiKey}".`,
+);
+/*
+ * 清除后 `chatApiKeyConfigured` 不一定是 false：CI 里 LLM_API_KEY / LLM_BASE_URL 是配好的，
+ * 角色的 Base URL 又与它一致，所以清掉角色自己的 Key 之后仍然「可用」，只是来源退回 environment。
+ * 要断言的是**角色级的那把 Key 没了**，不是「整个部署没有 Key 可用」——
+ * 后者只有在完全没有环境变量兜底时才成立，写成那样会随运行环境的 env 变化而红。
+ */
+assert(
+  clearedChatSettings.chatApiKeySource !== "character",
+  `Clearing the key must drop the character-level source, got "${clearedChatSettings.chatApiKeySource}".`,
+);
 const restoredChatSettings = await request(`/api/characters/${created.id}`, {
   method: "PATCH",
   body: { chatApiKey: "ci-only" },
 });
-assert(restoredChatSettings.chatApiKey === "ci-only", "Re-saving the key after clearing must round-trip.");
+assert(
+  restoredChatSettings.chatApiKey === "ci-only" && restoredChatSettings.chatApiKeySource === "character",
+  `Re-saving the key after clearing must round-trip, got "${restoredChatSettings.chatApiKey}" / "${restoredChatSettings.chatApiKeySource}".`,
+);
 
 // 未登录（伪造会话）拿不到明文：401，且响应体里不能夹带 Key。
 const forgedSessionResponse = await fetch(new URL(`/api/characters/${created.id}`, baseUrl), {
@@ -479,7 +501,7 @@ assert(!forgedSessionBody.includes("ci-only"), "A rejected request must not leak
 
 // 跨站来源即使带合法 cookie 也被来源守卫挡住，不会把带 Key 的 DTO 送出去。
 const crossSiteDetail = await fetch(new URL(`/api/characters/${created.id}`, baseUrl), {
-  headers: { cookie: sessionCookie, "sec-fetch-site": "cross-site" },
+  headers: { cookie: adminCookie, "sec-fetch-site": "cross-site" },
 });
 assert(crossSiteDetail.status === 403, `Cross-site character reads must be rejected, got ${crossSiteDetail.status}.`);
 await crossSiteDetail.arrayBuffer();
