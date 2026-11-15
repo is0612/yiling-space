@@ -377,24 +377,60 @@ assert(isNearDuplicateEvent(
   { title: "提交a报告", participants: [] },
 ), "完整标题规范化相同才判重");
 
-type FakeEvent = { id: string; memoryScopeId: string; dedupeKey: string; dayKey: string; conversationId: string | null; title: string; participants: string[] };
-const stored: FakeEvent[] = [];
-const fakeTx = {
-  memoryEvent: {
-    findFirst: async ({ where }: { where: { memoryScopeId: string; dedupeKey: string } }) =>
-      stored.find((row) => row.memoryScopeId === where.memoryScopeId && row.dedupeKey === where.dedupeKey) ?? null,
-    findMany: async ({ where }: { where: { memoryScopeId: string; dayKey: string } }) =>
-      stored.filter((row) => row.memoryScopeId === where.memoryScopeId && row.dayKey === where.dayKey),
-    create: async ({ data }: { data: Omit<FakeEvent, "id"> }) => {
-      const row = { ...data, id: `fake-${stored.length}` };
-      stored.push(row);
-      return { id: row.id };
+type FakeEvent = {
+  id: string; memoryScopeId: string; dedupeKey: string; dayKey: string;
+  conversationId: string | null; title: string; participants: string[]; occurredAt: Date;
+};
+
+/**
+ * `applyMemoryEvents` 的事务替身。只认它真正发出的两种忆泡查询：
+ *
+ * 1. 判重：`memoryScopeId + dedupeKey`；
+ * 2. 社交经历关联：建完忆泡后按 `id + memoryScope.characterId` 回查来源，
+ *    两个条件都对得上才返回 `occurredAt`，否则返回 null —— 让生产代码按
+ *    「社交经历来源不存在或不属于当前角色」失败，而不是被一个万能 mock 蒙过去。
+ *
+ * 其余形状一律返回 null：新加的查询如果没人适配，测试要当场炸，不能静默放行。
+ */
+function createFakeTx(options: { failOn?: "create" | "audit"; failure?: Error } = {}) {
+  const events: FakeEvent[] = [];
+  /** 范围 → 归属角色。真实库里由 `memory_scopes.characterId` 提供。 */
+  const scopeOwners = new Map<string, string>();
+  const tx = {
+    memoryEvent: {
+      findFirst: async ({ where }: { where: {
+        memoryScopeId?: string; dedupeKey?: string;
+        id?: string; memoryScope?: { is?: { characterId?: string } };
+      } }) => {
+        if (where.memoryScopeId !== undefined && where.dedupeKey !== undefined) {
+          return events.find((row) => row.memoryScopeId === where.memoryScopeId && row.dedupeKey === where.dedupeKey) ?? null;
+        }
+        const ownerId = where.memoryScope?.is?.characterId;
+        if (typeof where.id === "string" && typeof ownerId === "string") {
+          const row = events.find((item) => item.id === where.id && scopeOwners.get(item.memoryScopeId) === ownerId);
+          return row ? { occurredAt: row.occurredAt } : null;
+        }
+        return null;
+      },
+      findMany: async ({ where }: { where: { memoryScopeId: string; dayKey: string } }) =>
+        events.filter((row) => row.memoryScopeId === where.memoryScopeId && row.dayKey === where.dayKey),
+      create: async ({ data }: { data: Omit<FakeEvent, "id"> }) => {
+        if (options.failOn === "create") throw options.failure;
+        const row = { ...data, id: `fake-${events.length}` };
+        events.push(row);
+        return { id: row.id };
+      },
     },
-  },
-  auditLog: { create: async () => ({}) },
-  $executeRaw: async () => 1,
-} as unknown as MemoryApplyTx;
+    auditLog: { create: async () => { if (options.failOn === "audit") throw options.failure; return {}; } },
+    $executeRaw: async () => 1,
+  } as unknown as MemoryApplyTx;
+  return { tx, events, scopeOwners };
+}
+
+const { tx: fakeTx, events: stored, scopeOwners } = createFakeTx();
 const applyContext = { memoryScopeId: "scope", characterId: "00000000-0000-4000-8000-000000000001", snapshotId: null, timeZone: TZ, state: "FINAL" as const };
+// 关联查询要能查到「这个范围属于这个角色」，否则生产代码会按归属校验直接失败。
+scopeOwners.set(applyContext.memoryScopeId, applyContext.characterId);
 const applyDraft = async (at: Date, conversationId: string, title = collisionTitle) => {
   const message = { id: `message-${conversationId}`, occurredAt: at, conversationId };
   return applyMemoryEvents(fakeTx, applyContext, [{
@@ -414,6 +450,22 @@ stored.splice(1);
 assert.equal((await applyDraft(nextLocalDay, "group-a")).applied.length, 1, "旧 UTC 键碰撞不吞次日本地日");
 assert.equal((await applyDraft(firstLocalDay, "group-b")).applied.length, 1, "旧 key 不跨会话吞同标题");
 
+// 归属不符必须走生产代码的失败分支：替身若只按 id 命中就放行，角色校验等于没有。
+const foreignMessage = { id: "message-foreign-owner", occurredAt: firstLocalDay, conversationId: "group-foreign" };
+await assert.rejects(
+  applyMemoryEvents(
+    fakeTx,
+    { ...applyContext, characterId: "00000000-0000-4000-8000-000000000002" },
+    [{
+      occurredAt: firstLocalDay.toISOString(), precision: "exact", title: "归属不符的忆泡", detail: "归属不符的忆泡",
+      keywords: [], participants: [], confidence: 0.9, evidenceMessageIds: [foreignMessage.id],
+    }],
+    new Map([[foreignMessage.id, foreignMessage]]),
+  ),
+  /社交经历来源不存在或不属于当前角色/,
+  "忆泡所属角色对不上时，社交经历关联必须失败，不能静默跳过",
+);
+
 // 存储失败必须让调用方失败，不能当作判重跳过并推进抽取游标。
 const failingMessage = { id: "storage-evidence", occurredAt: firstLocalDay, conversationId: "storage-test" };
 const failingDraft = {
@@ -423,17 +475,10 @@ const failingDraft = {
 };
 for (const stage of ["event", "audit"] as const) {
   const failure = new Error(`${stage} storage unavailable`);
-  const tx = {
-    memoryEvent: {
-      findFirst: async () => null,
-      findMany: async () => [],
-      create: async () => {
-        if (stage === "event") throw failure;
-        return { id: "created-before-audit-failure" };
-      },
-    },
-    auditLog: { create: async () => { throw failure; } },
-  } as unknown as MemoryApplyTx;
+  // 「审计写失败」这一支必须先走过社交经历关联，所以替身也要能查到刚建的忆泡；
+  // 只有 create 那支才在写入时炸。
+  const { tx, scopeOwners: owners } = createFakeTx({ failOn: stage === "event" ? "create" : "audit", failure });
+  owners.set(applyContext.memoryScopeId, applyContext.characterId);
   await assert.rejects(
     applyMemoryEvents(tx, applyContext, [failingDraft], new Map([[failingMessage.id, failingMessage]])),
     (error: unknown) => error === failure,
