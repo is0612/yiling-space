@@ -7,12 +7,15 @@
  * 看完再点回去。Element 自带的 show-password 也能做这件事，抽出来的理由只是
  * 六个输入框要共用同一套显隐、图标和可访问属性，别各写一遍。
  *
- * 这里只管「刚输入的内容」露不露。库里那把 Key 从不回传网页，所以留空永远是「保持原样」，
- * 占位符负责把这件事说清楚。
+ * 关于回显（2026-11-12 起）：Key 现在以明文存在角色配置里，登录后的管理员会看到
+ * 库里那把；所以「输入框空着」不再等于「保持原样」，删除必须由调用方显式确认。
+ * 这就是 `clearable` 的用途：只有调用方说能清，才显示「清除」按钮并发出 `clear`，
+ * 由调用方把它翻译成保存时的 `clear*ApiKey`。
  */
 import { Hide, View } from "@element-plus/icons-vue";
 
 const key = defineModel<string>({ required: true });
+const emit = defineEmits<{ (event: "clear"): void }>();
 
 /** 每个输入框各管各的：只揭开会正在看的那一个，不该把整页六把 Key 一起露出来。 */
 const visible = ref(false);
@@ -22,7 +25,9 @@ withDefaults(defineProps<{
   placeholder?: string;
   ariaLabel?: string;
   maxlength?: number | string;
-}>(), { placeholder: "", ariaLabel: "", maxlength: 8192 });
+  /** 是否显示「清除」：真删 Key 走保存时的 clear 字段，所以要点一下再保存。 */
+  clearable?: boolean;
+}>(), { placeholder: "", ariaLabel: "", maxlength: 8192, clearable: false });
 </script>
 
 <template>
@@ -38,6 +43,16 @@ withDefaults(defineProps<{
   >
     <template #suffix>
       <button
+        v-if="clearable && key"
+        type="button"
+        class="key-clear"
+        aria-label="清除已保存的 Key"
+        title="清除已保存的 Key（保存后生效）"
+        @click="emit('clear')"
+      >
+        清除
+      </button>
+      <button
         type="button"
         class="key-eye"
         :aria-label="visible ? '隐藏 Key' : '显示 Key'"
@@ -51,6 +66,19 @@ withDefaults(defineProps<{
 </template>
 
 <style scoped>
+.key-clear {
+  margin-right: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  padding: 0 4px;
+  color: var(--rose, #c45656);
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.key-clear:hover { text-decoration: underline; }
+.key-clear:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .key-eye {
   display: grid;
   width: 22px;

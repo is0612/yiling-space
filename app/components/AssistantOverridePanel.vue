@@ -31,12 +31,18 @@ const props = withDefaults(defineProps<{
   requestSave?: () => Promise<boolean>;
   /** 是否显示温度 / Token 参数 */
   showNumeric?: boolean;
+  /**
+   * 是否允许清除已保存的 Key：助手面板自己不知道保存语义（哪个 clear 字段），
+   * 所以只透传「用户点了清除」这件事，由父组件记进 pendingKeyClears。
+   */
+  clearable?: boolean;
   disabled?: boolean;
 }>(), {
   modelsUrl: "",
   testUrl: "",
   requestSave: undefined,
   showNumeric: true,
+  clearable: false,
   disabled: false,
 });
 
@@ -47,7 +53,10 @@ const temperature = defineModel<number>("temperature", { default: 0.3 });
 const maxInputTokens = defineModel<number>("maxInputTokens", { default: 8192 });
 const maxOutputTokens = defineModel<number>("maxOutputTokens", { default: 2048 });
 
-const emit = defineEmits<{ (event: "busy-change", busy: boolean): void }>();
+const emit = defineEmits<{
+  (event: "busy-change", busy: boolean): void;
+  (event: "clear"): void;
+}>();
 
 const parametersOpen = ref(false);
 const fetching = ref(false);
@@ -218,6 +227,8 @@ async function testConnection() {
             ? '留空 = 使用对话模型的 Key'
             : '填写这个助手专用的 API Key'"
           :disabled="disabled"
+          :clearable="clearable"
+          @clear="emit('clear')"
         />
         <p
           v-if="apiBaseUrl.trim() && !apiKey.trim()"

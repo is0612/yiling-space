@@ -164,6 +164,35 @@ const draftSocialAssistantMaxOutputTokens = ref<number>(MODEL_PURPOSE_DEFAULTS.s
 const draftSocialAssistantApiBaseUrl = ref("");
 const draftSocialAssistantApiKey = ref("");
 
+/**
+ * 「保存时删除已保存的 Key」。
+ *
+ * Key 现在是明文回显的：输入框里放的就是库里那把。所以「空着」不能当成删除 ——
+ * 空的含义是「不动」，把两者混在一起，正是以前存量 Key 静默消失的那种事故。
+ * 用户点一下输入框里的「清除」，这里记一笔；保存时只有记过账、且输入框仍然是空的，
+ * 才发 clear*ApiKey（勾了又手打了新值，以新值为准）。
+ */
+const keyDrafts = {
+  chat: draftChatApiKey,
+  voice: draftVoiceApiKey,
+  asr: draftAsrApiKey,
+  vision: draftVisionApiKey,
+  memory: draftMemoryAssistantApiKey,
+  context: draftContextAssistantApiKey,
+  knowledge: draftKnowledgeAssistantApiKey,
+  social: draftSocialAssistantApiKey,
+};
+type KeyField = keyof typeof keyDrafts;
+const pendingKeyClears = ref<ReadonlySet<KeyField>>(new Set());
+/** 点了「清除」：先清空输入框，真正的删除等保存时发 clear 字段。 */
+function markKeyForClear(field: KeyField) {
+  keyDrafts[field].value = "";
+  pendingKeyClears.value = new Set([...pendingKeyClears.value, field]);
+}
+function sendsKeyClear(field: KeyField) {
+  return pendingKeyClears.value.has(field) && !keyDrafts[field].value.trim();
+}
+
 /** 四个分节各自可能正在「获取模型 / 测试」，保存按钮要一起禁用。 */
 const busyPanelKeys = ref<Set<string>>(new Set());
 function setPanelBusy(key: string, busy: boolean) {
@@ -756,6 +785,8 @@ async function loadCharacter() {
 
     fetchedModels.value = [];
     savedSignature.value = draftSignature.value;
+    // 新角色的草稿来自服务端回显，上一个角色点过的「清除」不能带过来。
+    pendingKeyClears.value = new Set();
     lastSavedAt.value = data.updatedAt ? new Date(data.updatedAt) : null;
     await loadUsage();
   } catch {
@@ -809,9 +840,9 @@ async function save(silent = false): Promise<boolean> {
         chatTemperature: draftChatTemperature.value,
         chatMaxTokens: draftChatMaxTokens.value,
         chatApiBaseUrl: draftChatApiBaseUrl.value.trim(),
-        // 不再发 clearApiKey：清除入口已下线（2026-11-07），已有 Key 只能被新的覆盖。
-        // 服务端仍接受这个字段（脚本和迁移在用），页面不传就是「不动」。
+        // 输入框里是回显的明文 Key：空着 = 不动；点了「清除」才发 clearApiKey。
         chatApiKey: draftChatApiKey.value,
+        ...(sendsKeyClear("chat") ? { clearApiKey: true } : {}),
         dailyTokenLimit: draftDailyTokenLimit.value,
         memoryTokenBudget: draftMemoryTokenBudget.value,
         snapshotTokenBudget: draftSnapshotTokenBudget.value,
@@ -830,12 +861,15 @@ async function save(silent = false): Promise<boolean> {
         asrProvider: draftAsrProvider.value === "auto" ? "" : draftAsrProvider.value,
         asrApiBaseUrl: draftAsrApiBaseUrl.value.trim(),
         ...(draftAsrApiKey.value.trim() ? { asrApiKey: draftAsrApiKey.value.trim() } : {}),
+        ...(sendsKeyClear("asr") ? { clearAsrApiKey: true } : {}),
         ...(syncAsrFromVoice.value ? { syncAsrFromVoice: true } : {}),
         ...(draftVoiceApiKey.value.trim() ? { voiceApiKey: draftVoiceApiKey.value.trim() } : {}),
+        ...(sendsKeyClear("voice") ? { clearVoiceApiKey: true } : {}),
         // 图片模型
         visionModel: draftVisionModel.value.trim(),
         visionApiBaseUrl: draftVisionApiBaseUrl.value.trim(),
         ...(draftVisionApiKey.value.trim() ? { visionApiKey: draftVisionApiKey.value.trim() } : {}),
+        ...(sendsKeyClear("vision") ? { clearVisionApiKey: true } : {}),
         // 四个助手：空字符串就是「跟随对话模型」，所以原样发过去，不做 fallback。
         memoryAssistantEnabled: draftMemoryAssistantEnabled.value,
         memoryAssistantModel: draftMemoryAssistantModel.value.trim(),
@@ -844,6 +878,7 @@ async function save(silent = false): Promise<boolean> {
         memoryAssistantMaxOutputTokens: draftMemoryAssistantMaxOutputTokens.value,
         memoryAssistantApiBaseUrl: draftMemoryAssistantApiBaseUrl.value.trim(),
         memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim(),
+        ...(sendsKeyClear("memory") ? { clearMemoryAssistantApiKey: true } : {}),
 
         contextAssistantEnabled: draftContextAssistantEnabled.value,
         contextAssistantModel: draftContextAssistantModel.value.trim(),
@@ -852,6 +887,7 @@ async function save(silent = false): Promise<boolean> {
         contextAssistantMaxOutputTokens: draftContextAssistantMaxOutputTokens.value,
         contextAssistantApiBaseUrl: draftContextAssistantApiBaseUrl.value.trim(),
         contextAssistantApiKey: draftContextAssistantApiKey.value.trim(),
+        ...(sendsKeyClear("context") ? { clearContextAssistantApiKey: true } : {}),
 
         knowledgeAssistantEnabled: draftKnowledgeAssistantEnabled.value,
         knowledgeAutoCollectEnabled: draftKnowledgeAutoCollectEnabled.value,
@@ -861,6 +897,7 @@ async function save(silent = false): Promise<boolean> {
         knowledgeAssistantMaxOutputTokens: draftKnowledgeAssistantMaxOutputTokens.value,
         knowledgeAssistantApiBaseUrl: draftKnowledgeAssistantApiBaseUrl.value.trim(),
         knowledgeAssistantApiKey: draftKnowledgeAssistantApiKey.value.trim(),
+        ...(sendsKeyClear("knowledge") ? { clearKnowledgeAssistantApiKey: true } : {}),
 
         socialRelationshipAssessmentAssistantEnabled: draftSocialAssistantEnabled.value,
         socialRelationshipAssessmentAssistantModel: draftSocialAssistantModel.value.trim(),
@@ -869,6 +906,7 @@ async function save(silent = false): Promise<boolean> {
         socialRelationshipAssessmentAssistantMaxOutputTokens: draftSocialAssistantMaxOutputTokens.value,
         socialRelationshipAssessmentAssistantApiBaseUrl: draftSocialAssistantApiBaseUrl.value.trim(),
         socialRelationshipAssessmentAssistantApiKey: draftSocialAssistantApiKey.value.trim(),
+        ...(sendsKeyClear("social") ? { clearSocialRelationshipAssessmentAssistantApiKey: true } : {}),
       },
     });
     // 请求期间用户改过的草稿不能被回显吞掉，也不能被算成「已保存」。
@@ -886,6 +924,8 @@ async function save(silent = false): Promise<boolean> {
     }
     // 没有并发编辑时，回显后的当前状态就是「已保存」；有并发编辑时，已保存的只有提交的那份。
     savedSignature.value = editedDuringFlight ? submittedSignature : buildDraftSignature();
+    // 提交的 clear 字段已经落库：账本必须翻页，否则「之后手动清空输入框」会被误判成又一次清除。
+    pendingKeyClears.value = new Set();
     lastSavedAt.value = new Date();
     if (!silent) modelMessage.success("模型设置已保存。");
     await loadUsage();
@@ -1157,6 +1197,8 @@ watch(id, () => void loadCharacter());
                   v-model="draftChatApiKey"
                   aria-label="API Key"
                   :placeholder="apiKeyPlaceholder"
+                  clearable
+                  @clear="markKeyForClear('chat')"
                 />
               </div>
 
@@ -1434,7 +1476,9 @@ watch(id, () => void loadCharacter());
             :test-url="`/api/characters/${encodeURIComponent(id)}/chat/test-memory-assistant-connection`"
             :request-save="requestSave"
             :disabled="saving"
+            clearable
             @busy-change="setPanelBusy('memory', $event)"
+            @clear="markKeyForClear('memory')"
           />
 
           <AssistantOverridePanel
@@ -1453,7 +1497,9 @@ watch(id, () => void loadCharacter());
             :test-url="`/api/characters/${encodeURIComponent(id)}/chat/test-context-assistant-connection`"
             :request-save="requestSave"
             :disabled="saving"
+            clearable
             @busy-change="setPanelBusy('context', $event)"
+            @clear="markKeyForClear('context')"
           />
 
           <AssistantOverridePanel
@@ -1471,7 +1517,9 @@ watch(id, () => void loadCharacter());
             :models-url="`/api/characters/${encodeURIComponent(id)}/growth/knowledge/models`"
             :request-save="requestSave"
             :disabled="saving"
+            clearable
             @busy-change="setPanelBusy('knowledge', $event)"
+            @clear="markKeyForClear('knowledge')"
           >
             <div class="field">
               <div class="field-head">
@@ -1503,7 +1551,9 @@ watch(id, () => void loadCharacter());
             :test-url="`/api/characters/${encodeURIComponent(id)}/growth/social/assessment-test`"
             :request-save="requestSave"
             :disabled="saving"
+            clearable
             @busy-change="setPanelBusy('social', $event)"
+            @clear="markKeyForClear('social')"
           />
         </div>
 
@@ -1607,6 +1657,8 @@ watch(id, () => void loadCharacter());
                   v-model="draftVoiceApiKey"
                   aria-label="语音 API Key"
                   :placeholder="voiceKeyPlaceholder"
+                  clearable
+                  @clear="markKeyForClear('voice')"
                 />
               </div>
 
@@ -1826,6 +1878,8 @@ watch(id, () => void loadCharacter());
                   v-model="draftAsrApiKey"
                   aria-label="识别 API Key"
                   :placeholder="asrKeyConfigured ? API_KEY_SAVED_PLACEHOLDER : API_KEY_EMPTY_PLACEHOLDER"
+                  clearable
+                  @clear="markKeyForClear('asr')"
                 />
               </div>
 
@@ -1926,6 +1980,8 @@ watch(id, () => void loadCharacter());
                   v-model="draftVisionApiKey"
                   aria-label="图片 API Key"
                   :placeholder="visionKeyPlaceholder"
+                  clearable
+                  @clear="markKeyForClear('vision')"
                 />
               </div>
 

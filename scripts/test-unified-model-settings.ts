@@ -59,11 +59,17 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   const draftNames = parsed.statements.filter(ts.isVariableStatement).flatMap(statement => statement.declarationList.declarations).flatMap(declaration => ts.isIdentifier(declaration.name) && declaration.name.text.startsWith("draft") && declaration.name.text !== "draftSignature" ? [declaration.name.text] : []);
   const context: Record<string, unknown> = Object.fromEntries(draftNames.map(name => [name, { value: "" }]));
   Object.assign(context, { id: { value: "role-a" }, saving: { value: false }, character: { value: {} }, savedSignature: { value: "" }, lastSavedAt: { value: null }, syncAsrFromVoice: { value: false }, modelMessage: { success: () => {}, error: () => {}, warning: () => {} }, readError: () => "error", loadUsage: async () => {}, disposed: false, roleVersion: 0 });
+  // 「清除 Key」记账本和字段映射：save 里的 sendsKeyClear 会读它们，缺了就是未定义标识符。
+  context.pendingKeyClears = { value: new Set<string>() };
+  context.keyDrafts = Object.fromEntries(Object.entries({
+    chat: "draftChatApiKey", voice: "draftVoiceApiKey", asr: "draftAsrApiKey", vision: "draftVisionApiKey",
+    memory: "draftMemoryAssistantApiKey", context: "draftContextAssistantApiKey", knowledge: "draftKnowledgeAssistantApiKey", social: "draftSocialAssistantApiKey",
+  }).map(([field, draftName]) => [field, context[draftName]]));
   let resolveSave!: (value: unknown) => void;
   context.modelRequest = () => new Promise(resolve => { resolveSave = resolve; });
   // `save` 落库后会用服务端回显回填 Key 输入框，还会按代际判断响应是否过期；
   // 这些函数都得进沙箱，否则在 vm 里是未定义标识符，save 会一路掉进 catch 返回 false。
-  const actual = new Script(ts.transpileModule(`(function(){${functionCode(main, ["buildDraftSignature", "syncKeysFromCharacter", "requestGeneration", "isStaleResponse", "save"])};return {save,buildDraftSignature};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(createContext(context)) as { save(silent?: boolean): Promise<boolean>; buildDraftSignature(clear?: boolean): string };
+  const actual = new Script(ts.transpileModule(`(function(){${functionCode(main, ["buildDraftSignature", "syncKeysFromCharacter", "requestGeneration", "isStaleResponse", "save", "sendsKeyClear", "markKeyForClear"])};return {save,buildDraftSignature,markKeyForClear,sendsKeyClear};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(createContext(context)) as { save(silent?: boolean): Promise<boolean>; buildDraftSignature(clear?: boolean): string; markKeyForClear(field: string): void; sendsKeyClear(field: string): boolean };
   (context.draftChatModel as { value: string }).value = "submitted-model";
   (context.draftChatApiKey as { value: string }).value = "submitted-key";
   const pending = actual.save(true);
@@ -78,6 +84,51 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   assert.equal(await second, true);
   assert.equal((context.draftChatApiKey as { value: string }).value, "");
   assert.equal((context.savedSignature as { value: string }).value, actual.buildDraftSignature());
+}
+{
+  // 「清除 Key」的语义：空输入框 = 「不动」；只有点过「清除」且保存时仍为空，才发 clear* 字段。
+  // 勾了清除又重新手打了新值，以新值为准，不发 clear —— 账本必须等保存成功后才翻页。
+  const parsed = scriptOf(main);
+  const draftNames = parsed.statements.filter(ts.isVariableStatement).flatMap(statement => statement.declarationList.declarations).flatMap(declaration => ts.isIdentifier(declaration.name) && declaration.name.text.startsWith("draft") && declaration.name.text !== "draftSignature" ? [declaration.name.text] : []);
+  const context: Record<string, unknown> = Object.fromEntries(draftNames.map(name => [name, { value: "" }]));
+  Object.assign(context, { id: { value: "role-a" }, saving: { value: false }, character: { value: {} }, savedSignature: { value: "" }, lastSavedAt: { value: null }, syncAsrFromVoice: { value: false }, modelMessage: { success: () => {}, error: () => {}, warning: () => {} }, readError: () => "error", loadUsage: async () => {}, disposed: false, roleVersion: 0 });
+  context.pendingKeyClears = { value: new Set<string>() };
+  context.keyDrafts = Object.fromEntries(Object.entries({
+    chat: "draftChatApiKey", voice: "draftVoiceApiKey", asr: "draftAsrApiKey", vision: "draftVisionApiKey",
+    memory: "draftMemoryAssistantApiKey", context: "draftContextAssistantApiKey", knowledge: "draftKnowledgeAssistantApiKey", social: "draftSocialAssistantApiKey",
+  }).map(([field, draftName]) => [field, context[draftName]]));
+  const bodies: Record<string, unknown>[] = [];
+  let resolveSave!: (value: unknown) => void;
+  context.modelRequest = (_url: string, init?: { body?: Record<string, unknown> }) => new Promise(resolve => { resolveSave = resolve; bodies.push(init?.body ?? {}); });
+  const actual = new Script(ts.transpileModule(`(function(){${functionCode(main, ["buildDraftSignature", "syncKeysFromCharacter", "requestGeneration", "isStaleResponse", "save", "sendsKeyClear", "markKeyForClear"])};return {save,markKeyForClear,sendsKeyClear};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(createContext(context)) as { save(silent?: boolean): Promise<boolean>; markKeyForClear(field: string): void; sendsKeyClear(field: string): boolean };
+
+  // 1) 只是清空输入框（没点「清除」）：保存 body 绝不能带 clear 字段 —— 否则存量 Key 静默消失。
+  (context.draftChatApiKey as { value: string }).value = "";
+  (context.draftVoiceApiKey as { value: string }).value = "";
+  const passiveSave = actual.save(true);
+  resolveSave({});
+  await passiveSave;
+  assert.equal("clearApiKey" in bodies[0], false, "空输入框只能代表「不动」，不允许静默清库");
+  assert.equal("clearVoiceApiKey" in bodies[0], false);
+
+  // 2) 点了「清除」：输入框清空、账本记账，保存 body 发对应 clear 字段。
+  actual.markKeyForClear("chat");
+  assert.equal((context.draftChatApiKey as { value: string }).value, "", "点「清除」先把输入框清空");
+  assert.equal(actual.sendsKeyClear("chat"), true);
+  const clearingSave = actual.save(true);
+  resolveSave({});
+  await clearingSave;
+  assert.equal((bodies[1] as { clearApiKey?: boolean }).clearApiKey, true, "点过「清除」且输入框为空，保存时发 clearApiKey");
+  assert.equal(actual.sendsKeyClear("chat"), false, "保存成功后账本翻页，后续手动清空不会被误判成清除");
+
+  // 3) 点了「清除」又重新手打了新值：以新值为准，不发 clear。
+  actual.markKeyForClear("voice");
+  (context.draftVoiceApiKey as { value: string }).value = "fresh-key";
+  const retypedSave = actual.save(true);
+  resolveSave({});
+  await retypedSave;
+  assert.equal("clearVoiceApiKey" in bodies[2], false, "清除后重新输入新 Key，以新值为准");
+  assert.equal((bodies[2] as { voiceApiKey?: string }).voiceApiKey, "fresh-key");
 }
 assert(page.includes("调用日志")); assert(page.includes("<ModelCallLogsDialog"));
 console.log("Unified model settings: seven capabilities, canonical role/section routing, per-role draft cache, original independent credentials and request lifecycle guards passed (script-level, no DOM).");
