@@ -238,11 +238,9 @@ async function toggleCharacterStatus(character: Character) {
  * 反而容易把没打算改的温度、上限一起带上去。
  */
 const thinkingSavingId = ref("");
-const memoryAssistantSavingId = ref("");
-const contextAssistantSavingId = ref("");
 
 async function toggleThinking(character: Character | null, next: boolean) {
-  if (!character || thinkingSavingId.value || memoryAssistantSavingId.value || contextAssistantSavingId.value) return;
+  if (!character || thinkingSavingId.value) return;
   thinkingSavingId.value = character.id;
   try {
     const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
@@ -255,49 +253,6 @@ async function toggleThinking(character: Character | null, next: boolean) {
     ElMessage.error(readError(error, "切换深度思考失败，请稍后重试。"));
   } finally {
     thinkingSavingId.value = "";
-  }
-}
-
-
-async function toggleMemoryAssistant(character: Character | null, next: boolean) {
-  if (!character || memoryAssistantSavingId.value || thinkingSavingId.value || contextAssistantSavingId.value) return;
-  if (next && !character.memoryAssistantConfigured) {
-    ElMessage.warning("请先到模型设置中填写记忆助手模型名称和独立 API Key。");
-    return;
-  }
-  memoryAssistantSavingId.value = character.id;
-  try {
-    const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
-      method: "PATCH",
-      body: { memoryAssistantEnabled: next },
-    });
-    replaceCharacter(characters.value, updated);
-    ElMessage.success(next ? "已为这个角色开启记忆助手。" : "已关闭这个角色的记忆助手。");
-  } catch (error) {
-    ElMessage.error(readError(error, "切换记忆助手失败，请稍后重试。"));
-  } finally {
-    memoryAssistantSavingId.value = "";
-  }
-}
-
-async function toggleContextAssistant(character: Character | null, next: boolean) {
-  if (!character || contextAssistantSavingId.value || memoryAssistantSavingId.value || thinkingSavingId.value) return;
-  if (next && !character.contextAssistantConfigured) {
-    ElMessage.warning("请先到模型设置中填写语境助手模型名称和独立 API Key。");
-    return;
-  }
-  contextAssistantSavingId.value = character.id;
-  try {
-    const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
-      method: "PATCH",
-      body: { contextAssistantEnabled: next },
-    });
-    replaceCharacter(characters.value, updated);
-    ElMessage.success(next ? "已为这个角色开启语境助手。" : "已关闭这个角色的语境助手。");
-  } catch (error) {
-    ElMessage.error(readError(error, "切换语境助手失败，请稍后重试。"));
-  } finally {
-    contextAssistantSavingId.value = "";
   }
 }
 
@@ -665,29 +620,6 @@ function runCharacterCommand(command: string) {
                 还没有写人设。人设是「她是谁」，对话、QQ 和 B站 被动回复都用同一份。
               </p>
             </div>
-
-            <div class="d-field">
-              <div class="d-field-h">
-                <el-icon><ChatLineSquare /></el-icon>
-                <h3>对话示例</h3>
-                <span
-                  v-if="selected.examples"
-                  class="d-count"
-                >{{ selected.examples.length }} 字</span>
-              </div>
-              <p
-                v-if="selected.examples"
-                class="d-prose"
-              >
-                {{ selected.examples }}
-              </p>
-              <p
-                v-else
-                class="d-empty"
-              >
-                还没有写对话示例。示例只对齐语气，给两三句就能明显稳住口吻。
-              </p>
-            </div>
           </div>
 
           <aside class="detail-side">
@@ -730,108 +662,6 @@ function runCharacterCommand(command: string) {
 
             <div class="d-group">
               <div class="d-group-h">
-                语境助手
-              </div>
-              <dl class="d-rows">
-                <div class="d-row">
-                  <dt>
-                    <el-icon><MagicStick /></el-icon>启用语境助手
-                  </dt>
-                  <dd class="d-switch">
-                    <el-switch
-                      :model-value="selected.contextAssistantEnabled === true"
-                      :loading="contextAssistantSavingId === selected.id"
-                      :disabled="contextAssistantSavingId !== '' || memoryAssistantSavingId !== '' || thinkingSavingId !== '' || (!selected.contextAssistantConfigured && selected.contextAssistantEnabled !== true)"
-                      aria-label="启用语境助手"
-                      size="small"
-                      @change="(value) => toggleContextAssistant(selected, value === true)"
-                    />
-                  </dd>
-                </div>
-                <div class="d-row">
-                  <dt>
-                    <el-icon><Cpu /></el-icon>专用模型
-                  </dt>
-                  <dd :class="{ 'is-missing': !selected.contextAssistantConfigured }">
-                    {{ selected.contextAssistantConfigured ? selected.contextAssistantModel : "未配置" }}
-                  </dd>
-                </div>
-                <div class="d-row">
-                  <dt>
-                    <el-icon><Key /></el-icon>独立 API Key
-                  </dt>
-                  <dd :class="{ 'is-missing': !selected.contextAssistantApiKeyConfigured }">
-                    {{ selected.contextAssistantApiKeyConfigured ? "已保存" : "未配置" }}
-                  </dd>
-                </div>
-              </dl>
-              <p class="d-note">
-                帮她理清群聊里的人物、话题与指向，需要时请求已启用的记忆助手查找往事，再由她决定回应或旁听。开启后会增加模型调用；分析失败时沿用原有流程。
-                <template v-if="!selected.contextAssistantConfigured">
-                  请先到模型设置中填写专用模型和独立 API Key。
-                </template>
-              </p>
-              <el-button
-                link
-                type="primary"
-                size="small"
-                @click="navigateTo(modelSettingsPath(selected.id))"
-              >
-                配置语境助手模型
-              </el-button>
-            </div>
-
-            <div class="d-group">
-              <div class="d-group-h">
-                记忆助手
-              </div>
-              <dl class="d-rows">
-                <div class="d-row">
-                  <dt>
-                    <el-icon><MagicStick /></el-icon>启用记忆助手
-                  </dt>
-                  <dd class="d-switch">
-                    <el-switch
-                      :model-value="selected.memoryAssistantEnabled === true"
-                      :loading="memoryAssistantSavingId === selected.id"
-                      :disabled="memoryAssistantSavingId !== '' || thinkingSavingId !== '' || contextAssistantSavingId !== '' || (!selected.memoryAssistantConfigured && selected.memoryAssistantEnabled !== true)"
-                      size="small"
-                      @change="(value) => toggleMemoryAssistant(selected, value === true)"
-                    />
-                  </dd>
-                </div>
-                <div class="d-row">
-                  <dt>
-                    <el-icon><Cpu /></el-icon>专用模型
-                  </dt>
-                  <dd :class="{ 'is-missing': !selected.memoryAssistantConfigured }">
-                    {{ selected.memoryAssistantConfigured ? selected.memoryAssistantModel : "未配置" }}
-                  </dd>
-                </div>
-                <div class="d-row">
-                  <dt>
-                    <el-icon><Key /></el-icon>独立 API Key
-                  </dt>
-                  <dd :class="{ 'is-missing': !selected.memoryAssistantApiKeyConfigured }">
-                    {{ selected.memoryAssistantApiKeyConfigured ? "已保存" : "未配置" }}
-                  </dd>
-                </div>
-              </dl>
-              <p class="d-note">
-                记忆助手只在大肥鱼判断需要回看历史细节时才会额外检索长期记忆、阶段总结、忆泡和当前可访问范围内的原始对话。它只返回来源证据，不替大肥鱼回复，也不会新增、修改或删除记忆；检索失败时仍会按原有上下文正常回复。
-              </p>
-              <el-button
-                link
-                type="primary"
-                size="small"
-                @click="navigateTo(modelSettingsPath(selected.id))"
-              >
-                配置记忆助手模型
-              </el-button>
-            </div>
-
-            <div class="d-group">
-              <div class="d-group-h">
                 模型
               </div>
               <dl class="d-rows">
@@ -857,7 +687,7 @@ function runCharacterCommand(command: string) {
                     <el-switch
                       :model-value="selected.chatThinking === true"
                       :loading="thinkingSavingId === selected.id"
-                      :disabled="thinkingSavingId !== '' || memoryAssistantSavingId !== '' || contextAssistantSavingId !== ''"
+                      :disabled="thinkingSavingId !== ''"
                       size="small"
                       @change="(value) => toggleThinking(selected, value === true)"
                     />
