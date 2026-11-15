@@ -50,7 +50,7 @@ yarn db:migrate:deploy        # 生产用 deploy，不要用 migrate dev
 | --- | --- | --- |
 | `DATABASE_URL` | ✅ | 指向服务器上的 PostgreSQL |
 | `TZ` | ✅ | `Asia/Shanghai`（也建议 `timedatectl set-timezone Asia/Shanghai`） |
-| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 可选 | 只是**兜底**。值班实际用角色自己的模型配置（存在库里、加密） |
+| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 可选 | 只是**兜底**。值班实际用角色自己的模型配置（存在库里，2026-11-12 起明文，页面可查） |
 | `AUTH_SESSION_TTL_HOURS` | Web 需要 | 默认 12 |
 | `YILING_COOKIE_SECURE` | Web 需要 | HTTPS 下设 `true` |
 | `YILING_ALLOW_REGISTRATION` | Web 需要 | 默认 `false`，公网开放前再开 |
@@ -62,7 +62,7 @@ yarn db:migrate:deploy        # 生产用 deploy，不要用 migrate dev
 要迁的：
 
 - **数据库**：`pg_dump` 出来在服务器 `psql` 恢复（或项目自带的备份脚本）；
-- **`.data/credentials-encryption.key`**：⚠️ 不拷这个，库里存的角色 API Key 解不开，得在网页重新填；
+- **`.data/credentials-encryption.key`**：渠道凭据（B站登录态、OneBot Token）的加解密密钥。不拷的话这些凭据解不开，要在渠道页重新登录/重填；角色模型 Key 2026-11-12 起明文存库，跟着数据库走，不受这个文件影响；
 - 判重（95 条）、报告、札记、记忆**都在库里**，不用搬文件。
 
 **不要迁** `%APPDATA%\bili-cli\credential.json`（Windows 路径，跨平台也别带）。登录态在服务器上重新扫，见下一节。
@@ -154,7 +154,7 @@ sudo journalctl -u bili-duty -f
 
 - **日志**：`journalctl -u bili-duty -f`，一行一个 JSON；按 `event` 过滤（`bili-duty-start` / `-done` / `-error`）。
 - **重启**：`systemctl restart bili-duty`，状态从数据库重建，重启不会重复刷。
-- **备份**：数据库 + `.data/credentials-encryption.key` 一起备；凭证在服务器本地，按机器各自扫码。
+- **备份**：数据库 + `.data/credentials-encryption.key` 一起备（后者管渠道凭据）；凭证在服务器本地，按机器各自扫码。
 - **监控**：`bili-duty-error` 连续出现、`/api/health`（Web）、任务队列失败数（`/tasks`）。
 
 ## 9. 容易踩的坑
@@ -164,7 +164,7 @@ sudo journalctl -u bili-duty -f
 | 窗口到了却不跑 | 服务器时区不是 Asia/Shanghai；或 `peakValley=false`；或今日额度已满 |
 | 值班「开着」却几天一轮都没跑 | 三层开关缺一层：`perDay>0`（配额）、`peakValley=true`（自动调度）、**适配器进程在跑**。第三层以前看不出来，现在 `/bili` 顶部会直接说「值班适配器没在跑」，并给出一键启动。`peakValley=false` 时页面会说「峰谷时段自动刷关着」—— 那种情况只有手动点「现在跑一轮」才会跑 |
 | `Cannot find module 'tsx'` | 装了 `--production`，把 devDependencies 装回来 |
-| 模型调用报未配置 Key | `.data/credentials-encryption.key` 没迁 → 网页重填角色 Key |
+| 模型调用报未配置 Key | 先看网页「模型设置」里 Key 在不在（明文存库，跟着数据库走）；渠道凭据报错才是 `.data/credentials-encryption.key` 没迁 |
 | `risk_control` / `captcha_required` | 立刻停手，换网络环境，**不要换方式绕**；海外 IP 尤其容易 |
 | 两侧同时私信/重复挑 | 旧机器或第二个实例还在跑，只留一个 |
 | 中文路径下 TLS 报错 | 仅 Windows/libcurl 的问题；Linux 服务器一般没有 |

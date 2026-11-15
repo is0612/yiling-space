@@ -104,7 +104,7 @@ PostgreSQL 的运行数据存放在 Docker named volume `yiling_postgres_data`�
 
 如果上传图片或其他文件存放在本地目录，还必须单独备份这些文件。仅备份 PostgreSQL 不会自动包含文件系统中的图片或附件。角色的表情包就属于这一类：清单在 `character_stickers` 表，图片本体在 `.data/stickers/<角色 id>/`，迁移时两边都要搬；只搬库的话页面会显示“图片文件不在本机”。
 
-另外，网页中保存的角色 API Key 使用本机生成的加密密钥 `.data/credentials-encryption.key` 加密。备份/迁移包含 API Key 的数据库时，必须将该文件安全地一并备份并恢复到新电脑项目根目录的 `.data/` 下；如果丢失，原有 API Key 无法解密，需要在角色的“模型设置 → 模型参数”中重新录入。该文件已被 Git 忽略，不能提交到仓库。
+另外有两类凭据要知道分别在哪。**角色 / 助手的 API Key 2026-11-12 起明文保存在数据库里**（`characters.model_config`），所以只备份数据库就够，搬到新机后在网页「模型设置」里能直接看到；登录管理员可以查看、修改、清除，未登录读不到。**渠道凭据**（OneBot WS/HTTP Token、B站账号）仍用本机密钥 `.data/credentials-encryption.key` 加密，备份/迁移时必须把这个文件一并恢复到新电脑项目根目录的 `.data/` 下，否则渠道凭据解不开、要在渠道页重新登录。该文件已被 Git 忽略，不能提交到仓库。
 
 ## 3.1 只搬角色：角色卡
 
@@ -275,7 +275,7 @@ docker exec yiling-hub-db dropdb --username yiling_hub yiling_hub_drill
 
 ## 8. 故障处理
 
-先跑 `yarn check:env` 体检：它只读不改，会逐项核对 `.env` 占位符、三处密码/端口是否一致、数据库能否连接、迁移是否跑完、管理员账号是否存在、模型 Key 与加密密钥是否就位，并给出对应的修复命令。
+先跑 `yarn check:env` 体检：它只读不改，会逐项核对 `.env` 占位符、三处密码/端口是否一致、数据库能否连接、迁移是否跑完、管理员账号是否存在、模型 Key 是否就位、`v1.` 旧密文是否需要迁移，并给出对应的修复命令。
 
 - **数据库未启动：** 检查 `docker compose ps` 与容器日志。
 - **端口冲突：** 修改 `.env` 中的 `POSTGRES_PORT`，同时同步更新 `DATABASE_URL`。

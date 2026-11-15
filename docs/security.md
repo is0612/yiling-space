@@ -48,11 +48,11 @@
 - 真实 `.env` 不提交到 Git。
 - 仓库只提交不含秘密的 `.env.example`。
 - 平台凭据优先加密保存或放到专门的 Secret Store。
-- 角色模型 API Key 使用 AES-256-GCM 加密后保存在角色配置中；加密密钥自动生成在本机被 Git 忽略的 `.data/credentials-encryption.key` 文件。
-- QQ 小号渠道的 OneBot WS/HTTP Token 使用同一套 AES-256-GCM 加密，保存在 `platform_connections.credentials_ciphertext`；`/api/admin/channels`（管理员接口）会解密回显这四个字段（地址 + 两个 Token）供核对，因为它们只作用于本机协议端、换一台机器就失效。
+- 角色模型 / 助手 API Key **2026-11-12 起以明文保存在角色配置（`modelConfig`）里**。取舍理由：单管理员、本机部署时，加密密钥 `.data/credentials-encryption.key` 和数据库在同一台机器上，拿到库的人基本也拿得到密钥，加密挡不住真威胁，却让用户没法在页面上核对自己填的是哪把 Key。产品规则是：**登录的管理员可以查看、修改、清除明文 Key；未登录请求不能读取 Key**（`/api/characters/:id` 未带有效会话返回 401，伪造会话与跨站请求同样被拒）。2026-11-12 之前写入的 `v1.` 密文仍可读取，由 `scripts/migrate-api-keys-to-plaintext.ts` 转为明文。
+- QQ 小号渠道的 OneBot WS/HTTP Token 仍使用 AES-256-GCM 加密，保存在 `platform_connections.credentials_ciphertext`；`/api/admin/channels`（管理员接口）会解密回显这四个字段（地址 + 两个 Token）供核对，因为它们只作用于本机协议端、换一台机器就失效。
 - 聊天模型请求只能将角色设定、对话和已检索上下文等明确白名单字段序列化到提示词正文；API Key、模型服务地址及连接参数不得进入提示词正文，API Key 仅通过服务端授权请求头发送。
-- 备份或迁移数据库时必须一并安全保管该加密密钥；密钥文件丢失后，已保存的 API Key 将无法解密，需要重新录入。
-- 数据库连接串、角色模型 API Key、Cookie 不得回显给用户或写入错误日志。
+- 备份或迁移数据库时要一并保管 `.data/credentials-encryption.key`——它现在只保护**渠道凭据**（OneBot Token、B站账号等）。丢了它，渠道凭据解不开、要在渠道页重新登录；模型 Key 不受影响，它们跟着数据库走。
+- 数据库连接串、Cookie、渠道凭据不得写进错误日志；角色模型 API Key 只对通过会话鉴权的管理员回显，未登录或伪造会话一律 401。
 - 生产与本地使用不同凭据。
 
 ## 5. 记忆与日志

@@ -65,11 +65,11 @@ server {
 
 - `DATABASE_URL`：指向独立、受保护的 PostgreSQL。
 - `POSTGRES_*`：仅本地 `docker compose` 使用。
-- `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`：模型服务的默认回退（角色的 API Key 可单独在网页配置，加密保存）。
+- `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`：模型服务的默认回退（角色的 API Key 可单独在网页配置，2026-11-12 起明文存库，登录管理员可查看与清除）。
 - `AUTH_SESSION_TTL_HOURS`、`YILING_COOKIE_SECURE`、`YILING_ALLOW_REGISTRATION`、`YILING_ALLOW_DEV_OWNER_BYPASS`：鉴权相关。
 - `ONEBOT_*`、`QQ_*`：QQ 小号渠道端点覆盖项（默认值见 `qq-onebot-deploy.md`）。
 
-秘密（数据库密码、模型 Key、OneBot WS/HTTP Token、加密密钥 `.data/credentials-encryption.key`）不得进入 Git 或镜像层，应通过 Secret 管理或受控的环境注入提供。
+环境变量里的秘密（数据库密码、`LLM_API_KEY`、OneBot WS/HTTP Token）不得进入 Git 或镜像层，应通过 Secret 管理或受控的环境注入提供。另外两处秘密**在数据里而不是环境里**：角色模型 Key 明文存在 `characters.model_config`（随数据库备份走，注意备份文件本身要加密保管）；渠道凭据用 `.data/credentials-encryption.key` 加密存 `platform_connections.credentials_ciphertext`（这个文件要跟着备份，但不要进 Git）。
 
 ## 4. 监控与告警
 
