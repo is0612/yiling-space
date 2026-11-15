@@ -24,7 +24,7 @@
 1. `channel_behavior_policies.sourceRefs`：schema 声明了 `@default("[]")`，首版迁移漏写 DB 默认值。补 `SET DEFAULT '[]'`。
 2. 互动指导版本表的唯一索引名被 PostgreSQL 截断到 63 字节（`…_revision_ke`），与 Prisma 算出的 `…_revisio_key` 不一致。改名为 Prisma 期望的名字。
 
-修正后 diff 只剩 6 项历史遗留：5 个旧表索引名截断 + `interaction_experience_progress` 一个库里有、schema 里没有的外键。它们与本功能无关，其中外键涉及级联语义（直接删除可能留下孤儿行），因此未在本次处理。
+修正后 diff 只剩 6 项历史遗留（4 张表的索引名截断 + 一个未声明外键），已在`6. CI Schema 漂移清零`中全部处理，最终零差异。
 
 ## 2. 专项测试
 
@@ -64,15 +64,92 @@
 1. **新回归没有被任何门禁执行**（真问题）：`30eb939` / `7d30e61` 新增的 7 个测试脚本既不在 `test:unit-suite` 也不在 `verify:local`，而 CI 只跑 `test:unit-suite`。已把 7 个脚本追加到两条链尾，`package.json` 校验通过。
 2. **两处 schema 漂移**：新增 `20261115100000_education_schema_align` 修正，已在开发库应用，并在空库重放验证。
 
-## 6. 遗留问题
+## 6. CI Schema 漂移清零（补充，2026-11-15）
 
-- 6 项历史迁移漂移（旧模块），本次不动。
+第一轮验收后 GitHub Actions 的 `validate` 仍然失败，失败命令是：
+
+```
+yarn prisma migrate diff --from-config-datasource --to-schema=prisma/schema.prisma --exit-code
+```
+
+在一次性空库上完整重放迁移链后复现了剩下的 6 项差异，逐项定性如下。
+
+### 6.1 六个索引名不一致（4 张表）
+
+| 表 | 库里实际名字（PG 截断后） | Prisma 计算出的名字 |
+|---|---|---|
+| `character_growth_import_identities` | `…_characterId_domain_localId_k` | `…_characterId_domain_local_key` |
+| `character_growth_import_identities` | `…_characterId_domain_originId_` | `…_characterId_domain_origi_key` |
+| `interaction_experiences` | `…_characterId_conversationId_memorySco_id` | `…_characterId_conversationId_memorySc_idx` |
+| `interaction_experiences` | `…_conversationId_assistantMessageId_fee_k` | `…_conversationId_assistantMessageId_f_key` |
+| `memory_knowledge_candidate_requests` | `…_characterId_memoryEventId_k` | `…_characterId_memoryEvent_key` |
+| `memory_knowledge_candidate_requests` | `…_characterId_status_createdA` | `…_characterId_status_crea_idx` |
+
+成因：早期迁移手写了这些约束的**完整**默认名（66 字节左右），PostgreSQL 把超过 63 字节的标识符直接截断；而 Prisma 自己算名字时会「保留后缀、截断前缀」。两边指向同一个索引、同一组列，只是标识符不同，所以每次 diff 都读成 6 条「重命名」。
+
+处理：新增 `20261115150000_align_legacy_index_names`，用 6 条 `ALTER INDEX … RENAME TO …` 把库里的名字改成 Prisma 算出来的名字。两侧都是 63 字节，重命名不会再次被截断；纯标识符变更，不重建索引、不锁表扫数据。
+
+选择「改库里的名字」而不是「在 schema 里写 `map`」：schema 保持 Prisma 默认命名，以后任何新库按默认名建索引都能对上；反过来把 PG 的截断结果写进 schema，等于固化一个需要长期维护的别名。
+
+### 6.2 `interaction_experience_progress` 的外键
+
+**结论：外键本来是对的，错的是 schema 漏声明。最终语义按数据库现状固化进 schema——`ON DELETE CASCADE` + `ON UPDATE NO ACTION`，没有执行任何 DDL。**
+
+先看事实。建表迁移 `20261113100000_interaction_experience_automatic` 是这样写的：
+
+```sql
+"conversationId" UUID PRIMARY KEY REFERENCES "conversations"("id") ON DELETE CASCADE
+```
+
+数据库里的实际约束（`pg_get_constraintdef`）：
+
+```
+FOREIGN KEY ("conversationId") REFERENCES conversations(id) ON DELETE CASCADE
+```
+
+没有 `ON UPDATE` 子句，即默认的 `NO ACTION`。但 `prisma/schema.prisma` 的 `InteractionExperienceProgress` 模型只写了 `conversationId String @id`，没有声明 `@relation`——于是 Prisma 认为这个外键「多出来了」，diff 报 `[-] Removed foreign key on columns (conversationId)`。
+
+业务语义：这张表是「某个会话的自动经验提炼游标」，主键就是 `conversationId`，一行对一会话。会话被删，游标必须跟着消失，否则会留下永远跑不完的孤儿游标。所以 `ON DELETE CASCADE` 是正确约束，不能删。
+
+修改：在 schema 里补声明，让 Prisma 认识这个既有约束。
+
+```prisma
+conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+@@map("interaction_experience_progress")
+```
+
+并在 `Conversation` 侧补反向字段 `interactionExperienceProgress InteractionExperienceProgress?`（`conversationId` 是主键，所以是一对一可选）。
+
+`onUpdate: NoAction` 是刻意写的：Prisma 的 `onUpdate` 默认值是 `Cascade`，不写就会 diff 成「外键需要改成 ON UPDATE CASCADE」。写 `NoAction` 与库里的「没有 ON UPDATE 子句」逐字对上。
+
+为什么不会破坏已有数据：
+
+- 这次只改 `schema.prisma` 和类型，**没有生成任何外键相关 DDL**，约束名、删除行为、更新行为都和上线时一致。
+- 外键一直由数据库强制，删除会话时游标行本来就会被级联删掉；补声明只是让 Prisma Client 也知道这条关系。
+- 实测（一次性库，非业务库）：插入一个会话 + 一条进度行 → `DELETE FROM conversations` → 进度行计数从 1 变 0，级联仍然生效。
+
+## 7. 验收结果（补充轮）
+
+| 检查 | 结果 |
+|---|---|
+| `prisma validate` | 通过 |
+| `prisma generate` | 通过 |
+| 完整迁移链空库重放（84 个迁移） | 通过 |
+| `prisma migrate diff --from-config-datasource --to-schema=prisma/schema.prisma --exit-code` | **No difference detected**（退出码 0），空库与开发库都验过 |
+| 教育迁移专项测试（`test:education-transfer`、`test:interaction-guidance`、`test:channel-policies` 及 4 个 isolated） | 全绿 |
+| `test:memory-reliability-isolated`（23 个连库子测试，含进度表） | 全绿 |
+| `test:memory-continuity` | 通过 |
+| `yarn typecheck` / `yarn check:sfc` / `yarn lint` | 通过 |
+
+## 8. 遗留问题
+
 - `pg` 的 `client.query() while already executing` 弃用告警：来自 `@prisma/adapter-pg` 内部实现（交互式事务），不是本仓库代码，无法在应用层修。
 - 撤权不回收已采纳规则：按设计保留，若产品要求变更需单独立项。
+- 迁移链本身有一处历史遗留的不一致（早期迁移手写了超长标识符）。这次用追加迁移把名字对齐了，但历史迁移文件保持原样，没有改写。
 
-## 7. 结论
+## 9. 结论
 
-- **工程测试通过**：7 组专项测试全绿，含 4 组在一次性空库上跑完整迁移链。
+- **工程测试通过**：7 组专项测试 + 23 个连库子测试 + 记忆连续性全绿，迁移链在一次性空库上从零重放并对齐 schema。
 - **静态检查通过**：类型、Lint、组件编译、OpenAPI 解析全绿。
 - **真实私聊 / 群聊行为尚未验收**：本次未接真实 QQ。`@` 抑制、群聊读规则、以及「该提才提」的判断仍只在 mock 与 SQL 层验证过，需人工在真实会话里确认。
 

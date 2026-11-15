@@ -467,6 +467,7 @@ model Conversation {
   messages               Message[]
   groupMembers           GroupMember[]
   interactionExperiences InteractionExperience[]
+  interactionExperienceProgress InteractionExperienceProgress?
   scopedReflectionRuns ReflectionRun[]
   scopedExpressionHabits CharacterExpressionHabit[]
   memoryEvents           MemoryEvent[]
@@ -2048,6 +2049,9 @@ model InteractionExperienceProgress {
   attempts Int @default(0)
   lastError String? @db.VarChar(80)
   updatedAt DateTime @default(now()) @db.Timestamptz(6)
+  /// 进度行从属于会话：会话删除时一起消失（外键建表时就是 ON DELETE CASCADE）。
+  /// 2026-11-15 补声明：此前 DB 有外键、schema 没写，migrate diff 一直报「多余外键」。
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@map("interaction_experience_progress")
 }
 model InteractionExperienceActivation {
