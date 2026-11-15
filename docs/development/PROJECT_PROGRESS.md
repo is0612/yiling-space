@@ -7,11 +7,11 @@
 
 ## 一眼看当前
 
-- **当前在收尾：** 两处彼此独立的 CI 失败——隐私门禁与「验证角色与记忆设置 API 的数据库持久化」冒烟测试。
-- **隐私门禁：** 失败提交为文档同步 `8cf0842`，失败步骤「隐私门禁」（validate 的第 17 步）。原因是本文件正文引用了 Actions 运行编号和运行链接，长串数字被门禁当成疑似真实号码。处理方式是**改文档**：正文只记提交 SHA、检查结论和失败步骤，运行编号既不写进正文，也不加进白名单。
-- **冒烟测试：** 失败提交为知识系统 `030223e`，失败步骤「验证角色与记忆设置 API 的数据库持久化」（validate 的第 53 步）。根因是该冒烟测试自身两处过期断言，不是 API Key 明文回显的实现坏了（详见本文件末尾交接）。
-- **最近已提交：** 知识收集白名单 `030223e`；冒烟测试断言修复随本批次一并提交。
-- **下一步：** 等本轮提交的 Actions 全绿；通过后再关闭本轮工程收尾，并核对知识白名单在页面与真实聊天里的表现。
+- **当前在收尾：** 本轮三项 CI 问题（隐私门禁、冒烟测试第 53 步、OpenAPI 契约第 55 步）已全部修复，最新一次 Actions 两个 job 全绿。
+- **隐私门禁：** 失败提交为文档同步 `8cf0842`，失败步骤「隐私门禁」（validate 第 17 步）。原因是本文件正文引用了 Actions 运行编号和运行链接，长串数字被门禁当成疑似真实号码。处理方式是**改文档**：正文只记提交 SHA、检查结论和失败步骤，运行编号既不写进正文，也不加进白名单。
+- **冒烟测试：** 失败提交为知识系统 `030223e`，失败步骤「验证角色与记忆设置 API 的数据库持久化」（validate 第 53 步）。根因是该冒烟测试自身两处过期断言，不是 API Key 明文回显的实现坏了。
+- **OpenAPI 契约：** 第 55 步「检查 OpenAPI 契约」在 `docs/openapi.yaml` 第 2782 行解析失败——忆泡重复预览 200 响应的 `description` 以单引号开头却没闭合，YAML 把下一行 `'400':` 当成字符串内容。补上收尾单引号即修复，描述正文和契约含义未变；该行自 `3785e08` 起就缺引号，之前一直被第 53 步失败挡在前面没跑到。
+- **下一步：** 工程收尾到此为止；下一件事是核对知识白名单在页面与真实聊天里的表现，以及私聊教育迁移的真实渠道验收。
 - **真实 QQ / 私聊行为：** 由用户在本地真实环境验收；没有实际聊天证据时，不标记为真实渠道验收完成。
 
 ## 当前工作状态
@@ -82,6 +82,7 @@
 
 | 时间（UTC） | 提交 | 说明 | 结果 |
 |---|---|---|---|
+| 2026-11-15 | `43e4ea4` | 补 `docs/openapi.yaml` 忆泡重复预览 200 描述缺失的收尾单引号 | **通过**：两个 job 全绿，OpenAPI 契约（第 55 步）valid |
 | 2026-11-15 | `8cf0842` | 文档同步进度总表 | **失败**：「隐私门禁」（validate 第 17 步），正文引用了运行编号 |
 | 2026-11-15 | `030223e` | 知识系统聊天候选按人白名单收集，接入社交授权 | **失败**：「验证角色与记忆设置 API 的数据库持久化」（validate 第 53 步），前 52 步通过 |
 | 2026-11-15 | `0c7e606f` | 修正进度文档隐私门禁问题（改为放宽白名单，本批次已回退该做法） | 已提交；隐私门禁未通过 |
@@ -92,17 +93,19 @@
 
 ### 2026-11-15 · CI 双失败修复（隐私门禁 + 角色与记忆设置冒烟测试）
 
-- 状态：待 CI 确认
+- 状态：已完成（工程验收通过；真实使用验收未开始）
 - 本次完成：
   1. **隐私门禁**：`docs/development/PROJECT_PROGRESS.md` 删除全部 Actions 运行编号与硬编码运行链接，改为「提交 SHA + 检查结论 + 失败步骤」；同步删掉 `scripts/privacy-allowlist.txt` 里为运行编号开的两条豁免，并在文件内写明不要再加回来。过期的「正在执行 / 排队中」状态改为已核对的结论。
   2. **冒烟测试**：`scripts/smoke-test-local-api.mjs` 修掉两处让第 53 步必然失败的断言——(a) 读回角色详情时用的是登出步骤里已经注销、并用它验证过「吊销后不再鉴权」的 `sessionCookie`，改为仍有效的 `adminCookie`；(b) 清除 Key 后要求 `chatApiKeyConfigured === false`，但 CI 环境本身配了 `LLM_API_KEY`、角色 Base URL 与之相同，清除角色级 Key 后来源退回 environment，`configured` 仍为 true。改为断言 `chatApiKey === ""` 且来源不再是 `character`，这既守住「不能把清掉的 Key 又回显出来」，也不依赖运行环境有没有 env 兜底。产品要求与鉴权边界均未改动。
-- 提交：本批次改动集中在 `docs/development/PROJECT_PROGRESS.md`、`scripts/privacy-allowlist.txt`、`scripts/smoke-test-local-api.mjs`。
+  3. **OpenAPI 契约**：`docs/openapi.yaml` 第 2782 行 `description` 以单引号开头未闭合，补上收尾单引号。只加一个字符，描述正文逐字不变，`responses` 的 200/400/401/404/422 结构不变，其他接口未动。
+- 提交：本批次改动集中在 `docs/development/PROJECT_PROGRESS.md`、`scripts/privacy-allowlist.txt`、`scripts/smoke-test-local-api.mjs`；OpenAPI 引号修复单独一个提交 `43e4ea4`。
 - 专项验收：
   - `yarn run check:privacy` —— 通过（1013 个文件）。
+  - `npx --yes @redocly/cli@latest lint --extends=minimal docs/openapi.yaml` —— 解析通过（valid，退出码 0）；116 条 warning 是 `operationId` 之类的既有风格提示，不是本次改动引入，minimal 规则下不阻塞。
   - 按 CI 相同环境变量，在本机独立数据库上起 mock LLM 与 Nuxt dev 后执行 `scripts/smoke-test-local-api.mjs` —— 通过；覆盖登录取回明文 Key、改其他参数不丢 Key、主动清除、伪造会话 401、跨站 403、连接测试，以及记忆设置延迟生效/取消/立即重算、导入、调度补齐、回收站、私有范围隔离、留存清理、多用户角色隔离。注意该脚本假设**干净数据库**（CI 每次新建）：在残留数据的库上重跑会在「Worker should skip empty overdue periods」处失败，那是任务队列里上一轮的旧任务占了 5 次处理预算，不是产品回归。
   - `yarn test:api-key-fields`、`yarn test:chat-model-config`、`yarn test:memory-reliability-isolated` —— 通过。
-- 工程回归：`yarn run check`（lint + check:sfc + check:privacy）通过；类型检查与完整测试矩阵由本轮 CI 复核。
-- CI：本批次提交后由 Actions 复核；未全绿前不关闭本轮收尾。
+- 工程回归：`yarn run check`（lint + check:sfc + check:privacy）通过。
+- CI：`43e4ea4` 的 Actions 两个 job 全绿——隐私门禁（第 17 步）、角色与记忆设置冒烟测试（第 53 步）、OpenAPI 契约（第 55 步）均 success。
 - 真实使用验收：未开始。真实 QQ / 私聊 / 真实模型效果仍须本地实测。
 - 当前卡点：仅剩「等 CI 结果」，本地无已知阻塞。
 - 下一步（只写一个优先动作）：推送本批次提交，盯到 Actions 全绿。
