@@ -1703,25 +1703,16 @@ async function runChannelTurn(input: {
     !isGroup && existingConversation ? { conversationId: existingConversation.id, memoryScopeId: conversationScopeId } : undefined, isGroup ? "GROUP" : "PRIVATE").catch(() => []);
   const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
   const turnId = randomUUID();
-  // One request-local context is created only after channel, character and readable scopes
-  // have been resolved. Private turns carry only this conversation's authorized evidence.
-  const collaboration = input.platform === "qq-onebot" && (isGroup || Boolean(input.externalConversationId?.trim()))
+  // Private context can be created before its dedicated knowledge analysis. The evidence
+  // list is limited to this conversation's current and already-authorized recent messages.
+  let collaboration = !isGroup && input.platform === "qq-onebot" && Boolean(input.externalConversationId?.trim())
     ? createAssistantTurnContext({
         turnId,
-        identity: {
-          characterId: character.id,
-          channel: isGroup ? "qq-group" : "qq-private",
-          channelBindingId: input.bindingId,
-          conversationKey: isGroup ? input.externalConversationId : (existingConversation?.id ?? input.externalConversationId),
-          readableScopeIds,
-          allowPrivate: !isGroup,
-        },
+        identity: { characterId: character.id, channel: "qq-private", channelBindingId: input.bindingId,
+          conversationKey: existingConversation?.id ?? input.externalConversationId, readableScopeIds, allowPrivate: true },
         evidenceIds: [...new Set([
           ...messages.map(item => item.externalMessageId),
           ...recentMessages.map(item => item.id),
-          ...backgroundLines.map(item => item.id),
-          ...(input.group?.analysisBackground ?? []).map(item => item.id),
-          ...(previousWorkingContext?.evidence ?? []).map(item => item.id),
         ].filter((id): id is string => typeof id === "string" && Boolean(id)))],
       })
     : undefined;
@@ -1893,6 +1884,22 @@ async function runChannelTurn(input: {
       ...readStoredSpeaker(row.metadata),
     })),
   } : undefined;
+  // Group analysis needs its validated working-context evidence, so preserve its later
+  // creation point while sharing the same request-local contract as private turns.
+  if (isGroup && input.platform === "qq-onebot") {
+    collaboration = createAssistantTurnContext({
+      turnId,
+      identity: { characterId: character.id, channel: "qq-group", channelBindingId: input.bindingId,
+        conversationKey: input.externalConversationId, readableScopeIds, allowPrivate: false },
+      evidenceIds: [...new Set([
+        ...messages.map(item => item.externalMessageId),
+        ...backgroundLines.map(item => item.id),
+        ...(input.group?.analysisBackground ?? []).map(item => item.id),
+        ...recentMessages.map(item => item.id),
+        ...(previousWorkingContext?.evidence ?? []).map(item => item.id),
+      ].filter((id): id is string => typeof id === "string" && Boolean(id)))],
+    });
+  }
   let pendingWorkingContext: { summary: string; evidenceMessageIds: string[] } | undefined;
   /**
    * 群聊候选证据是谁说的。
