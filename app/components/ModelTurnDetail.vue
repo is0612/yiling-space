@@ -282,7 +282,7 @@ function messageAuthor(message: TurnMessage) {
             class="record-card"
           >
             <div class="record-meta">
-              <strong>{{ collaborationStages[stage.stage] }}</strong>
+              <strong>{{ stage.stage === 'context' && !detail.groupChat ? '私聊知识分析' : collaborationStages[stage.stage] }}</strong>
               <el-tag type="info">
                 {{ stageLabel(stage) }}
               </el-tag>
