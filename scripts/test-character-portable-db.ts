@@ -269,6 +269,27 @@ async function main() {
     ],
   });
 
+  // 互动经验：一条已采纳（该进包）、一条待确认（不该进包）。渠道策略一条已采纳。
+  const guidanceSource = [{ version: 1, type: "experience", id: randomUUID() }];
+  await prisma.characterInteractionGuidance.createMany({
+    data: [
+      {
+        characterId, kind: "UNDERSTANDING", content: "她是他养的鱼，不是客服。", context: "被问「你是谁」时",
+        chatScope: "ALL", status: "ACTIVE", revision: 1, sourceRefs: guidanceSource, reason: "测试来源",
+      },
+      {
+        characterId, kind: "STRATEGY", content: "待确认的准则", context: "还没点头",
+        chatScope: "ALL", status: "PENDING", revision: 1, sourceRefs: guidanceSource, reason: "测试来源",
+      },
+    ],
+  });
+  await prisma.channelBehaviorPolicy.create({
+    data: {
+      characterId, kind: "GROUP_AT_DISABLED", content: "被动群聊回复不发送 @ 提醒，引用仍保留。",
+      chatScope: "GROUP", status: "ACTIVE", revision: 1, sourceRefs: guidanceSource,
+    },
+  });
+
   // ── 1. 导出 ───────────────────────────────────────────────
   const exported = await loadCharacterExportBundle({ characterId, ownerId: ownerA });
   assert.ok(exported, "本人导出应该拿得到包");
@@ -286,6 +307,14 @@ async function main() {
   assert.equal(bundle.counts.journalRevisions, 2, "日记与手账各一版都要带走");
   assert.equal(bundle.counts.snapshots, 1, "只带 CURRENT 版本，旧版本不进包");
   assert.equal(bundle.counts.catchphrases, 1, "待确认的梗不进包");
+  assert.equal(bundle.counts.interactionGuidance, 1, "只带已采纳的互动经验，待确认的不进包");
+  assert.equal(bundle.counts.channelPolicies, 1, "渠道策略跟着卡走");
+  assert.equal(bundle.interactionGuidance[0]?.content, "她是他养的鱼，不是客服。");
+  assert.equal(bundle.interactionGuidance[0]?.kind, "UNDERSTANDING");
+  assert.ok(
+    !("sourceRefs" in (bundle.interactionGuidance[0] ?? {})),
+    "本机的教育证据不进包：换台机器那些 id 全是悬空的",
+  );
 
   assert.equal(bundle.journals[0]?.dayKey, "2026-10-30");
   assert.equal(bundle.journals[0]?.revisions[1]?.quote, "今天和小明去了海边。", "今日一句要带走");
@@ -362,6 +391,47 @@ async function main() {
   );
   assert.equal(imported.memorySetting?.nextSnapshotAt, null, "周期边界不继承旧机器");
   assert.equal(imported.memorySetting?.rawMessageCleanupEnabled, false, "清理开关不能跟着包走");
+
+  /**
+   * 互动经验与渠道策略：导入必须落成 ACTIVE（不是 PENDING）——
+   * 包里带的本来就是主人已经采纳的条目，导入再走一遍审批等于让人把活重做一遍。
+   */
+  const importedGuidance = await prisma.characterInteractionGuidance.findMany({
+    where: { characterId: first.characterId },
+    include: { revisions: true },
+  });
+  assert.equal(importedGuidance.length, 1, "只导入已采纳的那条，待确认的不跟着搬");
+  assert.equal(importedGuidance[0]?.status, "ACTIVE", "导入后直接生效，不再要求确认一次");
+  assert.equal(importedGuidance[0]?.content, "她是他养的鱼，不是客服。");
+  assert.equal(importedGuidance[0]?.kind, "UNDERSTANDING");
+  assert.equal(importedGuidance[0]?.revision, 1);
+  assert.equal(importedGuidance[0]?.revisions.length, 1, "补一条 CREATE 历史，否则第一次编辑会出现「版本 2 但没有版本 1」");
+  assert.equal(importedGuidance[0]?.revisions[0]?.action, "CREATE");
+  assert.equal(importedGuidance[0]?.revisions[0]?.actorId, ownerA, "历史记在导入者名下");
+  const importedSource = importedGuidance[0]?.sourceRefs as Array<Record<string, unknown>> | null;
+  assert.equal(importedSource?.[0]?.type, "characterCard", "来源改写成「来自角色卡」，不指向不存在的本机证据");
+  assert.ok(
+    String(importedGuidance[0]?.reason ?? "").includes("角色卡"),
+    "理由要写明来源，排查时能一眼看出这条不是本机教出来的",
+  );
+
+  const importedPolicies = await prisma.channelBehaviorPolicy.findMany({
+    where: { characterId: first.characterId },
+    include: { revisions: true },
+  });
+  assert.equal(importedPolicies.length, 1);
+  assert.equal(importedPolicies[0]?.status, "ACTIVE");
+  assert.equal(importedPolicies[0]?.kind, "GROUP_AT_DISABLED");
+  assert.equal(importedPolicies[0]?.revisions.length, 1);
+
+  // 同一张卡再导一次：内容相同就是同一条，不该长出第二份。
+  const reimported = await importCharacterCard({
+    raw: JSON.parse(serialized),
+    ownerId: ownerA,
+    targetCharacterId: first.characterId,
+  });
+  assert.equal(reimported.added.interactionGuidance, 0, "同一张卡重复合并不该多出互动经验");
+  assert.equal(reimported.added.channelPolicies, 0, "渠道策略按 kind 去重，一种渠道只有一条");
 
   const importedGlobal = imported.memoryScopes.find((scope) => scope.scopeType === "CHARACTER_GLOBAL");
   const importedPrivate = imported.memoryScopes.find((scope) => scope.scopeType === "USER_PRIVATE");

@@ -130,6 +130,12 @@ const built = buildCharacterBundle({
     },
   ],
   catchphrases: [{ phrase: "不烧心吗", usage: "吃到辣的", enabled: true, source: "manual" }],
+  interactionGuidance: [
+    { kind: "UNDERSTANDING", content: "她是他养的鱼，不是客服。", context: "被问「你是谁」时", chatScope: "ALL" },
+  ],
+  channelPolicies: [
+    { kind: "GROUP_AT_DISABLED", content: "被动群聊回复不发送 @ 提醒，引用仍保留。", chatScope: "GROUP" },
+  ],
   journals: [
     {
       dayKey: "2026-10-30",
@@ -209,7 +215,9 @@ assert.equal(
   "血缘 id 必须跟着卡片走，否则没法认人合并",
 );
 assert.equal(built.formatVersion, CHARACTER_BUNDLE_VERSION, "导出用当前格式版本");
-assert.equal(CHARACTER_BUNDLE_VERSION, 5, "v5 增加成长领域内容与历史");
+assert.equal(CHARACTER_BUNDLE_VERSION, 6, "v6 增加互动经验与渠道行为策略");
+assert.equal(built.counts.interactionGuidance, 1, "互动经验单独成段并计数");
+assert.equal(built.counts.channelPolicies, 1, "渠道行为策略单独成段并计数");
 assert.equal(built.exportedAt, "2026-10-31T13:00:00.000Z", "导出时间用注入的 now，便于测试");
 assert.equal(built.character.name, "小鱼");
 assert.equal(built.counts.memories, 2, "两条记忆（全局 + 私人）");
@@ -238,6 +246,11 @@ assert.equal(Reflect.get(built.modelConfig, "chatApiKeyEncrypted"), undefined, "
 // ── 3. 回环：导出 → JSON → 导入解析 ──────────────────────────
 const roundTrip = parseCharacterBundle(JSON.parse(JSON.stringify(built)));
 assert.deepEqual(roundTrip.counts, built.counts, "回环后条数一致");
+assert.deepEqual(roundTrip.interactionGuidance, built.interactionGuidance, "互动经验回环后内容不变");
+assert.deepEqual(roundTrip.channelPolicies, built.channelPolicies, "渠道策略回环后内容不变");
+assert.equal(roundTrip.interactionGuidance[0]?.kind, "UNDERSTANDING");
+assert.equal(roundTrip.interactionGuidance[0]?.chatScope, "ALL");
+assert.equal(roundTrip.interactionGuidance[0]?.content, "她是他养的鱼，不是客服。");
 assert.equal(roundTrip.character.name, "小鱼");
 assert.equal(roundTrip.character.styleExamples, "主人：在吗\n小鱼：在。", "对话示例的换行要原样保留");
 assert.equal(roundTrip.memories[0]?.content, "主人住在杭州");
@@ -349,6 +362,55 @@ assert.throws(
   () => parseCharacterBundle(minimal({ friends: [{ platform: "qq-onebot" }] })),
   /平台账号不能为空/,
   "朋友没有账号要拒绝",
+);
+
+/**
+ * 互动经验 / 渠道策略（v6）。
+ * 关键点：不认识的 kind 要直接拒绝 —— 悄悄改成默认值等于把一条准则改坏，比没有更糟。
+ */
+assert.throws(
+  () => parseCharacterBundle(minimal({ formatVersion: 6, channelPolicies: [] })),
+  /缺少互动经验或渠道策略段/,
+  "v6 卡必须声明这两段，缺了会让人以为「她本来就没被教过」",
+);
+assert.throws(
+  () => parseCharacterBundle(minimal({
+    interactionGuidance: [{ kind: "UNDERSTANDING", content: "x", context: "y", chatScope: "ALL" }],
+  })),
+  /需要v6角色卡/,
+  "旧版本卡不许夹带互动经验，否则会被静默丢掉",
+);
+assert.throws(
+  () => parseCharacterBundle(minimal({
+    formatVersion: 6,
+    interactionGuidance: [{ kind: "MADE_UP", content: "x", context: "y", chatScope: "ALL" }],
+    channelPolicies: [],
+  })),
+  /类型无法识别/,
+  "认不出来的互动经验类型要拒绝",
+);
+assert.throws(
+  () => parseCharacterBundle(minimal({
+    formatVersion: 6,
+    interactionGuidance: [{ kind: "UNDERSTANDING", content: "x", context: "y", chatScope: "EVERYWHERE" }],
+    channelPolicies: [],
+  })),
+  /聊天范围无法识别/,
+  "认不出来的聊天范围要拒绝",
+);
+assert.throws(
+  () => parseCharacterBundle(minimal({
+    formatVersion: 6,
+    interactionGuidance: [{ kind: "UNDERSTANDING", content: "", context: "y", chatScope: "ALL" }],
+    channelPolicies: [],
+  })),
+  /不能为空/,
+  "空的互动经验要拒绝",
+);
+assert.throws(
+  () => parseCharacterBundle(minimal({ formatVersion: 6, interactionGuidance: [], channelPolicies: [] })),
+  /成长数据段/,
+  "v6 卡声明了两段新内容后，仍要过 v5 的成长段检查",
 );
 assert.throws(
   () => parseCharacterBundle(minimal({

@@ -50,8 +50,11 @@ export const CHARACTER_BUNDLE_FORMAT = "yiling-hub.character";
  * 版本检查拦下 —— 让老程序明说「导不进来」，好过它默默把备注丢掉、导完还像成功。
  * v4 增加长期记忆、忆泡、阶段总结的跨设备 originId；v1–v3 仍兼容，缺少身份时由导入端补发。
  * v5 增加成长领域及稳定迁移身份，旧卡按空成长内容读取；新卡必须声明成长段。
+ * v6 增加互动经验与渠道行为策略（2026-11-16）。这两段是「她怎么跟人打交道」的一部分，
+ * 之前漏在包外，换台机器养等于一夜之间忘掉所有被教过的东西。v6 起必须声明这两段，
+ * 老卡按空内容读取 —— 让老程序读 v6 卡会被上面那条版本检查拦下，好过它静默丢掉这些准则。
  */
-export const CHARACTER_BUNDLE_VERSION = 5;
+export const CHARACTER_BUNDLE_VERSION = 6;
 /** 导入包最大字节数：够 4000 条记忆 + 600 篇总结 + 1500 篇手账，再大基本是塞了别的东西。 */
 export const CHARACTER_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -86,6 +89,13 @@ export const CHARACTER_BUNDLE_LIMITS = {
   friendSnapshots: 60,
   /** 全部朋友名下的记忆合计上限，防止 500 × 300 把包撑爆。 */
   friendMemoriesTotal: 4000,
+  /**
+   * 互动经验条数上限。它是人一条条教出来的，不是生成的：
+   * 每一条都对应一句主人亲自说过的话，200 条已经远超正常使用量。
+   */
+  interactionGuidance: 200,
+  /** 渠道行为策略：每种渠道最多一条，留 20 个位置足够覆盖所有渠道。 */
+  channelPolicies: 20,
   name: 100,
   alias: 100,
   description: 2000,
@@ -313,8 +323,38 @@ export type CharacterBundleCounts = {
   friendMemories: number;
   /** 朋友们名下的备注（她私底下的叫法）总条数。为 0 时导入预览可以放心说「没有备注」。 */
   friendAliases: number;
+  /** 带走了几条已采纳的互动经验。 */
+  interactionGuidance: number;
+  /** 带走了几条已采纳的渠道行为策略。 */
+  channelPolicies: number;
   growth?: ReturnType<typeof growthCounts>;
 };
+
+/**
+ * 互动经验：她学到的「怎么跟人打交道」。
+ *
+ * 只带 ACTIVE 的条目 —— PENDING 是等主人确认的候选、REJECTED 是已经否决过的，
+ * 这两个状态属于本机的决策现场，搬到新机器上只会变成一堆要重新处理的待办。
+ * 也不带 sourceRefs：它指向本机的教育证据（哪句话、哪个群、谁授权的），
+ * 换台机器那些 id 全是悬空的。导入端会给它们重新盖一个「来自角色卡」的来源。
+ */
+export type CharacterBundleInteractionGuidance = {
+  kind: GuidanceKindName;
+  content: string;
+  context: string;
+  chatScope: "ALL" | "GROUP" | "PRIVATE";
+};
+
+/** 渠道行为策略：同样是「她怎么跟人打交道」，只是作用在渠道层而不是对话内容上。 */
+export type CharacterBundleChannelPolicy = {
+  kind: "GROUP_AT_DISABLED";
+  content: string;
+  chatScope: "GROUP";
+};
+
+export type GuidanceKindName = "UNDERSTANDING" | "REFERENCE" | "SITUATION" | "STRATEGY";
+const GUIDANCE_KIND_NAMES: readonly GuidanceKindName[] = ["UNDERSTANDING", "REFERENCE", "SITUATION", "STRATEGY"];
+const GUIDANCE_CHAT_SCOPES = ["ALL", "GROUP", "PRIVATE"] as const;
 
 export type CharacterBundle = {
   format: typeof CHARACTER_BUNDLE_FORMAT;
@@ -336,6 +376,10 @@ export type CharacterBundle = {
   journals: CharacterBundleJournal[];
   catchphrases: CharacterBundleCatchphrase[];
   friends: CharacterBundleFriend[];
+  /** 互动经验：只含 ACTIVE。旧卡没有这一段，读成空数组。 */
+  interactionGuidance: CharacterBundleInteractionGuidance[];
+  /** 渠道行为策略：只含 ACTIVE。 */
+  channelPolicies: CharacterBundleChannelPolicy[];
   growth: CharacterGrowthBundle;
   counts: CharacterBundleCounts;
 };
@@ -506,6 +550,8 @@ function buildCounts(bundle: Omit<CharacterBundle, "counts">): CharacterBundleCo
     friends: bundle.friends.length,
     friendMemories: bundle.friends.reduce((total, friend) => total + friend.memories.length, 0),
     friendAliases: bundle.friends.reduce((total, friend) => total + friend.aliases.length, 0),
+    interactionGuidance: bundle.interactionGuidance.length,
+    channelPolicies: bundle.channelPolicies.length,
     growth: growthCounts(bundle.growth),
   };
 }
@@ -676,6 +722,10 @@ export type BundleBuildInput = {
   }>;
   growth?: CharacterGrowthBundle;
   catchphrases?: Array<{ phrase: string; usage: string; enabled: boolean; source: string }>;
+  /** 互动经验：调用方只传 ACTIVE 的，这里不再筛。 */
+  interactionGuidance?: CharacterBundleInteractionGuidance[];
+  /** 渠道行为策略：同样只传 ACTIVE 的。 */
+  channelPolicies?: CharacterBundleChannelPolicy[];
   now?: Date;
 };
 
@@ -821,6 +871,8 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
       source: item.source || "manual",
     })),
     friends,
+    interactionGuidance: input.interactionGuidance ?? [],
+    channelPolicies: input.channelPolicies ?? [],
     growth: input.growth ?? emptyCharacterGrowthBundle(),
   };
 
@@ -841,6 +893,8 @@ export type ParsedCharacterBundle = {
   journals: CharacterBundleJournal[];
   catchphrases: CharacterBundleCatchphrase[];
   friends: CharacterBundleFriend[];
+  interactionGuidance: CharacterBundleInteractionGuidance[];
+  channelPolicies: CharacterBundleChannelPolicy[];
   growth: CharacterGrowthBundle;
   counts: CharacterBundleCounts;
   exportedAt: string | null;
@@ -1157,6 +1211,47 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     };
   });
 
+  /**
+   * 互动经验 / 渠道策略（v6）。老卡没有这两段，读成空数组 ——
+   * 与成长段不同，它们的缺失不会让人误以为「卡坏了」，只会是「没教过」。
+   *
+   * 内容长度对齐数据库列（400 / 200）；kind 与 chatScope 都走白名单，
+   * 认不出来的直接拒绝，而不是悄悄改成默认值 —— 一条被改错的准则比没有更糟。
+   */
+  const interactionGuidance: CharacterBundleInteractionGuidance[] = readArray(
+    body.interactionGuidance,
+    "互动经验",
+    CHARACTER_BUNDLE_LIMITS.interactionGuidance,
+  ).map((candidate, index) => {
+    const item = asRecord(candidate);
+    const label = `第 ${index + 1} 条互动经验`;
+    const kindInput = typeof item.kind === "string" ? item.kind : "";
+    if (!(GUIDANCE_KIND_NAMES as readonly string[]).includes(kindInput)) bad(`${label}的类型无法识别。`);
+    const scopeInput = typeof item.chatScope === "string" ? item.chatScope : "ALL";
+    if (!(GUIDANCE_CHAT_SCOPES as readonly string[]).includes(scopeInput)) bad(`${label}的聊天范围无法识别。`);
+    return {
+      kind: kindInput as GuidanceKindName,
+      content: readText(item.content, `${label}的内容`, 400, true),
+      context: readText(item.context, `${label}的场景`, 400, true),
+      chatScope: scopeInput as CharacterBundleInteractionGuidance["chatScope"],
+    };
+  });
+
+  const channelPolicies: CharacterBundleChannelPolicy[] = readArray(
+    body.channelPolicies,
+    "渠道行为策略",
+    CHARACTER_BUNDLE_LIMITS.channelPolicies,
+  ).map((candidate, index) => {
+    const item = asRecord(candidate);
+    const label = `第 ${index + 1} 条渠道策略`;
+    if (item.kind !== "GROUP_AT_DISABLED") bad(`${label}的类型无法识别。`);
+    return {
+      kind: "GROUP_AT_DISABLED" as const,
+      content: readText(item.content, `${label}的内容`, 200, true),
+      chatScope: "GROUP" as const,
+    };
+  });
+
   // 朋友是可选段：老角色卡没有这一段，分享型导出也会把它清空，所以缺省就是空数组。
   let friendMemoriesTotal = 0;
   const friends: CharacterBundleFriend[] = readArray(
@@ -1257,8 +1352,21 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     seenFriendKeys.add(key);
   }
 
+  /**
+   * 版本段的必填检查，从新到旧。
+   *
+   * 同时缺好几段时报最新的那个：它最能说明「这张卡是哪一版导出来的」，
+   * 报一个老段反而会让人以为是更早的格式问题。
+   */
+  if (version >= 6 && (body.interactionGuidance === undefined || body.channelPolicies === undefined)) {
+    bad("v6角色卡缺少互动经验或渠道策略段。");
+  }
+  if (version < 6 && (body.interactionGuidance !== undefined || body.channelPolicies !== undefined)) {
+    bad("互动经验与渠道策略需要v6角色卡，不能以旧版本静默导入。");
+  }
   if (version >= 5 && body.growth === undefined) bad("v5角色卡缺少成长数据段。");
   if (version < 5 && body.growth !== undefined) bad("成长数据需要v5角色卡，不能以旧版本静默导入。");
+
   const growth = version >= 5 ? parseCharacterGrowthBundle(body.growth, {
     eventIds: new Set(events.filter(item => item.scope === "character").flatMap(item => item.originId ? [item.originId] : [])),
     snapshotIds: new Set(snapshots.filter(item => item.scope === "character").flatMap(item => item.originId ? [item.originId] : [])),
@@ -1282,6 +1390,8 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     journals,
     catchphrases,
     friends,
+    interactionGuidance,
+    channelPolicies,
     growth,
   };
 
@@ -1298,6 +1408,8 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     journals,
     catchphrases,
     friends,
+    interactionGuidance,
+    channelPolicies,
     growth,
     counts: buildCounts(payload),
     exportedAt: payload.exportedAt || null,

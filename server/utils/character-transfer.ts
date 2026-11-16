@@ -17,8 +17,10 @@ import {
   type BundleJournalSource,
   type CharacterBundle,
   type CharacterBundleCatchphrase,
+  type CharacterBundleChannelPolicy,
   type CharacterBundleCounts,
   type CharacterBundleEventDay,
+  type CharacterBundleInteractionGuidance,
   type CharacterBundleJournal,
   type CharacterBundleMemoryBody,
   type CharacterBundleSnapshotBody,
@@ -137,6 +139,23 @@ export async function loadCharacterExportBundle(input: {
         orderBy: { createdAt: "asc" },
         select: { phrase: true, usage: true, enabled: true, source: true },
       },
+      /**
+       * 互动经验只带 ACTIVE：候选（PENDING）和已否决（REJECTED）是本机的决策现场，
+       * 搬过去只会变成一堆要重新处理的待办。
+       */
+      interactionGuidance: {
+        where: { status: "ACTIVE" },
+        orderBy: { createdAt: "asc" },
+        take: CHARACTER_BUNDLE_LIMITS.interactionGuidance,
+        select: { kind: true, content: true, context: true, chatScope: true },
+      },
+      /** 渠道策略同理，只带生效中的那一条。 */
+      channelPolicies: {
+        where: { status: "ACTIVE" },
+        orderBy: { createdAt: "asc" },
+        take: CHARACTER_BUNDLE_LIMITS.channelPolicies,
+        select: { kind: true, content: true, chatScope: true },
+      },
     },
   });
 
@@ -160,6 +179,17 @@ export async function loadCharacterExportBundle(input: {
     journals: await loadCharacterJournals(input.characterId),
     friends: includeFriends ? await loadCharacterFriends(input.characterId) : [],
     catchphrases: character.catchphrases,
+    interactionGuidance: character.interactionGuidance.map((item) => ({
+      kind: item.kind as CharacterBundleInteractionGuidance["kind"],
+      content: item.content,
+      context: item.context,
+      chatScope: item.chatScope as CharacterBundleInteractionGuidance["chatScope"],
+    })),
+    channelPolicies: character.channelPolicies.map((item) => ({
+      kind: item.kind as CharacterBundleChannelPolicy["kind"],
+      content: item.content,
+      chatScope: "GROUP" as const,
+    })),
     now,
   });
 
@@ -190,6 +220,8 @@ export async function loadCharacterExportBundle(input: {
         friends: bundle.counts.friends,
         friendMemories: bundle.counts.friendMemories,
         friendAliases: bundle.counts.friendAliases,
+        interactionGuidance: bundle.counts.interactionGuidance,
+        channelPolicies: bundle.counts.channelPolicies,
       },
     },
   }).catch(() => undefined);
@@ -396,6 +428,10 @@ export type CharacterImportAdded = {
   journalRevisions: number;
   catchphrases: number;
   friends: number;
+  /** 新增的互动经验条数。 */
+  interactionGuidance: number;
+  /** 新增的渠道行为策略条数。 */
+  channelPolicies: number;
   growth?: ReturnType<typeof growthCounts>;
 };
 
@@ -428,6 +464,8 @@ function emptyAdded(): CharacterImportAdded {
     journalRevisions: 0,
     catchphrases: 0,
     friends: 0,
+    interactionGuidance: 0,
+    channelPolicies: 0,
     growth: growthCounts(emptyCharacterGrowthBundle()),
   };
 }
@@ -880,8 +918,124 @@ async function insertCatchphrases(
   return rows.length;
 }
 
-/** 合并用：读某个范围已有的记忆正文，用来判断「这句话本机已经有了」。 */
-async function loadMemoryContents(tx: Tx, memoryScopeId: string): Promise<Set<string>> {
+/**
+ * 导入时给条目盖的来源。
+ *
+ * 真实的 sourceRefs 指向本机的教育证据（哪句话、哪个群、谁授权的），换台机器全是悬空 id。
+ * 这里盖一个自解释的标记，页面和排查都能看出「这条是从角色卡搬来的」。
+ * 长度必须在 1–30 之间（数据库有 CHECK），所以永远是单个元素。
+ */
+function characterCardSource(importedAt: Date): Prisma.InputJsonValue {
+  return [{ version: 1, type: "characterCard", importedAt: importedAt.toISOString() }];
+}
+
+const IMPORTED_GUIDANCE_REASON = "从角色卡导入的互动经验；原始教育来源没有随卡转移。";
+const IMPORTED_POLICY_SOURCE = [{ version: 1, type: "characterCard" }];
+
+/**
+ * 写互动经验。
+ *
+ * 直接落 ACTIVE：包里带的本来就是主人已经采纳的条目，导入再走一遍「待确认」
+ * 等于让用户把审批重做一遍。`revision` 从 1 开始并补一条 CREATE 历史，
+ * 否则后面第一次编辑会出现「版本 2 但没有版本 1」的断链。
+ */
+async function insertInteractionGuidance(
+  tx: Tx,
+  characterId: string,
+  items: CharacterBundleInteractionGuidance[],
+  actorId: string,
+  existingGuidance?: Set<string>,
+): Promise<number> {
+  let added = 0;
+  const importedAt = new Date();
+  for (const item of items) {
+    const key = `${item.kind}|${item.chatScope}|${item.content}`;
+    if (existingGuidance) {
+      if (existingGuidance.has(key)) continue;
+      existingGuidance.add(key);
+    }
+    const row = await tx.characterInteractionGuidance.create({
+      data: {
+        characterId,
+        kind: item.kind,
+        content: item.content,
+        context: item.context,
+        chatScope: item.chatScope,
+        status: "ACTIVE",
+        revision: 1,
+        sourceRefs: characterCardSource(importedAt),
+        reason: IMPORTED_GUIDANCE_REASON,
+      },
+    });
+    await tx.characterInteractionGuidanceRevision.create({
+      data: {
+        guidanceId: row.id,
+        revision: 1,
+        action: "CREATE",
+        kind: row.kind,
+        content: row.content,
+        context: row.context,
+        chatScope: row.chatScope,
+        status: row.status,
+        sourceRefs: row.sourceRefs as Prisma.InputJsonValue,
+        reason: row.reason,
+        actorId,
+      },
+    });
+    added += 1;
+  }
+  return added;
+}
+
+/**
+ * 写渠道行为策略。
+ *
+ * 内容用程序里的常量而不是包里的字符串：这张表的 CHECK 约束认的就是那一句，
+ * 跨版本带来一句改过措辞的文本只会让整张卡导不进来。
+ */
+async function insertChannelPolicies(
+  tx: Tx,
+  characterId: string,
+  items: CharacterBundleChannelPolicy[],
+  actorId: string,
+  existingKinds?: Set<string>,
+): Promise<number> {
+  let added = 0;
+  for (const item of items) {
+    if (existingKinds) {
+      if (existingKinds.has(item.kind)) continue;
+      existingKinds.add(item.kind);
+    }
+    const row = await tx.channelBehaviorPolicy.create({
+      data: {
+        characterId,
+        kind: "GROUP_AT_DISABLED",
+        content: "被动群聊回复不发送 @ 提醒，引用仍保留。",
+        chatScope: "GROUP",
+        status: "ACTIVE",
+        revision: 1,
+        sourceRefs: IMPORTED_POLICY_SOURCE as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await tx.channelBehaviorPolicyRevision.create({
+      data: {
+        policyId: row.id,
+        revision: 1,
+        action: "CREATE",
+        kind: row.kind,
+        content: row.content,
+        chatScope: row.chatScope,
+        status: row.status,
+        sourceRefs: row.sourceRefs as Prisma.InputJsonValue,
+        actorId,
+      },
+    });
+    added += 1;
+  }
+  return added;
+}
+
+/** 合并用：读某个范围已有的记忆正文，用来判断「这句话本机已经有了」。 */async function loadMemoryContents(tx: Tx, memoryScopeId: string): Promise<Set<string>> {
   const rows = await tx.memoryItem.findMany({
     where: { memoryScopeId },
     select: { originId: true, content: true },
@@ -1032,6 +1186,13 @@ async function createCharacterFromBundle(input: {
     }
 
     added.catchphrases += await insertCatchphrases(tx, characterId, bundle.catchphrases);
+    added.interactionGuidance += await insertInteractionGuidance(
+      tx,
+      characterId,
+      bundle.interactionGuidance,
+      ownerId,
+    );
+    added.channelPolicies += await insertChannelPolicies(tx, characterId, bundle.channelPolicies, ownerId);
 
     // 她的朋友：身份按 (platform, platformUid) 全局唯一，所以是 upsert 而不是新建 ——
     // 这台机器上同一个人可能已经跟另一个角色聊过，不能给他开出第二个身份。
@@ -1243,6 +1404,38 @@ async function mergeCharacterCard(input: {
       })).map((row) => row.phrase.trim()),
     );
     added.catchphrases += await insertCatchphrases(tx, target.id, bundle.catchphrases, existingPhrases);
+
+    /**
+     * 互动经验 / 渠道策略的合并去重按「内容」而不是按 id：
+     * 同一个角色在两台机器上各自被教过，内容相同就是同一条，不必出现两份。
+     */
+    const existingGuidance = new Set(
+      (await tx.characterInteractionGuidance.findMany({
+        where: { characterId: target.id },
+        select: { kind: true, chatScope: true, content: true },
+      })).map((row) => `${row.kind}|${row.chatScope}|${row.content}`),
+    );
+    added.interactionGuidance += await insertInteractionGuidance(
+      tx,
+      target.id,
+      bundle.interactionGuidance,
+      ownerId,
+      existingGuidance,
+    );
+
+    const existingPolicyKinds = new Set(
+      (await tx.channelBehaviorPolicy.findMany({
+        where: { characterId: target.id },
+        select: { kind: true },
+      })).map((row) => row.kind),
+    );
+    added.channelPolicies += await insertChannelPolicies(
+      tx,
+      target.id,
+      bundle.channelPolicies,
+      ownerId,
+      existingPolicyKinds,
+    );
 
     for (const friend of bundle.friends) {
       const identity = await tx.externalIdentity.upsert({

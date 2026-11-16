@@ -28,6 +28,10 @@ type BundleCounts = {
   friendMemories: number;
   /** 朋友们名下的备注（她私底下的叫法）总条数；v2 及更早的卡没有这一段。 */
   friendAliases?: number;
+  /** 互动经验（只含已采纳）；v6 之前的卡没有这一段，按 0 显示。 */
+  interactionGuidance?: number;
+  /** 渠道行为策略；同样是 v6 新增。 */
+  channelPolicies?: number;
   growth?: GrowthCounts;
 };
 
@@ -52,6 +56,8 @@ type BundleAdded = {
   journalRevisions: number;
   catchphrases: number;
   friends: number;
+  interactionGuidance?: number;
+  channelPolicies?: number;
   growth?: GrowthCounts;
 };
 
@@ -149,6 +155,13 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
     friends: typeof declared.friends === "number" ? declared.friends : friends.length,
     friendMemories: typeof declared.friendMemories === "number" ? declared.friendMemories : friendMemories,
     friendAliases: typeof declared.friendAliases === "number" ? declared.friendAliases : friendAliases,
+    // v6 新增：老卡没有这两段时按 0 显示，不猜。
+    interactionGuidance: typeof declared.interactionGuidance === "number"
+      ? declared.interactionGuidance
+      : asArray(asRecord(source).interactionGuidance).length,
+    channelPolicies: typeof declared.channelPolicies === "number"
+      ? declared.channelPolicies
+      : asArray(asRecord(source).channelPolicies).length,
     growth: Object.fromEntries(Object.entries(asRecord(asRecord(asRecord(source).growth).tables)).map(([key, rows]) => [key, asArray(rows).length])),
   };
 }
@@ -223,6 +236,8 @@ function describeAdded(added: BundleAdded): string {
   else if (added.journals) parts.push(`${added.journals} 天日记手账`);
   if (added.catchphrases) parts.push(`${added.catchphrases} 条梗`);
   if (added.friends) parts.push(`${added.friends} 位朋友`);
+  if (added.interactionGuidance) parts.push(`${added.interactionGuidance} 条互动经验`);
+  if (added.channelPolicies) parts.push(`${added.channelPolicies} 条渠道策略`);
   const growth = describeGrowth(added.growth);
   if (growth) parts.push(growth);
   return parts.length ? `新增 ${parts.join("、")}` : "没有新内容（本机已经全有了）";
@@ -453,6 +468,14 @@ function formatExportedAt(value: string | null): string {
         <div>
           <dt>她的朋友</dt>
           <dd>{{ preview.counts.friends }} 位</dd>
+        </div>
+        <div>
+          <dt>互动经验</dt>
+          <dd>{{ preview.counts.interactionGuidance ?? 0 }} 条</dd>
+        </div>
+        <div>
+          <dt>渠道策略</dt>
+          <dd>{{ preview.counts.channelPolicies ?? 0 }} 条</dd>
         </div>
       </dl>
 
