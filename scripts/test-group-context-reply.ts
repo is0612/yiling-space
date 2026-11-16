@@ -112,6 +112,16 @@ try {
   assert.equal(carriedSummary, "小鱼答应稍后继续。");
   assert(JSON.stringify(calls[1]!.messages).includes("稍后继续聊。"), "Selected stored reply evidence reaches the final character.");
 
+  const previousOnly = { summary: "之前约好继续话题。", evidence: [{ id: "previous-only", role: "ASSISTANT" as const, content: "PREVIOUS_ONLY_ORIGINAL_" + "字".repeat(700), occurredAt: "2026-11-05T00:00:00Z" }] };
+  reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, evidenceMessageIds: ["previous-only", "invented"], knowledgeCandidate: { evidenceMessageIds: ["previous-only"], reason: "must not collect carried-only evidence" } }) : response({ ...reply, usedMemoryIds: [] }));
+  let carriedCandidate = false;
+  await run({ previousWorkingContext: previousOnly, onKnowledgeCandidate: async () => { carriedCandidate = true; } });
+  assert(JSON.stringify(calls[0]!.messages).includes("PREVIOUS_ONLY_ORIGINAL_"));
+  assert(JSON.stringify(calls[1]!.messages).includes("PREVIOUS_ONLY_ORIGINAL_"), "Evidence existing only in workingContext must reach final composition.");
+  assert(!JSON.stringify(calls[1]!.messages).includes("字".repeat(601)), "Carried originals retain the 600-character final evidence bound.");
+  assert.deepEqual(details[0]?.context?.evidence?.map(item => item.id), ["previous-only"]);
+  assert.equal(carriedCandidate, false, "Carried evidence may support a reply without expanding knowledge collection scope.");
+
   reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, participation: "observing" }) : response({ ...reply, action: "silent", reply: "", usedMemoryIds: [] }));
   const silent = await run();
   assert.equal(silent.action, "silent", "Direct invitation flag does not force final output after advisory analysis.");

@@ -692,12 +692,20 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
 }): Promise<ConversationReplyWithMemoryAssistant> {
   const turnContext = input.chatInput.groupChat ? input.turnContext : undefined;
   if (turnContext) {
-    input = { ...input, chatInput: snapshotAssistantTurnData(input.chatInput), assistant: snapshotAssistantTurnData(input.assistant), candidates: snapshotAssistantTurnData(input.candidates) };
+    const { readOnlyTools, ...chatData } = input.chatInput;
+    input = { ...input, chatInput: { ...snapshotAssistantTurnData(chatData), ...(readOnlyTools ? { readOnlyTools } : {}) }, assistant: snapshotAssistantTurnData(input.assistant), candidates: snapshotAssistantTurnData(input.candidates) };
     validateAssistantTurnEvidence(turnContext, input.chatInput);
   }
   const report = (memory: NonNullable<TurnDetailPatch["memory"]>) => {
     try { input.onTurnDetail?.({ memory }); } catch { /* Diagnostics never affect generation. */ }
   };
+  if (input.chatInput.readOnlyTools) {
+    skipAssistantTurnStage(turnContext, "memory", "not_needed");
+    report({ status: "not_needed" });
+    const toolInput = { ...input.chatInput, memoryAssistantAvailable: false, memoryAssistantEvidenceProvided: false };
+    const { memoryAssistantQuery: _unusedQuery, ...result } = await runAssistantTurnStage(turnContext, "response", "read-only-tools", toolInput, observer => generateConversationReply(toolInput, observer));
+    return result;
+  }
   const assistantAvailable = Boolean(input.assistant && (input.loadCandidates || input.candidates.length > 0));
 
   const firstInput: ConversationReplyInput = {

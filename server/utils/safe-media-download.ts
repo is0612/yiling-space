@@ -311,9 +311,11 @@ function isExpectedDownloadError(error: unknown, prefix: string): error is Error
   return error.message.startsWith(`${prefix}_`);
 }
 
-function validateMediaUrl(raw: string, prefix: "IMAGE" | "VOICE"): URL {
+function validateMediaUrl(raw: string, prefix: "IMAGE" | "VOICE" | "WEB"): URL {
   try {
-    return assertFetchableMediaUrl(raw);
+    const url = assertFetchableMediaUrl(raw);
+    if (prefix === "WEB" && url.port) throw new Error("WEB_INVALID_URL");
+    return url;
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
     if (code === "IMAGE_BLOCKED_HOST") throw new Error(`${prefix}_BLOCKED_HOST`);
@@ -325,7 +327,7 @@ function validateMediaUrl(raw: string, prefix: "IMAGE" | "VOICE"): URL {
 export async function downloadSafeMedia(
   rawUrl: string,
   options: {
-    prefix: "IMAGE" | "VOICE";
+    prefix: "IMAGE" | "VOICE" | "WEB";
     maxBytes: number;
     timeoutMs: number;
     headers?: Record<string, string>;

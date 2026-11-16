@@ -70,6 +70,26 @@ try {
   assert.equal(empty.snapshot().stages.find(row => row.stage === "memory")!.operations[0]!.state, "no_sources");
   assert.deepEqual(models, ["context", "memory", "character"]);
 
+  models = []; mode = "success";
+  let toolCalls = 0;
+  const ordinaryFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(String(options?.body));
+    if (body.model === "character" && !body.messages.some((row: { role: string }) => row.role === "tool")) {
+      assert(body.tools?.length, "readOnlyTools survives the group data snapshot");
+      return Response.json({ choices: [{ message: { content: null, tool_calls: [{ id: "read-1", type: "function", function: { name: "search_memory", arguments: JSON.stringify({ query: "电影" }) } }] }, finish_reason: "tool_calls" }] });
+    }
+    return ordinaryFetch(url, options);
+  };
+  const toolInput = { ...chat, readOnlyTools: { searchMemory: async () => { toolCalls++; return [{ content: "公开查询结果" }]; } } };
+  await generateGroupContextReply({ ...args, turnContext: makeTurn(), chatInput: toolInput });
+  assert.equal(toolCalls, 1);
+  mode = "context-fail"; models = [];
+  await generateGroupContextReply({ ...args, turnContext: makeTurn(), chatInput: toolInput });
+  assert.equal(toolCalls, 2, "callbacks also survive fallback without a second legacy wrapper generation");
+  assert(!models.includes("memory"), "native tools bypass the legacy memory assistant loop");
+  globalThis.fetch = ordinaryFetch;
+
   models = []; mode = "success"; const privateTurn = makeTurn();
   await generateGroupContextReply({ ...args, turnContext: privateTurn, chatInput: { ...chat, groupChat: false } });
   assert.deepEqual(models, ["character"]); for (const name of ["context", "memory", "response"]) assert.equal(logical(privateTurn, name), 0);

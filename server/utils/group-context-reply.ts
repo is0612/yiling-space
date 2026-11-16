@@ -37,13 +37,14 @@ type GroupContextReplyInput = {
 export async function generateGroupContextReply(input: GroupContextReplyInput): Promise<ConversationReplyWithMemoryAssistant> {
   if (!input.chatInput.groupChat || !input.turnContext) return generateGroupContextReplyInternal(input);
   // Snapshot data before validation/keying: deferred execution must never observe caller mutations.
+  const { readOnlyTools, ...chatData } = input.chatInput;
   const captured: GroupContextReplyInput = { ...input,
-    chatInput: snapshotAssistantTurnData(input.chatInput), assistant: snapshotAssistantTurnData(input.assistant),
+    chatInput: { ...snapshotAssistantTurnData(chatData), ...(readOnlyTools ? { readOnlyTools } : {}) }, assistant: snapshotAssistantTurnData(input.assistant),
     contextAssistant: snapshotAssistantTurnData(input.contextAssistant), candidates: snapshotAssistantTurnData(input.candidates),
     analysisBackground: snapshotAssistantTurnData(input.analysisBackground), previousWorkingContext: snapshotAssistantTurnData(input.previousWorkingContext),
   };
   validateAssistantTurnEvidence(input.turnContext, captured.chatInput, captured.analysisBackground, captured.previousWorkingContext);
-  return executeAssistantGroupTurn(input.turnContext, { chatInput: captured.chatInput, assistant: captured.assistant, contextAssistant: captured.contextAssistant, candidates: captured.candidates, analysisBackground: captured.analysisBackground, previousWorkingContext: captured.previousWorkingContext }, () => generateGroupContextReplyInternal(captured));
+  return executeAssistantGroupTurn(input.turnContext, { chatInput: chatData, assistant: captured.assistant, contextAssistant: captured.contextAssistant, candidates: captured.candidates, analysisBackground: captured.analysisBackground, previousWorkingContext: captured.previousWorkingContext }, () => generateGroupContextReplyInternal(captured));
 }
 async function generateGroupContextReplyInternal(input: GroupContextReplyInput): Promise<ConversationReplyWithMemoryAssistant> {
   const turnContext = input.chatInput.groupChat ? input.turnContext : undefined;
@@ -83,11 +84,13 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
 
   const evidenceIds = new Set(analysis.evidenceMessageIds);
   const currentSources = [...(input.chatInput.transcript ?? []), ...(input.analysisBackground ?? input.chatInput.groupBackground ?? []), ...input.chatInput.recentMessages];
+  // Validated carried originals remain available after they leave the recent window.
+  const replySources: typeof currentSources = [...currentSources, ...(input.previousWorkingContext?.evidence ?? [])];
   if (analysis.workingEvidenceMessageIds?.length && input.onWorkingContext) {
     await input.onWorkingContext({ summary: analysis.workingSummary ?? "", evidenceMessageIds: analysis.workingEvidenceMessageIds }).catch(() => undefined);
   }
   const seenEvidence = new Set<string>();
-  const evidence = currentSources
+  const evidence = replySources
     .filter(line => {
       if (!line.id || !evidenceIds.has(line.id) || seenEvidence.has(line.id)) return false;
       seenEvidence.add(line.id);
@@ -171,7 +174,7 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
   if (!analysis.knowledgeQuery || !input.loadKnowledge) skipAssistantTurnStage(turnContext, "knowledge", !input.loadKnowledge ? "not_enabled" : "not_needed");
   const original = input.chatInput;
   // 大背景留给分析器，角色拿到本轮原话、被引用证据和少量最近互动。
-  const background = currentSources
+  const background = replySources
     .filter(line => line.id && evidenceIds.has(line.id))
     .map(line => ({ ...line, content: line.content.slice(0, 600) }));
   const unique = <T extends { id: string }>(base: T[], extra: T[]): T[] => {

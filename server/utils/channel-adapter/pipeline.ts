@@ -1,3 +1,4 @@
+import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
 import { readInteractionGuidance } from "../interaction-guidance";
 import { readInteractionExperiences } from "../interaction-experiences";
@@ -1907,70 +1908,7 @@ async function runChannelTurn(input: {
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
   })));
-  let generated;
-  const generationStartedAt = Date.now();
-  try {
-    generated = await generateGroupContextReply({
-      ...(collaboration ? { turnContext: collaboration } : {}),
-      assistant: memoryAssistant,
-      onTurnDetail: turnDetail.update,
-      contextAssistant: contextRuntime,
-      previousWorkingContext,
-      onWorkingContext: async value => { pendingWorkingContext = value; },
-      analysisBackground: input.group?.analysisBackground?.map(line => ({
-        id: line.id, member: line.member, speaker: line.speaker, content: line.text,
-        ...(line.mentions?.length ? { mentions: line.mentions } : {}),
-        occurredAt: new Date(line.at).toISOString(),
-      })),
-      loadKnowledge,
-      onKnowledgeCandidate: async (candidate) => {
-        const modelConfig = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
-          ? character.modelConfig as Record<string, unknown> : {};
-        if (modelConfig.knowledgeAutoCollectEnabled !== true) return;
-        // 「收谁的」：SELECTED 模式下，证据里得有被标成知识来源的人（或主人本人）说过话。
-        // 判定用账号不用昵称；这里失败按「不收」处理，别让一次查询异常变成噪音入库。
-        const allowedSource = await isGroupKnowledgeSource(prisma, {
-          characterId: input.characterId,
-          platform: input.platform,
-          evidence: await resolveGroupEvidenceAuthors(candidate.sourceMessageIds),
-          scope: readKnowledgeCollectScope(modelConfig),
-        }).catch(() => false);
-        if (!allowedSource) return;
-        const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
-        const duplicate = await prisma.knowledgeCandidate.findFirst({
-          where: { characterId: input.characterId, sourceType: "CHAT", rawContent: candidate.rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
-          select: { id: true },
-        });
-        if (duplicate) return;
-        await prisma.knowledgeCandidate.create({
-          data: {
-            characterId: input.characterId,
-            sourceType: "CHAT",
-            rawContent: candidate.rawContent,
-            sourceRef: {
-              ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-              messageIds: candidate.sourceMessageIds,
-              ...(candidate.speakers?.length ? { speakers: candidate.speakers } : {}),
-              reason: candidate.reason,
-              capturedAt: new Date().toISOString(),
-              channel: "GROUP",
-            } satisfies Prisma.InputJsonObject,
-          },
-        });
-      },
-      recordAssistantUsage: async (entry) => {
-        await recordModelUsage({
-          kind: entry.kind,
-          model: entry.model,
-          usage: toUsageTokens(entry.usage),
-          characterId: input.characterId,
-          channelBindingId: input.bindingId,
-          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-          metadata: { status: entry.status, turnId },
-        });
-      },
-      candidates: [],
-      loadCandidates: async (searchQuery: string, lookupOptions?: { participantName?: string; deterministicTimeline: boolean }) => {
+  const loadMemoryCandidates = async (searchQuery: string, lookupOptions?: { participantName?: string; deterministicTimeline: boolean }) => {
         // 人物名只从主人原始问题解析一次；不从记忆助手模板查询串反向解析。
         const searchParticipantName = lookupOptions?.participantName ?? parseEventParticipantQuery(currentMessage);
         const searchParticipantIds = searchParticipantName
@@ -2213,8 +2151,96 @@ async function runChannelTurn(input: {
           ...(searchParticipantIds.length ? { participantIds: searchParticipantIds } : {}),
           allowPrivate: !isGroup,
         });
+  };
+
+  const toolReads: Array<{ name: string; status: string; count: number }> = [];
+  const observeToolRead = async (name: string, load: () => Promise<unknown[]>): Promise<unknown[]> => {
+    try {
+      const rows = await load();
+      toolReads.push({ name, status: rows.length ? "success" : "no_sources", count: rows.length });
+      return rows;
+    } catch (error) { toolReads.push({ name, status: "failed", count: 0 }); throw error; }
+  };
+  const toolMemoryCache = new Map<string, Promise<unknown>>();
+  const toolKnowledgeCache = new Map<string, Promise<unknown>>();
+  const readOnlyTools = {
+    searchMemory: (query: string): Promise<unknown> => {
+      const key = query.trim().slice(0, 240);
+      if (!toolMemoryCache.has(key)) toolMemoryCache.set(key, observeToolRead("search_memory", async () => projectToolMemories(await loadMemoryCandidates(key), isGroup)));
+      return toolMemoryCache.get(key)!;
+    },
+    searchKnowledge: (query: string): Promise<unknown> => {
+      const key = query.trim().slice(0, 240);
+      if (!toolKnowledgeCache.has(key)) toolKnowledgeCache.set(key, observeToolRead("search_knowledge", async () => projectToolKnowledge(await loadKnowledge(key))));
+      return toolKnowledgeCache.get(key)!;
+    },
+  };
+  let generated;
+  const generationStartedAt = Date.now();
+  try {
+    generated = await generateGroupContextReply({
+      ...(collaboration ? { turnContext: collaboration } : {}),
+      assistant: memoryAssistant,
+      onTurnDetail: turnDetail.update,
+      contextAssistant: contextRuntime,
+      previousWorkingContext,
+      onWorkingContext: async value => { pendingWorkingContext = value; },
+      analysisBackground: input.group?.analysisBackground?.map(line => ({
+        id: line.id, member: line.member, speaker: line.speaker, content: line.text,
+        ...(line.mentions?.length ? { mentions: line.mentions } : {}),
+        occurredAt: new Date(line.at).toISOString(),
+      })),
+      loadKnowledge,
+      onKnowledgeCandidate: async (candidate) => {
+        const modelConfig = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
+          ? character.modelConfig as Record<string, unknown> : {};
+        if (modelConfig.knowledgeAutoCollectEnabled !== true) return;
+        // 「收谁的」：SELECTED 模式下，证据里得有被标成知识来源的人（或主人本人）说过话。
+        // 判定用账号不用昵称；这里失败按「不收」处理，别让一次查询异常变成噪音入库。
+        const allowedSource = await isGroupKnowledgeSource(prisma, {
+          characterId: input.characterId,
+          platform: input.platform,
+          evidence: await resolveGroupEvidenceAuthors(candidate.sourceMessageIds),
+          scope: readKnowledgeCollectScope(modelConfig),
+        }).catch(() => false);
+        if (!allowedSource) return;
+        const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+        const duplicate = await prisma.knowledgeCandidate.findFirst({
+          where: { characterId: input.characterId, sourceType: "CHAT", rawContent: candidate.rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
+          select: { id: true },
+        });
+        if (duplicate) return;
+        await prisma.knowledgeCandidate.create({
+          data: {
+            characterId: input.characterId,
+            sourceType: "CHAT",
+            rawContent: candidate.rawContent,
+            sourceRef: {
+              ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+              messageIds: candidate.sourceMessageIds,
+              ...(candidate.speakers?.length ? { speakers: candidate.speakers } : {}),
+              reason: candidate.reason,
+              capturedAt: new Date().toISOString(),
+              channel: "GROUP",
+            } satisfies Prisma.InputJsonObject,
+          },
+        });
       },
+      recordAssistantUsage: async (entry) => {
+        await recordModelUsage({
+          kind: entry.kind,
+          model: entry.model,
+          usage: toUsageTokens(entry.usage),
+          characterId: input.characterId,
+          channelBindingId: input.bindingId,
+          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+          metadata: { status: entry.status, turnId },
+        });
+      },
+      candidates: [],
+      loadCandidates: loadMemoryCandidates,
       chatInput: {
+        ...(input.platform === "qq-onebot" && qqReadOnlyTaskRequested(currentMessage) ? { readOnlyTools } : {}),
         preferences,
         expressionHabits,
         goals,
@@ -2308,7 +2334,7 @@ async function runChannelTurn(input: {
     await recordModelUsage({
       kind: "channel", model: chatSettings.model, characterId: input.characterId,
       channelBindingId: input.bindingId,
-      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize() },
+      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
     });
     return { status: "ignored", reason: (error instanceof Error ? error.message : "model_error").slice(0, 200) };
   }
@@ -2323,7 +2349,7 @@ async function runChannelTurn(input: {
     kind: "channel", model: chatSettings.model, usage: toUsageTokens(generated.usage),
     characterId: input.characterId, channelBindingId: input.bindingId,
     ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-    metadata: { status: "success", action: generated.action, durationMs: generationDurationMs, turnId, turnDetail: turnDetail.serialize() },
+    metadata: { status: "success", action: generated.action, durationMs: generationDurationMs, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
   });
   const now = new Date();
   const assistantAt = new Date(now.getTime() + 1);

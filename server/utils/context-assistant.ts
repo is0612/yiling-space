@@ -277,8 +277,9 @@ function readAnalysis(value: unknown, payload: PublicPayload): ContextAnalysis {
   const summary = text(result.summary, 1_600);
   if (!summary) throw new ContextAssistantError();
   const allowed = new Set([...payload.transcript, ...payload.groupBackground, ...payload.recentMessages].filter(row => row.content).map(row => row.id).filter(Boolean));
+  const evidenceAllowed = new Set([...allowed, ...(payload.previousWorkingContext?.evidence.map(row => row.id) ?? [])]);
   const evidenceMessageIds = [...new Set((Array.isArray(result.evidenceMessageIds) ? result.evidenceMessageIds : [])
-    .filter((id): id is string => typeof id === "string" && allowed.has(id)))].slice(0, 24);
+    .filter((id): id is string => typeof id === "string" && evidenceAllowed.has(id)))].slice(0, 24);
   const participation = evidenceMessageIds.length && (result.participation === "invited" || result.participation === "observing")
     ? result.participation : "uncertain";
   const memoryQuery = text(result.memoryQuery, 240);
