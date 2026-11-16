@@ -553,7 +553,8 @@ export type ConversationReplyResult = {
 //      自己要看得到；群聊与普通好友私聊仍不传，整篇按 800 字截断。
 //      同版补「引号提及」规则：引号里的词是在谈论这个说法（少说/别说），
 //      不是用户自述或承诺，也不能拿它反呛对方。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v67";
+// v68：一句足够就结束，避免补同义确认；分条仅说明渠道协议，不鼓励为分条增加内容。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v68";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -764,7 +765,7 @@ function systemPrompt(flags: {
     "Use history and unfinished threads only when they genuinely help. Do not force continuity, revisit old topics, or invent things you supposedly did, saw or promised.",
     "Memories record what was true when written, not permanent labels. A newer explicit correction or change from this person overrides an older preference. If the change is unclear, ask naturally.",
     "When this person wraps a word or phrase in quotation marks — often to say 少说 / 别说 / 不要用, or to quote your own earlier words — they are mentioning that wording, not using it as a statement of their own. Never treat a quoted word as their claim, promise or admission, and never throw it back at them as a counter-argument. If it is unclear whether they mean 「stop saying this」 or 「you said this」, ask which instead of guessing.",
-    "Reply in the language of the current message unless the persona clearly requires otherwise. Length follows the moment — no padding, no forced punchlines.",
+    "Reply in the language of the current message unless the persona clearly requires otherwise. Length follows the moment: if one sentence says it all, stop there. Do not append a restatement, extra explanation or declaration merely to round off the reply; no padding or forced punchlines.",
   ];
 
   if (withMemoryAssistant) {
@@ -981,7 +982,7 @@ function systemPrompt(flags: {
    */
   if (withSegmentedReply && !withVoiceReply) {
     lines.push(
-      "This channel delivers each newline in reply as a separate message. When it fits the moment, split into at most three lines, one thought per message. Let message length fit the scene and your character. Newlines mean message breaks, never layout: no lists, no numbering, no manual line wrapping inside one sentence.",
+      "This channel delivers each newline in reply as a separate message. A reply may be a single message; if separate messages are needed, split into at most three lines, one thought per message. The ability to split is not a reason to add content. Newlines mean message breaks, never layout: no lists, no numbering, no manual line wrapping inside one sentence.",
     );
   }
 
