@@ -921,7 +921,14 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
 .el-overlay .el-dialog__footer .el-button + .el-button { margin-left: 8px; }
 
 /* ── 确认框（MessageBox）跟 dialog 同一套外形 ──────────────────
-   结构没有 header/footer 分栏，只有一个 padding 包住全部内容。 */
+   结构没有 header/footer 分栏，只有一个 padding 包住全部内容。
+
+   层级另说一句：Element Plus 的弹层 z-index 走一个全局递增计数器，但在 Nuxt 下
+   MessageBox 会另算一份 —— 实测抽屉开在 2005，随后弹出的确认框只拿到 2002，
+   于是确认框被抽屉的遮罩盖住（看得见、点不到）。确认框永远该在最上面，
+   这里统一抬到 3000；内联 z-index 只有 !important 压得住。
+   别在单个页面里再写一份同样的补丁。 */
+.el-overlay.is-message-box { z-index: 3000 !important; }
 .el-overlay.is-message-box .el-message-box {
   width: 420px;
   max-width: calc(100vw - 32px);

@@ -28,7 +28,7 @@ async function preview() {
 async function archive(pair: Pair) {
   const seq = sequence, characterId = props.characterId;
   try {
-    await ElMessageBox.confirm(`保留「${pair.keep.title}」，隐藏「${pair.candidate.title}」？共享来源不代表重复，请先核对两条内容。隐藏后可在当天「已隐藏」中恢复。`, "确认隐藏候选", { confirmButtonText: "隐藏这一条", cancelButtonText: "取消", type: "warning", appendTo: document.body, modalClass: "memory-duplicate-confirm-overlay" });
+    await ElMessageBox.confirm(`保留「${pair.keep.title}」，隐藏「${pair.candidate.title}」？共享来源不代表重复，请先核对两条内容。隐藏后可在当天「已隐藏」中恢复。`, "确认隐藏候选", { confirmButtonText: "隐藏这一条", cancelButtonText: "取消", type: "warning", appendTo: document.body });
     if (seq !== sequence || saving.value) return;
     saving.value = true;
     await $fetch(`/api/characters/${encodeURIComponent(characterId)}/memory-events/duplicates`, { method: "POST", body: { keepId: pair.keep.id, candidateId: pair.candidate.id, token: pair.token } });
@@ -126,11 +126,6 @@ async function archive(pair: Pair) {
     </template>
   </el-dialog>
 </template>
-
-<style>
-/* Confirmation belongs above the candidate dialog, including nested dialog contexts. */
-.memory-duplicate-confirm-overlay { z-index: 3000 !important; }
-</style>
 
 <style scoped>
 .duplicate-pair { border-top: 1px solid var(--el-border-color); padding: 20px 0; }
