@@ -527,8 +527,8 @@
 
 建议新增五类数据，全部以 `characterId` 隔离：
 
-1. **KnowledgeTopicRun**：一次“发现主题”的执行记录。保存角色 ID、状态（PROCESSING / READY / FAILED / STALE / COMPLETED / DISMISSED）、本次输入知识 ID 与 revision 的快照、模型配置标识（不保存 API Key）、错误摘要及时间。它负责说明“这次分析了什么、结果是否过期”。
-2. **KnowledgeTopicSuggestion**：某次 Run 产出的一个待审核主题建议。保存名称、说明、归组理由、建议成员 ID 列表及审核状态。建议成员 ID 必须是 Run 输入快照的子集。
+1. **KnowledgeTopicRun**：一次“发现主题”的执行记录，同时作为 Worker 任务记录。保存角色 ID、状态（QUEUED / PROCESSING / READY / FAILED / STALE）、本次输入知识 ID 与 revision 快照、模型配置标识（不保存 API Key）、租约/重试字段、错误摘要及时间。`READY` 表示建议已生成并可审核；建议是否处理完由 Suggestion 状态表达，不再另设含义重叠的 Run `COMPLETED` / `DISMISSED`。
+2. **KnowledgeTopicSuggestion**：某次 Run 产出的一个待审核主题建议。保存名称、说明、归组理由、建议成员 ID 列表及状态（PENDING / ACCEPTED / DISMISSED）。建议成员 ID 必须是 Run 输入快照的子集；部分采纳时记录实际采纳的成员，不能修改原始建议快照。
 3. **KnowledgeTopic**：用户采纳后的正式主题。保存名称、说明、状态、revision 和时间。主题不复制知识正文。
 4. **KnowledgeTopicMember**：正式主题与知识条目的多对多引用。保存 topicId、itemId、采纳时的 itemRevision 和加入时间；同一主题内同一知识只出现一次，不同主题之间允许重复归属。
 5. **KnowledgeTopicRevision**：主题每次修改前的完整快照，包含名称、说明、状态及成员 ID/revision 列表，用于历史查看和撤销。
@@ -551,24 +551,36 @@
 - 撤销操作不是删除历史，而是将某个历史快照恢复为新的 revision，保留完整审计链。
 - 用户忽略建议只更新建议状态，不触碰正式主题和知识条目。
 
-### API 草案
+### API 契约（第一版）
 
-沿用现有 `/api/characters/:id/growth/knowledge` 路径和 owner 鉴权模式：
+统一前缀：`/api/characters/:characterId/growth/knowledge`。所有接口沿用现有 owner 鉴权；服务端从已鉴权角色上下文确定 characterId，并在每次读写时校验资源归属，不能只依赖 URL 或客户端传入的 ID。
 
-| 方法 | 路径（相对知识 API） | 用途 |
+| 方法 | 完整路径 | 用途与关键约束 |
 |---|---|---|
-| POST | `/topics/runs` | 创建主题发现任务；提交所选 ACTIVE item IDs |
-| GET | `/topics/runs` | 查询当前角色的历史批次及状态 |
-| GET | `/topics/runs/:runId` | 查看批次建议与未归组条目 |
-| POST | `/topics/runs/:runId/suggestions/:suggestionId/accept` | 采纳建议为新主题或应用到已有主题 |
-| POST | `/topics/suggestions/:suggestionId/dismiss` | 忽略建议 |
-| GET | `/topics`、`/topics/:topicId` | 查询主题列表与详情 |
-| PATCH | `/topics/:topicId` | 修改主题名称/说明 |
-| POST | `/topics/:topicId/members`、`DELETE /topics/:topicId/members/:itemId` | 添加/移除成员 |
-| POST | `/topics/:topicId/split`、`POST /topics/merge` | 拆分或合并主题组 |
-| GET | `/topics/:topicId/revisions`、`POST /topics/:topicId/revert` | 查看历史与按快照撤销 |
+| POST | `/topics/runs` | 创建发现任务；请求体为 `{ itemIds: string[] }`，必须是 1–50 个不重复 ID，服务端逐条确认属于当前角色且为 ACTIVE。成功创建返回 202 与 runId，重复提交视为用户明确发起的新批次。 |
+| GET | `/topics/runs` | 分页查询当前角色的批次历史，返回状态、创建时间、输入数量与建议数量。 |
+| GET | `/topics/runs/:runId` | 查询批次详情、建议、明确未归组条目及失败/过期原因；不得返回其他角色数据。 |
+| POST | `/topics/runs/:runId/suggestions/:suggestionId/accept` | 采纳建议。请求体明确指定 `{ mode: "CREATE" }` 或 `{ mode: "APPLY", topicId: string }`，并可传 `memberItemIds` 选择部分成员；省略时默认使用建议全部成员。只能选择建议成员的子集，且采纳前重新校验 ACTIVE 与 revision。 |
+| POST | `/topics/suggestions/:suggestionId/dismiss` | 将待审核建议标记为 DISMISSED，不修改主题或知识条目。 |
+| GET | `/topics`、`/topics/:topicId` | 查询主题列表/详情；详情包含成员当前状态与失效提示。 |
+| POST | `/topics` | 手动创建空主题，支持名称与说明。 |
+| PATCH / DELETE | `/topics/:topicId` | 修改名称/说明；删除只删除主题组织数据及其修订历史，不删除知识条目。 |
+| POST / DELETE | `/topics/:topicId/members`、`/topics/:topicId/members/:itemId` | 添加/移除成员；添加只允许当前角色 ACTIVE 知识，且每次变更先写修订快照。 |
+| POST | `/topics/:topicId/split` | 拆分主题；请求体提供新主题名称/说明与要移动的成员 ID，必须是源主题当前有效成员的非空子集；源主题保留其余成员。 |
+| POST | `/topics/merge` | 合并主题组；请求体提供同一角色下至少两个 topicIds 与目标主题信息。保留一个目标主题，将其他主题的成员引用去重迁入；每个受影响主题均写修订快照。 |
+| GET | `/topics/:topicId/revisions` | 查询主题修订历史。 |
+| POST | `/topics/:topicId/revert` | 请求体提供 revisionId；将该快照恢复为新的 revision，不删除或改写历史记录。 |
 
-Run 的模型调用应与 HTTP 请求生命周期解耦，避免长时间请求；第一版可沿用项目已有后台任务模式，但不得引入每条聊天消息触发的自动任务。具体采用同步还是后台任务，需先核对现有任务基础设施后确定。
+**状态与并发约定：**
+
+- Run 状态仅使用 `QUEUED`、`PROCESSING`、`READY`、`FAILED`、`STALE`。Worker 领取任务后通过租约/fencing token 防止过期 Worker 覆盖新结果；失败重试耗尽后为 FAILED。
+- Suggestion 状态仅使用 `PENDING`、`ACCEPTED`、`DISMISSED`。Run 为 READY 后，建议可以逐条审核；不额外维护含义重叠的“批次已完成”状态。
+- 创建 Run 时服务端保存输入 ID/revision 快照。模型输出必须满足 ID 白名单与结构约束；每个输入 ID 至少出现在一个主题建议或 `ungroupedIds` 中，允许同一知识出现在多个主题。
+- 保存建议前若任一输入条目不再属于当前角色、状态不再 ACTIVE 或 revision 变化，整批 Run 标记 STALE，不保存部分建议。
+- 所有主题写操作在事务中先保存受影响主题的修改前快照，再更新主题与成员关系；同一主题同一知识唯一。对主题或成员的跨角色 ID 一律按不可访问处理。
+- 主题成员读取时实时关联 KnowledgeItem；失效成员只展示状态提示，不作为有效成员参与主题建议或聊天检索。
+
+Run 的模型调用与 HTTP 请求生命周期解耦：POST 只创建 QUEUED 记录并快速返回，由现有常驻 Worker 宿主领取；新增知识主题专属处理步骤与租约字段，不复用 MemoryJob 或社交任务业务表，也不新建第二套 Worker。主题发现仅由用户在知识页面显式触发。
 
 ### 页面状态草案
 
@@ -579,11 +591,6 @@ Run 的模型调用应与 HTTP 请求生命周期解耦，避免长时间请求�
 - **已采纳主题**：列表显示主题名称和成员数；详情可改名、增删成员、拆分/合并主题、查看历史与撤销。
 - **未归组知识**：仅是当前主题视图的辅助筛选，不改变知识库条目状态。
 - **失效成员提示**：主题成员已不再 ACTIVE 时明确标记，不提供把归档/回收站/已合并条目直接加入主题的操作。
-
-### 尚需技术核实的一个问题
-
-后台任务基础设施是否适合承载“用户显式触发、单次最多 50 条”的主题分析，以及如何报告进度/取消。应先复用现有任务队列与模型调用封装，避免为主题聚类新造一套通用任务系统。核实后再冻结最终 API 和数据模型。
-
 
 ### 后台任务基础设施核查结论（2026-11-17）
 
@@ -596,4 +603,4 @@ Run 的模型调用应与 HTTP 请求生命周期解耦，避免长时间请求�
 
 **建议实现方式：** 新增知识主题专属 Run/Task 状态与租约字段，复用现有 Worker 宿主增加一个 `processNextKnowledgeTopicRun` 步骤；模型执行、租约续期、失败重试、失效检测和结果保存由知识主题领域模块自己负责。Run 记录本身兼任任务记录，不再额外造一张重复的 Task 表。模型调用仍复用知识助手的模型连接解析方式，但提示词、输入白名单、输出校验与用量记账独立。
 
-**结论：** 后台任务方案可以复用现有进程入口，但任务数据与领域逻辑必须独立。该结论仍需在编码前由实现者复核当前 Worker 调度顺序、租约工具和部署脚本；不将 MemoryJob 或 SocialRelationshipAssessmentTask 直接改造成通用表。
+**结论：** 后台任务方案复用现有进程入口，任务数据与领域逻辑保持知识主题专属。实现前仍需由实现者按当前代码复核 Worker 调度顺序、租约工具和部署脚本；不将 MemoryJob 或 SocialRelationshipAssessmentTask 改造成通用表。
