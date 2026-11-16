@@ -7,7 +7,8 @@
  *
  * 内容按领域做取舍：
  *   - v5 成长：知识、社交评估与证据、反思结论、成长事件与投递历史（执行状态归档）
- *   - 人设：name / basePrompt / styleExamples / userAddress + 少量模型参数
+ *   - v7 表达习惯 / 目标 / 偏好：她说话的方式、在追的事、口味
+ *   - 人设：name / basePrompt / styleExamples / userAddress + 全部非密钥设置（v7 起）
  *   - 记忆：CHARACTER_GLOBAL 与**导出者自己的** USER_PRIVATE 长期记忆
  *   - 忆泡：发生过什么（事实层）
  *   - 忆泡日历：哪些天整理过、整理到哪一刻（`memory_event_days`）。不带它，日历页
@@ -53,8 +54,15 @@ export const CHARACTER_BUNDLE_FORMAT = "yiling-hub.character";
  * v6 增加互动经验与渠道行为策略（2026-11-16）。这两段是「她怎么跟人打交道」的一部分，
  * 之前漏在包外，换台机器养等于一夜之间忘掉所有被教过的东西。v6 起必须声明这两段，
  * 老卡按空内容读取 —— 让老程序读 v6 卡会被上面那条版本检查拦下，好过它静默丢掉这些准则。
+ * v7（2026-11-17）补三处「换机器就换个人」的缺口：
+ *   - `modelConfig` 白名单从 9 个键扩到全部非密钥设置：语音（开关/概率/冷却/TTS 音色与语气）、
+ *     表情额度、看图、自动收表情、自动捡梗、私聊主动、群内冷场主动、四个助手模型、日额度
+ *   - 新增表达习惯 / 目标 / 偏好三段（她学到的说话方式、在追的事、口味）
+ *   - `memorySetting` 带上原文保留天数与自动清理开关
+ * 音色、语气指令这类东西属于「她是谁」，不再是可选的展示字段；凭据（`*ApiKey`）仍然一律不带，
+ * 新机器上缺 Key 时的表现和别的模型一样是「未配置」。
  */
-export const CHARACTER_BUNDLE_VERSION = 6;
+export const CHARACTER_BUNDLE_VERSION = 7;
 /** 导入包最大字节数：够 4000 条记忆 + 600 篇总结 + 1500 篇手账，再大基本是塞了别的东西。 */
 export const CHARACTER_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -96,6 +104,23 @@ export const CHARACTER_BUNDLE_LIMITS = {
   interactionGuidance: 200,
   /** 渠道行为策略：每种渠道最多一条，留 20 个位置足够覆盖所有渠道。 */
   channelPolicies: 20,
+  /**
+   * 表达习惯 / 目标 / 偏好（v7）。
+   *
+   * 三个上限都比「正常使用量」放宽一档：这些是人一条条教出来的，条数天然有限，
+   * 撞上限多半意味着包被别的东西污染了（或者她把三年前的目标都留着）。超了就拒绝，
+   * 不静默截断 —— 悄悄少带走一半目标，比导不进来更难发现。
+   */
+  expressionHabits: 300,
+  goals: 120,
+  preferences: 300,
+  /** 单个目标/偏好/习惯的正文、场景、原因长度，对齐数据库列。 */
+  habitContent: 300,
+  habitContext: 200,
+  goalTitle: 100,
+  goalDescription: 1000,
+  preferenceTopic: 100,
+  reason: 1000,
   name: 100,
   alias: 100,
   description: 2000,
@@ -159,6 +184,17 @@ export type CharacterBundleOrigin = {
   characterId: string;
 };
 
+/**
+ * 模型参数与行为开关。
+ *
+ * v7 之前只带 9 个「不会让角色做出意外动作」的键，理由是行为开关依赖新机器上的服务商与网关。
+ * 代价太大：换台机器之后她不再发表情、不再主动找话，声音也从「软软的带点气声」变成默认音色 ——
+ * 那已经不是一个参数，是换了一个人。所以 v7 起凡是**非密钥**的设置都带走，
+ * 密钥继续靠 `SECRET_NAME_PATTERN` 与值形态（`v1.` 密文）剥掉。
+ *
+ * 新机器上缺 Key / 缺服务商时，表现和别的模型一样：设置页显示未配置，聊天时那条链路降级，
+ * 而不是静默地按默认值乱说话。
+ */
 export type CharacterBundleModelConfig = {
   chatModel?: string;
   chatTemperature?: number;
@@ -169,6 +205,82 @@ export type CharacterBundleModelConfig = {
   snapshotTokenBudget?: number;
   memoryItemLimit?: number;
   recentMessageLimit?: number;
+  /** 表情额度：多少分钟内最多贴几张（贴图与内置表情共用）。 */
+  emojiEnabled?: boolean;
+  emojiWindowMinutes?: number;
+  emojiPerWindow?: number;
+  /** 语音：要不要发语音、要不要转写别人的语音，以及节奏。 */
+  voiceEnabled?: boolean;
+  voiceTranscribe?: boolean;
+  voiceChance?: number;
+  voiceCooldownMinutes?: number;
+  voiceApiBaseUrl?: string;
+  /** 她的声音。这几项丢了，换机器后声音就不是她了。 */
+  ttsProvider?: string;
+  ttsVoice?: string;
+  ttsModel?: string;
+  ttsSpeed?: number;
+  ttsGroupId?: string;
+  ttsInstructions?: string;
+  asrProvider?: string;
+  asrModel?: string;
+  asrApiBaseUrl?: string;
+  /** 看图。 */
+  imageUnderstanding?: boolean;
+  visionModel?: string;
+  visionApiBaseUrl?: string;
+  /** 收集类开关：表情、梗。 */
+  stickerAutoCollect?: boolean;
+  catchphraseAutoMine?: boolean;
+  knowledgeCollectScope?: string;
+  /** 记忆与额度。 */
+  eventRecentDays?: number;
+  dailyTokenLimit?: number;
+  /** 四个后台助手的模型选择（enabled 开关不随包走，见 `PORTABLE_MODEL_CONFIG_KEYS` 上方）。 */
+  contextAssistantModel?: string;
+  contextAssistantTemperature?: number;
+  contextAssistantApiBaseUrl?: string;
+  contextAssistantMaxInputTokens?: number;
+  contextAssistantMaxOutputTokens?: number;
+  memoryAssistantModel?: string;
+  memoryAssistantTemperature?: number;
+  memoryAssistantApiBaseUrl?: string;
+  memoryAssistantMaxInputTokens?: number;
+  memoryAssistantMaxOutputTokens?: number;
+  knowledgeAssistantModel?: string;
+  knowledgeAssistantTemperature?: number;
+  knowledgeAssistantApiBaseUrl?: string;
+  knowledgeAssistantMaxInputTokens?: number;
+  knowledgeAssistantMaxOutputTokens?: number;
+  socialRelationshipAssessmentAssistantModel?: string;
+  socialRelationshipAssessmentAssistantTemperature?: number;
+  socialRelationshipAssessmentAssistantApiBaseUrl?: string;
+  socialRelationshipAssessmentAssistantMaxInputTokens?: number;
+  socialRelationshipAssessmentAssistantMaxOutputTokens?: number;
+  /** 私聊主动找话 / 群里冷场接话：整块是对象，字段在下面各自白名单。 */
+  proactive?: CharacterBundleProactiveSettings;
+  groupInitiative?: CharacterBundleGroupInitiativeSettings;
+};
+
+/** 私聊主动：字段与 `resolveProactiveSettings` 同口径。 */
+export type CharacterBundleProactiveSettings = {
+  enabled: boolean;
+  dailyMax: number;
+  minGapMinutes: number;
+  quietStart: string;
+  quietEnd: string;
+  userActiveMinutes: number;
+  minConfidence: number;
+};
+
+/** 群内冷场主动：字段与 `resolveGroupInitiativeSettings` 同口径。 */
+export type CharacterBundleGroupInitiativeSettings = {
+  enabled: boolean;
+  idleMinutes: number;
+  dailyMax: number;
+  minGapMinutes: number;
+  quietStart: string;
+  quietEnd: string;
 };
 
 export type CharacterBundleMemory = {
@@ -327,6 +439,12 @@ export type CharacterBundleCounts = {
   interactionGuidance: number;
   /** 带走了几条已采纳的渠道行为策略。 */
   channelPolicies: number;
+  /** 表达习惯（语义上同「语言系统」）。 */
+  expressionHabits: number;
+  /** 目标与愿望（含已完成/已放弃的）。 */
+  goals: number;
+  /** 口味偏好。 */
+  preferences: number;
   growth?: ReturnType<typeof growthCounts>;
 };
 
@@ -352,9 +470,55 @@ export type CharacterBundleChannelPolicy = {
   chatScope: "GROUP";
 };
 
+/**
+ * 表达习惯：她说话的调子、用词、长短。
+ *
+ * 只带 ACTIVE 与 DISABLED：前者是她现在的说法，后者是她被明确关掉过的说法 ——
+ * 关掉本身也是选择，带过去不该又变回开着。PENDING / REJECTED 是本机的决策现场，不跟卡走。
+ */
+export type CharacterBundleExpressionHabit = {
+  kind: "TONE" | "WORDING" | "LENGTH";
+  content: string;
+  context: string;
+  chatScope: "ALL" | "GROUP" | "PRIVATE";
+  status: "ACTIVE" | "DISABLED";
+  /** 形成原因：她自己为什么这么说话，属于内容而不是设置。 */
+  reason: string;
+};
+
+/**
+ * 目标与愿望：她在追什么、追完过什么。
+ *
+ * PENDING（等人确认）与 REJECTED（否决过）不带；PAUSED / COMPLETED / ABANDONED 要带 ——
+ * 「她放弃过一个目标」和「她实现过一个目标」都是她经历过的事，不是待办。
+ * 进展（progress）不带：那是本地一天天记下来的事实，换台机器后从零开始才诚实。
+ */
+export type CharacterBundleGoal = {
+  kind: "GOAL" | "WISH";
+  title: string;
+  description: string;
+  reason: string;
+  status: "ACTIVE" | "PAUSED" | "COMPLETED" | "ABANDONED";
+};
+
+/** 口味：喜欢 / 不喜欢 / 感兴趣。口径同表达习惯。 */
+export type CharacterBundlePreference = {
+  kind: "LIKE" | "DISLIKE" | "INTEREST";
+  topic: string;
+  reason: string;
+  status: "ACTIVE" | "DISABLED";
+};
+
 export type GuidanceKindName = "UNDERSTANDING" | "REFERENCE" | "SITUATION" | "STRATEGY";
 const GUIDANCE_KIND_NAMES: readonly GuidanceKindName[] = ["UNDERSTANDING", "REFERENCE", "SITUATION", "STRATEGY"];
 const GUIDANCE_CHAT_SCOPES = ["ALL", "GROUP", "PRIVATE"] as const;
+
+const HABIT_KINDS = ["TONE", "WORDING", "LENGTH"] as const;
+const HABIT_STATUSES = ["ACTIVE", "DISABLED"] as const;
+const GOAL_KINDS = ["GOAL", "WISH"] as const;
+const GOAL_STATUSES = ["ACTIVE", "PAUSED", "COMPLETED", "ABANDONED"] as const;
+const PREFERENCE_KINDS = ["LIKE", "DISLIKE", "INTEREST"] as const;
+const PREFERENCE_STATUSES = ["ACTIVE", "DISABLED"] as const;
 
 export type CharacterBundle = {
   format: typeof CHARACTER_BUNDLE_FORMAT;
@@ -368,6 +532,9 @@ export type CharacterBundle = {
     snapshotIntervalDays: number;
     timezone: string;
     autoSnapshotEnabled: boolean;
+    /** 原文保留天数：null = 不自动清理。v7 之前不带，导入端按默认值兜。 */
+    rawMessageRetentionDays?: number | null;
+    rawMessageCleanupEnabled?: boolean;
   };
   memories: CharacterBundleMemory[];
   events: CharacterBundleEvent[];
@@ -380,14 +547,25 @@ export type CharacterBundle = {
   interactionGuidance: CharacterBundleInteractionGuidance[];
   /** 渠道行为策略：只含 ACTIVE。 */
   channelPolicies: CharacterBundleChannelPolicy[];
+  /** 表达习惯：ACTIVE + DISABLED（v7）。 */
+  expressionHabits: CharacterBundleExpressionHabit[];
+  /** 目标与愿望：ACTIVE / PAUSED / COMPLETED / ABANDONED（v7）。 */
+  goals: CharacterBundleGoal[];
+  /** 口味偏好：ACTIVE + DISABLED（v7）。 */
+  preferences: CharacterBundlePreference[];
   growth: CharacterGrowthBundle;
   counts: CharacterBundleCounts;
 };
 
 /**
- * 模型参数白名单：导出只带这些键，导入也只认这些键。
- * 行为开关（表情、语音、主动搭话、群内接话）不随包走 —— 它们依赖新机器上的服务商和网关，
- * 照搬只会让角色在新环境里做出没人预期的动作。
+ * 模型参数与行为开关白名单：导出只带这些键，导入也只认这些键。
+ *
+ * v7 之前这里只有 9 个「模型参数」，注释写着「行为开关不随包走，它们依赖新机器上的服务商和网关」。
+ * 那句话对**凭据**成立，对**设置**不成立：带着卡换台机器，她不该一夜之间不发表情、不主动开口、
+ * 声音从定制的音色退回默认音色。所以 v7 起所有非密钥设置都进白名单；
+ * 密钥照样靠 `SECRET_NAME_PATTERN` 和 `v1.` 密文形态剥掉（`*ApiKey` 一个都不进）。
+ *
+ * `proactive` / `groupInitiative` 是对象，走 `PORTABLE_MODEL_CONFIG_OBJECT_KEYS` 单独收口。
  */
 export const PORTABLE_MODEL_CONFIG_KEYS = [
   "chatModel",
@@ -399,7 +577,127 @@ export const PORTABLE_MODEL_CONFIG_KEYS = [
   "snapshotTokenBudget",
   "memoryItemLimit",
   "recentMessageLimit",
+  // 表情额度
+  "emojiEnabled",
+  "emojiWindowMinutes",
+  "emojiPerWindow",
+  // 语音 / 转写
+  "voiceEnabled",
+  "voiceTranscribe",
+  "voiceChance",
+  "voiceCooldownMinutes",
+  "voiceApiBaseUrl",
+  // 她的声音
+  "ttsProvider",
+  "ttsVoice",
+  "ttsModel",
+  "ttsSpeed",
+  "ttsGroupId",
+  "ttsInstructions",
+  "asrProvider",
+  "asrModel",
+  "asrApiBaseUrl",
+  // 看图
+  "imageUnderstanding",
+  "visionModel",
+  "visionApiBaseUrl",
+  // 收集类开关：收表情、捡梗（都要人看得见的结果，不额外花钱）
+  "stickerAutoCollect",
+  "catchphraseAutoMine",
+  "knowledgeCollectScope",
+  // 记忆与额度
+  "eventRecentDays",
+  "dailyTokenLimit",
+  // 四个后台助手：**只带模型选择，不带 enabled 开关**
+  "contextAssistantModel",
+  "contextAssistantTemperature",
+  "contextAssistantApiBaseUrl",
+  "contextAssistantMaxInputTokens",
+  "contextAssistantMaxOutputTokens",
+  "memoryAssistantModel",
+  "memoryAssistantTemperature",
+  "memoryAssistantApiBaseUrl",
+  "memoryAssistantMaxInputTokens",
+  "memoryAssistantMaxOutputTokens",
+  "knowledgeAssistantModel",
+  "knowledgeAssistantTemperature",
+  "knowledgeAssistantApiBaseUrl",
+  "knowledgeAssistantMaxInputTokens",
+  "knowledgeAssistantMaxOutputTokens",
+  "socialRelationshipAssessmentAssistantModel",
+  "socialRelationshipAssessmentAssistantTemperature",
+  "socialRelationshipAssessmentAssistantApiBaseUrl",
+  "socialRelationshipAssessmentAssistantMaxInputTokens",
+  "socialRelationshipAssessmentAssistantMaxOutputTokens",
 ] as const;
+
+/**
+ * 故意**不随包走**的开关：四个后台助手的 `*Enabled`、`knowledgeAutoCollectEnabled`、
+ * `interactionExperienceAutoEnabled`。
+ *
+ * 它们不改变「她是谁」，只决定新机器上要不要**自己开始花钱**（后台定时调模型整理记忆/知识/
+ * 社交评估）。这和「模型输出只能驱动白名单动作、副作用要有人点头」是同一条原则：
+ * 一张别人发来的卡不该让我的机器悄悄跑起四条流水线。模型选择照带，人在设置页打开开关就能用。
+ *
+ * 下面是对象型设置的白名单，与上面这份扁平清单互不重叠。
+ */
+export const PORTABLE_MODEL_CONFIG_OBJECT_KEYS = ["proactive", "groupInitiative"] as const;
+
+/** 单个字符串设置的上限：够放一段语气描述，又不会让一个键把包撑大。 */
+const PORTABLE_CONFIG_STRING_MAX = 1000;
+const PORTABLE_CLOCK_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * 读对象型设置。
+ *
+ * 与「内容段」不同，这里对坏字段是**收口**而不是整卡拒绝：一条脏的 `proactive.minGapMinutes`
+ * 不该让整张卡导不进来（和归档周期的 clamp 同一个道理）。但字段级白名单是硬的 ——
+ * 认不出来的键不会带进来，避免把未来的字段名带进一个不懂它的旧程序。
+ *
+ * 取值范围与 `proactive-settings.ts` / `group-initiative-settings.ts` 的 clamp 保持一致，
+ * 故意不 import 那两个模块：它们牵扯用量与数据库，portable 这个模块要保持纯函数。
+ */
+function readPortableObjectSettings(key: string, value: unknown): Record<string, unknown> | null {
+  const raw = asRecord(value);
+  if (!Object.keys(raw).length) return null;
+  const bool = (field: string) => (typeof raw[field] === "boolean" ? { [field]: raw[field] } : {});
+  const int = (field: string, min: number, max: number) => (
+    typeof raw[field] === "number" && Number.isFinite(raw[field])
+      ? { [field]: Math.max(min, Math.min(max, Math.round(raw[field] as number))) }
+      : {}
+  );
+  const clock = (field: string): string | undefined => (
+    typeof raw[field] === "string" && PORTABLE_CLOCK_PATTERN.test(raw[field].trim())
+      ? raw[field].trim()
+      : undefined
+  );
+  // 起止一样等于「没有安静时段」，和运行时一样当没配：两个都不带，别留下半条矛盾设置。
+  const quietOf = () => {
+    const start = clock("quietStart");
+    const end = clock("quietEnd");
+    return start && end && start !== end ? { quietStart: start, quietEnd: end } : {};
+  };
+
+  const merged: Record<string, unknown> = key === "proactive"
+    ? {
+        ...bool("enabled"),
+        ...int("dailyMax", 0, 24),
+        ...int("minGapMinutes", 15, 1440),
+        ...quietOf(),
+        ...int("userActiveMinutes", 0, 720),
+        ...(typeof raw.minConfidence === "number" && Number.isFinite(raw.minConfidence)
+          ? { minConfidence: Math.round(Math.max(0, Math.min(1, raw.minConfidence)) * 100) / 100 }
+          : {}),
+      }
+    : {
+        ...bool("enabled"),
+        ...int("idleMinutes", 15, 1440),
+        ...int("dailyMax", 0, 24),
+        ...int("minGapMinutes", 30, 1440),
+        ...quietOf(),
+      };
+  return Object.keys(merged).length ? merged : null;
+}
 
 /** 任何以 `v1.` 开头的密文字段、以及任何名字像密钥的字段都不许进包；这里再按名字兜一层。 */
 const SECRET_NAME_PATTERN = /(apikey|api_key|token|secret|password|credential)/i;
@@ -462,7 +760,10 @@ export function stripPortableModelConfig(config: unknown): CharacterBundleModelC
     if (value === undefined || value === null) continue;
     if (typeof value === "string") {
       if (SECRET_NAME_PATTERN.test(key) || value.startsWith("v1.")) continue;
-      result[key] = value;
+      // 空字符串没有信息量；超长的「设置」基本是塞了别的东西（一段人设、一坨 base64）
+      const trimmed = value.trim();
+      if (!trimmed || trimmed.length > PORTABLE_CONFIG_STRING_MAX) continue;
+      result[key] = trimmed;
       continue;
     }
     if (typeof value === "number" && Number.isFinite(value)) {
@@ -473,6 +774,10 @@ export function stripPortableModelConfig(config: unknown): CharacterBundleModelC
     if (typeof value === "boolean") {
       result[key] = value;
     }
+  }
+  for (const key of PORTABLE_MODEL_CONFIG_OBJECT_KEYS) {
+    const normalized = readPortableObjectSettings(key, source[key]);
+    if (normalized) result[key] = normalized;
   }
   return result as CharacterBundleModelConfig;
 }
@@ -507,6 +812,17 @@ function readOptionalNumber(value: unknown, label: string, min: number, max: num
   if (typeof value !== "number" || !Number.isFinite(value)) bad(`${label}必须是数字。`);
   if (value < min || value > max) bad(`${label}必须在 ${min} 到 ${max} 之间。`);
   return value;
+}
+
+/** 原文保留天数只认页面上那几个选项；`null` = 永久保留，`undefined`（老卡）= 导入端默认 30 天。 */
+const RAW_RETENTION_DAYS = [30, 90, 180] as const;
+const RAW_RETENTION_DEFAULT_DAYS = 30;
+function readRawRetentionDays(value: unknown): number | null {
+  if (value === null) return null;
+  if (value === undefined) return RAW_RETENTION_DEFAULT_DAYS;
+  const days = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : Number.NaN;
+  if (days === 0) return null;
+  return (RAW_RETENTION_DAYS as readonly number[]).includes(days) ? days : RAW_RETENTION_DEFAULT_DAYS;
 }
 
 function readStringList(value: unknown, label: string): string[] {
@@ -552,6 +868,9 @@ function buildCounts(bundle: Omit<CharacterBundle, "counts">): CharacterBundleCo
     friendAliases: bundle.friends.reduce((total, friend) => total + friend.aliases.length, 0),
     interactionGuidance: bundle.interactionGuidance.length,
     channelPolicies: bundle.channelPolicies.length,
+    expressionHabits: bundle.expressionHabits.length,
+    goals: bundle.goals.length,
+    preferences: bundle.preferences.length,
     growth: growthCounts(bundle.growth),
   };
 }
@@ -668,6 +987,8 @@ export type BundleBuildInput = {
     snapshotIntervalDays: number;
     timezone: string;
     autoSnapshotEnabled: boolean;
+    rawMessageRetentionDays?: number | null;
+    rawMessageCleanupEnabled?: boolean;
   } | null;
   scopes: Array<{
     scopeType: string;
@@ -726,6 +1047,10 @@ export type BundleBuildInput = {
   interactionGuidance?: CharacterBundleInteractionGuidance[];
   /** 渠道行为策略：同样只传 ACTIVE 的。 */
   channelPolicies?: CharacterBundleChannelPolicy[];
+  /** 表达习惯、目标、偏好（v7）：调用方负责按状态筛，这里不再筛。 */
+  expressionHabits?: CharacterBundleExpressionHabit[];
+  goals?: CharacterBundleGoal[];
+  preferences?: CharacterBundlePreference[];
   now?: Date;
 };
 
@@ -858,6 +1183,9 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
       snapshotIntervalDays: input.memorySetting?.snapshotIntervalDays ?? 3,
       timezone: input.memorySetting?.timezone ?? "Asia/Shanghai",
       autoSnapshotEnabled: input.memorySetting?.autoSnapshotEnabled ?? false,
+      // 原文保留策略是用户设定，不是运行状态：带着它换机器，才不用重新想一遍「留几天」。
+      rawMessageRetentionDays: input.memorySetting?.rawMessageRetentionDays ?? null,
+      rawMessageCleanupEnabled: input.memorySetting?.rawMessageCleanupEnabled ?? false,
     },
     memories,
     events,
@@ -873,6 +1201,9 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
     friends,
     interactionGuidance: input.interactionGuidance ?? [],
     channelPolicies: input.channelPolicies ?? [],
+    expressionHabits: input.expressionHabits ?? [],
+    goals: input.goals ?? [],
+    preferences: input.preferences ?? [],
     growth: input.growth ?? emptyCharacterGrowthBundle(),
   };
 
@@ -895,6 +1226,9 @@ export type ParsedCharacterBundle = {
   friends: CharacterBundleFriend[];
   interactionGuidance: CharacterBundleInteractionGuidance[];
   channelPolicies: CharacterBundleChannelPolicy[];
+  expressionHabits: CharacterBundleExpressionHabit[];
+  goals: CharacterBundleGoal[];
+  preferences: CharacterBundlePreference[];
   growth: CharacterGrowthBundle;
   counts: CharacterBundleCounts;
   exportedAt: string | null;
@@ -955,7 +1289,12 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
    * 这里刻意**不拒绝**超范围的老卡：拒绝等于「你导不进来」，而卡本身没有任何问题，
    * 只是当年允许填 30 天。收口则是把周期压到 8，导入后在设置页直接看得见，
    * 也不会留下「库里 30、界面 8、一保存就 400」的那种死角。
+   *
+   * 原文保留策略（v7）同一个态度：老卡没有这两格 → 沿用导入端原来的默认值（30 天）；
+   * 显式写 `null` 才是「永久保留」。只认页面上那几个选项（30 / 90 / 180），
+   * 别的一律收口。永久保留时不允许同时开着自动清理（页面接口也是这条规则）。
    */
+  const rawRetentionDays = readRawRetentionDays(setting.rawMessageRetentionDays);
   const memorySetting = {
     snapshotIntervalDays: Math.min(
       MEMORY_INTERVAL_MAX_DAYS,
@@ -971,6 +1310,8 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     ),
     timezone: timezoneInput && isValidTimezone(timezoneInput) ? timezoneInput : "Asia/Shanghai",
     autoSnapshotEnabled: setting.autoSnapshotEnabled === true,
+    rawMessageRetentionDays: rawRetentionDays,
+    rawMessageCleanupEnabled: setting.rawMessageCleanupEnabled === true && rawRetentionDays !== null,
   };
 
   const memories: CharacterBundleMemory[] = readArray(
@@ -1252,6 +1593,78 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     };
   });
 
+  /**
+   * 表达习惯 / 目标 / 偏好（v7）。老卡没有这三段，读成空数组 —— 与互动经验同一个态度：
+   * 缺失只意味着「那时还没这类内容」，不是「卡坏了」。
+   *
+   * 认不出来的 kind / chatScope 一律拒绝：一条被悄悄改成默认值的「说话习惯」
+   * 会直接改写她的语气，比没有更糟。状态只接受导出侧会带的那几个（PENDING 之类的
+   * 决策现场不跨机器），多出来的当卡被改过，拒绝。
+   */
+  const expressionHabits: CharacterBundleExpressionHabit[] = readArray(
+    body.expressionHabits,
+    "表达习惯",
+    CHARACTER_BUNDLE_LIMITS.expressionHabits,
+  ).map((candidate, index) => {
+    const item = asRecord(candidate);
+    const label = `第 ${index + 1} 条表达习惯`;
+    const kindInput = typeof item.kind === "string" ? item.kind : "";
+    if (!(HABIT_KINDS as readonly string[]).includes(kindInput)) bad(`${label}的类型无法识别。`);
+    const statusInput = typeof item.status === "string" ? item.status : "";
+    if (!(HABIT_STATUSES as readonly string[]).includes(statusInput)) bad(`${label}的状态无法识别。`);
+    const scopeInput = typeof item.chatScope === "string" ? item.chatScope : "ALL";
+    if (!(GUIDANCE_CHAT_SCOPES as readonly string[]).includes(scopeInput)) bad(`${label}的聊天范围无法识别。`);
+    return {
+      kind: kindInput as CharacterBundleExpressionHabit["kind"],
+      content: readText(item.content, `${label}的内容`, CHARACTER_BUNDLE_LIMITS.habitContent, true),
+      context: readText(item.context, `${label}的场景`, CHARACTER_BUNDLE_LIMITS.habitContext),
+      chatScope: scopeInput as CharacterBundleExpressionHabit["chatScope"],
+      status: statusInput as CharacterBundleExpressionHabit["status"],
+      // 成因必填：库里那条 CHECK 要求 reason 非空，空着导进去只会在事务里炸掉整张卡
+      reason: readText(item.reason, `${label}的成因`, CHARACTER_BUNDLE_LIMITS.reason, true),
+    };
+  });
+
+  const goals: CharacterBundleGoal[] = readArray(
+    body.goals,
+    "目标",
+    CHARACTER_BUNDLE_LIMITS.goals,
+  ).map((candidate, index) => {
+    const item = asRecord(candidate);
+    const label = `第 ${index + 1} 个目标`;
+    const kindInput = typeof item.kind === "string" ? item.kind : "";
+    if (!(GOAL_KINDS as readonly string[]).includes(kindInput)) bad(`${label}的类型无法识别。`);
+    const statusInput = typeof item.status === "string" ? item.status : "";
+    if (!(GOAL_STATUSES as readonly string[]).includes(statusInput)) bad(`${label}的状态无法识别。`);
+    return {
+      kind: kindInput as CharacterBundleGoal["kind"],
+      title: readText(item.title, `${label}的标题`, CHARACTER_BUNDLE_LIMITS.goalTitle, true),
+      // 库里 CHECK 要求标题、描述、成因都非空：这里先挡住，别让人导到一半整包回滚
+      description: readText(item.description, `${label}的描述`, CHARACTER_BUNDLE_LIMITS.goalDescription, true),
+      reason: readText(item.reason, `${label}的成因`, CHARACTER_BUNDLE_LIMITS.reason, true),
+      status: statusInput as CharacterBundleGoal["status"],
+    };
+  });
+
+  const preferences: CharacterBundlePreference[] = readArray(
+    body.preferences,
+    "偏好",
+    CHARACTER_BUNDLE_LIMITS.preferences,
+  ).map((candidate, index) => {
+    const item = asRecord(candidate);
+    const label = `第 ${index + 1} 条偏好`;
+    const kindInput = typeof item.kind === "string" ? item.kind : "";
+    if (!(PREFERENCE_KINDS as readonly string[]).includes(kindInput)) bad(`${label}的类型无法识别。`);
+    const statusInput = typeof item.status === "string" ? item.status : "";
+    if (!(PREFERENCE_STATUSES as readonly string[]).includes(statusInput)) bad(`${label}的状态无法识别。`);
+    return {
+      kind: kindInput as CharacterBundlePreference["kind"],
+      topic: readText(item.topic, `${label}的主题`, CHARACTER_BUNDLE_LIMITS.preferenceTopic, true),
+      reason: readText(item.reason, `${label}的原因`, CHARACTER_BUNDLE_LIMITS.reason, true),
+      status: statusInput as CharacterBundlePreference["status"],
+    };
+  });
+
   // 朋友是可选段：老角色卡没有这一段，分享型导出也会把它清空，所以缺省就是空数组。
   let friendMemoriesTotal = 0;
   const friends: CharacterBundleFriend[] = readArray(
@@ -1358,6 +1771,20 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
    * 同时缺好几段时报最新的那个：它最能说明「这张卡是哪一版导出来的」，
    * 报一个老段反而会让人以为是更早的格式问题。
    */
+  if (version >= 7 && (
+    body.expressionHabits === undefined
+    || body.goals === undefined
+    || body.preferences === undefined
+  )) {
+    bad("v7角色卡缺少表达习惯、目标或偏好段。");
+  }
+  if (version < 7 && (
+    body.expressionHabits !== undefined
+    || body.goals !== undefined
+    || body.preferences !== undefined
+  )) {
+    bad("表达习惯、目标与偏好需要v7角色卡，不能以旧版本静默导入。");
+  }
   if (version >= 6 && (body.interactionGuidance === undefined || body.channelPolicies === undefined)) {
     bad("v6角色卡缺少互动经验或渠道策略段。");
   }
@@ -1392,6 +1819,9 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     friends,
     interactionGuidance,
     channelPolicies,
+    expressionHabits,
+    goals,
+    preferences,
     growth,
   };
 
@@ -1410,6 +1840,9 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     friends,
     interactionGuidance,
     channelPolicies,
+    expressionHabits,
+    goals,
+    preferences,
     growth,
     counts: buildCounts(payload),
     exportedAt: payload.exportedAt || null,

@@ -20,9 +20,12 @@ import {
   type CharacterBundleChannelPolicy,
   type CharacterBundleCounts,
   type CharacterBundleEventDay,
+  type CharacterBundleExpressionHabit,
+  type CharacterBundleGoal,
   type CharacterBundleInteractionGuidance,
   type CharacterBundleJournal,
   type CharacterBundleMemoryBody,
+  type CharacterBundlePreference,
   type CharacterBundleSnapshotBody,
   type ParsedCharacterBundle,
 } from "./character-portable";
@@ -37,6 +40,17 @@ export type CharacterExportResult = {
   bundle: CharacterBundle;
   characterName: string;
 };
+
+/**
+ * 聊天范围收口。
+ *
+ * 库里那一列只是个 VARCHAR（没有 CHECK），理论上可能是空串或历史遗留值；
+ * 导入端的白名单只认 ALL / GROUP / PRIVATE，所以导出时就得收口 ——
+ * 否则一条脏数据会让整张卡在新机器上「聊天范围无法识别」，一个字段毁掉整次搬家。
+ */
+function asChatScope(value: string): "ALL" | "GROUP" | "PRIVATE" {
+  return value === "GROUP" || value === "PRIVATE" ? value : "ALL";
+}
 
 /**
  * 读出导出包。角色不属于该用户时返回 null（而不是抛错），由调用方决定回 404。
@@ -64,7 +78,14 @@ export async function loadCharacterExportBundle(input: {
       userAddress: true,
       modelConfig: true,
       memorySetting: {
-        select: { snapshotIntervalDays: true, timezone: true, autoSnapshotEnabled: true },
+        select: {
+          snapshotIntervalDays: true,
+          timezone: true,
+          autoSnapshotEnabled: true,
+          // v7：原文保留策略是用户设定，不随卡走就得在新机器上重新想一遍
+          rawMessageRetentionDays: true,
+          rawMessageCleanupEnabled: true,
+        },
       },
       memoryScopes: {
         where: {
@@ -156,6 +177,33 @@ export async function loadCharacterExportBundle(input: {
         take: CHARACTER_BUNDLE_LIMITS.channelPolicies,
         select: { kind: true, content: true, chatScope: true },
       },
+      /**
+       * 表达习惯（v7）：ACTIVE 是她现在的说法，DISABLED 是她**明确关掉过**的说法。
+       * 关掉也是选择，带过去不该又变回开着；PENDING / REJECTED 是本机的决策现场，不带。
+       */
+      expressionHabits: {
+        where: { status: { in: ["ACTIVE", "DISABLED"] } },
+        orderBy: { createdAt: "asc" },
+        take: CHARACTER_BUNDLE_LIMITS.expressionHabits,
+        select: { kind: true, content: true, context: true, chatScope: true, status: true, reason: true },
+      },
+      /**
+       * 目标（v7）：只排除待确认与否决过的。PAUSED / COMPLETED / ABANDONED 都要带 ——
+       * 「她放弃过一个目标」和「她实现过一个目标」都是她经历过的事，不是待办。
+       */
+      goals: {
+        where: { status: { in: ["ACTIVE", "PAUSED", "COMPLETED", "ABANDONED"] } },
+        orderBy: { createdAt: "asc" },
+        take: CHARACTER_BUNDLE_LIMITS.goals,
+        select: { kind: true, title: true, description: true, reason: true, status: true },
+      },
+      /** 口味偏好（v7）：口径同表达习惯。 */
+      preferences: {
+        where: { status: { in: ["ACTIVE", "DISABLED"] } },
+        orderBy: { createdAt: "asc" },
+        take: CHARACTER_BUNDLE_LIMITS.preferences,
+        select: { kind: true, topic: true, reason: true, status: true },
+      },
     },
   });
 
@@ -183,12 +231,33 @@ export async function loadCharacterExportBundle(input: {
       kind: item.kind as CharacterBundleInteractionGuidance["kind"],
       content: item.content,
       context: item.context,
-      chatScope: item.chatScope as CharacterBundleInteractionGuidance["chatScope"],
+      chatScope: asChatScope(item.chatScope),
     })),
     channelPolicies: character.channelPolicies.map((item) => ({
       kind: item.kind as CharacterBundleChannelPolicy["kind"],
       content: item.content,
       chatScope: "GROUP" as const,
+    })),
+    expressionHabits: character.expressionHabits.map((item) => ({
+      kind: item.kind as CharacterBundleExpressionHabit["kind"],
+      content: item.content,
+      context: item.context,
+      chatScope: asChatScope(item.chatScope),
+      status: item.status as CharacterBundleExpressionHabit["status"],
+      reason: item.reason,
+    })),
+    goals: character.goals.map((item) => ({
+      kind: item.kind as CharacterBundleGoal["kind"],
+      title: item.title,
+      description: item.description,
+      reason: item.reason,
+      status: item.status as CharacterBundleGoal["status"],
+    })),
+    preferences: character.preferences.map((item) => ({
+      kind: item.kind as CharacterBundlePreference["kind"],
+      topic: item.topic,
+      reason: item.reason,
+      status: item.status as CharacterBundlePreference["status"],
     })),
     now,
   });
@@ -222,6 +291,9 @@ export async function loadCharacterExportBundle(input: {
         friendAliases: bundle.counts.friendAliases,
         interactionGuidance: bundle.counts.interactionGuidance,
         channelPolicies: bundle.counts.channelPolicies,
+        expressionHabits: bundle.counts.expressionHabits,
+        goals: bundle.counts.goals,
+        preferences: bundle.counts.preferences,
       },
     },
   }).catch(() => undefined);
@@ -432,6 +504,12 @@ export type CharacterImportAdded = {
   interactionGuidance: number;
   /** 新增的渠道行为策略条数。 */
   channelPolicies: number;
+  /** 新增的表达习惯条数（v7）。 */
+  expressionHabits: number;
+  /** 新增的目标条数（v7）。 */
+  goals: number;
+  /** 新增的偏好条数（v7）。 */
+  preferences: number;
   growth?: ReturnType<typeof growthCounts>;
 };
 
@@ -466,6 +544,9 @@ function emptyAdded(): CharacterImportAdded {
     friends: 0,
     interactionGuidance: 0,
     channelPolicies: 0,
+    expressionHabits: 0,
+    goals: 0,
+    preferences: 0,
     growth: growthCounts(emptyCharacterGrowthBundle()),
   };
 }
@@ -1035,6 +1116,161 @@ async function insertChannelPolicies(
   return added;
 }
 
+/**
+ * 写表达习惯 / 目标 / 偏好（v7）。
+ *
+ * 与互动经验同一套口径：包里带的都是她自己已经在用的条目，导入直接落原状态
+ * （ACTIVE / DISABLED / PAUSED / COMPLETED …），不再让用户把确认重做一遍；
+ * `revision` 从 1 开始并补一条 CREATE 历史，否则第一次编辑会出现「版本 2 但没有版本 1」的断链。
+ *
+ * 本机的历史版本不跟卡走：revision 表记的是「谁在什么时候改的」，
+ * 跨机器复制那些行等于伪造审计。所以这里只补自己这一条 CREATE。
+ */
+async function insertExpressionHabits(
+  tx: Tx,
+  characterId: string,
+  items: CharacterBundleExpressionHabit[],
+  actorId: string,
+  existingKeys?: Set<string>,
+): Promise<number> {
+  let added = 0;
+  const importedAt = new Date();
+  for (const item of items) {
+    const key = `${item.kind}|${item.content}`;
+    if (existingKeys) {
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+    }
+    const row = await tx.characterExpressionHabit.create({
+      data: {
+        characterId,
+        kind: item.kind,
+        content: item.content,
+        context: item.context,
+        chatScope: item.chatScope,
+        status: item.status,
+        revision: 1,
+        // 库里的 CHECK 只认 MANUAL（来源为空）和 SOURCES（1–5 条）：带来源就必须声明 SOURCES
+        sourceType: "SOURCES",
+        sourceRefs: characterCardSource(importedAt),
+        reason: item.reason || IMPORTED_GUIDANCE_REASON,
+      },
+    });
+    await tx.characterExpressionHabitRevision.create({
+      data: {
+        habitId: row.id,
+        revision: 1,
+        action: "CREATE",
+        kind: row.kind,
+        content: row.content,
+        context: row.context,
+        chatScope: row.chatScope,
+        status: row.status,
+        sourceType: "SOURCES",
+        sourceRefs: row.sourceRefs as Prisma.InputJsonValue,
+        reason: row.reason,
+        actorId,
+      },
+    });
+    added += 1;
+  }
+  return added;
+}
+
+async function insertGoals(
+  tx: Tx,
+  characterId: string,
+  items: CharacterBundleGoal[],
+  actorId: string,
+  existingKeys?: Set<string>,
+): Promise<number> {
+  let added = 0;
+  const importedAt = new Date();
+  for (const item of items) {
+    const key = `${item.kind}|${item.title}`;
+    if (existingKeys) {
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+    }
+    const row = await tx.characterGoal.create({
+      data: {
+        characterId,
+        kind: item.kind,
+        title: item.title,
+        description: item.description,
+        reason: item.reason,
+        status: item.status,
+        revision: 1,
+        sourceType: "SOURCES",
+        sourceRefs: characterCardSource(importedAt),
+      },
+    });
+    await tx.characterGoalRevision.create({
+      data: {
+        goalId: row.id,
+        revision: 1,
+        action: "CREATE",
+        kind: row.kind,
+        title: row.title,
+        description: row.description,
+        reason: row.reason,
+        status: row.status,
+        sourceType: "SOURCES",
+        sourceRefs: row.sourceRefs as Prisma.InputJsonValue,
+        actorId,
+      },
+    });
+    added += 1;
+  }
+  return added;
+}
+
+async function insertPreferences(
+  tx: Tx,
+  characterId: string,
+  items: CharacterBundlePreference[],
+  actorId: string,
+  existingKeys?: Set<string>,
+): Promise<number> {
+  let added = 0;
+  const importedAt = new Date();
+  for (const item of items) {
+    const key = `${item.kind}|${item.topic}`;
+    if (existingKeys) {
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+    }
+    const row = await tx.characterPreference.create({
+      data: {
+        characterId,
+        kind: item.kind,
+        topic: item.topic,
+        reason: item.reason,
+        status: item.status,
+        revision: 1,
+        sourceType: "SOURCES",
+        sourceRefs: characterCardSource(importedAt),
+      },
+    });
+    await tx.characterPreferenceRevision.create({
+      data: {
+        preferenceId: row.id,
+        revision: 1,
+        action: "CREATE",
+        kind: row.kind,
+        topic: row.topic,
+        reason: row.reason,
+        status: row.status,
+        sourceType: "SOURCES",
+        sourceRefs: row.sourceRefs as Prisma.InputJsonValue,
+        actorId,
+      },
+    });
+    added += 1;
+  }
+  return added;
+}
+
 /** 合并用：读某个范围已有的记忆正文，用来判断「这句话本机已经有了」。 */async function loadMemoryContents(tx: Tx, memoryScopeId: string): Promise<Set<string>> {
   const rows = await tx.memoryItem.findMany({
     where: { memoryScopeId },
@@ -1142,8 +1378,12 @@ async function createCharacterFromBundle(input: {
             anchorAt: now,
             nextSnapshotAt: null,
             autoSnapshotEnabled: bundle.memorySetting.autoSnapshotEnabled,
-            rawMessageRetentionDays: DEFAULT_RAW_MESSAGE_RETENTION_DAYS,
-            rawMessageCleanupEnabled: false,
+            // 原文保留策略是用户设定（v7 起随卡走）。`parse` 已经把「老卡没这一格」收口成 30 天，
+            // 这里的 null 是用户明确选的「永久保留」，不能再兜成默认值。
+            rawMessageRetentionDays: bundle.memorySetting.rawMessageRetentionDays === undefined
+              ? DEFAULT_RAW_MESSAGE_RETENTION_DAYS
+              : bundle.memorySetting.rawMessageRetentionDays,
+            rawMessageCleanupEnabled: bundle.memorySetting.rawMessageCleanupEnabled === true,
           },
         },
       },
@@ -1193,6 +1433,9 @@ async function createCharacterFromBundle(input: {
       ownerId,
     );
     added.channelPolicies += await insertChannelPolicies(tx, characterId, bundle.channelPolicies, ownerId);
+    added.expressionHabits += await insertExpressionHabits(tx, characterId, bundle.expressionHabits, ownerId);
+    added.goals += await insertGoals(tx, characterId, bundle.goals, ownerId);
+    added.preferences += await insertPreferences(tx, characterId, bundle.preferences, ownerId);
 
     // 她的朋友：身份按 (platform, platformUid) 全局唯一，所以是 upsert 而不是新建 ——
     // 这台机器上同一个人可能已经跟另一个角色聊过，不能给他开出第二个身份。
@@ -1260,6 +1503,11 @@ async function createCharacterFromBundle(input: {
           friends: bundle.counts.friends,
           friendMemories: bundle.counts.friendMemories,
           friendAliases: bundle.counts.friendAliases,
+          interactionGuidance: bundle.counts.interactionGuidance,
+          channelPolicies: bundle.counts.channelPolicies,
+          expressionHabits: bundle.counts.expressionHabits,
+          goals: bundle.counts.goals,
+          preferences: bundle.counts.preferences,
         },
       },
     });
@@ -1435,6 +1683,46 @@ async function mergeCharacterCard(input: {
       bundle.channelPolicies,
       ownerId,
       existingPolicyKinds,
+    );
+
+    /**
+     * 表达习惯 / 目标 / 偏好的合并去重同样按「内容」：同一台机器上她自己已经有一条
+     * 「说话带点气声」，再导一次不该变成两条。目标按 kind+标题、偏好按 kind+主题。
+     */
+    const existingHabits = new Set(
+      (await tx.characterExpressionHabit.findMany({
+        where: { characterId: target.id },
+        select: { kind: true, content: true },
+      })).map((row) => `${row.kind}|${row.content}`),
+    );
+    added.expressionHabits += await insertExpressionHabits(
+      tx,
+      target.id,
+      bundle.expressionHabits,
+      ownerId,
+      existingHabits,
+    );
+
+    const existingGoals = new Set(
+      (await tx.characterGoal.findMany({
+        where: { characterId: target.id },
+        select: { kind: true, title: true },
+      })).map((row) => `${row.kind}|${row.title}`),
+    );
+    added.goals += await insertGoals(tx, target.id, bundle.goals, ownerId, existingGoals);
+
+    const existingPreferences = new Set(
+      (await tx.characterPreference.findMany({
+        where: { characterId: target.id },
+        select: { kind: true, topic: true },
+      })).map((row) => `${row.kind}|${row.topic}`),
+    );
+    added.preferences += await insertPreferences(
+      tx,
+      target.id,
+      bundle.preferences,
+      ownerId,
+      existingPreferences,
     );
 
     for (const friend of bundle.friends) {

@@ -11,6 +11,7 @@ import {
   parseCharacterBundle,
   stripPortableModelConfig,
 } from "../server/utils/character-portable";
+import { emptyCharacterGrowthBundle } from "../server/utils/character-growth-portable";
 
 /**
  * 角色卡格式的纯逻辑测试：脱敏、构建、校验、名称去重、文件名。
@@ -29,19 +30,50 @@ const rawConfig = {
   memoryTokenBudget: 4000,
   snapshotTokenBudget: 1200,
   recentMessageLimit: 30,
+  // v7 起这些「她是谁」的设置要跟着卡走
+  emojiEnabled: true,
+  emojiWindowMinutes: 1,
+  emojiPerWindow: 2,
+  voiceEnabled: true,
+  voiceTranscribe: true,
+  voiceChance: 10,
+  voiceCooldownMinutes: 20,
+  voiceApiBaseUrl: "https://api.example.com/v1",
+  ttsProvider: "minimax",
+  ttsVoice: "female-shaonv",
+  ttsModel: "speech-2.5",
+  ttsSpeed: 1,
+  ttsGroupId: "2115988379945407115",
+  ttsInstructions: "声音软软的、轻轻的",
+  asrProvider: "minimax",
+  asrModel: "asr-1.0",
+  visionModel: "gpt-5.6-luna",
+  imageUnderstanding: true,
+  stickerAutoCollect: false,
+  catchphraseAutoMine: true,
+  dailyTokenLimit: 200000,
+  eventRecentDays: 2,
+  knowledgeCollectScope: "SELECTED",
+  knowledgeAssistantModel: "private-knowledge-model",
+  knowledgeAssistantTemperature: 0.1,
+  memoryAssistantModel: "private-memory-model",
   // 下面这些都是不该进包的
   chatApiKeyEncrypted: "v1.aaa.bbb.ccc",
   voiceApiKeyEncrypted: "v1.ddd.eee.fff",
   memoryAssistantApiKeyEncrypted: "v1.ggg.hhh.iii",
   knowledgeAssistantApiKeyEncrypted: "v1.knowledge.key.secret",
-  knowledgeAssistantModel: "private-knowledge-model",
-  knowledgeAssistantEnabled: true,
-  memoryAssistantModel: "private-memory-model",
-  memoryAssistantEnabled: true,
+  voiceApiKey: "sk-voice",
+  asrApiKey: "sk-asr",
+  visionApiKey: "sk-vision",
   chatApiKey: "sk-plain",
   someToken: "abc",
-  proactive: { enabled: true, targetQq: "12345" },
-  emojiEnabled: true,
+  // 后台流水线的开关：会自己花钱，不跟卡走
+  knowledgeAssistantEnabled: true,
+  memoryAssistantEnabled: true,
+  knowledgeAutoCollectEnabled: true,
+  interactionExperienceAutoEnabled: true,
+  proactive: { enabled: true, dailyMax: 99, quietStart: "23:00", quietEnd: "23:00", targetQq: "12345" },
+  groupInitiative: { enabled: true, idleMinutes: 60, dailyMax: 3, quietStart: "23:30", quietEnd: "07:30" },
 };
 
 const stripped = stripPortableModelConfig(rawConfig);
@@ -49,16 +81,39 @@ assert.equal(Reflect.get(stripped, "chatApiKeyEncrypted"), undefined, "加密的
 assert.equal(Reflect.get(stripped, "voiceApiKeyEncrypted"), undefined, "加密的语音 Key 不能进包");
 assert.equal(Reflect.get(stripped, "memoryAssistantApiKeyEncrypted"), undefined, "记忆助手的加密 Key 不能进包");
 assert.equal(Reflect.get(stripped, "knowledgeAssistantApiKeyEncrypted"), undefined, "知识处理助手的加密 Key 不能进包");
-assert.equal(Reflect.get(stripped, "knowledgeAssistantModel"), undefined, "知识处理助手模型配置不随角色卡导出");
-assert.equal(Reflect.get(stripped, "knowledgeAssistantEnabled"), undefined, "导入角色卡时不自动启用知识处理助手");
-assert.equal(Reflect.get(stripped, "memoryAssistantModel"), undefined, "记忆助手的专用模型配置不随角色卡导出");
-assert.equal(Reflect.get(stripped, "memoryAssistantEnabled"), undefined, "导入角色卡时不自动启用记忆助手");
+assert.equal(Reflect.get(stripped, "voiceApiKey"), undefined, "语音 Key 明文也不能进包");
+assert.equal(Reflect.get(stripped, "asrApiKey"), undefined, "转写 Key 明文也不能进包");
+assert.equal(Reflect.get(stripped, "visionApiKey"), undefined, "看图 Key 明文也不能进包");
 assert.equal("chatApiKey" in stripped, false, "明文 Key 字段不能进包");
 assert.equal("someToken" in stripped, false, "白名单之外的字段一律不带走");
-assert.equal("proactive" in stripped, false, "依赖本机网关的行为设置不带走");
-assert.equal("emojiEnabled" in stripped, false, "行为开关不带走");
+
+// v7：她的声音、节奏、口味都跟着卡走 —— 换台机器不该变成另一个人
 assert.equal(stripped.chatModel, "deepseek-chat", "模型名保留");
 assert.equal(stripped.memoryTokenBudget, 4000, "记忆预算保留");
+assert.equal(stripped.emojiEnabled, true, "表情开关跟卡走");
+assert.equal(stripped.emojiPerWindow, 2, "表情额度跟卡走");
+assert.equal(stripped.voiceEnabled, true, "语音开关跟卡走");
+assert.equal(stripped.ttsVoice, "female-shaonv", "音色跟卡走（换机器不能换声）");
+assert.equal(stripped.ttsInstructions, "声音软软的、轻轻的", "语气指令跟卡走");
+assert.equal(stripped.visionModel, "gpt-5.6-luna", "看图模型跟卡走");
+assert.equal(stripped.dailyTokenLimit, 200000, "日额度是设置，不是密钥");
+assert.equal(stripped.knowledgeAssistantModel, "private-knowledge-model", "助手用的模型选择跟卡走");
+
+// 但「会自己花钱」的后台开关不跟：一张别人发来的卡不该替我跑起四条流水线
+assert.equal(Reflect.get(stripped, "knowledgeAssistantEnabled"), undefined, "后台助手开关不随卡走");
+assert.equal(Reflect.get(stripped, "memoryAssistantEnabled"), undefined, "后台助手开关不随卡走");
+assert.equal(Reflect.get(stripped, "knowledgeAutoCollectEnabled"), undefined, "自动收集开关不随卡走");
+assert.equal(Reflect.get(stripped, "interactionExperienceAutoEnabled"), undefined, "自动总结开关不随卡走");
+
+// 对象型设置：只留白名单字段，坏值收口而不是整卡失败
+const proactive = stripped.proactive!;
+assert.equal(proactive.enabled, true, "私聊主动的开关跟卡走");
+assert.equal(proactive.dailyMax, 24, "越界的每天条数收口到 24");
+assert.equal(Reflect.get(proactive, "targetQq"), undefined, "对象里的未知字段不带走");
+assert.equal(Reflect.get(proactive, "quietStart"), undefined, "起止相同的安静时段按「没配」处理");
+const groupInitiative = stripped.groupInitiative!;
+assert.equal(groupInitiative.idleMinutes, 60);
+assert.equal(groupInitiative.quietStart, "23:30", "合法安静时段照留");
 
 // 伪装成普通字段的密文也要挡住
 assert.equal(
@@ -135,6 +190,31 @@ const built = buildCharacterBundle({
   ],
   channelPolicies: [
     { kind: "GROUP_AT_DISABLED", content: "被动群聊回复不发送 @ 提醒，引用仍保留。", chatScope: "GROUP" },
+  ],
+  expressionHabits: [
+    {
+      kind: "TONE",
+      content: "说话带一点气声，尾音往上扬。",
+      context: "私聊撒娇时",
+      chatScope: "PRIVATE",
+      status: "ACTIVE",
+      reason: "主人说这样好听",
+    },
+    {
+      kind: "LENGTH",
+      content: "群里一次不超过两行。",
+      context: "大群里接话",
+      chatScope: "GROUP",
+      status: "DISABLED",
+      reason: "之前刷屏被说过",
+    },
+  ],
+  goals: [
+    { kind: "GOAL", title: "学会做红烧肉", description: "做给主人吃一次", reason: "他上周提过想吃", status: "ACTIVE" },
+    { kind: "WISH", title: "去看一次海", description: "想亲眼看看海有多大", reason: "她记得海边那次", status: "COMPLETED" },
+  ],
+  preferences: [
+    { kind: "LIKE", topic: "冰美式", reason: "喝过一次就喜欢上了", status: "ACTIVE" },
   ],
   journals: [
     {
@@ -215,9 +295,12 @@ assert.equal(
   "血缘 id 必须跟着卡片走，否则没法认人合并",
 );
 assert.equal(built.formatVersion, CHARACTER_BUNDLE_VERSION, "导出用当前格式版本");
-assert.equal(CHARACTER_BUNDLE_VERSION, 6, "v6 增加互动经验与渠道行为策略");
+assert.equal(CHARACTER_BUNDLE_VERSION, 7, "v7 补上语音/表情等设置、表达习惯、目标与偏好");
 assert.equal(built.counts.interactionGuidance, 1, "互动经验单独成段并计数");
 assert.equal(built.counts.channelPolicies, 1, "渠道行为策略单独成段并计数");
+assert.equal(built.counts.expressionHabits, 2, "表达习惯单独成段并计数（含被关掉的那条）");
+assert.equal(built.counts.goals, 2, "目标单独成段并计数（含已完成的）");
+assert.equal(built.counts.preferences, 1, "偏好单独成段并计数");
 assert.equal(built.exportedAt, "2026-10-31T13:00:00.000Z", "导出时间用注入的 now，便于测试");
 assert.equal(built.character.name, "小鱼");
 assert.equal(built.counts.memories, 2, "两条记忆（全局 + 私人）");
@@ -248,6 +331,11 @@ const roundTrip = parseCharacterBundle(JSON.parse(JSON.stringify(built)));
 assert.deepEqual(roundTrip.counts, built.counts, "回环后条数一致");
 assert.deepEqual(roundTrip.interactionGuidance, built.interactionGuidance, "互动经验回环后内容不变");
 assert.deepEqual(roundTrip.channelPolicies, built.channelPolicies, "渠道策略回环后内容不变");
+assert.deepEqual(roundTrip.expressionHabits, built.expressionHabits, "表达习惯回环后内容不变（含 DISABLED）");
+assert.deepEqual(roundTrip.goals, built.goals, "目标回环后内容不变（含已完成的愿望）");
+assert.deepEqual(roundTrip.preferences, built.preferences, "偏好回环后内容不变");
+assert.equal(roundTrip.expressionHabits[0]?.chatScope, "PRIVATE", "表达习惯的适用范围要保留");
+assert.equal(roundTrip.expressionHabits[1]?.status, "DISABLED", "被关掉过的那条不该回滚成 ACTIVE");
 assert.equal(roundTrip.interactionGuidance[0]?.kind, "UNDERSTANDING");
 assert.equal(roundTrip.interactionGuidance[0]?.chatScope, "ALL");
 assert.equal(roundTrip.interactionGuidance[0]?.content, "她是他养的鱼，不是客服。");
@@ -411,6 +499,92 @@ assert.throws(
   () => parseCharacterBundle(minimal({ formatVersion: 6, interactionGuidance: [], channelPolicies: [] })),
   /成长数据段/,
   "v6 卡声明了两段新内容后，仍要过 v5 的成长段检查",
+);
+
+/**
+ * 表达习惯 / 目标 / 偏好（v7）。
+ * 和 v6 同一个态度：新卡必须声明这几段；旧卡夹带一律拒绝，别指望它被静默丢掉。
+ * 状态白名单是硬的 —— 带一个 PENDING 过去，导入后会变成「她本来就需要确认的事」。
+ */
+function v7(overrides: Record<string, unknown> = {}) {
+  return minimal({
+    formatVersion: 7,
+    interactionGuidance: [],
+    channelPolicies: [],
+    growth: emptyCharacterGrowthBundle(),
+    expressionHabits: [],
+    goals: [],
+    preferences: [],
+    ...overrides,
+  });
+}
+
+assert.throws(
+  () => parseCharacterBundle(v7({ expressionHabits: undefined })),
+  /缺少表达习惯、目标或偏好段/,
+  "v7 卡必须声明这三段，缺了会让人以为「她本来就没被教过怎么说」",
+);
+assert.throws(
+  () => parseCharacterBundle(minimal({ goals: [] })),
+  /需要v7角色卡/,
+  "旧版本卡不许夹带目标，否则会被静默丢掉",
+);
+assert.throws(
+  () => parseCharacterBundle(v7({ expressionHabits: [{ kind: "TONE", content: "x", context: "", chatScope: "ALL", status: "PENDING", reason: "" }] })),
+  /状态无法识别/,
+  "PENDING 属于本机决策现场，不该跨机器",
+);
+assert.throws(
+  () => parseCharacterBundle(v7({ expressionHabits: [{ kind: "MADE_UP", content: "x", context: "", chatScope: "ALL", status: "ACTIVE", reason: "" }] })),
+  /类型无法识别/,
+  "认不出来的表达习惯类型要拒绝",
+);
+assert.throws(
+  () => parseCharacterBundle(v7({ goals: [{ kind: "GOAL", title: "", status: "ACTIVE" }] })),
+  /标题不能为空/,
+  "没有标题的目标要拒绝",
+);
+assert.throws(
+  () => parseCharacterBundle(v7({ goals: [{ kind: "GOAL", title: "x", status: "REJECTED" }] })),
+  /状态无法识别/,
+  "被否决过的目标不该跨机器",
+);
+assert.throws(
+  () => parseCharacterBundle(v7({ preferences: [{ kind: "LOVE", topic: "x", status: "ACTIVE" }] })),
+  /类型无法识别/,
+  "认不出来的偏好类型要拒绝",
+);
+
+const okV7 = parseCharacterBundle(v7({
+  expressionHabits: [{ kind: "TONE", content: "尾音上扬", context: "私聊", chatScope: "PRIVATE", status: "DISABLED", reason: "被说过" }],
+  goals: [{ kind: "WISH", title: "看海", description: "想亲眼看看", reason: "她记得海边那次", status: "ABANDONED" }],
+  preferences: [{ kind: "DISLIKE", topic: "香菜", reason: "闻到就皱眉", status: "ACTIVE" }],
+}));
+assert.equal(okV7.expressionHabits[0]?.status, "DISABLED", "关掉过的习惯要能带回来");
+assert.equal(okV7.goals[0]?.status, "ABANDONED", "放弃过的目标也是她经历过的事");
+assert.equal(okV7.counts.expressionHabits, 1);
+assert.equal(okV7.counts.goals, 1);
+assert.equal(okV7.counts.preferences, 1);
+
+// 原文保留策略：老卡（没有这一格）按 30 天兜；显式 null 才是「永久」
+assert.equal(parseCharacterBundle(minimal()).memorySetting.rawMessageRetentionDays, 30, "老卡沿用导入端默认值");
+assert.equal(parseCharacterBundle(minimal()).memorySetting.rawMessageCleanupEnabled, false, "默认不自动清理");
+assert.equal(
+  parseCharacterBundle(v7({ memorySetting: { rawMessageRetentionDays: null, rawMessageCleanupEnabled: true } }))
+    .memorySetting.rawMessageRetentionDays,
+  null,
+  "显式写 null 才是永久保留",
+);
+assert.equal(
+  parseCharacterBundle(v7({ memorySetting: { rawMessageRetentionDays: null, rawMessageCleanupEnabled: true } }))
+    .memorySetting.rawMessageCleanupEnabled,
+  false,
+  "永久保留时不允许同时开着自动清理",
+);
+assert.equal(
+  parseCharacterBundle(v7({ memorySetting: { rawMessageRetentionDays: 7 } })).memorySetting.rawMessageRetentionDays,
+  30,
+  "页面没有的档位收口到 30，不是拒绝整张卡",
 );
 assert.throws(
   () => parseCharacterBundle(minimal({

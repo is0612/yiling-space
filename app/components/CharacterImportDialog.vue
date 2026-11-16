@@ -32,6 +32,10 @@ type BundleCounts = {
   interactionGuidance?: number;
   /** 渠道行为策略；同样是 v6 新增。 */
   channelPolicies?: number;
+  /** 表达习惯 / 目标 / 偏好；v7 新增，老卡按 0 显示。 */
+  expressionHabits?: number;
+  goals?: number;
+  preferences?: number;
   growth?: GrowthCounts;
 };
 
@@ -58,6 +62,9 @@ type BundleAdded = {
   friends: number;
   interactionGuidance?: number;
   channelPolicies?: number;
+  expressionHabits?: number;
+  goals?: number;
+  preferences?: number;
   growth?: GrowthCounts;
 };
 
@@ -162,6 +169,14 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
     channelPolicies: typeof declared.channelPolicies === "number"
       ? declared.channelPolicies
       : asArray(asRecord(source).channelPolicies).length,
+    // v7 新增的三段，同样按内容数一遍兜底
+    expressionHabits: typeof declared.expressionHabits === "number"
+      ? declared.expressionHabits
+      : asArray(asRecord(source).expressionHabits).length,
+    goals: typeof declared.goals === "number" ? declared.goals : asArray(asRecord(source).goals).length,
+    preferences: typeof declared.preferences === "number"
+      ? declared.preferences
+      : asArray(asRecord(source).preferences).length,
     growth: Object.fromEntries(Object.entries(asRecord(asRecord(asRecord(source).growth).tables)).map(([key, rows]) => [key, asArray(rows).length])),
   };
 }
@@ -238,6 +253,9 @@ function describeAdded(added: BundleAdded): string {
   if (added.friends) parts.push(`${added.friends} 位朋友`);
   if (added.interactionGuidance) parts.push(`${added.interactionGuidance} 条互动经验`);
   if (added.channelPolicies) parts.push(`${added.channelPolicies} 条渠道策略`);
+  if (added.expressionHabits) parts.push(`${added.expressionHabits} 条表达习惯`);
+  if (added.goals) parts.push(`${added.goals} 个目标`);
+  if (added.preferences) parts.push(`${added.preferences} 条偏好`);
   const growth = describeGrowth(added.growth);
   if (growth) parts.push(growth);
   return parts.length ? `新增 ${parts.join("、")}` : "没有新内容（本机已经全有了）";
@@ -476,6 +494,18 @@ function formatExportedAt(value: string | null): string {
         <div>
           <dt>渠道策略</dt>
           <dd>{{ preview.counts.channelPolicies ?? 0 }} 条</dd>
+        </div>
+        <div>
+          <dt>表达习惯</dt>
+          <dd>{{ preview.counts.expressionHabits ?? 0 }} 条</dd>
+        </div>
+        <div>
+          <dt>目标 / 愿望</dt>
+          <dd>{{ preview.counts.goals ?? 0 }} 个</dd>
+        </div>
+        <div>
+          <dt>偏好</dt>
+          <dd>{{ preview.counts.preferences ?? 0 }} 条</dd>
         </div>
       </dl>
 

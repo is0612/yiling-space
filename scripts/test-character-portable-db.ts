@@ -61,7 +61,14 @@ async function main() {
         emojiEnabled: true,
       },
       memorySetting: {
-        create: { snapshotIntervalDays: 8, timezone: "Asia/Shanghai", autoSnapshotEnabled: true },
+        create: {
+          snapshotIntervalDays: 8,
+          timezone: "Asia/Shanghai",
+          autoSnapshotEnabled: true,
+          // v7 起原文保留策略随卡走：写个非默认值，才验得出「带过去了」而不是「碰巧一样」
+          rawMessageRetentionDays: 90,
+          rawMessageCleanupEnabled: false,
+        },
       },
     },
   });
@@ -290,6 +297,51 @@ async function main() {
     },
   });
 
+  /**
+   * v7 的三段：表达习惯 / 目标 / 偏好。
+   * 每种都放一条「该走」的、一条「状态不该跨机器」的（PENDING / REJECTED），
+   * 外加一条 DISABLED / COMPLETED / ABANDONED，用来验「关掉过、完成过、放弃过」也带得走。
+   */
+  await prisma.characterExpressionHabit.createMany({
+    data: [
+      {
+        characterId, kind: "TONE", content: "说话带一点气声，尾音往上扬。", context: "私聊撒娇时",
+        chatScope: "PRIVATE", status: "ACTIVE", revision: 1, reason: "主人说这样好听", sourceRefs: [],
+      },
+      {
+        characterId, kind: "LENGTH", content: "群里一次不超过两行。", context: "大群里接话",
+        chatScope: "GROUP", status: "DISABLED", revision: 1, reason: "之前刷屏被说过", sourceRefs: [],
+      },
+      {
+        characterId, kind: "WORDING", content: "待确认的说法。", context: "还没点头",
+        chatScope: "ALL", status: "PENDING", revision: 1, reason: "候选", sourceRefs: [],
+      },
+    ],
+  });
+  await prisma.characterGoal.createMany({
+    data: [
+      {
+        characterId, kind: "GOAL", title: "学会做红烧肉", description: "做给主人吃一次",
+        reason: "他上周提过想吃", status: "ACTIVE", revision: 1, sourceRefs: [],
+      },
+      {
+        characterId, kind: "WISH", title: "去看一次海", description: "想亲眼看看海有多大",
+        reason: "她记得海边那次", status: "COMPLETED", revision: 1, sourceRefs: [],
+      },
+      {
+        characterId, kind: "GOAL", title: "待确认的目标", description: "还没想清楚",
+        reason: "候选", status: "PENDING", revision: 1, sourceRefs: [],
+      },
+    ],
+  });
+  await prisma.characterPreference.createMany({
+    data: [
+      { characterId, kind: "LIKE", topic: "冰美式", reason: "喝过一次就喜欢上了", status: "ACTIVE", revision: 1, sourceRefs: [] },
+      { characterId, kind: "DISLIKE", topic: "香菜", reason: "闻到就皱眉", status: "DISABLED", revision: 1, sourceRefs: [] },
+      { characterId, kind: "INTEREST", topic: "待确认的偏好", reason: "候选", status: "PENDING", revision: 1, sourceRefs: [] },
+    ],
+  });
+
   // ── 1. 导出 ───────────────────────────────────────────────
   const exported = await loadCharacterExportBundle({ characterId, ownerId: ownerA });
   assert.ok(exported, "本人导出应该拿得到包");
@@ -315,6 +367,27 @@ async function main() {
     !("sourceRefs" in (bundle.interactionGuidance[0] ?? {})),
     "本机的教育证据不进包：换台机器那些 id 全是悬空的",
   );
+
+  // v7：表达习惯 / 目标 / 偏好 —— 待确认与已否决的不带走，关掉过/完成过的要带走
+  assert.equal(bundle.counts.expressionHabits, 2, "ACTIVE + DISABLED 进包，PENDING 不进");
+  assert.equal(bundle.counts.goals, 2, "ACTIVE + COMPLETED 进包，PENDING 不进");
+  assert.equal(bundle.counts.preferences, 2, "ACTIVE + DISABLED 进包，PENDING 不进");
+  assert.equal(
+    bundle.expressionHabits.find((item) => item.kind === "LENGTH")?.status,
+    "DISABLED",
+    "她自己关掉过的说法，带过去仍然是关着的",
+  );
+  assert.ok(
+    !bundle.expressionHabits.some((item) => item.content.includes("待确认")),
+    "待确认的候选属于本机决策现场，不跟着卡走",
+  );
+  assert.equal(
+    bundle.goals.find((item) => item.kind === "WISH")?.status,
+    "COMPLETED",
+    "实现过的愿望是她经历过的事，要带走",
+  );
+  assert.equal(bundle.expressionHabits[0]?.reason, "主人说这样好听", "形成原因属于内容");
+  assert.equal(bundle.memorySetting.rawMessageRetentionDays, 90, "原文保留天数随卡走");
 
   assert.equal(bundle.journals[0]?.dayKey, "2026-10-30");
   assert.equal(bundle.journals[0]?.revisions[1]?.quote, "今天和小明去了海边。", "今日一句要带走");
@@ -390,7 +463,12 @@ async function main() {
     "导入不认密钥字段，必须重新配置",
   );
   assert.equal(imported.memorySetting?.nextSnapshotAt, null, "周期边界不继承旧机器");
-  assert.equal(imported.memorySetting?.rawMessageCleanupEnabled, false, "清理开关不能跟着包走");
+  assert.equal(
+    imported.memorySetting?.rawMessageRetentionDays,
+    90,
+    "原文保留天数跟着卡走：换机器不用重新想一遍「留几天」",
+  );
+  assert.equal(imported.memorySetting?.rawMessageCleanupEnabled, false, "卡片里没开自动清理，导入也不该自己开");
 
   /**
    * 互动经验与渠道策略：导入必须落成 ACTIVE（不是 PENDING）——
@@ -424,6 +502,39 @@ async function main() {
   assert.equal(importedPolicies[0]?.kind, "GROUP_AT_DISABLED");
   assert.equal(importedPolicies[0]?.revisions.length, 1);
 
+  /**
+   * v7 三段：导入按原状态落库（不再要求用户重新点头），并补一条 CREATE 历史。
+   * 待确认的候选没进包，所以这里不该出现。
+   */
+  const importedHabits = await prisma.characterExpressionHabit.findMany({
+    where: { characterId: first.characterId },
+    include: { revisions: true },
+    orderBy: { kind: "asc" },
+  });
+  assert.equal(importedHabits.length, 2, "两条表达习惯（含关掉的那条）");
+  assert.deepEqual(importedHabits.map((row) => row.status).sort(), ["ACTIVE", "DISABLED"]);
+  assert.equal(importedHabits[0]?.revision, 1);
+  assert.equal(importedHabits[0]?.revisions.length, 1, "补一条 CREATE 历史，避免「版本 2 但没有版本 1」");
+  assert.equal(importedHabits[0]?.revisions[0]?.actorId, ownerA, "历史记在导入者名下");
+  const habitSource = importedHabits[0]?.sourceRefs as Array<Record<string, unknown>> | null;
+  assert.equal(habitSource?.[0]?.type, "characterCard", "来源改写成「来自角色卡」");
+
+  const importedGoals = await prisma.characterGoal.findMany({
+    where: { characterId: first.characterId },
+    include: { revisions: true },
+  });
+  assert.equal(importedGoals.length, 2);
+  assert.ok(importedGoals.some((row) => row.status === "COMPLETED"), "完成过的愿望要原样落库");
+  assert.equal(importedGoals[0]?.revisions.length, 1);
+
+  const importedPreferences = await prisma.characterPreference.findMany({
+    where: { characterId: first.characterId },
+    include: { revisions: true },
+  });
+  assert.equal(importedPreferences.length, 2);
+  assert.ok(importedPreferences.some((row) => row.status === "DISABLED"), "关掉的偏好不该回滚成生效");
+  assert.equal(importedPreferences[0]?.revisions.length, 1);
+
   // 同一张卡再导一次：内容相同就是同一条，不该长出第二份。
   const reimported = await importCharacterCard({
     raw: JSON.parse(serialized),
@@ -432,6 +543,9 @@ async function main() {
   });
   assert.equal(reimported.added.interactionGuidance, 0, "同一张卡重复合并不该多出互动经验");
   assert.equal(reimported.added.channelPolicies, 0, "渠道策略按 kind 去重，一种渠道只有一条");
+  assert.equal(reimported.added.expressionHabits, 0, "表达习惯按内容去重");
+  assert.equal(reimported.added.goals, 0, "目标按 kind + 标题去重");
+  assert.equal(reimported.added.preferences, 0, "偏好按 kind + 主题去重");
 
   const importedGlobal = imported.memoryScopes.find((scope) => scope.scopeType === "CHARACTER_GLOBAL");
   const importedPrivate = imported.memoryScopes.find((scope) => scope.scopeType === "USER_PRIVATE");
