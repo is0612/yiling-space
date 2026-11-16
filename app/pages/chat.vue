@@ -168,12 +168,6 @@ function resetForCharacter() {
   character.value = null;
 }
 
-async function switchCharacter(nextId: string) {
-  if (!nextId || nextId === id.value || sending.value) return;
-  // CharacterBar 负责 navigateTo 到 ?c= 新 id，这里只做跳转前的清场，避免闪一帧上一角色的会话
-  resetForCharacter();
-}
-
 async function loadCharacter(ticket: ReturnType<typeof chatSessionState.begin>) {
   const targetCharacterId = ticket.context.characterId;
   if (!targetCharacterId) return;
@@ -650,16 +644,10 @@ watch(id, (next, previous) => {
       </template>
     </PageHeader>
 
-    <!-- 角色切换：菜单页的第一件事，和角色记忆页用同一个位置、同一套控件 -->
-    <CharacterBar
-      path="/chat"
-      :disabled="sending"
-      empty-text="还没有角色。先创建一个角色，再回来和它说话。"
-      @change="switchCharacter"
-    >
-      <!-- 模型是按角色配的，状态就挂在角色这一行：不再在页面顶部单独报警 -->
+    <div v-if="id" class="chat-character-context">
+      <span class="avatar chat-character-avatar" :class="'avatar-' + (current?.avatarTone || 'mint')">{{ characterInitial }}</span>
+      <strong>{{ current?.name || character?.name || "当前角色" }}</strong>
       <button
-        v-if="id"
         type="button"
         class="model-chip"
         :class="{ 'is-warn': !modelConfigured }"
@@ -669,7 +657,8 @@ watch(id, (next, previous) => {
         {{ modelConfigured ? character?.chatModel || "模型已配置" : "模型未配置" }}
         <span class="model-chip-go">{{ modelConfigured ? "设置" : "去设置" }}</span>
       </button>
-    </CharacterBar>
+      <span class="chat-character-hint">角色可在左侧栏切换</span>
+    </div>
 
     <div
       v-if="characters.length"
@@ -1008,6 +997,11 @@ watch(id, (next, previous) => {
 .chat-page{display:flex;flex-direction:column;height:calc(100vh - var(--topbar-h));height:calc(100dvh - var(--topbar-h));padding-bottom:22px;overflow:hidden}
 
 .card{border:0;border-radius:10px;box-shadow:none}
+.chat-character-context{display:flex;flex:none;align-items:center;gap:10px;margin:0 0 12px;padding:0 4px}
+.chat-character-avatar{width:30px;height:30px;border-radius:9px;font-size:12px;font-weight:700}
+.chat-character-context>strong{color:var(--text);font-size:14px;font-weight:650}
+.chat-character-hint{color:var(--dim);font-size:12px}
+
 
 /* 模型状态：按角色配置的，所以挂在角色这一行；可点进设置 */
 .model-chip{display:inline-flex;flex:none;align-items:center;gap:5px;border:0;border-radius:999px;background:var(--surface-3);padding:4px 10px;color:var(--text-2);font-size:12px;font-weight:600;cursor:pointer;transition:background .14s var(--ease),color .14s var(--ease)}
