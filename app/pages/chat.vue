@@ -149,25 +149,6 @@ function requestContext(overrides: Partial<{
   };
 }
 
-function resetForCharacter() {
-  chatSessionState.invalidate();
-  loading.value = false;
-  sending.value = false;
-  pendingRequestKey.value = null;
-  pendingRequestContent.value = null;
-  pendingRequestConversationId.value = null;
-  conversations.value = [];
-  conversationId.value = null;
-  messages.value = [];
-  expandedSources.value = [];
-  draft.value = "";
-  conversationSearch.value = "";
-  conversationSearchDraft.value = "";
-  conversationView.value = "ACTIVE";
-  modelConfigured.value = false;
-  character.value = null;
-}
-
 async function loadCharacter(ticket: ReturnType<typeof chatSessionState.begin>) {
   const targetCharacterId = ticket.context.characterId;
   if (!targetCharacterId) return;
