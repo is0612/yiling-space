@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { createAssistantTurnContext } from "../server/utils/assistant-turn-context";
 import { generateGroupContextReply } from "../server/utils/group-context-reply";
 import type { TurnDetailPatch } from "../server/utils/model-turn-detail";
 import type { ConversationReplyInput } from "../server/utils/chat-reply";
@@ -159,8 +161,22 @@ try {
   assert.equal(details[1]?.memory?.status, "not_enabled");
 
   reset(() => response(reply));
-  await run({ chatInput: { ...chatInput, groupChat: false }, contextAssistant: null });
+  const privateTurn = createAssistantTurnContext({
+    turnId: randomUUID(),
+    identity: { characterId: randomUUID(), channel: "qq-private", channelBindingId: randomUUID(),
+      conversationKey: "private-conversation", readableScopeIds: [randomUUID()], allowPrivate: true },
+    evidenceIds: ["private-current"],
+  });
+  privateTurn.skip("context", "not_needed");
+  privateTurn.skip("knowledge", "not_needed");
+  await run({ chatInput: { ...chatInput, groupChat: false,
+    recentMessages: [{ id: "private-current", role: "USER", content: "私聊当前消息" }] },
+    contextAssistant: null, turnContext: privateTurn });
   assert.equal(details[0]?.context?.status, "not_applicable");
+  const privateStages = privateTurn.snapshot().stages;
+  assert.equal(privateStages.find(stage => stage.stage === "response")?.logicalCalls, 1,
+    "Private replies use the shared response stage without invoking the group analyzer.");
+  assert.equal(privateStages.find(stage => stage.stage === "memory")?.skipped, "not_needed");
 
   reset(body => body.model === "context" ? response(analysis) : response(reply));
   await run({ candidates: [] });
