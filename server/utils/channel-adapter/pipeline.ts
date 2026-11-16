@@ -1840,6 +1840,7 @@ async function runChannelTurn(input: {
             ...(existingConversation ? { conversationId: existingConversation.id } : {}),
             metadata: { status: "failed", turnId, source: "private-knowledge-analysis" },
           }).catch(() => undefined);
+          skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
         }
       } else {
         skipAssistantTurnStage(collaboration, "context", "not_enabled");
