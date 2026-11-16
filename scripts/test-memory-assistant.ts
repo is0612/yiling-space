@@ -14,6 +14,7 @@ import {
 import type { TurnDetailPatch } from "../server/utils/model-turn-detail";
 import type { ConversationReplyInput } from "../server/utils/chat-reply";
 import { selectRawMessagesForMemoryAssistant } from "../server/utils/message-retrieval";
+import { createAssistantTurnContext } from "../server/utils/assistant-turn-context";
 
 const now = new Date("2026-11-04T10:00:00.000Z");
 const scopeOf = (scopeId: string) => scopeId === "global" ? "character" as const : "private" as const;
@@ -684,4 +685,33 @@ assert(fittedBudgetCandidates.length < budgetCandidates.length,
 assert(estimatedPayloadTokens <= 4_096,
   "Estimated prompt and candidate payload must stay within the configured input budget.");
 
-console.log("Memory assistant tests passed: scope isolation, source whitelist, independent credentials, on-demand lookup, connection test, usage accounting, input budget, and output ceiling.");
+// The browser and desktop bridge share chat.post: it has a private direct-chat identity,
+// skips group-only context/knowledge stages, and still uses the common memory/response budget.
+const directTurn = createAssistantTurnContext({
+  turnId: randomUUID(),
+  identity: { characterId: randomUUID(), channel: "direct-chat", conversationKey: "direct:synthetic",
+    readableScopeIds: [randomUUID()], allowPrivate: true },
+  evidenceIds: [],
+});
+directTurn.skip("context", "not_enabled");
+directTurn.skip("knowledge", "not_needed");
+const originalDirectFetch = globalThis.fetch;
+try {
+  globalThis.fetch = async () => Response.json({
+    choices: [{ message: { content: JSON.stringify({ action: "reply", reply: "直聊回复", usedMemoryIds: [], usedSnapshotIds: [] }) }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 },
+  });
+  const directReply = await generateConversationReplyWithMemoryAssistant({
+    chatInput, assistant, candidates: [], turnContext: directTurn,
+  });
+  assert.equal(directReply.reply, "直聊回复");
+  const directStages = directTurn.snapshot().stages;
+  assert.equal(directStages.find(stage => stage.stage === "response")?.logicalCalls, 1);
+  assert.equal(directStages.find(stage => stage.stage === "memory")?.skipped, "not_needed");
+  assert.equal(directStages.find(stage => stage.stage === "context")?.skipped, "not_enabled");
+  assert.equal(directStages.find(stage => stage.stage === "knowledge")?.skipped, "not_needed");
+} finally {
+  globalThis.fetch = originalDirectFetch;
+}
+
+console.log("Memory assistant tests passed: scope isolation, source whitelist, independent credentials, on-demand lookup, direct-chat turn context, connection test, usage accounting, input budget, and output ceiling.");
