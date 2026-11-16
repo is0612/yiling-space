@@ -12,12 +12,16 @@ export type AssistantAttempt = {
 };
 export type AssistantOperationKey = { query: string; sourceVersion: string };
 export type AssistantOperationResult<T> = { value: T; state: "success" | "no_sources" };
+export type AssistantTurnIdentity = {
+  characterId: string; channelBindingId: string; conversationKey: string;
+  readableScopeIds: readonly string[];
+} & (
+  | { channel: "qq-group"; allowPrivate: false }
+  | { channel: "qq-private"; allowPrivate: true }
+);
 export type AssistantTurnInput = {
   turnId: string;
-  identity: {
-    characterId: string; channel: "qq-group"; channelBindingId: string; conversationKey: string;
-    readableScopeIds: readonly string[]; allowPrivate: false;
-  };
+  identity: AssistantTurnIdentity;
   evidenceIds: readonly string[];
   /** Must be supplied by a trusted server caller; this module does not perform authorization. */
   now?: () => number;
@@ -66,17 +70,20 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
   identifier(input.turnId, "turn id");
   identifier(input.identity.characterId, "character id");
   identifier(input.identity.channelBindingId, "binding id");
-  if (input.identity.channel !== "qq-group" || input.identity.allowPrivate !== false) throw new TypeError("Only public group turns are supported");
+  if (!((input.identity.channel === "qq-group" && input.identity.allowPrivate === false)
+    || (input.identity.channel === "qq-private" && input.identity.allowPrivate === true))) {
+    throw new TypeError("Assistant turn channel and private-scope policy do not match");
+  }
   if (typeof input.identity.conversationKey !== "string" || !input.identity.conversationKey.trim() || input.identity.conversationKey.length > 512) throw new TypeError("Invalid conversation key");
   if (!Array.isArray(input.identity.readableScopeIds) || !input.identity.readableScopeIds.length || input.identity.readableScopeIds.length > 50) throw new TypeError("Invalid readable scopes");
   const scopes = [...new Set(input.identity.readableScopeIds)];
   scopes.forEach(id => identifier(id, "scope id"));
   if (!Array.isArray(input.evidenceIds) || input.evidenceIds.length > 1000 || input.evidenceIds.some(id => typeof id !== "string" || !id.trim() || id.length > 200)) throw new TypeError("Invalid evidence ids");
   const evidence = new Set(input.evidenceIds);
-  const identity = Object.freeze({
-    characterId: input.identity.characterId, channel: "qq-group" as const,
+  const identity: Readonly<AssistantTurnIdentity> = Object.freeze({
+    characterId: input.identity.characterId, channel: input.identity.channel,
     channelBindingId: input.identity.channelBindingId, conversationKey: input.identity.conversationKey,
-    readableScopeIds: Object.freeze(scopes.sort()), allowPrivate: false as const,
+    readableScopeIds: Object.freeze(scopes.sort()), allowPrivate: input.identity.allowPrivate,
   });
   const now = input.now ?? Date.now;
   let lastTime = now();
@@ -84,7 +91,10 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
   const startedAt = lastTime;
   const time = () => { const value = now(); if (Number.isFinite(value)) lastTime = Math.max(lastTime, value); return lastTime; };
   const turnId = input.turnId;
-  const scopeDigest = digest([turnId, identity.characterId, identity.channelBindingId, identity.conversationKey, identity.readableScopeIds]);
+  // Channel and privacy policy are part of the cache namespace: a group turn can never
+  // reuse a private turn's operation even if all other identifiers happen to match.
+  const scopeDigest = digest([turnId, identity.characterId, identity.channel, identity.allowPrivate,
+    identity.channelBindingId, identity.conversationKey, identity.readableScopeIds]);
   const operations = new Map<string, Operation>();
   const skipped = new Map<AssistantTurnStage, "not_enabled" | "not_needed">();
   const logical = { context: 0, memory: 0, knowledge: 0, response: 0 };
