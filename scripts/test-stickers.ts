@@ -14,6 +14,13 @@ import {
   toStickerDto,
 } from "../server/utils/stickers";
 import { loadStickerSegments, toOnebotStickerSegments } from "../server/utils/channel-adapter/onebot/serve";
+import {
+  clampPage,
+  normalizeStickerSort,
+  parseStickerListParams,
+  stickerOrderBy,
+  totalPagesOf,
+} from "../server/utils/sticker-list";
 
 /**
  * 表情包（贴图）回归测试。
@@ -241,6 +248,49 @@ try {
   assert.ok(!capturedBody.includes("availableStickers"), "没传清单就不该提这件事（省 token）。");
 } finally {
   globalThis.fetch = originalFetch;
+}
+
+// ── 8. 列表排序与分页参数（页面的五个排序档、翻页回夹） ─────────────────────
+// 排序和切片都下推到数据库之后，这几条纯函数就是「翻页不重影、不越界」的全部依据：
+// 参数解析错了会静默变成默认排序，orderBy 少了 id 兜底则会在值相等时乱序。
+assert.equal(normalizeStickerSort("mostUsed"), "mostUsed");
+assert.equal(normalizeStickerSort("nonsense"), "recent", "认不出的排序键回默认，不能报错。");
+assert.equal(normalizeStickerSort(undefined), "recent");
+assert.equal(normalizeStickerSort(42), "recent");
+
+assert.deepEqual(
+  parseStickerListParams({}),
+  { sort: "recent", page: 1, pageSize: 12, untaggedOnly: false },
+  "什么都不传时与页面默认档一致：最近添加、第 1 页、12 张。",
+);
+assert.equal(parseStickerListParams({ page: "0" }).page, 1, "0 不是合法页码。");
+assert.equal(parseStickerListParams({ page: "-3" }).page, 1);
+assert.equal(parseStickerListParams({ page: "abc" }).page, 1);
+assert.equal(parseStickerListParams({ page: "3" }).page, 3);
+assert.equal(parseStickerListParams({ pageSize: "9999" }).pageSize, 100, "pageSize 封顶 100。");
+assert.equal(parseStickerListParams({ pageSize: "0" }).pageSize, 12, "0 退回默认档。");
+assert.equal(parseStickerListParams({ untagged: "1" }).untaggedOnly, true);
+assert.equal(parseStickerListParams({ untagged: "0" }).untaggedOnly, false);
+
+assert.equal(totalPagesOf(0, 12), 1, "0 条也要算一页，否则页面会显示「第 1/0 页」。");
+assert.equal(totalPagesOf(12, 12), 1);
+assert.equal(totalPagesOf(13, 12), 2);
+assert.equal(clampPage(5, 2), 2, "删到最后一页只剩一两张时，页码必须回夹。");
+assert.equal(clampPage(0, 2), 1);
+assert.equal(clampPage(2, 2), 2);
+
+assert.deepEqual(stickerOrderBy("recent"), [{ createdAt: "desc" }, { id: "desc" }]);
+assert.deepEqual(stickerOrderBy("oldest"), [{ createdAt: "asc" }, { id: "asc" }]);
+assert.equal((stickerOrderBy("mostUsed")[0] as { useCount: string }).useCount, "desc");
+assert.equal((stickerOrderBy("fresh")[0] as { useCount: string }).useCount, "asc", "「一直没用过的」= 次数升序，0 次排最前。");
+assert.deepEqual(
+  stickerOrderBy("lastUsed")[0],
+  { lastUsedAt: { sort: "desc", nulls: "last" } },
+  "一次没用过的是 null；不写 nulls last 的话 Postgres 会把它们当最大值排在最前。",
+);
+for (const sort of ["recent", "oldest", "mostUsed", "lastUsed", "fresh"] as const) {
+  const terms = stickerOrderBy(sort) as Array<Record<string, unknown>>;
+  assert.ok("id" in terms[terms.length - 1]!, `${sort} 必须用 id 兜底：排序值相等时顺序不定，翻页会重影。`);
 }
 
 console.log("表情包（贴图）：全部通过");

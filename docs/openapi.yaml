@@ -3770,6 +3770,37 @@ paths:
           description: 该接口仅限本地开发环境
         '404':
           $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Memories]
+      operationId: purgeCharacterMemoryTrash
+      summary: 清空角色记忆回收站
+      description: |
+        把这个角色回收站里（`status = TRASHED`）的条目**一次性永久删除**，不可恢复。
+        语义与逐条 `DELETE /memories/{memoryId}` 完全一致：只删当前长期记忆条目，
+        已有阶段总结里的生成时副本和来源记录仍保留（`memory_snapshot_sources` 只把 `memoryItemId` 置空），
+        所以历史归档里仍可能出现这些内容。
+
+        事务内先锁住这批行再删：并发有人点单条「恢复」时，锁等待结束后那条已不是 TRASHED，
+        批量删除会按最新状态再筛一次，不会把刚恢复的条目一起删掉。
+      responses:
+        '200':
+          description: 已清空
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, preservedSnapshotReferences]
+                properties:
+                  deleted:
+                    type: integer
+                    description: 实际删掉的条数；本来就是空的就返回 0
+                  preservedSnapshotReferences:
+                    type: integer
+                    description: 被保留的历史来源记录数（阶段总结里的生成时副本不受影响）
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /characters/{characterId}/snapshots:
     parameters:
@@ -5403,19 +5434,60 @@ paths:
       - $ref: '#/components/parameters/CharacterId'
     get:
       tags: [Stickers]
-      summary: 获取角色的表情包清单
+      summary: 获取角色的表情包清单（分页）
       description: |
-        按创建时间升序，返回**裸数组**。这一组接口都不套 `{data, error}` 信封（早期接口那样写，实际实现是裸 JSON）—— 以这里的定义为准。
+        **分页返回**，排序在服务端做。这一组接口都不套 `{data, error}` 信封（早期接口那样写，实际实现是裸 JSON）—— 以这里的定义为准。
         **回收站里的不返回**：删掉的表情只是软删，行还在库里，翻回收站走 `/stickers/trash`。
         图片本体不在这里，走 `/stickers/{stickerId}/image` 单独取：图存在 `.data/` 下、不可被 Web 直接访问，且它属于角色的私人素材。
+
+        `stats` 是**全量**计数（共几张、停用几张、几张没写场景、几张连了 QQ）：分页后页面手里只有一页，
+        这些数必须由服务端算，否则「停用 3 张」会变成「本页停用 0 张」。传 `untagged=1` 筛选时，
+        顶层的 `total` 是筛选后的条数，`stats.total` 仍是全量。
+      parameters:
+        - name: sort
+          in: query
+          description: |
+            recent（默认，最近添加）/ oldest / mostUsed / lastUsed / fresh（一直没用过的，次数升序）。
+            每档都用 `id` 兜底：排序值相等时 Postgres 不保证顺序，翻页会出现重影。
+          schema: { type: string, enum: [recent, oldest, mostUsed, lastUsed, fresh], default: recent }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 12 }
+        - name: untagged
+          in: query
+          description: 传 `1` 只返回还没写「什么时候用」的（页面「逐张识别补上」用它一次取全量待补的）。
+          schema: { type: string, enum: ['1', '0'] }
       responses:
         '200':
-          description: 表情包清单
+          description: 表情包分页清单
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/Sticker' }
+                type: object
+                required: [items, total, page, pageSize, totalPages, stats]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Sticker' }
+                  total:
+                    type: integer
+                    description: 当前筛选条件下的总张数
+                  page:
+                    type: integer
+                    description: 实际页码；请求的页码越界时已回夹到最后一页
+                  pageSize: { type: integer }
+                  totalPages: { type: integer }
+                  stats:
+                    type: object
+                    required: [total, disabled, untagged, qqLinked]
+                    properties:
+                      total: { type: integer, description: 全量张数（不含回收站） }
+                      disabled: { type: integer, description: 停用中的张数 }
+                      untagged: { type: integer, description: 还没写「什么时候用」的张数 }
+                      qqLinked: { type: integer, description: 已经和 QQ 收藏夹对上的张数 }
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -5676,6 +5748,30 @@ paths:
                   retentionDays:
                     type: integer
                     description: 保留天数，与页面文案保持一致
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Stickers]
+      summary: 清空回收站
+      description: |
+        把这个角色回收站里的**所有**条目连同磁盘文件一起彻底删除，不可恢复。
+        与打开回收站时「顺手清掉超过 30 天的」是同一条清理路径，区别只是不限过期时间。
+        活跃表情一概不动，别的角色的回收站也不动。
+      responses:
+        '200':
+          description: 已清空
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, purged]
+                properties:
+                  ok: { type: boolean, enum: [true] }
+                  purged:
+                    type: integer
+                    description: 本次彻底删掉的张数；本来就是空的就返回 0
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':

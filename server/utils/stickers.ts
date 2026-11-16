@@ -56,16 +56,21 @@ export function trashExpiredBefore(now: Date = new Date()): Date {
 }
 
 /**
- * 彻底删掉过期的回收站条目：行和文件一起清。
+ * 彻底删掉回收站条目：行和文件一起清。
+ *
+ * 传了 `before` 就只清早于那个时间点的（打开回收站时顺手清过期的）；
+ * **不传 = 清空整个回收站**（页面上那个「清空回收站」按钮）。
  *
  * 先删行再删文件 —— 反过来一旦中途崩了就是「文件没了、行还在」，
  * 回收站里会出现一张点开是坏图的条目。返回清掉几条，给接口回个数字。
  */
-export async function purgeTrashedStickers(characterId: string, before: Date): Promise<number> {
+export async function purgeTrashedStickers(characterId: string, before?: Date): Promise<number> {
   const { getPrisma } = await import("./prisma");
   const prisma = getPrisma();
   const rows = await prisma.characterSticker.findMany({
-    where: { characterId, deletedAt: { not: null, lt: before } },
+    where: before
+      ? { characterId, deletedAt: { not: null, lt: before } }
+      : { characterId, deletedAt: { not: null } },
     select: { id: true, fileName: true },
   });
   if (!rows.length) return 0;

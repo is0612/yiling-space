@@ -692,6 +692,47 @@ async function permanentlyDeleteMemory(memory: RecycleBinEntry) {
   }
 }
 
+/**
+ * 清空回收站：一次永久删除这个角色回收站里的全部条目。
+ *
+ * 逐条「永久删除」在回收站攒到几十条时点不动，给一个一次清完的入口。
+ * 语义与单条删除完全一致 —— 只删当前长期记忆条目，已有阶段总结里的生成时副本和来源记录仍保留，
+ * 所以确认框里要把这层「删了也不等于历史里没有」说清楚，不能让人以为能抹掉历史。
+ */
+const recycleBinClearing = ref(false);
+
+async function clearRecycleBin() {
+  const count = recycleBinTotal.value;
+  if (!count || recycleBinClearing.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `回收站里的 ${count} 条记忆会被一起永久删除，无法恢复。为保护历史追溯，已有阶段总结中的生成时副本和来源记录仍会保留；因此历史归档里仍可能出现这些内容。`,
+      "清空回收站",
+      { type: "error", confirmButtonText: `永久删除 ${count} 条`, cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  recycleBinClearing.value = true;
+  try {
+    const result = await $fetch<{ deleted: number; preservedSnapshotReferences: number }>(
+      `/api/characters/${encodeURIComponent(id.value)}/memories/trash`,
+      { method: "DELETE" },
+    );
+    await Promise.all([loadRecycleBin(1), refreshMemoryPage()]);
+    ElMessage.success(
+      `已永久删除 ${result.deleted} 条；保留了 ${result.preservedSnapshotReferences} 条历史来源记录，既有阶段总结未被改写。`,
+    );
+  } catch (error) {
+    const message = error && typeof error === "object" && "statusMessage" in error
+      ? String(error.statusMessage)
+      : error instanceof Error ? error.message : "清空回收站失败。";
+    ElMessage.error(message);
+  } finally {
+    recycleBinClearing.value = false;
+  }
+}
+
 async function saveConversation() {
   if (conversationSaving.value) return;
 
@@ -1566,9 +1607,21 @@ watch(id, () => {
         @update:page="changeRecycleBinPage"
       />
       <template #footer>
-        <el-button @click="recycleBinOpen = false">
-          关闭
-        </el-button>
+        <div class="recycle-footer">
+          <!-- 清空放左边、关闭放右边：破坏性操作不该长在最顺手的那个位置上 -->
+          <el-button
+            v-if="recycleBinTotal"
+            type="danger"
+            plain
+            :loading="recycleBinClearing"
+            @click="clearRecycleBin"
+          >
+            清空回收站
+          </el-button>
+          <el-button @click="recycleBinOpen = false">
+            关闭
+          </el-button>
+        </div>
       </template>
     </el-dialog>
 
@@ -1799,6 +1852,9 @@ watch(id, () => {
 .recycle-card-meta{margin-top:5px;color:var(--dim);font-size:12px}
 .recycle-card-body{margin:10px 0;color:var(--dim);font-size:12px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}
 .recycle-card-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+/* 底部：清空在左、关闭在右。写死 space-between，破坏性操作离「关闭」远一点 */
+.recycle-footer{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.recycle-footer .el-button+.el-button{margin-left:0}
 
 /* ── 群聊记录抽屉 ───────────────────────────────────── */
 /* 群号是这一屏的「主键」，用等宽字把它和正文区分开，别让它看起来像一句话 */

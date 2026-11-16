@@ -62,12 +62,32 @@ type SyncReport = {
 
 type TrashItem = StickerItem & { deletedAt: string };
 
+/**
+ * 列表接口的返回。排序和分页都在服务端做：这里只拿当前这一窗。
+ *
+ * `stats` 是全量的计数（共几张、停用几张、几张没写场景、几张连了 QQ），
+ * 分页后页面手里只有一页，这些数必须由接口给，不能拿 `stickers` 去数。
+ */
+type StickerStats = { total: number; disabled: number; untagged: number; qqLinked: number };
+type StickerList = {
+  items: StickerItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  stats: StickerStats;
+};
+
 const route = useRoute();
 const id = computed(() => String(route.params.id || ""));
 
 const characterName = ref("");
 const loading = ref(true);
 const stickers = ref<StickerItem[]>([]);
+/** 当前筛选条件下的总张数（没有筛选时等于 stats.total）。 */
+const total = ref(0);
+const totalPages = ref(1);
+const stats = ref<StickerStats>({ total: 0, disabled: 0, untagged: 0, qqLinked: 0 });
 const saving = ref(false);
 /** 角色的「表情」开关。关着的时候传多少张她都不会贴——不写页面上就会有人白传一通。 */
 const emojiEnabled = ref(false);
@@ -75,9 +95,9 @@ const emojiEnabled = ref(false);
 const emojiWindowMinutes = ref(10);
 const emojiPerWindow = ref(3);
 
-// ── 排序 + 分页 ────────────────────────────────────────
+// ── 排序 + 分页（服务端）────────────────────────────────
 // 攒到几十张以后一屏放不下，翻到后面就找不到「哪张一直没用过」。
-// stickers 始终是全量，页面只渲染 pagedStickers 这一窗。
+// 排序和切片都交给数据库：接口收 sort / page / pageSize，这里只保存「现在看的是哪一窗」。
 type SortKey = "recent" | "oldest" | "mostUsed" | "lastUsed" | "fresh";
 
 const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
@@ -92,34 +112,10 @@ const sortKey = ref<SortKey>("recent");
 const page = ref(1);
 const pageSize = ref(12);
 
-/** null 的 lastUsedAt 当 0 处理，这样「最近用过的」自然把没用过的沉到最后。 */
-const timeOf = (value: string | null) => (value ? new Date(value).getTime() : 0);
+/** 连点排序/翻页时旧响应可能后到：只认最后一次请求的结果。 */
+let listSeq = 0;
 
-const sortedStickers = computed(() => {
-  const rows = [...stickers.value];
-  switch (sortKey.value) {
-    case "oldest":
-      return rows.sort((a, b) => timeOf(a.createdAt) - timeOf(b.createdAt));
-    case "mostUsed":
-      return rows.sort((a, b) => b.useCount - a.useCount || timeOf(b.createdAt) - timeOf(a.createdAt));
-    case "lastUsed":
-      return rows.sort((a, b) => timeOf(b.lastUsedAt) - timeOf(a.lastUsedAt) || timeOf(b.createdAt) - timeOf(a.createdAt));
-    case "fresh":
-      // 一次都没用过的一律排前面 —— 这一档就是用来找「白占名额」的那几张。
-      return rows.sort(
-        (a, b) => Number(a.useCount > 0) - Number(b.useCount > 0) || timeOf(b.createdAt) - timeOf(a.createdAt),
-      );
-    default:
-      return rows.sort((a, b) => timeOf(b.createdAt) - timeOf(a.createdAt));
-  }
-});
-
-const pagedStickers = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return sortedStickers.value.slice(start, start + pageSize.value);
-});
-
-const disabledCount = computed(() => stickers.value.filter((item) => !item.enabled).length);
+const disabledCount = computed(() => stats.value.disabled);
 
 /**
  * 没写「什么时候用」的张数。
@@ -127,21 +123,15 @@ const disabledCount = computed(() => stickers.value.filter((item) => !item.enabl
  * 从 QQ 收藏导进来的多半是空的（QQ 那边只有一张图，没有场景），而挑图时模型主要比对的就是这句。
  * 所以这个数要显眼：不补的话，它们会一直排在候选里但永远挑不中。
  */
-const untaggedCount = computed(() => stickers.value.filter((item) => !item.usage.trim()).length);
-const qqLinkedCount = computed(() => stickers.value.filter((item) => item.qqEmojiId).length);
+const untaggedCount = computed(() => stats.value.untagged);
+const qqLinkedCount = computed(() => stats.value.qqLinked);
 
 /** 页码居中显示用：第 13–24 张，共 25 张。 */
 const rangeLabel = computed(() => {
-  if (!sortedStickers.value.length) return "";
+  if (!total.value) return "";
   const start = (page.value - 1) * pageSize.value + 1;
-  const end = Math.min(page.value * pageSize.value, sortedStickers.value.length);
-  return `第 ${start}–${end} 张，共 ${sortedStickers.value.length} 张`;
-});
-
-// 删到最后一页只剩一两张时页码会越界，落回最后一页。
-watch([() => sortedStickers.value.length, pageSize], () => {
-  const maxPage = Math.max(1, Math.ceil(sortedStickers.value.length / pageSize.value));
-  if (page.value > maxPage) page.value = maxPage;
+  const end = Math.min(page.value * pageSize.value, total.value);
+  return `第 ${start}–${end} 张，共 ${total.value} 张`;
 });
 
 const pageDescription = computed(
@@ -245,25 +235,67 @@ async function generateDraftUsage() {
   }
 }
 
-async function load() {
-  loading.value = true;
+async function loadCharacter() {
   try {
-    const [character, rows] = await Promise.all([
-      $fetch<{ name: string; emojiEnabled?: boolean; emojiWindowMinutes?: number; emojiPerWindow?: number }>(
-        `/api/characters/${encodeURIComponent(id.value)}`,
-      ),
-      $fetch<StickerItem[]>(`/api/characters/${encodeURIComponent(id.value)}/stickers`),
-    ]);
+    const character = await $fetch<{ name: string; emojiEnabled?: boolean; emojiWindowMinutes?: number; emojiPerWindow?: number }>(
+      `/api/characters/${encodeURIComponent(id.value)}`,
+    );
     characterName.value = character.name;
     emojiEnabled.value = character.emojiEnabled === true;
     if (typeof character.emojiWindowMinutes === "number") emojiWindowMinutes.value = character.emojiWindowMinutes;
     if (typeof character.emojiPerWindow === "number") emojiPerWindow.value = character.emojiPerWindow;
-    stickers.value = rows;
   } catch (error) {
+    ElMessage.error((error as { statusMessage?: string })?.statusMessage || "读取角色失败。");
+  }
+}
+
+function listUrl(options: { page?: number; pageSize?: number; sort?: SortKey; untagged?: boolean } = {}) {
+  const params = new URLSearchParams({
+    page: String(options.page ?? page.value),
+    pageSize: String(options.pageSize ?? pageSize.value),
+    sort: options.sort ?? sortKey.value,
+  });
+  if (options.untagged) params.set("untagged", "1");
+  return `/api/characters/${encodeURIComponent(id.value)}/stickers?${params.toString()}`;
+}
+
+/** 拉当前这一窗。页码越界时服务端已经回夹过，`page` 会跟着写回真实值。 */
+async function loadStickers() {
+  const seq = ++listSeq;
+  loading.value = true;
+  try {
+    const result = await $fetch<StickerList>(listUrl());
+    if (seq !== listSeq) return;
+    stickers.value = result.items;
+    total.value = result.total;
+    totalPages.value = result.totalPages;
+    page.value = result.page;
+    stats.value = result.stats;
+  } catch (error) {
+    if (seq !== listSeq) return;
     ElMessage.error((error as { statusMessage?: string })?.statusMessage || "读取表情包失败。");
   } finally {
-    loading.value = false;
+    if (seq === listSeq) loading.value = false;
   }
+}
+
+/** 换排序 / 换每页张数都回第一页：停在第 3 页换个排序，看到的是一批「不知道从哪开始的」图。 */
+function changeSort() {
+  page.value = 1;
+  void loadStickers();
+}
+
+function changePage(next: number) {
+  if (next === page.value) return;
+  page.value = next;
+  void loadStickers();
+}
+
+function changePageSize(next: number) {
+  if (next === pageSize.value) return;
+  pageSize.value = next;
+  page.value = 1;
+  void loadStickers();
 }
 
 async function submit() {
@@ -279,10 +311,11 @@ async function submit() {
       method: "POST",
       body: form,
     });
-    stickers.value = [...stickers.value, created];
-    // 新加的这张在任何排序下都不一定落在第一页，直接翻到它那一页，省得人以为没传上。
-    const index = sortedStickers.value.findIndex((item) => item.id === created.id);
-    if (index >= 0) page.value = Math.floor(index / pageSize.value) + 1;
+    // 新加的这张在「最近添加」里一定排第一。分页之后没法在本页里找它落在哪一页，
+    // 索性切回默认排序第一页 —— 否则人刚从别的排序翻到第 5 页，传完什么也看不见。
+    sortKey.value = "recent";
+    page.value = 1;
+    void loadStickers();
     pendingFile.value = null;
     draftName.value = "";
     draftUsage.value = "";
@@ -438,7 +471,8 @@ async function remove(row: StickerItem) {
       `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(row.id)}`,
       { method: "DELETE" },
     );
-    stickers.value = stickers.value.filter((item) => item.id !== row.id);
+    // 分页之后不能只从本地数组里摘掉：总张数、页码都可能变（删的是本页最后一张时要回夹）。
+    void loadStickers();
     if (result.qq && !result.qq.ok && !result.qq.skipped) {
       // 本地已经删掉了，QQ 那边没删掉 —— 下次同步会给「本地删了、QQ 还在」的补删一次。
       ElMessage.warning(`本地已删除，但 QQ 那边没删掉：${result.qq.error || "未知原因"}。下次「与 QQ 同步」会再试。`);
@@ -466,7 +500,10 @@ async function syncWithQq() {
       { method: "POST" },
     );
     syncReport.value = report;
-    await load();
+    // 同步会改数量、来源、「连没连 QQ」，也可能让页码越界 —— 回第一页重拉，
+    // 停在原来的第几页会看到一批已经不对应的图。
+    page.value = 1;
+    await loadStickers();
     if (!report.ok) ElMessage.warning("这次没有同步：QQ 收藏夹看起来不正常，为避免误删本地表情，什么都没动。");
     else if (report.warnings.length) ElMessage.warning("同步完成，但有几处需要看一眼。");
     else ElMessage.success("两边已经一致了。");
@@ -529,12 +566,12 @@ async function openTrash() {
 
 async function restoreFromTrash(item: TrashItem) {
   try {
-    const restored = await $fetch<StickerItem>(
+    await $fetch<StickerItem>(
       `/api/characters/${encodeURIComponent(id.value)}/stickers/trash/${encodeURIComponent(item.id)}/restore`,
       { method: "POST" },
     );
     trashItems.value = trashItems.value.filter((row) => row.id !== item.id);
-    stickers.value = [...stickers.value, restored];
+    void loadStickers();
     ElMessage.success("已恢复。她下一轮就能用它了。");
   } catch (error) {
     ElMessage.error((error as { statusMessage?: string })?.statusMessage || "恢复失败。");
@@ -564,6 +601,42 @@ async function purgeOne(item: TrashItem) {
 }
 
 /**
+ * 清空回收站。
+ *
+ * 逐条「彻底删除」在回收站攒到几十张时点不动，所以给一个一次清完的入口。
+ * 这是全站最难挽回的操作（图和名字一起没），确认框里把**张数**写清楚，
+ * 按钮文字也用「彻底删除 N 张」而不是「确定」—— 手快的人也能看出自己在删什么。
+ */
+const clearingTrash = ref(false);
+
+async function clearTrash() {
+  const count = trashItems.value.length;
+  if (!count || clearingTrash.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `回收站里的 ${count} 张会被一起彻底删除，图和名字都没了，找不回来。要恢复请先逐张「恢复」。`,
+      "清空回收站",
+      { type: "error", confirmButtonText: `彻底删除 ${count} 张`, cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  clearingTrash.value = true;
+  try {
+    const result = await $fetch<{ purged: number }>(
+      `/api/characters/${encodeURIComponent(id.value)}/stickers/trash`,
+      { method: "DELETE" },
+    );
+    trashItems.value = [];
+    ElMessage.success(`已彻底删除 ${result.purged} 张。`);
+  } catch (error) {
+    ElMessage.error((error as { statusMessage?: string })?.statusMessage || "清空失败。");
+  } finally {
+    clearingTrash.value = false;
+  }
+}
+
+/**
  * 给没写场景的那些逐张「重新识别」。
  *
  * 从 QQ 导进来的表情带着图但没带场景，而模型挑图时看的就是那句 —— 空着等于白占名额。
@@ -573,9 +646,35 @@ async function purgeOne(item: TrashItem) {
 const labelingAll = ref(false);
 const labelProgress = ref({ done: 0, total: 0 });
 
+/**
+ * 把全站没写场景的几张都取回来。
+ *
+ * 分页之后 `stickers` 只有当前一页，「一键补全部」按页去补就变成「只补这一页」了，
+ * 所以这里单独按 `untagged=1` 翻页取完（一页 100 张，实际几乎不会翻第二页）。
+ */
+async function loadUntaggedStickers(): Promise<StickerItem[]> {
+  const collected: StickerItem[] = [];
+  for (let current = 1; current <= 50; current += 1) {
+    const result = await $fetch<StickerList>(listUrl({ page: current, pageSize: 100, sort: "oldest", untagged: true }));
+    collected.push(...result.items);
+    if (current >= result.totalPages || !result.items.length) break;
+  }
+  return collected;
+}
+
 async function labelUntagged() {
-  const targets = stickers.value.filter((item) => !item.usage.trim());
-  if (!targets.length || labelingAll.value) return;
+  if (labelingAll.value) return;
+  let targets: StickerItem[] = [];
+  try {
+    targets = await loadUntaggedStickers();
+  } catch (error) {
+    ElMessage.error((error as { statusMessage?: string })?.statusMessage || "读取待补场景的表情失败。");
+    return;
+  }
+  if (!targets.length) {
+    ElMessage.info("没有需要补场景的表情。");
+    return;
+  }
   try {
     await ElMessageBox.confirm(
       `给 ${targets.length} 张没写场景的表情逐张识别？每张都会调一次模型，可能要一会儿。`,
@@ -594,11 +693,7 @@ async function labelUntagged() {
         `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(row.id)}/relabel`,
         { method: "POST" },
       );
-      if (result.sticker) {
-        row.name = result.sticker.name;
-        row.usage = result.sticker.usage;
-        ok += 1;
-      }
+      if (result.sticker) ok += 1;
     } catch {
       // 单张失败不影响后面的：可能是额度用完，也可能是这张解不开。最后统一报个数。
     }
@@ -606,9 +701,14 @@ async function labelUntagged() {
   }
   labelingAll.value = false;
   ElMessage.success(`补好了 ${ok} / ${targets.length} 张，没补上的可以手动写或再点一次。`);
+  // 名字/场景变了、统计里的 untagged 也变了 —— 重拉当前页，否则提示条还挂着旧数字。
+  void loadStickers();
 }
 
-onMounted(load);
+onMounted(() => {
+  void loadCharacter();
+  void loadStickers();
+});
 </script>
 
 <template>
@@ -711,7 +811,7 @@ onMounted(load);
     <section class="sticker-shelf">
       <div class="sec-h">
         <h2>
-          已有 {{ stickers.length }} 张
+          已有 {{ stats.total }} 张
           <span
             v-if="disabledCount"
             class="title-aside"
@@ -762,13 +862,14 @@ onMounted(load);
       </div>
 
       <div
-        v-if="stickers.length"
+        v-if="total"
         class="sticker-toolbar"
       >
         <span class="sticker-label">排序</span>
         <el-select
           v-model="sortKey"
           style="width: 150px"
+          @change="changeSort"
         >
           <el-option
             v-for="option in SORT_OPTIONS"
@@ -785,7 +886,7 @@ onMounted(load);
         class="sticker-list"
       >
         <div
-          v-for="sticker in pagedStickers"
+          v-for="sticker in stickers"
           :key="sticker.id"
           class="sticker-card"
           :class="{ 'is-off': !sticker.enabled }"
@@ -849,23 +950,25 @@ onMounted(load);
       </div>
 
       <div
-        v-if="sortedStickers.length > pageSize"
+        v-if="total > pageSize"
         class="sticker-pager"
       >
         <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :total="sortedStickers.length"
+          :current-page="page"
+          :page-size="pageSize"
+          :total="total"
           :page-sizes="[12, 24, 48]"
           :pager-count="5"
           layout="sizes, prev, pager, next"
           size="small"
           background
+          @current-change="changePage"
+          @size-change="changePageSize"
         />
       </div>
 
       <p
-        v-else-if="!stickers.length"
+        v-else-if="!total"
         class="sticker-empty"
       >
         还没有表情包。传一张，她回复时就能贴自己的图了。
@@ -1011,9 +1114,22 @@ onMounted(load);
         v-loading="trashLoading"
         class="trash-body"
       >
-        <p class="sync-summary">
-          删掉的表情会先放在这里 {{ trashRetention }} 天，期间随时能恢复；超过就自动清掉。
-        </p>
+        <div class="trash-head">
+          <p class="sync-summary">
+            删掉的表情会先放在这里 {{ trashRetention }} 天，期间随时能恢复；超过就自动清掉。
+          </p>
+          <!-- 攒到几十张以后逐条「彻底删除」点不动：给一个一次清完的出口，确认框里写清张数 -->
+          <el-button
+            v-if="trashItems.length"
+            type="danger"
+            plain
+            size="small"
+            :loading="clearingTrash"
+            @click="clearTrash"
+          >
+            清空回收站
+          </el-button>
+        </div>
 
         <div
           v-for="item in trashItems"
@@ -1435,6 +1551,21 @@ onMounted(load);
   flex-direction: column;
   gap: var(--sp-2);
   min-height: 120px;
+}
+
+/* 说明文字与「清空回收站」同一行：按钮贴着说明右侧，不占一整行高度 */
+.trash-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-1);
+}
+.trash-head .sync-summary {
+  flex: 1;
+  min-width: 0;
+}
+.trash-head .el-button {
+  flex: none;
 }
 
 .trash-item {
