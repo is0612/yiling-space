@@ -129,10 +129,11 @@ interface AssistantTurnContext {
   readonly turnId: string;
   readonly identity: {
     characterId: string;
-    channel: 'qq-group';
+    channel: 'qq-group' | 'qq-private';
+    channelBindingId: string;
     conversationKey: string;
     readableScopeIds: readonly string[];
-    allowPrivate: false;
+    allowPrivate: boolean; // qq-group=false; qq-private=true, both resolved by trusted server code
   };
   readonly evidenceIds: ReadonlySet<string>;
   readonly startedAt: number;
@@ -170,7 +171,8 @@ interface AssistantTurnContext {
 | 2B | group-context-reply.ts、pipeline.ts | 只在群聊文本协作链创建/传递；默认保留原行为；故障回退仍走旧wrapper |
 | 2C | context-assistant.ts、memory-assistant.ts、chat-reply.ts | 可选request-attempt回调/预算检查，只计当前请求，避免helper和caller重复记账 |
 | 2D | model-turn-detail.ts、usage/turn读取契约和展示 | 兼容阶段状态、HTTP尝试/耗时与缺用量标识，禁止返回凭据/推理全文 |
-| 后续批 | 偏好/语言/愿望/知识读取器、私聊、chat.post | 只有群聊通过基线后逐个适配；不在2A顺手迁移 |
+| 2E | pipeline.ts、context-assistant.ts、memory-assistant.ts、group-context-reply.ts、model-turn-detail.ts | QQ私聊文本链复用单轮上下文；私聊知识分析/ACTIVE知识检索、记忆回退与回复阶段统一计数；保留私人范围与原有失败回退 | 
+| 后续批 | 偏好/语言/愿望读取器、桌面/网页chat.post | 在群聊和QQ私聊文本链稳定后逐个适配；不把桌面入口混进本批 |
 
 若仅内部可选对象且HTTP响应不变，2A/2B不需要数据库迁移或改OpenAPI。2D改变公开诊断响应时再同步OpenAPI/前端类型/测试。不提前建通用Task表，不用setInterval保证任何正式任务。
 
@@ -183,6 +185,7 @@ interface AssistantTurnContext {
 - 主模型网络重试、JSON修复、wrapper两轮各自可识别；用量缺失不当免费；记账失败和诊断回调异常不阻断已成功回复。
 - no_sources缓存不引发无限查询；共享deadline后不新增调用，未完成阶段降级可解释；已经有效的首轮事实答复不得被错误兜底覆盖。
 - 保持直接@、沉默、表情、梗、引用与点名、主人/群友隐私规则；不把语境分析变成渠道副作用命令。
+- QQ私聊：单轮身份必须为qq-private且allowPrivate=true；只能携带服务端已解析的当前会话可读范围与消息证据。私聊知识分析与ACTIVE知识SQL检索最多各执行一次，记忆助手沿用私聊候选加载/范围过滤；上下文助手不可用或分析失败时，原有记忆补查与主模型回退仍可工作。
 - 快速切角色、同群不同绑定、私聊与群聊交错时，不复用其他轮数据。数据库写仍走原消息事务/请求幂等。
 - 同一组匿名样例记录输入范围、阶段次数、实际HTTP次数、耗时、token报告完整性、来源引用和最终回复。不得只记录“模型觉得更像人”。
 
@@ -269,3 +272,17 @@ ModelTurnDetail保持version1，新增可选collaboration；旧记录缺失不�
 隐私扫描通过；扫描发现架构旧文案含具体角色称呼，本批将其脱敏为泛称。git diff --check通过。
 
 本批不修改运行代码，未启动/重启Web、Worker或渠道，未调用付费模型，未执行数据库写入。完整typecheck/lint/build不是本次文档变更的必需检查，未重新执行；第二批必须在代码完成后跑适用检查。真实浏览器与供应商语义质量本批未验收。
+
+
+## 18. 2E QQ私聊文本链接入（2026-11-16，待工程回归）
+
+在独立分支 `feat/private-assistant-turn-context` 开始实施；不修改桌面/网页直接聊天API，也不做数据库迁移。
+
+- 单轮上下文身份从仅 `qq-group` 扩展为显式区分 `qq-group` 与 `qq-private`。渠道和 `allowPrivate` 必须匹配，二者均进入缓存命名空间；群聊仍强制 `allowPrivate=false`，私聊由服务端可信调用方传入 `allowPrivate=true`。
+- QQ私聊pipeline在私聊知识分析前创建单轮上下文，证据只来自当前私聊消息和该会话已授权的近期消息；群聊仍在工作上下文过滤完成后创建，保留原有证据范围。
+- 私聊专用知识分析作为 `context` 阶段，ACTIVE知识SQL检索作为 `knowledge` 阶段；分析器只新增可选HTTP尝试回调，不改变45秒超时、单次请求、输出预算或知识候选自动收集/人工审核规则。
+- 记忆助手包装器现在可接收私聊单轮上下文，记录旧流程的首轮回复、可选记忆筛选和最终回复；私聊入口仍不运行群聊语境分析器。群聊失败回退不变。
+- 私聊模型调用详情允许保存白名单协作阶段统计；群聊专属growthReads仍只对群聊保存。日志不记录查询正文、私人来源正文、Key或供应商推理文本。
+- 新增/扩展纯逻辑测试：私聊身份与策略匹配、私聊分析HTTP诊断、私聊回复阶段接入、私聊协作详情白名单。
+
+**当前验收状态：** 已提交到PR分支，GitHub Actions工程回归进行中；本轮未在本地运行yarn、数据库或真实QQ环境。PR通过前不得合并；真实私聊回复质量与权限隔离仍待用户本地验收。桌面/网页入口迁移仍是后续独立批次。
