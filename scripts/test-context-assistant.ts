@@ -107,7 +107,7 @@ try {
   const privateAttempts: Array<{ status: string; usageReported: boolean; finishReason?: string }> = [];
   const privateResult = await analyzePrivateKnowledgeCandidate(runtime, "小鱼", [
     { id: "private-1", speaker: "主人", content: "什么是鲸类的交流方式？" },
-  ], entry => privateAttempts.push(entry));
+  ], entry => privateAttempts.push({ status: entry.status, usageReported: entry.usageReported, finishReason: entry.finishReason }));
   assert.equal(calls, 1);
   assert.deepEqual(privateResult.evidenceMessageIds, ["private-1"]);
   assert.equal(privateResult.knowledgeQuery, "鲸类的交流方式");
@@ -119,7 +119,7 @@ try {
   const failedAttempts: Array<{ status: string; usageReported: boolean }> = [];
   await safeFailure(() => analyzePrivateKnowledgeCandidate(runtime, "小鱼", [
     { id: "private-2", content: "什么是向量检索？" },
-  ], entry => failedAttempts.push(entry)));
+  ], entry => failedAttempts.push({ status: entry.status, usageReported: entry.usageReported })));
   assert.deepEqual(failedAttempts, [{ status: "http_error", usageReported: false }]);
 
   reset();
