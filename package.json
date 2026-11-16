@@ -122,6 +122,7 @@
     "test:knowledge-page-races": "tsx scripts/test-knowledge-page-races.ts && tsx scripts/test-knowledge-batch-page.ts",
     "test:knowledge-governance-page": "tsx scripts/test-knowledge-governance-page.ts",
     "test:desktop-conversation-db": "tsx scripts/test-desktop-conversation-db.ts",
+    "test:chat-session-state": "tsx scripts/test-chat-session-state.ts",
     "test:chat-isolated": "tsx scripts/test-chat-isolated.ts",
     "test:chat-reply": "tsx scripts/test-chat-reply.ts",
     "test:chat-private-memory": "tsx scripts/test-chat-private-memory.ts",
