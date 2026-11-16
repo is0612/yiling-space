@@ -688,9 +688,9 @@ assert(estimatedPayloadTokens <= 4_096,
 // The browser and desktop bridge share chat.post: it has a private direct-chat identity,
 // skips group-only context/knowledge stages, and still uses the common memory/response budget.
 const directTurn = createAssistantTurnContext({
-  turnId: randomUUID(),
-  identity: { characterId: randomUUID(), channel: "direct-chat", conversationKey: "direct:synthetic",
-    readableScopeIds: [randomUUID()], allowPrivate: true },
+  turnId: "11111111-1111-4111-8111-111111111111",
+  identity: { characterId: "22222222-2222-4222-8222-222222222222", channel: "direct-chat", conversationKey: "direct:synthetic",
+    readableScopeIds: ["33333333-3333-4333-8333-333333333333"], allowPrivate: true },
   evidenceIds: [],
 });
 directTurn.skip("context", "not_enabled");
