@@ -690,7 +690,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   loadCandidates?: (query: string, options?: { participantName?: string; deterministicTimeline: boolean }) => Promise<MemoryAssistantCandidate[]>;
   onTurnDetail?: (detail: TurnDetailPatch) => void;
 }): Promise<ConversationReplyWithMemoryAssistant> {
-  const turnContext = input.chatInput.groupChat ? input.turnContext : undefined;
+  const turnContext = input.turnContext;
   if (turnContext) {
     const { readOnlyTools, ...chatData } = input.chatInput;
     input = { ...input, chatInput: { ...snapshotAssistantTurnData(chatData), ...(readOnlyTools ? { readOnlyTools } : {}) }, assistant: snapshotAssistantTurnData(input.assistant), candidates: snapshotAssistantTurnData(input.candidates) };
