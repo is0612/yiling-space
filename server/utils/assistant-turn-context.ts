@@ -80,11 +80,18 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
   scopes.forEach(id => identifier(id, "scope id"));
   if (!Array.isArray(input.evidenceIds) || input.evidenceIds.length > 1000 || input.evidenceIds.some(id => typeof id !== "string" || !id.trim() || id.length > 200)) throw new TypeError("Invalid evidence ids");
   const evidence = new Set(input.evidenceIds);
-  const identity: Readonly<AssistantTurnIdentity> = Object.freeze({
-    characterId: input.identity.characterId, channel: input.identity.channel,
-    channelBindingId: input.identity.channelBindingId, conversationKey: input.identity.conversationKey,
-    readableScopeIds: Object.freeze(scopes.sort()), allowPrivate: input.identity.allowPrivate,
-  });
+  const frozenScopes = Object.freeze(scopes.sort());
+  const identity: Readonly<AssistantTurnIdentity> = input.identity.channel === "qq-group"
+    ? Object.freeze({
+        characterId: input.identity.characterId, channel: "qq-group" as const,
+        channelBindingId: input.identity.channelBindingId, conversationKey: input.identity.conversationKey,
+        readableScopeIds: frozenScopes, allowPrivate: false as const,
+      })
+    : Object.freeze({
+        characterId: input.identity.characterId, channel: "qq-private" as const,
+        channelBindingId: input.identity.channelBindingId, conversationKey: input.identity.conversationKey,
+        readableScopeIds: frozenScopes, allowPrivate: true as const,
+      });
   const now = input.now ?? Date.now;
   let lastTime = now();
   if (!Number.isFinite(lastTime)) throw new TypeError("Invalid clock");
