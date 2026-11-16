@@ -407,6 +407,7 @@ export async function analyzePrivateKnowledgeCandidate(
   runtime: MemoryAssistantRuntime,
   characterName: string,
   messages: readonly PrivateKnowledgeMessage[],
+  onAttempt?: AssistantRequestObserver,
 ): Promise<{ evidenceMessageIds: string[]; reason: string; knowledgeQuery?: string; usage?: ModelUsageTokens }> {
   const safeMessages = messages.slice(-10).flatMap(item => {
     const id = text(item.id, 192);
@@ -419,6 +420,8 @@ export async function analyzePrivateKnowledgeCandidate(
     throw new ContextAssistantError();
   }
   let usage: ModelUsageTokens | undefined;
+  const diagnostic = startAssistantRequest(onAttempt);
+  let body: unknown;
   try {
     const thinking = thinkingModel(runtime.model, runtime.apiBaseUrl);
     // 这一条只判定「要不要查知识库」，正文更短；预算同样按「可见 + 思考余量」给，
@@ -435,12 +438,15 @@ export async function analyzePrivateKnowledgeCandidate(
         messages: [{ role: "system", content: PRIVATE_KNOWLEDGE_SYSTEM }, { role: "user", content: JSON.stringify(payload) }],
       }),
     });
-    if (!response.ok) throw new ContextAssistantError();
-    const body: unknown = await response.json();
+    if (!response.ok) { diagnostic.complete("http_error"); throw new ContextAssistantError(); }
+    try { body = await response.json(); } catch (error) {
+      diagnostic.complete(error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "timeout" : "invalid_response");
+      throw error;
+    }
     usage = readModelUsage(body) ?? undefined;
     const choices = record(body).choices;
     const choice = record(Array.isArray(choices) ? choices[0] : null);
-    if (choice.finish_reason === "length") throw new ContextAssistantError(usage);
+    if (choice.finish_reason === "length") { diagnostic.complete("truncated", body); throw new ContextAssistantError(usage); }
     const output = record(choice.message).content;
     if (typeof output !== "string") throw new ContextAssistantError(usage);
     const parsed = record(parseJsonLoose(output, { expect: "object" }));
@@ -449,6 +455,7 @@ export async function analyzePrivateKnowledgeCandidate(
     const allowed = new Set(safeMessages.map(item => item.id));
     const evidenceMessageIds = [...new Set((Array.isArray(candidate.evidenceMessageIds) ? candidate.evidenceMessageIds : [])
       .filter((id): id is string => typeof id === "string" && allowed.has(id)))].slice(0, 4);
+    diagnostic.complete("success", body);
     return {
       evidenceMessageIds,
       reason: evidenceMessageIds.length ? text(candidate.reason, 240) : "",
@@ -456,6 +463,7 @@ export async function analyzePrivateKnowledgeCandidate(
       ...(usage ? { usage } : {}),
     };
   } catch (error) {
+    diagnostic.complete(error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "timeout" : body === undefined ? "failed" : "invalid_response", body);
     if (error instanceof ContextAssistantError) throw error;
     throw new ContextAssistantError(usage);
   }
