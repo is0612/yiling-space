@@ -16,7 +16,12 @@ assert.equal(loaded.version, 1); assert.equal(loaded.collaboration?.stages[0]?.o
 assert.equal(loaded.collaboration?.stages[0]?.logicalCalls, 1);
 for (const forbidden of ["secret-must-not-appear", "PRIVATE_QUERY_MUST_NOT_PERSIST", "private-request-id", turn.identity.characterId]) assert(!serialized.includes(forbidden));
 assert.equal(readModelTurnDetail(JSON.stringify({ version: 1, groupChat: true }))?.collaboration, undefined);
-assert.equal(sanitizeModelTurnDetail({ version: 1, groupChat: false, collaboration: turn.snapshot() }).collaboration, undefined);
+const privateDetail = sanitizeModelTurnDetail({ version: 1, groupChat: false, collaboration: turn.snapshot(),
+  growthReads: [{ domain: "knowledge", status: "provided" }] });
+assert.equal(privateDetail.collaboration?.stages[0]?.logicalCalls, 1,
+  "Private direct-turn collaboration diagnostics are allowed through the same bounded whitelist.");
+assert.equal(privateDetail.growthReads, undefined,
+  "Group-only growth-read diagnostics must remain excluded from private turns.");
 assert.equal(sanitizeAssistantTurnDiagnostics({ version: 9, stages: [] }), undefined);
 const hostile = sanitizeAssistantTurnDiagnostics({ version: 1, elapsedMs: Infinity, stages: Array.from({ length: 100 }, () => ({ stage: "response", limit: 999, logicalCalls: 999, operations: Array.from({ length: 100 }, () => ({ state: "success", durationMs: -2, reportedAttempts: 999, rejectedDiagnostics: 999999, attempts: Array.from({ length: 100 }, () => ({ status: "success", usageReported: "true", finishReason: "provider-secret", durationMs: Infinity, reasoning: "secret" })) })) })) })!;
 assert.equal(hostile.stages.length, 1); assert.equal(hostile.stages[0]!.limit, 2); assert.equal(hostile.stages[0]!.logicalCalls, 2);
@@ -27,4 +32,4 @@ const arrayEnums = sanitizeAssistantTurnDiagnostics({ version: 1, stages: [{ sta
 assert.equal(arrayEnums.stages[0]!.operations.length, 0);
 assert.equal(arrayEnums.stages[1]!.operations[0]!.attempts.length, 1);
 assert.equal(arrayEnums.stages[1]!.operations[0]!.attempts[0]!.finishReason, undefined);
-console.log("Persisted collaboration diagnostics: whitelist, size bounds, reported counts, legacy readback and private exclusion passed.");
+console.log("Persisted collaboration diagnostics: whitelist, size bounds, reported counts, legacy readback, and private/group separation passed.");
