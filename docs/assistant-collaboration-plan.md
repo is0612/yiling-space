@@ -129,12 +129,12 @@ interface AssistantTurnContext {
   readonly turnId: string;
   readonly identity: {
     characterId: string;
-    channelBindingId: string;
     conversationKey: string;
     readableScopeIds: readonly string[];
   } & (
-    | { channel: 'qq-group'; allowPrivate: false }
-    | { channel: 'qq-private'; allowPrivate: true }
+    | { channel: 'qq-group'; channelBindingId: string; allowPrivate: false }
+    | { channel: 'qq-private'; channelBindingId: string; allowPrivate: true }
+    | { channel: 'direct-chat'; allowPrivate: true }
   );
   readonly evidenceIds: ReadonlySet<string>;
   readonly startedAt: number;
@@ -173,7 +173,8 @@ interface AssistantTurnContext {
 | 2C | context-assistant.ts、memory-assistant.ts、chat-reply.ts | 可选request-attempt回调/预算检查，只计当前请求，避免helper和caller重复记账 |
 | 2D | model-turn-detail.ts、usage/turn读取契约和展示 | 兼容阶段状态、HTTP尝试/耗时与缺用量标识，禁止返回凭据/推理全文 |
 | 2E | pipeline.ts、context-assistant.ts、memory-assistant.ts、group-context-reply.ts、model-turn-detail.ts | QQ私聊文本链复用单轮上下文；私聊知识分析/ACTIVE知识检索、记忆回退与回复阶段统一计数；保留私人范围与原有失败回退 | 
-| 后续批 | 偏好/语言/愿望读取器、桌面/网页chat.post | 在群聊和QQ私聊文本链稳定后逐个适配；不把桌面入口混进本批 |
+| 2F | server/api/characters/[id]/chat.post.ts、assistant-turn-context.ts、memory-assistant.ts | 浏览器与桌面桥接共用的直聊API创建direct-chat上下文；记忆筛选与回复统一进入单轮阶段统计，私有范围由登录用户和服务端scope解析提供 | 
+| 后续批 | 偏好/语言/愿望读取器 | 在群聊、QQ私聊与直聊入口稳定后逐个适配；不把成长系统读取器塞进中央助手 |
 
 若仅内部可选对象且HTTP响应不变，2A/2B不需要数据库迁移或改OpenAPI。2D改变公开诊断响应时再同步OpenAPI/前端类型/测试。不提前建通用Task表，不用setInterval保证任何正式任务。
 
@@ -287,3 +288,17 @@ ModelTurnDetail保持version1，新增可选collaboration；旧记录缺失不�
 - 新增/扩展纯逻辑测试：私聊身份与策略匹配、私聊分析HTTP诊断、私聊回复阶段接入、私聊协作详情白名单。
 
 **当前验收状态：** 已提交到PR分支，GitHub Actions工程回归进行中；本轮未在本地运行yarn、数据库或真实QQ环境。PR通过前不得合并；真实私聊回复质量与权限隔离仍待用户本地验收。桌面/网页入口迁移仍是后续独立批次。
+
+
+## 19. 2F 浏览器/桌面直聊入口迁移（2026-11-16，待工程回归）
+
+在独立PR分支 `feat/direct-chat-assistant-turn-context` 实施，PR以2E QQ私聊分支为base；必须先合并2E，再合并2F。
+
+- 浏览器页面与桌面桥接最终都调用同一个 `server/api/characters/[id]/chat.post.ts`，因此只迁移这个共享API，不在pet-bridge重复实现一套协作链。
+- 新增 `direct-chat` 身份；它属于已认证用户的私人直聊，`allowPrivate=true`，不需要外部渠道 `channelBindingId`。会话ID使用已解析的数据库会话ID；新会话使用当前幂等请求ID。
+- 只有在owner、character、会话、可读scope解析完成后才创建上下文。证据列表与实际传给模型的近期消息保持一致；私人候选仍由现有 `resolveChatMemoryScopes` 与候选加载器授权。
+- 直聊入口没有群聊语境分析器或独立知识查询器，因此显式跳过 `context` 与 `knowledge`；现有记忆助手筛选和最终回复继续共用 `memory` 与 `response` 阶段预算。
+- 成功与模型生成失败时均保存白名单协作诊断；不记录查询、记忆正文、凭据或供应商错误文本。
+- 新增直聊身份、无渠道绑定、跨渠道身份拒绝、记忆助手共享阶段的测试。
+
+**当前验收状态：** 代码已在堆叠PR中，等待GitHub Actions；无数据库迁移。真实浏览器与桌面桥接聊天仍待用户本地验收。该PR依赖2E分支，不能先于2E合并。
