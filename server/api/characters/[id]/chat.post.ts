@@ -8,6 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createError, getRouterParam, readBody, setResponseStatus } from "h3";
 import { type ConversationContextMessage } from "../../../utils/chat-reply";
 import { createModelTurnDetail } from "../../../utils/model-turn-detail";
+import { createAssistantTurnContext } from "../../../utils/assistant-turn-context";
 import {
   buildMemoryAssistantCandidates,
   generateConversationReplyWithMemoryAssistant,
@@ -448,13 +449,31 @@ export default defineEventHandler(async (event) => {
     characterId, conversationId: existingConversation.id, memoryScopeId, channelBindingId: null,
     model: chatSettings.model, apiKey, apiBaseUrl: chatSettings.apiBaseUrl,
   }).catch(() => null) : null;
+  const chatInputRecentMessages = conversationSummary
+    ? recentMessages.filter(row => !row.occurredAt || row.occurredAt > conversationSummary.through.occurredAt
+      || (row.occurredAt === conversationSummary.through.occurredAt && (row.id ?? "") > conversationSummary.through.id))
+    : recentMessages;
   const turnId = randomUUID();
+  // Browser and desktop bridge share this authenticated direct-chat API. The acting
+  // owner and readable scopes were resolved above; no external channel binding exists.
+  const turnContext = createAssistantTurnContext({
+    turnId,
+    identity: {
+      characterId, channel: "direct-chat",
+      conversationKey: existingConversation?.id ?? chatRequest.id,
+      readableScopeIds, allowPrivate: true,
+    },
+    evidenceIds: [...new Set(chatInputRecentMessages.map(row => row.id).filter((id): id is string => typeof id === "string" && Boolean(id)))],
+  });
+  turnContext.skip("context", "not_enabled");
+  turnContext.skip("knowledge", "not_needed");
   const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }]);
   let generated;
   const generationStartedAt = Date.now();
   try {
     generated = await generateConversationReplyWithMemoryAssistant({
       assistant: memoryAssistant,
+      turnContext,
       onTurnDetail: turnDetail.update,
       candidates: [],
       loadCandidates: async (searchQuery) => {
@@ -642,7 +661,7 @@ export default defineEventHandler(async (event) => {
         ...(interactionGuidance.length ? { interactionGuidance } : {}),
         ...(interactionExperiences.length ? { interactionExperiences } : {}),
         ...(conversationSummary ? { conversationSummary } : {}),
-        recentMessages: conversationSummary ? recentMessages.filter(row => !row.occurredAt || row.occurredAt > conversationSummary.through.occurredAt || (row.occurredAt === conversationSummary.through.occurredAt && (row.id ?? "") > conversationSummary.through.id)) : recentMessages,
+        recentMessages: chatInputRecentMessages,
         memories,
         snapshots,
         events,
@@ -657,6 +676,7 @@ export default defineEventHandler(async (event) => {
       },
     });
   } catch (error) {
+    turnDetail.update({ collaboration: turnContext.snapshot() });
     await recordModelUsage({
       kind: "chat", model: chatSettings.model, characterId, userId: ownerId,
       metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize() },
@@ -668,7 +688,10 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  turnDetail.update({ response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation } });
+  turnDetail.update({
+    response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation },
+    collaboration: turnContext.snapshot(),
+  });
   const generationDurationMs = Date.now() - generationStartedAt;
   await recordModelUsage({
     kind: "chat", model: generated.model, usage: toUsageTokens(generated.usage), characterId, userId: ownerId,
