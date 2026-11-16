@@ -1,5 +1,5 @@
 import type { AssistantTurnContext } from "./assistant-turn-context";
-import { executeAssistantGroupTurn, runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
+import { assertAssistantTurnChannel, executeAssistantGroupTurn, runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
 import type { TurnDetailPatch } from "./model-turn-detail";
 import { generateConversationReply, type ConversationKnowledgeItem, type ConversationReplyInput } from "./chat-reply";
 import { analyzeGroupContext, ContextAssistantError, type ContextAnalysis, type PreviousWorkingContext } from "./context-assistant";
@@ -35,6 +35,7 @@ type GroupContextReplyInput = {
   }) => Promise<void>;
 };
 export async function generateGroupContextReply(input: GroupContextReplyInput): Promise<ConversationReplyWithMemoryAssistant> {
+  if (input.turnContext) assertAssistantTurnChannel(input.turnContext, input.chatInput.groupChat === true);
   if (!input.chatInput.groupChat || !input.turnContext) return generateGroupContextReplyInternal(input);
   // Snapshot data before validation/keying: deferred execution must never observe caller mutations.
   const { readOnlyTools, ...chatData } = input.chatInput;
