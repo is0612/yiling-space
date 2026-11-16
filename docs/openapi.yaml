@@ -1333,6 +1333,11 @@ paths:
     delete:
       tags: [Auth]
       summary: 删除渠道连接（仅管理员）
+      description: |
+        号上挂过角色也能删：服务端先清绑定再删连接
+        （`character_channel_bindings.connectionId` 是 Restrict，不先清会被外键挡下）。
+        同时清掉没有外键的从属行（group_activities / onebot_group_announcements /
+        onebot_qzone_actions）。会话与 token 账单按 SetNull 保留 —— 号没了不等于那段历史该消失。
       parameters:
         - name: connectionId
           in: path
@@ -1341,6 +1346,22 @@ paths:
       responses:
         '200':
           description: 已删除
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, purged]
+                properties:
+                  deleted: { type: boolean }
+                  purged:
+                    type: object
+                    description: 一并清掉的行数；bindings = 这个号上原来挂了几个角色。
+                    required: [bindings, groupActivities, announcements, qzoneActions]
+                    properties:
+                      bindings: { type: integer, minimum: 0 }
+                      groupActivities: { type: integer, minimum: 0 }
+                      announcements: { type: integer, minimum: 0 }
+                      qzoneActions: { type: integer, minimum: 0 }
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

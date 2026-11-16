@@ -174,6 +174,23 @@ function toggleRow(key: string) {
     : [...openRows.value, key];
 }
 
+/**
+ * 空号（一条绑定都没有的那个号）默认展开。
+ *
+ * 这种行的全部用处就是「告诉你这儿有个没人接的号」，可它的两个出口
+ * （绑定角色 / 删除这个号）都在展开后的肚子里 —— 收着的时候整行只剩一句
+ * 「还没绑角色」，人就会觉得「解绑了角色，这个 QQ 却没地方去掉」。
+ * 只自动展开一次：之后人自己收起来了，刷新列表不再硬掰开。
+ */
+const autoOpenedEmptyRows = new Set<string>();
+watch(rows, (list) => {
+  for (const row of list) {
+    if (row.binding || autoOpenedEmptyRows.has(row.key)) continue;
+    autoOpenedEmptyRows.add(row.key);
+    if (!openRows.value.includes(row.key)) openRows.value = [...openRows.value, row.key];
+  }
+}, { immediate: true });
+
 const MODE_LABEL: Record<string, string> = {
   mention: "仅被 @ 时回",
   ambient: "自然接话",
@@ -1236,20 +1253,42 @@ async function unbind(connection: QqConnection, binding: ChannelBinding) {
   }
 }
 
+/**
+ * 删掉一个号（连接）。
+ *
+ * 之前只有「连接管理」那一块能进设置删号，而它认的是**主号**——
+ * 于是解绑掉唯一那个角色之后，剩下的空号在页面上没有任何入口，
+ * 只能看着它挂在那儿（「解绑了角色，QQ 没地方去掉」）。
+ * 现在每行都能进自己那个号的设置，空号那一行还直接给了一个删除按钮。
+ *
+ * 后端会先清绑定再删号（`character_channel_bindings.connectionId` 是 Restrict，
+ * 不先清就会被外键挡住），聊天记录与记忆按 SetNull 保留。
+ */
 async function removeConnection(connection: QqConnection) {
+  const bound = connection.bindings.length;
   const confirmed = await ElMessageBox.confirm(
-    `删除后「${connection.displayName}」及其绑定都会移除，确定？`,
-    "删除连接",
+    bound
+      ? `「${connection.displayName}」上还挂着 ${bound} 个角色，删号会一并解绑。聊天记录、记忆和角色本身都会留下。确定？`
+      : `删除「${connection.displayName}」？删除后这个号不再收发消息，聊天记录和记忆都会留下。`,
+    "删除这个号",
     { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" },
   ).catch(() => false);
   if (!confirmed) return;
   try {
     await $fetch(`/api/admin/channels/${encodeURIComponent(connection.id)}`, { method: "DELETE" });
-    ElMessage.success("已删除。");
+    ElMessage.success(bound ? `已删除，顺带解绑了 ${bound} 个角色。` : "已删除。");
     // 号没了，弹窗里那些字段就没有对象了；关掉再刷新，别留一个悬空的表单
     editVisible.value = false;
+    editingTarget.value = null;
     await refresh();
   } catch (error) {
+    // 这个号已经被别处删掉了：直接刷新，别让人对着一个不存在的号反复重试
+    if (error && typeof error === "object" && "statusCode" in error && (error as { statusCode?: number }).statusCode === 404) {
+      ElMessage.warning("这个号已经不在了，刷新一下列表。");
+      editVisible.value = false;
+      await refresh();
+      return;
+    }
     ElMessage.error(readErrorMessage(error, "删除失败，请稍后重试。"));
   }
 }
@@ -1479,6 +1518,13 @@ function copyInstallGuide() {
               <template #actions>
                 <button
                   type="button"
+                  class="btn quiet"
+                  @click="void openEdit(row.connection)"
+                >
+                  这个号的设置
+                </button>
+                <button
+                  type="button"
                   class="btn quiet is-danger"
                   @click="unbind(row.connection, row.binding)"
                 >
@@ -1494,7 +1540,7 @@ function copyInstallGuide() {
               <p>
                 {{ row.character
                   ? "这条绑定指向的角色已经不在了（可能被删掉），解绑后重新绑一个。"
-                  : "号通了，但消息进来没有角色接。" }}
+                  : "号通了，但消息进来没有角色接。不想用了就把这个号删掉。" }}
               </p>
               <button
                 type="button"
@@ -1511,6 +1557,22 @@ function copyInstallGuide() {
               >
                 解绑
               </button>
+              <button
+                type="button"
+                class="btn quiet"
+                @click="void openEdit(row.connection)"
+              >
+                这个号的设置
+              </button>
+              <!-- 空号（解绑完剩下的那个）必须有删除入口：它不挂在任何角色上，
+                   「连接管理」又只管主号，不给按钮就只能永远挂在这一行。 -->
+              <button
+                type="button"
+                class="btn quiet is-danger"
+                @click="removeConnection(row.connection)"
+              >
+                删除这个号
+              </button>
             </div>
           </div>
         </article>
@@ -1525,7 +1587,10 @@ function copyInstallGuide() {
       >
         <div class="admin-h">
           <h2>连接管理</h2>
-          <span class="admin-sub">地址和进程都在这，设好之后这里基本不用动</span>
+          <!-- 多个号时这块只管主号：不写清楚，人就以为「另一个号在页面上没有设置」 -->
+          <span class="admin-sub">{{ connections.length > 1
+            ? `地址和进程都在这，这块管的是主号 ${primaryConnection.appId || primaryConnection.displayName}；别的号进它那一行的「这个号的设置」`
+            : "地址和进程都在这，设好之后这里基本不用动" }}</span>
         </div>
         <div class="admin-chips">
           <span class="chip">QQ <b class="is-mono">{{ primaryConnection.appId || "未填" }}</b></span>
