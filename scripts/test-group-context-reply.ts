@@ -169,7 +169,7 @@ try {
   });
   privateTurn.skip("context", "not_needed");
   privateTurn.skip("knowledge", "not_needed");
-  await run({ chatInput: { ...chatInput, groupChat: false,
+  await run({ chatInput: { ...chatInput, groupChat: false, transcript: undefined, groupBackground: undefined,
     recentMessages: [{ id: "private-current", role: "USER", content: "私聊当前消息" }] },
     contextAssistant: null, turnContext: privateTurn });
   assert.equal(details[0]?.context?.status, "not_applicable");
