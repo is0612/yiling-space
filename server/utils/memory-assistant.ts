@@ -1,7 +1,7 @@
 import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { startAssistantRequest, type AssistantRequestObserver } from "./assistant-request-diagnostics";
 import type { AssistantTurnContext } from "./assistant-turn-context";
-import { runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
+import { assertAssistantTurnChannel, runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
 import type { TurnDetailPatch, TurnSource } from "./model-turn-detail";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { ASSISTANT_FIELDS, resolveAssistantConnection } from "./assistant-inheritance";
@@ -692,6 +692,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
 }): Promise<ConversationReplyWithMemoryAssistant> {
   const turnContext = input.turnContext;
   if (turnContext) {
+    assertAssistantTurnChannel(turnContext, input.chatInput.groupChat === true);
     const { readOnlyTools, ...chatData } = input.chatInput;
     input = { ...input, chatInput: { ...snapshotAssistantTurnData(chatData), ...(readOnlyTools ? { readOnlyTools } : {}) }, assistant: snapshotAssistantTurnData(input.assistant), candidates: snapshotAssistantTurnData(input.candidates) };
     validateAssistantTurnEvidence(turnContext, input.chatInput);
