@@ -13,11 +13,11 @@ export type AssistantAttempt = {
 export type AssistantOperationKey = { query: string; sourceVersion: string };
 export type AssistantOperationResult<T> = { value: T; state: "success" | "no_sources" };
 export type AssistantTurnIdentity = {
-  characterId: string; channelBindingId: string; conversationKey: string;
-  readableScopeIds: readonly string[];
+  characterId: string; conversationKey: string; readableScopeIds: readonly string[];
 } & (
-  | { channel: "qq-group"; allowPrivate: false }
-  | { channel: "qq-private"; allowPrivate: true }
+  | { channel: "qq-group"; channelBindingId: string; allowPrivate: false }
+  | { channel: "qq-private"; channelBindingId: string; allowPrivate: true }
+  | { channel: "direct-chat"; allowPrivate: true }
 );
 export type AssistantTurnInput = {
   turnId: string;
@@ -69,11 +69,10 @@ type Operation = {
 export function createAssistantTurnContext(input: AssistantTurnInput) {
   identifier(input.turnId, "turn id");
   identifier(input.identity.characterId, "character id");
-  identifier(input.identity.channelBindingId, "binding id");
-  if (!((input.identity.channel === "qq-group" && input.identity.allowPrivate === false)
-    || (input.identity.channel === "qq-private" && input.identity.allowPrivate === true))) {
-    throw new TypeError("Assistant turn channel and private-scope policy do not match");
-  }
+  const validChannelPolicy = (input.identity.channel === "qq-group" && input.identity.allowPrivate === false)
+    || ((input.identity.channel === "qq-private" || input.identity.channel === "direct-chat") && input.identity.allowPrivate === true);
+  if (!validChannelPolicy) throw new TypeError("Assistant turn channel and private-scope policy do not match");
+  if (input.identity.channel !== "direct-chat") identifier(input.identity.channelBindingId, "binding id");
   if (typeof input.identity.conversationKey !== "string" || !input.identity.conversationKey.trim() || input.identity.conversationKey.length > 512) throw new TypeError("Invalid conversation key");
   if (!Array.isArray(input.identity.readableScopeIds) || !input.identity.readableScopeIds.length || input.identity.readableScopeIds.length > 50) throw new TypeError("Invalid readable scopes");
   const scopes = [...new Set(input.identity.readableScopeIds)];
@@ -87,11 +86,16 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
         channelBindingId: input.identity.channelBindingId, conversationKey: input.identity.conversationKey,
         readableScopeIds: frozenScopes, allowPrivate: false as const,
       })
-    : Object.freeze({
-        characterId: input.identity.characterId, channel: "qq-private" as const,
-        channelBindingId: input.identity.channelBindingId, conversationKey: input.identity.conversationKey,
-        readableScopeIds: frozenScopes, allowPrivate: true as const,
-      });
+    : input.identity.channel === "qq-private"
+      ? Object.freeze({
+          characterId: input.identity.characterId, channel: "qq-private" as const,
+          channelBindingId: input.identity.channelBindingId, conversationKey: input.identity.conversationKey,
+          readableScopeIds: frozenScopes, allowPrivate: true as const,
+        })
+      : Object.freeze({
+          characterId: input.identity.characterId, channel: "direct-chat" as const,
+          conversationKey: input.identity.conversationKey, readableScopeIds: frozenScopes, allowPrivate: true as const,
+        });
   const now = input.now ?? Date.now;
   let lastTime = now();
   if (!Number.isFinite(lastTime)) throw new TypeError("Invalid clock");
@@ -101,7 +105,7 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
   // Channel and privacy policy are part of the cache namespace: a group turn can never
   // reuse a private turn's operation even if all other identifiers happen to match.
   const scopeDigest = digest([turnId, identity.characterId, identity.channel, identity.allowPrivate,
-    identity.channelBindingId, identity.conversationKey, identity.readableScopeIds]);
+    identity.channel === "direct-chat" ? null : identity.channelBindingId, identity.conversationKey, identity.readableScopeIds]);
   const operations = new Map<string, Operation>();
   const skipped = new Map<AssistantTurnStage, "not_enabled" | "not_needed">();
   const logical = { context: 0, memory: 0, knowledge: 0, response: 0 };
