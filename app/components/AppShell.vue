@@ -97,6 +97,7 @@ async function handleCharacterSwitch(nextId: string) {
  */
 const workspaceNavigation: NavigationItem[] = [
   { key: "home", label: "总览", href: "/", icon: DataBoard },
+  { key: "chat", label: "聊天", href: "/chat", icon: ChatDotRound },
   { key: "characters", label: "角色管理", href: "/characters", icon: User },
   {
     key: "journal",
