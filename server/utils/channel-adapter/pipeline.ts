@@ -9,6 +9,7 @@ import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../
 import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../preference-retrieval";
 import { randomUUID } from "node:crypto";
 import { createAssistantTurnContext } from "../assistant-turn-context";
+import { runAssistantTurnStage, skipAssistantTurnStage } from "../assistant-turn-execution";
 import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
 import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem, type ConversationQuotedMessage } from "../chat-reply";
@@ -1702,6 +1703,28 @@ async function runChannelTurn(input: {
     !isGroup && existingConversation ? { conversationId: existingConversation.id, memoryScopeId: conversationScopeId } : undefined, isGroup ? "GROUP" : "PRIVATE").catch(() => []);
   const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
   const turnId = randomUUID();
+  // One request-local context is created only after channel, character and readable scopes
+  // have been resolved. Private turns carry only this conversation's authorized evidence.
+  const collaboration = input.platform === "qq-onebot" && (isGroup || Boolean(input.externalConversationId?.trim()))
+    ? createAssistantTurnContext({
+        turnId,
+        identity: {
+          characterId: character.id,
+          channel: isGroup ? "qq-group" : "qq-private",
+          channelBindingId: input.bindingId,
+          conversationKey: isGroup ? input.externalConversationId : (existingConversation?.id ?? input.externalConversationId),
+          readableScopeIds,
+          allowPrivate: !isGroup,
+        },
+        evidenceIds: [...new Set([
+          ...messages.map(item => item.externalMessageId),
+          ...recentMessages.map(item => item.id),
+          ...backgroundLines.map(item => item.id),
+          ...(input.group?.analysisBackground ?? []).map(item => item.id),
+          ...(previousWorkingContext?.evidence ?? []).map(item => item.id),
+        ].filter((id): id is string => typeof id === "string" && Boolean(id)))],
+      })
+    : undefined;
 
   // Formal knowledge lookup is shared by group and private paths and is always character-scoped.
   const loadKnowledge = async (searchQuery: string): Promise<ConversationKnowledgeItem[]> => {
@@ -1744,7 +1767,10 @@ async function runChannelTurn(input: {
       const privateContextRuntime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
       if (privateContextRuntime) {
         try {
-          const result = await analyzePrivateKnowledgeCandidate(privateContextRuntime, character.name, privateMessages);
+          const result = await runAssistantTurnStage(collaboration, "context", "private-knowledge-analysis",
+            { characterId: input.characterId, channelBindingId: input.bindingId, conversationKey: existingConversation?.id ?? input.externalConversationId,
+              messageIds: privateMessages.map(item => item.id), runtimeModel: privateContextRuntime.model },
+            observer => analyzePrivateKnowledgeCandidate(privateContextRuntime, character.name, privateMessages, observer));
           await recordModelUsage({
             kind: "context-assistant",
             model: privateContextRuntime.model,
@@ -1757,7 +1783,11 @@ async function runChannelTurn(input: {
 
           // Retrieval is independent of auto-collection: only confirmed ACTIVE items are searchable.
           if (result.knowledgeQuery) {
-            privateKnowledgeItems = await loadKnowledge(result.knowledgeQuery).catch(() => []);
+            privateKnowledgeItems = await runAssistantTurnStage(collaboration, "knowledge", result.knowledgeQuery,
+              { characterId: input.characterId, readableScopeIds, query: result.knowledgeQuery },
+              () => loadKnowledge(result.knowledgeQuery!), items => items.length === 0).catch(() => []);
+          } else {
+            skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
           }
 
           const collectScope = readKnowledgeCollectScope(modelConfigForKnowledge);
@@ -1820,7 +1850,13 @@ async function runChannelTurn(input: {
             metadata: { status: "failed", turnId, source: "private-knowledge-analysis" },
           }).catch(() => undefined);
         }
+      } else {
+        skipAssistantTurnStage(collaboration, "context", "not_enabled");
+        skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
       }
+    } else {
+      skipAssistantTurnStage(collaboration, "context", "not_needed");
+      skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
     }
   }
 
@@ -1857,22 +1893,6 @@ async function runChannelTurn(input: {
       ...readStoredSpeaker(row.metadata),
     })),
   } : undefined;
-  // Create only after role/routing and readable scopes have been resolved on the server.
-  // This object never enters chatInput, provider prompts, stored messages or public API output.
-  const collaboration = isGroup && input.platform === "qq-onebot"
-    ? createAssistantTurnContext({
-        turnId,
-        identity: { characterId: character.id, channel: "qq-group", channelBindingId: input.bindingId,
-          conversationKey: input.externalConversationId, readableScopeIds, allowPrivate: false },
-        evidenceIds: [...new Set([
-          ...messages.map(item => item.externalMessageId),
-          ...backgroundLines.map(item => item.id),
-          ...(input.group?.analysisBackground ?? []).map(item => item.id),
-          ...recentMessages.map(item => item.id),
-          ...(previousWorkingContext?.evidence ?? []).map(item => item.id),
-        ].filter((id): id is string => typeof id === "string" && Boolean(id)))],
-      })
-    : undefined;
   let pendingWorkingContext: { summary: string; evidenceMessageIds: string[] } | undefined;
   /**
    * 群聊候选证据是谁说的。
