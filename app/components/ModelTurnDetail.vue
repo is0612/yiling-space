@@ -89,7 +89,7 @@ function growthVersion(item: GrowthReadDiagnostic["provided"][number]) {
   const versions = [item.revision !== undefined ? `版本 ${item.revision}` : "", item.updatedAt ? `更新时间 ${formatTime(item.updatedAt)}` : ""].filter(Boolean);
   return versions.length ? versions.join(" · ") : "未保存版本标记";
 }
-const collaborationStages = { context: "语境分析", memory: "记忆筛选", knowledge: "知识查询", response: "回复生成" };
+const collaborationStages = { context: "上下文分析", memory: "记忆筛选", knowledge: "知识查询", response: "回复生成" };
 const operationLabels = { running: "运行中", success: "完成", no_sources: "无相关来源", failed: "失败", budget_exhausted: "逻辑额度已用尽" };
 const attemptLabels = { success: "请求成功", failed: "请求失败", timeout: "请求超时", http_error: "HTTP 错误", invalid_response: "响应格式无效", truncated: "输出被截断" };
 function duration(value: number) { return value < 1000 ? `${Math.round(value)} 毫秒` : `${(value / 1000).toFixed(2)} 秒`; }
@@ -282,7 +282,7 @@ function messageAuthor(message: TurnMessage) {
             class="record-card"
           >
             <div class="record-meta">
-              <strong>{{ stage.stage === 'context' && !detail.groupChat ? '私聊知识分析' : collaborationStages[stage.stage] }}</strong>
+              <strong>{{ collaborationStages[stage.stage] }}</strong>
               <el-tag type="info">
                 {{ stageLabel(stage) }}
               </el-tag>
