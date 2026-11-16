@@ -47,14 +47,20 @@ export async function generateGroupContextReply(input: GroupContextReplyInput): 
   return executeAssistantGroupTurn(input.turnContext, { chatInput: chatData, assistant: captured.assistant, contextAssistant: captured.contextAssistant, candidates: captured.candidates, analysisBackground: captured.analysisBackground, previousWorkingContext: captured.previousWorkingContext }, () => generateGroupContextReplyInternal(captured));
 }
 async function generateGroupContextReplyInternal(input: GroupContextReplyInput): Promise<ConversationReplyWithMemoryAssistant> {
-  const turnContext = input.chatInput.groupChat ? input.turnContext : undefined;
+  const turnContext = input.turnContext;
   const report = (detail: TurnDetailPatch) => {
     try { input.onTurnDetail?.(detail); } catch { /* Diagnostics never affect generation. */ }
   };
-  if (!input.contextAssistant || !input.chatInput.groupChat) {
+  if (!input.chatInput.groupChat) {
+    // QQ private knowledge analysis and its SQL lookup are owned by the channel pipeline.
+    // Do not mark those already-recorded stages as skipped here.
+    report({ context: { status: "not_applicable" } });
+    return generateConversationReplyWithMemoryAssistant(input);
+  }
+  if (!input.contextAssistant) {
     skipAssistantTurnStage(turnContext, "context", "not_enabled");
     skipAssistantTurnStage(turnContext, "knowledge", "not_needed");
-    report({ context: { status: input.chatInput.groupChat ? "not_enabled" : "not_applicable" } });
+    report({ context: { status: "not_enabled" } });
     return generateConversationReplyWithMemoryAssistant(input);
   }
   const record = async (entry: Parameters<typeof input.recordAssistantUsage>[0]) => {
