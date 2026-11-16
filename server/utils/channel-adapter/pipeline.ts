@@ -1705,7 +1705,7 @@ async function runChannelTurn(input: {
   const turnId = randomUUID();
   // Private context can be created before its dedicated knowledge analysis. The evidence
   // list is limited to this conversation's current and already-authorized recent messages.
-  let collaboration = !isGroup && input.platform === "qq-onebot" && Boolean(input.externalConversationId?.trim())
+  let collaboration = !isGroup && input.platform === "qq-onebot" && Boolean(existingConversation?.id || input.externalConversationId?.trim())
     ? createAssistantTurnContext({
         turnId,
         identity: { characterId: character.id, channel: "qq-private", channelBindingId: input.bindingId,
