@@ -119,7 +119,7 @@ flowchart LR
 
 ## 7. 第二批共享单轮上下文契约（设计，尚未实现）
 
-建议新增`server/utils/assistant-turn-context.ts`，先由pipeline在可信角色、渠道和会话范围解析完成后创建，再交给group-context-reply。首批只接QQ群聊；私聊、桌面和后台保持原样。
+本节最初记录2A设计，随后2B先接入QQ群聊。2026-11-16的2E进一步接入QQ私聊文本链；当前仍由pipeline在可信角色、渠道和会话范围解析完成后创建，再交给对应回复包装器。桌面/网页直接聊天与后台任务仍保持原样。
 
 ```ts
 type TurnStage = 'context' | 'memory' | 'knowledge' | 'response';
@@ -129,12 +129,13 @@ interface AssistantTurnContext {
   readonly turnId: string;
   readonly identity: {
     characterId: string;
-    channel: 'qq-group' | 'qq-private';
     channelBindingId: string;
     conversationKey: string;
     readableScopeIds: readonly string[];
-    allowPrivate: boolean; // qq-group=false; qq-private=true, both resolved by trusted server code
-  };
+  } & (
+    | { channel: 'qq-group'; allowPrivate: false }
+    | { channel: 'qq-private'; allowPrivate: true }
+  );
   readonly evidenceIds: ReadonlySet<string>;
   readonly startedAt: number;
   readonly policy: {
