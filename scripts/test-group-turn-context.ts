@@ -102,5 +102,8 @@ try {
   assert.equal(logical(privateTurn, "context"), 0);
   assert.equal(logical(privateTurn, "memory"), 0);
   assert.equal(logical(privateTurn, "response"), 1, "Private replies still use the shared final-response stage.");
+  await assert.rejects(() => generateGroupContextReply({ ...args, turnContext: makeTurn(), chatInput: { ...chat, groupChat: false } }),
+    /Assistant turn identity does not match conversation channel/u,
+    "A group context must never be reused by a private turn.");
 } finally { globalThis.fetch = originalFetch; }
 console.log("Group turn context: once-only stages/callbacks, public evidence, fallback shared budgets, empty-source states and private bypass passed (mocked).");
