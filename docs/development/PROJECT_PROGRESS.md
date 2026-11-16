@@ -144,7 +144,7 @@
 - 本次完成：单轮上下文增加qq-private身份并强制与allowPrivate=true匹配；pipeline在私聊知识分析前创建上下文；私聊知识分析和ACTIVE知识SQL检索纳入context/knowledge阶段；记忆助手与最终回复复用memory/response阶段；私聊模型调用详情保存白名单协作诊断，growthReads仍只对群聊开放。
 - 分支：`feat/private-assistant-turn-context`
 - PR：[助手协作整合2E](https://github.com/is0612/yiling-space/pull/30)
-- 提交：`26f58ad`、`759e5f5`、`f3a65a0`、`63ff414`、`8781961`、`9faeac6`、`e57df16`、`f38803d`、`1460cbb`、`4746e07`、`4f1fd10`、`eb27883`、`28c0aef`、`c96f327`、`69cf1de`。
+- 提交：独立PR分支；完整提交记录见[PR页面](https://github.com/is0612/yiling-space/pull/30)。
 - 专项验收：新增/扩展私聊身份、分析器HTTP诊断、私聊回复阶段、模型详情白名单测试；尚未在本地执行。
 - 工程回归 / CI：待GitHub Actions结果；本轮无法运行本地typecheck、lint、build或数据库测试。
 - 真实使用验收：待用户本地QQ私聊验收；重点验证当前私聊记忆召回、知识查询与失败回退，不向群聊泄漏私人证据。
