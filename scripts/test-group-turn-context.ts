@@ -90,8 +90,17 @@ try {
   assert(!models.includes("memory"), "native tools bypass the legacy memory assistant loop");
   globalThis.fetch = ordinaryFetch;
 
-  models = []; mode = "success"; const privateTurn = makeTurn();
+  models = []; mode = "success";
+  const privateTurn = createAssistantTurnContext({ turnId: randomUUID(), identity: {
+    characterId: randomUUID(), channelBindingId: randomUUID(), channel: "qq-private",
+    conversationKey: "p:synthetic", readableScopeIds: [randomUUID()], allowPrivate: true,
+  }, evidenceIds: ["current"] });
+  privateTurn.skip("context", "not_needed");
+  privateTurn.skip("knowledge", "not_needed");
   await generateGroupContextReply({ ...args, turnContext: privateTurn, chatInput: { ...chat, groupChat: false } });
-  assert.deepEqual(models, ["character"]); for (const name of ["context", "memory", "response"]) assert.equal(logical(privateTurn, name), 0);
+  assert.deepEqual(models, ["character"]);
+  assert.equal(logical(privateTurn, "context"), 0);
+  assert.equal(logical(privateTurn, "memory"), 0);
+  assert.equal(logical(privateTurn, "response"), 1, "Private replies still use the shared final-response stage.");
 } finally { globalThis.fetch = originalFetch; }
 console.log("Group turn context: once-only stages/callbacks, public evidence, fallback shared budgets, empty-source states and private bypass passed (mocked).");
