@@ -56,6 +56,6 @@ export function validateAssistantTurnEvidence(context: AssistantTurnContext, inp
   recentMessages: ReadonlyArray<{ id?: string }>;
 }, extra?: ReadonlyArray<{ id?: string }>, previous?: { evidence?: ReadonlyArray<{ id?: string }> }) {
   for (const row of [...(input.transcript ?? []), ...(input.groupBackground ?? []), ...input.recentMessages, ...(extra ?? []), ...(previous?.evidence ?? [])]) {
-    if (row.id && !context.hasEvidence(row.id)) throw new Error("Assistant turn evidence does not match trusted group context");
+    if (row.id && !context.hasEvidence(row.id)) throw new Error("Assistant turn evidence does not match trusted request context");
   }
 }
