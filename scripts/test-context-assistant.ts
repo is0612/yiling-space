@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   analyzeGroupContext,
+  analyzePrivateKnowledgeCandidate,
   ContextAssistantError,
   CONTEXT_ASSISTANT_DEFAULTS,
   resolveContextAssistantRuntime,
@@ -97,6 +98,29 @@ try {
   assert.equal(calls, 0);
   await safeFailure(() => analyzeGroupContext(runtime, { ...input, groupChat: false }));
   assert.equal(calls, 0, "Private inputs must be rejected before fetch.");
+
+  // Private knowledge analysis is a distinct single-request stage and reports only
+  // allowlisted attempt metadata to the request-local turn context.
+  reset(() => modelResponse({ knowledgeQuery: "鲸类的交流方式", knowledgeCandidate: {
+    evidenceMessageIds: ["private-1", "invented"], reason: "可复用的事实解释",
+  } }));
+  const privateAttempts: Array<{ status: string; usageReported: boolean; finishReason?: string }> = [];
+  const privateResult = await analyzePrivateKnowledgeCandidate(runtime, "小鱼", [
+    { id: "private-1", speaker: "主人", content: "什么是鲸类的交流方式？" },
+  ], entry => privateAttempts.push(entry));
+  assert.equal(calls, 1);
+  assert.deepEqual(privateResult.evidenceMessageIds, ["private-1"]);
+  assert.equal(privateResult.knowledgeQuery, "鲸类的交流方式");
+  assert.deepEqual(privateAttempts, [{ status: "success", usageReported: true, finishReason: "stop" }]);
+  const privatePayload = JSON.parse(requests[0]!.messages[1]!.content) as { conversationType: string; messages: Array<{ id: string; content: string }> };
+  assert.equal(privatePayload.conversationType, "private");
+  assert.deepEqual(privatePayload.messages.map(row => row.id), ["private-1"]);
+  reset(() => new Response("SECRET_PROVIDER_BODY", { status: 401 }));
+  const failedAttempts: Array<{ status: string; usageReported: boolean }> = [];
+  await safeFailure(() => analyzePrivateKnowledgeCandidate(runtime, "小鱼", [
+    { id: "private-2", content: "什么是向量检索？" },
+  ], entry => failedAttempts.push(entry)));
+  assert.deepEqual(failedAttempts, [{ status: "http_error", usageReported: false }]);
 
   reset();
   const result = await analyzeGroupContext(runtime, input);
