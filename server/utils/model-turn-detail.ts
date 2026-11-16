@@ -34,7 +34,7 @@ function evidence(value: unknown): TurnEvidence[] {
 export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   const raw = object(value), context = object(raw.context), memory = object(raw.memory), response = object(raw.response);
   const groupChat = raw.groupChat === true;
-  const collaboration = groupChat ? sanitizeAssistantTurnDiagnostics(raw.collaboration) : undefined;
+  const collaboration = sanitizeAssistantTurnDiagnostics(raw.collaboration);
   const growthReads = groupChat ? sanitizeGrowthReadDiagnostics(raw.growthReads) : undefined;
   const sources: TurnSource[] = (Array.isArray(memory.sources) ? memory.sources : []).slice(0, 8).flatMap(item => {
     const row = object(item);
@@ -72,7 +72,7 @@ export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence
   return {
     update(patch: TurnDetailPatch) {
       if (patch.growthReads !== undefined && groupChat) detail.growthReads = sanitizeGrowthReadDiagnostics(patch.growthReads);
-      if (patch.collaboration !== undefined && groupChat) detail.collaboration = sanitizeAssistantTurnDiagnostics(patch.collaboration);
+      if (patch.collaboration !== undefined) detail.collaboration = sanitizeAssistantTurnDiagnostics(patch.collaboration);
       if (patch.context) detail.context = patch.context;
       if (patch.memory) detail.memory = patch.memory;
       if (patch.response) detail.response = { status: "success", ...patch.response };
