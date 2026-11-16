@@ -177,6 +177,9 @@ try {
   assert.equal(privateStages.find(stage => stage.stage === "response")?.logicalCalls, 1,
     "Private replies use the shared response stage without invoking the group analyzer.");
   assert.equal(privateStages.find(stage => stage.stage === "memory")?.skipped, "not_needed");
+  await assert.rejects(() => run({ turnContext: privateTurn }),
+    /Assistant turn identity does not match conversation channel/u,
+    "A private context must never be reused by a group turn.");
 
   reset(body => body.model === "context" ? response(analysis) : response(reply));
   await run({ candidates: [] });
