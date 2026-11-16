@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createAssistantTurnContext, AssistantTurnBudgetError, type AssistantTurnInput } from "../server/utils/assistant-turn-context";
+import { assertAssistantTurnChannel } from "../server/utils/assistant-turn-execution";
 function input(): AssistantTurnInput { return { turnId: randomUUID(), identity: { characterId: randomUUID(), channel: "qq-group", channelBindingId: randomUUID(), conversationKey: "g:synthetic", readableScopeIds: [randomUUID()], allowPrivate: false }, evidenceIds: ["message-a"] }; }
 function privateInput(): AssistantTurnInput { return { turnId: randomUUID(), identity: { characterId: randomUUID(), channel: "qq-private", channelBindingId: randomUUID(), conversationKey: "p:synthetic", readableScopeIds: [randomUUID(), randomUUID()], allowPrivate: true }, evidenceIds: ["private-message-a"] }; }
+function directInput(): AssistantTurnInput { return { turnId: randomUUID(), identity: { characterId: randomUUID(), channel: "direct-chat", conversationKey: "web:synthetic", readableScopeIds: [randomUUID(), randomUUID()], allowPrivate: true }, evidenceIds: ["direct-message-a"] }; }
 const key = { query: "历史问题", sourceVersion: "version-a" };
 const stage = (turn: ReturnType<typeof createAssistantTurnContext>, name: string) => turn.snapshot().stages.find(row => row.stage === name)!;
 {
@@ -17,6 +19,12 @@ const stage = (turn: ReturnType<typeof createAssistantTurnContext>, name: string
   assert.equal(privateTurn.identity.allowPrivate, true);
   assert.equal(privateTurn.identity.readableScopeIds.length, 2);
   assert(privateTurn.hasEvidence("private-message-a"));
+  const directTurn = createAssistantTurnContext(directInput());
+  assert.equal(directTurn.identity.channel, "direct-chat");
+  assert.equal(directTurn.identity.allowPrivate, true);
+  assert(!("channelBindingId" in directTurn.identity), "Direct web/desktop chats have no external channel binding.");
+  assertAssistantTurnChannel(directTurn, false);
+  assert.throws(() => assertAssistantTurnChannel(directTurn, true));
   assert.throws(() => createAssistantTurnContext({ ...input(), evidenceIds: [""] }));
 }
 {
