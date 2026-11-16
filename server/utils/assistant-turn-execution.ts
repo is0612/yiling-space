@@ -52,11 +52,10 @@ export function executeAssistantGroupTurn<T>(context: AssistantTurnContext, sour
 
 /** Prevent a request from accidentally reusing a turn context created for another channel. */
 export function assertAssistantTurnChannel(context: AssistantTurnContext, groupChat: boolean) {
-  const expected = groupChat ? "qq-group" : "qq-private";
-  const expectedPrivate = !groupChat;
-  if (context.identity.channel !== expected || context.identity.allowPrivate !== expectedPrivate) {
-    throw new Error("Assistant turn identity does not match conversation channel");
-  }
+  const valid = groupChat
+    ? context.identity.channel === "qq-group" && context.identity.allowPrivate === false
+    : context.identity.channel !== "qq-group" && context.identity.allowPrivate === true;
+  if (!valid) throw new Error("Assistant turn identity does not match conversation channel");
 }
 
 export function validateAssistantTurnEvidence(context: AssistantTurnContext, input: {
