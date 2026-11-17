@@ -1,8 +1,8 @@
 import { createError, getRouterParam } from "h3";
-import { requireActorUserId } from "../../../../../../utils/auth";
-import { requireUuid } from "../../../../../../utils/local-api";
-import { getPrisma } from "../../../../../../utils/prisma";
-import { dismissKnowledgeTopicSuggestion } from "../../../../../../utils/knowledge-topic-suggestions";
+import { requireActorUserId } from "../../../../../../../../utils/auth";
+import { requireUuid } from "../../../../../../../../utils/local-api";
+import { getPrisma } from "../../../../../../../../utils/prisma";
+import { dismissKnowledgeTopicSuggestion } from "../../../../../../../../utils/knowledge-topic-suggestions";
 
 export default defineEventHandler(async event => {
   const ownerId = await requireActorUserId(event);
