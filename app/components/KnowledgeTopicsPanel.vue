@@ -253,6 +253,8 @@ async function restoreRevision(revision: number) {
         <el-empty v-if="!historyLoading && !revisions.length" description="暂无历史版本。" />
       </div>
     </el-dialog>
+
+    <KnowledgeTopicDiscoveryPanel :character-id="characterId" :items="items" @changed="emit('changed')" />
   </section>
 </template>
 
