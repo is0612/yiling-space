@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import ts from "typescript";
 const main = readFileSync("app/components/CharacterModelSettings.vue", "utf8");
+const usageAside = readFileSync("app/components/ModelUsageAside.vue", "utf8");
 const page = readFileSync("app/pages/characters/[id]/settings/model.vue", "utf8");
 const legacy = readFileSync("app/pages/models.vue", "utf8");
 function scriptOf(source: string) { const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]; assert(script); return ts.createSourceFile("component.ts", script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS); }
@@ -131,5 +132,6 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   assert.equal("clearVoiceApiKey" in bodies[2], false, "清除后重新输入新 Key，以新值为准");
   assert.equal((bodies[2] as { voiceApiKey?: string }).voiceApiKey, "fresh-key");
 }
-assert(main.includes("调用日志")); assert(main.includes("<ModelCallLogsDialog"), "Call logs dialog belongs to the extracted model settings component");
+assert(usageAside.includes("调用日志")); assert(usageAside.includes("@logs=\"modelCallLogsOpen = true\"") === false, "Usage aside emits the logs action instead of owning the dialog");
+assert(main.includes("@logs=\"modelCallLogsOpen = true\""), "Model settings page handles the usage aside logs action");
 console.log("Unified model settings: seven capabilities, canonical role/section routing, per-role draft cache, original independent credentials and request lifecycle guards passed (script-level, no DOM).");
