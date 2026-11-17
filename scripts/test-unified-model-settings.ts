@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import ts from "typescript";
 const main = readFileSync("app/components/CharacterModelSettings.vue", "utf8");
+const usageAside = readFileSync("app/components/ModelUsageAside.vue", "utf8");
 const page = readFileSync("app/pages/characters/[id]/settings/model.vue", "utf8");
 const legacy = readFileSync("app/pages/models.vue", "utf8");
 function scriptOf(source: string) { const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)?.[1]; assert(script); return ts.createSourceFile("component.ts", script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS); }
@@ -27,9 +28,10 @@ const mergedSections = ["memoryAssistant", "contextAssistant", "knowledge", "soc
 for (const name of realSections) assert(page.includes(`key: "${name}"`));
 for (const name of mergedSections) assert(!page.includes(`key: "${name}"`), `${name} 已并入对话模型，不该再有独立分节`);
 assert(page.includes('<KeepAlive :key="characterId">'), "Role switch destroys cached forms; capability switch preserves them");
-assert(page.includes(':is="mainComponent"')); assert(page.includes(':character-id="characterId"')); assert(/\sembedded\s/.test(page), "Panel renders embedded inside the workspace shell");
+assert(page.includes('<main class="model-workspace-content">'), "Panel renders inside the model workspace content area");
+assert(page.includes(':is="mainComponent"')); assert(page.includes(':character-id="characterId"')); assert(page.includes(':section="section"'));
 assert(main.includes("const id = computed(() => props.characterId)")); assert(!main.includes("definePageMeta("));
-assert(main.includes('v-if="!embedded"')); assert(main.includes('v-show="activeTab === \'chat\'"')); assert(main.includes('v-show="activeTab === \'vision\'"'), "Assistant panels are folded into the chat section, vision stays its own panel");
+assert(main.includes('const activeTab = computed<ModelSection>(() => props.section ?? "chat")'), "The workspace controls the active model section through the section prop"); assert(main.includes('v-show="activeTab === \'chat\'"')); assert(main.includes('v-show="activeTab === \'vision\'"'), "Assistant panels are folded into the chat section, vision stays its own panel");
 assert(main.includes('if (disposed || version !== roleVersion) throw new Error("Model settings role changed")'));
 for (const field of ["chatApiKey: draftChatApiKey.value", "voiceApiKey: draftVoiceApiKey.value.trim()", "asrApiKey: draftAsrApiKey.value.trim()", "visionApiKey: draftVisionApiKey.value.trim()", "memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim()", "contextAssistantApiKey: draftContextAssistantApiKey.value.trim()"]) assert(main.includes(field), `Preserve credential save field: ${field}`);
 for (const endpoint of ["/voice/models", "/voice/test-connection", "/vision/test-connection", "/chat/memory-assistant/models", "/chat/context-assistant/models", "/chat/test-connection"]) assert(main.includes(endpoint), endpoint);
@@ -130,5 +132,6 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   assert.equal("clearVoiceApiKey" in bodies[2], false, "清除后重新输入新 Key，以新值为准");
   assert.equal((bodies[2] as { voiceApiKey?: string }).voiceApiKey, "fresh-key");
 }
-assert(page.includes("调用日志")); assert(page.includes("<ModelCallLogsDialog"));
+assert(usageAside.includes("调用日志")); assert(usageAside.includes("@logs=\"modelCallLogsOpen = true\"") === false, "Usage aside emits the logs action instead of owning the dialog");
+assert(main.includes("@logs=\"modelCallLogsOpen = true\""), "Model settings page handles the usage aside logs action");
 console.log("Unified model settings: seven capabilities, canonical role/section routing, per-role draft cache, original independent credentials and request lifecycle guards passed (script-level, no DOM).");

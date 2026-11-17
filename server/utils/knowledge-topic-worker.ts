@@ -123,7 +123,7 @@ async function callModel(input: TopicInput[], runtime: NonNullable<Awaited<Retur
   await recordModelUsage({ kind: "knowledge-assistant", model: runtime.model, characterId, usage: readModelUsage(root), metadata: { operation: "topic-clustering", runId, promptVersion: PROMPT_VERSION } }).catch(() => undefined);
   return validateKnowledgeTopicOutput(parsed, input.map(item => item.itemId));
 }
-async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnType<typeof validateKnowledgeTopicOutput>, model: string): Promise<boolean> {
+async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnType<typeof validateKnowledgeTopicOutput>, model: string): Promise<"READY" | "STALE" | null> {
   return prisma.$transaction(async tx => {
     const now = new Date();
     const held = await tx.$queryRaw<Array<{ id: string }>>`
@@ -131,7 +131,7 @@ async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnT
         AND "status" = 'PROCESSING'::"KnowledgeTopicRunStatus" AND "leaseToken" = ${lease.leaseToken}::uuid
         AND "fencingToken" = ${lease.fencingToken} AND "leaseExpiresAt" > ${now} FOR UPDATE
     `;
-    if (!held.length) return false;
+    if (!held.length) return null;
     const refs = snapshot(lease.inputSnapshot);
     const valid = await tx.$queryRaw<Array<{ id: string; revision: number }>>`
       SELECT "id", "revision" FROM "knowledge_items"
@@ -142,7 +142,7 @@ async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnT
     const revisions = new Map(valid.map(row => [row.id, row.revision]));
     if (valid.length !== refs.length || refs.some(ref => revisions.get(ref.itemId) !== ref.revision)) {
       await tx.knowledgeTopicRun.update({ where: { id: lease.id }, data: { status: "STALE", leaseToken: null, leaseExpiresAt: null, lastError: "输入知识已变化，请重新发现主题。" } });
-      return true;
+      return "STALE";
     }
     for (const topic of result.topics) {
       await tx.knowledgeTopicSuggestion.create({
@@ -153,7 +153,7 @@ async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnT
       where: { id: lease.id },
       data: { status: "READY", ungroupedIds: result.ungroupedIds as unknown as Prisma.InputJsonValue, model, promptVersion: PROMPT_VERSION, completedAt: now, leaseToken: null, leaseExpiresAt: null, lastError: null },
     });
-    return true;
+    return "READY";
   }, { timeout: 15_000 });
 }
 export async function processNextKnowledgeTopicRun(prisma: PrismaClient, _options: { workerId: string }): Promise<{ processed: boolean; runId?: string; status?: string }> {
@@ -213,8 +213,8 @@ export async function processNextKnowledgeTopicRun(prisma: PrismaClient, _option
     try { result = await callModel(input, runtime, lease.characterId, lease.id, controller.signal); }
     finally { clearTimeout(timeout); }
     if (leaseLost) return { processed: true, runId: lease.id };
-    const saved = await saveResult(prisma, lease, result, runtime.model);
-    return { processed: true, runId: lease.id, ...(saved ? { status: "READY" } : {}) };
+    const status = await saveResult(prisma, lease, result, runtime.model);
+    return { processed: true, runId: lease.id, ...(status ? { status } : {}) };
   } catch (error) {
     if (leaseLost) return { processed: true, runId: lease.id };
     const failedAt = new Date();
