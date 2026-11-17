@@ -847,6 +847,7 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
 .el-overlay .el-dialog {
   display: flex;
   max-height: 85vh;
+  --el-dialog-margin-top: 10vh;
   /* 有几个弹窗写死了 width="500px"，390 视口下会横向溢出，这里兜住 */
   max-width: calc(100vw - 32px);
   flex-direction: column;
@@ -879,6 +880,9 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
   right: 16px;
   width: 28px;
   height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--radius-xs);
 }
 .el-overlay .el-dialog__headerbtn:hover { background: var(--surface-3); }

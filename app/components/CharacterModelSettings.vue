@@ -2112,6 +2112,15 @@ watch(id, () => void loadCharacter());
           <div class="card-head">
             <h2>今日用量</h2>
             <span class="sub">{{ dailyUsage?.day ?? "—" }}</span>
+            <el-button
+              text
+              size="small"
+              class="usage-log-btn"
+              :disabled="!character"
+              @click="modelCallLogsOpen = true"
+            >
+              调用日志
+            </el-button>
           </div>
 
           <div class="usage-top">

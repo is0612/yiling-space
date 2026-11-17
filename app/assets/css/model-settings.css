@@ -1,10 +1,6 @@
 /* Unified model workspace only. All selectors are scoped beneath its root. */
 .model-settings-workspace { max-width: 1760px; margin: 0 auto; }
-.model-settings-workspace .model-workspace-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
 .model-settings-workspace .model-workspace-eyebrow { display: inline-flex; align-items: center; gap: 7px; color: var(--brand-strong); font-size: 12px; font-weight: 600; letter-spacing: .08em; }
-.model-settings-workspace .model-workspace-heading h1 { margin: 9px 0 8px; color: var(--text); font-size: 27px; line-height: 1.4; font-weight: 650; letter-spacing: -.025em; }
-.model-settings-workspace .model-workspace-heading p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.7; }
-.model-settings-workspace .model-workspace-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 12px; }
 .model-settings-workspace .model-role-indicator { display: inline-flex; align-items: center; gap: 7px; max-width: 240px; color: var(--text-2); font-size: 13px; overflow-wrap: anywhere; }
 .model-settings-workspace .model-role-indicator > span { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--brand); }
 .model-settings-workspace .model-workspace-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); align-items: start; gap: 24px; }
@@ -52,9 +48,6 @@
   .model-settings-workspace .model-settings-panel .knob { grid-template-columns: minmax(0, 1fr) 220px; gap: 8px 16px; }
 }
 @media (max-width: 760px) {
-  .model-settings-workspace .model-workspace-header { align-items: flex-start; gap: 16px; margin-bottom: 20px; }
-  .model-settings-workspace .model-workspace-heading h1 { font-size: 23px; }
-  .model-settings-workspace .model-workspace-actions { flex-direction: column; align-items: flex-end; gap: 10px; }
   .model-settings-workspace .model-role-indicator { max-width: 150px; font-size: 12px; }
   .model-settings-workspace .model-workspace-layout { display: flex; flex-direction: column; gap: 20px; }
   .model-settings-workspace .model-capability-sidebar { position: static; width: 100%; box-sizing: border-box; padding: 14px; }
@@ -69,7 +62,5 @@
   .model-settings-workspace .model-settings-panel .brick { padding: 18px; }
 }
 @media (max-width: 420px) {
-  .model-settings-workspace .model-workspace-header { flex-wrap: wrap; }
-  .model-settings-workspace .model-workspace-actions { width: 100%; flex-direction: row; align-items: center; justify-content: space-between; }
   .model-settings-workspace .model-role-indicator { max-width: calc(100% - 110px); }
 }

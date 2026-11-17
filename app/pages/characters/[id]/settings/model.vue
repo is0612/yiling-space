@@ -59,14 +59,12 @@ function readSection(value: unknown): ModelSection {
 
 const section = computed(() => readSection(route.query.section));
 
-const modelCallLogsOpen = ref(false);
 const activePanel = ref<{ busy?: boolean } | null>(null);
 const busy = computed(() => activePanel.value?.busy === true);
 onBeforeRouteUpdate((to, from) => {
   if (busy.value && (to.query.section !== from.query.section || to.query.c !== from.query.c)) return false;
 });
 onBeforeRouteLeave(() => busy.value ? false : undefined);
-watch(characterId, () => { modelCallLogsOpen.value = false; }, { flush: "sync" });
 
 const mainComponent = markRaw(CharacterModelSettings);
 
@@ -78,24 +76,6 @@ function selectSection(value: ModelSection) {
 
 <template>
   <div class="model-settings-workspace page-wrap">
-    <header class="model-workspace-header">
-      <div class="model-workspace-heading">
-        <h1>一次找到，按需配置。</h1>
-        <p>对话、看图、语音，以及跟着对话模型走的四个助手。</p>
-      </div>
-      <div class="model-workspace-actions">
-        <el-button
-          :disabled="!characterId"
-          @click="modelCallLogsOpen = true"
-        >
-          调用日志
-        </el-button>
-      </div>
-    </header>
-    <ModelCallLogsDialog
-      v-model="modelCallLogsOpen"
-      :character-id="characterId"
-    />
     <el-empty
       v-if="!characterId"
       description="请先选择一个角色，再配置模型。"
