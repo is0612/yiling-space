@@ -298,6 +298,8 @@ model Character {
   knowledgeCandidates KnowledgeCandidate[]
   knowledgeItems     KnowledgeItem[]
   knowledgeRelations KnowledgeItemRelation[]
+  knowledgeTopicRuns KnowledgeTopicRun[]
+  knowledgeTopics KnowledgeTopic[]
   growthEvents       GrowthEvent[]
   memoryKnowledgeRequests MemoryKnowledgeCandidateRequest[]
   reflectionRuns ReflectionRun[]
@@ -1585,6 +1587,26 @@ enum ReflectionSuggestionStatus {
   DEFERRED
 }
 
+enum KnowledgeTopicRunStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+  STALE
+}
+
+enum KnowledgeTopicSuggestionStatus {
+  PENDING
+  ACCEPTED
+  DISMISSED
+}
+
+enum KnowledgeTopicStatus {
+  ACTIVE
+  ARCHIVED
+  MERGED
+}
+
 model ReflectionRun {
   conversationId String? @db.Uuid
   memoryScopeId String? @db.Uuid
@@ -1652,6 +1674,110 @@ model CharacterGrowthImportIdentity {
   @@map("character_growth_import_identities")
 }
 
+
+/// 用户显式发起的一次知识主题发现任务。输入只保存 ID/revision 快照，不复制知识正文。
+model KnowledgeTopicRun {
+  id             String                  @id @default(uuid()) @db.Uuid
+  characterId    String                  @db.Uuid
+  status         KnowledgeTopicRunStatus @default(QUEUED)
+  inputSnapshot  Json                    @db.JsonB
+  ungroupedIds   Json                    @default("[]") @db.JsonB
+  attemptCount   Int                     @default(0)
+  maxAttempts    Int                     @default(3)
+  runAt          DateTime                @default(now()) @db.Timestamptz(6)
+  leaseToken     String?                 @db.Uuid
+  leaseExpiresAt DateTime?               @db.Timestamptz(6)
+  fencingToken   Int                     @default(0)
+  model          String?                 @db.VarChar(120)
+  promptVersion  String?                 @db.VarChar(80)
+  lastError      String?                 @db.VarChar(500)
+  completedAt    DateTime?               @db.Timestamptz(6)
+  createdAt      DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime                @updatedAt @db.Timestamptz(6)
+  character      Character               @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  suggestions    KnowledgeTopicSuggestion[]
+
+  @@index([status, runAt])
+  @@index([characterId, createdAt])
+  @@map("knowledge_topic_runs")
+}
+
+/// 模型生成的待审核主题建议；成员 ID 原样保存，采纳时另记实际采纳子集。
+model KnowledgeTopicSuggestion {
+  id                   String                         @id @default(uuid()) @db.Uuid
+  runId                String                         @db.Uuid
+  name                 String                         @db.VarChar(200)
+  description          String                         @default("") @db.Text
+  reason               String                         @db.Text
+  memberItemIds        Json                           @db.JsonB
+  acceptedMemberItemIds Json?                          @db.JsonB
+  status               KnowledgeTopicSuggestionStatus @default(PENDING)
+  reviewedAt           DateTime?                      @db.Timestamptz(6)
+  createdAt            DateTime                       @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime                       @updatedAt @db.Timestamptz(6)
+  run                  KnowledgeTopicRun              @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, status])
+  @@map("knowledge_topic_suggestions")
+}
+
+/// 用户采纳或手动创建的正式主题。合并源主题保留为 MERGED，并指向目标主题。
+model KnowledgeTopic {
+  id           String              @id @default(uuid()) @db.Uuid
+  characterId  String              @db.Uuid
+  name         String              @db.VarChar(200)
+  description  String              @default("") @db.Text
+  status       KnowledgeTopicStatus @default(ACTIVE)
+  revision     Int                 @default(1)
+  mergedIntoId String?             @db.Uuid
+  mergedAt     DateTime?           @db.Timestamptz(6)
+  createdAt    DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime            @updatedAt @db.Timestamptz(6)
+  character    Character           @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  mergedInto   KnowledgeTopic?     @relation("KnowledgeTopicMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedSources KnowledgeTopic[]   @relation("KnowledgeTopicMerge")
+  members      KnowledgeTopicMember[]
+  revisions    KnowledgeTopicRevision[]
+
+  @@index([characterId, status, updatedAt])
+  @@index([mergedIntoId])
+  @@map("knowledge_topics")
+}
+
+/// 主题成员只引用正式知识；itemRevision 是加入时的审计版本，不是持续有效性锁。
+model KnowledgeTopicMember {
+  id          String       @id @default(uuid()) @db.Uuid
+  topicId     String       @db.Uuid
+  itemId      String       @db.Uuid
+  itemRevision Int
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+  topic       KnowledgeTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  item        KnowledgeItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([topicId, itemId])
+  @@index([itemId])
+  @@index([topicId, createdAt])
+  @@map("knowledge_topic_members")
+}
+
+/// 每次主题修改前保存完整快照；撤销时以新 revision 恢复，不删除历史。
+model KnowledgeTopicRevision {
+  id          String              @id @default(uuid()) @db.Uuid
+  topicId     String              @db.Uuid
+  revision    Int
+  name        String              @db.VarChar(200)
+  description String              @default("") @db.Text
+  status      KnowledgeTopicStatus
+  mergedIntoId String?            @db.Uuid
+  members     Json                @db.JsonB
+  createdAt   DateTime            @default(now()) @db.Timestamptz(6)
+  topic       KnowledgeTopic      @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([topicId, revision])
+  @@index([topicId, createdAt])
+  @@map("knowledge_topic_revisions")
+}
+
 model KnowledgeCandidate {
   id               String    @id @default(uuid()) @db.Uuid
   characterId      String    @db.Uuid
@@ -1693,6 +1819,7 @@ model KnowledgeItem {
   revisions   KnowledgeItemRevision[]
   relationsFrom KnowledgeItemRelation[] @relation("KnowledgeRelationSource")
   relationsTo   KnowledgeItemRelation[] @relation("KnowledgeRelationTarget")
+  topicMemberships KnowledgeTopicMember[]
 
   @@index([characterId, status, updatedAt])
   @@index([characterId, category, status])
