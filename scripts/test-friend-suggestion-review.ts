@@ -15,7 +15,8 @@ function harness() {
     activeCharacterId: { value: "role-a" }, resolvingSuggestionId: { value: "" },
     suggestionResolveSequence: 0, suggestions: { value: [{ id: "one" }, { id: "two" }] },
     pendingSuggestions: { value: 2 },
-    $fetch: () => new Promise(resolve => callbacks.push(resolve)),
+    // 页面改用领域工厂后，这里只需要桩出这次裁决请求。
+    identitiesApi: { resolveAliasSuggestion: () => new Promise((resolve) => callbacks.push(resolve)) },
     applyAliases: (scope: string, saved: string[]) => aliases.push({ scope, saved }),
     ElMessage: { error: () => assert.fail("unexpected review error") },
     readErrorMessage: () => "error",

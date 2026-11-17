@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
+import { createIdentitiesApi } from "../app/api/identities";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 import { readApiErrorMessage } from "../app/utils/api-error";
 
 /**
@@ -134,6 +136,10 @@ function harness() {
   const timers = new Map<number, () => void>();
   let timerId = 0;
   let unmount: (() => void) | null = null;
+  // 页面已改为 createIdentitiesApi(useApiRequest())；这里走真实传输层，记录器只接管 fetchJson。
+  const recordingFetch = ((url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
+    requests.push({ url, options, resolve, reject });
+  })) as RawFetch;
 
   const context = createContext({
     readApiErrorMessage,
@@ -166,6 +172,8 @@ function harness() {
     $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
       requests.push({ url, options, resolve, reject });
     }),
+    createIdentitiesApi,
+    useApiRequest: () => createRequestClient(recordingFetch),
   });
   const bindings = executable.runInContext(context) as Record<string, Ref | ((...args: unknown[]) => unknown)>;
 

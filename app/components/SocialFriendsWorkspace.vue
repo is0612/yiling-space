@@ -14,63 +14,24 @@
  */
 import { Delete, Refresh, Search, User } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import {
+  createIdentitiesApi,
+  type AliasSuggestion as Suggestion,
+  type Friend,
+  type FriendCharacter as Character,
+  type FriendPage,
+  type FriendPatch,
+  type FriendSortBy as SortBy,
+  type FriendSortDirection as SortDirection,
+  type FriendSourceFilter,
+} from "~/api/identities";
 import { readApiErrorMessage } from "~/utils/api-error";
+
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const identitiesApi = createIdentitiesApi(useApiRequest());
 
 await useCharacterListData();
 const { id } = useCharacterSelection("/growth/social/friends");
-
-type Friend = {
-  scopeId: string;
-  characterId: string;
-  characterName: string;
-  identityId: string;
-  platform: string;
-  platformUid: string;
-  displayName: string | null;
-  status: string;
-  linkedUserId: string | null;
-  identityKind: "UNKNOWN" | "HUMAN" | "AI";
-  identityKindSource: "AUTO" | "MANUAL";
-  friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK";
-  proactiveContactEnabled: boolean;
-  educationEnabled: boolean;
-  /** 她的聊天算不算知识来源；只在角色设成「仅指定成员」时才起作用。 */
-  knowledgeCollectEnabled: boolean;
-  /** 当前角色实际的知识收集范围，用来提示这个开关现在生不生效。 */
-  characterKnowledgeCollectScope: "ALL" | "SELECTED";
-  lastProactiveContactAttempt: {
-    status: "SENDING" | "SENT" | "SKIPPED" | "FAILED" | "EXPIRED";
-    reason: string;
-    attemptedAt: string;
-    sentAt: string | null;
-  } | null;
-  interactionCount: number;
-  lastInteractedAt: string | null;
-  knownSince: string;
-  firstSource: string | null;
-  conversationCount: number;
-  /** 她私底下的叫法。空数组 = 没设过，卡片上显示「＋ 加备注」。 */
-  aliases: string[];
-};
-
-type Character = { id: string; name: string; status: string; friendCount: number };
-
-type FriendPage = {
-  items: Friend[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  hasMore: boolean;
-  characters: Character[];
-  /** 后端兜底选好的角色：没传 characterId 时落在「朋友最多的那个」 */
-  activeCharacterId: string;
-  /** 都按这个角色的全部朋友算，不受关键词/来源筛选影响 */
-  stats: { total: number; familiar: number; recent: number };
-  sourceCounts: { all: number; private: number; group: number };
-  /** 待审备注条数：顶部按钮角标用。 */
-  pendingSuggestions: number;
-};
 
 /** 一页 12 个＝四列三行，正好铺满不剩半行。与接口默认值保持一致。 */
 const PAGE_SIZE = 12;
@@ -80,9 +41,7 @@ const friends = ref<Friend[]>([]);
 const characters = ref<Character[]>([]);
 const activeCharacterId = computed(() => id.value);
 const query = ref("");
-const sourceFilter = ref<"ALL" | "PRIVATE" | "GROUP">("ALL");
-type SortBy = "recent" | "count" | "closeness" | "known";
-type SortDirection = "asc" | "desc";
+const sourceFilter = ref<FriendSourceFilter>("ALL");
 const sortBy = ref<SortBy>("recent");
 
 const page = ref(1);
@@ -206,7 +165,7 @@ const currentCharacter = computed(
   () => characters.value.find((item) => item.id === activeCharacterId.value) ?? null,
 );
 
-const sourceOptions = computed<Array<{ value: "ALL" | "PRIVATE" | "GROUP"; label: string; count: number }>>(() => [
+const sourceOptions = computed<Array<{ value: FriendSourceFilter; label: string; count: number }>>(() => [
   { value: "ALL", label: "全部", count: sourceCounts.value.all },
   { value: "PRIVATE", label: "私聊认识", count: sourceCounts.value.private },
   { value: "GROUP", label: "群里认识", count: sourceCounts.value.group },
@@ -231,7 +190,7 @@ async function load(target = page.value) {
   // 换角色 / 换筛选 / 翻页之后，之前勾的人可能已经不在这一页上了，先清空勾选。
   selectedIds.value = [];
   try {
-    const response = await $fetch<FriendPage>("/api/admin/identities", { query: requestQuery });
+    const response = await identitiesApi.listFriends(requestQuery);
     if (requestId !== loadSequence) return;
     friends.value = response.items;
     characters.value = response.characters;
@@ -251,7 +210,7 @@ async function load(target = page.value) {
 
 /** 换角色直接重取：名单变了，停在原来的页码上没有意义。 */
 
-function pickSource(value: "ALL" | "PRIVATE" | "GROUP") {
+function pickSource(value: FriendSourceFilter) {
   if (value === sourceFilter.value) return;
   sourceFilter.value = value;
   load(1);
@@ -339,21 +298,13 @@ function saveStateLabel(scopeId: string) {
  * 改一个字段就 PATCH 一次，带序号防乱序：连点两下时只认最后一次的响应，
  * 否则先发的请求后回来，会把界面上新的选择又改回旧值。
  */
-async function patchFriend(friend: Friend, patch: {
-  identityKind?: Friend["identityKind"];
-  friendChatPolicy?: Friend["friendChatPolicy"];
-  proactiveContactEnabled?: boolean;
-  educationEnabled?: boolean;
-  knowledgeCollectEnabled?: boolean;
-}) {
+async function patchFriend(friend: Friend, patch: FriendPatch) {
   const scopeId = friend.scopeId;
   const token = (saveTokens.get(scopeId) ?? 0) + 1;
   saveTokens.set(scopeId, token);
   markSaveState(scopeId, "saving");
   try {
-    const response = await $fetch<
-      Partial<Pick<Friend, "identityKind" | "identityKindSource" | "friendChatPolicy" | "proactiveContactEnabled" | "educationEnabled" | "knowledgeCollectEnabled">> & { scopeId: string }
-    >(`/api/admin/identities/${scopeId}`, { method: "PATCH", body: patch });
+    const response = await identitiesApi.updateFriend(scopeId, patch);
     if (saveTokens.get(scopeId) !== token) return;
     friends.value = friends.value.map((item) => (item.scopeId === scopeId ? { ...item, ...response } : item));
     markSaveState(scopeId, "saved");
@@ -492,13 +443,10 @@ async function confirmDelete() {
   try {
     if (targets.length === 1) {
       const only = targets[0]!;
-      await $fetch(`/api/admin/identities/${only.scopeId}`, { method: "DELETE" });
+      await identitiesApi.deleteFriend(only.scopeId);
       ElMessage.success(`已删掉和「${only.displayName || only.platformUid}」的关系。`);
     } else {
-      const response = await $fetch<{ deleted: number; failed: number }>(
-        "/api/admin/identities/batch-delete",
-        { method: "POST", body: { scopeIds: targets.map((friend) => friend.scopeId) } },
-      );
+      const response = await identitiesApi.batchDeleteFriends(targets.map((friend) => friend.scopeId));
       if (response.failed > 0) {
         ElMessage.warning(`删掉 ${response.deleted} 个，还有 ${response.failed} 个没删掉，刷新后重试。`);
       } else {
@@ -538,10 +486,7 @@ async function saveAliases(friend: Friend, aliases: string | string[], closeEdit
   if (aliasSaving.value) return;
   aliasSaving.value = true;
   try {
-    const response = await $fetch<{ aliases: string[]; dropped: number }>(
-      `/api/admin/identities/aliases/${friend.scopeId}`,
-      { method: "PATCH", body: { aliases } },
-    );
+    const response = await identitiesApi.updateAliases(friend.scopeId, aliases);
     applyAliases(friend.scopeId, response.aliases);
     if (closeEditor) cancelEdit();
     if (response.dropped > 0) {
@@ -565,16 +510,6 @@ function removeAlias(friend: Friend, alias: string) {
  * 同意 = 写进那个人的 aliases；删掉 = 标记 REJECTED（不删行，唯一约束挡着不再被提回来）。
  * 裁决后从本地列表移除并刷新角标，不用整页重载。
  */
-type Suggestion = {
-  id: string;
-  scopeId: string;
-  alias: string;
-  reason: string;
-  friendName: string;
-  platform: string;
-  platformUid: string;
-};
-
 const suggestionDialogOpen = ref(false);
 const suggestions = ref<Suggestion[]>([]);
 const suggestionsLoading = ref(false);
@@ -592,9 +527,7 @@ async function openSuggestions() {
   suggestionsError.value = "";
   suggestionsLoading.value = true;
   try {
-    const response = await $fetch<{ items: Suggestion[] }>("/api/admin/identities/aliases/suggestions", {
-      query: { characterId: requestedCharacterId || undefined },
-    });
+    const response = await identitiesApi.listAliasSuggestions(requestedCharacterId);
     if (requestId !== suggestionRequestSequence || requestedCharacterId !== activeCharacterId.value) return;
     suggestions.value = response.items;
   } catch (error) {
@@ -612,10 +545,7 @@ async function resolveSuggestion(suggestion: Suggestion, approve: boolean) {
   const current = () => sequence === suggestionResolveSequence && characterId === activeCharacterId.value;
   resolvingSuggestionId.value = suggestion.id;
   try {
-    const result = await $fetch<{ aliases: string[] }>(`/api/admin/identities/aliases/suggestions/${suggestion.id}`, {
-      method: "POST",
-      body: { approve },
-    });
+    const result = await identitiesApi.resolveAliasSuggestion(suggestion.id, approve);
     if (!current()) return;
     suggestions.value = suggestions.value.filter((item) => item.id !== suggestion.id);
     pendingSuggestions.value = Math.max(0, pendingSuggestions.value - 1);
