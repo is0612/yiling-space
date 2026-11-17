@@ -1,5 +1,6 @@
 import { computed, inject, provide, reactive, ref, type InjectionKey } from "vue";
 import { ElMessage } from "element-plus";
+import { createBiliApi } from "~/api/bili";
 import type { BiliAccount, DashboardData } from "./types";
 import {
   coverStyle as coverGradientStyle, dur, formatTime, readErrorMessage, windowLabel,
@@ -17,6 +18,8 @@ export type BiliDashboard = ReturnType<typeof createDashboard>;
 const DASH_KEY: InjectionKey<BiliDashboard> = Symbol("bili-dashboard");
 
 function createDashboard() {
+  // setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+  const biliApi = createBiliApi(useApiRequest());
   const loading = ref(true);
   const dashboard = ref<DashboardData>({ today: "", accounts: [] });
   const lastRoundSeconds = ref<number | null>(null);
@@ -129,7 +132,7 @@ function createDashboard() {
   async function resolveCover(bvid: string) {
     if (coverCache[bvid] || coverBroken[bvid]) return;
     try {
-      const data = await $fetch<{ bvid: string; pic: string | null }>("/api/admin/bili/cover", { query: { bvid } });
+      const data = await biliApi.getCover(bvid);
       if (data.pic) coverCache[bvid] = data.pic;
       else coverBroken[bvid] = true;
     } catch {
@@ -146,7 +149,7 @@ function createDashboard() {
   async function loadDashboard() {
     loading.value = true;
     try {
-      dashboard.value = await $fetch<DashboardData>("/api/admin/bili/dashboard");
+      dashboard.value = await biliApi.getDashboard();
       await loadCovers();
     } catch (error) {
       ElMessage.error(readErrorMessage(error, "无法读取 B站 工作台数据。"));
@@ -167,12 +170,10 @@ function createDashboard() {
     }
     running.value = binding.bindingId;
     try {
-      const result = await $fetch<{
-        ok: boolean; seconds: number; picked: number; skipped: number; error?: string; notes?: string[];
-      }>(
-        "/api/admin/bili/run-round",
-        { method: "POST", body: { connectionId: account.connectionId, bindingId: binding.bindingId } },
-      );
+      const result = await biliApi.runRound({
+        connectionId: account.connectionId,
+        bindingId: binding.bindingId,
+      });
       lastRoundSeconds.value = result.seconds;
       const notes = result.notes ?? [];
       if (!result.ok) {

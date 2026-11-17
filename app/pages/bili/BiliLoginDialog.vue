@@ -2,6 +2,7 @@
 import { onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { CircleCheck, TopRight } from "@element-plus/icons-vue";
+import { createBiliApi, type BiliAuthStatus as AuthStatus } from "~/api/bili";
 import type { BiliMe } from "./types";
 import { readErrorMessage } from "./utils";
 
@@ -14,17 +15,14 @@ import { readErrorMessage } from "./utils";
  *
  * ⚠️ 轮询 2s 一次，关弹窗必须停 —— 不然关了还在后台打 auth status。
  */
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const biliApi = createBiliApi(useApiRequest());
+
 const props = defineProps<{ modelValue: boolean; me: BiliMe | null }>();
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   "logged-in": [];
 }>();
-
-type AuthStatus = {
-  ok: boolean;
-  user: unknown;
-  error: { code?: string; message?: string; hint?: string } | null;
-};
 
 const loading = ref(false);
 const qrDataUrl = ref("");
@@ -44,16 +42,13 @@ async function startLogin() {
   qrDataUrl.value = "";
   user.value = null;
   try {
-    const result = await $fetch<{ ok: boolean; code: number | null; stderr: string }>(
-      "/api/admin/bili/auth/login",
-      { method: "POST" },
-    );
+    const result = await biliApi.login();
     if (!result.ok) {
       ElMessage.error(result.stderr || "发起登录失败，请确认 bili CLI 已安装。");
       status.value = "error";
       return;
     }
-    const qr = await $fetch<{ dataUrl: string }>("/api/admin/bili/auth/qr");
+    const qr = await biliApi.getLoginQr();
     qrDataUrl.value = qr.dataUrl;
     status.value = "waiting";
     timer = setInterval(pollStatus, 2000);
@@ -67,7 +62,7 @@ async function startLogin() {
 
 async function pollStatus() {
   try {
-    const result = await $fetch<AuthStatus>("/api/admin/bili/auth/status");
+    const result = await biliApi.getAuthStatus();
     if (result.ok) {
       status.value = "done";
       user.value = result.user;

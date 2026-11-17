@@ -1,5 +1,6 @@
 import { computed, inject, provide, reactive, ref, watch, type InjectionKey, type Ref } from "vue";
 import { ElMessage } from "element-plus";
+import { createBiliApi } from "~/api/bili";
 import type { BiliCatalogItem, BiliRunResult, RunLogEntry } from "./types";
 import { readErrorMessage } from "./utils";
 
@@ -28,6 +29,8 @@ const SELF_CHECK = [
 
 function createRunner(deps: BiliRunnerDeps) {
   const { activeCmd } = deps;
+  // setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+  const biliApi = createBiliApi(useApiRequest());
 
   /**
    * 一个记录装所有参数值：文本是 string、数字框是 number、开关是 boolean。
@@ -97,9 +100,10 @@ function createRunner(deps: BiliRunnerDeps) {
     lastResult.value = null;
     lastLabel.value = label;
     try {
-      const result = await $fetch<BiliRunResult>("/api/admin/bili/run", {
-        method: "POST",
-        body: { argv: argvList, itemId, allowWrite: argvList.includes("--dry-run") ? false : !dryRun.value },
+      const result = await biliApi.runCommand({
+        argv: argvList,
+        itemId,
+        allowWrite: argvList.includes("--dry-run") ? false : !dryRun.value,
       });
       lastResult.value = result;
       runLog.value = [

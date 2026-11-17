@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { createBiliApi, type BiliJournalEntry as JournalEntry } from "~/api/bili";
 import type { BiliAccount } from "./types";
 import { formatDateTime, readErrorMessage } from "./utils";
 
@@ -10,10 +11,11 @@ import { formatDateTime, readErrorMessage } from "./utils";
  * 不是另建一份文件：读、改、删都直接落到 MemoryItem（角色全局范围），
  * 这样聊天检索和 B站 值班读到的是同一份记忆。
  */
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const biliApi = createBiliApi(useApiRequest());
+
 const props = defineProps<{ modelValue: boolean; account: BiliAccount | null }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean]; saved: [] }>();
-
-type JournalEntry = { id: string; content: string; dedupeKey: string | null; updatedAt: string };
 
 const bindings = computed(() => props.account?.bindings ?? []);
 const selectedBindingId = ref("");
@@ -41,9 +43,7 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const result = await $fetch<{ entries: JournalEntry[] }>("/api/admin/bili/journal", {
-      query: { connectionId: account.connectionId, bindingId },
-    });
+    const result = await biliApi.listJournal({ connectionId: account.connectionId, bindingId });
     entries.value = result.entries;
   } catch (loadError) {
     entries.value = [];
@@ -62,9 +62,10 @@ async function createEntry() {
   if (!props.account || !selectedBindingId.value || !content || saving.value) return;
   saving.value = true;
   try {
-    await $fetch("/api/admin/bili/journal", {
-      method: "POST",
-      body: { connectionId: props.account.connectionId, bindingId: selectedBindingId.value, content },
+    await biliApi.createJournal({
+      connectionId: props.account.connectionId,
+      bindingId: selectedBindingId.value,
+      content,
     });
     draft.value = "";
     ElMessage.success("札记已写入长期记忆。");
@@ -92,10 +93,7 @@ async function saveEdit() {
   if (!editingId.value || !content || saving.value) return;
   saving.value = true;
   try {
-    await $fetch(`/api/admin/bili/journal/${encodeURIComponent(editingId.value)}`, {
-      method: "PATCH",
-      body: { content },
-    });
+    await biliApi.updateJournal({ entryId: editingId.value, content });
     cancelEdit();
     ElMessage.success("札记已更新。");
     await load();
@@ -115,7 +113,7 @@ async function removeEntry(entry: JournalEntry) {
   ).catch(() => false);
   if (!confirmed) return;
   try {
-    await $fetch(`/api/admin/bili/journal/${encodeURIComponent(entry.id)}`, { method: "DELETE" });
+    await biliApi.deleteJournal(entry.id);
     ElMessage.success("札记已移入回收站。");
     await load();
     emit("saved");

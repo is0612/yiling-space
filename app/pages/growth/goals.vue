@@ -1,5 +1,15 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
+import {
+  createGrowthApi,
+  type Goal,
+  type GoalHistory as History,
+  type GoalKind as Kind,
+  type GoalProgress as Progress,
+  type GoalStatus as Status,
+  type GrowthSource as Source,
+  type GrowthSourceType as SourceType,
+} from "~/api/growth";
 
 definePageMeta({
   topbar: {
@@ -7,14 +17,10 @@ definePageMeta({
     crumbs: [{ label: "成长系统" }],
   },
 });
-type Kind = "GOAL" | "WISH";
-type Status = "ACTIVE" | "PENDING" | "PAUSED" | "COMPLETED" | "ABANDONED" | "REJECTED";
-type SourceType = "MEMORY_EVENT" | "REFLECTION_SUGGESTION";
-type Source = { type: SourceType; id: string; title: string; summary: string; hash: string; occurredAt?: string };
-type Goal = { id: string; characterId: string; kind: Kind; title: string; description: string; reason: string; status: Status; revision: number; sourceType: "MANUAL" | "SOURCES"; sourceRefs: Source[]; createdAt: string; updatedAt: string; progressCount?: number; latestProgress?: Progress | null };
-type Progress = { id: string; goalId: string; content: string; sourceRefs: Source[]; createdAt: string };
-type History = Goal & { action: string };
-type Page<T> = { items: T[]; pagination: { page: number; pageSize: number; total: number; pageCount: number } };
+
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const growthApi = createGrowthApi(useApiRequest());
+
 type Operation = "ACTIVATE" | "PAUSE" | "COMPLETE" | "ABANDON" | "REJECT";
 type Target = { role: string; generation: number; sequence: number };
 type Draft = { kind: Kind; title: string; description: string; reason: string; activate: boolean };
@@ -41,7 +47,6 @@ const progressContent = ref(""); const progressSaving = ref(false); const progre
 let progressSequence = 0; let progressRequest = 0;
 let progressAttempt: { goalId: string; content: string; requestKey: string; expectedRevision: number } | null = null;
 let generation = 0; let listSequence = 0; let editorSequence = 0; let sourceSequence = 0; let suggestionSequence = 0; let draftRevision = 0; let actionSequence = 0; let historySequence = 0; let historyRequest = 0; let disposed = false;
-function api(role: string) { return `/api/characters/${encodeURIComponent(role)}/growth/goals`; }
 function canEdit(item: Goal) { return ["PENDING", "ACTIVE", "PAUSED"].includes(item.status); }
 function availableActions(item: Goal): Operation[] {
   if (item.status === "PENDING") return ["ACTIVATE", "REJECT"];
@@ -69,7 +74,7 @@ async function loadList() {
   if (!target.role || disposed) return;
   loading.value = true; loadError.value = ""; items.value = []; total.value = 0;
   try {
-    const result = await $fetch<Page<Goal>>(api(target.role), { query: { status: status.value, q: query.value, page: page.value, pageSize: 20 } });
+    const result = await growthApi.listGoals({ characterId: target.role, status: status.value, keyword: query.value, page: page.value });
     if (!current(target) || target.sequence !== listSequence) return;
     items.value = result.items.filter(item => item.characterId === target.role && (status.value === "ALL" || item.status === status.value));
     total.value = result.pagination.total; page.value = result.pagination.page;
@@ -96,7 +101,7 @@ async function loadSources() {
   if (!target || !editorCurrent(target) || editorMode.value !== "sources") return;
   const request = ++sourceSequence; sourceLoading.value = true; sourceError.value = ""; sources.value = []; sourceTotal.value = 0;
   try {
-    const result = await $fetch<Page<Source>>(`${api(target.role)}/sources`, { query: { type: sourceType.value, q: sourceKeyword.value.trim(), page: sourcePage.value, pageSize: 10 } });
+    const result = await growthApi.listGoalSources({ characterId: target.role, type: sourceType.value, keyword: sourceKeyword.value.trim(), page: sourcePage.value });
     if (!editorCurrent(target) || request !== sourceSequence) return;
     sources.value = result.items; sourcePage.value = result.pagination.page; sourceTotal.value = result.pagination.total;
   } catch (error) { if (editorCurrent(target) && request === sourceSequence) sourceError.value = errorText(error, "读取来源失败，请重试。"); }
@@ -121,7 +126,7 @@ async function suggestGoal() {
   const selected = selectedSources.value.map(({ type, id, hash }) => ({ type, id, hash })); const startingSources = JSON.stringify(selected);
   suggesting.value = true; suggestionMessage.value = "";
   try {
-    const result = await $fetch<{ suggestion: { kind: Kind; title: string; description: string; reason: string } | null }>(`${api(target.role)}/suggest`, { method: "POST", body: { sources: selected } });
+    const result = await growthApi.suggestGoal({ characterId: target.role, sources: selected });
     if (!editorCurrent(target) || request !== suggestionSequence) return;
     if (startingDraftRevision !== draftRevision || startingDraft !== JSON.stringify(draft.value) || startingSources !== JSON.stringify(selectedSources.value.map(({ type, id, hash }) => ({ type, id, hash })))) { suggestionMessage.value = "填写内容或来源已变化，本次建议未覆盖你的草稿。"; return; }
     if (!result.suggestion) { suggestionMessage.value = "这些来源还不足以支持一条目标与愿望。可以补充依据，或自行填写观察。"; return; }
@@ -139,7 +144,7 @@ async function saveEditor() {
   try {
     const body = target.item ? { operation: "EDIT", expectedRevision: target.item.revision, kind: draft.value.kind, title, description, reason }
       : { kind: draft.value.kind, title, description, reason, status: editorMode.value === "sources" || !draft.value.activate ? "PENDING" : "ACTIVE", ...(editorMode.value === "sources" ? { sources: selectedSources.value.map(({ type, id, hash }) => ({ type, id, hash })) } : {}) };
-    await $fetch(target.item ? `${api(target.role)}/${encodeURIComponent(target.item.id)}` : api(target.role), { method: target.item ? "PATCH" : "POST", body });
+    await growthApi.saveGoal({ characterId: target.role, goalId: target.item?.id, data: body });
     if (!editorCurrent(target)) return;
     const nextStatus = target.item?.status ?? (editorMode.value === "sources" || !draft.value.activate ? "PENDING" : "ACTIVE");
     closeEditor(); status.value = nextStatus; page.value = 1;
@@ -161,7 +166,11 @@ async function confirmAction() {
   if (!target || !actionCurrent(target) || acting.value) return;
   acting.value = true; actionError.value = "";
   try {
-    await $fetch(`${api(target.role)}/${encodeURIComponent(target.item.id)}`, { method: "PATCH", body: { operation: target.operation, expectedRevision: target.item.revision } });
+    await growthApi.saveGoal({
+      characterId: target.role,
+      goalId: target.item.id,
+      data: { operation: target.operation, expectedRevision: target.item.revision },
+    });
     if (!actionCurrent(target)) return;
     closeAction(); ElMessage.success("目标与愿望状态已更新，操作已留档。"); await loadList();
   } catch (error) {
@@ -180,7 +189,7 @@ async function loadHistory() {
   if (!target || !historyCurrent(target)) return;
   const request = ++historyRequest; historyLoading.value = true; historyError.value = ""; historyItems.value = []; historyTotal.value = 0;
   try {
-    const result = await $fetch<Page<History>>(`${api(target.role)}/${encodeURIComponent(target.item.id)}/history`, { query: { page: historyPage.value, pageSize: 10 } });
+    const result = await growthApi.listGoalHistory({ characterId: target.role, goalId: target.item.id, page: historyPage.value });
     if (!historyCurrent(target) || request !== historyRequest) return;
     historyItems.value = result.items; historyPage.value = result.pagination.page; historyTotal.value = result.pagination.total;
   } catch (error) { if (historyCurrent(target) && request === historyRequest) historyError.value = errorText(error, "读取历史失败，请重试。"); }
@@ -204,7 +213,7 @@ async function loadProgress() {
   const target = progressTarget.value; if (!target || !progressCurrent(target)) return;
   const request = ++progressRequest; progressLoading.value = true; progressError.value = ""; progressItems.value = []; progressTotal.value = 0;
   try {
-    const result = await $fetch<Page<Progress>>(`${api(target.role)}/${encodeURIComponent(target.item.id)}/progress`, { query: { page: progressPage.value, pageSize: 10 } });
+    const result = await growthApi.listGoalProgress({ characterId: target.role, goalId: target.item.id, page: progressPage.value });
     if (!progressCurrent(target) || request !== progressRequest) return;
     progressItems.value = result.items.filter(item => item.goalId === target.item.id); progressTotal.value = result.pagination.total; progressPage.value = result.pagination.page;
   } catch (error) { if (progressCurrent(target) && request === progressRequest) progressError.value = errorText(error, "读取进展失败，请重试。"); }
@@ -220,7 +229,13 @@ async function saveProgress() {
   const attempt = progressAttempt;
   progressSaving.value = true; progressSaveError.value = "";
   try {
-    const result = await $fetch<{ goal: Goal; progress: Progress; created?: boolean }>(`${api(target.role)}/${encodeURIComponent(target.item.id)}/progress`, { method: "POST", body: { expectedRevision: attempt.expectedRevision, requestKey: attempt.requestKey, content } });
+    const result = await growthApi.createGoalProgress({
+      characterId: target.role,
+      goalId: target.item.id,
+      expectedRevision: attempt.expectedRevision,
+      requestKey: attempt.requestKey,
+      content,
+    });
     if (!progressCurrent(target)) return;
     if (result.goal.id !== target.item.id || result.goal.characterId !== target.role) throw new Error("目标响应不匹配");
     progressTarget.value = { ...target, item: result.goal }; progressAttempt = null; progressContent.value = ""; progressPage.value = 1;

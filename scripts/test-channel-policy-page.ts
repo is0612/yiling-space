@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createContext, Script } from "node:vm";
 import ts from "typescript";
+import { createGrowthApi } from "../app/api/growth";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 const source = readFileSync(new URL("../app/components/ChannelPolicyWorkspace.vue", import.meta.url), "utf8");
 const ast = ts.createSourceFile("channel.ts", source.match(/<script[^>]*>([\s\S]*?)<\/script>/)![1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const statements = ast.statements.filter(node => !ts.isImportDeclaration(node));
@@ -10,7 +12,7 @@ const compiled = ts.transpileModule(`(function(){${statements.map(node => node.g
 type Request = { url: string; options: { body?: Record<string, unknown>; query?: Record<string, unknown> }; resolve: (value: unknown) => void; reject: (value: unknown) => void };
 function harness() {
  const props = { characterId: "a" }; const requests: Request[] = []; let watcher = () => {}; let unmount = () => {}; let notices = 0;
- const ctx = createContext({ defineProps: () => props, ref: (value: unknown) => ({ value }), watch: (_: unknown, cb: () => void) => { watcher = cb; cb(); }, onBeforeUnmount: (cb: () => void) => { unmount = cb; }, ElMessage: { success: () => { notices++; } }, $fetch: (url: string, options: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })) });
+ const ctx = createContext({ defineProps: () => props, ref: (value: unknown) => ({ value }), watch: (_: unknown, cb: () => void) => { watcher = cb; cb(); }, onBeforeUnmount: (cb: () => void) => { unmount = cb; }, ElMessage: { success: () => { notices++; } }, $fetch: (url: string, options: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })), createGrowthApi, useApiRequest: () => createRequestClient(((url, options) => new Promise((resolve, reject) => requests.push({ url, options: options as Request["options"], resolve, reject }))) as RawFetch) });
  const b = new Script(compiled).runInContext(ctx) as Record<string, any>;
  return { get: (key: string) => b[key].value, set: (key: string, value: unknown) => { b[key].value = value; }, call: (key: string, ...args: unknown[]) => b[key](...args), take: () => { assert(requests.length); return requests.shift()!; }, pending: () => requests.length, switch: (id: string) => { props.characterId = id; watcher(); }, unmount, notices: () => notices };
 }

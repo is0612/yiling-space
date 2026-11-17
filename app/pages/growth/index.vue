@@ -1,19 +1,19 @@
 <script setup lang="ts">
+import {
+  createGrowthApi,
+  type GrowthOverview as Overview,
+  type GrowthOverviewConclusion as Conclusion,
+} from "~/api/growth";
+
 definePageMeta({
   topbar: {
     title: "成长总览",
     crumbs: [{ label: "成长系统" }],
   },
 });
-type Conclusion = { id: string; title: string; observation: string; inference: string; recommendation: string; acceptedAt: string; sourceRefs: unknown[] };
-type Overview = {
-  character: { id: string; name: string }; period: { days: number; start: string; end: string }; generatedAt: string;
-  stats: { memories: number; knowledge: number; relationships: number; conclusions: number };
-  pending: { reflections: number; knowledge: number; relationships: number };
-  conclusions: Conclusion[];
-  timeline: { id: string; type: "reflection" | "knowledge" | "relationship" | "snapshot"; title: string; at: string; description: string; href: string }[];
-  delivery: { failed: number; stuck: number; ready: number };
-};
+
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const growthApi = createGrowthApi(useApiRequest());
 const route = useRoute();
 const { character: activeCharacter } = useCharacterSelection(route.path);
 const characterId = computed(() => activeCharacter.value?.id ?? "");
@@ -76,7 +76,7 @@ async function loadOverview() {
   if (!target || disposed) return;
   const current = () => !disposed && roleGeneration === generation && requestVersion === version && characterId.value === target;
   try {
-    const result = await $fetch<Overview>(`/api/characters/${encodeURIComponent(target)}/growth/overview`, { query: { days: days.value } });
+    const result = await growthApi.getOverview({ characterId: target, days: days.value });
     if (!current()) return;
     if (result.character.id !== target) throw new Error("角色数据不匹配");
     overview.value = result;

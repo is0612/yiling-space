@@ -1,4 +1,5 @@
 import { inject, provide, ref, type InjectionKey } from "vue";
+import { createBiliApi } from "~/api/bili";
 import type { BiliMe } from "./types";
 
 /**
@@ -19,6 +20,8 @@ export type BiliMeHandlers = {
 const ME_KEY: InjectionKey<BiliMeStore> = Symbol("bili-me");
 
 function createMe(handlers: BiliMeHandlers) {
+  // setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+  const biliApi = createBiliApi(useApiRequest());
   const loginVisible = ref(false);
   const meProfile = ref<BiliMe | null>(null);
   const meLoading = ref(true);
@@ -26,7 +29,7 @@ function createMe(handlers: BiliMeHandlers) {
   async function loadMe() {
     meLoading.value = true;
     try {
-      const result = await $fetch<{ ok: boolean; me: BiliMe | null }>("/api/admin/bili/me");
+      const result = await biliApi.getMe();
       meProfile.value = result.ok ? result.me : null;
     } catch {
       meProfile.value = null;

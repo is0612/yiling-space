@@ -177,7 +177,7 @@ async function deleteAbaDismissalAndStaleReads() {
 }
 async function errorsUnmountAndReadOnlyGet() {
   const page = buildPageHarness(path); const request = page.take(base());
-  assert.equal(request.options?.method, undefined, "Reading records must use GET only");
+  assert.equal(request.options?.method ?? "GET", "GET", "Reading records must use GET only");
   request.reject({ statusCode: 404 }); await flushMicrotasks(); assert.match(page.read<string>("loadError"), /不存在/);
   page.call("load"); const pending = page.take(base()); page.unmount(); pending.resolve(list([run("late")])); await flushMicrotasks();
   assert.equal(page.read<unknown[]>("runs").length, 0); page.finish();

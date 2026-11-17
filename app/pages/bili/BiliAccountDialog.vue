@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
+import { createBiliApi } from "~/api/bili";
 import { readErrorMessage } from "./utils";
 
 /**
@@ -9,6 +10,9 @@ import { readErrorMessage } from "./utils";
  *
  * 请求和表单都归这个组件；父页面只接 `saved` 事件去重拉 dashboard。
  */
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const biliApi = createBiliApi(useApiRequest());
+
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
@@ -36,14 +40,11 @@ async function save() {
   if (saving.value) return;
   saving.value = true;
   try {
-    await $fetch("/api/admin/channels", {
-      method: "POST",
-      body: {
-        platform: "bili",
-        displayName: form.displayName.trim(),
-        dataHome: form.dataHome.trim(),
-        biliBin: form.biliBin.trim(),
-      },
+    await biliApi.createChannel({
+      platform: "bili",
+      displayName: form.displayName.trim(),
+      dataHome: form.dataHome.trim(),
+      biliBin: form.biliBin.trim(),
     });
     ElMessage.success("B站 账号已添加，值班设置等账号出现后再配。");
     close();

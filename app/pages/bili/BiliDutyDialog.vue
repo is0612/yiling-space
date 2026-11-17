@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { createBiliApi } from "~/api/bili";
 import type { BiliAccount, BiliOwner } from "./types";
 import { readErrorMessage } from "./utils";
 
@@ -12,6 +13,9 @@ import { readErrorMessage } from "./utils";
  *   · 「主人」写在 bili CLI 自己的配置里（`bili owner set`），**当面生效、不随保存提交**，
  *     所以每次打开都现读一次，否则换号登录后还显示上一个人。
  */
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const biliApi = createBiliApi(useApiRequest());
+
 const props = defineProps<{ modelValue: boolean; account: BiliAccount | null }>();
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
@@ -105,10 +109,7 @@ async function loadOwner(connectionId: string) {
   ownerLoading.value = true;
   ownerError.value = "";
   try {
-    const result = await $fetch<{ ok: boolean; owner: BiliOwner | null; error?: string }>(
-      "/api/admin/bili/owner",
-      { query: { connectionId } },
-    );
+    const result = await biliApi.getOwner(connectionId);
     ownerInfo.value = result.owner ?? null;
     if (!result.ok) ownerError.value = result.error || "读不到主人信息。";
   } catch (error) {
@@ -128,10 +129,7 @@ async function saveOwner() {
   }
   ownerSaving.value = true;
   try {
-    const result = await $fetch<{ ok: boolean; owner: BiliOwner | null; error?: string }>("/api/admin/bili/owner", {
-      method: "PUT",
-      body: { connectionId: props.account.connectionId, uid },
-    });
+    const result = await biliApi.saveOwner({ connectionId: props.account.connectionId, uid });
     if (!result.ok) {
       ownerError.value = result.error || "设置主人失败。";
       ElMessage.warning(ownerError.value);
@@ -165,36 +163,33 @@ async function saveDuty() {
   }
   saving.value = true;
   try {
-    await $fetch("/api/admin/bili/duty", {
-      method: "PUT",
-      body: {
-        connectionId: props.account.connectionId,
-        duty: {
-          perDay: form.perDay,
-          peakValley: form.peakValley,
-          noon: form.noon,
-          night: form.night,
-          keywords: form.keywordsText.split(/[,，\n]/).map((k) => k.trim()).filter(Boolean),
-          zone: form.zone,
-          frames: form.frames,
-          reportLevel: form.reportLevel,
-          dmMode: form.dmMode,
-          dmTargetUid,
-          dmAllowNew: form.dmAllowNew,
-          autoComment: form.autoComment,
-          commentPerRound: form.commentPerRound,
-          mentionName: form.mentionName.trim(),
-          taste: form.taste.trim().slice(0, TASTE_MAX),
-          favMinScore: form.favMinScore,
-          autoDynamic: form.autoDynamic,
-          dynamicMinScore: form.dynamicMinScore,
-          ownerFirst: form.ownerFirst,
-          ownerWatch: form.ownerWatch,
-          ownerLike: form.ownerLike,
-          ownerFav: form.ownerFav,
-          ownerComment: form.ownerComment,
-          ownerCoinMinScore: form.ownerCoinMinScore,
-        },
+    await biliApi.saveDuty({
+      connectionId: props.account.connectionId,
+      duty: {
+        perDay: form.perDay,
+        peakValley: form.peakValley,
+        noon: form.noon,
+        night: form.night,
+        keywords: form.keywordsText.split(/[,，\n]/).map((k) => k.trim()).filter(Boolean),
+        zone: form.zone,
+        frames: form.frames,
+        reportLevel: form.reportLevel,
+        dmMode: form.dmMode,
+        dmTargetUid,
+        dmAllowNew: form.dmAllowNew,
+        autoComment: form.autoComment,
+        commentPerRound: form.commentPerRound,
+        mentionName: form.mentionName.trim(),
+        taste: form.taste.trim().slice(0, TASTE_MAX),
+        favMinScore: form.favMinScore,
+        autoDynamic: form.autoDynamic,
+        dynamicMinScore: form.dynamicMinScore,
+        ownerFirst: form.ownerFirst,
+        ownerWatch: form.ownerWatch,
+        ownerLike: form.ownerLike,
+        ownerFav: form.ownerFav,
+        ownerComment: form.ownerComment,
+        ownerCoinMinScore: form.ownerCoinMinScore,
       },
     });
     ElMessage.success("已保存，下一轮按新设置跑。");
@@ -221,10 +216,7 @@ async function resetQuota() {
 
   resetting.value = true;
   try {
-    await $fetch("/api/admin/bili/duty/reset", {
-      method: "POST",
-      body: { connectionId: props.account.connectionId },
-    });
+    await biliApi.resetDuty(props.account.connectionId);
     ElMessage.success("今日额度已重置，报告和判重都还在。");
     close();
     emit("saved");

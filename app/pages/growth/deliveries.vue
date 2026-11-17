@@ -1,5 +1,13 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
+import {
+  createGrowthApi,
+  type Delivery,
+  type DeliveryDetail,
+  type DeliveryList,
+  type DeliveryStatus,
+  type DeliverySummary as Summary,
+} from "~/api/growth";
 
 definePageMeta({
   topbar: {
@@ -8,21 +16,9 @@ definePageMeta({
   },
 });
 
-type DeliveryStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "RETRY_WAIT" | "FAILED" | "SKIPPED" | "CANCELLED";
-type Delivery = {
-  id: string; eventId: string; consumerKey: string; status: DeliveryStatus;
-  attemptCount: number; maxAttempts: number; runAt: string;
-  lockedAt: string | null; lockedBy: string | null; leaseExpiresAt: string | null;
-  fencingToken: number; lastError: string | null; processedAt: string | null;
-  createdAt: string; updatedAt: string; eventType: string; sourceDomain: string;
-  aggregateType: string; aggregateId: string; occurredAt: string;
-  leaseExpired: boolean; queueDelayMs: number;
-};
-type DeliveryDetail = Delivery & {
-  audits: Array<{ id: string; actorType: string; actorId: string | null; createdAt: string; details: unknown }>;
-};
-type Summary = { statusCounts: Record<DeliveryStatus, number>; readyCount: number; stuckCount: number; oldestReadyAt: string | null };
-type DeliveryList = { items: Delivery[]; total: number; page: number; pageSize: number; totalPages: number; hasMore: boolean; summary: Summary };
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const growthApi = createGrowthApi(useApiRequest());
+
 const statusLabels: Record<DeliveryStatus, string> = {
   QUEUED: "待执行", RUNNING: "运行中", SUCCEEDED: "成功", RETRY_WAIT: "等待重试",
   FAILED: "失败", SKIPPED: "已跳过", CANCELLED: "已取消",
@@ -60,7 +56,6 @@ function emptySummary(): Summary {
 function current(id: string, version: number) {
   return !disposed && generation === version && characterId.value === id;
 }
-function api(id: string) { return `/api/characters/${encodeURIComponent(id)}/growth/deliveries`; }
 function errorText(error: unknown, fallback: string) {
   const value = error as { statusCode?: number; status?: number; response?: { status?: number } };
   const code = value?.statusCode ?? value?.status ?? value?.response?.status;
@@ -77,7 +72,7 @@ async function loadList() {
   loading.value = true;
   loadError.value = "";
   try {
-    const result = await $fetch<DeliveryList>(api(id), { query: { page: page.value, pageSize: 20, status: status.value } });
+    const result = await growthApi.listDeliveries({ characterId: id, page: page.value, status: status.value });
     if (!current(id, roleVersion) || request !== listVersion) return;
     items.value = result.items;
     total.value = result.total;
@@ -110,7 +105,7 @@ async function loadDetail(id: string) {
   detailLoading.value = true;
   detailError.value = "";
   try {
-    const result = await $fetch<DeliveryDetail>(`${api(roleId)}/${encodeURIComponent(id)}`);
+    const result = await growthApi.getDelivery({ characterId: roleId, deliveryId: id });
     if (!current(roleId, roleVersion) || request !== detailVersion || detailId.value !== id || !detailOpen.value) return;
     detail.value = result;
   } catch (error) {
@@ -159,7 +154,7 @@ async function confirmRetry() {
   retrying.value = true;
   retryError.value = "";
   try {
-    await $fetch(`${api(target.characterId)}/${encodeURIComponent(target.id)}/retry`, { method: "POST" });
+    await growthApi.retryDelivery({ characterId: target.characterId, deliveryId: target.id });
     if (!current(target.characterId, target.generation) || request !== retryVersion) return;
     cancelRetry();
     ElMessage.success("失败投递已恢复到队列。");

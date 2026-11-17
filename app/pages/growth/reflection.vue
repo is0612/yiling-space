@@ -1,5 +1,14 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
+import {
+  createGrowthApi,
+  type ReflectionDecision as Decision,
+  type ReflectionList as ListResult,
+  type ReflectionRun,
+  type ReflectionSourceRef as SourceRef,
+  type ReflectionSuggestion as Suggestion,
+  type ReflectionSuggestionStatus as SuggestionStatus,
+} from "~/api/growth";
 
 definePageMeta({
   topbar: {
@@ -8,22 +17,9 @@ definePageMeta({
   },
 });
 
-type SourceRef = { key: string; type: "memory" | "knowledge" | "snapshot" | "experience"; id: string; title: string; hash: string; excerpt: string };
-type SuggestionStatus = "PENDING" | "ACCEPTED" | "REJECTED" | "DEFERRED";
-type Suggestion = {
-  id: string; title: string; observation: string; inference: string; recommendation: string;
-  sourceRefs: SourceRef[]; status: SuggestionStatus; reviewNote: string | null;
-  reviewedAt: string | null; acceptedAt: string | null;
-};
-type ReflectionRun = {
-  id: string; periodStart: string; periodEnd: string; status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
-  attemptCount: number; maxAttempts: number; runAt: string; lastError: string | null;
-  model: string | null; promptVersion: string | null; createdAt: string; completedAt: string | null;
-  conversationId?: string | null; memoryScopeId?: string | null;
-  suggestions: Suggestion[];
-};
-type ListResult = { items: ReflectionRun[]; total: number; page: number; pageSize: number; totalPages: number; hasMore: boolean };
-type Decision = "ACCEPTED" | "REJECTED" | "DEFERRED";
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const growthApi = createGrowthApi(useApiRequest());
+
 type ActionTarget = { role: string; generation: number; sequence: number; id: string };
 
 const route = useRoute();
@@ -69,7 +65,6 @@ const pendingCount = computed(() => runs.value.reduce((sum, run) => sum + run.su
 const visibleRuns = computed(() => view.value === "accepted" ? runs.value.filter(run => run.suggestions.some(suggestion => suggestion.status === "ACCEPTED")) : runs.value);
 const hasActiveRun = computed(() => runs.value.some(run => run.status === "QUEUED" || run.status === "RUNNING"));
 
-function api(role = characterId.value) { return `/api/characters/${encodeURIComponent(role)}/growth/reflections`; }
 function current(role: string, version: number) { return !disposed && characterId.value === role && generation === version; }
 function newRequestKey() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -114,7 +109,7 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    const result = await $fetch<ListResult>(api(role), { query: { page: page.value, pageSize: 20 } });
+    const result = await growthApi.listReflections({ characterId: role, page: page.value });
     if (!current(role, roleGeneration) || version !== listVersion) return;
     runs.value = result.items;
     total.value = result.total;
@@ -159,8 +154,10 @@ async function confirmCreate() {
   createSaving.value = true;
   createError.value = "";
   try {
-    const result = await $fetch<{ run: ReflectionRun; created: boolean }>(api(target.role), {
-      method: "POST", body: { requestKey: target.id, days: selectedDays },
+    const result = await growthApi.createReflection({
+      characterId: target.role,
+      requestKey: target.id,
+      days: selectedDays,
     });
     if (!isActionCurrent(target)) return;
     requestKey.value = newRequestKey();
@@ -187,7 +184,7 @@ async function confirmRetry() {
   retrySaving.value = true;
   retryError.value = "";
   try {
-    await $fetch(`${api(target.role)}/${encodeURIComponent(target.id)}/retry`, { method: "POST", body: {} });
+    await growthApi.retryReflection({ characterId: target.role, reflectionId: target.id });
     if (!isActionCurrent(target)) return;
     closeConfirmations();
     ElMessage.success("失败任务已重新排队，恢复操作已记录。");
@@ -215,8 +212,11 @@ async function confirmReview() {
   reviewSaving.value = true;
   reviewError.value = "";
   try {
-    await $fetch<{ suggestion: Suggestion }>(`${api(target.role)}/suggestions/${encodeURIComponent(target.id)}/review`, {
-      method: "POST", body: { decision: target.decision, ...(note ? { note } : {}) },
+    await growthApi.reviewReflectionSuggestion({
+      characterId: target.role,
+      suggestionId: target.id,
+      decision: target.decision,
+      ...(note ? { note } : {}),
     });
     if (!isActionCurrent(target)) return;
     closeConfirmations();
@@ -245,7 +245,10 @@ async function confirmDelete() {
   deleteError.value = "";
   deletingRoles.add(target.role);
   try {
-    const result = await $fetch<{ deletedRuns: number; deletedSuggestions: number }>(target.all ? api(target.role) : `${api(target.role)}/${encodeURIComponent(target.id)}`, { method: "DELETE" });
+    const result = await growthApi.deleteReflection({
+      characterId: target.role,
+      reflectionId: target.all ? undefined : target.id,
+    });
     if (!isActionCurrent(target)) return;
     closeConfirmations();
     // Invalidate older list reads immediately, including a last-page read issued before deletion.

@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
-type Status = "PENDING" | "ACTIVE" | "DISABLED" | "REJECTED";
-type ChatScope = "ALL" | "GROUP" | "PRIVATE";
-type Kind = "UNDERSTANDING" | "REFERENCE" | "SITUATION" | "STRATEGY";
-type Item = { id: string; characterId: string; kind: Kind; content: string; context: string; chatScope: ChatScope; reason: string; status: Status; revision: number; sourceRefs?: unknown[]; createdAt: string; updatedAt: string; action?: string };
-type Page = { items: Item[]; pagination: { page: number; pageSize: number; total: number; pageCount: number } };
+import {
+  createGrowthApi,
+  type ChatScope,
+  type GuidanceItem as Item,
+  type GuidanceKind as Kind,
+  type GuidanceStatus as Status,
+} from "~/api/growth";
+
 const props = defineProps<{ characterId: string }>();
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const growthApi = createGrowthApi(useApiRequest());
 const labels: Record<Kind, string> = { UNDERSTANDING: "理解纠正", REFERENCE: "指代识别", SITUATION: "场合判断", STRATEGY: "应对策略" };
 const statuses: Record<Status, string> = { PENDING: "待审核", ACTIVE: "已生效", DISABLED: "已停用", REJECTED: "已驳回" };
 const scopes: Record<ChatScope, string> = { ALL: "所有聊天", GROUP: "仅群聊", PRIVATE: "仅私聊" };
@@ -14,7 +19,6 @@ const items = ref<Item[]>([]), target = ref<Item | null>(null), mode = ref<"EDIT
 const draft = reactive({ content: "", context: "", chatScope: "ALL" as ChatScope });
 const reviewed = ref(false), historyTarget = ref<Item | null>(null), historyItems = ref<Item[]>([]), historyPage = ref(1), historyTotal = ref(0), historyLoading = ref(false), historyError = ref("");
 let generation = 0, sequence = 0, actionSequence = 0, historySequence = 0, disposed = false;
-const api = (id: string) => `/api/characters/${encodeURIComponent(id)}/growth/interaction-guidance`;
 const fail = (e: unknown) => (e as { data?: { statusMessage?: string; message?: string } })?.data?.statusMessage || (e as { data?: { message?: string } })?.data?.message || "操作未完成，请刷新后重试。";
 const current = (id: string, epoch: number) => !disposed && props.characterId === id && generation === epoch;
 function closeAction() { actionSequence++; target.value = null; mode.value = null; busy.value = false; dialogError.value = ""; reviewed.value = false; }
@@ -24,7 +28,7 @@ async function load() {
   if (!id || disposed) return;
   loading.value = true; error.value = "";
   try {
-    const result = await $fetch<Page>(api(id), { query: { status: status.value, page: page.value, pageSize: 20 } });
+    const result = await growthApi.listGuidance({ characterId: id, status: status.value, page: page.value });
     if (!current(id, epoch) || sequence !== request) return;
     items.value = result.items.filter(item => item.characterId === id && item.status === status.value); total.value = result.pagination.total;
     if (page.value > Math.max(1, result.pagination.pageCount)) { page.value = Math.max(1, result.pagination.pageCount); void load(); }
@@ -42,7 +46,11 @@ async function submit() {
   if (operation === "EDIT" && (!draft.content.trim() || draft.content.length > 400 || draft.context.length > 400 || !Object.hasOwn(scopes, draft.chatScope))) { dialogError.value = "请填写指导正文（最多400字）及有效范围，场景最多400字。"; return; }
   const request = ++actionSequence; busy.value = true; dialogError.value = "";
   try {
-    await $fetch(`${api(id)}/${encodeURIComponent(item.id)}`, { method: "PATCH", body: { operation, expectedRevision: item.revision, ...(operation === "EDIT" ? { content: draft.content.trim(), context: draft.context.trim(), chatScope: draft.chatScope } : {}) } });
+    await growthApi.updateGuidance({
+      characterId: id,
+      guidanceId: item.id,
+      data: { operation, expectedRevision: item.revision, ...(operation === "EDIT" ? { content: draft.content.trim(), context: draft.context.trim(), chatScope: draft.chatScope } : {}) },
+    });
     if (!current(id, epoch) || request !== actionSequence) return;
     closeAction(); ElMessage.success("长期指导已更新，历史版本已保留。"); await load();
   } catch (e) { if (current(id, epoch) && request === actionSequence) dialogError.value = fail(e); }
@@ -53,7 +61,7 @@ async function loadHistory() {
   if (!item) return;
   historyLoading.value = true; historyError.value = "";
   try {
-    const result = await $fetch<Page>(`${api(id)}/${encodeURIComponent(item.id)}/history`, { query: { page: historyPage.value, pageSize: 10 } });
+    const result = await growthApi.listGuidanceHistory({ characterId: id, guidanceId: item.id, page: historyPage.value });
     if (!current(id, epoch) || request !== historySequence || historyTarget.value?.id !== item.id) return;
     historyItems.value = result.items; historyTotal.value = result.pagination.total;
   } catch (e) { if (current(id, epoch) && request === historySequence) historyError.value = fail(e); }

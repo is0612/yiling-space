@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
-type Status = "PENDING" | "ACTIVE" | "DISABLED" | "REJECTED";
+import { createGrowthApi, type ChannelPolicyItem as Item, type GuidanceStatus as Status } from "~/api/growth";
+
 type Operation = "ACTIVATE" | "REJECT" | "DISABLE";
-type Item = { id: string; characterId: string; kind: "GROUP_AT_DISABLED"; chatScope: "GROUP"; content: string; status: Status; revision: number; sourceRefs?: unknown[]; createdAt: string; updatedAt?: string; action?: string };
-type Page = { items: Item[]; pagination: { page: number; pageSize: number; total: number; pageCount: number } };
 const props = defineProps<{ characterId: string }>();
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const growthApi = createGrowthApi(useApiRequest());
 const statuses: Record<Status, string> = { PENDING: "待审核", ACTIVE: "已生效", DISABLED: "已停用", REJECTED: "已驳回" };
 const actions: Record<string, string> = { CREATE: "生成候选", ACTIVATE: "确认启用", REJECT: "驳回", DISABLE: "停用" };
 const scopeText = "当前角色所有 QQ 绑定的被动群聊回复不再附带 @ 提醒；正文和引用照常发送。不影响主动好友联系或群公告。";
@@ -12,7 +13,6 @@ const status = ref<Status>("PENDING"), page = ref(1), total = ref(0), items = re
 const target = ref<Item | null>(null), operation = ref<Operation | null>(null), reviewed = ref(false), busy = ref(false), dialogError = ref("");
 const historyTarget = ref<Item | null>(null), historyItems = ref<Item[]>([]), historyPage = ref(1), historyTotal = ref(0), historyLoading = ref(false), historyError = ref("");
 let generation = 0, sequence = 0, actionSequence = 0, historySequence = 0, disposed = false;
-const api = (id: string) => `/api/characters/${encodeURIComponent(id)}/growth/channel-policies`;
 const current = (id: string, epoch: number) => !disposed && props.characterId === id && generation === epoch;
 const fail = (e: unknown) => (e as { data?: { statusMessage?: string; message?: string } })?.data?.statusMessage || (e as { data?: { message?: string } })?.data?.message || "操作未完成，请刷新后重试。";
 function closeAction() { actionSequence++; target.value = null; operation.value = null; reviewed.value = false; busy.value = false; dialogError.value = ""; }
@@ -22,7 +22,7 @@ async function load() {
   if (!id || disposed) return;
   loading.value = true; error.value = "";
   try {
-    const result = await $fetch<Page>(api(id), { query: { status: status.value, page: page.value, pageSize: 20 } });
+    const result = await growthApi.listChannelPolicies({ characterId: id, status: status.value, page: page.value });
     if (!current(id, epoch) || request !== sequence) return;
     items.value = result.items.filter(item => item.characterId === id && item.kind === "GROUP_AT_DISABLED" && item.status === status.value); total.value = result.pagination.total;
     if (page.value > Math.max(1, result.pagination.pageCount)) { page.value = Math.max(1, result.pagination.pageCount); void load(); }
@@ -40,7 +40,11 @@ async function submit() {
   if (!item || !next || disposed || busy.value || item.characterId !== id || (next === "ACTIVATE" && !reviewed.value)) return;
   const request = ++actionSequence; busy.value = true; dialogError.value = "";
   try {
-    await $fetch(`${api(id)}/${encodeURIComponent(item.id)}`, { method: "PATCH", body: { operation: next, expectedRevision: item.revision } });
+    await growthApi.updateChannelPolicy({
+      characterId: id,
+      policyId: item.id,
+      data: { operation: next, expectedRevision: item.revision },
+    });
     if (!current(id, epoch) || request !== actionSequence) return;
     closeAction(); ElMessage.success("渠道行为状态已更新，历史记录已保留。"); await load();
   } catch (e) { if (current(id, epoch) && request === actionSequence) dialogError.value = fail(e); }
@@ -51,7 +55,7 @@ async function loadHistory() {
   if (!item || disposed || item.characterId !== id) return;
   historyLoading.value = true; historyError.value = "";
   try {
-    const result = await $fetch<Page>(`${api(id)}/${encodeURIComponent(item.id)}/history`, { query: { page: historyPage.value, pageSize: 10 } });
+    const result = await growthApi.listChannelPolicyHistory({ characterId: id, policyId: item.id, page: historyPage.value });
     if (!current(id, epoch) || request !== historySequence || historyTarget.value?.id !== item.id) return;
     historyItems.value = result.items; historyTotal.value = result.pagination.total;
     if (historyPage.value > Math.max(1, result.pagination.pageCount)) { historyPage.value = Math.max(1, result.pagination.pageCount); void loadHistory(); }

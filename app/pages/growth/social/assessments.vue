@@ -1,6 +1,17 @@
 <script setup lang="ts">
 import { Refresh } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import {
+  createGrowthApi,
+  type Assessment,
+  type AssessmentDecision as Decision,
+  type AssessmentEvidence as Evidence,
+  type AssessmentFilter as Filter,
+  type AssessmentPageResult as PageResult,
+  type AssessmentPeopleResult as PeopleResult,
+  type AssessmentPersonGroup as PersonGroup,
+  type AssessmentSummary as Summary,
+} from "~/api/growth";
 
 // 标题不再自带「社交系统 ·」前缀：那一级现在由顶栏 crumbs 承担，重复写会在同一行出现两次
 definePageMeta({
@@ -9,29 +20,10 @@ definePageMeta({
     crumbs: [{ label: "成长系统" }, { label: "社交系统", to: "/growth/social" }],
   },
 });
-type Filter = "ALL" | "ACTIONABLE" | "ACCEPTED" | "REJECTED" | "STALE" | "FAILED" | "RUNNING";
-type Decision = "ACCEPTED" | "REJECTED" | "DEFERRED";
-type Evidence = { id: string; kind: "NEW" | "CONTEXT"; occurredAt: string; title: string; detail: string; participants: string[]; confidence: number | null; eventStatus: string };
-type Assessment = {
-  id: string; scopeId: string; friend: { displayName: string; platform: string; platformUid: string; kind: string };
-  currentRelationship: { stage: string; status: string; version: number };
-  generation: number; triggerReasons: string[]; evaluatedStage: string; evaluatedStatus: string; relationshipVersion: number;
-  outcome: string | null; suggestedStage: string | null; suggestedStatus: string | null; reason: string | null; observations: unknown;
-  confidence: number | null; modelName: string | null; promptVersion: string | null; status: string; reviewStatus: string;
-  reviewedAt: string | null; reviews: { decision: string; note: string | null; createdAt: string }[];
-  error: string | null; startedAt: string; completedAt: string | null; createdAt: string; evidence: Evidence[];
-  canReview: boolean; staleReason: string | null;
-};
-type PersonGroup = {
-  scopeId: string; friend: Assessment["friend"]; currentRelationship: Assessment["currentRelationship"];
-  assessmentCount: number; matchingCount: number;
-  latestAssessment: Pick<Assessment, "id" | "status" | "outcome" | "reviewStatus" | "createdAt"> | null;
-  changes: { id: string; fromStage: string; toStage: string; fromStatus: string | null; toStatus: string | null; createdAt: string }[];
-  changeCount: number;
-};
-type PeopleResult = { items: PersonGroup[]; total: number; page: number; pageSize: number; totalPages: number; summary: Summary };
-type Summary = { all: number; actionable: number; accepted: number; failed: number; running: number };
-type PageResult = { items: Assessment[]; total: number; page: number; pageSize: number; totalPages: number; hasMore: boolean; summary: Summary };
+
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const growthApi = createGrowthApi(useApiRequest());
+
 const route = useRoute();
 const { character: activeCharacter } = useCharacterSelection(route.path);
 const characterId = computed(() => activeCharacter.value?.id ?? "");
@@ -87,7 +79,6 @@ function observationNotes(value: unknown): string[] {
   return Array.isArray(notes) ? notes.filter((item): item is string => typeof item === "string") : [];
 }
 function roleHref(path: string) { return `${path}${path.includes("?") ? "&" : "?"}c=${encodeURIComponent(characterId.value)}`; }
-function api(role: string) { return `/api/characters/${encodeURIComponent(role)}/growth/social/assessments`; }
 function current(role: string, generation: number) { return !disposed && characterId.value === role && roleVersion === generation; }
 function canAct(item: Assessment) { return item.status === "SUCCEEDED" && item.outcome === "CHANGE" && ["PENDING", "DEFERRED"].includes(item.reviewStatus); }
 function staleReason(item: Assessment) {
@@ -113,7 +104,12 @@ async function load(requestedPage = pageNumber.value, corrected = false) {
   if (!role || disposed) return;
   const isCurrent = () => current(role, generation) && requestVersion === version && selectedScope.value === scope && view.value === selectedView;
   try {
-    const result = await $fetch<PageResult>(api(role), { query: { page: requestedPage, pageSize: 12, filter: filter.value, ...(scope ? { scopeId: scope } : {}) } });
+    const result = await growthApi.listAssessments({
+      characterId: role,
+      page: requestedPage,
+      filter: filter.value,
+      ...(scope ? { scopeId: scope } : {}),
+    });
     if (!isCurrent()) return;
     if (!corrected && requestedPage > Math.max(1, result.totalPages)) {
       pageNumber.value = Math.max(1, result.totalPages);
@@ -136,7 +132,7 @@ async function loadPeople(requestedPage = peoplePage.value, corrected = false) {
   if (!role || disposed) return;
   const isCurrent = () => current(role, generation) && version === requestVersion && showingPeople.value;
   try {
-    const result = await $fetch<PeopleResult>(api(role), { query: { view: "people", page: requestedPage, pageSize: 12, filter: filter.value } });
+    const result = await growthApi.listAssessmentPeople({ characterId: role, page: requestedPage, filter: filter.value });
     if (!isCurrent()) return;
     if (!corrected && requestedPage > Math.max(1, result.totalPages)) { peoplePage.value = Math.max(1, result.totalPages); await loadPeople(peoplePage.value, true); return; }
     groups.value = result.items; summary.value = result.summary; peopleTotal.value = result.total;
@@ -186,7 +182,12 @@ async function confirmReview() {
   const isCurrent = () => current(target.characterId, target.roleVersion) && confirmationVersion === version && reviewOpen.value && reviewTarget.value?.assessmentId === target.assessmentId;
   reviewingIds.value = [target.assessmentId]; reviewError.value = "";
   try {
-    const result = await $fetch<{ applied: boolean; stale?: boolean }>(`${api(target.characterId)}/${encodeURIComponent(target.assessmentId)}/review`, { method: "POST", body: { decision: target.decision, note } });
+    const result = await growthApi.reviewAssessment({
+      characterId: target.characterId,
+      assessmentId: target.assessmentId,
+      decision: target.decision,
+      note,
+    });
     if (!isCurrent()) return;
     if (result.stale) ElMessage.warning("关系或来源已变化，本次没有修改关系。请查看最新历史。");
     else if (target.decision === "ACCEPTED" && result.applied) ElMessage.success("已采纳建议并更新关系。");

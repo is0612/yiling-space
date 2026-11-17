@@ -1,5 +1,14 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
+import {
+  createGrowthApi,
+  type GrowthSource as Source,
+  type GrowthSourceType as SourceType,
+  type Preference,
+  type PreferenceHistory as History,
+  type PreferenceKind as Kind,
+  type PreferenceStatus as Status,
+} from "~/api/growth";
 
 definePageMeta({
   topbar: {
@@ -8,19 +17,11 @@ definePageMeta({
   },
 });
 
-type Kind = "LIKE" | "DISLIKE" | "INTEREST";
-type Status = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";
-type SourceType = "MEMORY_EVENT" | "REFLECTION_SUGGESTION";
-type Source = { type: SourceType; id: string; title: string; summary: string; hash: string; occurredAt?: string };
-type Preference = {
-  id: string; characterId: string; kind: Kind; topic: string; reason: string; status: Status; revision: number;
-  sourceType: "MANUAL" | "SOURCES"; sourceRefs: Source[]; createdAt: string; updatedAt: string;
-};
-type Pagination = { page: number; pageSize: number; total: number; pageCount: number };
-type Page<T> = { items: T[]; pagination: Pagination };
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const growthApi = createGrowthApi(useApiRequest());
+
 type Operation = "ACTIVATE" | "REJECT" | "DISABLE";
 type Target = { role: string; generation: number; sequence: number };
-type History = { id: string; revision: number; kind: Kind; topic: string; reason: string; status: Status; operation?: string; action?: string; createdAt: string };
 
 const route = useRoute();
 const { character: activeCharacter } = useCharacterSelection(route.path);
@@ -76,7 +77,6 @@ let historySequence = 0;
 let historyRequest = 0;
 let disposed = false;
 
-function api(role: string) { return `/api/characters/${encodeURIComponent(role)}/growth/preferences`; }
 function current(target: Target) { return !disposed && target.role === characterId.value && target.generation === generation; }
 function editorCurrent(target: Target) { return current(target) && editorOpen.value && target.sequence === editorSequence; }
 function actionCurrent(target: Target) { return current(target) && actionOpen.value && target.sequence === actionSequence; }
@@ -102,7 +102,7 @@ async function loadList() {
   // Empty the previous result so failed searches cannot display another filter's records.
   items.value = []; total.value = 0;
   try {
-    const result = await $fetch<Page<Preference>>(api(target.role), { query: { status: status.value, q: query.value, page: page.value, pageSize: 20 } });
+    const result = await growthApi.listPreferences({ characterId: target.role, status: status.value, keyword: query.value, page: page.value });
     if (!current(target) || target.sequence !== listSequence) return;
     items.value = result.items.filter(item => item.characterId === target.role && (status.value === "ALL" || item.status === status.value));
     total.value = result.pagination.total; page.value = result.pagination.page; pageCount.value = result.pagination.pageCount;
@@ -137,7 +137,7 @@ async function loadSources() {
   const request = ++sourceSequence;
   sourceLoading.value = true; sourceError.value = ""; sources.value = []; sourceTotal.value = 0;
   try {
-    const result = await $fetch<Page<Source>>(`${api(target.role)}/sources`, { query: { type: sourceType.value, q: sourceKeyword.value.trim(), page: sourcePage.value, pageSize: 10 } });
+    const result = await growthApi.listPreferenceSources({ characterId: target.role, type: sourceType.value, keyword: sourceKeyword.value.trim(), page: sourcePage.value });
     if (!editorCurrent(target) || request !== sourceSequence) return;
     sources.value = result.items; sourcePage.value = result.pagination.page; sourceTotal.value = result.pagination.total;
   } catch (error) {
@@ -166,7 +166,7 @@ async function suggestPreference() {
   const startingSources = JSON.stringify(selected);
   suggesting.value = true; suggestionMessage.value = "";
   try {
-    const result = await $fetch<{ suggestion: { kind: Kind; topic: string; reason: string } | null }>(`${api(target.role)}/suggest`, { method: "POST", body: { sources: selected } });
+    const result = await growthApi.suggestPreference({ characterId: target.role, sources: selected });
     if (!editorCurrent(target) || request !== suggestionSequence) return;
     if (startingDraftRevision !== draftRevision || startingDraft !== JSON.stringify(draft.value) || startingSources !== JSON.stringify(selectedSources.value.map(({ type, id, hash }) => ({ type, id, hash })))) {
       suggestionMessage.value = "填写内容或来源已变化，本次建议未覆盖你的草稿。"; return;
@@ -189,7 +189,7 @@ async function saveEditor() {
     const body = target.item
       ? { operation: "EDIT", expectedRevision: target.item.revision, kind: draft.value.kind, topic, reason }
       : { kind: draft.value.kind, topic, reason, status: editorMode.value === "sources" || !draft.value.activate ? "PENDING" : "ACTIVE", ...(editorMode.value === "sources" ? { sources: selectedSources.value.map(({ type, id, hash }) => ({ type, id, hash })) } : {}) };
-    await $fetch(target.item ? `${api(target.role)}/${encodeURIComponent(target.item.id)}` : api(target.role), { method: target.item ? "PATCH" : "POST", body });
+    await growthApi.savePreference({ characterId: target.role, preferenceId: target.item?.id, data: body });
     if (!editorCurrent(target)) return;
     const nextStatus = target.item?.status ?? (editorMode.value === "sources" || !draft.value.activate ? "PENDING" : "ACTIVE");
     closeEditor(); status.value = nextStatus; page.value = 1;
@@ -213,7 +213,11 @@ async function confirmAction() {
   if (!target || !actionCurrent(target) || acting.value) return;
   acting.value = true; actionError.value = "";
   try {
-    await $fetch(`${api(target.role)}/${encodeURIComponent(target.item.id)}`, { method: "PATCH", body: { operation: target.operation, expectedRevision: target.item.revision } });
+    await growthApi.savePreference({
+      characterId: target.role,
+      preferenceId: target.item.id,
+      data: { operation: target.operation, expectedRevision: target.item.revision },
+    });
     if (!actionCurrent(target)) return;
     closeAction(); ElMessage.success("偏好状态已更新，操作已留档。"); await loadList();
   } catch (error) {
@@ -235,7 +239,7 @@ async function loadHistory() {
   const request = ++historyRequest;
   historyLoading.value = true; historyError.value = ""; historyItems.value = []; historyTotal.value = 0;
   try {
-    const result = await $fetch<Page<History>>(`${api(target.role)}/${encodeURIComponent(target.item.id)}/history`, { query: { page: historyPage.value, pageSize: 10 } });
+    const result = await growthApi.listPreferenceHistory({ characterId: target.role, preferenceId: target.item.id, page: historyPage.value });
     if (!historyCurrent(target) || request !== historyRequest) return;
     historyItems.value = result.items; historyPage.value = result.pagination.page; historyTotal.value = result.pagination.total;
   } catch (error) {

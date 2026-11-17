@@ -1,5 +1,6 @@
 import { computed, inject, provide, ref, type InjectionKey } from "vue";
 import { ElMessage } from "element-plus";
+import { createBiliApi } from "~/api/bili";
 import type { BiliCliEnv } from "./types";
 
 /**
@@ -17,6 +18,8 @@ export type BiliEnvStore = ReturnType<typeof createEnv>;
 const ENV_KEY: InjectionKey<BiliEnvStore> = Symbol("bili-env");
 
 function createEnv() {
+  // setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+  const biliApi = createBiliApi(useApiRequest());
   const env = ref<BiliCliEnv | null>(null);
   const loading = ref(false);
 
@@ -24,7 +27,7 @@ function createEnv() {
   async function loadEnv() {
     loading.value = true;
     try {
-      env.value = await $fetch<BiliCliEnv>("/api/admin/bili/env");
+      env.value = await biliApi.getEnv();
     } catch {
       env.value = null;
     } finally {

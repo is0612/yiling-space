@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
+import { createBiliApi } from "~/api/bili";
 import { readErrorMessage } from "./utils";
 
 /**
  * 绑定角色 —— 一个账号可绑多个角色，各自独立记报告、判重和每日额度。
  * 角色列表由父页面传进来（和角色管理页共用 useCharacterList 那份数据）。
  */
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const biliApi = createBiliApi(useApiRequest());
+
 const props = defineProps<{
   modelValue: boolean;
   connectionId: string;
@@ -35,10 +39,7 @@ async function bind() {
   }
   saving.value = true;
   try {
-    await $fetch(`/api/admin/channels/${encodeURIComponent(props.connectionId)}/bindings`, {
-      method: "POST",
-      body: { characterId: form.characterId },
-    });
+    await biliApi.createBinding({ connectionId: props.connectionId, characterId: form.characterId });
     ElMessage.success("角色已绑定到这个账号。");
     emit("update:modelValue", false);
     emit("saved");

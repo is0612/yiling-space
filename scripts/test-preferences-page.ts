@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createContext, Script } from "node:vm";
 import ts from "typescript";
+import { createGrowthApi } from "../app/api/growth";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 
 // Script-level state/race regression; this does not claim browser DOM coverage.
 const sfc = readFileSync(new URL("../app/pages/growth/preferences.vue", import.meta.url), "utf8");
@@ -16,12 +18,25 @@ function harness() {
   const requests: Request[] = [];
   const callbacks: Array<() => void> = [];
   let watcher: () => void = () => {};
+  // 页面已改为 createGrowthApi(useApiRequest())；这里走真实传输层，记录器只接管 fetchJson。
+  const recordingFetch: RawFetch = (url, options) => new Promise((resolve, reject) => requests.push({
+    url,
+    options: {
+      method: options?.method as string | undefined,
+      body: options?.body as Record<string, unknown> | undefined,
+      query: options?.query as Record<string, unknown> | undefined,
+    },
+    resolve,
+    reject,
+  }));
   const context = createContext({
     ref: (value: unknown) => ({ value }), computed: (get: () => unknown) => ({ get value() { return get(); } }),
     useRoute: () => ({ path: "/growth/preferences" }), useCharacterSelection: () => ({ character: role }), definePageMeta: () => {},
     watch: (_: unknown, cb: () => void, options: { immediate?: boolean }) => { watcher = cb; if (options.immediate) cb(); },
     onBeforeUnmount: (cb: () => void) => callbacks.push(cb), ElMessage: { success() {}, warning() {} },
     $fetch: (url: string, options: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
+    createGrowthApi,
+    useApiRequest: () => createRequestClient(recordingFetch),
   });
   const bindings = new Script(compiled).runInContext(context) as Record<string, unknown>;
   function get<T>(key: string) { return (bindings[key] as { value: T }).value; }

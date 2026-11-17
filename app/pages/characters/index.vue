@@ -28,6 +28,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character, CharacterStatus } from "~/utils/mock-data";
 import { characterCopyInput, createCharacterOperationGuard, replaceCharacter } from "~/utils/character-management";
 import { readApiErrorMessage } from "~/utils/api-error";
+import { createCharactersApi } from "~/api/characters";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
 definePageMeta({
@@ -36,6 +37,8 @@ definePageMeta({
     crumbs: [{ label: "工作空间" }],
   },
 });
+
+const api = createCharactersApi(useApiRequest());
 
 const route = useRoute();
 const characterOperations = createCharacterOperationGuard();
@@ -120,15 +123,12 @@ async function createCharacter() {
 
   creating.value = true;
   try {
-    const item = await $fetch<Character>("/api/characters", {
-      method: "POST",
-      body: {
-        name: trimmed,
-        description: description.value.trim(),
-        personality: personality.value.trim(),
-        examples: examples.value.trim(),
-        userAddress: userAddress.value.trim(),
-      },
+    const item = await api.createCharacter({
+      name: trimmed,
+      description: description.value.trim(),
+      personality: personality.value.trim(),
+      examples: examples.value.trim(),
+      userAddress: userAddress.value.trim(),
     });
     characters.value.unshift(item);
     // 刚建完就该看到他，而不是让人回列表里再找一次
@@ -194,10 +194,7 @@ function onProfileSaved(updated: Character) {
  */
 async function duplicateCharacter(character: Character) {
   try {
-    const copy = await $fetch<Character>("/api/characters", {
-      method: "POST",
-      body: characterCopyInput(character),
-    });
+    const copy = await api.createCharacter(characterCopyInput(character));
     characters.value.unshift(copy);
     selectedId.value = copy.id;
     ElMessage.success(`已复制「${character.name}」。人设沿用，记忆从零开始。`);
@@ -218,9 +215,8 @@ async function toggleCharacterStatus(character: Character) {
     if (!confirmed) return;
   }
   try {
-    const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
-      method: "PATCH",
-      body: { status: pausing ? "已暂停" : "运行中" },
+    const updated = await api.updateCharacter(character.id, {
+      status: pausing ? "已暂停" : "运行中",
     });
     replaceCharacter(characters.value, updated);
     ElMessage.success(pausing ? "角色已停用。" : "角色已启用。");
@@ -241,10 +237,7 @@ async function toggleThinking(character: Character | null, next: boolean) {
   if (!character || thinkingSavingId.value) return;
   thinkingSavingId.value = character.id;
   try {
-    const updated = await $fetch<Character>(`/api/characters/${character.id}`, {
-      method: "PATCH",
-      body: { chatThinking: next },
-    });
+    const updated = await api.updateCharacter(character.id, { chatThinking: next });
     replaceCharacter(characters.value, updated);
     ElMessage.success(next ? "已开启深度思考：她会先想再说，回复会慢一些。" : "已关闭深度思考。");
   } catch (error) {
@@ -268,7 +261,7 @@ async function deleteCharacter(character: Character) {
     return;
   }
   try {
-    const result = await $fetch<{ cleanupWarning?: string }>(`/api/characters/${character.id}`, { method: "DELETE" });
+    const result = await api.deleteCharacter(character.id);
     characters.value = characters.value.filter((c) => c.id !== character.id);
     if (selectedId.value === character.id) selectedId.value = "";
     if (result.cleanupWarning) ElMessage.warning(result.cleanupWarning);

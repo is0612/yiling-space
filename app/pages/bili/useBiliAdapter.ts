@@ -1,5 +1,6 @@
 import { inject, provide, ref, type InjectionKey } from "vue";
 import { ElMessage } from "element-plus";
+import { createBiliApi } from "~/api/bili";
 import type { BiliAdapterStatus } from "./types";
 
 /**
@@ -22,6 +23,8 @@ const LAUNCH_POLL_MS = 800;
 const LAUNCH_POLL_TIMES = 6;
 
 function createAdapter() {
+  // setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+  const biliApi = createBiliApi(useApiRequest());
   const adapter = ref<BiliAdapterStatus | null>(null);
   const loading = ref(false);
   const launching = ref(false);
@@ -30,7 +33,7 @@ function createAdapter() {
   async function loadAdapter() {
     loading.value = true;
     try {
-      adapter.value = await $fetch<BiliAdapterStatus>("/api/admin/bili/adapter");
+      adapter.value = await biliApi.getAdapter();
     } catch {
       adapter.value = null;
     } finally {
@@ -46,10 +49,7 @@ function createAdapter() {
     if (launching.value) return;
     launching.value = true;
     try {
-      const result = await $fetch<{ ok: boolean; pid?: number; message?: string }>(
-        "/api/admin/bili/adapter/launch",
-        { method: "POST" },
-      );
+      const result = await biliApi.launchAdapter();
       if (!result.ok) {
         ElMessage.error(result.message || "启动失败，请在项目根目录手动运行 yarn bili:run。");
         return;

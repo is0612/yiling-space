@@ -5,6 +5,7 @@ import {
   ChatDotRound, ChatLineRound, Collection, DataLine, Film, Folder, MessageBox,
   Microphone, Promotion, Setting, Star, TrendCharts, Upload, User, VideoPlay, View,
 } from "@element-plus/icons-vue";
+import { createBiliApi } from "~/api/bili";
 import type { BiliCatalogGroup, BiliCatalogItem } from "./types";
 import { readErrorMessage } from "./utils";
 
@@ -32,6 +33,8 @@ export type BiliDesk = ReturnType<typeof createDesk>;
 const DESK_KEY: InjectionKey<BiliDesk> = Symbol("bili-desk");
 
 function createDesk(handlers: BiliDeskHandlers) {
+// setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+const biliApi = createBiliApi(useApiRequest());
 // ── 视图切换 ───────────────────────────────────────────────
 const route = useRoute();
 const router = useRouter();
@@ -236,7 +239,7 @@ const groupIcon = (name: string) => GROUP_ICON[name] ?? Folder;
 async function loadCatalog() {
   catalogLoading.value = true;
   try {
-    const data = await $fetch<{ groups: BiliCatalogGroup[] }>("/api/admin/bili/catalog");
+    const data = await biliApi.getCatalog();
     groups.value = data.groups;
     applyMenu();
     // 深链：/bili?cmd=video.watch

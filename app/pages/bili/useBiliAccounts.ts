@@ -1,5 +1,6 @@
 import { inject, provide, ref, type ComputedRef, type InjectionKey } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { createBiliApi } from "~/api/bili";
 import type { BiliAccount, BiliBinding } from "./types";
 import { readErrorMessage } from "./utils";
 
@@ -24,6 +25,8 @@ const ACC_KEY: InjectionKey<BiliAccounts> = Symbol("bili-accounts");
 
 function createAccounts(deps: BiliAccountsDeps) {
   const { accounts, reload } = deps;
+  // setup 里同步捕获本次 SSR 的请求实例，事件回调复用同一个客户端。
+  const biliApi = createBiliApi(useApiRequest());
 
   const accountVisible = ref(false);
   const bindVisible = ref(false);
@@ -63,10 +66,7 @@ function createAccounts(deps: BiliAccountsDeps) {
     ).catch(() => false);
     if (!confirmed) return;
     try {
-      await $fetch(
-        `/api/admin/channels/${encodeURIComponent(account.connectionId)}/bindings/${encodeURIComponent(binding.bindingId)}`,
-        { method: "DELETE" },
-      );
+      await biliApi.deleteBinding({ connectionId: account.connectionId, bindingId: binding.bindingId });
       ElMessage.success("已解绑。");
       await reload();
     } catch (error) {
@@ -82,7 +82,7 @@ function createAccounts(deps: BiliAccountsDeps) {
     ).catch(() => false);
     if (!confirmed) return;
     try {
-      await $fetch(`/api/admin/channels/${encodeURIComponent(account.connectionId)}`, { method: "DELETE" });
+      await biliApi.deleteChannel(account.connectionId);
       ElMessage.success("账号已删除。");
       await reload();
     } catch (error) {
