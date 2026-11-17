@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
+import { readApiErrorMessage } from "../app/utils/api-error";
 
 /**
  * 「她的朋友」页面竞态回归：直接跑当前 `SocialFriendsWorkspace.vue` 的真实 script。
@@ -135,6 +136,7 @@ function harness() {
   let unmount: (() => void) | null = null;
 
   const context = createContext({
+    readApiErrorMessage,
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
     ref: (initial: unknown) => {
