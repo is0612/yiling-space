@@ -24,5 +24,8 @@ assert.throws(() => validateKnowledgeTopicOutput({ topics: [{ name: "x", descrip
 assert.throws(() => validateKnowledgeTopicOutput({ topics: [{ name: "x", description: "", reason: "r", itemIds: [a, "99999999-9999-4999-8999-999999999999"] }], ungroupedIds: [b, c, d] }, allowed));
 assert.throws(() => validateKnowledgeTopicOutput({ topics: [{ name: "x", description: "", reason: "r", itemIds: [a, b] }], ungroupedIds: [b, c, d] }, allowed));
 assert.throws(() => validateKnowledgeTopicOutput({ topics: [{ name: "x", description: "", reason: "r", itemIds: [a, b] }], ungroupedIds: [c] }, allowed));
-assert.throws(() => validateKnowledgeTopicOutput({ topics: [], ungroupedIds: [a, b, c, d] }, allowed));
+// 没有共同主题时允许全部未分组，不强迫模型凑主题。
+assert.deepEqual(validateKnowledgeTopicOutput({ topics: [], ungroupedIds: [a, b, c, d] }, allowed), {
+  topics: [], ungroupedIds: [a, b, c, d],
+});
 console.log("knowledge topic output validation passed");
