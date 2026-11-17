@@ -648,3 +648,8 @@ Run 的模型调用与 HTTP 请求生命周期解耦：POST 只创建 QUEUED 记
 - 本批仍不引入向量数据库、embedding 字段、自动知识合并或聊天链路触发。主题分组仅是用户审核后的组织视图。
 - 实现前必须复核现有 Worker 的租约/fencing token 工具、调度顺序和进程退出行为；若现有设施不能保证旧 Worker 无法提交，则先补齐可验证的 fencing 保护，再接入主题任务。
 - 本节评审通过后，下一阶段才进入 Prisma Schema/迁移与领域服务实现；页面接入排在数据模型、API 和 Worker 专项测试之后。
+
+
+## 主题聚类实现进度（2026-11-17）
+
+第一批 Prisma Schema 与 PostgreSQL migration 已进入独立开发分支，覆盖 Run、Suggestion、Topic、TopicMember、TopicRevision 五类数据，以及任务租约/fencing、成员唯一约束、主题合并引用和修订快照。该批次尚未完成 Prisma 校验、迁移执行、API、Worker 或页面；以合并后的代码和专项测试结果为准更新状态。后端 Run/Worker 主链路是下一阶段唯一优先事项。
