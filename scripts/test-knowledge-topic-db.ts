@@ -211,6 +211,29 @@ try {
   assert.equal(afterRecovery.status, "READY", JSON.stringify(afterRecovery));
   assert.equal((await prisma.knowledgeTopicRun.findUniqueOrThrow({ where: { id: expiredId } })).fencingToken, 2);
 
+  // An old in-flight worker must not overwrite a successor after its lease is reclaimed.
+  const fencedId = await newRun([a.id, b.id]);
+  const oldGate = holdModelOnce();
+  const oldWorker = runWorker();
+  await oldGate.reached;
+  await prisma.knowledgeTopicRun.update({ where: { id: fencedId }, data: { leaseExpiresAt: new Date(Date.now() - 1_000) } });
+  await runWorker(); // reclaim the expired lease; the row is queued with backoff.
+  await prisma.knowledgeTopicRun.update({ where: { id: fencedId }, data: { runAt: new Date(0) } });
+  const successorGate = holdModelOnce();
+  const successorWorker = runWorker();
+  await successorGate.reached;
+  const successorLease = await prisma.knowledgeTopicRun.findUniqueOrThrow({ where: { id: fencedId } });
+  oldGate.release();
+  await oldWorker;
+  const afterOldWorker = await prisma.knowledgeTopicRun.findUniqueOrThrow({ where: { id: fencedId } });
+  assert.equal(afterOldWorker.status, "PROCESSING");
+  assert.equal(afterOldWorker.leaseToken, successorLease.leaseToken);
+  assert.equal(await prisma.knowledgeTopicSuggestion.count({ where: { runId: fencedId } }), 0);
+  successorGate.release();
+  const successorResult = await successorWorker;
+  assert.equal(successorResult.status, "READY", JSON.stringify(successorResult));
+  assert.equal(await prisma.knowledgeTopicSuggestion.count({ where: { runId: fencedId } }), 1);
+
   // Concurrent workers must claim distinct runs; SKIP LOCKED prevents double claims.
   const [concurrentA, concurrentB] = await Promise.all([
     makeItems(characterId, "并发知识 A"), makeItems(characterId, "并发知识 B"),
