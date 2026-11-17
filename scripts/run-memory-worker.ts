@@ -10,6 +10,7 @@ import { processNextSocialRelationshipAssessmentTask } from "../server/utils/soc
 import { processAutomaticInteractionExperience } from "../server/utils/interaction-experience-automatic";
 import { processEducationTransfer } from "../server/utils/education-transfer";
 import { processNextReflectionRun } from "../server/utils/reflection-worker";
+import { processNextKnowledgeTopicRun } from "../server/utils/knowledge-topic-worker";
 
 const prisma = getPrisma();
 const watch = process.argv.includes("--watch");
@@ -75,6 +76,13 @@ const runner = createGrowthEventRunner({
       if (reflection.processed) process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event: "reflection-processed", ...reflection }) + "\n");
     } catch (error) {
       reportError("reflection-error", error);
+    }
+    if (signal.aborted) return;
+    try {
+      const topicRun = await processNextKnowledgeTopicRun(prisma, { workerId });
+      if (topicRun.processed) process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event: "knowledge-topic-run-processed", ...topicRun }) + "\\n");
+    } catch (error) {
+      reportError("knowledge-topic-run-error", error);
     }
     if (signal.aborted) return;
     try {
