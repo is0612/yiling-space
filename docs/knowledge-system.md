@@ -653,3 +653,14 @@ Run 的模型调用与 HTTP 请求生命周期解耦：POST 只创建 QUEUED 记
 ## 主题聚类实现进度（2026-11-17）
 
 第一批 Prisma Schema 与 PostgreSQL migration 已进入独立开发分支，覆盖 Run、Suggestion、Topic、TopicMember、TopicRevision 五类数据，以及任务租约/fencing、成员唯一约束、主题合并引用和修订快照。该批次尚未完成 Prisma 校验、迁移执行、API、Worker 或页面；以合并后的代码和专项测试结果为准更新状态。后端 Run/Worker 主链路是下一阶段唯一优先事项。
+
+
+### 主题聚类后端第一批实现（2026-11-17）
+
+- 已新增 `POST /api/characters/:id/growth/knowledge/topics/runs`：仅 owner 可调用；请求必须包含 1–50 个不重复知识 ID；在事务内按角色、ACTIVE 状态读取并锁定条目，保存不可变 ID/revision 快照，快速返回 202。
+- 已新增主题专属 Worker：复用现有常驻 Worker 宿主；使用知识助手运行时配置；单次模型请求最多 90 秒，5 分钟租约每分钟续期；租约 token 与 fencing token 均匹配才允许最终写入。
+- Worker 领取任务后按快照读取 ACTIVE 知识，模型调用后在事务内再次锁定并核对全部输入 revision；任一条目变化则整批 STALE。
+- 模型输出采用严格协议校验：只接受输入白名单 ID；主题内不重复；未归组 ID 不得与主题成员重叠；覆盖全部输入；不合法时整批重试，不保存部分建议。跨主题重复成员允许。
+- 输出全部通过后，在单个事务中写入 Suggestions、ungroupedIds 并将 Run 置为 READY。失败按最多三次退避重试，旧租约执行者不能更新结果。
+- 新增输出协议专项测试并接入知识系统回归脚本。
+- 本批尚未执行 Prisma / 数据库集成专项测试、typecheck、lint、build 或 GitHub Actions；不代表后端主链路已验收。API 的查询详情、建议审核与主题管理接口尚未开发。
