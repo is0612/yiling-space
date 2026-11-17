@@ -30,6 +30,7 @@ import { rankKnowledgeItems } from "../knowledge-retrieval";
 import { isGroupKnowledgeSource, isPrivateKnowledgeSource, readKnowledgeCollectScope } from "../knowledge-collect-policy";
 import { generateGroupContextReply } from "../group-context-reply";
 import { loadConversationWorkingContext, saveConversationWorkingContext } from "../conversation-working-context";
+import { loadOwnerHistoryContext, saveOwnerHistoryContext, planOwnerHistory, planRestartedHistoryRetry, loadOwnerHistoryPage, type OwnerHistoryAuthorization, type OwnerHistoryCoverage } from "../owner-private-history";
 import { parseEventTimeRange } from "../memory-event-time";
 import {
   CROSS_CHANNEL_WINDOW_MINUTES,
@@ -1936,7 +1937,50 @@ async function runChannelTurn(input: {
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
   })));
+  // This capability is granted by the verified owner turn, never by a tool query or stored metadata.
+  const ownerHistoryAuth: OwnerHistoryAuthorization | null = !isGroup && input.platform === "qq-onebot" && isOwnerTurn && ownerPrivateScopeId && existingConversation && ownerPlatformUid
+    ? { characterId: input.characterId, bindingId: input.bindingId, privateScopeId: ownerPrivateScopeId,
+        conversationId: existingConversation.id, ownerUid: ownerPlatformUid } : null;
+  const ownerHistoryNow = new Date();
+  const ownerHistoryStored = ownerHistoryAuth
+    ? await loadOwnerHistoryContext(prisma, ownerHistoryAuth, ownerHistoryNow).catch(() => null) : null;
+  let ownerHistoryPlan = ownerHistoryAuth
+    ? planOwnerHistory(currentMessage, ownerHistoryStored?.plan ?? null, ownerHistoryNow, chatTimeZone) : null;
+  // Resolve a referential room only from the owner's own recent explicit room references,
+  // then verify the room against this character's QQ group conversations.
+  const bareHistoryRetry = /^(?:现在呢|还是呢|再看看|再试试)[？?。！!\s]*$/u.test(currentMessage);
+  if (ownerHistoryAuth && (!ownerHistoryPlan || !ownerHistoryPlan.groupId)
+    && (bareHistoryRetry || /那个群|这个群/u.test(currentMessage))) {
+    const roomCandidates = [...new Set(recentStoredMessages.filter(row => row.role === "USER"
+      && row.occurredAt.getTime() >= ownerHistoryNow.getTime() - 2 * 3_600_000).flatMap(row => {
+        const match = /(?:群(?:号)?\s*[:：]?\s*(\d{5,12})|(\d{5,12})\s*(?:这个群|那个群|群|那边|这边))/u.exec(row.content);
+        return match?.slice(1).filter((value): value is string => Boolean(value)) ?? [];
+      }))];
+    if (roomCandidates.length) {
+      const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId,
+        externalConversationId: { in: roomCandidates.map(id => `g:${id}`) },
+        channelBinding: { connection: { platform: "qq-onebot" } } },
+        select: { externalConversationId: true }, take: 40 });
+      const verified = new Set(rooms.map(room => room.externalConversationId));
+      const groupId = roomCandidates.find(id => verified.has(`g:${id}`));
+      if (groupId) {
+        ownerHistoryPlan = ownerHistoryPlan
+          ? { ...ownerHistoryPlan, groupId }
+          // The live task expired or died with the adapter; a bare retry still deserves a real read.
+          : planRestartedHistoryRetry(groupId, ownerHistoryNow, chatTimeZone);
+      }
+    }
+  }
+  let ownerHistoryCoverage: OwnerHistoryCoverage | undefined;
   const loadMemoryCandidates = async (searchQuery: string, lookupOptions?: { participantName?: string; deterministicTimeline: boolean }) => {
+        if (ownerHistoryAuth && ownerHistoryPlan) {
+          if (!ownerHistoryStored) throw new Error("Owner history authorization or continuity unavailable");
+          const participantIds = ownerHistoryPlan.participantName
+            ? await resolveParticipantAccounts(prisma, ownerHistoryPlan.participantName, { characterId: input.characterId, platform: input.platform }) : [];
+          const page = await loadOwnerHistoryPage(prisma, input.characterId, ownerHistoryPlan, participantIds);
+          ownerHistoryCoverage = page.coverage;
+          return page.sources;
+        }
         // 人物名只从主人原始问题解析一次；不从记忆助手模板查询串反向解析。
         const searchParticipantName = lookupOptions?.participantName ?? parseEventParticipantQuery(currentMessage);
         const searchParticipantIds = searchParticipantName
@@ -2266,6 +2310,11 @@ async function runChannelTurn(input: {
         });
       },
       candidates: [],
+      ...(ownerHistoryPlan ? { requiredHistoryLookup: { query: ownerHistoryPlan.query, load: async () => {
+        const sources = await loadMemoryCandidates(ownerHistoryPlan!.query);
+        if (!ownerHistoryCoverage) throw new Error("History coverage unavailable");
+        return { sources, coverage: ownerHistoryCoverage };
+      } } } : {}),
       loadCandidates: loadMemoryCandidates,
       chatInput: {
         ...(input.platform === "qq-onebot" && qqReadOnlyTaskRequested(currentMessage) ? { readOnlyTools } : {}),
@@ -2374,11 +2423,28 @@ async function runChannelTurn(input: {
   const generationDurationMs = Date.now() - generationStartedAt;
   // 在落消息/发送前保存模型阶段结果，渠道发送失败也能从助手日志打开本轮详情。
   await recordModelUsage({
-    kind: "channel", model: chatSettings.model, usage: toUsageTokens(generated.usage),
+    kind: "channel", model: generated.localHistoryReceipt ? "local-history-lookup" : chatSettings.model, usage: toUsageTokens(generated.usage),
     characterId: input.characterId, channelBindingId: input.bindingId,
     ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-    metadata: { status: "success", action: generated.action, durationMs: generationDurationMs, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
+    metadata: { status: generated.localHistoryReceipt ? generated.memoryAssistantStatus ?? "failed" : "success",
+      ...(generated.localHistoryReceipt ? { source: "local-history-receipt", supplierCalled: false } : {}),
+      ...(generated.ownerHistoryCoverage ? { ownerHistoryCoverage: JSON.stringify(generated.ownerHistoryCoverage) } : {}),
+      action: generated.action, durationMs: generationDurationMs, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
   });
+  if (ownerHistoryAuth && (ownerHistoryStored || ownerHistoryCoverage)) {
+    const nextPlan = ownerHistoryPlan ? { ...ownerHistoryPlan,
+      // A completed read starts a fresh TTL. A later short follow-up must not inherit an
+      // expired task merely because nothing was re-saved after the original request.
+      ...(ownerHistoryCoverage ? { anchoredAt: ownerHistoryNow.toISOString() } : {}),
+      ...(generated.ownerHistoryCoverage ? { start: generated.ownerHistoryCoverage.start,
+        end: generated.ownerHistoryCoverage.end, cursor: generated.ownerHistoryCoverage.oldestCursor } : {}),
+      evidenceIds: generated.memoryAssistantStatus === "success"
+        ? (generated.memoryAssistantSources ?? []).filter(source => source.sourceType === "message").map(source => source.id)
+        : ownerHistoryPlan.evidenceIds } : null;
+    await saveOwnerHistoryContext(prisma, ownerHistoryAuth, ownerHistoryStored?.historyContext ?? null, nextPlan)
+      .then(saved => { if (!saved) console.warn("[owner-history] continuity save conflict; newer state preserved"); })
+      .catch(() => { console.warn("[owner-history] continuity save unavailable"); });
+  }
   const now = new Date();
   const assistantAt = new Date(now.getTime() + 1);
   const groupId = isGroup ? readGroupIdFromConversationKey(input.externalConversationId) : null;
@@ -2549,7 +2615,7 @@ async function runChannelTurn(input: {
           metadata: {
             source: "channel",
             platform: input.platform,
-            generatedBy: "llm",
+            generatedBy: generated.localHistoryReceipt ? "local-history-receipt" : "llm",
             model: generated.model,
             provider: generated.provider,
             promptTemplateVersion: generated.promptTemplateVersion,

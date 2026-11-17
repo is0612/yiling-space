@@ -3,6 +3,7 @@ import { startAssistantRequest, type AssistantRequestObserver } from "./assistan
 import type { AssistantTurnContext } from "./assistant-turn-context";
 import { assertAssistantTurnChannel, runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
 import type { TurnDetailPatch, TurnSource } from "./model-turn-detail";
+import type { OwnerHistoryCoverage } from "./owner-private-history";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { ASSISTANT_FIELDS, resolveAssistantConnection } from "./assistant-inheritance";
 import {
@@ -622,6 +623,8 @@ function appendUnique<T extends { id: string }>(base: T[], additions: T[]): T[] 
 }
 
 export type ConversationReplyWithMemoryAssistant = ConversationReplyResult & {
+  localHistoryReceipt?: true;
+  ownerHistoryCoverage?: OwnerHistoryCoverage;
   memoryAssistantUsage?: ModelUsageTokens;
   memoryAssistantModel?: string;
   memoryAssistantSources?: MemoryAssistantCandidate[];
@@ -687,6 +690,7 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   chatInput: ConversationReplyInput;
   assistant: MemoryAssistantRuntime | null;
   candidates: MemoryAssistantCandidate[];
+  requiredHistoryLookup?: { query: string; load?: () => Promise<{ sources: MemoryAssistantCandidate[]; coverage: OwnerHistoryCoverage }> };
   loadCandidates?: (query: string, options?: { participantName?: string; deterministicTimeline: boolean }) => Promise<MemoryAssistantCandidate[]>;
   onTurnDetail?: (detail: TurnDetailPatch) => void;
 }): Promise<ConversationReplyWithMemoryAssistant> {
@@ -700,6 +704,54 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   const report = (memory: NonNullable<TurnDetailPatch["memory"]>) => {
     try { input.onTurnDetail?.({ memory }); } catch { /* Diagnostics never affect generation. */ }
   };
+  // A server-authorized owner history task must execute before the optional tools path.
+  // Its loader returns one bounded exchange bundle: do not rank it again or let a second model drop answers.
+  if (input.requiredHistoryLookup && !input.chatInput.groupChat && input.chatInput.speaker?.isOwner === true) {
+    const query = input.requiredHistoryLookup.query;
+    let sources: MemoryAssistantCandidate[];
+    let coverage: OwnerHistoryCoverage | undefined;
+    const unavailable = (status: "failed" | "no_sources"): ConversationReplyWithMemoryAssistant => ({
+      action: "reply", reply: status === "failed"
+        ? "这次查询群聊记录没成功，暂时不能核实，不代表记录不存在。"
+        : "这次在指定范围内没找到足够的群聊记录，暂时不能确定；可以再给我一句原话或缩小范围。",
+      usedMemoryIds: [], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [], faceIds: [], stickerId: null, usedCatchphraseIds: [],
+      localHistoryReceipt: true, model: "local-history-lookup", provider: "local-history-lookup",
+      promptTemplateVersion: "owner-history-lookup-v1", memoryAssistantStatus: status,
+      ...(coverage ? { ownerHistoryCoverage: coverage } : {}),
+    });
+    try {
+      sources = await runAssistantTurnStage(turnContext, "memory", query, { query }, async () => {
+        if (input.requiredHistoryLookup?.load) {
+          const page = await input.requiredHistoryLookup.load();
+          coverage = page.coverage;
+          return page.sources;
+        }
+        if (!input.loadCandidates) throw new Error("History candidate loader unavailable");
+        return input.loadCandidates(query);
+      }, rows => rows.length === 0);
+    } catch {
+      report({ status: "failed", query, candidateCount: 0, sources: [] });
+      skipAssistantTurnStage(turnContext, "response", "not_needed");
+      return unavailable("failed");
+    }
+    sources = sources.filter(source => source.sourceType === "message" && source.scope === "character");
+    report({ status: sources.length ? "success" : "no_sources", query, candidateCount: sources.length, sources: sources.map(memoryAssistantTurnSource) });
+    if (!sources.length) {
+      skipAssistantTurnStage(turnContext, "response", "not_needed");
+      return unavailable("no_sources");
+    }
+    const rawMessages: ConversationContextRawMessage[] = sources.map(source => ({ id: source.id, role: source.role ?? "USER",
+      content: source.content ?? "", occurredAt: source.occurredAt ?? "", scope: source.scope,
+      ...(source.speaker ? { speaker: source.speaker } : {}), ...(source.isOwner ? { isOwner: true } : {}) }));
+    const finalInput = { ...input.chatInput, rawMessages: rawMessages,
+      ...(coverage ? { ownerHistoryCoverage: coverage } : {}),
+      // The verified page supersedes unrelated automatic samples and stale denials from prior rounds.
+      // This turn has already spent its single history operation; do not repeat it through tools.
+      readOnlyTools: undefined, memoryAssistantAvailable: false, memoryAssistantEvidenceProvided: true };
+    const { memoryAssistantQuery: _query, ...result } = await runAssistantTurnStage(turnContext, "response", "owner-history-final", finalInput,
+      observer => generateConversationReply(finalInput, observer));
+    return { ...result, memoryAssistantStatus: "success", memoryAssistantSources: sources, ...(coverage ? { ownerHistoryCoverage: coverage } : {}) };
+  }
   if (input.chatInput.readOnlyTools) {
     skipAssistantTurnStage(turnContext, "memory", "not_needed");
     report({ status: "not_needed" });

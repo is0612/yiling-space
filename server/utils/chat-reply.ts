@@ -7,6 +7,7 @@ import { buildChatTimeContext, CHAT_TIME_ZONE_DEFAULT, formatLocalTimestamp } fr
 import type { ConversationMessageMention } from "./conversation-message";
 // 只引类型：那个模块连着 token 估算，而这个文件要被提示词单测直接 import。
 import type { CrossChannelLine } from "./cross-channel-context";
+import type { OwnerHistoryCoverage } from "./owner-private-history";
 // 备注的清洗与截断：库里的数据不一定干净（旧版本、手工 SQL、迁移），
 // 而这里是最不该赌的地方 —— 备注会原样进系统提示词。
 import { aliasesForPrompt } from "./friend-aliases";
@@ -309,6 +310,8 @@ export type ConversationReplyInput = {
   recentEvents?: ConversationContextEvent[];
   /** 忆泡还没覆盖到的那一段，用原始对话兜底。留空就不注入。 */
   rawMessages?: ConversationContextRawMessage[];
+  /** Database-verified coverage for the current owner's bounded group-history query. */
+  ownerHistoryCoverage?: OwnerHistoryCoverage;
   /**
    * 他在**别的地方**说过的话 —— 目前只有一种来源：同一个人的 QQ 群发言。
    *
@@ -557,7 +560,8 @@ export type ConversationReplyResult = {
 //      不是用户自述或承诺，也不能拿它反呛对方。
 // v68：一句足够就结束，避免补同义确认；分条仅说明渠道协议，不鼓励为分条增加内容。
 // v69：QQ显式查证任务支持有界只读工具续轮。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v69";
+// v70: distinguish database history coverage from a bounded returned sample.
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v71";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -819,6 +823,7 @@ function systemPrompt(flags: {
   if (withRawMessages) {
     lines.push(
       "rawMessages are original lines from that period, evidence only. If a raw line and an event disagree, trust the event. Attribute quotes by speaker; only isOwner: true is your owner.",
+      "When ownerHistoryCoverage is supplied, it is a fresh server-verified database read. Its start/end are only the window that was queried, never proof that records exist there or stop there. count, actualFirst and actualLast describe the records that really exist inside that window; sampledFirst/sampledLast describe only the excerpts you were shown; groupIds are the rooms actually observed. Never describe a difference between the window and actualFirst/actualLast as a gap, an empty stretch, missing days or a jump, and never say records stop at a sample boundary. Prefer this fresh evidence over prior conversational claims that records were absent. If hasEarlier is true, earlier records do exist: never say earlier history is empty, inaccessible, disconnected or lost. If truncated is true, say only that this is one partial page. An absence of a quote in this page never proves it was not said. Answer with the actual retrieved content, not an invented story about broken access.",
       "For a question about the latest interaction with a named person, distinguish that person's latest message from a mutual exchange. If the supplied rawMessages contain that person's group messages but no owner messages, state the latest timestamp as that person's latest recorded group message. Do not describe it as a conversation or mutual interaction; do not answer as if no relevant record exists. Equally, do not infer that the owner and person never interacted or never had a private chat: the supplied records may cover only one side or one channel. State the evidence boundary briefly and naturally.",
     );
   }
@@ -1342,6 +1347,16 @@ export async function generateConversationReply(input: ConversationReplyInput, o
         })) }
       : {}),
     ...(input.memoryAssistantEvidenceProvided ? { memoryAssistantEvidenceProvided: true } : {}),
+    ...(!withGroupChat && input.speaker?.isOwner === true && input.ownerHistoryCoverage ? {
+      ownerHistoryCoverage: {
+        ...input.ownerHistoryCoverage,
+        ...Object.fromEntries(["start", "end", "actualFirst", "actualLast", "sampledFirst", "sampledLast"].map(key => {
+          const value = input.ownerHistoryCoverage![key as "start" | "end" | "actualFirst" | "actualLast" | "sampledFirst" | "sampledLast"];
+          return [key, value ? formatLocalTimestamp(value, promptTimeZone) : null];
+        })),
+        oldestCursor: undefined,
+      },
+    } : {}),
     ...(withCatchphrases
       ? {
           catchphrases: catchphrases.map((item) => ({
