@@ -25,9 +25,12 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { selectRuntimeConnection, type ChainActionKind } from "~/utils/qq-channel";
 import type { Character } from "~/utils/mock-data";
 
-// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+// 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明和动作。
 definePageMeta({
-  topbar: { title: "QQ 渠道" },
+  topbar: {
+    title: "QQ 渠道",
+    crumbs: [{ label: "系统管理" }],
+  },
 });
 
 useHead({ title: "QQ 渠道 · 忆灵空间" });
@@ -1327,7 +1330,6 @@ function copyInstallGuide() {
 <template>
   <div class="page-wrap qq-a">
     <PageHeader
-      eyebrow="系统管理 / QQ 渠道"
       :description="lede"
     >
       <!-- 空态时页头不给主操作：同一个动作在屏幕上出现两次会分散注意力 -->

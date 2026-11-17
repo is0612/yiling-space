@@ -7,7 +7,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 definePageMeta({
   topbar: {
     title: "表情包",
-    crumbs: [{ label: "角色管理", to: "/characters" }],
+    crumbs: [{ label: "工作空间" }, { label: "角色管理", to: "/characters" }],
   },
 });
 

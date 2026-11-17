@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 
-definePageMeta({ topbar: { title: "偏好系统" } });
+definePageMeta({
+  topbar: {
+    title: "偏好系统",
+    crumbs: [{ label: "成长系统" }],
+  },
+});
 
 type Kind = "LIKE" | "DISLIKE" | "INTEREST";
 type Status = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";

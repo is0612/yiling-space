@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 
-definePageMeta({ topbar: { title: "知识系统" } });
+definePageMeta({
+  topbar: {
+    title: "知识系统",
+    crumbs: [{ label: "成长系统" }],
+  },
+});
 
 type KnowledgeResult = {
   isKnowledge: boolean;

@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 
-definePageMeta({ topbar: { title: "愿望系统" } });
+definePageMeta({
+  topbar: {
+    title: "愿望系统",
+    crumbs: [{ label: "成长系统" }],
+  },
+});
 type Kind = "GOAL" | "WISH";
 type Status = "ACTIVE" | "PENDING" | "PAUSED" | "COMPLETED" | "ABANDONED" | "REJECTED";
 type SourceType = "MEMORY_EVENT" | "REFLECTION_SUGGESTION";

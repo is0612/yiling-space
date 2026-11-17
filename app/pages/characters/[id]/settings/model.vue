@@ -13,7 +13,7 @@ import "~/assets/css/model-settings.css";
 definePageMeta({
   topbar: {
     title: "模型设置",
-    crumbs: [{ label: "角色管理", to: "/characters" }],
+    crumbs: [{ label: "工作空间" }, { label: "角色管理", to: "/characters" }],
   },
 });
 

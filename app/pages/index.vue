@@ -9,6 +9,7 @@ import { characterUrgency, describeCountdown, formatCny, formatTokenCount, type 
 definePageMeta({
   topbar: {
     title: "工作台",
+    crumbs: [{ label: "工作空间" }],
     refreshable: true,
   },
 });

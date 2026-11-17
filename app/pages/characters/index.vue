@@ -30,7 +30,10 @@ import { characterCopyInput, createCharacterOperationGuard, replaceCharacter } f
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
 definePageMeta({
-  topbar: { title: "你的 AI 角色" },
+  topbar: {
+    title: "角色管理",
+    crumbs: [{ label: "工作空间" }],
+  },
 });
 
 const route = useRoute();

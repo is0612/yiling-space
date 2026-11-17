@@ -40,6 +40,13 @@ import "./bili.css";
  */
 useHead({ title: "B站值班台 · 忆灵空间" });
 
+definePageMeta({
+  topbar: {
+    title: "B站值班台",
+    crumbs: [{ label: "系统管理" }],
+  },
+});
+
 // 角色列表：绑定角色时用，与角色管理页共享同一份数据。
 const characters = useCharacterList();
 

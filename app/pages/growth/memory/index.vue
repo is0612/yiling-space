@@ -7,7 +7,12 @@ import {
 } from "~/composables/useMemoryProgress";
 import { useMemoryActions } from "~/composables/useMemoryActions";
 
-definePageMeta({ topbar: { title: "记忆系统" } });
+definePageMeta({
+  topbar: {
+    title: "记忆系统",
+    crumbs: [{ label: "成长系统" }],
+  },
+});
 
 await useCharacterListData();
 const characters = useCharacterList();

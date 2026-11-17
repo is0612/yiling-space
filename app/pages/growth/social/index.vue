@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { Avatar, Connection, DocumentChecked, Setting } from "@element-plus/icons-vue";
 
-definePageMeta({ topbar: { title: "社交系统" } });
+definePageMeta({
+  topbar: {
+    title: "社交系统",
+    crumbs: [{ label: "成长系统" }],
+  },
+});
 const route = useRoute();
 const { character: activeCharacter } = useCharacterSelection(route.path);
 const characterId = computed(() => activeCharacter.value?.id ?? "");

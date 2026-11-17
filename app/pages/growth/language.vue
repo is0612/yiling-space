@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 
-definePageMeta({ topbar: { title: "语言系统" } });
+definePageMeta({
+  topbar: {
+    title: "语言系统",
+    crumbs: [{ label: "成长系统" }],
+  },
+});
 type ChatScope = "ALL" | "GROUP" | "PRIVATE";
 type Kind = "TONE" | "WORDING" | "LENGTH";
 type Status = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";

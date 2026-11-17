@@ -13,9 +13,12 @@
 import { Clock, Refresh } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
-// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+// 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明和动作。
 definePageMeta({
-  topbar: { title: "用户管理" },
+  topbar: {
+    title: "用户管理",
+    crumbs: [{ label: "系统管理" }],
+  },
 });
 
 type AdminUser = {
@@ -191,7 +194,6 @@ onMounted(() => {
 <template>
   <div class="page-wrap users-a">
     <PageHeader
-      eyebrow="系统管理 / 用户管理"
       description="使用本系统的账号与活动统计。这里只有账号信息，不含任何人的对话或记忆内容。"
     >
       <template #actions>

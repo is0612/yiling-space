@@ -1,5 +1,10 @@
 <script setup lang="ts">
-definePageMeta({ topbar: { title: "成长总览" } });
+definePageMeta({
+  topbar: {
+    title: "成长总览",
+    crumbs: [{ label: "成长系统" }],
+  },
+});
 type Conclusion = { id: string; title: string; observation: string; inference: string; recommendation: string; acceptedAt: string; sourceRefs: unknown[] };
 type Overview = {
   character: { id: string; name: string }; period: { days: number; start: string; end: string }; generatedAt: string;

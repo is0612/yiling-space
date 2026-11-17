@@ -2,7 +2,7 @@
 definePageMeta({
   topbar: {
     title: "好友档案",
-    crumbs: [{ label: "社交系统", to: "/growth/social" }],
+    crumbs: [{ label: "成长系统" }, { label: "社交系统", to: "/growth/social" }],
   },
 });
 </script>

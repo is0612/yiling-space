@@ -7,7 +7,6 @@
  * 具体业务数据仍由后续阶段按模块接入，本组件不预置业务结构。
  */
 defineProps<{
-  eyebrow: string;
   description?: string;
 }>();
 

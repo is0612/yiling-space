@@ -8,7 +8,7 @@ import { initialCharacters, type Character } from "~/utils/mock-data";
 definePageMeta({
   topbar: {
     title: "记忆周期设置",
-    crumbs: [{ label: "角色管理", to: "/characters" }],
+    crumbs: [{ label: "工作空间" }, { label: "角色管理", to: "/characters" }],
   },
 });
 

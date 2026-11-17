@@ -5,7 +5,10 @@ import type { Character } from "~/utils/mock-data";
 
 // 标题归顶栏（AppShell 读 route.meta.topbar）；正文不再重复一遍面包屑和说明行。
 definePageMeta({
-  topbar: { title: "日记与手账" },
+  topbar: {
+    title: "日记手账",
+    crumbs: [{ label: "工作空间" }],
+  },
 });
 
 /**
@@ -1179,7 +1182,7 @@ await loadList();
 .rail-month { width: 100%; }
 .rail-body {
   flex: 1;
-  min-height: 0;
+  max-height: calc(100vh - 328px);
   overflow-y: auto;
   padding: var(--sp-1) var(--sp-2) var(--sp-2);
 }
@@ -1234,7 +1237,7 @@ await loadList();
   font-size: 12px;
   line-height: 1.6;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 .day-excerpt.is-empty { color: var(--dim); }
 .day-quote { overflow: hidden; color: var(--dim); font-size: 12px; line-height: 1.6; white-space: nowrap; text-overflow: ellipsis; }

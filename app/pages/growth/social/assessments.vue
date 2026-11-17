@@ -6,7 +6,7 @@ import { ElMessage } from "element-plus";
 definePageMeta({
   topbar: {
     title: "评估历史",
-    crumbs: [{ label: "社交系统", to: "/growth/social" }],
+    crumbs: [{ label: "成长系统" }, { label: "社交系统", to: "/growth/social" }],
   },
 });
 type Filter = "ALL" | "ACTIONABLE" | "ACCEPTED" | "REJECTED" | "STALE" | "FAILED" | "RUNNING";

@@ -5,7 +5,7 @@ import { Refresh } from "@element-plus/icons-vue";
 definePageMeta({
   topbar: {
     title: "互动经验",
-    crumbs: [{ label: "记忆系统", to: "/growth/memory" }],
+    crumbs: [{ label: "成长系统" }, { label: "记忆系统", to: "/growth/memory" }],
   },
 });
 type LearningKind = "UNDERSTANDING" | "REFERENCE" | "SITUATION" | "STRATEGY" | "EXPRESSION";

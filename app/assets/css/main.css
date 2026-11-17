@@ -407,7 +407,7 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
 /* ══════════════════════════════════════════════════════════
    页面骨架（所有页面只用这一套）
    ══════════════════════════════════════════════════════════ */
-.page-wrap { width: 100%; margin: 0 auto; padding: 22px 28px 48px; }
+.page-wrap { width: 100%; margin: 0 auto; padding: 22px 28px 32px; }
 
 .page-header { display: flex; flex-direction: column; gap: 14px; margin-bottom: 18px; }
 .page-heading { min-width: 0; }

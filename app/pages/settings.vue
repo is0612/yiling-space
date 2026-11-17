@@ -7,9 +7,12 @@
  * 收成右侧一列状态行，一眼看出哪项接上了、哪项还空着。
  */
 
-// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+// 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明。
 definePageMeta({
-  topbar: { title: "系统设置" },
+  topbar: {
+    title: "系统设置",
+    crumbs: [{ label: "系统管理" }],
+  },
 });
 
 const STATUS_ROWS = [
@@ -30,7 +33,6 @@ const ABOUT_ROWS = [
 <template>
   <div class="page-wrap set-a">
     <PageHeader
-      eyebrow="系统管理 / 系统设置"
       description="管理员密码与登录设备，以及各模块的接入状态。"
     />
 

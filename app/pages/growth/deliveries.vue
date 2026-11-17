@@ -4,7 +4,7 @@ import { ElMessage } from "element-plus";
 definePageMeta({
   topbar: {
     title: "成长事件投递",
-    crumbs: [{ label: "成长总览", to: "/growth" }],
+    crumbs: [{ label: "成长系统" }, { label: "成长总览", to: "/growth" }],
   },
 });
 

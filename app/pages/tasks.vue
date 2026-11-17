@@ -9,9 +9,12 @@
 import { ArrowRight, Cpu, Files, MagicStick, Refresh, Search, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
-// 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
+// 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明和动作。
 definePageMeta({
-  topbar: { title: "后台任务" },
+  topbar: {
+    title: "后台任务",
+    crumbs: [{ label: "系统管理" }],
+  },
 });
 
 type MemoryTask = {
@@ -452,7 +455,6 @@ onBeforeUnmount(() => {
 <template>
   <div class="page-wrap tasks-a">
     <PageHeader
-      eyebrow="系统管理 / 任务监控"
       description="持久化任务队列：扫描到期周期、手动跑一次 Worker，处理失败与待重试的任务。"
     >
       <template #actions>

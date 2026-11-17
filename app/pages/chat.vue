@@ -1,8 +1,16 @@
 <script setup lang="ts">
-import { ArrowDown, CopyDocument, Cpu, Plus, Promotion, Search, Warning } from "@element-plus/icons-vue";
+import { ArrowDown, CopyDocument, Cpu, Promotion, Search, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character } from "~/utils/mock-data";
 import { createChatSessionState } from "~/utils/chat-session-state";
+
+// 标题与面包屑放顶栏（AppShell 读 route.meta.topbar）
+definePageMeta({
+  topbar: {
+    title: "聊天",
+    crumbs: [{ label: "工作空间" }],
+  },
+});
 
 type ChatCharacter = {
   id: string;
@@ -264,31 +272,6 @@ async function openConversation(item: ConversationSummary) {
   } finally {
     if (chatSessionState.isCurrent(ticket, requestContext())) loading.value = false;
   }
-}
-
-async function startNewConversation() {
-  if (sending.value) return;
-  conversationView.value = "ACTIVE";
-  conversationSearch.value = "";
-  conversationSearchDraft.value = "";
-  conversationId.value = null;
-  messages.value = [];
-  expandedSources.value = [];
-  draft.value = "";
-  pendingRequestKey.value = null;
-  pendingRequestContent.value = null;
-  pendingRequestConversationId.value = null;
-  const ticket = chatSessionState.begin(requestContext({ conversationId: null, view: "ACTIVE", search: "" }));
-  const nextQuery = { ...route.query };
-  delete nextQuery.conversationId;
-  delete nextQuery.q;
-  delete nextQuery.view;
-  await navigateTo({ path: route.path, query: nextQuery });
-  if (!chatSessionState.isCurrent(ticket, requestContext())) return;
-  await loadHistory(ticket, null);
-  if (!chatSessionState.isCurrent(ticket, requestContext())) return;
-  conversationId.value = null;
-  messages.value = [];
 }
 
 async function changeConversationView(status: "ACTIVE" | "ARCHIVED") {
@@ -609,22 +592,6 @@ watch(id, (next, previous) => {
 
 <template>
   <div class="page-wrap chat-page">
-    <PageHeader
-      eyebrow="工作空间 / 聊天"
-      title="聊天"
-    >
-      <template #actions>
-        <button
-          type="button"
-          class="btn primary"
-          :disabled="sending || !characters.length"
-          @click="void startNewConversation()"
-        >
-          <el-icon><Plus /></el-icon>新建对话
-        </button>
-      </template>
-    </PageHeader>
-
     <div v-if="id" class="chat-character-context">
       <span class="avatar chat-character-avatar" :class="'avatar-' + (current?.avatarTone || 'mint')">{{ characterInitial }}</span>
       <strong>{{ current?.name || character?.name || "当前角色" }}</strong>
