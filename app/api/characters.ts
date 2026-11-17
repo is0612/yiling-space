@@ -19,6 +19,10 @@ const characterPath = (characterId: string) => `/characters/${encodeURIComponent
  * 导出角色卡要的是原始文件流和 `Content-Disposition` 头，不经过 JSON 入口，仍由页面用原生 `fetch`。
  */
 export function createCharactersApi(request: ApiRequest) {
+  function listCharacters(): Promise<Character[]> {
+    return request<Character[]>({ url: "/characters", method: "get" });
+  }
+
   function createCharacter(payload: CharacterCreateInput): Promise<Character> {
     return request<Character>({ url: "/characters", method: "post", data: payload });
   }
@@ -37,7 +41,7 @@ export function createCharactersApi(request: ApiRequest) {
     });
   }
 
-  return { createCharacter, updateCharacter, deleteCharacter };
+  return { listCharacters, createCharacter, updateCharacter, deleteCharacter };
 }
 
 export type CharactersApi = ReturnType<typeof createCharactersApi>;

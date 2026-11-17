@@ -11,19 +11,19 @@
  */
 import { Promotion, QuestionFilled, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { assistantHasProbe, createCharacterSettingsApi, type AssistantKind } from "~/api/character-settings";
 import { MODEL_PROVIDERS, buildModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
 
 const props = withDefaults(defineProps<{
   title: string;
   hint: string;
+  /** 哪个角色的哪个助手：模型清单和连通性探针都按这两个参数定位。 */
+  characterId: string;
+  assistant: AssistantKind;
   /** 对话模型的当前值：占位符用它们说明「留空会变成什么」 */
   chatModel: string;
   chatApiBaseUrl: string;
   chatApiKeyConfigured: boolean;
-  /** 拉取模型清单的接口；不给就只显示内置清单 */
-  modelsUrl?: string;
-  /** 测试连接的接口；不给就不显示测试按钮（知识助手没有探针） */
-  testUrl?: string;
   /**
    * 拉模型 / 测试前先落库：这两个接口都读服务端已存的配置，
    * 不先保存就会拿旧配置去请求，报错还指向上一版。
@@ -38,8 +38,6 @@ const props = withDefaults(defineProps<{
   clearable?: boolean;
   disabled?: boolean;
 }>(), {
-  modelsUrl: "",
-  testUrl: "",
   requestSave: undefined,
   showNumeric: true,
   clearable: false,
@@ -57,6 +55,9 @@ const emit = defineEmits<{
   (event: "busy-change", busy: boolean): void;
   (event: "clear"): void;
 }>();
+
+// setup 里同步捕获本次 SSR 的请求实例，拉模型 / 测试连接复用同一个客户端。
+const settingsApi = createCharacterSettingsApi(useApiRequest());
 
 const parametersOpen = ref(false);
 const fetching = ref(false);
@@ -88,12 +89,12 @@ function applyProvider(key: string) {
 }
 
 async function fetchModels() {
-  if (fetching.value || !props.modelsUrl) return;
+  if (fetching.value) return;
   fetching.value = true;
   emit("busy-change", true);
   try {
     if (props.requestSave && !(await props.requestSave())) return;
-    const result = await $fetch<{ ok: boolean; models: string[]; message: string }>(props.modelsUrl);
+    const result = await settingsApi.getAssistantModels(props.characterId, props.assistant);
     if (result.ok) {
       fetched.value = result.models;
       ElMessage.success(result.message || `获取到 ${result.models.length} 个模型。`);
@@ -112,12 +113,13 @@ async function fetchModels() {
 }
 
 async function testConnection() {
-  if (testing.value || !props.testUrl) return;
+  const kind = props.assistant;
+  if (testing.value || !assistantHasProbe(kind)) return;
   testing.value = true;
   emit("busy-change", true);
   try {
     if (props.requestSave && !(await props.requestSave())) return;
-    const result = await $fetch<{ ok: boolean; message: string; elapsedMs?: number }>(props.testUrl, { method: "POST" });
+    const result = await settingsApi.testAssistantConnection(props.characterId, kind);
     const suffix = result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : "";
     if (result.ok) ElMessage.success(result.message + suffix);
     else ElMessage.error(result.message || `${props.title}连通性测试失败。`);
@@ -261,7 +263,6 @@ async function testConnection() {
             />
           </el-select>
           <el-button
-            v-if="modelsUrl"
             :loading="fetching"
             :disabled="disabled || fetching"
             @click="fetchModels"
@@ -269,7 +270,7 @@ async function testConnection() {
             <el-icon><Refresh /></el-icon>{{ fetching ? "获取中…" : "获取模型" }}
           </el-button>
           <el-button
-            v-if="testUrl"
+            v-if="assistantHasProbe(assistant)"
             :loading="testing"
             :disabled="disabled || testing"
             @click="testConnection"

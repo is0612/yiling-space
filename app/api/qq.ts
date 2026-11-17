@@ -156,6 +156,18 @@ export type CreateConnectionReq = {
 export type BindCharacterReq = {
   characterId: string;
   routingKey: string;
+  /** 绑定级行为：不传 = 保留已有配置（新绑定时沿用连接默认值）。 */
+  replyWindowMinutes?: number;
+  replyLimitPerWindow?: number;
+  groupChatMode?: GroupChatSettings["mode"];
+  groupChatModes?: Record<string, GroupChatSettings["mode"]>;
+  minGapSeconds?: number;
+  dailyMax?: number;
+  ambientChance?: number;
+  quietStart?: string;
+  quietEnd?: string;
+  groupAliases?: string;
+  groupBiliRunEnabled?: boolean;
 };
 
 const connectionPath = (connectionId: string) => `/admin/channels/${encodeURIComponent(connectionId)}`;

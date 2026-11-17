@@ -1,25 +1,15 @@
-export type AuthUser = {
-  id: string;
-  username: string;
-  displayName: string | null;
-  role?: "ADMIN" | "USER";
-};
-
-export type AuthSessionState = {
-  loaded: boolean;
-  mode: "session" | "local-dev" | "anonymous";
-  user: AuthUser | null;
-  reason?: string | null;
-};
+import { createAuthApi, type AuthSessionState } from "~/api/auth";
 
 const EMPTY_STATE: AuthSessionState = { loaded: false, mode: "anonymous", user: null, reason: null };
 
 export function useAuthSession() {
   const state = useState<AuthSessionState>("auth-session", () => ({ ...EMPTY_STATE }));
+  // SSR 阶段由注入的请求实例转发 cookie，不再手动透传请求头。
+  const api = createAuthApi(useApiRequest());
 
-  async function refresh(headers?: Record<string, string>) {
+  async function refresh() {
     try {
-      const response = await $fetch<Omit<AuthSessionState, "loaded">>("/api/auth/session", headers ? { headers } : undefined);
+      const response = await api.getSession();
       state.value = { loaded: true, ...response, reason: response.reason ?? null };
     } catch {
       state.value = { loaded: true, mode: "anonymous", user: null, reason: "request_failed" };
@@ -29,7 +19,7 @@ export function useAuthSession() {
 
   async function logout() {
     try {
-      await $fetch("/api/auth/logout", { method: "POST" });
+      await api.logout();
     } finally {
       state.value = { loaded: true, mode: "anonymous", user: null, reason: null };
       await navigateTo("/login");

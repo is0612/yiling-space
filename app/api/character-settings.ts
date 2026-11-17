@@ -148,6 +148,84 @@ export type ConnectionProbeResult = {
   voice?: string;
 };
 
+/** 对话页里的四个后台助手；知识助手没有连通性探针。 */
+export type AssistantKind = "memory" | "context" | "knowledge" | "social";
+export type AssistantWithProbe = Exclude<AssistantKind, "knowledge">;
+
+export type ProactiveSettings = {
+  enabled: boolean;
+  dailyMax: number;
+  minGapMinutes: number;
+  quietStart: string;
+  quietEnd: string;
+  userActiveMinutes: number;
+  minConfidence: number;
+};
+
+/** 群聊「冷场了自己找话题」：与私聊各有一套节奏，不能共用一个阈值。 */
+export type GroupInitiativeSettings = {
+  enabled: boolean;
+  idleMinutes: number;
+  dailyMax: number;
+  minGapMinutes: number;
+  quietStart: string;
+  quietEnd: string;
+};
+
+export type GroupInitiativeSnapshot = {
+  settings: GroupInitiativeSettings;
+  status: {
+    canSendNow: boolean;
+    reason: string;
+    reasonLabel: string;
+    groups: Array<{
+      groupId: string;
+      idleMinutes: number;
+      sentToday: number;
+      lastInitiativeAt: string | null;
+      canSendNow: boolean;
+      reason: string;
+      reasonLabel: string;
+    }>;
+  };
+};
+
+export type ProactiveSnapshot = {
+  settings: ProactiveSettings;
+  group: GroupInitiativeSnapshot;
+  status: {
+    sentToday: number;
+    pendingCount: number;
+    recipient: string | null;
+    lastSentAt: string | null;
+    gapRemainingMinutes: number;
+    quietNow: boolean;
+    quotaExceeded: boolean;
+    canSendNow: boolean;
+    reason: string;
+    reasonLabel: string;
+  };
+  recent: Array<{
+    id: string;
+    kind: string;
+    goal: string;
+    status: string;
+    content: string | null;
+    confidence: number;
+    sentAt: string | null;
+  }>;
+};
+
+export type ProactiveTryResult = {
+  status: string;
+  reason: string;
+  reasonLabel: string;
+  content: string | null;
+  detail: string | null;
+};
+
+export type GroupProactiveTryResult = ProactiveTryResult & { groupId: string | null };
+
 export type ImportedCharacterResult<
   TAdded = Record<string, unknown>,
   TCounts = Record<string, unknown>,
@@ -164,8 +242,23 @@ const catchphraseBase = (characterId: string) => `${characterBase(characterId)}/
 const catchphrasePath = (characterId: string, catchphraseId: string) =>
   `${catchphraseBase(characterId)}/${encodeURIComponent(catchphraseId)}`;
 const stickerBase = (characterId: string) => `${characterBase(characterId)}/stickers`;
+const assistantModelPaths: Record<AssistantKind, string> = {
+  memory: "/chat/memory-assistant/models",
+  context: "/chat/context-assistant/models",
+  knowledge: "/growth/knowledge/models",
+  social: "/growth/social/assessment-models",
+};
+const assistantTestPaths: Record<AssistantWithProbe, string> = {
+  memory: "/chat/test-memory-assistant-connection",
+  context: "/chat/test-context-assistant-connection",
+  social: "/growth/social/assessment-test",
+};
 const stickerPath = (characterId: string, stickerId: string) =>
   `${stickerBase(characterId)}/${encodeURIComponent(stickerId)}`;
+
+export function assistantHasProbe(kind: AssistantKind): kind is AssistantWithProbe {
+  return kind !== "knowledge";
+}
 
 /**
  * 角色设置接口：记忆周期、角色资料与模型、梗语录、表情包。
@@ -390,6 +483,35 @@ export function createCharacterSettingsApi(request: ApiRequest) {
     });
   }
 
+  function getAssistantModels(characterId: string, kind: AssistantKind): Promise<ModelCatalogResult> {
+    return request<ModelCatalogResult>({
+      url: `${characterBase(characterId)}${assistantModelPaths[kind]}`,
+      method: "get",
+    });
+  }
+
+  function testAssistantConnection(characterId: string, kind: AssistantWithProbe): Promise<ConnectionProbeResult> {
+    return request<ConnectionProbeResult>({
+      url: `${characterBase(characterId)}${assistantTestPaths[kind]}`,
+      method: "post",
+    });
+  }
+
+  function getProactiveSnapshot(characterId: string): Promise<ProactiveSnapshot> {
+    return request<ProactiveSnapshot>({ url: `${characterBase(characterId)}/proactive`, method: "get" });
+  }
+
+  function tryProactive(characterId: string): Promise<ProactiveTryResult> {
+    return request<ProactiveTryResult>({ url: `${characterBase(characterId)}/proactive/try`, method: "post" });
+  }
+
+  function tryGroupProactive(characterId: string): Promise<GroupProactiveTryResult> {
+    return request<GroupProactiveTryResult>({
+      url: `${characterBase(characterId)}/proactive/group-try`,
+      method: "post",
+    });
+  }
+
   function importCharacter<
     TAdded = Record<string, unknown>,
     TCounts = Record<string, unknown>,
@@ -433,6 +555,11 @@ export function createCharacterSettingsApi(request: ApiRequest) {
     testVoiceConnection,
     getVisionModels,
     testVisionConnection,
+    getAssistantModels,
+    testAssistantConnection,
+    getProactiveSnapshot,
+    tryProactive,
+    tryGroupProactive,
     importCharacter,
   };
 }

@@ -3,6 +3,12 @@ import { ArrowDown, CopyDocument, Cpu, Promotion, Search, Warning } from "@eleme
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character } from "~/utils/mock-data";
 import { createChatSessionState } from "~/utils/chat-session-state";
+import {
+  createChatApi,
+  type ChatCharacter,
+  type ChatMessage,
+  type ConversationSummary,
+} from "~/api/chat";
 
 // 标题与面包屑放顶栏（AppShell 读 route.meta.topbar）
 definePageMeta({
@@ -12,59 +18,9 @@ definePageMeta({
   },
 });
 
-type ChatCharacter = {
-  id: string;
-  name: string;
-  chatModel: string;
-  chatTemperature: number;
-  chatMaxTokens: number;
-  chatApiBaseUrl: string;
-  chatApiKeyConfigured: boolean;
-  chatApiKeySource: "character" | "environment" | "missing";
-};
-type MemoryScopeOrigin = "character" | "private";
-type ChatMemorySource = { id: string; category: string; content: string; scope?: MemoryScopeOrigin };
-type ChatSnapshotSource = { id: string; summary: string; periodStart: string; periodEnd: string; version: number; scope?: MemoryScopeOrigin };
-type ChatMessage = {
-  id: string;
-  role: "USER" | "ASSISTANT";
-  content: string;
-  occurredAt: string;
-  sources?: { memories: ChatMemorySource[]; snapshots: ChatSnapshotSource[] };
-};
-type ConversationSummary = {
-  id: string;
-  title: string;
-  lastMessageAt: string | null;
-  updatedAt: string;
-  messageCount: number;
-};
-type ChatHistoryResponse = {
-  character: ChatCharacter;
-  modelConfigured: boolean;
-  conversations: ConversationSummary[];
-  selectedConversationId: string | null;
-  messages: ChatMessage[];
-};
-type ChatExportPage = {
-  conversationId: string;
-  title: string;
-  status: "ACTIVE" | "ARCHIVED";
-  page: number;
-  pageSize: number;
-  total: number;
-  messages: ChatMessage[];
-};
-type ChatSendResponse = {
-  conversationId: string;
-  title: string;
-  userMessage: ChatMessage;
-  assistantMessage: ChatMessage;
-  model: { name: string; provider: string; promptTemplateVersion: string };
-  retrieval: { memoriesAvailable: number; snapshotsAvailable: number; privateScopeActive?: boolean };
-};
-
 const route = useRoute();
+// setup 里同步捕获本次 SSR 的请求实例，之后在事件回调里复用。
+const chatApi = createChatApi(useApiRequest());
 const characters = useCharacterList();
 await useCharacterListData();
 
@@ -160,7 +116,7 @@ function requestContext(overrides: Partial<{
 async function loadCharacter(ticket: ReturnType<typeof chatSessionState.begin>) {
   const targetCharacterId = ticket.context.characterId;
   if (!targetCharacterId) return;
-  const result = await $fetch<ChatCharacter>("/api/characters/" + encodeURIComponent(targetCharacterId));
+  const result = await chatApi.getCharacter(targetCharacterId);
   if (chatSessionState.isCurrent(ticket, requestContext())) character.value = result;
 }
 
@@ -194,10 +150,11 @@ async function renameConversation(item: ConversationSummary) {
   }
   if (!title || title === item.title || id.value !== characterId) return;
   try {
-    const updated = await $fetch<{ id: string; title: string; status: "ACTIVE" | "ARCHIVED"; updatedAt: string }>(
-      "/api/characters/" + encodeURIComponent(characterId) + "/chat/" + encodeURIComponent(item.id),
-      { method: "PATCH", body: { title } },
-    );
+    const updated = await chatApi.updateConversation({
+      characterId,
+      conversationId: item.id,
+      title,
+    });
     if (id.value !== characterId) return;
     conversations.value = conversations.value.map((entry) => entry.id === updated.id
       ? { ...entry, title: updated.title, updatedAt: updated.updatedAt }
@@ -211,10 +168,12 @@ async function renameConversation(item: ConversationSummary) {
 async function loadHistory(ticket: ReturnType<typeof chatSessionState.begin>, requestedId?: string | null) {
   const context = ticket.context;
   if (!context.characterId) return;
-  const params = new URLSearchParams({ status: context.view });
-  if (requestedId) params.set("conversationId", requestedId);
-  if (context.search) params.set("q", context.search);
-  const data = await $fetch<ChatHistoryResponse>("/api/characters/" + encodeURIComponent(context.characterId) + "/chat?" + params.toString());
+  const data = await chatApi.listHistory({
+    characterId: context.characterId,
+    status: context.view,
+    conversationId: requestedId,
+    search: context.search,
+  });
   if (!chatSessionState.isCurrent(ticket, requestContext())) return;
   modelConfigured.value = data.modelConfigured;
   conversations.value = data.conversations;
@@ -319,10 +278,7 @@ async function toggleConversationStatus(item: ConversationSummary) {
 
   if (id.value !== characterId) return;
   try {
-    await $fetch("/api/characters/" + encodeURIComponent(characterId) + "/chat/" + encodeURIComponent(item.id), {
-      method: "PATCH",
-      body: { status: nextStatus },
-    });
+    await chatApi.updateConversation({ characterId, conversationId: item.id, status: nextStatus });
     if (id.value !== characterId || conversationView.value !== sourceView) return;
     ElMessage.success(nextStatus === "ARCHIVED" ? "会话已归档，消息和来源记录均已保留。" : "会话已恢复。");
     const nextQuery = { ...route.query };
@@ -358,14 +314,7 @@ async function deleteConversation(item: ConversationSummary) {
   if (id.value !== characterId || conversationView.value !== sourceView) return;
   const wasSelected = item.id === conversationId.value;
   try {
-    const result = await $fetch<{
-      deletedMessages: number;
-      retainedMemories: number;
-      retainedSnapshotSources: number;
-    }>(
-      "/api/characters/" + encodeURIComponent(characterId) + "/chat/" + encodeURIComponent(item.id),
-      { method: "DELETE" },
-    );
+    const result = await chatApi.deleteConversation({ characterId, conversationId: item.id });
     if (id.value !== characterId || conversationView.value !== sourceView) return;
     // 有可能一条长期记忆都没有、但快照已经总结过这段（实测库里就是这样），
     // 所以只按 retainedMemories 拼文案的话，人删完什么都看不到，反而会担心记忆没了。
@@ -431,10 +380,12 @@ async function exportConversation(item: ConversationSummary | null = activeConve
     const exportMessages: ChatMessage[] = [];
     let expectedTotal = 0;
     for (let page = 1; ; page += 1) {
-      const result = await $fetch<ChatExportPage>(
-        "/api/characters/" + encodeURIComponent(exportCharacterId) + "/chat/" + encodeURIComponent(exportConversationId) +
-          "?page=" + page + "&pageSize=200",
-      );
+      const result = await chatApi.listMessagePage({
+        characterId: exportCharacterId,
+        conversationId: exportConversationId,
+        page,
+        pageSize: 200,
+      });
       if (page === 1) expectedTotal = result.total;
       exportMessages.push(...result.messages);
       if (exportMessages.length >= expectedTotal || result.messages.length === 0) break;
@@ -547,9 +498,11 @@ async function sendMessage() {
   draft.value = "";
   await scrollToLatest();
   try {
-    const result = await $fetch<ChatSendResponse>("/api/characters/" + encodeURIComponent(characterId) + "/chat", {
-      method: "POST",
-      body: { requestKey, message: content, ...(targetConversationId ? { conversationId: targetConversationId } : {}) },
+    const result = await chatApi.sendMessage({
+      characterId,
+      requestKey,
+      message: content,
+      conversationId: targetConversationId,
     });
     if (!chatSessionState.isCurrent(ticket, requestContext())) return;
     pendingRequestKey.value = null;

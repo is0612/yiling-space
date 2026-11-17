@@ -1,49 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Refresh } from "@element-plus/icons-vue";
-import ModelTurnDetail, { type ModelTurnDetailResponse } from "./ModelTurnDetail.vue";
-
-type CallLog = {
-  id: string;
-  turnId: string | null;
-  hasTurnDetail: boolean;
-  createdAt: string;
-  kind: string;
-  model: string;
-  status: "success" | "failed" | "unknown";
-  promptTokens: number | null;
-  completionTokens: number | null;
-  totalTokens: number | null;
-  reasoningTokens: number | null;
-  cacheHitTokens: number | null;
-  cacheMissTokens: number | null;
-  usageReported: boolean;
-  attempts: number | null;
-  durationMs?: number | null;
-  finishReason: string | null;
-  httpStatus: number | null;
-  reason: string | null;
-  costCny: number | null;
-};
-type CallLogsResponse = {
-  items: CallLog[];
-  page: number;
-  pageSize: number;
-  total: number;
-  summary: { records: number; totalTokens: number; failed: number; unknown: number; usageMissingRecords: number };
-  models: string[];
-  kinds: string[];
-  note: string;
-};
+import ModelTurnDetail from "./ModelTurnDetail.vue";
+import {
+  createModelLogsApi,
+  type ModelCallLog,
+  type ModelCallLogsResponse,
+  type ModelTurnDetailResponse,
+} from "~/api/model-logs";
 
 const props = defineProps<{ characterId: string }>();
+// setup 里同步捕获本次 SSR 的请求实例，之后在取消/重试回调里复用。
+const logsApi = createModelLogsApi(useApiRequest());
 const opened = defineModel<boolean>({ default: false });
 const days = ref<1 | 7 | 30>(7);
 const kind = ref("");
 const model = ref("");
 const page = ref(1);
 const pageSize = ref<20 | 50>(20);
-const report = ref<CallLogsResponse | null>(null);
+const report = ref<ModelCallLogsResponse | null>(null);
 const availableKinds = ref<string[]>([]);
 const availableModels = ref<string[]>([]);
 const total = ref(0);
@@ -76,7 +51,7 @@ function closeTurnDetail() {
   selectedLog.value = null;
   clearTurnDetail();
 }
-function openTurnDetail(row: CallLog) {
+function openTurnDetail(row: ModelCallLog) {
   if (!opened.value || !props.characterId || !row.turnId) return;
   selectedLog.value = { id: row.id, turnId: row.turnId };
   detailOpened.value = true;
@@ -90,7 +65,9 @@ async function loadTurnDetail() {
   detailController = new AbortController();
   detailLoading.value = true;
   try {
-    const response = await $fetch<ModelTurnDetailResponse>(`/api/characters/${encodeURIComponent(props.characterId)}/usage/logs/${encodeURIComponent(selection.id)}/turn`, {
+    const response = await logsApi.getTurnDetail({
+      characterId: props.characterId,
+      logId: selection.id,
       signal: detailController.signal,
     });
     if (sequence !== detailSequence || key !== detailKey.value) return;
@@ -140,14 +117,14 @@ function formatTime(value: string) {
 function formatNumber(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("zh-CN") : "—";
 }
-function formatTokens(row: CallLog, value: number | null) {
+function formatTokens(row: ModelCallLog, value: number | null) {
   return row.usageReported ? formatNumber(value) : "—";
 }
 function formatDuration(value: number | null | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
   return value < 1000 ? `${formatNumber(value)} 毫秒` : `${(value / 1000).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 秒`;
 }
-function formatCost(row: CallLog) {
+function formatCost(row: ModelCallLog) {
   if (!row.usageReported || row.costCny === null || !Number.isFinite(row.costCny)) return "—";
   if (row.costCny > 0 && row.costCny < 0.0001) return "< ¥0.0001";
   return `¥${row.costCny.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
@@ -156,7 +133,7 @@ function finishLabel(value: string | null) {
   if (!value) return "—";
   return ({ stop: "正常结束", length: "达到输出上限", tool_calls: "请求工具", function_call: "请求工具", content_filter: "内容被拦截" } as Record<string, string>)[value] ?? "其他结束方式";
 }
-function reasonLabel(row: CallLog) {
+function reasonLabel(row: ModelCallLog) {
   // Never render raw provider messages: they can contain request details or credentials.
   if (!row.reason) return "—";
   if (row.httpStatus === 401 || row.httpStatus === 403) return "服务商拒绝访问，请检查连接配置";
@@ -177,8 +154,13 @@ async function loadLogs() {
   loading.value = true;
   errorMessage.value = "";
   try {
-    const response = await $fetch<CallLogsResponse>(`/api/characters/${encodeURIComponent(props.characterId)}/usage/logs`, {
-      query: { days: days.value, kind: kind.value || undefined, model: model.value || undefined, page: page.value, pageSize: pageSize.value },
+    const response = await logsApi.listLogs({
+      characterId: props.characterId,
+      days: days.value,
+      kind: kind.value || undefined,
+      model: model.value || undefined,
+      page: page.value,
+      pageSize: pageSize.value,
       signal: controller.signal,
     });
     if (sequence !== requestSequence || key !== requestKey.value) return;
@@ -339,14 +321,14 @@ onBeforeUnmount(() => {
               <template #default="{ row }">
                 <dl class="log-details">
                   <div><dt>用量上报</dt><dd>{{ row.usageReported ? '已上报' : '未上报，Token 与金额不可确认' }}</dd></div>
-                  <div><dt>缓存命中 Token</dt><dd>{{ formatTokens(row as CallLog, row.cacheHitTokens) }}</dd></div>
-                  <div><dt>缓存未命中 Token</dt><dd>{{ formatTokens(row as CallLog, row.cacheMissTokens) }}</dd></div>
-                  <div><dt>思考 Token</dt><dd>{{ formatTokens(row as CallLog, row.reasoningTokens) }}</dd></div>
+                  <div><dt>缓存命中 Token</dt><dd>{{ formatTokens(row as ModelCallLog, row.cacheHitTokens) }}</dd></div>
+                  <div><dt>缓存未命中 Token</dt><dd>{{ formatTokens(row as ModelCallLog, row.cacheMissTokens) }}</dd></div>
+                  <div><dt>思考 Token</dt><dd>{{ formatTokens(row as ModelCallLog, row.reasoningTokens) }}</dd></div>
                   <div><dt>尝试次数</dt><dd>{{ formatNumber(row.attempts) }}</dd></div>
                   <div><dt>生成总耗时</dt><dd>{{ formatDuration(row.durationMs) }}（含助手处理与重试）</dd></div>
                   <div><dt>HTTP 状态</dt><dd>{{ formatNumber(row.httpStatus) }}</dd></div>
                   <div><dt>结束方式</dt><dd>{{ finishLabel(row.finishReason) }}</dd></div>
-                  <div><dt>结果说明</dt><dd>{{ reasonLabel(row as CallLog) }}</dd></div>
+                  <div><dt>结果说明</dt><dd>{{ reasonLabel(row as ModelCallLog) }}</dd></div>
                 </dl>
               </template>
             </el-table-column>
@@ -378,10 +360,10 @@ onBeforeUnmount(() => {
             >
               <template #default="{ row }">
                 <el-tag
-                  :type="statusTypes[row.status as CallLog['status']] ?? 'info'"
+                  :type="statusTypes[row.status as ModelCallLog['status']] ?? 'info'"
                   effect="light"
                 >
-                  {{ statusLabels[row.status as CallLog['status']] ?? '未知' }}
+                  {{ statusLabels[row.status as ModelCallLog['status']] ?? '未知' }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -391,7 +373,7 @@ onBeforeUnmount(() => {
               align="right"
             >
               <template #default="{ row }">
-                {{ formatTokens(row as CallLog, row.promptTokens) }}
+                {{ formatTokens(row as ModelCallLog, row.promptTokens) }}
               </template>
             </el-table-column>
             <el-table-column
@@ -400,7 +382,7 @@ onBeforeUnmount(() => {
               align="right"
             >
               <template #default="{ row }">
-                {{ formatTokens(row as CallLog, row.completionTokens) }}
+                {{ formatTokens(row as ModelCallLog, row.completionTokens) }}
               </template>
             </el-table-column>
             <el-table-column
@@ -409,7 +391,7 @@ onBeforeUnmount(() => {
               align="right"
             >
               <template #default="{ row }">
-                {{ formatTokens(row as CallLog, row.totalTokens) }}
+                {{ formatTokens(row as ModelCallLog, row.totalTokens) }}
               </template>
             </el-table-column>
             <el-table-column
@@ -418,7 +400,7 @@ onBeforeUnmount(() => {
               align="right"
             >
               <template #default="{ row }">
-                {{ formatCost(row as CallLog) }}
+                {{ formatCost(row as ModelCallLog) }}
               </template>
             </el-table-column>
             <el-table-column
@@ -431,7 +413,7 @@ onBeforeUnmount(() => {
                   v-if="row.turnId != null"
                   link
                   type="primary"
-                  @click="openTurnDetail(row as CallLog)"
+                  @click="openTurnDetail(row as ModelCallLog)"
                 >
                   查看本轮详情
                 </el-button>

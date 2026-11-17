@@ -1,77 +1,11 @@
-<script lang="ts">
-export type TurnMessage = {
-  id?: string;
-  member?: string;
-  speaker?: string;
-  content: string;
-  occurredAt?: string;
-};
-export type TurnCollaboration = {
-  version: 1;
-  elapsedMs: number;
-  stages: Array<{
-    stage: "context" | "memory" | "knowledge" | "response";
-    limit: number; logicalCalls: number; budgetRejections: number;
-    skipped: "not_enabled" | "not_needed" | null;
-    operations: Array<{
-      state: "running" | "success" | "no_sources" | "failed" | "budget_exhausted";
-      durationMs: number; reportedAttempts: number; rejectedDiagnostics: number;
-      attempts: Array<{
-        status: "success" | "failed" | "timeout" | "http_error" | "invalid_response" | "truncated";
-        durationMs: number; usageReported: boolean;
-        finishReason?: "stop" | "length" | "content_filter" | "unknown";
-      }>;
-    }>;
-  }>;
-};
-export type GrowthReadDiagnostic = {
-  domain: "preferences" | "language" | "goals" | "knowledge";
-  status: "not_needed" | "no_match" | "failed" | "budget_excluded" | "provided";
-  candidateCount: number; matchedCount: number; selectedCount: number;
-  budgetExcludedCount: number; limitExcludedCount: number; candidateLimitReached: boolean;
-  provided: Array<{ id: string; revision?: number; updatedAt?: string }>;
-  usedIds: string[];
-};
-export type ModelTurnDetailResponse = {
-  turnId: string;
-  createdAt: string;
-  detail: {
-    version: 1;
-    groupChat: boolean;
-    collaboration?: TurnCollaboration;
-    growthReads?: GrowthReadDiagnostic[];
-    messages: TurnMessage[];
-    context: {
-      status: "not_enabled" | "not_applicable" | "success" | "failed";
-      summary?: string;
-      participation?: "invited" | "observing" | "uncertain";
-      uncertainty?: string;
-      evidence?: TurnMessage[];
-    };
-    memory: {
-      status: "not_needed" | "not_enabled" | "no_sources" | "failed" | "success";
-      query?: string;
-      sources?: Array<{
-        id: string;
-        type: "memory" | "snapshot" | "event" | "message";
-        scope: "character" | "private";
-        title?: string;
-        content: string;
-        occurredAt?: string;
-      }>;
-    };
-    response: {
-      status: "success" | "failed";
-      action?: "reply" | "silent";
-      reply?: string;
-      explanation?: string;
-    };
-  };
-};
-</script>
-
 <script setup lang="ts">
 import { computed } from "vue";
+import type {
+  GrowthReadDiagnostic,
+  ModelTurnDetailResponse,
+  TurnCollaboration,
+  TurnMessage,
+} from "~/api/model-logs";
 
 const props = defineProps<{
   result: ModelTurnDetailResponse;

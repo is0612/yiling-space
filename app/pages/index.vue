@@ -3,7 +3,8 @@ import {
   ArrowRight,
   User,
 } from "@element-plus/icons-vue";
-import { characterUrgency, describeCountdown, formatCny, formatTokenCount, type OverviewCharacter, type OverviewPayload } from "~/utils/overview";
+import { createOverviewApi } from "~/api/overview";
+import { characterUrgency, describeCountdown, formatCny, formatTokenCount, type OverviewCharacter } from "~/utils/overview";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文从异常条直接开始；refreshable 让顶栏出现刷新按钮。
 definePageMeta({
@@ -16,11 +17,11 @@ definePageMeta({
 
 const { isAdmin } = useAuthSession();
 
-// SSR 阶段必须转发 cookie，否则总览会以匿名身份请求并触发 401。
-const request = import.meta.server ? useRequestFetch() : $fetch;
+// SSR 阶段由 useApiRequest 转发 cookie，否则总览会以匿名身份请求并触发 401。
+const overviewApi = createOverviewApi(useApiRequest());
 const { data: overview, pending, refresh } = await useAsyncData(
   "overview",
-  () => request<OverviewPayload>("/api/overview"),
+  () => overviewApi.getOverview(),
 );
 
 const characters = computed(() => overview.value?.characters ?? []);

@@ -1,3 +1,4 @@
+import { createCharactersApi } from "~/api/characters";
 import type { Character } from "~/utils/mock-data";
 
 /**
@@ -19,10 +20,10 @@ export function useCharacterListError() {
 export async function loadCharacters(): Promise<Character[]> {
   const characters = useCharacterList();
   const error = useCharacterListError();
-  // SSR 阶段使用 useRequestFetch 转发 cookie，避免把已登录用户的请求变成匿名请求。
-  const request = import.meta.server ? useRequestFetch() : $fetch;
+  // SSR 阶段由 useApiRequest 里的 useRequestFetch 转发 cookie，避免变成匿名请求。
+  const api = createCharactersApi(useApiRequest());
   try {
-    characters.value = await request<Character[]>("/api/characters");
+    characters.value = await api.listCharacters();
     error.value = null;
   } catch (cause) {
     // 保持已有列表，调用方按空列表处理。

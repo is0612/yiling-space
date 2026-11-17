@@ -1161,8 +1161,8 @@ watch(id, () => void loadCharacter());
             :chat-model="draftChatModel"
             :chat-api-base-url="draftChatApiBaseUrl"
             :chat-api-key-configured="character?.chatApiKeyConfigured === true"
-            :models-url="`/api/characters/${encodeURIComponent(id)}/chat/memory-assistant/models`"
-            :test-url="`/api/characters/${encodeURIComponent(id)}/chat/test-memory-assistant-connection`"
+            :character-id="id"
+            assistant="memory"
             :request-save="requestSave"
             :disabled="saving"
             clearable
@@ -1182,8 +1182,8 @@ watch(id, () => void loadCharacter());
             :chat-model="draftChatModel"
             :chat-api-base-url="draftChatApiBaseUrl"
             :chat-api-key-configured="character?.chatApiKeyConfigured === true"
-            :models-url="`/api/characters/${encodeURIComponent(id)}/chat/context-assistant/models`"
-            :test-url="`/api/characters/${encodeURIComponent(id)}/chat/test-context-assistant-connection`"
+            :character-id="id"
+            assistant="context"
             :request-save="requestSave"
             :disabled="saving"
             clearable
@@ -1203,7 +1203,8 @@ watch(id, () => void loadCharacter());
             :chat-model="draftChatModel"
             :chat-api-base-url="draftChatApiBaseUrl"
             :chat-api-key-configured="character?.chatApiKeyConfigured === true"
-            :models-url="`/api/characters/${encodeURIComponent(id)}/growth/knowledge/models`"
+            :character-id="id"
+            assistant="knowledge"
             :request-save="requestSave"
             :disabled="saving"
             clearable
@@ -1261,8 +1262,8 @@ watch(id, () => void loadCharacter());
             :chat-model="draftChatModel"
             :chat-api-base-url="draftChatApiBaseUrl"
             :chat-api-key-configured="character?.chatApiKeyConfigured === true"
-            :models-url="`/api/characters/${encodeURIComponent(id)}/growth/social/assessment-models`"
-            :test-url="`/api/characters/${encodeURIComponent(id)}/growth/social/assessment-test`"
+            :character-id="id"
+            assistant="social"
             :request-save="requestSave"
             :disabled="saving"
             clearable

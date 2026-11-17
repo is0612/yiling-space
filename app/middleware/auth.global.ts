@@ -8,10 +8,7 @@ const PUBLIC_PATHS = new Set(["/login", "/register"]);
 
 export default defineNuxtRouteMiddleware(async (to) => {
   const { state, refresh, isAdmin } = useAuthSession();
-  if (!state.value.loaded) {
-    const headers = import.meta.server ? useRequestHeaders(["cookie"]) : undefined;
-    await refresh(headers);
-  }
+  if (!state.value.loaded) await refresh();
 
   const isPublic = PUBLIC_PATHS.has(to.path);
   if (!state.value.user && !isPublic) {

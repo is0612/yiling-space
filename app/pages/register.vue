@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
+import { createAuthApi } from "~/api/auth";
 import { readApiErrorMessage } from "~/utils/api-error";
 
 definePageMeta({ layout: false });
 
 const { refresh } = useAuthSession();
+const authApi = createAuthApi(useApiRequest());
 const email = ref("");
 const displayName = ref("");
 const password = ref("");
@@ -27,13 +29,10 @@ async function submit() {
   }
   submitting.value = true;
   try {
-    await $fetch("/api/auth/register", {
-      method: "POST",
-      body: {
-        email: email.value.trim(),
-        password: password.value,
-        displayName: displayName.value.trim(),
-      },
+    await authApi.register({
+      email: email.value.trim(),
+      password: password.value,
+      displayName: displayName.value.trim(),
     });
     password.value = "";
     confirm.value = "";

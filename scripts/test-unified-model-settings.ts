@@ -36,8 +36,9 @@ assert(main.includes('const activeTab = computed<ModelSection>(() => props.secti
 assert(main.includes('if (disposed || version !== roleVersion) throw new Error("Model settings role changed")'));
 for (const field of ["chatApiKey: draftChatApiKey.value", "voiceApiKey: draftVoiceApiKey.value.trim()", "asrApiKey: draftAsrApiKey.value.trim()", "visionApiKey: draftVisionApiKey.value.trim()", "memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim()", "contextAssistantApiKey: draftContextAssistantApiKey.value.trim()"]) assert(main.includes(field), `Preserve credential save field: ${field}`);
 for (const endpoint of ["/voice/models", "/voice/test-connection", "/vision/test-connection", "/chat/test-connection"]) assert(settingsApi.includes(endpoint), endpoint);
-// 两个助手自己的模型清单仍由 AssistantOverridePanel 通过 props 接收 URL。
-for (const endpoint of ["/chat/memory-assistant/models", "/chat/context-assistant/models"]) assert(main.includes(endpoint), endpoint);
+// 四个助手的模型清单与探针已收进 character-settings 领域工厂，页面只传角色与助手类型。
+for (const endpoint of ["/chat/memory-assistant/models", "/chat/context-assistant/models", "/growth/knowledge/models", "/growth/social/assessment-models", "/chat/test-memory-assistant-connection", "/chat/test-context-assistant-connection", "/growth/social/assessment-test"]) assert(settingsApi.includes(endpoint), endpoint);
+for (const assistant of ["memory", "context", "knowledge", "social"]) assert(main.includes(`assistant="${assistant}"`), assistant);
 assert(legacy.includes("/settings/model"), "旧 /models 应转到角色下的模型设置页");
 assert(legacy.includes("...route.query")); assert(legacy.includes("hash: route.hash")); assert(legacy.includes("useCharacterSelection"));
 assert(!/font-size:\s*(?:[0-9]|1[01])px/.test(page));

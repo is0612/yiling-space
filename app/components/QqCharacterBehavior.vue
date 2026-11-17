@@ -12,76 +12,13 @@
 import { ArrowRight, Promotion } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { readApiErrorMessage } from "~/utils/api-error";
-
-type ProactiveSettings = {
-  enabled: boolean;
-  dailyMax: number;
-  minGapMinutes: number;
-  quietStart: string;
-  quietEnd: string;
-  userActiveMinutes: number;
-  minConfidence: number;
-};
-
-/**
- * 群聊「冷场了自己找话题」。
- *
- * 与私聊的 ProactiveSettings 是两套：私聊的节奏是「这个人」，群里的节奏是「这个群」，
- * 共用一个阈值必然有一边是错的（一个群安静两小时，另一个群一分钟几十条）。
- */
-type GroupInitiativeSettings = {
-  enabled: boolean;
-  idleMinutes: number;
-  dailyMax: number;
-  minGapMinutes: number;
-  quietStart: string;
-  quietEnd: string;
-};
-
-type GroupInitiativeSnapshot = {
-  settings: GroupInitiativeSettings;
-  status: {
-    canSendNow: boolean;
-    reason: string;
-    reasonLabel: string;
-    groups: Array<{
-      groupId: string;
-      idleMinutes: number;
-      sentToday: number;
-      lastInitiativeAt: string | null;
-      canSendNow: boolean;
-      reason: string;
-      reasonLabel: string;
-    }>;
-  };
-};
-
-type ProactiveSnapshot = {
-  settings: ProactiveSettings;
-  /** 群聊「冷场了自己找话题」的现状：和私聊那条各自独立。 */
-  group: GroupInitiativeSnapshot;
-  status: {
-    sentToday: number;
-    pendingCount: number;
-    recipient: string | null;
-    lastSentAt: string | null;
-    gapRemainingMinutes: number;
-    quietNow: boolean;
-    quotaExceeded: boolean;
-    canSendNow: boolean;
-    reason: string;
-    reasonLabel: string;
-  };
-  recent: Array<{
-    id: string;
-    kind: string;
-    goal: string;
-    status: string;
-    content: string | null;
-    confidence: number;
-    sentAt: string | null;
-  }>;
-};
+import {
+  createCharacterSettingsApi,
+  type GroupInitiativeSettings,
+  type ProactiveSettings,
+  type ProactiveSnapshot,
+} from "~/api/character-settings";
+import { createQqApi } from "~/api/qq";
 
 const props = defineProps<{
   characterId: string;
@@ -141,6 +78,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{ saved: [] }>();
+
+// setup 里同步捕获本次 SSR 的请求实例，之后在事件回调里复用。
+const settingsApi = createCharacterSettingsApi(useApiRequest());
+const qqApi = createQqApi(useApiRequest());
 
 const FALLBACK: ProactiveSettings = {
   enabled: false,
@@ -420,25 +361,22 @@ async function saveBind() {
     if (isGroupChatMode(mode)) groupChatModes[key] = mode;
   }
   try {
-    await $fetch(`/api/admin/channels/${encodeURIComponent(props.connectionId)}/bindings`, {
-      method: "POST",
-      body: {
-        characterId: props.characterId,
-        routingKey: groupKeyList.value.join(","),
-        replyWindowMinutes: bind.replyWindowMinutes,
-        replyLimitPerWindow: bind.replyLimitPerWindow,
-        groupChatMode: bind.groupChatMode,
-        // 群号列表空着（= 收所有群 + 私聊）时页面上看不到按群设置，顺手清掉等于一次
-        // 看不见的数据丢失，所以原样带着；后端仍会按群号应用它们。
-        groupChatModes: groupKeyList.value.length ? groupChatModes : { ...(props.groupChatModes ?? {}) },
-        minGapSeconds: bind.minGapSeconds,
-        dailyMax: bind.dailyMax,
-        ambientChance: bind.ambientChancePercent / 100,
-        quietStart: bind.quietStart,
-        quietEnd: bind.quietEnd,
-        groupAliases: bind.groupAliases,
-        groupBiliRunEnabled: bind.groupBiliRunEnabled,
-      },
+    await qqApi.bindCharacter(props.connectionId, {
+      characterId: props.characterId,
+      routingKey: groupKeyList.value.join(","),
+      replyWindowMinutes: bind.replyWindowMinutes,
+      replyLimitPerWindow: bind.replyLimitPerWindow,
+      groupChatMode: bind.groupChatMode,
+      // 群号列表空着（= 收所有群 + 私聊）时页面上看不到按群设置，顺手清掉等于一次
+      // 看不见的数据丢失，所以原样带着；后端仍会按群号应用它们。
+      groupChatModes: groupKeyList.value.length ? groupChatModes : { ...(props.groupChatModes ?? {}) },
+      minGapSeconds: bind.minGapSeconds,
+      dailyMax: bind.dailyMax,
+      ambientChance: bind.ambientChancePercent / 100,
+      quietStart: bind.quietStart,
+      quietEnd: bind.quietEnd,
+      groupAliases: bind.groupAliases,
+      groupBiliRunEnabled: bind.groupBiliRunEnabled,
     });
     ElMessage.success("群聊行为已保存。");
     emit("saved");
@@ -452,9 +390,7 @@ async function saveBind() {
 // ── 角色级：发表情 / 主动找话 ───────────────────────────
 async function loadSnapshot() {
   try {
-    snapshot.value = await $fetch<ProactiveSnapshot>(
-      `/api/characters/${encodeURIComponent(props.characterId)}/proactive`,
-    );
+    snapshot.value = await settingsApi.getProactiveSnapshot(props.characterId);
   } catch {
     // 读不到状态不影响改设置
     snapshot.value = null;
@@ -468,10 +404,7 @@ async function onEmojiChange(next: string | number | boolean) {
   const value = next === true;
   savingEmoji.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(props.characterId)}`, {
-      method: "PATCH",
-      body: { emojiEnabled: value },
-    });
+    await settingsApi.updateCharacter(props.characterId, { emojiEnabled: value });
     ElMessage.success(value ? "已开启：QQ 回复偶尔会单独跟一张表情。" : "已关闭：QQ 回复不再带表情。");
     emit("saved");
   } catch (error) {
@@ -492,12 +425,9 @@ async function onEmojiRateChange() {
   if (savingEmojiRate.value) return;
   savingEmojiRate.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(props.characterId)}`, {
-      method: "PATCH",
-      body: {
-        emojiWindowMinutes: emojiWindow.value,
-        emojiPerWindow: emojiPerWindow.value,
-      },
+    await settingsApi.updateCharacter(props.characterId, {
+      emojiWindowMinutes: emojiWindow.value,
+      emojiPerWindow: emojiPerWindow.value,
     });
     ElMessage.success(`已保存：每 ${emojiWindow.value} 分钟最多 ${emojiPerWindow.value} 张。`);
     emit("saved");
@@ -513,10 +443,7 @@ async function onImageUnderstandingChange(next: string | number | boolean) {
   const value = next === true;
   savingImageUnderstanding.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(props.characterId)}`, {
-      method: "PATCH",
-      body: { imageUnderstanding: value },
-    });
+    await settingsApi.updateCharacter(props.characterId, { imageUnderstanding: value });
     ElMessage.success(value
       ? "已开启：群友发的图会先读成几句文字，再交给她回复。"
       : "已关闭：群里的图又变回 [图片]。");
@@ -559,10 +486,7 @@ async function checkStickerCollectReadiness(): Promise<void> {
 
   checkingStickerReadiness.value = true;
   try {
-    const result = await $fetch<{ ok: boolean; message: string; model?: string }>(
-      `/api/characters/${encodeURIComponent(props.characterId)}/vision/test-connection`,
-      { method: "POST" },
-    );
+    const result = await settingsApi.testVisionConnection(props.characterId);
     if (result.ok) return;
     /**
      * 结论交给探测接口的原文：它分得清「模型名错了 / Key 不对 / 收到图但没看 / 预算被思考吃光」，
@@ -584,10 +508,7 @@ async function onStickerAutoCollectChange(next: string | number | boolean) {
   const value = next === true;
   savingStickerAutoCollect.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(props.characterId)}`, {
-      method: "PATCH",
-      body: { stickerAutoCollect: value },
-    });
+    await settingsApi.updateCharacter(props.characterId, { stickerAutoCollect: value });
     ElMessage.success(value
       ? "已开启：群里发来的图会存进她的表情库，并自动起名。"
       : "已关闭：不再自动收群里的图。");
@@ -608,10 +529,7 @@ async function onCatchphraseAutoMineChange(next: string | number | boolean) {
   const value = next === true;
   savingCatchphraseAutoMine.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(props.characterId)}`, {
-      method: "PATCH",
-      body: { catchphraseAutoMine: value },
-    });
+    await settingsApi.updateCharacter(props.characterId, { catchphraseAutoMine: value });
     ElMessage.success(value
       ? "已开启：群聊之后会顺手扫一遍，捡到的梗先待在「待确认」里，你点头她才会说。"
       : "已关闭：不再自动扫群里的梗。");
@@ -632,14 +550,11 @@ async function saveVoice() {
   if (savingVoice.value) return;
   savingVoice.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(props.characterId)}`, {
-      method: "PATCH",
-      body: {
-        voiceEnabled: voice.enabled,
-        voiceTranscribe: voice.transcribe,
-        voiceChance: voice.chance,
-        voiceCooldownMinutes: voice.cooldown,
-      },
+    await settingsApi.updateCharacter(props.characterId, {
+      voiceEnabled: voice.enabled,
+      voiceTranscribe: voice.transcribe,
+      voiceChance: voice.chance,
+      voiceCooldownMinutes: voice.cooldown,
     });
     ElMessage.success(voice.enabled || voice.transcribe
       ? "语音设置已保存。"
@@ -662,10 +577,7 @@ async function saveProactive(silent = false): Promise<boolean> {
   if (savingProactive.value) return false;
   savingProactive.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(props.characterId)}`, {
-      method: "PATCH",
-      body: { proactive: { ...draft.value } },
-    });
+    await settingsApi.updateCharacter(props.characterId, { proactive: { ...draft.value } });
     if (!silent) ElMessage.success("主动找话设置已保存。");
     emit("saved");
     await loadSnapshot();
@@ -684,13 +596,7 @@ async function tryOnce() {
   try {
     const saved = await saveProactive(true);
     if (!saved) return;
-    const result = await $fetch<{
-      status: string;
-      reason: string;
-      reasonLabel: string;
-      content: string | null;
-      detail: string | null;
-    }>(`/api/characters/${encodeURIComponent(props.characterId)}/proactive/try`, { method: "POST" });
+    const result = await settingsApi.tryProactive(props.characterId);
 
     if (result.status === "sent") ElMessage.success(`发出去了：「${result.content ?? ""}」`);
     else if (result.status === "skipped") ElMessage.warning(`这次没发：${result.reasonLabel}`);
@@ -715,10 +621,7 @@ async function saveGroupInitiative(silent = false): Promise<boolean> {
   if (savingGroupInitiative.value) return false;
   savingGroupInitiative.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(props.characterId)}`, {
-      method: "PATCH",
-      body: { groupInitiative: { ...groupDraft.value } },
-    });
+    await settingsApi.updateCharacter(props.characterId, { groupInitiative: { ...groupDraft.value } });
     if (!silent) ElMessage.success("群内找话题设置已保存。");
     emit("saved");
     await loadSnapshot();
@@ -738,14 +641,7 @@ async function tryGroupOnce() {
   try {
     const saved = await saveGroupInitiative(true);
     if (!saved) return;
-    const result = await $fetch<{
-      status: string;
-      reason: string;
-      reasonLabel: string;
-      groupId: string | null;
-      content: string | null;
-      detail: string | null;
-    }>(`/api/characters/${encodeURIComponent(props.characterId)}/proactive/group-try`, { method: "POST" });
+    const result = await settingsApi.tryGroupProactive(props.characterId);
 
     const where = result.groupId ? `（群 ${result.groupId}）` : "";
     if (result.status === "sent") ElMessage.success(`已经在群里说了${where}：「${result.content ?? ""}」`);

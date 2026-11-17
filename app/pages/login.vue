@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Lock, User } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { createAuthApi } from "~/api/auth";
 import { readApiErrorMessage } from "~/utils/api-error";
 
 definePageMeta({ layout: false });
@@ -19,6 +20,7 @@ const DEFAULT_ADMIN_PASSWORD = "admin123";
 const showDefaultAdmin = Boolean(import.meta.dev);
 
 const { refresh } = useAuthSession();
+const authApi = createAuthApi(useApiRequest());
 const username = ref(showDefaultAdmin ? DEFAULT_ADMIN_USERNAME : "");
 const password = ref(showDefaultAdmin ? DEFAULT_ADMIN_PASSWORD : "");
 const submitting = ref(false);
@@ -35,10 +37,7 @@ async function submit() {
   }
   submitting.value = true;
   try {
-    await $fetch("/api/auth/login", {
-      method: "POST",
-      body: { username: username.value.trim(), password: password.value },
-    });
+    await authApi.login({ username: username.value.trim(), password: password.value });
     password.value = "";
     await refresh();
     ElMessage.success("已登录。");
