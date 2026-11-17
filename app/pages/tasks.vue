@@ -8,6 +8,7 @@
  */
 import { ArrowRight, Cpu, Files, MagicStick, Refresh, Search, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { createSystemApi } from "~/api/system";
 
 // 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明和动作。
 definePageMeta({
@@ -16,6 +17,8 @@ definePageMeta({
     crumbs: [{ label: "系统管理" }],
   },
 });
+
+const api = createSystemApi(useApiRequest());
 
 type MemoryTask = {
   id: string;
@@ -39,34 +42,6 @@ type MemoryTask = {
   characterName: string;
   cleanupResult: { deletedMessageCount: number | null; cutoff: string | null; recordedAt: string } | null;
 };
-type TaskListResponse = {
-  items: MemoryTask[];
-  total: number;
-  allTotal: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  stuckCount: number;
-  oldestStuckAt: string | null;
-  statusCounts: Record<MemoryTask["status"], number>;
-};
-type WorkerResult = {
-  processed: boolean;
-  jobId?: string;
-  status?: "SUCCEEDED" | "SKIPPED" | "RETRY_WAIT" | "FAILED" | "CANCELLED";
-  snapshotId?: string;
-  message: string;
-};
-type SchedulerReport = {
-  settingsChecked: number;
-  settingsAdvanced: number;
-  jobsQueued: number;
-  periodsConsidered: number;
-  missingGlobalScope: number;
-  settingsStillDue: number;
-  note: string;
-};
-
 const tasks = ref<MemoryTask[]>([]);
 const totalTasks = ref(0);
 const allTasksTotal = ref(0);
@@ -262,13 +237,13 @@ async function loadTasks(allowPageCorrection = true) {
   loading.value = true;
   loadError.value = "";
   try {
-    const params = new URLSearchParams({
-      page: String(currentPage.value),
-      pageSize: String(pageSize.value),
+    const keyword = query.value.trim();
+    const result = await api.listTasks({
+      page: currentPage.value,
+      pageSize: pageSize.value,
+      ...(statusFilter.value !== "ALL" ? { status: statusFilter.value } : {}),
+      ...(keyword ? { keyword } : {}),
     });
-    if (statusFilter.value !== "ALL") params.set("status", statusFilter.value);
-    if (query.value.trim()) params.set("q", query.value.trim());
-    const result = await $fetch<TaskListResponse>("/api/tasks?" + params.toString());
     if (version !== requestVersion.value) return;
     // 操作任务后筛选结果可能缩小，当前页随之越界；只回退重查一次，避免空页锁死。
     if (allowPageCorrection && result.page > result.totalPages) {
@@ -306,7 +281,7 @@ async function runScheduler() {
   if (schedulerRunning.value) return;
   schedulerRunning.value = true;
   try {
-    const report = await $fetch<SchedulerReport>("/api/tasks/scheduler/run", { method: "POST" });
+    const report = await api.runTaskScheduler();
     await loadTasks();
     if (report.jobsQueued > 0) {
       ElMessage.success(`扫描完成：排入 ${report.jobsQueued} 个周期任务，处理 ${report.periodsConsidered} 个到期周期。`);
@@ -327,7 +302,7 @@ async function runWorker() {
   if (workerRunning.value) return;
   workerRunning.value = true;
   try {
-    const result = await $fetch<WorkerResult>("/api/tasks/worker/run", { method: "POST" });
+    const result = await api.runTaskWorker();
     await loadTasks();
     if (!result.processed) {
       ElMessage.info(result.message);
@@ -399,7 +374,7 @@ async function retrySelectedTask() {
 
   taskActionLoading.value = true;
   try {
-    await $fetch(`/api/tasks/${encodeURIComponent(task.id)}/retry`, { method: "POST" });
+    await api.retryTask(task.id);
     await loadTasks();
     selectedTask.value = tasks.value.find((item) => item.id === task.id) ?? null;
     if (!selectedTask.value) {
@@ -430,7 +405,7 @@ async function cancelSelectedTask() {
 
   taskActionLoading.value = true;
   try {
-    await $fetch(`/api/tasks/${encodeURIComponent(task.id)}/cancel`, { method: "POST" });
+    await api.cancelTask(task.id);
     await loadTasks();
     selectedTask.value = tasks.value.find((item) => item.id === task.id) ?? null;
     if (!selectedTask.value) {

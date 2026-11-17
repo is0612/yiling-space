@@ -13,6 +13,7 @@
 import { Clock, Refresh } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { readApiErrorMessage } from "~/utils/api-error";
+import { createSystemApi } from "~/api/system";
 
 // 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明和动作。
 definePageMeta({
@@ -21,6 +22,8 @@ definePageMeta({
     crumbs: [{ label: "系统管理" }],
   },
 });
+
+const api = createSystemApi(useApiRequest());
 
 type AdminUser = {
   id: string;
@@ -32,17 +35,6 @@ type AdminUser = {
   createdAt: string;
   characterCount: number;
   lastActiveAt: string | null;
-};
-
-type AdminUserPage = {
-  items: AdminUser[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  hasMore: boolean;
-  /** 全表统计，与当前页无关 —— 否则翻到第 3 页数字会缩水 */
-  stats: { total: number; adminCount: number; disabledCount: number };
 };
 
 const loading = ref(true);
@@ -82,9 +74,7 @@ function initialOf(user: AdminUser) {
 async function loadUsers(target = userPage.value) {
   loading.value = true;
   try {
-    const response = await $fetch<AdminUserPage>("/api/admin/users", {
-      query: { page: target, pageSize: USER_PAGE_SIZE },
-    });
+    const response = await api.listAdminUsers({ page: target, pageSize: USER_PAGE_SIZE });
     users.value = response.items;
     userPage.value = response.page;
     userTotal.value = response.total;
@@ -98,7 +88,6 @@ async function loadUsers(target = userPage.value) {
 }
 
 type AuditItem = { id: string; action: string; createdAt: string; actor: string | null; details: unknown };
-type AuditPage = { items: AuditItem[]; total: number; page: number; totalPages: number };
 const auditItems = ref<AuditItem[]>([]);
 const AUDIT_PAGE_SIZE = 10;
 const auditPage = ref(1);
@@ -116,9 +105,7 @@ const actionLabels: Record<string, string> = {
 
 async function loadAudit(target = auditPage.value) {
   try {
-    const response = await $fetch<AuditPage>("/api/admin/audit", {
-      query: { page: target, pageSize: AUDIT_PAGE_SIZE },
-    });
+    const response = await api.listAuditLogs({ page: target, pageSize: AUDIT_PAGE_SIZE });
     auditItems.value = response.items;
     auditPage.value = response.page;
     auditTotal.value = response.total;
@@ -138,7 +125,7 @@ async function toggleStatus(user: AdminUser) {
   if (!confirmed) return;
 
   try {
-    await $fetch(`/api/admin/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: { status: next } });
+    await api.updateAdminUser({ userId: user.id, status: next });
     ElMessage.success(next === "DISABLED" ? "账号已停用。" : "账号已启用。");
     await loadUsers();
   } catch (error) {
@@ -165,10 +152,7 @@ async function submitReset() {
   }
   resetting.value = true;
   try {
-    await $fetch(`/api/admin/users/${encodeURIComponent(resetTarget.value.id)}`, {
-      method: "PATCH",
-      body: { password },
-    });
+    await api.updateAdminUser({ userId: resetTarget.value.id, password });
     ElMessage.success("密码已重置，请把新密码告知该用户。");
     resetTarget.value = null;
     resetPassword.value = "";

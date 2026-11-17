@@ -10,6 +10,9 @@ import { Monitor, Refresh, SwitchButton, Unlock } from "@element-plus/icons-vue"
 import { ElMessage, ElMessageBox } from "element-plus";
 import { readApiErrorMessage } from "~/utils/api-error";
 import type { FormInstance, FormRules } from "element-plus";
+import { createSystemApi } from "~/api/system";
+
+const api = createSystemApi(useApiRequest());
 
 type DeviceKind = "desktop" | "mobile" | "tablet" | "unknown";
 
@@ -73,7 +76,7 @@ const otherSessionCount = computed(() => sessions.value.filter((session) => !ses
 async function loadSessions() {
   loadingSessions.value = true;
   try {
-    const response = await $fetch<{ mode: "session" | "local-dev"; sessions: AuthSessionRow[] }>("/api/auth/sessions");
+    const response = await api.listAuthSessions();
     sessions.value = response.sessions;
     sessionMode.value = response.mode;
   } catch (error) {
@@ -91,9 +94,9 @@ async function submitPasswordChange() {
 
   changingPassword.value = true;
   try {
-    const result = await $fetch<{ changed: boolean; revokedSessions: number }>("/api/auth/password", {
-      method: "POST",
-      body: { currentPassword: passwordForm.current, newPassword: passwordForm.next },
+    const result = await api.changePassword({
+      currentPassword: passwordForm.current,
+      newPassword: passwordForm.next,
     });
     passwordForm.current = "";
     passwordForm.next = "";
@@ -123,10 +126,7 @@ async function revokeSession(session: AuthSessionRow) {
 
   revokingId.value = session.id;
   try {
-    const result = await $fetch<{ revoked: boolean; currentRevoked: boolean }>(
-      `/api/auth/sessions/${encodeURIComponent(session.id)}`,
-      { method: "DELETE" },
-    );
+    const result = await api.revokeSession(session.id);
     if (result.currentRevoked) {
       await navigateTo("/login");
       return;
@@ -151,7 +151,7 @@ async function revokeOtherSessions() {
 
   revokingOthers.value = true;
   try {
-    const result = await $fetch<{ revoked: number }>("/api/auth/sessions/revoke-others", { method: "POST" });
+    const result = await api.revokeOtherSessions();
     ElMessage.success(result.revoked > 0 ? `已退出 ${result.revoked} 个设备。` : "没有其他在线设备。");
     await loadSessions();
   } catch (error) {
