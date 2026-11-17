@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
-import { buildChatCompletionsEndpoint } from "./chat-model-config";
+import { buildChatCompletionsEndpoint, resolveChatModelSettings } from "./chat-model-config";
 import { resolveKnowledgeAssistantRuntime } from "./knowledge-ai";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, recordModelUsage } from "./model-usage";
@@ -123,7 +123,7 @@ async function callModel(input: TopicInput[], runtime: NonNullable<Awaited<Retur
   await recordModelUsage({ kind: "knowledge-assistant", model: runtime.model, characterId, usage: readModelUsage(root), metadata: { operation: "topic-clustering", runId, promptVersion: PROMPT_VERSION } }).catch(() => undefined);
   return validateKnowledgeTopicOutput(parsed, input.map(item => item.itemId));
 }
-async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnType<typeof validateKnowledgeTopicOutput>): Promise<boolean> {
+async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnType<typeof validateKnowledgeTopicOutput>, model: string): Promise<boolean> {
   return prisma.$transaction(async tx => {
     const now = new Date();
     const held = await tx.$queryRaw<Array<{ id: string }>>`
@@ -151,7 +151,7 @@ async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnT
     }
     await tx.knowledgeTopicRun.update({
       where: { id: lease.id },
-      data: { status: "READY", ungroupedIds: result.ungroupedIds as unknown as Prisma.InputJsonValue, model: null, promptVersion: PROMPT_VERSION, completedAt: now, leaseToken: null, leaseExpiresAt: null, lastError: null },
+      data: { status: "READY", ungroupedIds: result.ungroupedIds as unknown as Prisma.InputJsonValue, model, promptVersion: PROMPT_VERSION, completedAt: now, leaseToken: null, leaseExpiresAt: null, lastError: null },
     });
     return true;
   }, { timeout: 15_000 });
@@ -197,7 +197,7 @@ export async function processNextKnowledgeTopicRun(prisma: PrismaClient, _option
     }
     const character = await prisma.character.findUnique({ where: { id: lease.characterId }, select: { modelConfig: true } });
     if (!character) throw new Error(SAFE_FAILURE);
-    const chat = await import("./chat-model-config").then(m => m.resolveChatModelSettings(character.modelConfig));
+    const chat = resolveChatModelSettings(character.modelConfig);
     const runtime = await resolveKnowledgeAssistantRuntime(character.modelConfig, chat.apiBaseUrl);
     if (!runtime) throw new Error("知识助手尚未启用或配置不完整，请先检查模型设置。");
     heartbeat = setInterval(() => {
@@ -213,7 +213,7 @@ export async function processNextKnowledgeTopicRun(prisma: PrismaClient, _option
     try { result = await callModel(input, runtime, lease.characterId, lease.id, controller.signal); }
     finally { clearTimeout(timeout); }
     if (leaseLost) return { processed: true, runId: lease.id };
-    const saved = await saveResult(prisma, lease, result);
+    const saved = await saveResult(prisma, lease, result, runtime.model);
     return { processed: true, runId: lease.id, ...(saved ? { status: "READY" } : {}) };
   } catch (error) {
     if (leaseLost) return { processed: true, runId: lease.id };
