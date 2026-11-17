@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ArrowRight, Clock, EditPen, MagicStick, Refresh } from "@element-plus/icons-vue";
+import { ArrowRight, Clock, EditPen, Plus, Refresh } from "@element-plus/icons-vue";
 import type { Character } from "~/utils/mock-data";
 
 // 标题归顶栏（AppShell 读 route.meta.topbar）；正文不再重复一遍面包屑和说明行。
@@ -101,6 +101,8 @@ const activeTab = ref<JournalKind>("DIARY");
 
 const writeDay = ref("");
 const writeDayTouched = ref(false);
+/** 「写日记」浮层：入口在目录标题行，浮层只放日期与确认。 */
+const writeOpen = ref(false);
 const writing = ref(false);
 const regenerating = ref(false);
 const journalTimeZone = ref("Asia/Shanghai");
@@ -385,7 +387,11 @@ async function writeDayNow(target: JournalKind | "BOTH" = "BOTH"): Promise<void>
   } catch (error) {
     if (seq === writeRequestSeq && targetCharacterId === id.value) ElMessage.error(readError(error));
   } finally {
-    if (seq === writeRequestSeq) writing.value = false;
+    if (seq === writeRequestSeq) {
+      writing.value = false;
+      // 结果已经用消息提示过了，浮层不用再留着。
+      writeOpen.value = false;
+    }
   }
 }
 
@@ -561,6 +567,7 @@ watch(id, () => {
   }
   writeDay.value = "";
   writeDayTouched.value = false;
+  writeOpen.value = false;
   revisions.value = [];
   historyTarget.value = null;
   historyOpen.value = false;
@@ -609,43 +616,6 @@ await loadList();
 
 <template>
   <div class="page-wrap journal-page">
-    <section
-      v-if="currentCharacter"
-      class="write-strip"
-    >
-      <span
-        class="write-badge"
-        aria-hidden="true"
-      >
-        <el-icon><MagicStick /></el-icon>
-      </span>
-      <div class="write-copy">
-        <p class="write-title">
-          补写某一天
-        </p>
-        <p class="write-sub">
-          挑一个日子，让她按那天的对话补上日记与手账。
-        </p>
-      </div>
-      <div class="write-form">
-        <el-date-picker
-          v-model="writeDay"
-          type="date"
-          value-format="YYYY-MM-DD"
-          :clearable="false"
-          style="width: 148px"
-          @change="markWriteDayTouched"
-        />
-        <el-button
-          type="primary"
-          :loading="writing"
-          @click="writeDayNow('BOTH')"
-        >
-          让她写这一天
-        </el-button>
-      </div>
-    </section>
-
     <div
       v-if="!currentCharacter"
       class="no-character"
@@ -667,6 +637,46 @@ await loadList();
           <div class="rail-title">
             <h2>写过的日子</h2>
             <span class="rail-count">{{ total }} 天</span>
+            <el-popover
+              v-model:visible="writeOpen"
+              placement="bottom-end"
+              :width="236"
+              trigger="click"
+              popper-class="write-popper"
+            >
+              <template #reference>
+                <button
+                  type="button"
+                  class="write-btn"
+                >
+                  <el-icon><Plus /></el-icon>写日记
+                </button>
+              </template>
+              <div class="write-pop">
+                <p class="write-pop-label">
+                  哪一天
+                </p>
+                <el-date-picker
+                  v-model="writeDay"
+                  type="date"
+                  value-format="YYYY-MM-DD"
+                  :clearable="false"
+                  style="width: 100%"
+                  @change="markWriteDayTouched"
+                />
+                <el-button
+                  type="primary"
+                  class="write-pop-go"
+                  :loading="writing"
+                  @click="writeDayNow('BOTH')"
+                >
+                  写这一天
+                </el-button>
+                <p class="write-pop-hint">
+                  默认昨天，可以改成过去任意一天。她会读那天的对话，写下日记与手账。
+                </p>
+              </div>
+            </el-popover>
           </div>
           <el-date-picker
             v-model="month"
@@ -689,7 +699,7 @@ await loadList();
             v-else-if="!items.length"
             class="rail-state"
           >
-            还没有日记或手账。挑一个日期，点上面的「让她写这一天」试试。
+            还没有日记或手账。点右上角「写日记」，挑一天让她写。
           </p>
 
           <div
@@ -1117,35 +1127,8 @@ await loadList();
 </template>
 
 <style scoped>
-/* 整页节奏：补写条 → 目录 / 正文两栏。间距只取 --sp-* 阶。 */
+/* 整页：目录 / 正文两栏。间距只取 --sp-* 阶。 */
 .journal-page { display: flex; flex-direction: column; gap: var(--sp-4); }
-
-/* ── 补写条：第一落点，浅品牌底，不跟阅读区抢注意力 ── */
-.write-strip {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--brand-line);
-  border-radius: var(--radius);
-  background: var(--brand-soft);
-}
-.write-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex: none;
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--brand);
-  font-size: 16px;
-}
-.write-copy { flex: 1; min-width: 0; }
-.write-title { color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; }
-.write-sub { margin-top: 2px; color: var(--dim); font-size: 12px; line-height: 1.6; }
-.write-form { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
 
 /* ── 两栏 ── */
 .journal-grid {
@@ -1175,10 +1158,37 @@ await loadList();
   padding: var(--sp-3);
   border-bottom: 1px solid var(--surface-3);
 }
-.rail-title { display: flex; align-items: baseline; gap: var(--sp-2); }
+.rail-title { display: flex; align-items: center; gap: var(--sp-2); }
 /* 分节标题 12/700 --dim：和角色档案的「档案 / 模型」同一档，靠字重分层不靠字号 */
 .rail-title h2 { color: var(--dim); font-size: 12px; font-weight: 700; }
 .rail-count { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* 「写日记」入口：目录管的就是日子，创建日子放在目录标题行，
+   不去阅读区抢位置；低频动作收进浮层，常态只占 26px 高。 */
+.write-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  margin-left: auto;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--brand-btn);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s var(--ease);
+}
+.write-btn:hover { background: var(--brand-btn-h); }
+.write-btn:focus-visible { outline: 2px solid var(--brand-line); outline-offset: 2px; }
+.write-btn .el-icon { font-size: 13px; }
+.write-pop { display: flex; flex-direction: column; gap: var(--sp-2); }
+.write-pop-label { color: var(--dim); font-size: 12px; font-weight: 600; }
+.write-pop-go { width: 100%; }
+.write-pop-hint { color: var(--dim); font-size: 12px; line-height: 1.7; }
 .rail-month { width: 100%; }
 .rail-body {
   flex: 1;
@@ -1432,9 +1442,6 @@ await loadList();
   /* 单列时目录在正文之上，吸顶会把它钉在视口里挡住内容 */
   .rail { position: static; max-height: none; }
   .rail-body { max-height: 320px; }
-  .write-strip { flex-wrap: wrap; }
-  .write-copy { flex-basis: calc(100% - 44px); }
-  .write-form { width: 100%; }
 }
 @media (max-width: 620px) {
   .reader-head { grid-template-columns: auto minmax(0, 1fr); }
