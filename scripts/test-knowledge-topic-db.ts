@@ -30,6 +30,9 @@ const addTopicMembers = (await import("../server/api/characters/[id]/growth/know
 const removeTopicMember = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/members/[itemId].delete")).default;
 const splitTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/split.post")).default;
 const mergeTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/merge.post")).default;
+const listTopicRevisions = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions.get")).default;
+const getTopicRevision = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions/[revision].get")).default;
+const restoreTopicRevision = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions/[revision]/restore.post")).default;
 const prisma = getPrisma();
 const ownerId = randomUUID();
 const otherOwnerId = randomUUID();
@@ -50,6 +53,9 @@ router.post("/characters/:id/growth/knowledge/topics/:topicId/members", addTopic
 router.delete("/characters/:id/growth/knowledge/topics/:topicId/members/:itemId", removeTopicMember);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/split", splitTopic);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/merge", mergeTopic);
+router.get("/characters/:id/growth/knowledge/topics/:topicId/revisions", listTopicRevisions);
+router.get("/characters/:id/growth/knowledge/topics/:topicId/revisions/:revision", getTopicRevision);
+router.post("/characters/:id/growth/knowledge/topics/:topicId/revisions/:revision/restore", restoreTopicRevision);
 app.use(router);
 const api = createServer(toNodeListener(app));
 
