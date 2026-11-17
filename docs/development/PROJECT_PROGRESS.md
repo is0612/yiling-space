@@ -199,3 +199,12 @@
 - 真实使用验收：未开始；尚无主题页面，暂不需要 QQ/聊天链路验收。
 - 当前卡点：需验证 Prisma Client 类型、SQL 锁语义、Worker 调度和 API 路由。
 - 下一步（只写一个优先动作）：补齐并运行主题 Run/Worker 数据库专项测试，再进行工程回归。
+
+
+### 2026-11-17 · 知识主题建议审核 API
+
+- 状态：开发中（独立分支，待 CI）
+- 新增建议 CREATE / APPLY 采纳与 DISMISSED 忽略 API；事务内锁定 Run/Suggestion，复核角色归属、READY/PENDING 状态和成员 ACTIVE + revision 快照。
+- APPLY 先保存主题修订快照，再递增 revision 并补充成员；CREATE 同事务创建主题与成员。支持部分采纳，不修改模型原始建议成员快照。
+- 数据库集成测试扩展：跨角色访问、并发双重采纳、CREATE、部分 APPLY、修订快照、非法成员、忽略及重复审核。
+- 尚待 Prisma/typecheck/lint/build 与 GitHub Actions；不得将代码提交视为已验收。
