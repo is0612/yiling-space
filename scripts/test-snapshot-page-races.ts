@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
+import { createMemoryApi } from "../app/api/memory";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 
 /**
  * Execute the actual script/setup handlers with deferred fetch/confirmation promises.
@@ -29,7 +31,7 @@ assert.equal(compiled.diagnostics?.filter((d) => d.category === ts.DiagnosticCat
 const executable = new Script(compiled.outputText, { filename: "snapshots.vue.actual-script.js" });
 
 type Ref = { value: unknown };
-type Request = { url: string; options?: { method?: string; body?: unknown }; resolve: (value: unknown) => void; reject: (error: unknown) => void };
+type Request = { url: string; options?: { method?: string; body?: unknown; query?: Record<string, unknown> }; resolve: (value: unknown) => void; reject: (error: unknown) => void };
 
 function harness() {
   const watchers: Array<{ sources: Ref[]; callback: (...args: unknown[]) => void }> = [];
@@ -40,6 +42,16 @@ function harness() {
   let timerId = 0;
   const role = { value: "role-a" };
   const notify = (message: string) => messages.push(message);
+  const recordingFetch: RawFetch = (url, fetchOptions) => new Promise((resolve, reject) => requests.push({
+    url,
+    options: {
+      method: fetchOptions?.method as string | undefined,
+      body: fetchOptions?.body,
+      query: fetchOptions?.query as Record<string, unknown> | undefined,
+    },
+    resolve,
+    reject,
+  }));
   const bindings = executable.runInContext(createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
@@ -54,7 +66,8 @@ function harness() {
     useMemoryProgress: () => ({ lastFinished: { value: null } }),
     ElMessage: { error: notify, success: notify, warning: notify, info: notify },
     ElMessageBox: { confirm: () => new Promise((resolve, reject) => confirmations.push({ resolve, reject })) },
-    $fetch: (url: string, options?: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
+    createMemoryApi,
+    useApiRequest: () => createRequestClient(recordingFetch),
   })) as Record<string, Ref | ((...args: unknown[]) => unknown)>;
   function read<T = unknown>(name: string): T { return (bindings[name] as Ref).value as T; }
   function set(name: string, value: unknown) {
@@ -76,25 +89,45 @@ function harness() {
     const index = requests.findIndex((request) => request.url === path && (request.options?.method ?? "GET") === method);
     return index >= 0 ? requests.splice(index, 1)[0]! : null;
   }
+  /** 查询参数现在走 options.query；这里按完整参数集匹配，避免漏传或多传。 */
+  function takeQuery(path: string, expected: Record<string, string>, method = "GET") {
+    const index = requests.findIndex((request) => {
+      if (request.url !== path || (request.options?.method ?? "GET") !== method) return false;
+      const query = request.options?.query ?? {};
+      const keys = Object.keys(query);
+      return keys.length === Object.keys(expected).length
+        && Object.entries(expected).every(([key, value]) => String(query[key] ?? "") === value);
+    });
+    assert.ok(index >= 0, `missing ${method} ${path} ${JSON.stringify(expected)}`);
+    return requests.splice(index, 1)[0]!;
+  }
   function confirm() { assert.ok(confirmations.length, "missing confirmation"); confirmations.shift()!.resolve(); }
   function runTimers() { const pending = [...timers.values()]; timers.clear(); for (const callback of pending) callback(); }
   function done() { assert.equal(requests.length, 0, "unexpected/unsettled request"); assert.equal(confirmations.length, 0); }
-  return { read, set, call, take, takeIf, confirm, runTimers, done, messages, requests, bindings };
+  return { read, set, call, take, takeIf, takeQuery, confirm, runTimers, done, messages, requests, bindings };
 }
 
-/** 列表 URL：与 loadSnapshots 拼出来的参数顺序一致。 */
-function listUrl(characterId: string, options: { page?: number; kind?: "AUTOMATIC" | "ALL"; status?: string; q?: string } = {}) {
-  const params = new URLSearchParams({ page: String(options.page ?? 1), pageSize: "10" });
-  if (options.status) params.set("status", options.status);
-  if (options.kind !== "ALL") params.set("kind", options.kind ?? "AUTOMATIC");
-  if (options.q) params.set("q", options.q);
-  return `/api/characters/${characterId}/snapshots?${params.toString()}`;
+/** 列表接口：路径与查询参数分开断言（查询现在走 options.query）。 */
+function listPath(characterId: string) {
+  return `/api/characters/${characterId}/snapshots`;
+}
+function listQuery(options: { page?: number; kind?: "AUTOMATIC" | "ALL"; status?: string; q?: string } = {}) {
+  return {
+    page: String(options.page ?? 1),
+    pageSize: "10",
+    ...(options.status ? { status: options.status } : {}),
+    ...(options.kind !== "ALL" ? { kind: options.kind ?? "AUTOMATIC" } : {}),
+    ...(options.q ? { q: options.q } : {}),
+  };
 }
 function detailUrl(characterId: string, id: string) {
   return `/api/characters/${characterId}/snapshots/${id}`;
 }
-function sourcesUrl(characterId: string, id: string, page = 1) {
-  return `/api/characters/${characterId}/snapshots/${id}/sources?page=${page}&pageSize=10`;
+function sourcesPath(characterId: string, id: string) {
+  return `/api/characters/${characterId}/snapshots/${id}/sources`;
+}
+function sourcesQuery(page = 1) {
+  return { page: String(page), pageSize: "10" };
 }
 function summary(id: string) {
   return {
@@ -119,8 +152,8 @@ function pageResult(ids: string[], page = 1) {
 }
 
 /** 解析一次「列表 + 详情」：列表回来之后页面会紧跟一次详情请求。 */
-async function settleLoad(page: ReturnType<typeof harness>, characterId: string, ids: string[], options: Parameters<typeof listUrl>[1] = {}) {
-  page.take(listUrl(characterId, options)).resolve(pageResult(ids, options.page ?? 1));
+async function settleLoad(page: ReturnType<typeof harness>, characterId: string, ids: string[], options: Parameters<typeof listQuery>[0] = {}) {
+  page.takeQuery(listPath(characterId), listQuery(options)).resolve(pageResult(ids, options.page ?? 1));
   await flush();
   const nextDetail = ids.length ? page.takeIf(detailUrl(characterId, ids[0]!)) : null;
   if (nextDetail) {
@@ -134,7 +167,7 @@ async function listAndDetailRaces() {
   for (const reject of [false, true]) {
     const page = harness();
     const old = page.call("loadSnapshots", { page: 1 });
-    const stale = page.take(listUrl("role-a"));
+    const stale = page.takeQuery(listPath("role-a"), listQuery());
     page.set("id", "role-b");
     await settleLoad(page, "role-b", ["b"]);
     if (reject) stale.reject(new Error("late list failure")); else stale.resolve(pageResult(["stale"]));
@@ -167,7 +200,7 @@ async function sourceRaces() {
   void page.call("loadSnapshots", { page: 1 });
   await settleLoad(page, "role-a", ["a"]);
   page.call("toggleSources");
-  page.take(sourcesUrl("role-a", "a", 1)).resolve({
+  page.takeQuery(sourcesPath("role-a", "a"), sourcesQuery(1)).resolve({
     items: [{ index: 1, id: "m1", role: "USER", eventType: "message", content: "hi", occurredAt: "2026-11-05T01:00:00.000Z", conversationTitle: null }],
     total: 20, page: 1, pageSize: 10, totalPages: 2,
   });
@@ -177,7 +210,7 @@ async function sourceRaces() {
   assert.equal(page.read("sourceTotalPages"), 2);
 
   page.call("changeSourcePage", 2);
-  const second = page.take(sourcesUrl("role-a", "a", 2));
+  const second = page.takeQuery(sourcesPath("role-a", "a"), sourcesQuery(2));
   // 翻页途中切到另一份：迟到的第 2 页属于旧快照，必须丢掉。
   await page.call("selectDetail", summary("c"));
   page.take(detailUrl("role-a", "c")).resolve(detail("c"));
@@ -256,7 +289,7 @@ async function writeGuards() {
   page.take("/api/characters/role-a/snapshots", "POST").resolve({ id: "new" });
   await flush();
   assert.equal(page.read("showManual"), true);
-  page.take(listUrl("role-a", { kind: "ALL" })).resolve(pageResult(["new"]));
+  page.takeQuery(listPath("role-a"), listQuery({ kind: "ALL" })).resolve(pageResult(["new"]));
   await flush();
   page.take(detailUrl("role-a", "new")).resolve(detail("new"));
   await pending;

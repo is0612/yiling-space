@@ -3,6 +3,9 @@ import { ArrowDown, Calendar, Files, Refresh, Search } from "@element-plus/icons
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character, Snapshot, SnapshotAnalysis, SnapshotDetail, SnapshotSourceMessage } from "~/utils/mock-data";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
+import { createMemoryApi } from "~/api/memory";
+
+const api = createMemoryApi(useApiRequest());
 
 const pageDescription = "回看每个周期的经历、变化与约定，沿着来源了解每一份总结。";
 
@@ -23,23 +26,6 @@ const current = computed<Character | null>(
  * - 详情：点开某一版才取 AI 提炼结果；
  * - 来源：展开「来源消息与原文」才取，那一块自己翻页。
  */
-type SnapshotPage = {
-  items: Snapshot[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  counts: { automatic: number; manual: number; current: number; superseded: number };
-  stats: { messages: number; latestDate: string | null; automatic: number; manual: number };
-};
-type SnapshotSourcePage = {
-  items: SnapshotSourceMessage[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
-
 /** 一页 10 份：左栏列表自己滚，翻页也不会把右栏顶走 */
 const PAGE_SIZE = 10;
 const SOURCE_PAGE_SIZE = 10;
@@ -209,14 +195,16 @@ async function loadSnapshots(options: { page?: number; selectedId?: string; refr
   const targetPage = options.page ?? page.value;
   loading.value = true;
   try {
-    const params = new URLSearchParams({ page: String(targetPage), pageSize: String(PAGE_SIZE) });
-    if (statusParam()) params.set("status", statusParam());
-    if (!showManual.value) params.set("kind", "AUTOMATIC");
+    const status = statusParam();
     const keyword = query.value.trim();
-    if (keyword) params.set("q", keyword);
-    const result = await $fetch<SnapshotPage>(
-      `/api/characters/${encodeURIComponent(characterId)}/snapshots?${params.toString()}`,
-    );
+    const result = await api.listSnapshots({
+      characterId,
+      page: targetPage,
+      pageSize: PAGE_SIZE,
+      ...(status ? { status } : {}),
+      ...(!showManual.value ? { kind: "AUTOMATIC" } : {}),
+      ...(keyword ? { keyword } : {}),
+    });
     if (!isCurrent()) return false;
     items.value = result.items;
     total.value = result.total;
@@ -256,9 +244,7 @@ async function loadDetail(snapshotId: string, stillActive: () => boolean = () =>
   if (detail.value && detail.value.id !== snapshotId) applyDetail(null);
   detailLoading.value = true;
   try {
-    const result = await $fetch<SnapshotDetail>(
-      `/api/characters/${encodeURIComponent(characterId)}/snapshots/${encodeURIComponent(snapshotId)}`,
-    );
+    const result = await api.getSnapshot({ characterId, snapshotId });
     if (request !== detailRequest || characterId !== id.value || !stillActive()) return false;
     applyDetail(result);
     return true;
@@ -304,9 +290,12 @@ async function loadSources(targetPage = 1) {
   const request = ++sourceRequest;
   sourcesLoading.value = true;
   try {
-    const result = await $fetch<SnapshotSourcePage>(
-      `/api/characters/${encodeURIComponent(characterId)}/snapshots/${encodeURIComponent(snapshot.id)}/sources?page=${targetPage}&pageSize=${SOURCE_PAGE_SIZE}`,
-    );
+    const result = await api.listSnapshotSources({
+      characterId,
+      snapshotId: snapshot.id,
+      page: targetPage,
+      pageSize: SOURCE_PAGE_SIZE,
+    });
     if (request !== sourceRequest || characterId !== id.value || detail.value?.id !== snapshot.id) return;
     sourceItems.value = result.items;
     sourceTotal.value = result.total;
@@ -449,10 +438,7 @@ async function reviewChange(changeIndex: number, decision: "ACCEPT" | "IGNORE", 
   try {
     if (decision === "ACCEPT" && !(await confirmAccept(item))) return;
     if (!operationCurrent(context) || detail.value?.analysis?.memoryChangesApplied[changeIndex] !== item || !reviewPending(item)) return;
-    const result = await $fetch<{ outcome: string | null }>(
-      `/api/characters/${encodeURIComponent(characterId)}/snapshots/${encodeURIComponent(snapshotId)}/review`,
-      { method: "POST", body: { changeIndex, decision } },
-    );
+    const result = await api.reviewSnapshotChange({ characterId, snapshotId, changeIndex, decision });
     if (!operationCurrent(context)) return;
     ElMessage.success(reviewResultMessage(decision, result.outcome));
     // 刷新后保持原来选中哪一份、以及来源消息是开还是收。
@@ -499,7 +485,7 @@ async function createSnapshot() {
   if (!operationCurrent(context)) return;
   creating.value = true;
   try {
-    const result = await $fetch<{ id: string }>(`/api/characters/${encodeURIComponent(characterId)}/snapshots`, { method: "POST" });
+    const result = await api.createSnapshot(characterId);
     if (!operationCurrent(context)) return;
     // 刚存的那份如果被默认收起，用户会以为没存上
     showManual.value = true;
@@ -531,10 +517,7 @@ async function regenerateWithAi(snapshot: Snapshot) {
   if (!operationCurrent(context)) return;
   aiRegeneratingId.value = snapshotId;
   try {
-    const result = await $fetch<{ jobId: string; status: string; duplicate: boolean }>(
-      `/api/characters/${encodeURIComponent(characterId)}/snapshots`,
-      { method: "POST", body: { snapshotId, mode: "ai" } },
-    );
+    const result = await api.queueSnapshotAiRegeneration({ characterId, snapshotId });
     if (!operationCurrent(context)) return;
     ElMessage.success(
       result.duplicate
@@ -566,10 +549,7 @@ async function regenerate(snapshot: Snapshot) {
   if (!operationCurrent(context)) return;
   regeneratingId.value = snapshotId;
   try {
-    const result = await $fetch<{ id: string }>(`/api/characters/${encodeURIComponent(characterId)}/snapshots`, {
-      method: "POST",
-      body: { snapshotId },
-    });
+    const result = await api.regenerateSnapshot({ characterId, snapshotId });
     if (!operationCurrent(context)) return;
     page.value = 1;
     if (!(await loadSnapshots({ page: 1, selectedId: result.id, refreshDetail: true })) || !operationActive(context)) return;

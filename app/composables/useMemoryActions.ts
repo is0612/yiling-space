@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ensureMemoryProgressPolling, refreshMemoryProgress } from "~/composables/useMemoryProgress";
+import { createMemoryApi } from "~/api/memory";
 
 /**
  * 记忆系统的两个手动动作：「整理忆泡」和「阶段总结」。
@@ -17,24 +18,6 @@ import { ensureMemoryProgressPolling, refreshMemoryProgress } from "~/composable
  * 「这次请求还在等」，不代表任务已经结束 —— 页面不要用它判断任务是不是跑完了。
  */
 
-/** `snapshots/generate` 的返回。`processing` = 已转后台，进度看面板。 */
-type GenerateResult = {
-  queued: string[];
-  skipped: string[];
-  processed: Array<{ status: string; message: string }>;
-  pending: number;
-  advancedTo: string | null;
-  processing?: boolean;
-};
-
-/** `memory-events/extract` 的返回。`notice` 解释「一条都没排」的真实原因。 */
-type ExtractResult = {
-  queued: string[];
-  processed: Array<{ status: string; message: string }>;
-  notice?: "queued" | "running" | "no-new-messages";
-  processing?: boolean;
-};
-
 /** 服务端把原因放在 statusMessage 里，拿不到才退回通用文案。 */
 function statusMessage(error: unknown, fallback: string) {
   if (error && typeof error === "object" && "statusMessage" in error) {
@@ -49,6 +32,7 @@ export function useMemoryActions(
   resolveCharacterId: () => string,
   resolveCharacterName: () => string = () => "",
 ) {
+  const api = createMemoryApi(useApiRequest());
   const snapshotGenerating = ref(false);
   const eventExtracting = ref(false);
 
@@ -78,10 +62,7 @@ export function useMemoryActions(
     // 排队之后面板才看得见任务；提前起轮询，免得几十秒里右下角一片安静。
     ensureMemoryProgressPolling();
     try {
-      const result = await $fetch<GenerateResult>(
-        `/api/characters/${encodeURIComponent(id)}/snapshots/generate`,
-        { method: "POST" },
-      );
+      const result = await api.generateSnapshot(id);
       void refreshMemoryProgress();
 
       const failed = result.processed.find((item) => item.status === "FAILED" || item.status === "RETRY_WAIT");
@@ -121,10 +102,7 @@ export function useMemoryActions(
     eventExtracting.value = true;
     ensureMemoryProgressPolling();
     try {
-      const result = await $fetch<ExtractResult>(
-        `/api/characters/${encodeURIComponent(id)}/memory-events/extract`,
-        { method: "POST" },
-      );
+      const result = await api.extractMemoryEvents(id);
       void refreshMemoryProgress();
 
       const failed = result.processed.find((item) => item.status !== "SUCCEEDED" && item.status !== "SKIPPED");

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createContext, Script } from "node:vm";
 import ts from "typescript";
+import { createMemoryApi } from "../app/api/memory";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 const source = readFileSync(new URL("../app/pages/growth/memory/interaction-experiences.vue", import.meta.url), "utf8");
 assert(!source.includes("生成候选（调用模型）"));
 assert(!source.includes("assistantMessageId"));
@@ -18,7 +20,8 @@ type Options = { method?: string; body?: Record<string, unknown>; query?: Record
 type Request = { url: string; options?: Options; resolve: (v: unknown) => void; reject: (e: unknown) => void };
 function harness() {
  const role={value:{id:"a"}}; const requests:Request[]=[]; let watcher=()=>{}; let unmount=()=>{}; let notices=0;
- const context=createContext({ref:(v:unknown)=>({value:v}),reactive:(v:unknown)=>v,computed:(get:()=>unknown)=>({get value(){return get();}}),useRoute:()=>({path:"/growth/memory/interaction-experiences"}),useCharacterSelection:()=>({character:role}),definePageMeta:()=>{},watch:(_:unknown,cb:()=>void)=>{watcher=cb;cb();},onBeforeUnmount:(cb:()=>void)=>{unmount=cb;},ElMessage:{success(){notices++;}},$fetch:(url:string,options:Options)=>new Promise((resolve,reject)=>requests.push({url,options,resolve,reject}))});
+ const recordingFetch:RawFetch=(url,fetchOptions)=>new Promise((resolve,reject)=>requests.push({url,options:{method:fetchOptions?.method as string|undefined,body:fetchOptions?.body as Record<string,unknown>|undefined,query:fetchOptions?.query as Record<string,unknown>|undefined},resolve,reject}));
+ const context=createContext({ref:(v:unknown)=>({value:v}),reactive:(v:unknown)=>v,computed:(get:()=>unknown)=>({get value(){return get();}}),useRoute:()=>({path:"/growth/memory/interaction-experiences"}),useCharacterSelection:()=>({character:role}),definePageMeta:()=>{},watch:(_:unknown,cb:()=>void)=>{watcher=cb;cb();},onBeforeUnmount:(cb:()=>void)=>{unmount=cb;},ElMessage:{success(){notices++;}},createMemoryApi,useApiRequest:()=>createRequestClient(recordingFetch)});
  const bindings=new Script(compiled).runInContext(context) as Record<string,any>;
  return {get:(key:string)=>bindings[key].value,call:(key:string,...args:unknown[])=>bindings[key](...args),draft:bindings.draft,take:()=>{assert(requests.length);return requests.shift()!;},switch:(id:string)=>{role.value={id};watcher();},unmount:()=>unmount(),notices:()=>notices,remaining:()=>requests.length};
 }

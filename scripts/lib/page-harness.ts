@@ -8,6 +8,9 @@ import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
 import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
+import { createKnowledgeApi } from "../../app/api/knowledge";
+import { readApiErrorMessage } from "../../app/utils/api-error";
+import { createRequestClient, type RawFetch } from "../../app/utils/request";
 
 type PendingRequest = {
   url: string;
@@ -67,6 +70,20 @@ return { ${names.join(", ")} };
   const successes: string[] = [];
   const unmountCallbacks: Array<() => void> = [];
   const mountedCallbacks: Array<() => void> = [];
+  // 领域 API 通过 useApiRequest() 取传输层；这里复用真实 createRequestClient，
+  // 让页面测试同时覆盖「路径不带 /api、查询进 params、正文进 data」的约定。
+  const recordingFetch: RawFetch = (url, fetchOptions) => new Promise((resolve, reject) => {
+    requests.push({
+      url,
+      options: {
+        method: fetchOptions?.method as string | undefined,
+        body: fetchOptions?.body,
+        query: fetchOptions?.query as Record<string, unknown> | undefined,
+      },
+      resolve,
+      reject,
+    });
+  });
   const context = createContext({
     MODEL_PURPOSE_DEFAULTS,
     definePageMeta: () => {},
@@ -101,6 +118,10 @@ return { ${names.join(", ")} };
     $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
       requests.push({ url, options, resolve, reject });
     }),
+    // 页面里显式 import 的领域工具在沙箱中也要可见（import 声明会被剥掉）。
+    readApiErrorMessage,
+    createKnowledgeApi,
+    useApiRequest: () => createRequestClient(recordingFetch),
     ...options.globals,
   });
   const executable = new Script(compiled.outputText, { filename: relativePath + ".actual-script.js" });

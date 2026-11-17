@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from "element-plus";
+import { createMemoryApi } from "~/api/memory";
+
+const api = createMemoryApi(useApiRequest());
+
 const props = defineProps<{ characterId: string; dayKey: string }>();
 const emit = defineEmits<{ changed: [] }>();
 type Entry = { id: string; title: string; detail: string; sourceMessageIds: string[] };
@@ -19,7 +23,7 @@ async function preview() {
   const characterId = props.characterId, dayKey = props.dayKey;
   open.value = true; loading.value = true; error.value = ""; pairs.value = [];
   try {
-    const result = await $fetch<{ pairs: Pair[]; checkedCount: number; pairsLimited: boolean }>(`/api/characters/${encodeURIComponent(characterId)}/memory-events/duplicates`, { query: { dayKey } });
+    const result = await api.listMemoryEventDuplicates({ characterId, dayKey });
     if (seq !== sequence) return;
     pairs.value = result.pairs; checked.value = result.checkedCount; limited.value = result.pairsLimited;
   } catch { if (seq === sequence) error.value = "预览失败，请重试；每天最多支持 500 条可访问忆泡。"; }
@@ -31,7 +35,12 @@ async function archive(pair: Pair) {
     await ElMessageBox.confirm(`保留「${pair.keep.title}」，隐藏「${pair.candidate.title}」？共享来源不代表重复，请先核对两条内容。隐藏后可在当天「已隐藏」中恢复。`, "确认隐藏候选", { confirmButtonText: "隐藏这一条", cancelButtonText: "取消", type: "warning", appendTo: document.body });
     if (seq !== sequence || saving.value) return;
     saving.value = true;
-    await $fetch(`/api/characters/${encodeURIComponent(characterId)}/memory-events/duplicates`, { method: "POST", body: { keepId: pair.keep.id, candidateId: pair.candidate.id, token: pair.token } });
+    await api.archiveMemoryEventDuplicate({
+      characterId,
+      keepId: pair.keep.id,
+      candidateId: pair.candidate.id,
+      token: pair.token,
+    });
     if (seq !== sequence) return;
     ElMessage.success("已隐藏，原文和来源保留，可在当天已隐藏列表恢复。");
     emit("changed");

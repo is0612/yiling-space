@@ -4,6 +4,9 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character } from "~/utils/mock-data";
 import { formatDayClock } from "~/utils/day-time";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
+import { createMemoryApi } from "~/api/memory";
+
+const api = createMemoryApi(useApiRequest());
 
 
 /**
@@ -138,10 +141,6 @@ const knowledgeError = ref("");
 let knowledgeRequestSeq = 0;
 let knowledgeContextSeq = 0;
 
-type KnowledgeRequestResult = {
-  requestId: string; eventId: string | null; status: "PENDING" | "CREATED" | "SKIPPED";
-  candidateId: string | null; created: boolean;
-};
 function canRequestKnowledge(event: DayEvent) {
   return event.scope === "character" && event.status === "ACTIVE";
 }
@@ -190,8 +189,12 @@ async function submitKnowledgeRequest() {
     && knowledgeEvent.value?.id === target.id;
   knowledgeSaving.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(characterId)}/memory-events/${encodeURIComponent(target.id)}/knowledge-candidate`;
-    const result = await $fetch<KnowledgeRequestResult>(url, { method: "POST", body: { excerpt, reason } });
+    const result = await api.requestEventKnowledge({
+      characterId,
+      eventId: target.id,
+      excerpt,
+      reason,
+    });
     if (!isCurrent()) return;
     closeKnowledgeRequest();
     if (result.status === "SKIPPED") ElMessage.info("该请求已跳过，未自动生成或入库知识。可到知识页面查看已有候选。");
@@ -234,19 +237,17 @@ async function saveEdit() {
   editSaving.value = true;
   try {
     // 固定本次编辑的角色与日期，避免等待请求期间切换角色后刷新错页面。
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/memory-events/${encodeURIComponent(target.id)}`;
     const participants = form.value.participants
       .split(/[、,，\\s]+/)
       .map((item) => item.trim())
       .filter(Boolean);
-    await $fetch(url, {
-      method: "PATCH",
-      body: {
-        title: form.value.title.trim(),
-        detail: form.value.detail.trim(),
-        place: form.value.place.trim(),
-        participants,
-      },
+    await api.updateMemoryEvent({
+      characterId: targetCharacterId,
+      eventId: target.id,
+      title: form.value.title.trim(),
+      detail: form.value.detail.trim(),
+      place: form.value.place.trim(),
+      participants,
     });
     if (seq !== editSaveSeq || targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     editOpen.value = false;
@@ -278,8 +279,7 @@ async function setEventStatus(event: DayEvent, status: "ACTIVE" | "ARCHIVED") {
     }
     // 确认框打开期间可能切换角色或日期；这种情况下取消旧页面的后续操作。
     if (targetCharacterId !== id.value || targetDayKey !== selected.value) return;
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/memory-events/${encodeURIComponent(event.id)}`;
-    await $fetch(url, { method: "PATCH", body: { status } });
+    await api.changeMemoryEventStatus({ characterId: targetCharacterId, eventId: event.id, status });
     if (targetCharacterId !== id.value || targetDayKey !== selected.value) return;
     await loadDetail(targetDayKey, targetCharacterId);
     if (targetCharacterId !== id.value || targetDayKey !== selected.value) return;
@@ -324,10 +324,12 @@ async function loadDays(targetCharacterId = id.value) {
   if (!targetCharacterId || targetCharacterId !== id.value) return;
   loading.value = true;
   try {
-    const params = new URLSearchParams({ page: String(daysPage.value), pageSize: String(daysPageSize.value) });
-    if (keyword) params.set("q", keyword);
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/days?${params.toString()}`;
-    const result = await $fetch<{ today: string; timeZone: string; days: DayRow[]; page: number; pageSize: number; total: number; totalPages: number }>(url);
+    const result = await api.listDays({
+      characterId: targetCharacterId,
+      page: daysPage.value,
+      pageSize: daysPageSize.value,
+      ...(keyword ? { keyword } : {}),
+    });
     if (seq !== daysRequestSeq || targetCharacterId !== id.value || keyword !== searchQuery.value.trim()) return;
 
     days.value = result.days;
@@ -371,19 +373,7 @@ async function loadDetail(dayKey: string, targetCharacterId = id.value, page = e
   if (!targetCharacterId || targetCharacterId !== id.value || !dayKey) return;
   detailLoading.value = true;
   try {
-    // URL 先落成 string 再传：模板字面量的字面类型会让 Nuxt 的路由类型推导爆栈（TS2321）。
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/days/${encodeURIComponent(dayKey)}?page=${page}`;
-    const result = await $fetch<{
-      day: DayRow | null;
-      events: DayEvent[];
-      usage: { calls: number; tokens: number };
-      timeZone: string;
-      eventsTotal: number;
-      eventsTruncated: boolean;
-      eventsPage: number;
-      eventsPageSize: number;
-      eventsTotalPages: number;
-    }>(url);
+    const result = await api.getDayDetail({ characterId: targetCharacterId, dayKey, page });
     if (seq !== detailRequestSeq || targetCharacterId !== id.value || dayKey !== selected.value) return;
     detail.value = result;
     eventsPage.value = result.eventsPage;
@@ -413,13 +403,7 @@ async function loadMessages(dayKey: string, targetCharacterId = id.value) {
   const seq = ++messagesRequestSeq;
   messagesLoading.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/days/${encodeURIComponent(dayKey)}/messages`;
-    const result = await $fetch<{
-      dayKey: string;
-      timeZone: string;
-      messageGroups: DayMessageGroup[];
-      totalMessages: number;
-    }>(url);
+    const result = await api.listDayMessages({ characterId: targetCharacterId, dayKey });
     if (seq !== messagesRequestSeq || targetCharacterId !== id.value || dayKey !== selected.value) return;
     messageGroups.value = result.messageGroups;
     messageTotal.value = result.totalMessages;

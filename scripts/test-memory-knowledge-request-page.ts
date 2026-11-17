@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate } from "node:timers/promises";
 import ts from "typescript";
+import { createMemoryApi } from "../app/api/memory";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 
 // Run the actual component script with controlled requests, following page-harness.
 const sfc = readFileSync(new URL("../app/components/DaysWorkspace.vue", import.meta.url), "utf8");
@@ -14,7 +16,7 @@ const names = statements.flatMap(node => ts.isVariableStatement(node)
 const compiled = ts.transpileModule(`(function(){${statements.map(node => node.getText(source)).join("\n")}\nreturn {${names.join(",")}};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } });
 const executable = new Script(compiled.outputText);
 type Ref = { value: unknown };
-type Request = { url: string; options?: { method?: string; body?: unknown }; resolve: (value: unknown) => void; reject: (error: unknown) => void };
+type Request = { url: string; options?: { method?: string; body?: unknown; query?: Record<string, unknown> }; resolve: (value: unknown) => void; reject: (error: unknown) => void };
 function harness() {
   const role: Ref = { value: "role-a" };
   const watchers: Array<{ source: Ref; callback: () => void }> = [];
@@ -22,6 +24,16 @@ function harness() {
   const successes: string[] = [];
   const infos: string[] = [];
   let unmount = () => {};
+  const recordingFetch: RawFetch = (url, fetchOptions) => new Promise((resolve, reject) => requests.push({
+    url,
+    options: {
+      method: fetchOptions?.method as string | undefined,
+      body: fetchOptions?.body,
+      query: fetchOptions?.query as Record<string, unknown> | undefined,
+    },
+    resolve,
+    reject,
+  }));
   const context = createContext({
     ref: (value: unknown) => ({ value }), computed: (getter: () => unknown) => ({ get value() { return getter(); } }),
     watch: (source: Ref, callback: () => void) => watchers.push({ source, callback }),
@@ -31,7 +43,8 @@ function harness() {
     onBeforeUnmount: (callback: () => void) => { unmount = callback; },
     ElMessage: { success: (message: string) => successes.push(message), info: (message: string) => infos.push(message), warning: () => {}, error: () => {} },
     ElMessageBox: { confirm: async () => true }, URLSearchParams, setTimeout, clearTimeout,
-    $fetch: (url: string, options?: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
+    createMemoryApi,
+    useApiRequest: () => createRequestClient(recordingFetch),
   });
   const bindings = executable.runInContext(context) as Record<string, Ref | ((...args: unknown[]) => unknown)>;
   return {

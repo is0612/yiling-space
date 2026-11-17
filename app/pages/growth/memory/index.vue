@@ -6,6 +6,9 @@ import {
   useMemoryProgress,
 } from "~/composables/useMemoryProgress";
 import { useMemoryActions } from "~/composables/useMemoryActions";
+import { createMemoryApi } from "~/api/memory";
+
+const api = createMemoryApi(useApiRequest());
 
 definePageMeta({
   topbar: {
@@ -54,7 +57,7 @@ async function loadStats() {
   if (!characterId || !character.value) return;
   statsLoading.value = true;
   try {
-    const result = await $fetch<MemoryStats>(`/api/characters/${encodeURIComponent(characterId)}/memory-stats`);
+    const result = await api.getMemoryStats(characterId);
     if (request === statsRequest && characterId === id.value) stats.value = result;
   } catch {
     if (request === statsRequest && characterId === id.value) statsError.value = true;

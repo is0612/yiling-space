@@ -1,5 +1,17 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
+import { readApiErrorMessage } from "~/utils/api-error";
+import {
+  createKnowledgeApi,
+  type Candidate,
+  type KnowledgeEntry,
+  type KnowledgeItem,
+  type KnowledgeItemRevision,
+  type KnowledgeLifecycleAction,
+  type KnowledgeRelationView,
+  type KnowledgeRelatedItem,
+  type WorkspaceData,
+} from "~/api/knowledge";
 
 definePageMeta({
   topbar: {
@@ -8,23 +20,9 @@ definePageMeta({
   },
 });
 
-type KnowledgeResult = {
-  isKnowledge: boolean;
-  recommendation: "CREATE" | "DUPLICATE" | "CONFLICT" | "DISCARD";
-  title: string;
-  content: string;
-  category: string;
-  tags: string[];
-  confidence: number;
-  reason: string;
-  relatedItemIds: string[];
-  confirmedRelatedItemIds?: string[];
-};
-type KnowledgeRelatedItem = { id: string; title: string; content: string; category: string; tags: string[]; revision: number };
-type KnowledgeRelationView = {
-  id: string; sourceItemId: string; targetItemId: string; relationType: string; status: string; resolution: string | null; metadata: unknown; updatedAt: string;
-  relatedItem: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; status: string; revision: number; sourceType: string; sourceRef: unknown };
-};
+// setup 里同步捕获本次 SSR 的请求实例，异步流程与事件回调都复用同一个客户端。
+const knowledgeApi = createKnowledgeApi(useApiRequest());
+
 type KnowledgeMergeDraft = {
   sourceItemId: string; targetItemId: string; expectedSourceRevision: number; expectedTargetRevision: number;
   sourceTitle: string; sourceContent: string; sourceCategory: string; sourceConfidence: number | null; sourceTags: string[];
@@ -33,24 +31,7 @@ type KnowledgeMergeDraft = {
   targetSourceType: string; targetSourceRef: unknown;
   title: string; content: string; category: string; tagsText: string; confidence: string;
 };
-type Candidate = {
-  id: string; sourceType: string; sourceRef: unknown; rawContent: string; status: string;
-  processedResult: KnowledgeResult | null; processingError: string | null; processedAt: string | null; createdAt: string;
-  relatedItems: KnowledgeRelatedItem[];
-};
-type KnowledgeEntry = {
-  id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null;
-  status: string; sourceType: string; sourceRef: unknown; revision: number; createdAt: string; updatedAt: string;
-  /** 回收站接口给的展示派生字段：参与过合并审计链时为 false。只用于禁用按钮，不能当作删除依据。 */
-  canPermanentlyDelete?: boolean;
-};
-type KnowledgeItem = KnowledgeEntry & { relations: KnowledgeRelationView[] };
-type KnowledgeItemRevision = {
-  id: string; revision: number; title: string; content: string; category: string; tags: string[];
-  confidence: number | null; status: string; sourceType: string; sourceRef: unknown; createdAt: string;
-};
 type KnowledgeItemDraft = { title: string; content: string; category: string; tagsText: string; confidence: string };
-type WorkspaceData = { candidates: Candidate[]; items: KnowledgeItem[]; candidateCount: number; itemCount: number };
 
 /** 生命周期操作只需要标识、标题、版本号和状态，弹窗里保存这份最小快照即可。 */
 type LifecycleTarget = { id: string; title: string; revision: number; status: string; canPermanentlyDelete?: boolean };
@@ -72,7 +53,7 @@ type ConfirmState = {
   candidateIds?: string[];
 };
 
-const LIFECYCLE_PATHS: Record<LifecycleOperation, string> = {
+const LIFECYCLE_PATHS: Record<LifecycleOperation, KnowledgeLifecycleAction> = {
   ARCHIVE: "archive", UNARCHIVE: "unarchive", TRASH: "trash", RESTORE: "restore",
 };
 const LIFECYCLE_FALLBACK_MESSAGES: Record<LifecycleOperation, string> = {
@@ -148,10 +129,6 @@ function isCurrentRole(targetCharacterId: string, expectedRoleVersion: number): 
     && roleVersion === expectedRoleVersion;
 }
 
-function knowledgeBase(targetCharacterId: string) {
-  return `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge`;
-}
-
 /** 知识库只显示 ACTIVE；接口层面已经过滤，这里再挡一次，避免查询参数出错时混入其它状态。 */
 const libraryItems = computed(() => (data.value.items ?? []).filter(item => item.status === "ACTIVE"));
 const candidateFilters = [
@@ -221,23 +198,13 @@ async function load(
   }
 
   loading.value = true;
-  const base = knowledgeBase(requestedCharacterId);
   try {
-    const workspacePromise = $fetch<WorkspaceData>(
-      base,
-      { query: requestedKeyword ? { q: requestedKeyword } : {} },
-    );
+    const workspacePromise = knowledgeApi.getWorkspace({ characterId: requestedCharacterId, keyword: requestedKeyword });
     const archivePromise = requestedTab === "archive"
-      ? $fetch<{ items: KnowledgeEntry[]; itemPagination: { page: number; pageSize: number; total: number; pageCount: number } }>(
-          base,
-          { query: { itemStatus: "ARCHIVED", ...(requestedKeyword ? { q: requestedKeyword } : {}), page: archivePage.value } },
-        )
+      ? knowledgeApi.listArchived({ characterId: requestedCharacterId, keyword: requestedKeyword, page: archivePage.value })
       : null;
     const trashPromise = requestedTab === "trash"
-      ? $fetch<{ items: KnowledgeEntry[]; pagination: { page: number; pageSize: number; total: number; pageCount: number } }>(
-          `${base}/trash`,
-          { query: { ...(requestedKeyword ? { q: requestedKeyword } : {}), page: trashPage.value } },
-        )
+      ? knowledgeApi.listTrash({ characterId: requestedCharacterId, keyword: requestedKeyword, page: trashPage.value })
       : null;
     const [workspace, archived, trash] = await Promise.all([workspacePromise, archivePromise, trashPromise]);
     if (requestVersion !== loadVersion || !isCurrentRole(requestedCharacterId, requestedRoleVersion)) return;
@@ -269,8 +236,7 @@ async function load(
     selectedCandidateIds.value = selectedCandidateIds.value.filter(id => candidateIds.has(id));
   } catch (error) {
     if (requestVersion !== loadVersion || !isCurrentRole(requestedCharacterId, requestedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "读取知识系统失败。");
+    ElMessage.error(readApiErrorMessage(error, "读取知识系统失败。"));
   } finally {
     if (requestVersion === loadVersion && isCurrentRole(requestedCharacterId, requestedRoleVersion)) {
       loading.value = false;
@@ -372,18 +338,14 @@ async function addCandidate() {
   if (!targetCharacterId || savingCandidate.value || !content || pageDisposed) return;
   savingCandidate.value = true;
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates`,
-      { method: "POST", body: { rawContent: content, sourceType: "MANUAL" } },
-    );
+    await knowledgeApi.createCandidate({ characterId: targetCharacterId, rawContent: content });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     rawContent.value = "";
     ElMessage.success("已加入知识候选。");
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "添加候选失败。");
+    ElMessage.error(readApiErrorMessage(error, "添加候选失败。"));
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) savingCandidate.value = false;
   }
@@ -404,6 +366,7 @@ async function importDocument(event: Event) {
   form.append("file", file, file.name);
   importingFile.value = true;
   try {
+    // 文件导入是 multipart，统一 JSON 入口不接收 FormData；按约定在页面单独发送。
     await $fetch(
       `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/import`,
       { method: "POST", body: form },
@@ -413,8 +376,7 @@ async function importDocument(event: Event) {
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "文件导入失败。");
+    ElMessage.error(readApiErrorMessage(error, "文件导入失败。"));
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) importingFile.value = false;
     if (input) input.value = "";
@@ -428,18 +390,14 @@ async function importWebPage() {
   if (!targetCharacterId || !url || importingWeb.value || pageDisposed) return;
   importingWeb.value = true;
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/web-import`,
-      { method: "POST", body: { url } },
-    );
+    await knowledgeApi.importWebCandidate({ characterId: targetCharacterId, url });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     webImportUrl.value = "";
     ElMessage.success("网页正文已加入知识候选，请运行知识处理助手整理。");
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "网页导入失败。");
+    ElMessage.error(readApiErrorMessage(error, "网页导入失败。"));
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) importingWeb.value = false;
   }
@@ -461,18 +419,14 @@ async function runBatchCandidates() {
       if (!isCurrentRole(targetCharacterId, expectedRoleVersion) || batchStopRequested.value) break;
       busyIds.value = [...busyIds.value, candidate.id];
       try {
-        const response = await $fetch<{ candidate: Pick<Candidate, "status" | "processedResult" | "processedAt"> }>(
-          knowledgeBase(targetCharacterId) + "/candidates/" + encodeURIComponent(candidate.id) + "/process",
-          { method: "POST" },
-        );
+        const response = await knowledgeApi.processCandidate({ characterId: targetCharacterId, candidateId: candidate.id });
         if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
         const current = data.value.candidates.find(item => item.id === candidate.id);
         if (current) Object.assign(current, response.candidate, { processingError: null });
         batchProgress.value.succeeded += 1;
       } catch (error) {
         if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-        const e = error as { data?: { statusMessage?: string } };
-        batchFailures.value.push({ id: candidate.id, message: e.data?.statusMessage || "知识处理失败。" });
+        batchFailures.value.push({ id: candidate.id, message: readApiErrorMessage(error, "知识处理失败。") });
         batchProgress.value.failed += 1;
       } finally {
         if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
@@ -500,17 +454,13 @@ async function runCandidate(candidate: Candidate) {
   if (!targetCharacterId || pageDisposed || busyIds.value.includes(candidate.id) || batchRunning.value) return;
   busyIds.value = [...busyIds.value, candidate.id];
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/process`,
-      { method: "POST" },
-    );
+    await knowledgeApi.processCandidate({ characterId: targetCharacterId, candidateId: candidate.id });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success("知识处理完成，请检查结果后决定是否入库。");
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "知识处理失败。");
+    ElMessage.error(readApiErrorMessage(error, "知识处理失败。"));
     await load(targetCharacterId);
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
@@ -525,17 +475,13 @@ async function acceptCandidate(candidate: Candidate) {
   if (!targetCharacterId || pageDisposed || busyIds.value.includes(candidate.id)) return;
   busyIds.value = [...busyIds.value, candidate.id];
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/accept`,
-      { method: "POST" },
-    );
+    await knowledgeApi.acceptCandidate({ characterId: targetCharacterId, candidateId: candidate.id });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success("已正式加入知识库。");
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "入库失败。");
+    ElMessage.error(readApiErrorMessage(error, "入库失败。"));
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
       busyIds.value = busyIds.value.filter(id => id !== candidate.id);
@@ -551,17 +497,18 @@ async function toggleCandidateRelation(candidate: Candidate, target: KnowledgeRe
   const confirmed = !current.includes(target.id);
   busyIds.value = [...busyIds.value, candidate.id];
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/relations`,
-      { method: "POST", body: { targetItemId: target.id, confirmed } },
-    );
+    await knowledgeApi.confirmCandidateRelation({
+      characterId: targetCharacterId,
+      candidateId: candidate.id,
+      targetItemId: target.id,
+      confirmed,
+    });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success(confirmed ? "已确认这条关联。" : "已取消这条关联。");
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "调整关联失败。");
+    ElMessage.error(readApiErrorMessage(error, "调整关联失败。"));
     await load(targetCharacterId);
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {
@@ -575,17 +522,13 @@ async function dismissCandidate(candidate: Candidate) {
   const expectedRoleVersion = roleVersion;
   if (!targetCharacterId || pageDisposed) return;
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/${encodeURIComponent(candidate.id)}/dismiss`,
-      { method: "POST" },
-    );
+    await knowledgeApi.dismissCandidate({ characterId: targetCharacterId, candidateId: candidate.id });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success("已忽略这条候选。");
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "操作失败。");
+    ElMessage.error(readApiErrorMessage(error, "操作失败。"));
   }
 }
 /**
@@ -603,10 +546,13 @@ async function withAction(run: () => Promise<ActionOutcome>): Promise<ActionOutc
 }
 
 /** 统一失败反馈：服务端有话说就用服务端的话，409 交给调用方决定是否关闭弹窗。 */
+function apiErrorStatus(error: unknown): number | undefined {
+  return (error as { data?: { statusCode?: number } }).data?.statusCode;
+}
+
 function actionError(error: unknown, fallback: string): ActionOutcome {
-  const e = error as { data?: { statusCode?: number; statusMessage?: string } };
-  ElMessage.error(e.data?.statusMessage || fallback);
-  return e.data?.statusCode === 409 ? "conflict" : "failed";
+  ElMessage.error(readApiErrorMessage(error, fallback));
+  return apiErrorStatus(error) === 409 ? "conflict" : "failed";
 }
 
 /** 操作后一律重新拉取；非当前分区的计数先标成「未知」，等用户真的打开那个分区再读。 */
@@ -622,10 +568,12 @@ async function performLifecycle(item: LifecycleTarget, operation: LifecycleOpera
   const expectedRoleVersion = roleVersion;
   if (!targetCharacterId || pageDisposed || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
   try {
-    const result = await $fetch<{ item: { revision: number }; message?: string }>(
-      `${knowledgeBase(targetCharacterId)}/items/${encodeURIComponent(item.id)}/${LIFECYCLE_PATHS[operation]}`,
-      { method: "POST", body: { expectedRevision: item.revision } },
-    );
+    const result = await knowledgeApi.changeItemLifecycle({
+      characterId: targetCharacterId,
+      itemId: item.id,
+      action: LIFECYCLE_PATHS[operation],
+      expectedRevision: item.revision,
+    });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "done";
     ElMessage.success(result.message || LIFECYCLE_FALLBACK_MESSAGES[operation]);
     await refreshAfterAction(targetCharacterId);
@@ -649,13 +597,14 @@ async function performArchivedTrash(item: LifecycleTarget): Promise<ActionOutcom
   const targetCharacterId = characterId.value;
   const expectedRoleVersion = roleVersion;
   if (!targetCharacterId || pageDisposed || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
-  const base = knowledgeBase(targetCharacterId);
   let revision = item.revision;
   try {
-    const unarchived = await $fetch<{ item: { revision: number } }>(
-      `${base}/items/${encodeURIComponent(item.id)}/unarchive`,
-      { method: "POST", body: { expectedRevision: revision } },
-    );
+    const unarchived = await knowledgeApi.changeItemLifecycle({
+      characterId: targetCharacterId,
+      itemId: item.id,
+      action: "unarchive",
+      expectedRevision: revision,
+    });
     revision = unarchived.item.revision;
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
@@ -666,20 +615,21 @@ async function performArchivedTrash(item: LifecycleTarget): Promise<ActionOutcom
   // 角色已经切换：第一步已经改了 A 的状态，但不再替用户把 A 的知识继续移入回收站。
   if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
   try {
-    await $fetch(
-      `${base}/items/${encodeURIComponent(item.id)}/trash`,
-      { method: "POST", body: { expectedRevision: revision } },
-    );
+    await knowledgeApi.changeItemLifecycle({
+      characterId: targetCharacterId,
+      itemId: item.id,
+      action: "trash",
+      expectedRevision: revision,
+    });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "done";
     ElMessage.success("已取消归档，并把知识移入回收站。");
     await refreshAfterAction(targetCharacterId);
     return "done";
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
-    const e = error as { data?: { statusCode?: number; statusMessage?: string } };
-    ElMessage.error(`已取消归档，知识现在在知识库；移入回收站失败：${e.data?.statusMessage || "请稍后重试。"}`);
+    ElMessage.error(`已取消归档，知识现在在知识库；移入回收站失败：${readApiErrorMessage(error, "请稍后重试。")}`);
     await refreshAfterAction(targetCharacterId);
-    return e.data?.statusCode === 409 ? "conflict" : "failed";
+    return apiErrorStatus(error) === 409 ? "conflict" : "failed";
   }
 }
 
@@ -688,10 +638,12 @@ async function performPurge(item: LifecycleTarget): Promise<ActionOutcome> {
   const expectedRoleVersion = roleVersion;
   if (!targetCharacterId || pageDisposed || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
   try {
-    const result = await $fetch<{ message?: string }>(
-      `${knowledgeBase(targetCharacterId)}/items/${encodeURIComponent(item.id)}`,
-      { method: "DELETE", body: { expectedRevision: item.revision, confirm: PURGE_CONFIRMATION } },
-    );
+    const result = await knowledgeApi.deleteItemPermanently({
+      characterId: targetCharacterId,
+      itemId: item.id,
+      expectedRevision: item.revision,
+      confirm: PURGE_CONFIRMATION,
+    });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "done";
     ElMessage.success(result.message || "知识已永久删除。");
     await refreshAfterAction(targetCharacterId);
@@ -709,10 +661,7 @@ async function performDeleteCandidate(candidate: { id: string }): Promise<Action
   const expectedRoleVersion = roleVersion;
   if (!targetCharacterId || pageDisposed || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
   try {
-    const result = await $fetch<{ knowledgeItemRetained?: boolean }>(
-      `${knowledgeBase(targetCharacterId)}/candidates/${encodeURIComponent(candidate.id)}`,
-      { method: "DELETE" },
-    );
+    const result = await knowledgeApi.deleteCandidate({ characterId: targetCharacterId, candidateId: candidate.id });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "done";
     ElMessage.success(result.knowledgeItemRetained ? "候选已删除，已入库的正式知识保留。" : "候选已删除。");
     await refreshAfterAction(targetCharacterId);
@@ -744,15 +693,11 @@ async function performBatchDeleteCandidates(): Promise<ActionOutcome> {
   for (const candidate of targets) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
     try {
-      await $fetch(
-        `${knowledgeBase(targetCharacterId)}/candidates/${encodeURIComponent(candidate.id)}`,
-        { method: "DELETE" },
-      );
+      await knowledgeApi.deleteCandidate({ characterId: targetCharacterId, candidateId: candidate.id });
       deleted += 1;
     } catch (error) {
       failed += 1;
-      const e = error as { data?: { statusMessage?: string } };
-      lastFailure = e.data?.statusMessage || "删除失败。";
+      lastFailure = readApiErrorMessage(error, "删除失败。");
     }
   }
   if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
@@ -768,10 +713,7 @@ async function performPurgeDismissedCandidates(): Promise<ActionOutcome> {
   const expectedRoleVersion = roleVersion;
   if (!targetCharacterId || pageDisposed || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return "failed";
   try {
-    const result = await $fetch<{ deletedCount: number }>(
-      `${knowledgeBase(targetCharacterId)}/candidates/purge-dismissed`,
-      { method: "POST", body: {} },
-    );
+    const result = await knowledgeApi.purgeDismissedCandidates({ characterId: targetCharacterId });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return "done";
     selectedCandidateIds.value = [];
     ElMessage.success(`已清理 ${result.deletedCount} 条已忽略候选。`);
@@ -977,29 +919,25 @@ async function saveEdit(item: KnowledgeItem) {
   const tags = draft.tagsText.split(/[，,]/).map(tag => tag.trim()).filter(Boolean);
   savingItem.value = true;
   try {
-    const result = await $fetch<{ item: KnowledgeItem; unchanged: boolean }>(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/items/${encodeURIComponent(item.id)}`,
-      {
-        method: "PATCH",
-        body: {
-          revision: item.revision,
-          title: draft.title,
-          content: draft.content,
-          category: draft.category,
-          tags,
-          confidence,
-        },
-      },
-    );
+    const result = await knowledgeApi.updateItem({
+      characterId: targetCharacterId,
+      itemId: item.id,
+      revision: item.revision,
+      title: draft.title,
+      content: draft.content,
+      category: draft.category,
+      tags,
+      confidence,
+    });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success(result.unchanged ? "内容没有变化。" : `已保存为第 ${result.item.revision} 版。`);
     cancelEdit();
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string; statusCode?: number } };
-    ElMessage.error(e.data?.statusMessage || (e.data?.statusCode === 409 ? "知识已更新，请检查最新版本后重新编辑。" : "保存知识失败。"));
-    if (e.data?.statusCode === 409) {
+    const conflict = apiErrorStatus(error) === 409;
+    ElMessage.error(readApiErrorMessage(error, conflict ? "知识已更新，请检查最新版本后重新编辑。" : "保存知识失败。"));
+    if (conflict) {
       cancelEdit();
       await load(targetCharacterId);
     }
@@ -1024,15 +962,12 @@ async function toggleHistory(item: KnowledgeItem) {
   historyItems.value = [];
   historyLoading.value = true;
   try {
-    const result = await $fetch<{ revisions: KnowledgeItemRevision[] }>(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/items/${encodeURIComponent(item.id)}/history`,
-    );
+    const result = await knowledgeApi.listItemHistory({ characterId: targetCharacterId, itemId: item.id });
     if (requestVersion !== historyRequestVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     historyItems.value = result.revisions;
   } catch (error) {
     if (requestVersion !== historyRequestVersion || !isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "读取知识版本历史失败。");
+    ElMessage.error(readApiErrorMessage(error, "读取知识版本历史失败。"));
   } finally {
     if (requestVersion === historyRequestVersion && isCurrentRole(targetCharacterId, expectedRoleVersion)) {
       historyLoading.value = false;
@@ -1092,31 +1027,26 @@ async function submitMerge() {
   mergingKnowledge.value = true;
   busyIds.value = [...new Set([...busyIds.value, draft.sourceItemId, draft.targetItemId])];
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/items/${encodeURIComponent(draft.sourceItemId)}/merge`,
-      {
-        method: "POST",
-        body: {
-          targetItemId: draft.targetItemId,
-          expectedSourceRevision: draft.expectedSourceRevision,
-          expectedTargetRevision: draft.expectedTargetRevision,
-          title: draft.title,
-          content: draft.content,
-          category: draft.category,
-          tags,
-          confidence,
-        },
-      },
-    );
+    await knowledgeApi.mergeItems({
+      characterId: targetCharacterId,
+      sourceItemId: draft.sourceItemId,
+      targetItemId: draft.targetItemId,
+      expectedSourceRevision: draft.expectedSourceRevision,
+      expectedTargetRevision: draft.expectedTargetRevision,
+      title: draft.title,
+      content: draft.content,
+      category: draft.category,
+      tags,
+      confidence,
+    });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.success("重复知识已合并，源条目和双方历史均已保留。");
     mergeDraft.value = null;
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string; statusCode?: number } };
-    ElMessage.error(e.data?.statusMessage || "合并知识失败。");
-    if (e.data?.statusCode === 409) {
+    ElMessage.error(readApiErrorMessage(error, "合并知识失败。"));
+    if (apiErrorStatus(error) === 409) {
       mergeDraft.value = null;
       await load(targetCharacterId);
     }
@@ -1137,10 +1067,13 @@ async function resolveRelation(item: KnowledgeItem, relation: KnowledgeRelationV
   const targetRevision = relation.targetItemId === item.id ? item.revision : relation.relatedItem.revision;
   resolvingRelationIds.value = [...resolvingRelationIds.value, relation.id];
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/relations/${encodeURIComponent(relation.id)}/resolve`,
-      { method: "POST", body: { action, expectedSourceRevision: sourceRevision, expectedTargetRevision: targetRevision } },
-    );
+    await knowledgeApi.resolveRelation({
+      characterId: targetCharacterId,
+      relationId: relation.id,
+      action,
+      expectedSourceRevision: sourceRevision,
+      expectedTargetRevision: targetRevision,
+    });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     const messages: Record<typeof action, string> = {
       CONFIRM_CONFLICT: "已确认冲突，双方知识均予以保留。",
@@ -1152,8 +1085,7 @@ async function resolveRelation(item: KnowledgeItem, relation: KnowledgeRelationV
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    const e = error as { data?: { statusMessage?: string } };
-    ElMessage.error(e.data?.statusMessage || "处置知识关联失败。");
+    ElMessage.error(readApiErrorMessage(error, "处置知识关联失败。"));
     await load(targetCharacterId);
   } finally {
     if (isCurrentRole(targetCharacterId, expectedRoleVersion)) {

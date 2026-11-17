@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
+import { createMemoryApi } from "../app/api/memory";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 
 /** Execute the current DaysWorkspace.vue script with controlled requests and watchers. */
 const pagePath = new URL("../app/components/DaysWorkspace.vue", import.meta.url);
@@ -31,7 +33,7 @@ const executable = new Script(compiled.outputText, { filename: "DaysWorkspace.vu
 type Ref = { value: unknown };
 type PendingRequest = {
   url: string;
-  options?: { method?: string; body?: unknown };
+  options?: { method?: string; body?: unknown; query?: Record<string, unknown> };
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
 };
@@ -77,6 +79,18 @@ function harness() {
   });
   let timerId = 0;
   let unmount: (() => void) | null = null;
+  const recordingFetch: RawFetch = (url, fetchOptions) => new Promise((resolve, reject) => {
+    requests.push({
+      url,
+      options: {
+        method: fetchOptions?.method as string | undefined,
+        body: fetchOptions?.body,
+        query: fetchOptions?.query as Record<string, unknown> | undefined,
+      },
+      resolve,
+      reject,
+    });
+  });
 
   const context = createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
@@ -115,9 +129,8 @@ function harness() {
       info: (message: string) => infos.push(message),
     },
     ElMessageBox: { confirm: async () => true },
-    $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
-      requests.push({ url, options, resolve, reject });
-    }),
+    createMemoryApi,
+    useApiRequest: () => createRequestClient(recordingFetch),
   });
   const bindings = executable.runInContext(context) as Record<string, Ref | ((...args: unknown[]) => Promise<void>)>;
 
@@ -136,8 +149,9 @@ function harness() {
   function take(path: string, query?: string, method?: string) {
     const index = requests.findIndex((request) => {
       const parsed = new URL(request.url, "http://test.local");
+      const keyword = request.options?.query?.q ?? parsed.searchParams.get("q");
       return parsed.pathname === path
-        && (query === undefined || parsed.searchParams.get("q") === query)
+        && (query === undefined || keyword === query)
         && (method === undefined || request.options?.method === method);
     });
     assert.ok(index >= 0, `expected pending request: ${path}`);

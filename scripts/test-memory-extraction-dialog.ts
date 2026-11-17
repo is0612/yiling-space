@@ -3,12 +3,14 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
+import { createMemoryApi } from "../app/api/memory";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 
 const sfc = readFileSync(new URL("../app/components/MemoryExtractionDialog.vue", import.meta.url), "utf8");
 const source = ts.createSourceFile("dialog.ts", sfc.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const script = source.statements.filter(node => !ts.isImportDeclaration(node)).map(node => node.getText(source)).join("\n");
 const compiled = ts.transpileModule(`(function () { ${script}\n return { preview, previewError, previewLoading, jobs, progressError, canStart, startExtraction, loadPreview, refresh, sessionCharacterId }; })()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
-type Request = { url: string; options?: { query: Record<string, string> }; resolve: (value: unknown) => void; reject: (error: Error) => void };
+type Request = { url: string; options?: { method?: string; body?: unknown; query?: Record<string, unknown> }; resolve: (value: unknown) => void; reject: (error: Error) => void };
 function harness() {
   const props = { modelValue: false, characterId: "role-a", characterName: "角色甲" };
   const requests: Request[] = [];
@@ -18,6 +20,16 @@ function harness() {
   let timerId = 0;
   let dispose: () => void = () => {};
   const ref = (value: unknown) => ({ value });
+  const recordingFetch: RawFetch = (url, fetchOptions) => new Promise((resolve, reject) => requests.push({
+    url,
+    options: {
+      method: fetchOptions?.method as string | undefined,
+      body: fetchOptions?.body,
+      query: fetchOptions?.query as Record<string, unknown> | undefined,
+    },
+    resolve,
+    reject,
+  }));
   const page = new Script(compiled).runInContext(createContext({
     defineProps: () => props, defineEmits: () => () => {}, ref, Error,
     computed: (get: (() => unknown) | { get: () => unknown; set: (value: boolean) => void }) => ({ get value() { return typeof get === "function" ? get() : get.get(); } }),
@@ -29,7 +41,8 @@ function harness() {
     onBeforeUnmount: (callback: () => void) => { dispose = callback; },
     useMemoryActions: (getId: () => string) => ({ eventExtracting: ref(false), runEventExtraction: async () => { actions.push(getId()); return true; } }),
     ensureMemoryProgressPolling: () => {},
-    $fetch: (url: string, options?: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
+    createMemoryApi,
+    useApiRequest: () => createRequestClient(recordingFetch),
     setTimeout: (callback: () => Promise<void>) => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: (id: number) => timers.delete(id),
   }));

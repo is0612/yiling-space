@@ -121,6 +121,8 @@ function progressState() {
  * 等于点了没反应，所以先把旧请求掐掉再发新的。轮询本身不用 force，没必要并发。
  */
 export async function refreshMemoryProgress(options: { force?: boolean } = {}): Promise<MemoryProgressRow[]> {
+  // 这里保留 `$fetch`：轮询只跑在客户端，且必须自己持有 AbortController 掐掉挂死的请求。
+  // 统一入口 `createRequestClient` 目前不暴露 signal 生命周期，交给领域 API 反而拿不回控制权。
   const { jobs, lastFinished, checkedAt } = progressState();
   if (!import.meta.client) return jobs.value;
   if (inflight) {

@@ -3,6 +3,7 @@ import { ArrowDown, Collection, Search, Delete } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character } from "~/utils/mock-data";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
+import { createMemoryApi } from "~/api/memory";
 
 type MemoryCategory = "FACT" | "PREFERENCE" | "RELATIONSHIP" | "COMMITMENT" | "GOAL" | "EVENT" | "SUMMARY" | "OTHER";
 type MemoryDetail = {
@@ -73,6 +74,8 @@ const memoryCategoryOptions: Array<{ label: string; value: MemoryCategory }> = [
   { label: "记忆摘要", value: "SUMMARY" },
   { label: "其他", value: "OTHER" },
 ];
+
+const api = createMemoryApi(useApiRequest());
 
 const characters = useCharacterList();
 /** 角色列表与侧边栏共用同一份 SSR 数据，同 key 不会重复请求 */
@@ -298,14 +301,15 @@ async function loadMemories(targetPage = memoryPage.value) {
   const keyword = query.value.trim();
   memoryLoading.value = true;
   try {
-    const params = new URLSearchParams({ page: String(targetPage), pageSize: String(PAGE_SIZE) });
-    if (keyword) params.set("q", keyword);
-    if (scopeFilter.value !== "ALL") params.set("scope", scopeFilter.value);
-    if (categoryFilter.value !== "ALL") params.set("category", categoryFilter.value);
-    if (statusFilter.value !== "ALL") params.set("status", statusFilter.value);
-    const result = await $fetch<MemoryPage>(
-      `/api/characters/${encodeURIComponent(requestedCharacterId)}/memories?${params.toString()}`,
-    );
+    const result = await api.listMemories({
+      characterId: requestedCharacterId,
+      page: targetPage,
+      pageSize: PAGE_SIZE,
+      ...(keyword ? { keyword } : {}),
+      ...(scopeFilter.value !== "ALL" ? { scope: scopeFilter.value } : {}),
+      ...(categoryFilter.value !== "ALL" ? { category: categoryFilter.value } : {}),
+      ...(statusFilter.value !== "ALL" ? { status: statusFilter.value } : {}),
+    });
     if (seq !== listRequestSeq || requestedCharacterId !== id.value || keyword !== query.value.trim()) return;
     memoryRows.value = result.items;
     memoryTotal.value = result.total;
@@ -326,9 +330,7 @@ async function loadStats(targetCharacterId = id.value) {
   const seq = ++statsRequestSeq;
   if (!targetCharacterId || targetCharacterId !== id.value) return;
   try {
-    const result = await $fetch<MemoryStats>(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/memory-stats`,
-    );
+    const result = await api.getMemoryStats(targetCharacterId);
     if (seq === statsRequestSeq && targetCharacterId === id.value) memoryStats.value = result;
   } catch {
     if (seq !== statsRequestSeq || targetCharacterId !== id.value) return;
@@ -386,7 +388,7 @@ async function loadCharacter() {
     return;
   }
   try {
-    const result = await $fetch<Character>(`/api/characters/${encodeURIComponent(requestedCharacterId)}`);
+    const result = await api.getCharacter(requestedCharacterId);
     if (seq !== characterLoadSeq || requestedCharacterId !== id.value) return;
     currentCharacter.value = result;
     await Promise.all([loadMemories(1), loadStats(requestedCharacterId)]);
@@ -407,13 +409,11 @@ async function saveMemory() {
 
   memorySaving.value = true;
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(id.value)}/memories`, {
-      method: "POST",
-      body: {
-        category: draftMemoryCategory.value,
-        content: draftMemoryContent.value.trim(),
-        scope: draftMemoryScope.value,
-      },
+    await api.createMemory({
+      characterId: id.value,
+      category: draftMemoryCategory.value,
+      content: draftMemoryContent.value.trim(),
+      scope: draftMemoryScope.value,
     });
     memoryDialogOpen.value = false;
     draftMemoryContent.value = "";
@@ -449,7 +449,7 @@ async function openMemoryDetail(memoryId: string) {
   draftEditMemoryCategory.value = "FACT";
   memoryEditLoading.value = true;
   try {
-    const memory = await $fetch<MemoryDetail>(`/api/memories/${encodeURIComponent(memoryId)}`);
+    const memory = await api.getMemory(memoryId);
     if (seq !== memoryDetailRequestSeq || targetCharacterId !== id.value || editingMemoryId.value !== memoryId) return;
     draftEditMemoryCategory.value = memory.category;
     draftEditMemoryContent.value = memory.content;
@@ -509,12 +509,10 @@ async function saveEditedMemory() {
   const detailSeq = memoryDetailRequestSeq;
   memoryEditSaving.value = true;
   try {
-    await $fetch(`/api/memories/${encodeURIComponent(targetMemoryId)}`, {
-      method: "PATCH",
-      body: {
-        category: draftEditMemoryCategory.value,
-        content: draftEditMemoryContent.value.trim(),
-      },
+    await api.updateMemory({
+      memoryId: targetMemoryId,
+      category: draftEditMemoryCategory.value,
+      content: draftEditMemoryContent.value.trim(),
     });
     if (targetCharacterId !== id.value || targetMemoryId !== editingMemoryId.value || detailSeq !== memoryDetailRequestSeq) return;
     memoryEditDialogOpen.value = false;
@@ -546,10 +544,7 @@ async function setMemoryStatus(row: MemoryRow, status: "active" | "archived" | "
   }
 
   try {
-    await $fetch(`/api/memories/${encodeURIComponent(row.id)}`, {
-      method: "PATCH",
-      body: { status },
-    });
+    await api.changeMemoryStatus({ memoryId: row.id, status });
     await refreshMemoryPage();
     ElMessage.success(`记忆已${actionLabel}。`);
   } catch (error) {
@@ -590,13 +585,11 @@ async function loadRecycleBin(targetPage = recycleBinPage.value, targetCharacter
   if (targetCharacterId !== id.value) return;
   recycleBinLoading.value = true;
   try {
-    const result = await $fetch<{
-      items: RecycleBinEntry[];
-      total: number;
-      page: number;
-      pageSize: number;
-      totalPages: number;
-    }>(`/api/characters/${encodeURIComponent(targetCharacterId)}/memories/trash?page=${targetPage}&pageSize=${RECYCLE_PAGE_SIZE}`);
+    const result = await api.listTrashedMemories({
+      characterId: targetCharacterId,
+      page: targetPage,
+      pageSize: RECYCLE_PAGE_SIZE,
+    });
     if (seq !== recycleBinRequestSeq || targetCharacterId !== id.value) return;
     recycleBinEntries.value = result.items;
     recycleBinTotal.value = result.total;
@@ -636,7 +629,7 @@ async function moveMemoryToTrash(row: MemoryRow) {
     );
   } catch { return; }
   try {
-    await $fetch(`/api/memories/${encodeURIComponent(row.id)}/trash`, { method: "POST" });
+    await api.trashMemory(row.id);
     await refreshMemoryPage();
     if (recycleBinOpen.value) await loadRecycleBin();
     ElMessage.success("记忆已移入回收站，可随时恢复。");
@@ -652,7 +645,7 @@ async function restoreTrashedMemory(memory: RecycleBinEntry) {
   if (recycleBinBusyIds.value.includes(memory.id)) return;
   recycleBinBusyIds.value.push(memory.id);
   try {
-    await $fetch(`/api/memories/${encodeURIComponent(memory.id)}/restore`, { method: "POST" });
+    await api.restoreMemory(memory.id);
     await Promise.all([loadRecycleBin(), refreshMemoryPage()]);
     ElMessage.success(`记忆已恢复为“${memoryStatusText(memory.statusBeforeTrash)}”状态。`);
   } catch (error) {
@@ -676,10 +669,7 @@ async function permanentlyDeleteMemory(memory: RecycleBinEntry) {
   } catch { return; }
   recycleBinBusyIds.value.push(memory.id);
   try {
-    const result = await $fetch<{ preservedSnapshotReferences: number }>(
-      `/api/memories/${encodeURIComponent(memory.id)}`,
-      { method: "DELETE" },
-    );
+    const result = await api.deleteMemory(memory.id);
     await Promise.all([loadRecycleBin(), refreshMemoryPage()]);
     ElMessage.success(`当前记忆条目已永久删除；保留了 ${result.preservedSnapshotReferences} 条历史来源记录，既有阶段总结未被改写。`);
   } catch (error) {
@@ -715,10 +705,7 @@ async function clearRecycleBin() {
   }
   recycleBinClearing.value = true;
   try {
-    const result = await $fetch<{ deleted: number; preservedSnapshotReferences: number }>(
-      `/api/characters/${encodeURIComponent(id.value)}/memories/trash`,
-      { method: "DELETE" },
-    );
+    const result = await api.clearTrashedMemories(id.value);
     await Promise.all([loadRecycleBin(1), refreshMemoryPage()]);
     ElMessage.success(
       `已永久删除 ${result.deleted} 条；保留了 ${result.preservedSnapshotReferences} 条历史来源记录，既有阶段总结未被改写。`,
@@ -766,13 +753,11 @@ async function saveConversation() {
 
   conversationSaving.value = true;
   try {
-    const result = await $fetch<{ messageCount: number; timestampsEstimated: boolean }>(
-      `/api/characters/${encodeURIComponent(id.value)}/conversations/import`,
-      {
-        method: "POST",
-        body: { title: draftConversationTitle.value.trim(), messages },
-      },
-    );
+    const result = await api.importConversation({
+      characterId: id.value,
+      title: draftConversationTitle.value.trim(),
+      messages,
+    });
     conversationDialogOpen.value = false;
     draftConversationTitle.value = "";
     draftTranscript.value = "";
@@ -817,13 +802,7 @@ async function loadGroupChats(conversationId?: string) {
   groupChatLoading.value = true;
   groupChatError.value = "";
   try {
-    const result = await $fetch<{
-      groups: GroupChatGroup[];
-      selectedConversationId: string | null;
-      messages: GroupChatMessage[];
-    }>(`/api/characters/${encodeURIComponent(id.value)}/group-chats`, {
-      query: conversationId ? { conversationId } : {},
-    });
+    const result = await api.listGroupChats({ characterId: targetCharacterId, conversationId });
     if (seq !== groupChatRequestSeq || targetCharacterId !== id.value) return;
     groupChatGroups.value = result.groups;
     groupChatSelectedId.value = result.selectedConversationId ?? "";
@@ -873,15 +852,7 @@ async function loadPrivateChats(conversationId?: string) {
   privateChatLoadingMore.value = false;
   privateChatError.value = "";
   try {
-    const result = await $fetch<{
-      chats: PrivateChatChat[];
-      selectedConversationId: string | null;
-      messages: PrivateChatMessage[];
-      hasMore: boolean;
-      nextCursor: PrivateChatCursor;
-    }>(`/api/characters/${encodeURIComponent(id.value)}/private-chats`, {
-      query: conversationId ? { conversationId } : {},
-    });
+    const result = await api.listPrivateChats({ characterId: id.value, conversationId });
     if (seq !== privateChatRequestSeq) return;
     privateChatChats.value = result.chats;
     privateChatSelectedId.value = result.selectedConversationId ?? "";
@@ -920,12 +891,10 @@ async function loadOlderPrivateChat() {
   privateChatLoadingMore.value = true;
   try {
     const cursor = privateChatNextCursor.value ?? { before: oldest.occurredAt, beforeId: oldest.id };
-    const result = await $fetch<{
-      messages: PrivateChatMessage[];
-      hasMore: boolean;
-      nextCursor: PrivateChatCursor;
-    }>(`/api/characters/${encodeURIComponent(id.value)}/private-chats`, {
-      query: { conversationId, ...cursor },
+    const result = await api.listPrivateChats({
+      characterId: id.value,
+      conversationId,
+      cursor,
     });
     // 切了人或者重新载入过：这一页已经不属于当前聊天窗，丢掉。
     if (seq !== privateChatRequestSeq || privateChatSelectedId.value !== conversationId) return;

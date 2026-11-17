@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 import { Refresh } from "@element-plus/icons-vue";
+import { createMemoryApi } from "~/api/memory";
+
+const api = createMemoryApi(useApiRequest());
 
 definePageMeta({
   topbar: {
@@ -12,7 +15,6 @@ type LearningKind = "UNDERSTANDING" | "REFERENCE" | "SITUATION" | "STRATEGY" | "
 type Learning = { kind: LearningKind; situation: string; misunderstanding: string; correction: string; nextJudgment: string };
 type Status = "PENDING" | "ACTIVE" | "DISABLED" | "REJECTED";
 type Item = { id: string; content: string; context: string; feedbackQuote: string; status: string; revision: number; conversationId: string; weight: number; createdAt?: string; updatedAt?: string; learning?: unknown };
-type Pagination = { page: number; pageSize: number; total: number; pageCount: number };
 const learningKinds: Array<{ value: LearningKind; label: string }> = [
   { value: "UNDERSTANDING", label: "理解纠正" }, { value: "REFERENCE", label: "指代识别" },
   { value: "SITUATION", label: "场合判断" }, { value: "STRATEGY", label: "应对策略" },
@@ -63,7 +65,6 @@ const draft = reactive({ content: "", context: "", structured: false, kind: "UND
 let generation = 0;
 let actionGeneration = 0;
 let disposed = false;
-const api = (id: string) => `/api/characters/${encodeURIComponent(id)}/growth/interaction-experiences`;
 function fail(e: unknown) {
   const value = e as { data?: { statusMessage?: string; message?: string } };
   return value?.data?.statusMessage ?? value?.data?.message ?? "操作失败，请刷新后重试。";
@@ -75,7 +76,12 @@ async function load() {
   loading.value = Boolean(id);
   if (!id) { items.value = []; total.value = 0; pageCount.value = 1; return; }
   try {
-    const result = await $fetch<{ items: Item[]; pagination?: Pagination; automation?: Automation }>(api(id), { query: { status: status.value, page: page.value, pageSize: PAGE_SIZE } });
+    const result = await api.listInteractionExperiences({
+      characterId: id,
+      status: status.value,
+      page: page.value,
+      pageSize: PAGE_SIZE,
+    });
     if (disposed || request !== generation || id !== characterId.value) return;
     items.value = result.items;
     automation.value = result.automation ?? null;
@@ -128,9 +134,18 @@ async function operate(item: Item, operation: "EDIT" | "DISABLE" | "ACCEPT" | "R
   error.value = "";
   const isCurrent = () => !disposed && action === actionGeneration && id === characterId.value;
   try {
-    await $fetch(`${api(id)}/${encodeURIComponent(item.id)}`, {
-      method: "PATCH",
-      body: { revision: item.revision, operation, ...(operation === "EDIT" ? { content: learning?.nextJudgment ?? draft.content.trim(), context: learning?.situation ?? draft.context.trim(), learning } : {}) },
+    await api.updateInteractionExperience({
+      characterId: id,
+      itemId: item.id,
+      revision: item.revision,
+      operation,
+      ...(operation === "EDIT"
+        ? {
+            content: learning?.nextJudgment ?? draft.content.trim(),
+            context: learning?.situation ?? draft.context.trim(),
+            learning,
+          }
+        : {}),
     });
     if (isCurrent()) {
       closeEditor();
@@ -153,7 +168,7 @@ async function toggleAutomation() {
   error.value = "";
   const isCurrent = () => !disposed && action === actionGeneration && id === characterId.value;
   try {
-    await $fetch(`${api(id)}/settings`, { method: "PATCH", body: { enabled } });
+    await api.updateInteractionExperienceSettings({ characterId: id, enabled });
     if (isCurrent()) {
       ElMessage.success(enabled ? "互动经验自动整理已开启" : "已停止新整理，已生效经验仍可使用");
       await load();

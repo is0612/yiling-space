@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
+import { createMemoryApi } from "../app/api/memory";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
 
 /** Run the current page code, not a second implementation of its request guards.
  * No Nuxt server, browser, database, real timers, or network requests are needed.
@@ -38,7 +40,7 @@ const executable = new Script(compiled.outputText, { filename: "MemoryWorkspace.
 type Ref = { value: unknown };
 type PendingRequest = {
   url: string;
-  options?: { query?: Record<string, string> };
+  options?: { method?: string; body?: unknown; query?: Record<string, unknown> };
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
 };
@@ -50,6 +52,19 @@ function harness() {
   const errors: string[] = [];
   const role: Ref = { value: "role-a" };
   let timerId = 0;
+  // 领域 API 走真实传输层；这里拦下 $fetch，路径仍带 /api，查询落在 options.query。
+  const recordingFetch: RawFetch = (url, fetchOptions) => new Promise((resolve, reject) => {
+    requests.push({
+      url,
+      options: {
+        method: fetchOptions?.method as string | undefined,
+        body: fetchOptions?.body,
+        query: fetchOptions?.query as Record<string, unknown> | undefined,
+      },
+      resolve,
+      reject,
+    });
+  });
   const bindings = executable.runInContext(createContext({
     /** Nuxt 编译期宏：只在构建时注册路由元信息，运行时被抹掉，沙盒里桩掉即可。 */
     definePageMeta: () => {},
@@ -65,9 +80,8 @@ function harness() {
     setTimeout: (callback: () => void) => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: (id: number) => timers.delete(id),
     ElMessage: { error: (message: string) => errors.push(message), success: () => {}, warning: () => {}, info: () => {} },
-    $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
-      requests.push({ url, options, resolve, reject });
-    }),
+    createMemoryApi,
+    useApiRequest: () => createRequestClient(recordingFetch),
   })) as Record<string, Ref | ((...args: unknown[]) => Promise<void>)>;
 
   function read<T = unknown>(name: string): T {
@@ -86,11 +100,18 @@ function harness() {
     assert.equal(typeof bindings[name], "function", `missing page handler: ${name}`);
     return (bindings[name] as (...args: unknown[]) => Promise<void>)(...args);
   }
+  function queryOf(request: PendingRequest) {
+    const query: Record<string, unknown> = { ...(request.options?.query ?? {}) };
+    const url = new URL(request.url, "http://test.local");
+    for (const [key, value] of url.searchParams) query[key] = value;
+    return query;
+  }
   function match(path: string, params: Record<string, string> = {}) {
     const found = requests.findIndex((request) => {
       const url = new URL(request.url, "http://test.local");
       if (url.pathname !== path) return false;
-      return Object.entries(params).every(([key, value]) => url.searchParams.get(key) === value);
+      const query = queryOf(request);
+      return Object.entries(params).every(([key, value]) => String(query[key] ?? "") === value);
     });
     assert.ok(found >= 0, `expected pending request: ${path} ${JSON.stringify(params)}`);
     return requests.splice(found, 1)[0]!;
@@ -168,9 +189,9 @@ async function onlyLoadsMemories() {
   page.take("/api/characters/role-a").resolve({ id: "role-a", name: "角色 A" });
   await flush();
   const listRequest = page.take("/api/characters/role-a/memories");
-  const url = new URL(listRequest.url, "http://test.local");
-  assert.equal(url.searchParams.get("page"), "1", "The list must ask the server for a page, not a 400-row window.");
-  assert.equal(url.searchParams.has("q"), false, "An empty search box must not send a keyword.");
+  const query = listRequest.options?.query ?? {};
+  assert.equal(String(query.page), "1", "The list must ask the server for a page, not a 400-row window.");
+  assert.equal("q" in query, false, "An empty search box must not send a keyword.");
   listRequest.resolve(list("role-a"));
   page.take("/api/characters/role-a/memory-stats").resolve(stats("role-a"));
   await loading;
@@ -285,8 +306,7 @@ async function roleSwitchList() {
   await flush();
   // 换角色会清空搜索词，所以新请求不带 q。
   const current = page.take("/api/characters/role-b/memories");
-  const url = new URL(current.url, "http://test.local");
-  assert.equal(url.searchParams.has("q"), false);
+  assert.equal("q" in (current.options?.query ?? {}), false);
   current.resolve(list("role-b"));
   page.take("/api/characters/role-b/memory-stats").resolve(stats("role-b"));
   await flush();

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ensureMemoryProgressPolling, type MemoryProgressRow } from "~/composables/useMemoryProgress";
 import { useMemoryActions } from "~/composables/useMemoryActions";
+import { createMemoryApi } from "~/api/memory";
+
+const api = createMemoryApi(useApiRequest());
 
 type ExtractionPreview = {
   characterId: string;
@@ -55,7 +58,7 @@ async function loadPreview() {
   previewLoading.value = true;
   previewError.value = "";
   try {
-    const result = await $fetch<ExtractionPreview>(`/api/characters/${encodeURIComponent(characterId)}/memory-events/preview`);
+    const result = await api.previewMemoryEvents(characterId);
     if (!current(token, characterId) || request !== previewRequest) return;
     if (result.characterId !== characterId) throw new Error("预览角色不一致，请重新加载。");
     preview.value = result;
@@ -75,9 +78,7 @@ async function loadProgress() {
   if (!characterId || !props.modelValue) return;
   progressLoading.value = true;
   try {
-    const result = await $fetch<{ jobs: MemoryProgressRow[]; checkedAt: string }>("/api/memory-progress", {
-      query: { characterId, type: "EXTRACT_EVENTS" },
-    });
+    const result = await api.listMemoryProgress({ characterId, type: "EXTRACT_EVENTS" });
     if (!current(token, characterId) || request !== progressRequest) return;
     jobs.value = result.jobs.filter(job => job.characterId === characterId && job.type === "EXTRACT_EVENTS");
     progressCheckedAt.value = result.checkedAt;
