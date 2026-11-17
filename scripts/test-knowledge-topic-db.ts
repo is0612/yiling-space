@@ -209,6 +209,18 @@ try {
   assert.equal(topicDetail.status, 200);
   assert.equal((topicDetail.body.topic as { members: unknown[] }).members.length, 2);
   assert.equal((await getRequest(`/characters/${characterId}/growth/knowledge/topics/${createdTopicId}`, otherSession.token)).status, 404);
+  // Even inconsistent legacy membership must not expose another character's knowledge body.
+  const isolatedTopic = await prisma.knowledgeTopic.create({
+    data: {
+      characterId, name: "隔离防护主题",
+      members: { create: { itemId: foreign.id, itemRevision: 1 } },
+    },
+  });
+  const isolatedDetail = await getRequest(`/characters/${characterId}/growth/knowledge/topics/${isolatedTopic.id}`, session.token);
+  const isolatedMember = (isolatedDetail.body.topic as { members: Array<{ valid: boolean; item: unknown; invalidReason: string }> }).members[0]!;
+  assert.equal(isolatedMember.valid, false);
+  assert.equal(isolatedMember.item, null);
+  assert.equal(isolatedMember.invalidReason, "NOT_IN_CHARACTER");
   const runList = await getRequest(`/characters/${characterId}/growth/knowledge/topics/runs?status=READY`, session.token);
   assert.equal(runList.status, 200);
   assert.ok((runList.body.runs as Array<{ id: string }>).some(run => run.id === readyRunId));
