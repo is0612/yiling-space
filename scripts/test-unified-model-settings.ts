@@ -131,5 +131,5 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   assert.equal("clearVoiceApiKey" in bodies[2], false, "清除后重新输入新 Key，以新值为准");
   assert.equal((bodies[2] as { voiceApiKey?: string }).voiceApiKey, "fresh-key");
 }
-assert(page.includes("调用日志")); assert(page.includes("<ModelCallLogsDialog"));
+assert(main.includes("调用日志")); assert(main.includes("<ModelCallLogsDialog"), "Call logs dialog belongs to the extracted model settings component");
 console.log("Unified model settings: seven capabilities, canonical role/section routing, per-role draft cache, original independent credentials and request lifecycle guards passed (script-level, no DOM).");
