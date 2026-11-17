@@ -27,7 +27,8 @@ const mergedSections = ["memoryAssistant", "contextAssistant", "knowledge", "soc
 for (const name of realSections) assert(page.includes(`key: "${name}"`));
 for (const name of mergedSections) assert(!page.includes(`key: "${name}"`), `${name} 已并入对话模型，不该再有独立分节`);
 assert(page.includes('<KeepAlive :key="characterId">'), "Role switch destroys cached forms; capability switch preserves them");
-assert(page.includes(':is="mainComponent"')); assert(page.includes(':character-id="characterId"')); assert(/\sembedded\s/.test(page), "Panel renders embedded inside the workspace shell");
+assert(page.includes('<main class="model-workspace-content">'), "Panel renders inside the model workspace content area");
+assert(page.includes(':is="mainComponent"')); assert(page.includes(':character-id="characterId"')); assert(page.includes(':section="section"'));
 assert(main.includes("const id = computed(() => props.characterId)")); assert(!main.includes("definePageMeta("));
 assert(main.includes('v-if="!embedded"')); assert(main.includes('v-show="activeTab === \'chat\'"')); assert(main.includes('v-show="activeTab === \'vision\'"'), "Assistant panels are folded into the chat section, vision stays its own panel");
 assert(main.includes('if (disposed || version !== roleVersion) throw new Error("Model settings role changed")'));
