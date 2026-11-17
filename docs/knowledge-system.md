@@ -694,3 +694,28 @@ Run 的模型调用与 HTTP 请求生命周期解耦：POST 只创建 QUEUED 记
 - 所有主题修改和成员关系变化均在事务中先保存完整修改前快照，再递增主题 revision；支持客户端传入 revision 做乐观并发冲突检测。重复添加已有成员为幂等 no-op，不产生虚假 revision。
 - 本批不提供物理删除主题入口，避免误删历史；归档作为可恢复的停用方式。主题拆分、合并、历史查询与撤销仍是后续 API 阶段。
 - 新增 PostgreSQL 集成测试覆盖创建、字段校验、编辑、归档/恢复、跨角色隔离、成员增删、重复添加、revision 冲突及历史快照。
+
+
+### 主题拆分与合并 API（2026-11-17，开发分支）
+
+#### 拆分主题
+
+- 路径：`POST /api/characters/:id/growth/knowledge/topics/:topicId/split`
+- 请求：`{ name, description?, memberItemIds, revision }`。
+- `memberItemIds` 必须是来源主题当前成员的非空真子集；至少为原主题保留一条知识。请求不能凭空把其他主题或其他角色的知识加入新主题。
+- 事务内锁定来源主题并校验 ACTIVE 状态及 revision，先保存来源主题完整修改前快照，再从来源主题移出选中成员并创建新主题。新主题成员保留原有 `itemRevision`，来源主题 revision 递增，新主题从 revision 1 开始。
+- 任一校验或写入失败整体回滚；拆分不会修改 KnowledgeItem 正文、状态、来源或版本。
+
+#### 合并主题
+
+- 路径：`POST /api/characters/:id/growth/knowledge/topics/:topicId/merge`，路径中的 `topicId` 是来源主题。
+- 请求：`{ targetTopicId, sourceRevision, targetRevision }`。来源与目标必须是两个不同、同角色、ACTIVE 的主题；两个 revision 都必填。
+- 事务内按主题 ID 排序加行锁，避免并发合并时锁顺序不一致；先保存来源主题修改前快照，再将来源标记为 MERGED，写入 `mergedIntoId` / `mergedAt` 并递增 revision。
+- 目标主题保留名称、说明和身份。来源成员合并到目标时按 `(topicId, itemId)` 唯一约束去重；已有成员不重复添加，新增成员保留来源的 `itemRevision`。目标只有在成员集合实际变化时才保存快照并递增 revision。
+- MERGED 来源主题保留原成员和历史用于追溯，不物理删除；后续不可再编辑、归档或作为合并目标。合并不改变任何 KnowledgeItem。
+- 任一 revision 过期、角色不匹配、主题状态不允许或其他写入失败，整笔事务回滚，不产生部分迁移。
+
+#### 本批验收边界
+
+- PostgreSQL 专项测试覆盖拆分成员子集、来源剩余成员、来源快照、新主题初始 revision、无效全量拆分、跨角色访问、过期 revision、合并成员去重、源主题 MERGED 标记、目标主题快照、合并后不可编辑。
+- 本批不实现主题合并撤销；撤销仍需下一批主题历史查询/撤销 API 设计。页面继续排在 API 稳定和专项测试之后。

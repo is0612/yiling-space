@@ -28,6 +28,8 @@ const createTopic = (await import("../server/api/characters/[id]/growth/knowledg
 const patchTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId].patch")).default;
 const addTopicMembers = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/members/index.post")).default;
 const removeTopicMember = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/members/[itemId].delete")).default;
+const splitTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/split.post")).default;
+const mergeTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/merge.post")).default;
 const prisma = getPrisma();
 const ownerId = randomUUID();
 const otherOwnerId = randomUUID();
@@ -46,6 +48,8 @@ router.post("/characters/:id/growth/knowledge/topics", createTopic);
 router.patch("/characters/:id/growth/knowledge/topics/:topicId", patchTopic);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/members", addTopicMembers);
 router.delete("/characters/:id/growth/knowledge/topics/:topicId/members/:itemId", removeTopicMember);
+router.post("/characters/:id/growth/knowledge/topics/:topicId/split", splitTopic);
+router.post("/characters/:id/growth/knowledge/topics/:topicId/merge", mergeTopic);
 app.use(router);
 const api = createServer(toNodeListener(app));
 
@@ -364,6 +368,90 @@ try {
   assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
     name: "越权", revision: 6,
   }, otherSession.token)).status, 404);
+
+  // Topic split and merge: membership is moved, both operations are revision-guarded and auditable.
+  const splitItems = await makeItems(characterId, "主题拆分合并", 3);
+  const splitSource = await prisma.knowledgeTopic.create({
+    data: {
+      characterId, name: "拆分前主题", description: "原主题说明",
+      members: { create: splitItems.map(item => ({ itemId: item.id, itemRevision: item.revision })) },
+    },
+  });
+  const splitPath = `/characters/${characterId}/growth/knowledge/topics/${splitSource.id}/split`;
+  assert.equal((await request(splitPath, {
+    name: "拆分子主题", description: "拆分说明",
+    memberItemIds: [splitItems[0]!.id], revision: 1,
+  }, otherSession.token)).status, 404);
+  assert.equal((await request(splitPath, {
+    name: "拆分子主题", memberItemIds: [splitItems[0]!.id], revision: 99,
+  }, session.token)).status, 409);
+  const splitResult = await request(splitPath, {
+    name: "拆分子主题", description: "拆分说明",
+    memberItemIds: [splitItems[0]!.id], revision: 1,
+  }, session.token);
+  assert.equal(splitResult.status, 200, JSON.stringify(splitResult.body));
+  const splitNewId = (splitResult.body.newTopic as { id: string; revision: number }).id;
+  assert.equal((splitResult.body.newTopic as { revision: number }).revision, 1);
+  assert.deepEqual(splitResult.body.movedItemIds, [splitItems[0]!.id]);
+  assert.deepEqual(
+    [...(splitResult.body.remainingItemIds as string[])].sort(),
+    [splitItems[1]!.id, splitItems[2]!.id].sort(),
+  );
+  const splitSourceAfter = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: splitSource.id }, include: { members: true, revisions: true },
+  });
+  const splitNewTopic = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: splitNewId }, include: { members: true },
+  });
+  assert.equal(splitSourceAfter.revision, 2);
+  assert.equal(splitSourceAfter.members.length, 2);
+  assert.equal(splitSourceAfter.revisions.length, 1);
+  assert.equal(splitSourceAfter.revisions[0]!.revision, 1);
+  assert.deepEqual(splitNewTopic.members.map(member => member.itemId), [splitItems[0]!.id]);
+  assert.equal((await request(splitPath, {
+    name: "不能全拆", memberItemIds: [splitItems[1]!.id, splitItems[2]!.id], revision: 2,
+  }, session.token)).status, 400);
+
+  const mergeTarget = await prisma.knowledgeTopic.create({
+    data: {
+      characterId, name: "合并目标主题",
+      members: { create: { itemId: splitItems[2]!.id, itemRevision: splitItems[2]!.revision } },
+    },
+  });
+  const mergePath = `/characters/${characterId}/growth/knowledge/topics/${splitSource.id}/merge`;
+  assert.equal((await request(mergePath, {
+    targetTopicId: mergeTarget.id, sourceRevision: 2, targetRevision: 99,
+  }, session.token)).status, 409);
+  assert.equal((await prisma.knowledgeTopic.findUniqueOrThrow({ where: { id: splitSource.id } })).status, "ACTIVE");
+  assert.equal((await request(mergePath, {
+    targetTopicId: splitSource.id, sourceRevision: 2, targetRevision: 2,
+  }, session.token)).status, 400);
+  assert.equal((await request(mergePath, {
+    targetTopicId: mergeTarget.id, sourceRevision: 2, targetRevision: 1,
+  }, otherSession.token)).status, 404);
+  const merged = await request(mergePath, {
+    targetTopicId: mergeTarget.id, sourceRevision: 2, targetRevision: 1,
+  }, session.token);
+  assert.equal(merged.status, 200, JSON.stringify(merged.body));
+  assert.equal((merged.body.sourceTopic as { status: string; revision: number; mergedIntoId: string }).status, "MERGED");
+  assert.equal((merged.body.sourceTopic as { revision: number }).revision, 3);
+  assert.equal((merged.body.sourceTopic as { mergedIntoId: string }).mergedIntoId, mergeTarget.id);
+  assert.deepEqual(merged.body.addedItemIds, [splitItems[1]!.id]);
+  assert.deepEqual(merged.body.alreadyPresentItemIds, [splitItems[2]!.id]);
+  const mergeSourceAfter = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: splitSource.id }, include: { members: true, revisions: true },
+  });
+  const mergeTargetAfter = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: mergeTarget.id }, include: { members: true, revisions: true },
+  });
+  assert.equal(mergeSourceAfter.members.length, 2, "merged source retains its members for audit");
+  assert.equal(mergeSourceAfter.revisions.length, 2);
+  assert.equal(mergeTargetAfter.members.length, 2);
+  assert.equal(mergeTargetAfter.revision, 2);
+  assert.equal(mergeTargetAfter.revisions.length, 1);
+  assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${splitSource.id}`, "PATCH", {
+    name: "不允许编辑已合并主题", revision: 3,
+  }, session.token)).status, 409);
 
   // Revision changes before execution make the run STALE without calling the model.
   const beforeStaleCalls = modelCalls;
