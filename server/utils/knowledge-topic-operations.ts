@@ -184,7 +184,6 @@ export async function mergeKnowledgeTopics(
     });
 
     if (additions.length) {
-      await saveTopicRevision(tx, target);
       await tx.knowledgeTopicMember.createMany({
         data: additions.map(member => ({
           topicId: targetTopicId,
