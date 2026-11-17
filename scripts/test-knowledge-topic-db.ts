@@ -24,6 +24,10 @@ const listTopics = (await import("../server/api/characters/[id]/growth/knowledge
 const getTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId].get")).default;
 const listRuns = (await import("../server/api/characters/[id]/growth/knowledge/topics/runs.get")).default;
 const getRun = (await import("../server/api/characters/[id]/growth/knowledge/topics/runs/[runId].get")).default;
+const createTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/index.post")).default;
+const patchTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId].patch")).default;
+const addTopicMembers = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/members/index.post")).default;
+const removeTopicMember = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/members/[itemId].delete")).default;
 const prisma = getPrisma();
 const ownerId = randomUUID();
 const otherOwnerId = randomUUID();
@@ -38,6 +42,10 @@ router.get("/characters/:id/growth/knowledge/topics", listTopics);
 router.get("/characters/:id/growth/knowledge/topics/:topicId", getTopic);
 router.get("/characters/:id/growth/knowledge/topics/runs", listRuns);
 router.get("/characters/:id/growth/knowledge/topics/runs/:runId", getRun);
+router.post("/characters/:id/growth/knowledge/topics", createTopic);
+router.patch("/characters/:id/growth/knowledge/topics/:topicId", patchTopic);
+router.post("/characters/:id/growth/knowledge/topics/:topicId/members", addTopicMembers);
+router.delete("/characters/:id/growth/knowledge/topics/:topicId/members/:itemId", removeTopicMember);
 app.use(router);
 const api = createServer(toNodeListener(app));
 
@@ -91,6 +99,18 @@ async function getRequest(path: string, cookie?: string) {
 async function request(path: string, body?: Record<string, unknown>, cookie?: string) {
   const response = await fetch(`http://127.0.0.1:${(api.address() as { port: number }).port}${path}`, {
     method: "POST",
+    headers: {
+      ...(cookie ? { cookie: `yiling_session=${cookie}` } : {}),
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const text = await response.text();
+  return { status: response.status, body: text ? JSON.parse(text) as Record<string, any> : {} };
+}
+async function mutate(path: string, method: "PATCH" | "DELETE", body?: Record<string, unknown>, cookie?: string) {
+  const response = await fetch(`http://127.0.0.1:${(api.address() as { port: number }).port}${path}`, {
+    method,
     headers: {
       ...(cookie ? { cookie: `yiling_session=${cookie}` } : {}),
       ...(body ? { "content-type": "application/json" } : {}),
@@ -274,6 +294,76 @@ try {
   await prisma.knowledgeItem.update({ where: { id: staleReviewItems[0]!.id }, data: { revision: 2 } });
   assert.equal((await request(acceptPath(staleReviewSuggestion.id), { mode: "CREATE" }, session.token)).status, 409);
   assert.equal((await prisma.knowledgeTopicSuggestion.findUniqueOrThrow({ where: { id: staleReviewSuggestion.id } })).status, "PENDING");
+
+  // Manual topic management: create, edit, archive/restore, add/remove members and revision snapshots.
+  const manualItems = await makeItems(characterId, "手动主题成员");
+  const manualCreate = await request(`/characters/${characterId}/growth/knowledge/topics`, {
+    name: "手动主题", description: "初始说明",
+  }, session.token);
+  assert.equal(manualCreate.status, 200, JSON.stringify(manualCreate.body));
+  const manualTopicId = (manualCreate.body.topic as { id: string; revision: number }).id;
+  assert.equal((manualCreate.body.topic as { revision: number }).revision, 1);
+  assert.equal((await request(`/characters/${characterId}/growth/knowledge/topics`, {
+    name: "   ",
+  }, session.token)).status, 400);
+  assert.equal((await request(`/characters/${characterId}/growth/knowledge/topics`, {
+    name: "越权主题",
+  }, otherSession.token)).status, 404);
+  const edited = await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
+    name: "编辑后的主题", description: "编辑后的说明", revision: 1,
+  }, session.token);
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal((edited.body.topic as { revision: number }).revision, 2);
+  assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
+    name: "过期覆盖", revision: 1,
+  }, session.token)).status, 409);
+  const archived = await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
+    status: "ARCHIVED", revision: 2,
+  }, session.token);
+  assert.equal(archived.status, 200);
+  assert.equal((archived.body.topic as { status: string; revision: number }).status, "ARCHIVED");
+  assert.equal((archived.body.topic as { revision: number }).revision, 3);
+  assert.equal((await request(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/members`, {
+    itemIds: [manualItems[0]!.id], revision: 3,
+  }, session.token)).status, 409);
+  const restored = await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
+    status: "ACTIVE", revision: 3,
+  }, session.token);
+  assert.equal(restored.status, 200);
+  assert.equal((restored.body.topic as { revision: number }).revision, 4);
+  const added = await request(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/members`, {
+    itemIds: [manualItems[0]!.id], revision: 4,
+  }, session.token);
+  assert.equal(added.status, 200, JSON.stringify(added.body));
+  assert.deepEqual(added.body.addedItemIds, [manualItems[0]!.id]);
+  assert.equal(added.body.revision, 5);
+  const duplicateAdd = await request(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/members`, {
+    itemIds: [manualItems[0]!.id], revision: 5,
+  }, session.token);
+  assert.equal(duplicateAdd.status, 200);
+  assert.equal(duplicateAdd.body.revision, 5);
+  assert.equal((await request(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/members`, {
+    itemIds: [foreign.id], revision: 5,
+  }, session.token)).status, 409);
+  const removed = await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/members/${manualItems[0]!.id}`, "DELETE", {
+    revision: 5,
+  }, session.token);
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.equal(removed.body.revision, 6);
+  assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/members/${manualItems[0]!.id}`, "DELETE", {
+    revision: 6,
+  }, session.token)).status, 404);
+  const manualAfter = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: manualTopicId }, include: { members: true, revisions: { orderBy: { revision: "asc" } } },
+  });
+  assert.equal(manualAfter.name, "编辑后的主题");
+  assert.equal(manualAfter.members.length, 0);
+  assert.equal(manualAfter.revision, 6);
+  assert.equal(manualAfter.revisions.length, 5);
+  assert.deepEqual(manualAfter.revisions.map(row => row.revision), [1, 2, 3, 4, 5]);
+  assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
+    name: "越权", revision: 6,
+  }, otherSession.token)).status, 404);
 
   // Revision changes before execution make the run STALE without calling the model.
   const beforeStaleCalls = modelCalls;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { applyAsrProviderPreset, applyVoiceProviderPreset } from "../app/utils/voice-provider-preset";
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "../app/utils/model-catalog";
 import { isImageGenerationModel } from "../shared/utils/vision-models";
+import { readApiErrorMessage } from "../app/utils/api-error";
 import { buildPageHarness, flushMicrotasks } from "./lib/page-harness";
 
 /**
@@ -19,6 +20,7 @@ const modelSettingsGlobals = {
   applyAsrProviderPreset,
   applyVoiceProviderPreset,
   isImageGenerationModel,
+  readApiErrorMessage,
 };
 
 /** 设置类场景统一走这个入口：换角色要触发 `watch(id, ...)`，首次加载在 onMounted。 */
