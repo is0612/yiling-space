@@ -228,6 +228,9 @@ jobs:
       - name: 知识文档导入安全解析测试
         run: yarn run test:knowledge-import
 
+      - name: 知识主题聚类 Worker 数据库与并发集成测试
+        run: yarn run test:knowledge-topic-isolated
+
       - name: 其余单元与集成测试
         run: yarn run test:unit-suite
 
