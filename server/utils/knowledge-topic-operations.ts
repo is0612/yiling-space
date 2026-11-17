@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createError } from "h3";
 import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
 
@@ -51,8 +52,12 @@ async function lockTopics(tx: Db, characterId: string, topicIds: string[]) {
   return new Map(topics.map(topic => [topic.id, topic]));
 }
 
-async function saveTopicRevision(tx: Db, topic: Topic) {
-  await tx.knowledgeTopicRevision.create({
+async function saveTopicRevision(
+  tx: Db,
+  topic: Topic,
+  metadata: { action?: string; operationId?: string; relatedTopicId?: string } = {},
+) {
+  return tx.knowledgeTopicRevision.create({
     data: {
       topicId: topic.id,
       revision: topic.revision,
@@ -64,6 +69,9 @@ async function saveTopicRevision(tx: Db, topic: Topic) {
         itemId: member.itemId,
         itemRevision: member.itemRevision,
       })) as unknown as Prisma.InputJsonValue,
+      action: metadata.action ?? "EDIT",
+      operationId: metadata.operationId,
+      relatedTopicId: metadata.relatedTopicId,
     },
   });
 }
@@ -97,7 +105,8 @@ export async function splitKnowledgeTopic(
     const selected = new Set(selectedIds);
     const movedMembers = source.members.filter(member => selected.has(member.itemId));
     const remainingMembers = source.members.filter(member => !selected.has(member.itemId));
-    await saveTopicRevision(tx, source);
+    const operationId = randomUUID();
+    const sourceRevision = await saveTopicRevision(tx, source, { action: "SPLIT", operationId });
     const updatedSource = await tx.knowledgeTopic.update({
       where: { id: topicId },
       data: {
@@ -117,6 +126,10 @@ export async function splitKnowledgeTopic(
         })) },
       },
       select: { id: true, name: true, description: true, status: true, revision: true, createdAt: true, updatedAt: true },
+    });
+    await tx.knowledgeTopicRevision.update({
+      where: { id: sourceRevision.id },
+      data: { relatedTopicId: created.id },
     });
     return {
       sourceTopic: updatedSource,
@@ -153,7 +166,13 @@ export async function mergeKnowledgeTopics(
     const additions = source.members.filter(member => !targetIds.has(member.itemId));
     const now = new Date();
 
-    await saveTopicRevision(tx, source);
+    const operationId = randomUUID();
+    await saveTopicRevision(tx, source, {
+      action: "MERGE", operationId, relatedTopicId: targetTopicId,
+    });
+    await saveTopicRevision(tx, target, {
+      action: "MERGE", operationId, relatedTopicId: sourceTopicId,
+    });
     await tx.knowledgeTopic.update({
       where: { id: sourceTopicId },
       data: {
@@ -173,11 +192,11 @@ export async function mergeKnowledgeTopics(
           itemRevision: member.itemRevision,
         })),
       });
-      await tx.knowledgeTopic.update({
-        where: { id: targetTopicId },
-        data: { revision: { increment: 1 } },
-      });
     }
+    await tx.knowledgeTopic.update({
+      where: { id: targetTopicId },
+      data: { revision: { increment: 1 } },
+    });
 
     const [updatedSource, updatedTarget] = await Promise.all([
       tx.knowledgeTopic.findUniqueOrThrow({
