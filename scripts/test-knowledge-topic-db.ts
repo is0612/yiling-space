@@ -30,6 +30,9 @@ const addTopicMembers = (await import("../server/api/characters/[id]/growth/know
 const removeTopicMember = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/members/[itemId].delete")).default;
 const splitTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/split.post")).default;
 const mergeTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/merge.post")).default;
+const listTopicRevisions = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions.get")).default;
+const getTopicRevision = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions/[revision].get")).default;
+const restoreTopicRevision = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions/[revision]/restore.post")).default;
 const prisma = getPrisma();
 const ownerId = randomUUID();
 const otherOwnerId = randomUUID();
@@ -50,6 +53,9 @@ router.post("/characters/:id/growth/knowledge/topics/:topicId/members", addTopic
 router.delete("/characters/:id/growth/knowledge/topics/:topicId/members/:itemId", removeTopicMember);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/split", splitTopic);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/merge", mergeTopic);
+router.get("/characters/:id/growth/knowledge/topics/:topicId/revisions", listTopicRevisions);
+router.get("/characters/:id/growth/knowledge/topics/:topicId/revisions/:revision", getTopicRevision);
+router.post("/characters/:id/growth/knowledge/topics/:topicId/revisions/:revision/restore", restoreTopicRevision);
 app.use(router);
 const api = createServer(toNodeListener(app));
 
@@ -365,8 +371,29 @@ try {
   assert.equal(manualAfter.revision, 6);
   assert.equal(manualAfter.revisions.length, 5);
   assert.deepEqual(manualAfter.revisions.map(row => row.revision), [1, 2, 3, 4, 5]);
+
+  const historyPath = `/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/revisions`;
+  const history = await getRequest(historyPath, session.token);
+  assert.equal(history.status, 200, JSON.stringify(history.body));
+  assert.equal((history.body.revisions as Array<{ revision: number }>).length, 5);
+  const historicalDetail = await getRequest(`${historyPath}/1`, session.token);
+  assert.equal(historicalDetail.status, 200, JSON.stringify(historicalDetail.body));
+  assert.equal((historicalDetail.body.snapshot as { name: string }).name, "手动主题");
+  assert.equal((await getRequest(`${historyPath}/1`, otherSession.token)).status, 404);
+  const restoredHistory = await request(`${historyPath}/1/restore`, { expectedRevision: 6 }, session.token);
+  assert.equal(restoredHistory.status, 200, JSON.stringify(restoredHistory.body));
+  assert.equal((restoredHistory.body.topic as { name: string; revision: number }).name, "手动主题");
+  assert.equal((restoredHistory.body.topic as { revision: number }).revision, 7);
+  assert.equal((await request(`${historyPath}/1/restore`, { expectedRevision: 6 }, session.token)).status, 409);
+  const afterHistoryRestore = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: manualTopicId }, include: { members: true, revisions: true },
+  });
+  assert.equal(afterHistoryRestore.revision, 7);
+  assert.equal(afterHistoryRestore.name, "手动主题");
+  assert.equal(afterHistoryRestore.revisions.length, 6);
+
   assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
-    name: "越权", revision: 6,
+    name: "越权", revision: 7,
   }, otherSession.token)).status, 404);
 
   // Topic split and merge: membership is moved, both operations are revision-guarded and auditable.
