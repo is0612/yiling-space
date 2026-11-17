@@ -35,7 +35,9 @@ export type KnowledgeTopicRunSummary = {
   lastError: string | null; createdAt: string; updatedAt: string; completedAt: string | null;
   runAt: string; inputCount: number; ungroupedCount: number; suggestionCount: number;
 };
-export type KnowledgeTopicRunDetail = KnowledgeTopicRunSummary & {
+export type KnowledgeTopicRunDetail = {
+  id: string; status: KnowledgeTopicRunStatus; attemptCount: number; maxAttempts: number;
+  lastError: string | null; createdAt: string; updatedAt: string; completedAt: string | null; runAt: string;
   inputSnapshot: Array<{ itemId: string; revision: number; item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null }>;
   ungroupedItems: Array<{ id: string; title: string; category: string; status: string; revision: number; updatedAt: string }>;
   suggestions: Array<{
