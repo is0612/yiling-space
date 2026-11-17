@@ -3,6 +3,7 @@ import { applyAsrProviderPreset, applyVoiceProviderPreset } from "../app/utils/v
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "../app/utils/model-catalog";
 import { isImageGenerationModel } from "../shared/utils/vision-models";
 import { readApiErrorMessage } from "../app/utils/api-error";
+import { createCharacterSettingsApi } from "../app/api/character-settings";
 import { buildPageHarness, flushMicrotasks } from "./lib/page-harness";
 
 /**
@@ -21,6 +22,7 @@ const modelSettingsGlobals = {
   applyVoiceProviderPreset,
   isImageGenerationModel,
   readApiErrorMessage,
+  createCharacterSettingsApi,
 };
 
 /** 设置类场景统一走这个入口：换角色要触发 `watch(id, ...)`，首次加载在 onMounted。 */
