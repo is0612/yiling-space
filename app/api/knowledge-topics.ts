@@ -27,7 +27,25 @@ export type KnowledgeTopicPage = {
   pagination: { page: number; pageSize: number; total: number; pageCount: number };
 };
 
-const base = (characterId: string) => `/characters/${encodeURIComponent(characterId)}/growth/knowledge/topics`;
+
+export type KnowledgeTopicRunStatus = "QUEUED" | "PROCESSING" | "READY" | "FAILED" | "STALE";
+export type KnowledgeTopicSuggestionStatus = "PENDING" | "ACCEPTED" | "DISMISSED";
+export type KnowledgeTopicRunSummary = {
+  id: string; status: KnowledgeTopicRunStatus; attemptCount: number; maxAttempts: number;
+  lastError: string | null; createdAt: string; updatedAt: string; completedAt: string | null;
+  runAt: string; inputCount: number; ungroupedCount: number; suggestionCount: number;
+};
+export type KnowledgeTopicRunDetail = KnowledgeTopicRunSummary & {
+  inputSnapshot: Array<{ itemId: string; revision: number; item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null }>;
+  ungroupedItems: Array<{ id: string; title: string; category: string; status: string; revision: number; updatedAt: string }>;
+  suggestions: Array<{
+    id: string; name: string; description: string; reason: string; memberItemIds: string[];
+    acceptedMemberItemIds: string[] | null; status: KnowledgeTopicSuggestionStatus; reviewedAt: string | null; createdAt: string;
+    members: Array<{ itemId: string; item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null }>;
+    acceptedMembers: Array<{ itemId: string; item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null }>;
+  }>;
+};
+\nconst base = (characterId: string) => `/characters/${encodeURIComponent(characterId)}/growth/knowledge/topics`;
 const topicPath = (characterId: string, topicId: string) => `${base(characterId)}/${encodeURIComponent(topicId)}`;
 
 export function createKnowledgeTopicsApi(request: ApiRequest) {
@@ -61,7 +79,23 @@ export function createKnowledgeTopicsApi(request: ApiRequest) {
   function restoreRevision(payload: { characterId: string; topicId: string; revision: number; expectedRevision: number }): Promise<unknown> {
     return request({ url: `${topicPath(payload.characterId, payload.topicId)}/revisions/${payload.revision}/restore`, method: "post", data: { expectedRevision: payload.expectedRevision } });
   }
-  return { list, get, create, update, addMembers, removeMember, listRevisions, getRevision, restoreRevision };
+
+  function createRun(payload: { characterId: string; itemIds: string[] }): Promise<{ run: { id: string; status: KnowledgeTopicRunStatus; createdAt: string } }> {
+    return request({ url: `${base(payload.characterId)}/runs`, method: "post", data: { itemIds: payload.itemIds } });
+  }
+  function listRuns(payload: { characterId: string; status?: KnowledgeTopicRunStatus; page?: number }): Promise<{ runs: KnowledgeTopicRunSummary[]; pagination: { page: number; pageSize: number; total: number; pageCount: number } }> {
+    return request({ url: `${base(payload.characterId)}/runs`, method: "get", params: { page: payload.page ?? 1, pageSize: 20, ...(payload.status ? { status: payload.status } : {}) } });
+  }
+  function getRun(payload: { characterId: string; runId: string }): Promise<{ run: KnowledgeTopicRunDetail }> {
+    return request({ url: `${base(payload.characterId)}/runs/${encodeURIComponent(payload.runId)}`, method: "get" });
+  }
+  function acceptSuggestion(payload: { characterId: string; suggestionId: string; mode: "CREATE" | "APPLY"; topicId?: string; memberItemIds?: string[] }): Promise<{ topic: KnowledgeTopicSummary; acceptedMemberItemIds: string[] }> {
+    return request({ url: `${base(payload.characterId)}/suggestions/${encodeURIComponent(payload.suggestionId)}/accept`, method: "post", data: { mode: payload.mode, ...(payload.topicId ? { topicId: payload.topicId } : {}), ...(payload.memberItemIds ? { memberItemIds: payload.memberItemIds } : {}) } });
+  }
+  function dismissSuggestion(payload: { characterId: string; suggestionId: string }): Promise<{ id: string; status: "DISMISSED" }> {
+    return request({ url: `${base(payload.characterId)}/suggestions/${encodeURIComponent(payload.suggestionId)}/dismiss`, method: "post" });
+  }
+  return { list, get, create, update, addMembers, removeMember, listRevisions, getRevision, restoreRevision, createRun, listRuns, getRun, acceptSuggestion, dismissSuggestion };
 }
 
 export type KnowledgeTopicsApi = ReturnType<typeof createKnowledgeTopicsApi>;
