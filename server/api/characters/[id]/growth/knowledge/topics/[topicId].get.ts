@@ -19,7 +19,7 @@ export default defineEventHandler(async event => {
         include: {
           item: {
             select: {
-              id: true, title: true, content: true, category: true, tags: true,
+              id: true, characterId: true, title: true, content: true, category: true, tags: true,
               status: true, revision: true, updatedAt: true,
             },
           },
@@ -42,10 +42,15 @@ export default defineEventHandler(async event => {
       mergedInto: topic.mergedInto, createdAt: topic.createdAt, updatedAt: topic.updatedAt,
       members: topic.members.map(member => ({
         id: member.id, itemId: member.itemId, itemRevision: member.itemRevision, createdAt: member.createdAt,
-        valid: member.item.status === "ACTIVE",
-        itemRevisionChanged: member.item.revision !== member.itemRevision,
-        invalidReason: member.item.status === "ACTIVE" ? null : member.item.status,
-        item: member.item,
+        valid: member.item.characterId === characterId && member.item.status === "ACTIVE",
+        itemRevisionChanged: member.item.characterId === characterId && member.item.revision !== member.itemRevision,
+        invalidReason: member.item.characterId !== characterId ? "NOT_IN_CHARACTER"
+          : member.item.status === "ACTIVE" ? null : member.item.status,
+        item: member.item.characterId === characterId ? {
+          id: member.item.id, title: member.item.title, content: member.item.content,
+          category: member.item.category, tags: member.item.tags, status: member.item.status,
+          revision: member.item.revision, updatedAt: member.item.updatedAt,
+        } : null,
       })),
       revisions: topic.revisions,
     },
