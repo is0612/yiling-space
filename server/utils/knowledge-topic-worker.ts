@@ -131,7 +131,7 @@ async function saveResult(prisma: PrismaClient, lease: RunLease, result: ReturnT
         AND "status" = 'PROCESSING'::"KnowledgeTopicRunStatus" AND "leaseToken" = ${lease.leaseToken}::uuid
         AND "fencingToken" = ${lease.fencingToken} AND "leaseExpiresAt" > ${now} FOR UPDATE
     `;
-    if (!held.length) return false;
+    if (!held.length) return null;
     const refs = snapshot(lease.inputSnapshot);
     const valid = await tx.$queryRaw<Array<{ id: string; revision: number }>>`
       SELECT "id", "revision" FROM "knowledge_items"
