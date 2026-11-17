@@ -8,8 +8,7 @@ import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerBy
 import { applyAsrProviderPreset, applyVoiceProviderPreset } from "~/utils/voice-provider-preset";
 
 type ModelSection = "chat" | "voice" | "vision";
-const props = defineProps<{ characterId: string; section?: ModelSection; embedded?: boolean }>();
-const emit = defineEmits<{ (event: "busy-change", busy: boolean): void }>();
+const props = defineProps<{ characterId: string; section?: ModelSection }>();
 
 /**
  * 模型设置：从「角色设置」弹窗里搬出来的。
@@ -25,8 +24,6 @@ const emit = defineEmits<{ (event: "busy-change", busy: boolean): void }>();
  *       三次 = 填入推荐值、刷新用量（文字按钮）。
  * 保存条吸底：这页往下滚两屏才到底，主操作不能跟着滚出视野。
  */
-const route = useRoute();
-const router = useRouter();
 const id = computed(() => props.characterId);
 let disposed = false;
 let roleVersion = 0;
@@ -212,10 +209,8 @@ const fetchingVisionModels = ref(false);
 /** 模型设置页签：对话 / 语音 / 图片。用 v-show 切换，切换不丢已填表单 */
 const operationBusy = computed(() => saving.value || testing.value || fetchingModels.value || fetchingVoiceModels.value || testingVoice.value
   || testingVision.value || assistantsBusy.value || fetchingVisionModels.value);
-watch(operationBusy, busy => emit("busy-change", busy), { immediate: true });
-onBeforeUnmount(() => emit("busy-change", false));
-const activeTab = ref<ModelSection>(props.section ?? "chat");
-watch(() => props.section, section => { if (section) activeTab.value = section; }, { immediate: true });
+/** 当前页签由父级模型工作台决定 */
+const activeTab = computed<ModelSection>(() => props.section ?? "chat");
 
 /** 本页「获取模型」拉回来的列表；换地址就作废 */
 const fetchedModels = ref<string[]>([]);
@@ -232,24 +227,6 @@ type DailyUsage = {
 const dailyUsage = ref<DailyUsage | null>(null);
 const loadingUsage = ref(false);
 const modelCallLogsOpen = ref(false);
-
-const KIND_LABELS: Record<string, string> = {
-  chat: "对话接口",
-  channel: "QQ 回复",
-  snapshot: "阶段总结",
-  events: "忆泡整理",
-  journal: "日记/手账",
-  "bili-screening": "值班粗筛",
-  "bili-judge": "值班终判",
-  proactive: "主动找话",
-  vision: "群图片识别",
-  "sticker-label": "表情包打标",
-  "memory-assistant": "记忆助手",
-  "context-assistant": "语境助手",
-  "knowledge-assistant": "知识处理助手",
-  "social-relationship-assistant": "关系评估助手",
-  other: "其他",
-};
 
 /**
  * 表单指纹：只收「能看出改过没改过」的值。
@@ -322,7 +299,7 @@ function buildDraftSignature() { return JSON.stringify([
 ]); }
 const draftSignature = computed(() => buildDraftSignature());
 const dirty = computed(() => savedSignature.value !== "" && draftSignature.value !== savedSignature.value);
-defineExpose({ hasUnsavedChanges: dirty, busy: operationBusy });
+defineExpose({ busy: operationBusy });
 
 /** 手动刷新的最短加载时长：本地接口几十毫秒就回来了，转圈一闪而过等于没有反馈 */
 const USAGE_REFRESH_MIN_MS = 1000;
@@ -359,25 +336,6 @@ const saveStateLabel = computed(() => {
   if (!at) return "";
   const pad = (value: number) => String(value).padStart(2, "0");
   return `已保存 ${pad(at.getHours())}:${pad(at.getMinutes())}`;
-});
-
-/** 额度条：两个数字并排比不出「还剩多少」，加一条进度才算回答了这个问题 */
-const quotaPercent = computed(() => {
-  const quota = dailyUsage.value?.quota;
-  if (!quota || !quota.limit) return null;
-  return Math.min(100, Math.round((quota.used / quota.limit) * 100));
-});
-
-const usageKinds = computed(() => Object.entries(dailyUsage.value?.usage.byKind ?? {}));
-
-/** 两个入口各回各家：角色管理页、成长系统的长期记忆页 */
-const backTarget = computed(() => router.resolve({
-  path: route.query.from === "characters" ? "/characters" : "/growth/memory/long-term",
-  query: { ...route.query, c: id.value },
-}).fullPath);
-const backLabel = computed(() => {
-  if (route.query.from === "characters") return "返回角色管理";
-  return "返回长期记忆";
 });
 
 /**
@@ -1047,22 +1005,6 @@ watch(id, () => void loadCharacter());
 
 <template>
   <div class="page-wrap ms-a">
-    <PageHeader
-      v-if="!embedded"
-      :eyebrow="'角色管理 / ' + (character?.name ?? '角色') + ' / 模型设置'"
-      description="决定这个角色使用哪些模型：对话、语音、看图、记忆助手和语境助手可以分别配置。API Key 加密保存、不回传给网页。"
-      :back-to="backTarget"
-      :back-label="backLabel"
-    >
-      <template #actions>
-        <el-button
-          :disabled="!character"
-          @click="modelCallLogsOpen = true"
-        >
-          调用日志
-        </el-button>
-      </template>
-    </PageHeader>
     <ModelCallLogsDialog
       v-model="modelCallLogsOpen"
       :character-id="id"
@@ -1085,47 +1027,6 @@ watch(id, () => void loadCharacter());
       class="ms-grid"
     >
       <div class="ms-main">
-        <!-- 三个页签：对话、语音、图片。四个后台助手收在对话模型页里。 -->
-        <div
-          v-if="!embedded"
-          class="model-tabs"
-          role="tablist"
-        >
-          <button
-            id="model-tab-chat"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab === 'chat'"
-            class="model-tab"
-            :class="{ 'is-on': activeTab === 'chat' }"
-            @click="activeTab = 'chat'"
-          >
-            对话模型
-          </button>
-          <button
-            id="model-tab-voice"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab === 'voice'"
-            class="model-tab"
-            :class="{ 'is-on': activeTab === 'voice' }"
-            @click="activeTab = 'voice'"
-          >
-            语音模型
-          </button>
-          <button
-            id="model-tab-vision"
-            type="button"
-            role="tab"
-            :aria-selected="activeTab === 'vision'"
-            class="model-tab"
-            :class="{ 'is-on': activeTab === 'vision' }"
-            @click="activeTab = 'vision'"
-          >
-            图片模型
-          </button>
-        </div>
-
         <div
           v-show="activeTab === 'chat'"
           class="model-pane"
@@ -1251,217 +1152,18 @@ watch(id, () => void loadCharacter());
             </div>
           </section>
 
-          <el-dialog
+          <ModelGenerationDialog
             v-model="generationParametersOpen"
-            title="生成参数"
-            width="min(720px, calc(100vw - 32px))"
-            class="ms-a generation-dialog"
-            append-to-body
-          >
-            <div class="brick-head">
-              <div class="brick-head-txt">
-                <div class="brick-heading">
-                  <span class="brick-title">对话与记忆预算</span>
-                </div>
-                <p class="brick-desc">
-                  面向自然对话：适度保留表达变化，并为回复与思考预留输出空间。恢复推荐只改温度和输出上限，保存后生效。
-                </p>
-              </div>
-              <el-button
-                text
-                class="head-act"
-                @click="resetRecommendedGenerationSettings"
-              >
-                恢复对话推荐
-              </el-button>
-            </div>
-
-            <div class="knob-group">
-              <div class="knob-group-head">
-                <h3 class="knob-group-title">
-                  回复表现
-                </h3>
-                <span class="knob-group-note">从日常陪伴推荐方案开始，再按实际效果微调</span>
-              </div>
-
-              <div class="knob">
-                <div class="knob-label">
-                  温度
-                </div>
-                <p class="field-help">
-                  推荐 0.7：为自然交流保留表达变化。需要更稳时可降低；不同模型对温度的支持与效果不同。
-                </p>
-                <div class="knob-ctl">
-                  <el-slider
-                    v-model="draftChatTemperature"
-                    class="knob-slider"
-                    :min="0"
-                    :max="2"
-                    :step="0.1"
-                    :aria-label="'温度'"
-                  />
-                  <el-input-number
-                    v-model="draftChatTemperature"
-                    class="knob-number narrow"
-                    :min="0"
-                    :max="2"
-                    :step="0.1"
-                    :precision="1"
-                    :controls="false"
-                    aria-label="温度数值"
-                  />
-                </div>
-              </div>
-
-              <div class="knob">
-                <div class="knob-label">
-                  最大输出 Token
-                </div>
-                <p class="field-help">
-                  推荐 4096：思考 token 也算在这个上限里，给窄了会出现「思考完没正文」。这是单次输出上限，不代表每次都会用满，用多少算多少。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftChatMaxTokens"
-                    class="knob-number"
-                    :min="256"
-                    :max="8192"
-                    :step="256"
-                    aria-label="最大输出 Token"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div class="knob-group">
-              <div class="knob-group-head">
-                <h3 class="knob-group-title">
-                  用量与记忆
-                </h3>
-                <span class="knob-group-note">预算越高，上下文越多，用量也可能增加</span>
-              </div>
-
-              <div class="knob">
-                <div class="knob-label">
-                  每日 token 额度
-                </div>
-                <p class="field-help">
-                  默认不限（0）。想设上限时再填：按东八区统计所有调用，达到额度后会暂停相关调用；这不是金额上限，建议先观察几天「用量与花费」再决定。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftDailyTokenLimit"
-                    class="knob-number"
-                    :min="0"
-                    :max="10000000"
-                    :step="10000"
-                    aria-label="每日 token 额度"
-                  />
-                </div>
-              </div>
-
-              <div class="knob">
-                <div class="knob-label">
-                  最近对话保留（条）
-                </div>
-                <p class="field-help">
-                  推荐 40 条（网页对话约 20 轮）。群里一轮就有好几条，同样的条数覆盖的轮次会少一些，可以调大；范围 20–200。调得太大不只是费 token，真正相关的几句反而会被稀释。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftRecentMessageLimit"
-                    class="knob-number"
-                    :min="20"
-                    :max="200"
-                    :step="10"
-                    aria-label="最近对话保留条数"
-                  />
-                </div>
-              </div>
-
-              <div class="knob">
-                <div class="knob-label">
-                  近期忆泡（天）
-                </div>
-                <p class="field-help">
-                  0 = 不带。填 2 表示把最近两天发生的事无条件带进每一轮，和问不问无关——群里没人会问日期，不这么带，她对昨天就是一片空白。代价是每轮多几百 token；提示词里已经写明「只当背景、不主动提」，但调大后仍可能翻旧账。范围 0–14。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftEventRecentDays"
-                    class="knob-number"
-                    :min="0"
-                    :max="14"
-                    :step="1"
-                    aria-label="近期忆泡天数"
-                  />
-                </div>
-              </div>
-
-              <div class="knob">
-                <div class="knob-label">
-                  记忆注入预算（token）
-                </div>
-                <p class="field-help">
-                  推荐 1800：约 20 条长期记忆的量，适合持续陪伴。预算并非严格硬上限，首条记忆始终放行；0 回退到系统默认 1800。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftMemoryTokenBudget"
-                    class="knob-number"
-                    :min="0"
-                    :max="20000"
-                    :step="200"
-                    aria-label="记忆注入预算"
-                  />
-                </div>
-              </div>
-
-              <div class="knob">
-                <div class="knob-label">
-                  记忆注入条数
-                </div>
-                <p class="field-help">
-                  推荐 20 条。它比预算更早卡住：记忆平均 74 字，12 条才 888 token，1800 的预算有一半用不上。上限 50，再多每条的注意力会被摊薄。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftMemoryItemLimit"
-                    class="knob-number"
-                    :min="1"
-                    :max="50"
-                    :step="1"
-                    aria-label="记忆注入条数"
-                  />
-                </div>
-              </div>
-
-              <div class="knob">
-                <div class="knob-label">
-                  阶段总结注入预算（token）
-                </div>
-                <p class="field-help">
-                  推荐 2500：约 1.5 份周期总结，与长期记忆预算独立。首条总结始终放行，可能超出预算；0 回退到系统默认 2500。
-                </p>
-                <div class="knob-ctl">
-                  <el-input-number
-                    v-model="draftSnapshotTokenBudget"
-                    class="knob-number"
-                    :min="0"
-                    :max="20000"
-                    :step="200"
-                    aria-label="阶段总结注入预算"
-                  />
-                </div>
-              </div>
-            </div>
-            <template #footer>
-              <span class="parameter-save-note">修改保留在草稿中，点击页面「保存设置」后生效。</span>
-              <el-button @click="generationParametersOpen = false">
-                完成
-              </el-button>
-            </template>
-          </el-dialog>
+            v-model:chat-temperature="draftChatTemperature"
+            v-model:chat-max-tokens="draftChatMaxTokens"
+            v-model:daily-token-limit="draftDailyTokenLimit"
+            v-model:recent-message-limit="draftRecentMessageLimit"
+            v-model:event-recent-days="draftEventRecentDays"
+            v-model:memory-token-budget="draftMemoryTokenBudget"
+            v-model:memory-item-limit="draftMemoryItemLimit"
+            v-model:snapshot-token-budget="draftSnapshotTokenBudget"
+            @reset="resetRecommendedGenerationSettings"
+          />
 
           <!--
             四个后台助手。
@@ -2076,101 +1778,15 @@ watch(id, () => void loadCharacter());
         </div>
       </div>
 
-      <aside class="ms-side">
-        <section class="brick">
-          <div class="card-head">
-            <h2>当前配置</h2>
-            <span class="sub">已写入数据库</span>
-          </div>
-          <div class="metric-row">
-            <span>模型</span><span class="metric-value">{{ character?.chatModel || "未配置" }}</span>
-          </div>
-          <div class="metric-row">
-            <span>服务商</span><span class="metric-value">{{ providerLabel }}</span>
-          </div>
-          <div class="metric-row">
-            <span>API Key</span><span
-              class="pill"
-              :class="apiKeySource === 'missing' ? 'pill-rose' : 'pill-green'"
-            >{{ apiKeySource === "character" ? "角色独立 Key" : apiKeySource === "environment" ? "服务端默认 Key" : "未配置" }}</span>
-          </div>
-          <div class="metric-row">
-            <span>温度 / 上限</span><span class="metric-value">{{ character?.chatTemperature ?? "—" }} · {{ character?.chatMaxTokens ?? "—" }} tokens</span>
-          </div>
-          <div class="metric-row">
-            <span>看图模型</span><span class="metric-value">{{ character?.visionModel || "跟随对话模型" }}</span>
-          </div>
-          <div class="metric-row">
-            <span>记忆助手</span><span class="metric-value">{{ character?.memoryAssistantConfigured ? character.memoryAssistantModel : "未配置" }}</span>
-          </div>
-          <p class="side-note">
-            模型未配置时，对话与自动归档会留在队列里，不会用规则摘要冒充 AI 输出。
-          </p>
-        </section>
-
-        <section class="brick">
-          <div class="card-head">
-            <h2>今日用量</h2>
-            <span class="sub">{{ dailyUsage?.day ?? "—" }}</span>
-            <el-button
-              text
-              size="small"
-              class="usage-log-btn"
-              :disabled="!character"
-              @click="modelCallLogsOpen = true"
-            >
-              调用日志
-            </el-button>
-          </div>
-
-          <div class="usage-top">
-            <span class="usage-value">{{ dailyUsage ? dailyUsage.usage.totalTokens.toLocaleString() : "—" }}</span>
-            <span
-              v-if="dailyUsage?.quota.limit"
-              class="usage-limit"
-            >/ {{ dailyUsage.quota.limit.toLocaleString() }} · {{ quotaPercent }}%</span>
-            <span
-              v-else
-              class="usage-limit"
-            >不限额度</span>
-          </div>
-          <div
-            v-if="quotaPercent !== null"
-            class="usage-bar"
-            role="img"
-            :aria-label="`今日用量 ${quotaPercent}%`"
-          >
-            <div
-              class="usage-fill"
-              :class="{ warn: quotaPercent >= 90 }"
-              :style="{ width: quotaPercent + '%' }"
-            />
-          </div>
-
-          <div class="metric-row">
-            <span>调用次数</span><span class="metric-value">{{ dailyUsage?.usage.calls ?? 0 }}</span>
-          </div>
-          <div
-            v-for="[kind, value] in usageKinds"
-            :key="kind"
-            class="metric-row"
-          >
-            <span>{{ KIND_LABELS[String(kind)] ?? kind }}</span>
-            <span class="metric-value">{{ value.totalTokens.toLocaleString() }} · {{ value.calls }} 次</span>
-          </div>
-
-          <div class="usage-foot">
-            <el-button
-              text
-              :loading="loadingUsage"
-              @click="loadUsage(false)"
-            >
-              {{ loadingUsage ? "刷新中…" : "刷新用量" }}
-            </el-button>
-            <span class="usage-note">额度用完不会自动清零：统计的是真实花费，调高额度或等次日恢复。</span>
-          </div>
-        </section>
-      </aside>
+      <ModelUsageAside
+        :character="character"
+        :provider-label="providerLabel"
+        :api-key-source="apiKeySource"
+        :daily-usage="dailyUsage"
+        :loading-usage="loadingUsage"
+        @refresh="loadUsage(false)"
+        @logs="modelCallLogsOpen = true"
+      />
     </div>
   </div>
 </template>
@@ -2187,23 +1803,6 @@ watch(id, () => void loadCharacter());
 
 .ms-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--sp-5); align-items: start; }
 .ms-main { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-4); }
-/* 页签：对话模型 / 语音模型。下划线选中态，与侧栏「当前项」同一套语汇 */
-.model-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); border-bottom: 1px solid var(--line); }
-.model-tab {
-  margin-bottom: -1px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  padding: var(--sp-2) var(--sp-3);
-  color: var(--dim);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color .14s var(--ease), border-color .14s var(--ease);
-}
-.model-tab:hover { color: var(--text-2); }
-.model-tab.is-on { color: var(--brand-strong); border-bottom-color: var(--brand); }
-.model-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: var(--radius-xs); }
 /* 页签内容：一块 pane 就是一组 brick，v-show 切换不丢已填的表单 */
 .model-pane { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-4); }
 
@@ -2330,27 +1929,7 @@ watch(id, () => void loadCharacter());
 
 /* ── 右栏 ───────────────────────────────────────── */
 .ms-side { display: flex; flex-direction: column; gap: var(--sp-4); }
-.ms-side .brick { padding: var(--sp-4) var(--sp-5); }
-.card-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-2); }
-.card-head h2 { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 700; }
-.card-head .sub { margin-left: auto; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-
-/* 行线用最淡的 --surface-3，读数区不描边 */
-.ms-a .metric-row { border-bottom: 0; padding: var(--sp-2) 0; color: var(--dim); }
-.ms-a .metric-row + .metric-row { border-top: 1px solid var(--surface-3); }
-.ms-side .metric-value { max-width: 62%; color: var(--text-2); text-align: right; word-break: break-word; }
 .ms-a .pill { border: 0; }
-
-.usage-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-2); }
-/* 用量数字是这一栏的主角：比旁边的限值大两档 */
-.usage-value { color: var(--text); font-size: 22px; font-weight: 700; letter-spacing: -.015em; font-variant-numeric: tabular-nums; }
-.usage-limit { color: var(--dim); font-size: 12px; font-weight: 600; }
-.usage-bar { height: 6px; overflow: hidden; border-radius: 3px; background: var(--surface-3); }
-.usage-fill { height: 100%; border-radius: 3px; background: var(--brand); transition: width .3s var(--ease); }
-.usage-fill.warn { background: var(--amber); }
-.usage-foot { display: flex; align-items: flex-start; gap: var(--sp-2); margin-top: var(--sp-3); }
-.usage-note { flex: 1; color: var(--dim); font-size: 12px; line-height: 1.6; }
-.side-note { margin: var(--sp-3) 0 0; border-radius: var(--radius-sm); background: var(--surface-2); padding: var(--sp-3); color: var(--dim); font-size: 12px; line-height: 1.7; }
 
 
 /* 空态：一句话 + 一颗按钮，不围虚线框 */

@@ -119,7 +119,6 @@ function selectSection(value: ModelSection) {
               ref="activePanel"
               :character-id="characterId"
               :section="section"
-              embedded
             />
           </KeepAlive>
         </div>
