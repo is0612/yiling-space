@@ -2,6 +2,7 @@
 import { ElMessage } from "element-plus";
 import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
+import { createCharacterSettingsApi } from "~/api/character-settings";
 
 /**
  * 导入角色卡。
@@ -81,6 +82,8 @@ const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   imported: [character: Character];
 }>();
+
+const api = createCharacterSettingsApi(useApiRequest());
 
 const open = computed({
   get: () => props.modelValue,
@@ -327,16 +330,10 @@ async function submit() {
   importing.value = true;
   try {
     // 合并走 ?target=：包本身不动，服务端按同步根再次校验目标确实同源。
-    const url = merging.value && mergeTarget.value
-      ? `/api/characters/import?target=${encodeURIComponent(mergeTarget.value.id)}`
-      : "/api/characters/import";
-    const result = await $fetch<{
-      character: Character;
-      mode: "new" | "merge";
-      counts: BundleCounts;
-      added: BundleAdded;
-      warnings?: string[];
-    }>(url, { method: "POST", body: payload.value });
+    const result = await api.importCharacter<BundleAdded, BundleCounts>({
+      bundle: payload.value,
+      ...(merging.value && mergeTarget.value ? { targetCharacterId: mergeTarget.value.id } : {}),
+    });
     emit("imported", result.character);
     emit("update:modelValue", false);
     ElMessage.success(result.mode === "merge"

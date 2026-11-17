@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { Delete, EditPen, MagicStick } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { createCharacterSettingsApi } from "~/api/character-settings";
+
+const api = createCharacterSettingsApi(useApiRequest());
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
 // 「角色管理」这一级交给顶栏 crumbs：常驻、滚到哪都能点回去；正文的 crumb 只留角色名 + 本页。
@@ -72,16 +75,13 @@ const draftPhrases = computed(() =>
 const canSubmit = computed(() => draftPhrases.value.length > 0);
 const disabledCount = computed(() => items.value.filter((item) => !item.enabled).length);
 
-const listUrl = computed(() => `/api/characters/${encodeURIComponent(id.value)}/catchphrases`);
-const itemUrl = (catchphraseId: string) => `${listUrl.value}/${encodeURIComponent(catchphraseId)}`;
-
 async function load() {
   loading.value = true;
   try {
     const [character, rows, pending] = await Promise.all([
-      $fetch<{ name: string }>(`/api/characters/${encodeURIComponent(id.value)}`),
-      $fetch<CatchphraseItem[]>(listUrl.value),
-      $fetch<CatchphraseItem[]>(listUrl.value, { query: { status: "pending" } }),
+      api.getCharacter(id.value),
+      api.listCatchphrases(id.value),
+      api.listCatchphrases(id.value, { status: "pending" }),
     ]);
     characterName.value = character.name;
     items.value = rows;
@@ -99,12 +99,9 @@ async function load() {
 async function scan() {
   scanning.value = true;
   try {
-    const result = await $fetch<{ scanned: number; candidates: number; created: number; skipped: number }>(
-      `${listUrl.value}/mine`,
-      { method: "POST" },
-    );
+    const result = await api.scanCatchphrases(id.value);
     if (result.created > 0) {
-      pendingItems.value = await $fetch<CatchphraseItem[]>(listUrl.value, { query: { status: "pending" } });
+      pendingItems.value = await api.listCatchphrases(id.value, { status: "pending" });
       reviewOpen.value = true;
       ElMessage.success(`捡到 ${result.created} 句，看看要不要收。`);
     } else if (!result.scanned) {
@@ -134,9 +131,10 @@ function markDeciding(catchphraseId: string, busy: boolean) {
 async function accept(item: CatchphraseItem) {
   markDeciding(item.id, true);
   try {
-    const updated = await $fetch<CatchphraseItem>(itemUrl(item.id), {
-      method: "PATCH",
-      body: { status: "ACTIVE" },
+    const updated = await api.updateCatchphrase({
+      characterId: id.value,
+      catchphraseId: item.id,
+      status: "ACTIVE",
     });
     pendingItems.value = pendingItems.value.filter((row) => row.id !== item.id);
     items.value = [...items.value, updated];
@@ -156,7 +154,7 @@ async function accept(item: CatchphraseItem) {
 async function dismiss(item: CatchphraseItem) {
   markDeciding(item.id, true);
   try {
-    await $fetch(itemUrl(item.id), { method: "PATCH", body: { status: "REJECTED" } });
+    await api.updateCatchphrase({ characterId: id.value, catchphraseId: item.id, status: "REJECTED" });
     pendingItems.value = pendingItems.value.filter((row) => row.id !== item.id);
     if (!pendingItems.value.length) reviewOpen.value = false;
   } catch (error) {
@@ -173,9 +171,10 @@ async function acceptAll() {
   for (const item of targets) {
     markDeciding(item.id, true);
     try {
-      accepted.push(await $fetch<CatchphraseItem>(itemUrl(item.id), {
-        method: "PATCH",
-        body: { status: "ACTIVE" },
+      accepted.push(await api.updateCatchphrase({
+        characterId: id.value,
+        catchphraseId: item.id,
+        status: "ACTIVE",
       }));
       pendingItems.value = pendingItems.value.filter((row) => row.id !== item.id);
     } catch {
@@ -195,9 +194,10 @@ async function submit() {
   if (!phrases.length) return;
   saving.value = true;
   try {
-    const result = await $fetch<{ created: CatchphraseItem[]; skipped: string[] }>(listUrl.value, {
-      method: "POST",
-      body: { phrases, usage: draftUsage.value.trim() },
+    const result = await api.createCatchphrases({
+      characterId: id.value,
+      phrases,
+      usage: draftUsage.value.trim(),
     });
     items.value = [...items.value, ...result.created];
     draftPhrase.value = "";
@@ -222,10 +222,11 @@ async function submit() {
 
 async function toggleEnabled(row: CatchphraseItem, enabled: boolean) {
   try {
-    const updated = await $fetch<CatchphraseItem>(
-      `/api/characters/${encodeURIComponent(id.value)}/catchphrases/${encodeURIComponent(row.id)}`,
-      { method: "PATCH", body: { enabled } },
-    );
+    const updated = await api.updateCatchphrase({
+      characterId: id.value,
+      catchphraseId: row.id,
+      enabled,
+    });
     row.enabled = updated.enabled;
   } catch (error) {
     row.enabled = !enabled;
@@ -255,10 +256,12 @@ async function saveEdit() {
   }
   savingEdit.value = true;
   try {
-    const updated = await $fetch<CatchphraseItem>(
-      `/api/characters/${encodeURIComponent(id.value)}/catchphrases/${encodeURIComponent(target.id)}`,
-      { method: "PATCH", body: { phrase, usage: editUsage.value.trim() } },
-    );
+    const updated = await api.updateCatchphrase({
+      characterId: id.value,
+      catchphraseId: target.id,
+      phrase,
+      usage: editUsage.value.trim(),
+    });
     // 就地更新：整页重拉会丢掉下面「刚说过」的标记变化，用户会以为点错了。
     target.phrase = updated.phrase;
     target.usage = updated.usage;
@@ -282,9 +285,7 @@ async function remove(row: CatchphraseItem) {
     return;
   }
   try {
-    await $fetch(`/api/characters/${encodeURIComponent(id.value)}/catchphrases/${encodeURIComponent(row.id)}`, {
-      method: "DELETE",
-    });
+    await api.deleteCatchphrase({ characterId: id.value, catchphraseId: row.id });
     items.value = items.value.filter((item) => item.id !== row.id);
     ElMessage.success("已删除。");
   } catch (error) {

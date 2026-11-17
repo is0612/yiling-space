@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { Delete, EditPen, MagicStick, Picture } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { createCharacterSettingsApi } from "~/api/character-settings";
+
+const api = createCharacterSettingsApi(useApiRequest());
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
 // 「角色管理」这一级交给顶栏 crumbs：常驻、滚到哪都能点回去；正文的 crumb 只留角色名 + 本页。
@@ -221,10 +224,7 @@ async function generateDraftUsage() {
   generatingDraftUsage.value = true;
   try {
     const image = pendingFile.value ? await previewDataUrl(pendingFile.value) : null;
-    const result = await $fetch<{ usage: string; source: "vision" | "name" }>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/usage-suggestion`,
-      { method: "POST", body: image ? { name, image } : { name } },
-    );
+    const result = await api.suggestStickerUsage({ characterId: id.value, name, image });
     draftUsage.value = result.usage;
     draftUsageSource.value = result.source;
     ElMessage.success(result.source === "vision" ? "按「名字 + 画面」生成了一句，可以再改。" : "按名字生成了一句，可以再改。");
@@ -237,9 +237,7 @@ async function generateDraftUsage() {
 
 async function loadCharacter() {
   try {
-    const character = await $fetch<{ name: string; emojiEnabled?: boolean; emojiWindowMinutes?: number; emojiPerWindow?: number }>(
-      `/api/characters/${encodeURIComponent(id.value)}`,
-    );
+    const character = await api.getCharacter(id.value);
     characterName.value = character.name;
     emojiEnabled.value = character.emojiEnabled === true;
     if (typeof character.emojiWindowMinutes === "number") emojiWindowMinutes.value = character.emojiWindowMinutes;
@@ -249,14 +247,14 @@ async function loadCharacter() {
   }
 }
 
-function listUrl(options: { page?: number; pageSize?: number; sort?: SortKey; untagged?: boolean } = {}) {
-  const params = new URLSearchParams({
-    page: String(options.page ?? page.value),
-    pageSize: String(options.pageSize ?? pageSize.value),
+function loadStickerPage(options: { page?: number; pageSize?: number; sort?: SortKey; untagged?: boolean } = {}) {
+  return api.listStickers({
+    characterId: id.value,
+    page: options.page ?? page.value,
+    pageSize: options.pageSize ?? pageSize.value,
     sort: options.sort ?? sortKey.value,
+    untagged: options.untagged,
   });
-  if (options.untagged) params.set("untagged", "1");
-  return `/api/characters/${encodeURIComponent(id.value)}/stickers?${params.toString()}`;
 }
 
 /** 拉当前这一窗。页码越界时服务端已经回夹过，`page` 会跟着写回真实值。 */
@@ -264,7 +262,7 @@ async function loadStickers() {
   const seq = ++listSeq;
   loading.value = true;
   try {
-    const result = await $fetch<StickerList>(listUrl());
+    const result = await loadStickerPage();
     if (seq !== listSeq) return;
     stickers.value = result.items;
     total.value = result.total;
@@ -307,6 +305,7 @@ async function submit() {
     form.append("filename", pendingFile.value.name);
     form.append("name", draftName.value.trim().slice(0, 60));
     form.append("usage", draftUsage.value.trim().slice(0, 200));
+    // 文件上传是 multipart，不走 JSON 入口，留着页面自己发。
     const created = await $fetch<StickerItem & { qq?: QqSideEffect }>(`/api/characters/${encodeURIComponent(id.value)}/stickers`, {
       method: "POST",
       body: form,
@@ -335,10 +334,11 @@ async function submit() {
 
 async function toggleEnabled(row: StickerItem, enabled: boolean) {
   try {
-    const updated = await $fetch<StickerItem>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(row.id)}`,
-      { method: "PATCH", body: { enabled } },
-    );
+    const updated = await api.updateSticker({
+      characterId: id.value,
+      stickerId: row.id,
+      enabled,
+    });
     row.enabled = updated.enabled;
   } catch (error) {
     row.enabled = !enabled;
@@ -355,10 +355,7 @@ async function relabel(row: StickerItem) {
   if (relabelingId.value) return;
   relabelingId.value = row.id;
   try {
-    const result = await $fetch<{ skipped: boolean; message?: string; sticker?: StickerItem }>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(row.id)}/relabel`,
-      { method: "POST" },
-    );
+    const result = await api.relabelSticker({ characterId: id.value, stickerId: row.id });
     if (result.skipped) {
       ElMessage.warning(result.message || "模型判断这张不像表情包，名字没有改。");
       return;
@@ -411,10 +408,11 @@ async function generateUsage() {
   }
   generatingUsage.value = true;
   try {
-    const result = await $fetch<{ usage: string; source: "vision" | "name" }>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(target.id)}/usage-suggestion`,
-      { method: "POST", body: { name } },
-    );
+    const result = await api.suggestStickerUsageFor({
+      characterId: id.value,
+      stickerId: target.id,
+      name,
+    });
     editUsage.value = result.usage;
     generatedFrom.value = result.source;
     ElMessage.success(result.source === "vision" ? "按「名字 + 画面」生成了一句，可以再改。" : "按名字生成了一句，可以再改。");
@@ -435,10 +433,12 @@ async function saveEdit() {
   }
   savingEdit.value = true;
   try {
-    const updated = await $fetch<StickerItem & { qqDesc?: QqSideEffect | null }>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(target.id)}`,
-      { method: "PATCH", body: { name, usage: editUsage.value.trim() } },
-    );
+    const updated = await api.updateSticker({
+      characterId: id.value,
+      stickerId: target.id,
+      name,
+      usage: editUsage.value.trim(),
+    });
     // 就地更新这一行，不整页重拉：列表滚动位置和展开状态都还在。
     target.name = updated.name;
     target.usage = updated.usage;
@@ -467,10 +467,7 @@ async function remove(row: StickerItem) {
     return;
   }
   try {
-    const result = await $fetch<{ ok: boolean; qq?: QqSideEffect }>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(row.id)}`,
-      { method: "DELETE" },
-    );
+    const result = await api.deleteSticker({ characterId: id.value, stickerId: row.id });
     // 分页之后不能只从本地数组里摘掉：总张数、页码都可能变（删的是本页最后一张时要回夹）。
     void loadStickers();
     if (result.qq && !result.qq.ok && !result.qq.skipped) {
@@ -495,10 +492,7 @@ async function syncWithQq() {
   if (syncing.value) return;
   syncing.value = true;
   try {
-    const report = await $fetch<SyncReport>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/qq-sync`,
-      { method: "POST" },
-    );
+    const report = await api.syncStickersWithQq(id.value);
     syncReport.value = report;
     // 同步会改数量、来源、「连没连 QQ」，也可能让页码越界 —— 回第一页重拉，
     // 停在原来的第几页会看到一批已经不对应的图。
@@ -551,9 +545,7 @@ async function openTrash() {
   trashOpen.value = true;
   trashLoading.value = true;
   try {
-    const result = await $fetch<{ items: TrashItem[]; purged: number; retentionDays: number }>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/trash`,
-    );
+    const result = await api.listStickerTrash(id.value);
     trashItems.value = result.items;
     trashRetention.value = result.retentionDays;
     if (result.purged) ElMessage.info(`顺手清掉了 ${result.purged} 张超过 ${result.retentionDays} 天没人管的。`);
@@ -566,10 +558,7 @@ async function openTrash() {
 
 async function restoreFromTrash(item: TrashItem) {
   try {
-    await $fetch<StickerItem>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/trash/${encodeURIComponent(item.id)}/restore`,
-      { method: "POST" },
-    );
+    await api.restoreSticker({ characterId: id.value, stickerId: item.id });
     trashItems.value = trashItems.value.filter((row) => row.id !== item.id);
     void loadStickers();
     ElMessage.success("已恢复。她下一轮就能用它了。");
@@ -589,10 +578,7 @@ async function purgeOne(item: TrashItem) {
     return;
   }
   try {
-    await $fetch(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/trash/${encodeURIComponent(item.id)}/purge`,
-      { method: "DELETE" },
-    );
+    await api.purgeSticker({ characterId: id.value, stickerId: item.id });
     trashItems.value = trashItems.value.filter((row) => row.id !== item.id);
     ElMessage.success("已彻底删除。");
   } catch (error) {
@@ -623,10 +609,7 @@ async function clearTrash() {
   }
   clearingTrash.value = true;
   try {
-    const result = await $fetch<{ purged: number }>(
-      `/api/characters/${encodeURIComponent(id.value)}/stickers/trash`,
-      { method: "DELETE" },
-    );
+    const result = await api.clearStickerTrash(id.value);
     trashItems.value = [];
     ElMessage.success(`已彻底删除 ${result.purged} 张。`);
   } catch (error) {
@@ -655,7 +638,7 @@ const labelProgress = ref({ done: 0, total: 0 });
 async function loadUntaggedStickers(): Promise<StickerItem[]> {
   const collected: StickerItem[] = [];
   for (let current = 1; current <= 50; current += 1) {
-    const result = await $fetch<StickerList>(listUrl({ page: current, pageSize: 100, sort: "oldest", untagged: true }));
+    const result = await loadStickerPage({ page: current, pageSize: 100, sort: "oldest", untagged: true });
     collected.push(...result.items);
     if (current >= result.totalPages || !result.items.length) break;
   }
@@ -689,10 +672,7 @@ async function labelUntagged() {
   let ok = 0;
   for (const row of targets) {
     try {
-      const result = await $fetch<{ skipped: boolean; message?: string; sticker?: StickerItem }>(
-        `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(row.id)}/relabel`,
-        { method: "POST" },
-      );
+      const result = await api.relabelSticker({ characterId: id.value, stickerId: row.id });
       if (result.sticker) ok += 1;
     } catch {
       // 单张失败不影响后面的：可能是额度用完，也可能是这张解不开。最后统一报个数。

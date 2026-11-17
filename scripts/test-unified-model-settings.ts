@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import ts from "typescript";
 const main = readFileSync("app/components/CharacterModelSettings.vue", "utf8");
+const settingsApi = readFileSync("app/api/character-settings.ts", "utf8");
 const usageAside = readFileSync("app/components/ModelUsageAside.vue", "utf8");
 const page = readFileSync("app/pages/characters/[id]/settings/model.vue", "utf8");
 const legacy = readFileSync("app/pages/models.vue", "utf8");
@@ -34,7 +35,9 @@ assert(main.includes("const id = computed(() => props.characterId)")); assert(!m
 assert(main.includes('const activeTab = computed<ModelSection>(() => props.section ?? "chat")'), "The workspace controls the active model section through the section prop"); assert(main.includes('v-show="activeTab === \'chat\'"')); assert(main.includes('v-show="activeTab === \'vision\'"'), "Assistant panels are folded into the chat section, vision stays its own panel");
 assert(main.includes('if (disposed || version !== roleVersion) throw new Error("Model settings role changed")'));
 for (const field of ["chatApiKey: draftChatApiKey.value", "voiceApiKey: draftVoiceApiKey.value.trim()", "asrApiKey: draftAsrApiKey.value.trim()", "visionApiKey: draftVisionApiKey.value.trim()", "memoryAssistantApiKey: draftMemoryAssistantApiKey.value.trim()", "contextAssistantApiKey: draftContextAssistantApiKey.value.trim()"]) assert(main.includes(field), `Preserve credential save field: ${field}`);
-for (const endpoint of ["/voice/models", "/voice/test-connection", "/vision/test-connection", "/chat/memory-assistant/models", "/chat/context-assistant/models", "/chat/test-connection"]) assert(main.includes(endpoint), endpoint);
+for (const endpoint of ["/voice/models", "/voice/test-connection", "/vision/test-connection", "/chat/test-connection"]) assert(settingsApi.includes(endpoint), endpoint);
+// 两个助手自己的模型清单仍由 AssistantOverridePanel 通过 props 接收 URL。
+for (const endpoint of ["/chat/memory-assistant/models", "/chat/context-assistant/models"]) assert(main.includes(endpoint), endpoint);
 assert(legacy.includes("/settings/model"), "旧 /models 应转到角色下的模型设置页");
 assert(legacy.includes("...route.query")); assert(legacy.includes("hash: route.hash")); assert(legacy.includes("useCharacterSelection"));
 assert(!/font-size:\s*(?:[0-9]|1[01])px/.test(page));
@@ -43,15 +46,15 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
 }
 {
   let done!: (value: unknown) => void;
-  const runtime = createContext({ disposed: false, roleVersion: 0, $fetch: () => new Promise(resolve => { done = resolve; }) });
+  const runtime = createContext({ disposed: false, roleVersion: 0 });
   const requestCode = functionCode(main, ["modelRequest"]);
-  const request = new Script(ts.transpileModule(`(function(){${requestCode};return modelRequest;})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(runtime) as (url: string) => Promise<unknown>;
-  const pending = request("/api/characters/role-a");
+  const request = new Script(ts.transpileModule(`(function(){${requestCode};return modelRequest;})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(runtime) as (call: () => Promise<unknown>) => Promise<unknown>;
+  const pending = request(() => new Promise(resolve => { done = resolve; }));
   runtime.disposed = true;
   done({ chatApiKey: "provider-must-not-reach-new-role" });
   await assert.rejects(pending, /no longer active|role changed/);
   runtime.disposed = false;
-  const stale = request("/api/characters/role-a");
+  const stale = request(() => new Promise(resolve => { done = resolve; }));
   runtime.roleVersion = 1;
   done({ name: "old role" });
   await assert.rejects(stale, /role changed/);
@@ -101,7 +104,14 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   }).map(([field, draftName]) => [field, context[draftName]]));
   const bodies: Record<string, unknown>[] = [];
   let resolveSave!: (value: unknown) => void;
-  context.modelRequest = (_url: string, init?: { body?: Record<string, unknown> }) => new Promise(resolve => { resolveSave = resolve; bodies.push(init?.body ?? {}); });
+  // save 现在通过领域 API 提交：伪造 api.updateCharacter 收下 body，再用 modelRequest 的代际守卫包一层。
+  context.api = {
+    updateCharacter: (_characterId: string, data: Record<string, unknown>) => new Promise(resolve => {
+      resolveSave = resolve;
+      bodies.push(data);
+    }),
+  };
+  context.modelRequest = (call: () => Promise<unknown>) => call();
   const actual = new Script(ts.transpileModule(`(function(){${functionCode(main, ["buildDraftSignature", "syncKeysFromCharacter", "requestGeneration", "isStaleResponse", "save", "sendsKeyClear", "markKeyForClear"])};return {save,markKeyForClear,sendsKeyClear};})()`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText).runInContext(createContext(context)) as { save(silent?: boolean): Promise<boolean>; markKeyForClear(field: string): void; sendsKeyClear(field: string): boolean };
 
   // 1) 只是清空输入框（没点「清除」）：保存 body 绝不能带 clear 字段 —— 否则存量 Key 静默消失。

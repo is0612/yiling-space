@@ -2,6 +2,7 @@
 import { Calendar, InfoFilled, RefreshLeft, Lock, Select } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { initialCharacters, type Character } from "~/utils/mock-data";
+import { createCharacterSettingsApi } from "~/api/character-settings";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
 // 「角色管理」这一级交给顶栏 crumbs：常驻、滚到哪都能点回去；正文的 crumb 只留角色名 + 本页。
@@ -12,21 +13,7 @@ definePageMeta({
   },
 });
 
-type MemorySettings = {
-  snapshotIntervalDays: number;
-  activeSnapshotIntervalDays: number;
-  pendingSnapshotIntervalDays: number | null;
-  timezone: string;
-  anchorAt: string;
-  rawMessageRetentionDays: number;
-  rawMessageCleanupEnabled: boolean;
-  autoSnapshotEnabled: boolean;
-  changePolicy: "NEXT_CYCLE" | "IMMEDIATE_RECALC";
-  nextSnapshotAt: string | null;
-  updatedAt: string;
-  /** 保存为「关闭」时，服务端顺带作废的排队任务数（只读返回）。 */
-  cancelledPendingJobs?: number;
-};
+const api = createCharacterSettingsApi(useApiRequest());
 
 const route = useRoute();
 const router = useRouter();
@@ -105,8 +92,8 @@ async function loadSettings() {
   loading.value = true;
   try {
     const [loadedCharacter, settings] = await Promise.all([
-      $fetch<Character>(`/api/characters/${encodeURIComponent(id.value)}`),
-      $fetch<MemorySettings>(`/api/characters/${encodeURIComponent(id.value)}/memory-settings`),
+      api.getCharacter(id.value),
+      api.getMemorySettings(id.value),
     ]);
     character.value = loadedCharacter;
     interval.value = settings.snapshotIntervalDays;
@@ -161,17 +148,14 @@ async function saveSettings() {
   saving.value = true;
   try {
     const anchorAt = zonedInputToIso(anchor.value, timezone.value);
-    const saved = await $fetch<MemorySettings>(`/api/characters/${encodeURIComponent(id.value)}/memory-settings`, {
-      method: "PATCH",
-      body: {
-        snapshotIntervalDays: safeInterval.value,
-        timezone: timezone.value,
-        anchorAt,
-        rawMessageRetentionDays: retention.value,
-        rawMessageCleanupEnabled: nextRetention > 0,
-        autoSnapshotEnabled: autoSnapshot.value,
-        changePolicy: effectivePolicy.value === "立即重算" ? "IMMEDIATE_RECALC" : "NEXT_CYCLE",
-      },
+    const saved = await api.updateMemorySettings(id.value, {
+      snapshotIntervalDays: safeInterval.value,
+      timezone: timezone.value,
+      anchorAt,
+      rawMessageRetentionDays: retention.value,
+      rawMessageCleanupEnabled: nextRetention > 0,
+      autoSnapshotEnabled: autoSnapshot.value,
+      changePolicy: effectivePolicy.value === "立即重算" ? "IMMEDIATE_RECALC" : "NEXT_CYCLE",
     });
     interval.value = saved.snapshotIntervalDays;
     activeInterval.value = saved.activeSnapshotIntervalDays;

@@ -2,6 +2,7 @@
 import { ElMessage } from "element-plus";
 import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
+import { createCharacterSettingsApi } from "~/api/character-settings";
 
 /**
  * 编辑角色资料：只改名称和基础人设。
@@ -39,6 +40,8 @@ const open = computed({
   set: (value: boolean) => emit("update:modelValue", value),
 });
 
+const api = createCharacterSettingsApi(useApiRequest());
+
 const saving = ref(false);
 const draftName = ref("");
 const draftPersonality = ref("");
@@ -72,9 +75,9 @@ async function save() {
   }
   saving.value = true;
   try {
-    const updated = await $fetch<Character>(`/api/characters/${encodeURIComponent(props.character.id)}`, {
-      method: "PATCH",
-      body: { name, personality: draftPersonality.value.trim() },
+    const updated = await api.updateCharacter(props.character.id, {
+      name,
+      personality: draftPersonality.value.trim(),
     });
     emit("saved", updated);
     open.value = false;

@@ -7,9 +7,12 @@ import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
 import { applyAsrProviderPreset, applyVoiceProviderPreset } from "~/utils/voice-provider-preset";
+import { createCharacterSettingsApi } from "~/api/character-settings";
 
 type ModelSection = "chat" | "voice" | "vision";
 const props = defineProps<{ characterId: string; section?: ModelSection }>();
+
+const api = createCharacterSettingsApi(useApiRequest());
 
 /**
  * 模型设置：从「角色设置」弹窗里搬出来的。
@@ -48,12 +51,12 @@ const modelMessage = {
   error: (value: string | { message: string; duration: number }) => { if (!disposed) ElMessage.error(value); },
   info: (value: string) => { if (!disposed) ElMessage.info(value); },
 };
-async function modelRequest<T>(url: string, options?: Parameters<typeof $fetch>[1]): Promise<T> {
+async function modelRequest<T>(call: () => Promise<T>): Promise<T> {
   if (disposed) throw new Error("Model settings panel is no longer active");
   const version = roleVersion;
-  const result = await $fetch<T>(url, options);
+  const result = await call();
   if (disposed || version !== roleVersion) throw new Error("Model settings role changed");
-  return result as T;
+  return result;
 }
 
 /**
@@ -311,7 +314,7 @@ async function loadUsage(silent = true) {
   loadingUsage.value = true;
   const startedAt = Date.now();
   try {
-    dailyUsage.value = await modelRequest<DailyUsage>(`/api/characters/${encodeURIComponent(id.value)}/usage`);
+    dailyUsage.value = await modelRequest(() => api.getDailyUsage(id.value));
   } catch (error) {
     // 旧角色的用量读失败不能把新角色已经显示出来的数字清空。
     if (isStaleResponse(generation)) return;
@@ -534,9 +537,7 @@ async function fetchVoiceModels() {
   try {
     const saved = await save(true);
     if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; models: string[]; message: string; unsupported?: boolean }>(
-      `/api/characters/${encodeURIComponent(id.value)}/voice/models`,
-    );
+    const result = await modelRequest(() => api.getVoiceModels(id.value));
     if (!result.ok) {
       if (result.unsupported) modelMessage.warning(result.message);
       else modelMessage.error(result.message);
@@ -562,10 +563,7 @@ async function testVoice() {
   try {
     const saved = await save(true);
     if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; message: string; elapsedMs?: number; voice?: string }>(
-      `/api/characters/${encodeURIComponent(id.value)}/voice/test-connection`,
-      { method: "POST" },
-    );
+    const result = await modelRequest(() => api.testVoiceConnection(id.value));
     if (result.ok) {
       modelMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
     } else {
@@ -590,10 +588,7 @@ async function testVision() {
   try {
     const saved = await save(true);
     if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; message: string; detail?: string; elapsedMs?: number; model?: string }>(
-      `/api/characters/${encodeURIComponent(id.value)}/vision/test-connection`,
-      { method: "POST" },
-    );
+    const result = await modelRequest(() => api.testVisionConnection(id.value));
     if (result.ok) {
       modelMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
     } else {
@@ -673,7 +668,7 @@ async function loadCharacter() {
   const generation = requestGeneration();
   loading.value = true;
   try {
-    const data = await modelRequest<Character>(`/api/characters/${encodeURIComponent(id.value)}`);
+    const data = await modelRequest(() => api.getCharacter(id.value));
     character.value = data;
     draftChatModel.value = data.chatModel ?? "";
     draftChatTemperature.value = data.chatTemperature ?? MODEL_PURPOSE_DEFAULTS.chat.temperature;
@@ -792,9 +787,7 @@ async function save(silent = false): Promise<boolean> {
   const generation = requestGeneration();
   saving.value = true;
   try {
-    const updated = await modelRequest<Character>(`/api/characters/${encodeURIComponent(id.value)}`, {
-      method: "PATCH",
-      body: {
+    const updated = await modelRequest(() => api.updateCharacter(id.value, {
         chatModel: draftChatModel.value.trim(),
         chatTemperature: draftChatTemperature.value,
         chatMaxTokens: draftChatMaxTokens.value,
@@ -867,8 +860,7 @@ async function save(silent = false): Promise<boolean> {
         socialRelationshipAssessmentAssistantApiBaseUrl: draftSocialAssistantApiBaseUrl.value.trim(),
         socialRelationshipAssessmentAssistantApiKey: draftSocialAssistantApiKey.value.trim(),
         ...(sendsKeyClear("social") ? { clearSocialRelationshipAssessmentAssistantApiKey: true } : {}),
-      },
-    });
+    }));
     // 请求期间用户改过的草稿不能被回显吞掉，也不能被算成「已保存」。
     const editedDuringFlight = submittedKeys.some(({ field, value }) => field.value !== value);
     // 回显会覆盖输入框，先把用户此刻敲的内容留一份，等下按字段还回去。
@@ -911,10 +903,7 @@ async function testConnection() {
   try {
     const saved = await save(true);
     if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; message: string; elapsedMs?: number }>(
-      `/api/characters/${encodeURIComponent(id.value)}/chat/test-connection`,
-      { method: "POST" },
-    );
+    const result = await modelRequest(() => api.testChatConnection(id.value));
     if (result.ok) {
       modelMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
     } else {
@@ -935,9 +924,7 @@ async function fetchModels() {
   try {
     const saved = await save(true);
     if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; models: string[]; message: string; unsupported?: boolean }>(
-      `/api/characters/${encodeURIComponent(id.value)}/chat/models`,
-    );
+    const result = await modelRequest(() => api.getChatModels(id.value));
     if (!result.ok) {
       if (result.unsupported) modelMessage.warning(result.message);
       else modelMessage.error(result.message);
@@ -970,9 +957,7 @@ async function fetchVisionModels() {
   try {
     const saved = await save(true);
     if (!saved) return;
-    const result = await modelRequest<{ ok: boolean; models: string[]; message: string; unsupported?: boolean }>(
-      `/api/characters/${encodeURIComponent(id.value)}/chat/models?target=vision`,
-    );
+    const result = await modelRequest(() => api.getVisionModels(id.value));
     if (!result.ok) {
       if (result.unsupported) modelMessage.warning(result.message);
       else modelMessage.error(result.message);
