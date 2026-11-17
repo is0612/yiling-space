@@ -65,8 +65,8 @@ const model = createServer(async (request, response) => {
 model.listen(0, "127.0.0.1");
 await once(model, "listening");
 const modelUrl = `http://127.0.0.1:${(model.address() as { port: number }).port}/v1`;
-let session: Awaited<ReturnType<typeof createSession>>;
-let otherSession: Awaited<ReturnType<typeof createSession>>;
+let session!: Awaited<ReturnType<typeof createSession>>;
+let otherSession!: Awaited<ReturnType<typeof createSession>>;
 
 async function request(path: string, body?: Record<string, unknown>, cookie?: string) {
   const response = await fetch(`http://127.0.0.1:${(api.address() as { port: number }).port}${path}`, {
@@ -120,8 +120,10 @@ try {
     },
     { id: otherCharacterId, ownerId: otherOwnerId, name: "其他用户角色", basePrompt: "test" },
   ] });
-  const [a, b] = await makeItems(characterId, "正常知识");
-  const [foreign] = await makeItems(otherCharacterId, "其他角色知识", 1);
+  const normalItems = await makeItems(characterId, "正常知识");
+  const a = normalItems[0]!;
+  const b = normalItems[1]!;
+  const foreign = (await makeItems(otherCharacterId, "其他角色知识", 1))[0]!;
 
   api.listen(0, "127.0.0.1");
   await once(api, "listening");
