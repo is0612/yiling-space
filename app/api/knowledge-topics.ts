@@ -82,7 +82,7 @@ export function createKnowledgeTopicsApi(request: ApiRequest) {
     return request({ url: `${topicPath(payload.characterId, payload.topicId)}/revisions/${payload.revision}/restore`, method: "post", data: { expectedRevision: payload.expectedRevision } });
   }
 
-  function split(payload: { characterId: string; topicId: string; name: string; description?: string; memberItemIds: string[]; revision: number }): Promise<{ sourceTopic: KnowledgeTopicSummary; newTopic: KnowledgeTopicSummary; movedItemIds: string[]; remainingItemIds: string[] }> {
+  function split(payload: { characterId: string; topicId: string; name: string; description?: string; memberItemIds: string[]; revision: number }): Promise<{ sourceTopic: { id: string; name: string; description: string; status: KnowledgeTopicStatus; revision: number; updatedAt: string }; newTopic: { id: string; name: string; description: string; status: KnowledgeTopicStatus; revision: number; createdAt: string; updatedAt: string }; movedItemIds: string[]; remainingItemIds: string[] }> {
     return request({ url: `${topicPath(payload.characterId, payload.topicId)}/split`, method: "post", data: { name: payload.name, description: payload.description ?? "", memberItemIds: payload.memberItemIds, revision: payload.revision } });
   }
   function merge(payload: { characterId: string; sourceTopicId: string; targetTopicId: string; sourceRevision: number; targetRevision: number }): Promise<{ sourceTopic: { id: string; status: KnowledgeTopicStatus; revision: number; mergedIntoId: string }; targetTopic: { id: string; name: string; status: KnowledgeTopicStatus; revision: number }; addedItemIds: string[]; alreadyPresentItemIds: string[] }> {
