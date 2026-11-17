@@ -265,6 +265,31 @@ try {
   assert(!budgetResult.analysis.evidenceMessageIds.includes("old-0"), "Omitted background ids are not evidence.");
   assert(Buffer.byteLength(requests[0]!.messages.map(row => row.content).join(""), "utf8") + 256 <= 4_096,
     "Entire serialized prompt including system and reserve must remain within budget.");
+  /**
+   * 去重不是裁剪。
+   *
+   * 同一条群消息会同时出现在本轮、最近对话、群背景里，装配时按 id 去重（内容由另一段
+   * 代表）。早先的实现拿「输入数组」和「去重后的载荷」比长度，而群聊 15 分钟的背景
+   * 必然与最近 120 条重叠，于是每一轮都被标成 contextClipped —— 模型据此自行降级成
+   * 「前文缺失、不确定」，哪怕它看到的就是全部近期对话。
+   */
+  reset();
+  await analyzeGroupContext(runtime, {
+    ...input,
+    transcript: [{ id: "shared-1", member: "member_1", speaker: "群友", content: "@self 哪个版本？" }],
+    groupBackground: [
+      { id: "shared-1", member: "member_1", speaker: "群友", content: "@self 哪个版本？" },
+      { id: "bg-only", member: "member_2", speaker: "群友乙", content: "背景里另一条。" },
+    ],
+    recentMessages: [
+      { role: "USER", id: "shared-1", content: "@self 哪个版本？", speaker: "群友" },
+      { role: "ASSISTANT", id: "reply-1", content: "就那一个版本。", occurredAt: "2026-11-05T02:59:00Z" },
+    ],
+  });
+  assert.equal(publicBodies[0]!.contextClipped, false, "重复消息被去重不算裁剪：内容由另一段代表，一个字都没少。");
+  assert.deepEqual(publicBodies[0]!.transcript.map(row => row.id), ["shared-1"]);
+  assert.deepEqual(publicBodies[0]!.groupBackground.map(row => row.id), ["bg-only"], "与本轮/最近对话重复的背景行只出现一次。");
+  assert.deepEqual(publicBodies[0]!.recentMessages.map(row => row.id), ["reply-1"], "本轮已经进 transcript 的行不再重复进最近对话。");
   reset(() => modelResponse({ ...valid, workingSummary: "群友与小鱼约好稍后继续聊天。", workingEvidenceMessageIds: ["saved", "invented"] }));
   const carried = await analyzeGroupContext(runtime, input, { summary: "稍后继续聊天。", evidence: [{ id: "saved", role: "ASSISTANT", content: "晚点继续聊。", occurredAt: "2026-11-05T02:40:00Z" }] });
   assert.deepEqual(carried.analysis.workingEvidenceMessageIds, ["saved"]);

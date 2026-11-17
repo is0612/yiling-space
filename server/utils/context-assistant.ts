@@ -137,9 +137,11 @@ type PublicPayload = {
   groupAnchors: Array<{ id: string; label: string }>;
   previousWorkingContext?: PreviousWorkingContext;
 };
+/** 单条正文进载荷前的硬上限。超过这个长度的行是**真的**被截断了，要算裁剪。 */
+const ROW_CONTENT_LIMIT = 12_000;
 function message(value: unknown, _recent = false): PublicMessage {
   const row = record(value);
-  const result: PublicMessage = { content: text(row.content, 12_000) };
+  const result: PublicMessage = { content: text(row.content, ROW_CONTENT_LIMIT) };
   // Source ids must come from stored messages or the channel, never manufactured from text.
   if (typeof row.id === "string" && row.id.length <= 192 && row.id.trim() === row.id && row.id) result.id = row.id;
   for (const key of ["member", "speaker", "occurredAt"] as const) {
@@ -185,6 +187,16 @@ function publicInput(input: ConversationReplyInput, maxInputTokens: number, prev
   };
   const cost = () => tokens(SYSTEM) + SYSTEM_RESERVE + tokens(JSON.stringify(payload));
   if (!Number.isFinite(maxInputTokens) || cost() > maxInputTokens) throw new ContextAssistantError();
+  /**
+   * `contextClipped` 只表达「有内容没进载荷」，用来告诉模型前文是否缺失。
+   *
+   * 同一个 id 的群消息会同时落在本轮、最近对话、群背景三处，装配时按 id 去重；
+   * **去重不是丢失**，那条消息仍在另一段里。早先拿「输入数组」和「去重后的载荷」
+   * 比长度，而群聊 15 分钟的背景必然与最近 120 条重叠，于是几乎每一轮都被标成
+   * `true` —— 模型照着系统提示词自行降级成「前文缺失、不确定」，哪怕它看到的就是
+   * 全部近期对话。所以这里只记真实损失：超条数上限的行、预算装不下的行、被缩短的正文。
+   */
+  let clipped = false;
   // Fit strings by checking the complete serialized request, including all JSON overhead.
   const fit = (content: string, assign: (value: string) => void, ceiling = maxInputTokens) => {
     let low = 0; let high = content.length;
@@ -194,17 +206,30 @@ function publicInput(input: ConversationReplyInput, maxInputTokens: number, prev
       if (cost() <= ceiling) low = middle; else high = middle - 1;
     }
     assign(content.slice(0, low));
+    if (low < content.length) clipped = true;
   };
+  /** 单条正文本身超过硬上限：这些字是真的没发出去。 */
+  const overlong = (rows: readonly unknown[]) => rows.some((row) => {
+    const content = record(row).content;
+    return typeof content === "string" && content.trim().length > ROW_CONTENT_LIMIT;
+  });
+  if (input.characterName.trim().length > 120
+    || overlong([{ content: input.currentMessage }])
+    || overlong(input.transcript ?? [])
+    || overlong(input.groupBackground ?? [])
+    || overlong(input.recentMessages)) clipped = true;
   const initial = cost();
-  fit(text(input.currentMessage, 12_000), value => { payload.currentMessage = value; },
+  fit(text(input.currentMessage, ROW_CONTENT_LIMIT), value => { payload.currentMessage = value; },
     initial + Math.floor((maxInputTokens - initial) / 3));
   // Keep a representation of every current-round row when possible; if even metadata
   // cannot fit, retain the newest rows. Older background never displaces current rows.
-  const round = (input.transcript ?? []).slice(-80).map(row => message(row)).filter(row => row.content);
+  const roundSource = input.transcript ?? [];
+  if (roundSource.length > 80) clipped = true;
+  const round = roundSource.slice(-80).map(row => message(row)).filter(row => row.content);
   const contents = new Map(round.map(row => [row, row.content]));
   for (const row of round) row.content = "";
   payload.transcript = [...round];
-  while (payload.transcript.length && cost() > maxInputTokens) payload.transcript.shift();
+  while (payload.transcript.length && cost() > maxInputTokens) { payload.transcript.shift(); clipped = true; }
   for (let i = payload.transcript.length - 1; i >= 0; i--) {
     const row = payload.transcript[i]!;
     const ceiling = cost() + Math.floor(Math.max(0, maxInputTokens - cost()) / (i + 1));
@@ -212,13 +237,14 @@ function publicInput(input: ConversationReplyInput, maxInputTokens: number, prev
   }
   payload.transcript = payload.transcript.filter(row => row.content);
   const addMessages = (rows: readonly unknown[], target: PublicMessage[], recent = false, ceiling = maxInputTokens) => {
+    if (rows.length > 120) clipped = true;
     for (const source of rows.slice(-120).reverse()) {
       const row = message(source, recent);
       if (!row.content) continue;
       const content = row.content;
       row.content = "";
       target.unshift(row);
-      if (cost() > ceiling) { target.shift(); continue; }
+      if (cost() > ceiling) { target.shift(); clipped = true; continue; }
       fit(content, value => { row.content = value; }, ceiling);
       if (!row.content) target.shift();
     }
@@ -245,28 +271,22 @@ function publicInput(input: ConversationReplyInput, maxInputTokens: number, prev
   }
   const recentIds = new Set(payload.recentMessages.map(row => row.id).filter(Boolean));
   addMessages((input.groupBackground ?? []).filter(row => !row.id || (!recentIds.has(row.id) && !roundIds.has(row.id))), payload.groupBackground);
+  if ((input.groupMembers ?? []).length > 80) clipped = true;
   for (const source of (input.groupMembers ?? []).slice(0, 80)) {
     const row = { member: text(source.member, 120), speaker: text(source.speaker, 120), belongsTo: text(source.belongsTo, 120), belongsToName: text(source.belongsToName, 120) };
     payload.groupMembers.push(row);
-    if (cost() > maxInputTokens) payload.groupMembers.pop();
+    if (cost() > maxInputTokens) { payload.groupMembers.pop(); clipped = true; }
   }
+  if ((input.groupAnchors ?? []).length > 12) clipped = true;
   for (const source of (input.groupAnchors ?? []).slice(0, 12)) {
     payload.groupAnchors.push({ id: text(source.id, 192), label: text(source.label, 240) });
-    if (cost() > maxInputTokens) payload.groupAnchors.pop();
+    if (cost() > maxInputTokens) { payload.groupAnchors.pop(); clipped = true; }
   }
-  const sameMessages = (source: readonly { content: string }[], selected: PublicMessage[]) =>
-    source.length === selected.length && source.every((row, index) => row.content.trim() === selected[index]?.content);
-  const clipped = input.characterName.trim() !== payload.characterName
-    || input.currentMessage.trim() !== payload.currentMessage
-    || !sameMessages(input.transcript ?? [], payload.transcript)
-    || !sameMessages(input.groupBackground ?? [], payload.groupBackground)
-    || !sameMessages(input.recentMessages, payload.recentMessages)
-    || (input.groupMembers ?? []).length !== payload.groupMembers.length
-    || (input.groupAnchors ?? []).length !== payload.groupAnchors.length
-    || (input.groupMembers ?? []).some(row => Object.values(row).some(value => typeof value === "string" && value.trim().length > 120))
+  // 字段级截断：名字/锚点超长、@ 对象超过 8 个，同样是载荷里少了一部分。
+  if ((input.groupMembers ?? []).some(row => Object.values(row).some(value => typeof value === "string" && value.trim().length > 120))
     || (input.groupAnchors ?? []).some(row => row.id.trim().length > 192 || row.label.trim().length > 240)
     || (input.transcript ?? []).some(row => (row.mentions?.length ?? 0) > 8)
-    || (input.groupBackground ?? []).some(row => (row.mentions?.length ?? 0) > 8);
+    || (input.groupBackground ?? []).some(row => (row.mentions?.length ?? 0) > 8)) clipped = true;
   // false is one byte longer than true; preserve the bound even at the exact boundary.
   if (!clipped && cost() + 1 <= maxInputTokens) payload.contextClipped = false;
   return payload;
