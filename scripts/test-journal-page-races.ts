@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import { setImmediate as flush } from "node:timers/promises";
 import ts from "typescript";
+import { createJournalApi } from "../app/api/journal";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
+import { readApiErrorMessage } from "../app/utils/api-error";
 
 /** Run the actual journal.vue script with deferred network and confirmation promises. */
 const sfc = readFileSync(new URL("../app/pages/journal.vue", import.meta.url), "utf8");
@@ -79,7 +82,9 @@ function harness() {
     useCharacterListData: async () => {},
     useCharacterSelection: () => ({ id: role }),
     useCharacterList: () => ({ value: [{ id: "role-a", name: "角色 A" }, { id: "role-b", name: "角色 B" }] }),
-    useRequestFetch: () => (url: string, options?: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
+    createJournalApi,
+    readApiErrorMessage,
+    useApiRequest: () => createRequestClient(((url: string, options?: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }))) as RawFetch),
     ElMessage: {
       error: (message: string) => messages.push(`error:${message}`),
       success: (message: string) => messages.push(`success:${message}`),

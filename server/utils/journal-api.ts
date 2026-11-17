@@ -38,12 +38,19 @@ export function readJournalDayKey(event: H3Event): string {
  */
 export function throwJournalGenerationError(error: unknown): never {
   if (error && typeof error === "object" && "statusCode" in error) throw error;
-  console.error("[journal] 生成失败", error);
-  const raw = error instanceof Error ? error.message : String(error ?? "");
-  const detail = raw.replace(/^LLM_[A-Z_]+:\s*/, "").trim();
+  const raw = error instanceof Error ? error.message : "";
+  const code = /^LLM_[A-Z_]+(?=:|$)/u.exec(raw)?.[0];
+  console.error("[journal] 生成失败", code ?? "INTERNAL_ERROR");
+  const messages: Record<string, string> = {
+    LLM_TIMEOUT: "模型请求超时，请稍后重试。",
+    LLM_NETWORK_ERROR: "暂时无法连接模型服务，请稍后重试。",
+    LLM_HTTP_ERROR: "模型服务请求失败，请检查模型配置或稍后重试。",
+    LLM_EMPTY_REPLY: "模型没有返回正文，请重试或调整模型输出额度。",
+  };
   throw createError({
-    statusCode: 502,
-    statusMessage: raw.startsWith("LLM_") && detail ? detail : "日记/手账生成失败，请稍后重试。",
+    statusCode: code ? 502 : 500,
+    statusMessage: code ? "Bad Gateway" : "Internal Server Error",
+    message: code ? (messages[code] ?? "模型返回内容未通过校验，请重试或检查模型配置。") : "日记/手账生成失败，请稍后重试。",
   });
 }
 

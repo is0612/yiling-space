@@ -25,6 +25,16 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { selectRuntimeConnection, type ChainActionKind } from "~/utils/qq-channel";
 import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
+import {
+  createQqApi,
+  type ChannelBinding,
+  type HookResponse,
+  type PanelPasswordInfo,
+  type ProvisionResponse,
+  type QqConnection,
+  type QuotaRow,
+  type RuntimeStatus,
+} from "~/api/qq";
 
 // 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明和动作。
 definePageMeta({
@@ -36,60 +46,15 @@ definePageMeta({
 
 useHead({ title: "QQ 渠道 · 忆灵空间" });
 
-type GroupChatSettings = {
-  mode: "mention" | "ambient" | "all";
-  batchWindowSeconds: number;
-  mentionWindowSeconds: number;
-  minGapSeconds: number;
-  dailyMax: number;
-  quietStart: string;
-  quietEnd: string;
-  ambientChance: number;
-  aliases: string[];
-};
-
-type ChannelBinding = {
-  id: string;
-  characterId: string;
-  characterName: string;
-  routingKey: string | null;
-  /** 群聊限流窗口（分钟）与窗口内上限；上限 0 = 不限。 */
-  replyWindowMinutes: number;
-  replyLimitPerWindow: number;
-  /** 群聊是否仅被 @ 时才回复（后端已回退到连接默认值）。 */
-  replyOnlyWhenMentioned: boolean;
-  /** 群聊怎么回：模式 + 攒批/闸门参数，后端已解析好默认值。 */
-  groupChat: GroupChatSettings;
-  /** 按群覆盖的模式：`{ "<群号>": 档位 }`；没在这张表里的群沿 groupChat.mode。 */
-  groupChatModes?: Record<string, GroupChatSettings["mode"]>;
-  /** 主人能否在群里触发刷一轮 B站（后端已回退到连接默认值）。 */
-  groupBiliRunEnabled: boolean;
-};
-/** 接口回显的明文凭据（管理员页可见）；解不开时为 null。 */
-type QqCredentials = {
-  wsUrl?: string;
-  httpUrl?: string;
-  accessToken?: string;
-  httpToken?: string;
-  /** SnowLuma 网页面板密码，用来在「一键启动」后自动登录配节点。 */
-  snowlumaPassword?: string;
-};
-type QqConnection = {
-  id: string; platform: string; displayName: string; appId: string | null; status: string;
-  lastEventAt: string | null; createdAt: string; metadata: Record<string, unknown> | null;
-  credentials?: QqCredentials | null;
-  bindings: ChannelBinding[];
-};
-
 const characters = useCharacterList();
+// setup 里同步捕获本次 SSR 的请求实例，之后在轮询/事件回调里复用。
+const qqApi = createQqApi(useApiRequest());
 await useCharacterListData();
 
 const readErrorMessage = readApiErrorMessage;
 
-// SSR 阶段带上登录态；这个页面只管 OneBot 小号，B站 连接由值班台自己管。
-const request = import.meta.server ? useRequestFetch() : $fetch;
 const { data, pending, refresh, error } = await useAsyncData("qq-connections", async () => {
-  const response = await request<{ connections: QqConnection[] }>("/api/admin/channels");
+  const response = await qqApi.listConnections();
   return response.connections.filter((item) => item.platform === "qq-onebot");
 });
 
@@ -261,27 +226,6 @@ async function onBehaviorSaved() {
  * 三样分开显示，是因为它们的失败长得一模一样：日志里都是连不上 3001，
  * 但可能是「网关没启动」「网关起了 WS 节点没开」「适配器没起」三件完全不同的事。
  */
-type SnowlumaStatus = {
-  home: string;
-  /** 目录从哪来：saved=页面上填过 env=环境变量 process/scan=自动找到 default=没找到，用的默认值 */
-  source: "saved" | "env" | "process" | "scan" | "default";
-  /** start.bat 在不在 */
-  installed: boolean;
-  running: boolean;
-  panelPort: number;
-};
-type AccountGateway = { wsUrl: string; host: string; port: number; reachable: boolean; connectionId?: string; accountState?: "waiting_login" | "ready" | "unknown" };
-type RuntimeStatus = {
-  selectedConnectionId?: string | null;
-  gateways?: AccountGateway[];
-  adapter: { running: boolean; pid?: number; startedAt?: string };
-  snowluma: SnowlumaStatus;
-  /** 适配器要连的那个端口通不通；读不到连接配置时为 null */
-  gateway: AccountGateway | null;
-  /** 人点过「停止」后自动补起会一直关着，直到再点启动/重连 */
-  autostart: { paused: boolean; at?: string };
-};
-
 const runtime = ref<RuntimeStatus | null>(null);
 const adapterStatus = computed(() => runtime.value?.adapter ?? null);
 const snowluma = computed(() => runtime.value?.snowluma ?? null);
@@ -298,13 +242,6 @@ const runtimeReady = computed(() => runtime.value !== null);
  * 用户从头到尾没打过字。不摆在页面上，他就既不知道密码是什么、也没法换成自己记得住的，
  * 只能翻数据库 —— 那等于「我们替他改了个他打不开的门锁」。
  */
-type PanelPasswordInfo = {
-  password: string | null;
-  accountQq: string;
-  panelPort: number;
-  panelUrl: string;
-  snowlumaRunning: boolean;
-};
 const panelPassword = ref<PanelPasswordInfo | null>(null);
 /** 默认摊开：这页在本人电脑上，遮起来反而让「看一眼再复制」多两步。旁边留了「遮住」 */
 const panelPasswordVisible = ref(true);
@@ -312,7 +249,7 @@ const panelPasswordVisible = ref(true);
 async function loadPanelPassword() {
   try {
     // 只在客户端取：明文密码不该被 SSR 写进页面 HTML（查看源代码就能看到的东西不算「只有管理员可见」）。
-    panelPassword.value = await $fetch<PanelPasswordInfo>("/api/admin/channels/onebot/runtime/panel-password");
+    panelPassword.value = await qqApi.getPanelPassword();
   } catch {
     panelPassword.value = null;
   }
@@ -362,7 +299,7 @@ async function loadRuntime(connectionId?: string) {
   const version = ++runtimeRequestVersion;
   const selectedId = selectedRuntimeConnectionId.value;
   try {
-    const result = await $fetch<RuntimeStatus>("/api/admin/channels/onebot/runtime", { query: selectedId ? { connectionId: selectedId } : {} });
+    const result = await qqApi.getRuntimeStatus(selectedId ? { connectionId: selectedId } : {});
     if (version !== runtimeRequestVersion) return;
     runtime.value = result;
     if (!homeEditing.value) homeDraft.value = result.snowluma.home;
@@ -381,15 +318,6 @@ async function loadRuntime(connectionId?: string) {
  * 群里表现就是「@ 也不回」，而页面上四段全是绿的 —— 2026-10-30 就因此查了半天。
  * 所以这里单独拿一次额度，用尽时在列表上方明说，而不是等人去翻日志。
  */
-type QuotaRow = {
-  id: string;
-  name: string;
-  /** 0 = 没设上限（不限额） */
-  limit: number;
-  used: number;
-  remaining: number | null;
-  exceeded: boolean;
-};
 const quotaRows = ref<QuotaRow[]>([]);
 const exhaustedQuota = computed(() => quotaRows.value.filter((row) => row.exceeded));
 const exhaustedText = computed(() => exhaustedQuota.value
@@ -402,7 +330,7 @@ async function loadQuota() {
     return;
   }
   try {
-    const response = await $fetch<{ characters: QuotaRow[] }>("/api/admin/channels/onebot/quota");
+    const response = await qqApi.getQuota();
     quotaRows.value = response.characters;
   } catch {
     // 额度只是提示，拿不到就不显示，不要因为一行提示把整页变成错误态
@@ -480,7 +408,7 @@ type LaunchResult = { ok: boolean; message: string; alreadyRunning?: boolean };
  */
 async function launchGateway(): Promise<LaunchResult> {
   try {
-    const result = await $fetch<{ message: string }>("/api/admin/channels/onebot/runtime/snowluma", { method: "POST" });
+    const result = await qqApi.startSnowluma();
     return { ok: true, message: result.message };
   } catch (error) {
     if (readStatus(error) === 409) {
@@ -493,7 +421,7 @@ async function launchGateway(): Promise<LaunchResult> {
 /** 拉起适配器；409 同理。 */
 async function launchAdapter(): Promise<LaunchResult> {
   try {
-    const result = await $fetch<{ message: string }>("/api/admin/channels/onebot/runtime/adapter", { method: "POST" });
+    const result = await qqApi.startAdapter();
     return { ok: true, message: result.message };
   } catch (error) {
     if (readStatus(error) === 409) {
@@ -502,17 +430,6 @@ async function launchAdapter(): Promise<LaunchResult> {
     return { ok: false, message: readErrorMessage(error, "启动失败，请手动运行 yarn onebot:run。") };
   }
 }
-
-type ProvisionResponse = {
-  ok: boolean;
-  reason?: "no-password" | "unreachable" | "bad-password" | "totp" | "rate-limited" | "error" | "account-not-logged-in";
-  action?: "waiting-login";
-  message: string;
-  changes: string[];
-  warnings: string[];
-  uin?: string;
-  ports?: { ws: number; http: number };
-};
 
 /**
  * 用存下的密码登录面板，把 WS/HTTP 节点对齐成连接里的那份。
@@ -535,7 +452,7 @@ async function provisionPanel(quiet = false, connectionId = primaryConnection.va
   if (panelProvisioning.value || panelAuthPaused.value) return;
   panelProvisioning.value = true;
   try {
-    const result = await $fetch<ProvisionResponse>("/api/admin/channels/onebot/runtime/provision", { method: "POST", ...(connectionId ? { body: { connectionId } } : {}) });
+    const result = await qqApi.provisionPanel(connectionId ? { connectionId } : {});
     for (const warning of result.warnings ?? []) ElMessage.warning(warning);
     if (result.action === "waiting-login" || result.reason === "account-not-logged-in") {
       if (!quiet) ElMessage.info(result.message);
@@ -554,22 +471,6 @@ async function provisionPanel(quiet = false, connectionId = primaryConnection.va
     panelProvisioning.value = false;
   }
 }
-
-type HookResponse = {
-  ok: boolean;
-  /** already=本来就在听；attached=这次挂上了；failed=没挂上 */
-  action: "already" | "attached" | "failed" | "waiting-login";
-  message: string;
-  /**
-   * 失败分类，服务端给的。页面靠它决定「要不要顺手把面板开给用户」：
-   * 密码类（no-password / bad-password / totp / rate-limited）和「面板拒绝挂载」，
-   * 人只能进面板解决；no-process 开面板也没用（该去 QQ 客户端）。
-   */
-  reason?: string;
-  uin?: string;
-  wsPort?: number | null;
-  reachable?: boolean;
-};
 
 /**
  * 这些原因都意味着「人得进面板」。
@@ -597,7 +498,7 @@ const PANEL_NEEDED_REASONS = new Set(["no-password", "bad-password", "totp", "ra
  */
 async function attachHook(quiet = false, connectionId = primaryConnection.value?.id): Promise<{ ok: boolean; message: string; reason?: string; action?: HookResponse["action"] }> {
   try {
-    const result = await $fetch<HookResponse>("/api/admin/channels/onebot/runtime/hook", { method: "POST", ...(connectionId ? { body: { connectionId } } : {}) });
+    const result = await qqApi.attachHook(connectionId ? { connectionId } : {});
     if (result.ok) {
       if (result.action === "attached" && !quiet) ElMessage.success(result.message);
       if (result.action === "waiting-login" && !quiet) ElMessage.info(result.message);
@@ -633,10 +534,7 @@ async function startSnowluma() {
   if (snowlumaStarting.value || snowluma.value?.running) return;
   snowlumaStarting.value = true;
   try {
-    const result = await $fetch<{ message: string; panelPassword?: string | null }>(
-      "/api/admin/channels/onebot/runtime/snowluma",
-      { method: "POST" },
-    );
+    const result = await qqApi.startSnowluma();
     ElMessage.success(result.message);
     /*
      * 刚接管的密码当场摊开：它只在这一刻存在于响应里（库里另存一份），
@@ -697,10 +595,7 @@ async function saveHome() {
   if (homeSaving.value) return;
   homeSaving.value = true;
   try {
-    await $fetch("/api/admin/channels/onebot/runtime/snowluma", {
-      method: "PUT",
-      body: { home: homeDraft.value },
-    });
+    await qqApi.saveSnowlumaHome(homeDraft.value);
     ElMessage.success("目录已记住。");
     homeEditing.value = false;
     await loadRuntime();
@@ -762,10 +657,7 @@ function scrollToSteps() {
 async function ensureStack() {
   if (import.meta.server) return;
   try {
-    const result = await $fetch<{ action: string; message: string; steps: string[] }>(
-      "/api/admin/channels/onebot/runtime/ensure",
-      { method: "POST" },
-    );
+    const result = await qqApi.ensureStack();
     if (result.action === "started") {
       ElMessage.success(result.message);
       await loadRuntime();
@@ -910,7 +802,7 @@ async function openEdit(connection: QqConnection) {
    */
   credLoading.value = true;
   try {
-    const detail = await request<{ connections: QqConnection[] }>("/api/admin/channels?withCredentials=1");
+    const detail = await qqApi.listConnections({ withCredentials: true });
     const found = detail.connections.find((item) => item.id === connection.id);
     form.wsUrl = found?.credentials?.wsUrl ?? "";
     form.httpUrl = found?.credentials?.httpUrl ?? "";
@@ -1058,7 +950,7 @@ async function reconnectConnection(connection: QqConnection) {
       }
     } else {
       connectStep.value = "让适配器重新连接…";
-      await $fetch(`/api/admin/channels/${encodeURIComponent(connection.id)}/reload`, { method: "POST" });
+      await qqApi.reloadConnection(connection.id);
       startReloadPolling();
     }
 
@@ -1095,10 +987,7 @@ async function stopChain() {
   connecting.value = true;
   try {
     connectStep.value = "停止适配器和协议端…";
-    const result = await $fetch<{ stopped: boolean; message: string }>(
-      "/api/admin/channels/onebot/runtime/stop",
-      { method: "POST" },
-    );
+    const result = await qqApi.stopRuntime();
 
     connectStep.value = "收尾…";
     // taskkill 是同步的，但端口真正释放、页面探活反映过来还要几百毫秒。
@@ -1127,30 +1016,27 @@ async function submitConnection(reconnect = false) {
   }
   saving.value = true;
   try {
-    const saved = await $fetch<{ id: string }>("/api/admin/channels", {
-      method: "POST",
-      body: {
-        platform: "qq-onebot",
-        qqNumber: form.qqNumber.trim(),
-        displayName: form.displayName.trim(),
-        wsUrl: form.wsUrl.trim(),
-        httpUrl: form.httpUrl.trim(),
-        accessToken: form.accessToken,
-        httpToken: form.httpToken,
-        snowlumaPassword: form.snowlumaPassword,
-        groupAnnouncementEnabled: form.groupAnnouncementEnabled,
-        qzoneEnabled: form.qzoneEnabled,
-        qzoneAutoAskEnabled: form.qzoneAutoAskEnabled,
-        qzoneAutoAskTimes: form.qzoneAutoAskTimes.trim(),
-        qzoneAutoAskDailyMax: Number(form.qzoneAutoAskDailyMax) || 0,
-        qzoneFriendQqs: form.qzoneFriendQqs.trim(),
-        ownerQq: form.ownerQq.trim(),
-        ownerName: form.ownerName.trim(),
-      },
+    const saved = await qqApi.createConnection({
+      platform: "qq-onebot",
+      qqNumber: form.qqNumber.trim(),
+      displayName: form.displayName.trim(),
+      wsUrl: form.wsUrl.trim(),
+      httpUrl: form.httpUrl.trim(),
+      accessToken: form.accessToken,
+      httpToken: form.httpToken,
+      snowlumaPassword: form.snowlumaPassword,
+      groupAnnouncementEnabled: form.groupAnnouncementEnabled,
+      qzoneEnabled: form.qzoneEnabled,
+      qzoneAutoAskEnabled: form.qzoneAutoAskEnabled,
+      qzoneAutoAskTimes: form.qzoneAutoAskTimes.trim(),
+      qzoneAutoAskDailyMax: Number(form.qzoneAutoAskDailyMax) || 0,
+      qzoneFriendQqs: form.qzoneFriendQqs.trim(),
+      ownerQq: form.ownerQq.trim(),
+      ownerName: form.ownerName.trim(),
     });
     if (reconnect) {
       try {
-        await $fetch(`/api/admin/channels/${encodeURIComponent(saved.id)}/reload`, { method: "POST" });
+        await qqApi.reloadConnection(saved.id);
         ElMessage.success("设置已保存，重新连接请求已提交。请查看连接卡片的处理状态。");
       } catch (reloadError) {
         ElMessage.warning(readErrorMessage(reloadError, "设置已保存，但重新连接请求失败，请稍后重试。"));
@@ -1215,12 +1101,9 @@ async function submitBind() {
   }
   bindSaving.value = true;
   try {
-    await $fetch(`/api/admin/channels/${encodeURIComponent(bindTarget.value.id)}/bindings`, {
-      method: "POST",
-      body: {
-        characterId: bindForm.characterId,
-        routingKey: bindForm.routingKeys.join(","),
-      },
+    await qqApi.bindCharacter(bindTarget.value.id, {
+      characterId: bindForm.characterId,
+      routingKey: bindForm.routingKeys.join(","),
     });
     ElMessage.success("角色已绑定。");
     bindVisible.value = false;
@@ -1240,10 +1123,7 @@ async function unbind(connection: QqConnection, binding: ChannelBinding) {
   ).catch(() => false);
   if (!confirmed) return;
   try {
-    await $fetch(
-      `/api/admin/channels/${encodeURIComponent(connection.id)}/bindings/${encodeURIComponent(binding.id)}`,
-      { method: "DELETE" },
-    );
+    await qqApi.unbindCharacter(connection.id, binding.id);
     ElMessage.success("已解绑。");
     await refresh();
   } catch (error) {
@@ -1273,7 +1153,7 @@ async function removeConnection(connection: QqConnection) {
   ).catch(() => false);
   if (!confirmed) return;
   try {
-    await $fetch(`/api/admin/channels/${encodeURIComponent(connection.id)}`, { method: "DELETE" });
+    await qqApi.deleteConnection(connection.id);
     ElMessage.success(bound ? `已删除，顺带解绑了 ${bound} 个角色。` : "已删除。");
     // 号没了，弹窗里那些字段就没有对象了；关掉再刷新，别留一个悬空的表单
     editVisible.value = false;

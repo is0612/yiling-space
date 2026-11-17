@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import { createRequestClient, type RawFetch } from "../app/utils/request";
+import { createJournalApi } from "../app/api/journal";
+import { readApiErrorMessage } from "../app/utils/api-error";
+import { throwJournalGenerationError } from "../server/utils/journal-api";
+import { createError } from "h3";
+const calls: Array<{ owner: string; url: string; options: unknown }> = [];
+const transport = (owner: string): RawFetch => async <T>(url: string, options?: unknown) => {
+  calls.push({ owner, url, options }); await Promise.resolve(); return { items: [], owner } as T;
+};
+const a = createJournalApi(createRequestClient(transport("a")));
+const b = createJournalApi(createRequestClient(transport("b")));
+await Promise.all([ (async () => { await a.listJournals({ characterId: "one/two", page: 1, pageSize: 20 }); await Promise.resolve(); await a.getJournalDetail({ characterId: "one/two", dayKey: "2026-11-17" }); })(), b.listJournals({ characterId: "other", page: 1, pageSize: 20 }) ]);
+assert.deepEqual(calls.map(c => c.owner), ["a", "b", "a"]);
+assert.equal(calls[2]!.url, "/api/characters/one%2Ftwo/journals/2026-11-17");
+const controller = new AbortController();
+await createRequestClient(transport("cancel"))({ url: "/test", method: "post", data: { x: 1 }, signal: controller.signal, timeout: 123 });
+assert.deepEqual(calls.at(-1)!.options, { retry: 0, method: "POST", body: { x: 1 }, signal: controller.signal, timeout: 123 });
+for (const url of ["//evil.example", "https://evil.example", "/api/test", "/test?q=1"]) assert.throws(() => createRequestClient(transport("bad"))({ url }));
+assert.equal(readApiErrorMessage({ statusMessage: "Bad Request", data: { message: "日期格式不正确" } }), "日期格式不正确");
+assert.equal(readApiErrorMessage({ data: { statusMessage: "角色不存在。" } }), "角色不存在。");
+assert.equal(readApiErrorMessage({ message: "[GET] /api/private: 500 Internal Server Error" }, "兜底"), "兜底");
+assert.equal(readApiErrorMessage({ data: { message: "Internal Server Error" } }, "兜底"), "兜底");
+const originalError = createError({ statusCode: 429, message: "额度不足" });
+assert.throws(() => throwJournalGenerationError(originalError), e => e === originalError);
+assert.throws(() => throwJournalGenerationError(new Error("LLM_NETWORK_ERROR: secret-host fake-key")), (e: unknown) => {
+  const err = e as { statusCode: number; message: string }; assert.equal(err.statusCode, 502); assert(!err.message.includes("secret")); assert.match(err.message, /模型/); return true;
+});
+assert.throws(() => throwJournalGenerationError(new Error("database password secret")), (e: unknown) => { const err = e as { statusCode: number; message: string }; assert.equal(err.statusCode, 500); assert(!err.message.includes("secret")); return true; });
+console.log("API request regressions passed: request-scoped async isolation, encoded paths, cancellation, no retries, safe errors and journal status mapping (mock only).");

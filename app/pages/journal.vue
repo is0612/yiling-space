@@ -4,13 +4,7 @@ import { ArrowRight, Check, Clock, EditPen, Loading, Plus, Refresh } from "@elem
 import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
 import {
-  getJournalDetail,
-  listJournalRevisions,
-  listJournals,
-  regenerateJournal,
-  restoreJournalRevision,
-  saveJournalEntry,
-  writeJournalDay,
+  createJournalApi,
   type JournalDetail,
   type JournalKind,
   type JournalListItem,
@@ -33,6 +27,8 @@ definePageMeta({
  *
  * 两份各自版本、各自编辑/重写；手账的「一句」摘自某一版日记。
  */
+const { getJournalDetail, listJournalRevisions, listJournals, regenerateJournal,
+  restoreJournalRevision, saveJournalEntry, writeJournalDay } = createJournalApi(useApiRequest());
 await useCharacterListData();
 const route = useRoute();
 const { id } = useCharacterSelection("/journal");

@@ -197,6 +197,7 @@ B站适配器与值班服务的部署方式见对应集成文档。
 
 - [CLAUDE.md](CLAUDE.md) — 代码约束与协作规则。
 - [开发阶段与验收标准](docs/development-phases.md)。
+- [前端业务 API 调用约定](docs/frontend-api-requests.md) — 请求实例、SSR 登录态、领域 API、错误展示与逐模块迁移。
 - [GitHub Issues](https://github.com/is0612/yiling-space/issues) — 报告问题或提出功能建议。
 
 ## 交流与反馈

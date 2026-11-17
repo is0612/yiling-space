@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Script, createContext } from "node:vm";
 import ts from "typescript";
 import { selectRuntimeConnection } from "../app/utils/qq-channel";
+import { createQqApi } from "../app/api/qq";
 
 const source = readFileSync(new URL("../app/pages/qq.vue", import.meta.url), "utf8");
 const setup = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1]!;
@@ -14,6 +15,9 @@ type Request = { url: string; options?: { method?: string; body?: Record<string,
 const ref = <T>(value: T) => ({ value });
 function harness() {
   const requests: Request[] = [], errors: string[] = [], infos: string[] = [];
+  const qqApi = createQqApi((config) => new Promise((resolve, reject) => {
+    requests.push({ url: config.url, options: { method: config.method, body: config.data as Record<string, unknown> | undefined, query: config.params }, resolve, reject });
+  }));
   const runtime = ref<any>(null), selectedRuntimeConnectionId = ref("");
   const primaryConnection = { get value() { return selectRuntimeConnection([{ id: "offline", status: "ERROR" }, { id: "online", status: "CONNECTED" }], runtime.value?.selectedConnectionId); } };
   const bindings = new Script(compiled).runInContext(createContext({
@@ -26,7 +30,7 @@ function harness() {
     ElMessage: { error: (message: string) => errors.push(message), info: (message: string) => infos.push(message), success: () => {}, warning: () => {} },
     PANEL_NEEDED_REASONS: new Set(["no-password"]), openPanel: () => { throw Error("Unexpected panel open"); },
     readErrorMessage: (_: unknown, fallback: string) => fallback,
-    $fetch: (url: string, options?: Request["options"]) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject })),
+    qqApi,
   })) as Record<string, (...args: any[]) => Promise<any>>;
   const take = (ending: string) => { const index = requests.findIndex(row => row.url.endsWith(ending)); assert(index >= 0, ending); return requests.splice(index, 1)[0]!; };
   return { bindings, requests, take, errors, infos, runtime, selectedRuntimeConnectionId, primaryConnection };

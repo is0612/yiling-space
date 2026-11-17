@@ -1,28 +1,18 @@
-/**
- * 把 $fetch / useRequestFetch 抛出的错误翻成一句能展示的话。
- *
- * Nuxt 的 FetchError 把服务端 createError 的正文放在 data 里：
- * - 4xx / 自定义错误：data.statusMessage 是给人看的原因
- * - 未捕获的 500：statusMessage 往往只是 "Internal Server Error"，
- *   真正原因在 data.message / message（例如模型输出校验失败）
- */
-const IGNORED = new Set(["Internal Server Error", "fetch failed", "Failed to fetch"]);
-
-export function readApiErrorMessage(
-  error: unknown,
-  fallback = "操作失败，请检查本地开发服务器日志。",
-): string {
+/** Read explicit API messages, never ofetch's method/URL wrapper or generic HTTP labels. */
+const GENERIC = /^(?:bad request|unauthorized|forbidden|not found|method not allowed|conflict|too many requests|internal server error|bad gateway|service unavailable|gateway timeout|fetch failed|failed to fetch|network error|request failed|request timeout)$/iu;
+function displayMessage(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text && !GENERIC.test(text) && !/^\[(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\]/iu.test(text)
+    && !/^(?:TypeError|FetchError|Error):/u.test(text) ? text : "";
+}
+export function readApiErrorMessage(error: unknown, fallback = "操作失败，请稍后重试。"): string {
   if (error && typeof error === "object") {
-    const e = error as {
-      statusMessage?: unknown;
-      message?: unknown;
-      data?: { statusMessage?: unknown; message?: unknown };
-    };
-    const candidates = [e.data?.statusMessage, e.statusMessage, e.data?.message, e.message];
-    for (const candidate of candidates) {
-      const message = typeof candidate === "string" ? candidate.trim() : "";
-      if (message && !IGNORED.has(message)) return message;
+    const e = error as { statusMessage?: unknown; message?: unknown; data?: { statusMessage?: unknown; message?: unknown } };
+    for (const candidate of [e.data?.message, e.data?.statusMessage, e.statusMessage]) {
+      const message = displayMessage(candidate);
+      if (message) return message;
     }
+    // Local/native Error text may contain URLs or internal details; only server business fields are public.
   }
   return fallback;
 }

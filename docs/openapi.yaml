@@ -6060,6 +6060,10 @@ paths:
           description: 这一天已有内容 / 角色停用 / 模型未配置
         '429':
           description: 今日模型额度已用完
+        '500':
+          description: 服务端内部生成或保存失败；正文 message 为安全提示
+        '502':
+          description: 模型调用或输出校验失败；正文 message 为安全提示
   /characters/{characterId}/journals/{dayKey}:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
@@ -6214,6 +6218,10 @@ paths:
           description: 角色停用 / 模型未配置
         '429':
           description: 今日模型额度已用完
+        '500':
+          description: 服务端内部生成或保存失败；正文 message 为安全提示
+        '502':
+          description: 模型调用或输出校验失败；正文 message 为安全提示
   /characters/{characterId}/journals/{dayKey}/restore:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
