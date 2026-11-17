@@ -37,7 +37,7 @@ async function loadTopics() {
       selectedId.value = "";
       detail.value = null;
     }
-    if (!selectedId.value && result.topics.length) selectedId.value = result.topics[0].id;
+    if (!selectedId.value && result.topics.length) selectedId.value = result.topics[0]?.id ?? "";
     if (selectedId.value) await loadDetail(selectedId.value);
   } catch (error) {
     ElMessage.error(readApiErrorMessage(error, "读取主题失败。"));
