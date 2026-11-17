@@ -82,6 +82,13 @@ export function createKnowledgeTopicsApi(request: ApiRequest) {
     return request({ url: `${topicPath(payload.characterId, payload.topicId)}/revisions/${payload.revision}/restore`, method: "post", data: { expectedRevision: payload.expectedRevision } });
   }
 
+  function split(payload: { characterId: string; topicId: string; name: string; description?: string; memberItemIds: string[]; revision: number }): Promise<{ sourceTopic: KnowledgeTopicSummary; newTopic: KnowledgeTopicSummary; movedItemIds: string[]; remainingItemIds: string[] }> {
+    return request({ url: `${topicPath(payload.characterId, payload.topicId)}/split`, method: "post", data: { name: payload.name, description: payload.description ?? "", memberItemIds: payload.memberItemIds, revision: payload.revision } });
+  }
+  function merge(payload: { characterId: string; sourceTopicId: string; targetTopicId: string; sourceRevision: number; targetRevision: number }): Promise<{ sourceTopic: { id: string; status: KnowledgeTopicStatus; revision: number; mergedIntoId: string }; targetTopic: { id: string; name: string; status: KnowledgeTopicStatus; revision: number }; addedItemIds: string[]; alreadyPresentItemIds: string[] }> {
+    return request({ url: `${topicPath(payload.characterId, payload.sourceTopicId)}/merge`, method: "post", data: { targetTopicId: payload.targetTopicId, sourceRevision: payload.sourceRevision, targetRevision: payload.targetRevision } });
+  }
+
   function createRun(payload: { characterId: string; itemIds: string[] }): Promise<{ run: { id: string; status: KnowledgeTopicRunStatus; createdAt: string } }> {
     return request({ url: `${base(payload.characterId)}/runs`, method: "post", data: { itemIds: payload.itemIds } });
   }
@@ -97,7 +104,7 @@ export function createKnowledgeTopicsApi(request: ApiRequest) {
   function dismissSuggestion(payload: { characterId: string; suggestionId: string }): Promise<{ id: string; status: "DISMISSED" }> {
     return request({ url: `${base(payload.characterId)}/suggestions/${encodeURIComponent(payload.suggestionId)}/dismiss`, method: "post" });
   }
-  return { list, get, create, update, addMembers, removeMember, listRevisions, getRevision, restoreRevision, createRun, listRuns, getRun, acceptSuggestion, dismissSuggestion };
+  return { list, get, create, update, addMembers, removeMember, listRevisions, getRevision, restoreRevision, split, merge, createRun, listRuns, getRun, acceptSuggestion, dismissSuggestion };
 }
 
 export type KnowledgeTopicsApi = ReturnType<typeof createKnowledgeTopicsApi>;
