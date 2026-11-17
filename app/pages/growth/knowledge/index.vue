@@ -101,7 +101,7 @@ const trashPageCount = ref(1);
 const archiveTotalCount = ref(0);
 const trashTotalCount = ref(0);
 const selectedCandidateIds = ref<string[]>([]);
-const workspaceView = ref<"candidates" | "library">("candidates");
+const workspaceView = ref<"candidates" | "library" | "topics">("candidates");
 const collectorOpen = ref(false);
 const candidateFilter = ref("TODO");
 const candidateKeyword = ref("");
@@ -1176,6 +1176,9 @@ function formatDate(value: string) {
         <el-radio-button value="library">
           正式知识库
         </el-radio-button>
+        <el-radio-button value="topics">
+          知识主题
+        </el-radio-button>
       </el-radio-group>
       <div class="workspace-toolbar-actions">
         <el-button
@@ -1192,6 +1195,13 @@ function formatDate(value: string) {
         </el-button>
       </div>
     </div>
+
+    <KnowledgeTopicsPanel
+      v-if="characterId && workspaceView === 'topics'"
+      :character-id="characterId"
+      :items="libraryItems"
+      @changed="load()"
+    />
 
     <nav
       v-if="characterId && workspaceView === 'library'"
