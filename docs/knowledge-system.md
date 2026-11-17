@@ -719,3 +719,14 @@ Run 的模型调用与 HTTP 请求生命周期解耦：POST 只创建 QUEUED 记
 
 - PostgreSQL 专项测试覆盖拆分成员子集、来源剩余成员、来源快照、新主题初始 revision、无效全量拆分、跨角色访问、过期 revision、合并成员去重、源主题 MERGED 标记、目标主题快照、合并后不可编辑。
 - 本批不实现主题合并撤销；撤销仍需下一批主题历史查询/撤销 API 设计。页面继续排在 API 稳定和专项测试之后。
+
+
+### 正式主题历史查询与撤销 API（开发中）
+
+- 主题历史列表：`GET /api/characters/{id}/growth/knowledge/topics/{topicId}/revisions`，返回当前 revision 与最近历史快照摘要；默认 50 条，最多 100 条。
+- 历史详情：`GET /api/characters/{id}/growth/knowledge/topics/{topicId}/revisions/{revision}`，读取指定主题版本的完整快照。
+- 历史恢复：`POST /api/characters/{id}/growth/knowledge/topics/{topicId}/revisions/{revision}/restore`，请求体携带 `expectedRevision`。恢复不是覆盖旧历史，而是先保存当前版本快照，再以新 revision 恢复所选版本的名称、说明、状态与成员。
+- 安全边界：所有接口校验登录用户、角色归属与主题归属；恢复使用主题行锁和 revision 乐观并发校验。已合并主题不可恢复，也不能恢复到 MERGED 快照。
+- 完整性边界：恢复前要求快照中的知识成员仍存在、属于当前角色且处于 ACTIVE；若成员已删除、归档或失效，整笔恢复返回冲突，不静默丢成员。
+- 默认知识检索不读取主题历史快照；主题历史只用于管理和审计。
+- 当前实现等待专项数据库测试与 GitHub Actions，尚未标记为验收完成。
