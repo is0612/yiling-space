@@ -20,6 +20,10 @@ assert.match(database.pathname, /^\/yiling_knowledge_topic_test_[a-f0-9]{32}$/,
 const createRun = (await import("../server/api/characters/[id]/growth/knowledge/topics/runs.post")).default;
 const acceptSuggestion = (await import("../server/api/characters/[id]/growth/knowledge/topics/suggestions/[suggestionId]/accept.post")).default;
 const dismissSuggestion = (await import("../server/api/characters/[id]/growth/knowledge/topics/suggestions/[suggestionId]/dismiss.post")).default;
+const listTopics = (await import("../server/api/characters/[id]/growth/knowledge/topics/index.get")).default;
+const getTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId].get")).default;
+const listRuns = (await import("../server/api/characters/[id]/growth/knowledge/topics/runs.get")).default;
+const getRun = (await import("../server/api/characters/[id]/growth/knowledge/topics/runs/[runId].get")).default;
 const prisma = getPrisma();
 const ownerId = randomUUID();
 const otherOwnerId = randomUUID();
@@ -30,6 +34,10 @@ const router = createRouter();
 router.post("/characters/:id/growth/knowledge/topics/runs", createRun);
 router.post("/characters/:id/growth/knowledge/topics/suggestions/:suggestionId/accept", acceptSuggestion);
 router.post("/characters/:id/growth/knowledge/topics/suggestions/:suggestionId/dismiss", dismissSuggestion);
+router.get("/characters/:id/growth/knowledge/topics", listTopics);
+router.get("/characters/:id/growth/knowledge/topics/:topicId", getTopic);
+router.get("/characters/:id/growth/knowledge/topics/runs", listRuns);
+router.get("/characters/:id/growth/knowledge/topics/runs/:runId", getRun);
 app.use(router);
 const api = createServer(toNodeListener(app));
 
@@ -72,6 +80,14 @@ const modelUrl = `http://127.0.0.1:${(model.address() as { port: number }).port}
 let session!: Awaited<ReturnType<typeof createSession>>;
 let otherSession!: Awaited<ReturnType<typeof createSession>>;
 
+async function getRequest(path: string, cookie?: string) {
+  const response = await fetch(`http://127.0.0.1:${(api.address() as { port: number }).port}${path}`, {
+    method: "GET",
+    headers: cookie ? { cookie: `yiling_session=${cookie}` } : {},
+  });
+  const text = await response.text();
+  return { status: response.status, body: text ? JSON.parse(text) as Record<string, any> : {} };
+}
 async function request(path: string, body?: Record<string, unknown>, cookie?: string) {
   const response = await fetch(`http://127.0.0.1:${(api.address() as { port: number }).port}${path}`, {
     method: "POST",
@@ -183,6 +199,24 @@ try {
   assert.equal(acceptedSuggestion.status, "ACCEPTED");
   assert.deepEqual(acceptedSuggestion.acceptedMemberItemIds, [a.id, b.id]);
   assert.equal((await request(acceptPath(suggestionId), { mode: "CREATE" }, session.token)).status, 409);
+  // Read APIs expose only this character's topic/run data and current member validity.
+  const topicsList = await getRequest(`/characters/${characterId}/growth/knowledge/topics?status=ACTIVE`, session.token);
+  assert.equal(topicsList.status, 200);
+  assert.ok((topicsList.body.topics as Array<{ id: string; memberCount: number }>).some(topic =>
+    topic.id === createdTopicId && topic.memberCount === 2));
+  assert.equal((await getRequest(`/characters/${characterId}/growth/knowledge/topics`, otherSession.token)).status, 404);
+  const topicDetail = await getRequest(`/characters/${characterId}/growth/knowledge/topics/${createdTopicId}`, session.token);
+  assert.equal(topicDetail.status, 200);
+  assert.equal((topicDetail.body.topic as { members: unknown[] }).members.length, 2);
+  assert.equal((await getRequest(`/characters/${characterId}/growth/knowledge/topics/${createdTopicId}`, otherSession.token)).status, 404);
+  const runList = await getRequest(`/characters/${characterId}/growth/knowledge/topics/runs?status=READY`, session.token);
+  assert.equal(runList.status, 200);
+  assert.ok((runList.body.runs as Array<{ id: string }>).some(run => run.id === readyRunId));
+  const runDetail = await getRequest(`/characters/${characterId}/growth/knowledge/topics/runs/${readyRunId}`, session.token);
+  assert.equal(runDetail.status, 200);
+  assert.equal((runDetail.body.run as { suggestions: unknown[] }).suggestions.length, 1);
+  assert.equal((await getRequest(`/characters/${characterId}/growth/knowledge/topics/runs/${readyRunId}`, otherSession.token)).status, 404);
+
 
   const applyItems = await makeItems(characterId, "部分采纳知识");
   const applyRunId = await newRun(applyItems.map(row => row.id));
