@@ -47,7 +47,7 @@ export type KnowledgeTopicRunDetail = {
     acceptedMembers: Array<{ itemId: string; item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null }>;
   }>;
 };
-\nconst base = (characterId: string) => `/characters/${encodeURIComponent(characterId)}/growth/knowledge/topics`;
+const base = (characterId: string) => `/characters/${encodeURIComponent(characterId)}/growth/knowledge/topics`;
 const topicPath = (characterId: string, topicId: string) => `${base(characterId)}/${encodeURIComponent(topicId)}`;
 
 export function createKnowledgeTopicsApi(request: ApiRequest) {
