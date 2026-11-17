@@ -18,6 +18,8 @@ assert.match(database.pathname, /^\/yiling_knowledge_topic_test_[a-f0-9]{32}$/,
 (globalThis as Record<string, unknown>).createError = (await import("h3")).createError;
 
 const createRun = (await import("../server/api/characters/[id]/growth/knowledge/topics/runs.post")).default;
+const acceptSuggestion = (await import("../server/api/characters/[id]/growth/knowledge/topics/suggestions/[suggestionId]/accept.post")).default;
+const dismissSuggestion = (await import("../server/api/characters/[id]/growth/knowledge/topics/suggestions/[suggestionId]/dismiss.post")).default;
 const prisma = getPrisma();
 const ownerId = randomUUID();
 const otherOwnerId = randomUUID();
@@ -26,6 +28,8 @@ const otherCharacterId = randomUUID();
 const app = createApp();
 const router = createRouter();
 router.post("/characters/:id/growth/knowledge/topics/runs", createRun);
+router.post("/characters/:id/growth/knowledge/topics/suggestions/:suggestionId/accept", acceptSuggestion);
+router.post("/characters/:id/growth/knowledge/topics/suggestions/:suggestionId/dismiss", dismissSuggestion);
 app.use(router);
 const api = createServer(toNodeListener(app));
 
@@ -157,6 +161,73 @@ try {
   assert.equal(suggestions.length, 1);
   assert.deepEqual(suggestions[0]!.memberItemIds, [a.id, b.id]);
   assert.equal(suggestions[0]!.status, "PENDING");
+
+  // Suggestion review: owner isolation, atomic CREATE, partial APPLY, immutable revisions and dismissal.
+  const suggestionId = suggestions[0]!.id;
+  const acceptPath = (id: string) => `/characters/${characterId}/growth/knowledge/topics/suggestions/${id}/accept`;
+  const dismissPath = (id: string) => `/characters/${characterId}/growth/knowledge/topics/suggestions/${id}/dismiss`;
+  assert.equal((await request(acceptPath(suggestionId), { mode: "CREATE" }, otherSession.token)).status, 404);
+  const [createAcceptA, createAcceptB] = await Promise.all([
+    request(acceptPath(suggestionId), { mode: "CREATE" }, session.token),
+    request(acceptPath(suggestionId), { mode: "CREATE" }, session.token),
+  ]);
+  assert.deepEqual([createAcceptA.status, createAcceptB.status].sort(), [200, 409]);
+  const createdTopicResult = createAcceptA.status === 200 ? createAcceptA : createAcceptB;
+  const createdTopicId = (createdTopicResult.body.topic as { id: string }).id;
+  const createdTopic = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: createdTopicId }, include: { members: true },
+  });
+  assert.equal(createdTopic.name, "测试主题");
+  assert.equal(createdTopic.members.length, 2);
+  const acceptedSuggestion = await prisma.knowledgeTopicSuggestion.findUniqueOrThrow({ where: { id: suggestionId } });
+  assert.equal(acceptedSuggestion.status, "ACCEPTED");
+  assert.deepEqual(acceptedSuggestion.acceptedMemberItemIds, [a.id, b.id]);
+  assert.equal((await request(acceptPath(suggestionId), { mode: "CREATE" }, session.token)).status, 409);
+
+  const applyItems = await makeItems(characterId, "部分采纳知识");
+  const applyRunId = await newRun(applyItems.map(row => row.id));
+  assert.equal((await runWorker()).status, "READY");
+  const applySuggestion = await prisma.knowledgeTopicSuggestion.findFirstOrThrow({ where: { runId: applyRunId } });
+  const existingTopic = await prisma.knowledgeTopic.create({
+    data: {
+      characterId, name: "已有主题", description: "已有说明",
+      members: { create: [{ itemId: a.id, itemRevision: 1 }] },
+    },
+  });
+  assert.equal((await request(acceptPath(applySuggestion.id), {
+    mode: "APPLY", topicId: existingTopic.id, memberItemIds: [foreign.id],
+  }, session.token)).status, 400);
+  const applied = await request(acceptPath(applySuggestion.id), {
+    mode: "APPLY", topicId: existingTopic.id, memberItemIds: [applyItems[0]!.id],
+  }, session.token);
+  assert.equal(applied.status, 200, JSON.stringify(applied.body));
+  assert.deepEqual(applied.body.acceptedMemberItemIds, [applyItems[0]!.id]);
+  const updatedTopic = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: existingTopic.id }, include: { members: true, revisions: true },
+  });
+  assert.equal(updatedTopic.revision, 2);
+  assert.equal(updatedTopic.members.length, 2);
+  assert.equal(updatedTopic.revisions.length, 1);
+  assert.equal(updatedTopic.revisions[0]!.revision, 1);
+  assert.deepEqual(acceptedSuggestion.acceptedMemberItemIds, [a.id, b.id]);
+
+  const dismissItems = await makeItems(characterId, "忽略建议知识");
+  const dismissRunId = await newRun(dismissItems.map(row => row.id));
+  assert.equal((await runWorker()).status, "READY");
+  const dismissSuggestion = await prisma.knowledgeTopicSuggestion.findFirstOrThrow({ where: { runId: dismissRunId } });
+  const dismissed = await request(dismissPath(dismissSuggestion.id), {}, session.token);
+  assert.equal(dismissed.status, 200, JSON.stringify(dismissed.body));
+  assert.equal(dismissed.body.status, "DISMISSED");
+  assert.equal((await prisma.knowledgeTopicSuggestion.findUniqueOrThrow({ where: { id: dismissSuggestion.id } })).status, "DISMISSED");
+  assert.equal((await request(dismissPath(dismissSuggestion.id), {}, session.token)).status, 409);
+
+  const staleReviewItems = await makeItems(characterId, "过期审核知识");
+  const staleReviewRunId = await newRun(staleReviewItems.map(row => row.id));
+  assert.equal((await runWorker()).status, "READY");
+  const staleReviewSuggestion = await prisma.knowledgeTopicSuggestion.findFirstOrThrow({ where: { runId: staleReviewRunId } });
+  await prisma.knowledgeItem.update({ where: { id: staleReviewItems[0]!.id }, data: { revision: 2 } });
+  assert.equal((await request(acceptPath(staleReviewSuggestion.id), { mode: "CREATE" }, session.token)).status, 409);
+  assert.equal((await prisma.knowledgeTopicSuggestion.findUniqueOrThrow({ where: { id: staleReviewSuggestion.id } })).status, "PENDING");
 
   // Revision changes before execution make the run STALE without calling the model.
   const beforeStaleCalls = modelCalls;
