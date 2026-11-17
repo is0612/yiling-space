@@ -365,8 +365,29 @@ try {
   assert.equal(manualAfter.revision, 6);
   assert.equal(manualAfter.revisions.length, 5);
   assert.deepEqual(manualAfter.revisions.map(row => row.revision), [1, 2, 3, 4, 5]);
+
+  const historyPath = `/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/revisions`;
+  const history = await getRequest(historyPath, session.token);
+  assert.equal(history.status, 200, JSON.stringify(history.body));
+  assert.equal((history.body.revisions as Array<{ revision: number }>).length, 5);
+  const historicalDetail = await getRequest(`${historyPath}/1`, session.token);
+  assert.equal(historicalDetail.status, 200, JSON.stringify(historicalDetail.body));
+  assert.equal((historicalDetail.body.snapshot as { name: string }).name, "手动主题");
+  assert.equal((await getRequest(`${historyPath}/1`, otherSession.token)).status, 404);
+  const restoredHistory = await request(`${historyPath}/1/restore`, { expectedRevision: 6 }, session.token);
+  assert.equal(restoredHistory.status, 200, JSON.stringify(restoredHistory.body));
+  assert.equal((restoredHistory.body.topic as { name: string; revision: number }).name, "手动主题");
+  assert.equal((restoredHistory.body.topic as { revision: number }).revision, 7);
+  assert.equal((await request(`${historyPath}/1/restore`, { expectedRevision: 6 }, session.token)).status, 409);
+  const afterHistoryRestore = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: manualTopicId }, include: { members: true, revisions: true },
+  });
+  assert.equal(afterHistoryRestore.revision, 7);
+  assert.equal(afterHistoryRestore.name, "手动主题");
+  assert.equal(afterHistoryRestore.revisions.length, 6);
+
   assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
-    name: "越权", revision: 6,
+    name: "越权", revision: 7,
   }, otherSession.token)).status, 404);
 
   // Topic split and merge: membership is moved, both operations are revision-guarded and auditable.
