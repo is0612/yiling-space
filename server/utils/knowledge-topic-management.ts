@@ -67,12 +67,14 @@ export async function updateKnowledgeTopic(prisma: PrismaClient, characterId: st
   if (input.status !== undefined && input.status !== "ACTIVE" && input.status !== "ARCHIVED") {
     fail(400, "主题状态只能设置为 ACTIVE 或 ARCHIVED。");
   }
+  const status: "ACTIVE" | "ARCHIVED" | undefined =
+    input.status === "ACTIVE" || input.status === "ARCHIVED" ? input.status : undefined;
   return prisma.$transaction(async tx => {
     const topic = await lockTopic(tx, characterId, topicId);
     checkRevision(input.revision, topic.revision);
     const changed = (name !== undefined && name !== topic.name)
       || (description !== undefined && description !== topic.description)
-      || (input.status !== undefined && input.status !== topic.status);
+      || (status !== undefined && status !== topic.status);
     if (!changed) return { id: topic.id, name: topic.name, description: topic.description, status: topic.status, revision: topic.revision };
     await saveRevision(tx, topic);
     const updated = await tx.knowledgeTopic.update({
@@ -80,7 +82,7 @@ export async function updateKnowledgeTopic(prisma: PrismaClient, characterId: st
       data: {
         ...(name !== undefined ? { name } : {}),
         ...(description !== undefined ? { description } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(status !== undefined ? { status } : {}),
         revision: { increment: 1 },
       },
       select: { id: true, name: true, description: true, status: true, revision: true, updatedAt: true },
