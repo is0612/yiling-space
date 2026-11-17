@@ -664,3 +664,14 @@ Run 的模型调用与 HTTP 请求生命周期解耦：POST 只创建 QUEUED 记
 - 输出全部通过后，在单个事务中写入 Suggestions、ungroupedIds 并将 Run 置为 READY。失败按最多三次退避重试，旧租约执行者不能更新结果。
 - 新增输出协议专项测试并接入知识系统回归脚本。
 - 本批尚未执行 Prisma / 数据库集成专项测试、typecheck、lint、build 或 GitHub Actions；不代表后端主链路已验收。API 的查询详情、建议审核与主题管理接口尚未开发。
+
+
+### 主题建议审核 API（2026-11-17，开发分支）
+
+- 新增建议采纳接口：`POST /api/characters/:id/growth/knowledge/topics/suggestions/:suggestionId/accept`。请求支持 `{ mode: "CREATE" }` 创建新主题，或 `{ mode: "APPLY", topicId }` 应用到已有主题；可选传入 `memberItemIds` 采纳建议成员的非空子集，省略时采纳全部建议成员。
+- 新增建议忽略接口：`POST /api/characters/:id/growth/knowledge/topics/suggestions/:suggestionId/dismiss`。只改变建议状态，不改动主题或知识条目。
+- 两个接口均校验 owner、角色归属、Run=READY、Suggestion=PENDING，并在事务内锁定 Run 与 Suggestion，避免并发重复审核；建议必须来自当前角色的有效批次。
+- 采纳时校验成员属于建议原始成员集合，并按 Run 的 ID/revision 快照重新检查当前角色 ACTIVE 知识。过期、归档或跨角色成员均拒绝，不保存半成品。
+- CREATE 在同一事务创建主题、成员引用并记录建议实际采纳成员；APPLY 对目标主题加行锁，先保存完整修改前修订快照，再递增主题 revision 并添加新成员；已存在的成员不会重复插入。
+- 采纳与忽略均为单向终态操作；重复请求返回冲突，不会重复创建主题或修订。
+- 已扩展 `test-knowledge-topic-db`，覆盖跨角色访问、并发双重采纳、CREATE、部分 APPLY、修订快照、无效成员和忽略/重复忽略。当前等待 GitHub Actions 工程回归；尚未标记验收通过。
