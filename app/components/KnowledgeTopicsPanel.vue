@@ -27,6 +27,16 @@ let listRequest = 0;
 let detailRequest = 0;
 let historyRequest = 0;
 onBeforeUnmount(() => { listRequest++; detailRequest++; historyRequest++; });
+const splitOpen = ref(false);
+const splitName = ref("");
+const splitDescription = ref("");
+const splitMemberItemIds = ref<string[]>([]);
+const splitting = ref(false);
+const mergeOpen = ref(false);
+const mergeTargetId = ref("");
+const merging = ref(false);
+const splitCandidates = computed(() => detail.value?.members.filter(member => member.valid) ?? []);
+const mergeCandidates = computed(() => topics.value.filter(topic => topic.status === "ACTIVE" && topic.id !== detail.value?.id));
 
 const availableItems = computed(() => props.items.filter(item =>
   item.status === "ACTIVE" && !detail.value?.members.some(member => member.itemId === item.id && member.valid),
@@ -179,6 +189,76 @@ async function removeMember(itemId: string, title: string) {
     if (error !== "cancel" && error !== "close") ElMessage.error(readApiErrorMessage(error, "移除成员失败。"));
   }
 }
+function openSplit() {
+  if (!detail.value || detail.value.status !== "ACTIVE" || splitCandidates.value.length < 2) return;
+  splitName.value = `${detail.value.name}（拆分）`;
+  splitDescription.value = detail.value.description;
+  splitMemberItemIds.value = [];
+  splitOpen.value = true;
+}
+async function submitSplit() {
+  if (!detail.value || !splitName.value.trim() || !splitMemberItemIds.value.length
+    || splitMemberItemIds.value.length >= splitCandidates.value.length || splitting.value) return;
+  splitting.value = true;
+  try {
+    const result = await api.split({
+      characterId: props.characterId,
+      topicId: detail.value.id,
+      name: splitName.value.trim(),
+      description: splitDescription.value.trim(),
+      memberItemIds: splitMemberItemIds.value,
+      revision: detail.value.revision,
+    });
+    selectedId.value = result.newTopic.id;
+    splitOpen.value = false;
+    ElMessage.success(`已拆分为新主题「${result.newTopic.name}」，移动 ${result.movedItemIds.length} 条知识，原主题保留 ${result.remainingItemIds.length} 条。`);
+    await loadTopics();
+    emit("changed");
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "拆分主题失败；如果主题已变化，请刷新后重试。"));
+  } finally {
+    splitting.value = false;
+  }
+}
+function openMerge() {
+  if (!detail.value || detail.value.status !== "ACTIVE" || !mergeCandidates.value.length) return;
+  mergeTargetId.value = "";
+  mergeOpen.value = true;
+}
+async function submitMerge() {
+  if (!detail.value || !mergeTargetId.value || merging.value) return;
+  const target = mergeCandidates.value.find(topic => topic.id === mergeTargetId.value);
+  if (!target) return;
+  try {
+    await ElMessageBox.confirm(
+      `将「${detail.value.name}」合并到「${target.name}」？目标主题会保留名称与身份，来源主题会标记为已合并并保留历史。知识条目本身不会被修改或删除。`,
+      "确认合并主题",
+      { type: "warning", confirmButtonText: "确认合并", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  merging.value = true;
+  try {
+    const result = await api.merge({
+      characterId: props.characterId,
+      sourceTopicId: detail.value.id,
+      targetTopicId: target.id,
+      sourceRevision: detail.value.revision,
+      targetRevision: target.revision,
+    });
+    selectedId.value = target.id;
+    mergeOpen.value = false;
+    ElMessage.success(`已合并到「${target.name}」；新增 ${result.addedItemIds.length} 条成员，重复成员 ${result.alreadyPresentItemIds.length} 条已去重。`);
+    await loadTopics();
+    emit("changed");
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "合并主题失败；如果任一主题已变化，请刷新后重试。"));
+  } finally {
+    merging.value = false;
+  }
+}
+
 async function openHistory() {
   if (!detail.value) return;
   const request = ++historyRequest;
@@ -244,6 +324,8 @@ async function restoreRevision(revision: number) {
           <div><h3>{{ detail.name }}</h3><p>{{ detail.description || "暂无主题说明" }}</p></div>
           <div class="topic-toolbar">
             <el-button @click="openHistory">历史版本</el-button>
+            <el-button :disabled="detail.status !== 'ACTIVE' || splitCandidates.length < 2" @click="openSplit">拆分主题</el-button>
+            <el-button :disabled="detail.status !== 'ACTIVE' || !mergeCandidates.length" @click="openMerge">合并到…</el-button>
             <el-button :disabled="detail.status === 'MERGED'" @click="openEdit">编辑</el-button>
             <el-button :disabled="detail.status === 'MERGED'" @click="toggleArchive">{{ detail.status === "ARCHIVED" ? "恢复主题" : "归档主题" }}</el-button>
           </div>
@@ -284,6 +366,38 @@ async function restoreRevision(revision: number) {
       <template #footer><el-button @click="formOpen = false">取消</el-button><el-button type="primary" :loading="saving" :disabled="!formName.trim()" @click="saveTopic">保存</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="splitOpen" title="拆分主题" width="min(620px, 94vw)">
+      <el-form label-position="top">
+        <el-form-item label="新主题名称">
+          <el-input v-model="splitName" maxlength="200" show-word-limit placeholder="输入拆分后主题的名称" />
+        </el-form-item>
+        <el-form-item label="新主题说明">
+          <el-input v-model="splitDescription" type="textarea" :rows="3" maxlength="5000" show-word-limit placeholder="可选，说明新主题的范围" />
+        </el-form-item>
+        <el-form-item label="移动到新主题的知识">
+          <el-select v-model="splitMemberItemIds" multiple filterable collapse-tags :max-collapse-tags="4" placeholder="选择要拆分出去的有效知识" style="width: 100%">
+            <el-option v-for="member in splitCandidates" :key="member.itemId" :label="member.item?.title || member.itemId" :value="member.itemId" />
+          </el-select>
+          <small class="topic-dialog-hint">原主题至少保留一条有效知识。已失效成员不会出现在可选列表中。</small>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="splitOpen = false">取消</el-button>
+        <el-button type="primary" :loading="splitting" :disabled="!splitName.trim() || !splitMemberItemIds.length || splitMemberItemIds.length >= splitCandidates.length" @click="submitSplit">确认拆分</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="mergeOpen" title="合并主题" width="min(560px, 92vw)">
+      <p class="topic-dialog-copy">选择一个活动主题作为保留目标。当前主题将变为“已合并”，不会被物理删除。</p>
+      <el-select v-model="mergeTargetId" filterable placeholder="选择目标主题" style="width: 100%">
+        <el-option v-for="topic in mergeCandidates" :key="topic.id" :label="`${topic.name} · v${topic.revision} · ${topic.memberCount} 条知识`" :value="topic.id" />
+      </el-select>
+      <template #footer>
+        <el-button @click="mergeOpen = false">取消</el-button>
+        <el-button type="danger" :loading="merging" :disabled="!mergeTargetId" @click="submitMerge">确认合并</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="historyOpen" title="主题历史版本" width="min(680px, 94vw)">
       <div v-loading="historyLoading" class="topic-history">
         <article v-for="revision in revisions" :key="revision.id" class="topic-history-item">
@@ -294,6 +408,8 @@ async function restoreRevision(revision: number) {
         <el-empty v-if="!historyLoading && !revisions.length" description="暂无历史版本。" />
       </div>
     </el-dialog>
+
+    <KnowledgeTopicDiscoveryPanel :character-id="characterId" :items="items" @changed="emit('changed')" />
   </section>
 </template>
 
@@ -328,5 +444,7 @@ async function restoreRevision(revision: number) {
 .topic-invalid, .topic-warning { color: var(--el-color-warning); }
 .topic-warning { padding: 10px; margin: 12px 0; border-radius: 8px; background: var(--el-color-warning-light-9); }
 .topic-history { display: flex; flex-direction: column; gap: 8px; }
+.topic-dialog-hint, .topic-dialog-copy { color: var(--el-text-color-secondary); font-size: 12px; }
+.topic-dialog-hint { display: block; margin-top: 6px; }
 @media (max-width: 760px) { .topic-layout { grid-template-columns: 1fr; } .topic-add-members { flex-direction: column; } }
 </style>
