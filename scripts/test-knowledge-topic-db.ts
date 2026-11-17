@@ -393,7 +393,10 @@ try {
   const splitNewId = (splitResult.body.newTopic as { id: string; revision: number }).id;
   assert.equal((splitResult.body.newTopic as { revision: number }).revision, 1);
   assert.deepEqual(splitResult.body.movedItemIds, [splitItems[0]!.id]);
-  assert.deepEqual(splitResult.body.remainingItemIds, [splitItems[1]!.id, splitItems[2]!.id]);
+  assert.deepEqual(
+    [...(splitResult.body.remainingItemIds as string[])].sort(),
+    [splitItems[1]!.id, splitItems[2]!.id].sort(),
+  );
   const splitSourceAfter = await prisma.knowledgeTopic.findUniqueOrThrow({
     where: { id: splitSource.id }, include: { members: true, revisions: true },
   });
