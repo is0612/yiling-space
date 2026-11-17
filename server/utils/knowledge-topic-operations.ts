@@ -3,7 +3,13 @@ import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 type Db = PrismaClient | Prisma.TransactionClient;
-type Topic = Awaited<ReturnType<Db["knowledgeTopic"]["findUniqueOrThrow"]>> & {
+type Topic = {
+  id: string;
+  name: string;
+  description: string;
+  status: "ACTIVE" | "ARCHIVED" | "MERGED";
+  revision: number;
+  mergedIntoId: string | null;
   members: Array<{ itemId: string; itemRevision: number }>;
 };
 
