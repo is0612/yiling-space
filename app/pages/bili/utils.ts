@@ -5,14 +5,8 @@ import type { BiliAccount } from "./types";
  * 都是纯函数，放在这里而不是 composable 里：谁要用谁 import，不需要响应式。
  */
 
-/** 把 $fetch 抛出来的错误翻成人话：优先用服务端的 statusMessage。 */
-export function readErrorMessage(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+/** 把 $fetch 抛出来的错误翻成人话：优先用服务端返回的原因。 */
+export { readApiErrorMessage as readErrorMessage } from "~/utils/api-error";
 
 export function formatTime(value: string) {
   const date = new Date(value);

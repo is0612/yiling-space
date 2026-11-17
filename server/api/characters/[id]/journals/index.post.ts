@@ -1,5 +1,5 @@
 import { createError, readBody } from "h3";
-import { requireJournalCharacter, journalGenerationResponse } from "../../../../utils/journal-api";
+import { requireJournalCharacter, journalGenerationResponse, throwJournalGenerationError } from "../../../../utils/journal-api";
 import {
   generateJournalForDay,
   isJournalDayKey,
@@ -33,7 +33,7 @@ export default defineEventHandler(async (event) => {
     mode: "manual",
     target,
     actorUserId: ownerId,
-  }, prisma);
+  }, prisma).catch(throwJournalGenerationError);
 
   return journalGenerationResponse(outcome);
 });

@@ -1,5 +1,5 @@
 import { createError, readBody } from "h3";
-import { requireJournalCharacter, journalGenerationResponse, readJournalDayKey } from "../../../../../utils/journal-api";
+import { requireJournalCharacter, journalGenerationResponse, readJournalDayKey, throwJournalGenerationError } from "../../../../../utils/journal-api";
 import { generateJournalForDay, type JournalGenerationTarget } from "../../../../../utils/journal-service";
 
 const TARGETS = ["DIARY", "HANDBOOK", "BOTH"] as const;
@@ -26,7 +26,7 @@ export default defineEventHandler(async (event) => {
     mode: "regenerate",
     target,
     actorUserId: ownerId,
-  }, prisma);
+  }, prisma).catch(throwJournalGenerationError);
 
   return journalGenerationResponse(outcome);
 });

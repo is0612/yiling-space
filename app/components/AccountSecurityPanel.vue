@@ -8,6 +8,7 @@
  */
 import { Monitor, Refresh, SwitchButton, Unlock } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { readApiErrorMessage } from "~/utils/api-error";
 import type { FormInstance, FormRules } from "element-plus";
 
 type DeviceKind = "desktop" | "mobile" | "tablet" | "unknown";
@@ -58,13 +59,7 @@ const passwordRules: FormRules = {
   ],
 };
 
-function readErrorMessage(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readErrorMessage = readApiErrorMessage;
 
 function formatDateTime(value: string) {
   const date = new Date(value);

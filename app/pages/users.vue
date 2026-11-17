@@ -12,6 +12,7 @@
  */
 import { Clock, Refresh } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 // 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明和动作。
 definePageMeta({
@@ -56,13 +57,7 @@ const dialogVisible = ref(false);
 const resetTarget = ref<AdminUser | null>(null);
 const resetPassword = ref("");
 
-function readErrorMessage(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readErrorMessage = readApiErrorMessage;
 
 function formatDateTime(value: string | null) {
   if (!value) return "从未";

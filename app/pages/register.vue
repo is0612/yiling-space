@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 definePageMeta({ layout: false });
 
@@ -11,13 +12,7 @@ const confirm = ref("");
 const submitting = ref(false);
 const errorMessage = ref("");
 
-function readErrorMessage(error: unknown) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return "注册失败，请稍后重试。";
-}
+const readErrorMessage = readApiErrorMessage;
 
 async function submit() {
   if (submitting.value) return;
@@ -46,7 +41,7 @@ async function submit() {
     ElMessage.success("注册成功，已自动登录。");
     await navigateTo("/");
   } catch (error) {
-    errorMessage.value = readErrorMessage(error);
+    errorMessage.value = readErrorMessage(error, "注册失败，请稍后重试。");
   } finally {
     submitting.value = false;
   }

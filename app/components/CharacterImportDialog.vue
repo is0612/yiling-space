@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 import type { Character } from "~/utils/mock-data";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 /**
  * 导入角色卡。
@@ -317,13 +318,7 @@ function pickFile() {
   fileInput.value?.click();
 }
 
-function readError(error: unknown, fallback: string): string {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readError = readApiErrorMessage;
 
 const merging = computed(() => mergeMode.value === "merge" && Boolean(mergeTarget.value));
 

@@ -31,6 +31,23 @@ export function readJournalDayKey(event: H3Event): string {
 }
 
 /**
+ * 生成失败也要给前端一句能看的话。
+ *
+ * 模型调用 / 输出校验抛的是普通 Error（如 `LLM_INVALID_SOURCES: …`），
+ * 直接冒泡会变成 500，前端只能看到「Internal Server Error」或通用兜底。
+ */
+export function throwJournalGenerationError(error: unknown): never {
+  if (error && typeof error === "object" && "statusCode" in error) throw error;
+  console.error("[journal] 生成失败", error);
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const detail = raw.replace(/^LLM_[A-Z_]+:\s*/, "").trim();
+  throw createError({
+    statusCode: 502,
+    statusMessage: raw.startsWith("LLM_") && detail ? detail : "日记/手账生成失败，请稍后重试。",
+  });
+}
+
+/**
  * 把生成结果翻译成接口返回或错误。
  *
  * 「已经写过」用 409：页面上的「重写」是另一个按钮，混成成功响应会让人以为重写生效了。

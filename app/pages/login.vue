@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Lock, User } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 definePageMeta({ layout: false });
 
@@ -23,13 +24,7 @@ const password = ref(showDefaultAdmin ? DEFAULT_ADMIN_PASSWORD : "");
 const submitting = ref(false);
 const errorMessage = ref("");
 
-function readErrorMessage(error: unknown) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return "登录失败，请检查用户名和密码后重试。";
-}
+const readErrorMessage = readApiErrorMessage;
 
 async function submit() {
   if (submitting.value) return;
@@ -49,7 +44,7 @@ async function submit() {
     ElMessage.success("已登录。");
     await navigateTo("/");
   } catch (error) {
-    errorMessage.value = readErrorMessage(error);
+    errorMessage.value = readErrorMessage(error, "登录失败，请检查用户名和密码后重试。");
   } finally {
     submitting.value = false;
   }

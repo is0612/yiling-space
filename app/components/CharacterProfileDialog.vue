@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 import type { Character } from "~/utils/mock-data";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 /**
  * 编辑角色资料：只改名称和基础人设。
@@ -50,13 +51,7 @@ watch(open, (isOpen) => {
   draftPersonality.value = current?.personality ?? "";
 }, { immediate: true });
 
-function readError(error: unknown, fallback: string): string {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readError = readApiErrorMessage;
 
 /** 「上次保存 10 月 28 日 11:20」；字段缺失或时间非法时整条不显示，不留半截文案 */
 const savedNote = computed(() => {

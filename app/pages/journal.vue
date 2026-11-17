@@ -1,7 +1,21 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ArrowRight, Clock, EditPen, Plus, Refresh } from "@element-plus/icons-vue";
+import { ArrowRight, Check, Clock, EditPen, Loading, Plus, Refresh } from "@element-plus/icons-vue";
 import type { Character } from "~/utils/mock-data";
+import { readApiErrorMessage } from "~/utils/api-error";
+import {
+  getJournalDetail,
+  listJournalRevisions,
+  listJournals,
+  regenerateJournal,
+  restoreJournalRevision,
+  saveJournalEntry,
+  writeJournalDay,
+  type JournalDetail,
+  type JournalKind,
+  type JournalListItem,
+  type JournalRevision,
+} from "~/api/journal";
 
 // 标题归顶栏（AppShell 读 route.meta.topbar）；正文不再重复一遍面包屑和说明行。
 definePageMeta({
@@ -22,64 +36,7 @@ definePageMeta({
 await useCharacterListData();
 const route = useRoute();
 const { id } = useCharacterSelection("/journal");
-const requestFetch = useRequestFetch();
 
-type JournalKind = "DIARY" | "HANDBOOK";
-type JournalListItem = {
-  id: string;
-  dayKey: string;
-  status: "ACTIVE" | "SKIPPED";
-  diaryTitle: string | null;
-  diaryFirstLine: string;
-  handbookQuote: string | null;
-  diaryVersion: number;
-  handbookVersion: number;
-  updatedAt: string;
-};
-type JournalRevision = {
-  id: string;
-  kind: JournalKind;
-  version: number;
-  title: string | null;
-  content: string;
-  thought: string | null;
-  quote: string | null;
-  tags: string[];
-  sourceDiaryRevisionId: string | null;
-  sourceDiaryVersion: number | null;
-  revisionType: string;
-  promptVersion: string | null;
-  model: string | null;
-  editedByUserId: string | null;
-  createdAt: string;
-  sources: { messages: number; events: number };
-};
-type JournalDetail = {
-  id: string;
-  dayKey: string;
-  status: "ACTIVE" | "SKIPPED";
-  skipReason: string | null;
-  createdAt: string;
-  updatedAt: string;
-  diaryState: "PENDING" | "GENERATED" | "SKIPPED";
-  handbookState: "PENDING" | "GENERATED" | "SKIPPED";
-  diaryDecidedAt: string | null;
-  handbookDecidedAt: string | null;
-  revisionCounts: { diary: number; handbook: number };
-  diary: JournalRevision | null;
-  handbook: JournalRevision | null;
-};
-type JournalPage = {
-  items: JournalListItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  hasMore: boolean;
-  timeZone: string;
-  todayKey: string;
-  yesterdayKey: string;
-};
 type HandbookSection = { title: string; lines: string[] };
 
 const PAGE_SIZE = 20;
@@ -204,13 +161,7 @@ function kindLabel(kind: JournalKind): string {
   return kind === "DIARY" ? "日记" : "手账";
 }
 
-function readError(error: unknown): string {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return "操作失败，请检查本地开发服务器日志。";
-}
+const readError = readApiErrorMessage;
 
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "statusCode" in error && (error as { statusCode?: number }).statusCode === 404);
@@ -281,13 +232,11 @@ async function loadList(keepSelection = false, targetCharacterId = id.value): Pr
   }
   loading.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals`;
-    const result = await requestFetch<JournalPage>(url, {
-      query: {
-        page: targetPage,
-        pageSize: PAGE_SIZE,
-        ...(targetMonth ? { month: targetMonth } : {}),
-      },
+    const result = await listJournals({
+      characterId: targetCharacterId,
+      page: targetPage,
+      pageSize: PAGE_SIZE,
+      ...(targetMonth ? { month: targetMonth } : {}),
     });
     if (seq !== listRequestSeq || targetCharacterId !== id.value || targetPage !== page.value || targetMonth !== month.value) return;
 
@@ -344,8 +293,7 @@ async function loadDetail(dayKey: string, targetCharacterId = id.value): Promise
   }
   detailLoading.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals/${encodeURIComponent(dayKey)}`;
-    const result = await requestFetch<JournalDetail>(url);
+    const result = await getJournalDetail({ characterId: targetCharacterId, dayKey });
     if (seq !== detailRequestSeq || targetCharacterId !== id.value || dayKey !== selectedDay.value) return;
     detail.value = result;
     detailCharacterId.value = targetCharacterId;
@@ -366,16 +314,18 @@ async function loadDetail(dayKey: string, targetCharacterId = id.value): Promise
 async function writeDayNow(target: JournalKind | "BOTH" = "BOTH"): Promise<void> {
   const targetCharacterId = id.value;
   const dayKey = writeDay.value;
-  if (!targetCharacterId || !dayKey || writing.value) return;
+  if (!targetCharacterId || writing.value) return;
+  if (!dayKey) {
+    ElMessage.warning("先选一个日期。");
+    return;
+  }
   const seq = ++writeRequestSeq;
   const selectionAtStart = selectedDay.value;
   writing.value = true;
+  // 按钮点下就收起草稿浮层，进度交给目录标题行的「写日记」按钮。
+  writeOpen.value = false;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals`;
-    const result = await requestFetch<{ status: string; reason?: string }>(url, {
-      method: "POST",
-      body: { dayKey, target },
-    });
+    const result = await writeJournalDay({ characterId: targetCharacterId, dayKey, target });
     if (seq !== writeRequestSeq || targetCharacterId !== id.value) return;
     if (result.status === "created") ElMessage.success("写好了。");
     else ElMessage.info(result.reason || "这一天她没写。");
@@ -389,8 +339,6 @@ async function writeDayNow(target: JournalKind | "BOTH" = "BOTH"): Promise<void>
   } finally {
     if (seq === writeRequestSeq) {
       writing.value = false;
-      // 结果已经用消息提示过了，浮层不用再留着。
-      writeOpen.value = false;
     }
   }
 }
@@ -402,11 +350,7 @@ async function writeCurrent(kind: JournalKind): Promise<void> {
   const seq = ++writeRequestSeq;
   writing.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals`;
-    const result = await requestFetch<{ status: string; reason?: string }>(url, {
-      method: "POST",
-      body: { dayKey, target: kind },
-    });
+    const result = await writeJournalDay({ characterId: targetCharacterId, dayKey, target: kind });
     if (seq !== writeRequestSeq || targetCharacterId !== id.value) return;
     if (result.status === "created") ElMessage.success(`${kindLabel(kind)}写好了。`);
     else ElMessage.info(result.reason || `这一天她没写${kindLabel(kind)}。`);
@@ -436,11 +380,7 @@ async function regenerate(kind: JournalKind): Promise<void> {
   const seq = ++regenerateRequestSeq;
   regenerating.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals/${encodeURIComponent(dayKey)}/regenerate`;
-    const result = await requestFetch<{ status: string; reason?: string }>(url, {
-      method: "POST",
-      body: { target: kind },
-    });
+    const result = await regenerateJournal({ characterId: targetCharacterId, dayKey, kind });
     if (seq !== regenerateRequestSeq || targetCharacterId !== id.value) return;
     if (result.status === "created") ElMessage.success(`${kindLabel(kind)}重写好了。`);
     else ElMessage.info(result.reason || `这一天她没写${kindLabel(kind)}。`);
@@ -479,8 +419,7 @@ async function saveEdit(): Promise<void> {
   };
   editSaving.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(target.characterId)}/journals/${encodeURIComponent(target.dayKey)}`;
-    await requestFetch(url, { method: "PATCH", body: payload });
+    await saveJournalEntry({ characterId: target.characterId, dayKey: target.dayKey, ...payload });
     if (seq !== editRequestSeq || target.characterId !== id.value || editTarget.value?.dayKey !== target.dayKey) return;
     editOpen.value = false;
     editTarget.value = null;
@@ -504,8 +443,7 @@ async function openHistory(kind: JournalKind): Promise<void> {
   historyLoading.value = true;
   revisions.value = [];
   try {
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals/${encodeURIComponent(dayKey)}/revisions`;
-    const result = await requestFetch<{ items: JournalRevision[] }>(url, { query: { kind } });
+    const result = await listJournalRevisions({ characterId: targetCharacterId, dayKey, kind });
     if (seq !== historyRequestSeq || targetCharacterId !== id.value || historyTarget.value?.dayKey !== dayKey || historyTarget.value?.kind !== kind) return;
     revisions.value = result.items;
   } catch (error) {
@@ -534,8 +472,7 @@ async function restoreRevision(version: number): Promise<void> {
   const seq = ++restoreRequestSeq;
   restoring.value = true;
   try {
-    const url: string = `/api/characters/${encodeURIComponent(targetCharacterId)}/journals/${encodeURIComponent(dayKey)}/restore`;
-    await requestFetch(url, { method: "POST", body: { kind, version } });
+    await restoreJournalRevision({ characterId: targetCharacterId, dayKey, kind, version });
     if (seq !== restoreRequestSeq || targetCharacterId !== id.value) return;
     ElMessage.success("恢复好了，历史里还能看到原来的版本。");
     if (selectedDay.value === dayKey) await openHistory(kind);
@@ -648,14 +585,20 @@ await loadList();
                 <button
                   type="button"
                   class="write-btn"
+                  :disabled="writing"
                 >
-                  <el-icon><Plus /></el-icon>写日记
+                  <el-icon
+                    v-if="writing"
+                    class="is-loading"
+                  >
+                    <Loading />
+                  </el-icon>
+                  <el-icon v-else>
+                    <Plus />
+                  </el-icon>{{ writing ? "正在写…" : "写日记" }}
                 </button>
               </template>
               <div class="write-pop">
-                <p class="write-pop-label">
-                  哪一天
-                </p>
                 <el-date-picker
                   v-model="writeDay"
                   type="date"
@@ -667,14 +610,12 @@ await loadList();
                 <el-button
                   type="primary"
                   class="write-pop-go"
-                  :loading="writing"
+                  aria-label="写这一天"
+                  :disabled="writing"
                   @click="writeDayNow('BOTH')"
                 >
-                  写这一天
+                  <el-icon><Check /></el-icon>
                 </el-button>
-                <p class="write-pop-hint">
-                  默认昨天，可以改成过去任意一天。她会读那天的对话，写下日记与手账。
-                </p>
               </div>
             </el-popover>
           </div>
@@ -1183,11 +1124,12 @@ await loadList();
   transition: background .15s var(--ease);
 }
 .write-btn:hover { background: var(--brand-btn-h); }
+.write-btn:disabled { cursor: progress; opacity: .85; }
 .write-btn:focus-visible { outline: 2px solid var(--brand-line); outline-offset: 2px; }
 .write-btn .el-icon { font-size: 13px; }
-.write-pop { display: flex; flex-direction: column; gap: var(--sp-2); }
+.write-pop { display: flex; align-items: center; gap: var(--sp-2); }
 .write-pop-label { color: var(--dim); font-size: 12px; font-weight: 600; }
-.write-pop-go { width: 100%; }
+.write-pop-go { width: 32px; height: 32px; flex: none; padding: 0; }
 .write-pop-hint { color: var(--dim); font-size: 12px; line-height: 1.7; }
 .rail-month { width: 100%; }
 .rail-body {

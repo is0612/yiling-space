@@ -4,6 +4,7 @@ import { CopyDocument, Promotion, QuestionFilled, Refresh, TopRight } from "@ele
 import { ElMessage } from "element-plus";
 import { isImageGenerationModel } from "#shared/utils/vision-models";
 import type { Character } from "~/utils/mock-data";
+import { readApiErrorMessage } from "~/utils/api-error";
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "~/utils/model-catalog";
 import { applyAsrProviderPreset, applyVoiceProviderPreset } from "~/utils/voice-provider-preset";
 
@@ -616,13 +617,7 @@ const modelOptions = computed(() => buildModelOptions({
   fetched: fetchedModels.value,
 }));
 
-function readError(error: unknown, fallback: string): string {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readError = readApiErrorMessage;
 
 function applyProvider(key: string) {
   draftProviderKey.value = key;

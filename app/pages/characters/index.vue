@@ -27,6 +27,7 @@ import {
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character, CharacterStatus } from "~/utils/mock-data";
 import { characterCopyInput, createCharacterOperationGuard, replaceCharacter } from "~/utils/character-management";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
 definePageMeta({
@@ -146,13 +147,7 @@ function statusTone(status: CharacterStatus) {
   return status === "运行中" ? "pill-green" : status === "已暂停" ? "pill-amber" : "pill-gray";
 }
 
-function readError(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readError = readApiErrorMessage;
 
 function formatSavedAt(value?: string) {
   if (!value) return "";

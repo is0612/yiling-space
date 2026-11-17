@@ -11,6 +11,7 @@
  */
 import { ArrowRight, Promotion } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 type ProactiveSettings = {
   enabled: boolean;
@@ -406,13 +407,7 @@ watch(
   { deep: true },
 );
 
-function readError(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readError = readApiErrorMessage;
 
 // ── 绑定级保存 ─────────────────────────────────────────
 async function saveBind() {

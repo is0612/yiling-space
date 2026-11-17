@@ -14,6 +14,7 @@
  */
 import { Delete, Refresh, Search, User } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 await useCharacterListData();
 const { id } = useCharacterSelection("/growth/social/friends");
@@ -111,13 +112,7 @@ const sortDirections = ref<Record<SortBy, SortDirection>>({
   known: "asc",
 });
 
-function readErrorMessage(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readErrorMessage = readApiErrorMessage;
 
 function platformLabel(platform: string) {
   if (platform === "bili") return "B站";

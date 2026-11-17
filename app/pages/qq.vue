@@ -24,6 +24,7 @@ import {
 import { ElMessage, ElMessageBox } from "element-plus";
 import { selectRuntimeConnection, type ChainActionKind } from "~/utils/qq-channel";
 import type { Character } from "~/utils/mock-data";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 // 标题与面包屑放顶栏（AppShell 读 route.meta.topbar），正文页头只留说明和动作。
 definePageMeta({
@@ -83,13 +84,7 @@ type QqConnection = {
 const characters = useCharacterList();
 await useCharacterListData();
 
-function readErrorMessage(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "statusMessage" in error) {
-    const message = String((error as { statusMessage?: unknown }).statusMessage ?? "");
-    if (message) return message;
-  }
-  return fallback;
-}
+const readErrorMessage = readApiErrorMessage;
 
 // SSR 阶段带上登录态；这个页面只管 OneBot 小号，B站 连接由值班台自己管。
 const request = import.meta.server ? useRequestFetch() : $fetch;
