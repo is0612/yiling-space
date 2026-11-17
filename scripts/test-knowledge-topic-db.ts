@@ -30,6 +30,8 @@ const addTopicMembers = (await import("../server/api/characters/[id]/growth/know
 const removeTopicMember = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/members/[itemId].delete")).default;
 const splitTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/split.post")).default;
 const mergeTopic = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/merge.post")).default;
+const listTopicRevisions = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions.get")).default;
+const revertTopicRevision = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revert.post")).default;
 const prisma = getPrisma();
 const ownerId = randomUUID();
 const otherOwnerId = randomUUID();
@@ -50,6 +52,8 @@ router.post("/characters/:id/growth/knowledge/topics/:topicId/members", addTopic
 router.delete("/characters/:id/growth/knowledge/topics/:topicId/members/:itemId", removeTopicMember);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/split", splitTopic);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/merge", mergeTopic);
+router.get("/characters/:id/growth/knowledge/topics/:topicId/revisions", listTopicRevisions);
+router.post("/characters/:id/growth/knowledge/topics/:topicId/revert", revertTopicRevision);
 app.use(router);
 const api = createServer(toNodeListener(app));
 
@@ -449,6 +453,70 @@ try {
   assert.equal(mergeTargetAfter.members.length, 2);
   assert.equal(mergeTargetAfter.revision, 2);
   assert.equal(mergeTargetAfter.revisions.length, 1);
+
+  // Grouped history makes merge rollback atomic across source and target.
+  const historyPath = `/characters/${characterId}/growth/knowledge/topics/${splitSource.id}/revisions`;
+  const history = await getRequest(historyPath, session.token);
+  assert.equal(history.status, 200, JSON.stringify(history.body));
+  const mergeHistory = (history.body.revisions as Array<{ id: string; action: string; revision: number }>)
+    .find(row => row.action === "MERGE");
+  assert.ok(mergeHistory, "merge revision should be visible in history");
+  assert.equal((await request(historyPath, undefined, otherSession.token)).status, 404);
+  const revertPath = `/characters/${characterId}/growth/knowledge/topics/${splitSource.id}/revert`;
+  const revertedMerge = await request(revertPath, {
+    revisionId: mergeHistory.id, expectedRevision: 3,
+  }, session.token);
+  assert.equal(revertedMerge.status, 200, JSON.stringify(revertedMerge.body));
+  const sourceAfterMergeRevert = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: splitSource.id }, include: { members: true },
+  });
+  const targetAfterMergeRevert = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: mergeTarget.id }, include: { members: true },
+  });
+  assert.equal(sourceAfterMergeRevert.status, "ACTIVE");
+  assert.equal(sourceAfterMergeRevert.members.length, 2);
+  assert.equal(targetAfterMergeRevert.members.length, 1);
+  assert.equal(targetAfterMergeRevert.revision, 3);
+  assert.equal((await request(revertPath, {
+    revisionId: mergeHistory.id, expectedRevision: 4,
+  }, session.token)).status, 409, "the same merge snapshot cannot be replayed");
+
+  // Split rollback restores the source and archives the operation-created topic.
+  const rollbackItems = await makeItems(characterId, "主题拆分撤销", 2);
+  const rollbackSource = await prisma.knowledgeTopic.create({
+    data: {
+      characterId, name: "待撤销拆分主题",
+      members: { create: rollbackItems.map(item => ({ itemId: item.id, itemRevision: item.revision })) },
+    },
+  });
+  const rollbackSplit = await request(
+    `/characters/${characterId}/growth/knowledge/topics/${rollbackSource.id}/split`,
+    { name: "待归档拆分主题", memberItemIds: [rollbackItems[0]!.id], revision: 1 },
+    session.token,
+  );
+  assert.equal(rollbackSplit.status, 200, JSON.stringify(rollbackSplit.body));
+  const rollbackNewId = (rollbackSplit.body.newTopic as { id: string }).id;
+  const rollbackHistory = await getRequest(
+    `/characters/${characterId}/growth/knowledge/topics/${rollbackSource.id}/revisions`, session.token,
+  );
+  const splitHistory = (rollbackHistory.body.revisions as Array<{ id: string; action: string }>)
+    .find(row => row.action === "SPLIT");
+  assert.ok(splitHistory);
+  const splitReverted = await request(
+    `/characters/${characterId}/growth/knowledge/topics/${rollbackSource.id}/revert`,
+    { revisionId: splitHistory.id, expectedRevision: 2 },
+    session.token,
+  );
+  assert.equal(splitReverted.status, 200, JSON.stringify(splitReverted.body));
+  const restoredSplitSource = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: rollbackSource.id }, include: { members: true },
+  });
+  const archivedSplitTopic = await prisma.knowledgeTopic.findUniqueOrThrow({
+    where: { id: rollbackNewId }, include: { members: true },
+  });
+  assert.equal(restoredSplitSource.members.length, 2);
+  assert.equal(archivedSplitTopic.status, "ARCHIVED");
+  assert.equal(archivedSplitTopic.members.length, 0);
   assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${splitSource.id}`, "PATCH", {
     name: "不允许编辑已合并主题", revision: 3,
   }, session.token)).status, 409);
