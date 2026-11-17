@@ -359,8 +359,8 @@ try {
   assert.equal(manualAfter.name, "编辑后的主题");
   assert.equal(manualAfter.members.length, 0);
   assert.equal(manualAfter.revision, 6);
-  assert.equal(manualAfter.revisions.length, 4);
-  assert.deepEqual(manualAfter.revisions.map(row => row.revision), [1, 2, 3, 4]);
+  assert.equal(manualAfter.revisions.length, 5);
+  assert.deepEqual(manualAfter.revisions.map(row => row.revision), [1, 2, 3, 4, 5]);
   assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}`, "PATCH", {
     name: "越权", revision: 6,
   }, otherSession.token)).status, 404);
