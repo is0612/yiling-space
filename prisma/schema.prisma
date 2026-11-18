@@ -1762,22 +1762,26 @@ model KnowledgeTopicMember {
 
 /// 每次主题修改前保存完整快照；撤销时以新 revision 恢复，不删除历史。
 model KnowledgeTopicRevision {
-  id          String              @id @default(uuid()) @db.Uuid
-  topicId     String              @db.Uuid
-  revision    Int
-  name        String              @db.VarChar(200)
-  description String              @default("") @db.Text
-  status      KnowledgeTopicStatus
-  mergedIntoId String?            @db.Uuid
-  members     Json                @db.JsonB
-  createdAt   DateTime            @default(now()) @db.Timestamptz(6)
-  topic       KnowledgeTopic      @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  id             String              @id @default(uuid()) @db.Uuid
+  topicId        String              @db.Uuid
+  revision       Int
+  name           String              @db.VarChar(200)
+  description    String              @default("") @db.Text
+  status         KnowledgeTopicStatus
+  mergedIntoId   String?             @db.Uuid
+  members        Json                @db.JsonB
+  /// 变更类型；SPLIT / MERGE 使用 operationId 将多个主题快照组成一个可原子撤销的操作。
+  action         String              @default("EDIT") @db.VarChar(20)
+  operationId    String?             @db.Uuid
+  relatedTopicId String?             @db.Uuid
+  createdAt      DateTime            @default(now()) @db.Timestamptz(6)
+  topic          KnowledgeTopic      @relation(fields: [topicId], references: [id], onDelete: Cascade)
 
   @@unique([topicId, revision])
   @@index([topicId, createdAt])
+  @@index([operationId])
   @@map("knowledge_topic_revisions")
 }
-
 model KnowledgeCandidate {
   id               String    @id @default(uuid()) @db.Uuid
   characterId      String    @db.Uuid

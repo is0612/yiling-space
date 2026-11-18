@@ -721,15 +721,25 @@ Run 的模型调用与 HTTP 请求生命周期解耦：POST 只创建 QUEUED 记
 - 本批不实现主题合并撤销；撤销仍需下一批主题历史查询/撤销 API 设计。页面继续排在 API 稳定和专项测试之后。
 
 
-### 正式主题历史查询与撤销 API（开发中）
+### 主题历史查询与撤销 API（2026-11-17）
 
-- 主题历史列表：`GET /api/characters/{id}/growth/knowledge/topics/{topicId}/revisions`，返回当前 revision 与最近历史快照摘要；默认 50 条，最多 100 条。
+- 主题历史列表：`GET /api/characters/{id}/growth/knowledge/topics/{topicId}/revisions`，返回当前 revision 与最近历史快照摘要；默认 50 条，最多 100 条。每条摘要包含 action、operationId、关联主题与成员数量。
 - 历史详情：`GET /api/characters/{id}/growth/knowledge/topics/{topicId}/revisions/{revision}`，读取指定主题版本的完整快照。
 - 历史恢复：`POST /api/characters/{id}/growth/knowledge/topics/{topicId}/revisions/{revision}/restore`，请求体携带 `expectedRevision`。恢复不是覆盖旧历史，而是先保存当前版本快照，再以新 revision 恢复所选版本的名称、说明、状态与成员。
 - 安全边界：所有接口校验登录用户、角色归属与主题归属；恢复使用主题行锁和 revision 乐观并发校验。已合并主题不可恢复，也不能恢复到 MERGED 快照。
 - 完整性边界：恢复前要求快照中的知识成员仍存在、属于当前角色且处于 ACTIVE；若成员已删除、归档或失效，整笔恢复返回冲突，不静默丢成员。
 - 默认知识检索不读取主题历史快照；主题历史只用于管理和审计。
 - 当前实现等待专项数据库测试与 GitHub Actions，尚未标记为验收完成。
+
+### 主题操作原子撤销 API（2026-11-17）
+
+- 新增 `POST /api/characters/{id}/growth/knowledge/topics/{topicId}/revert`，请求体为 `{ revisionId, expectedRevision }`。与按 revision 号恢复不同，这条接口撤销的是一笔操作本身，撤销同样以新 revision 落库，不覆盖也不删除历史。
+- 普通编辑、归档、成员增删的历史可按单主题撤销；拆分与合并写入共享 operationId，把同一操作涉及的主题快照关联起来，撤销时在一个事务中恢复全部关联主题。
+- 撤销拆分时恢复来源主题成员，并把拆分时创建的新主题清空成员后归档；不物理删除主题或知识。
+- 撤销合并时同时恢复来源主题与目标主题，避免只恢复一侧造成成员重复归属或合并状态不一致。
+- 撤销前按主题 ID 排序加行锁，校验 owner/角色、当前 revision 与操作后的预期 revision；关联主题在该操作后又发生变化时整笔拒绝，不做部分恢复。
+- 只允许撤销紧邻的上一笔操作。历史引用的知识条目必须仍存在且属于当前角色；指向已归档知识的历史成员关系可以恢复，但该成员仍按现有规则显示为失效。
+- 该接口目前只提供 API，主题管理页面尚未接入；页面仍使用按 revision 号恢复的单主题接口。
 
 ### 知识主题管理界面（第一阶段已合并，真实使用待验收）
 
@@ -758,3 +768,4 @@ Run 的模型调用与 HTTP 请求生命周期解耦：POST 只创建 QUEUED 记
 - 拆分/合并只调整主题与知识的组织关系，不修改 KnowledgeItem 正文、来源、状态或版本。合并时服务端按唯一成员关系去重。
 - 仍不引入向量数据库、embedding、自动改写知识正文或聊天消息触发主题发现。
 - 工程回归与真实使用验收以当前 PR 的 CI 和本地页面测试为准；未通过前不标记完成。
+
