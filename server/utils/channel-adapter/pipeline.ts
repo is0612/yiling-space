@@ -1098,7 +1098,12 @@ async function runChannelTurn(input: {
             // 私聊预落库之后，这条消息已经在库里了；它作为 currentMessage 单独进提示词，
             // 不能又出现在 recentMessages 里（模型会以为自己说过两遍）。
             ...(privateMessagesRecorded
-              ? { externalMessageId: { notIn: messages.map((message) => message.externalMessageId) } }
+              ? { OR: [
+                  // Our own replies have no platform message id. SQL NULL NOT IN (...) is
+                  // not true, so an unguarded NOT IN silently erased all assistant history.
+                  { externalMessageId: null },
+                  { externalMessageId: { notIn: messages.map((message) => message.externalMessageId) } },
+                ] }
               : {}),
           },
           orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
@@ -1117,6 +1122,13 @@ async function runChannelTurn(input: {
         })
       : Promise.resolve([]),
   ]);
+
+  // SQL-selection evidence only, not a claim about post-summary prompt usage. No text or ids.
+  const privateHistorySelection = privateMessagesRecorded ? {
+    version: 1,
+    userRows: recentStoredMessages.filter(row => row.role === "USER").length,
+    assistantRows: recentStoredMessages.filter(row => row.role === "ASSISTANT").length,
+  } : undefined;
 
   // 被标记为 AI / 禁止交流的对象，旧消息仍保存在聊天记录中，但不再进入后续群聊提示词。
   const blockedRecentMessageIds = new Set<string>();
@@ -2685,6 +2697,7 @@ async function runChannelTurn(input: {
             usedPreferenceIds: generated.usedPreferenceIds ?? [],
             usedExpressionHabitIds: generated.usedExpressionHabitIds ?? [],
             usedGoalIds: generated.usedGoalIds ?? [],
+            ...(privateHistorySelection ? { privateHistorySelection } : {}),
             ...(selfUnderstanding ? { providedSelfUnderstandingSources: selfUnderstandingReferences(selfUnderstanding) } : {}),
             usedGoals: usedGoalSnapshots(goals, generated.usedGoalIds ?? []),
             usedExpressionHabits: usedExpressionHabitSnapshots(expressionHabits, generated.usedExpressionHabitIds ?? []),
