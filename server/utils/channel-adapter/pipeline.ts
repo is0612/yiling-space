@@ -1,6 +1,8 @@
 import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
 import { readInteractionGuidance } from "../interaction-guidance";
+import { wantsSelfUnderstanding, selfUnderstandingReferences } from "../self-understanding";
+import { loadSelfUnderstanding } from "../self-understanding-reader";
 import { readInteractionExperiences } from "../interaction-experiences";
 import { prepareConversationSummary } from "../conversation-summary";
 import { createGrowthReadDiagnostic, reconcileGrowthReadUsage, type GrowthReadDiagnostic } from "../growth-read-diagnostics";
@@ -1695,6 +1697,9 @@ async function runChannelTurn(input: {
   const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
+  const selfUnderstanding = wantsSelfUnderstanding(currentMessage)
+    ? await loadSelfUnderstanding(prisma, { characterId: character.id, readableScopeIds, conversationId: existingConversation?.id, groupChat: isGroup }).catch(() => { console.warn("[self-understanding] channel evidence unavailable"); return undefined; })
+    : undefined;
   const growthReads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();
   const observeGrowthRead = input.platform === "qq-onebot"
     ? (entry: GrowthReadDiagnostic) => { growthReads.set(entry.domain, entry); }
@@ -2442,6 +2447,7 @@ async function runChannelTurn(input: {
         ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
         ...(acquaintances ? { acquaintances } : {}),
         ...(interactionGuidance.length ? { interactionGuidance } : {}),
+        ...(selfUnderstanding ? { selfUnderstanding } : {}),
         ...(interactionExperiences.length ? { interactionExperiences } : {}),
         ...(conversationSummary ? { conversationSummary } : {}),
         recentMessages: conversationSummary ? recentMessages.filter(row => {
@@ -2679,6 +2685,7 @@ async function runChannelTurn(input: {
             usedPreferenceIds: generated.usedPreferenceIds ?? [],
             usedExpressionHabitIds: generated.usedExpressionHabitIds ?? [],
             usedGoalIds: generated.usedGoalIds ?? [],
+            ...(selfUnderstanding ? { providedSelfUnderstandingSources: selfUnderstandingReferences(selfUnderstanding) } : {}),
             usedGoals: usedGoalSnapshots(goals, generated.usedGoalIds ?? []),
             usedExpressionHabits: usedExpressionHabitSnapshots(expressionHabits, generated.usedExpressionHabitIds ?? []),
             usedPreferences: usedPreferenceSnapshots(preferences, generated.usedPreferenceIds ?? []),

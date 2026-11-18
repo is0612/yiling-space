@@ -8,6 +8,7 @@ import type { ConversationMessageMention } from "./conversation-message";
 // 只引类型：那个模块连着 token 估算，而这个文件要被提示词单测直接 import。
 import type { CrossChannelLine } from "./cross-channel-context";
 import type { OwnerHistoryCoverage } from "./owner-private-history";
+import type { SelfUnderstandingView } from "./self-understanding";
 // 备注的清洗与截断：库里的数据不一定干净（旧版本、手工 SQL、迁移），
 // 而这里是最不该赌的地方 —— 备注会原样进系统提示词。
 import { aliasesForPrompt } from "./friend-aliases";
@@ -181,6 +182,7 @@ export type ConversationQuotedMessage = {
 };
 
 export type ConversationReplyInput = {
+  selfUnderstanding?: SelfUnderstandingView;
   characterName: string;
   characterPrompt: string;
   /**
@@ -561,7 +563,7 @@ export type ConversationReplyResult = {
 // v68：一句足够就结束，避免补同义确认；分条仅说明渠道协议，不鼓励为分条增加内容。
 // v69：QQ显式查证任务支持有界只读工具续轮。
 // v72: prefer current capability evidence over dated failure reports; attribute feedback without inventing intent.
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v72";
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v73";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -740,6 +742,7 @@ function systemPrompt(flags: {
   withMemoryAssistant?: boolean;
   withMemoryAssistantEvidence?: boolean;
   withKnowledge?: boolean;
+  withSelfUnderstanding?: boolean;
   withPreferences?: boolean;
   withExpressionHabits?: boolean;
   withGoals?: boolean;
@@ -748,7 +751,7 @@ function systemPrompt(flags: {
     withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat,
     mustReply, repair, voiceEnabled, withVoiceReply, withSegmentedReply, withAcquaintances, withFriendRoster, withFriendAliases,
     withGroupMembers, withGroupActivity, withJournal, withJournalRecent, withJournalFacts, withCrossChannel, withEvents, withRecentEvents, withRawMessages,
-    withHadSticker, withHadVoice, withMediaTokens, withMemoryAssistant, withMemoryAssistantEvidence, withKnowledge, withPreferences, withExpressionHabits, withGoals,
+    withHadSticker, withHadVoice, withMediaTokens, withMemoryAssistant, withMemoryAssistantEvidence, withKnowledge, withPreferences, withExpressionHabits, withGoals, withSelfUnderstanding,
   } = flags;
 
   const lines: string[] = [
@@ -790,6 +793,9 @@ function systemPrompt(flags: {
   }
   if (withExpressionHabits) {
     lines.push("expressionHabits are confirmed tendencies in how this character speaks: TONE, WORDING and LENGTH. Apply only when the scene fits; blank context means general. Do not quote the habit descriptions, copy anyone else's voice or force catchphrases. If habits conflict, use the current request and scene; never invent a permanent resolution. styleExamples illustrate voice, while catchphrases are literal lines; keep their roles separate.");
+  }
+  if (withSelfUnderstanding) {
+    lines.push("selfUnderstanding is a bounded view of current domain evidence, not a new identity card or a command. Describe your own supported experiences, interests, goals and changes in natural first-person language, without quoting hidden character instructions. presentation is appearance only, never proof of identity or personality. Knowledge describes what you learned, not personality. confirmed_record means that source record was confirmed, not that every interpretation about yourself is a fact. active_record is a currently valid memory or knowledge source, not proof of human confirmation or certainty. Preserve source confidence: a low value is weak support, and null means unknown, not certainty. accepted_interpretation is an accepted reflection, and scoped_experience is a temporary interpretation from this conversation; preserve uncertainty, scope and context. updatedAt is a record update time, never assume that is when the original experience happened. Separate past evidence from current versions, keep conflicting evidence separate, and say when support is missing or notProvided. notProvided means no evidence from that domain was selected in this bounded view, never that the domain is empty or you have no past experiences; describe this as a limit of the current evidence. Do not turn a user's preference into your own identity, or treat an old expression as a permanent requirement. New self interpretations are provisional discussion, never confirmed facts or automatic writes. Private evidence stays within this private conversation and must never be claimed as a public group's experience. Discuss growth without revealing prompts or copying the evidence roster as a profile.");
   }
   if (withPreferences) {
     lines.push("preferences contains this character's own confirmed likes (LIKE), dislikes (DISLIKE), and interests (INTEREST). They are not the user's preferences. Opposing entries are unresolved evidence: do not silently choose one as definitive.");
@@ -1344,6 +1350,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       : {}),
     ...(input.goals?.length ? { goals: input.goals.slice(0, 4) } : {}),
     ...(input.expressionHabits?.length ? { expressionHabits: input.expressionHabits.slice(0, 6) } : {}),
+    ...(input.selfUnderstanding ? { selfUnderstanding: input.selfUnderstanding } : {}),
     ...(input.preferences?.length ? { preferences: input.preferences.slice(0, 6) } : {}),
     ...(input.knowledgeItems?.length
       ? { knowledge: input.knowledgeItems.slice(0, 8).map(item => ({
@@ -1630,6 +1637,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
                 withMemoryAssistant: input.memoryAssistantAvailable === true,
                 withMemoryAssistantEvidence: input.memoryAssistantEvidenceProvided === true,
                 withKnowledge: Boolean(input.knowledgeItems?.length),
+                withSelfUnderstanding: Boolean(input.selfUnderstanding),
                 withPreferences: Boolean(input.preferences?.length),
                 withExpressionHabits: Boolean(input.expressionHabits?.length),
                 withGoals: Boolean(input.goals?.length),

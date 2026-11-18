@@ -20,6 +20,7 @@ try {
     ["node_modules/prisma/build/index.js", ["migrate", "deploy"]],
     ["node_modules/tsx/dist/cli.mjs", ["scripts/test-assistant-collaboration-db.ts"]],
     ["node_modules/tsx/dist/cli.mjs", ["scripts/test-growth-consumers-db.ts"]],
+    ["node_modules/tsx/dist/cli.mjs", ["scripts/test-self-understanding-db.ts"]],
   ] as const) {
     const result = spawnSync(process.execPath, [entry, ...args], { env, stdio: "inherit" });
     if (result.error) throw result.error;

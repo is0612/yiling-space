@@ -1,4 +1,6 @@
 import { readInteractionExperiences } from "../../../utils/interaction-experiences";
+import { wantsSelfUnderstanding, selfUnderstandingReferences } from "../../../utils/self-understanding";
+import { loadSelfUnderstanding } from "../../../utils/self-understanding-reader";
 import { readInteractionGuidance } from "../../../utils/interaction-guidance";
 import { prepareConversationSummary } from "../../../utils/conversation-summary";
 import { loadGoalsForPrompt, usedGoalSnapshots } from "../../../utils/goal-retrieval";
@@ -436,6 +438,9 @@ export default defineEventHandler(async (event) => {
    * 读失败就当没有 —— 一张关系表读不动，不该让整条回复失败。
    */
   const acquaintances = await listAcquaintances({ characterId, limit: CLOSE_FRIEND_LIMIT }).catch(() => null);
+  const selfUnderstanding = wantsSelfUnderstanding(message)
+    ? await loadSelfUnderstanding(prisma, { characterId, readableScopeIds, conversationId: existingConversation?.id, groupChat: false }).catch(() => { console.warn("[self-understanding] Web evidence unavailable"); return undefined; })
+    : undefined;
   const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
@@ -667,6 +672,7 @@ export default defineEventHandler(async (event) => {
         thinking: chatSettings.thinking,
         currentMessage: message,
         ...(interactionGuidance.length ? { interactionGuidance } : {}),
+        ...(selfUnderstanding ? { selfUnderstanding } : {}),
         ...(interactionExperiences.length ? { interactionExperiences } : {}),
         ...(conversationSummary ? { conversationSummary } : {}),
         recentMessages: chatInputRecentMessages,
@@ -801,6 +807,7 @@ export default defineEventHandler(async (event) => {
           usedExpressionHabitIds: generated.usedExpressionHabitIds ?? [],
           usedGoalIds: generated.usedGoalIds ?? [],
           usedSources,
+          ...(selfUnderstanding ? { providedSelfUnderstandingSources: selfUnderstandingReferences(selfUnderstanding) } : {}),
           usage: generated.usage ?? {},
         },
       },
