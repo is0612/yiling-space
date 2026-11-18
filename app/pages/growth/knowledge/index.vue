@@ -367,12 +367,17 @@ async function importDocument(event: Event) {
   importingFile.value = true;
   try {
     // 文件导入是 multipart，统一 JSON 入口不接收 FormData；按约定在页面单独发送。
-    await $fetch(
+    const result = await $fetch<{ chunkCount?: number }>(
       `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/import`,
       { method: "POST", body: form },
     );
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
-    ElMessage.success("文件已加入知识候选，请运行知识处理助手整理。");
+    const count = result?.chunkCount ?? 1;
+    ElMessage.success(
+      count > 1
+        ? `已按段落拆成 ${count} 条候选，请运行知识处理助手逐条整理。`
+        : "文件已加入知识候选，请运行知识处理助手整理。",
+    );
     await load(targetCharacterId);
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;

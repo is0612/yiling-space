@@ -797,6 +797,9 @@ function systemPrompt(flags: {
   if (withKnowledge) {
     lines.push(
       "The knowledge array contains confirmed, character-owned learning records retrieved for this question. Respect each item's confidence and category, do not present uncertain content as certain, and do not claim personal experience from general knowledge. If no item answers the question, answer from your own reliable knowledge or acknowledge uncertainty.",
+      // 命中条目时以条目为准：模型的先验（尤其是训练里常见的经验数值）经常和这里写的
+      // 具体条件冲突，结果就是「明明查到了，还是按记忆答」。条目没说到的细节则不要补。
+      "When a knowledge item covers this question, follow it over your own prior knowledge — including specific numbers, limits and steps. Do not silently replace its figures with more familiar-sounding ones, and do not add details the item does not state. Only fall back to your own knowledge when no item addresses the question.",
     );
   }
 

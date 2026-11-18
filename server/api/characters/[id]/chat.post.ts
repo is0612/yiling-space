@@ -20,6 +20,7 @@ import {
 import { resolveChatModelSettings } from "../../../utils/chat-model-config";
 import { resolveChatTimeZone } from "../../../utils/chat-time-context";
 import { parseEventTimeRange } from "../../../utils/memory-event-time";
+import { rankKnowledgeItems } from "../../../utils/knowledge-retrieval";
 import { resolveCharacterApiKey } from "../../../utils/credential-encryption";
 import { CLOSE_FRIEND_LIMIT, listAcquaintances } from "../../../utils/friends";
 import {
@@ -466,7 +467,14 @@ export default defineEventHandler(async (event) => {
     evidenceIds: [...new Set(chatInputRecentMessages.map(row => row.id).filter((id): id is string => typeof id === "string" && Boolean(id)))],
   });
   turnContext.skip("context", "not_enabled");
-  turnContext.skip("knowledge", "not_needed");
+  // 桌面聊天也按当前消息查一次知识：以前这里直接 skip，等于「问什么都不会查库」。
+  // 词法匹配不花 token，命中就注入，符合「先用代码判，再调模型」。
+  const desktopKnowledgeItems = await prisma.knowledgeItem.findMany({
+    where: { characterId, status: "ACTIVE" },
+    orderBy: { updatedAt: "desc" },
+    take: 300,
+    select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, sourceType: true, updatedAt: true },
+  }).then(rows => rankKnowledgeItems(message, rows, 8)).catch(() => []);
   const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }]);
   let generated;
   const generationStartedAt = Date.now();
@@ -665,6 +673,7 @@ export default defineEventHandler(async (event) => {
         memories,
         snapshots,
         events,
+        ...(desktopKnowledgeItems.length ? { knowledgeItems: desktopKnowledgeItems } : {}),
         ...(recentEvents.length ? { recentEvents } : {}),
         rawMessages,
         timeZone,
