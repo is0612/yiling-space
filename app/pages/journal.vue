@@ -339,6 +339,16 @@ async function writeDayNow(target: JournalKind | "BOTH" = "BOTH"): Promise<void>
   }
 }
 
+/**
+ * 空态按钮「让她写这一天」：这一天两份都缺，写一次 BOTH。
+ * 只是把选中日期交给 writeDay 再转调 writeDayNow，防乱序 / 换角色的守卫全在它里面。
+ */
+function writeSelectedDay(): void {
+  if (!selectedDay.value) return;
+  writeDay.value = selectedDay.value;
+  void writeDayNow("BOTH");
+}
+
 async function writeCurrent(kind: JournalKind): Promise<void> {
   const targetCharacterId = id.value;
   const dayKey = selectedDay.value;
@@ -563,8 +573,9 @@ await loadList();
 
     <div
       v-else
-      class="journal-grid"
+      class="journal"
     >
+      <!-- ═════════ 左栏：目录 ═════════ -->
       <aside class="rail">
         <div class="rail-head">
           <div class="rail-title">
@@ -580,7 +591,7 @@ await loadList();
               <template #reference>
                 <button
                   type="button"
-                  class="write-btn"
+                  class="write"
                   :disabled="writing"
                 >
                   <el-icon
@@ -595,14 +606,15 @@ await loadList();
                 </button>
               </template>
               <div class="write-pop">
-                <el-date-picker
-                  v-model="writeDay"
-                  type="date"
-                  value-format="YYYY-MM-DD"
-                  :clearable="false"
-                  style="width: 100%"
-                  @change="markWriteDayTouched"
-                />
+                <div class="write-pop-date">
+                  <el-date-picker
+                    v-model="writeDay"
+                    type="date"
+                    value-format="YYYY-MM-DD"
+                    :clearable="false"
+                    @change="markWriteDayTouched"
+                  />
+                </div>
                 <el-button
                   type="primary"
                   class="write-pop-go"
@@ -615,14 +627,17 @@ await loadList();
               </div>
             </el-popover>
           </div>
-          <el-date-picker
-            v-model="month"
-            type="month"
-            value-format="YYYY-MM"
-            placeholder="全部月份"
-            clearable
-            class="rail-month"
-          />
+          <!-- 月份筛选：外层 div 收口宽度 —— el-date-picker 是多根组件，
+               直接往它身上挂 class 会因为属性透传失效而落不下来 -->
+          <div class="month-field">
+            <el-date-picker
+              v-model="month"
+              type="month"
+              value-format="YYYY-MM"
+              placeholder="全部月份"
+              clearable
+            />
+          </div>
         </div>
 
         <div class="rail-body">
@@ -644,15 +659,20 @@ await loadList();
             :key="group.month"
             class="day-group"
           >
-            <p class="day-group-label">
+            <p class="month-label">
               {{ group.label }}
             </p>
             <button
               v-for="item in group.items"
               :key="item.id"
               type="button"
-              class="day-row"
-              :class="{ active: item.dayKey === selectedDay }"
+              class="day"
+              :class="{
+                'is-active': item.dayKey === selectedDay,
+                'wd-sat': weekdayShort(item.dayKey) === '周六',
+                'wd-sun': weekdayShort(item.dayKey) === '周日',
+              }"
+              :aria-current="item.dayKey === selectedDay"
               @click="selectDay(item.dayKey)"
             >
               <span class="day-date">
@@ -668,11 +688,11 @@ await loadList();
                   <span class="day-marks">
                     <span
                       v-if="item.diaryVersion"
-                      class="mark mark-diary"
+                      class="mark is-diary"
                     >日记</span>
                     <span
                       v-if="item.handbookVersion"
-                      class="mark mark-handbook"
+                      class="mark is-hb"
                     >手账</span>
                   </span>
                 </span>
@@ -705,6 +725,7 @@ await loadList();
         </div>
       </aside>
 
+      <!-- ═════════ 右栏：阅读区 ═════════ -->
       <section class="reader">
         <p
           v-if="detailLoading"
@@ -715,40 +736,41 @@ await loadList();
 
         <template v-else-if="detail">
           <header class="reader-head">
-            <span class="reader-day">{{ dayNumber(detail.dayKey) }}</span>
+            <span class="day-big">{{ dayNumber(detail.dayKey) }}</span>
             <div class="reader-when">
               <p class="reader-month">
                 {{ yearMonthLabel(detail.dayKey) }} · {{ weekdayShort(detail.dayKey) }}
                 <span
                   v-if="relativeFlag(detail.dayKey)"
-                  class="reader-flag"
+                  class="day-flag"
                 >{{ relativeFlag(detail.dayKey) }}</span>
               </p>
               <p class="reader-sub">
                 更新于 {{ clockOf(detail.updatedAt) }}
               </p>
             </div>
-            <el-tag
-              class="reader-status"
-              size="small"
-              effect="plain"
-              :type="detail.status === 'ACTIVE' ? 'success' : 'info'"
-            >
-              {{ detail.status === "ACTIVE" ? "写过了" : "没写" }}
-            </el-tag>
+            <div class="reader-head-right">
+              <span
+                class="state-chip"
+                :class="{ 'is-skip': !detail.diary && !detail.handbook }"
+              >{{ detail.diary || detail.handbook ? "写过了" : "没写" }}</span>
+            </div>
           </header>
 
           <div class="reader-bar">
             <div
-              class="kind-switch"
+              class="seg"
               role="tablist"
               aria-label="日记与手账"
             >
               <button
                 type="button"
                 role="tab"
-                class="kind-tab"
-                :class="{ active: activeTab === 'DIARY' }"
+                class="seg-btn"
+                :class="{
+                  'is-on': activeTab === 'DIARY',
+                  'is-empty': !detail.diary && !detail.handbook,
+                }"
                 :aria-selected="activeTab === 'DIARY'"
                 @click="activeTab = 'DIARY'"
               >
@@ -757,8 +779,11 @@ await loadList();
               <button
                 type="button"
                 role="tab"
-                class="kind-tab"
-                :class="{ active: activeTab === 'HANDBOOK' }"
+                class="seg-btn"
+                :class="{
+                  'is-on': activeTab === 'HANDBOOK',
+                  'is-empty': !detail.diary && !detail.handbook,
+                }"
                 :aria-selected="activeTab === 'HANDBOOK'"
                 @click="activeTab = 'HANDBOOK'"
               >
@@ -766,85 +791,129 @@ await loadList();
               </button>
             </div>
 
-            <div class="reader-ops">
+            <!-- 改内容的三个入口跟着当前这份文本走；这一天没写就整组收起 -->
+            <div
+              v-if="detail.diary || detail.handbook"
+              class="ops"
+            >
               <template v-if="activeRevision">
-                <el-button
-                  text
-                  size="small"
+                <button
+                  type="button"
+                  class="op"
                   @click="openEdit(activeTab)"
                 >
                   <el-icon><EditPen /></el-icon>编辑
-                </el-button>
-                <el-button
-                  text
-                  size="small"
-                  :loading="regenerating"
+                </button>
+                <button
+                  type="button"
+                  class="op"
+                  :disabled="regenerating"
                   @click="regenerate(activeTab)"
                 >
-                  <el-icon><Refresh /></el-icon>重写
-                </el-button>
-                <el-button
-                  text
-                  size="small"
+                  <el-icon :class="{ 'is-loading': regenerating }">
+                    <Refresh />
+                  </el-icon>重写
+                </button>
+                <button
+                  type="button"
+                  class="op"
                   @click="openHistory(activeTab)"
                 >
-                  <el-icon><Clock /></el-icon>历史 {{ activeRevisionCount }}
-                </el-button>
+                  <el-icon><Clock /></el-icon>历史 <span class="n">{{ activeRevisionCount }}</span>
+                </button>
               </template>
             </div>
           </div>
 
           <div class="reader-body">
+            <!-- 那天没写：给原因 + 给动作，不留「写过了 + 一片空白」 -->
             <div
-              v-if="detail.status === 'SKIPPED' && !detail.diary && !detail.handbook"
-              class="skip-note"
+              v-if="!detail.diary && !detail.handbook"
+              class="reader-empty"
             >
-              <p>这一天她没写日记，也没写手账。</p>
-              <p class="skip-reason">
-                {{ detail.skipReason || "没有什么值得记的事。" }}
+              <span
+                class="empty-ico"
+                aria-hidden="true"
+              >日</span>
+              <h3>这一天她还什么都没写</h3>
+              <p>
+                {{ detail.skipReason || "那天没有可用的对话，也没有留下忆泡。可以让她读一遍那几天的记忆再补写，写不写由她判断。" }}
               </p>
+              <button
+                type="button"
+                class="go"
+                :disabled="writing"
+                @click="writeSelectedDay"
+              >
+                让她写这一天
+              </button>
             </div>
 
-            <template v-if="activeTab === 'DIARY'">
+            <template v-else-if="activeTab === 'DIARY'">
               <template v-if="detail.diary">
                 <article class="sheet">
-                  <h3
+                  <h2
                     v-if="detail.diary.title"
                     class="sheet-title"
                   >
                     {{ detail.diary.title }}
-                  </h3>
-                  <div class="sheet-body">
-                    {{ detail.diary.content }}
+                  </h2>
+                  <div
+                    v-if="detail.diary.content"
+                    class="sheet-body"
+                  >
+                    <p
+                      v-for="(para, index) in detail.diary.content.split(/\r?\n\s*\r?\n/)"
+                      :key="index"
+                    >
+                      {{ para }}
+                    </p>
                   </div>
                 </article>
                 <p class="sheet-meta">
-                  第 {{ detail.diary.version }} 版 · {{ revisionTypeLabel(detail.diary.revisionType) }} ·
-                  来源：对话 {{ detail.diary.sources.messages }} 条 · 忆泡 {{ detail.diary.sources.events }} 条
+                  第 {{ detail.diary.version }} 版
+                  <span class="sep">·</span>{{ revisionTypeLabel(detail.diary.revisionType) }}
+                  <span class="sep">·</span>来源：对话 {{ detail.diary.sources.messages }} 条 · 忆泡 {{ detail.diary.sources.events }} 条
+                  <NuxtLink
+                    class="meta-link"
+                    :to="{ path: '/growth/memory/events', query: { ...route.query, c: id } }"
+                  >
+                    去看那天的忆泡
+                    <el-icon><ArrowRight /></el-icon>
+                  </NuxtLink>
                 </p>
               </template>
               <div
                 v-else
-                class="reader-empty"
+                class="reader-empty is-compact"
               >
                 <p>这一天还没有日记。</p>
-                <el-button
-                  type="primary"
-                  plain
-                  :loading="writing"
+                <button
+                  type="button"
+                  class="go"
+                  :disabled="writing"
                   @click="writeCurrent('DIARY')"
                 >
                   写日记
-                </el-button>
+                </button>
               </div>
             </template>
 
             <template v-else>
               <template v-if="detail.handbook">
-                <article
-                  v-if="detail.handbook.content"
-                  class="sheet"
-                >
+                <div class="hb">
+                  <blockquote
+                    v-if="detail.handbook.quote"
+                    class="quote-card"
+                  >
+                    <p class="quote-text">
+                      「{{ detail.handbook.quote }}」
+                    </p>
+                    <p class="quote-note">
+                      摘自日记{{ detail.handbook.sourceDiaryVersion ? `第 ${detail.handbook.sourceDiaryVersion} 版` : "正文" }}，不是另写的。
+                    </p>
+                  </blockquote>
+
                   <template v-if="handbookSections">
                     <section
                       v-for="section in handbookSections"
@@ -862,84 +931,62 @@ await loadList();
                       </ul>
                     </section>
                   </template>
-                  <div
+                  <p
                     v-else
                     class="sheet-body"
                   >
                     {{ detail.handbook.content }}
-                  </div>
-                </article>
-
-                <article
-                  v-if="detail.handbook.thought"
-                  class="thought-card"
-                >
-                  <h4 class="block-title">
-                    今日想法
-                  </h4>
-                  <p class="thought">
-                    {{ detail.handbook.thought }}
                   </p>
-                </article>
 
-                <blockquote
-                  v-if="detail.handbook.quote"
-                  class="quote-card"
-                >
-                  <p class="quote-text">
-                    {{ detail.handbook.quote }}
-                  </p>
-                  <p class="quote-note">
-                    摘自日记{{ detail.handbook.sourceDiaryVersion ? `第 ${detail.handbook.sourceDiaryVersion} 版` : "正文" }}，不是另写的。
-                  </p>
-                </blockquote>
-
-                <div
-                  v-if="detail.handbook.tags.length"
-                  class="tag-row"
-                >
-                  <el-tag
-                    v-for="tag in detail.handbook.tags"
-                    :key="tag"
-                    size="small"
-                    effect="plain"
-                    round
+                  <section
+                    v-if="detail.handbook.thought"
+                    class="thought"
                   >
-                    {{ tag }}
-                  </el-tag>
+                    <h4>今日想法</h4>
+                    <p>{{ detail.handbook.thought }}</p>
+                  </section>
+
+                  <div
+                    v-if="detail.handbook.tags.length"
+                    class="tags"
+                  >
+                    <span
+                      v-for="tag in detail.handbook.tags"
+                      :key="tag"
+                      class="tag"
+                    >{{ tag }}</span>
+                  </div>
                 </div>
 
                 <p class="sheet-meta">
-                  第 {{ detail.handbook.version }} 版 · {{ revisionTypeLabel(detail.handbook.revisionType) }} ·
-                  来源：对话 {{ detail.handbook.sources.messages }} 条 · 忆泡 {{ detail.handbook.sources.events }} 条
+                  第 {{ detail.handbook.version }} 版
+                  <span class="sep">·</span>{{ revisionTypeLabel(detail.handbook.revisionType) }}
+                  <span class="sep">·</span>来源：对话 {{ detail.handbook.sources.messages }} 条 · 忆泡 {{ detail.handbook.sources.events }} 条
+                  <NuxtLink
+                    class="meta-link"
+                    :to="{ path: '/growth/memory/events', query: { ...route.query, c: id } }"
+                  >
+                    去看那天的忆泡
+                    <el-icon><ArrowRight /></el-icon>
+                  </NuxtLink>
                 </p>
               </template>
               <div
                 v-else
-                class="reader-empty"
+                class="reader-empty is-compact"
               >
                 <p>这一天还没有手账。</p>
-                <el-button
-                  type="primary"
-                  plain
-                  :loading="writing"
+                <button
+                  type="button"
+                  class="go"
+                  :disabled="writing"
                   @click="writeCurrent('HANDBOOK')"
                 >
                   写手账
-                </el-button>
+                </button>
               </div>
             </template>
           </div>
-
-          <footer class="reader-foot">
-            <NuxtLink
-              class="reader-link"
-              :to="{ path: '/growth/memory/events', query: { ...route.query, c: id } }"
-            >
-              去看那天的忆泡
-              <el-icon><ArrowRight /></el-icon>
-            </NuxtLink>
-          </footer>
         </template>
 
         <div
@@ -1064,26 +1111,29 @@ await loadList();
 </template>
 
 <style scoped>
-/* 整页：目录 / 正文两栏。间距只取 --sp-* 阶。 */
+/* ════════════════════════════════════════════════════════════════════════
+   日记手账：目录（左 306）+ 阅读区（右自适应）。
+   色 / 间距 / 圆角只取 main.css 的令牌：白砖零描边，层次靠明度差与间距。
+   ════════════════════════════════════════════════════════════════════════ */
 .journal-page { display: flex; flex-direction: column; gap: var(--sp-4); }
 
-/* ── 两栏 ── */
-.journal-grid {
+/* ── 两栏骨架 ── */
+.journal {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: 306px minmax(0, 1fr);
   gap: var(--sp-4);
   align-items: start;
 }
 
 /* ── 左：目录 ──
-   和角色管理同一套「色块平铺」：白砖零描边零阴影，层次只靠明度差和间距；
-   列表自己滚、翻页条钉在砖底，整页不被一条长目录拽长；整块吸在顶栏下。 */
+   一天一行，目录会很长，所以列表自己滚、翻页钉在栏底，整页不被一条长目录拽长。
+   吸顶跟着 sticky 顶栏走：top = 顶栏 56 + 8；高度到底部再留 16 的呼吸。 */
 .rail {
   position: sticky;
-  top: calc(var(--topbar-h) + var(--sp-4));
+  top: calc(var(--topbar-h) + var(--sp-2));
   display: flex;
+  max-height: calc(100vh - var(--topbar-h) - var(--sp-4) - var(--sp-2));
   flex-direction: column;
-  max-height: calc(100vh - 96px);
   overflow: hidden;
   border-radius: var(--radius);
   background: var(--surface);
@@ -1091,27 +1141,24 @@ await loadList();
 .rail-head {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
-  padding: var(--sp-3);
-  border-bottom: 1px solid var(--surface-3);
+  gap: 10px;
+  padding: var(--sp-4) 14px var(--sp-3);
 }
-.rail-title { display: flex; align-items: center; gap: var(--sp-2); }
-/* 分节标题 12/700 --dim：和角色档案的「档案 / 模型」同一档，靠字重分层不靠字号 */
-.rail-title h2 { color: var(--dim); font-size: 12px; font-weight: 700; }
+.rail-title { display: flex; align-items: baseline; gap: var(--sp-2); }
+.rail-title h2 { color: var(--text); font-size: 14px; font-weight: 700; }
 .rail-count { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
 
-/* 「写日记」入口：目录管的就是日子，创建日子放在目录标题行，
-   不去阅读区抢位置；低频动作收进浮层，常态只占 26px 高。 */
-.write-btn {
+/* 写日记：主色实心；右侧「编辑 / 重写」是同尺寸的幽灵按钮，层级一眼分得开 */
+.write {
   display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  height: 26px;
+  height: 30px;
   margin-left: auto;
-  padding: 0 9px;
+  align-items: center;
+  gap: 5px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   background: var(--brand-btn);
+  padding: 0 11px;
   color: #fff;
   font-size: 12px;
   font-weight: 600;
@@ -1119,229 +1166,377 @@ await loadList();
   cursor: pointer;
   transition: background .15s var(--ease);
 }
-.write-btn:hover { background: var(--brand-btn-h); }
-.write-btn:disabled { cursor: progress; opacity: .85; }
-.write-btn:focus-visible { outline: 2px solid var(--brand-line); outline-offset: 2px; }
-.write-btn .el-icon { font-size: 13px; }
-.write-pop { display: flex; align-items: center; gap: var(--sp-2); }
-.write-pop-label { color: var(--dim); font-size: 12px; font-weight: 600; }
-.write-pop-go { width: 32px; height: 32px; flex: none; padding: 0; }
-.write-pop-hint { color: var(--dim); font-size: 12px; line-height: 1.7; }
-.rail-month { width: 100%; }
-.rail-body {
-  flex: 1;
-  max-height: calc(100vh - 328px);
-  overflow-y: auto;
-  padding: var(--sp-1) var(--sp-2) var(--sp-2);
-}
-.rail-state { padding: var(--sp-3) var(--sp-2); color: var(--dim); font-size: 12px; line-height: 1.8; }
-.rail-foot { padding: var(--sp-1) var(--sp-2) var(--sp-2); border-top: 1px solid var(--surface-3); }
+.write:hover { background: var(--brand-btn-h); }
+.write:disabled { cursor: progress; opacity: .85; }
+.write:focus-visible { outline: 2px solid var(--brand-line); outline-offset: 2px; }
+.write .el-icon { font-size: 12px; }
 
-.day-group + .day-group { margin-top: var(--sp-1); }
-.day-group-label { padding: var(--sp-2) var(--sp-2) var(--sp-1); color: var(--dim); font-size: 12px; font-weight: 600; }
-.day-row {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: var(--sp-2);
-  width: 100%;
-  padding: var(--sp-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: background .14s var(--ease), box-shadow .14s var(--ease);
+/* 月份筛选：压成一个安静的下拉（30 高 / --surface-2 底 / 无描边 / 只占内容宽）。
+   Element 默认的输入框样式（白底 + 描边 + 220px 定宽）在这里会像个表单字段，全部盖掉。 */
+.month-field { display: flex; }
+.month-field :deep(.el-input),
+.month-field :deep(.el-date-editor) { width: auto; }
+.month-field :deep(.el-input__wrapper) {
+  height: 30px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  padding: 0 8px 0 10px;
+  box-shadow: none;
+  transition: background .14s var(--ease);
 }
-.day-row:hover { background: var(--surface-2); }
-/* 选中：极淡品牌底 + 内描边 + 左侧 3px 品牌条，和角色选择卡 `.char-tab.is-on` 同一套。
-   底色和文字色都属于颜色通道，灰度下会消失，所以必须再给一个形状通道 */
-.day-row.active,
-.day-row.active:hover {
-  background: #fff8fa;
-  box-shadow: inset 0 0 0 1px var(--brand-line), inset 3px 0 0 var(--brand);
-}
-.day-row:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.day-date { display: flex; flex-direction: column; align-items: center; gap: 2px; padding-top: 1px; }
-.day-num { color: var(--text-2); font-size: 18px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.day-wd { color: var(--dim); font-size: 12px; font-style: normal; line-height: 1.2; }
-.day-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.day-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); min-height: 18px; }
-.day-flag { color: var(--brand-strong); font-size: 12px; font-weight: 600; line-height: 18px; }
-.day-marks { display: inline-flex; gap: 4px; flex: none; }
-/* 两份文本各一枚小印：无描边软底，和 main.css 的 .pill-* 一致 */
-.mark {
-  padding: 0 6px;
-  border: 0;
-  border-radius: 999px;
-  font-size: 12px;
-  line-height: 16px;
-}
-.mark-diary { background: var(--brand-soft); color: var(--brand-strong); }
-.mark-handbook { background: var(--green-soft); color: var(--green); }
-.day-excerpt {
-  display: -webkit-box;
-  overflow: hidden;
+.month-field :deep(.el-input__wrapper:hover) { background: var(--surface-3); }
+.month-field :deep(.el-input__wrapper.is-focus) { background: var(--surface-3); box-shadow: 0 0 0 1px var(--brand-line) inset; }
+.month-field :deep(.el-input__inner) {
+  height: 30px;
   color: var(--text-2);
   font-size: 12px;
-  line-height: 1.6;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
+  font-weight: 600;
+  text-align: left;
 }
-.day-excerpt.is-empty { color: var(--dim); }
-.day-quote { overflow: hidden; color: var(--dim); font-size: 12px; line-height: 1.6; white-space: nowrap; text-overflow: ellipsis; }
+.month-field :deep(.el-input__prefix),
+.month-field :deep(.el-input__suffix) { color: var(--faint); }
+.month-field :deep(.el-input__icon) { font-size: 12px; }
 
-/* ── 右：正文 ── */
-.reader {
-  display: flex;
-  flex-direction: column;
-  min-height: 440px;
-  border-radius: var(--radius);
-  background: var(--surface);
+.rail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--sp-2) var(--sp-2); }
+.rail-state { padding: var(--sp-3) var(--sp-2); color: var(--dim); font-size: 12px; line-height: 1.8; }
+.month-label {
+  padding: 10px 6px var(--sp-1);
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
 }
-.reader-head {
+
+/* 一天一行：日期数字作左侧锚点，右侧三行（标记 / 摘要 / 引文） */
+.day {
+  position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  padding: 9px var(--sp-2) 9px 6px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .14s var(--ease);
 }
-.reader-day {
-  color: var(--brand);
-  font-size: 26px;
+.day + .day { margin-top: 2px; }
+.day:hover { background: var(--surface-2); }
+.day.is-active,
+.day.is-active:hover { background: var(--brand-soft); }
+/* 选中：左边一道 3px 竖条 —— 和好友档案的顶部强度条同一套「靠边编码」，
+   灰度下靠形状也读得出来 */
+.day.is-active::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--brand);
+  content: "";
+}
+.day:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.day-date { display: flex; flex-direction: column; align-items: center; gap: 1px; padding-top: 2px; }
+.day-num {
+  color: var(--text);
+  font-size: 21px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
 }
-.reader-when { min-width: 0; }
+.day.is-active .day-num { color: var(--brand-strong); }
+/* 周末日期数字淡一档；<i> 只借它的语义，样式上必须归正 */
+.day.wd-sat .day-num,
+.day.wd-sun .day-num { color: var(--faint); }
+.day.is-active.wd-sat .day-num,
+.day.is-active.wd-sun .day-num { color: var(--brand-strong); }
+.day-wd { color: var(--dim); font-size: 11px; font-style: normal; line-height: 1.3; letter-spacing: .02em; }
+
+.day-body { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.day-top { display: flex; align-items: center; gap: var(--sp-2); }
+/* 标记用「点 + 字」：19 天 × 2 枚药丸太吵，一行里只要读得出有哪两份 */
+.day-marks { display: flex; align-items: center; gap: 9px; color: var(--dim); font-size: 11px; }
+.mark { display: inline-flex; align-items: center; gap: 4px; }
+.mark::before { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); content: ""; }
+.mark.is-diary::before { background: var(--brand); }
+.mark.is-hb::before { background: var(--amber); }
+.day-flag {
+  border-radius: 4px;
+  background: var(--brand-soft);
+  padding: 0 5px;
+  color: var(--brand-strong);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.day-excerpt {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.day.is-active .day-excerpt { color: var(--text); }
+.day-excerpt.is-empty { color: var(--faint); }
+.day-quote {
+  overflow: hidden;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-foot { padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--surface-3); }
+
+/* ── 右：阅读区 ── */
+.reader {
+  display: flex;
+  min-height: 440px;
+  flex-direction: column;
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: var(--sp-5) 30px 22px;
+}
+.reader-head { display: flex; align-items: flex-start; gap: var(--sp-4); }
+/* 46/700：这一天是整页的主角，比顶栏标题还大一级 */
+.day-big {
+  color: var(--text);
+  font-size: 46px;
+  font-weight: 700;
+  line-height: .92;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.03em;
+}
+.reader-when { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-1); padding-top: var(--sp-1); }
 .reader-month {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: var(--sp-2);
   color: var(--text-2);
   font-size: 14px;
   font-weight: 600;
 }
-.reader-flag {
-  padding: 0 8px;
+.reader-month .day-flag { padding: 0 6px; font-size: 11px; line-height: 18px; }
+.reader-sub { color: var(--dim); font-size: 12px; }
+.reader-head-right { display: flex; margin-left: auto; align-items: center; gap: 10px; padding-top: 6px; }
+/* 状态用「写过了 / 没写」两色软底，不用 el-tag 的默认样式 */
+.state-chip {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 5px;
   border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand-strong);
-  font-size: 12px;
+  background: var(--green-soft);
+  padding: 0 9px;
+  color: var(--green);
+  font-size: 11px;
   font-weight: 600;
-  line-height: 18px;
 }
-.reader-sub { margin-top: 3px; color: var(--dim); font-size: 12px; }
-.reader-status { flex: none; }
+.state-chip.is-skip { background: var(--surface-3); color: var(--dim); }
 
-/* 分段式切换 + 一组安静的文字按钮：动作全跟着当前这份文本走 */
+/* 分段（日记 / 手账）与操作同一行：左边切内容，右边改内容 */
 .reader-bar {
   display: flex;
-  align-items: center;
   flex-wrap: wrap;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  padding: 0 var(--sp-5) var(--sp-3);
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
   border-bottom: 1px solid var(--surface-3);
+  padding-bottom: 14px;
 }
-.kind-switch { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--surface-3); }
-.kind-tab {
-  padding: 5px 16px;
+.seg { display: flex; gap: 2px; border-radius: var(--radius-sm); background: var(--surface-2); padding: 3px; }
+.seg-btn {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
   border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--dim);
-  font-size: 14px;
+  border-radius: var(--radius-xs);
+  background: none;
+  padding: 0 var(--sp-3);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   transition: background .14s var(--ease), color .14s var(--ease);
 }
-.kind-tab:hover { color: var(--text-2); }
-.kind-tab.active { background: var(--surface); color: var(--text); font-weight: 600; }
-.kind-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
-.reader-ops { display: flex; align-items: center; gap: 2px; }
-/* Element 给相邻按钮 12px margin-left，和 gap 叠加后间距会忽宽忽窄，统一交给 gap */
-.reader-ops :deep(.el-button + .el-button) { margin-left: 0; }
-.reader-ops :deep(.el-button.is-text) { padding: 6px 8px; }
-/* 文字按钮里图标和字之间没有默认间距，自己给一点 */
-.reader-ops .el-icon { margin-right: 4px; }
-.reader-link .el-icon { font-size: 12px; }
+.seg-btn:hover { background: var(--surface); }
+.seg-btn.is-on { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, .06); }
+.seg-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* 这一天没写：两段都置灰，白色药丸也收掉，避免看起来「可切」 */
+.seg-btn.is-empty,
+.seg-btn.is-empty:hover,
+.seg-btn.is-empty.is-on { background: none; color: var(--faint); box-shadow: none; cursor: default; }
 
-.reader-body { flex: 1; padding: var(--sp-4) var(--sp-5) var(--sp-5); }
-.reader-body > * + * { margin-top: var(--sp-4); }
-
-/* 正文按阅读宽度排版：16px / 2 倍行高，一行不超过 68 个字 */
-.sheet-title { margin-bottom: var(--sp-3); color: var(--text); font-size: 18px; font-weight: 600; line-height: 1.5; }
-.sheet-body {
-  max-width: 68ch;
-  color: var(--text-2);
-  font-size: 16px;
-  line-height: 2;
-  letter-spacing: .01em;
-  white-space: pre-wrap;
+.ops { display: flex; margin-left: auto; align-items: center; gap: 2px; }
+.op {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  padding: 0 9px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .14s var(--ease), color .14s var(--ease);
 }
+.op:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.op:disabled { cursor: progress; opacity: .7; }
+.op:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.op .el-icon { font-size: 13px; }
+.op .n { color: var(--faint); font-variant-numeric: tabular-nums; }
 
-/* 手账栏目之间用最淡的 --surface-3 分节，和角色档案的「人设 / 示例」同一条线 */
-.hb-block + .hb-block { margin-top: var(--sp-4); padding-top: var(--sp-4); border-top: 1px solid var(--surface-3); }
-.hb-block h4 { display: flex; align-items: center; gap: var(--sp-2); color: var(--text-2); font-size: 14px; font-weight: 600; }
-.hb-block h4::before { content: ""; width: 3px; height: 12px; border-radius: 2px; background: var(--brand-line); }
-.hb-block ul { display: flex; flex-direction: column; gap: 2px; margin-top: var(--sp-2); list-style: none; }
-.hb-block li { position: relative; padding-left: var(--sp-4); color: var(--text-2); font-size: 14px; line-height: 1.9; }
+.reader-body { flex: 1; padding-top: var(--sp-5); }
+
+/* 日记：一张纸，正文限宽 640、行高 1.95 —— 长文读起来不费劲 */
+.sheet { max-width: 640px; }
+.sheet-title {
+  margin-bottom: 14px;
+  color: var(--text);
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -.01em;
+}
+.sheet-body { color: var(--text-2); font-size: 15px; line-height: 1.95; }
+/* 段落由模板按空行切开；段内的单换行仍保留（pre-line） */
+.sheet-body p { margin: 0 0 15px; white-space: pre-line; }
+.sheet-body p:last-child { margin-bottom: 0; }
+
+/* 页脚元信息：第几版、谁改的、素材从哪来 —— 一行说完，右侧给出处 */
+.sheet-meta {
+  display: flex;
+  max-width: 640px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-5);
+  border-top: 1px solid var(--surface-3);
+  padding-top: var(--sp-3);
+  color: var(--dim);
+  font-size: 12px;
+}
+.sheet-meta .sep { color: var(--faint); }
+.meta-link {
+  display: inline-flex;
+  margin-left: auto;
+  align-items: center;
+  gap: 3px;
+  color: var(--brand-strong);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.meta-link .el-icon { font-size: 12px; }
+.meta-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* 手账：结构化。「今日一句」用左侧竖线立起来，片段用小标题分块 */
+.hb { display: flex; max-width: 660px; flex-direction: column; gap: var(--sp-5); }
+.quote-card { border-left: 3px solid var(--brand-line); padding: 2px 0 2px var(--sp-4); }
+.quote-text { color: var(--text); font-size: 17px; font-weight: 500; line-height: 1.75; }
+.quote-note { margin-top: 6px; color: var(--dim); font-size: 12px; }
+.hb-block h4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.hb-block h4::before { width: 5px; height: 5px; border-radius: 50%; background: var(--brand-line); content: ""; }
+/* 栏目之间用 gap 分节，不再叠一条分隔线 —— 标题前的圆点已经足够分组 */
+.hb-block ul { display: flex; flex-direction: column; gap: 2px; list-style: none; }
+.hb-block li { position: relative; padding-left: 14px; color: var(--text-2); font-size: 14px; line-height: 1.9; }
 .hb-block li::before {
-  content: "";
   position: absolute;
-  top: 11px;
-  left: 4px;
+  top: 12px;
+  left: 2px;
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: var(--line-strong);
+  background: var(--faint);
+  content: "";
+}
+.thought { border-radius: var(--radius); background: var(--surface-2); padding: 14px var(--sp-4); }
+.thought h4 { margin-bottom: 6px; color: var(--dim); font-size: 12px; font-weight: 700; }
+.thought p { color: var(--text); font-size: 14px; line-height: 1.85; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag {
+  border-radius: var(--radius-xs);
+  background: var(--surface-3);
+  padding: 2px var(--sp-2);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
 }
 
-.block-title { margin-bottom: var(--sp-2); color: var(--text-2); font-size: 14px; font-weight: 600; }
-/* 想法是一块浅砖，靠明度差分出来，不加描边 */
-.thought-card {
-  padding: var(--sp-4);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-}
-.thought { color: var(--text-2); font-size: 14px; line-height: 1.9; }
-/* 「今日一句」是整页唯一一块带色底的，因为它只可能有一句；
-   3px 竖条用 inset 阴影而不是 border-left，内容左侧不会被推偏 */
-.quote-card {
-  padding: var(--sp-4) var(--sp-5);
-  border-radius: var(--radius-sm);
-  background: var(--brand-soft);
-  box-shadow: inset 3px 0 0 var(--brand-line);
-}
-.quote-text { color: var(--text); font-size: 18px; font-weight: 500; line-height: 1.8; }
-.quote-note { margin-top: var(--sp-2); color: var(--dim); font-size: 12px; }
-.tag-row { display: flex; flex-wrap: wrap; gap: 6px; }
-.sheet-meta { color: var(--dim); font-size: 12px; line-height: 1.8; }
-
-.skip-note {
-  padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--amber-line);
-  border-radius: var(--radius-sm);
-  background: var(--amber-soft);
-}
-.skip-note p { color: var(--text-2); font-size: 14px; font-weight: 600; }
-.skip-note .skip-reason { margin-top: 3px; color: var(--dim); font-size: 12px; font-weight: 400; }
-
-.reader-empty { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); padding: var(--sp-6) var(--sp-4); text-align: center; }
-.reader-empty p { color: var(--dim); font-size: 14px; }
-.reader-state { padding: var(--sp-5); color: var(--dim); font-size: 14px; }
-.reader-state-empty { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; }
-.reader-foot { display: flex; justify-content: flex-end; padding: 0 var(--sp-5) var(--sp-4); }
-.reader-link { display: inline-flex; align-items: center; gap: 3px; color: var(--brand-strong); font-size: 12px; font-weight: 600; }
-.reader-link:hover { text-decoration: underline; }
-
-/* ── 空角色 / 弹窗 ── */
-.no-character {
+/* ── 空态：给原因 + 给动作，不留一片白 ── */
+.reader-empty {
   display: flex;
+  min-height: 420px;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  text-align: center;
+}
+.reader-empty.is-compact { min-height: 240px; }
+.empty-ico {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin-bottom: var(--sp-3);
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 18px;
+}
+.reader-empty h3 { color: var(--text); font-size: 15px; font-weight: 700; }
+.reader-empty p { max-width: 420px; margin-top: 7px; color: var(--dim); font-size: 13px; line-height: 1.75; }
+.go {
+  height: 32px;
+  margin-top: 14px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--brand-btn);
+  padding: 0 14px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s var(--ease);
+}
+.go:hover:not(:disabled) { background: var(--brand-btn-h); }
+.go:disabled { cursor: progress; opacity: .85; }
+.go:focus-visible { outline: 2px solid var(--brand-line); outline-offset: 2px; }
+
+.reader-state { padding: var(--sp-5); color: var(--dim); font-size: 14px; }
+.reader-state-empty { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; }
+
+/* ── 写日记浮层 / 空角色 / 弹窗 ── */
+.write-pop { display: flex; align-items: center; gap: var(--sp-2); }
+.write-pop-date { flex: 1; min-width: 0; }
+.write-pop-date :deep(.el-input),
+.write-pop-date :deep(.el-date-editor) { width: 100%; }
+.write-pop-go { width: 32px; height: 32px; flex: none; padding: 0; }
+.no-character {
+  display: flex;
   min-height: 260px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--radius);
   background: var(--surface);
   padding: var(--sp-6) var(--sp-5);
@@ -1355,15 +1550,15 @@ await loadList();
   flex-direction: column;
   align-items: flex-start;
   gap: var(--sp-2);
-  padding: var(--sp-3) 0;
   border-top: 1px solid var(--line);
+  padding: var(--sp-3) 0;
 }
-.history-item:first-of-type { padding-top: 0; border-top: 0; }
-.history-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); width: 100%; }
+.history-item:first-of-type { border-top: 0; padding-top: 0; }
+.history-head { display: flex; width: 100%; align-items: baseline; justify-content: space-between; gap: var(--sp-2); }
 .history-version {
-  padding: 0 8px;
   border-radius: 999px;
   background: var(--surface-3);
+  padding: 0 var(--sp-2);
   color: var(--text-2);
   font-size: 12px;
   font-weight: 600;
@@ -1372,19 +1567,20 @@ await loadList();
 .history-meta { color: var(--dim); font-size: 12px; }
 .history-preview { color: var(--dim); font-size: 12px; line-height: 1.8; }
 
+/* ── 响应式 ── */
 @media (max-width: 1180px) {
-  .journal-grid { grid-template-columns: 264px minmax(0, 1fr); }
+  .journal { grid-template-columns: 272px minmax(0, 1fr); }
 }
-@media (max-width: 960px) {
-  .journal-grid { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 980px) {
+  .journal { grid-template-columns: minmax(0, 1fr); }
   /* 单列时目录在正文之上，吸顶会把它钉在视口里挡住内容 */
   .rail { position: static; max-height: none; }
   .rail-body { max-height: 320px; }
 }
 @media (max-width: 620px) {
-  .reader-head { grid-template-columns: auto minmax(0, 1fr); }
-  .reader-status { grid-column: 1 / -1; justify-self: start; }
+  .reader { padding: 18px var(--sp-4); }
+  .day-big { font-size: 38px; }
   .reader-bar { align-items: stretch; flex-direction: column; }
-  .reader-ops { justify-content: flex-end; }
+  .ops { justify-content: flex-end; }
 }
 </style>

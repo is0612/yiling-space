@@ -8,9 +8,12 @@
  * 私聊来访或群里发过言的人都会出现在名单；群成员第一次发言只建立「遇到过」记录，
  * 不增加互动次数。只有她真的回了对方，群聊互动次数才 +1。
  *
- * 名单会一直长（群里认人会一直往上加），所以筛选、排序、翻页全在服务端做：
- * 页面每次只拿一页，统计带和来源计数由接口按「这个角色的全部朋友」另算，
- * 不会因为翻了页或筛了来源就变形。
+ * 卡片按「名片」排版：上面是「他是谁、聊过几次、多久没见」，设置默认折成一行摘要，
+ * 点「调整」才铺开。理由见 docs 里的视觉/体验规范：540 条规模下这一页的读法是
+ * 「先筛后人」，设置常驻会把每张卡撑成 660px 的表单，扫列时根本认不出人。
+ *
+ * 名单会一直长，所以筛选、排序、翻页全在服务端做：页面每次只拿一页，
+ * 统计带与来源计数由接口按「这个角色的全部朋友」另算，不会因为翻了页或筛了来源就变形。
  */
 import { Delete, Refresh, Search, User } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
@@ -80,12 +83,6 @@ function platformLabel(platform: string) {
   return platform;
 }
 
-function sourceLabel(source: string | null) {
-  if (source === "GROUP") return "群里认识";
-  if (source === "PRIVATE") return "私聊认识";
-  return "来源不明";
-}
-
 function formatDateTime(value: string | null) {
   if (!value) return "—";
   const date = new Date(value);
@@ -94,40 +91,223 @@ function formatDateTime(value: string | null) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function proactiveAttemptLabel(friend: Friend) {
+/**
+ * 相对时间：卡片上写「3 天前」，完整时间放 title。
+ *
+ * 卡片只有一行宽度，绝对时间（2026-11-08 14:22）既占地方又要在脑子里做减法；
+ * 而「多久没来往」正是这一页要判断的事。绝对值没丢，挂在 title 上。
+ */
+function relativeTime(value: string | null): { text: string; title: string } {
+  if (!value) return { text: "还没聊过", title: "从没互动过" };
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { text: "—", title: "" };
+  const minutes = Math.floor((Date.now() - date.getTime()) / 60000);
+  const title = formatDateTime(value);
+  if (minutes < 1) return { text: "刚刚", title };
+  if (minutes < 60) return { text: `${minutes} 分钟前`, title };
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return { text: `${hours} 小时前`, title };
+  const days = Math.floor(hours / 24);
+  if (days < 30) return { text: `${days} 天前`, title };
+  const months = Math.floor(days / 30);
+  if (months < 12) return { text: `${months} 个月前`, title };
+  return { text: `${Math.floor(months / 12)} 年前`, title };
+}
+
+/**
+ * 关系强度：三档，只按累计互动次数，**不含时间条件**。
+ *
+ * 不带时间是有意的：新鲜度已经写在信号行右侧（「2 小时前」），顶部条再编码一次时间，
+ * 就会出现「昨天绿的卡今天自己变粉、用户什么都没做」——会自己变的标记不值钱。
+ * 阈值 30 按当前样本的中位数偏上取整：这一页要的是「一眼认出自己人」，
+ * 一半人都算「常来往」等于没标。`禁止交流` 永远覆盖强度（用户显式决定优先）。
+ */
+const STRENGTH_L3_MIN = 30;
+
+type Strength = "l3" | "l2" | "l1" | "block";
+
+function strengthOf(friend: Friend): Strength {
+  if (friend.friendChatPolicy === "BLOCK") return "block";
+  if (friend.interactionCount >= STRENGTH_L3_MIN) return "l3";
+  if (friend.interactionCount >= 1) return "l2";
+  return "l1";
+}
+
+const STRENGTH_LABEL: Record<Strength, string> = {
+  l3: "常来往",
+  l2: "说过话",
+  l1: "只见过",
+  block: "不交流",
+};
+
+/** 读屏用的规则句：药丸是三个字，光看颜色不够，说出来要能自解释。 */
+const STRENGTH_RULE: Record<Strength, string> = {
+  l3: `聊过 ${STRENGTH_L3_MIN} 次以上`,
+  l2: `聊过 1 到 ${STRENGTH_L3_MIN - 1} 次`,
+  l1: "还没回过",
+  block: "已设为禁止交流",
+};
+
+/**
+ * 展开态：一次只展开一张。
+ *
+ * 同时展开多张会让整页变成长短不一的表单堆；只留一张，视线始终在刚点的那张上。
+ * 展开的内容全是既有控件，没有新增任何设置。
+ */
+const expandedScopeId = ref("");
+
+function isExpanded(friend: Friend) {
+  return expandedScopeId.value === friend.scopeId;
+}
+
+function toggleExpand(friend: Friend) {
+  expandedScopeId.value = isExpanded(friend) ? "" : friend.scopeId;
+}
+
+function collapse(friend: Friend) {
+  if (isExpanded(friend)) expandedScopeId.value = "";
+}
+
+/** 收起态最多两个备注，其余折成「＋N」；展开后全放出来。 */
+const COLLAPSED_ALIAS_LIMIT = 2;
+
+function visibleAliases(friend: Friend) {
+  return isExpanded(friend) ? friend.aliases : friend.aliases.slice(0, COLLAPSED_ALIAS_LIMIT);
+}
+
+function hiddenAliasCount(friend: Friend) {
+  if (isExpanded(friend)) return 0;
+  return Math.max(0, friend.aliases.length - COLLAPSED_ALIAS_LIMIT);
+}
+
+/** 副行只写「平台 · UID」；「私聊认识」是少数派，只有它值得占那几个字。 */
+function sourceNote(friend: Friend) {
+  if (friend.firstSource !== "PRIVATE") return "";
+  // 已经筛成「群里认识」时，这一页不会有私聊来源，写出来只会自相矛盾。
+  if (sourceFilter.value === "GROUP" && !query.value.trim()) return "";
+  return "私聊认识";
+}
+
+function subTitle(friend: Friend) {
+  return `认识于 ${formatDateTime(friend.knownSince)}`;
+}
+
+/**
+ * 摘要行：把每个开关的当前值写在明处，收起也不藏信息。
+ *
+ * 身份和交流权限永远显示（它们回答「她跟这个人怎么相处」）；
+ * 三个能力开关只在打开时出现 —— 关掉的能力不占文字，靠「调整」发现。
+ */
+type SummaryChip = {
+  key: string;
+  label: string;
+  prefix: string;
+  variant: "muted" | "brand" | "ai" | "block";
+  title: string;
+};
+
+const IDENTITY_KIND_OPTIONS: ReadonlyArray<{ value: Friend["identityKind"]; label: string; hint: string }> = [
+  { value: "UNKNOWN", label: "未知", hint: "还没判断过：按默认规则处理" },
+  { value: "HUMAN", label: "真人", hint: "确认是真人：她正常接话" },
+  { value: "AI", label: "AI", hint: "确认是 AI：她默认不接话" },
+];
+
+const CHAT_POLICY_OPTIONS: ReadonlyArray<{ value: Friend["friendChatPolicy"]; label: string; hint: string }> = [
+  { value: "DEFAULT", label: "默认", hint: "默认规则：真人正常回，AI 默认不回" },
+  { value: "ALLOW", label: "允许交流", hint: "这个角色一定接这个人的话" },
+  { value: "BLOCK", label: "禁止交流", hint: "这个角色不理这个人" },
+];
+
+function summaryChips(friend: Friend): SummaryChip[] {
+  const chips: SummaryChip[] = [];
+  const kind = IDENTITY_KIND_OPTIONS.find((option) => option.value === friend.identityKind);
+  if (kind) {
+    chips.push({
+      key: "kind",
+      label: kind.label,
+      prefix: "身份：",
+      variant: kind.value === "AI" ? "ai" : "muted",
+      title: kind.hint,
+    });
+  }
+  const policy = CHAT_POLICY_OPTIONS.find((option) => option.value === friend.friendChatPolicy);
+  if (policy) {
+    chips.push({
+      key: "policy",
+      label: policy.label,
+      prefix: "交流权限：",
+      variant: policy.value === "BLOCK" ? "block" : policy.value === "ALLOW" ? "brand" : "muted",
+      title: policy.hint,
+    });
+  }
+  if (friend.proactiveContactEnabled) {
+    chips.push({ key: "proactive", label: "主动", prefix: "已允许主动联系，", variant: "brand", title: "已允许她主动联系这个人" });
+  }
+  if (friend.educationEnabled) {
+    chips.push({ key: "education", label: "教育", prefix: "允许提出教育候选，", variant: "brand", title: "允许此好友提出跨场景教育候选" });
+  }
+  if (friend.knowledgeCollectEnabled) {
+    const active = friend.characterKnowledgeCollectScope === "SELECTED";
+    chips.push({
+      key: "knowledge",
+      label: "知识",
+      prefix: active ? "作为知识来源，" : "",
+      variant: active ? "brand" : "ai",
+      title: active
+        ? "这个角色只收选定成员的聊天，他的话会进知识候选"
+        : "当前不生效：这个角色现在收所有人的聊天，知识设置改成「仅指定成员」后才会用上",
+    });
+  }
+  return chips;
+}
+
+/** 主动联系最近一次的失败原因：只有「要处理」的三种状态才在卡片上占一行。 */
+const PROACTIVE_ATTEMPT_LABELS: Record<NonNullable<Friend["lastProactiveContactAttempt"]>["status"], string> = {
+  SENDING: "正在发送",
+  SENT: "已发送",
+  SKIPPED: "已跳过",
+  FAILED: "发送失败",
+  EXPIRED: "已过期",
+};
+
+const PROACTIVE_REASONS: Record<string, string> = {
+  no_common_group: "没有共同群",
+  group_mode_forbids: "群设置为仅 @ 回复",
+  quiet_hours: "群安静时段",
+  target_not_verified: "无法确认好友仍在群内",
+  nothing_to_say: "暂时没有自然话题",
+  friend_cooldown: "好友冷却中",
+  ai_dialogue_limit: "AI 连续对话保护",
+  daily_limit: "今日次数已达上限",
+  not_authorized: "未授权",
+  relationship_not_close: "关系还不够熟",
+  relationship_not_healthy: "关系状态不适合",
+  friend_blocked: "已禁止交流",
+  model_error: "模型调用失败",
+  send_failed: "消息发送失败",
+  sent_but_transcript_failed: "已发送，转录写入失败",
+  dispatch_lease_expired: "发送中断，已过期",
+  already_attempted: "本时间窗已尝试",
+  dispatch_in_progress: "发送处理中",
+  dispatching: "正在发送",
+};
+
+/** 卡片上那一行：省略号截断，完整原因进 title。 */
+function warnLine(friend: Friend) {
   const attempt = friend.lastProactiveContactAttempt;
-  if (!attempt) return "暂无联系记录";
-  const labels: Record<typeof attempt.status, string> = {
-    SENDING: "发送中",
-    SENT: "已发送",
-    SKIPPED: "已跳过",
-    FAILED: "发送失败",
-    EXPIRED: "已过期",
-  };
-  const reasons: Record<string, string> = {
-    no_common_group: "没有共同群",
-    group_mode_forbids: "群设置为仅 @ 回复",
-    quiet_hours: "群安静时段",
-    target_not_verified: "无法确认好友仍在群内",
-    nothing_to_say: "暂时没有自然话题",
-    friend_cooldown: "好友冷却中",
-    ai_dialogue_limit: "AI 连续对话保护",
-    daily_limit: "今日次数已达上限",
-    not_authorized: "未授权",
-    relationship_not_close: "关系还不够熟",
-    relationship_not_healthy: "关系状态不适合",
-    friend_blocked: "已禁止交流",
-    model_error: "模型调用失败",
-    send_failed: "消息发送失败",
-    sent_but_transcript_failed: "已发送，转录写入失败",
-    dispatch_lease_expired: "发送中断，已过期",
-    already_attempted: "本时间窗已尝试",
-    dispatch_in_progress: "发送处理中",
-    dispatching: "正在发送",
-  };
-  const reason = attempt.reason === "ok" ? "" : reasons[attempt.reason] ?? attempt.reason;
+  if (!attempt) return "";
+  if (attempt.status !== "FAILED" && attempt.status !== "SKIPPED" && attempt.status !== "EXPIRED") return "";
+  const reason = attempt.reason && attempt.reason !== "ok" ? PROACTIVE_REASONS[attempt.reason] ?? attempt.reason : "";
+  return `最近主动联系：${PROACTIVE_ATTEMPT_LABELS[attempt.status]}${reason ? `（${reason}）` : ""}`;
+}
+
+/** 展开区那一行：任何状态都显示，含时间。 */
+function proactiveContactAttemptLabel(friend: Friend): string {
+  const attempt = friend.lastProactiveContactAttempt;
+  if (!attempt) return "最近主动联系：暂无记录";
+  const reason = attempt.reason && attempt.reason !== "ok" ? PROACTIVE_REASONS[attempt.reason] ?? attempt.reason : "";
   const when = formatDateTime(attempt.sentAt ?? attempt.attemptedAt);
-  return [labels[attempt.status], reason, when].filter(Boolean).join(" · ");
+  return ["最近主动联系：" + PROACTIVE_ATTEMPT_LABELS[attempt.status], reason, when].filter(Boolean).join(" · ");
 }
 
 /** 头像只放一个字：昵称取首字，没有昵称就取 UID 首位。真头像取不到时也回落到这里。 */
@@ -171,6 +351,22 @@ const sourceOptions = computed<Array<{ value: FriendSourceFilter; label: string;
   { value: "GROUP", label: "群里认识", count: sourceCounts.value.group },
 ]);
 
+/** 空结果时把生效的筛选念出来，用户才知道要清什么。 */
+const activeFilterLabel = computed(() => {
+  const parts: string[] = [];
+  if (sourceFilter.value === "PRIVATE") parts.push("私聊认识");
+  if (sourceFilter.value === "GROUP") parts.push("群里认识");
+  const keyword = query.value.trim();
+  if (keyword) parts.push(`搜「${keyword}」`);
+  return parts.join(" · ");
+});
+
+function clearFilters() {
+  query.value = "";
+  sourceFilter.value = "ALL";
+  load(1);
+}
+
 // 列表请求序号：快速切角色 / 搜索 / 翻页时，只允许最后一次请求提交页面状态。
 let loadSequence = 0;
 
@@ -200,6 +396,10 @@ async function load(target = page.value) {
     stats.value = response.stats;
     sourceCounts.value = response.sourceCounts;
     pendingSuggestions.value = response.pendingSuggestions ?? 0;
+    // 展开的那张可能已经被删掉 / 翻页翻走了，别让 id 悬空。
+    if (expandedScopeId.value && !response.items.some((item) => item.scopeId === expandedScopeId.value)) {
+      expandedScopeId.value = "";
+    }
   } catch (error) {
     if (requestId !== loadSequence) return;
     ElMessage.error(readErrorMessage(error, "无法读取朋友列表。"));
@@ -207,8 +407,6 @@ async function load(target = page.value) {
     if (requestId === loadSequence) loading.value = false;
   }
 }
-
-/** 换角色直接重取：名单变了，停在原来的页码上没有意义。 */
 
 function pickSource(value: FriendSourceFilter) {
   if (value === sourceFilter.value) return;
@@ -246,27 +444,7 @@ const editingScopeId = ref("");
 const aliasDraft = ref("");
 const aliasSaving = ref(false);
 
-/**
- * 身份与交流：点一下就是最终决定，没有「保存设置」那一步。
- *
- * 两个维度各三个选项，用单选框而不是下拉 —— 只有三个值，下拉要点两下、还得读一遍才知道有哪些选择；
- * 平铺出来一眼看全，点完立刻生效。选项说明放 title 里，不占版面。
- * 行首不再挂「身份 / 交流」两个字：选项自己说明得清，省下的横向空间给按钮。
- * 读屏用 aria-label 补回分组名。
- */
-const IDENTITY_KIND_OPTIONS: ReadonlyArray<{ value: Friend["identityKind"]; label: string; hint: string }> = [
-  { value: "UNKNOWN", label: "未知", hint: "还没判断过：按默认规则处理" },
-  { value: "HUMAN", label: "真人", hint: "确认是真人：她正常接话" },
-  { value: "AI", label: "AI", hint: "确认是 AI：她默认不接话" },
-];
-
-const CHAT_POLICY_OPTIONS: ReadonlyArray<{ value: Friend["friendChatPolicy"]; label: string; hint: string }> = [
-  { value: "DEFAULT", label: "默认", hint: "默认规则：真人正常回，AI 默认不回" },
-  { value: "ALLOW", label: "允许交流", hint: "这个角色一定接这个人的话" },
-  { value: "BLOCK", label: "禁止交流", hint: "这个角色不理这个人" },
-];
-
-/** 每张卡片的保存状态：saving 显示「保存中」，saved 显示「已保存」并在 1.6 秒后自己消失。 */
+/** 每张卡片的保存状态：saving 显示「保存中」，saved 显示「已保存」并在 2.4 秒后自己消失。 */
 type SaveState = "saving" | "saved";
 const saveStates = ref<Record<string, SaveState>>({});
 const saveTokens = new Map<string, number>();
@@ -283,7 +461,8 @@ function markSaveState(scopeId: string, state: SaveState | null) {
   else delete next[scopeId];
   saveStates.value = next;
   if (state === "saved") {
-    saveTimers.set(scopeId, setTimeout(() => markSaveState(scopeId, null), 1600));
+    // 1.6s 对读屏的 polite 队列偏短，可能还没念完就消失。
+    saveTimers.set(scopeId, setTimeout(() => markSaveState(scopeId, null), 2400));
   }
 }
 
@@ -351,24 +530,12 @@ function setKnowledgeCollectEnabled(friend: Friend, enabled: boolean) {
   void patchFriend(friend, { knowledgeCollectEnabled: enabled });
 }
 
-function proactiveContactAttemptLabel(friend: Friend): string {
-  const attempt = friend.lastProactiveContactAttempt;
-  if (!attempt) return "";
-  const labels: Record<NonNullable<Friend["lastProactiveContactAttempt"]>["status"], string> = {
-    SENDING: "正在发送",
-    SENT: "已发送",
-    SKIPPED: "已跳过",
-    FAILED: "发送失败",
-    EXPIRED: "已过期",
-  };
-  return `最近主动联系：${labels[attempt.status]} · ${formatDateTime(attempt.sentAt ?? attempt.attemptedAt)}`;
-}
-
 /**
  * 多选：给「很少聊的那几个人」准备的一次性清理。
  *
  * 不在卡片上常驻勾选框 —— 平时这张页面是「看人」的，勾选框会让每张卡都像待办事项。
  * 点页头的「多选」才进这个模式：卡片变可选、身份/交流暂时不可改（避免一边选一边写）。
+ * 跨页不保留勾选：540 条规模下没人会核对「已选 37 人里有 25 人不在本页」，误删代价更大。
  */
 const selecting = ref(false);
 const selectedIds = ref<string[]>([]);
@@ -377,8 +544,14 @@ const selectedFriends = computed(() =>
   friends.value.filter((friend) => selectedIds.value.includes(friend.scopeId)),
 );
 
+/** 判据必须是「本页 id 全在当前勾选里」；用长度比会被删完重载后的巧合骗过。 */
 const allSelected = computed(
-  () => friends.value.length > 0 && selectedIds.value.length === friends.value.length,
+  () => friends.value.length > 0 && friends.value.every((friend) => selectedIds.value.includes(friend.scopeId)),
+);
+
+/** 勾选里混进聊过天的人时提醒一句，把「我清的是零互动群友」变成可见事实。 */
+const selectedInteracted = computed(
+  () => selectedFriends.value.filter((friend) => friend.interactionCount >= 1).length,
 );
 
 function isPicked(friend: Friend) {
@@ -454,7 +627,8 @@ async function confirmDelete() {
       }
     }
     deleteDialogOpen.value = false;
-    exitSelecting();
+    // 删完停在多选态：清一批人往往要连清几页，每页都重进多选等于白点一次。
+    selectedIds.value = [];
     // 这一页删空了就往前翻一页，不然会停在空页上。
     const remaining = friends.value.length - targets.length;
     await load(remaining > 0 ? page.value : Math.max(1, page.value - 1));
@@ -577,11 +751,17 @@ watch(id, (nextId, previousId) => {
   suggestionsLoading.value = false;
   editingScopeId.value = "";
   aliasDraft.value = "";
+  expandedScopeId.value = "";
   exitSelecting();
   friends.value = [];
   stats.value = { total: 0, familiar: 0, recent: 0 };
   sourceCounts.value = { all: 0, private: 0, group: 0 };
   pendingSuggestions.value = 0;
+  // 换角色 = 换数据集，筛选条件不能跟着走：来源计数是按角色算的，同一个「私聊认识」
+  // 在新角色身上含义已经变了；留着关键词更容易让人以为「这个角色没朋友」。
+  // 排序是纯偏好，保留。
+  query.value = "";
+  sourceFilter.value = "ALL";
   page.value = 1;
   load(1);
 });
@@ -597,11 +777,17 @@ onBeforeUnmount(() => {
   saveTimers.clear();
 });
 
+/** 有了旧数据就不再显示骨架屏，改用半透明遮住（换角色时 friends 已清空，会走骨架屏）。 */
+const showSkeleton = computed(() => loading.value && !friends.value.length);
+
 onMounted(() => load(1));
 </script>
 
 <template>
-  <div class="page-wrap fr-a">
+  <div
+    class="page-wrap fr-a"
+    :class="{ 'is-selecting': selecting }"
+  >
     <PageHeader
       description="私聊来访、群里见过的人都会记录下来。可以手动标记真人 / AI，并按当前角色决定她是否与对方交流。"
     >
@@ -636,36 +822,37 @@ onMounted(() => load(1));
       </template>
     </PageHeader>
 
+    <!-- 骨架屏：12 张锁 220 高，和真实卡片同一个格子，加载完不跳版 -->
     <div
-      v-if="loading && !friends.length"
-      class="friend-grid"
+      v-if="showSkeleton"
+      class="grid"
+      aria-hidden="true"
     >
       <div
-        v-for="i in 4"
+        v-for="i in PAGE_SIZE"
         :key="'sk-' + i"
-        class="friend-card is-skeleton"
+        class="card is-skeleton"
       >
-        <div
-          v-for="n in 3"
-          :key="n"
-          class="sk"
-          :style="{ height: n === 1 ? '32px' : '14px', width: n === 1 ? '58%' : '100%' }"
-        />
+        <div class="sk sk-avatar" />
+        <div class="sk sk-name" />
+        <div class="sk sk-sub" />
+        <div class="sk sk-line" />
       </div>
     </div>
 
     <div
       v-else-if="!characters.length"
-      class="empty-block"
+      class="empty"
     >
-      <span class="empty-icon"><el-icon><User /></el-icon></span>
+      <span class="empty-ico"><el-icon><User /></el-icon></span>
       <h3>还没有角色</h3>
       <p>先建一个角色，她在平台上认识的人才会记到这里。</p>
     </div>
 
     <template v-else>
+      <!-- 工具栏：搜索固定 240，两组分段各带 aria-label，不再挂两个 12px 文字标签 -->
       <div class="toolbar">
-        <label class="fr-search">
+        <label class="search">
           <el-icon><Search /></el-icon>
           <input
             v-model="query"
@@ -674,8 +861,11 @@ onMounted(() => load(1));
             @input="onQueryInput"
           >
         </label>
-        <span class="seg-label">来源</span>
-        <div class="seg">
+        <div
+          class="seg"
+          role="group"
+          aria-label="筛选来源"
+        >
           <button
             v-for="option in sourceOptions"
             :key="option.value"
@@ -687,8 +877,11 @@ onMounted(() => load(1));
             {{ option.label }}<span class="seg-n">{{ option.count }}</span>
           </button>
         </div>
-        <span class="seg-label">排序</span>
-        <div class="seg seg-sort">
+        <div
+          class="seg"
+          role="group"
+          aria-label="排序方式"
+        >
           <button
             v-for="option in SORT_OPTIONS"
             :key="option.value"
@@ -706,6 +899,7 @@ onMounted(() => load(1));
         </div>
       </div>
 
+      <!-- 多选条与统计带同槽位同高：进出多选零垂直位移 -->
       <div
         v-if="selecting"
         class="sel-bar"
@@ -714,14 +908,23 @@ onMounted(() => load(1));
         <button
           type="button"
           class="sel-link"
+          :title="`只选这一页的 ${friends.length} 人，翻页后要重新选`"
           @click="toggleSelectAll"
         >
-          {{ allSelected ? "取消全选" : "全选本页" }}
+          {{ allSelected ? "取消全选" : `全选本页 ${friends.length} 人` }}
         </button>
-        <span class="sel-note">多选时卡片上的身份 / 交流暂时不能改</span>
+        <span
+          v-if="selectedInteracted"
+          class="sel-note"
+        >已选里 {{ selectedInteracted }} 个聊过天</span>
+        <span
+          v-else
+          class="sel-note is-plain"
+        >多选时卡片上的身份 / 交流暂时不能改</span>
         <button
           type="button"
           class="sel-del"
+          :class="{ 'is-armed': selectedIds.length > 0 }"
           :disabled="!selectedIds.length"
           @click="askBatchDelete"
         >
@@ -730,31 +933,41 @@ onMounted(() => load(1));
       </div>
 
       <div
-        v-if="stats.total"
+        v-else-if="stats.total"
         class="band"
       >
         <div class="band-cell">
-          <span class="band-k">{{ currentCharacter?.name ?? "她" }}认识的人</span>
+          <span class="band-krow">
+            <span
+              class="band-k"
+              title="私聊来访或在群里发过言的人都会出现"
+            >{{ currentCharacter?.name ?? "她" }}认识的人</span>
+            <span class="band-f">私聊 {{ sourceCounts.private }} · 群里 {{ sourceCounts.group }}</span>
+          </span>
           <span class="band-v">{{ stats.total }}<small>个</small></span>
-          <span class="band-f">私聊来访或在群里发过言的人都会出现</span>
         </div>
         <div class="band-cell">
-          <span class="band-k">聊过两次以上</span>
+          <span
+            class="band-k"
+            title="只回一句就消失的算路人"
+          >聊过两次以上</span>
           <span class="band-v">{{ stats.familiar }}<small>个</small></span>
-          <span class="band-f">只回一句就消失的算路人</span>
         </div>
         <div class="band-cell">
-          <span class="band-k">最近七天有来往</span>
+          <span
+            class="band-k"
+            title="按最后一次互动算"
+          >最近七天有来往</span>
           <span class="band-v">{{ stats.recent }}<small>个</small></span>
-          <span class="band-f">按最后一次互动算</span>
         </div>
       </div>
 
+      <!-- 空结果：把生效的筛选念出来，并给一个能点的出口 -->
       <div
         v-if="!friends.length && !loading"
-        class="empty-block"
+        class="empty"
       >
-        <span class="empty-icon"><el-icon><User /></el-icon></span>
+        <span class="empty-ico"><el-icon><User /></el-icon></span>
         <h3>{{ stats.total ? "没有找到这个人" : "还没遇到人" }}</h3>
         <p v-if="stats.total">
           换个关键词，或者把来源切回「全部」。
@@ -762,32 +975,64 @@ onMounted(() => load(1));
         <p v-else>
           有人私聊她或在群里发言后，就会出现在这里；即使还没互动，也能先设置身份和交流权限。
         </p>
+        <p
+          v-if="stats.total && activeFilterLabel"
+          class="empty-cond"
+        >
+          当前筛选：{{ activeFilterLabel }}
+        </p>
+        <button
+          v-if="stats.total"
+          type="button"
+          class="empty-reset"
+          @click="clearFilters"
+        >
+          清空筛选
+        </button>
       </div>
 
       <div
         v-else
-        class="friend-grid"
+        class="grid"
+        :style="loading ? { opacity: 0.55 } : undefined"
+        :aria-busy="loading"
       >
         <article
           v-for="friend in friends"
           :key="friend.scopeId"
-          class="friend-card"
-          :class="{ 'is-selecting': selecting, 'is-picked': selecting && isPicked(friend) }"
+          class="card"
+          :class="[
+            `is-${strengthOf(friend)}`,
+            {
+              'is-open': isExpanded(friend),
+              'is-picked': selecting && isPicked(friend),
+            },
+          ]"
+          :aria-labelledby="`nm-${friend.scopeId}`"
           @click="selecting && toggleSelect(friend)"
         >
-          <div class="fr-head">
-            <input
+          <span
+            class="card-bar"
+            aria-hidden="true"
+          />
+
+          <!-- ① 身份区：头像 + 昵称（2 行钳制）。删除键绝对定位在右上，不占这里的宽度 -->
+          <div class="head">
+            <label
               v-if="selecting"
-              class="fr-check"
-              type="checkbox"
-              :checked="isPicked(friend)"
-              :aria-label="`选中 ${friend.displayName || friend.platformUid}`"
+              class="pick"
               @click.stop
-              @change="toggleSelect(friend)"
             >
+              <input
+                type="checkbox"
+                :checked="isPicked(friend)"
+                :aria-label="`选中 ${friend.displayName || friend.platformUid}`"
+                @change="toggleSelect(friend)"
+              >
+            </label>
             <img
               v-if="avatarUrl(friend) && !brokenAvatars[friend.scopeId]"
-              class="fr-avatar is-photo"
+              class="avatar is-photo"
               :src="avatarUrl(friend) || ''"
               alt=""
               loading="lazy"
@@ -797,59 +1042,91 @@ onMounted(() => load(1));
             >
             <span
               v-else
-              class="fr-avatar"
+              class="avatar"
+              aria-hidden="true"
             >{{ initialOf(friend) }}</span>
-            <div class="fr-id">
-              <h3 class="fr-name">
+            <div class="card-id">
+              <h3
+                :id="`nm-${friend.scopeId}`"
+                class="name"
+                :title="friend.displayName || friend.platformUid"
+              >
                 {{ friend.displayName || friend.platformUid }}
               </h3>
-              <p class="fr-sub">
-                {{ platformLabel(friend.platform) }}<span class="sep">·</span>{{ friend.platformUid }}
-              </p>
-            </div>
-            <div class="fr-head-actions">
-              <span class="pill pill-gray">{{ friend.interactionCount > 0 ? sourceLabel(friend.firstSource) : "群里见过" }}</span>
-              <button
-                v-if="!selecting"
-                type="button"
-                class="fr-del"
-                :title="`删掉「${friend.displayName || friend.platformUid}」这条朋友关系和她的相关记忆`"
-                aria-label="删除朋友"
-                @click="askDelete(friend)"
+              <p
+                class="sub"
+                :title="subTitle(friend)"
               >
-                <el-icon><Delete /></el-icon>
-              </button>
+                <span class="sub-main">{{ platformLabel(friend.platform) }} · {{ friend.platformUid }}</span>
+                <span
+                  v-if="sourceNote(friend)"
+                  class="sub-src"
+                >· {{ sourceNote(friend) }}</span>
+              </p>
             </div>
           </div>
 
-          <div class="fr-alias">
+          <!-- ② 关系信号：强度词 + 聊过几次 + 多久没来往，读成一句话 -->
+          <div class="signal">
             <span
-              v-for="alias in friend.aliases"
-              :key="alias"
-              class="alias-chip"
+              class="pill"
+              :class="`is-${strengthOf(friend)}`"
+              :title="`${STRENGTH_LABEL[strengthOf(friend)]}：${STRENGTH_RULE[strengthOf(friend)]}`"
             >
-              {{ alias }}
+              {{ STRENGTH_LABEL[strengthOf(friend)] }}<span class="sr-only">（{{ STRENGTH_RULE[strengthOf(friend)] }}）</span>
+            </span>
+            <span class="s-label">聊过</span><b
+              class="s-num"
+              :class="{ 'is-zero': !friend.interactionCount }"
+            >{{ friend.interactionCount }}</b><span class="s-label">次</span>
+            <span
+              class="s-time"
+              :title="relativeTime(friend.lastInteractedAt).title"
+            >{{ relativeTime(friend.lastInteractedAt).text }}</span>
+          </div>
+
+          <!-- ③ 备注：收起最多两个 + ＋N；展开后全放出来 -->
+          <div class="aliases">
+            <span
+              v-for="alias in visibleAliases(friend)"
+              :key="alias"
+              class="alias"
+            >
+              <span class="alias-txt">{{ alias }}</span>
               <button
                 type="button"
                 class="alias-x"
+                :aria-label="`删掉「${alias}」`"
                 :title="`删掉「${alias}」`"
-                @click="removeAlias(friend, alias)"
+                @click.stop="removeAlias(friend, alias)"
               >×</button>
             </span>
+            <span
+              v-if="hiddenAliasCount(friend)"
+              class="alias-more"
+              :title="friend.aliases.join('、')"
+            >＋{{ hiddenAliasCount(friend) }}</span>
             <button
               v-if="editingScopeId !== friend.scopeId"
               type="button"
               class="alias-add"
               :title="friend.aliases.length ? '改这些叫法' : '她按心情换着叫对方的名字'"
-              @click="startEdit(friend)"
+              @click.stop="startEdit(friend)"
             >
               {{ friend.aliases.length ? "编辑" : "＋ 加备注" }}
             </button>
+            <!-- 主动联系异常：并进这一行右端，不单独占一行 —— 否则卡片会为「可能出现的提示」常备一条 24px 空洞 -->
+            <span
+              v-if="warnLine(friend) && !isExpanded(friend)"
+              class="alias-warn"
+              :title="proactiveContactAttemptLabel(friend)"
+            >{{ warnLine(friend) }}</span>
           </div>
 
           <div
             v-if="editingScopeId === friend.scopeId"
             class="alias-editor"
+            @click.stop
           >
             <input
               v-model="aliasDraft"
@@ -857,15 +1134,15 @@ onMounted(() => load(1));
               type="text"
               placeholder="用逗号隔开，例如：小鱼干，宝，笨蛋鱼"
               @keydown.enter.prevent="saveAliases(friend, aliasDraft, true)"
-              @keydown.esc="cancelEdit"
+              @keydown.esc.stop="cancelEdit"
             >
             <p class="alias-hint">
-              最多 8 个、每个 12 字。她会在私聊和这个群的熟人面前，按当时的心情挑一个叫。
+              最多 8 个、每个 12 字
             </p>
             <div class="alias-actions">
               <button
                 type="button"
-                class="alias-save"
+                class="a-save"
                 :disabled="aliasSaving"
                 @click="saveAliases(friend, aliasDraft, true)"
               >
@@ -873,7 +1150,7 @@ onMounted(() => load(1));
               </button>
               <button
                 type="button"
-                class="alias-cancel"
+                class="a-cancel"
                 @click="cancelEdit"
               >
                 取消
@@ -881,20 +1158,55 @@ onMounted(() => load(1));
             </div>
           </div>
 
+          <!-- ④ 设置摘要：身份 + 交流常显，能力只在开启时出现；右侧「调整」是这一行唯一的可点物 -->
+          <div class="sum">
+            <div class="chips">
+              <span
+                v-for="chip in summaryChips(friend)"
+                :key="chip.key"
+                class="chip"
+                :class="`is-${chip.variant}`"
+                :title="chip.title"
+              >
+                <span
+                  v-if="chip.prefix"
+                  class="sr-only"
+                >{{ chip.prefix }}</span>{{ chip.label }}
+              </span>
+            </div>
+            <button
+              type="button"
+              class="adjust"
+              :disabled="selecting"
+              :aria-expanded="isExpanded(friend)"
+              :aria-controls="`ctl-${friend.scopeId}`"
+              :title="isExpanded(friend) ? '收起设置' : '改身份与权限'"
+              @click.stop="toggleExpand(friend)"
+            >
+              <span class="txt">{{ isExpanded(friend) ? "收起" : "调整" }}</span>
+              <span
+                class="caret"
+                aria-hidden="true"
+              >{{ isExpanded(friend) ? "▴" : "▾" }}</span>
+            </button>
+          </div>
+
+          <!-- 展开态：既有控件原样搬进来，一次只展开一张 -->
           <div
-            class="friend-controls"
-            :class="{ 'is-locked': selecting }"
+            v-if="isExpanded(friend)"
+            :id="`ctl-${friend.scopeId}`"
+            class="ctl"
+            @keydown.esc.stop="collapse(friend)"
           >
             <div
-              class="friend-opts"
+              class="opts"
               role="radiogroup"
-              aria-label="身份"
+              :aria-label="`${friend.displayName || friend.platformUid} 的身份`"
             >
               <label
                 v-for="option in IDENTITY_KIND_OPTIONS"
                 :key="option.value"
-                class="friend-opt"
-                :class="{ 'is-on': friend.identityKind === option.value }"
+                class="opt"
                 :title="option.hint"
               >
                 <input
@@ -904,103 +1216,124 @@ onMounted(() => load(1));
                   :checked="friend.identityKind === option.value"
                   @change="setIdentityKind(friend, option.value)"
                 >
-                {{ option.label }}
+                <span>{{ option.label }}</span>
               </label>
             </div>
+
             <div
-              class="friend-opts"
+              class="opts nowrap"
               role="radiogroup"
-              aria-label="交流权限"
+              :aria-label="`${friend.displayName || friend.platformUid} 的交流权限`"
             >
               <label
                 v-for="option in CHAT_POLICY_OPTIONS"
                 :key="option.value"
-                class="friend-opt"
-                :class="{
-                  'is-on': friend.friendChatPolicy === option.value,
-                  'is-block': option.value === 'BLOCK',
-                }"
+                class="opt"
+                :class="{ 'is-block': option.value === 'BLOCK' }"
                 :title="option.hint"
               >
                 <input
                   type="radio"
                   :name="`friend-policy-${friend.scopeId}`"
                   :value="option.value"
+                  :aria-label="option.label"
                   :checked="friend.friendChatPolicy === option.value"
                   @change="setChatPolicy(friend, option.value)"
                 >
-                {{ option.label }}
+                <span>{{ option.value === "ALLOW" ? "允许" : option.value === "BLOCK" ? "禁止" : option.label }}</span>
               </label>
             </div>
+
             <label
-              class="friend-opt"
-              :class="{ 'is-on': friend.proactiveContactEnabled }"
+              class="opt opt-wide proactive"
               title="单独允许她主动联系这位好友；仍受关系阶段、禁止交流、共同群和频率保护限制"
             >
               <input
                 type="checkbox"
                 :checked="friend.proactiveContactEnabled"
+                aria-label="允许她主动联系这个人"
                 @change="setProactiveContactEnabled(friend, ($event.target as HTMLInputElement).checked)"
               >
-              主动联系 {{ friend.proactiveContactEnabled ? "已允许" : "未授权" }}
+              <span>主动联系 <span class="pv-off">未授权</span><span class="pv-on">已允许</span></span>
             </label>
-            <el-switch
-              :model-value="friend.educationEnabled"
-              active-text="允许教育此角色"
-              aria-label="允许此好友提出跨场景教育候选"
-              @change="setEducationEnabled(friend, $event === true)"
-            />
-            <p class="friend-save-state">
-              仅影响新教育候选；关闭不会撤销已采纳的习惯。
+
+            <div class="switch-row">
+              <span
+                class="switch-label"
+                title="仅影响新教育候选；关闭不会撤销已采纳的习惯。"
+              >允许教育此角色</span>
+              <label class="switch">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  aria-label="允许此好友提出跨场景教育候选"
+                  :checked="friend.educationEnabled"
+                  @change="setEducationEnabled(friend, ($event.target as HTMLInputElement).checked)"
+                >
+                <span
+                  class="track"
+                  aria-hidden="true"
+                />
+              </label>
+            </div>
+
+            <div class="switch-row">
+              <span
+                class="switch-label"
+                title="把这个人的聊天收进知识候选；不影响她怎么回这个人。"
+              >作为知识来源</span>
+              <label class="switch">
+                <input
+                  type="checkbox"
+                  role="switch"
+                  aria-label="把她和这位好友的聊天收进知识候选"
+                  :checked="friend.knowledgeCollectEnabled"
+                  @change="setKnowledgeCollectEnabled(friend, ($event.target as HTMLInputElement).checked)"
+                >
+                <span
+                  class="track"
+                  aria-hidden="true"
+                />
+              </label>
+            </div>
+
+            <!-- 说明只在真的不生效时出现，其余进 title（卡内不写段落） -->
+            <p
+              v-if="friend.knowledgeCollectEnabled && friend.characterKnowledgeCollectScope === 'ALL'"
+              class="switch-note"
+            >
+              这个角色现在收所有人的聊天，这个开关暂时不生效；知识设置改成「仅指定成员」后才会用上。
             </p>
-            <el-switch
-              :model-value="friend.knowledgeCollectEnabled"
-              active-text="作为知识来源"
-              aria-label="把她和这位好友的聊天收进知识候选"
-              @change="setKnowledgeCollectEnabled(friend, $event === true)"
-            />
-            <p class="friend-save-state">
-              <template v-if="friend.characterKnowledgeCollectScope === 'SELECTED'">
-                这个角色只收选定成员的聊天，打开后他的话才会变成知识候选。
-              </template>
-              <template v-else>
-                这个角色现在收所有人的聊天，这个开关暂时不生效；知识设置改成「仅指定成员」后才会用上。
-              </template>
-            </p>
-            <p class="friend-save-state">
+
+            <p
+              class="save-state"
+              aria-live="polite"
+            >
               {{ saveStateLabel(friend.scopeId) }}
             </p>
-            <p
-              v-if="friend.lastProactiveContactAttempt"
-              class="friend-save-state"
-              :title="friend.lastProactiveContactAttempt.reason"
-            >
+            <p class="ctl-note">
               {{ proactiveContactAttemptLabel(friend) }}
             </p>
+            <!-- 触屏没有 hover，删除入口收在这里（一屏 12 个灰图标是噪声，且紧挨强度词易误触） -->
+            <button
+              type="button"
+              class="ctl-del"
+              @click.stop="askDelete(friend)"
+            >
+              删除这条关系
+            </button>
           </div>
 
-          <dl class="fr-kv">
-            <div>
-              <dt>聊过</dt>
-              <dd>{{ friend.interactionCount }} 次</dd>
-            </div>
-            <div>
-              <dt>最近一次</dt>
-              <dd :class="{ 'is-muted': !friend.lastInteractedAt }">
-                {{ formatDateTime(friend.lastInteractedAt) }}
-              </dd>
-            </div>
-            <div>
-              <dt>认识于</dt>
-              <dd>{{ formatDateTime(friend.knownSince) }}</dd>
-            </div>
-            <div>
-              <dt>主动联系</dt>
-              <dd :class="{ 'is-muted': !friend.lastProactiveContactAttempt }">
-                {{ proactiveAttemptLabel(friend) }}
-              </dd>
-            </div>
-          </dl>
+          <!-- 删除键：DOM 里是最后一项，Tab 走到它时已经在所有设置之后 -->
+          <button
+            type="button"
+            class="del"
+            :aria-label="`删除「${friend.displayName || friend.platformUid}」`"
+            :title="`删掉「${friend.displayName || friend.platformUid}」这条朋友关系和她的相关记忆`"
+            @click.stop="askDelete(friend)"
+          >
+            <el-icon><Delete /></el-icon>
+          </button>
         </article>
       </div>
 
@@ -1102,6 +1435,7 @@ onMounted(() => load(1));
             <span>{{ platformLabel(deleteSingle.platform) }} · {{ deleteSingle.platformUid }} · 跟「{{ deleteSingle.characterName }}」</span>
           </span>
         </div>
+        <!-- 名单里标出「聊过 N」：否则用户只知道「共 N 段对话」，不知道是这 12 人里的哪一个 -->
         <ul
           v-else
           class="del-names"
@@ -1110,7 +1444,11 @@ onMounted(() => load(1));
             v-for="friend in deleteTargets.slice(0, 8)"
             :key="friend.scopeId"
           >
-            {{ friend.displayName || friend.platformUid }}
+            {{ friend.displayName || friend.platformUid
+            }}<em
+              v-if="friend.conversationCount > 0"
+              class="del-names-count"
+            >聊过 {{ friend.interactionCount }}</em>
           </li>
           <li
             v-if="deleteTargets.length > 8"
@@ -1149,6 +1487,7 @@ onMounted(() => load(1));
         </p>
       </template>
       <template #footer>
+        <span class="del-hint">不可撤销</span>
         <button
           type="button"
           class="del-cancel"
@@ -1170,136 +1509,12 @@ onMounted(() => load(1));
 </template>
 
 <style scoped>
-/* A 套：白砖、零描边、零阴影。全部规则挂在 .fr-a 下（作用域 + 压过 main.css 单类规则）。 */
+/* 全部规则挂在 .fr-a 下：作用域 + 压过 main.css 的单类规则（比如全局 .card 有描边和阴影）。 */
 .fr-a .btn { height: 36px; border: 0; background: none; box-shadow: none; padding: 0 10px; color: var(--text-2); border-radius: 8px; }
 .fr-a .btn:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
-
-/* 工具栏：角色分段 + 搜索 + 来源分段 + 排序，一行排开，宽度不够自动换行 */
-.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: var(--sp-4); }
-/* 搜索框固定窄宽，剩下的空隙靠 margin-right: auto 撑开，把来源/排序推到右边 */
-.fr-search { display: flex; height: 36px; flex: 0 0 200px; align-items: center; gap: 8px; margin-right: auto; border-radius: 8px; background: var(--surface); padding: 0 12px; color: var(--dim); }
-.fr-search input { width: 100%; min-width: 0; border: 0; background: none; color: var(--text); font-size: 13px; outline: none; }
-.fr-search input::placeholder { color: var(--faint); }
-.seg { display: flex; gap: 2px; border-radius: 8px; background: var(--surface); padding: 3px; }
-/* 两组分段挨着放，标一下哪组是筛来源、哪组是换排序 */
-.seg-label { color: var(--dim); font-size: 12px; font-weight: 500; }
-.seg-btn {
-  display: inline-flex;
-  height: 30px;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  padding: 0 10px;
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background .14s var(--ease), color .14s var(--ease);
-}
-.seg-btn:hover { background: var(--surface-2); }
-.seg-btn.is-on { background: var(--surface-2); color: var(--text); }
-.seg-n { color: var(--dim); font-variant-numeric: tabular-nums; font-weight: 500; }
-/* 当前排序维度后面的箭头：点同一个按钮就翻转，每个维度各记各的方向 */
-.seg-dir { color: var(--brand-strong); font-size: 12px; font-weight: 600; line-height: 1; }
-
-/* 统计带：三格数字并进一张白砖，脚注静音 */
-.band {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0 24px;
-  margin-bottom: var(--sp-4);
-  border: 0;
-  border-radius: 12px;
-  background: var(--surface);
-  box-shadow: none;
-  padding: 22px;
-}
-.band-cell { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-.band-k { color: var(--dim); font-size: 12px; }
-.band-v { color: var(--text); font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; line-height: 1.25; }
-.band-v small { margin-left: 3px; color: var(--dim); font-size: 12px; font-weight: 500; letter-spacing: 0; }
-.band-f { overflow: hidden; color: var(--dim); font-size: 12px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
-
-/* 一行四张；窄屏依次退到三列、两列、单列。
-   阈值按视口算（左侧还有 240 的导航），1360 以下内容区不足 4×280，就退三列。 */
-.friend-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); align-items: start; }
-@media (max-width: 1360px) {
-  .friend-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (max-width: 1000px) {
-  .friend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-.friend-card {
-  display: flex;
-  flex-direction: column;
-  border: 0;
-  border-radius: 12px;
-  background: var(--surface);
-  box-shadow: none;
-  padding: 22px;
-}
-.friend-card.is-skeleton { gap: 10px; padding-bottom: 18px; }
-
-.fr-head { display: flex; align-items: flex-start; gap: 11px; }
-/* 来源标签 + 删除：两个都是「右上角的小东西」，贴在一起，别让 gap 11 把它们撑开 */
-.fr-head-actions { display: flex; flex: none; align-items: center; gap: 2px; }
-.fr-avatar {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  flex: none;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--brand-soft);
-  color: var(--brand-strong);
-  font-size: 16px;
-  font-weight: 700;
-}
-/* 真头像：裁成和首字方块同一个 40×40 圆角格，换脸不跳版；加载中露底色，不会闪白 */
-.fr-avatar.is-photo { display: block; object-fit: cover; background: var(--surface-3); }
-.fr-id { min-width: 0; flex: 1; }.fr-name { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
-.fr-sub { margin: 2px 0 0; color: var(--dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.fr-sub .sep { margin: 0 5px; color: var(--faint); }
-
-/* 备注：她私底下怎么叫这个人。
-   chips 用 brand-soft 而不是灰 pill —— 「群里认识」是事实标签，这里是可以改的内容。 */
-.fr-alias { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; }
-.alias-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  border-radius: 6px;
-  background: var(--brand-soft);
-  padding: 1px 3px 1px 8px;
-  color: var(--brand-strong);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.7;
-}
-.alias-x { border: 0; background: none; padding: 0 3px; color: var(--brand-strong); opacity: .5; cursor: pointer; font-size: 13px; line-height: 1; }
-.alias-x:hover { opacity: 1; }
-.alias-add { border: 0; background: none; padding: 0 2px; color: var(--dim); font-size: 12px; font-weight: 500; cursor: pointer; }
-.alias-add:hover { color: var(--brand-strong); text-decoration: underline; text-underline-offset: 3px; }
-
-/* 编辑区：浅底一块，不描边不投影，和卡片的白砖分出层级 */
-.alias-editor { margin-top: 9px; border-radius: 8px; background: var(--surface-2); padding: 9px 11px 10px; }
-.alias-editor input { width: 100%; border: 0; background: none; color: var(--text); font-size: 13px; line-height: 1.6; outline: none; }
-.alias-editor input::placeholder { color: var(--faint); }
-.alias-hint { margin: 5px 0 0; color: var(--dim); font-size: 12px; line-height: 1.6; }
-.alias-actions { display: flex; gap: 8px; margin-top: 7px; }
-.alias-actions button { height: 26px; border: 0; border-radius: 6px; padding: 0 11px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.alias-save { background: var(--brand); color: #fff; }
-.alias-save:disabled { opacity: .5; cursor: default; }
-.alias-cancel { background: none; color: var(--dim); }
-.alias-cancel:hover { color: var(--text); }
-
-/* 待审备注入口：按钮 + 角标 */
-.btn-suggest { position: relative; display: inline-flex; align-items: center; gap: 6px; }
-/* 多选开关：开着的时候要能一眼看出「现在点卡片是选人，不是看人」 */
 .fr-a .btn-select-mode.is-on { background: var(--brand-soft); color: var(--brand-strong); }
 .fr-a .btn-select-mode.is-on:hover { text-decoration: none; }
+.btn-suggest { position: relative; display: inline-flex; align-items: center; gap: 6px; }
 .suggest-badge {
   display: inline-grid;
   min-width: 18px;
@@ -1315,112 +1530,332 @@ onMounted(() => load(1));
   font-variant-numeric: tabular-nums;
 }
 
-/* 待审弹窗 */
-.suggest-desc { margin: 0 0 12px; color: var(--dim); font-size: 13px; line-height: 1.7; }
-.suggest-loading, .suggest-empty { padding: 24px 0; color: var(--dim); font-size: 13px; text-align: center; }
-.suggest-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; max-height: 50vh; overflow-y: auto; }
-.suggest-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border: 0; border-radius: 12px; background: var(--surface-2); box-shadow: none; padding: 12px 14px; }
-.suggest-main { min-width: 0; flex: 1; }
-.suggest-alias { color: var(--text); font-size: 15px; font-weight: 700; }
-.suggest-for { margin-left: 8px; color: var(--dim); font-size: 12px; }
-.suggest-reason { margin: 5px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.6; }
-.suggest-actions { display: flex; flex: none; gap: 8px; align-items: center; }
-.suggest-actions button { height: 28px; border: 0; border-radius: 6px; padding: 0 13px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.suggest-actions button:disabled { opacity: .5; cursor: default; }
-.suggest-ok { background: var(--brand); color: #fff; }
-.suggest-no { background: none; color: var(--dim); }
-.suggest-no:hover { color: var(--text); }
-
-/* 身份与交流权限：三个值平铺成单选，点一下就是最终决定，没有保存按钮。
-   身份是平台账号属性，交流政策是当前角色的关系属性 —— 所以只有下面这行提示说清范围，
-   每个选项的说明放在 title 里，不占版面。 */
-.friend-controls {
-  display: grid;
-  gap: 8px;
-  margin-top: 13px;
-  border-top: 1px solid var(--surface-3);
-  padding-top: 12px;
+/* 屏读专用：四个字以内的前缀用隐藏文本，不要用 aria-label —— 无 role 的 span 上浏览器会忽略它。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
-/* 多选时整块锁住：只改选择，不改设置。用透明度 + 断掉指针，比直接 v-if 掉更稳 —— 卡片高度不会跳。 */
-.friend-controls.is-locked { pointer-events: none; opacity: .45; }
-.friend-opts { display: flex; min-width: 0; flex-wrap: wrap; gap: 4px; }
-.friend-opt {
-  position: relative;
-  display: inline-flex;
-  height: 26px;
+
+/* ── 工具栏 ── */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-4); }
+.search {
+  display: flex;
+  height: 36px;
+  flex: 0 0 240px;
   align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0 12px;
+  color: var(--dim);
+}
+.search input { width: 100%; min-width: 0; border: 0; background: none; color: var(--text); font-size: 13px; outline: none; }
+.search input::placeholder { color: var(--faint); }
+.search:focus-within { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+.seg { display: flex; gap: 2px; border-radius: var(--radius-sm); background: var(--surface); padding: 3px; }
+.seg-btn {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
   border-radius: var(--radius-xs);
-  background: var(--surface-2);
+  background: none;
   padding: 0 10px;
   color: var(--text-2);
   font-size: 12px;
   font-weight: 600;
-  line-height: 1;
   cursor: pointer;
   transition: background .14s var(--ease), color .14s var(--ease);
 }
-.friend-opt:hover { background: var(--surface-3); }
-/* 原生 radio 藏起来但保留键盘可达：用 1px + opacity 而不是 display:none，
-   Tab 和方向键仍然能选中，读屏也能念出「身份 / 真人」。 */
-.friend-opt input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.friend-opt:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
-.friend-opt.is-on { background: var(--brand-soft); color: var(--brand-strong); }
-/* 禁止交流是「关掉」的动作，选中时走红色，跟允许 / 默认区分开 */
-.friend-opt.is-block.is-on { background: var(--red-soft); color: var(--red-text); }
-/* 保存状态：固定占一行高度，出现/消失时卡片不会跳一下 */
-.friend-save-state { min-height: 14px; margin: 0; color: var(--dim); font-size: 12px; line-height: 14px; text-align: right; }
+.seg-btn:hover { background: var(--surface-2); }
+.seg-btn.is-on { background: var(--surface-2); color: var(--text); }
+.seg-n { color: var(--dim); font-variant-numeric: tabular-nums; font-weight: 500; }
+.seg-dir { color: var(--brand-strong); font-size: 12px; font-weight: 600; line-height: 1; }
 
-/* 多选：勾选框只在多选模式出现，卡片整块可点 */
-.fr-check {
-  width: 16px;
-  height: 16px;
-  flex: none;
-  margin: 2px 0 0;
-  accent-color: var(--brand);
-  cursor: pointer;
-}
-.friend-card.is-selecting { cursor: pointer; }
-.friend-card.is-picked { outline: 2px solid var(--brand); outline-offset: -2px; }
-/* 多选时备注也别改：链接类按钮停掉指针，chips 本身只是显示 */
-.friend-card.is-selecting .alias-add,
-.friend-card.is-selecting .alias-x { pointer-events: none; }
-
-/* 多选工具条：跟统计带同一块白砖的调子，只在多选模式出现 */
-.sel-bar {
+/* ── 统计带 / 多选条：同槽位同高 84，进出多选零垂直位移 ── */
+.band, .sel-bar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
+  min-height: 84px;
   margin-bottom: var(--sp-4);
-  border: 0;
   border-radius: 12px;
   background: var(--surface);
-  box-shadow: none;
-  padding: 22px;
+  padding: 14px 18px;
 }
+.band { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 24px; }
+.band-cell { display: flex; min-width: 0; flex-direction: column; justify-content: center; }
+.band-krow { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 8px; }
+.band-k { min-width: 0; overflow: hidden; color: var(--dim); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.band-v { color: var(--text); font-size: 18px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; line-height: 22px; }
+.band-v small { margin-left: 3px; color: var(--dim); font-size: 12px; font-weight: 500; }
+.band-f { flex: none; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 18px; white-space: nowrap; }
+
+.sel-bar { align-items: center; gap: 12px; }
 .sel-count { color: var(--text-2); font-size: 14px; font-weight: 600; }
 .sel-count b { color: var(--brand-strong); font-variant-numeric: tabular-nums; }
 .sel-link { border: 0; background: none; padding: 0; color: var(--brand-strong); font-size: 14px; font-weight: 600; cursor: pointer; }
 .sel-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-.sel-note { margin-right: auto; color: var(--dim); font-size: 12px; }
+.sel-note { margin-right: auto; color: var(--amber); font-size: 12px; }
+.sel-note.is-plain { color: var(--dim); }
 .sel-del {
   height: 30px;
   border: 0;
   border-radius: var(--radius-sm);
-  background: var(--red);
+  background: none;
   padding: 0 14px;
-  color: #fff;
+  color: var(--dim);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
+  transition: background .14s var(--ease), color .14s var(--ease);
 }
-.sel-del:disabled { background: var(--surface-3); color: var(--dim); cursor: default; }
+.sel-del:hover { color: var(--red-text); }
+.sel-del.is-armed { background: var(--red); color: #fff; }
+.sel-del.is-armed:hover { background: #b32136; }
+.sel-del:disabled { cursor: default; }
 
-/* 删朋友：平时隐身，指到卡片上才显形（触屏没有 hover，就常显） */.fr-del {
+/* ── 网格：1440 = 四列 × 三行 = 12 张 ── */
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-3); align-items: start; }
+@media (max-width: 1360px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1000px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* ── 卡片 ── */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* 全局 .card 有描边和阴影，这里必须显式清掉（A 套：白砖、零描边、零阴影） */
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: none;
+  padding: 18px 18px 14px;
+}
+/* 收起态严格等高（220）。不齐的两个来源：名字 1 行 vs 2 行、备注行有无。
+   头区锁 60、备注行锁 24（异常提示也并在这一行里，不额外占高），剩下的交给 min-height。 */
+.card:not(.is-open) { min-height: 220px; }
+.card-bar { position: absolute; inset: 0 0 auto; height: 3px; border-radius: 12px 12px 0 0; background: transparent; }
+.card.is-l3 .card-bar { background: var(--fr-l3-fg, var(--green)); }
+.card.is-l2 .card-bar { background: var(--brand); }
+.card.is-block .card-bar { background: var(--red); }
+
+.head { display: flex; min-height: 60px; align-items: flex-start; gap: 11px; }
+.pick { position: relative; display: none; align-self: center; }
+.pick::after { position: absolute; inset: -8px; content: ""; }
+.pick input { width: 16px; height: 16px; margin: 0; accent-color: var(--brand); cursor: pointer; }
+.avatar {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+  font-size: 16px;
+  font-weight: 700;
+}
+.avatar.is-photo { display: block; object-fit: cover; background: var(--surface-3); }
+/* 昵称文本块给右上角绝对定位的删除键让位：键占 [右 14, 宽 24] → 侵入内容 20px，留 22 有 2px 余量 */
+.card-id { min-width: 0; flex: 1; padding-right: 22px; }
+.name {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+/* 副行必须单行：QQ · UID 段可省略，来源词 flex:none 挂在行尾永不被截 */
+.sub {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
+  margin: 2px 0 0;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.sub-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sub-src { flex: none; color: var(--brand-strong); font-weight: 500; }
+
+/* ② 关系信号行：强度词在行首，和「聊过 N 次 / 最近」读成一句话 */
+.signal { display: flex; align-items: center; gap: 4px; margin-top: 10px; }
+.signal .pill { margin-right: 4px; }
+.s-label { color: var(--dim); font-size: 12px; }
+.s-num { color: var(--text); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.s-num.is-zero { color: var(--dim); font-weight: 600; }
+.s-time { margin-left: auto; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.pill {
+  display: inline-flex;
+  height: 20px;
+  min-width: 52px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.pill.is-l3 { background: var(--fr-l3-bg, var(--green-soft)); color: var(--fr-l3-fg, var(--green)); }
+.pill.is-l2 { background: var(--fr-l2-bg, var(--brand-soft)); color: var(--fr-l2-fg, var(--brand-strong)); }
+.pill.is-l1 { background: var(--fr-l1-bg, var(--surface-3)); color: var(--fr-l1-fg, var(--dim)); }
+.pill.is-block { background: var(--fr-block-bg, var(--red-soft)); color: var(--fr-block-fg, var(--red-text)); }
+
+/* 主动联系异常：在备注行右端，1 行省略号，完整原因在 title 里。
+   不单独占一行是有意的：单独一行就要给它常备高度，否则卡片会随提示出现/消失跳动。 */
+.alias-warn {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--amber);
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ③ 备注行 */
+.aliases { display: flex; min-height: 24px; align-items: center; gap: 6px; margin-top: 10px; overflow: hidden; flex-wrap: nowrap; }
+.card.is-open .aliases { flex-wrap: wrap; }
+.alias {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 1px;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  background: var(--brand-soft);
+  padding: 1px 3px 1px 8px;
+  color: var(--brand-strong);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.alias-txt { overflow: hidden; text-overflow: ellipsis; }
+.alias-x {
+  position: relative;
+  border: 0;
+  background: none;
+  padding: 0 3px;
+  color: var(--brand-strong);
+  font-size: 13px;
+  line-height: 1;
+  opacity: .5;
+  cursor: pointer;
+  transition: opacity .14s var(--ease);
+}
+.alias-x::after { position: absolute; inset: -6px -4px; content: ""; }
+.alias-x:hover { opacity: 1; }
+.alias-more { flex: none; color: var(--dim); font-size: 12px; font-weight: 600; }
+.alias-add {
+  position: relative;
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color .14s var(--ease);
+}
+.alias-add::after { position: absolute; inset: -8px -4px; content: ""; }
+.alias-add:hover { color: var(--brand-strong); text-decoration: underline; text-underline-offset: 3px; }
+
+.alias-editor { margin-top: 9px; border-radius: var(--radius-sm); background: var(--surface-2); padding: 9px 11px 10px; }
+.alias-editor input { width: 100%; border: 0; background: none; color: var(--text); font-size: 13px; line-height: 1.6; outline: none; }
+.alias-editor input::placeholder { color: var(--faint); }
+.alias-hint { margin: 5px 0 0; color: var(--dim); font-size: 12px; line-height: 1.6; }
+.alias-actions { display: flex; gap: 8px; margin-top: 7px; }
+.alias-actions button { height: 26px; border: 0; border-radius: var(--radius-xs); padding: 0 11px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.a-save { background: var(--brand-btn); color: #fff; }
+.a-save:hover { background: var(--brand-strong); }
+.a-save:disabled { opacity: .5; cursor: default; }
+.a-cancel { background: none; color: var(--dim); }
+.a-cancel:hover { color: var(--text); }
+
+/* ④ 设置摘要：chips 自己换行，右侧「调整」不孤立 */
+.sum {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: auto;
+  border-top: 1px solid var(--surface-3);
+  padding-top: 12px;
+  min-height: 24px;
+}
+.chips { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chip {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--surface-3);
+  padding: 0 7px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: default;
+}
+.chip.is-brand { background: var(--brand-soft); color: var(--brand-strong); }
+.chip.is-ai { background: var(--amber-soft); color: var(--amber); }
+.chip.is-block { background: var(--red-soft); color: var(--red-text); }
+/* 「调整」：这一行唯一可交互物。盒高 32（真命中区）用负 margin 收回 22 的视觉占位 */
+.adjust {
+  display: inline-flex;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  justify-self: end;
+  margin: -5px -4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  padding: 0 4px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color .14s var(--ease);
+}
+/* 悬停只变色，不加下划线：「收起 / 调整」是个动作入口，不是正文链接，划一道线会显得像被选中 */
+.adjust:hover { color: var(--brand-strong); }
+.adjust:disabled { color: var(--faint); cursor: default; text-decoration: none; }
+.adjust .caret { font-size: 10px; line-height: 1; }
+
+/* 删除键：绝对定位不占行内宽度；DOM 里是卡片最后一个子元素，Tab 最后才到 */
+.del {
+  position: absolute;
+  top: 14px;
+  right: 14px;
   display: grid;
   width: 24px;
   height: 24px;
-  flex: none;
   place-items: center;
   border: 0;
   border-radius: var(--radius-xs);
@@ -1429,17 +1864,161 @@ onMounted(() => load(1));
   color: var(--faint);
   cursor: pointer;
   opacity: 0;
-  transition: opacity .14s var(--ease), background .14s var(--ease), color .14s var(--ease);
+  transition: opacity .15s var(--ease), background .15s var(--ease), color .15s var(--ease);
 }
-.fr-del .el-icon { font-size: 14px; }
-.friend-card:hover .fr-del, .friend-card:focus-within .fr-del { opacity: 1; }
-.fr-del:hover { background: var(--red-soft); color: var(--red-text); }
-.fr-del:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; opacity: 1; }
-@media (hover: none) {
-  .fr-del { opacity: 1; }
-}
+.del::after { position: absolute; inset: -4px; content: ""; }
+.card:hover .del, .card:focus-within .del { opacity: 1; }
+/* 单写一条：只靠父级 :focus-within 会在过渡期间呈现半透明，键盘用户会聚焦到看不见的按钮 */
+.del:focus-visible { opacity: 1; outline: 2px solid var(--brand); outline-offset: 1px; transition: none; }
+.del:hover { background: var(--red-soft); color: var(--red-text); }
 
-/* 删朋友弹窗：先摆清楚删的是谁、连带走什么，再给红色按钮 */
+/* 展开区 */
+.ctl { display: grid; gap: 8px; margin-top: 10px; border-radius: var(--radius-sm); background: var(--surface-2); padding: 12px; }
+.opts { display: flex; min-width: 0; flex-wrap: wrap; gap: 4px; }
+.opts.nowrap { flex-wrap: nowrap; }
+/* 药丸 26px 视觉 + 32px 命中区；灰底上必须看清形状 → 唯一允许的内描边 */
+.opt {
+  position: relative;
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+  padding: 0 10px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .14s var(--ease), color .14s var(--ease), box-shadow .14s var(--ease);
+}
+.opt::after { position: absolute; inset: -3px 0; content: ""; }
+.opt:hover { background: var(--surface-2); }
+.opt input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.opt:has(input:checked) { background: var(--brand-soft); box-shadow: inset 0 0 0 1px var(--brand-line); color: var(--brand-strong); }
+.opt.is-block:has(input:checked) { background: var(--red-soft); box-shadow: inset 0 0 0 1px #f3c9cf; color: var(--red-text); }
+.opt:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
+.opt-wide { width: max-content; max-width: 100%; justify-self: start; justify-content: flex-start; gap: 4px; }
+.pv-on { display: none; }
+.proactive input:checked ~ span .pv-off { display: none; }
+.proactive input:checked ~ span .pv-on { display: inline; }
+
+.switch-row { display: flex; height: 32px; align-items: center; justify-content: space-between; gap: 10px; }
+.switch-label { color: var(--text-2); font-size: 14px; font-weight: 600; }
+.switch { position: relative; display: inline-flex; width: 34px; height: 20px; flex: none; cursor: pointer; }
+.switch::after { position: absolute; inset: -8px -6px; content: ""; }
+.switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.switch .track { position: relative; width: 34px; height: 20px; border-radius: 999px; background: var(--line-strong); transition: background .16s var(--ease); }
+.switch .track::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  content: "";
+  transition: transform .16s var(--ease);
+}
+.switch input:checked + .track { background: var(--brand); }
+.switch input:checked + .track::after { transform: translateX(14px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--brand); outline-offset: 3px; }
+.switch-note { margin: 0; color: var(--amber); font-size: 12px; line-height: 1.5; }
+.save-state { min-height: 14px; margin: 0; color: var(--dim); font-size: 12px; line-height: 14px; text-align: right; }
+.ctl-note { margin: 0; color: var(--dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.ctl-del {
+  display: none;
+  height: 32px;
+  align-items: center;
+  justify-self: start;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  padding: 0 4px;
+  color: var(--red-text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ctl-del:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* ── 多选态 ── */
+.is-selecting .card { cursor: pointer; }
+.is-selecting .card:hover { background: var(--surface-2); }
+.is-selecting .pick { display: grid; }
+/* 选中环外扩 1px：落在 12px 网格 gap 里，不裁切、也不压住顶部 3px 强度条 */
+.is-selecting .card.is-picked { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* 多选锁设置：摘要与展开区一起变淡并断掉指针，「调整」同时真 disabled（不进 Tab 序） */
+.is-selecting .sum, .is-selecting .ctl { opacity: .4; pointer-events: none; }
+
+/* ── 骨架屏：和真实卡片同高，加载完不跳版 ── */
+.card.is-skeleton { gap: 10px; min-height: 220px; }
+.sk { border-radius: var(--radius-xs); background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%); background-size: 400% 100%; animation: sk-shimmer 1.4s ease-in-out infinite; }
+.sk-avatar { width: 40px; height: 40px; border-radius: var(--radius-sm); }
+.sk-name { width: 58%; height: 16px; }
+.sk-sub { width: 40%; height: 12px; }
+.sk-line { width: 100%; height: 14px; margin-top: 18px; }
+@keyframes sk-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+/* ── 空态 ── */
+.empty {
+  display: flex;
+  min-height: 220px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 22px;
+  text-align: center;
+}
+.empty-ico {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 12px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 20px;
+}
+.empty h3 { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; }
+.empty p { max-width: 440px; margin: 8px 0 0; color: var(--dim); font-size: 14px; line-height: 1.75; }
+.empty-cond { color: var(--dim); font-size: 12px; }
+.empty-reset {
+  margin-top: 12px;
+  border: 0;
+  background: none;
+  padding: 4px 6px;
+  color: var(--brand-strong);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.empty-reset:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* ── 待审备注弹窗 ── */
+.suggest-desc { margin: 0 0 12px; color: var(--dim); font-size: 13px; line-height: 1.7; }
+.suggest-loading, .suggest-empty { padding: 24px 0; color: var(--dim); font-size: 13px; text-align: center; }
+.suggest-list { display: flex; max-height: 50vh; flex-direction: column; gap: 10px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.suggest-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-radius: 12px; background: var(--surface-2); padding: 12px 14px; }
+.suggest-main { min-width: 0; flex: 1; }
+.suggest-alias { color: var(--text); font-size: 15px; font-weight: 700; }
+.suggest-for { margin-left: 8px; color: var(--dim); font-size: 12px; }
+.suggest-reason { margin: 5px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.6; }
+.suggest-actions { display: flex; flex: none; align-items: center; gap: 8px; }
+.suggest-actions button { height: 28px; border: 0; border-radius: 6px; padding: 0 13px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.suggest-actions button:disabled { opacity: .5; cursor: default; }
+.suggest-ok { background: var(--brand-btn); color: #fff; }
+.suggest-no { background: none; color: var(--dim); }
+.suggest-no:hover { color: var(--text); }
+
+/* ── 删朋友弹窗 ── */
 .del-who { display: flex; align-items: center; gap: 10px; border-radius: var(--radius-sm); background: var(--surface-2); padding: 10px 12px; }
 .del-avatar {
   display: grid;
@@ -1458,16 +2037,11 @@ onMounted(() => load(1));
 .del-id span { color: var(--dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .del-desc { margin: 14px 0 6px; color: var(--text-2); font-size: 14px; }
 .del-list { margin: 0; padding-left: 18px; color: var(--dim); font-size: 14px; line-height: 1.8; }
-/* 批量删除：把要删的人名先列出来，比「N 个人」更有实感 */
-.del-names {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
+.del-names { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .del-names li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border-radius: var(--radius-xs);
   background: var(--surface-2);
   padding: 3px 9px;
@@ -1476,8 +2050,11 @@ onMounted(() => load(1));
   font-weight: 600;
   line-height: 1.6;
 }
+/* 有私聊记录的人在这里标出来：用户才知道自己勾没勾掉一个熟客 */
+.del-names-count { color: var(--brand-strong); font-style: normal; font-weight: 600; }
 .del-names .del-names-more { background: none; color: var(--dim); font-weight: 500; }
 .del-note { margin: 12px 0 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
+.del-hint { margin-right: 10px; color: var(--dim); font-size: 12px; }
 .del-cancel, .del-ok {
   height: 32px;
   border: 0;
@@ -1493,54 +2070,34 @@ onMounted(() => load(1));
 .del-ok { margin-left: 8px; background: var(--red); color: #fff; }
 .del-ok:disabled { cursor: default; opacity: .6; }
 
-/* 释义行：label 定宽 56px，值紧跟在后 */
-.fr-kv { display: flex; flex-direction: column; gap: 7px; margin: 14px 0 0; border-top: 1px solid var(--surface-3); padding-top: 12px; }
-.fr-kv > div { display: flex; gap: 10px; align-items: baseline; }
-.fr-kv dt { flex: 0 0 56px; color: var(--dim); font-size: 12px; }
-.fr-kv dd { min-width: 0; flex: 1; margin: 0; color: var(--text-2); font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
-.fr-kv dd.is-muted { color: var(--dim); font-weight: 500; }
-
-/* 空态：居中白砖 + 圆形图标，不用虚线框 */
-.empty-block {
-  display: flex;
-  min-height: 260px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 12px;
-  background: var(--surface);
-  box-shadow: none;
-  padding: 22px;
-  text-align: center;
+/* ── 响应式收尾 ── */
+@media (max-width: 900px) {
+  /* 第一格的 label 与图注改上下排（横排会把 label 挤成半个字）；两档都锁 100，进出多选仍零位移 */
+  .band, .sel-bar { min-height: 100px; }
+  .band-krow { display: block; }
+  .band-f { display: block; margin-top: 2px; }
 }
-.empty-icon {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  margin-bottom: 12px;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--brand-soft);
-  color: var(--brand);
-  font-size: 20px;
-}
-.empty-block h3 { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; }
-.empty-block p { max-width: 440px; margin: 8px 0 0; color: var(--dim); font-size: 14px; line-height: 1.75; }
-
 @media (max-width: 760px) {
-  .friend-grid { grid-template-columns: minmax(0, 1fr); }
+  .card { padding: 16px; }
+  .del { top: 12px; right: 12px; }
+  /* 展开区高于视口时自身滚动，不把整页拉长 */
+  .card.is-open .ctl { max-height: 70vh; overflow-y: auto; }
 }
 @media (max-width: 720px) {
-  /* 搜索独占一行；两排分段各自横向滚动，不硬挤 */
-  .fr-search { flex: 1 1 100%; }
+  .search { flex: 1 1 100%; }
   .seg { max-width: 100%; overflow-x: auto; }
 }
 @media (max-width: 560px) {
-  .band { gap: 0 12px; }
-  .band-f { display: none; }
+  .band { grid-template-columns: minmax(0, 1fr); gap: 12px 0; }
+  .band-cell:nth-child(n+2) { display: none; }
+  .sel-bar { flex-wrap: wrap; }
 }
-@media (max-width: 650px) {
-  .band, .friend-card, .friend-card.is-skeleton, .sel-bar, .empty-block { padding: 16px; }
+/* 触屏：不常显垃圾桶，删除入口收进展开区底部（一屏 12 个灰图标是噪声，且紧挨强度词易误触） */
+@media (hover: none) {
+  .del { display: none; }
+  .ctl-del { display: inline-flex; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
 }
 </style>
