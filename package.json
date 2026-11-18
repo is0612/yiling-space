@@ -42,6 +42,7 @@
     "scheduler:run": "tsx scripts/run-memory-scheduler.ts",
     "scheduler:watch": "tsx scripts/run-memory-scheduler.ts --watch",
     "watchdog:run": "tsx scripts/watchdog.ts",
+    "probe:growth-acceptance": "tsx scripts/probe-growth-acceptance.ts",
     "test:scheduler": "tsx scripts/test-memory-scheduler.ts",
     "test:scheduler-db": "tsx scripts/test-memory-scheduler-db.ts",
     "test:watchdog": "tsx scripts/test-watchdog.ts",
