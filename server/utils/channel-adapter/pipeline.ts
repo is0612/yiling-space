@@ -26,7 +26,7 @@ import {
 import { resolveChatTimeZone } from "../chat-time-context";
 import { analyzePrivateKnowledgeCandidate, resolveContextAssistantRuntime, shouldAnalyzePrivateKnowledge } from "../context-assistant";
 import { historyCursorWhere, historyExcludedIds, loadMessageHistoryCoverage } from "../message-history-coverage";
-import { rankKnowledgeItems } from "../knowledge-retrieval";
+import { loadChatKnowledge } from "../chat-knowledge-retrieval";
 import { isGroupKnowledgeSource, isPrivateKnowledgeSource, readKnowledgeCollectScope } from "../knowledge-collect-policy";
 import { generateGroupContextReply } from "../group-context-reply";
 import { loadConversationWorkingContext, saveConversationWorkingContext } from "../conversation-working-context";
@@ -1696,7 +1696,7 @@ async function runChannelTurn(input: {
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
   const growthReads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();
-  const observeGrowthRead = isGroup && input.platform === "qq-onebot"
+  const observeGrowthRead = input.platform === "qq-onebot"
     ? (entry: GrowthReadDiagnostic) => { growthReads.set(entry.domain, entry); }
     : undefined;
   if (observeGrowthRead) observeGrowthRead(createGrowthReadDiagnostic("knowledge"));
@@ -1720,28 +1720,29 @@ async function runChannelTurn(input: {
     : undefined;
 
   // Formal knowledge lookup is shared by group and private paths and is always character-scoped.
-  const loadKnowledge = async (searchQuery: string): Promise<ConversationKnowledgeItem[]> => {
-    try {
-    const rows = await prisma.knowledgeItem.findMany({
-      where: { characterId: input.characterId, status: "ACTIVE" },
-      orderBy: { updatedAt: "desc" },
-      take: 300,
-      select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, sourceType: true, updatedAt: true },
-    });
-    const selected = rankKnowledgeItems(searchQuery, rows, 8);
-    // Diagnostics rank the same bounded candidate slice without issuing another query.
-    const matchedCount = observeGrowthRead ? rows.reduce((count, row) => count + (rankKnowledgeItems(searchQuery, [row], 1).length ? 1 : 0), 0) : 0;
-    observeGrowthRead?.(createGrowthReadDiagnostic("knowledge", { status: selected.length ? "provided" : "no_match", candidateCount: rows.length,
-      matchedCount, selectedCount: selected.length, limitExcludedCount: Math.max(0, matchedCount - selected.length), candidateLimitReached: rows.length === 300,
-      provided: selected.map(item => ({ id: item.id, updatedAt: new Date(item.updatedAt).toISOString() })) }));
-    return selected.map(item => ({
-      id: item.id, title: item.title, content: item.content, category: item.category,
-      tags: item.tags, confidence: item.confidence, sourceType: item.sourceType,
-    }));
-    } catch (error) {
-      observeGrowthRead?.(createGrowthReadDiagnostic("knowledge", { status: "failed" }));
-      throw error;
+  const loadKnowledge = (searchQuery: string): Promise<ConversationKnowledgeItem[]> =>
+    loadChatKnowledge(prisma, input.characterId, searchQuery, observeGrowthRead);
+
+  /**
+   * 词法兜底：不依赖分析器给的 `knowledgeQuery`，直接用这一轮原文再查一次。
+   *
+   * 为什么需要：分析器只在它认为「这是可复用的知识话题」时才给 query（提示词里明确排除了
+   * 闲聊、个人经历和「可以直接回答」的问题），于是一条完全命中知识库的问题也可能一次都不查。
+   * 词法匹配是确定性计算、不花 token，问什么就查什么，比让模型判断「要不要查」更稳。
+   */
+  const lexicalKnowledgeQuery = (): string => {
+    const source = isGroup ? messages.slice(-3) : messages;
+    return source.map(item => item.content).join("\n").replace(/\s+/g, " ").trim().slice(0, 240);
+  };
+  const loadKnowledgeWithLexical = async (query?: string): Promise<ConversationKnowledgeItem[]> => {
+    const merged = new Map<string, ConversationKnowledgeItem>();
+    for (const candidate of [query, lexicalKnowledgeQuery()]) {
+      const trimmed = candidate?.trim();
+      if (!trimmed) continue;
+      for (const item of await loadKnowledge(trimmed).catch(() => [])) merged.set(item.id, item);
     }
+    // 与分析器结果合并后仍守同一条上限：知识段是参考，不是把整库塞进提示词。
+    return [...merged.values()].slice(0, 8);
   };
 
   // This capability is granted by the verified owner turn, never by a tool query or stored metadata.
@@ -1830,7 +1831,11 @@ async function runChannelTurn(input: {
   // capture is disabled. Only current-round original messages enter this private-only analysis.
   const modelConfigForKnowledge = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
     ? character.modelConfig as Record<string, unknown> : {};
-  let privateKnowledgeItems: ConversationKnowledgeItem[] = [];
+  // Reading approved knowledge is independent of the optional model analysis for
+  // query rewriting/candidate capture. Natural questions must reach this reader
+  // even when the cheap analyzer gate is false or its model is unavailable.
+  let privateKnowledgeItems: ConversationKnowledgeItem[] = !isGroup
+    ? await loadKnowledgeWithLexical().catch(() => []) : [];
   if (!isGroup) {
     const privateMessages = messages.map(item => ({
       id: item.externalMessageId,
@@ -1856,11 +1861,12 @@ async function runChannelTurn(input: {
           }).catch(() => undefined);
 
           // Retrieval is independent of auto-collection: only confirmed ACTIVE items are searchable.
-          if (result.knowledgeQuery) {
+          if (result.knowledgeQuery && !privateKnowledgeItems.length) {
             privateKnowledgeItems = await runAssistantTurnStage(collaboration, "knowledge", result.knowledgeQuery,
               { characterId: input.characterId, readableScopeIds, query: result.knowledgeQuery },
-              () => loadKnowledge(result.knowledgeQuery!), items => items.length === 0).catch(() => []);
+              () => loadKnowledgeWithLexical(result.knowledgeQuery!), items => items.length === 0).catch(() => []);
           } else {
+            // The unconditional local read above already handled the original question.
             skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
           }
 
@@ -2310,7 +2316,7 @@ async function runChannelTurn(input: {
         ...(line.mentions?.length ? { mentions: line.mentions } : {}),
         occurredAt: new Date(line.at).toISOString(),
       })),
-      loadKnowledge,
+      loadKnowledge: loadKnowledgeWithLexical,
       onKnowledgeCandidate: async (candidate) => {
         const modelConfig = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
           ? character.modelConfig as Record<string, unknown> : {};
