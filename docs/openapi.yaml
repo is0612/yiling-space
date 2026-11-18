@@ -3393,6 +3393,46 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: 角色还没有全局记忆范围
+  /characters/{characterId}/memory-events/pending:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+    delete:
+      tags: [Memories]
+      operationId: deletePendingCharacterMemoryMessages
+      summary: 删除待整理范围一行的未处理原始消息
+      description: >-
+        仅角色所有者可操作。key 必须匹配当前预览中的日期、范围和会话；按当前忆泡游标过滤，只删除入库时间及消息时间不晚于 checkedAt 的原始消息，保留已有忆泡、快照和长期记忆。删除会清空相关来源指针并写入审计，不删除会话。checkedAt 有效期为30分钟；范围变化、数量不符或同范围有重叠的排队/运行/等待重试任务时返回409，要求刷新或先处理任务。事务使用串行化隔离，冲突不会自动扩大删除范围。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [key, expectedCount, checkedAt]
+              properties:
+                key: { type: string, description: 原样提交预览行的 key }
+                expectedCount: { type: integer, minimum: 1 }
+                checkedAt: { type: string, format: date-time }
+      responses:
+        '200':
+          description: 已删除未整理原文，已有记忆保留
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deletedMessages, memoriesPreserved]
+                properties:
+                  deletedMessages: { type: integer, minimum: 0 }
+                  memoriesPreserved: { type: boolean, enum: [true] }
+        '400':
+          description: 删除参数无效
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 预览过期、范围或数量变化、存在活动任务或事务冲突
   /characters/{characterId}/memory-events/extract:
     parameters:
       - $ref: '#/components/parameters/CharacterId'

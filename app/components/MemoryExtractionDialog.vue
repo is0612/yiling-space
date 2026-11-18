@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ElMessage } from "element-plus";
 import { ensureMemoryProgressPolling, type MemoryProgressRow } from "~/composables/useMemoryProgress";
 import { useMemoryActions } from "~/composables/useMemoryActions";
 import { createMemoryApi } from "~/api/memory";
@@ -24,6 +25,14 @@ const visible = computed({ get: () => props.modelValue, set: (value: boolean) =>
 const sessionCharacterId = ref("");
 const sessionCharacterName = ref("");
 const preview = ref<ExtractionPreview | null>(null);
+type PendingRow = ExtractionPreview["rows"][number];
+const deleteTarget = ref<{ row: PendingRow; checkedAt: string; token: number; characterId: string } | null>(null);
+const deleting = ref(false);
+const deleteError = ref("");
+const deleteConfirmVisible = computed({
+  get: () => Boolean(deleteTarget.value),
+  set: (value: boolean) => { if (!value && !deleting.value) deleteTarget.value = null; },
+});
 const previewLoading = ref(false);
 const previewError = ref("");
 const jobs = ref<MemoryProgressRow[]>([]);
@@ -109,6 +118,9 @@ watch(() => [props.modelValue, props.characterId] as const, ([open, characterId]
   progressRequest++;
   stopPolling();
   preview.value = null;
+  deleteTarget.value = null;
+  deleting.value = false;
+  deleteError.value = "";
   jobs.value = [];
   previewError.value = "";
   progressError.value = "";
@@ -132,7 +144,35 @@ const retryable = computed(() => jobs.value.some(job => ["QUEUED", "RETRY_WAIT",
 const running = computed(() => jobs.value.some(job => job.status === "RUNNING" && !job.leaseExpired));
 const pendingRelocation = computed(() => preview.value?.hasLegacyOwnerChats === true);
 const canStart = computed(() => Boolean(sessionCharacterId.value && preview.value && !previewLoading.value
-  && !eventExtracting.value && (preview.value.totalMessages > 0 || pendingRelocation.value)));
+  && !eventExtracting.value && !deleteTarget.value && !deleting.value && (preview.value.totalMessages > 0 || pendingRelocation.value)));
+function requestDelete(value: unknown) {
+  if (!preview.value || previewLoading.value || deleting.value || deleteTarget.value || eventExtracting.value) return;
+  const key = value && typeof value === "object" && "key" in value ? value.key : null;
+  const row = preview.value.rows.find(item => item.key === key);
+  if (!row) return;
+  deleteError.value = "";
+  deleteTarget.value = { row: { ...row }, checkedAt: preview.value.checkedAt, token: epoch, characterId: sessionCharacterId.value };
+}
+async function confirmDelete() {
+  const target = deleteTarget.value;
+  if (!target || deleting.value || eventExtracting.value || !current(target.token, target.characterId)) return;
+  deleting.value = true;
+  deleteError.value = "";
+  try {
+    const result = await api.deletePendingMemoryEvents(target.characterId, {
+      key: target.row.key, expectedCount: target.row.pendingMessages, checkedAt: target.checkedAt,
+    });
+    if (!current(target.token, target.characterId)) return;
+    deleteTarget.value = null;
+    ElMessage.success(`已永久删除 ${result.deletedMessages} 条尚未整理的原始消息。`);
+    await refresh();
+  } catch (error) {
+    if (!current(target.token, target.characterId)) return;
+    deleteError.value = message(error, "删除失败，请刷新预览后重试。");
+  } finally {
+    if (current(target.token, target.characterId)) deleting.value = false;
+  }
+}
 async function startExtraction() {
   if (!canStart.value) return;
   const token = epoch;
@@ -174,6 +214,7 @@ function formatCheckedAt(value: string | null) {
           <h3>待整理范围</h3>
           <el-button
             :loading="previewLoading || progressLoading"
+            :disabled="deleting || Boolean(deleteTarget) || eventExtracting"
             @click="refresh"
           >
             刷新预览与进度
@@ -234,6 +275,22 @@ function formatCheckedAt(value: string | null) {
               width="120"
               align="right"
             />
+            <el-table-column
+              label="操作"
+              width="100"
+              align="right"
+            >
+              <template #default="{ row }">
+                <el-button
+                  type="danger"
+                  link
+                  :disabled="previewLoading || deleting || Boolean(deleteTarget) || eventExtracting"
+                  @click="requestDelete(row)"
+                >
+                  删除
+                </el-button>
+              </template>
+            </el-table-column>
           </el-table>
           <el-empty
             v-else
@@ -347,6 +404,50 @@ function formatCheckedAt(value: string | null) {
         @click="startExtraction"
       >
         {{ pendingRelocation ? '检查并整理（昨天和今天）' : retryable || running ? '继续整理（昨天和今天）' : '开始整理' }}
+      </el-button>
+    </template>
+  </el-dialog>
+  <el-dialog
+    v-model="deleteConfirmVisible"
+    title="永久删除待整理原始消息"
+    width="min(480px, 94vw)"
+    :close-on-click-modal="!deleting"
+    :close-on-press-escape="!deleting"
+    :show-close="!deleting"
+    append-to-body
+  >
+    <template v-if="deleteTarget">
+      <p>日期：{{ deleteTarget.row.dayKey }}</p>
+      <p>会话：{{ deleteTarget.row.conversationLabel }}</p>
+      <p>数量：{{ deleteTarget.row.pendingMessages }} 条尚未整理的原始消息</p>
+      <el-alert
+        title="这些原始消息将永久删除，无法恢复。已有忆泡和长期记忆会保留。"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <p
+        v-if="deleteError"
+        class="extraction-error"
+        role="alert"
+      >
+        {{ deleteError }}
+      </p>
+    </template>
+    <template #footer>
+      <el-button
+        :disabled="deleting"
+        @click="deleteConfirmVisible = false"
+      >
+        取消
+      </el-button>
+      <el-button
+        type="danger"
+        :loading="deleting"
+        :disabled="deleting || eventExtracting"
+        @click="confirmDelete"
+      >
+        永久删除
       </el-button>
     </template>
   </el-dialog>

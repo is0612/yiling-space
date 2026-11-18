@@ -528,6 +528,14 @@ export function createMemoryApi(request: ApiRequest) {
     });
   }
 
+  function deletePendingMemoryEvents(characterId: string, body: { key: string; expectedCount: number; checkedAt: string }): Promise<{ deletedMessages: number }> {
+    return request<{ deletedMessages: number }>({
+      url: `${eventBase(characterId)}/pending`,
+      method: "delete",
+      data: body,
+    });
+  }
+
   function listMemoryProgress(payload: { characterId?: string; type?: string }): Promise<MemoryProgressPayload> {
     return request<MemoryProgressPayload>({
       url: "/memory-progress",
@@ -725,6 +733,7 @@ export function createMemoryApi(request: ApiRequest) {
     changeMemoryEventStatus,
     requestEventKnowledge,
     previewMemoryEvents,
+    deletePendingMemoryEvents,
     listMemoryProgress,
     listMemoryEventDuplicates,
     archiveMemoryEventDuplicate,
