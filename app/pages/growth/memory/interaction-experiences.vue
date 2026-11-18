@@ -14,7 +14,7 @@ definePageMeta({
 type LearningKind = "UNDERSTANDING" | "REFERENCE" | "SITUATION" | "STRATEGY" | "EXPRESSION";
 type Learning = { kind: LearningKind; situation: string; misunderstanding: string; correction: string; nextJudgment: string };
 type Status = "PENDING" | "ACTIVE" | "DISABLED" | "REJECTED";
-type Item = { id: string; content: string; context: string; feedbackQuote: string; status: string; revision: number; conversationId: string; weight: number; createdAt?: string; updatedAt?: string; learning?: unknown };
+type Item = { review?: { status: string; reason: string; current: boolean } | null; id: string; content: string; context: string; feedbackQuote: string; status: string; revision: number; conversationId: string; weight: number; createdAt?: string; updatedAt?: string; learning?: unknown };
 const learningKinds: Array<{ value: LearningKind; label: string }> = [
   { value: "UNDERSTANDING", label: "理解纠正" }, { value: "REFERENCE", label: "指代识别" },
   { value: "SITUATION", label: "场合判断" }, { value: "STRATEGY", label: "应对策略" },
@@ -55,7 +55,7 @@ const automationLabel = computed(() => {
   if (!automation.value.enabled) return "互动经验自动整理已关闭";
   return ({ WAITING: "等待对话收尾", IDLE: "等待对话收尾", QUEUED: "等待后台收尾", RUNNING: "正在整理互动经验", RETRY_WAIT: "等待重试", FAILED: "自动收尾失败", SUCCEEDED: "最近收尾已完成", SKIPPED: "本次没有形成经验", CANCELLED: "收尾任务已取消" } as Record<string, string>)[automation.value.status.toUpperCase()] ?? "自动收尾已开启";
 });
-const automationError = computed(() => ({ MODEL_UNAVAILABLE: "模型暂不可用，请检查角色模型配置。", LEASE_LOST: "处理已交由新的后台任务继续。", SOURCE_CHANGED: "对话依据已变化，后台将重新检查。", MODEL_FAILED: "模型整理失败，等待后台重试。" } as Record<string, string>)[automation.value?.lastError ?? ""] ?? (automation.value?.lastError ? "自动整理暂未完成，请稍后刷新。" : ""));
+const automationError = computed(() => ({ MODEL_UNAVAILABLE: "模型暂不可用，请检查角色模型配置。", LEASE_LOST: "处理已交由新的后台任务继续。", SOURCE_CHANGED: "对话依据已变化，后台将重新检查。", MODEL_FAILED: "模型整理失败，等待后台重试。", REVIEW_FAILED: "角色审核失败，等待后台重试。" } as Record<string, string>)[automation.value?.lastError ?? ""] ?? (automation.value?.lastError ? "自动整理暂未完成，请稍后刷新。" : ""));
 const loading = ref(false);
 const busy = ref(false);
 const error = ref("");
@@ -149,7 +149,7 @@ async function operate(item: Item, operation: "EDIT" | "DISABLE" | "ACCEPT" | "R
     });
     if (isCurrent()) {
       closeEditor();
-      ElMessage.success(operation === "DISABLE" ? "经验已停用" : operation === "EDIT" ? "经验已纠正" : "旧候选已处理");
+      ElMessage.success(operation === "DISABLE" ? "经验已停用" : operation === "EDIT" ? "经验已纠正" : "候选已处理");
       await load();
     }
   } catch (e) {
@@ -224,7 +224,7 @@ function dateTime(value?: string) {
     />
 
     <section class="domain-note">
-      <p><strong>对话空闲 30 分钟后，后台自动收尾。</strong>有依据才形成经验，并自动生效。</p>
+      <p><strong>对话空闲 30 分钟后，后台自动收尾。</strong>提炼后由角色独立审核，有依据才自动生效；拿不准的留待确认。</p>
       <p>没有明确反馈，不对回应效果下结论。这是供类似情境参考的经验记忆，不是必须照做的语言规则。经验只在原私聊会话使用，随时间降低召回权重；隐私和明确底线不作为会衰减的临时经验。</p>
     </section>
 
@@ -291,7 +291,7 @@ function dateTime(value?: string) {
           v-if="status === 'PENDING'"
           class="muted"
         >
-          旧版待审核候选尚未生效；新经验由后台自动形成，无需在这里采纳。证据失效的候选会拒绝处理。
+          待审核候选尚未生效，包含角色拿不准的经验和旧版人工候选。证据失效的候选会拒绝处理。
         </p>
 
         <el-alert
@@ -308,7 +308,7 @@ function dateTime(value?: string) {
         >
           <el-empty
             v-if="!items.length && !loading"
-            :description="error ? '暂未加载成功，请刷新重试。' : status === 'PENDING' ? '没有待审核的旧候选。' : '暂时没有自动形成的经验；无需手动选择消息。'"
+            :description="error ? '暂未加载成功，请刷新重试。' : status === 'PENDING' ? '没有待审核的候选。' : '暂时没有自动形成的经验；无需手动选择消息。'"
           />
           <article
             v-for="item in items"
@@ -346,6 +346,7 @@ function dateTime(value?: string) {
               <strong>适用场景：</strong>{{ item.context || "未记录" }}
             </p>
             <blockquote><strong>反馈依据：</strong>{{ item.feedbackQuote }}</blockquote>
+            <p v-if="item.review"><strong>角色自审核{{ item.review.current ? '' : '（修改前）' }}：</strong>{{ ({ ACTIVE: '通过', PENDING: '待确认', REJECTED: '不通过' } as Record<string, string>)[item.review.status] }} · {{ item.review.reason }}</p>
             <footer class="record-footer">
               <span class="muted">
                 召回权重 {{ weight(item.weight) }} · 仅原会话 · 形成于 {{ dateTime(item.createdAt) }}
@@ -374,7 +375,7 @@ function dateTime(value?: string) {
                   :disabled="busy || loading"
                   @click="operate(item, 'ACCEPT')"
                 >
-                  使旧候选生效
+                  采纳候选
                 </el-button>
                 <el-button
                   v-if="item.status === 'PENDING'"

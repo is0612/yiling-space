@@ -10,7 +10,7 @@ assert(!source.includes("assistantMessageId"));
 assert.match(source, /空闲 30 分钟后，后台自动收尾/u);
 assert.match(source, /ACTIVE: "已生效"/u);
 assert.match(source, /没有明确反馈，不对回应效果下结论/u);
-assert.match(source, /旧版待审核候选/u);
+assert.match(source, /角色拿不准的经验和旧版人工候选/u);
 assert.match(source, /el-pagination/u);
 const ast = ts.createSourceFile("page.ts", source.match(/<script[^>]*>([\s\S]*?)<\/script>/)![1]!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 const statements = ast.statements.filter(n => !ts.isImportDeclaration(n) && !n.getText(ast).startsWith("await useCharacterListData"));

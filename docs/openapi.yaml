@@ -462,13 +462,13 @@ paths:
         - { name: status, in: query, schema: { type: string, enum: [ALL, PENDING, ACTIVE, REJECTED, DISABLED], default: ALL } }
       description: 返回 pagination（page、pageSize、total、pageCount），按创建时间及ID倒序；非法分页或状态返回400。
       responses:
-        '200': { description: 'items 数组包含 id/content/context/feedbackQuote/learning/status/revision/conversationId/memoryScopeId/createdAt/updatedAt/weight；learning为kind、situation、misunderstanding、correction、nextJudgment，旧卡可为空；自动经验直接ACTIVE，旧人工候选PENDING保留兼容。weight为七天半衰期权重。automation包含enabled、status（WAITING/QUEUED/RUNNING/SUCCEEDED/RETRY_WAIT）、lastError安全代码、nextRunAt、lastCompletedAt。自动处理需常驻Worker，默认不重扫部署锚点之前历史。' }
+        '200': { description: 'items 数组包含 id/content/context/feedbackQuote/learning/status/revision/conversationId/memoryScopeId/createdAt/updatedAt/weight；learning为kind、situation、misunderstanding、correction、nextJudgment，旧卡可为空；自动经验经独立第二轮语义审核才ACTIVE，不确定PENDING，无依据REJECTED；review为最新AI审核（status、reason、reviewedAt、revision、current）或null，current表示审核对应当前版本，旧卡不补审。旧人工候选PENDING保留兼容。weight为七天半衰期权重。automation包含enabled、status（WAITING/QUEUED/RUNNING/SUCCEEDED/RETRY_WAIT）、lastError安全代码、nextRunAt、lastCompletedAt。自动处理需常驻Worker，默认不重扫部署锚点之前历史。' }
         '401': { description: 未登录 }
         '404': { description: 角色不存在或无权访问 }
     post:
       tags: [Memories]
       summary: 兼容旧版人工发起的经验候选提炼
-      description: 日常经验由后台在对话收尾时自动形成并直接生效，不需要调用本接口或逐条采纳。本接口仅兼容旧版人工候选；校验同会话助手回复与随后USER反馈、期间没有其他助手回复；模型仅判断语义，必须逐字引用反馈。沉默不算反馈，隐私边界拒绝作为临时经验。此人工入口仍保存PENDING，需PATCH采纳才召回；相同证据幂等。
+      description: 日常经验由后台在对话收尾时提炼并经独立语义审核后决定是否生效，不需要调用本接口或逐条采纳。本接口仅兼容旧版人工候选；校验同会话助手回复与随后USER反馈、期间没有其他助手回复；模型仅判断语义，必须逐字引用反馈。沉默不算反馈，隐私边界拒绝作为临时经验。此人工入口仍保存PENDING，需PATCH采纳才召回；相同证据幂等。
       requestBody:
         required: true
         content:

@@ -10,7 +10,7 @@ import { readDailyQuota, readModelUsage, recordModelUsage } from "./model-usage"
 import { parseJsonLoose } from "./loose-json";
 
 type Owner = { ownerId: string; characterId: string };
-/** 列表页可筛选的状态。PENDING 只留给旧版手动候选，新经验由后台直接生效。 */
+/** 列表页可筛选的状态。PENDING 包含语义不确定的自动候选和手动候选。 */
 export const INTERACTION_EXPERIENCE_STATUSES = ["PENDING", "ACTIVE", "REJECTED", "DISABLED"] as const;
 export type InteractionExperienceStatus = (typeof INTERACTION_EXPERIENCE_STATUSES)[number];
 export function interactionReadableScope(ownerId: string) {
@@ -108,9 +108,15 @@ export async function listInteractionExperiences(prisma: PrismaClient, input: Ow
     prisma.interactionExperienceProgress.findFirst({ where: { conversationId: { in: roomIds } }, orderBy: { updatedAt: "desc" } }),
     prisma.auditLog.findFirst({ where: { characterId: input.characterId, action: "interaction_experience.auto_completed", entityId: { in: roomIds } }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
   ]);
+  const reviews = items.length ? await prisma.auditLog.findMany({ where: { characterId: input.characterId, action: "interaction_experience.ai_reviewed", entityType: "InteractionExperience", entityId: { in: items.map(row => row.id) } }, orderBy: { createdAt: "desc" } }) : [];
   const config = character.modelConfig as Record<string, unknown> | null;
   return {
-    items: items.map(row => ({ ...row, weight: interactionExperienceWeight(row.createdAt) })),
+    items: items.map(row => {
+      const audit = reviews.find(a => a.entityId === row.id);
+      const details = audit?.details as Record<string, unknown> | undefined;
+      const review = details && ["ACTIVE", "PENDING", "REJECTED"].includes(String(details.status)) && typeof details.reason === "string" && typeof details.revision === "number" ? { status: String(details.status), reason: details.reason, reviewedAt: audit!.createdAt, revision: details.revision, current: details.revision === row.revision } : null;
+      return { ...row, weight: interactionExperienceWeight(row.createdAt), review };
+    }),
     pagination: { page, pageSize, total, pageCount: Math.max(1, Math.ceil(total / pageSize)) },
     automation: { enabled: config?.interactionExperienceAutoEnabled === true, status: progress?.status ?? "WAITING", lastError: progress?.lastError ?? null, nextRunAt: progress?.runAt ?? null, lastCompletedAt: completed?.createdAt ?? null },
   };

@@ -277,6 +277,7 @@ export type MemoryExtractResult = {
 };
 
 export type InteractionExperienceItem = {
+  review?: { status: string; reason: string; reviewedAt: string; revision: number; current: boolean } | null;
   id: string;
   content: string;
   context: string;

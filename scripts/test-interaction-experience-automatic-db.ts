@@ -2,6 +2,7 @@ import "dotenv/config";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
+import { listInteractionExperiences, updateInteractionExperience } from "../server/utils/interaction-experiences";
 import { processAutomaticInteractionExperience } from "../server/utils/interaction-experience-automatic";
 const database = new URL(process.env.DATABASE_URL ?? "");
 assert(/^yiling_memory_test_[a-f0-9]{32}$/.test(database.pathname.slice(1)));
@@ -9,11 +10,15 @@ const prisma = getPrisma();
 const original = globalThis.fetch;
 let calls = 0;
 let fail = false;
+let reviewStatus = "ACTIVE";
+let reviewFailure = false;
+let invalidCandidate = false;
+let reviewHook: (() => Promise<void>) | null = null;
 process.env.LLM_API_KEY = "mock";
 process.env.LLM_MODEL = "mock";
 process.env.LLM_BASE_URL = "http://127.0.0.1:4010/v1";
 globalThis.fetch = async (url, init) => { assert(String(url).startsWith("http://127.0.0.1:4010/")); calls++; if (fail)
-    throw new Error("mock failure"); const body = JSON.parse(String(init?.body)); const input = JSON.parse(body.messages[1].content); assert.equal(new Set(input.messages.map((m:{id:string})=>m.id)).size,input.messages.length); if(input.messages.some((m:{content:string})=>m.content.includes("先给结论更好"))) assert(input.messages.some((m:{content:string})=>m.content.includes("先告诉我结论"))); const misunderstanding = input.pairs.find((r:{feedbackMessageId:string})=>input.messages.find((m:{id:string;content:string})=>m.id===r.feedbackMessageId)?.content.includes("我只是想说说")); if(misunderstanding){assert(input.messages.some((m:{content:string})=>m.content.includes("今天工作很难受")));return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({experiences:[{assistantMessageId:misunderstanding.assistantMessageId,feedbackMessageId:misunderstanding.feedbackMessageId,content:"先辨别倾诉还是求方案",context:"情绪倾诉",feedbackQuote:"我只是想说说",learning:{kind:"UNDERSTANDING",situation:"倾诉难受",misunderstanding:"把倾诉当求建议",correction:"只是想说说",nextJudgment:"先倾听，再确认是否需要建议"}}]})}}]}));} const p = input.pairs.find((r: { feedbackMessageId: string; }) => input.messages.find((m:{id:string;content:string})=>m.id===r.feedbackMessageId)?.content.includes("先给结论更好")); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ experiences: p ? [{ assistantMessageId: p.assistantMessageId, feedbackMessageId: p.feedbackMessageId, content: "先给结论", context: "讨论方案", feedbackQuote: "先给结论更好", learning: {kind:"EXPRESSION",situation:"讨论方案",misunderstanding:"展开太早",correction:"先给结论更好",nextJudgment:"先结论后展开"} }] : [] }) } }] })); };
+    throw new Error("mock failure"); const body = JSON.parse(String(init?.body)); const input = JSON.parse(body.messages[1].content); if (body.messages[0].content.includes("独立第二轮语义审核者")) { assert(input.candidate.learning); assert(input.assistant.content); assert(input.feedback.content.includes(input.candidate.feedbackQuote)); if(reviewHook) await reviewHook(); return new Response(JSON.stringify({usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15},choices:[{message:{content:reviewFailure ? "{}" : JSON.stringify({status:reviewStatus,reason:"原始上下文与反馈支持程度审核"})}}]})); } if (invalidCandidate) return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({experiences:[{assistantMessageId:randomUUID(),feedbackMessageId:input.pairs[0].feedbackMessageId,content:"虚构",context:"场景",feedbackQuote:"无依据"}]})}}]})); assert.equal(new Set(input.messages.map((m:{id:string})=>m.id)).size,input.messages.length); if(input.messages.some((m:{content:string})=>m.content.includes("先给结论更好"))) assert(input.messages.some((m:{content:string})=>m.content.includes("先告诉我结论"))); const misunderstanding = input.pairs.find((r:{feedbackMessageId:string})=>input.messages.find((m:{id:string;content:string})=>m.id===r.feedbackMessageId)?.content.includes("我只是想说说")); if(misunderstanding){assert(input.messages.some((m:{content:string})=>m.content.includes("今天工作很难受")));return new Response(JSON.stringify({usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15},choices:[{message:{content:JSON.stringify({experiences:[{assistantMessageId:misunderstanding.assistantMessageId,feedbackMessageId:misunderstanding.feedbackMessageId,content:"先辨别倾诉还是求方案",context:"情绪倾诉",feedbackQuote:"我只是想说说",learning:{kind:"UNDERSTANDING",situation:"倾诉难受",misunderstanding:"把倾诉当求建议",correction:"只是想说说",nextJudgment:"先倾听，再确认是否需要建议"}}]})}}]}));} const p = input.pairs.find((r: { feedbackMessageId: string; }) => input.messages.find((m:{id:string;content:string})=>m.id===r.feedbackMessageId)?.content.includes("先给结论更好")); return new Response(JSON.stringify({ usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15}, choices: [{ message: { content: JSON.stringify({ experiences: p ? [{ assistantMessageId: p.assistantMessageId, feedbackMessageId: p.feedbackMessageId, content: "先给结论", context: "讨论方案", feedbackQuote: "先给结论更好", learning: {kind:"EXPRESSION",situation:"讨论方案",misunderstanding:"展开太早",correction:"先给结论更好",nextJudgment:"先结论后展开"} }] : [] }) } }] })); };
 try {
     const anchor = new Date(Date.now() - 7200000);
     await prisma.interactionExperienceActivation.update({ where: { id: 1 }, data: { anchorAt: anchor } });
@@ -31,9 +36,9 @@ try {
     assert.equal(card.status, "ACTIVE");
     assert.equal((card.learning as {kind:string}).kind, "EXPRESSION");
     assert.equal(card.assistantMessageId, a.id);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     await processAutomaticInteractionExperience(prisma);
-    assert.equal(calls, 1, "checkpoint prevents repeated billing");
+    assert.equal(calls, 2, "checkpoint prevents repeated billing");
     await prisma.interactionExperience.update({ where: { id: card.id }, data: { status: "DISABLED" } });
     await prisma.interactionExperienceProgress.update({ where: { conversationId: room.id }, data: { cursorAt: null, cursorId: null, runAt: new Date(0) } });
     await processAutomaticInteractionExperience(prisma);
@@ -48,6 +53,69 @@ try {
     await processAutomaticInteractionExperience(prisma);
     const understoodCard=await prisma.interactionExperience.findFirstOrThrow({where:{conversationId:understood.id}});
     assert.equal((understoodCard.learning as {kind:string}).kind,"UNDERSTANDING");
+    for (const expected of ["PENDING", "REJECTED"]) {
+      reviewStatus = expected;
+      const uncertain = await prisma.conversation.create({data:{characterId:character.id,memoryScopeId:scope.id}});
+      await prisma.message.createMany({data:[{conversationId:uncertain.id,role:"USER",content:"讨论方案，先告诉我结论",occurredAt:at},{conversationId:uncertain.id,role:"ASSISTANT",content:"方案解释",occurredAt:new Date(at.getTime()+1)},{conversationId:uncertain.id,role:"USER",content:"先给结论更好",occurredAt:new Date(at.getTime()+2)}]});
+      assert.equal((await processAutomaticInteractionExperience(prisma)).status,"SUCCEEDED");
+      const reviewed = await prisma.interactionExperience.findFirstOrThrow({where:{conversationId:uncertain.id}});
+      assert.equal(reviewed.status,expected);
+      const audit = await prisma.auditLog.findFirstOrThrow({where:{entityId:reviewed.id,action:"interaction_experience.ai_reviewed"}});
+      assert.equal((audit.details as {status:string}).status,expected);
+      const listed = await listInteractionExperiences(prisma,{ownerId:user.id,characterId:character.id});
+      assert.equal(listed.items.find(row=>row.id===reviewed.id)?.review?.status,expected);
+      assert.equal(listed.items.find(row=>row.id===reviewed.id)?.review?.current,true);
+      if (expected === "PENDING") {
+        await updateInteractionExperience(prisma,{ownerId:user.id,characterId:character.id,id:reviewed.id,revision:reviewed.revision,operation:"EDIT",content:"修改后的判断",context:"修改后的场景"});
+        const edited = await listInteractionExperiences(prisma,{ownerId:user.id,characterId:character.id});
+        assert.equal(edited.items.find(row=>row.id===reviewed.id)?.review?.current,false,"do not present stale review as approval of edited text");
+      }
+    }
+    reviewStatus = "ACTIVE";
+    const brokenReview = await prisma.conversation.create({data:{characterId:character.id,memoryScopeId:scope.id}});
+    await prisma.message.createMany({data:[{conversationId:brokenReview.id,role:"USER",content:"先告诉我结论",occurredAt:new Date(at.getTime()-1)},{conversationId:brokenReview.id,role:"ASSISTANT",content:"方案解释",occurredAt:at},{conversationId:brokenReview.id,role:"USER",content:"先给结论更好",occurredAt:new Date(at.getTime()+2)}]});
+    reviewFailure = true;
+    assert.equal((await processAutomaticInteractionExperience(prisma)).status,"RETRY_WAIT");
+    assert.equal(await prisma.interactionExperience.count({where:{conversationId:brokenReview.id}}),0);
+    assert.equal((await prisma.interactionExperienceProgress.findUniqueOrThrow({where:{conversationId:brokenReview.id}})).cursorId,null);
+    reviewFailure = false;
+    await prisma.interactionExperienceProgress.update({where:{conversationId:brokenReview.id},data:{runAt:new Date(0)}});
+    assert.equal((await processAutomaticInteractionExperience(prisma)).status,"SUCCEEDED");
+    assert.equal((await prisma.interactionExperience.findFirstOrThrow({where:{conversationId:brokenReview.id}})).status,"ACTIVE");
+    const changedSource = await prisma.conversation.create({data:{characterId:character.id,memoryScopeId:scope.id}});
+    const changedMessages = await Promise.all([{role:"USER" as const,content:"先告诉我结论",offset:0},{role:"ASSISTANT" as const,content:"方案解释",offset:1},{role:"USER" as const,content:"先给结论更好",offset:2}].map(m=>prisma.message.create({data:{conversationId:changedSource.id,role:m.role,content:m.content,occurredAt:new Date(at.getTime()+m.offset)}})));
+    reviewHook = async () => { await prisma.message.update({where:{id:changedMessages[0]!.id},data:{content:"原始请求已修改"}}); };
+    assert.equal((await processAutomaticInteractionExperience(prisma)).reason,"SOURCE_CHANGED");
+    assert.equal(await prisma.interactionExperience.count({where:{conversationId:changedSource.id}}),0);
+    reviewHook = null;
+    const leaseRoom = await prisma.conversation.create({data:{characterId:character.id,memoryScopeId:scope.id}});
+    await prisma.message.createMany({data:[{conversationId:leaseRoom.id,role:"USER",content:"先告诉我结论",occurredAt:at},{conversationId:leaseRoom.id,role:"ASSISTANT",content:"方案解释",occurredAt:new Date(at.getTime()+1)},{conversationId:leaseRoom.id,role:"USER",content:"先给结论更好",occurredAt:new Date(at.getTime()+2)}]});
+    const replacementToken = randomUUID();
+    reviewHook = async () => { await prisma.interactionExperienceProgress.update({where:{conversationId:leaseRoom.id},data:{token:replacementToken,leaseUntil:new Date(Date.now()+300000)}}); };
+    assert.equal((await processAutomaticInteractionExperience(prisma)).reason,"LEASE_LOST");
+    assert.equal(await prisma.interactionExperience.count({where:{conversationId:leaseRoom.id}}),0);
+    assert.equal((await prisma.interactionExperienceProgress.findUniqueOrThrow({where:{conversationId:leaseRoom.id}})).token,replacementToken);
+    reviewHook = null;
+    const quotaCharacter = await prisma.character.create({data:{ownerId:user.id,name:"Quota review",basePrompt:"test",modelConfig:{interactionExperienceAutoEnabled:true,dailyTokenLimit:15}}});
+    const quotaScope = await prisma.memoryScope.create({data:{characterId:quotaCharacter.id,scopeType:"CHARACTER_GLOBAL",scopeKey:randomUUID()}});
+    const quotaRoom = await prisma.conversation.create({data:{characterId:quotaCharacter.id,memoryScopeId:quotaScope.id}});
+    await prisma.message.createMany({data:[{conversationId:quotaRoom.id,role:"USER",content:"先告诉我结论",occurredAt:at},{conversationId:quotaRoom.id,role:"ASSISTANT",content:"方案解释",occurredAt:new Date(at.getTime()+1)},{conversationId:quotaRoom.id,role:"USER",content:"先给结论更好",occurredAt:new Date(at.getTime()+2)}]});
+    const beforeQuota = calls;
+    assert.equal((await processAutomaticInteractionExperience(prisma)).reason,"MODEL_UNAVAILABLE");
+    assert.equal(calls,beforeQuota+1,"generation charge must be visible before review quota check");
+    assert.equal(await prisma.interactionExperience.count({where:{conversationId:quotaRoom.id}}),0);
+    assert.equal((await prisma.interactionExperienceProgress.findUniqueOrThrow({where:{conversationId:quotaRoom.id}})).cursorId,null);
+    const usage = await prisma.modelUsage.findMany({where:{characterId:character.id}});
+    assert(usage.some(row=>(row.metadata as {source?:string})?.source==="interaction-experience-review"));
+    assert(usage.some(row=>(row.metadata as {source?:string})?.source==="interaction-experience-auto"));
+    const invalidRoom = await prisma.conversation.create({data:{characterId:character.id,memoryScopeId:scope.id}});
+    await prisma.message.createMany({data:[{conversationId:invalidRoom.id,role:"ASSISTANT",content:"回复",occurredAt:at},{conversationId:invalidRoom.id,role:"USER",content:"反馈",occurredAt:new Date(at.getTime()+1)}]});
+    invalidCandidate = true;
+    const beforeInvalid = calls;
+    assert.equal((await processAutomaticInteractionExperience(prisma)).reason,"MODEL_FAILED");
+    assert.equal(calls,beforeInvalid+1,"unknown source IDs must fail before semantic review");
+    assert.equal(await prisma.interactionExperience.count({where:{conversationId:invalidRoom.id}}),0);
+    invalidCandidate = false;
     const failed = await prisma.conversation.create({ data: { characterId: character.id, memoryScopeId: scope.id } });
     await prisma.message.createMany({ data: [{ conversationId: failed.id, role: "ASSISTANT", content: "a", occurredAt: at }, { conversationId: failed.id, role: "USER", content: "feedback", occurredAt: new Date(at.getTime() + 1) }] });
     fail = true;
@@ -63,7 +131,7 @@ try {
     await prisma.message.create({ data: { conversationId: oldRoom.id, role: "USER", content: "old", occurredAt: new Date(anchor.getTime() - 1000) } });
     await processAutomaticInteractionExperience(prisma);
     assert.equal(await prisma.interactionExperienceProgress.count({ where: { conversationId: oldRoom.id } }), 0);
-    console.log("Automatic interaction experience isolated DB passed: direct ACTIVE, continuous USER feedback, empty skip checkpoint, no repeat billing, disabled preservation and failure retry, independent opt-in and future anchor.");
+    console.log("Automatic interaction experience isolated DB passed: second-round ACTIVE/PENDING/REJECTED, audit reasons, invalid review retry, continuous USER feedback, empty skip checkpoint, no repeat billing, disabled preservation and failure retry, independent opt-in and future anchor.");
 }
 finally {
     globalThis.fetch = original;

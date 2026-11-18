@@ -6,6 +6,8 @@ import { resolveCharacterApiKey } from "./credential-encryption";
 import { readDailyQuota, recordModelUsage } from "./model-usage";
 import { callRawModel } from "./raw-llm";
 import { interactionExperiencePrompt, parseInteractionSuggestion } from "./interaction-experiences";
+import { reviewInteractionExperience, type InteractionReview } from "./interaction-experience-review";
+import { validateInteractionEvidence } from "./interaction-experience-domain";
 const hash = (a: {
     content: string;
     occurredAt: Date;
@@ -72,7 +74,7 @@ export async function processAutomaticInteractionExperience(prisma: PrismaClient
                 else if (assistant)
                     pairs.push({ assistant, feedback: message });
             }
-            const eligible = [];
+            const eligible: typeof pairs = [];
             for (const pair of pairs) {
                 if (pair.assistant.content.length + pair.feedback.content.length > 16000)
                     continue;
@@ -83,27 +85,60 @@ export async function processAutomaticInteractionExperience(prisma: PrismaClient
             const drafts: Array<{
                 pair: typeof pairs[number];
                 suggestion: ReturnType<typeof parseInteractionSuggestion>;
+                review?: InteractionReview;
             }> = [];
             if (eligible.length) {
                 const settings = resolveChatModelSettings(room.character.modelConfig);
                 const key = await resolveCharacterApiKey(room.character.modelConfig, settings.apiBaseUrl);
                 if (!key || !settings.model || (await readDailyQuota(room.characterId, room.character.modelConfig)).exceeded)
                     throw new Error("MODEL_UNAVAILABLE");
-                const text = await callRawModel({ model: settings.model, apiKey: key, apiBaseUrl: settings.apiBaseUrl, systemPrompt: interactionExperiencePrompt + ' 自动批量模式优先：messages含原始请求与前文，pairs仅允许指定回复和反馈ID；contextOnly消息只用于理解不能独立形成经验。仅输出{ "experiences": [{ "assistantMessageId":"输入ID", "feedbackMessageId":"输入ID", "content":"经验", "context":"场景", "feedbackQuote":"原文", "learning":{"kind":"UNDERSTANDING|REFERENCE|SITUATION|STRATEGY|EXPRESSION","situation":"当时情境","misunderstanding":"误解或空字符串","correction":"用户支持的纠正","nextJudgment":"下次判断"}}]}，没有合格项返回空数组，最多3条。不要输出单项skip对象。', userPrompt: JSON.stringify({ pairs: eligible.map(p => ({ assistantMessageId: p.assistant.id, feedbackMessageId: p.feedback.id })), messages: [...new Map([...contextRows, ...batch, ...eligible.flatMap(p => [p.assistant, p.feedback])].filter(m => m.content.length <= 16000).map(m => [m.id, {id:m.id,role:m.role,content:m.content,contextOnly:contextRows.some(row=>row.id===m.id)}])).values()].slice(-48) }), onUsage: usage => { void recordModelUsage({ characterId: room.characterId, conversationId: room.id, model: settings.model, kind: "other", usage, metadata: { source: "interaction-experience-auto" } }).catch(() => undefined); } });
+                const usageWrites: Promise<unknown>[] = [];
+                const onUsage = (source: string) => (usage: Parameters<typeof recordModelUsage>[0]["usage"]) => { usageWrites.push(recordModelUsage({ characterId: room.characterId, conversationId: room.id, model: settings.model, kind: "other", usage, metadata: { source } }).catch(() => { console.warn("Interaction experience usage recording failed"); })); };
+                const trackedCall = async <T>(source: string, run: (usage: ReturnType<typeof onUsage>) => Promise<T>) => {
+                    let receivedUsage = false;
+                    let succeeded = false;
+                    try {
+                        const result = await run(usage => { receivedUsage = true; onUsage(source)(usage); });
+                        succeeded = true;
+                        return result;
+                    } finally {
+                        if (!receivedUsage) usageWrites.push(recordModelUsage({ characterId: room.characterId, conversationId: room.id, model: settings.model, kind: "other", usage: null, metadata: { source, status: succeeded ? "success_without_usage" : "failed" } }));
+                        await Promise.all(usageWrites);
+                    }
+                };
+                try {
+                const text = await trackedCall("interaction-experience-auto", usageCallback => callRawModel({ retry: false, timeoutCapMs: 120000, model: settings.model, apiKey: key, apiBaseUrl: settings.apiBaseUrl, systemPrompt: interactionExperiencePrompt + ' 自动批量模式优先：messages含原始请求与前文，pairs仅允许指定回复和反馈ID；contextOnly消息只用于理解不能独立形成经验。仅输出{ "experiences": [{ "assistantMessageId":"输入ID", "feedbackMessageId":"输入ID", "content":"经验", "context":"场景", "feedbackQuote":"原文", "learning":{"kind":"UNDERSTANDING|REFERENCE|SITUATION|STRATEGY|EXPRESSION","situation":"当时情境","misunderstanding":"误解或空字符串","correction":"用户支持的纠正","nextJudgment":"下次判断"}}]}，没有合格项返回空数组，最多3条。不要输出单项skip对象。', userPrompt: JSON.stringify({ pairs: eligible.map(p => ({ assistantMessageId: p.assistant.id, feedbackMessageId: p.feedback.id })), messages: [...new Map([...contextRows, ...batch, ...eligible.flatMap(p => [p.assistant, p.feedback])].filter(m => m.content.length <= 16000).map(m => [m.id, {id:m.id,role:m.role,content:m.content,contextOnly:contextRows.some(row=>row.id===m.id)}])).values()].slice(-48) }), onUsage: usageCallback }));
                 const parsed = parseJsonLoose(text, { expect: "object" }) as {
                     experiences?: unknown[];
                 };
                 if (!Array.isArray(parsed?.experiences))
                     throw new Error("MODEL_FAILED");
-                for (const raw of parsed.experiences.slice(0, 3)) {
+                if (parsed.experiences.length > 3) throw new Error("MODEL_FAILED");
+                const seen = new Set<string>();
+                for (const raw of parsed.experiences) {
+                    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("MODEL_FAILED");
                     const r = raw as Record<string, unknown>;
                     const pair = eligible.find(p => p.assistant.id === r.assistantMessageId && p.feedback.id === r.feedbackMessageId);
                     if (!pair)
                         throw new Error("MODEL_FAILED");
+                    const pairKey = `${pair.assistant.id}:${pair.feedback.id}`;
+                    if (seen.has(pairKey)) throw new Error("MODEL_FAILED");
+                    seen.add(pairKey);
+                    validateInteractionEvidence(pair.assistant, pair.feedback);
                     const suggestion = parseInteractionSuggestion(JSON.stringify(r), pair.feedback.content);
                     if (!("skip" in suggestion) && !suggestion.learning) throw new Error("MODEL_FAILED");
                     drafts.push({ pair, suggestion });
                 }
+                await Promise.all(usageWrites);
+                for (const draft of drafts) {
+                    if ("skip" in draft.suggestion) continue;
+                    const renewed = await prisma.interactionExperienceProgress.updateMany({ where: { conversationId: room.id, token, status: "RUNNING", leaseUntil: { gte: new Date() } }, data: { leaseUntil: new Date(Date.now() + 300000) } });
+                    if (!renewed.count) throw new Error("LEASE_LOST");
+                    if ((await readDailyQuota(room.characterId, room.character.modelConfig)).exceeded) throw new Error("MODEL_UNAVAILABLE");
+                    draft.review = await trackedCall("interaction-experience-review", usageCallback => reviewInteractionExperience({ model: settings.model, apiKey: key, apiBaseUrl: settings.apiBaseUrl, onUsage: usageCallback, evidence: { messages: [...contextRows, ...batch].map(m => ({ id: m.id, role: m.role, content: m.content, occurredAt: m.occurredAt })), assistant: { id: draft.pair.assistant.id, content: draft.pair.assistant.content }, feedback: { id: draft.pair.feedback.id, content: draft.pair.feedback.content }, candidate: draft.suggestion } }));
+                    await Promise.all(usageWrites);
+                }
+                } finally { await Promise.all(usageWrites); }
             }
             await prisma.$transaction(async (tx) => {
                 // Updating the fenced row locks it until both experiences and cursor commit.
@@ -117,14 +152,20 @@ export async function processAutomaticInteractionExperience(prisma: PrismaClient
                 const evidenceHash = (messages: typeof batch) => createHash("sha256").update(JSON.stringify(messages.map(m => [m.id, m.role, m.content, m.occurredAt.toISOString()]))).digest("hex");
                 if (evidenceHash(reloaded) !== evidenceHash([...contextRows, ...batch]))
                     throw new Error("SOURCE_CHANGED");
-                for (const { pair, suggestion } of drafts) {
+                for (const { pair, suggestion, review } of drafts) {
                     const source = await tx.message.findMany({ where: { id: { in: [pair.assistant.id, pair.feedback.id] }, conversationId: room.id } });
                     const a = source.find(m => m.id === pair.assistant.id), f = source.find(m => m.id === pair.feedback.id);
                     if (!a || !f || hash(a, f, room.memoryScopeId) !== hash(pair.assistant, pair.feedback, room.memoryScopeId))
                         throw new Error("SOURCE_CHANGED");
+                    validateInteractionEvidence(a, f);
+                    if (await tx.message.count({ where: { conversationId: room.id, role: "ASSISTANT", occurredAt: { gt: a.occurredAt, lt: f.occurredAt } } })) throw new Error("SOURCE_CHANGED");
                     if ("skip" in suggestion)
                         continue;
-                    await tx.interactionExperience.upsert({ where: { conversationId_assistantMessageId_feedbackMessageId: { conversationId: room.id, assistantMessageId: a.id, feedbackMessageId: f.id } }, update: {}, create: { characterId: room.characterId, conversationId: room.id, memoryScopeId: room.memoryScopeId, assistantMessageId: a.id, feedbackMessageId: f.id, evidenceHash: hash(a, f, room.memoryScopeId), status: "ACTIVE", ...suggestion } });
+                    if (!review) throw new Error("REVIEW_FAILED");
+                    const inserted = await tx.interactionExperience.createMany({ skipDuplicates: true, data: [{ characterId: room.characterId, conversationId: room.id, memoryScopeId: room.memoryScopeId, assistantMessageId: a.id, feedbackMessageId: f.id, evidenceHash: hash(a, f, room.memoryScopeId), status: review.status, ...suggestion }] });
+                    if (!inserted.count) continue;
+                    const saved = await tx.interactionExperience.findUniqueOrThrow({ where: { conversationId_assistantMessageId_feedbackMessageId: { conversationId: room.id, assistantMessageId: a.id, feedbackMessageId: f.id } } });
+                    await tx.auditLog.create({ data: { actorType: "SYSTEM", characterId: room.characterId, action: "interaction_experience.ai_reviewed", entityType: "InteractionExperience", entityId: saved.id, details: { version: 1, status: review.status, reason: review.reason, revision: saved.revision, evidenceHash: saved.evidenceHash } } });
                 }
                 await tx.auditLog.create({ data: { actorType: "SYSTEM", characterId: room.characterId, action: "interaction_experience.auto_completed", entityType: "Conversation", entityId: room.id, details: { generated: drafts.length, cursorMessageId: end.id } } });
                 await tx.interactionExperienceProgress.update({ where: { conversationId: room.id }, data: { cursorAt: end.occurredAt, cursorId: end.id, status: "SUCCEEDED", token: null, leaseUntil: null, attempts: 0, lastError: null, runAt: new Date(now.getTime() + 300000), updatedAt: new Date() } });
@@ -132,7 +173,7 @@ export async function processAutomaticInteractionExperience(prisma: PrismaClient
             return { processed: true, status: "SUCCEEDED", pairs: drafts.length };
         }
         catch (error) {
-            const code = error instanceof Error && ["MODEL_UNAVAILABLE", "LEASE_LOST", "SOURCE_CHANGED"].includes(error.message) ? error.message : "MODEL_FAILED";
+            const code = error instanceof Error && ["MODEL_UNAVAILABLE", "LEASE_LOST", "SOURCE_CHANGED", "REVIEW_FAILED"].includes(error.message) ? error.message : "MODEL_FAILED";
             await prisma.interactionExperienceProgress.updateMany({ where: { conversationId: room.id, token, status: "RUNNING" }, data: { status: "RETRY_WAIT", token: null, leaseUntil: null, attempts: { increment: 1 }, lastError: code, runAt: new Date(now.getTime() + 300000), updatedAt: new Date() } });
             return { processed: true, status: "RETRY_WAIT", reason: code };
         }
