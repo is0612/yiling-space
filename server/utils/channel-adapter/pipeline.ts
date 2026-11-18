@@ -30,7 +30,7 @@ import { rankKnowledgeItems } from "../knowledge-retrieval";
 import { isGroupKnowledgeSource, isPrivateKnowledgeSource, readKnowledgeCollectScope } from "../knowledge-collect-policy";
 import { generateGroupContextReply } from "../group-context-reply";
 import { loadConversationWorkingContext, saveConversationWorkingContext } from "../conversation-working-context";
-import { analyzeOwnerHistoryIntent, privateContextPurpose } from "../owner-history-intent";
+import { analyzeOwnerHistoryIntent, isOwnerJournalTurn, privateContextPurpose } from "../owner-history-intent";
 import { loadOwnerHistoryContext, saveOwnerHistoryContext, planOwnerHistory, applyOwnerHistoryIntent, isOwnerHistoryDateRetry, planRestartedHistoryRetry, loadOwnerHistoryPage, type OwnerHistoryAuthorization, type OwnerHistoryCoverage } from "../owner-private-history";
 import { parseEventTimeRange } from "../memory-event-time";
 import {
@@ -1751,12 +1751,14 @@ async function runChannelTurn(input: {
   const ownerHistoryNow = new Date();
   const ownerHistoryStored = ownerHistoryAuth
     ? await loadOwnerHistoryContext(prisma, ownerHistoryAuth, ownerHistoryNow).catch(() => null) : null;
-  let ownerHistoryPlan = ownerHistoryAuth
+  const ownerJournalTurn = Boolean(ownerHistoryAuth && isOwnerJournalTurn(currentMessage,
+    recentStoredMessages.filter(row => row.role === "USER").slice(0, 8).reverse().map(row => row.content)));
+  let ownerHistoryPlan = ownerHistoryAuth && !ownerJournalTurn
     ? planOwnerHistory(currentMessage, ownerHistoryStored?.plan ?? null, ownerHistoryNow, chatTimeZone) : null;
   // Resolve a referential room only from the owner's own recent explicit room references,
   // then verify the room against this character's QQ group conversations.
   const bareHistoryRetry = /^(?:现在呢|还是呢|再看看|再试试)[？?。！!\s]*$/u.test(currentMessage);
-  if (ownerHistoryAuth && (!ownerHistoryPlan || !ownerHistoryPlan.groupId)
+  if (ownerHistoryAuth && !ownerJournalTurn && (!ownerHistoryPlan || !ownerHistoryPlan.groupId)
     && (bareHistoryRetry || /那个群|这个群/u.test(currentMessage))) {
     const roomCandidates = [...new Set(recentStoredMessages.filter(row => row.role === "USER"
       && row.occurredAt.getTime() >= ownerHistoryNow.getTime() - 2 * 3_600_000).flatMap(row => {
@@ -1781,7 +1783,7 @@ async function runChannelTurn(input: {
   let ownerHistoryLookup = Boolean(ownerHistoryPlan);
   let ownerHistoryIntentFailed = false;
   let ownerHistoryAnalyzed = false;
-  let ownerHistoryHold = false;
+  let ownerHistoryHold = ownerJournalTurn;
   const suppliedPendingGroup = Boolean(ownerHistoryStored?.plan && !ownerHistoryStored.plan.groupId
     && ownerHistoryPlan?.groupId && /^\d{5,12}$/u.test(currentMessage.trim()));
   const suppliedDateRetry = Boolean(ownerHistoryStored?.plan && ownerHistoryPlan && isOwnerHistoryDateRetry(currentMessage));
@@ -1789,7 +1791,7 @@ async function runChannelTurn(input: {
     // The owner supplied a missing group or a new date, not a new semantic request.
     ownerHistoryAnalyzed = true;
     skipAssistantTurnStage(collaboration, "context", "not_needed");
-  } else if (ownerHistoryAuth && (ownerHistoryStored?.plan || ownerHistoryPlan)) {
+  } else if (ownerHistoryAuth && !ownerJournalTurn && (ownerHistoryStored?.plan || ownerHistoryPlan)) {
     const runtime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
     ownerHistoryAnalyzed = true;
     if (runtime) {

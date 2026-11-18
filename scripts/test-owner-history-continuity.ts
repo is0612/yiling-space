@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import type { PrismaClient } from "../src/generated/prisma/client";
 import { applyOwnerHistoryIntent, loadOwnerHistoryPage, planOwnerHistory, readOwnerHistoryPlan, ownerHistoryTopicTerms, type OwnerHistoryRow } from "../server/utils/owner-private-history";
-import { analyzeOwnerHistoryIntent, parseOwnerHistoryIntent, privateContextPurpose, type OwnerHistoryIntent } from "../server/utils/owner-history-intent";
+import { analyzeOwnerHistoryIntent, isOwnerJournalTurn, parseOwnerHistoryIntent, privateContextPurpose, type OwnerHistoryIntent } from "../server/utils/owner-history-intent";
 import { generateConversationReplyWithMemoryAssistant } from "../server/utils/memory-assistant";
 import { createAssistantTurnContext } from "../server/utils/assistant-turn-context";
 import type { TurnDetailPatch } from "../server/utils/model-turn-detail";
@@ -12,6 +12,20 @@ assert(normalizeOwnerHistoryTerms(["看看"]).some(term => "看一下".includes(
 assert.equal(privateContextPurpose(true, true), "history", "History intent and knowledge eligibility cannot consume two context operations");
 assert.equal(privateContextPurpose(false, true), "knowledge", "Ordinary private knowledge analysis remains available");
 assert.equal(privateContextPurpose(false, false), "none");
+const journalQuote = "昨天的手账里有一条待续事项：有人说想重新开课，之前的进度还算不算数，群里没人给准话。";
+assert(isOwnerJournalTurn(journalQuote, "我们闲聊一下吧"));
+assert(isOwnerJournalTurn(journalQuote, journalQuote));
+const journalCorrection = "这个不是在查消息啦，是你的手账";
+assert(isOwnerJournalTurn(journalCorrection, journalQuote));
+assert(isOwnerJournalTurn("17号有个待续事项，你能看到吗", journalCorrection));
+assert(!isOwnerJournalTurn("查一下昨晚那个群里的原话", journalCorrection));
+assert(!isOwnerJournalTurn("手账我看到了，帮我查下昨晚的群原文", journalCorrection));
+assert(!isOwnerJournalTurn("17号有个待续事项，你能看到吗", "换个话题吧"));
+const journalFollowup = "17号有个待续事项，你能看到吗";
+assert(isOwnerJournalTurn(journalFollowup, [journalQuote, journalCorrection, journalFollowup]));
+assert(isOwnerJournalTurn(journalFollowup, [journalQuote, journalCorrection, journalFollowup, journalFollowup]));
+assert(!isOwnerJournalTurn(journalFollowup, [journalQuote, "查一下昨晚那个群里的原话", journalFollowup]));
+assert(!isOwnerJournalTurn(journalFollowup, [journalQuote, "换个话题吧", journalFollowup]));
 const now = new Date("2026-02-03T16:01:00Z");
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
 const row = (n:number, at:string, content:string, role="USER", room="123456789", person="person-a"): OwnerHistoryRow => ({id:id(n), conversationId:room,externalMessageId:`e${n}`,role,content,occurredAt:new Date(at),metadata:{authorOpenId:person,authorDisplayName:person},conversation:{externalConversationId:`g:${room}`}});
@@ -132,6 +146,20 @@ try {
  const before=sqlReads;const correction=applyOwnerHistoryIntent(referential.plan,null,{action:"hold"},"你这句表达太绕了");assert.equal(correction.lookup,false);assert.equal(sqlReads,before);
  await generateConversationReplyWithMemoryAssistant({chatInput:{...base,currentMessage:"这句表达太绕了"},assistant:null,candidates:[],suppressHistoryLookup:true});assert.equal(sqlReads,before,"Expression correction never invokes history loader");
  assert.equal(responseCalls,3);
+ globalThis.fetch = async (_url, init) => {
+  const prompt = JSON.stringify(JSON.parse(String(init?.body)).messages);
+  assert(prompt.includes("journalRecent") && prompt.includes("之前的进度还算不算数"));
+  return Response.json({choices:[{message:{content:JSON.stringify({reply:"看到了，那条写的是课程进度还没有定论。"})},finish_reason:"stop"}]});
+ };
+ const journalDetails: TurnDetailPatch[] = [];
+ const journalReply = await generateConversationReplyWithMemoryAssistant({
+  chatInput: {...base,currentMessage:"17号有个待续事项，你能看到吗",journalRecent:[{dayKey:"2026-02-17",handbook:{notes:journalQuote}}]},
+  assistant:runtime,candidates:[],suppressHistoryLookup:isOwnerJournalTurn(journalFollowup,[journalQuote,journalCorrection,journalFollowup,journalFollowup]),
+  loadCandidates:async()=>{assert.fail("A journal follow-up must not load group history");},
+  onTurnDetail:detail=>journalDetails.push(detail),
+ });
+ assert.equal(journalDetails.at(-1)?.memory?.status,"not_needed");
+ assert.match(journalReply.reply,/课程进度/);
  assert.throws(()=>parseOwnerHistoryIntent('{"action":"delete"}'));
  const clear=applyOwnerHistoryIntent(state,null,{action:"clear"},"不查了");assert.equal(clear.plan,null);
 } finally {globalThis.fetch=original;}
