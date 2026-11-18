@@ -15,7 +15,11 @@ export function selectExpressionHabitsForPrompt(query: string, rows: readonly Ex
   const ranked = rows.filter(row => row.status === "ACTIVE" && ((row.chatScope ?? "ALL") === "ALL" || row.chatScope === chatScene)).map(row => ({ row,
     score: row.context.trim() ? terms.reduce((sum, term) => sum + (row.context.toLowerCase().includes(term) ? 1 : 0), 0) : 0,
   })).filter(({ row, score }) => !row.context.trim() || score > 0)
-    .sort((a, b) => b.score - a.score || a.row.id.localeCompare(b.row.id));
+    .sort((a, b) => b.score - a.score
+      // A confirmed rule for this scene must not be starved by generic style examples
+      // merely because their UUIDs happen to sort first.
+      || Number(Boolean(chatScene) && b.row.chatScope === chatScene) - Number(Boolean(chatScene) && a.row.chatScope === chatScene)
+      || a.row.id.localeCompare(b.row.id));
   const selected: ConversationExpressionHabit[] = [];
   let used = 0; let budgetExcludedCount = 0; let limitExcludedCount = 0;
   for (const { row } of ranked) {

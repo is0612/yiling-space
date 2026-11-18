@@ -70,10 +70,43 @@ try {
     } },
   });
   assert.equal(result.ownerHistoryCoverage?.count, 843);
-  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v71");
+  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v72");
   for (const chatInput of [{ ...base, speaker: { isOwner: false } }, { ...base, groupChat: true }]) {
     await generateConversationReply({ ...chatInput, ownerHistoryCoverage: coverage });
   }
   assert.equal(calls, 3);
+  // Boundary questions use actual database statistics, never a guessed summary of a sample.
+  globalThis.fetch = async () => { throw new Error("A database boundary receipt must not call a model"); };
+  let boundaryStatus = "";
+  const boundary = await generateConversationReplyWithMemoryAssistant({
+    chatInput: { ...base, currentMessage: "能看到多早" }, assistant: null, candidates: [],
+    requiredHistoryLookup: { query: "能看到多早", mode: "boundary", load: async () => ({ coverage, sources: [] }) },
+    onTurnDetail: detail => { if (detail.memory) boundaryStatus = detail.memory.status; },
+  });
+  assert.equal(boundary.localHistoryReceipt, true);
+  assert.equal(boundaryStatus, "success");
+  assert.equal(boundary.memoryAssistantStatus, "success");
+  assert.match(boundary.reply, /843/); assert.match(boundary.reply, /22:41:13/);
+  assert.match(boundary.reply, /更早记录/);
+  assert.deepEqual(boundary.usedRawMessageIds, [], "Statistics never masquerade as an original message source");
+  const missing = await generateConversationReplyWithMemoryAssistant({
+    chatInput: base, assistant: null, candidates: [],
+    requiredHistoryLookup: { query: "能看到多早", mode: "boundary", load: async () => ({ coverage: { ...coverage, count: 0, actualFirst: null, actualLast: null }, sources: [] }) },
+  });
+  assert.equal(missing.memoryAssistantStatus, "no_sources");
+  for (const reason of ["unresolved_participant", "unresolved_group"] as const) {
+    const unresolved = await generateConversationReplyWithMemoryAssistant({
+      chatInput: base, assistant: null, candidates: [],
+      requiredHistoryLookup: { query: "查询这个人", mode: "topic", load: async () => ({ coverage: { ...coverage, count: 0, reason }, sources: [] }) },
+    });
+    assert.equal(unresolved.memoryAssistantStatus, "no_sources");
+    assert.match(unresolved.reply, reason === "unresolved_participant" ? /完整昵称或账号/ : /群号/);
+    assert(!unresolved.reply.includes("没找到足够"), "An unexecuted identity lookup is not an empty database result");
+  }
+  const unavailable = await generateConversationReplyWithMemoryAssistant({
+    chatInput: base, assistant: null, candidates: [], requiredHistoryLookup: { query: "查历史", unavailable: true },
+  });
+  assert.equal(unavailable.memoryAssistantStatus, "failed");
+  assert.equal(unavailable.localHistoryReceipt, true);
 } finally { globalThis.fetch = originalFetch; }
 console.log("Owner history coverage prompt integration passed (mock model, no database).");

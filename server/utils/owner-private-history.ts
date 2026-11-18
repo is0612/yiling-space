@@ -3,6 +3,7 @@ import { parseEventTimeRange } from "./memory-event-time";
 import { parseEventParticipantQuery } from "./memory-event-retrieval";
 import { extractMemoryAssistantSearchTerms, estimateTokens } from "./memory-retrieval";
 import type { MemoryAssistantCandidate } from "./memory-assistant";
+import { normalizeOwnerHistoryTerms } from "./owner-history-terms";
 
 export const OWNER_HISTORY_TTL_MS = 20 * 60_000;
 export type OwnerHistoryCursor = { id: string; occurredAt: string };
@@ -11,6 +12,8 @@ export type OwnerHistoryCoverage = {
   count: number; actualFirst: string | null; actualLast: string | null;
   sampledFirst: string | null; sampledLast: string | null;
   truncated: boolean; hasEarlier: boolean; oldestCursor?: OwnerHistoryCursor;
+  /** A failed identity/room precondition is not a completed zero-result database read. */
+  reason?: "unresolved_participant" | "unresolved_group";
 };
 export type OwnerHistoryPlan = {
   query: string; groupId?: string; participantName?: string;
@@ -18,6 +21,10 @@ export type OwnerHistoryPlan = {
   evidenceIds: string[];
   direction?: "earlier" | "latest";
   cursor?: OwnerHistoryCursor;
+  mode?: "topic" | "page" | "boundary";
+  topicTerms?: string[];
+  /** Original question range survives page navigation and topic changes. */
+  rootStart?: string; rootEnd?: string;
 };
 const object = (v: unknown): Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 const validDate = (v: unknown): v is string => typeof v === "string" && Number.isFinite(Date.parse(v));
@@ -33,6 +40,9 @@ export function readOwnerHistoryPlan(value: unknown, now: Date): OwnerHistoryPla
   const cursor = object(v.cursor);
   if (v.cursor !== undefined && (typeof cursor.id !== "string" || !uuid.test(cursor.id) || !validDate(cursor.occurredAt))) return null;
   return { query: v.query, start: v.start, end: v.end, anchoredAt: v.anchoredAt,
+    ...(["topic", "page", "boundary"].includes(String(v.mode)) ? { mode: v.mode as OwnerHistoryPlan["mode"] } : {}),
+    ...(normalizeOwnerHistoryTerms(v.topicTerms).length ? { topicTerms: normalizeOwnerHistoryTerms(v.topicTerms) } : {}),
+    ...(validDate(v.rootStart) && validDate(v.rootEnd) ? { rootStart: v.rootStart, rootEnd: v.rootEnd } : {}),
     ...(v.direction === "earlier" || v.direction === "latest" ? { direction: v.direction } : {}),
     ...(v.cursor !== undefined ? { cursor: { id: cursor.id as string, occurredAt: cursor.occurredAt as string } } : {}),
     ...(typeof v.groupId === "string" ? { groupId: v.groupId } : {}),
@@ -103,6 +113,25 @@ export function planRestartedHistoryRetry(groupId: string, now: Date, timeZone: 
   return base ? { ...base, groupId, direction: "earlier" } : null;
 }
 
+export function applyOwnerHistoryIntent(previous: OwnerHistoryPlan | null, proposed: OwnerHistoryPlan | null,
+  intent: import("./owner-history-intent").OwnerHistoryIntent, message: string): { plan: OwnerHistoryPlan | null; lookup: boolean } {
+  if (intent.action === "clear") return { plan: null, lookup: false };
+  if (intent.action === "hold") return { plan: previous, lookup: false };
+  const base = proposed ?? previous;
+  if (!base) return { plan: null, lookup: false };
+  const newRange = proposed && previous && (proposed.start !== previous.start || proposed.end !== previous.end);
+  const newGroup = proposed?.groupId && previous?.groupId && proposed.groupId !== previous.groupId;
+  const rootStart = base.rootStart ?? (newRange || newGroup ? base.start : previous?.rootStart ?? base.start);
+  const rootEnd = base.rootEnd ?? (newRange || newGroup ? base.end : previous?.rootEnd ?? base.end);
+  if (intent.action === "retry") return { plan: { ...base, rootStart, rootEnd, cursor: undefined }, lookup: true };
+  if (intent.action === "page") return { plan: { ...base, mode: "page", direction: "earlier", rootStart, rootEnd,
+    ...(previous?.cursor ? { cursor: previous.cursor } : {}), evidenceIds: [] }, lookup: true };
+  return { plan: { ...base, mode: intent.action, start: rootStart, end: rootEnd, rootStart, rootEnd,
+    query: intent.query || message, direction: "latest", cursor: undefined, evidenceIds: [],
+    topicTerms: intent.action === "topic" ? normalizeOwnerHistoryTerms(intent.keywords) : undefined,
+    ...(intent.participantName ? { participantName: intent.participantName } : {}) }, lookup: true };
+}
+
 export type OwnerHistoryAuthorization = { characterId: string; bindingId: string; privateScopeId: string; conversationId: string; ownerUid: string };
 export function ownerHistoryConversationWhere(auth: OwnerHistoryAuthorization): Prisma.ConversationWhereInput {
   return { id: auth.conversationId, characterId: auth.characterId, channelBindingId: auth.bindingId,
@@ -145,11 +174,16 @@ export function ownerHistoryGroupWhere(characterId: string, plan: OwnerHistoryPl
 export type OwnerHistoryRow = { id: string; conversationId: string; externalMessageId: string | null; role: string; content: string; occurredAt: Date; metadata: unknown; conversation?: { externalConversationId: string | null } };
 const author = (row: OwnerHistoryRow): string => String(object(row.metadata).authorOpenId ?? "");
 const quote = (row: OwnerHistoryRow): string => String(object(row.metadata).replyToMessageId ?? object(object(row.metadata).quotedMessage).messageId ?? "");
+export function ownerHistoryTopicTerms(plan: OwnerHistoryPlan): string[] {
+  const precise = normalizeOwnerHistoryTerms(plan.topicTerms).filter(term => term !== plan.participantName);
+  return precise.length ? precise : extractMemoryAssistantSearchTerms(plan.query, 16)
+    .filter(term => !/^\d+$/u.test(term) && !["群里", "聊天", "记录", "今晚", "今天", "追问"].includes(term));
+}
 /** Keep participant exchanges across noisy intervening speakers, rather than nearest arbitrary rows. */
 export function selectOwnerHistoryEvidence(rows: OwnerHistoryRow[], plan: OwnerHistoryPlan, participantIds: string[]): MemoryAssistantCandidate[] {
   if (plan.participantName && participantIds.length !== 1) return [];
   const ordered = [...new Map(rows.map(row => [row.id, row])).values()].sort((a,b) => a.occurredAt.getTime()-b.occurredAt.getTime() || a.id.localeCompare(b.id));
-  const terms = extractMemoryAssistantSearchTerms(plan.query, 16).filter(term => !/^\d+$/u.test(term) && !["群里", "聊天", "记录", "今晚", "今天", "追问"].includes(term));
+  const terms = ownerHistoryTopicTerms(plan);
   const score = (row: OwnerHistoryRow) => terms.reduce((n,term) => n + (row.content.includes(term) ? 1 : 0), 0);
   const users = ordered.filter(row => row.role === "USER" && (!participantIds.length || participantIds.includes(author(row))));
   const earlyFirst = plan.direction === "earlier" && !plan.cursor;
@@ -157,6 +191,29 @@ export function selectOwnerHistoryEvidence(rows: OwnerHistoryRow[], plan: OwnerH
   const anchors = [...users].sort((a,b) => plan.direction === "earlier"
     ? (earlyFirst ? chronological(a,b) : chronological(b,a))
     : score(b)-score(a) || chronological(b,a)).slice(0, 4);
+  const topicPriority: OwnerHistoryRow[] = [];
+  if (plan.mode === "topic") {
+    const allAnchors = ordered.filter(row => plan.evidenceIds.includes(row.id));
+    const participantContext = participantIds.length ? allAnchors.filter(row => row.role === "USER" && participantIds.includes(author(row))) : [];
+    const diverse = [...new Map([
+      ...(participantContext.length ? [participantContext[0]!, participantContext[participantContext.length - 1]!] : []),
+      ...terms.flatMap(term => {
+        const hit = allAnchors.filter(row => row.content.includes(term));
+        return hit.length ? [hit[0]!, hit[hit.length - 1]!] : [];
+      }),
+    ].map(row => [row.id, row])).values()].slice(0, 8);
+    const rounds = diverse.map(anchor => {
+      const neighbors = ordered.filter(row => row.conversationId === anchor.conversationId && row.role !== anchor.role
+        && Math.abs(row.occurredAt.getTime()-anchor.occurredAt.getTime()) <= 180_000);
+      const before = neighbors.filter(row => row.occurredAt < anchor.occurredAt).at(-1);
+      const after = neighbors.find(row => row.occurredAt >= anchor.occurredAt);
+      return [anchor, ...(after ? [after] : []), ...(before ? [before] : [])];
+    });
+    for (let depth = 0; depth < 3; depth++) for (const round of rounds) {
+      const row = round[depth];
+      if (row && !topicPriority.some(item => item.id === row.id)) topicPriority.push(row);
+    }
+  }
   const wanted = new Set(plan.evidenceIds);
   for (const anchor of anchors) {
     wanted.add(anchor.id);
@@ -173,7 +230,10 @@ export function selectOwnerHistoryEvidence(rows: OwnerHistoryRow[], plan: OwnerH
   const selected = ordered.filter(row => wanted.has(row.id));
   const result: MemoryAssistantCandidate[] = [];
   let tokens = 0;
-  for (const row of (earlyFirst ? selected.slice(0, 24) : selected.slice(-24))) {
+  const prioritized = plan.mode === "topic"
+    ? [...new Map([...topicPriority, ...selected].map(row => [row.id, row])).values()].slice(0, 24)
+    : earlyFirst ? selected.slice(0, 24) : selected.slice(-24);
+  for (const row of prioritized) {
     const content = row.content.slice(0, 360), cost = estimateTokens(content) + 16;
     if (tokens + cost > 3200) break;
     tokens += cost;
@@ -198,16 +258,40 @@ export async function loadOwnerHistoryPage(prisma: Pick<PrismaClient, "message">
   let effective = { ...plan };
   const emptyCoverage: OwnerHistoryCoverage = { groupIds: plan.groupId ? [plan.groupId] : [], start: plan.start, end: plan.end,
     direction: plan.direction ?? "latest", count: 0, actualFirst: null, actualLast: null, sampledFirst: null, sampledLast: null, truncated: false, hasEarlier: false };
-  if (plan.participantName && participantIds.length !== 1) return { sources: [], coverage: emptyCoverage };
+  if (plan.participantName && participantIds.length !== 1) return { sources: [], coverage: { ...emptyCoverage, reason: "unresolved_participant" } };
+  if ((plan.mode === "topic" || plan.mode === "boundary") && !plan.groupId) return { sources: [], coverage: { ...emptyCoverage, reason: "unresolved_group" } };
   const select = { id: true, conversationId: true, externalMessageId: true, role: true, content: true, occurredAt: true, metadata: true,
     conversation: { select: { externalConversationId: true } } } as const;
-  const terms = extractMemoryAssistantSearchTerms(plan.query, 16).filter(term => !/^\d+$/u.test(term));
+  if (plan.mode === "boundary") {
+    const where = ownerHistoryGroupWhere(characterId, plan);
+    const [count, first, last] = await Promise.all([prisma.message.count({ where }),
+      prisma.message.findMany({ where, orderBy: [{ occurredAt: "asc" }, { id: "asc" }], take: 1, select }),
+      prisma.message.findMany({ where, orderBy: [{ occurredAt: "desc" }, { id: "desc" }], take: 1, select })]);
+    const { occurredAt: _range, ...authorized } = where;
+    const prior = await prisma.message.findMany({ where: { AND: [authorized, { occurredAt: { lt: new Date(plan.start) } }] }, take: 1, select });
+    return { sources: [], coverage: { ...emptyCoverage, count, actualFirst: first[0]?.occurredAt.toISOString() ?? null,
+      actualLast: last[0]?.occurredAt.toISOString() ?? null, hasEarlier: prior.length > 0 } };
+  }
+  const terms = ownerHistoryTopicTerms(plan);
   const userWhere: Prisma.MessageWhereInput = { role: "USER", ...(participantIds.length ? { metadata: { path: ["authorOpenId"], equals: participantIds[0]! } } : {}) };
   const readAnchors = async () => {
     const order = effective.direction === "earlier" && !effective.cursor ? "asc" as const : "desc" as const;
     const where = { AND: [ownerHistoryGroupWhere(characterId, effective),
-      ...(effective.direction === "earlier" && !participantIds.length ? [] : [userWhere]),
+      ...((effective.direction === "earlier" || effective.mode === "topic") && !participantIds.length ? [] : [userWhere]),
       ...(effective.cursor ? [beforeCursor(effective.cursor)] : [])] };
+    if (effective.mode === "topic") {
+      const hits = await Promise.all(terms.flatMap(term => (["asc", "desc"] as const).map(order => prisma.message.findMany({
+        where: { AND: [where, { content: { contains: term, mode: "insensitive" as const } }] },
+        orderBy: [{ occurredAt: order }, { id: order }], take: 1, select,
+      }))));
+      if (!hits.some(batch => batch.length)) return [];
+      const participantContext = participantIds.length ? await Promise.all((["asc", "desc"] as const).map(order => prisma.message.findMany({
+        where: { AND: [where, userWhere] }, orderBy: [{ occurredAt: order }, { id: order }], take: 1, select,
+      }))) : [];
+      // The person's first/last contributions complete the interaction even when their
+      // opening action uses different wording than the later topic question.
+      return [...new Map([...participantContext.flat(), ...hits.flat()].map(row => [row.id, row])).values()].slice(0, 8);
+    }
     // A directional page is chronological, not a new keyword search that jumps over a range.
     const matched = effective.direction !== "earlier" && terms.length ? await prisma.message.findMany({
       where: { AND: [where, { OR: terms.map(term => ({ content: { contains: term, mode: "insensitive" as const } })) }] },
@@ -224,11 +308,11 @@ export async function loadOwnerHistoryPage(prisma: Pick<PrismaClient, "message">
   const where = ownerHistoryGroupWhere(characterId, effective);
   const pageWhere: Prisma.MessageWhereInput = { AND: [where, ...(effective.cursor ? [beforeCursor(effective.cursor)] : [])] };
   const retained = effective.evidenceIds.length ? await prisma.message.findMany({ where: { AND: [pageWhere, { id: { in: effective.evidenceIds } }] }, take: 24, select }) : [];
-  const expanded = await Promise.all(anchors.slice(0, 4).flatMap(anchor =>
+  const expanded = await Promise.all(anchors.slice(0, effective.mode === "topic" ? 8 : 4).flatMap(anchor =>
     (["before", "after"] as const).flatMap(direction => (["USER", "ASSISTANT"] as const).map(role => {
       const sideOrder = direction === "before" ? "desc" as const : "asc" as const;
       return prisma.message.findMany({ where: { AND: [pageWhere, { conversationId: anchor.conversationId, role,
-        ...(role === "USER" ? { metadata: { path: ["authorOpenId"], equals: author(anchor) } } : {}),
+        ...(role === "USER" && anchor.role === "USER" ? { metadata: { path: ["authorOpenId"], equals: author(anchor) } } : {}),
         occurredAt: direction === "before"
           ? { gte: new Date(anchor.occurredAt.getTime()-15*60_000), lte: anchor.occurredAt }
           : { gte: anchor.occurredAt, lte: new Date(anchor.occurredAt.getTime()+15*60_000) },

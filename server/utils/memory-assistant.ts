@@ -4,6 +4,7 @@ import type { AssistantTurnContext } from "./assistant-turn-context";
 import { assertAssistantTurnChannel, runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
 import type { TurnDetailPatch, TurnSource } from "./model-turn-detail";
 import type { OwnerHistoryCoverage } from "./owner-private-history";
+import { formatLocalTimestamp, CHAT_TIME_ZONE_DEFAULT } from "./chat-time-context";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { ASSISTANT_FIELDS, resolveAssistantConnection } from "./assistant-inheritance";
 import {
@@ -690,7 +691,8 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   chatInput: ConversationReplyInput;
   assistant: MemoryAssistantRuntime | null;
   candidates: MemoryAssistantCandidate[];
-  requiredHistoryLookup?: { query: string; load?: () => Promise<{ sources: MemoryAssistantCandidate[]; coverage: OwnerHistoryCoverage }> };
+  suppressHistoryLookup?: boolean;
+  requiredHistoryLookup?: { query: string; mode?: "topic" | "page" | "boundary"; unavailable?: boolean; load?: () => Promise<{ sources: MemoryAssistantCandidate[]; coverage: OwnerHistoryCoverage }> };
   loadCandidates?: (query: string, options?: { participantName?: string; deterministicTimeline: boolean }) => Promise<MemoryAssistantCandidate[]>;
   onTurnDetail?: (detail: TurnDetailPatch) => void;
 }): Promise<ConversationReplyWithMemoryAssistant> {
@@ -704,6 +706,14 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
   const report = (memory: NonNullable<TurnDetailPatch["memory"]>) => {
     try { input.onTurnDetail?.({ memory }); } catch { /* Diagnostics never affect generation. */ }
   };
+  if (input.suppressHistoryLookup && !input.chatInput.groupChat && input.chatInput.speaker?.isOwner === true) {
+    report({ status: "not_needed", sources: [] });
+    skipAssistantTurnStage(turnContext, "memory", "not_needed");
+    const replyInput = { ...input.chatInput, readOnlyTools: undefined, memoryAssistantAvailable: false, memoryAssistantEvidenceProvided: false };
+    const { memoryAssistantQuery: _query, ...result } = await runAssistantTurnStage(turnContext, "response", "owner-history-hold", replyInput,
+      observer => generateConversationReply(replyInput, observer));
+    return result;
+  }
   // A server-authorized owner history task must execute before the optional tools path.
   // Its loader returns one bounded exchange bundle: do not rank it again or let a second model drop answers.
   if (input.requiredHistoryLookup && !input.chatInput.groupChat && input.chatInput.speaker?.isOwner === true) {
@@ -713,14 +723,19 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
     const unavailable = (status: "failed" | "no_sources"): ConversationReplyWithMemoryAssistant => ({
       action: "reply", reply: status === "failed"
         ? "这次查询群聊记录没成功，暂时不能核实，不代表记录不存在。"
-        : "这次在指定范围内没找到足够的群聊记录，暂时不能确定；可以再给我一句原话或缩小范围。",
+        : coverage?.reason === "unresolved_participant"
+          ? "还不能唯一确认这个称呼指的是谁，请补一下完整昵称或账号，我再查对应的记录。"
+          : coverage?.reason === "unresolved_group"
+            ? "这次还没确认你指的是哪个群，请补一下群号，我再查对应的记录。"
+            : "这次在指定范围内没找到足够的群聊记录，暂时不能确定；可以再给我一句原话或缩小范围。",
       usedMemoryIds: [], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [], faceIds: [], stickerId: null, usedCatchphraseIds: [],
       localHistoryReceipt: true, model: "local-history-lookup", provider: "local-history-lookup",
       promptTemplateVersion: "owner-history-lookup-v1", memoryAssistantStatus: status,
       ...(coverage ? { ownerHistoryCoverage: coverage } : {}),
     });
     try {
-      sources = await runAssistantTurnStage(turnContext, "memory", query, { query }, async () => {
+      sources = await runAssistantTurnStage(turnContext, "memory", query, { query, mode: input.requiredHistoryLookup.mode ?? "topic" }, async () => {
+        if (input.requiredHistoryLookup?.unavailable) throw new Error("History intent resolution unavailable");
         if (input.requiredHistoryLookup?.load) {
           const page = await input.requiredHistoryLookup.load();
           coverage = page.coverage;
@@ -728,11 +743,27 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
         }
         if (!input.loadCandidates) throw new Error("History candidate loader unavailable");
         return input.loadCandidates(query);
-      }, rows => rows.length === 0);
+      }, rows => input.requiredHistoryLookup?.mode === "boundary" ? !coverage || coverage.count === 0 : rows.length === 0);
     } catch {
       report({ status: "failed", query, candidateCount: 0, sources: [] });
       skipAssistantTurnStage(turnContext, "response", "not_needed");
       return unavailable("failed");
+    }
+    if (input.requiredHistoryLookup.mode === "boundary" && coverage) {
+      const status = coverage.count > 0 ? "success" as const : "no_sources" as const;
+      report({ status, query, candidateCount: 0, sources: [] });
+      skipAssistantTurnStage(turnContext, "response", "not_needed");
+      if (!coverage.count || !coverage.actualFirst || !coverage.actualLast) return unavailable("no_sources");
+      const zone = input.chatInput.timeZone ?? CHAT_TIME_ZONE_DEFAULT;
+      const first = formatLocalTimestamp(coverage.actualFirst, zone);
+      const last = formatLocalTimestamp(coverage.actualLast, zone);
+      return {
+        action: "reply", reply: `这次查的群和时间范围里有 ${coverage.count} 条记录，最早是 ${first}，最新是 ${last}。`
+          + (coverage.hasEarlier ? "这个范围前面还有更早记录；这次没有把所有历史都展开。" : "这只说明本次范围内的情况，不代表所有历史。"),
+        usedMemoryIds: [], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [], faceIds: [], stickerId: null, usedCatchphraseIds: [],
+        localHistoryReceipt: true, model: "local-history-lookup", provider: "local-history-lookup", promptTemplateVersion: "owner-history-lookup-v1",
+        memoryAssistantStatus: status, memoryAssistantSources: [], ownerHistoryCoverage: coverage,
+      };
     }
     sources = sources.filter(source => source.sourceType === "message" && source.scope === "character");
     report({ status: sources.length ? "success" : "no_sources", query, candidateCount: sources.length, sources: sources.map(memoryAssistantTurnSource) });

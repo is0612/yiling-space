@@ -21,6 +21,7 @@ type GroupContextReplyInput = {
   contextAssistant?: MemoryAssistantRuntime | null;
   candidates: MemoryAssistantCandidate[];
   requiredHistoryLookup?: Parameters<typeof generateConversationReplyWithMemoryAssistant>[0]["requiredHistoryLookup"];
+  suppressHistoryLookup?: boolean;
   onTurnDetail?: (detail: TurnDetailPatch) => void;
   analysisBackground?: ConversationReplyInput["groupBackground"];
   previousWorkingContext?: PreviousWorkingContext;

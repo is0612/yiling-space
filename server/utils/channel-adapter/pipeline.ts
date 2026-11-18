@@ -30,7 +30,8 @@ import { rankKnowledgeItems } from "../knowledge-retrieval";
 import { isGroupKnowledgeSource, isPrivateKnowledgeSource, readKnowledgeCollectScope } from "../knowledge-collect-policy";
 import { generateGroupContextReply } from "../group-context-reply";
 import { loadConversationWorkingContext, saveConversationWorkingContext } from "../conversation-working-context";
-import { loadOwnerHistoryContext, saveOwnerHistoryContext, planOwnerHistory, planRestartedHistoryRetry, loadOwnerHistoryPage, type OwnerHistoryAuthorization, type OwnerHistoryCoverage } from "../owner-private-history";
+import { analyzeOwnerHistoryIntent, privateContextPurpose } from "../owner-history-intent";
+import { loadOwnerHistoryContext, saveOwnerHistoryContext, planOwnerHistory, applyOwnerHistoryIntent, planRestartedHistoryRetry, loadOwnerHistoryPage, type OwnerHistoryAuthorization, type OwnerHistoryCoverage } from "../owner-private-history";
 import { parseEventTimeRange } from "../memory-event-time";
 import {
   CROSS_CHANNEL_WINDOW_MINUTES,
@@ -1743,6 +1744,78 @@ async function runChannelTurn(input: {
     }
   };
 
+  // This capability is granted by the verified owner turn, never by a tool query or stored metadata.
+  const ownerHistoryAuth: OwnerHistoryAuthorization | null = !isGroup && input.platform === "qq-onebot" && isOwnerTurn && ownerPrivateScopeId && existingConversation && ownerPlatformUid
+    ? { characterId: input.characterId, bindingId: input.bindingId, privateScopeId: ownerPrivateScopeId,
+        conversationId: existingConversation.id, ownerUid: ownerPlatformUid } : null;
+  const ownerHistoryNow = new Date();
+  const ownerHistoryStored = ownerHistoryAuth
+    ? await loadOwnerHistoryContext(prisma, ownerHistoryAuth, ownerHistoryNow).catch(() => null) : null;
+  let ownerHistoryPlan = ownerHistoryAuth
+    ? planOwnerHistory(currentMessage, ownerHistoryStored?.plan ?? null, ownerHistoryNow, chatTimeZone) : null;
+  // Resolve a referential room only from the owner's own recent explicit room references,
+  // then verify the room against this character's QQ group conversations.
+  const bareHistoryRetry = /^(?:现在呢|还是呢|再看看|再试试)[？?。！!\s]*$/u.test(currentMessage);
+  if (ownerHistoryAuth && (!ownerHistoryPlan || !ownerHistoryPlan.groupId)
+    && (bareHistoryRetry || /那个群|这个群/u.test(currentMessage))) {
+    const roomCandidates = [...new Set(recentStoredMessages.filter(row => row.role === "USER"
+      && row.occurredAt.getTime() >= ownerHistoryNow.getTime() - 2 * 3_600_000).flatMap(row => {
+        const match = /(?:群(?:号)?\s*[:：]?\s*(\d{5,12})|(\d{5,12})\s*(?:这个群|那个群|群|那边|这边))/u.exec(row.content);
+        return match?.slice(1).filter((value): value is string => Boolean(value)) ?? [];
+      }))];
+    if (roomCandidates.length) {
+      const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId,
+        externalConversationId: { in: roomCandidates.map(id => `g:${id}`) },
+        channelBinding: { connection: { platform: "qq-onebot" } } },
+        select: { externalConversationId: true }, take: 40 });
+      const verified = new Set(rooms.map(room => room.externalConversationId));
+      const groupId = roomCandidates.find(id => verified.has(`g:${id}`));
+      if (groupId) {
+        ownerHistoryPlan = ownerHistoryPlan
+          ? { ...ownerHistoryPlan, groupId }
+          // The live task expired or died with the adapter; a bare retry still deserves a real read.
+          : planRestartedHistoryRetry(groupId, ownerHistoryNow, chatTimeZone);
+      }
+    }
+  }
+  let ownerHistoryLookup = Boolean(ownerHistoryPlan);
+  let ownerHistoryIntentFailed = false;
+  let ownerHistoryAnalyzed = false;
+  let ownerHistoryHold = false;
+  if (ownerHistoryAuth && (ownerHistoryStored?.plan || ownerHistoryPlan)) {
+    const runtime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
+    ownerHistoryAnalyzed = true;
+    if (runtime) {
+      let usage: import("../model-usage").ModelUsageTokens | undefined;
+      try {
+        const intent = await runAssistantTurnStage(collaboration, "context", "owner-history-intent",
+          { message: currentMessage, previous: ownerHistoryStored?.plan?.query ?? "" },
+          () => analyzeOwnerHistoryIntent(runtime, { message: currentMessage,
+            recent: recentMessages.slice(-8).map(row => ({ role: row.role, content: row.content })),
+            previous: ownerHistoryStored?.plan ?? null }, value => { usage = value; }));
+        const decision = applyOwnerHistoryIntent(ownerHistoryStored?.plan ?? null, ownerHistoryPlan, intent, currentMessage);
+        ownerHistoryPlan = decision.plan;
+        ownerHistoryLookup = decision.lookup;
+        ownerHistoryHold = intent.action === "hold";
+        await recordModelUsage({ kind: "context-assistant", model: runtime.model, usage: toUsageTokens(usage),
+          characterId: input.characterId, channelBindingId: input.bindingId,
+          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+          metadata: { status: "success", source: "owner-history-intent", turnId, action: intent.action } }).catch(() => undefined);
+      } catch {
+        ownerHistoryIntentFailed = true;
+        ownerHistoryLookup = Boolean(ownerHistoryPlan);
+        await recordModelUsage({ kind: "context-assistant", model: runtime.model, usage: toUsageTokens(usage),
+          characterId: input.characterId, channelBindingId: input.bindingId,
+          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+          metadata: { status: "failed", source: "owner-history-intent", turnId } }).catch(() => undefined);
+      }
+    } else {
+      ownerHistoryIntentFailed = true;
+      ownerHistoryLookup = Boolean(ownerHistoryPlan);
+      skipAssistantTurnStage(collaboration, "context", "not_enabled");
+    }
+  }
+
   // One private analyzer call can both request a knowledge lookup and nominate candidate evidence.
   // The local gate runs regardless of the auto-collect switch: retrieval must keep working when
   // capture is disabled. Only current-round original messages enter this private-only analysis.
@@ -1755,7 +1828,7 @@ async function runChannelTurn(input: {
       speaker: item.authorDisplayName ?? "",
       content: item.content,
     }));
-    if (shouldAnalyzePrivateKnowledge(privateMessages)) {
+    if (privateContextPurpose(ownerHistoryAnalyzed, shouldAnalyzePrivateKnowledge(privateMessages)) === "knowledge") {
       const privateContextRuntime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
       if (privateContextRuntime) {
         try {
@@ -1848,7 +1921,7 @@ async function runChannelTurn(input: {
         skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
       }
     } else {
-      skipAssistantTurnStage(collaboration, "context", "not_needed");
+      if (!ownerHistoryAnalyzed) skipAssistantTurnStage(collaboration, "context", "not_needed");
       skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
     }
   }
@@ -1937,40 +2010,6 @@ async function runChannelTurn(input: {
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
   })));
-  // This capability is granted by the verified owner turn, never by a tool query or stored metadata.
-  const ownerHistoryAuth: OwnerHistoryAuthorization | null = !isGroup && input.platform === "qq-onebot" && isOwnerTurn && ownerPrivateScopeId && existingConversation && ownerPlatformUid
-    ? { characterId: input.characterId, bindingId: input.bindingId, privateScopeId: ownerPrivateScopeId,
-        conversationId: existingConversation.id, ownerUid: ownerPlatformUid } : null;
-  const ownerHistoryNow = new Date();
-  const ownerHistoryStored = ownerHistoryAuth
-    ? await loadOwnerHistoryContext(prisma, ownerHistoryAuth, ownerHistoryNow).catch(() => null) : null;
-  let ownerHistoryPlan = ownerHistoryAuth
-    ? planOwnerHistory(currentMessage, ownerHistoryStored?.plan ?? null, ownerHistoryNow, chatTimeZone) : null;
-  // Resolve a referential room only from the owner's own recent explicit room references,
-  // then verify the room against this character's QQ group conversations.
-  const bareHistoryRetry = /^(?:现在呢|还是呢|再看看|再试试)[？?。！!\s]*$/u.test(currentMessage);
-  if (ownerHistoryAuth && (!ownerHistoryPlan || !ownerHistoryPlan.groupId)
-    && (bareHistoryRetry || /那个群|这个群/u.test(currentMessage))) {
-    const roomCandidates = [...new Set(recentStoredMessages.filter(row => row.role === "USER"
-      && row.occurredAt.getTime() >= ownerHistoryNow.getTime() - 2 * 3_600_000).flatMap(row => {
-        const match = /(?:群(?:号)?\s*[:：]?\s*(\d{5,12})|(\d{5,12})\s*(?:这个群|那个群|群|那边|这边))/u.exec(row.content);
-        return match?.slice(1).filter((value): value is string => Boolean(value)) ?? [];
-      }))];
-    if (roomCandidates.length) {
-      const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId,
-        externalConversationId: { in: roomCandidates.map(id => `g:${id}`) },
-        channelBinding: { connection: { platform: "qq-onebot" } } },
-        select: { externalConversationId: true }, take: 40 });
-      const verified = new Set(rooms.map(room => room.externalConversationId));
-      const groupId = roomCandidates.find(id => verified.has(`g:${id}`));
-      if (groupId) {
-        ownerHistoryPlan = ownerHistoryPlan
-          ? { ...ownerHistoryPlan, groupId }
-          // The live task expired or died with the adapter; a bare retry still deserves a real read.
-          : planRestartedHistoryRetry(groupId, ownerHistoryNow, chatTimeZone);
-      }
-    }
-  }
   let ownerHistoryCoverage: OwnerHistoryCoverage | undefined;
   const loadMemoryCandidates = async (searchQuery: string, lookupOptions?: { participantName?: string; deterministicTimeline: boolean }) => {
         if (ownerHistoryAuth && ownerHistoryPlan) {
@@ -2310,14 +2349,15 @@ async function runChannelTurn(input: {
         });
       },
       candidates: [],
-      ...(ownerHistoryPlan ? { requiredHistoryLookup: { query: ownerHistoryPlan.query, load: async () => {
+      ...(ownerHistoryHold ? { suppressHistoryLookup: true } : {}),
+      ...(ownerHistoryPlan && ownerHistoryLookup ? { requiredHistoryLookup: { query: ownerHistoryPlan.query, mode: ownerHistoryPlan.mode, load: async () => {
         const sources = await loadMemoryCandidates(ownerHistoryPlan!.query);
         if (!ownerHistoryCoverage) throw new Error("History coverage unavailable");
         return { sources, coverage: ownerHistoryCoverage };
       } } } : {}),
       loadCandidates: loadMemoryCandidates,
       chatInput: {
-        ...(input.platform === "qq-onebot" && qqReadOnlyTaskRequested(currentMessage) ? { readOnlyTools } : {}),
+        ...(input.platform === "qq-onebot" && !(ownerHistoryHold) && qqReadOnlyTaskRequested(currentMessage) ? { readOnlyTools } : {}),
         preferences,
         expressionHabits,
         goals,
