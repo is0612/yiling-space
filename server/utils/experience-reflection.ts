@@ -10,10 +10,11 @@ export function experienceReflectionHash(row: { content: string; context: string
 export async function collectExperienceReflectionSources(db: DB, characterId: string, scope: ExperienceScope, start: Date, end: Date) {
   const candidates = await db.interactionExperience.findMany({ where: { characterId, ...scope, status: "ACTIVE", createdAt: { gte: start, lt: end }, conversation: { characterId, memoryScopeId: scope.memoryScopeId, OR: [{ channelBindingId: null }, { externalConversationId: { startsWith: "c:" } }] } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: 300 });
   const feedback = await db.message.findMany({ where: { id: { in: candidates.map(row => row.feedbackMessageId) }, conversationId: scope.conversationId, role: "USER" }, select: { id: true, occurredAt: true } });
+  const occurredAtById = new Map(feedback.map(row => [row.id, row.occurredAt.toISOString()]));
   const dayById = new Map(feedback.map(row => [row.id, row.occurredAt.toISOString().slice(0,10)]));
   const counts = new Map<string, number>(); const seen = new Set<string>();
   const rows = candidates.filter(row => { const day = dayById.get(row.feedbackMessageId); if (!day || seen.has(row.feedbackMessageId) || (counts.get(day) ?? 0) >= 15) return false; seen.add(row.feedbackMessageId); counts.set(day, (counts.get(day) ?? 0)+1); return true; }).slice(0,30);
-  return rows.map(row => ({ key: `experience:${row.id}`, type: "experience" as const, id: row.id, hash: experienceReflectionHash(row), ...scope, title: "本会话互动经验", excerpt: JSON.stringify({ content: row.content, context: row.context, learning: row.learning }).slice(0, 1200) }));
+  return rows.map(row => ({ key: `experience:${row.id}`, type: "experience" as const, id: row.id, hash: experienceReflectionHash(row), ...scope, feedbackOccurredAt: occurredAtById.get(row.feedbackMessageId)!, title: "本会话互动经验", excerpt: JSON.stringify({ content: row.content, context: row.context, learning: row.learning }).slice(0, 1200) }));
 }
 export async function validateExperienceReflectionRefs(tx: Prisma.TransactionClient, characterId: string, refs: readonly ExperienceReflectionRef[], expected?: ExperienceScope) {
   if (!refs.length || refs.length > 30) return false;
