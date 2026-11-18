@@ -60,10 +60,11 @@ export async function loadSelfUnderstanding(prisma: PrismaClient, input: {
   for (const row of experiences) {
     const learning = readExperienceLearning(row.learning);
     evidence.push({ domain: "experience", id: row.id,
+      ...(learning ? { subject: "current_character_response" as const } : {}),
       text: learning ? `用户纠正: ${learning.correction.slice(0, 100)}; 下次判断: ${learning.nextJudgment.slice(0, 100)}` : row.content,
       excerptTruncated: Boolean(learning && (learning.correction.length > 100 || learning.nextJudgment.length > 100)),
       context: row.context, state: "ACTIVE", scope: "private", conversationId: row.conversationId,
       revision: row.revision, updatedAt: row.updatedAt.toISOString() });
   }
-  return buildSelfUnderstandingView({ name: character.name, avatar: character.avatar ?? undefined, groupChat: input.groupChat, conversationId: room?.id, evidence });
+  return buildSelfUnderstandingView({ name: character.name, avatar: character.avatar ?? undefined, groupChat: input.groupChat, conversationId: room?.id, evidence, scopedMemoryReadSucceeded: scopeIds.length > 0 });
 }

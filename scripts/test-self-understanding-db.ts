@@ -40,6 +40,8 @@ try {
   const view = await loadSelfUnderstanding(db, args);
   const serialized = JSON.stringify(view);
   assert.equal(view.identity.name, "当前名字");
+  assert.equal(view.runtimeEvidence.memoryRead, "authorized_scoped_read_succeeded");
+  assert.equal(view.runtimeEvidence.historyCompleteness, "not_established");
   assert.equal(view.presentation.meaning, "appearance_only");
   assert.equal(view.evidence.find(row => row.id === knowledge.id)?.confidence, 0.2);
   assert.equal(view.evidence.find(row => row.id === knowledge.id)?.status, "active_record");
@@ -53,6 +55,7 @@ try {
   const experienceEvidence = view.evidence.find(row => row.id === experience.id)!;
   assert(experienceEvidence.excerpt.includes("用户纠正: 应核对当前证据"));
   assert(experienceEvidence.excerpt.includes("下次判断: 先检查当前权限"));
+  assert.equal(experienceEvidence.subject, "current_character_response");
   assert(!experienceEvidence.excerpt.includes("OLD_FAILURE_SENTINEL"));
   assert(!view.evidence.some(row => row.id === invalidGlobal.id), "Global reflection cannot borrow private references");
   const group = await loadSelfUnderstanding(db, { ...args, readableScopeIds: [global.id, own.id, other.id], groupChat: true });

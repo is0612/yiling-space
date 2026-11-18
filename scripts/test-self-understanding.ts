@@ -5,7 +5,12 @@ for (const text of ["哈哈", "最近天气如何", "你最近看了什么", "�
 const now = new Date("2026-11-18T12:00:00Z");
 const previousMessage = { role: "ASSISTANT", occurredAt: new Date(now.getTime() - 1000), metadata: { providedSelfUnderstandingSources: [] } };
 const privateContext = { groupChat: false, previousMessage, now };
-for (const text of ["这段时间有什么变化？有没有具体的经历能说明？", "最近有什么变化？", "有没有具体的例子？", "刚才那句有什么依据？", "这是哪来的消息？"]) {
+const followupVariants = ["", "具体", "具体的"].flatMap(detail => [
+  `这段时间有什么变化？有没有${detail}经历能说明？`,
+  `最近有什么变化？有没有${detail}经历能说明？`,
+  `有没有${detail}例子？`,
+]);
+for (const text of [...followupVariants, "最近有什么变化？", "刚才那句有什么依据？", "这是哪来的消息？"]) {
   assert(wantsSelfUnderstanding(text, privateContext), text);
   assert(!wantsSelfUnderstanding(text), "No inherited subject without a trusted previous self reply");
   assert(!wantsSelfUnderstanding(text, { ...privateContext, groupChat: true }));
@@ -28,7 +33,12 @@ assert.equal(view.presentation.meaning, "appearance_only");
 assert.equal(view.presentation.changeableByOwner, true);
 assert.equal(view.runtimeEvidence.events, "not_supplied_by_this_view");
 assert.equal(view.runtimeEvidence.currentAbilities, "not_assessed_by_this_view");
-const memoryOnly = buildSelfUnderstandingView({ name: "测试角色", groupChat: false, evidence: [{ ...base, domain: "memory", id: "dated-memory", text: "过去曾参加活动" }] });
+assert.equal(view.runtimeEvidence.memoryRead, "not_performed_by_this_view");
+const scopedRead = buildSelfUnderstandingView({ name: "测试角色", groupChat: false, evidence: [], scopedMemoryReadSucceeded: true });
+assert.equal(scopedRead.runtimeEvidence.memoryRead, "authorized_scoped_read_succeeded");
+assert.equal(scopedRead.runtimeEvidence.historyCompleteness, "not_established", "A scoped read cannot prove complete history");
+const memoryOnly = buildSelfUnderstandingView({ name: "测试角色", groupChat: false, evidence: [{ ...base, domain: "memory", id: "dated-memory", text: "过去曾参加活动", subject: "current_character_response" }] });
+assert.equal(memoryOnly.evidence[0]?.subject, undefined, "A memory record cannot acquire a self-feedback label by a supplied field");
 assert.equal(memoryOnly.coverage.selectedMemorySources, 1);
 assert.equal(memoryOnly.coverage.selectedInteractionFeedbackSources, 0);
 assert.equal(memoryOnly.coverage.unselectedMeaning, "not_in_this_bounded_view");

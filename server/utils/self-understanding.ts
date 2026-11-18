@@ -19,14 +19,14 @@ export function wantsSelfUnderstanding(message: string, context?: {
   const age = (context.now ?? new Date()).getTime() - new Date(previous.occurredAt).getTime();
   if (!Number.isFinite(age) || age < 0 || age > 15 * 60_000) return false;
   if (/(?:这是哪来的(?:消息|说法|判断|结论)|(?:你刚才|刚才那句|这个说法|你这个判断).{0,12}(?:依据|来源)|^(?:依据|来源)(?:是什么|在哪里|呢))/u.test(message.trim())) return true;
-  return /^(?:那[，,\s]*)?(?:(?:这段时间|最近|现在)(?:有什么|有哪些|有啥|有|的)?(?:变化|改变|成长)|(?:和|与)(?:以前|过去)相比(?:有什么|有哪些)?(?:变化|不同)|有没有(?:具体的)?(?:经历|例子|依据)(?:能说明|支持|吗)?)[？?。！!，,\s]*(?:有没有(?:具体的)?(?:经历|例子|依据|记录)(?:能说明|支持|吗)?[？?。！!\s]*)?$/u.test(message.trim());
+  return /^(?:那[，,\s]*)?(?:(?:这段时间|最近|现在)(?:有什么|有哪些|有啥|有|的)?(?:变化|改变|成长)|(?:和|与)(?:以前|过去)相比(?:有什么|有哪些)?(?:变化|不同)|有没有(?:具体的?)?(?:经历|例子|依据)(?:能说明|支持|吗)?)[？?。！!，,\s]*(?:有没有(?:具体的?)?(?:经历|例子|依据|记录)(?:能说明|支持|吗)?[？?。！!\s]*)?$/u.test(message.trim());
 }
 
 export type SelfUnderstandingEvidence = {
   domain: SelfUnderstandingDomain; id: string; text: string;
   state: "ACTIVE" | "ACCEPTED";
   scope: "character" | "private";
-  revision?: number; updatedAt: string; context?: string; confidence?: number | null; excerptTruncated?: boolean;
+  revision?: number; updatedAt: string; context?: string; confidence?: number | null; excerptTruncated?: boolean; subject?: "current_character_response";
   /** Only request-authorized conversation evidence may be passed by a trusted domain adapter. */
   conversationId?: string;
 };
@@ -34,11 +34,12 @@ export type SelfUnderstandingView = {
   version: 1;
   identity: { name: string };
   presentation: { avatar: string; meaning: "appearance_only"; changeableByOwner: true };
-  runtimeEvidence: { events: "not_supplied_by_this_view"; currentAbilities: "not_assessed_by_this_view" };
+  runtimeEvidence: { events: "not_supplied_by_this_view"; currentAbilities: "not_assessed_by_this_view";
+    memoryRead: "not_performed_by_this_view" | "authorized_scoped_read_succeeded"; historyCompleteness: "not_established" };
   evidence: Array<{
     domain: SelfUnderstandingDomain; id: string; excerpt: string;
     scope: "character" | "private"; status: "confirmed_record" | "active_record" | "accepted_interpretation" | "scoped_experience";
-    revision?: number; updatedAt: string; context?: string; confidence?: number | null; excerptTruncated?: boolean;
+    revision?: number; updatedAt: string; context?: string; confidence?: number | null; excerptTruncated?: boolean; subject?: "current_character_response";
   }>;
   coverage: { selectedMemorySources: number; selectedInteractionFeedbackSources: number; unselectedMeaning: "not_in_this_bounded_view" };
   notProvided: Array<Exclude<SelfUnderstandingDomain, "experience"> | "interaction_feedback_cards">;
@@ -52,6 +53,7 @@ export function selfUnderstandingReferences(view: SelfUnderstandingView) {
 export function buildSelfUnderstandingView(input: {
   name: string; avatar?: string; groupChat: boolean; conversationId?: string;
   evidence: readonly SelfUnderstandingEvidence[];
+  scopedMemoryReadSucceeded?: boolean;
 }): SelfUnderstandingView {
   const evidence: SelfUnderstandingView["evidence"] = [];
   const seen = new Set<string>();
@@ -74,6 +76,7 @@ export function buildSelfUnderstandingView(input: {
         status: row.domain === "reflection" ? "accepted_interpretation" : row.domain === "experience" ? "scoped_experience" : row.domain === "memory" || row.domain === "knowledge" ? "active_record" : "confirmed_record",
         ...(Number.isSafeInteger(row.revision) && row.revision! > 0 ? { revision: row.revision } : {}),
         updatedAt: new Date(row.updatedAt).toISOString(),
+        ...(row.domain === "experience" && row.subject === "current_character_response" ? { subject: "current_character_response" as const } : {}),
         ...(row.excerptTruncated || row.text.trim().length > 240 || (row.context?.trim().length ?? 0) > 120 ? { excerptTruncated: true } : {}),
         ...(row.confidence !== undefined ? { confidence: typeof row.confidence === "number" && Number.isFinite(row.confidence) && row.confidence >= 0 && row.confidence <= 1 ? row.confidence : null } : {}),
         ...(row.context?.trim() ? { context: row.context.trim().slice(0, 120) } : {}),
@@ -86,7 +89,8 @@ export function buildSelfUnderstandingView(input: {
   return {
     version: 1, identity: { name: input.name.trim().slice(0, 100) },
     presentation: { avatar: /^(?:https?:|data:|blob:|\/)/iu.test((input.avatar ?? "").trim()) ? "configured_image" : (input.avatar ?? "").trim().slice(0, 80), meaning: "appearance_only", changeableByOwner: true },
-    runtimeEvidence: { events: "not_supplied_by_this_view", currentAbilities: "not_assessed_by_this_view" },
+    runtimeEvidence: { events: "not_supplied_by_this_view", currentAbilities: "not_assessed_by_this_view",
+      memoryRead: input.scopedMemoryReadSucceeded === true ? "authorized_scoped_read_succeeded" : "not_performed_by_this_view", historyCompleteness: "not_established" },
     coverage: { selectedMemorySources: evidence.filter(row => row.domain === "memory").length,
       selectedInteractionFeedbackSources: evidence.filter(row => row.domain === "experience").length, unselectedMeaning: "not_in_this_bounded_view" },
     evidence, notProvided: SELF_UNDERSTANDING_DOMAINS.filter(domain => !evidence.some(row => row.domain === domain))

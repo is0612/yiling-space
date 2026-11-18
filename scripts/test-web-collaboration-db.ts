@@ -77,15 +77,17 @@ try {
     });
     const result = await response.json(); assert.equal(response.status, 201, JSON.stringify(result)); return result;
   };
-  const followed = await follow("这段时间有什么变化？有没有具体的经历能说明？");
-  assert(promptPayloads[2]?.selfUnderstanding?.evidence.some(row => row.id === preference.id), "Omitted subject must inherit only the preceding self reply");
-  const followedMessage = await prisma.message.findUniqueOrThrow({ where: { id: followed.assistantMessage.id } });
-  assert(Array.isArray((followedMessage.metadata as {providedSelfUnderstandingSources?:unknown}).providedSelfUnderstandingSources));
+  for (const message of ["这段时间有什么变化？有没有具体的经历能说明？", "这段时间有什么变化？有没有具体经历能说明？"]) {
+    const followed = await follow(message);
+    assert(promptPayloads.at(-1)?.selfUnderstanding?.evidence.some(row => row.id === preference.id), "Particle variations must keep the trusted self subject");
+    const followedMessage = await prisma.message.findUniqueOrThrow({ where: { id: followed.assistantMessage.id } });
+    assert(Array.isArray((followedMessage.metadata as {providedSelfUnderstandingSources?:unknown}).providedSelfUnderstandingSources));
+  }
   await follow("最近天气有什么变化？");
-  assert.equal(promptPayloads[3]?.selfUnderstanding, undefined, "An unrelated topic must not inherit a self subject");
+  assert.equal(promptPayloads[4]?.selfUnderstanding, undefined, "An unrelated topic must not inherit a self subject");
   await follow("最近有什么变化？");
-  assert.equal(promptPayloads[4]?.selfUnderstanding, undefined, "An ordinary intervening reply ends self continuity");
-  assert.equal(calls, 5);
+  assert.equal(promptPayloads[5]?.selfUnderstanding, undefined, "An ordinary intervening reply ends self continuity");
+  assert.equal(calls, 6);
   console.log("Web HTTP collaboration passed: auth, isolation, diagnostics, idempotency, trusted self view and bounded follow-up continuity without topic contamination.");
 } finally {
   if (api.listening) await new Promise<void>(resolve => api.close(() => resolve()));
