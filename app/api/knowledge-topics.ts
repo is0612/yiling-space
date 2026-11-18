@@ -20,7 +20,7 @@ export type KnowledgeTopicDetail = KnowledgeTopicSummary & {
   mergedInto: { id: string; name: string; status: string } | null;
 };
 export type KnowledgeTopicRevisionDetail = KnowledgeTopicRevision & {
-  members: Array<{ itemId: string; itemRevision: number; item: KnowledgeTopicMember["item"] }>;
+  members: Array<{ itemId: string; itemRevision: number }>;
 };
 export type KnowledgeTopicPage = {
   topics: KnowledgeTopicSummary[];
@@ -75,7 +75,7 @@ export function createKnowledgeTopicsApi(request: ApiRequest) {
   function listRevisions(payload: { characterId: string; topicId: string }): Promise<{ topicId: string; currentRevision: number; revisions: KnowledgeTopicRevision[] }> {
     return request({ url: `${topicPath(payload.characterId, payload.topicId)}/revisions`, method: "get" });
   }
-  function getRevision(payload: { characterId: string; topicId: string; revision: number }): Promise<{ revision: KnowledgeTopicRevisionDetail }> {
+  function getRevision(payload: { characterId: string; topicId: string; revision: number }): Promise<{ topicId: string; currentRevision: number; snapshot: KnowledgeTopicRevisionDetail }> {
     return request({ url: `${topicPath(payload.characterId, payload.topicId)}/revisions/${payload.revision}`, method: "get" });
   }
   function restoreRevision(payload: { characterId: string; topicId: string; revision: number; expectedRevision: number }): Promise<unknown> {

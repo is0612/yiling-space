@@ -409,7 +409,7 @@ async function restoreRevision(revision: number) {
       </div>
     </el-dialog>
 
-    <KnowledgeTopicDiscoveryPanel :character-id="characterId" :items="items" @changed="emit('changed')" />
+    <KnowledgeTopicDiscoveryPanel :character-id="characterId" :items="items" @changed="loadTopics" />
   </section>
 </template>
 

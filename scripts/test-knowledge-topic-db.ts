@@ -143,6 +143,7 @@ async function makeItems(targetCharacterId: string, prefix: string, count = 2) {
     data: {
       characterId: targetCharacterId, title: `${prefix}-${index}`, content: `${prefix} 正文 ${index}`,
       category: "GENERAL", tags: ["topic-test"], sourceType: "MANUAL",
+      sourceRef: { kind: "topic-acceptance-fixture", reference: `${prefix}-${index}` },
     },
   })));
 }
@@ -545,6 +546,16 @@ try {
   assert.equal((await mutate(`/characters/${characterId}/growth/knowledge/topics/${splitSource.id}`, "PATCH", {
     name: "不允许编辑已合并主题", revision: 3,
   }, session.token)).status, 409);
+
+  // Organization-only operations must preserve every field of formal knowledge,
+  // including provenance, ownership, status, revision and timestamps (and not delete it).
+  for (const original of [...normalItems, ...manualItems, ...splitItems]) {
+    assert.deepEqual(
+      await prisma.knowledgeItem.findUnique({ where: { id: original.id } }),
+      original,
+      "Topic discovery/review, membership, split/merge and history recovery must not alter formal knowledge.",
+    );
+  }
 
   // Revision changes before execution make the run STALE without calling the model.
   const beforeStaleCalls = modelCalls;
