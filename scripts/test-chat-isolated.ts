@@ -27,7 +27,7 @@ try {
   };
   run("node_modules/prisma/build/index.js", ["migrate", "deploy"]);
   for (const script of ["test-desktop-conversation-db.ts", "test-chat-conversation-delete-db.ts",
-    "test-chat-request-idempotency-db.ts", "test-chat-private-memory-db.ts"]) {
+    "test-chat-request-idempotency-db.ts", "test-chat-private-memory-db.ts", "test-web-collaboration-db.ts"]) {
     run("node_modules/tsx/dist/cli.mjs", [`scripts/${script}`]);
   }
   console.log("Isolated chat checks passed; no business fixtures or paid models were used.");

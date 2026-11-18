@@ -2024,7 +2024,7 @@ async function runChannelTurn(input: {
   const turnDetail = createModelTurnDetail(isGroup, messages.map(item => ({
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
-  })));
+  })), collaboration && !isGroup ? "qq-private" : undefined);
   let ownerHistoryCoverage: OwnerHistoryCoverage | undefined;
   const loadMemoryCandidates = async (searchQuery: string, lookupOptions?: { participantName?: string; deterministicTimeline: boolean }) => {
         if (ownerHistoryAuth && ownerHistoryPlan) {

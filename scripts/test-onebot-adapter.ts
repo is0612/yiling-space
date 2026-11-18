@@ -9,6 +9,7 @@ import { encryptApiKey } from "../server/utils/credential-encryption";
 import { loadOnebotConnections } from "../server/utils/channel-adapter/onebot/configure";
 import { markOnebotReloadApplied } from "../server/utils/channel-adapter/onebot/runtime";
 import { createOnebotMessageHandler } from "../server/utils/channel-adapter/onebot/serve";
+import { readModelTurnDetail } from "../server/utils/model-turn-detail";
 import { connectOnebot, POKE_CONTENT, resolveOnebotEvent, resolveOnebotPokeEvent } from "../server/utils/channel-adapter/onebot/client";
 
 const connectionString = process.env.DATABASE_URL;
@@ -1047,6 +1048,24 @@ try {
   assert(tempReply, "临时会话必须走 send_private_msg 发回复。");
   assert.equal(tempReply.body.user_id, 222, "临时会话回给发起者。");
   assert.equal(tempReply.body.group_id, 777, "临时会话的回复必须带上来源群号，否则协议端拒绝、对方收不到。");
+
+  const privateConversation = await prisma.conversation.findFirstOrThrow({
+    where: { characterId, channelBindingId: bindingId, externalConversationId: "c:222" },
+    select: { id: true },
+  });
+  const privateLog = await prisma.modelUsage.findFirstOrThrow({
+    where: { characterId, channelBindingId: bindingId, kind: "channel", conversationId: privateConversation.id },
+    orderBy: { createdAt: "desc" },
+    select: { metadata: true },
+  });
+  const privateTurn = readModelTurnDetail((privateLog.metadata as { turnDetail?: unknown }).turnDetail);
+  assert.equal(privateTurn?.channel, "qq-private");
+  assert.equal(privateTurn.groupChat, false);
+  assert.equal(privateTurn.response.status, "success");
+  assert(privateTurn.collaboration?.stages.some(stage => stage.stage === "response" && stage.operations.some(operation => operation.state === "success")));
+  assert.deepEqual(privateTurn.growthReads?.map(read => read.domain).sort(), ["goals", "knowledge", "language", "preferences"]);
+  assert.equal(privateTurn.growthReads?.find(read => read.domain === "knowledge")?.status, "not_needed");
+  assert(!privateTurn.memory.sources?.some(source => source.scope === "private"), "An unrelated temporary contact must not receive the owner's private data.");
 
   // ── 主人在群里说的话，即使这一轮没接她，也要落库（storedReason=context）──
   // 群聊和私聊是两个会话，私聊的最近对话窗口只回看自己那一条。这一句不落库，

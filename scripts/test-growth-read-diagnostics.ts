@@ -11,4 +11,15 @@ assert.equal(readModelTurnDetail(JSON.stringify({ version: 1, groupChat: true })
 const privateDetail = createModelTurnDetail(false, []); privateDetail.update({ growthReads: usage }); assert.equal(readModelTurnDetail(privateDetail.serialize())!.growthReads, undefined);
 const unsafe = sanitizeGrowthReadDiagnostics([{ ...read, query: "secret", provided: [{ id: "preference-1", revision: 4, content: "must-not-copy" }], usedIds: ["invented", "preference-1"] }, { ...read }, { domain: ["goals"], status: "provided" }])!;
 assert.equal(unsafe.length, 1); assert(!JSON.stringify(unsafe).includes("secret")); assert(!JSON.stringify(unsafe).includes("must-not-copy")); assert.deepEqual(unsafe[0]!.usedIds, ["preference-1"]);
-console.log("Growth read diagnostics: bounded references, source whitelist, self-reported usage, silence, legacy and private exclusion passed.");
+const qqPrivate = createModelTurnDetail(false, [], "qq-private");
+qqPrivate.update({ growthReads: [{ ...read, provided: [{ id: "preference-1", revision: 4, content: "private-body" }] }] });
+const privateSaved = readModelTurnDetail(qqPrivate.serialize())!;
+assert.equal(privateSaved.channel, "qq-private");
+assert.deepEqual(privateSaved.growthReads, [read]);
+assert(!qqPrivate.serialize().includes("private-body"));
+assert.equal(readModelTurnDetail(JSON.stringify({ version: 1, groupChat: false, channel: "direct-chat", growthReads: usage }))!.growthReads, undefined);
+const web = createModelTurnDetail(false, [], "web");
+web.update({ growthReads: usage });
+assert.equal(readModelTurnDetail(web.serialize())!.channel, "web");
+assert.deepEqual(readModelTurnDetail(web.serialize())!.growthReads, usage);
+console.log("Growth read diagnostics: bounded references, source whitelist, self-reported usage, silence, QQ private, Web and legacy compatibility passed.");

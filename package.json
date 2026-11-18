@@ -120,7 +120,7 @@
     "test:social-relationship-assessment-config": "tsx scripts/test-social-relationship-assessment-config.ts",
     "test:social-relationship-assessment-ai": "tsx scripts/test-social-relationship-assessment-ai.ts",
     "test:social-relationship-assessment-ai-db": "tsx scripts/test-social-relationship-assessment-ai-db.ts",
-    "test:knowledge-retrieval": "tsx scripts/test-knowledge-retrieval.ts",
+    "test:knowledge-retrieval": "tsx scripts/test-knowledge-retrieval.ts && tsx scripts/test-chat-knowledge-retrieval.ts",
     "test:knowledge-relations": "tsx scripts/test-knowledge-relations.ts",
     "test:knowledge-page-races": "tsx scripts/test-knowledge-page-races.ts && tsx scripts/test-knowledge-batch-page.ts",
     "test:knowledge-governance-page": "tsx scripts/test-knowledge-governance-page.ts",

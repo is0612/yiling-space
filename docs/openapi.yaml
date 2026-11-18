@@ -1153,10 +1153,11 @@ paths:
                     properties:
                       version: { type: integer, enum: [1] }
                       groupChat: { type: boolean }
+                      channel: { type: string, enum: [qq-private, web], description: 可选，标记接入单轮协作诊断的 QQ 私聊或 Web 聊天 }
                       growthReads:
                         type: array
                         maxItems: 4
-                        description: 群聊可选读取诊断；旧记录缺失不当作零读取。provided表示已选入上下文，不保证后续HTTP已发出。counts仅为本次有限候选，usedIds仅为模型自报白名单引用；知识暂未回传引用。
+                        description: 群聊、已标记的 QQ 私聊和 Web 聊天可选读取诊断；旧记录缺失不当作零读取。provided表示已选入上下文，不保证后续HTTP已发出。counts仅为本次有限候选，usedIds仅为模型自报白名单引用；知识暂未回传引用。
                         items:
                           type: object
                           additionalProperties: false

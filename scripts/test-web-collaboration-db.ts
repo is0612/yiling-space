@@ -1,0 +1,57 @@
+import "dotenv/config";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { randomUUID } from "node:crypto";
+import { createApp, createRouter, defineEventHandler, readBody, setResponseStatus, createError, toNodeListener } from "h3";
+import { getPrisma } from "../server/utils/prisma";
+import { createSession } from "../server/utils/auth";
+import { readModelTurnDetail } from "../server/utils/model-turn-detail";
+assert.equal(process.env.YILING_CHAT_ISOLATED_DB, "1");
+assert.match(new URL(process.env.DATABASE_URL!).pathname, /^\/yiling_chat_test_[a-f0-9]{32}$/);
+Object.assign(globalThis, { defineEventHandler, readBody, setResponseStatus, createError });
+const handler = (await import("../server/api/characters/[id]/chat.post")).default;
+const prisma = getPrisma();
+let calls = 0;
+const model = createServer(async (req, res) => {
+  let raw = ""; for await (const chunk of req) raw += chunk;
+  const payload = JSON.parse(raw);
+  assert(!JSON.stringify(payload).includes("FORBIDDEN_FOREIGN_KNOWLEDGE"));
+  calls++;
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ reply: "番茄育苗需要通风。", usedMemoryIds: [], usedSnapshotIds: [] }) }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } }));
+});
+const api = createServer();
+try {
+  model.listen(0, "127.0.0.1"); await once(model, "listening");
+  const owner = await prisma.user.create({ data: { username: `web-test-${randomUUID()}`, passwordHash: "test" } });
+  const stranger = await prisma.user.create({ data: { username: `web-other-${randomUUID()}`, passwordHash: "test" } });
+  const character = await prisma.character.create({ data: { ownerId: owner.id, name: "合成 Web 角色", basePrompt: "测试", modelConfig: { chatModel: "mock-web", chatApiBaseUrl: `http://127.0.0.1:${(model.address() as {port:number}).port}/v1`, chatApiKey: "test", memoryAssistantEnabled: false }, memoryScopes: { create: { scopeType: "CHARACTER_GLOBAL", scopeKey: `web-test:${randomUUID()}` } } } });
+  const foreign = await prisma.character.create({ data: { ownerId: stranger.id, name: "其他角色", basePrompt: "测试" } });
+  const knowledge = await prisma.knowledgeItem.create({ data: { characterId: character.id, title: "番茄育苗", content: "需要通风", category: "GENERAL", sourceType: "MANUAL", tags: [] } });
+  await prisma.knowledgeItem.create({ data: { characterId: foreign.id, title: "番茄育苗", content: "FORBIDDEN_FOREIGN_KNOWLEDGE", category: "GENERAL", sourceType: "MANUAL", tags: [] } });
+  const session = await createSession({ userId: owner.id });
+  const otherSession = await createSession({ userId: stranger.id });
+  const app = createApp(); const router = createRouter(); router.post("/characters/:id/chat", handler); app.use(router); api.on("request", toNodeListener(app));
+  api.listen(0, "127.0.0.1"); await once(api, "listening");
+  const requestKey = randomUUID();
+  const request = async (token?: string) => fetch(`http://127.0.0.1:${(api.address() as {port:number}).port}/characters/${character.id}/chat`, { method: "POST", headers: { "content-type": "application/json", ...(token ? { cookie: `yiling_session=${token}` } : {}) }, body: JSON.stringify({ message: "番茄育苗", requestKey }) });
+  assert.equal((await request()).status, 401);
+  assert.equal((await request(otherSession.token)).status, 404);
+  const response = await request(session.token); const body = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(body));
+  assert.equal((await request(session.token)).status, 200);
+  assert.equal(calls, 1, "Idempotent replay must not read/generate another turn");
+  const usage = await prisma.modelUsage.findFirstOrThrow({ where: { characterId: character.id, kind: "chat" } });
+  const detail = readModelTurnDetail((usage.metadata as {turnDetail?:unknown}).turnDetail)!;
+  assert.equal(detail.channel, "web");
+  assert.equal(detail.collaboration?.stages.find(s => s.stage === "knowledge")?.logicalCalls, 1);
+  assert.equal(detail.collaboration?.stages.find(s => s.stage === "knowledge")?.operations[0]?.reportedAttempts, 0);
+  assert.deepEqual(detail.growthReads?.find(r => r.domain === "knowledge")?.provided.map(r => r.id), [knowledge.id]);
+  assert.equal(detail.response.status, "success");
+  console.log("Web HTTP collaboration passed: session auth, character isolation, shared SQL stage, persisted diagnostics and idempotent replay.");
+} finally {
+  if (api.listening) await new Promise<void>(resolve => api.close(() => resolve()));
+  if (model.listening) await new Promise<void>(resolve => model.close(() => resolve()));
+  await prisma.$disconnect();
+}

@@ -12,6 +12,7 @@ export type TurnDetailPatch = {
 };
 export type ModelTurnDetail = {
   version: 1; groupChat: boolean; messages: TurnEvidence[];
+  channel?: "qq-private" | "web";
   collaboration?: AssistantTurnDiagnostics;
   growthReads?: GrowthReadDiagnostic[];
   context: NonNullable<TurnDetailPatch["context"]>;
@@ -35,7 +36,8 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   const raw = object(value), context = object(raw.context), memory = object(raw.memory), response = object(raw.response);
   const groupChat = raw.groupChat === true;
   const collaboration = sanitizeAssistantTurnDiagnostics(raw.collaboration);
-  const growthReads = groupChat ? sanitizeGrowthReadDiagnostics(raw.growthReads) : undefined;
+  const channel = !groupChat && (raw.channel === "qq-private" || raw.channel === "web") ? raw.channel : undefined;
+  const growthReads = groupChat || channel ? sanitizeGrowthReadDiagnostics(raw.growthReads) : undefined;
   const sources: TurnSource[] = (Array.isArray(memory.sources) ? memory.sources : []).slice(0, 8).flatMap(item => {
     const row = object(item);
     if (!["memory", "snapshot", "event", "message"].includes(String(row.type)) || !["character", "private"].includes(String(row.scope)) || (groupChat && row.scope !== "character")) return [];
@@ -45,6 +47,7 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   });
   return {
     version: 1, groupChat, messages: evidence(raw.messages),
+    ...(channel ? { channel } : {}),
     ...(collaboration ? { collaboration } : {}),
     ...(growthReads ? { growthReads } : {}),
     context: {
@@ -67,11 +70,11 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
     },
   };
 }
-export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence[]) {
-  const detail: ModelTurnDetail = { version: 1, groupChat, messages, context: { status: groupChat ? "not_enabled" : "not_applicable" }, memory: { status: "not_needed" }, response: { status: "failed" } };
+export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence[], channel?: ModelTurnDetail["channel"]) {
+  const detail: ModelTurnDetail = { version: 1, groupChat, messages, channel: groupChat ? undefined : channel, context: { status: groupChat ? "not_enabled" : "not_applicable" }, memory: { status: "not_needed" }, response: { status: "failed" } };
   return {
     update(patch: TurnDetailPatch) {
-      if (patch.growthReads !== undefined && groupChat) detail.growthReads = sanitizeGrowthReadDiagnostics(patch.growthReads);
+      if (patch.growthReads !== undefined && (groupChat || detail.channel === "qq-private" || detail.channel === "web")) detail.growthReads = sanitizeGrowthReadDiagnostics(patch.growthReads);
       if (patch.collaboration !== undefined) detail.collaboration = sanitizeAssistantTurnDiagnostics(patch.collaboration);
       if (patch.context) detail.context = patch.context;
       if (patch.memory) detail.memory = patch.memory;

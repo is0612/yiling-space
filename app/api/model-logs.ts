@@ -76,6 +76,7 @@ export type ModelTurnDetailResponse = {
   detail: {
     version: 1;
     groupChat: boolean;
+    channel?: "qq-private" | "web";
     collaboration?: TurnCollaboration;
     growthReads?: GrowthReadDiagnostic[];
     messages: TurnMessage[];

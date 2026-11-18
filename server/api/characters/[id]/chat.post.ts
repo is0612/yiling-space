@@ -20,7 +20,9 @@ import {
 import { resolveChatModelSettings } from "../../../utils/chat-model-config";
 import { resolveChatTimeZone } from "../../../utils/chat-time-context";
 import { parseEventTimeRange } from "../../../utils/memory-event-time";
-import { rankKnowledgeItems } from "../../../utils/knowledge-retrieval";
+import { loadChatKnowledge } from "../../../utils/chat-knowledge-retrieval";
+import { runAssistantTurnStage } from "../../../utils/assistant-turn-execution";
+import { reconcileGrowthReadUsage, type GrowthReadDiagnostic } from "../../../utils/growth-read-diagnostics";
 import { resolveCharacterApiKey } from "../../../utils/credential-encryption";
 import { CLOSE_FRIEND_LIMIT, listAcquaintances } from "../../../utils/friends";
 import {
@@ -437,10 +439,12 @@ export default defineEventHandler(async (event) => {
   const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
-  const goals = await loadGoalsForPrompt(prisma, characterId, message).catch(() => []);
-  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, characterId, message, undefined,
+  const growthReads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();
+  const observeGrowthRead = (entry: GrowthReadDiagnostic) => { growthReads.set(entry.domain, entry); };
+  const goals = await loadGoalsForPrompt(prisma, characterId, message, observeGrowthRead).catch(() => []);
+  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, characterId, message, observeGrowthRead,
     existingConversation ? { conversationId: existingConversation.id, memoryScopeId } : undefined, "PRIVATE").catch(() => []);
-  const preferences = await loadPreferencesForPrompt(prisma, characterId, message).catch(() => []);
+  const preferences = await loadPreferencesForPrompt(prisma, characterId, message, observeGrowthRead).catch(() => []);
   const interactionGuidance = await readInteractionGuidance(prisma, { characterId, query: message, chatScene: "PRIVATE" }).catch(() => []);
   const interactionExperiences = existingConversation ? await readInteractionExperiences(prisma, {
     characterId, conversationId: existingConversation.id, memoryScopeId, query: message,
@@ -455,8 +459,8 @@ export default defineEventHandler(async (event) => {
       || (row.occurredAt === conversationSummary.through.occurredAt && (row.id ?? "") > conversationSummary.through.id))
     : recentMessages;
   const turnId = randomUUID();
-  // Browser and desktop bridge share this authenticated direct-chat API. The acting
-  // owner and readable scopes were resolved above; no external channel binding exists.
+  // The Web API creates its turn only after resolving the actor and readable scopes.
+  // Infrastructure names keep compatibility with existing local conversations.
   const turnContext = createAssistantTurnContext({
     turnId,
     identity: {
@@ -467,15 +471,11 @@ export default defineEventHandler(async (event) => {
     evidenceIds: [...new Set(chatInputRecentMessages.map(row => row.id).filter((id): id is string => typeof id === "string" && Boolean(id)))],
   });
   turnContext.skip("context", "not_enabled");
-  // 桌面聊天也按当前消息查一次知识：以前这里直接 skip，等于「问什么都不会查库」。
-  // 词法匹配不花 token，命中就注入，符合「先用代码判，再调模型」。
-  const desktopKnowledgeItems = await prisma.knowledgeItem.findMany({
-    where: { characterId, status: "ACTIVE" },
-    orderBy: { updatedAt: "desc" },
-    take: 300,
-    select: { id: true, title: true, content: true, category: true, tags: true, confidence: true, sourceType: true, updatedAt: true },
-  }).then(rows => rankKnowledgeItems(message, rows, 8)).catch(() => []);
-  const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }]);
+  // Reuse the same authorized reader as channel chat. SQL is not a model request.
+  const knowledgeItems = await runAssistantTurnStage(turnContext, "knowledge", message,
+    { characterId, readableScopeIds }, () => loadChatKnowledge(prisma, characterId, message, observeGrowthRead),
+    rows => !rows.length).catch(() => []);
+  const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }], "web");
   let generated;
   const generationStartedAt = Date.now();
   try {
@@ -673,7 +673,7 @@ export default defineEventHandler(async (event) => {
         memories,
         snapshots,
         events,
-        ...(desktopKnowledgeItems.length ? { knowledgeItems: desktopKnowledgeItems } : {}),
+        ...(knowledgeItems.length ? { knowledgeItems } : {}),
         ...(recentEvents.length ? { recentEvents } : {}),
         rawMessages,
         timeZone,
@@ -685,7 +685,7 @@ export default defineEventHandler(async (event) => {
       },
     });
   } catch (error) {
-    turnDetail.update({ collaboration: turnContext.snapshot() });
+    turnDetail.update({ collaboration: turnContext.snapshot(), growthReads: [...growthReads.values()] });
     await recordModelUsage({
       kind: "chat", model: chatSettings.model, characterId, userId: ownerId,
       metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize() },
@@ -700,6 +700,9 @@ export default defineEventHandler(async (event) => {
   turnDetail.update({
     response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation },
     collaboration: turnContext.snapshot(),
+    growthReads: reconcileGrowthReadUsage([...growthReads.values()], {
+      preferences: generated.usedPreferenceIds, language: generated.usedExpressionHabitIds, goals: generated.usedGoalIds,
+    }, generated.action === "silent"),
   });
   const generationDurationMs = Date.now() - generationStartedAt;
   await recordModelUsage({
