@@ -36,6 +36,49 @@ function matches(r:OwnerHistoryRow,p:Record<string,unknown>):boolean {
 }
 let sqlReads=0;
 const db={message:{findMany:async(a:{where:Record<string,unknown>;orderBy?:Array<Record<string,string>>;take:number})=>{sqlReads++;const query=JSON.stringify(a.where);assert(query.includes('"characterId":"character-a"'));assert(query.includes('"platform":"qq-onebot"'));return corpus.filter(r=>matches(r,a.where)).sort((a1,b)=>((a1.occurredAt.getTime()-b.occurredAt.getTime())||a1.id.localeCompare(b.id))*(a.orderBy?.[0]?.occurredAt==="desc"?-1:1)).slice(0,a.take);},count:async(a:{where:Record<string,unknown>})=>corpus.filter(r=>matches(r,a.where)).length}} as unknown as Pick<PrismaClient,"message">;
+// The owner asks in the afternoon, then supplies only the requested group number.
+const afternoon = new Date("2026-02-04T06:46:00Z");
+const initialNight = planOwnerHistory("查一下昨晚那个群里，聊陶艺的那段", null, afternoon, "Asia/Shanghai")!;
+assert.equal(initialNight.start, "2026-02-03T10:00:00.000Z");
+assert.equal(initialNight.end, "2026-02-03T22:00:00.000Z");
+const pendingNight = applyOwnerHistoryIntent(null, initialNight, { action: "topic", query: "陶艺邀请", keywords: ["陶艺"] }, "查昨晚群聊").plan!;
+const firstRead = await loadOwnerHistoryPage(db, "character-a", pendingNight, []);
+assert.equal(firstRead.coverage.reason, "unresolved_group");
+const clarifiedNight = planOwnerHistory("123456789", pendingNight, new Date(afternoon.getTime() + 10_000), "Asia/Shanghai")!;
+assert.deepEqual(clarifiedNight, { ...readOwnerHistoryPlan(pendingNight, afternoon), groupId: "123456789" }, "A bare group clarification must preserve all topic and time parameters");
+corpus.push(row(8800, "2026-02-03T16:15:00Z", "陶艺课几点开始？"));
+const nightPage = await loadOwnerHistoryPage(db, "character-a", clarifiedNight, []);
+assert(nightPage.sources.some(source => source.id === id(8800)), "Last night includes records after midnight");
+assert(nightPage.sources.some(source => source.id === id(4)), "Last night includes earlier evening replies");
+const staleStart = "2026-02-04T04:46:00.000Z", staleEnd = afternoon.toISOString();
+const staleNight = { ...clarifiedNight, anchoredAt: afternoon.toISOString(), start: staleStart, end: staleEnd,
+  rootStart: staleStart, rootEnd: staleEnd, direction: "earlier" as const,
+  cursor: { id: id(8800), occurredAt: staleStart }, evidenceIds: [id(8800)] };
+const recheckAt = new Date(afternoon.getTime() + 30_000);
+const dateRetry = planOwnerHistory("现在能查到昨晚的了吗", staleNight, recheckAt, "Asia/Shanghai")!;
+assert.equal(dateRetry.groupId, staleNight.groupId);
+assert.equal(dateRetry.query, staleNight.query);
+assert.deepEqual(dateRetry.topicTerms, staleNight.topicTerms);
+assert.deepEqual([dateRetry.start, dateRetry.end, dateRetry.rootStart, dateRetry.rootEnd],
+  [initialNight.start, initialNight.end, initialNight.start, initialNight.end]);
+assert.deepEqual(dateRetry.evidenceIds, []);
+assert.equal(dateRetry.cursor, undefined);
+const retriedPage = await loadOwnerHistoryPage(db, "character-a", dateRetry, []);
+assert(retriedPage.sources.some(source => source.id === id(8800)));
+const bareRetry = planOwnerHistory("现在呢", staleNight, recheckAt, "Asia/Shanghai")!;
+assert.deepEqual([bareRetry.start, bareRetry.end], [staleStart, staleEnd]);
+assert.equal(planOwnerHistory("现在能查到昨晚的了吗", null, recheckAt, "Asia/Shanghai"), null, "A date alone does not authorize searching a group");
+corpus.push(row(8801, "2026-02-03T10:30:00Z", "我喜欢春天的花"),
+  row(8802, "2026-02-03T16:16:00Z", "你喜不喜欢我呀"),
+  row(8803, "2026-02-03T16:16:10Z", "你指哪一种？", "ASSISTANT"),
+  row(8804, "2026-02-03T16:16:30Z", "我说的是好朋友"),
+  row(8805, "2026-02-03T18:00:00Z", "你们喜欢什么天气"));
+const exactQuestion = await loadOwnerHistoryPage(db, "character-a", {
+  ...clarifiedNight, query: "有人问喜不喜欢他", topicTerms: ["喜欢"],
+}, []);
+assert(exactQuestion.sources.some(source => source.id === id(8802)), "The original question must survive common-word matches at both ends of the window");
+assert(exactQuestion.sources.some(source => source.id === id(8804)), "Keep the speaker's clarification alongside the question");
+corpus.splice(corpus.findIndex(item => item.id === id(8801)), 5);
 const original=globalThis.fetch;
 let semantic:OwnerHistoryIntent={action:"hold"},responseCalls=0;
 const runtime={model:"mock-context",apiKey:"test-only",apiBaseUrl:"https://model.invalid/v1",temperature:0,maxInputTokens:8192,maxOutputTokens:1200};

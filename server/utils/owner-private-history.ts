@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
-import { parseEventTimeRange } from "./memory-event-time";
+import { localDayHour, parseEventTimeRange, resolveDayWindow, zonedDateTime } from "./memory-event-time";
 import { parseEventParticipantQuery } from "./memory-event-retrieval";
 import { extractMemoryAssistantSearchTerms, estimateTokens } from "./memory-retrieval";
 import type { MemoryAssistantCandidate } from "./memory-assistant";
@@ -50,6 +50,11 @@ export function readOwnerHistoryPlan(value: unknown, now: Date): OwnerHistoryPla
     evidenceIds: Array.isArray(v.evidenceIds) ? [...new Set(v.evidenceIds.filter((id): id is string => typeof id === "string" && uuid.test(id)))].slice(0, 24) : [] };
 }
 
+/** A short, explicit date correction for an existing history question, without a new topic. */
+export function isOwnerHistoryDateRetry(message: string): boolean {
+  return /^(?:现在\s*)?(?:还|再)?(?:能不能|能否|能|可以)?\s*(?:再)?(?:查到|查|翻到|看到|找到)\s*(?:昨晚|今晚|昨天|今天|前天)(?:的)?(?:记录|消息|聊天记录)?[了吗么呢？?。！!\s]*$/u.test(message.trim());
+}
+
 /** Only explicit history tasks and referential follow-ups inherit a task; ordinary chat clears it. */
 export function planOwnerHistory(message: string, previous: OwnerHistoryPlan | null, now: Date, timeZone: string): OwnerHistoryPlan | null {
   const text = message.trim();
@@ -57,13 +62,17 @@ export function planOwnerHistory(message: string, previous: OwnerHistoryPlan | n
   const live = previous && readOwnerHistoryPlan(previous, now);
   const groupId = /(?:群(?:号)?\s*[:：]?\s*(\d{5,12})|(\d{5,12})\s*(?:这个|那个)?群)/u.exec(text)?.slice(1).find(Boolean)
     ?? (live ? /^(\d{5,12})(?=\s*(?:那边|这边|那里|这里|[，,：:]|$))/u.exec(text)?.[1] : undefined);
+  // A bare room number answers our pending clarification; no new topic, clock,
+  // or model interpretation is needed to fill this one server-owned field.
+  if (live && !live.groupId && groupId && /^\d{5,12}$/u.test(text)) return { ...live, groupId };
   const groupTask = /群里|群聊|群的|这个群|那个群|群记录/u.test(text) || Boolean(groupId);
   const historyTask = /记录|历史|刚才|之前|今晚|昨晚|昨天|今天|前天|上次|说过|聊过|回过|答应过|回复过|发生|怎么|咋|了/u.test(text);
   const wantsEarlier = /更早|再早|往前|向前|之前|以前|到不了|查不到|读不到/u.test(text);
   // A retry after reloading the adapter is still the same live earlier-history task.
   // Match the entire short utterance so unrelated conversation cannot inherit history access.
   const retryEarlier = live?.direction === "earlier" && /^(?:现在呢|还是呢|再看看|再试试)[？?。！!\s]*$/u.test(text);
-  const followup = Boolean(live) && text.length <= 180 && (retryEarlier || Boolean(groupId) || wantsEarlier || /他|她|那|这|哪种|哪句|怎么|为什么|你都|你不是|有没有|到底|继续|再查|再找|回复|回答/u.test(text));
+  const dateRetry = live && isOwnerHistoryDateRetry(text);
+  const followup = Boolean(live) && text.length <= 180 && (dateRetry || retryEarlier || Boolean(groupId) || wantsEarlier || /他|她|那|这|哪种|哪句|怎么|为什么|你都|你不是|有没有|到底|继续|再查|再找|回复|回答/u.test(text));
   if (!(groupTask && (historyTask || groupId)) && !followup) return null;
   const inherit = Boolean(live && followup && (!groupId || !live.groupId || groupId === live.groupId));
   const parsedParticipant = /(?:这个群|那个群|群里|群)的\s*([^\s，。？！,!?]{1,12})(?:[，。？！,!?]|$)/u.exec(text)?.[1]
@@ -72,11 +81,23 @@ export function planOwnerHistory(message: string, previous: OwnerHistoryPlan | n
   // A relative day is resolved once. Unqualified follow-ups retain the absolute range after midnight.
   const explicitTime = /今晚|昨晚|昨天|今天|前天|大前天|上周|本周|\d{1,4}[年/月.-]\d{1,2}|\d{1,2}月\d{1,2}/u.test(text);
   let range = explicitTime ? parseEventTimeRange(text, now, timeZone) : null;
-  // After midnight, “tonight” normally means the evening immediately preceding this morning.
-  if (/今晚/u.test(text)) {
-    const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", hourCycle: "h23" }).format(now));
-    range = parseEventTimeRange(hour < 6 ? "昨天" : "今天", now, timeZone);
-    if (range) range = { ...range, start: new Date(range.start.getTime() + 18 * 3_600_000), end: new Date(Math.min(now.getTime() + 1, range.end.getTime() + 6 * 3_600_000)) };
+  // A night spans midnight: last night is yesterday 18:00 through today 06:00.
+  // Before dawn, “tonight” refers to the same night. Build each civil boundary
+  // separately so DST does not shift the end of the window.
+  if (/昨晚|今晚/u.test(text)) {
+    const { dayKey, hour } = localDayHour(now, timeZone);
+    const preceding = /昨晚/u.test(text) || hour < 6;
+    const nextDay = preceding ? dayKey : localDayHour(new Date(resolveDayWindow(dayKey, timeZone).end), timeZone).dayKey;
+    const [year, month, day] = dayKey.split("-").map(Number) as [number, number, number];
+    const [endYear, endMonth, endDay] = nextDay.split("-").map(Number) as [number, number, number];
+    const start = zonedDateTime(year, month, day - Number(preceding), 18, timeZone);
+    const end = new Date(Math.max(start.getTime() + 1, Math.min(now.getTime() + 1, zonedDateTime(endYear, endMonth, endDay, 6, timeZone).getTime())));
+    range = { start, end, label: /昨晚/u.test(text) ? "昨晚" : "今晚" };
+  }
+  if (dateRetry && live && range) {
+    const start = range.start.toISOString(), end = range.end.toISOString();
+    return { ...live, start, end, rootStart: start, rootEnd: end,
+      anchoredAt: now.toISOString(), cursor: undefined, evidenceIds: [] };
   }
   // Direction and date are independent: “tonight, earlier” starts at the early end
   // of tonight. A subsequent earlier request moves before the sampled cursor in the
@@ -175,7 +196,10 @@ export type OwnerHistoryRow = { id: string; conversationId: string; externalMess
 const author = (row: OwnerHistoryRow): string => String(object(row.metadata).authorOpenId ?? "");
 const quote = (row: OwnerHistoryRow): string => String(object(row.metadata).replyToMessageId ?? object(object(row.metadata).quotedMessage).messageId ?? "");
 export function ownerHistoryTopicTerms(plan: OwnerHistoryPlan): string[] {
-  const precise = normalizeOwnerHistoryTerms(plan.topicTerms).filter(term => term !== plan.participantName);
+  // Preserve the distinctive wording of A不A questions even when the semantic
+  // helper reduces them to a common verb. Put the phrase before the broad terms.
+  const questionForms = [...plan.query.matchAll(/([\p{Script=Han}]{1,3})不\1/gu)].map(match => match[0]);
+  const precise = normalizeOwnerHistoryTerms([...questionForms, ...(plan.topicTerms ?? [])]).filter(term => term !== plan.participantName);
   return precise.length ? precise : extractMemoryAssistantSearchTerms(plan.query, 16)
     .filter(term => !/^\d+$/u.test(term) && !["群里", "聊天", "记录", "今晚", "今天", "追问"].includes(term));
 }

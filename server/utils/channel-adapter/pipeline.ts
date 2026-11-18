@@ -31,7 +31,7 @@ import { isGroupKnowledgeSource, isPrivateKnowledgeSource, readKnowledgeCollectS
 import { generateGroupContextReply } from "../group-context-reply";
 import { loadConversationWorkingContext, saveConversationWorkingContext } from "../conversation-working-context";
 import { analyzeOwnerHistoryIntent, privateContextPurpose } from "../owner-history-intent";
-import { loadOwnerHistoryContext, saveOwnerHistoryContext, planOwnerHistory, applyOwnerHistoryIntent, planRestartedHistoryRetry, loadOwnerHistoryPage, type OwnerHistoryAuthorization, type OwnerHistoryCoverage } from "../owner-private-history";
+import { loadOwnerHistoryContext, saveOwnerHistoryContext, planOwnerHistory, applyOwnerHistoryIntent, isOwnerHistoryDateRetry, planRestartedHistoryRetry, loadOwnerHistoryPage, type OwnerHistoryAuthorization, type OwnerHistoryCoverage } from "../owner-private-history";
 import { parseEventTimeRange } from "../memory-event-time";
 import {
   CROSS_CHANNEL_WINDOW_MINUTES,
@@ -1782,7 +1782,14 @@ async function runChannelTurn(input: {
   let ownerHistoryIntentFailed = false;
   let ownerHistoryAnalyzed = false;
   let ownerHistoryHold = false;
-  if (ownerHistoryAuth && (ownerHistoryStored?.plan || ownerHistoryPlan)) {
+  const suppliedPendingGroup = Boolean(ownerHistoryStored?.plan && !ownerHistoryStored.plan.groupId
+    && ownerHistoryPlan?.groupId && /^\d{5,12}$/u.test(currentMessage.trim()));
+  const suppliedDateRetry = Boolean(ownerHistoryStored?.plan && ownerHistoryPlan && isOwnerHistoryDateRetry(currentMessage));
+  if (suppliedPendingGroup || suppliedDateRetry) {
+    // The owner supplied a missing group or a new date, not a new semantic request.
+    ownerHistoryAnalyzed = true;
+    skipAssistantTurnStage(collaboration, "context", "not_needed");
+  } else if (ownerHistoryAuth && (ownerHistoryStored?.plan || ownerHistoryPlan)) {
     const runtime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
     ownerHistoryAnalyzed = true;
     if (runtime) {
