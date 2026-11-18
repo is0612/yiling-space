@@ -27,11 +27,12 @@ try {
   await db.characterPreference.create({ data: { characterId: character.id, kind: "LIKE", topic: "PENDING_SENTINEL", reason: "候选", status: "PENDING" } });
   const knowledge = await db.knowledgeItem.create({ data: { characterId: character.id, title: "育苗", content: "幼苗需要光照", category: "GENERAL", sourceType: "MANUAL", confidence: 0.2 } });
   const experience = await db.interactionExperience.create({ data: { characterId: character.id, conversationId: room.id, memoryScopeId: own.id,
-    assistantMessageId: randomUUID(), feedbackMessageId: randomUUID(), content: "讨论方案先核对", context: "方案讨论", feedbackQuote: "先核对", evidenceHash: "a".repeat(64), status: "ACTIVE" } });
+    assistantMessageId: randomUUID(), feedbackMessageId: randomUUID(), content: "OLD_FAILURE_SENTINEL：旧回复曾声称永远读不到", context: "方案讨论", feedbackQuote: "先核对", evidenceHash: "a".repeat(64), status: "ACTIVE",
+    learning: { kind: "UNDERSTANDING", situation: "旧查询曾失败", misunderstanding: "把一次失败当成永久限制", correction: "应核对当前证据", nextJudgment: "先检查当前权限及实际查询结果" } } });
   const refs = [{ key: `experience:${experience.id}`, type: "experience", id: experience.id, hash: experienceReflectionHash(experience), conversationId: room.id, memoryScopeId: own.id }];
   const createReflection = async (conversationId: string | null, memoryScopeId: string | null) => {
     const run = await db.reflectionRun.create({ data: { characterId: character.id, requestKey: randomUUID(), periodStart: new Date(0), periodEnd: new Date(), conversationId, memoryScopeId } });
-    return db.reflectionSuggestion.create({ data: { runId: run.id, title: "合成观察", observation: "原会话的纠正", inference: "可能倾向先核对", recommendation: "核对后回应", status: "ACCEPTED", sourceRefs: refs } });
+    return db.reflectionSuggestion.create({ data: { runId: run.id, title: "合成观察", observation: "另一个伙伴曾在旧测试中查询失败。".repeat(20), inference: "这只是过去场景，不能推断当前无法查询", recommendation: "核对当前权限和实际结果后再作判断", status: "ACCEPTED", sourceRefs: refs } });
   };
   const reflection = await createReflection(room.id, own.id);
   const invalidGlobal = await createReflection(null, null);
@@ -45,6 +46,14 @@ try {
   assert(serialized.includes("OWN_PRIVATE_SENTINEL"));
   for (const sentinel of ["OTHER_PERSON_SENTINEL", "FOREIGN_ROLE_SENTINEL", "PENDING_SENTINEL", "HIDDEN_FOUNDATION_SENTINEL"]) assert(!serialized.includes(sentinel));
   assert(view.evidence.some(row => row.id === reflection.id && row.status === "accepted_interpretation"));
+  const reflectionEvidence = view.evidence.find(row => row.id === reflection.id)!;
+  assert(reflectionEvidence.excerpt.includes("暂时推断:"));
+  assert(reflectionEvidence.excerpt.includes("建议:"));
+  assert.equal(reflectionEvidence.excerptTruncated, true);
+  const experienceEvidence = view.evidence.find(row => row.id === experience.id)!;
+  assert(experienceEvidence.excerpt.includes("用户纠正: 应核对当前证据"));
+  assert(experienceEvidence.excerpt.includes("下次判断: 先检查当前权限"));
+  assert(!experienceEvidence.excerpt.includes("OLD_FAILURE_SENTINEL"));
   assert(!view.evidence.some(row => row.id === invalidGlobal.id), "Global reflection cannot borrow private references");
   const group = await loadSelfUnderstanding(db, { ...args, readableScopeIds: [global.id, own.id, other.id], groupChat: true });
   assert(group.evidence.every(row => row.scope === "character"));

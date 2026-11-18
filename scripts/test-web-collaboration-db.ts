@@ -70,7 +70,23 @@ try {
   assert(references?.some(row => row.id === preference.id));
   assert(references.every(row => row.excerpt === undefined));
   assert.equal(await prisma.characterPreference.count({ where: { characterId: character.id } }), 2, "Self interpretation cannot write new preferences");
-  console.log("Web HTTP collaboration passed: session auth, character isolation, shared SQL stage, persisted diagnostics, idempotency and trusted on-demand self view without candidate promotion.");
+  const follow = async (message: string) => {
+    const response = await fetch(`http://127.0.0.1:${(api.address() as {port:number}).port}/characters/${character.id}/chat`, {
+      method: "POST", headers: { "content-type": "application/json", cookie: `yiling_session=${session.token}` },
+      body: JSON.stringify({ message, conversationId: body.conversationId, requestKey: randomUUID() }),
+    });
+    const result = await response.json(); assert.equal(response.status, 201, JSON.stringify(result)); return result;
+  };
+  const followed = await follow("这段时间有什么变化？有没有具体的经历能说明？");
+  assert(promptPayloads[2]?.selfUnderstanding?.evidence.some(row => row.id === preference.id), "Omitted subject must inherit only the preceding self reply");
+  const followedMessage = await prisma.message.findUniqueOrThrow({ where: { id: followed.assistantMessage.id } });
+  assert(Array.isArray((followedMessage.metadata as {providedSelfUnderstandingSources?:unknown}).providedSelfUnderstandingSources));
+  await follow("最近天气有什么变化？");
+  assert.equal(promptPayloads[3]?.selfUnderstanding, undefined, "An unrelated topic must not inherit a self subject");
+  await follow("最近有什么变化？");
+  assert.equal(promptPayloads[4]?.selfUnderstanding, undefined, "An ordinary intervening reply ends self continuity");
+  assert.equal(calls, 5);
+  console.log("Web HTTP collaboration passed: auth, isolation, diagnostics, idempotency, trusted self view and bounded follow-up continuity without topic contamination.");
 } finally {
   if (api.listening) await new Promise<void>(resolve => api.close(() => resolve()));
   if (model.listening) await new Promise<void>(resolve => model.close(() => resolve()));

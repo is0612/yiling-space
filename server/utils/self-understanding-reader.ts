@@ -2,6 +2,7 @@ import type { PrismaClient } from "../../src/generated/prisma/client";
 import { buildSelfUnderstandingView, type SelfUnderstandingEvidence } from "./self-understanding";
 import { validateExperienceReflectionRefs, type ExperienceReflectionRef } from "./experience-reflection";
 import { validateReflectionSourceRefs } from "./reflection-worker";
+import { readExperienceLearning } from "./interaction-experience-domain";
 
 /** Internal adapter only: chat entry points must resolve the actor and readable scopes first. */
 export async function loadSelfUnderstanding(prisma: PrismaClient, input: {
@@ -50,10 +51,19 @@ export async function loadSelfUnderstanding(prisma: PrismaClient, input: {
       : !refs.some(ref => ref && typeof ref === "object" && "type" in ref && ref.type === "experience")
         && await prisma.$transaction(tx => validateReflectionSourceRefs(tx, input.characterId, refs));
     if (!valid || !refs.length) continue;
-    evidence.push({ domain: "reflection", id: row.id, text: `观察: ${row.observation}; 推断: ${row.inference}; 建议: ${row.recommendation}`, state: "ACCEPTED",
+    // Reserve space for all three semantic layers. A long observation must not clip away its correction.
+    evidence.push({ domain: "reflection", id: row.id, text: `观察: ${row.observation.slice(0, 70)}; 暂时推断: ${row.inference.slice(0, 60)}; 建议: ${row.recommendation.slice(0, 85)}`, state: "ACCEPTED",
+      excerptTruncated: row.observation.length > 70 || row.inference.length > 60 || row.recommendation.length > 85,
+      context: "已采纳的解释；保留观察对象及原情境，不是当前能力或永久身份的证明",
       scope: row.run.conversationId ? "private" : "character", ...(row.run.conversationId ? { conversationId: row.run.conversationId } : {}), updatedAt: row.updatedAt.toISOString() });
   }
-  for (const row of experiences) evidence.push({ domain: "experience", id: row.id, text: row.content, context: row.context, state: "ACTIVE", scope: "private", conversationId: row.conversationId,
-    revision: row.revision, updatedAt: row.updatedAt.toISOString() });
+  for (const row of experiences) {
+    const learning = readExperienceLearning(row.learning);
+    evidence.push({ domain: "experience", id: row.id,
+      text: learning ? `用户纠正: ${learning.correction.slice(0, 100)}; 下次判断: ${learning.nextJudgment.slice(0, 100)}` : row.content,
+      excerptTruncated: Boolean(learning && (learning.correction.length > 100 || learning.nextJudgment.length > 100)),
+      context: row.context, state: "ACTIVE", scope: "private", conversationId: row.conversationId,
+      revision: row.revision, updatedAt: row.updatedAt.toISOString() });
+  }
   return buildSelfUnderstandingView({ name: character.name, avatar: character.avatar ?? undefined, groupChat: input.groupChat, conversationId: room?.id, evidence });
 }

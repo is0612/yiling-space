@@ -14,11 +14,15 @@ try {
     { domain: "reflection", id: "r-1", text: "可能愿意先核对依据", state: "ACCEPTED", scope: "character", updatedAt: "2026-11-18T00:00:00Z" },
   ] });
   const reply = await generateConversationReply({ ...input, selfUnderstanding: view });
-  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v73");
+  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v74");
   const system = requests[0]!.messages.find(row => row.role === "system")!.content;
   assert(system.includes("presentation is appearance only"));
   assert(system.includes("provisional discussion, never confirmed facts or automatic writes"));
   assert(system.includes("Private evidence stays within this private conversation"));
+  assert(system.includes("do not claim appearance becomes permanent once chosen"));
+  assert(system.includes("Past lookup failures do not establish permanent inability"));
+  assert(system.includes("identify it as your unsupported guess and withdraw it"));
+  assert(system.includes("a quoted old mistake or another person's situation is not your current belief"));
   const payload = JSON.parse(requests[0]!.messages.find(row => row.role === "user")!.content);
   assert.deepEqual(payload.selfUnderstanding, view);
   assert(!JSON.stringify(payload.selfUnderstanding).includes(input.characterPrompt));

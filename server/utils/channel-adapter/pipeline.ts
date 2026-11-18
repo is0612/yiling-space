@@ -1697,7 +1697,7 @@ async function runChannelTurn(input: {
   const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
-  const selfUnderstanding = wantsSelfUnderstanding(currentMessage)
+  const selfUnderstanding = wantsSelfUnderstanding(currentMessage, { groupChat: isGroup, previousMessage: recentStoredMessages[0] })
     ? await loadSelfUnderstanding(prisma, { characterId: character.id, readableScopeIds, conversationId: existingConversation?.id, groupChat: isGroup }).catch(() => { console.warn("[self-understanding] channel evidence unavailable"); return undefined; })
     : undefined;
   const growthReads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();

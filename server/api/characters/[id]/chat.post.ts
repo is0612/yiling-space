@@ -214,7 +214,7 @@ export default defineEventHandler(async (event) => {
         // 40 条约 20 轮问答，条数可在「模型设置」里按角色调整。
         // 20 条时她经常接不上十分钟前提过的事，用户会以为「记性差」，其实只是没被喂进去。
         take: resolveRecentMessageLimit(character.modelConfig),
-        select: { id: true, role: true, content: true, occurredAt: true },
+        select: { id: true, role: true, content: true, occurredAt: true, metadata: true },
       })
     : [];
   const recentMessages: ConversationContextMessage[] = recentStoredMessages
@@ -438,7 +438,7 @@ export default defineEventHandler(async (event) => {
    * 读失败就当没有 —— 一张关系表读不动，不该让整条回复失败。
    */
   const acquaintances = await listAcquaintances({ characterId, limit: CLOSE_FRIEND_LIMIT }).catch(() => null);
-  const selfUnderstanding = wantsSelfUnderstanding(message)
+  const selfUnderstanding = wantsSelfUnderstanding(message, { groupChat: false, previousMessage: recentStoredMessages.at(-1) })
     ? await loadSelfUnderstanding(prisma, { characterId, readableScopeIds, conversationId: existingConversation?.id, groupChat: false }).catch(() => { console.warn("[self-understanding] Web evidence unavailable"); return undefined; })
     : undefined;
   const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
