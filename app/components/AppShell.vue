@@ -9,6 +9,7 @@ import {
   DataAnalysis,
   ChatLineRound,
   DataBoard,
+  Compass,
   MagicStick,
   Memo,
   Refresh,
@@ -114,6 +115,7 @@ const workspaceNavigation: NavigationItem[] = [
  */
 const growthNavigation: NavigationItem[] = [
   { key: "growth", label: "总览", href: "/growth", icon: TrendCharts, exact: true },
+  { key: "growth-galaxy", label: "成长星图", href: "/growth/galaxy", icon: Compass, exact: true },
   { key: "growth-memory", label: "记忆系统", href: "/growth/memory", icon: Collection },
   { key: "growth-social", label: "社交系统", href: "/growth/social", icon: Avatar },
   { key: "growth-language", label: "语言系统", href: "/growth/language", icon: ChatDotRound },
