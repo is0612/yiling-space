@@ -44,6 +44,16 @@
 
 全部仅管理员可用；契约见 `docs/openapi.yaml` 的 `LocalObserve` 路径。
 
+## 她能用吗
+
+可以，但只在**桌面聊天**里，且只有管理员：
+
+- 管理员在桌面聊天时，模型会拿到 `list_local_roots` / `list_local_directory` / `read_local_file` /
+  `search_local_files` 四个只读工具；
+- 工具只能访问「授权目录」里的内容，走的还是同一套根目录白名单、敏感文件过滤和审计；
+- QQ / 群聊不启用本地文件工具，避免群里的人借她读本机文件；
+- 每次工具调用写 `<data>/local-exec-audit.jsonl`，`source: "chat"`。
+
 ## 下一步
 
 - 授权目录（用户手动添加根目录）；

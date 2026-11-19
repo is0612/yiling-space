@@ -3,7 +3,20 @@ import { readPublicWebpage } from "./read-public-webpage";
 export type ReadOnlyChatTools = {
   searchMemory?: (query: string) => Promise<unknown>;
   searchKnowledge?: (query: string) => Promise<unknown>;
+  /** 本地只读观察：root 是授权目录的 id 或显示名。 */
+  localRoots?: () => Promise<unknown>;
+  listLocalFiles?: (root: string, path: string) => Promise<unknown>;
+  readLocalFile?: (root: string, path: string) => Promise<unknown>;
+  searchLocalFiles?: (root: string, query: string, path: string) => Promise<unknown>;
 };
+
+type LocalToolSpec = {
+  name: string;
+  description: string;
+  fields: Array<{ name: string; required: boolean; maxLength: number }>;
+  call: (args: Record<string, string>) => Promise<unknown>;
+};
+
 export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMessage = "") {
   const allowedUrls = new Set((currentMessage.match(/https?:\/\/[^\s<>"'，。！？）】]+/giu) ?? []).map(value => { try { return new URL(value).toString(); } catch { return ""; } }));
   let count = 0;
@@ -13,11 +26,95 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
     ...(handlers.searchKnowledge ? [{ name: "search_knowledge", description: "Search this character's confirmed knowledge.", field: "query" }] : []),
     { name: "read_public_webpage", description: "Read a public webpage when the current user asks to examine a URL or external information. No login, local files or private network access.", field: "url" },
   ];
+  const localSpecs: LocalToolSpec[] = [
+    ...(handlers.localRoots ? [{
+      name: "list_local_roots",
+      description: "List the local directories the owner has explicitly authorized for read-only observation. Call this before reading files if you do not know the root name.",
+      fields: [],
+      call: async () => handlers.localRoots!(),
+    }] : []),
+    ...(handlers.listLocalFiles ? [{
+      name: "list_local_directory",
+      description: "List files in an authorized local directory. Use root from list_local_roots and a relative path (empty for the root). Read-only.",
+      fields: [{ name: "root", required: true, maxLength: 200 }, { name: "path", required: false, maxLength: 500 }],
+      call: async (args: Record<string, string>) => handlers.listLocalFiles!(args.root ?? "", args.path ?? ""),
+    }] : []),
+    ...(handlers.readLocalFile ? [{
+      name: "read_local_file",
+      description: "Read a UTF-8 text file in an authorized local directory. Use a relative path. Read-only; binary and files over 256 KB are rejected.",
+      fields: [{ name: "root", required: true, maxLength: 200 }, { name: "path", required: true, maxLength: 500 }],
+      call: async (args: Record<string, string>) => handlers.readLocalFile!(args.root ?? "", args.path ?? ""),
+    }] : []),
+    ...(handlers.searchLocalFiles ? [{
+      name: "search_local_files",
+      description: "Search file names or text content inside an authorized local directory. Read-only; returns bounded matches.",
+      fields: [
+        { name: "root", required: true, maxLength: 200 },
+        { name: "query", required: true, maxLength: 100 },
+        { name: "path", required: false, maxLength: 500 },
+      ],
+      call: async (args: Record<string, string>) => handlers.searchLocalFiles!(args.root ?? "", args.query ?? "", args.path ?? ""),
+    }] : []),
+  ];
+
+  function localDefinitions() {
+    return localSpecs.map((spec) => ({
+      type: "function",
+      function: {
+        name: spec.name,
+        description: spec.description,
+        parameters: {
+          type: "object",
+          properties: Object.fromEntries(spec.fields.map((field) => [field.name, { type: "string", maxLength: field.maxLength }])),
+          required: spec.fields.filter((field) => field.required).map((field) => field.name),
+          additionalProperties: false,
+        },
+      },
+    }));
+  }
+
+  async function callLocal(name: string, raw: string): Promise<string> {
+    const spec = localSpecs.find((item) => item.name === name);
+    if (!spec || raw.length > 4096) return JSON.stringify({ error: "invalid_tool_call" });
+    let args: Record<string, unknown>;
+    try { args = JSON.parse(raw); } catch { return JSON.stringify({ error: "invalid_arguments" }); }
+    if (!args || typeof args !== "object" || Array.isArray(args)) return JSON.stringify({ error: "invalid_arguments" });
+    const allowed = new Set(spec.fields.map((field) => field.name));
+    if (Object.keys(args).some((key) => !allowed.has(key))) return JSON.stringify({ error: "invalid_arguments" });
+    const values: Record<string, string> = {};
+    for (const field of spec.fields) {
+      const value = args[field.name];
+      if (value === undefined) {
+        if (field.required) return JSON.stringify({ error: "invalid_arguments" });
+        values[field.name] = "";
+        continue;
+      }
+      if (typeof value !== "string" || value.length > field.maxLength) return JSON.stringify({ error: "invalid_arguments" });
+      values[field.name] = value.trim();
+    }
+    const key = JSON.stringify([name, values]);
+    if (!cache.has(key)) cache.set(key, (async () => {
+      try {
+        const result = await spec.call(values);
+        const text = JSON.stringify({ untrustedEvidence: true, result });
+        return text.length <= 10000 ? text : JSON.stringify({ untrustedEvidence: true, truncated: true, text: text.slice(0, 9500) });
+      } catch (error) {
+        return JSON.stringify({
+          error: "tool_unavailable",
+          instruction: "Do not claim this lookup succeeded.",
+          ...(error instanceof Error ? { message: error.message.slice(0, 200) } : {}),
+        });
+      }
+    })());
+    return cache.get(key)!;
+  }
+
   return {
-    definitions: definitions.map(item => ({ type: "function", function: { name: item.name, description: item.description,
-      parameters: { type: "object", properties: { [item.field]: { type: "string", maxLength: item.field === "url" ? 2048 : 240 } }, required: [item.field], additionalProperties: false } } })),
+    definitions: [...definitions.map(item => ({ type: "function", function: { name: item.name, description: item.description,
+      parameters: { type: "object", properties: { [item.field]: { type: "string", maxLength: item.field === "url" ? 2048 : 240 } }, required: [item.field], additionalProperties: false } } })), ...localDefinitions()],
     async call(name: string, raw: string): Promise<string> {
       if (++count > 4) return JSON.stringify({ error: "tool_budget_exhausted" });
+      if (localSpecs.some((spec) => spec.name === name)) return callLocal(name, raw);
       const definition = definitions.find(item => item.name === name);
       if (!definition || raw.length > 4096) return JSON.stringify({ error: "invalid_tool_call" });
       let args: Record<string, unknown>;

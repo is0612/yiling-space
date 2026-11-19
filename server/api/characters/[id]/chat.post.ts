@@ -40,7 +40,8 @@ import {
 } from "../../../utils/message-retrieval";
 import { recordModelUsage, readDailyQuota, toUsageTokens } from "../../../utils/model-usage";
 import { resolveChatMemoryScopes } from "../../../utils/memory-scope-access";
-import { requireActorUserId } from "../../../utils/auth";
+import { requireActor } from "../../../utils/auth";
+import { auditLocalObserve, listLocalDirectory, listLocalObserveRoots, readLocalTextFile, searchLocalProject } from "../../../utils/local-observe";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
 import { desktopConversationWhere, DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR, lockActiveDesktopConversationForWrite, throwDeletedDesktopConversationRequest, validateDesktopConversationReplay } from "../../../utils/desktop-conversation";
@@ -50,7 +51,9 @@ import { readPreviousJournalLine, readRecentJournals, dropDuplicateJournalQuote 
 import { isSelfFactQuery, loadJournalFacts } from "../../../utils/journal-facts";
 
 export default defineEventHandler(async (event) => {
-  const ownerId = await requireActorUserId(event);
+  const actor = await requireActor(event);
+  const ownerId = actor.user.id;
+  const isAdmin = actor.user.role === "ADMIN";
   const characterId = requireUuid(getRouterParam(event, "id") ?? "", "角色");
   const body = await readBody<Record<string, unknown>>(event);
   const message = readTrimmedString(body?.message, "消息", 8000, { required: true });
@@ -483,6 +486,56 @@ export default defineEventHandler(async (event) => {
   const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }], "web");
   let generated;
   const generationStartedAt = Date.now();
+  const localRootsForTools = isAdmin ? await listLocalObserveRoots(false).catch(() => []) : [];
+  const resolveLocalToolRoot = async (value: string) => {
+    const root = localRootsForTools.find((item) =>
+      item.id === value || item.label === value || item.path.toLowerCase() === value.toLowerCase());
+    if (!root) throw new Error("这个目录不在授权列表里。");
+    return root;
+  };
+  const localReadOnlyTools = isAdmin ? {
+    localRoots: async () => localRootsForTools.map((root) => ({ id: root.id, label: root.label, path: root.path })),
+    listLocalFiles: async (rootValue: string, path: string) => {
+      let rootId = "";
+      try {
+        const root = await resolveLocalToolRoot(rootValue);
+        rootId = root.id;
+        const result = listLocalDirectory(root.path, path);
+        auditLocalObserve(ownerId, "list", { source: "chat", rootId, path: result.path, entries: result.entries.length, truncated: result.truncated });
+        return { root: { id: root.id, label: root.label }, ...result };
+      } catch (error) {
+        auditLocalObserve(ownerId, "list", { source: "chat", rootId, path, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    },
+    readLocalFile: async (rootValue: string, path: string) => {
+      let rootId = "";
+      try {
+        const root = await resolveLocalToolRoot(rootValue);
+        rootId = root.id;
+        const result = readLocalTextFile(root.path, path);
+        const content = result.content.slice(0, 6000);
+        auditLocalObserve(ownerId, "read", { source: "chat", rootId, path: result.path, bytes: result.size, lines: result.lines });
+        return { root: { id: root.id, label: root.label }, ...result, content, truncated: result.content.length > content.length };
+      } catch (error) {
+        auditLocalObserve(ownerId, "read", { source: "chat", rootId, path, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    },
+    searchLocalFiles: async (rootValue: string, query: string, path: string) => {
+      let rootId = "";
+      try {
+        const root = await resolveLocalToolRoot(rootValue);
+        rootId = root.id;
+        const result = searchLocalProject(root.path, query, path);
+        auditLocalObserve(ownerId, "search", { source: "chat", rootId, path, query, matches: result.matches.length, scanned: result.scanned });
+        return { root: { id: root.id, label: root.label }, ...result };
+      } catch (error) {
+        auditLocalObserve(ownerId, "search", { source: "chat", rootId, path, query, error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    },
+  } : undefined;
   try {
     generated = await generateConversationReplyWithMemoryAssistant({
       assistant: memoryAssistant,
@@ -671,6 +724,7 @@ export default defineEventHandler(async (event) => {
         maxTokens: chatSettings.maxTokens,
         thinking: chatSettings.thinking,
         currentMessage: message,
+        ...(localReadOnlyTools ? { readOnlyTools: localReadOnlyTools } : {}),
         ...(interactionGuidance.length ? { interactionGuidance } : {}),
         ...(selfUnderstanding ? { selfUnderstanding } : {}),
         ...(interactionExperiences.length ? { interactionExperiences } : {}),

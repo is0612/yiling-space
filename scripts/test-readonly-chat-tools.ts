@@ -36,5 +36,15 @@ try {
     assert(!body.tools); return response({ content: '{"reply":"正常回复","usedMemoryIds":[],"usedSnapshotIds":[]}' });
   };
   assert.equal((await generateConversationReply({ ...base, readOnlyTools: {} })).reply, "正常回复");
-  console.log("Read-only tools: whitelist, argument validation, budgets, cached queries, native continuation, reasoning, usage and unsupported-provider fallback passed (mock only).");
+  const localTools = createReadOnlyChatTools({
+    localRoots: async () => [{ id: "project", label: "项目目录" }],
+    listLocalFiles: async (root, path) => ({ root, path, entries: [] }),
+    readLocalFile: async () => ({ content: "x" }),
+    searchLocalFiles: async () => ({ matches: [] }),
+  });
+  assert.equal(localTools.definitions.length, 5);
+  assert.match(await localTools.call("list_local_directory", '{"root":"project"}'), /untrustedEvidence/);
+  assert.match(await localTools.call("read_local_file", '{"root":"project"}'), /invalid_arguments/);
+  assert.match(await localTools.call("list_local_roots", '{"extra":"x"}'), /invalid_arguments/);
+  console.log("Read-only tools: whitelist, argument validation, budgets, cached queries, native continuation, reasoning, usage, unsupported-provider fallback and local tools passed (mock only).");
 } finally { globalThis.fetch = original; }
