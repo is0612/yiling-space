@@ -39,6 +39,7 @@ const statusFilters: Array<{ value: Status | "ALL"; label: string }> = [
 ];
 
 const domainOrder: Domain[] = ["memory", "experience", "preferences", "language", "goals", "social", "reflection", "knowledge"];
+const quoteExpanded = ref(false);
 const domainFilter = ref<Domain | "ALL">("ALL");
 const statusFilter = ref<Status | "ALL">("ALL");
 const visibleCount = ref(5);
@@ -134,6 +135,7 @@ async function load() {
 watch(characterId, () => {
   domainFilter.value = "ALL";
   statusFilter.value = "ALL";
+  quoteExpanded.value = false;
   visibleCount.value = 5;
   void load();
 }, { immediate: true });
@@ -191,57 +193,61 @@ onBeforeUnmount(() => { sequence++; });
         class="ident"
         aria-labelledby="ident-heading"
       >
-        <div
-          class="avatar"
-          aria-hidden="true"
-        >
-          {{ avatarLetter }}
-        </div>
-        <div class="ident-main">
+        <div class="ident-top">
           <div
             id="ident-heading"
             class="eyebrow"
           >
             身份与定位
           </div>
-          <div class="ident-name">
-            <h2>{{ view.identity.name }}</h2>
-            <span class="pill">当前角色名</span>
+          <NuxtLink
+            class="l1"
+            :to="roleLink(`/characters/${encodeURIComponent(characterId)}`)"
+          >
+            查看角色资料 →
+          </NuxtLink>
+        </div>
+        <div class="ident-body">
+          <div
+            class="avatar"
+            aria-hidden="true"
+          >
+            {{ avatarLetter }}
           </div>
-          <div class="ident-meta">
-            {{ evidence.length }} 条证据<template v-if="latestUpdate">
-              · 最近更新 {{ shortText(latestUpdate) }}
-            </template> · 外观是呈现方式
+          <div class="ident-main">
+            <div class="ident-name">
+              <h2>{{ view.identity.name }}</h2>
+              <span class="pill">当前角色名</span>
+            </div>
+            <div class="ident-meta">
+              {{ evidence.length }} 条证据<template v-if="latestUpdate">
+                · 最近更新 {{ shortText(latestUpdate) }}
+              </template> · 外观是呈现方式
+            </div>
+          </div>
+          <div class="ident-fields">
+            <div class="field-row">
+              <div class="field">
+                <span class="f-label">外观</span>
+                <span
+                  class="f-value"
+                  :title="appearanceHint"
+                >{{ appearance }}</span>
+              </div>
+              <div class="field">
+                <span class="f-label">别称</span>
+                <span class="f-value">—</span>
+              </div>
+              <div class="field">
+                <span class="f-label">旧名</span>
+                <span class="f-value">—</span>
+              </div>
+            </div>
+            <div class="legend">
+              — 表示角色数据中没有这条记录，不作为判断依据。
+            </div>
           </div>
         </div>
-        <div class="ident-fields">
-          <div class="field-row">
-            <div class="field">
-              <span class="f-label">外观</span>
-              <span
-                class="f-value"
-                :title="appearanceHint"
-              >{{ appearance }}</span>
-            </div>
-            <div class="field">
-              <span class="f-label">别称</span>
-              <span class="f-value">—</span>
-            </div>
-            <div class="field">
-              <span class="f-label">旧名</span>
-              <span class="f-value">—</span>
-            </div>
-          </div>
-          <div class="legend">
-            — 表示角色数据中没有这条记录，不作为判断依据。
-          </div>
-        </div>
-        <NuxtLink
-          class="l1"
-          :to="roleLink(`/characters/${encodeURIComponent(characterId)}`)"
-        >
-          查看角色资料 →
-        </NuxtLink>
       </section>
 
       <div class="kpis">
@@ -303,9 +309,18 @@ onBeforeUnmount(() => { sequence++; });
             <div class="lab">
               她现在的说法
             </div>
-            <p>{{ readableExcerpt(quote.excerpt) }}<span v-if="quote.excerptTruncated">…</span></p>
+            <p :class="{ clamp: !quoteExpanded }">
+              {{ readableExcerpt(quote.excerpt) }}<span v-if="quote.excerptTruncated">…</span>
+            </p>
             <div class="q-meta">
-              已采纳的解释 · {{ shortText(quote.updatedAt) }}
+              <span>已采纳的解释 · {{ shortText(quote.updatedAt) }}</span>
+              <button
+                type="button"
+                class="quote-toggle"
+                @click="quoteExpanded = !quoteExpanded"
+              >
+                {{ quoteExpanded ? "收起" : "展开全文" }}
+              </button>
             </div>
           </div>
           <div
@@ -407,15 +422,20 @@ onBeforeUnmount(() => { sequence++; });
               <div class="tl-time">
                 {{ shortText(row.current.recordedAt) }} · {{ domainLabels[row.domain] }}
               </div>
-              <div class="tl-title">
+              <div
+                v-if="row.domain === 'social'"
+                class="tl-title"
+              >
                 {{ historySubject(row) }}
               </div>
               <div class="cmp">
                 <div class="o">
-                  <span>历史版 v{{ row.previous.revision }}</span>{{ readableExcerpt(row.previous.excerpt) }}<span v-if="row.previous.excerptTruncated">…</span>
+                  <span>历史版 v{{ row.previous.revision }}</span>
+                  <em>{{ readableExcerpt(row.previous.excerpt) }}<template v-if="row.previous.excerptTruncated">…</template></em>
                 </div>
                 <div class="n">
-                  <span>当前版 v{{ row.current.revision }}</span>{{ readableExcerpt(row.current.excerpt) }}<span v-if="row.current.excerptTruncated">…</span>
+                  <span>当前版 v{{ row.current.revision }}</span>
+                  <em>{{ readableExcerpt(row.current.excerpt) }}<template v-if="row.current.excerptTruncated">…</template></em>
                 </div>
               </div>
             </div>
@@ -441,37 +461,39 @@ onBeforeUnmount(() => { sequence++; });
 </template>
 
 <style scoped>
-.self-page { max-width: 1124px; margin-inline: auto; }
+.self-page { max-width: 1280px; margin-inline: auto; }
 .phead { display: flex; align-items: flex-end; gap: 14px; }
 .phead h1 { margin: 0; font-size: 22px; line-height: 28px; letter-spacing: -.02em; }
 .phead .sub { margin: 4px 0 0; font-size: 12px; line-height: 18px; color: var(--dim); }
 .phead .acts { margin-left: auto; padding-bottom: 3px; }
 .notice { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 
-.ident { height: 104px; margin-top: 12px; background: var(--surface); border-radius: 10px; padding: 0 16px; display: flex; align-items: center; }
+.ident { height: 104px; margin-top: 12px; background: var(--surface); border-radius: 10px; padding: 12px 16px 14px; display: flex; flex-direction: column; }
+.ident-top { display: flex; align-items: center; height: 16px; flex: none; }
+.ident-body { display: flex; align-items: center; height: 56px; margin-top: 6px; flex: none; }
 .avatar { width: 56px; height: 56px; border-radius: 10px; background: var(--brand-soft); color: var(--brand-btn); font-size: 24px; font-weight: 700; display: grid; place-items: center; flex: none; }
 .ident-main { min-width: 0; margin-left: 14px; }
-.eyebrow { font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: .06em; color: var(--dim); margin-bottom: 2px; }
+.eyebrow { font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: .06em; color: var(--dim); }
 .ident-name { display: flex; align-items: center; gap: 8px; }
 .ident-name h2 { margin: 0; font-size: 22px; line-height: 28px; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pill { height: 22px; padding: 0 10px; border-radius: 999px; background: var(--brand-soft); color: var(--brand-btn); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; flex: none; }
-.ident-meta { margin-top: 4px; font-size: 12px; line-height: 18px; color: var(--dim); }
-.ident-fields { margin-left: 32px; display: flex; flex-direction: column; gap: 6px; }
+.ident-meta { margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--dim); }
+.ident-fields { margin-left: 32px; display: flex; flex-direction: column; justify-content: center; gap: 0; }
 .field-row { display: flex; gap: 24px; }
 .field { width: 96px; }
 .f-label { display: block; font-size: 12px; line-height: 16px; color: var(--dim); }
-.f-value { display: block; font-size: 14px; line-height: 20px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.f-value { display: block; font-size: 14px; line-height: 20px; margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .legend { font-size: 12px; line-height: 16px; color: var(--dim); }
 .l1 { margin-left: auto; flex: none; font-size: 14px; font-weight: 600; color: var(--brand-btn); }
 .l2 { font-size: 12px; font-weight: 600; color: var(--brand-btn); }
 .l3 { flex: none; font-size: 12px; color: var(--dim); text-align: right; }
 .l1:hover, .l2:hover, .l3:hover { text-decoration: underline; }
 
-.kpis { display: grid; grid-template-columns: 224px 281px 281px 296px; gap: 14px; margin-top: 16px; }
+.kpis { display: grid; grid-template-columns: 224px minmax(0, 1fr) minmax(0, 1fr) 296px; gap: 14px; margin-top: 16px; }
 .kpi { background: var(--surface); border-radius: 10px; padding: 12px 16px; }
 .kpi .row { display: flex; align-items: baseline; gap: 8px; }
 .kpi .lab { font-size: 12px; line-height: 16px; color: var(--dim); }
-.kpi .note { margin-left: auto; font-size: 12px; line-height: 16px; color: var(--dim); text-align: right; }
+.kpi .note { margin-left: auto; min-width: 0; font-size: 12px; line-height: 16px; color: var(--dim); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpi b { display: block; font-size: 22px; line-height: 26px; margin-top: 4px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 
 .grid { display: grid; grid-template-columns: 224px minmax(0, 1fr) 296px; gap: 14px; margin-top: 14px; height: max(460px, calc(100vh - 378px)); }
@@ -481,20 +503,23 @@ onBeforeUnmount(() => { sequence++; });
 .card-h .meta { margin-left: auto; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
 
 .domlist { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 6px 0; }
-.domrow { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: 8px; background: none; font-family: inherit; font-size: 14px; color: var(--text-2); text-align: left; cursor: pointer; }
+.domrow { display: flex; align-items: center; gap: 8px; width: 100%; height: 40px; padding: 0 10px; border: 0; border-radius: 8px; background: none; font-family: inherit; font-size: 14px; color: var(--text-2); text-align: left; cursor: pointer; }
 .domrow b { margin-left: auto; font-size: 12px; color: var(--dim); font-weight: 600; font-variant-numeric: tabular-nums; }
 .domrow:hover:not(.dis) { background: var(--bg); }
 .domrow.on { background: var(--brand-soft); color: var(--brand-btn); font-weight: 600; }
 .domrow.on b { color: var(--brand-btn); }
 .domrow.dis { color: #8b94a3; cursor: default; }
 .domrow.dis b { color: #8b94a3; }
-.b-note { margin-top: auto; padding: 8px 16px 16px; font-size: 12px; line-height: 20px; color: var(--dim); }
+.b-note { margin-top: 12px; padding: 8px 16px 16px; font-size: 12px; line-height: 20px; color: var(--dim); }
 
 .quote { padding: 16px 16px 12px; flex: none; }
 .quote .lab { font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--dim); margin-bottom: 6px; }
-.quote p { margin: 0; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.quote p { margin: 0; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+.quote p.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.quote-toggle { margin-left: auto; padding: 0; border: 0; background: none; font-family: inherit; font-size: 12px; font-weight: 600; color: var(--brand-btn); cursor: pointer; }
+.quote-toggle:hover { text-decoration: underline; }
 .quote p.quiet { color: var(--dim); }
-.q-meta { margin-top: 8px; font-size: 12px; line-height: 18px; color: var(--dim); }
+.q-meta { margin-top: 8px; display: flex; align-items: center; gap: 10px; font-size: 12px; line-height: 18px; color: var(--dim); }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 12px; flex: none; }
 .fchip { height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 12px; color: var(--text-2); font-family: inherit; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .fchip b { font-weight: 600; color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -503,7 +528,7 @@ onBeforeUnmount(() => { sequence++; });
 .fchip.on b { color: var(--brand-btn); }
 .fchip:disabled { opacity: .5; cursor: default; }
 
-.list { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); }
+.list { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); scrollbar-width: thin; mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); }
 .ev { list-style: none; margin: 0; padding: 0; }
 .ev li { display: grid; grid-template-columns: 7px 54px minmax(0, 1fr) 58px; gap: 10px; align-items: center; min-height: 55px; padding: 6px 16px; border-bottom: 1px solid var(--line); }
 .ev li:hover { background: var(--bg); }
@@ -531,7 +556,8 @@ onBeforeUnmount(() => { sequence++; });
 .tl-time { font-size: 12px; line-height: 16px; color: var(--dim); }
 .tl-title { font-size: 14px; font-weight: 600; margin: 2px 0 6px; }
 .cmp { border-radius: 8px; overflow: hidden; }
-.cmp div { padding: 6px 10px; font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.cmp div { padding: 7px 10px; font-size: 12px; line-height: 19px; overflow-wrap: anywhere; }
+.cmp em { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-style: normal; }
 .cmp .o { background: var(--bg); color: var(--dim); }
 .cmp .n { background: var(--surface); color: var(--text); border-left: 2px solid var(--brand); }
 .cmp span { display: block; font-size: 12px; line-height: 16px; margin-bottom: 2px; color: var(--dim); }
@@ -539,9 +565,15 @@ onBeforeUnmount(() => { sequence++; });
 .tl-foot { flex: none; padding: 12px 16px 16px; border-top: 1px solid var(--line); }
 
 
+@media (max-width: 1360px) {
+  .grid { grid-template-columns: 200px minmax(0, 1fr) 264px; }
+  .ident-fields { margin-left: 24px; }
+}
 @media (max-width: 1180px) {
-  .ident { height: auto; padding: 14px 16px; flex-wrap: wrap; gap: 10px 16px; }
-  .ident-fields { margin-left: 70px; }
+  .ident { height: auto; }
+  .ident-body { height: auto; flex-wrap: wrap; gap: 12px 16px; margin-top: 8px; }
+  .ident-main { flex: 1 1 180px; }
+  .ident-fields { margin-left: 0; flex: 1 1 100%; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid { grid-template-columns: 200px minmax(0, 1fr); height: auto; }
   .grid > .card:last-child { grid-column: 1 / -1; max-height: 320px; }
