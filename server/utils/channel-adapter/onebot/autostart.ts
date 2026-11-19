@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { loadOnebotConnections, requestOnebotReload, updateOnebotConnectionCredentials } from "./configure";
+import { dataPath } from "../../data-dir";
 import { readOnebotAccountPresence } from "./account-availability";
 import {
   panelListProcesses,
@@ -34,7 +35,7 @@ import {
 
 /** 自动补起的总开关：点过「停止」就写它 */
 function pauseFile(): string {
-  return path.join(process.cwd(), ".data", "onebot-autostart.json");
+  return dataPath("onebot-autostart.json");
 }
 
 export async function readAutoStartPause(): Promise<{ paused: boolean; at?: string }> {
@@ -108,7 +109,7 @@ async function loadConfiguredConnections(): Promise<
 async function trace(action: string, message: string): Promise<void> {
   try {
     const line = `${new Date().toISOString()} ${action} ${message}\n`;
-    await fs.appendFile(path.join(process.cwd(), ".data", "onebot-autostart.log"), line, "utf8");
+    await fs.appendFile(dataPath("onebot-autostart.log"), line, "utf8");
   } catch {
     // 记不下来不影响补起本身
   }

@@ -11,28 +11,31 @@
  */
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
+import { dataPath } from "./data-dir";
 
-const KEY_PATH = resolve(process.cwd(), ".data", "credentials-encryption.key");
+function keyPath(): string {
+  return dataPath("credentials-encryption.key");
+}
 let cachedKey: Promise<Buffer> | null = null;
 
 async function loadEncryptionKey(): Promise<Buffer> {
   try {
-    const existing = await readFile(KEY_PATH);
+    const existing = await readFile(keyPath());
     if (existing.length !== 32) throw new Error("本地凭据加密密钥文件长度无效。");
     return existing;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
-  await mkdir(dirname(KEY_PATH), { recursive: true, mode: 0o700 });
+  await mkdir(dirname(keyPath()), { recursive: true, mode: 0o700 });
   const generated = randomBytes(32);
   try {
-    await writeFile(KEY_PATH, generated, { flag: "wx", mode: 0o600 });
+    await writeFile(keyPath(), generated, { flag: "wx", mode: 0o600 });
     return generated;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const existing = await readFile(KEY_PATH);
+    const existing = await readFile(keyPath());
     if (existing.length !== 32) throw new Error("本地凭据加密密钥文件长度无效。");
     return existing;
   }

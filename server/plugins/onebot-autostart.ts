@@ -18,6 +18,12 @@ import { ensureOnebotStack } from "../utils/channel-adapter/onebot/autostart";
  *    日常不受影响 —— HMR 不会带走那两个 detached 进程，断的不是它们。
  */
 export default defineNitroPlugin(() => {
+  // 桌面端由 desktop-supervisor 统一管理 QQ 栈（可优雅退出），
+  // 这里再自动补一次会变成两套进程抢同一个 3001/3002。
+  if (process.env.YILING_ONEBOT_AUTOSTART === "0") {
+    console.log("[onebot-autostart] skipped: desktop supervisor owns the QQ stack");
+    return;
+  }
   // 先让 server 落定两秒：启动那一瞬间 prisma 还没热、SnowLuma 的目录发现也没缓存，
   // 这时候去判断「链路通没通」容易得出错误结论，白补一次或者干脆不补。
   setTimeout(() => {

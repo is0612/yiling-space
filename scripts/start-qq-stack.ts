@@ -41,9 +41,41 @@ function readSavedSnowlumaHome(): string {
 
 const SNOWLUMA_HOME = process.env.SNOWLUMA_HOME?.trim() || readSavedSnowlumaHome();
 const PORTS = [3001, 3002];
+const PANEL_PORT = Number(process.env.SNOWLUMA_PANEL_PORT || 5099);
 const READY_TIMEOUT_MS = 120_000;
+const MANAGED = process.argv.includes("--managed");
 
 let running = true;
+let requestShutdown: (() => void) | null = null;
+let shutdownRequested = false;
+
+/**
+ * 桌面 supervisor 通过 stdin 发 shutdown。Windows 上 SIGTERM 等于直接杀进程，
+ * 所以必须留一条能按顺序停 adapter → watchdog → SnowLuma 的通道。
+ */
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  if (!MANAGED) return;
+  for (const line of String(chunk).split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const command = JSON.parse(line);
+      if (command?.command === "shutdown") {
+        shutdownRequested = true;
+        requestShutdown?.();
+      }
+    } catch {
+      // 非 JSON 输入忽略
+    }
+  }
+});
+for (const event of ["end", "close"]) {
+  process.stdin.on(event, () => {
+    if (!MANAGED) return;
+    shutdownRequested = true;
+    requestShutdown?.();
+  });
+}
 
 function log(entry: Record<string, unknown>) {
   process.stdout.write(JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n");
@@ -138,8 +170,11 @@ function startAdapter(): ChildProcess {
 
 async function main() {
   let snowluma: ChildProcess | null = null;
-  if (await portOpen(PORTS[0]!)) {
-    log({ event: "snowluma-already-running", hint: "3001 已在监听，跳过启动。" });
+  // 只看 3001 不够：网关端口可能还在，但面板 5099 已经死了。
+  // 面板没人应答时页面会报「面板端口 5099 没人应答，3001 上没有 WS 节点」，
+  // 这时必须重新拉起 SnowLuma，而不是直接跳过。
+  if (await portOpen(PORTS[0]!) && await portOpen(PANEL_PORT)) {
+    log({ event: "snowluma-already-running", hint: `${PORTS[0]} 与面板 ${PANEL_PORT} 都在监听，跳过启动。` });
   } else {
     if (!SNOWLUMA_HOME) {
       throw new Error(
@@ -160,6 +195,7 @@ async function main() {
       + `打开 http://127.0.0.1:5099 看进程注入那一页，登录后重试。`,
     );
   }
+  if (!running) return;
   log({ event: "snowluma-ready", ports: PORTS });
 
   // 停滞检测挂在同一个窗口里（`YILING_WATCHDOG_DISABLED=1` 可以关掉）。
@@ -169,11 +205,18 @@ async function main() {
   // 记忆 Worker 也挂进来（`YILING_WORKER_DISABLED=1` 可以关掉）。
   let worker: Awaited<ReturnType<typeof superviseMemoryWorker>> | null = null;
   let adapter: ChildProcess | null = null;
-  const stopAdapter = () => { running = false; adapter?.kill(); };
-  process.once("SIGINT", stopAdapter);
-  process.once("SIGTERM", stopAdapter);
+  const shutdown = () => {
+    running = false;
+    adapter?.kill();
+    watchdog?.kill();
+    snowluma?.kill();
+    void worker?.stop();
+  };
+  requestShutdown = shutdown;
+  if (shutdownRequested) shutdown();
   try {
     worker = await superviseMemoryWorker({ root: REPO_ROOT, log });
+    if (!running) return;
     adapter = startAdapter();
     const activeAdapter = adapter;
     const exitCode = await new Promise<number>((resolveExit) => {
@@ -183,8 +226,6 @@ async function main() {
     process.exitCode = exitCode;
   } finally {
     running = false;
-    process.off("SIGINT", stopAdapter);
-    process.off("SIGTERM", stopAdapter);
     await worker?.stop();
     watchdog?.kill();
     snowluma?.kill();
@@ -193,6 +234,7 @@ async function main() {
 
 const stop = () => {
   running = false;
+  requestShutdown?.();
 };
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);

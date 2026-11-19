@@ -5,6 +5,7 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getPrisma } from "../../prisma";
+import { dataPath } from "../../data-dir";
 import { hasPrimaryOnebotConnection, savePrimarySnowlumaPassword } from "./configure";
 
 /** Acknowledge the request served by this ready socket without replacing concurrent metadata. */
@@ -30,7 +31,7 @@ export type OnebotAdapterStatus = {
 };
 
 function adapterStateFile(): string {
-  return path.join(process.cwd(), ".data", "onebot-adapter.json");
+  return dataPath("onebot-adapter.json");
 }
 
 export async function readOnebotAdapterStatus(): Promise<OnebotAdapterStatus> {
@@ -137,7 +138,7 @@ const DISCOVERY_TTL_MS = 60_000;
 export type SnowlumaHomeSource = "saved" | "env" | "process" | "scan" | "default";
 
 function snowlumaHomeFile(): string {
-  return path.join(process.cwd(), ".data", "snowluma-home.json");
+  return dataPath("snowluma-home.json");
 }
 
 async function hasStartBat(home: string): Promise<boolean> {
@@ -639,7 +640,7 @@ type ProcessRow = { pid: number; ppid: number; name: string; cmd: string };
  * 两头都记下来，停的时候以启动器为根，实在没有就按进程表往上爬。
  */
 function launcherFile(target: "snowluma" | "adapter"): string {
-  return path.join(process.cwd(), ".data", `onebot-${target}-launcher.json`);
+  return dataPath(`onebot-${target}-launcher.json`);
 }
 
 async function rememberLauncher(target: "snowluma" | "adapter", pid: number | undefined): Promise<void> {

@@ -8,6 +8,7 @@
 import fs from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
+import { dataPath } from "../../data-dir";
 import { getPrisma } from "../../prisma";
 import { ensureGroupMemberIdentity } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
@@ -869,7 +870,7 @@ export function toOnebotVoiceSegments(silkBase64: string): OnebotSegment[] {
  * base64 要在网关里再解一遍、再落地、再上传，中间任何一步出问题都会得到
  * 「发送成功但有人播不出来」——那正是这个目录存在的理由。
  */
-const VOICE_OUT_DIR = resolve(process.cwd(), ".data", "voice-out");
+const VOICE_OUT_DIR = dataPath("voice-out");
 /** 语音文件留着没用，一小时前的顺手清掉，避免 .data 里堆成山 */
 const VOICE_OUT_KEEP_MS = 60 * 60 * 1000;
 

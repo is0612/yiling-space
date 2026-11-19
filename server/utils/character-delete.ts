@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getPrisma } from "./prisma";
+import { dataDir } from "./data-dir";
 import { stickerCharacterDir, stickerOriginalsDir, invalidateStickerCache } from "./stickers";
 
 /**
@@ -132,9 +133,9 @@ export async function removeCharacterStickerDirs(
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(characterId)) {
     throw new Error(`拒绝删除非 uuid 目录：${characterId}`);
   }
-  const root = path.join(process.cwd(), ".data");
+  const root = dataDir();
   const targets = [stickerCharacterDir(characterId), stickerOriginalsDir(characterId)];
-  // 双保险：目标必须真的落在 `.data` 下面，别因为 process.cwd() 变了就删到别处去。
+  // 双保险：目标必须真的落在数据目录下面，别因为 YILING_DATA_DIR 配错就删到别处去。
   for (const target of targets) {
     if (!path.resolve(target).startsWith(path.resolve(root) + path.sep)) {
       throw new Error(`拒绝删除 .data 之外的目录：${target}`);

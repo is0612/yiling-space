@@ -108,6 +108,8 @@ B 站值班功能已整体下线。数据库侧：
 
 PostgreSQL 的运行数据存放在 Docker named volume `yiling_postgres_data`。不要将这个卷当作唯一备份。
 
+本机文件（凭据密钥、表情包、语音临时文件等）默认放在项目根目录的 `.data/`。桌面端通过 `YILING_DATA_DIR` 把它指到可写目录（程序旁的 `data/` 或 `%APPDATA%`）；该变量留空时仍是 `.data/`，旧安装不需要改任何路径。
+
 数据库迁移优先使用 PostgreSQL 逻辑备份（`pg_dump` 的 custom 格式）和 `pg_restore` 恢复。该方式比直接拷贝 Docker 卷更适合不同电脑、不同 Docker 环境或迁移到 Linux 服务器。
 
 如果上传图片或其他文件存放在本地目录，还必须单独备份这些文件。仅备份 PostgreSQL 不会自动包含文件系统中的图片或附件。角色的表情包就属于这一类：清单在 `character_stickers` 表，图片本体在 `.data/stickers/<角色 id>/`，迁移时两边都要搬；只搬库的话页面会显示“图片文件不在本机”。

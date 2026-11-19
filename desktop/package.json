@@ -1,0 +1,16 @@
+{
+  "name": "yiling-space-desktop",
+  "productName": "Yiling Space",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "main.cjs",
+  "description": "Yiling Space Windows desktop shell (Electron).",
+  "scripts": {
+    "start": "node launch.cjs",
+    "start:no-sandbox": "node launch.cjs --no-sandbox"
+  },
+  "devDependencies": {
+    "electron": "^44.4.3"
+  }
+}

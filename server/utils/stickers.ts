@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { dataPath } from "./data-dir";
 
 /**
  * 角色自己的表情包（贴图）。
@@ -83,7 +84,7 @@ export async function purgeTrashedStickers(characterId: string, before?: Date): 
 export const STICKER_MIME_TYPES = Object.keys(MIME_EXTENSIONS);
 
 export function stickerRootDir(): string {
-  return path.join(process.cwd(), ".data", "stickers");
+  return dataPath("stickers");
 }
 
 export function stickerCharacterDir(characterId: string): string {
@@ -137,7 +138,7 @@ export async function saveStickerFile(characterId: string, extension: string, da
  * 好让「再缩一次」永远从原件出发、不在压缩过的图上叠压缩。
  */
 export function stickerOriginalsDir(characterId: string): string {
-  return path.join(process.cwd(), ".data", "sticker-originals", characterId);
+  return dataPath("sticker-originals", characterId);
 }
 
 export function stickerOriginalFilePath(characterId: string, fileName: string): string | null {

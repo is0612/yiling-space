@@ -19,6 +19,7 @@ node_modules
 backups
 dist
 docs
+desktop
 
 *.log
 *.dump

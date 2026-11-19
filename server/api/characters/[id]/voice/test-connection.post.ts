@@ -1,6 +1,6 @@
 import { createError, getRouterParam } from "h3";
 import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dataDir, dataPath } from "../../../../utils/data-dir";
 import { resolveChatModelSettings } from "../../../../utils/chat-model-config";
 import { resolveCharacterApiKey, resolveCharacterVoiceApiKey } from "../../../../utils/credential-encryption";
 import { requireActorUserId } from "../../../../utils/auth";
@@ -9,7 +9,7 @@ import { getPrisma } from "../../../../utils/prisma";
 import { resolveVoiceTtsSettings, silkToWav, synthesizeSpeechSilk } from "../../../../utils/voice";
 
 /** 测试产物写到哪：`.data/voice-probe.wav`，双击就能听。 */
-const PROBE_PATH = resolve(process.cwd(), ".data", "voice-probe.wav");
+const PROBE_PATH = dataPath("voice-probe.wav");
 
 /**
  * 测语音合成：真合成一句，验证 Key / 地址 / 模型 / 音色 / hex 解码 / silk 编码整条链路。
@@ -66,7 +66,7 @@ export default defineEventHandler(async (event) => {
   // 落一份可双击试听的 wav：用户点「测试」就是想听音色，只报「N 字节」等于没给结果。
   let probeWritten = false;
   try {
-    await mkdir(resolve(process.cwd(), ".data"), { recursive: true });
+    await mkdir(dataDir(), { recursive: true });
     await writeFile(PROBE_PATH, await silkToWav(silk));
     probeWritten = true;
   } catch {
