@@ -102,7 +102,7 @@ export type LocalObserveRoot = {
   id: string;
   label: string;
   path: string;
-  mode: "READ_ONLY";
+  mode: "READ_ONLY" | "READ_WRITE";
   enabled: boolean;
   builtin: boolean;
 };
@@ -145,7 +145,7 @@ export async function listLocalObserveRoots(includeDisabled = false): Promise<Lo
       id: row.id,
       label: row.label,
       path: row.path,
-      mode: "READ_ONLY" as const,
+      mode: row.mode === "READ_WRITE" ? "READ_WRITE" as const : "READ_ONLY" as const,
       enabled: row.enabled,
       builtin: false,
     })),
@@ -159,8 +159,15 @@ export async function resolveObserveRoot(rootIdInput: unknown): Promise<LocalObs
   const row = await getPrisma().localAccessRoot.findUnique({ where: { id: rootId } });
   if (!row) throw new LocalObserveError(404, "授权目录不存在。");
   if (!row.enabled) throw new LocalObserveError(403, "这个授权目录已停用。");
-  if (row.mode !== "READ_ONLY") throw new LocalObserveError(403, "这个目录的权限模式暂不支持。");
-  return { id: row.id, label: row.label, path: row.path, mode: "READ_ONLY", enabled: row.enabled, builtin: false };
+  if (row.mode !== "READ_ONLY" && row.mode !== "READ_WRITE") throw new LocalObserveError(403, "这个目录的权限模式暂不支持。");
+  return {
+    id: row.id,
+    label: row.label,
+    path: row.path,
+    mode: row.mode === "READ_WRITE" ? "READ_WRITE" : "READ_ONLY",
+    enabled: row.enabled,
+    builtin: false,
+  };
 }
 
 const DENIED_ROOT_PATHS = new Set([
@@ -222,7 +229,7 @@ function realRoot(root: string): string {
 /**
  * 把接口里的相对路径解析成真实路径；拒绝绝对路径、`..`、授权根外路径和越界符号链接。
  */
-export function resolveLocalPath(root: string, input: unknown): { relative: string; absolute: string; real: string } {
+export function resolveLocalPath(root: string, input: unknown, allowMissing = false): { relative: string; absolute: string; real: string } {
   if (typeof input !== "string") throw new LocalObserveError(400, "路径参数必须是字符串。");
   const raw = input.trim().replace(/\\/g, "/");
   if (raw.includes("\0")) throw new LocalObserveError(400, "路径包含非法字符。");
@@ -240,10 +247,39 @@ export function resolveLocalPath(root: string, input: unknown): { relative: stri
   try {
     real = fs.realpathSync(absolute);
   } catch {
-    throw new LocalObserveError(404, "路径不存在。");
+    if (!allowMissing) throw new LocalObserveError(404, "路径不存在。");
+    const parent = path.dirname(absolute);
+    let parentReal: string;
+    try {
+      parentReal = fs.realpathSync(parent);
+    } catch {
+      throw new LocalObserveError(404, "目标目录不存在。");
+    }
+    if (!within(rootReal, parentReal)) throw new LocalObserveError(403, "目标目录在授权目录之外。");
+    real = path.join(parentReal, path.basename(absolute));
   }
   if (!within(rootReal, real)) throw new LocalObserveError(403, "符号链接指向授权目录之外。");
   return { relative: normalized === "." ? "" : normalized, absolute, real };
+}
+
+/** 写文件的路径校验：目标可以不存在，但父目录必须已存在且仍在授权根内。 */
+export function validateLocalWritablePath(root: string, input: unknown) {
+  const resolved = resolveLocalPath(root, input, true);
+  if (!resolved.relative) throw new LocalObserveError(400, "必须指定要写入的文件。");
+  assertReadableName(resolved.relative);
+  let exists = false;
+  let size = 0;
+  try {
+    const stat = fs.lstatSync(resolved.absolute);
+    if (stat.isSymbolicLink()) throw new LocalObserveError(403, "不能写符号链接。");
+    if (stat.isDirectory()) throw new LocalObserveError(400, "目标是目录，不能写。");
+    exists = true;
+    size = stat.size;
+  } catch (error) {
+    if (error instanceof LocalObserveError) throw error;
+    if ((error as { code?: string })?.code !== "ENOENT") throw error;
+  }
+  return { ...resolved, exists, size };
 }
 
 function assertReadableName(relative: string) {
@@ -427,7 +463,7 @@ export function searchLocalProject(root: string, queryInput: unknown, pathInput:
 /** 只追加审计，不记录文件正文；写失败不影响只读请求。 */
 export function auditLocalObserve(
   actorId: string,
-  action: "list" | "read" | "search" | "root.add" | "root.update" | "root.delete",
+  action: "list" | "read" | "search" | "root.add" | "root.update" | "root.delete" | "write.request" | "write.apply" | "write.reject",
   detail: Record<string, unknown>,
 ) {
   try {

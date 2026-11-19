@@ -41,10 +41,12 @@ try {
     listLocalFiles: async (root, path) => ({ root, path, entries: [] }),
     readLocalFile: async () => ({ content: "x" }),
     searchLocalFiles: async () => ({ matches: [] }),
+    proposeFileWrite: async () => ({ status: "PENDING_APPROVAL" }),
   });
-  assert.equal(localTools.definitions.length, 5);
+  assert.equal(localTools.definitions.length, 6);
   assert.match(await localTools.call("list_local_directory", '{"root":"project"}'), /untrustedEvidence/);
   assert.match(await localTools.call("read_local_file", '{"root":"project"}'), /invalid_arguments/);
   assert.match(await localTools.call("list_local_roots", '{"extra":"x"}'), /invalid_arguments/);
+  assert.match(await localTools.call("propose_file_write", '{"root":"project","path":"a.txt","content":"x","reason":"test"}'), /PENDING_APPROVAL/);
   console.log("Read-only tools: whitelist, argument validation, budgets, cached queries, native continuation, reasoning, usage, unsupported-provider fallback and local tools passed (mock only).");
 } finally { globalThis.fetch = original; }

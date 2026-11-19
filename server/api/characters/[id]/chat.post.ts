@@ -42,6 +42,7 @@ import { recordModelUsage, readDailyQuota, toUsageTokens } from "../../../utils/
 import { resolveChatMemoryScopes } from "../../../utils/memory-scope-access";
 import { requireActor } from "../../../utils/auth";
 import { auditLocalObserve, listLocalDirectory, listLocalObserveRoots, readLocalTextFile, searchLocalProject } from "../../../utils/local-observe";
+import { createLocalWriteRequest } from "../../../utils/local-write";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
 import { desktopConversationWhere, DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR, lockActiveDesktopConversationForWrite, throwDeletedDesktopConversationRequest, validateDesktopConversationReplay } from "../../../utils/desktop-conversation";
@@ -535,6 +536,26 @@ export default defineEventHandler(async (event) => {
         throw error;
       }
     },
+    ...(localRootsForTools.some((root) => root.mode === "READ_WRITE") ? {
+      proposeFileWrite: async (rootValue: string, path: string, content: string, reason: string) => {
+        const root = await resolveLocalToolRoot(rootValue);
+        const request = await createLocalWriteRequest({
+          rootId: root.id,
+          relativePath: path,
+          content,
+          reason,
+          actorId: ownerId,
+          characterId,
+          ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
+        });
+        return {
+          status: "PENDING_APPROVAL",
+          requestId: request.id,
+          path: request.relativePath,
+          message: "已提交给主人审批，尚未写入文件。",
+        };
+      },
+    } : {}),
   } : undefined;
   try {
     generated = await generateConversationReplyWithMemoryAssistant({

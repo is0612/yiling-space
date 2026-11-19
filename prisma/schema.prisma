@@ -2121,6 +2121,29 @@ model LocalAccessRoot {
   enabled Boolean @default(true)
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  writeRequests LocalWriteRequest[]
   @@index([enabled, createdAt])
   @@map("local_access_roots")
+}
+
+/// 写文件提案：模型只能创建 PENDING，管理员批准后才真正写盘。
+model LocalWriteRequest {
+  id String @id @default(uuid()) @db.Uuid
+  rootId String @db.Uuid
+  relativePath String @db.VarChar(1000)
+  content String @db.Text
+  reason String @db.VarChar(500)
+  baseHash String? @db.VarChar(64)
+  status String @default("PENDING") @db.VarChar(20)
+  actorId String @db.Uuid
+  characterId String? @db.Uuid
+  conversationId String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  decidedAt DateTime? @db.Timestamptz(6)
+  appliedAt DateTime? @db.Timestamptz(6)
+  error String? @db.VarChar(500)
+  root LocalAccessRoot @relation(fields: [rootId], references: [id], onDelete: Cascade)
+  @@index([status, createdAt])
+  @@index([rootId, createdAt])
+  @@map("local_write_requests")
 }

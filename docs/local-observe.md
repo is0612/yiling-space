@@ -19,13 +19,26 @@
 - 停用的目录不参与观察，可以随时重新启用；
 - 移除只删白名单记录，不删除磁盘文件。
 
+## 写文件（需审批）
+
+管理员可以把某个授权目录改成「可写」；即使可写，她也不能直接落盘：
+
+1. 她在桌面聊天里调用 `propose_file_write`，提交 `root / path / content / reason`；
+2. 服务端创建 `PENDING` 写请求，检查目录可写、路径在根内、敏感文件/忽略目录、内容 ≤32 KB；
+3. 管理页「写审批」里显示路径、原因、将写入的内容；
+4. 管理员批准后才真正写文件；拒绝则什么也不写；
+5. 批准时还会校验文件在请求后有没有被改过（`baseHash`），改过就失败，避免覆盖别人的修改。
+
+写请求表：`local_write_requests`。工具结果只返回 `PENDING_APPROVAL`，不会返回“已写入”。
+
 ## 边界
 
 - 接口只接受相对路径，绝对路径、`..`、根外符号链接都会被拒绝；
 - 以下目录不进入观察范围：`node_modules`、`.git`、`.nuxt`、`.output`、`.data`、`dist`、`backups` 等；
-- `.env*`、`*.key`、`*.pem`、`credentials-encryption.key`、`onebot-*.json` 等敏感文件不可读；
+- `.env*`、`*.key`、`*.pem`、`credentials-encryption.key`、`onebot-*.json` 等敏感文件不可读、不可写；
 - 二进制文件不预览；超过 256 KB 的文件不预览；
-- 只读：没有写文件、删除、终端、Git 操作。
+- 读工具只读；写文件必须经过审批，且只能覆盖已存在的授权目录内文件或新建文件；
+- 没有删除、终端、Git 操作。
 
 ## 审计
 
@@ -41,6 +54,9 @@
 - `GET /api/local/observe/search?rootId=&q=&path=`
 - `GET/POST /api/local/roots`
 - `PATCH/DELETE /api/local/roots/{id}`
+- `GET /api/local/write-requests?status=PENDING`
+- `POST /api/local/write-requests/{id}/approve`
+- `POST /api/local/write-requests/{id}/reject`
 
 全部仅管理员可用；契约见 `docs/openapi.yaml` 的 `LocalObserve` 路径。
 
@@ -49,9 +65,10 @@
 可以，但只在**桌面聊天**里，且只有管理员：
 
 - 管理员在桌面聊天时，模型会拿到 `list_local_roots` / `list_local_directory` / `read_local_file` /
-  `search_local_files` 四个只读工具；
+  `search_local_files` 四个只读工具；授权目录开启可写时还会拿到 `propose_file_write`（只提交审批，不直接写）；
 - 工具只能访问「授权目录」里的内容，走的还是同一套根目录白名单、敏感文件过滤和审计；
 - QQ / 群聊不启用本地文件工具，避免群里的人借她读本机文件；
+- 写文件只能提交审批，不能直接写；QQ 也不启用写工具；
 - 每次工具调用写 `<data>/local-exec-audit.jsonl`，`source: "chat"`。
 
 ## 下一步

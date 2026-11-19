@@ -28,9 +28,20 @@ type LocalObserveRoot = {
   id: string;
   label: string;
   path: string;
-  mode: "READ_ONLY";
+  mode: "READ_ONLY" | "READ_WRITE";
   enabled: boolean;
   builtin: boolean;
+};
+
+type LocalWriteRequest = {
+  id: string;
+  relativePath: string;
+  content: string;
+  reason: string;
+  status: "PENDING" | "APPROVING" | "APPLIED" | "REJECTED" | "FAILED";
+  createdAt: string;
+  error: string | null;
+  root: { id: string; label: string; path: string; mode: "READ_ONLY" | "READ_WRITE" };
 };
 
 type Entry = {
@@ -93,6 +104,12 @@ const manageLoading = ref(false);
 const newRootPath = ref("");
 const newRootLabel = ref("");
 const savingRoot = ref(false);
+const writeVisible = ref(false);
+const writeLoading = ref(false);
+const writeRequests = ref<LocalWriteRequest[]>([]);
+const selectedWrite = ref<LocalWriteRequest | null>(null);
+const writeBusy = ref(false);
+const pendingWriteCount = computed(() => writeRequests.value.filter((request) => request.status === "PENDING").length);
 
 const selectedRoot = computed(() =>
   roots.value.find((root) => root.id === selectedRootId.value) ?? roots.value[0] ?? null,
@@ -286,6 +303,15 @@ function asLocalRoot(row: unknown): LocalObserveRoot {
   return row as LocalObserveRoot;
 }
 
+function asWriteRequest(row: unknown): LocalWriteRequest {
+  return row as LocalWriteRequest;
+}
+
+function changeRootMode(row: unknown, mode: unknown) {
+  if (mode !== "READ_ONLY" && mode !== "READ_WRITE") return;
+  void setRootMode(asLocalRoot(row), mode);
+}
+
 async function toggleRoot(root: LocalObserveRoot) {
   try {
     await request({
@@ -321,11 +347,92 @@ async function removeRoot(root: LocalObserveRoot) {
   }
 }
 
+async function setRootMode(root: LocalObserveRoot, mode: "READ_ONLY" | "READ_WRITE") {
+  try {
+    await request({
+      url: `/local/roots/${root.id}`,
+      method: "patch",
+      data: { mode },
+    });
+    await refreshManage();
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "更新目录权限失败。"));
+  }
+}
+
+async function loadWriteRequests(showDialog = false) {
+  if (showDialog) writeVisible.value = true;
+  writeLoading.value = true;
+  try {
+    const result = await request<{ requests: LocalWriteRequest[] }>({
+      url: "/local/write-requests",
+      params: { status: "PENDING" },
+    });
+    writeRequests.value = result.requests;
+    if (!selectedWrite.value || !writeRequests.value.some((request) => request.id === selectedWrite.value?.id)) {
+      selectedWrite.value = writeRequests.value[0] ?? null;
+    }
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "读取写文件审批失败。"));
+  } finally {
+    writeLoading.value = false;
+  }
+}
+
+async function openWrites() {
+  await loadWriteRequests(true);
+}
+
+async function approveWrite(write: LocalWriteRequest) {
+  try {
+    await ElMessageBox.confirm(
+      `批准写入「${write.root.label}/${write.relativePath}」？这会覆盖目标文件。`,
+      "批准写文件",
+      { type: "warning", confirmButtonText: "批准写入", cancelButtonText: "取消" },
+    );
+    writeBusy.value = true;
+    await request({ url: `/local/write-requests/${write.id}/approve`, method: "post" });
+    ElMessage.success("已写入。");
+    await loadWriteRequests();
+    await refreshManage();
+    await list(currentPath.value);
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(readApiErrorMessage(error, "写入失败。"));
+  } finally {
+    writeBusy.value = false;
+  }
+}
+
+async function rejectWrite(write: LocalWriteRequest) {
+  try {
+    const result = await ElMessageBox.prompt("拒绝原因（可留空）", "拒绝写文件", {
+      confirmButtonText: "拒绝",
+      cancelButtonText: "取消",
+      inputPlaceholder: "例如：这次不需要改这个文件",
+    });
+    writeBusy.value = true;
+    await request({
+      url: `/local/write-requests/${write.id}/reject`,
+      method: "post",
+      data: { reason: result.value ?? "" },
+    });
+    ElMessage.success("已拒绝。");
+    await loadWriteRequests();
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(readApiErrorMessage(error, "拒绝写请求失败。"));
+  } finally {
+    writeBusy.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     rootInfo.value = await request<RootInfo>({ url: "/local/observe/root" });
     await loadRoots();
     await list("");
+    await loadWriteRequests();
   } catch (error) {
     ElMessage.error(readApiErrorMessage(error, "本地观察初始化失败。"));
   } finally {
@@ -374,6 +481,12 @@ onMounted(async () => {
               @click="openManage"
             >
               管理目录
+            </el-button>
+            <el-button
+              :type="pendingWriteCount ? 'warning' : 'default'"
+              @click="openWrites"
+            >
+              写审批{{ pendingWriteCount ? ` (${pendingWriteCount})` : "" }}
             </el-button>
           </div>
           <el-breadcrumb separator="/">
@@ -612,7 +725,7 @@ onMounted(async () => {
         :closable="false"
         show-icon
         title="她只能读取这里列出的目录"
-        description="移除只影响白名单，不会删除磁盘文件。当前版本全部只读；写权限后续单独做审批。"
+        description="移除只影响白名单，不会删除磁盘文件。写权限只对开启「可写」的目录生效，且每次写入仍需在「写审批」里确认。"
       />
       <div class="manage-add">
         <el-input
@@ -673,10 +786,28 @@ onMounted(async () => {
         />
         <el-table-column
           label="权限"
-          width="86"
+          width="130"
         >
-          <template #default>
-            <span class="muted">只读</span>
+          <template #default="{ row }">
+            <el-select
+              v-if="!row.builtin"
+              :model-value="row.mode"
+              size="small"
+              @change="changeRootMode(row, $event)"
+            >
+              <el-option
+                label="只读"
+                value="READ_ONLY"
+              />
+              <el-option
+                label="可写"
+                value="READ_WRITE"
+              />
+            </el-select>
+            <span
+              v-else
+              class="muted"
+            >只读</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -708,6 +839,108 @@ onMounted(async () => {
       </el-table>
       <template #footer>
         <el-button @click="manageVisible = false">
+          关闭
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="writeVisible"
+      title="写文件审批"
+      width="860px"
+      append-to-body
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="批准之前不会写盘"
+        description="模型只能提交写文件请求；这里批准后才会覆盖目标文件。请先看路径和内容。"
+      />
+      <div
+        v-if="!writeLoading && !writeRequests.length"
+        class="write-empty"
+      >
+        没有待审批的写文件请求。
+      </div>
+      <div
+        v-else
+        class="write-grid"
+      >
+        <el-table
+          v-loading="writeLoading"
+          :data="writeRequests"
+          row-key="id"
+          size="small"
+          highlight-current-row
+          class="write-table"
+          @row-click="(row) => selectedWrite = asWriteRequest(row)"
+        >
+          <el-table-column
+            label="目录"
+            width="110"
+          >
+            <template #default="{ row }">
+              {{ row.root.label }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="relativePath"
+            label="路径"
+            min-width="180"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            prop="reason"
+            label="原因"
+            min-width="160"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            label="时间"
+            width="145"
+          >
+            <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+          </el-table-column>
+        </el-table>
+        <div
+          v-if="selectedWrite"
+          class="write-preview"
+        >
+          <div class="preview-head">
+            <span>{{ selectedWrite.root.label }} / {{ selectedWrite.relativePath }}</span>
+          </div>
+          <div class="write-reason">
+            {{ selectedWrite.reason }}
+          </div>
+          <pre class="preview-body write-content">{{ selectedWrite.content }}</pre>
+          <div class="write-actions">
+            <el-button
+              type="danger"
+              plain
+              :disabled="writeBusy"
+              @click="rejectWrite(selectedWrite)"
+            >
+              拒绝
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="writeBusy"
+              @click="approveWrite(selectedWrite)"
+            >
+              批准写入
+            </el-button>
+          </div>
+        </div>
+        <div
+          v-else
+          class="preview-placeholder"
+        >
+          选一条请求查看要写入的内容。
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="writeVisible = false">
           关闭
         </el-button>
       </template>
@@ -764,6 +997,41 @@ onMounted(async () => {
 }
 .builtin-tag {
   margin-left: 6px;
+}
+.write-empty {
+  padding: 28px 0;
+  text-align: center;
+  color: #98a2b3;
+}
+.write-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+.write-table {
+  cursor: pointer;
+}
+.write-preview {
+  min-width: 0;
+  border: 1px solid #e4e9f2;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fafbfe;
+}
+.write-reason {
+  margin-bottom: 8px;
+  color: #68717f;
+  font-size: 13px;
+}
+.write-content {
+  max-height: 360px;
+}
+.write-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
 }
 .crumb-link {
   border: 0;

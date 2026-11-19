@@ -7,14 +7,20 @@ export default defineEventHandler(async (event) => {
   const actor = await requireAdminActor(event);
   const id = getRouterParam(event, "id");
   if (!id) throw createError({ statusCode: 400, statusMessage: "缺少目录 ID。" });
-  const body = await readBody<{ label?: unknown; enabled?: unknown }>(event).catch(() => null);
-  const data: { label?: string; enabled?: boolean } = {};
+  const body = await readBody<{ label?: unknown; enabled?: unknown; mode?: unknown }>(event).catch(() => null);
+  const data: { label?: string; enabled?: boolean; mode?: "READ_ONLY" | "READ_WRITE" } = {};
   if (typeof body?.label === "string") {
     const label = body.label.trim();
     if (!label) throw createError({ statusCode: 400, statusMessage: "目录名称不能为空。" });
     data.label = label.slice(0, 100);
   }
   if (typeof body?.enabled === "boolean") data.enabled = body.enabled;
+  if (body?.mode !== undefined) {
+    if (body.mode !== "READ_ONLY" && body.mode !== "READ_WRITE") {
+      throw createError({ statusCode: 400, statusMessage: "权限模式只能是 READ_ONLY 或 READ_WRITE。" });
+    }
+    data.mode = body.mode;
+  }
   if (!Object.keys(data).length) {
     throw createError({ statusCode: 400, statusMessage: "没有要修改的字段。" });
   }

@@ -8,12 +8,15 @@ export type ReadOnlyChatTools = {
   listLocalFiles?: (root: string, path: string) => Promise<unknown>;
   readLocalFile?: (root: string, path: string) => Promise<unknown>;
   searchLocalFiles?: (root: string, query: string, path: string) => Promise<unknown>;
+  /** 只创建审批请求，不直接写盘。 */
+  proposeFileWrite?: (root: string, path: string, content: string, reason: string) => Promise<unknown>;
 };
 
 type LocalToolSpec = {
   name: string;
   description: string;
   fields: Array<{ name: string; required: boolean; maxLength: number }>;
+  maxRaw?: number;
   call: (args: Record<string, string>) => Promise<unknown>;
 };
 
@@ -55,6 +58,18 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
       ],
       call: async (args: Record<string, string>) => handlers.searchLocalFiles!(args.root ?? "", args.query ?? "", args.path ?? ""),
     }] : []),
+    ...(handlers.proposeFileWrite ? [{
+      name: "propose_file_write",
+      description: "Propose writing a UTF-8 text file inside an authorized writable directory. This does NOT write immediately: it creates a pending request that the owner must approve. Never claim the file was written.",
+      fields: [
+        { name: "root", required: true, maxLength: 200 },
+        { name: "path", required: true, maxLength: 500 },
+        { name: "content", required: true, maxLength: 20000 },
+        { name: "reason", required: true, maxLength: 500 },
+      ],
+      maxRaw: 24000,
+      call: async (args: Record<string, string>) => handlers.proposeFileWrite!(args.root ?? "", args.path ?? "", args.content ?? "", args.reason ?? ""),
+    }] : []),
   ];
 
   function localDefinitions() {
@@ -75,7 +90,7 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
 
   async function callLocal(name: string, raw: string): Promise<string> {
     const spec = localSpecs.find((item) => item.name === name);
-    if (!spec || raw.length > 4096) return JSON.stringify({ error: "invalid_tool_call" });
+    if (!spec || raw.length > (spec.maxRaw ?? 4096)) return JSON.stringify({ error: "invalid_tool_call" });
     let args: Record<string, unknown>;
     try { args = JSON.parse(raw); } catch { return JSON.stringify({ error: "invalid_arguments" }); }
     if (!args || typeof args !== "object" || Array.isArray(args)) return JSON.stringify({ error: "invalid_arguments" });

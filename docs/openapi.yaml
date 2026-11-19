@@ -6919,6 +6919,7 @@ paths:
               properties:
                 label: { type: string, maxLength: 100 }
                 enabled: { type: boolean }
+                mode: { type: string, enum: [READ_ONLY, READ_WRITE] }
       responses:
         '200':
           description: 已更新
@@ -6958,6 +6959,81 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /local/write-requests:
+    get:
+      tags: [LocalObserve]
+      summary: 待审批的写文件请求
+      description: 仅管理员；默认只返回 PENDING。
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, default: PENDING }
+      responses:
+        '200':
+          description: 写请求
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items: { $ref: '#/components/schemas/LocalWriteRequest' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /local/write-requests/{id}/approve:
+    post:
+      tags: [LocalObserve]
+      summary: 批准并写入
+      description: 仅管理员；批准后才会真正写文件；文件在请求后被改过会返回 409。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 已写入
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request: { $ref: '#/components/schemas/LocalWriteRequest' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/BadRequest'
+  /local/write-requests/{id}/reject:
+    post:
+      tags: [LocalObserve]
+      summary: 拒绝写文件
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: 已拒绝
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request: { $ref: '#/components/schemas/LocalWriteRequest' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
 
 components:
   securitySchemes:
@@ -7002,6 +7078,29 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    LocalWriteRequest:
+      type: object
+      required: [id, rootId, relativePath, content, reason, status, createdAt, root]
+      properties:
+        id: { type: string, format: uuid }
+        rootId: { type: string, format: uuid }
+        relativePath: { type: string }
+        content: { type: string }
+        reason: { type: string }
+        baseHash: { type: string, nullable: true }
+        status: { type: string, enum: [PENDING, APPROVING, APPLIED, REJECTED, FAILED] }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: string, format: date-time, nullable: true }
+        appliedAt: { type: string, format: date-time, nullable: true }
+        error: { type: string, nullable: true }
+        root:
+          type: object
+          required: [id, label, path, mode]
+          properties:
+            id: { type: string }
+            label: { type: string }
+            path: { type: string }
+            mode: { type: string, enum: [READ_ONLY, READ_WRITE] }
     LocalObserveRoot:
       type: object
       required: [id, label, path, mode, enabled, builtin]
@@ -7009,7 +7108,7 @@ components:
         id: { type: string }
         label: { type: string }
         path: { type: string }
-        mode: { type: string, enum: [READ_ONLY] }
+        mode: { type: string, enum: [READ_ONLY, READ_WRITE] }
         enabled: { type: boolean }
         builtin: { type: boolean, description: 内置项目目录，不可移除 }
     PreferenceSourceRef:
