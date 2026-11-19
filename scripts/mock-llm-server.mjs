@@ -220,7 +220,7 @@ const server = http.createServer(async (request, response) => {
           }
         : undefined;
       sendJson(response, 200, chatCompletion(body, {
-        reply: "CI 模拟模型回复：" + String(input.currentMessage ?? "").slice(0, 150),
+        reply: "CI 模拟模型回复：" + String(input.currentMessage ?? transcript.map(line => line?.content ?? "").join("\n")).slice(0, 150),
         usedMemoryIds: firstMemory ? [firstMemory] : [],
         usedSnapshotIds: firstSnapshot ? [firstSnapshot] : [],
         faces: pickedFace ? [pickedFace] : [],

@@ -92,7 +92,11 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
   }
 
   const evidenceIds = new Set(analysis.evidenceMessageIds);
-  const currentSources = [...(input.chatInput.transcript ?? []), ...(input.analysisBackground ?? input.chatInput.groupBackground ?? []), ...input.chatInput.recentMessages];
+  const currentSources = [
+    ...(input.chatInput.transcript ?? []),
+    ...input.chatInput.recentMessages,
+    ...(input.analysisBackground ?? input.chatInput.groupBackground ?? []),
+  ];
   // Validated carried originals remain available after they leave the recent window.
   const replySources: typeof currentSources = [...currentSources, ...(input.previousWorkingContext?.evidence ?? [])];
   if (analysis.workingEvidenceMessageIds?.length && input.onWorkingContext) {
@@ -183,9 +187,13 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
   if (!analysis.knowledgeQuery || !input.loadKnowledge) skipAssistantTurnStage(turnContext, "knowledge", !input.loadKnowledge ? "not_enabled" : "not_needed");
   const original = input.chatInput;
   // 大背景留给分析器，角色拿到本轮原话、被引用证据和少量最近互动。
-  const background = replySources
-    .filter(line => line.id && evidenceIds.has(line.id))
-    .map(line => ({ ...line, content: line.content.slice(0, 600) }));
+  const recentMessages = original.recentMessages.slice(-6);
+  const shownIds = new Set([...original.transcript ?? [], ...recentMessages].map(line => line.id));
+  const background = replySources.flatMap(line => {
+    if (!line.id || !evidenceIds.has(line.id) || shownIds.has(line.id)) return [];
+    shownIds.add(line.id);
+    return [{ ...line, content: line.content.slice(0, 600) }];
+  });
   const unique = <T extends { id: string }>(base: T[], extra: T[]): T[] => {
     const ids = new Set(base.map(item => item.id));
     return [...base, ...extra.filter(item => !ids.has(item.id))];
@@ -194,7 +202,7 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
     ...original,
     allowSilent: true,
     groupBackground: background,
-    recentMessages: original.recentMessages.slice(-6),
+    recentMessages,
     contextAnalysis: {
       summary: analysis.summary,
       evidenceMessageIds: analysis.evidenceMessageIds,

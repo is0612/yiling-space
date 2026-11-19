@@ -42,7 +42,7 @@ function modelResponse(content: unknown = valid, finishReason = "stop", withUsag
 }
 type RequestBody = { model: string; max_tokens: number; response_format: { type: string }; thinking?: { type: string }; reasoning_effort?: string; messages: Array<{ role: string; content: string }> };
 type PublicBody = {
-  characterName: string; currentTime: string; currentMessage: string; contextClipped: boolean;
+  characterName: string; currentTime: string; currentMessage?: string; contextClipped: boolean;
   transcript: Array<{ id?: string; content: string; mentions?: Array<Record<string, unknown>>; [key: string]: unknown }>;
   groupBackground: Array<{ id?: string; content: string; mentions?: Array<Record<string, unknown>> }>;
   recentMessages: Array<{ id?: string; content: string; mentions?: Array<Record<string, unknown>> }>;
@@ -130,7 +130,7 @@ try {
   assert.equal(result.usage?.reasoningTokens, 8);
   assert.equal(result.usage?.cacheHitTokens, 40);
   assert.equal(publicBodies[0]?.currentTime, "2026-11-05T03:00:00.000Z");
-  assert.deepEqual(Object.keys(publicBodies[0]!).sort(), ["characterName", "currentTime", "currentMessage", "contextClipped", "transcript", "groupBackground", "recentMessages", "groupMembers", "groupAnchors"].sort());
+  assert.deepEqual(Object.keys(publicBodies[0]!).sort(), ["characterName", "currentTime", "contextClipped", "transcript", "groupBackground", "recentMessages", "groupMembers", "groupAnchors"].sort());
   assert.deepEqual(publicBodies[0]?.transcript[0]?.mentions, [{ target: "self" }], "语境助手也要知道这一行 @ 的是她本人。");
   assert.deepEqual(
     publicBodies[0]?.groupBackground[0]?.mentions,
@@ -248,6 +248,10 @@ try {
   reset(() => modelResponse(valid, "stop", false));
   assert.equal((await analyzeGroupContext(runtime, input)).usage, undefined);
 
+  reset();
+  await analyzeGroupContext(runtime, { ...input, transcript: [], currentMessage: "FALLBACK_ONLY" });
+  assert.equal(publicBodies[0]!.currentMessage, "FALLBACK_ONLY");
+
   const longInput: ConversationReplyInput = {
     ...input,
     currentMessage: "CURRENT_PRIORITY_" + "长".repeat(40_000),
@@ -260,7 +264,7 @@ try {
   const budgetResult = await analyzeGroupContext(smallRuntime, longInput);
   const selected = publicBodies[0]!;
   assert.equal(selected.contextClipped, true);
-  assert(selected.currentMessage.startsWith("CURRENT_PRIORITY_"));
+  assert.equal(selected.currentMessage, undefined, "Structured messages get the budget instead of a duplicate body.");
   assert(selected.transcript.some(row => row.id === "round-19"), "Newest current round must survive a tight budget.");
   assert(!budgetResult.analysis.evidenceMessageIds.includes("old-0"), "Omitted background ids are not evidence.");
   assert(Buffer.byteLength(requests[0]!.messages.map(row => row.content).join(""), "utf8") + 256 <= 4_096,

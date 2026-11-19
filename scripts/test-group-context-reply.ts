@@ -114,6 +114,32 @@ try {
   assert.equal(carriedSummary, "小鱼答应稍后继续。");
   assert(JSON.stringify(calls[1]!.messages).includes("稍后继续聊。"), "Selected stored reply evidence reaches the final character.");
 
+  const currentText = "CURRENT_ONLY_ONCE";
+  const older = [
+    { id: "old-owner", role: "USER" as const, content: "OWNER_EVIDENCE", isOwner: true },
+    { id: "old-reply", role: "ASSISTANT" as const, content: "OWN_REPLY_EVIDENCE", hadVoice: true },
+  ];
+  reset(body => body.model === "context"
+    ? response({ ...analysis, memoryQuery: undefined, evidenceMessageIds: ["current", "recent-5", "old-owner", "old-reply"] })
+    : response({ ...reply, usedMemoryIds: [] }));
+  await run({ chatInput: {
+    ...chatInput, currentMessage: currentText + "REMOVED_DUPLICATE_TAIL".repeat(100),
+    transcript: [{ id: "current", content: currentText + "x".repeat(1200) + "REMOVED_TRANSCRIPT_TAIL" }],
+    recentMessages: [...older, ...Array.from({ length: 6 }, (_, i) => ({ id: `recent-${i}`, role: "USER" as const, content: `RECENT_${i}` }))],
+    groupBackground: [{ id: "old-owner", content: "LESS_PRECISE_DUPLICATE" }],
+  } });
+  const payloads = calls.map(call => JSON.parse(call.messages.find(row => row.role === "user")!.content));
+  for (const payload of payloads) assert.equal(payload.currentMessage, undefined);
+  const finalPayload = payloads.at(-1);
+  const finalRows = [...finalPayload.transcript, ...finalPayload.recentMessages, ...finalPayload.groupBackground];
+  assert.equal(finalRows.length, new Set(finalRows.map(row => row.id)).size);
+  assert(!JSON.stringify(finalPayload).includes("REMOVED_DUPLICATE_TAIL"));
+  assert(!JSON.stringify(finalPayload).includes("REMOVED_TRANSCRIPT_TAIL"));
+  assert(finalPayload.transcript[0].content.length <= 1200);
+  assert.deepEqual(finalPayload.groupBackground.map((row: { id: string; role: string; isOwner?: boolean; hadVoice?: boolean }) => [row.id, row.role, row.isOwner, row.hadVoice]), [
+    ["old-owner", "USER", true, undefined], ["old-reply", "ASSISTANT", undefined, true],
+  ]);
+
   const previousOnly = { summary: "之前约好继续话题。", evidence: [{ id: "previous-only", role: "ASSISTANT" as const, content: "PREVIOUS_ONLY_ORIGINAL_" + "字".repeat(700), occurredAt: "2026-11-05T00:00:00Z" }] };
   reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, evidenceMessageIds: ["previous-only", "invented"], knowledgeCandidate: { evidenceMessageIds: ["previous-only"], reason: "must not collect carried-only evidence" } }) : response({ ...reply, usedMemoryIds: [] }));
   let carriedCandidate = false;

@@ -89,12 +89,12 @@ try {
   assert(system3.includes("recentMessages are earlier lines"), "群聊系统提示必须解释历史消息里的发言人。");
   // 2026-10-31 16:08：别人说「这鱼嘴挺硬」，她认成自己，抢了别人的台词；
   // 主人 @ 她「没说你呢」递台阶，她反问一句踢回去。两件事都要有明文规矩。
-  assert(system3.includes("Referents and possessives are not you by default"), "群聊系统提示必须说明指代默认不是她。");
+  assert(system3.includes("If unclear, do not assume they mean you"), "指代不清时不要冒认。");
   assert(system3.includes("没说你"), "群聊系统提示必须把「澄清」和「挑衅」分开。");
   // 21:00「我的鱼也是成气候了」说的是他自己那条鱼，她接「谁是你的鱼了」。
   // 区分话题归属与参与权限：没有点名不能冒认主语，但仍可参与开放话题。
   assert(system3.includes("我的鱼 / 我家宝"), "群聊系统提示必须说明「我的X」指的是说话人自己的 bot。");
-  assert(system3.includes("Resolve the subject and addressee"), "群聊必须依据原文区分主语与听者。");
+  assert(system3.includes("distinguish the person addressed from the person described"), "群聊必须依据原文区分主语与听者。");
   assert(system3.includes("does not prevent joining an open topic"), "没有点名也可参与开放话题。");
   assert(!system3.includes("the message is not about you"), "不能用缺少点名硬判话题归属。");
   assert(system3.includes("A line starting with /"), "群聊系统提示必须说明斜杠命令是发给别的 bot 的，不是骂她。");
@@ -118,7 +118,7 @@ try {
   assert(system3.includes("hadVoice"), "系统提示必须解释 hadVoice 是「自己那条是语音」。");
   assert(system3.includes("do not say you can only type"), "系统提示必须写明：别否认自己会发语音。");
   assert(recentSection.includes("\"hadVoice\":true"), "发过语音的 ASSISTANT 历史行必须标 hadVoice:true，否则她下一轮否认自己说过话。");
-  assert(!system3.includes("groupMembers says who belongs"), "没带归属表时不许提这个字段，否则模型会凭空认亲戚。");
+  assert(!system3.includes("Use groupMembers"), "没带归属表时不许提这个字段，否则模型会凭空认亲戚。");
 
   /**
    * 群内归属：21:00「我的鱼也是成气候了」说的是他自己那条鱼，她接「谁是你的鱼了」。
@@ -135,9 +135,11 @@ try {
     allowSilent: true,
     transcript: [
       { id: "m9", member: "member_1", speaker: "群友甲", content: "我的鱼也是成气候了", isOwner: false },
+      { id: "m10", member: "member_3", speaker: "群友乙", content: "@self 我的鱼，你和 @member_2 都说说", isOwner: true,
+        mentions: [{ target: "self" }, { target: "other", member: "member_2" }] },
     ],
     groupMembers: [
-      { member: "member_2", speaker: "千人安知鱼之乐", belongsTo: "member_1", belongsToName: "群友甲" },
+      { member: "member_2", speaker: "外部角色", belongsTo: "member_1", belongsToName: "群友甲" },
     ],
     recentMessages: [],
     memories: [],
@@ -146,8 +148,13 @@ try {
   const body4 = JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> };
   const system4 = body4.messages.find((item) => item.role === "system")?.content ?? "";
   const user4 = body4.messages.find((item) => item.role === "user")?.content ?? "";
-  assert(system4.includes("groupMembers says who belongs"), "有归属表时必须解释这张表是什么。");
-  assert(system4.includes("Check it before you treat a possessive as yours"), "必须写出「先查表再判断所有格」这一步。");
+  assert(system4.includes("The table does not override verified owner identity"));
+  assert(system4.includes("They can refer to you when your verified owner is clearly addressing or referring to you"));
+  assert(system4.includes("a line that only tags others") && system4.includes("If it also tags you or everyone"));
+  assert(!system4.includes("that speaker's own bot, never you"));
+  const mixed = JSON.parse(user4).transcript[1];
+  assert.equal(mixed.isOwner, true);
+  assert.deepEqual(mixed.mentions.map((mention: { target: string }) => mention.target), ["self", "other"]);
   assert(user4.includes("\"belongsTo\":\"member_1\""), "归属关系必须进 payload，否则提示词让她查也没得查。");
 
   console.log("对话主人上下文测试通过：主人/群友区分、主人名字注入、群聊逐行 isOwner、群内归属表（谁属于谁）、平台账号 ID 不进入提示词。");
