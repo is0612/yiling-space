@@ -13,8 +13,10 @@ try {
     { domain: "preferences", id: "p-1", text: "LIKE: 园艺", state: "ACTIVE", scope: "character", revision: 2, updatedAt: "2026-11-18T00:00:00Z" },
     { domain: "reflection", id: "r-1", text: "可能愿意先核对依据", state: "ACCEPTED", scope: "character", updatedAt: "2026-11-18T00:00:00Z" },
   ] });
-  const reply = await generateConversationReply({ ...input, selfUnderstanding: view });
-  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v77");
+  const historicalView = { ...view, history: [{ domain: "preferences" as const, id: "p-1", scope: "character" as const,
+    previous: { revision: 1, excerpt: "INTEREST: 园艺" }, current: { revision: 2, excerpt: "LIKE: 园艺", recordedAt: "2026-11-18T00:00:00Z" } }] };
+  const reply = await generateConversationReply({ ...input, selfUnderstanding: historicalView });
+  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v78");
   const system = requests[0]!.messages.find(row => row.role === "system")!.content;
   assert(system.includes("presentation is appearance only"));
   assert(system.includes("provisional discussion, never confirmed facts or automatic writes"));
@@ -27,7 +29,12 @@ try {
   assert(system.includes("keep your own dated changes separate"));
   assert(system.includes("not a verified current system status"));
   const payload = JSON.parse(requests[0]!.messages.find(row => row.role === "user")!.content);
-  assert.deepEqual(payload.selfUnderstanding, view);
+  assert(system.includes("compare only the paired previous and current versions of the same record"));
+  assert(system.includes("An empty history means no supported pair was supplied"));
+  assert.deepEqual(payload.selfUnderstanding, { ...historicalView,
+    evidence: view.evidence.map(row => ({ ...row, updatedAt: "2026-11-18 08:00:00" })),
+    history: historicalView.history.map(row => ({ ...row, current: { ...row.current, recordedAt: "2026-11-18 08:00:00" } })),
+  });
   assert(!JSON.stringify(payload.selfUnderstanding).includes(input.characterPrompt));
   await generateConversationReply({ ...input, currentMessage: "你好" });
   assert(!requests[1]!.messages.find(row => row.role === "system")!.content.includes("selfUnderstanding is a bounded view"));

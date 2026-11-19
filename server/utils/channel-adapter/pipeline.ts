@@ -1,7 +1,7 @@
 import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
 import { readInteractionGuidance } from "../interaction-guidance";
-import { wantsSelfUnderstanding, selfUnderstandingReferences } from "../self-understanding";
+import { asksSelfUnderstandingHistory, wantsSelfUnderstanding, selfUnderstandingReferences } from "../self-understanding";
 import { loadSelfUnderstanding } from "../self-understanding-reader";
 import { readInteractionExperiences } from "../interaction-experiences";
 import { prepareConversationSummary } from "../conversation-summary";
@@ -1427,7 +1427,7 @@ async function runChannelTurn(input: {
         status: "ACTIVE",
         // 群聊只取本群发生的事：范围是全局的，不按会话过滤就会把别的群的
         // participants 算进「这个群」（2026-11-04 实况）。
-        ...(isGroup && existingConversation ? { conversationId: existingConversation.id } : {}),
+        ...(isGroup ? { conversationId: { in: existingConversation ? [existingConversation.id] : [] } } : {}),
       },
       orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       take: 200,
@@ -1710,7 +1710,7 @@ async function runChannelTurn(input: {
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
   const selfUnderstanding = wantsSelfUnderstanding(currentMessage, { groupChat: isGroup, previousMessage: recentStoredMessages[0] })
-    ? await loadSelfUnderstanding(prisma, { characterId: character.id, readableScopeIds, conversationId: existingConversation?.id, groupChat: isGroup }).catch(() => { console.warn("[self-understanding] channel evidence unavailable"); return undefined; })
+    ? await loadSelfUnderstanding(prisma, { characterId: character.id, readableScopeIds, conversationId: existingConversation?.id, groupChat: isGroup, profileOwner: isOwnerTurn, includeHistory: asksSelfUnderstandingHistory(currentMessage, !isGroup) }).catch(() => { console.warn("[self-understanding] channel evidence unavailable"); return undefined; })
     : undefined;
   const growthReads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();
   const observeGrowthRead = input.platform === "qq-onebot"
@@ -2112,7 +2112,7 @@ async function runChannelTurn(input: {
                 where: {
                   memoryScopeId: { in: readableScopeIds },
                   status: "ACTIVE",
-                  ...(isGroup && existingConversation ? { conversationId: existingConversation.id } : {}),
+                  ...(isGroup ? { conversationId: { in: existingConversation ? [existingConversation.id] : [] } } : {}),
                   ...rangeWhere,
                   ...(searchTerms.length
                     ? {
@@ -2140,7 +2140,7 @@ async function runChannelTurn(input: {
               where: {
                 memoryScopeId: { in: readableScopeIds },
                 status: "ACTIVE",
-                ...(isGroup && existingConversation ? { conversationId: existingConversation.id } : {}),
+                ...(isGroup ? { conversationId: { in: existingConversation ? [existingConversation.id] : [] } } : {}),
                 ...rangeWhere,
               },
               orderBy: [{ occurredAt: eventOrder }, { id: eventOrder }],
@@ -2698,7 +2698,7 @@ async function runChannelTurn(input: {
             usedExpressionHabitIds: generated.usedExpressionHabitIds ?? [],
             usedGoalIds: generated.usedGoalIds ?? [],
             ...(privateHistorySelection ? { privateHistorySelection } : {}),
-            ...(selfUnderstanding ? { providedSelfUnderstandingSources: selfUnderstandingReferences(selfUnderstanding) } : {}),
+            ...(selfUnderstanding && !generated.localHistoryReceipt ? { providedSelfUnderstandingSources: selfUnderstandingReferences(selfUnderstanding) } : {}),
             usedGoals: usedGoalSnapshots(goals, generated.usedGoalIds ?? []),
             usedExpressionHabits: usedExpressionHabitSnapshots(expressionHabits, generated.usedExpressionHabitIds ?? []),
             usedPreferences: usedPreferenceSnapshots(preferences, generated.usedPreferenceIds ?? []),

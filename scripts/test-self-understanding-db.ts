@@ -23,7 +23,32 @@ try {
     { memoryScopeId: other.id, category: "FACT", content: "OTHER_PERSON_SENTINEL" },
     { memoryScopeId: foreignScope.id, category: "FACT", content: "FOREIGN_ROLE_SENTINEL" },
   ] });
-  const pref = await db.characterPreference.create({ data: { characterId: character.id, kind: "LIKE", topic: "园艺", reason: "人工确认", status: "ACTIVE" } });
+  const pref = await db.characterPreference.create({ data: { characterId: character.id, kind: "LIKE", topic: "园艺", reason: "人工确认", status: "ACTIVE", revision: 3 } });
+  await db.characterPreferenceRevision.createMany({ data: [
+    { preferenceId: pref.id, actorId: owner.id, revision: 1, action: "CREATE", kind: "INTEREST", topic: "种花", status: "ACTIVE", sourceType: "MANUAL", sourceRefs: [], reason: "AUDIT_REASON_SENTINEL" },
+    { preferenceId: pref.id, actorId: owner.id, revision: 2, action: "EDIT", kind: "DISLIKE", topic: "UNAPPROVED_HISTORY_SENTINEL", status: "PENDING", sourceType: "MANUAL", sourceRefs: [], reason: "草稿" },
+    { preferenceId: pref.id, actorId: owner.id, revision: 3, action: "EDIT", kind: "LIKE", topic: "园艺", status: "ACTIVE", sourceType: "MANUAL", sourceRefs: [], reason: "人工确认" },
+  ] });
+  const habit = await db.characterExpressionHabit.create({ data: { characterId: character.id, kind: "WORDING", content: "简明说明依据", context: "", reason: "人工确认", status: "ACTIVE", chatScope: "ALL", revision: 3 } });
+  await db.characterExpressionHabitRevision.createMany({ data: [
+    { habitId: habit.id, actorId: owner.id, revision: 1, action: "CREATE", kind: "WORDING", content: "PRIVATE_HABIT_HISTORY_SENTINEL", context: "", reason: "旧私人场景", status: "ACTIVE", chatScope: "PRIVATE", sourceType: "MANUAL", sourceRefs: [] },
+    { habitId: habit.id, actorId: owner.id, revision: 2, action: "EDIT", kind: "WORDING", content: "先举例再说明", context: "", reason: "人工确认", status: "ACTIVE", chatScope: "ALL", sourceType: "MANUAL", sourceRefs: [] },
+    { habitId: habit.id, actorId: owner.id, revision: 3, action: "EDIT", kind: "WORDING", content: "简明说明依据", context: "", reason: "人工确认", status: "ACTIVE", chatScope: "ALL", sourceType: "MANUAL", sourceRefs: [] },
+  ] });
+  const friend = await db.externalIdentity.create({ data: { platform: "qq-onebot", platformUid: `test-${randomUUID()}`, displayName: "OWNER_RELATION_SENTINEL" } });
+  const social = await db.memoryScope.create({ data: { characterId: character.id, scopeType: "EXTERNAL_IDENTITY", scopeKey: randomUUID(), externalIdentityId: friend.id, interactionCount: 2, relationshipVersion: 2, relationshipStage: "FRIEND", relationshipStatus: "NORMAL", firstSource: "PRIVATE" } });
+  const assessment = await db.socialRelationshipAssessment.create({ data: { scopeId: social.id, generation: 1, relationshipVersion: 1,
+    evaluatedStage: "ACQUAINTANCE", evaluatedStatus: "NORMAL", suggestedStage: "FRIEND", suggestedStatus: "NORMAL", status: "SUCCEEDED", reviewStatus: "ACCEPTED", outcome: "CHANGE" } });
+  await db.socialRelationChange.create({ data: { scopeId: social.id, assessmentId: assessment.id, relationshipVersionBefore: 1, relationshipVersionAfter: 2,
+    fromStage: "ACQUAINTANCE", toStage: "FRIEND", fromStatus: "NORMAL", toStatus: "NORMAL", reason: "PRIVATE_ASSESSMENT_REASON_SENTINEL", idempotencyKey: randomUUID() } });
+  const goal = await db.characterGoal.create({ data: { characterId: character.id, kind: "GOAL", title: "完成花园", description: "先照料幼苗", reason: "合成目标", status: "ACTIVE", revision: 2 } });
+  await db.characterGoalRevision.createMany({ data: [
+    { goalId: goal.id, actorId: owner.id, revision: 1, action: "CREATE", kind: "GOAL", title: "完成花园", description: "先画草图", status: "ACTIVE", reason: "合成目标", sourceType: "MANUAL", sourceRefs: [] },
+    { goalId: goal.id, actorId: owner.id, revision: 2, action: "EDIT", kind: "GOAL", title: "完成花园", description: "先照料幼苗", status: "ACTIVE", reason: "合成目标", sourceType: "MANUAL", sourceRefs: [] },
+  ] });
+  for (const day of [1, 4, 5, 6, 7, 8]) await db.memoryEvent.create({ data: { memoryScopeId: global.id,
+    dayKey: `2026-10-0${day}`, occurredAt: new Date(`2026-10-0${day}T02:00:00Z`), dedupeKey: `self-episode-${day}`,
+    title: `Episode ${day}`, detail: "合成样本", createdAt: new Date("2026-11-01T02:00:00Z") } });
   await db.characterPreference.create({ data: { characterId: character.id, kind: "LIKE", topic: "PENDING_SENTINEL", reason: "候选", status: "PENDING" } });
   const knowledge = await db.knowledgeItem.create({ data: { characterId: character.id, title: "育苗", content: "幼苗需要光照", category: "GENERAL", sourceType: "MANUAL", confidence: 0.2 } });
   const experience = await db.interactionExperience.create({ data: { characterId: character.id, conversationId: room.id, memoryScopeId: own.id,
@@ -58,7 +83,27 @@ try {
   assert.equal(experienceEvidence.subject, "current_character_response");
   assert(!experienceEvidence.excerpt.includes("OLD_FAILURE_SENTINEL"));
   assert(!view.evidence.some(row => row.id === invalidGlobal.id), "Global reflection cannot borrow private references");
-  const group = await loadSelfUnderstanding(db, { ...args, readableScopeIds: [global.id, own.id, other.id], groupChat: true });
+  assert.equal(view.history, undefined, "Current-only requests do not fetch old revisions");
+  const retrospective = await loadSelfUnderstanding(db, { ...args, profileOwner: true, includeHistory: true });
+  assert.deepEqual(retrospective.history?.map(row => [row.id, row.previous.revision, row.current.revision]), [[pref.id, 1, 3], [habit.id, 2, 3], [goal.id, 1, 2], [social.id, 1, 2]]);
+  const relationshipHistory = retrospective.history?.find(row => row.id === social.id);
+  assert.equal(relationshipHistory?.previous.excerpt, "ACQUAINTANCE, NORMAL");
+  assert.equal(relationshipHistory?.previous.recordedAt, undefined, "An accepted transition does not date the previous state");
+  assert.equal(relationshipHistory?.current.excerpt, "FRIEND, NORMAL");
+  assert(!JSON.stringify(retrospective).includes("PRIVATE_ASSESSMENT_REASON_SENTINEL"));
+  assert.equal(retrospective.history?.[0]?.previous.excerpt, "INTEREST: 种花");
+  const episode = retrospective.evidence.find(row => row.excerpt.startsWith("Episode 1:"));
+  assert.equal(episode?.occurredAt, "2026-10-01T02:00:00.000Z");
+  assert.equal(episode.updatedAt, "2026-11-01T02:00:00.000Z");
+  assert(episode.context?.includes("未保留原文"));
+  assert(retrospective.evidence.some(row => row.domain === "social" && row.excerpt.includes("OWNER_RELATION_SENTINEL")));
+  const historyText = JSON.stringify(retrospective);
+  for (const sentinel of ["AUDIT_REASON_SENTINEL", "UNAPPROVED_HISTORY_SENTINEL", "PRIVATE_HABIT_HISTORY_SENTINEL"]) assert(!historyText.includes(sentinel));
+  assert(!serialized.includes("OWNER_RELATION_SENTINEL"), "Other contacts do not get the private relationship roster");
+  const group = await loadSelfUnderstanding(db, { ...args, profileOwner: true, includeHistory: true, readableScopeIds: [global.id, own.id, other.id], groupChat: true });
+  assert(!JSON.stringify(group).includes("OWNER_RELATION_SENTINEL"));
+  assert(!JSON.stringify(group).includes("PRIVATE_HABIT_HISTORY_SENTINEL"));
+  assert(!group.evidence.some(row => row.occurredAt), "A group with no authorized event in its room must not inherit old events");
   assert(group.evidence.every(row => row.scope === "character"));
   assert(!JSON.stringify(group).includes("OWN_PRIVATE_SENTINEL"));
   assert(!group.evidence.some(row => row.domain === "experience" || row.domain === "reflection"));

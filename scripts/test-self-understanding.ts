@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
-import { buildSelfUnderstandingView, selfUnderstandingReferences, wantsSelfUnderstanding, type SelfUnderstandingEvidence } from "../server/utils/self-understanding";
+import { asksSelfUnderstandingHistory, buildSelfUnderstandingView, selfUnderstandingReferences, wantsSelfUnderstanding, type SelfUnderstandingEvidence } from "../server/utils/self-understanding";
 for (const text of ["你是谁？", "你对自己的认识是什么？", "你这段时间有什么变化？", "你的性格是怎样的？"]) assert(wantsSelfUnderstanding(text));
 for (const text of ["哈哈", "最近天气如何", "你最近看了什么", "你能告诉我 PostgreSQL 是什么吗"]) assert(!wantsSelfUnderstanding(text));
+for (const text of ["你的身份是怎么形成的？", "你的表达习惯这段时间怎么变的？", "你的偏好有变化吗？", "你以前和现在有什么不同？", "你和阿鲸的关系有什么变化？", "你有哪些重要经历？"]) {
+  assert(wantsSelfUnderstanding(text), text);
+  assert(asksSelfUnderstandingHistory(text), text);
+}
+for (const text of ["你最近看群里有什么变化？", "你最近觉得另一个朋友有什么变化？"]) {
+  assert(!wantsSelfUnderstanding(text), text);
+  assert(!asksSelfUnderstandingHistory(text), text);
+}
+assert(!asksSelfUnderstandingHistory("最近有什么变化？"));
+assert(asksSelfUnderstandingHistory("最近有什么变化？", true));
 const now = new Date("2026-11-18T12:00:00Z");
 const previousMessage = { role: "ASSISTANT", occurredAt: new Date(now.getTime() - 1000), metadata: { providedSelfUnderstandingSources: [] } };
 const privateContext = { groupChat: false, previousMessage, now };

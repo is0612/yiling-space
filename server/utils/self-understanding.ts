@@ -8,7 +8,8 @@ export function wantsSelfUnderstanding(message: string, context?: {
   now?: Date;
 }): boolean {
   if (message.length > 800) return false;
-  if (/(?:你是谁|你是什么样的|你的(?:性格|身份|自我认知)|你(?:觉得|认为|怎么看)(?:你自己|自己)|你对自己的(?:认识|理解|看法)|你(?:最近|现在|这段时间|与以前相比).{0,12}(?:变化|改变|成长)|你和(?:以前|过去).{0,8}(?:不同|区别)|梳理.{0,8}你的成长)/u.test(message)) return true;
+  if (asksSelfUnderstandingHistory(message)) return true;
+  if (/(?:你是谁|你是什么样的|你的(?:性格|身份|自我认知)|你(?:觉得|认为|怎么看)(?:你自己|自己)|你对自己的(?:认识|理解|看法)|你和(?:以前|过去).{0,8}(?:不同|区别)|梳理.{0,8}你的成长)/u.test(message)) return true;
   // Only the immediately preceding server-authored private reply can anchor an omitted subject.
   // Never inherit across group speakers, intervening topics, sessions, or a long pause.
   const previous = context?.previousMessage;
@@ -22,11 +23,18 @@ export function wantsSelfUnderstanding(message: string, context?: {
   return /^(?:那[，,\s]*)?(?:(?:这段时间|最近|现在)(?:有什么|有哪些|有啥|有|的)?(?:变化|改变|成长)|(?:和|与)(?:以前|过去)相比(?:有什么|有哪些)?(?:变化|不同)|有没有(?:具体的?)?(?:经历|例子|依据)(?:能说明|支持|吗)?)[？?。！!，,\s]*(?:有没有(?:具体的?)?(?:经历|例子|依据|记录)(?:能说明|支持|吗)?[？?。！!\s]*)?$/u.test(message.trim());
 }
 
+/** Request the bounded historical comparison only for explicit retrospective questions. */
+export function asksSelfUnderstandingHistory(message: string, authorizedFollowup = false): boolean {
+  if (message.length > 800) return false;
+  if (authorizedFollowup && /^(?:那[，,\s]*)?(?:(?:和|与)(?:以前|过去)相比|(?:最近|现在|这段时间)(?:有什么|有哪些|有啥|有|的)?(?:变化|改变|成长)|有没有(?:具体的?)?(?:经历|例子))/u.test(message.trim())) return true;
+  return /(?:你(?:的)?(?:身份.{0,8}(?:形成|得来)|(?:表达习惯|偏好|目标|和.{1,28}的关系).{0,12}(?:变|演变)|(?:经历过什么|有哪些重要经历)|(?:以前|过去|刚认识|和过去|与以前).{0,24}(?:现在|变化|不同|区别)|(?:最近|现在|这段时间)(?:自己)?(?:有(?:什么|哪些|啥)?|发生了|的)?(?:变化|改变|成长))|(?:过去的你|以前的你).{0,16}现在的你)/u.test(message);
+}
+
 export type SelfUnderstandingEvidence = {
   domain: SelfUnderstandingDomain; id: string; text: string;
   state: "ACTIVE" | "ACCEPTED";
   scope: "character" | "private";
-  revision?: number; updatedAt: string; context?: string; confidence?: number | null; excerptTruncated?: boolean; subject?: "current_character_response";
+  revision?: number; updatedAt: string; occurredAt?: string; context?: string; confidence?: number | null; excerptTruncated?: boolean; subject?: "current_character_response";
   /** Only request-authorized conversation evidence may be passed by a trusted domain adapter. */
   conversationId?: string;
 };
@@ -39,10 +47,12 @@ export type SelfUnderstandingView = {
   evidence: Array<{
     domain: SelfUnderstandingDomain; id: string; excerpt: string;
     scope: "character" | "private"; status: "confirmed_record" | "active_record" | "accepted_interpretation" | "scoped_experience";
-    revision?: number; updatedAt: string; context?: string; confidence?: number | null; excerptTruncated?: boolean; subject?: "current_character_response";
+    revision?: number; updatedAt: string; occurredAt?: string; context?: string; confidence?: number | null; excerptTruncated?: boolean; subject?: "current_character_response";
   }>;
   coverage: { selectedMemorySources: number; selectedInteractionFeedbackSources: number; unselectedMeaning: "not_in_this_bounded_view" };
   notProvided: Array<Exclude<SelfUnderstandingDomain, "experience"> | "interaction_feedback_cards">;
+  /** Only present for a retrospective question. An empty array does not establish no change. */
+  history?: import("./self-understanding-history").SelfUnderstandingHistoryEntry[];
 };
 
 export function selfUnderstandingReferences(view: SelfUnderstandingView) {
@@ -76,6 +86,7 @@ export function buildSelfUnderstandingView(input: {
         status: row.domain === "reflection" ? "accepted_interpretation" : row.domain === "experience" ? "scoped_experience" : row.domain === "memory" || row.domain === "knowledge" ? "active_record" : "confirmed_record",
         ...(Number.isSafeInteger(row.revision) && row.revision! > 0 ? { revision: row.revision } : {}),
         updatedAt: new Date(row.updatedAt).toISOString(),
+        ...(row.occurredAt && Number.isFinite(Date.parse(row.occurredAt)) ? { occurredAt: new Date(row.occurredAt).toISOString() } : {}),
         ...(row.domain === "experience" && row.subject === "current_character_response" ? { subject: "current_character_response" as const } : {}),
         ...(row.excerptTruncated || row.text.trim().length > 240 || (row.context?.trim().length ?? 0) > 120 ? { excerptTruncated: true } : {}),
         ...(row.confidence !== undefined ? { confidence: typeof row.confidence === "number" && Number.isFinite(row.confidence) && row.confidence >= 0 && row.confidence <= 1 ? row.confidence : null } : {}),

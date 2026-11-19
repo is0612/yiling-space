@@ -52,7 +52,11 @@ try {
   assert.deepEqual(detail.growthReads?.find(r => r.domain === "knowledge")?.provided.map(r => r.id), [knowledge.id]);
   assert.equal(detail.response.status, "success");
   assert.equal(promptPayloads[0]?.selfUnderstanding, undefined, "Ordinary question must not build cognition context");
-  const preference = await prisma.characterPreference.create({ data: { characterId: character.id, kind: "LIKE", topic: "园艺", reason: "人工确认", status: "ACTIVE" } });
+  const preference = await prisma.characterPreference.create({ data: { characterId: character.id, kind: "LIKE", topic: "园艺", reason: "人工确认", status: "ACTIVE", revision: 2 } });
+  await prisma.characterPreferenceRevision.createMany({ data: [
+    { preferenceId: preference.id, actorId: character.ownerId, revision: 1, action: "CREATE", kind: "INTEREST", topic: "盆栽", status: "ACTIVE", reason: "合成历史", sourceType: "MANUAL", sourceRefs: [] },
+    { preferenceId: preference.id, actorId: character.ownerId, revision: 2, action: "EDIT", kind: "LIKE", topic: "园艺", status: "ACTIVE", reason: "合成历史", sourceType: "MANUAL", sourceRefs: [] },
+  ] });
   const pending = await prisma.characterPreference.create({ data: { characterId: character.id, kind: "LIKE", topic: "PENDING_SELF_SENTINEL", reason: "候选", status: "PENDING" } });
   const selfResponse = await fetch(`http://127.0.0.1:${(api.address() as {port:number}).port}/characters/${character.id}/chat`, {
     method: "POST", headers: { "content-type": "application/json", cookie: `yiling_session=${session.token}` },
@@ -80,6 +84,9 @@ try {
   for (const message of ["这段时间有什么变化？有没有具体的经历能说明？", "这段时间有什么变化？有没有具体经历能说明？"]) {
     const followed = await follow(message);
     assert(promptPayloads.at(-1)?.selfUnderstanding?.evidence.some(row => row.id === preference.id), "Particle variations must keep the trusted self subject");
+    const comparison = promptPayloads.at(-1)?.selfUnderstanding?.history?.find(row => row.id === preference.id);
+    assert.equal(comparison?.previous.excerpt, "INTEREST: 盆栽");
+    assert.equal(comparison?.current.excerpt, "LIKE: 园艺");
     const followedMessage = await prisma.message.findUniqueOrThrow({ where: { id: followed.assistantMessage.id } });
     assert(Array.isArray((followedMessage.metadata as {providedSelfUnderstandingSources?:unknown}).providedSelfUnderstandingSources));
   }

@@ -1,5 +1,5 @@
 import { readInteractionExperiences } from "../../../utils/interaction-experiences";
-import { wantsSelfUnderstanding, selfUnderstandingReferences } from "../../../utils/self-understanding";
+import { asksSelfUnderstandingHistory, wantsSelfUnderstanding, selfUnderstandingReferences } from "../../../utils/self-understanding";
 import { loadSelfUnderstanding } from "../../../utils/self-understanding-reader";
 import { readInteractionGuidance } from "../../../utils/interaction-guidance";
 import { prepareConversationSummary } from "../../../utils/conversation-summary";
@@ -439,7 +439,7 @@ export default defineEventHandler(async (event) => {
    */
   const acquaintances = await listAcquaintances({ characterId, limit: CLOSE_FRIEND_LIMIT }).catch(() => null);
   const selfUnderstanding = wantsSelfUnderstanding(message, { groupChat: false, previousMessage: recentStoredMessages.at(-1) })
-    ? await loadSelfUnderstanding(prisma, { characterId, readableScopeIds, conversationId: existingConversation?.id, groupChat: false }).catch(() => { console.warn("[self-understanding] Web evidence unavailable"); return undefined; })
+    ? await loadSelfUnderstanding(prisma, { characterId, readableScopeIds, conversationId: existingConversation?.id, groupChat: false, profileOwner: true, includeHistory: asksSelfUnderstandingHistory(message, true) }).catch(() => { console.warn("[self-understanding] Web evidence unavailable"); return undefined; })
     : undefined;
   const timeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);

@@ -51,6 +51,7 @@ try {
   assert(second.recentMessages.some(row => row.role === "USER" && row.content === "NULL_ID_HISTORY_SENTINEL"));
   assert(!second.recentMessages.some(row => row.content === followup), "Exclude the pre-recorded current input without excluding NULL history");
   assert(second.selfUnderstanding, "The real private pipeline must inherit the previous marked assistant reply");
+  assert(Array.isArray((second.selfUnderstanding as { history?: unknown }).history), "A close retrospective follow-up should request historical evidence");
   assert.equal(await db.message.count({ where: { conversationId: roomId, externalMessageId: followId } }), 1);
   const secondReply = await db.message.findFirstOrThrow({ where: { conversationId: roomId, role: "ASSISTANT" }, orderBy: [{ occurredAt: "desc" }, { id: "desc" }] });
   assert.deepEqual((secondReply.metadata as {privateHistorySelection?:unknown}).privateHistorySelection,
