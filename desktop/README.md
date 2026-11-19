@@ -43,6 +43,10 @@ run-as-node，后者在部分机器上带不起 SnowLuma），并同时检查面
 
 窗口里按 **F12** 或 **Ctrl+Shift+I** 打开 / 关闭开发者工具；这是窗口内快捷键，不影响其它应用。
 
+关闭窗口默认**隐藏到系统托盘**，不停止 runtime；托盘菜单里「退出」才真正停止服务。
+窗口大小/位置/最大化状态会记在 Electron userData 的 `window-state.json`，下次按原来的位置打开。
+托盘菜单还可以直接打开数据目录和日志目录。
+
 桌面版会话 Cookie 使用 `yiling_session_desktop`（开发版仍是 `yiling_session`），两者同时登录不会互相顶掉。
 
 ## 数据目录

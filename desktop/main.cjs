@@ -11,7 +11,7 @@
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } = require("electron");
 
 const ROOT = path.resolve(__dirname, "..");
 const DATA_DIR = path.resolve(process.env.YILING_DATA_DIR?.trim() || path.join(ROOT, ".data"));
@@ -62,6 +62,84 @@ let supervisor = null;
 let supervisorStopping = false;
 let appReady = false;
 let currentUrl = "";
+let tray = null;
+let isQuitting = false;
+let saveStateTimer = null;
+const WINDOW_STATE_FILE = () => path.join(app.getPath("userData"), "window-state.json");
+const ICON_PATH = path.join(__dirname, "assets", "icon.png");
+
+function loadWindowState() {
+  const fallback = { width: 1440, height: 900, maximized: false };
+  try {
+    const state = JSON.parse(fs.readFileSync(WINDOW_STATE_FILE(), "utf8"));
+    if (!Number.isFinite(state.width) || !Number.isFinite(state.height)) return fallback;
+    const width = Math.max(1040, Math.round(state.width));
+    const height = Math.max(680, Math.round(state.height));
+    if (!Number.isFinite(state.x) || !Number.isFinite(state.y)) {
+      return { width, height, maximized: Boolean(state.maximized) };
+    }
+    const bounds = { x: Math.round(state.x), y: Math.round(state.y), width, height };
+    const visible = screen.getAllDisplays().some((display) => {
+      const area = display.workArea;
+      return bounds.x < area.x + area.width
+        && bounds.x + bounds.width > area.x
+        && bounds.y < area.y + area.height
+        && bounds.y + bounds.height > area.y;
+    });
+    return visible ? { ...bounds, maximized: Boolean(state.maximized) } : { width, height, maximized: false };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const bounds = typeof mainWindow.getNormalBounds === "function"
+      ? mainWindow.getNormalBounds()
+      : mainWindow.getBounds();
+    fs.writeFileSync(WINDOW_STATE_FILE(), JSON.stringify({
+      ...bounds,
+      maximized: mainWindow.isMaximized(),
+    }), "utf8");
+  } catch {
+    // 写不了窗口状态不影响使用
+  }
+}
+
+function scheduleSaveWindowState() {
+  clearTimeout(saveStateTimer);
+  saveStateTimer = setTimeout(saveWindowState, 300);
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  try {
+    const image = nativeImage.createFromPath(ICON_PATH);
+    const icon = image.isEmpty() ? image : image.resize({ width: 16, height: 16 });
+    tray = new Tray(icon);
+    tray.setToolTip("忆灵空间");
+    const menu = Menu.buildFromTemplate([
+      { label: "打开忆灵空间", click: showMainWindow },
+      { type: "separator" },
+      { label: "打开数据目录", click: () => void shell.openPath(DATA_DIR) },
+      { label: "打开日志目录", click: () => void shell.openPath(LOG_DIR) },
+      { type: "separator" },
+      { label: "退出", click: () => { isQuitting = true; app.quit(); } },
+    ]);
+    tray.setContextMenu(menu);
+    tray.on("click", showMainWindow);
+    tray.on("double-click", showMainWindow);
+  } catch (error) {
+    log("tray-create-failed", { message: error instanceof Error ? error.message : String(error) });
+  }
+}
 
 function log(message, detail = {}) {
   const line = JSON.stringify({ at: new Date().toISOString(), message, ...detail });
@@ -86,15 +164,18 @@ function loadingPage(message) {
 }
 
 function createWindow() {
+  const state = loadWindowState();
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    ...(Number.isFinite(state.x) ? { x: state.x, y: state.y } : {}),
+    width: state.width,
+    height: state.height,
     minWidth: 1040,
     minHeight: 680,
     useContentSize: true,
     show: false,
     backgroundColor: "#f4f6f9",
     title: "忆灵空间",
+    icon: ICON_PATH,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -106,7 +187,20 @@ function createWindow() {
     },
   });
 
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => {
+    if (state.maximized) mainWindow?.maximize();
+    mainWindow?.show();
+  });
+  mainWindow.on("resize", scheduleSaveWindowState);
+  mainWindow.on("move", scheduleSaveWindowState);
+  mainWindow.on("maximize", scheduleSaveWindowState);
+  mainWindow.on("unmaximize", scheduleSaveWindowState);
+  mainWindow.on("close", (event) => {
+    saveWindowState();
+    if (isQuitting) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
   mainWindow.loadURL(loadingPage("正在启动…"));
   mainWindow.webContents.on("did-finish-load", () => {
     log("window-loaded", { url: mainWindow?.webContents.getURL() });
@@ -345,17 +439,22 @@ if (yieldToOther) {
   app.whenReady().then(() => {
     appReady = true;
     createWindow();
+    createTray();
     startSupervisor();
   }).catch((error) => {
     showError("Electron 启动失败", error instanceof Error ? error.message : String(error));
   });
 
+  app.on("activate", showMainWindow);
+
   app.on("window-all-closed", () => {
-    app.quit();
+    if (isQuitting) app.quit();
   });
 
   app.on("before-quit", (event) => {
+    isQuitting = true;
     clearInstanceMarker();
+    saveWindowState();
     if (!supervisor) return;
     event.preventDefault();
     void stopSupervisor().finally(() => app.quit());
