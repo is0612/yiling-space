@@ -40,9 +40,8 @@ const sortedCharacters = computed(() =>
 /**
  * 报警条的一条：说什么 + 点「去处理」应该去哪。
  *
- * 以前所有报警都跳 `/tasks`，这对记忆流水线成立，对 B站 值班不成立 ——
- * 值班停摆的修复点是「B站 值班台」（看适配器在不在跑、自动刷开没开），
- * 任务监控里什么都没有，于是人点进去只看到一张空表，还以为按钮坏了。
+ * 记忆流水线的修复点都在任务监控（或角色页），所以统一指过去；
+ * 以后若出现「另一条流水线」的报警，再按 `finding.code` 区分目标。
  */
 type AlertItem = { text: string; to: string; label: string };
 
@@ -56,12 +55,10 @@ const alerts = computed<AlertItem[]>(() => {
   // 比后面的「有任务失败」「归档逾期」更接近原因。最多列三条，剩下的合并成一句。
   const findings = data.watchdog?.findings ?? [];
   for (const finding of findings.slice(0, 3)) {
-    // 值班是另一条流水线：它的动作在 B站 值班台，不在任务监控里
-    const duty = finding.code === "duty_silent";
     list.push({
       text: `${finding.characterName}：${finding.message}`,
-      to: duty ? "/bili" : taskTarget,
-      label: duty ? "去值班台" : taskLabel,
+      to: taskTarget,
+      label: taskLabel,
     });
   }
   if (findings.length > 3) {
@@ -87,7 +84,7 @@ const alerts = computed<AlertItem[]>(() => {
   return list;
 });
 
-/** 报警条右侧的按钮：按目标去重，两个目标就出两个按钮（值班和记忆本来就是两条线）。 */
+/** 报警条右侧的按钮：按目标去重，同一目标只出一个按钮。 */
 const alertRoutes = computed(() => {
   const routes = new Map<string, string>();
   for (const alert of alerts.value) if (!routes.has(alert.to)) routes.set(alert.to, alert.label);

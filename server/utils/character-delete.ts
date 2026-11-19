@@ -14,7 +14,7 @@ import { stickerCharacterDir, stickerOriginalsDir, invalidateStickerCache } from
  *   A. 有外键的，交给数据库
  *      - Conversation → Message（Cascade）
  *      - MemoryScope → MemoryItem / MemorySnapshot / MemoryEvent / MemoryJob（Cascade）
- *      - CharacterChannelBinding → BiliRoundReport / BiliSeenVideo / BiliAction（Cascade）
+ *      - CharacterChannelBinding → 绑定的会话与运行记录（Cascade）
  *      - CharacterSticker / CharacterCatchphrase / ProactiveIntent / CharacterMemorySetting（Cascade）
  *      - AuditLog → SetNull（记录本身留着，`characterId` 置空）
  *      - Conversation / MemoryScope 是 Restrict，所以必须先手动删，否则角色删不掉

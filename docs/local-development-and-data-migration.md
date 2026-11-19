@@ -2,7 +2,7 @@
 
 本文说明如何在本地开发 Yiling Space、备份 PostgreSQL 数据，并将项目迁移到新电脑。脚本面向 Windows PowerShell；其他系统可按同样原则实现对应脚本。
 
-> 当前实现状态：Nuxt 管理后台已经接入 PostgreSQL，角色 CRUD、记忆设置、会话录入/对话、快照版本、AI 记忆提炼、长期记忆、持久化任务队列、Scheduler/Worker、原始消息保留清理与审计、管理员登录与服务端会话、多用户（管理员 + 邮箱注册用户）与账号管理、QQ 小号（OneBot v11）与 B站 渠道适配器、以及 Windows 备份/恢复的**真实数据演练**均已有实现和验收。生产部署安全（HTTPS、反向代理、监控告警）见 `docs/deployment.md`，仍需在真实服务器上演练。
+> 当前实现状态：Nuxt 管理后台已经接入 PostgreSQL，角色 CRUD、记忆设置、会话录入/对话、快照版本、AI 记忆提炼、长期记忆、持久化任务队列、Scheduler/Worker、原始消息保留清理与审计、管理员登录与服务端会话、多用户（管理员 + 邮箱注册用户）与账号管理、QQ 小号（OneBot v11）渠道适配器、以及 Windows 备份/恢复的**真实数据演练**均已有实现和验收。生产部署安全（HTTPS、反向代理、监控告警）见 `docs/deployment.md`，仍需在真实服务器上演练。
 
 ## 1. 文件职责
 
@@ -86,15 +86,23 @@
 yarn verify:local
 ```
 
-它会依次校验 Prisma Schema、重新生成 Client、准备 Nuxt 类型信息，然后跑 TypeScript 检查、周期调度单元测试、PostgreSQL 调度与清理集成测试、AI 来源校验与请求凭据隔离、记忆检索、角色模型参数、聊天提示词凭据隔离、私人记忆范围隔离（含数据库集成）、聊天请求幂等、登录会话与 CSRF、会话与登录限流、跨平台身份隔离、QQ 小号（OneBot）端到端（自带模拟网关与模拟模型）、B站 命令目录/值班判定/解析层与数据库集成，最后是 ESLint 和生产构建。
+它会依次校验 Prisma Schema、重新生成 Client、准备 Nuxt 类型信息，然后跑 TypeScript 检查、周期调度单元测试、PostgreSQL 调度与清理集成测试、AI 来源校验与请求凭据隔离、记忆检索、角色模型参数、聊天提示词凭据隔离、私人记忆范围隔离（含数据库集成）、聊天请求幂等、登录会话与 CSRF、会话与登录限流、跨平台身份隔离、QQ 小号（OneBot）端到端（自带模拟网关与模拟模型），最后是 ESLint 和生产构建。
 
 运行前：
 
 - 先启动 PostgreSQL，确认 `.env` 的 `DATABASE_URL` 指向本机开发/测试库，且已应用迁移。
 - 数据库集成测试会创建并清理临时数据，**不要指向含重要数据的库**。
-- 该命令不会重置数据库，也不会启动 Nuxt 服务；QQ 小号测试自己拉起模拟网关与模拟模型。B站 相关测试不需要本机装 `bili` CLI。
+- 该命令不会重置数据库，也不会启动 Nuxt 服务；QQ 小号测试自己拉起模拟网关与模拟模型。
 
 CI 还会额外启动本地模拟模型与 Nuxt，执行完整 API 冒烟测试，并检查数据库迁移与 OpenAPI 契约。
+
+### 2.1.1 B 站功能移除（2026-11-19）
+
+B 站值班功能已整体下线。数据库侧：
+
+- `prisma/migrations/20261120000000_remove_bili_channel` 会 `DROP TABLE IF EXISTS` 五张专用表（`bili_round_reports`、`bili_seen_videos`、`bili_actions`、`bili_duty_leases`、`bili_duty_window_runs`）；
+- 已有安装执行 `yarn db:migrate:deploy` 即生效，全新安装不会创建这些表；
+- `platform_connections` / `character_channel_bindings` / `conversations` / `messages` 是通用表，其中的历史 B 站连接与聊天记录**不会**被迁移自动删除（避免连带清掉长期记忆）。页面已不再显示这些连接；确认不再需要时再手工清理，并先备份。
 
 ## 3. 本地数据存放位置
 
@@ -104,7 +112,7 @@ PostgreSQL 的运行数据存放在 Docker named volume `yiling_postgres_data`�
 
 如果上传图片或其他文件存放在本地目录，还必须单独备份这些文件。仅备份 PostgreSQL 不会自动包含文件系统中的图片或附件。角色的表情包就属于这一类：清单在 `character_stickers` 表，图片本体在 `.data/stickers/<角色 id>/`，迁移时两边都要搬；只搬库的话页面会显示“图片文件不在本机”。
 
-另外有两类凭据要知道分别在哪。**角色 / 助手的 API Key 2026-11-12 起明文保存在数据库里**（`characters.model_config`），所以只备份数据库就够，搬到新机后在网页「模型设置」里能直接看到；登录管理员可以查看、修改、清除，未登录读不到。**渠道凭据**（OneBot WS/HTTP Token、B站账号）仍用本机密钥 `.data/credentials-encryption.key` 加密，备份/迁移时必须把这个文件一并恢复到新电脑项目根目录的 `.data/` 下，否则渠道凭据解不开、要在渠道页重新登录。该文件已被 Git 忽略，不能提交到仓库。
+另外有两类凭据要知道分别在哪。**角色 / 助手的 API Key 2026-11-12 起明文保存在数据库里**（`characters.model_config`），所以只备份数据库就够，搬到新机后在网页「模型设置」里能直接看到；登录管理员可以查看、修改、清除，未登录读不到。**渠道凭据**（OneBot WS/HTTP Token、SnowLuma 面板密码）仍用本机密钥 `.data/credentials-encryption.key` 加密，备份/迁移时必须把这个文件一并恢复到新电脑项目根目录的 `.data/` 下，否则渠道凭据解不开、要在渠道页重新登录。该文件已被 Git 忽略，不能提交到仓库。
 
 ## 3.1 只搬角色：角色卡
 
@@ -146,7 +154,7 @@ PostgreSQL 的运行数据存放在 Docker named volume `yiling_postgres_data`�
 | --- | --- |
 | 角色、会话与消息 | 会话是外键 Restrict，服务端在事务里先删会话再删角色 |
 | 记忆范围及其下所有数据 | 长期记忆、忆泡、忆泡事件与日索引、阶段总结、任务队列 |
-| 渠道绑定与 B 站账本 | 值班报告、已看视频、已做的动作一起走 |
+| 渠道绑定 | 绑定配置与渠道侧记录一起走 |
 | 梗、表情包清单、记忆设置、主动意图 | 都是 Cascade |
 | `.data/stickers/<角色 id>/`、`.data/sticker-originals/<角色 id>/` | 磁盘上的图会整目录删掉，库里删了但图留着就是纯垃圾 |
 | 群活跃度、群公告草稿、请求幂等记录 | 这三张表**没有外键**，靠服务端显式清理（历史上漏过，现在不会了） |

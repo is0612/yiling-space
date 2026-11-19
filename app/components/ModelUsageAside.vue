@@ -30,8 +30,6 @@ const KIND_LABELS: Record<string, string> = {
   snapshot: "阶段总结",
   events: "忆泡整理",
   journal: "日记/手账",
-  "bili-screening": "值班粗筛",
-  "bili-judge": "值班终判",
   proactive: "主动找话",
   vision: "群图片识别",
   "sticker-label": "表情包打标",

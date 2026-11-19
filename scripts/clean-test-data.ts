@@ -21,7 +21,7 @@ import { PrismaClient } from "../src/generated/prisma/client";
  *
  *   保留：
  *     - local-dev 用户（DEV_OWNER_ID）
- *     - 大肥鱼角色及其 B站连接绑定
+ *     - 大肥鱼角色及其渠道连接绑定
  *     - 平台连接、外部身份
  *
  * 用法：
@@ -46,7 +46,7 @@ const TEST_CHAR_PREFIX = "CI ";
 const TEST_CHAR_EXACT = new Set(["id-test-character"]);
 /**
  * 测试账号前缀。**新增 db 测试脚本时记得回来登记** —— 漏登记的残留会被这里当成真人账号
- * 跳过去，只能手工捞。`bili-test-` 就是这么漏的：脚本一直在用，名单里没有。
+ * 跳过去，只能手工捞。测试遗留的连接名就是这么漏的：脚本一直在用，名单里没有。
  * 现有测试脚本用到的前缀见 `grep -rh "username: *[\"\`]" scripts/*.ts`。
  */
 const TEST_USER_PREFIXES = [
@@ -54,7 +54,6 @@ const TEST_USER_PREFIXES = [
   "id-test-user-",
   "scheduler-test-",
   "journal-test-",
-  "bili-test-",
   "card-test-",
   "del-test-",
   "group-initiative-test-",

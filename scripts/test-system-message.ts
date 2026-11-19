@@ -21,7 +21,7 @@ assert.equal(looksLikeSystemMessage("好。"), false, "极短的带句号句子�
 assert.equal(isSystemBroadcast("管理命令仅管理员可用。"), true);
 assert.equal(isSystemBroadcast("⏳ 系统服务重启中，消息已排队，恢复后自动处理。"), true);
 assert.equal(isSystemBroadcast("⚠️ 本条回复因疑似包含敏感信息（路径/凭据/会话令牌）被安全策略拦截，已记录并通知管理员。"), true);
-assert.equal(isSystemBroadcast("B站内容获取失败，可能需要配置 Cookies，请在插件配置中填写后重试。"), true);
+assert.equal(isSystemBroadcast("内容获取失败，可能需要配置 Cookies，请在插件配置中填写后重试。"), true);
 assert.equal(isSystemBroadcast("❌ 没有权限"), true, "状态 emoji 开头，两个判据都认。");
 
 // 真人说的话：宽判据会误伤，窄判据必须放过

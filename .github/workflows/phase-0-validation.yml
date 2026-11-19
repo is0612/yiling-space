@@ -259,21 +259,6 @@ jobs:
       - name: 统一成长事件中心事务与租约隔离测试
         run: yarn run test:growth-event-center-isolated
 
-      - name: B站 命令目录与解析层测试
-        run: yarn run test:bili-runner && yarn run test:bili-schema
-
-      - name: B站 视频卡片解析测试
-        run: yarn run test:bili-cards
-
-      - name: B站 值班窗口与判重测试
-        run: yarn run test:bili-duty
-
-      - name: B站 值班模型调用测试
-        run: yarn run test:bili-llm
-
-      - name: B站 数据库集成测试
-        run: yarn run test:bili-db
-
       - name: ESLint 检查
         run: yarn run lint
 

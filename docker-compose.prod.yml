@@ -5,7 +5,7 @@
 #   使用版：镜像 + 本文件（8801）+ 内部数据库（不对外映射端口）+ 容器 yiling-space-app / yiling-space-postgres
 #
 # 铁律：两个版本绝不能指向同一个数据库。两个 Worker 会重复消费同一批记忆任务，
-# 两个 OneBot/B站适配器会重复收发同一条消息。
+# 两个 OneBot 适配器会重复收发同一条消息。
 #
 # 启动：双击「启动忆灵空间-使用版.bat」，或
 #       docker compose -f docker-compose.prod.yml up -d

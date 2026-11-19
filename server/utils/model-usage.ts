@@ -8,7 +8,7 @@
 import { estimateUsageCostCny, resolveModelPrice, resolveUsdCnyRate } from "./model-pricing";
 import { getPrisma } from "./prisma";
 
-export type ModelUsageKind = "chat" | "channel" | "snapshot" | "events" | "journal" | "bili-screening" | "bili-judge" | "bili-owner" | "proactive" | "vision" | "sticker-label" | "catchphrase-mine" | "memory-assistant" | "context-assistant" | "knowledge-assistant" | "social-relationship-assistant" | "other";
+export type ModelUsageKind = "chat" | "channel" | "snapshot" | "events" | "journal" | "proactive" | "vision" | "sticker-label" | "catchphrase-mine" | "memory-assistant" | "context-assistant" | "knowledge-assistant" | "social-relationship-assistant" | "other";
 
 export type ModelUsageTokens = {
   promptTokens: number;
@@ -91,7 +91,7 @@ export function readModelUsage(payload: unknown): ModelUsageTokens | null {
 
 /**
  * 把各调用点已经解析好的「宽松 usage」（字段都可选）归一化成记账用的结构。
- * 三个调用点（chat-reply / memory-ai / bili llm）各自解析出来都缺字段，统一走这里补零。
+ * 各调用点（chat-reply / memory-ai / 回复流水线）解析出来都缺字段，统一走这里补零。
  */
 export function toUsageTokens(
   input: {
@@ -160,8 +160,8 @@ export async function recordModelUsage(input: ModelUsageInput): Promise<void> {
 }
 
 /**
- * 日界固定东八区：与 B站 值班的 `toDayKey` 用同一套「今天」，
- * 否则同一时刻会出现两个日期，额度与值班额度对不上。
+ * 日界固定东八区：额度与「今天」的统计必须共用同一套日界，
+ * 否则同一时刻会出现两个日期，两处数字对不上。
  */
 export function usageDayKey(date: Date = new Date()): string {
   return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);

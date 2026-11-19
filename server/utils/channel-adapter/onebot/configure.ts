@@ -33,8 +33,6 @@ export type OnebotBindingRecord = {
   groupChatModes: GroupChatModeOverrides;
   /** 群聊是否仅当被 @ 时才回复（已回退到连接默认值，私聊总是回复）。 */
   replyOnlyWhenMentioned: boolean;
-  /** 主人能否在群里触发她刷一轮 B站（已回退到连接默认值）。 */
-  groupBiliRunEnabled: boolean;
 };
 
 /**
@@ -117,9 +115,7 @@ export type OnebotConnectionRecord = {
   qzoneAutoAskTimes: string[];
   /** 每天最多主动问几次（跨所有时间点）。 */
   qzoneAutoAskDailyMax: number;
-  /** 「刷一轮 B站」的连接级默认值：各 binding 未单独覆盖时生效。 */
-  groupBiliRunEnabled: boolean;
-  /** 主人 QQ 号；空 = 未设置，群里 B站 指令不生效。连接级。 */
+  /** 主人 QQ 号；空 = 未设置，空间动作与群内主人识别都不生效。连接级。 */
   ownerQq: string;
   /** 主人称呼（可留空）；留空时回退到外部身份/群名片。 */
   ownerName: string;
@@ -382,7 +378,6 @@ export async function loadOnebotConnections(
     const connectionMentionOnly =
       typeof metadata.replyOnlyWhenMentioned === "boolean" ? metadata.replyOnlyWhenMentioned : true;
     const groupAnnouncementEnabled = metadata.groupAnnouncementEnabled === true;
-    const groupBiliRunEnabled = metadata.groupBiliRunEnabled === true;
     // 空间动作只认主人，所以开关和「有没有填主人 QQ」是一件事的两面：没填主人就等于关。
     const qzoneEnabled = metadata.qzoneEnabled === true;
     const qzoneAutoAskEnabled = metadata.qzoneAutoAskEnabled === true;
@@ -421,7 +416,6 @@ export async function loadOnebotConnections(
       config: readConfig(credentials, connection.platformAccountKey),
       replyOnlyWhenMentioned: connectionMentionOnly,
       groupAnnouncementEnabled,
-      groupBiliRunEnabled,
       qzoneEnabled,
       qzoneLimits,
       qzoneFriendQqs,
@@ -457,9 +451,6 @@ export async function loadOnebotConnections(
           groupChat: resolveGroupChatSettings(config, connectionMentionOnly),
           groupChatModes: readGroupChatModeOverrides(config.groupChatModes),
           replyOnlyWhenMentioned,
-          groupBiliRunEnabled: typeof config.groupBiliRunEnabled === "boolean"
-            ? config.groupBiliRunEnabled
-            : groupBiliRunEnabled,
         };
       }),
     });

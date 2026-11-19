@@ -2,16 +2,13 @@ import { createError, readBody } from "h3";
 import { requireAdminActor } from "../../../utils/auth";
 import { decryptApiKey, encryptApiKey } from "../../../utils/credential-encryption";
 import { readTrimmedString } from "../../../utils/local-api";
-import { parseDutyInput } from "../../../utils/channel-adapter/bili/configure";
 import { ONEBOT_DEFAULT_HTTP_URL, ONEBOT_DEFAULT_WS_URL } from "../../../utils/channel-adapter/onebot/configure";
 import { getPrisma } from "../../../utils/prisma";
 
 /**
  * Creates or updates a channel connection.
  *
- * - QQ OneBot：WS/HTTP 地址与 Token 用 AES-256-GCM 加密入库，QQ 号兼作唯一账号键。
- * - B站：无 AppID/AppSecret，值班设置（dataHome / biliBin / duty）写入 metadata；
- *        登录凭证沿用 bili-cli 自己的 credential.json，不随代码、不入库。
+ * QQ OneBot：WS/HTTP 地址与 Token 用 AES-256-GCM 加密入库，QQ 号兼作唯一账号键。
  */
 export default defineEventHandler(async (event) => {
   await requireAdminActor(event);
@@ -21,10 +18,7 @@ export default defineEventHandler(async (event) => {
   if (platform === "qq-onebot") {
     return createOnebotConnection(body);
   }
-  if (platform === "bili") {
-    return createBiliConnection(body);
-  }
-  throw createError({ statusCode: 400, statusMessage: "不支持该平台，目前支持 qq-onebot / bili。" });
+  throw createError({ statusCode: 400, statusMessage: "不支持该平台，目前支持 qq-onebot。" });
 });
 
 async function createOnebotConnection(body: Record<string, unknown>) {
@@ -34,7 +28,6 @@ async function createOnebotConnection(body: Record<string, unknown>) {
   const replyOnlyWhenMentioned = typeof body?.replyOnlyWhenMentioned === "boolean" ? body.replyOnlyWhenMentioned : true;
   // 群管理动作默认关闭：只开「群公告」，且只认群主/管理员。踢人/禁言不在本期范围。
   const groupAnnouncementEnabled = body?.groupAnnouncementEnabled === true;
-  const groupBiliRunEnabled = body?.groupBiliRunEnabled === true;
   // 空间动作默认关闭，且只认主人 QQ。配额的三个数字不放进表单，用默认值
   // （发多了被封号比少发两条严重），需要时直接改 metadata。
   const qzoneEnabled = body?.qzoneEnabled === true;
@@ -56,7 +49,7 @@ async function createOnebotConnection(body: Record<string, unknown>) {
   const qzoneFriendQqs = body?.qzoneFriendQqs === undefined
     ? undefined
     : readTrimmedString(body?.qzoneFriendQqs, "空间好友 QQ", 200);
-  // 主人 QQ：群里的 B站 指令只认这个号。留空 = 未设置；省略字段 = 不改旧值。
+  // 主人 QQ：空间动作只认这个号，群聊里也用它标出主人。留空 = 未设置；省略字段 = 不改旧值。
   let ownerQq: string | undefined;
   if (body?.ownerQq !== undefined) {
     ownerQq = readTrimmedString(body?.ownerQq, "主人 QQ 号", 20);
@@ -128,7 +121,6 @@ async function createOnebotConnection(body: Record<string, unknown>) {
         qqNumber,
         replyOnlyWhenMentioned,
         groupAnnouncementEnabled,
-        groupBiliRunEnabled,
         qzoneEnabled,
         qzoneAutoAskEnabled,
         ...(qzoneAutoAskTimes !== undefined ? { qzoneAutoAskTimes } : {}),
@@ -152,7 +144,6 @@ async function createOnebotConnection(body: Record<string, unknown>) {
           qqNumber,
           replyOnlyWhenMentioned,
           groupAnnouncementEnabled,
-          groupBiliRunEnabled,
           qzoneEnabled,
           qzoneAutoAskEnabled,
           ...(qzoneAutoAskTimes !== undefined ? { qzoneAutoAskTimes } : {}),
@@ -166,54 +157,6 @@ async function createOnebotConnection(body: Record<string, unknown>) {
       WHERE id = ${saved.id}::uuid
     `;
     return saved;
-  });
-
-  return {
-    id: connection.id,
-    platform: connection.platform,
-    displayName: connection.displayName,
-    appId: connection.platformAccountKey,
-    status: connection.status,
-  };
-}
-
-async function createBiliConnection(body: Record<string, unknown>) {
-  const dataHome = readTrimmedString(body?.dataHome, "数据目录", 500);
-  const biliBin = readTrimmedString(body?.biliBin, "bili 可执行文件路径", 500);
-  const displayName = readTrimmedString(body?.displayName, "显示名", 120) || "B站 账号";
-
-  const prisma = getPrisma();
-  // B站连接没有唯一的 platformAccountKey 来源，用 dataHome 或生成稳定键。
-  // 用 displayName 作为账号键容易重复，改用 dataHome（若提供）否则用固定单例键。
-  const accountKey = dataHome || "bili-default";
-
-  // 值班设置（可选，缺省用 BILI_DUTY_DEFAULTS）：
-  // 这个接口同时承担「改连接信息」，所以必须和库里已有的 duty 合并后再规范化。
-  // 早期这里是照着表单重新拼一份 duty，把没在表单里的字段（frames / taste /
-  // 私信收件人）直接冲成了默认值 —— 从渠道管理点一次保存，值班台上填过的东西就没了。
-  const existing = await prisma.platformConnection.findUnique({
-    where: { platform_platformAccountKey: { platform: "bili", platformAccountKey: accountKey } },
-    select: { metadata: true },
-  });
-  const oldMetadata = (existing?.metadata && typeof existing.metadata === "object" ? existing.metadata : {}) as Record<string, unknown>;
-  const oldDuty = (oldMetadata.duty && typeof oldMetadata.duty === "object" ? oldMetadata.duty : {}) as Record<string, unknown>;
-  const dutyRaw = (body?.duty && typeof body.duty === "object" ? body.duty : {}) as Record<string, unknown>;
-  const duty = parseDutyInput({ ...oldDuty, ...dutyRaw });
-
-  const connection = await prisma.platformConnection.upsert({
-    where: { platform_platformAccountKey: { platform: "bili", platformAccountKey: accountKey } },
-    create: {
-      platform: "bili",
-      platformAccountKey: accountKey,
-      displayName,
-      status: "DISCONNECTED",
-      metadata: { ...oldMetadata, dataHome, biliBin, duty },
-    },
-    update: {
-      displayName,
-      metadata: { ...oldMetadata, dataHome, biliBin, duty },
-    },
-    select: { id: true, platform: true, displayName: true, platformAccountKey: true, status: true },
   });
 
   return {

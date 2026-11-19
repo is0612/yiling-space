@@ -16,7 +16,7 @@
 ## 2. 开工与范围约束
 
 - 先检查 git 状态并阅读 CLAUDE.md、README.md、产品方案、QQ OneBot 文档；保护现有改动。此前布局提交为 107f80e，实施时以实际 HEAD 为准。
-- 只做 QQ OneBot 普通群聊。保留私聊、公告确认、主人 B站 口令、额度、限流、幂等、发送失败处理、视觉和表情逻辑。
+- 只做 QQ OneBot 普通群聊。保留私聊、公告确认、额度、限流、幂等、发送失败处理、视觉和表情逻辑。
 - 继续使用“攒批 → 零成本闸门 → 一次模型判断并生成回复”。不新增每句话一次模型调用，不另外启动分类模型/agent 循环。
 - 角色数据驱动，不硬编码鱼名或特定 QQ 号。
 - 本期优先使用进程内有界短期缓存；重启丢失关注状态是可接受的降级。无须新增数据库表或接口。短期状态不是周期任务或长期记忆。
@@ -148,7 +148,7 @@ direct / allowSilent=false 是程序决定，不能被模型返回的 unrelated 
 9. 上下文满/过期、并行话题、群内多线聊天、绑定/群/连接隔离、无关消息不续期、重启后安静降级。
 10. 发送失败不记已参与；silent 不生成 assistant；重复事件不二次发送或续期；额度/间隔/群规阻止时不调聊天或视觉模型。
 11. @ 自己即使单条且 allowSilent=false，也收到群聊上下文；模型异常返回 silent 时保持现有必回约束的错误处理，不另造额外模型循环。
-12. 网页/私聊/公告/B站 口令/表情/视觉/群聊私人记忆隔离不回归。
+12. 网页/私聊/公告/表情/视觉/群聊私人记忆隔离不回归。
 
 真实模型用上述语料各试少量轮次，重点记录“未参与却认领别人 @”和“已参与同话题却一刀切退出”两类错误。人工看结果后调提示词，不声称百分百准确。
 
@@ -163,7 +163,7 @@ direct / allowSilent=false 是程序决定，不能被模型返回的 unrelated 
 - yarn test:chat-speaker-context
 - yarn test:model-usage
 - yarn test:onebot-announcement
-- yarn test:onebot-bili-run
+- yarn test:onebot
 - 如涉及对应流程：yarn test:onebot-faces、yarn test:image-understanding
 - yarn lint、yarn typecheck、yarn build
 - 如修改 .vue：yarn check:sfc

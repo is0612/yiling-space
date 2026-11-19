@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 区块标题 —— 对齐 bili-desk 的 .sec-h（14px 标题 + 可选说明 + 右侧动作）。 */
+/** 区块标题 —— 工作台的 .sec-h（14px 标题 + 可选说明 + 右侧动作）。 */
 defineProps<{ title: string; description?: string }>();
 </script>
 

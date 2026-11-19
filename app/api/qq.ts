@@ -26,8 +26,6 @@ export type ChannelBinding = {
   groupChat: GroupChatSettings;
   /** 按群覆盖的模式：`{ "<群号>": 档位 }`；没在这张表里的群沿 groupChat.mode。 */
   groupChatModes?: Record<string, GroupChatSettings["mode"]>;
-  /** 主人能否在群里触发刷一轮 B站（后端已回退到连接默认值）。 */
-  groupBiliRunEnabled: boolean;
 };
 
 /** 接口回显的明文凭据（管理员页可见）；解不开时为 null。 */
@@ -167,7 +165,6 @@ export type BindCharacterReq = {
   quietStart?: string;
   quietEnd?: string;
   groupAliases?: string;
-  groupBiliRunEnabled?: boolean;
 };
 
 const connectionPath = (connectionId: string) => `/admin/channels/${encodeURIComponent(connectionId)}`;

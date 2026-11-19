@@ -196,7 +196,7 @@ export type ConversationReplyInput = {
   styleExamples?: string;
   /**
    * 这个角色怎么称呼用户（如「主人」「老板」）。留空 = 不特意称呼。
-   * 只在网页 AI 对话里传：QQ/B站 被动回复的对话方不一定是同一个人，默认不注入。
+   * 只在网页 AI 对话里传：QQ 被动回复的对话方不一定是同一个人，默认不注入。
    */
   userAddress?: string;
   /**
@@ -584,9 +584,6 @@ export const STYLE_EXAMPLES_HEADING = "## 对话示例（只学语气，不要�
  *   - **不改变输出格式**：这个接口要求返回 JSON 信封（reply / usedMemoryIds / usedSnapshotIds），
  *     所以示例只能是文本，绝不能做成真正的 few-shot 消息轮次 —— 那会诱导模型直接吐纯文本，解析就炸；
  *   - 动作神态等表达边界由各角色人设决定，不在通用示例说明中另给相反建议。
- *
- * ⚠️ B站 值班判断**不调用**这里：那条路径每条候选都要带一次人设（一轮最多 30 次），
- * 示例只教聊天，对「这条值不值得看」没有帮助，还会把 30 字理由带成碎碎念。
  */
 export function composeCharacterPrompt(persona: string, examples?: string): string {
   const style = (examples ?? "").trim();
@@ -1762,7 +1759,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
      * `JSON.parse`，这两种都当场判失败 —— 整轮重试一次、再失败就记
      * `ignored:LLM_INVALID_RESPONSE`，表现是「该说的时候她没说话」，而模型其实答对了。
      *
-     * 同样的坑别的调用点早踩过（`proactive.ts`、B 站卡片、粗筛都用 `parseJsonLoose`），
+     * 同样的坑别的调用点早踩过（`proactive.ts` 等都用 `parseJsonLoose`），
      * 只有这条**最常走**的路径没上 —— 这才是这类失败真正的原因。
      * 宽容解析在这里是安全的：解出来的东西马上要过 id 白名单，多余字段一律不认。
      */

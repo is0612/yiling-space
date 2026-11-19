@@ -656,7 +656,7 @@ try {
    * `response_format: json_object` 只是请求，不是保证。这条路径上最常见的两种坏输出是
    * 套 ```json 围栏、前面先写一句「好的，这是结果：」—— 以前这里直接 `JSON.parse`，
    * 两种都当场判失败，重试一次仍失败就整轮丢掉，表现是「该说的时候她没说话」。
-   * 别的调用点（proactive / B 站卡片 / 粗筛）早就用 `parseJsonLoose` 了，只有这条没上。
+   * 别的调用点（proactive 等）早就用 `parseJsonLoose` 了，只有这条没上。
    */
   calls = 0;
   globalThis.fetch = async (): Promise<Response> => {

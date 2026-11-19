@@ -1,8 +1,7 @@
 /**
  * 宽松 JSON 解析：模型经常带 ```json 围栏，或在前后加一句解释。
  *
- * 原来长在 `channel-adapter/bili/cards.ts` 里，主动机制也要解 JSON 数组，
- * 所以抽出来共用；那里保留同名导出，调用点和测试都不用改。
+ * 后台任务也常要解 JSON（主动机制、表情打标等），抽出来共用。
  */
 export function parseJsonLoose(text: string, options: { expect?: "object" | "array" } = {}): unknown {
   const cleaned = (text || "").trim();

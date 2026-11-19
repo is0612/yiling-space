@@ -76,7 +76,7 @@ export default defineEventHandler(async (event) => {
         // 兼容旧字段 replyLimitPer10Min：窗口固定 10 分钟。
         const rawLimit = config.replyLimitPerWindow ?? config.replyLimitPer10Min;
         const rawWindow = config.replyWindowMinutes;
-        // 「群聊怎么回」「刷 B站」已挪到角色（binding），未覆盖时回退连接级默认值。
+        // 「群聊怎么回」已挪到角色（binding），未覆盖时回退连接级默认值。
         const meta = (connection.metadata && typeof connection.metadata === "object")
           ? connection.metadata as Record<string, unknown>
           : {};
@@ -100,9 +100,6 @@ export default defineEventHandler(async (event) => {
           groupChatModes: readGroupChatModeOverrides(config.groupChatModes),
           // 旧字段保留给还没升级的调用方；值跟着 groupChat.mode 走，省得两处说法不一致。
           replyOnlyWhenMentioned: groupChat.mode === "mention",
-          groupBiliRunEnabled: typeof config.groupBiliRunEnabled === "boolean"
-            ? config.groupBiliRunEnabled
-            : meta.groupBiliRunEnabled === true,
         };
       }),
     });

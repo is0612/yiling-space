@@ -169,7 +169,7 @@ function readGroupIdFromConversationKey(key: string): string | null {
 export type ChannelTurnMessage = {
   externalMessageId: string;
   authorOpenId: string;
-  /** Stable per-platform author id (bili uid / qq openid). Used to upsert ExternalIdentity. */
+  /** Stable per-platform author id (qq openid / external uid). Used to upsert ExternalIdentity. */
   authorPlatformUid?: string;
   /** Optional author display name for identity metadata. */
   authorDisplayName?: string;
@@ -206,13 +206,13 @@ export type ChannelMessageInput = {
   platform: string;
   characterId: string;
   bindingId: string;
-  /** Platform-specific message event type (e.g. QQ group message, bili dm). */
+  /** Platform-specific message event type (e.g. QQ group message, private chat). */
   eventType: string;
   /** Stable key for the conversation: "g:<group_openid>", "c:<user_openid>", "dm:<id>", etc. */
   externalConversationId: string;
   externalMessageId: string;
   authorOpenId: string;
-  /** Stable per-platform author id (bili uid / qq openid). Used to upsert ExternalIdentity. */
+  /** Stable per-platform author id (qq openid / external uid). Used to upsert ExternalIdentity. */
   authorPlatformUid?: string;
   /** Optional author display name for identity metadata. */
   authorDisplayName?: string;
@@ -237,7 +237,7 @@ export type ChannelMessageInput = {
   /** 这条消息带的语音。渠道不传就等于「这个渠道没有语音」。 */
   voices?: ChannelVoiceRef[];
   /**
-   * 这个渠道能发的表情清单。**传了就等于声明「本渠道支持表情」**——B站 私信没有表情段，
+   * 这个渠道能发的表情清单。**传了就等于声明「本渠道支持表情」**——不支持表情段的渠道
    * 不传；流水线不认平台名，只认这份清单在不在。
    */
   faceCatalog?: ReadonlyArray<{ id: string; name: string }>;
@@ -1238,7 +1238,7 @@ async function runChannelTurn(input: {
   /**
    * 梗语录：和表情包不同，**不从调用方传**，流水线自己查。
    *
-   * 表情包要按渠道能力决定（B站私信发不了图），梗是纯文字、哪个渠道都能说；
+   * 表情包要按渠道能力决定（有的渠道发不了图），梗是纯文字、哪个渠道都能说；
    * 交给每个 adapter 各自去查，只会有一边忘了接。角色级的文字习惯应该在角色级生效。
    */
   const catchphrasePrompt = toCatchphrasePromptEntries(
@@ -2905,7 +2905,7 @@ export type ChannelSingleMessageResult =
   | { status: "duplicate" }
   | { status: "ignored"; reason: string };
 
-/** 单条消息（私聊、B站、以及群聊里 @ 她的那一条）。行为与此前一致。 */
+/** 单条消息（私聊、以及群聊里 @ 她的那一条）。行为与此前一致。 */
 export async function handleChannelMessage(input: ChannelMessageInput): Promise<ChannelSingleMessageResult> {
   const result = await runChannelTurn({
     platform: input.platform,

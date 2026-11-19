@@ -662,7 +662,7 @@ export default defineEventHandler(async (event) => {
         characterName: character.name,
         characterPrompt: character.basePrompt.slice(0, 12_000),
         styleExamples: (character.styleExamples ?? "").slice(0, 8000),
-        // 称呼是角色级的私人设定：只在网页对话注入，QQ/B站 的对话方不一定是本人。
+        // 称呼是角色级的私人设定：只在网页对话注入，QQ 的对话方不一定是本人。
         userAddress: character.userAddress ?? "",
         model: chatSettings.model,
         apiKey,

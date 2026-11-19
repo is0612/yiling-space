@@ -34,7 +34,7 @@ export type CharacterDto = {
   memoryCount: number;
   latestSnapshot: string;
   personality: string;
-  /** 对话示例：只用于对齐语气，聊天 / QQ / B站 被动回复会注入，B站 值班判断不注入。 */
+  /** 对话示例：只用于对齐语气，聊天 / QQ 被动回复会注入。 */
   examples: string;
   /** 角色在对话里怎么称呼用户；空字符串表示不特意称呼。 */
   userAddress: string;

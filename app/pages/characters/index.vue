@@ -203,12 +203,12 @@ async function duplicateCharacter(character: Character) {
   }
 }
 
-/** 停用 / 启用：停用后角色不再回复消息、不再跑 AI 回复和 B站 值班。 */
+/** 停用 / 启用：停用后角色不再回复消息、不再跑 AI 回复。 */
 async function toggleCharacterStatus(character: Character) {
   const pausing = character.status !== "已暂停";
   if (pausing) {
     const confirmed = await ElMessageBox.confirm(
-      `停用「${character.name}」后，它不再回复消息、也不跑 B站 值班。已有记忆和阶段总结不受影响，自动归档仍按记忆设置单独控制。`,
+      `停用「${character.name}」后，它不再回复消息。已有记忆和阶段总结不受影响，自动归档仍按记忆设置单独控制。`,
       "停用角色",
       { confirmButtonText: "停用", cancelButtonText: "取消", type: "warning" },
     ).catch(() => false);
@@ -608,7 +608,7 @@ function runCharacterCommand(command: string) {
                 v-else
                 class="d-empty"
               >
-                还没有写人设。人设是「她是谁」，对话、QQ 和 B站 被动回复都用同一份。
+                还没有写人设。人设是「她是谁」，对话和 QQ 回复都用同一份。
               </p>
             </div>
           </div>

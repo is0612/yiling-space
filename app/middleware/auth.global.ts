@@ -3,7 +3,7 @@
  * requires an authenticated (or explicitly enabled local-development) identity. Administrator-only
  * pages are additionally gated on the session role.
  */
-const ADMIN_ONLY_PATHS = [/^\/users/, /^\/settings/, /^\/tasks/, /^\/bili/, /^\/qq/];
+const ADMIN_ONLY_PATHS = [/^\/users/, /^\/settings/, /^\/tasks/, /^\/qq/];
 const PUBLIC_PATHS = new Set(["/login", "/register"]);
 
 export default defineNuxtRouteMiddleware(async (to) => {

@@ -40,9 +40,8 @@ const FRIEND_BASE: Prisma.MemoryScopeWhereInput = {
   externalIdentityId: { not: null },
 };
 
-/** 库里存 bili / qq-onebot / wechat，页面显示 B站 / QQ / 微信；搜「QQ」也得能搜到。 */
+/** 库里存 qq-onebot / wechat，页面显示 QQ / 微信；搜「QQ」也得能搜到。 */
 const PLATFORM_LABELS: Record<string, string> = {
-  bili: "B站",
   "qq-onebot": "QQ",
   wechat: "微信",
 };
@@ -136,7 +135,7 @@ export default defineEventHandler(async (event) => {
     const identityFilters: Prisma.ExternalIdentityWhereInput[] = [
       { displayName: { contains: keyword, mode: "insensitive" } },
       { platformUid: { contains: keyword, mode: "insensitive" } },
-      // platform 列本身也搜一遍，这样输入 "qq" / "bili" 同样命中。
+      // platform 列本身也搜一遍，这样输入 "qq" / "wechat" 同样命中。
       { platform: { contains: keyword, mode: "insensitive" } },
       ...(platformMatches.length ? [{ platform: { in: platformMatches } }] : []),
     ];

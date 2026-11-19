@@ -92,7 +92,7 @@ export type StickerLabelResult =
  * 套一层 ```json 围栏、或前面先写「好的，这是结果：」，括号里的内容其实全对。
  * 裸解会把这两种都判成 `model-failed`，表现就是「明明配了图片模型，一张也收不到」，
  * 而失败那一步是静默的，用户根本查不出原因。
- * 项目里其它 LLM 出口（chat-reply / proactive / bili / memory-ai）早就走 `parseJsonLoose` 了，
+ * 项目里其它 LLM 出口（chat-reply / proactive / memory-ai）早就走 `parseJsonLoose` 了，
  * 只有这里漏了 —— CLAUDE.md 里写死的那条「一律走 parseJsonLoose，不许裸 JSON.parse」。
  */
 export function readStickerLabel(content: string): StickerLabelResult {

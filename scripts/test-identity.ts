@@ -30,23 +30,23 @@ async function main() {
 
   // 1. 外部身份 upsert（模拟渠道消息进来时）
   const identity = await prisma.externalIdentity.upsert({
-    where: { platform_platformUid: { platform: "bili", platformUid: "uid-123" } },
-    create: { platform: "bili", platformUid: "uid-123", displayName: "B站用户", status: "UNVERIFIED" },
+    where: { platform_platformUid: { platform: "wechat", platformUid: "uid-123" } },
+    create: { platform: "wechat", platformUid: "uid-123", displayName: "微信用户", status: "UNVERIFIED" },
     update: {},
     select: { id: true, status: true },
   });
   assert.equal(identity.status, "UNVERIFIED");
 
   // 2. scopeKey 确定性生成
-  const key1 = buildExternalIdentityScopeKey(characterId, "bili", "uid-123");
-  const key2 = buildExternalIdentityScopeKey(characterId, "bili", "uid-123");
+  const key1 = buildExternalIdentityScopeKey(characterId, "wechat", "uid-123");
+  const key2 = buildExternalIdentityScopeKey(characterId, "wechat", "uid-123");
   assert.equal(key1, key2);
-  assert.equal(key1, `character:${characterId}:external:bili:uid-123`);
+  assert.equal(key1, `character:${characterId}:external:wechat:uid-123`);
 
   // 3. ensureExternalIdentityScope 建立 scope，且幂等
-  const first = await ensureExternalIdentityScope(characterId, "bili", "uid-123", identity.id);
+  const first = await ensureExternalIdentityScope(characterId, "wechat", "uid-123", identity.id);
   assert.equal(first.created, true);
-  const second = await ensureExternalIdentityScope(characterId, "bili", "uid-123", identity.id);
+  const second = await ensureExternalIdentityScope(characterId, "wechat", "uid-123", identity.id);
   assert.equal(second.created, false);
   assert.equal(first.scopeId, second.scopeId);
 
@@ -98,7 +98,7 @@ async function main() {
 
   // 清理（先删 scope 和 identity，再删 character 和 user，因为 MemoryScope.character 是 Restrict）
   await prisma.memoryScope.deleteMany({ where: { characterId } });
-  await prisma.externalIdentity.deleteMany({ where: { platform: "bili", platformUid: "uid-123" } });
+  await prisma.externalIdentity.deleteMany({ where: { platform: "wechat", platformUid: "uid-123" } });
   await prisma.character.delete({ where: { id: characterId } });
   await prisma.user.deleteMany({ where: { id: { in: [ownerId, userId] } } });
   await prisma.$disconnect();

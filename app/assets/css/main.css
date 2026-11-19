@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════════════
-   忆灵空间 · 全局设计系统（对齐 bili-desk 设计契约 v3）
+   忆灵空间 · 全局设计系统（工作台设计契约 v3）
 
    四条纪律（改样式前先读一遍）：
    1. 底色不用纯白（#F4F6F9），卡片才用纯白 —— 靠明度差分层，不给卡片加阴影
@@ -427,7 +427,7 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
 .ph-lede { margin: 0; color: var(--dim); font-size: 14px; }
 .page-h .ph-r { display: flex; align-items: center; gap: 8px; margin-left: auto; padding-bottom: 2px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 
-/* 区块标题行（bili-desk 的 .sec-h） */
+/* 区块标题行 */
 .sec-h { display: flex; align-items: center; gap: 10px; margin: 22px 0 11px; }
 .sec-h:first-child { margin-top: 0; }
 .sec-h h2 { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 700; }

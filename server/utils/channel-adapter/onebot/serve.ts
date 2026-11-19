@@ -18,9 +18,6 @@ import { parseBindingRoutingKeys, type OnebotBindingRecord, type OnebotConnectio
 import { ONEBOT_FACES, toOnebotFaceSegments } from "./faces";
 import { handleChannelBatch, handleChannelMessage, buildStoredMessageMetadata, type ChannelReplySender } from "../pipeline";
 import type { ConversationMessageMention } from "../../conversation-message";
-import { loadBiliConnections } from "../bili/configure";
-import { runDutyRound, type BiliDutyRoundResult } from "../bili/duty-pipeline";
-import { isBiliRunCommand } from "./bili-run";
 import {
   createGroupChatBuffer,
   evaluateGroupChatGate,
@@ -127,11 +124,6 @@ function isSelfMentioned(event: OnebotResolvedEvent, fallbackSelfId = ""): boole
   return readOnebotMentions(event.data, selfId).some((mention) => mention.target === "self");
 }
 
-/** 已处理的群指令消息 id，防止 QQ 网关重复投递导致连刷两轮。 */
-const processedBiliRunCommands = new Set<string>();
-/** 正在跑 B站 的角色；同一角色不并发跑两轮。 */
-const biliRunInFlight = new Set<string>();
-
 /**
  * 同一个绑定在同一个会话里的消息必须排队处理，不能并发。
  *
@@ -190,95 +182,6 @@ function enqueueConversation<T>(key: string, task: () => Promise<T>): Promise<T>
     if (conversationChains.get(key) === guard) conversationChains.delete(key);
   });
   return run;
-}
-
-function rememberBiliRunCommand(messageId: string) {
-  processedBiliRunCommands.add(messageId);
-  if (processedBiliRunCommands.size > 500) {
-    const oldest = processedBiliRunCommands.values().next().value;
-    if (oldest) processedBiliRunCommands.delete(oldest);
-  }
-}
-
-/** 按字数截断并加省略号 —— 直接 slice 会把「napcat」切成「napc」，看不出是被截的。 */
-function clampText(text: string, max: number): string {
-  const value = (text ?? "").trim();
-  return value.length > max ? `${value.slice(0, max)}…` : value;
-}
-
-function summarizeBiliRound(result: BiliDutyRoundResult): string {
-  if (!result.ok) return `这轮没刷成：${result.error ?? "未知原因"}`;
-  if (result.picked === 0) {
-    return result.error ? `这轮没刷成：${result.error}` : "刷完了，这轮没有挑中新视频。";
-  }
-  const parts = [`刷完了：挑中 ${result.picked} 条，跳过 ${result.skipped} 条`];
-  if (result.delivered.comments > 0) parts.push(`评论 ${result.delivered.comments} 条`);
-  if (result.delivered.fav > 0) parts.push(`收藏 ${result.delivered.fav} 条`);
-  if (result.delivered.dynamic) parts.push("发了动态");
-  const lines = [parts.join("，") + "。"];
-  // 只回条数等于没评价。把挑中的标题、分数、理由带回来，主人不用再翻值班台。
-  // 链接单独一行：和标题挤在同一行会被 QQ 自动折行，链接断在半路就点不开了。
-  for (const item of result.pickedItems.slice(0, 3)) {
-    const score = item.score !== null ? `${item.score} 分` : "未评分";
-    const reason = clampText(item.reason, 50);
-    lines.push(`· 《${clampText(item.title, 40)}》${score}${reason ? `：${reason}` : ""}`);
-    if (item.url) lines.push(`　${item.url}`);
-  }
-  if (result.picked > 3) lines.push(`· 还有 ${result.picked - 3} 条，详见 B站 值班台。`);
-  return lines.join("\n");
-}
-
-/** 主人让鱼刷一轮 B站：先回执，再在后台跑；同一角色不并发。 */
-async function handleBiliRunCommand(
-  event: OnebotResolvedEvent,
-  characterId: string,
-  sendReply: (text: string) => Promise<void>,
-): Promise<OnebotHandleOutcome> {
-  if (processedBiliRunCommands.has(event.messageId)) return { status: "duplicate" };
-  rememberBiliRunCommand(event.messageId);
-
-  if (biliRunInFlight.has(characterId)) {
-    await sendReply("上一轮 B站 还在跑，等它结束再说。");
-    return { status: "replied", conversationId: "" };
-  }
-
-  let target: Awaited<ReturnType<typeof loadBiliConnections>>[number] | null = null;
-  let binding: { id: string; characterId: string } | null = null;
-  try {
-    const connections = await loadBiliConnections();
-    for (const connection of connections) {
-      const found = connection.bindings.find((item) => item.characterId === characterId);
-      if (found) {
-        target = connection;
-        binding = found;
-        break;
-      }
-    }
-  } catch (error) {
-    await sendReply(`读 B站 配置失败：${(error instanceof Error ? error.message : String(error)).slice(0, 120)}`);
-    return { status: "replied", conversationId: "" };
-  }
-
-  if (!target || !binding) {
-    await sendReply("这个角色还没绑定 B站 值班账号，先到「B站 值班台」绑定后再试。");
-    return { status: "replied", conversationId: "" };
-  }
-
-  const connection = target;
-  const biliBinding = binding;
-  biliRunInFlight.add(characterId);
-  await sendReply("收到，我去刷一轮 B站，刷完在群里说。");
-  void (async () => {
-    try {
-      const result = await runDutyRound(connection, biliBinding);
-      await sendReply(summarizeBiliRound(result));
-    } catch (error) {
-      await sendReply(`这轮没刷成：${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`).catch(() => undefined);
-    } finally {
-      biliRunInFlight.delete(characterId);
-    }
-  })();
-  return { status: "replied", conversationId: "" };
 }
 
 /** 群规限流：滚动时间窗由绑定自己定，只统计这条鱼在该群已落库的回复。0 条 = 不限。 */
@@ -1214,11 +1117,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
   };
 
   /**
-   * 这条群消息是不是「指令」（公告确认/拟稿、B站 跑任务）—— 需要排队的那种。
+   * 这条群消息是不是「指令」（公告确认/拟稿、空间动作）—— 需要排队的那种。
    *
    * 普通群消息不需要排队：`remember` + `buffer.push` 都是同步的，真正要串行的是
    * flush（查库、调模型），它在 `onFlush` 里已经自己排队。指令要改公告草稿、
-   * 跑 B站 任务，得和私聊/其他指令保持串行，所以走外层队列。
+   * 调空间接口，得和私聊/其他指令保持串行，所以走外层队列。
    */
   const isGroupCommandMessage = (event: OnebotResolvedEvent, binding: OnebotBindingRecord): boolean => {
     if (event.messageType !== "group" || !event.groupId) return false;
@@ -1235,7 +1138,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       if (parseQzoneBrowseRequest(event.content)) return true;
       if (parseQzoneCommentRequest(event.content)) return true;
     }
-    return binding.groupBiliRunEnabled && isBiliRunCommand(event.content);
+    return false;
   };
 
   /**
@@ -1906,16 +1809,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       }
     }
 
-    // B站 指令只认主人：群友发同一句话直接忽略，不进入普通聊天，避免她答应别人。
-    if (!ownerContextOnly && binding.groupBiliRunEnabled && event.messageType === "group" && isBiliRunCommand(event.content)) {
-      if (!record.ownerQq || event.userId !== record.ownerQq) {
-        return { status: "ignored", reason: "bili_run_not_owner" };
-      }
-      return handleBiliRunCommand(event, binding.characterId, sendReply);
-    }
-
     // 群聊统一走一条攒批管道：三档只决定「放不放进来」，不再有单条快速路径。
-    // 指令类（公告、B站）已经在上面的分支里返回，不会走到这里。
+    // 指令类（公告、空间）已经在上面的分支里返回，不会走到这里。
     if (isGroupMessage) {
       groupChatBuffer.push(
         contextKey,
@@ -1991,7 +1886,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
      * 群里说的话她完全看不见；@ 她的那句也一样丢。模型越慢，丢得越多。
      *
      * 登记（remember + push）是同步的，不需要排队；需要串行的是「处理」，
-     * flush 在 `onFlush` 里自己排队。指令（公告/B站）仍走队列，保持串行。
+     * flush 在 `onFlush` 里自己排队。指令（公告/空间）仍走队列，保持串行。
      */
     if (event.messageType === "group" && event.groupId && !isGroupCommandMessage(event, binding)) {
       return handleRoutedEvent(event, binding);
@@ -2002,7 +1897,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
        * 排队超时只丢群指令，不丢私聊。
        *
        * 私聊要「先落库、尽量全留」：排队等太久时回不回可以再判，但这句话不能因为
-       * 前面一轮在等模型就整条消失。群指令（公告/B站）仍然按过期丢弃 —— 过了那一刻，
+       * 前面一轮在等模型就整条消失。群指令（公告/空间）仍然按过期丢弃 —— 过了那一刻，
        * 在群里回一句旧指令只会让人莫名其妙。
        */
       if (event.messageType === "group" && Date.now() - queuedAt > QUEUE_STALE_MS) {

@@ -1004,23 +1004,6 @@ try {
 
   record.bindings[0]!.groupChat = { ...ambientSettings, mode: "all" };
 
-  // 10. 群聊 B站 指令只认主人：群友触发被忽略，主人触发才得到回执/提示。
-  record.groupBiliRunEnabled = true;
-  record.bindings[0]!.groupBiliRunEnabled = true;
-  record.ownerQq = "222";
-  const biliReplies = async () => (await readSent()).filter(
-    (item) => item.action === "send_group_msg" && Number(item.body.group_id) === 1002,
-  );
-  await emitToGroup(1002, 30, "去刷一轮B站", 333);
-  await sleep(1000);
-  assert.equal((await biliReplies()).length, 0, "非主人发 B站 指令不能有任何回复。");
-
-  await emitToGroup(1002, 31, "去刷一轮B站", 222);
-  await waitFor(async () => (await biliReplies()).length >= 1);
-  const biliReply = String((await biliReplies())[0]!.body.message);
-  assert(biliReply.includes("B站"), "主人触发后必须给出 B站 相关回执。");
-  assert(biliReply.includes("还没绑定"), "测试角色没有 B站 绑定时必须明确提示，不能假装跑了。");
-
   /**
    * 临时会话（通过群发起的私聊，非好友）：OneBot 仍报 `message_type: "private"`，
    * 群号挂在 **`sender.group_id`** 上（SnowLuma 的 `convertPrivateMessage` 就是这么写的）。
@@ -1242,7 +1225,7 @@ try {
 
   closeGateway();
 
-  console.log("OneBot 渠道端到端测试通过：WS token 鉴权与单次握手、事件接入、CQ 码解析、凭据解密、角色绑定路由、记忆检索、模型回复、表情段发送与表情额度、消息持久化、外部身份 upsert、回发平台与幂等去重、群公告草稿与确认发布、普通成员越权拦截、按群滚动 10 分钟回复上限、群聊统一攒批（mention 档只在被叫到时进管道）、自然接话闸门、按群覆盖群聊模式、引用与 @ 的分工（回上一条不加、接旧句才引用、点名才 @）、别人 @ 别人时不抢话（@all 例外）、被挡下的 @ 对象身份落库（AI/HUMAN 分开）、围栏 JSON 照常回、戳一戳能叫醒她（戳别人不算）、B站 指令主人专属、临时会话的回复带上来源群号。");
+  console.log("OneBot 渠道端到端测试通过：WS token 鉴权与单次握手、事件接入、CQ 码解析、凭据解密、角色绑定路由、记忆检索、模型回复、表情段发送与表情额度、消息持久化、外部身份 upsert、回发平台与幂等去重、群公告草稿与确认发布、普通成员越权拦截、按群滚动 10 分钟回复上限、群聊统一攒批（mention 档只在被叫到时进管道）、自然接话闸门、按群覆盖群聊模式、引用与 @ 的分工（回上一条不加、接旧句才引用、点名才 @）、别人 @ 别人时不抢话（@all 例外）、被挡下的 @ 对象身份落库（AI/HUMAN 分开）、围栏 JSON 照常回、戳一戳能叫醒她（戳别人不算）、临时会话的回复带上来源群号。");
 } finally {
   for (const child of children) child.kill();
   await prisma.onebotGroupAnnouncement.deleteMany({ where: { connectionId } }).catch(() => undefined);

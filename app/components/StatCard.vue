@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * KPI 卡 —— 对齐 bili-desk 的 .kpi > .k / .v / .bar / .foot。
+ * KPI 卡 —— 工作台的 .kpi > .k / .v / .bar / .foot。
  * 数字 26px，单位 12px，可选进度条（progress: 0-100）。
  */
 withDefaults(defineProps<{

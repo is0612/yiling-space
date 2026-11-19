@@ -52,7 +52,7 @@ try {
     usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
   });
   await recordModelUsage({
-    kind: "bili-judge", model: "test-model", characterId,
+    kind: "journal", model: "test-model", characterId,
     usage: { promptTokens: 60, completionTokens: 40, totalTokens: 100 },
   });
   await recordModelUsage({
@@ -66,7 +66,7 @@ try {
   assert.equal(usage.totalTokens, 275, "三条记录应累计到 275。");
   assert.equal(usage.calls, 3, "没有用量的调用不计入次数。");
   assert.equal(usage.byKind.chat?.totalTokens, 150, "按类别分开统计。");
-  assert.equal(usage.byKind["bili-judge"]?.calls, 1, "值班调用单独一类。");
+  assert.equal(usage.byKind.journal?.calls, 1, "日记调用单独一类。");
   assert.equal(usage.byKind["social-relationship-assistant"]?.totalTokens, 25, "关系评估助手用量必须单独分类。");
 
   const exceeded = await readDailyQuota(characterId, { dailyTokenLimit: 200 }, day);

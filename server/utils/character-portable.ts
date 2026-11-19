@@ -397,7 +397,7 @@ export type CharacterBundleSnapshotBody = Omit<CharacterBundleSnapshot, "scope">
  */
 export type CharacterBundleFriend = {
   platform: string;
-  /** QQ 号 / B站 uid。群里认人靠它，所以必须带；这也是分享时最该慎重的字段。 */
+  /** QQ 号。群里认人靠它，所以必须带；这也是分享时最该慎重的字段。 */
   platformUid: string;
   displayName: string;
   /**

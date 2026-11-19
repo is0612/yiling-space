@@ -19,7 +19,7 @@ export type Character = {
   memoryCount: number;
   latestSnapshot: string;
   personality: string;
-  /** 对话示例：只用于对齐语气（聊天 / QQ / B站 被动回复注入，值班判断不注入）。 */
+  /** 对话示例：只用于对齐语气（聊天 / QQ 被动回复注入）。 */
   examples?: string;
   /** 这个角色在对话里怎么称呼你；空字符串 = 不特意称呼。 */
   userAddress?: string;
@@ -265,7 +265,7 @@ export const initialCharacters: Character[] = [
     avatar: "鱼",
     avatarTone: "purple",
     status: "运行中",
-    channels: ["QQ", "B站"],
+    channels: ["QQ"],
     intervalDays: 8,
     nextSnapshot: "明天 09:00",
     memoryCount: 128,
@@ -353,12 +353,12 @@ export const initialTimeline: TimelineEntry[] = [
     id: "evt-5",
     type: "event",
     title: "关注了一个新的音乐频道",
-    summary: "从 B 站内容摘要中发现用户最近开始关注轻音乐和 Lo-fi 播放列表。",
+    summary: "从聊天记录中发现用户最近开始关注轻音乐和 Lo-fi 播放列表。",
     time: "10 月 20 日 21:08",
-    channel: "B站",
+    channel: "QQ",
     tag: "内容事件",
     tagTone: "blue",
-    source: "B站内容摘要 · 来源 #bv-381",
+    source: "聊天记录 · 来源 #msg-381",
   },
 ];
 
@@ -396,7 +396,7 @@ export const initialSnapshots: Snapshot[] = [
     version: 1,
     date: "2026-10-05 09:00",
     range: "9 月 27 日 — 10 月 5 日",
-    summary: "首次记录到用户开始规律分享 B 站收藏，并更喜欢简洁直接的聊天方式。",
+    summary: "首次记录到用户开始规律分享音乐，并更喜欢简洁直接的聊天方式。",
     events: 3,
     messages: 31,
     status: "已被替代",
@@ -408,12 +408,10 @@ export const initialTasks: DemoTask[] = [
   { id: "job-204", name: "生成阶段总结", character: "大肥鱼", range: "10/21 09:00 — 10/29 09:00", status: "等待执行", tone: "amber", tries: 0, time: "计划于明天 09:00" },
   { id: "job-203", name: "整理长期记忆", character: "大肥鱼", range: "当前周期", status: "成功", tone: "green", tries: 1, time: "今天 08:45" },
   { id: "job-202", name: "生成阶段总结", character: "龙娘", range: "10/20 20:00 — 11/03 20:00", status: "等待执行", tone: "amber", tries: 0, time: "计划于 11/03 20:00" },
-  { id: "job-201", name: "同步外部事件", character: "大肥鱼", range: "B站内容摘要", status: "失败待重试", tone: "rose", tries: 2, time: "上次失败：10:14" },
   { id: "job-200", name: "检查周期活动", character: "星海旅人", range: "10/06 — 10/14", status: "跳过", tone: "gray", tries: 1, time: "10 月 14 日 09:00" },
 ];
 
 export const channels = [
   { name: "QQ", description: "聊天消息与会话事件", status: "规划中", color: "purple" },
-  { name: "B 站", description: "收藏、动态与内容摘要", status: "规划中", color: "blue" },
   { name: "Telegram", description: "机器人会话与命令", status: "预留", color: "green" },
 ];

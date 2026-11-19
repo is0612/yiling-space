@@ -1,17 +1,13 @@
 /**
  * 裸文本模型调用 —— 直接打 chat/completions，**不套**聊天回复那套 JSON 契约。
  *
- * 原来的名字是 `callBiliModel`（B站值班专用），主动机制也要同一套重试与预算逻辑，
- * 所以抽到这里；`channel-adapter/bili/llm.ts` 只留一层兼容导出。
+ * 主动机制、表情打标等后台任务需要同一套重试与预算逻辑，所以抽到这里共用。
  *
  * 为什么不能复用 `generateConversationReply`（踩过的坑，2026-10-28）：
  *   它是给「聊天」写的：强制 `response_format: json_object`，并要求模型返回
  *   `{ reply, usedMemoryIds, usedSnapshotIds }`，拿不到非空 `reply` 就抛 LLM_INVALID_RESPONSE。
- *   而值班要的是「给个 BV 号的 JSON 数组」「按三行回答」——
- *   模型看到题目要数组就直接回数组，wrapper 解不出 `reply` 字段：
- *   粗筛整轮返回空 ⇒ 所有候选都被记成「粗筛没留」⇒ 报告里 0 条挑中，看起来像「全跳过了」。
- *   实测：人设 + 刷站口味（system 约 3400 字）时必现；只放人设（2000 字）时侥幸能过 ——
- *   所以这是个「内容一变长就爆」的脆弱依赖，不是偶发。
+ *   后台任务要的可能是「给个 id 的 JSON 数组」「按三行回答」——
+ *   模型看到题目要数组就直接回数组，wrapper 解不出 `reply` 字段，整轮返回空。
  *
  * 第二个坑（同一天，紧接着踩到）：**思考型模型会把 max_tokens 先花在思考上**。
  *   给 800 的预算，实测 25 条候选时 `finish_reason=length`、`reasoning_tokens=800`、正文是空的 ——
@@ -21,9 +17,7 @@
  *     2. 正文为空且是 `length` 截断时，自动把预算翻倍重试一次（最多 8192）；
  *     3. 仍然空就把 `finish_reason` / 思考 token 数写进错误里，一眼能看出是「预算不够」而不是「内容被过滤」。
  *
- * 值班的每一步都是「判断 + 摘录」，用裸文本更稳：
- *   - 粗筛：只输出 BV 数组（裸数组也认，`parseJsonLoose` 能解）
- *   - 终判：三行「判断 / 理由 / 评论」，本来就是纯文本格式，包在 JSON 里纯属浪费 token
+ * 后台判断类任务用裸文本更稳：只输出数组、或三行纯文本，包在 JSON 里纯属浪费 token。
  */
 
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
@@ -31,9 +25,9 @@ import { readConfiguredLlmTimeoutMs } from "./llm-timeout";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 
 export type RawModelCall = {
-  /** 人设 + 值班章程（同一个角色三端共用的那份，加上这台账号的口味）。 */
+  /** 人设 + 任务背景（同一个角色三端共用的那份）。 */
   systemPrompt: string;
-  /** 这一轮的具体任务（候选列表 / 看懂的正文 + 判断要求）。 */
+  /** 这一轮的具体任务（候选列表 / 正文 + 判断要求）。 */
   userPrompt: string;
   model: string;
   apiKey: string;
@@ -106,7 +100,7 @@ export async function callRawModel(input: RawModelCall): Promise<string> {
   }
 
   /**
-   * 裸文本调用都发生在后台（B站值班、主动消息、日记、群话题），按「后台任务」取超时；
+   * 裸文本调用都发生在后台（主动消息、日记、群话题、表情打标），按「后台任务」取超时；
    * 调用方还能用 `input.timeoutMs` 要求更长，两者取大。
    */
   const configuredTimeoutMs = readConfiguredLlmTimeoutMs("job");

@@ -1,5 +1,5 @@
 /**
- * 外部身份的记忆范围管理：为某个外部身份（B站 uid / QQ openid）建立/查找其专属
+ * 外部身份的记忆范围管理：为某个外部身份（QQ openid / 其它渠道 uid）建立/查找其专属
  * EXTERNAL_IDENTITY 记忆范围。这是"按平台隔离私人记忆"的基础。
  *
  * 规则（对齐 memory-system.md 第 6 节与 CLAUDE.md 第 4 条）：

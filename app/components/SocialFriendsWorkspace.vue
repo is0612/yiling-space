@@ -77,7 +77,6 @@ const sortDirections = ref<Record<SortBy, SortDirection>>({
 const readErrorMessage = readApiErrorMessage;
 
 function platformLabel(platform: string) {
-  if (platform === "bili") return "B站";
   if (platform === "qq-onebot") return "QQ";
   if (platform === "wechat") return "微信";
   return platform;
@@ -324,8 +323,7 @@ function initialOf(friend: Friend) {
  * 浏览器直连腾讯 CDN，一个月只下一次。
  *
  * 只对「纯数字 QQ 号」生效：onebot 的陌生人是 `u_xxxx` 这种，拼不出东西。
- * B站需要先用 view 接口换 face（`bili/cover.get.ts` 那套），微信没有公开途径，
- * 这两种都继续用首字。
+ * 微信等其它平台没有公开途径，继续用首字。
  */
 function avatarUrl(friend: Friend) {
   if (friend.platform !== "qq-onebot") return null;

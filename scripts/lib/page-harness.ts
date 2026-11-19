@@ -10,7 +10,6 @@ import ts from "typescript";
 import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { createKnowledgeApi } from "../../app/api/knowledge";
 import { createGrowthApi } from "../../app/api/growth";
-import { createBiliApi } from "../../app/api/bili";
 import { createCharactersApi } from "../../app/api/characters";
 import { readApiErrorMessage } from "../../app/utils/api-error";
 import { createRequestClient, type RawFetch } from "../../app/utils/request";
@@ -125,7 +124,6 @@ return { ${names.join(", ")} };
     readApiErrorMessage,
     createKnowledgeApi,
     createGrowthApi,
-    createBiliApi,
     createCharactersApi,
     useApiRequest: () => createRequestClient(recordingFetch),
     ...options.globals,

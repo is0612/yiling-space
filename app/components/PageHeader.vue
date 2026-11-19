@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { ArrowLeft } from "@element-plus/icons-vue";
 
 /**
- * 页面页头 —— 对齐 bili-desk 的 .crumb + .page-h。
+ * 页面页头 —— 工作台的 .crumb + .page-h。
  * 标题本身不在这里：h1 归顶栏（AppShell 读 route.meta.topbar），页面用 definePageMeta 声明。
  * 这个组件只负责 crumb、一行说明，以及右侧动作。
  *

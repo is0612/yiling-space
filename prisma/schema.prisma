@@ -273,7 +273,7 @@ model Character {
   name              String                    @db.VarChar(100)
   avatar            String?
   basePrompt        String                    @db.Text
-  /// 对话示例：只用来对齐语气和用词。聊天与 QQ/B站 被动回复会注入，B站 值班判断不注入。
+  /// 对话示例：只用来对齐语气和用词。聊天与 QQ 被动回复会注入。
   styleExamples     String                    @default("") @db.Text
   /// 角色在这个对话里怎么称呼用户（默认「主人」）。空字符串 = 不特意称呼。
   userAddress       String                    @default("主人") @db.VarChar(40)
@@ -349,11 +349,6 @@ model CharacterChannelBinding {
   character        Character          @relation(fields: [characterId], references: [id], onDelete: Cascade)
   connection       PlatformConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
   conversations    Conversation[]
-  biliRoundReports BiliRoundReport[]
-  biliSeenVideos   BiliSeenVideo[]
-  biliActions      BiliAction[]
-  biliDutyLease    BiliDutyLease?
-  biliDutyWindowRuns BiliDutyWindowRun[]
 
   @@unique([characterId, connectionId])
   @@index([status])
@@ -1053,43 +1048,6 @@ model LoginAttempt {
   @@map("login_attempts")
 }
 
-/// B站值班：每一轮"刷B站"的报告。替代 bili-desk 的 out/<date>.md 文件级报告。
-/// 报告正文用 `### BV号` 段落标记"挑中的"视频，宿主按段落数统计本轮挑了几条。
-model BiliRoundReport {
-  id          String                  @id @default(uuid()) @db.Uuid
-  bindingId   String                  @db.Uuid
-  day         String                  @db.VarChar(10)
-  roundIndex  Int                     @default(1)
-  pickedCount Int                     @default(0)
-  content     String                  @db.Text
-  createdAt   DateTime                @default(now()) @db.Timestamptz(6)
-  binding     CharacterChannelBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
-
-  @@unique([bindingId, day, roundIndex])
-  @@index([bindingId, createdAt])
-  @@map("bili_round_reports")
-}
-
-/// B站值班判重表：替代 bili-desk 的 seen.md，记录看过的每一条视频（挑中/跳过都算）。
-/// 最近 7 天看过的 BV 不再重复挑，用 bvid 唯一约束保证幂等。
-model BiliSeenVideo {
-  id        String                  @id @default(uuid()) @db.Uuid
-  bindingId String                  @db.Uuid
-  bvid      String                  @db.VarChar(32)
-  title     String?                 @db.VarChar(255)
-  author    String?                 @db.VarChar(120)
-  result    String                  @db.VarChar(20)
-  reason    String?                 @db.Text
-  /// 终判给这条视频打的分（0-20）。null = 这轮没打分（老记录或模型没给）。
-  score     Int?
-  seenAt    DateTime                @default(now()) @db.Timestamptz(6)
-  binding   CharacterChannelBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
-
-  @@unique([bindingId, bvid])
-  @@index([bindingId, seenAt])
-  @@map("bili_seen_videos")
-}
-
 /// 主动找话的「目的池」。
 ///
 /// 目的必须落库，不能每次现编：刚聊完又凑上来、同一句话反复说，都是「每次现编」的典型症状。
@@ -1163,80 +1121,14 @@ model GroupActivity {
   @@map("group_activities")
 }
 
-/// B站 的对外动作账本：收藏、发动态。
-/// 记在库里而不是内存，是为了做「每天最多几次」「两条动态至少隔多久」这类判定——
-/// 进程重启后内存里的计数会归零，账号那边的痕迹删不掉。
-model BiliAction {
-  id        String                  @id @default(uuid()) @db.Uuid
-  bindingId String                  @db.Uuid
-  /// 东八区日界，与值班报告的 day 同口径。
-  day       String                  @db.VarChar(10)
-  /// fav | dynamic
-  kind      String                  @db.VarChar(20)
-  bvid      String?                 @db.VarChar(32)
-  /// 动作内容（动态正文 / 收藏理由），排查用。
-  detail    String?                 @db.Text
-  createdAt DateTime                @default(now()) @db.Timestamptz(6)
-  binding   CharacterChannelBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
-
-  @@index([bindingId, day, kind])
-  @@index([bindingId, createdAt])
-  @@map("bili_actions")
-}
-
-/// B站某个角色绑定当前值班轮次的数据库租约。
-///
-/// 手动入口和定时适配器最终都进入 runDutyRound，因此按 binding 唯一认领；
-/// expiresAt 配合定时续租处理进程崩溃，token 则阻止旧执行者续租或释放新租约。
-model BiliDutyLease {
-  bindingId String                  @id @db.Uuid
-  token     String                  @db.Uuid
-  expiresAt DateTime                @db.Timestamptz(6)
-  createdAt DateTime                @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
-  binding   CharacterChannelBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
-
-  @@index([expiresAt])
-  @@map("bili_duty_leases")
-}
-
 /// 每次模型调用的 token 记账。
 /// 故意不做外键：账单不应该随角色/会话删除而消失，且这里只用于统计与额度。
 
-/// B站谷时调度窗口的尝试记录，与日报内容分离。
-///
-/// 没有候选、模型未配置或 CLI 返回错误时，值班流水线可能正常提前返回而不生成日报；
-/// 如果调度器只靠 BiliRoundReport.createdAt 重建窗口状态，就会每分钟重复尝试。
-/// 这张表在拿到 binding 租约后、开始任何工作前先落一条记录；该窗口本轮无论正常结束、
-/// 返回无候选还是进程异常中断，都不会被自动重复触发，以免不确定外部动作是否已发生时重放。
-model BiliDutyWindowRun {
-  id          String                  @id @default(uuid()) @db.Uuid
-  bindingId   String                  @db.Uuid
-  /// 窗口业务日；夜间跨午夜窗口使用前一晚的日期。
-  businessDay String                  @db.VarChar(10)
-  /// noon | night
-  windowKey   String                  @db.VarChar(10)
-  /// RUNNING | COMPLETED | FAILED
-  status      String                  @default("RUNNING") @db.VarChar(20)
-  attemptCount Int                    @default(1)
-  /// 与 BiliDutyLease.token 对应，用于阻止旧执行者覆盖接管后的结果。
-  leaseToken  String                  @db.Uuid
-  startedAt   DateTime                @default(now()) @db.Timestamptz(6)
-  finishedAt  DateTime?               @db.Timestamptz(6)
-  lastError   String?                 @db.Text
-  createdAt   DateTime                @default(now()) @db.Timestamptz(6)
-  updatedAt   DateTime                @default(now()) @updatedAt @db.Timestamptz(6)
-  binding     CharacterChannelBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
-
-  @@unique([bindingId, businessDay, windowKey])
-  @@index([bindingId, createdAt])
-  @@index([status, updatedAt])
-  @@map("bili_duty_window_runs")
-}
-
+/// 每次模型调用的 token 记账。
+/// 故意不做外键：账单不应该随角色/会话删除而消失，且这里只用于统计与额度。
 model ModelUsage {
   id               String   @id @default(uuid()) @db.Uuid
-  /// 调用类别：chat / channel / snapshot / bili-screening / bili-judge / other。
+  /// 调用类别：chat / channel / snapshot / events / journal / proactive / other。
   /// 用字符串而不是 enum：新调用点不该为此再跑一次迁移。
   kind             String   @db.VarChar(40)
   model            String   @db.VarChar(120)

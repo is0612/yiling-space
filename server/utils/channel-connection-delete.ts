@@ -13,7 +13,7 @@ import { getPrisma } from "./prisma";
  *      - GroupActivity：按绑定 id 删 —— 绑定没了，这些活跃度行永远读不到
  *      - OnebotGroupAnnouncement / OnebotQzoneAction：只带 connectionId，没有 relation
  *   B. 有外键的交给数据库
- *      - CharacterChannelBinding → Bili* 级联删
+ *      - CharacterChannelBinding → 绑定相关的会话与记录级联删
  *      - Conversation / ModelUsage 的 `channelBindingId` 是 SetNull：聊天记录和账单**保留**，
  *        号没了不等于那段时间的对话该消失
  *      - ExternalIdentity.connectionId → SetNull

@@ -3,7 +3,7 @@
  * 一张卡对应「角色 ↔ QQ 号/群」的一条绑定。
  *
  * 卡里分两层：
- * - 绑定级：群号、群聊回复策略、发言限流、刷 B站 —— 存在 binding.config，随绑定走
+ * - 绑定级：群号、群聊回复策略、发言限流 —— 存在 binding.config，随绑定走
  * - 角色级：发表情、主动找话 —— 存在角色 modelConfig，多绑定时每张卡复用（改的是同一个角色）
  *
  * 绑定级保存走 POST /bindings（按 characterId+connectionId upsert），
@@ -45,7 +45,6 @@ const props = defineProps<{
    * 没在这张表里的群沿 `groupChat.mode`。
    */
   groupChatModes?: Record<string, "mention" | "ambient" | "all">;
-  groupBiliRunEnabled: boolean;
   emojiEnabled: boolean;
   /** 表情额度：多少分钟内最多贴几次（贴图与内置表情共用，按会话分别算）。 */
   emojiWindowMinutes?: number;
@@ -173,7 +172,6 @@ const bind = reactive({
   quietStart: props.groupChat.quietStart,
   quietEnd: props.groupChat.quietEnd,
   groupAliases: props.groupChat.aliases.join("，"),
-  groupBiliRunEnabled: props.groupBiliRunEnabled,
 });
 const savingBind = ref(false);
 
@@ -283,7 +281,6 @@ const paceSummary = computed(() => {
   parts.push(bind.replyLimitPerWindow > 0
     ? `每 ${bind.replyWindowMinutes} 分钟最多 ${bind.replyLimitPerWindow} 条`
     : "回复不限流");
-  if (bind.groupBiliRunEnabled) parts.push("B站口令开");
   return parts.join(" · ");
 });
 
@@ -328,7 +325,6 @@ watch(
     props.replyOnlyWhenMentioned,
     props.groupChat,
     props.groupChatModes,
-    props.groupBiliRunEnabled,
   ],
   () => {
     bind.routingKeys = readRoutingKeys(props.routingKey);
@@ -341,7 +337,6 @@ watch(
     bind.quietStart = props.groupChat.quietStart;
     bind.quietEnd = props.groupChat.quietEnd;
     bind.groupAliases = props.groupChat.aliases.join("，");
-    bind.groupBiliRunEnabled = props.groupBiliRunEnabled;
     // 保存成功后父级会重新拉列表，按群草稿跟着以库里的为准
     syncOverrides(bind.routingKeys, props.groupChatModes ?? {});
   },
@@ -376,7 +371,6 @@ async function saveBind() {
       quietStart: bind.quietStart,
       quietEnd: bind.quietEnd,
       groupAliases: bind.groupAliases,
-      groupBiliRunEnabled: bind.groupBiliRunEnabled,
     });
     ElMessage.success("群聊行为已保存。");
     emit("saved");
@@ -888,15 +882,6 @@ async function tryGroupOnce() {
               </div>
               <em>0 条 = 不限。按群分别计数，只统计她自己的回复。</em>
             </div>
-          </div>
-
-          <!-- 绑定级开关：只在这个号/群生效，所以留在第一组 -->
-          <div class="toggle">
-            <span class="toggle-copy">
-              <b>主人的 B站 口令</b>
-              <span>主人在群里说口令时跑一轮 B站 值班；主人 QQ 在连接设置里填</span>
-            </span>
-            <el-switch v-model="bind.groupBiliRunEnabled" />
           </div>
         </div>
       </details>

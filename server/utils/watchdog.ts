@@ -15,7 +15,6 @@
  */
 
 import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
-import { parseDutyInput } from "./channel-adapter/bili/configure";
 import { isChatModelConfigured } from "./chat-model-config";
 
 export type WatchdogSeverity = "err" | "warn";
@@ -29,8 +28,6 @@ export type WatchdogFindingCode =
   | "scheduler_stalled"
   /** 自动归档开着，却长期没有产出新总结。 */
   | "snapshot_silent"
-  /** B站 值班开着，但很久没跑过一轮（适配器没跑 / CLI 不可用）。 */
-  | "duty_silent"
   /** 成长事件投递长时间无人领取。 */
   | "growth_event_worker_stalled"
   /** 成长事件投递租约超时，执行者未能完成或回收。 */
@@ -76,24 +73,6 @@ export type WatchdogCharacterFacts = {
   growthEventOldestQueuedAt?: Date | null;
   /** 最早一条 RUNNING 投递的锁定时间。 */
   growthEventStuckLockedAt?: Date | null;
-  /** B站 值班：没有可用绑定或没开值班时为 null。 */
-  duty?: {
-    /** 每天轮次上限；0 = 关。 */
-    perDay: number;
-    /**
-     * 「峰谷时段自动刷」是否开着。
-     *
-     * 关掉之后 perDay 只是一个上限，没有任何东西会到点自己跑 —— 只能人点「现在跑一轮」。
-     * 这时再报「三天没跑」就是**归因错误**：不是流水线断了，是配置里根本没有自动执行者。
-     * （2026-11-03 实际踩过：perDay=5 但 peakValley=false，总览一直喊值班停摆，
-     * 点「去处理」跳任务监控，那里当然什么都没有可处理的。）
-     */
-    autoDuty: boolean;
-    /** 最近一轮报告的生成时间；null = 一轮都没跑过。 */
-    lastRoundAt: Date | null;
-    /** 最早一条相关绑定的创建时间：从没跑过时用它当起点。 */
-    since: Date;
-  } | null;
 };
 
 export type WatchdogInput = {
@@ -116,12 +95,6 @@ export const WATCHDOG_THRESHOLDS = {
   schedulerGraceMs: 1 * HOUR,
   /** 自动归档开着却这么久没有产出：至少两个周期，且不少于两周。 */
   minSilentDays: 14,
-  /**
-   * B站 值班多久没跑算停摆。perDay ≥ 1 且**开着峰谷自动刷**，就意味着「每天至少一轮」；
-   * 但谷时窗口、风控、额度用完都可能合法地空一天，所以给到 3 天再报。
-   * 自动刷关着时根本没有自动执行者，不在这条的判定范围里（见 `evaluateDutySilence`）。
-   */
-  dutySilentMs: 3 * DAY,
   growthEventStuckLockMs: 15 * MINUTE,
   growthEventBacklogMs: 30 * MINUTE,
 } as const;
@@ -200,31 +173,6 @@ function evaluateMemoryPipeline(now: number, character: WatchdogCharacterFacts):
 }
 
 /**
- * B站 值班是**另一条流水线**，和记忆队列互不影响：记忆停着不代表值班没在跑，反之亦然。
- * 所以它单独出一项，不参与上面那条因果链 —— 一个角色可能同时坏在两处。
- */
-function evaluateDutySilence(now: number, character: WatchdogCharacterFacts): WatchdogFinding | null {
-  const duty = character.duty;
-  if (!duty || duty.perDay <= 0) return null;
-  // 自动刷关着 = 只能手动跑，没有任何进程会到点触发。「没跑过」在这里是配置，不是故障。
-  if (!duty.autoDuty) return null;
-  // 从没跑过时以绑定时间为起点：刚绑上两天的角色不该被指责。
-  const anchor = duty.lastRoundAt ?? duty.since;
-  const idleFor = now - anchor.getTime();
-  if (idleFor <= WATCHDOG_THRESHOLDS.dutySilentMs) return null;
-  const base = { characterId: character.id, characterName: character.name };
-  return {
-    ...base,
-    code: "duty_silent",
-    severity: "warn",
-    message: duty.lastRoundAt
-      ? `B站 值班开着，但已经 ${describeDuration(idleFor)}没跑过一轮`
-      : `B站 值班开着，但绑定后 ${describeDuration(idleFor)}一次都没跑过`,
-    detail: `每天上限 ${duty.perDay} 轮；${duty.lastRoundAt ? "最近一轮的记录还在，问题出在这一轮之后" : "库里没有任何一轮报告"}。通常是值班适配器没在跑（yarn bili:run）、或者 bili CLI 不可用 —— 只看绑定和开关是看不出来的。`,
-  };
-}
-
-/**
  * Event Center 是独立于模型配置的投递管线：首个只读消费者不调用模型，
  * 因此不能沿用 memory worker 的「未配置模型时不报积压」豁免。
  */
@@ -271,8 +219,6 @@ export function evaluateWatchdog(input: WatchdogInput): WatchdogFinding[] {
   for (const character of input.characters) {
     const memory = evaluateMemoryPipeline(now, character);
     if (memory) findings.push(memory);
-    const duty = evaluateDutySilence(now, character);
-    if (duty) findings.push(duty);
     findings.push(...evaluateGrowthEventPipeline(now, character));
   }
   return findings;
@@ -387,53 +333,6 @@ export async function collectWatchdogFindings(
   `);
   const growthEventBuckets = new Map(growthEventGroups.map((row) => [row.characterId, row]));
 
-  // B站 值班：绑定挂在角色上，值班开关写在**连接**的 metadata 里（不是绑定 config）。
-  const biliBindings = await prisma.characterChannelBinding.findMany({
-    where: {
-      status: "ACTIVE",
-      connection: { is: { platform: "bili" } },
-      ...(ownerId ? { character: { is: { ownerId } } } : {}),
-    },
-    select: {
-      id: true,
-      characterId: true,
-      createdAt: true,
-      connection: { select: { metadata: true } },
-    },
-  });
-
-  const bindingIds = biliBindings.map((binding) => binding.id);
-  const lastRoundByBinding = new Map<string, Date>();
-  if (bindingIds.length) {
-    const rounds = await prisma.biliRoundReport.groupBy({
-      by: ["bindingId"],
-      where: { bindingId: { in: bindingIds } },
-      _max: { createdAt: true },
-    });
-    for (const round of rounds) {
-      if (round._max.createdAt) lastRoundByBinding.set(round.bindingId, round._max.createdAt);
-    }
-  }
-
-  // 一个角色可能挂多个 B站 小号：取最大的 perDay、最近的一轮、最早的绑定时间。
-  const dutyByCharacter = new Map<string, NonNullable<WatchdogCharacterFacts["duty"]>>();
-  for (const binding of biliBindings) {
-    const metadata = (binding.connection.metadata ?? {}) as Record<string, unknown>;
-    const config = parseDutyInput(metadata.duty);
-    if (config.perDay <= 0) continue;
-    const lastRoundAt = lastRoundByBinding.get(binding.id) ?? null;
-    const previous = dutyByCharacter.get(binding.characterId);
-    dutyByCharacter.set(binding.characterId, {
-      perDay: Math.max(config.perDay, previous?.perDay ?? 0),
-      // 一个角色挂多个小号时，「会自己跑」取决于有没有**任意一个**开着自动刷
-      autoDuty: config.peakValley || (previous?.autoDuty ?? false),
-      lastRoundAt: previous?.lastRoundAt && lastRoundAt
-        ? (previous.lastRoundAt > lastRoundAt ? previous.lastRoundAt : lastRoundAt)
-        : previous?.lastRoundAt ?? lastRoundAt,
-      since: previous && previous.since < binding.createdAt ? previous.since : binding.createdAt,
-    });
-  }
-
   const facts: WatchdogCharacterFacts[] = characters.map((character) => {
     const bucket = buckets.get(character.id) ?? { pending: 0, failed: 0, oldestQueuedAt: null, stuckLockedAt: null };
     const latestSnapshotAt = character.memoryScopes
@@ -456,7 +355,6 @@ export async function collectWatchdogFindings(
       growthEventFailedCount: growthEventBuckets.get(character.id)?.failedCount ?? 0,
       growthEventOldestQueuedAt: growthEventBuckets.get(character.id)?.oldestQueuedAt ?? null,
       growthEventStuckLockedAt: growthEventBuckets.get(character.id)?.stuckLockedAt ?? null,
-      duty: dutyByCharacter.get(character.id) ?? null,
     };
   });
 

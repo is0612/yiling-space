@@ -25,7 +25,7 @@ export type MemoryEvidenceMessage = {
   /** 这条消息是谁发的（渠道账号）。用来推导忆泡的参与者引用，而不是靠模型写名字。 */
   role?: string;
   authorOpenId?: string;
-  /** 平台标识（qq-onebot / bili …）。没有就当未知，不参与身份合并。 */
+  /** 平台标识（qq-onebot / wechat …）。没有就当未知，不参与身份合并。 */
   platform?: string;
   /**
    * 发言人显示名（渠道昵称）。

@@ -9,7 +9,6 @@ import {
   DataAnalysis,
   ChatLineRound,
   DataBoard,
-  Compass,
   MagicStick,
   Memo,
   Refresh,
@@ -18,7 +17,6 @@ import {
   TrendCharts,
   User,
   UserFilled,
-  VideoPlay,
   Reading,
   View,
 } from "@element-plus/icons-vue";
@@ -115,7 +113,6 @@ const workspaceNavigation: NavigationItem[] = [
  */
 const growthNavigation: NavigationItem[] = [
   { key: "growth", label: "总览", href: "/growth", icon: TrendCharts, exact: true },
-  { key: "growth-galaxy", label: "成长星图", href: "/growth/galaxy", icon: Compass, exact: true },
   { key: "growth-memory", label: "记忆系统", href: "/growth/memory", icon: Collection },
   { key: "growth-social", label: "社交系统", href: "/growth/social", icon: Avatar },
   { key: "growth-language", label: "语言系统", href: "/growth/language", icon: ChatDotRound },
@@ -128,7 +125,6 @@ const adminNavigation = computed<NavigationItem[]>(() => {
   if (!isAdmin.value) return [];
   return [
     { key: "qq", label: "QQ 渠道", href: "/qq", icon: ChatLineRound },
-    { key: "bili", label: "B站值班台", href: "/bili", icon: VideoPlay },
     { key: "tasks", label: "任务监控", href: "/tasks", icon: DataAnalysis },
     { key: "users", label: "用户管理", href: "/users", icon: UserFilled },
     { key: "settings", label: "系统设置", href: "/settings", icon: Setting },
@@ -173,8 +169,6 @@ function isActive(item: NavigationItem) {
       // 角色设置（模型 / 记忆周期 / 表情包 / 梗语录）都挂在 /characters/:id 下面，
       // 进到这些子页时侧栏仍应停在「角色管理」这一项
       return path === "/characters" || path.startsWith("/characters/");
-    case "bili":
-      return path === "/bili" || path.startsWith("/bili/");
     default:
       return path === item.href || path.startsWith(`${item.href}/`);
   }

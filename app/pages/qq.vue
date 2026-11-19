@@ -76,7 +76,7 @@ const primaryBinding = computed(() => primaryConnection.value?.bindings[0] ?? nu
 const qzoneEnabled = computed(() => primaryConnection.value?.metadata?.qzoneEnabled === true);
 
 /**
- * 一张卡对应一条绑定（角色 ↔ 号/群）：群号、群聊回复、限流、刷 B站 都是绑定级，
+ * 一张卡对应一条绑定（角色 ↔ 号/群）：群号、群聊回复、限流都是绑定级，
  * 跟着绑定走；发表情、主动找话是角色级，多绑定时在每张卡里复用（改的是同一个角色）。
  * 角色基本只有一个，所以通常就一张卡。
  */
@@ -1376,7 +1376,6 @@ function copyInstallGuide() {
               :reply-only-when-mentioned="row.binding.replyOnlyWhenMentioned"
               :group-chat="row.binding.groupChat"
               :group-chat-modes="row.binding.groupChatModes"
-              :group-bili-run-enabled="row.binding.groupBiliRunEnabled"
               :emoji-enabled="row.character.emojiEnabled === true"
               :emoji-window-minutes="row.character.emojiWindowMinutes"
               :emoji-per-window="row.character.emojiPerWindow"
@@ -1924,8 +1923,8 @@ function copyInstallGuide() {
               <dd>展开上面那一行，把「这个群怎么回」调成「仅被 @ 时回复」。</dd>
             </div>
             <div class="fix-row">
-              <dt>想让她发表情 / 主动找话 / 刷 B站</dt>
-              <dd>也都在行里：「这个角色」是角色级开关，「主人的 B站 口令」在这个群那一组。</dd>
+              <dt>想让她发表情 / 主动找话</dt>
+              <dd>都在行里：「这个角色」那一组是角色级开关，改一次对所有绑定生效。</dd>
             </div>
           </dl>
         </section>
@@ -2057,7 +2056,7 @@ function copyInstallGuide() {
             <el-input
               v-model="form.ownerQq"
               maxlength="15"
-              placeholder="只有这个 QQ 能让她去刷 B站"
+              placeholder="例如主人自己的 QQ 号"
             />
           </el-form-item>
           <el-form-item label="主人称呼（可留空）">
@@ -2068,7 +2067,7 @@ function copyInstallGuide() {
             />
           </el-form-item>
           <p class="cq-hint">
-            留空主人 QQ = 群里的 B站 指令不会生效。主人称呼会写进对话上下文，让她认得出你；留空时用 QQ 昵称。
+            主人 QQ 用来认人：她的空间说说/评论只认这个号，群聊里也会标出谁是主人。主人称呼会写进对话上下文，让她认得出你；留空时用 QQ 昵称。
           </p>
         </div>
 
@@ -2234,7 +2233,7 @@ function copyInstallGuide() {
         </el-form-item>
         <p class="cq-hint">
           填了群号就只在这些群里回复；可以填多个群号，回车或输入逗号确认一个。
-          留空则私聊和所有群都会回复。群聊参与度、限流、B站 口令在清单里展开那一行改。
+          留空则私聊和所有群都会回复。群聊参与度、限流在清单里展开那一行改。
         </p>
         <p
           v-if="allCharactersBound"

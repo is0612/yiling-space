@@ -162,14 +162,13 @@ yarn check:env
 
 ---
 
-## 9. 可选：QQ 和 B站
+## 9. 可选：QQ
 
-这两块都要额外进程，**不装不影响网页端使用**，别在第一次安装时一起做，先把第 5 节跑通。
+QQ 渠道要额外进程，**不装不影响网页端使用**，别在第一次安装时一起做，先把第 5 节跑通。
 
 | 渠道 | 额外要什么 | 文档 |
 |---|---|---|
 | QQ 小号 | QQ 客户端 + SnowLuma 面板 + 一个不常用的小号 | [QQ 小号部署](docs/qq-onebot-deploy.md) |
-| B站 值班 | `bili` CLI + 账号绑定 | [B站 值班集成](docs/bili-desk-integration.md) |
 
 SnowLuma 是第三方程序，需要自己下载解压；**但它的面板密码和两个令牌都不用你手抄**：全新安装时忆灵空间会替你生成面板密码，
 用 `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD` 播种进去并写进「连接设置 → SnowLuma 面板密码」——
@@ -177,18 +176,6 @@ SnowLuma 是第三方程序，需要自己下载解压；**但它的面板密码
 所以你永远不需要去翻数据库或配置文件找它；连接里的 WS/HTTP 令牌空着时，
 启动器会读面板里同端口的节点、把 `accessToken` 抄回连接设置并落库。只有当那份 SnowLuma 早就初始化过
 （`config/webui.json` 已存在）时才需要你把密码填一次。
-
-B站 值班台依赖的 `bili` 是一个独立的 PyPI 包（`bili-agent`），**不在 npm 依赖里，`yarn setup` 不会替你装**。
-要用的话在项目根跑：
-
-```bash
-uv venv .venv && uv pip install --python .venv/Scripts/python.exe bili-agent==0.6.0
-.venv/Scripts/bili.exe --version   # {"ok": true, "data": {"version": "0.6.0"}}
-```
-
-macOS / Linux 把 `Scripts/python.exe` 换成 `bin/python`。没装也不影响其他功能，
-但进「B站值班台」会看到空数据 —— 先跑 `yarn check:env`，里面「B站 值班台（可选）」一节会明确告诉你
-装没装、装在哪、有没有扫码登录。
 
 记忆任务不在 Web 进程里跑定时器，需要另开两个常驻进程：
 

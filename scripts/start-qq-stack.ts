@@ -5,7 +5,7 @@
  * 起了两个协议端实例还会抢同一个 messages.db（SQLITE_READONLY，消息直接写不进去）。
  *
  * ⚠️ 适配器必须走 run-onebot-adapter.ts（runner），不能在这里直接 supervise：
- * runner 每秒 reconcile，网页上改的绑定级设置（仅 @ 回复、限流、群号、群刷 B站）
+ * runner 每秒 reconcile，网页上改的绑定级设置（仅 @ 回复、限流、群号）
  * 才会自动重载；直接 supervise 只在启动时读一次，改了等于没改。
  */
 

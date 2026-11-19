@@ -150,7 +150,6 @@ const binding = {
   groupChat: resolveGroupChatSettings({ groupChatMode: "mention" }, true),
   groupChatModes: {},
   replyOnlyWhenMentioned: true,
-  groupBiliRunEnabled: false,
 };
 
 const record = {

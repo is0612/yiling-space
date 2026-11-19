@@ -71,7 +71,7 @@ export default defineEventHandler(async (event) => {
     replyLimitPerWindow = value;
     replyWindowMinutes = 10;
   }
-  // 群聊回复策略 + 刷 B站：都是可选的 boolean，未提交 = 保留原值（或沿用连接默认值）。
+  // 群聊回复策略：可选的 boolean，未提交 = 保留原值（或沿用连接默认值）。
   let replyOnlyWhenMentioned: boolean | undefined;
   if (body?.replyOnlyWhenMentioned !== undefined) {
     if (typeof body.replyOnlyWhenMentioned !== "boolean") {
@@ -118,14 +118,6 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: "群里的称呼最多 200 个字。" });
     }
     groupAliases = trimmed;
-  }
-
-  let groupBiliRunEnabled: boolean | undefined;
-  if (body?.groupBiliRunEnabled !== undefined) {
-    if (typeof body.groupBiliRunEnabled !== "boolean") {
-      throw createError({ statusCode: 400, statusMessage: "「刷一轮 B站」必须是布尔值。" });
-    }
-    groupBiliRunEnabled = body.groupBiliRunEnabled;
   }
 
   /**
@@ -201,7 +193,6 @@ export default defineEventHandler(async (event) => {
   if (quietStart !== undefined) patch.quietStart = quietStart;
   if (quietEnd !== undefined) patch.quietEnd = quietEnd;
   if (groupAliases !== undefined) patch.groupAliases = groupAliases;
-  if (groupBiliRunEnabled !== undefined) patch.groupBiliRunEnabled = groupBiliRunEnabled;
   if (groupChatModes !== undefined) patch.groupChatModes = groupChatModes;
   const hasUpdate = Object.keys(patch).length > 0;
   let config = hasUpdate ? { ...baseConfig, ...patch } : (existing?.config ?? undefined);

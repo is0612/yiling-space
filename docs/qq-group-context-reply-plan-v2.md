@@ -73,7 +73,7 @@
 
 ## 2. 不可破坏的约束
 
-- 只改 QQ OneBot 普通群聊。保留私聊、群公告确认、主人 B站 口令、额度、限流、幂等、发送失败处理、视觉与表情逻辑。
+- 只改 QQ OneBot 普通群聊。保留私聊、群公告确认、额度、限流、幂等、发送失败处理、视觉与表情逻辑。
 - 继续「攒批 → 零成本闸门 → 一次模型判断并生成回复」。不逐条调模型，不加分类模型/agent 循环。
 - 角色、成员、话题全部数据驱动，不硬编码鱼名、QQ 号、角色名。
 - 短期状态放进程内有界缓存；重启丢失关注状态是可接受的降级。本期**不新增数据库表、不新增公开接口**。短期状态不是周期任务或长期记忆，不需要持久化/幂等/补处理。
@@ -347,7 +347,7 @@ interface GroupDecision {
 16. 发送失败、silent、只调模型都不记参与；发送成功才写锚点。
 17. 额度、间隔、群规、安静时段仍生效；被阻止时不调聊天或视觉模型。
 18. silent 不发空消息、不写伪 assistant；usage/落库/去重符合现有约定。
-19. 网页、私聊、公告、B站 口令、视觉、表情、群聊私人记忆隔离无回归。
+19. 网页、私聊、公告、视觉、表情、群聊私人记忆隔离无回归。
 
 ### 13.4 真实模型语义抽查
 
@@ -371,7 +371,7 @@ interface GroupDecision {
 - `yarn test:chat-speaker-context`
 - `yarn test:model-usage`
 - `yarn test:onebot-announcement`
-- `yarn test:onebot-bili-run`
+- `yarn test:onebot`
 - 涉及对应流程时：`yarn test:onebot-faces`、`yarn test:image-understanding`
 - `yarn lint`、`yarn typecheck`、`yarn build`
 - 改过 `.vue` 再跑 `yarn check:sfc`

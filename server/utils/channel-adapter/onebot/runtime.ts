@@ -121,7 +121,7 @@ export function parseWsEndpoint(wsUrl: string): { host: string; port: number } |
  * SnowLuma 装在哪。**能不让人填就不让人填**，所以这里是一条发现链：
  *
  * 1. 页面里存过的目录（`.data/snowluma-home.json`）—— 填过就认它
- * 2. 环境变量 `SNOWLUMA_HOME` —— 部署时批量指定，和 bili CLI 的 `BILI_CLI_HOME` 一个套路
+ * 2. 环境变量 `SNOWLUMA_HOME` —— 部署时批量指定，和面板密码一样属于本机配置
  * 3. **反查运行中的进程**：5099 在听 → netstat 拿 pid → PowerShell 拿 exe 路径 → 上一级就是安装目录
  * 4. **扫常见位置**：Downloads / 桌面 / 文档 / Program Files / 各盘根下两层，找带 start.bat 的 SnowLuma 目录
  * 5. 都没有 → 本机默认 `D:\Tools\SnowLuma`（多半是错的，但至少页面上能看到它在找哪儿）
