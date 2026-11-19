@@ -11,10 +11,9 @@ type MemoryTransaction = Prisma.TransactionClient;
  * - 主人私聊时读的是 `USER_PRIVATE`，旧忆泡看不见；
  * - 归位后 `USER_PRIVATE` 的按天任务会重新提一遍同一天，产生跨范围重复。
  *
- * 只搬「这条会话自己的」忆泡：以 `sourceMessageId` 为锚（写入时它就是最早证据，
- * 也就决定了忆泡归属的会话），不碰同范围里群聊等其他会话的事件。
- * 搬完重算两边的 `memoryEventDays.eventCount`，并把旧范围的整理水位带过去，
- * 避免新范围把已经整理过的消息再喂一遍模型。
+ * 只搬这条会话自己的忆泡。优先用持久的 `conversationId`，即使原文已清理仍能归位；
+ * 只有没有会话归属的旧条目才通过 `sourceMessageId` 确认所属，避免搬走同范围的其他会话。
+ * 搬完重算两边的 `memoryEventDays.eventCount`，合并范围的游标保守重置。
  */
 export async function moveConversationEventsToScope(
   tx: MemoryTransaction,
@@ -22,17 +21,13 @@ export async function moveConversationEventsToScope(
 ): Promise<{ moved: number; merged: number; days: number }> {
   if (input.fromScopeId === input.toScopeId) return { moved: 0, merged: 0, days: 0 };
 
-  const messages = await tx.message.findMany({
-    where: { conversationId: input.conversationId },
-    select: { id: true },
-  });
-  const messageIds = messages.map((message) => message.id);
-  if (!messageIds.length) return { moved: 0, merged: 0, days: 0 };
-
   const events = await tx.memoryEvent.findMany({
     where: {
       memoryScopeId: input.fromScopeId,
-      sourceMessageId: { in: messageIds },
+      OR: [
+        { conversationId: input.conversationId },
+        { conversationId: null, sourceMessage: { is: { conversationId: input.conversationId } } },
+      ],
     },
     select: { id: true, dayKey: true, dedupeKey: true },
   });

@@ -4,6 +4,33 @@ const host = "127.0.0.1";
 const portInput = Number(process.env.LLM_MOCK_PORT ?? 4010);
 const port = Number.isInteger(portInput) && portInput >= 1024 && portInput <= 65535 ? portInput : 4010;
 const expectedApiKey = process.env.LLM_MOCK_API_KEY ?? "ci-only";
+const educationJourneyModel = "ci-education-journey";
+const educationJourneyHabit = "方案讨论时先给结论，再补依据";
+const journeyTurns = new Map();
+
+function readJourneyTurn(input, body) {
+  const transcript = Array.isArray(input.transcript) ? input.transcript : [];
+  const text = [input.currentMessage, ...transcript.map(line => line?.content)].join("\n");
+  const marker = /CI_JOURNEY_[a-f0-9]{32}_(?:PENDING|ACTIVE|DISABLED|SOURCE)_(?:WEB|GROUP|PRIVATE)/u.exec(text)?.[0];
+  if (!marker) return null;
+  const habits = Array.isArray(input.expressionHabits) ? input.expressionHabits : [];
+  const habit = habits.find(row => row?.content === educationJourneyHabit && row.chatScope === "ALL");
+  // Store only bounded test diagnostics, never the full HTTP prompt or request headers.
+  const serialized = body.messages.map(message => message?.content).join("\n");
+  const observations = journeyTurns.get(marker) ?? [];
+  observations.push({
+    group: transcript.length > 0,
+    habitIds: habits.map(row => row.id),
+    knowledgeIds: Array.isArray(input.knowledge) ? input.knowledge.map(row => row.id) : [],
+    hasPrivateSource: serialized.includes("CI_JOURNEY_PRIVATE_EVIDENCE_"),
+    hasPrivateMemory: Array.isArray(input.memories)
+      && input.memories.some(row => row?.content?.includes("CI_JOURNEY_PRIVATE_EVIDENCE_")),
+    hasPrivateRefs: /"(?:sourceRefs|feedbackMessageId|proposer)"\s*:/u.test(serialized),
+  });
+  journeyTurns.set(marker, observations.slice(-3));
+  if (journeyTurns.size > 100) journeyTurns.delete(journeyTurns.keys().next().value);
+  return { reply: habit ? "CI 结论先行。这里补充依据。" : "CI 这里先介绍背景，再说结论。", usedExpressionHabitIds: habit ? [habit.id] : [] };
+}
 
 if (process.env.NODE_ENV === "production") {
   throw new Error("The CI mock LLM server must never run in production.");
@@ -113,12 +140,17 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, 200, { ok: true, service: "ci-mock-llm" });
     return;
   }
-  if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
-    sendJson(response, 404, { error: { message: "Not found" } });
-    return;
-  }
   if (request.headers.authorization !== "Bearer " + expectedApiKey) {
     sendJson(response, 401, { error: { message: "Invalid CI test key" } });
+    return;
+  }
+
+  if (request.method === "GET" && request.url?.startsWith("/__mock/journey/")) {
+    sendJson(response, 200, journeyTurns.get(request.url.slice("/__mock/journey/".length)) ?? []);
+    return;
+  }
+  if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+    sendJson(response, 404, { error: { message: "Not found" } });
     return;
   }
 
@@ -145,6 +177,24 @@ const server = http.createServer(async (request, response) => {
     }
 
     const input = JSON.parse(userMessage.content);
+    if (body.model === educationJourneyModel && systemMessage?.content.includes("从授权反馈中提出当前角色跨会话教育候选")) {
+      const source = input.sources?.find(row => input.newIds?.includes(row.id)
+        && row.learning?.kind === "EXPRESSION" && row.feedback?.includes("CI_JOURNEY_PRIVATE_EVIDENCE_"));
+      sendJson(response, 200, chatCompletion(body, { candidates: source ? [{
+        domain: "language", kind: "WORDING", mode: "explicit", content: educationJourneyHabit,
+        sourceIds: [source.id], privacySafe: true, consistent: true, chatScope: "ALL", context: "",
+      }] : [] }));
+      return;
+    }
+    if (body.model === educationJourneyModel && systemMessage?.content.startsWith("You analyze public group conversation")) {
+      const question = input.transcript?.find(line => line.content?.includes("蓝晶方案校准"));
+      sendJson(response, 200, chatCompletion(body, {
+        summary: "合成测试：群友询问校准方案。", participation: "uncertain",
+        evidenceMessageIds: question?.id ? [question.id] : [],
+        ...(question ? { knowledgeQuery: "蓝晶方案校准" } : {}),
+      }));
+      return;
+    }
     // Historical journal catch-up can run before retention cleanup in API smoke
     // tests. Return a valid, explicit mock decision rather than snapshot JSON.
     if (typeof systemMessage?.content === "string" &&
@@ -164,6 +214,11 @@ const server = http.createServer(async (request, response) => {
       const privateScopeSentinel = "YILING_PRIVATE_SCOPE_ONLY_SENTINEL_";
       if (JSON.stringify({ memories, snapshots }).includes(privateScopeSentinel)) {
         sendJson(response, 400, { error: { message: "Another user's private-scope memory must never enter this user's chat prompt." } });
+        return;
+      }
+      const journeyTurn = body.model === educationJourneyModel ? readJourneyTurn(input, body) : null;
+      if (journeyTurn) {
+        sendJson(response, 200, chatCompletion(body, journeyTurn));
         return;
       }
       const firstMemory = memories[0] && typeof memories[0].id === "string" ? memories[0].id : null;

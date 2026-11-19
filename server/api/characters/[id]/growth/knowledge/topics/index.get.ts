@@ -37,7 +37,8 @@ export default defineEventHandler(async event => {
       select: {
         id: true, name: true, description: true, status: true, revision: true,
         mergedIntoId: true, mergedAt: true, createdAt: true, updatedAt: true,
-        _count: { select: { members: true } },
+        // Retain historical member links, but count only currently usable knowledge.
+        _count: { select: { members: { where: { item: { characterId, status: "ACTIVE" } } } } },
       },
     }),
     prisma.knowledgeTopic.count({ where }),

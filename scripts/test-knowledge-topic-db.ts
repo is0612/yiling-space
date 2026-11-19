@@ -34,6 +34,8 @@ const listTopicRevisions = (await import("../server/api/characters/[id]/growth/k
 const getTopicRevision = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions/[revision].get")).default;
 const restoreTopicRevision = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revisions/[revision]/restore.post")).default;
 const revertTopicRevision = (await import("../server/api/characters/[id]/growth/knowledge/topics/[topicId]/revert.post")).default;
+const archiveKnowledge = (await import("../server/api/characters/[id]/growth/knowledge/items/[itemId]/archive.post")).default;
+const unarchiveKnowledge = (await import("../server/api/characters/[id]/growth/knowledge/items/[itemId]/unarchive.post")).default;
 const prisma = getPrisma();
 const ownerId = randomUUID();
 const otherOwnerId = randomUUID();
@@ -58,6 +60,8 @@ router.get("/characters/:id/growth/knowledge/topics/:topicId/revisions", listTop
 router.get("/characters/:id/growth/knowledge/topics/:topicId/revisions/:revision", getTopicRevision);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/revisions/:revision/restore", restoreTopicRevision);
 router.post("/characters/:id/growth/knowledge/topics/:topicId/revert", revertTopicRevision);
+router.post("/characters/:id/growth/knowledge/items/:itemId/archive", archiveKnowledge);
+router.post("/characters/:id/growth/knowledge/items/:itemId/unarchive", unarchiveKnowledge);
 app.use(router);
 const api = createServer(toNodeListener(app));
 
@@ -350,6 +354,32 @@ try {
   assert.equal(added.status, 200, JSON.stringify(added.body));
   assert.deepEqual(added.body.addedItemIds, [manualItems[0]!.id]);
   assert.equal(added.body.revision, 5);
+  const topicsPath = `/characters/${characterId}/growth/knowledge/topics`;
+  const itemPath = `/characters/${characterId}/growth/knowledge/items/${manualItems[0]!.id}`;
+  const assertMemberState = async (valid: boolean, invalidReason: string | null, revisionChanged: boolean) => {
+    const [list, detail] = await Promise.all([
+      getRequest(`${topicsPath}?q=${encodeURIComponent("编辑后的主题")}`, session.token),
+      getRequest(`${topicsPath}/${manualTopicId}`, session.token),
+    ]);
+    assert.equal(list.status, 200);
+    assert.equal(detail.status, 200);
+    assert.equal(list.body.topics.find((topic: { id: string }) => topic.id === manualTopicId)?.memberCount, Number(valid));
+    assert.equal(detail.body.topic.revision, 5, "Knowledge lifecycle changes do not edit the topic itself");
+    const [member] = detail.body.topic.members;
+    assert.equal(detail.body.topic.members.length, 1, "Lifecycle changes retain the historical membership");
+    assert.equal(member.valid, valid);
+    assert.equal(member.invalidReason, invalidReason);
+    assert.equal(member.itemRevisionChanged, revisionChanged);
+  };
+  await assertMemberState(true, null, false);
+  assert.deepEqual(await prisma.knowledgeItem.findUnique({ where: { id: manualItems[0]!.id } }), manualItems[0]);
+  const archivedItem = await request(`${itemPath}/archive`, { expectedRevision: manualItems[0]!.revision }, session.token);
+  assert.equal(archivedItem.status, 200, JSON.stringify(archivedItem.body));
+  await assertMemberState(false, "ARCHIVED", true);
+  const unarchivedItem = await request(`${itemPath}/unarchive`, { expectedRevision: archivedItem.body.item.revision }, session.token);
+  assert.equal(unarchivedItem.status, 200, JSON.stringify(unarchivedItem.body));
+  await assertMemberState(true, null, true);
+  manualItems[0] = await prisma.knowledgeItem.findUniqueOrThrow({ where: { id: manualItems[0]!.id } });
   const duplicateAdd = await request(`/characters/${characterId}/growth/knowledge/topics/${manualTopicId}/members`, {
     itemIds: [manualItems[0]!.id], revision: 5,
   }, session.token);

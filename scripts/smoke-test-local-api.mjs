@@ -1,4 +1,12 @@
-import { randomBytes, scryptSync } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scryptSync } from "node:crypto";
+import { createServer } from "node:http";
+import { deepStrictEqual, strictEqual } from "node:assert";
+import { getPrisma } from "../server/utils/prisma";
+import { processEducationTransfer } from "../server/utils/education-transfer";
+import { encryptApiKey } from "../server/utils/credential-encryption";
+import { loadOnebotConnections } from "../server/utils/channel-adapter/onebot/configure";
+import { resolveOnebotEvent } from "../server/utils/channel-adapter/onebot/client";
+import { createOnebotMessageHandler } from "../server/utils/channel-adapter/onebot/serve";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 
@@ -1222,6 +1230,194 @@ assert(
   ),
   "Permanent retention must not enqueue raw-message cleanup work."
 );
+
+// Use the same fixture DB as the Web server. Never run the education worker
+// against a developer database: it claims pending evidence globally.
+async function verifyEducationJourney() {
+  const database = new URL(databaseUrl);
+  const ciDatabase = process.env.GITHUB_ACTIONS === "true" && database.pathname === "/yiling_hub";
+  assert(["localhost", "127.0.0.1", "[::1]"].includes(database.hostname)
+    && (ciDatabase || /^\/yiling_(?:ci_extra|stage2_test)_[a-f0-9]{32}$/.test(database.pathname)),
+  "Education journey requires a disposable local smoke database.");
+  assert(new URL(baseUrl).hostname === "127.0.0.1", "Education journey requires a loopback Web server.");
+
+  const runId = randomUUID().replaceAll("-", "");
+  const privateMarker = `CI_JOURNEY_PRIVATE_EVIDENCE_${runId}`;
+  const knowledgeTerm = "蓝晶方案校准";
+  const account = 123456789;
+  const teacher = 222;
+  const otherContact = 333;
+  const group = 999;
+  const sent = [];
+  const gateway = createServer(async (req, res) => {
+    if (req.method !== "POST" || !["/send_group_msg", "/send_private_msg"].includes(req.url)) {
+      res.writeHead(404).end();
+      return;
+    }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    sent.push({ action: req.url, body });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ status: "ok", retcode: 0, data: { message_id: sent.length } }));
+  });
+  await new Promise((resolve, reject) => {
+    gateway.once("error", reject);
+    gateway.listen(0, "127.0.0.1", resolve);
+  });
+
+  const workerDb = getPrisma();
+  try {
+    const character = await prisma.character.create({ data: {
+      ownerId: adminLogin.payload.user.id,
+      name: `CI 教学整合 ${runId}`,
+      basePrompt: "你是合成方案讨论角色。",
+      modelConfig: {
+        chatModel: "ci-education-journey", chatApiBaseUrl: mockModelBaseUrl,
+        chatApiKey: process.env.LLM_MOCK_API_KEY || "ci-only", interactionExperienceAutoEnabled: true,
+      },
+      memoryScopes: { create: { scopeType: "CHARACTER_GLOBAL", scopeKey: `ci-journey:${runId}` } },
+    } });
+    const knowledge = await prisma.knowledgeItem.create({ data: {
+      characterId: character.id, title: knowledgeTerm, content: "合成知识：校准采用蓝色阶梯。",
+    } });
+    const mockGatewayUrl = `http://127.0.0.1:${gateway.address().port}`;
+    const connection = await prisma.platformConnection.create({ data: {
+      platform: "qq-onebot", platformAccountKey: `ci-journey:${runId}`, status: "DISABLED",
+      displayName: "CI 回环网关", metadata: { qqNumber: String(account) },
+      credentialsCiphertext: Buffer.from(await encryptApiKey(JSON.stringify({
+        wsUrl: mockGatewayUrl.replace("http:", "ws:"), httpUrl: mockGatewayUrl,
+      })), "utf8"),
+    } });
+    const binding = await prisma.characterChannelBinding.create({ data: {
+      characterId: character.id, connectionId: connection.id,
+      config: { groupChatMode: "all", mentionWindowSeconds: 1 },
+    } });
+    const record = (await loadOnebotConnections(undefined, { includeDisabled: true })).find(row => row.id === connection.id);
+    assert(record?.config.httpUrl === mockGatewayUrl, "OneBot must send only to this test's loopback receiver.");
+    const handleOnebot = createOnebotMessageHandler(record);
+    let nextMessageId = 100;
+    async function onebotTurn(path, text, userId, expectedReply) {
+      const grouped = path === "GROUP";
+      const event = resolveOnebotEvent({
+        post_type: "message", message_type: grouped ? "group" : "private", self_id: account,
+        message_id: nextMessageId++, user_id: userId, ...(grouped ? { group_id: group } : {}),
+        sender: { user_id: userId, nickname: "合成联系人", role: "member" },
+        message: [{ type: "text", data: { text } }],
+      });
+      const before = sent.length;
+      assert(event, "Synthetic OneBot event must parse.");
+      const outcome = await handleOnebot(event);
+      strictEqual(outcome.status, grouped ? "buffered" : "replied", JSON.stringify(outcome));
+      for (let attempt = 0; sent.length === before && attempt < 150; attempt++) await sleep(100);
+      strictEqual(sent.length, before + 1, `${path} must send one reply to the mock gateway.`);
+      const { action, body } = sent[before];
+      strictEqual(action, grouped ? "/send_group_msg" : "/send_private_msg");
+      strictEqual(Number(grouped ? body.group_id : body.user_id), grouped ? group : userId);
+      const reply = Array.isArray(body.message)
+        ? body.message.filter(segment => segment.type === "text").map(segment => segment.data.text).join("")
+        : body.message;
+      if (expectedReply !== undefined) strictEqual(reply, expectedReply, `${path} reply`);
+      assert(!reply.includes(privateMarker) || userId === teacher, `${path} reply exposed private evidence.`);
+      return event.messageId;
+    }
+
+    // Seed only the reviewed experience; capture both evidence messages from the
+    // real private handler. This deliberately does not test experience extraction.
+    await onebotTurn("PRIVATE", "请解释怎么讨论方案。", teacher);
+    const room = await prisma.conversation.findFirstOrThrow({ where: {
+      characterId: character.id, channelBindingId: binding.id, externalConversationId: `c:${teacher}`,
+    }, include: { memoryScope: { include: { externalIdentity: true } } } });
+    strictEqual(room.memoryScope.scopeType, "EXTERNAL_IDENTITY");
+    strictEqual(room.memoryScope.externalIdentity?.platformUid, String(teacher));
+    const previousReply = await prisma.message.findFirstOrThrow({ where: { conversationId: room.id, role: "ASSISTANT" } });
+    await prisma.memoryScope.update({ where: { id: room.memoryScopeId }, data: { educationEnabled: true } });
+    const teaching = `以后讨论方案时请先说结论，再补依据。${privateMarker}`;
+    const feedbackExternalId = await onebotTurn("PRIVATE", teaching, teacher);
+    const feedback = await prisma.message.findFirstOrThrow({ where: {
+      conversationId: room.id, externalMessageId: feedbackExternalId, role: "USER",
+    } });
+    strictEqual(feedback.content, teaching);
+    const experience = await prisma.interactionExperience.create({ data: {
+      characterId: character.id, conversationId: room.id, memoryScopeId: room.memoryScopeId,
+      assistantMessageId: previousReply.id, feedbackMessageId: feedback.id,
+      content: `合成私人经验 ${privateMarker}`, context: "讨论方案", feedbackQuote: teaching,
+      evidenceHash: createHash("sha256").update(teaching).digest("hex"), status: "ACTIVE",
+      learning: { kind: "EXPRESSION", situation: "方案讨论", misunderstanding: "背景过长", correction: "先给结论", nextJudgment: "再补依据" },
+    } });
+    await prisma.memoryItem.create({ data: {
+      memoryScopeId: room.memoryScopeId, category: "PREFERENCE", confidence: 1, importance: 1,
+      sourceMessageId: feedback.id, content: `${knowledgeTerm} ${privateMarker}`,
+    } });
+    deepStrictEqual(await processEducationTransfer(workerDb), { processed: true, status: "SUCCEEDED" });
+    const habit = await prisma.characterExpressionHabit.findFirstOrThrow({ where: {
+      characterId: character.id, sourceType: "EDUCATION_TRANSFER",
+    } });
+    strictEqual(habit.status, "PENDING");
+    strictEqual(habit.conversationId, null);
+    strictEqual(habit.chatScope, "ALL");
+    deepStrictEqual(habit.sourceRefs.map(ref => ref.id), [experience.id]);
+    strictEqual(habit.sourceRefs[0].proposer.platform, "qq-onebot");
+    strictEqual(habit.sourceRefs[0].proposer.kind, "authorized");
+    assert(!habit.content.includes(privateMarker), "Candidate text must be abstracted from the original.");
+
+    const modelObservation = async (marker) => {
+      const observed = await fetch(new URL(`/__mock/journey/${marker}`, mockModelBaseUrl), {
+        headers: { authorization: `Bearer ${process.env.LLM_MOCK_API_KEY || "ci-only"}` },
+      });
+      strictEqual(observed.status, 200, "Mock request evidence must be readable.");
+      return observed.json();
+    };
+    // Positive control: the exact same query can find the sentinel inside its
+    // own private conversation, so the negative checks below are meaningful.
+    const sourceControl = `CI_JOURNEY_${runId}_SOURCE_PRIVATE`;
+    await onebotTurn("PRIVATE", `请介绍${knowledgeTerm}。${sourceControl}`, teacher,
+      "CI 这里先介绍背景，再说结论。");
+    deepStrictEqual(await modelObservation(sourceControl), [{
+      group: false, habitIds: [], knowledgeIds: [knowledge.id], hasPrivateSource: true,
+      hasPrivateMemory: true, hasPrivateRefs: false,
+    }], "The source private conversation must retrieve its own synthetic memory while the habit is pending.");
+
+    const reviewPath = `/api/characters/${character.id}/growth/language/${habit.id}`;
+    const ownerHeaders = { ...writeHeaders, cookie: adminCookie };
+    let revision = habit.revision;
+    for (const stage of ["PENDING", "ACTIVE", "DISABLED"]) {
+      if (stage !== "PENDING") {
+        const review = await request(reviewPath, {
+          method: "PATCH", headers: ownerHeaders,
+          body: { operation: stage === "ACTIVE" ? "ACTIVATE" : "DISABLE", expectedRevision: revision },
+        });
+        strictEqual(review.habit.status, stage);
+        strictEqual(review.habit.revision, revision + 1);
+        revision = review.habit.revision;
+      }
+      const active = stage === "ACTIVE";
+      const expectedReply = active ? "CI 结论先行。这里补充依据。" : "CI 这里先介绍背景，再说结论。";
+      for (const path of ["WEB", "GROUP", "PRIVATE"]) {
+        const marker = `CI_JOURNEY_${runId}_${stage}_${path}`;
+        const message = `请介绍${knowledgeTerm}。${marker}`;
+        if (path === "WEB") {
+          const reply = await request(`/api/characters/${character.id}/chat`, {
+            method: "POST", headers: ownerHeaders, body: { message },
+          });
+          strictEqual(reply.assistantMessage.content, expectedReply, `${stage} Web reply`);
+          deepStrictEqual((reply.assistantMessage.sources.expressionHabits ?? []).map(row => row.id), active ? [habit.id] : []);
+        } else {
+          await onebotTurn(path, message, otherContact, expectedReply);
+        }
+        deepStrictEqual(await modelObservation(marker), [{
+          group: path === "GROUP", habitIds: active ? [habit.id] : [], knowledgeIds: [knowledge.id],
+          hasPrivateSource: false, hasPrivateMemory: false, hasPrivateRefs: false,
+        }], `${stage} ${path}: model request, public knowledge and private source isolation`);
+      }
+      console.log(`Education journey ${stage}: Web + OneBot group/private model requests, replies and isolation passed.`);
+    }
+  } finally {
+    await new Promise((resolve, reject) => gateway.close(error => error ? reject(error) : resolve()));
+    await workerDb.$disconnect();
+  }
+}
+await verifyEducationJourney();
 
 console.log("Local API smoke test passed: character CRUD, encrypted per-character API settings and connection test, memory settings including deferred changes, pending-change cancellation and immediate recalculation, transcript import, scheduler backfill, local-mock AI extraction, source-ID validation, persisted provenance, manual and AI snapshot versions, safe AI regeneration, task cancel/requeue, recycle-bin lifecycle, context-aware AI chat with private-scope isolation, conversation search/rename, archive/restore, archived write protection, end-to-end raw-message retention cleanup with audit-result visibility, cleanup-task cancel/retry, retention-widening protection, permanent-retention safety, login/logout with throttling, login-logout audit trail, device listing, cross-site revocation refusal, sign-out-others, password policy plus rotation with session invalidation, and open email registration with role isolation and admin-only account management.");
 

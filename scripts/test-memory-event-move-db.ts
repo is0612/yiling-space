@@ -8,7 +8,7 @@
  */
 import "dotenv/config";
 import { getPrisma } from "../server/utils/prisma";
-import { moveConversationEventsToScope } from "../server/utils/memory-event-move";
+import { moveConversationEventsToScope, rehomeConversationScope } from "../server/utils/memory-event-move";
 
 const prisma = getPrisma();
 const NAME = "__忆泡归位搬家__";
@@ -90,8 +90,9 @@ try {
       ...baseEvent,
       title: "群里的事件",
       dedupeKey: "ev:stay-1",
-      sourceMessageId: groupMessage.id,
-      sourceMessageIds: [groupMessage.id],
+      conversationId: groupConversation.id,
+      sourceMessageId: privateMessage.id,
+      sourceMessageIds: [privateMessage.id, groupMessage.id],
     },
   });
   const day = await prisma.memoryEventDay.create({
@@ -138,11 +139,29 @@ try {
   const finalOldDay = await prisma.memoryEventDay.findUniqueOrThrow({ where: { id: day.id }, select: { eventCount: true } });
   const finalNewDay = await prisma.memoryEventDay.findFirstOrThrow({ where: { memoryScopeId: toScopeId, dayKey: "2026-10-31" }, select: { eventCount: true } });
   check("重算后两边条数都等于真实事件数", finalOldDay.eventCount === finalOldCount && finalNewDay.eventCount === finalNewCount, { finalOldCount, finalNewCount, finalOldDay, finalNewDay });
+
+  console.log("\n[3] 原文已清理：持久会话归属仍优先于旧锚点");
+  const retained = await prisma.memoryEvent.create({
+    data: { ...baseEvent, conversationId: privateConversation.id, dedupeKey: "ev:retained", sourceMessageId: privateMessage.id },
+  });
+  const other = await prisma.memoryEvent.create({
+    data: { ...baseEvent, conversationId: groupConversation.id, dedupeKey: "ev:other", sourceMessageId: privateMessage2.id },
+  });
+  await prisma.message.deleteMany({ where: { conversationId: privateConversation.id } });
+  check("原文删除只清空锚点", (await prisma.memoryEvent.findUniqueOrThrow({ where: { id: retained.id } })).sourceMessageId === null);
+  const rehomed = await prisma.$transaction((tx) => rehomeConversationScope(tx, {
+    conversationId: privateConversation.id, fromScopeId, toScopeId,
+  }));
+  check("会话没有任何原文时仍搬走其忆泡", rehomed.moved === 1, rehomed);
+  check("保留的忆泡与会话在同一新范围", await prisma.memoryEvent.count({ where: {
+    id: retained.id, memoryScopeId: toScopeId, conversation: { is: { id: privateConversation.id, memoryScopeId: toScopeId } },
+  } }) === 1);
+  check("同范围其他会话的忆泡仍在原范围", await prisma.memoryEvent.count({ where: { id: other.id, memoryScopeId: fromScopeId } }) === 1);
 } catch (error) {
   failures += 1;
   console.log("  ❌ 运行异常", error instanceof Error ? error.message : String(error));
 } finally {
-  console.log("\n[3] 清理");
+  console.log("\n[4] 清理");
   if (characterId) {
     await prisma.memoryEvent.deleteMany({ where: { memoryScope: { characterId } } });
     await prisma.memoryEventDay.deleteMany({ where: { memoryScope: { characterId } } });

@@ -81,7 +81,7 @@ paths:
         - &knowledgeTopicPage { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1 } }
         - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 30 } }
       responses:
-        '200': { description: 'topics（包含 memberCount）、pagination（page、pageSize、total、pageCount）' }
+        '200': { description: 'topics（memberCount 仅计同角色活动知识）、pagination（page、pageSize、total、pageCount）' }
         '400': &knowledgeTopicBad { description: 参数无效 }
         '401': &knowledgeTopicUnauthorized { description: 未登录 }
         '404': &knowledgeTopicMissing { description: 资源不存在或不属于当前用户或角色 }
