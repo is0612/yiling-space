@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dataPath } from "./data-dir";
+import { getPrisma } from "./prisma";
 
 /**
  * 阶段三第一块：本地只读观察。
@@ -95,9 +96,31 @@ export type LocalSearchResult = {
   scanned: number;
 };
 
+export const PROJECT_ROOT_ID = "project";
+
+export type LocalObserveRoot = {
+  id: string;
+  label: string;
+  path: string;
+  mode: "READ_ONLY";
+  enabled: boolean;
+  builtin: boolean;
+};
+
 export function localObserveRoot(): string {
   const configured = process.env.YILING_LOCAL_ROOT?.trim();
   return path.resolve(configured || process.cwd());
+}
+
+export function projectObserveRoot(): LocalObserveRoot {
+  return {
+    id: PROJECT_ROOT_ID,
+    label: "项目目录",
+    path: localObserveRoot(),
+    mode: "READ_ONLY",
+    enabled: true,
+    builtin: true,
+  };
 }
 
 export function localObserveRootInfo() {
@@ -109,6 +132,71 @@ export function localObserveRootInfo() {
     maxFileBytes: LOCAL_OBSERVE_MAX_FILE_BYTES,
     maxSearchResults: LOCAL_OBSERVE_MAX_SEARCH_RESULTS,
   };
+}
+
+export async function listLocalObserveRoots(includeDisabled = false): Promise<LocalObserveRoot[]> {
+  const rows = await getPrisma().localAccessRoot.findMany({
+    where: includeDisabled ? {} : { enabled: true },
+    orderBy: [{ createdAt: "asc" }],
+  });
+  return [
+    projectObserveRoot(),
+    ...rows.map((row) => ({
+      id: row.id,
+      label: row.label,
+      path: row.path,
+      mode: "READ_ONLY" as const,
+      enabled: row.enabled,
+      builtin: false,
+    })),
+  ];
+}
+
+export async function resolveObserveRoot(rootIdInput: unknown): Promise<LocalObserveRoot> {
+  const rootId = typeof rootIdInput === "string" && rootIdInput.trim() ? rootIdInput.trim() : PROJECT_ROOT_ID;
+  if (rootId === PROJECT_ROOT_ID) return projectObserveRoot();
+  if (!/^[0-9a-f-]{36}$/i.test(rootId)) throw new LocalObserveError(404, "授权目录不存在。");
+  const row = await getPrisma().localAccessRoot.findUnique({ where: { id: rootId } });
+  if (!row) throw new LocalObserveError(404, "授权目录不存在。");
+  if (!row.enabled) throw new LocalObserveError(403, "这个授权目录已停用。");
+  if (row.mode !== "READ_ONLY") throw new LocalObserveError(403, "这个目录的权限模式暂不支持。");
+  return { id: row.id, label: row.label, path: row.path, mode: "READ_ONLY", enabled: row.enabled, builtin: false };
+}
+
+const DENIED_ROOT_PATHS = new Set([
+  "c:\\windows",
+  "c:\\program files",
+  "c:\\program files (x86)",
+  "c:\\programdata",
+]);
+
+/** 管理页新增目录时用：必须是已存在的绝对目录，不能是盘符根/系统目录。 */
+export function validateLocalRootPath(input: unknown): string {
+  if (typeof input !== "string" || !input.trim()) throw new LocalObserveError(400, "请填写目录路径。");
+  const raw = input.trim();
+  if (raw.includes("\0")) throw new LocalObserveError(400, "路径包含非法字符。");
+  if (!path.isAbsolute(raw)) throw new LocalObserveError(400, "授权目录必须是绝对路径。");
+  let real: string;
+  try {
+    real = fs.realpathSync(raw);
+  } catch {
+    throw new LocalObserveError(400, "目录不存在或无法访问。");
+  }
+  const stat = fs.statSync(real);
+  if (!stat.isDirectory()) throw new LocalObserveError(400, "授权路径必须是目录。");
+  const parsed = path.parse(real);
+  if (parsed.root === real) throw new LocalObserveError(400, "不能把整个盘符根目录加为授权目录。");
+  if (DENIED_ROOT_PATHS.has(real.toLowerCase())) {
+    throw new LocalObserveError(403, "Windows 系统目录不允许加入本地观察。");
+  }
+  if (real.split(/[\\/]/).some((part) => part.toLowerCase() === ".data")) {
+    throw new LocalObserveError(403, ".data 是运行时数据目录，不允许作为授权目录。");
+  }
+  const home = process.env.USERPROFILE ? path.resolve(process.env.USERPROFILE) : "";
+  if (home && path.resolve(real).toLowerCase() === home.toLowerCase()) {
+    throw new LocalObserveError(403, "不能直接授权整个用户目录；请选择下面的具体目录。");
+  }
+  return real;
 }
 
 function isIgnored(name: string) {
@@ -127,35 +215,34 @@ function within(root: string, target: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function realRoot(): string {
-  return fs.realpathSync(localObserveRoot());
+function realRoot(root: string): string {
+  return fs.realpathSync(root);
 }
 
 /**
- * 把接口里的相对路径解析成真实路径；拒绝绝对路径、`..`、根外路径和越界符号链接。
+ * 把接口里的相对路径解析成真实路径；拒绝绝对路径、`..`、授权根外路径和越界符号链接。
  */
-export function resolveLocalPath(input: unknown): { relative: string; absolute: string; real: string } {
+export function resolveLocalPath(root: string, input: unknown): { relative: string; absolute: string; real: string } {
   if (typeof input !== "string") throw new LocalObserveError(400, "路径参数必须是字符串。");
   const raw = input.trim().replace(/\\/g, "/");
   if (raw.includes("\0")) throw new LocalObserveError(400, "路径包含非法字符。");
   if (raw.startsWith("/") || /^[a-zA-Z]:/.test(raw)) {
-    throw new LocalObserveError(400, "只接受项目根目录内的相对路径。");
+    throw new LocalObserveError(400, "只接受授权目录内的相对路径。");
   }
   const normalized = path.posix.normalize(raw);
   if (normalized === ".." || normalized.startsWith("../")) {
-    throw new LocalObserveError(403, "不能访问项目根目录之外。");
+    throw new LocalObserveError(403, "不能访问授权目录之外。");
   }
-  const root = localObserveRoot();
-  const rootReal = realRoot();
+  const rootReal = realRoot(root);
   const absolute = path.resolve(root, normalized === "." ? "" : normalized);
-  if (!within(root, absolute)) throw new LocalObserveError(403, "不能访问项目根目录之外。");
+  if (!within(root, absolute)) throw new LocalObserveError(403, "不能访问授权目录之外。");
   let real: string;
   try {
     real = fs.realpathSync(absolute);
   } catch {
     throw new LocalObserveError(404, "路径不存在。");
   }
-  if (!within(rootReal, real)) throw new LocalObserveError(403, "符号链接指向项目根目录之外。");
+  if (!within(rootReal, real)) throw new LocalObserveError(403, "符号链接指向授权目录之外。");
   return { relative: normalized === "." ? "" : normalized, absolute, real };
 }
 
@@ -183,12 +270,12 @@ function kindOf(dirent: fs.Dirent, absolute: string): LocalEntryKind {
   return "other";
 }
 
-export function listLocalDirectory(input: unknown): {
+export function listLocalDirectory(root: string, input: unknown): {
   path: string;
   entries: LocalEntry[];
   truncated: boolean;
 } {
-  const resolved = resolveLocalPath(input);
+  const resolved = resolveLocalPath(root, input);
   assertReadableName(resolved.relative);
   const stat = fs.statSync(resolved.real);
   if (!stat.isDirectory()) throw new LocalObserveError(400, "这个路径不是目录。");
@@ -234,8 +321,8 @@ function looksBinary(buffer: Buffer) {
   return sample.length > 0 && control / sample.length > 0.1;
 }
 
-export function readLocalTextFile(input: unknown): LocalReadResult {
-  const resolved = resolveLocalPath(input);
+export function readLocalTextFile(root: string, input: unknown): LocalReadResult {
+  const resolved = resolveLocalPath(root, input);
   assertReadableName(resolved.relative);
   const stat = fs.statSync(resolved.real);
   if (!stat.isFile()) throw new LocalObserveError(400, "这个路径不是文件。");
@@ -259,11 +346,11 @@ function searchableFile(name: string) {
   return SEARCH_EXTENSIONS.has(path.extname(lower)) || lower.endsWith(".env.example");
 }
 
-export function searchLocalProject(queryInput: unknown, pathInput: unknown = ""): LocalSearchResult {
+export function searchLocalProject(root: string, queryInput: unknown, pathInput: unknown = ""): LocalSearchResult {
   const query = typeof queryInput === "string" ? queryInput.trim() : "";
   if (query.length < 2) throw new LocalObserveError(400, "搜索词至少 2 个字符。");
   if (query.length > 100) throw new LocalObserveError(400, "搜索词最多 100 个字符。");
-  const resolved = resolveLocalPath(pathInput);
+  const resolved = resolveLocalPath(root, pathInput);
   assertReadableName(resolved.relative);
   const stat = fs.statSync(resolved.real);
   if (!stat.isDirectory()) throw new LocalObserveError(400, "搜索起点必须是目录。");
@@ -340,7 +427,7 @@ export function searchLocalProject(queryInput: unknown, pathInput: unknown = "")
 /** 只追加审计，不记录文件正文；写失败不影响只读请求。 */
 export function auditLocalObserve(
   actorId: string,
-  action: "list" | "read" | "search",
+  action: "list" | "read" | "search" | "root.add" | "root.update" | "root.delete",
   detail: Record<string, unknown>,
 ) {
   try {

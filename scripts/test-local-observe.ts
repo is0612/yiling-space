@@ -28,30 +28,38 @@ function expectError(fn: () => unknown, code: number) {
   assert.fail(`expected LocalObserveError ${code}`);
 }
 
-const resolved = module.resolveLocalPath("src");
+const resolved = module.resolveLocalPath(root, "src");
 assert.equal(resolved.relative, "src");
 assert.equal(resolved.absolute, path.join(root, "src"));
-expectError(() => module.resolveLocalPath("../outside"), 403);
-expectError(() => module.resolveLocalPath("C:\\Windows"), 400);
-expectError(() => module.resolveLocalPath("/etc"), 400);
+expectError(() => module.resolveLocalPath(root, "../outside"), 403);
+expectError(() => module.resolveLocalPath(root, "C:\\Windows"), 400);
+expectError(() => module.resolveLocalPath(root, "/etc"), 400);
 
-const listing = module.listLocalDirectory("");
+const listing = module.listLocalDirectory(root, "");
 const names = listing.entries.map((entry: { name: string }) => entry.name);
 assert.ok(names.includes("src"));
 assert.ok(names.includes("README.md"));
 assert.ok(!names.includes("node_modules"));
 assert.ok(!names.includes(".env"));
 
-const read = module.readLocalTextFile("src/a.ts");
+const read = module.readLocalTextFile(root, "src/a.ts");
 assert.match(read.content, /needle/);
-expectError(() => module.readLocalTextFile(".env"), 403);
-expectError(() => module.readLocalTextFile("binary.bin"), 415);
-expectError(() => module.readLocalTextFile("large.txt"), 413);
+expectError(() => module.readLocalTextFile(root, ".env"), 403);
+expectError(() => module.readLocalTextFile(root, "binary.bin"), 415);
+expectError(() => module.readLocalTextFile(root, "large.txt"), 413);
 
-const search = module.searchLocalProject("needle", "");
+const search = module.searchLocalProject(root, "needle", "");
 assert.ok(search.matches.some((match: { path: string; kind: string }) =>
   match.path === "src/a.ts" && match.kind === "content"));
-expectError(() => module.searchLocalProject("a", ""), 400);
+expectError(() => module.searchLocalProject(root, "a", ""), 400);
+
+const validated = module.validateLocalRootPath(root);
+assert.equal(validated, fs.realpathSync(root));
+expectError(() => module.validateLocalRootPath("relative/path"), 400);
+if (process.platform === "win32") {
+  expectError(() => module.validateLocalRootPath("C:\\Windows"), 403);
+  expectError(() => module.validateLocalRootPath("C:\\"), 400);
+}
 
 fs.rmSync(root, { recursive: true, force: true });
-console.log("Local observe tests passed: path traversal, ignore/sensitive filters, text/binary/size limits, search.");
+console.log("Local observe tests passed: path traversal, root validation, ignore/sensitive filters, text/binary/size limits, search.");

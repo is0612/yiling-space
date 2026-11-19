@@ -6,7 +6,7 @@
  * 页面不提供任何写操作；不要把这里做成文件管理器。
  */
 import { Document, Folder, Refresh, Search } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { readApiErrorMessage } from "~/utils/api-error";
 
 definePageMeta({
@@ -24,6 +24,15 @@ type RootInfo = {
   maxSearchResults: number;
 };
 
+type LocalObserveRoot = {
+  id: string;
+  label: string;
+  path: string;
+  mode: "READ_ONLY";
+  enabled: boolean;
+  builtin: boolean;
+};
+
 type Entry = {
   name: string;
   path: string;
@@ -37,6 +46,7 @@ type ListResult = {
   path: string;
   entries: Entry[];
   truncated: boolean;
+  root: LocalObserveRoot;
 };
 
 type ReadResult = {
@@ -65,6 +75,8 @@ const request = useApiRequest();
 const loading = ref(true);
 const listing = ref(false);
 const rootInfo = ref<RootInfo | null>(null);
+const roots = ref<LocalObserveRoot[]>([]);
+const selectedRootId = ref("project");
 const currentPath = ref("");
 const entries = ref<Entry[]>([]);
 const listTruncated = ref(false);
@@ -75,6 +87,16 @@ const searchQuery = ref("");
 const searching = ref(false);
 const searchPerformed = ref(false);
 const searchResult = ref<SearchResult | null>(null);
+const manageVisible = ref(false);
+const manageRoots = ref<LocalObserveRoot[]>([]);
+const manageLoading = ref(false);
+const newRootPath = ref("");
+const newRootLabel = ref("");
+const savingRoot = ref(false);
+
+const selectedRoot = computed(() =>
+  roots.value.find((root) => root.id === selectedRootId.value) ?? roots.value[0] ?? null,
+);
 
 const breadcrumbs = computed(() => {
   const parts = currentPath.value.split("/").filter(Boolean);
@@ -109,7 +131,10 @@ function kindLabel(kind: Entry["kind"]) {
 async function list(path: string) {
   listing.value = true;
   try {
-    const result = await request<ListResult>({ url: "/local/observe/list", params: { path } });
+    const result = await request<ListResult>({
+      url: "/local/observe/list",
+      params: { rootId: selectedRootId.value, path },
+    });
     currentPath.value = result.path;
     pathInput.value = result.path;
     entries.value = result.entries;
@@ -125,7 +150,10 @@ async function list(path: string) {
 async function read(path: string) {
   previewLoading.value = true;
   try {
-    preview.value = await request<ReadResult>({ url: "/local/observe/read", params: { path } });
+    preview.value = await request<ReadResult>({
+      url: "/local/observe/read",
+      params: { rootId: selectedRootId.value, path },
+    });
   } catch (error) {
     preview.value = null;
     ElMessage.error(readApiErrorMessage(error, "读取文件失败。"));
@@ -171,7 +199,7 @@ async function search() {
   try {
     searchResult.value = await request<SearchResult>({
       url: "/local/observe/search",
-      params: { q: query, path: currentPath.value },
+      params: { rootId: selectedRootId.value, q: query, path: currentPath.value },
     });
   } catch (error) {
     searchResult.value = null;
@@ -193,9 +221,110 @@ function refresh() {
   }
 }
 
+async function loadRoots() {
+  const result = await request<{ roots: LocalObserveRoot[] }>({ url: "/local/observe/roots" });
+  roots.value = result.roots;
+  if (!roots.value.some((root) => root.id === selectedRootId.value)) {
+    selectedRootId.value = roots.value[0]?.id ?? "project";
+  }
+}
+
+async function changeRoot() {
+  currentPath.value = "";
+  preview.value = null;
+  searchPerformed.value = false;
+  searchResult.value = null;
+  await list("");
+}
+
+async function openManage() {
+  manageVisible.value = true;
+  manageLoading.value = true;
+  try {
+    const result = await request<{ roots: LocalObserveRoot[] }>({ url: "/local/roots" });
+    manageRoots.value = result.roots;
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "读取授权目录失败。"));
+  } finally {
+    manageLoading.value = false;
+  }
+}
+
+async function refreshManage() {
+  const result = await request<{ roots: LocalObserveRoot[] }>({ url: "/local/roots" });
+  manageRoots.value = result.roots;
+  await loadRoots();
+}
+
+async function addRoot() {
+  const path = newRootPath.value.trim();
+  if (!path) {
+    ElMessage.info("请填写要授权的绝对目录。");
+    return;
+  }
+  savingRoot.value = true;
+  try {
+    const result = await request<{ root: LocalObserveRoot }>({
+      url: "/local/roots",
+      method: "post",
+      data: { path, label: newRootLabel.value.trim() || undefined },
+    });
+    ElMessage.success(`已授权：${result.root.label}`);
+    newRootPath.value = "";
+    newRootLabel.value = "";
+    selectedRootId.value = result.root.id;
+    await refreshManage();
+    await list("");
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "添加授权目录失败。"));
+  } finally {
+    savingRoot.value = false;
+  }
+}
+
+function asLocalRoot(row: unknown): LocalObserveRoot {
+  return row as LocalObserveRoot;
+}
+
+async function toggleRoot(root: LocalObserveRoot) {
+  try {
+    await request({
+      url: `/local/roots/${root.id}`,
+      method: "patch",
+      data: { enabled: !root.enabled },
+    });
+    await refreshManage();
+    if (selectedRootId.value === root.id && root.enabled) {
+      selectedRootId.value = "project";
+      await list("");
+    }
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "更新授权目录失败。"));
+  }
+}
+
+async function removeRoot(root: LocalObserveRoot) {
+  try {
+    await ElMessageBox.confirm(
+      `从白名单移除「${root.label}」？不会删除磁盘上的文件。`,
+      "移除授权目录",
+      { type: "warning", confirmButtonText: "移除", cancelButtonText: "取消" },
+    );
+    await request({ url: `/local/roots/${root.id}`, method: "delete" });
+    ElMessage.success("已移除授权目录。");
+    if (selectedRootId.value === root.id) selectedRootId.value = "project";
+    await refreshManage();
+    await list("");
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(readApiErrorMessage(error, "移除授权目录失败。"));
+  }
+}
+
 onMounted(async () => {
   try {
     rootInfo.value = await request<RootInfo>({ url: "/local/observe/root" });
+    await loadRoots();
     await list("");
   } catch (error) {
     ElMessage.error(readApiErrorMessage(error, "本地观察初始化失败。"));
@@ -203,6 +332,7 @@ onMounted(async () => {
     loading.value = false;
   }
 });
+
 </script>
 
 <template>
@@ -212,7 +342,7 @@ onMounted(async () => {
       :closable="false"
       show-icon
       title="只读观察"
-      :description="rootInfo ? `根目录：${rootInfo.root} · 仅管理员 · 不写文件、不执行终端命令` : '只读观察项目目录；仅管理员可用。'"
+      :description="selectedRoot ? `根目录：${selectedRoot.path} · 仅管理员 · 不写文件、不执行终端命令` : '只读观察授权目录；仅管理员可用。'"
     />
 
     <el-card
@@ -222,6 +352,30 @@ onMounted(async () => {
     >
       <div class="toolbar">
         <div class="toolbar-main">
+          <div class="root-row">
+            <el-select
+              v-model="selectedRootId"
+              class="root-select"
+              :disabled="listing"
+              @change="changeRoot"
+            >
+              <el-option
+                v-for="root in roots"
+                :key="root.id"
+                :label="root.label"
+                :value="root.id"
+              >
+                <span>{{ root.label }}</span>
+                <span class="option-path">{{ root.path }}</span>
+              </el-option>
+            </el-select>
+            <el-button
+              :icon="Folder"
+              @click="openManage"
+            >
+              管理目录
+            </el-button>
+          </div>
           <el-breadcrumb separator="/">
             <el-breadcrumb-item>
               <button
@@ -229,7 +383,7 @@ onMounted(async () => {
                 class="crumb-link"
                 @click="goPath('')"
               >
-                {{ rootInfo?.name || "项目根目录" }}
+                {{ selectedRoot?.label || rootInfo?.name || "项目根目录" }}
               </button>
             </el-breadcrumb-item>
             <el-breadcrumb-item
@@ -446,6 +600,118 @@ onMounted(async () => {
         </div>
       </div>
     </el-card>
+
+    <el-dialog
+      v-model="manageVisible"
+      title="授权目录"
+      width="760px"
+      append-to-body
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="她只能读取这里列出的目录"
+        description="移除只影响白名单，不会删除磁盘文件。当前版本全部只读；写权限后续单独做审批。"
+      />
+      <div class="manage-add">
+        <el-input
+          v-model="newRootPath"
+          placeholder="绝对路径，例如 D:\Projects"
+          clearable
+          @keyup.enter="addRoot"
+        />
+        <el-input
+          v-model="newRootLabel"
+          placeholder="显示名称（可选）"
+          clearable
+        />
+        <el-button
+          type="primary"
+          :loading="savingRoot"
+          @click="addRoot"
+        >
+          添加
+        </el-button>
+      </div>
+      <el-table
+        v-loading="manageLoading"
+        :data="manageRoots"
+        row-key="id"
+        size="small"
+        class="manage-table"
+      >
+        <el-table-column
+          label="名称"
+          min-width="150"
+        >
+          <template #default="{ row }">
+            <span>{{ row.label }}</span>
+            <el-tag
+              v-if="row.builtin"
+              size="small"
+              type="info"
+              class="builtin-tag"
+            >
+              内置
+            </el-tag>
+            <el-tag
+              v-else
+              size="small"
+              :type="row.enabled ? 'success' : 'info'"
+              class="builtin-tag"
+            >
+              {{ row.enabled ? "启用" : "停用" }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="path"
+          label="路径"
+          min-width="260"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          label="权限"
+          width="86"
+        >
+          <template #default>
+            <span class="muted">只读</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="操作"
+          width="150"
+        >
+          <template #default="{ row }">
+            <template v-if="!row.builtin">
+              <el-switch
+                :model-value="row.enabled"
+                size="small"
+                @change="toggleRoot(asLocalRoot(row))"
+              />
+              <el-button
+                text
+                type="danger"
+                size="small"
+                @click="removeRoot(asLocalRoot(row))"
+              >
+                移除
+              </el-button>
+            </template>
+            <span
+              v-else
+              class="muted"
+            >不可移除</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="manageVisible = false">
+          关闭
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -472,6 +738,32 @@ onMounted(async () => {
 .toolbar-actions {
   display: flex;
   gap: 8px;
+}
+.root-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.root-select {
+  width: 230px;
+}
+.option-path {
+  margin-left: 10px;
+  color: #98a2b3;
+  font-size: 12px;
+}
+.manage-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 0.8fr) auto;
+  gap: 8px;
+  margin: 14px 0;
+}
+.manage-table {
+  margin-top: 4px;
+}
+.builtin-tag {
+  margin-left: 6px;
 }
 .crumb-link {
   border: 0;

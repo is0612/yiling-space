@@ -1,21 +1,31 @@
 import { createError, getQuery } from "h3";
 import { requireAdminActor } from "../../../utils/auth";
-import { auditLocalObserve, listLocalDirectory, LocalObserveError } from "../../../utils/local-observe";
+import {
+  auditLocalObserve,
+  listLocalDirectory,
+  LocalObserveError,
+  resolveObserveRoot,
+} from "../../../utils/local-observe";
 
 export default defineEventHandler(async (event) => {
   const actor = await requireAdminActor(event);
-  const raw = getQuery(event).path;
-  const pathInput = typeof raw === "string" ? raw : "";
+  const query = getQuery(event);
+  const rootId = typeof query.rootId === "string" ? query.rootId : "";
+  const pathInput = typeof query.path === "string" ? query.path : "";
   try {
-    const result = listLocalDirectory(pathInput);
+    const root = await resolveObserveRoot(rootId);
+    const result = listLocalDirectory(root.path, pathInput);
     auditLocalObserve(actor.user.id, "list", {
+      rootId: root.id,
+      root: root.path,
       path: result.path,
       entries: result.entries.length,
       truncated: result.truncated,
     });
-    return result;
+    return { ...result, root };
   } catch (error) {
     auditLocalObserve(actor.user.id, "list", {
+      rootId,
       path: pathInput,
       error: error instanceof Error ? error.message : String(error),
     });

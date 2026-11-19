@@ -4,15 +4,23 @@
 
 ## 能做什么
 
-- 列出项目根目录内的目录；
+- 管理授权目录（添加 / 停用 / 移除；移除不删磁盘文件）；
+- 列出授权目录内的目录；
 - 读取文本文件（≤256 KB）；
 - 按文件名或内容搜索（最多 100 条结果）。
 
 入口：系统管理 → 本地观察（`/local-observe`）。
 
+## 授权目录
+
+- 内置「项目目录」永远存在，不能移除；
+- 管理页可以添加任意**已存在的绝对目录**（最多 20 个）；
+- 添加时会拒绝：盘符根、`C:\Windows` / `Program Files` / `ProgramData`、整个用户目录、`.data` 运行时目录；
+- 停用的目录不参与观察，可以随时重新启用；
+- 移除只删白名单记录，不删除磁盘文件。
+
 ## 边界
 
-- 根目录默认是服务进程的 `process.cwd()`，可用 `YILING_LOCAL_ROOT` 指定；
 - 接口只接受相对路径，绝对路径、`..`、根外符号链接都会被拒绝；
 - 以下目录不进入观察范围：`node_modules`、`.git`、`.nuxt`、`.output`、`.data`、`dist`、`backups` 等；
 - `.env*`、`*.key`、`*.pem`、`credentials-encryption.key`、`onebot-*.json` 等敏感文件不可读；
@@ -27,9 +35,12 @@
 ## API
 
 - `GET /api/local/observe/root`
-- `GET /api/local/observe/list?path=`
-- `GET /api/local/observe/read?path=`
-- `GET /api/local/observe/search?q=&path=`
+- `GET /api/local/observe/roots`
+- `GET /api/local/observe/list?rootId=&path=`
+- `GET /api/local/observe/read?rootId=&path=`
+- `GET /api/local/observe/search?rootId=&q=&path=`
+- `GET/POST /api/local/roots`
+- `PATCH/DELETE /api/local/roots/{id}`
 
 全部仅管理员可用；契约见 `docs/openapi.yaml` 的 `LocalObserve` 路径。
 
