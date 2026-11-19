@@ -2138,12 +2138,48 @@ model LocalWriteRequest {
   actorId String @db.Uuid
   characterId String? @db.Uuid
   conversationId String? @db.Uuid
+  taskId String? @db.Uuid
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   decidedAt DateTime? @db.Timestamptz(6)
   appliedAt DateTime? @db.Timestamptz(6)
   error String? @db.VarChar(500)
   root LocalAccessRoot @relation(fields: [rootId], references: [id], onDelete: Cascade)
+  task LocalTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
   @@index([status, createdAt])
   @@index([rootId, createdAt])
+  @@index([taskId, createdAt])
   @@map("local_write_requests")
+}
+
+/// 本地执行任务档案：目标 → 计划 → 写请求 → 验收证据。
+model LocalTask {
+  id String @id @default(uuid()) @db.Uuid
+  title String @db.VarChar(200)
+  goal String @db.Text
+  plan String @db.Text
+  status String @default("PLANNED") @db.VarChar(20)
+  actorId String @db.Uuid
+  characterId String? @db.Uuid
+  conversationId String? @db.Uuid
+  resultNote String? @db.VarChar(1000)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  completedAt DateTime? @db.Timestamptz(6)
+  writeRequests LocalWriteRequest[]
+  evidence LocalTaskEvidence[]
+  @@index([status, createdAt])
+  @@map("local_tasks")
+}
+
+model LocalTaskEvidence {
+  id String @id @default(uuid()) @db.Uuid
+  taskId String @db.Uuid
+  kind String @default("MANUAL") @db.VarChar(20)
+  outcome String @db.VarChar(20)
+  note String @db.Text
+  actorId String @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  task LocalTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  @@index([taskId, createdAt])
+  @@map("local_task_evidence")
 }

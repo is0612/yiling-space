@@ -463,7 +463,7 @@ export function searchLocalProject(root: string, queryInput: unknown, pathInput:
 /** 只追加审计，不记录文件正文；写失败不影响只读请求。 */
 export function auditLocalObserve(
   actorId: string,
-  action: "list" | "read" | "search" | "root.add" | "root.update" | "root.delete" | "write.request" | "write.apply" | "write.reject",
+  action: "list" | "read" | "search" | "root.add" | "root.update" | "root.delete" | "write.request" | "write.apply" | "write.reject" | "task.create" | "task.evidence" | "task.cancel",
   detail: Record<string, unknown>,
 ) {
   try {

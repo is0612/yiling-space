@@ -7035,6 +7035,136 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /local/tasks:
+    get:
+      tags: [LocalObserve]
+      summary: 任务档案
+      description: 仅管理员；最近 50 条，可按状态过滤。
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string }
+      responses:
+        '200':
+          description: 任务列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tasks]
+                properties:
+                  tasks:
+                    type: array
+                    items: { $ref: '#/components/schemas/LocalTask' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [LocalObserve]
+      summary: 手动建任务档案
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, goal, plan]
+              properties:
+                title: { type: string, maxLength: 200 }
+                goal: { type: string, maxLength: 4000 }
+                plan: { type: string, maxLength: 8000 }
+      responses:
+        '200':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task: { $ref: '#/components/schemas/LocalTask' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /local/tasks/{id}:
+    get:
+      tags: [LocalObserve]
+      summary: 任务详情
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 任务
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task: { $ref: '#/components/schemas/LocalTask' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /local/tasks/{id}/evidence:
+    post:
+      tags: [LocalObserve]
+      summary: 记录验收证据
+      description: PASS / FAIL 会改变任务状态；INFO 只追加记录。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome, note]
+              properties:
+                outcome: { type: string, enum: [PASS, FAIL, INFO] }
+                note: { type: string, maxLength: 4000 }
+                kind: { type: string, maxLength: 20, default: MANUAL }
+      responses:
+        '200':
+          description: 已记录
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evidence: { $ref: '#/components/schemas/LocalTaskEvidence' }
+                  task: { $ref: '#/components/schemas/LocalTask' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/BadRequest'
+  /local/tasks/{id}/cancel:
+    post:
+      tags: [LocalObserve]
+      summary: 取消任务
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 已取消
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task: { $ref: '#/components/schemas/LocalTask' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/BadRequest'
+
 components:
   securitySchemes:
     sessionCookie:
@@ -7078,6 +7208,46 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    LocalTask:
+      type: object
+      required: [id, title, goal, plan, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        goal: { type: string }
+        plan: { type: string }
+        status: { type: string, enum: [PLANNED, WAITING_APPROVAL, RUNNING, SUCCEEDED, FAILED, CANCELLED] }
+        resultNote: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+        writeRequests:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              relativePath: { type: string }
+              status: { type: string }
+              reason: { type: string }
+              root:
+                type: object
+                properties:
+                  id: { type: string }
+                  label: { type: string }
+                  path: { type: string }
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/LocalTaskEvidence' }
+    LocalTaskEvidence:
+      type: object
+      required: [id, taskId, kind, outcome, note, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        kind: { type: string }
+        outcome: { type: string, enum: [PASS, FAIL, INFO] }
+        note: { type: string }
+        createdAt: { type: string, format: date-time }
     LocalWriteRequest:
       type: object
       required: [id, rootId, relativePath, content, reason, status, createdAt, root]
@@ -7088,6 +7258,7 @@ components:
         content: { type: string }
         reason: { type: string }
         baseHash: { type: string, nullable: true }
+        taskId: { type: string, format: uuid, nullable: true }
         status: { type: string, enum: [PENDING, APPROVING, APPLIED, REJECTED, FAILED] }
         createdAt: { type: string, format: date-time }
         decidedAt: { type: string, format: date-time, nullable: true }

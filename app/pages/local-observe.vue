@@ -44,6 +44,38 @@ type LocalWriteRequest = {
   root: { id: string; label: string; path: string; mode: "READ_ONLY" | "READ_WRITE" };
 };
 
+type LocalTaskStatus = "PLANNED" | "WAITING_APPROVAL" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+
+type LocalTask = {
+  id: string;
+  title: string;
+  goal: string;
+  plan: string;
+  status: LocalTaskStatus;
+  resultNote: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  _count?: { writeRequests: number; evidence: number };
+};
+
+type LocalTaskDetail = LocalTask & {
+  writeRequests: Array<{
+    id: string;
+    relativePath: string;
+    status: string;
+    reason: string;
+    createdAt: string;
+    root: { id: string; label: string; path: string; mode: string };
+  }>;
+  evidence: Array<{
+    id: string;
+    kind: string;
+    outcome: "PASS" | "FAIL" | "INFO";
+    note: string;
+    createdAt: string;
+  }>;
+};
+
 type Entry = {
   name: string;
   path: string;
@@ -110,6 +142,13 @@ const writeRequests = ref<LocalWriteRequest[]>([]);
 const selectedWrite = ref<LocalWriteRequest | null>(null);
 const writeBusy = ref(false);
 const pendingWriteCount = computed(() => writeRequests.value.filter((request) => request.status === "PENDING").length);
+const tasksVisible = ref(false);
+const tasksLoading = ref(false);
+const tasks = ref<LocalTask[]>([]);
+const selectedTask = ref<LocalTask | null>(null);
+const taskDetail = ref<LocalTaskDetail | null>(null);
+const taskDetailLoading = ref(false);
+const taskBusy = ref(false);
 
 const selectedRoot = computed(() =>
   roots.value.find((root) => root.id === selectedRootId.value) ?? roots.value[0] ?? null,
@@ -396,6 +435,7 @@ async function approveWrite(write: LocalWriteRequest) {
     await loadWriteRequests();
     await refreshManage();
     await list(currentPath.value);
+    if (tasksVisible.value) await openTasks();
   } catch (error) {
     if (error === "cancel" || error === "close") return;
     ElMessage.error(readApiErrorMessage(error, "写入失败。"));
@@ -424,6 +464,118 @@ async function rejectWrite(write: LocalWriteRequest) {
     ElMessage.error(readApiErrorMessage(error, "拒绝写请求失败。"));
   } finally {
     writeBusy.value = false;
+  }
+}
+
+function taskStatusLabel(status: string) {
+  return {
+    PLANNED: "已计划",
+    WAITING_APPROVAL: "待审批",
+    RUNNING: "进行中",
+    SUCCEEDED: "已验收",
+    FAILED: "验收失败",
+    CANCELLED: "已取消",
+  }[status as LocalTaskStatus] ?? status;
+}
+
+function taskStatusType(status: string) {
+  return ({
+    PLANNED: "info",
+    WAITING_APPROVAL: "warning",
+    RUNNING: "primary",
+    SUCCEEDED: "success",
+    FAILED: "danger",
+    CANCELLED: "info",
+  } as Record<string, "info" | "warning" | "primary" | "success" | "danger">)[status] ?? "info";
+}
+
+async function loadTaskDetail(id: string) {
+  taskDetailLoading.value = true;
+  try {
+    const result = await request<{ task: LocalTaskDetail }>({ url: `/local/tasks/${id}` });
+    taskDetail.value = result.task;
+  } catch (error) {
+    taskDetail.value = null;
+    ElMessage.error(readApiErrorMessage(error, "读取任务详情失败。"));
+  } finally {
+    taskDetailLoading.value = false;
+  }
+}
+
+async function openTasks() {
+  tasksVisible.value = true;
+  tasksLoading.value = true;
+  try {
+    const result = await request<{ tasks: LocalTask[] }>({ url: "/local/tasks" });
+    tasks.value = result.tasks;
+    if (!selectedTask.value || !tasks.value.some((task) => task.id === selectedTask.value?.id)) {
+      selectedTask.value = tasks.value[0] ?? null;
+    }
+    if (selectedTask.value) await loadTaskDetail(selectedTask.value.id);
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "读取任务档案失败。"));
+  } finally {
+    tasksLoading.value = false;
+  }
+}
+
+async function selectTask(row: unknown) {
+  const task = row as LocalTask;
+  selectedTask.value = task;
+  await loadTaskDetail(task.id);
+}
+
+async function recordTask(outcome: "PASS" | "FAIL") {
+  const task = selectedTask.value;
+  if (!task) return;
+  try {
+    const result = await ElMessageBox.prompt(
+      outcome === "PASS" ? "验收通过的依据（例如：跑过测试、检查了输出）" : "验收失败的原因",
+      outcome === "PASS" ? "验收通过" : "验收失败",
+      {
+        confirmButtonText: outcome === "PASS" ? "通过" : "失败",
+        cancelButtonText: "取消",
+        inputPlaceholder: outcome === "PASS" ? "例如：test:local-write 通过，文件内容符合预期" : "例如：写入后测试仍然失败",
+      },
+    );
+    if (!result.value?.trim()) {
+      ElMessage.info("请写一句验收依据。");
+      return;
+    }
+    taskBusy.value = true;
+    await request({
+      url: `/local/tasks/${task.id}/evidence`,
+      method: "post",
+      data: { outcome, note: result.value.trim() },
+    });
+    ElMessage.success(outcome === "PASS" ? "已记录验收通过。" : "已记录验收失败。");
+    await openTasks();
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(readApiErrorMessage(error, "记录验收失败。"));
+  } finally {
+    taskBusy.value = false;
+  }
+}
+
+async function cancelTask() {
+  const task = selectedTask.value;
+  if (!task) return;
+  try {
+    await ElMessageBox.confirm(`取消任务「${task.title}」？`, "取消任务", {
+      type: "warning",
+      confirmButtonText: "取消任务",
+      cancelButtonText: "返回",
+    });
+    taskBusy.value = true;
+    await request({ url: `/local/tasks/${task.id}/cancel`, method: "post" });
+    ElMessage.success("任务已取消。");
+    await openTasks();
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(readApiErrorMessage(error, "取消任务失败。"));
+  } finally {
+    taskBusy.value = false;
   }
 }
 
@@ -487,6 +639,9 @@ onMounted(async () => {
               @click="openWrites"
             >
               写审批{{ pendingWriteCount ? ` (${pendingWriteCount})` : "" }}
+            </el-button>
+            <el-button @click="openTasks">
+              任务档案
             </el-button>
           </div>
           <el-breadcrumb separator="/">
@@ -945,6 +1100,168 @@ onMounted(async () => {
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="tasksVisible"
+      title="任务档案"
+      width="900px"
+      append-to-body
+    >
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="目标 → 计划 → 写请求 → 验收证据"
+        description="她可以用 create_local_task 建档案；写文件仍需单独审批。验收由你记录，不把执行者自己的说法当成功。"
+      />
+      <div class="task-grid">
+        <el-table
+          v-loading="tasksLoading"
+          :data="tasks"
+          row-key="id"
+          size="small"
+          highlight-current-row
+          class="task-table"
+          @row-click="selectTask"
+        >
+          <el-table-column
+            prop="title"
+            label="任务"
+            min-width="180"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            label="状态"
+            width="96"
+          >
+            <template #default="{ row }">
+              <el-tag
+                size="small"
+                :type="taskStatusType(row.status)"
+              >
+                {{ taskStatusLabel(row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="写请求/证据"
+            width="110"
+          >
+            <template #default="{ row }">
+              {{ row._count?.writeRequests ?? 0 }} / {{ row._count?.evidence ?? 0 }}
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div
+          v-if="taskDetail"
+          v-loading="taskDetailLoading"
+          class="task-detail"
+        >
+          <h3>{{ taskDetail.title }}</h3>
+          <div class="task-status-line">
+            <el-tag :type="taskStatusType(taskDetail.status)">
+              {{ taskStatusLabel(taskDetail.status) }}
+            </el-tag>
+            <span class="muted">{{ formatDate(taskDetail.createdAt) }}</span>
+          </div>
+          <div class="task-section">
+            <b>目标</b>
+            <p>{{ taskDetail.goal }}</p>
+          </div>
+          <div class="task-section">
+            <b>计划</b>
+            <pre class="task-plan">{{ taskDetail.plan }}</pre>
+          </div>
+          <div class="task-section">
+            <b>写请求</b>
+            <div
+              v-if="!taskDetail.writeRequests.length"
+              class="muted"
+            >
+              还没有写请求。
+            </div>
+            <div
+              v-for="write in taskDetail.writeRequests"
+              :key="write.id"
+              class="task-write"
+            >
+              <span>{{ write.root.label }} / {{ write.relativePath }}</span>
+              <el-tag
+                size="small"
+                :type="write.status === 'APPLIED' ? 'success' : write.status === 'REJECTED' ? 'info' : 'warning'"
+              >
+                {{ write.status }}
+              </el-tag>
+            </div>
+          </div>
+          <div class="task-section">
+            <b>验收证据</b>
+            <div
+              v-if="!taskDetail.evidence.length"
+              class="muted"
+            >
+              还没有验收记录。
+            </div>
+            <div
+              v-for="item in taskDetail.evidence"
+              :key="item.id"
+              class="task-evidence"
+            >
+              <el-tag
+                size="small"
+                :type="item.outcome === 'PASS' ? 'success' : item.outcome === 'FAIL' ? 'danger' : 'info'"
+              >
+                {{ item.outcome }}
+              </el-tag>
+              <span>{{ item.note }}</span>
+            </div>
+          </div>
+          <div
+            v-if="taskDetail.resultNote"
+            class="task-section"
+          >
+            <b>结果</b>
+            <p>{{ taskDetail.resultNote }}</p>
+          </div>
+          <div class="task-actions">
+            <el-button
+              :disabled="taskBusy || taskDetail.status === 'CANCELLED'"
+              @click="cancelTask"
+            >
+              取消任务
+            </el-button>
+            <el-button
+              type="danger"
+              plain
+              :disabled="taskBusy || taskDetail.status === 'CANCELLED'"
+              @click="recordTask('FAIL')"
+            >
+              验收失败
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="taskBusy"
+              :disabled="taskDetail.status === 'CANCELLED'"
+              @click="recordTask('PASS')"
+            >
+              验收通过
+            </el-button>
+          </div>
+        </div>
+        <div
+          v-else
+          class="preview-placeholder"
+        >
+          选一个任务查看计划和验收记录。
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="tasksVisible = false">
+          关闭
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1032,6 +1349,65 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 10px;
+}
+.task-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+.task-table {
+  cursor: pointer;
+}
+.task-detail {
+  min-width: 0;
+  max-height: 560px;
+  overflow: auto;
+  border: 1px solid #e4e9f2;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fafbfe;
+}
+.task-detail h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+.task-status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.task-section {
+  margin-top: 12px;
+}
+.task-section p {
+  margin: 4px 0 0;
+  color: #4f5b6d;
+  white-space: pre-wrap;
+}
+.task-plan {
+  margin: 4px 0 0;
+  max-height: 150px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: 12px/1.6 "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
+  color: #4f5b6d;
+}
+.task-write,
+.task-evidence {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+  color: #4f5b6d;
+}
+.task-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }
 .crumb-link {
   border: 0;

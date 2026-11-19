@@ -149,6 +149,7 @@
     "test:auth": "tsx scripts/test-auth.ts",
     "test:local-observe": "tsx scripts/test-local-observe.ts",
     "test:local-write": "tsx scripts/test-local-write.ts",
+    "test:local-task": "tsx scripts/test-local-task.ts",
     "test:auth-db": "tsx scripts/test-auth-db.ts",
     "test:auth-admin-reset": "tsx scripts/test-auth-admin-reset.ts",
     "test:auth-flows": "tsx scripts/test-auth-flows.ts",

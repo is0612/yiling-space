@@ -7,6 +7,7 @@ import {
   validateLocalWritablePath,
   type LocalObserveRoot,
 } from "./local-observe";
+import { advanceTaskForWrite } from "./local-tasks";
 import { getPrisma } from "./prisma";
 
 export const LOCAL_WRITE_MAX_BYTES = 32 * 1024;
@@ -20,6 +21,7 @@ export type LocalWriteRequestInput = {
   actorId: string;
   characterId?: string;
   conversationId?: string;
+  taskId?: string;
 };
 
 function hashContent(content: Buffer | string) {
@@ -45,6 +47,10 @@ export async function createLocalWriteRequest(input: LocalWriteRequestInput) {
   const reason = input.reason.trim().slice(0, 500);
   if (!reason) throw new LocalObserveError(400, "写文件必须说明原因。");
   const root = await writableRoot(input.rootId);
+  if (input.taskId) {
+    const task = await getPrisma().localTask.findUnique({ where: { id: input.taskId }, select: { id: true } });
+    if (!task) throw new LocalObserveError(404, "任务不存在。");
+  }
   const target = validateLocalWritablePath(root.path, input.relativePath);
   if (target.exists && target.size > MAX_EXISTING_BYTES) {
     throw new LocalObserveError(413, "目标文件超过 2 MB，暂不支持覆盖。");
@@ -60,8 +66,10 @@ export async function createLocalWriteRequest(input: LocalWriteRequestInput) {
       actorId: input.actorId,
       ...(input.characterId ? { characterId: input.characterId } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+      ...(input.taskId ? { taskId: input.taskId } : {}),
     },
   });
+  await advanceTaskForWrite(input.taskId, "WAITING_APPROVAL");
   auditLocalObserve(input.actorId, "write.request", {
     requestId: request.id,
     rootId: root.id,
@@ -132,6 +140,7 @@ export async function approveLocalWriteRequest(id: string, actorId: string) {
       path: target.relative,
       status: "applied",
     });
+    await advanceTaskForWrite(request.taskId, "RUNNING");
     return applied;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

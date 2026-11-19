@@ -9,7 +9,9 @@ export type ReadOnlyChatTools = {
   readLocalFile?: (root: string, path: string) => Promise<unknown>;
   searchLocalFiles?: (root: string, query: string, path: string) => Promise<unknown>;
   /** 只创建审批请求，不直接写盘。 */
-  proposeFileWrite?: (root: string, path: string, content: string, reason: string) => Promise<unknown>;
+  proposeFileWrite?: (root: string, path: string, content: string, reason: string, taskId?: string) => Promise<unknown>;
+  /** 建一条任务档案；不产生文件/命令副作用。 */
+  createLocalTask?: (title: string, goal: string, plan: string) => Promise<unknown>;
 };
 
 type LocalToolSpec = {
@@ -58,6 +60,17 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
       ],
       call: async (args: Record<string, string>) => handlers.searchLocalFiles!(args.root ?? "", args.query ?? "", args.path ?? ""),
     }] : []),
+    ...(handlers.createLocalTask ? [{
+      name: "create_local_task",
+      description: "Create a local task archive entry with title, goal and plan. This does not write files or run commands; use the returned taskId when proposing file writes.",
+      fields: [
+        { name: "title", required: true, maxLength: 200 },
+        { name: "goal", required: true, maxLength: 4000 },
+        { name: "plan", required: true, maxLength: 8000 },
+      ],
+      maxRaw: 16000,
+      call: async (args: Record<string, string>) => handlers.createLocalTask!(args.title ?? "", args.goal ?? "", args.plan ?? ""),
+    }] : []),
     ...(handlers.proposeFileWrite ? [{
       name: "propose_file_write",
       description: "Propose writing a UTF-8 text file inside an authorized writable directory. This does NOT write immediately: it creates a pending request that the owner must approve. Never claim the file was written.",
@@ -66,9 +79,10 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
         { name: "path", required: true, maxLength: 500 },
         { name: "content", required: true, maxLength: 20000 },
         { name: "reason", required: true, maxLength: 500 },
+        { name: "taskId", required: false, maxLength: 80 },
       ],
       maxRaw: 24000,
-      call: async (args: Record<string, string>) => handlers.proposeFileWrite!(args.root ?? "", args.path ?? "", args.content ?? "", args.reason ?? ""),
+      call: async (args: Record<string, string>) => handlers.proposeFileWrite!(args.root ?? "", args.path ?? "", args.content ?? "", args.reason ?? "", args.taskId || undefined),
     }] : []),
   ];
 

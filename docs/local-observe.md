@@ -31,6 +31,19 @@
 
 写请求表：`local_write_requests`。工具结果只返回 `PENDING_APPROVAL`，不会返回“已写入”。
 
+## 任务档案与验收
+
+一条任务按「目标 → 计划 → 写请求 → 验收证据」串起来：
+
+1. `create_local_task`（桌面聊天，管理员）建立任务档案；
+2. `propose_file_write` 可以带 `taskId`，写请求创建后任务变成「待审批」；
+3. 写请求批准后任务变成「进行中」；
+4. 管理页「任务档案」里可以记录 `PASS` / `FAIL` 验收证据，任务相应变成「已验收」/「验收失败」；
+5. 任务也可以取消；已取消/已完成的任务不能再改验收结果。
+
+当前验收证据是**人工记录**（例如“跑过 `test:local-write`，文件内容正确”），不是自动执行测试；终端接入后
+才会由命令结果自动写证据。这条边界是为了避免把执行者自己的说法当成功。
+
 ## 边界
 
 - 接口只接受相对路径，绝对路径、`..`、根外符号链接都会被拒绝；
@@ -57,6 +70,10 @@
 - `GET /api/local/write-requests?status=PENDING`
 - `POST /api/local/write-requests/{id}/approve`
 - `POST /api/local/write-requests/{id}/reject`
+- `GET/POST /api/local/tasks`
+- `GET /api/local/tasks/{id}`
+- `POST /api/local/tasks/{id}/evidence`
+- `POST /api/local/tasks/{id}/cancel`
 
 全部仅管理员可用；契约见 `docs/openapi.yaml` 的 `LocalObserve` 路径。
 

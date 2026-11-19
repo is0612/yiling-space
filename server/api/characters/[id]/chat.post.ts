@@ -43,6 +43,7 @@ import { resolveChatMemoryScopes } from "../../../utils/memory-scope-access";
 import { requireActor } from "../../../utils/auth";
 import { auditLocalObserve, listLocalDirectory, listLocalObserveRoots, readLocalTextFile, searchLocalProject } from "../../../utils/local-observe";
 import { createLocalWriteRequest } from "../../../utils/local-write";
+import { createLocalTask } from "../../../utils/local-tasks";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
 import { desktopConversationWhere, DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR, lockActiveDesktopConversationForWrite, throwDeletedDesktopConversationRequest, validateDesktopConversationReplay } from "../../../utils/desktop-conversation";
@@ -496,6 +497,13 @@ export default defineEventHandler(async (event) => {
   };
   const localReadOnlyTools = isAdmin ? {
     localRoots: async () => localRootsForTools.map((root) => ({ id: root.id, label: root.label, path: root.path })),
+    createLocalTask: async (title: string, goal: string, plan: string) => {
+      const task = await createLocalTask({
+        title, goal, plan, actorId: ownerId, characterId,
+        ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
+      });
+      return { taskId: task.id, title: task.title, status: task.status, message: "任务档案已创建；写文件仍需单独审批。" };
+    },
     listLocalFiles: async (rootValue: string, path: string) => {
       let rootId = "";
       try {
@@ -537,7 +545,7 @@ export default defineEventHandler(async (event) => {
       }
     },
     ...(localRootsForTools.some((root) => root.mode === "READ_WRITE") ? {
-      proposeFileWrite: async (rootValue: string, path: string, content: string, reason: string) => {
+      proposeFileWrite: async (rootValue: string, path: string, content: string, reason: string, taskId?: string) => {
         const root = await resolveLocalToolRoot(rootValue);
         const request = await createLocalWriteRequest({
           rootId: root.id,
@@ -547,6 +555,7 @@ export default defineEventHandler(async (event) => {
           actorId: ownerId,
           characterId,
           ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
+          ...(taskId ? { taskId } : {}),
         });
         return {
           status: "PENDING_APPROVAL",
