@@ -1959,10 +1959,10 @@ async function runChannelTurn(input: {
   }
 
   const interactionGuidance = await readInteractionGuidance(prisma, { characterId: input.characterId, query: currentMessage, chatScene: isGroup ? "GROUP" : "PRIVATE" }).catch(() => []);
-  const interactionExperiences = !isGroup && existingConversation ? await readInteractionExperiences(prisma, {
-    characterId: input.characterId, conversationId: existingConversation.id, memoryScopeId: conversationScopeId, query: currentMessage,
-    recentQueries: recentMessages.filter(row => row.role === "USER").slice(-4).map(row => row.content.slice(0, 500)),
-  }).catch(() => { console.warn("[interaction-experience] private read unavailable"); return []; }) : [];
+  const interactionExperiences = existingConversation ? await readInteractionExperiences(prisma, {
+    characterId: input.characterId, conversationId: existingConversation.id, memoryScopeId: conversationScopeId, group: isGroup, query: currentMessage,
+    recentQueries: isGroup ? [] : recentMessages.filter(row => row.role === "USER").slice(-4).map(row => row.content.slice(0, 500)),
+  }).catch(() => { console.warn("[interaction-experience] read unavailable"); return []; }) : [];
   const conversationSummary = !isGroup && existingConversation ? await prepareConversationSummary(prisma, {
     characterId: input.characterId, conversationId: existingConversation.id, memoryScopeId: conversationScopeId,
     channelBindingId: input.bindingId, model: chatSettings.model, apiKey, apiBaseUrl: chatSettings.apiBaseUrl,
@@ -2460,7 +2460,7 @@ async function runChannelTurn(input: {
         ...(acquaintances ? { acquaintances } : {}),
         ...(interactionGuidance.length ? { interactionGuidance } : {}),
         ...(selfUnderstanding ? { selfUnderstanding } : {}),
-        ...(interactionExperiences.length ? { interactionExperiences } : {}),
+        ...(interactionExperiences.length ? (isGroup ? { groupInteractionExperiences: interactionExperiences } : { interactionExperiences }) : {}),
         ...(conversationSummary ? { conversationSummary } : {}),
         recentMessages: conversationSummary ? recentMessages.filter(row => {
           const source = recentStoredMessages.find(item => (item.externalMessageId || item.id) === row.id);

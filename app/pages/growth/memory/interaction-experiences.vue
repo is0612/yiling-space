@@ -102,6 +102,7 @@ function changeStatus(value: string | number | boolean | undefined) {
   page.value = 1;
   void load();
 }
+function showProposedExperience() { changeStatus("ALL"); }
 function changePage(value: number) { page.value = value; void load(); }
 function closeEditor() { editing.value = null; editorError.value = ""; }
 watch(characterId, () => {
@@ -207,6 +208,11 @@ function dateTime(value?: string) {
     <MemorySectionNavigation active="interaction-experiences" />
     <PageHeader description="她从相处中的反馈里，记住理解、指代、场合与应对上的经验。">
       <template #actions>
+        <InteractionExperienceFeedbackDialog
+          v-if="characterId"
+          :character-id="characterId"
+          @proposed="showProposedExperience"
+        />
         <el-button
           :icon="Refresh"
           :loading="loading"
@@ -225,7 +231,7 @@ function dateTime(value?: string) {
 
     <section class="domain-note">
       <p><strong>对话空闲 30 分钟后，后台自动收尾。</strong>提炼后由角色独立审核，有依据才自动生效；拿不准的留待确认。</p>
-      <p>没有明确反馈，不对回应效果下结论。这是供类似情境参考的经验记忆，不是必须照做的语言规则。经验只在原私聊会话使用，随时间降低召回权重；隐私和明确底线不作为会衰减的临时经验。</p>
+      <p>没有明确反馈，不对回应效果下结论。这是供类似情境参考的经验记忆，不是必须照做的语言规则。网页和私聊可自动收尾；群里遇到值得学的接话或判断，可以手动选原话提炼，采纳后仅在原群使用。经验会随时间降低召回权重。</p>
     </section>
 
     <el-empty
@@ -291,7 +297,7 @@ function dateTime(value?: string) {
           v-if="status === 'PENDING'"
           class="muted"
         >
-          待审核候选尚未生效，包含角色拿不准的经验和旧版人工候选。证据失效的候选会拒绝处理。
+          待审核候选尚未生效，包含角色拿不准的经验和你手动发起的提炼。证据失效的候选无法采纳。
         </p>
 
         <el-alert

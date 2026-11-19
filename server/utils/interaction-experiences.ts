@@ -63,8 +63,11 @@ export async function generateInteractionExperience(prisma: PrismaClient, input:
     const preceding = await prisma.message.findMany({where:{conversationId:evidence.assistant.conversationId,occurredAt:{lt:evidence.assistant.occurredAt},role:{in:["USER","ASSISTANT"]}},orderBy:[{occurredAt:"desc"},{id:"desc"}],take:6});
     let contextChars=0;
     const contextMessages=preceding.filter(row=>{if(contextChars+row.content.length>4000)return false;contextChars+=row.content.length;return true;}).reverse().map(row=>({id:row.id,role:row.role,content:row.content}));
-    const text = await callRawModel({ model: settings.model, apiKey, apiBaseUrl: settings.apiBaseUrl, temperature: 0.2, systemPrompt: interactionExperiencePrompt, userPrompt: JSON.stringify({ contextMessages, assistant: evidence.assistant.content, feedback: evidence.feedback.content }), onUsage: value => { usage = value; } });
+    const isGroup = evidence.assistant.conversation.externalConversationId?.startsWith("g:") === true;
+    const systemPrompt = interactionExperiencePrompt + (isGroup ? " 这是多人群聊。消息相邻不能证明反馈指向你；反馈必须明确评价或纠正所选回复，否则返回no_feedback。闲聊、讽刺、别人的对话或机器人回执不算反馈。情境和下次判断用概括描述，不抄成员称呼、账号、原文或私人细节。" : "");
+    const text = await callRawModel({ model: settings.model, apiKey, apiBaseUrl: settings.apiBaseUrl, temperature: 0.2, systemPrompt, userPrompt: JSON.stringify({ contextMessages, assistant: evidence.assistant.content, feedback: evidence.feedback.content }), onUsage: value => { usage = value; } });
     const suggestion = parseInteractionSuggestion(text, evidence.feedback.content);
+    if (isGroup && !("skip" in suggestion) && !suggestion.learning) throw new Error("Missing group learning");
     if ("skip" in suggestion) { success = true; return { item: null, notice: suggestion.skip === "boundary" ? "这是稳定边界，请写入长期关系记忆，不作为临时经验。" : "没有明确回应效果反馈，不生成经验。" }; }
     const current = await load();
     if (current.assistant.content !== evidence.assistant.content || current.feedback.content !== evidence.feedback.content) throw createError({ statusCode: 409, statusMessage: "来源已变化，请重试。" });
@@ -144,8 +147,10 @@ export async function updateInteractionExperience(prisma: PrismaClient, input: O
   });
 }
 /** Caller must pass current conversation and its authorized scope. No cross-room sharing. */
-export async function readInteractionExperiences(prisma: PrismaClient, input: { characterId: string; conversationId: string; memoryScopeId: string; now?: Date; query?: string; recentQueries?: string[] }) {
-  const rows = await prisma.interactionExperience.findMany({ where: { characterId: input.characterId, conversationId: input.conversationId, memoryScopeId: input.memoryScopeId, status: "ACTIVE", conversation: { characterId: input.characterId, memoryScopeId: input.memoryScopeId } }, orderBy: { createdAt: "desc" }, take: 50 });
+export async function readInteractionExperiences(prisma: PrismaClient, input: { characterId: string; conversationId: string; memoryScopeId: string; group?: boolean; now?: Date; query?: string; recentQueries?: string[] }) {
+  const rows = await prisma.interactionExperience.findMany({ where: { characterId: input.characterId, conversationId: input.conversationId, memoryScopeId: input.memoryScopeId, status: "ACTIVE", conversation: { characterId: input.characterId, memoryScopeId: input.memoryScopeId,
+    ...(input.group ? { channelBindingId: { not: null }, externalConversationId: { startsWith: "g:" }, memoryScope: { scopeType: "CHARACTER_GLOBAL" } } : {}),
+  } }, orderBy: { createdAt: "desc" }, take: 50 });
   const currentQuery = (input.query ?? "").slice(0, 2000);
   const retrievalQuery = [...(input.recentQueries ?? []).slice(-4).map(text => text.slice(0, 500)), currentQuery].join(" ");
   const terms = extractRetrievalTerms(retrievalQuery);
@@ -155,5 +160,5 @@ export async function readInteractionExperiences(prisma: PrismaClient, input: { 
     const lexical = Math.min(1, terms.filter(term => `${row.context} ${row.content}`.includes(term)).length / 2);
     const situational = experienceSituationMatch(learning, retrievalQuery);
     return { ...row, learning, weight: interactionExperienceWeight(row.createdAt, input.now) * Math.max(lexical, situational) };
-  }).filter(row => row.weight >= 0.08).sort((a,b) => b.weight - a.weight).slice(0, 3).map(row => ({ id: row.id, content: row.content, context: row.context, learning: row.learning, weight: row.weight }));
+  }).filter(row => row.weight >= 0.08 && (!input.group || row.learning)).sort((a,b) => b.weight - a.weight).slice(0, 3).map(row => ({ id: row.id, content: row.content, context: row.context, learning: row.learning, weight: row.weight }));
 }

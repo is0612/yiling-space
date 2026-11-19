@@ -477,6 +477,7 @@ model Conversation {
   groupMembers           GroupMember[]
   interactionExperiences InteractionExperience[]
   interactionExperienceProgress InteractionExperienceProgress?
+  groupObservationProgress GroupObservationProgress?
   scopedReflectionRuns ReflectionRun[]
   scopedExpressionHabits CharacterExpressionHabit[]
   memoryEvents           MemoryEvent[]
@@ -504,6 +505,7 @@ model Message {
 
   @@unique([conversationId, externalMessageId])
   @@index([conversationId, occurredAt])
+  @@index([conversationId, ingestedAt, id], map: "messages_observation_ingest_idx")
   @@index([eventType, occurredAt])
   @@map("messages")
 }
@@ -2056,6 +2058,7 @@ model CharacterExpressionHabit {
   reason String @db.VarChar(1000)
   status String @default("PENDING") @db.VarChar(20)
   revision Int @default(1)
+  /// GROUP_OBSERVATION references a selected group window; its approved habit has role-wide scope.
   sourceType String @default("MANUAL") @db.VarChar(20)
   sourceRefs Json @default("[]") @db.JsonB
   createdAt DateTime @default(now()) @db.Timestamptz(6)
@@ -2192,6 +2195,25 @@ model InteractionExperienceProgress {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@map("interaction_experience_progress")
 }
+/// One durable opt-in and scan checkpoint per recorded group conversation.
+model GroupObservationProgress {
+  conversationId String @id @db.Uuid
+  enabled Boolean @default(false)
+  anchorAt DateTime @db.Timestamptz(6)
+  /// Exact PostgreSQL timestamp text; JavaScript Date would truncate the ingest cursor to milliseconds.
+  cursorIngestKey String? @db.VarChar(40)
+  cursorId String? @db.Uuid
+  runAt DateTime @db.Timestamptz(6)
+  leaseToken String? @db.Uuid
+  leaseUntil DateTime? @db.Timestamptz(6)
+  attempts Int @default(0)
+  lastError String? @db.VarChar(40)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([enabled, runAt])
+  @@map("group_observation_progress")
+}
+
 model InteractionExperienceActivation {
   id Int @id
   anchorAt DateTime @default(now()) @db.Timestamptz(6)

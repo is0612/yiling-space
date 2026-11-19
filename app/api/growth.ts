@@ -81,7 +81,7 @@ export type LanguageHabit = {
   reason: string;
   status: LanguageStatus;
   revision: number;
-  sourceType: "MANUAL" | "SOURCES" | "EXPERIENCE_REFLECT" | "EDUCATION_TRANSFER";
+  sourceType: "MANUAL" | "SOURCES" | "EXPERIENCE_REFLECT" | "EDUCATION_TRANSFER" | "GROUP_OBSERVATION";
   conversationId?: string | null;
   memoryScopeId?: string | null;
   sourceRefs: GrowthSource[];
@@ -562,6 +562,16 @@ export function createGrowthApi(request: ApiRequest) {
     });
   }
 
+  function observeGroupLanguage(characterId: string, selection: { conversationId: string; openingId: string; responseId: string; outcomeId: string }) {
+    return request<{ habit: LanguageHabit | null; reused: boolean }>({
+      url: `${languageBase(characterId)}/observe-group`, method: "post", data: selection,
+    });
+  }
+
+  function setAutomaticGroupLanguage(characterId: string, conversationId: string, enabled: boolean) {
+    return request<{ enabled: boolean }>({ url: `${languageBase(characterId)}/observe-group`, method: "patch", data: { conversationId, enabled } });
+  }
+
   function saveLanguageHabit(payload: {
     characterId: string;
     habitId?: string;
@@ -811,6 +821,8 @@ export function createGrowthApi(request: ApiRequest) {
     listLanguageHabits,
     listLanguageSources,
     suggestLanguageHabit,
+    observeGroupLanguage,
+    setAutomaticGroupLanguage,
     saveLanguageHabit,
     listLanguageHistory,
     listReflections,

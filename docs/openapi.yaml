@@ -467,8 +467,8 @@ paths:
         '404': { description: 角色不存在或无权访问 }
     post:
       tags: [Memories]
-      summary: 兼容旧版人工发起的经验候选提炼
-      description: 日常经验由后台在对话收尾时提炼并经独立语义审核后决定是否生效，不需要调用本接口或逐条采纳。本接口仅兼容旧版人工候选；校验同会话助手回复与随后USER反馈、期间没有其他助手回复；模型仅判断语义，必须逐字引用反馈。沉默不算反馈，隐私边界拒绝作为临时经验。此人工入口仍保存PENDING，需PATCH采纳才召回；相同证据幂等。
+      summary: 主人从实际反馈手动提炼经验候选
+      description: 网页和私聊日常经验可在后台收尾时自动提炼。本接口让角色主人主动选取网页、可读私聊或群聊中的反馈；校验同会话助手回复与随后USER反馈、期间没有其他助手回复。模型须逐字引用反馈，群聊还要求指出明确针对所选回复的反馈并提供结构化判断。沉默不算反馈，隐私边界拒绝作为临时经验。新候选为PENDING，需PATCH采纳才在原会话的相关情境召回；相同证据返回既有项。
       requestBody:
         required: true
         content:
@@ -519,7 +519,7 @@ paths:
         - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: conversationId, in: query, schema: { type: string, format: uuid } }
       responses:
-        '200': { description: '未指定会话时返回最近50个conversations（id/title/memoryScopeId）；指定时返回其最近100条USER/ASSISTANT messages（id/role/content/occurredAt）。仅角色拥有者可读。' }
+        '200': { description: '未指定会话时返回最近50个conversations（id/title/memoryScopeId/scene，scene为WEB/GROUP/PRIVATE）；指定时返回其最近100条USER/ASSISTANT messages（id/role/content/occurredAt）。仅角色拥有者可读。' }
         '400': { description: 会话ID无效 }
         '401': { description: 未登录 }
         '404': { description: 角色不存在或无权访问 }
@@ -832,6 +832,58 @@ paths:
         '401': { description: 未登录 }
         '404': { description: 角色或条目不存在或无权访问 }
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
+  /characters/{characterId}/growth/language/observe-group:
+    post:
+      tags: [Characters]
+      summary: 从所选群聊片段提炼待确认的表达习惯
+      description: 仅角色拥有者可操作。三条依据必须在当前角色同一已记录QQ全局群聊内，按开场、接话、后续排序。读取包含中间消息的片段，最多12条且不超过15分钟，不接受角色自己参与的片段。已知机器人和系统播报不能作为依据。模型看到去标识后的有界文本；无明确后续可返回空。新候选一律PENDING，默认ALL，首次采纳重验来源，后续聊天只读取抽象表达和适用场景。
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [conversationId, openingId, responseId, outcomeId]
+              properties:
+                conversationId: { type: string, format: uuid }
+                openingId: { type: string, format: uuid }
+                responseId: { type: string, format: uuid }
+                outcomeId: { type: string, format: uuid }
+      responses:
+        '200': { description: 'habit 为待确认表达习惯或 null；reused 表示返回已有记录。sourceRefs 仅保存来源引用和指纹，不含群聊原文。' }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色不存在或无权访问 }
+        '409': { description: 群聊或来源不属于当前角色、失效或已变更 }
+        '422': { description: 片段时间、长度、参与者或内容不符合要求 }
+        '429': { description: 今日额度已用完 }
+        '502': { description: 模型调用、响应解析或抽象检查失败 }
+        '503': { description: 模型未配置 }
+    patch:
+      tags: [Characters]
+      summary: 按群开启或关闭自动观察
+      description: 默认关闭。只使用开启后已经落库的新群聊，不扩大消息留存范围。关闭不删除候选，并阻止尚未保存的自动候选提交。候选仍需主人确认。
+      parameters:
+        - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [conversationId, enabled]
+              properties:
+                conversationId: { type: string, format: uuid }
+                enabled: { type: boolean }
+      responses:
+        '200': { description: '返回已保存状态 {enabled}' }
+        '400': { description: 输入无效 }
+        '401': { description: 未登录 }
+        '404': { description: 角色或群不属于当前主人、不存在或不可观察 }
   /characters/{characterId}/growth/language/{habitId}:
     patch:
       tags: [Characters]
@@ -3512,11 +3564,12 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [conversationId, groupId, label, lastMessageAt, updatedAt, messageCount, connectionName]
+                      required: [conversationId, groupId, label, lastMessageAt, updatedAt, messageCount, connectionName, automaticObservation]
                       properties:
                         conversationId: { type: string, format: uuid }
                         groupId: { type: string, nullable: true, description: 群号；老数据或非群会话可能为空。 }
                         label: { type: string, example: "QQ群 12345678" }
+                        automaticObservation: { type: object, required: [enabled, lastError], properties: { enabled: { type: boolean }, lastError: { type: string, nullable: true } } }
                         lastMessageAt: { type: string, format: date-time, nullable: true }
                         updatedAt: { type: string, format: date-time }
                         messageCount: { type: integer }
@@ -6700,7 +6753,7 @@ components:
         reason: { type: string, maxLength: 1000 }
         status: { type: string, enum: [PENDING, ACTIVE, REJECTED, DISABLED] }
         revision: { type: integer, minimum: 1 }
-        sourceType: { type: string, enum: [MANUAL, SOURCES, EXPERIENCE_REFLECT, EDUCATION_TRANSFER] }
+        sourceType: { type: string, enum: [MANUAL, SOURCES, EXPERIENCE_REFLECT, EDUCATION_TRANSFER, GROUP_OBSERVATION] }
         conversationId: { type: string, format: uuid, nullable: true }
         memoryScopeId: { type: string, format: uuid, nullable: true }
         sourceRefs:

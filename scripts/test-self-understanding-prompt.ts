@@ -14,7 +14,7 @@ try {
     { domain: "reflection", id: "r-1", text: "可能愿意先核对依据", state: "ACCEPTED", scope: "character", updatedAt: "2026-11-18T00:00:00Z" },
   ] });
   const reply = await generateConversationReply({ ...input, selfUnderstanding: view });
-  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v76");
+  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v77");
   const system = requests[0]!.messages.find(row => row.role === "system")!.content;
   assert(system.includes("presentation is appearance only"));
   assert(system.includes("provisional discussion, never confirmed facts or automatic writes"));

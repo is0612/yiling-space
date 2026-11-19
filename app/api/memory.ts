@@ -83,6 +83,7 @@ export type GroupChatGroup = {
   updatedAt: string;
   messageCount: number;
   connectionName: string | null;
+  automaticObservation?: { enabled: boolean; lastError: string | null };
 };
 
 export type GroupChatMessage = {
@@ -679,6 +680,24 @@ export function createMemoryApi(request: ApiRequest) {
     });
   }
 
+  function listInteractionExperienceConversations(characterId: string) {
+    return request<{ conversations: Array<{ id: string; title: string | null; scene: "WEB" | "GROUP" | "PRIVATE" }> }>({
+      url: `${interactionBase(characterId)}/evidence`, method: "get",
+    });
+  }
+
+  function listInteractionExperienceMessages(characterId: string, conversationId: string) {
+    return request<{ messages: Array<{ id: string; role: "USER" | "ASSISTANT"; content: string; occurredAt: string }> }>({
+      url: `${interactionBase(characterId)}/evidence`, method: "get", params: { conversationId },
+    });
+  }
+
+  function proposeInteractionExperience(characterId: string, assistantMessageId: string, feedbackMessageId: string) {
+    return request<{ item: InteractionExperienceItem | null; notice: string }>({
+      url: interactionBase(characterId), method: "post", data: { assistantMessageId, feedbackMessageId },
+    });
+  }
+
   function updateInteractionExperience(payload: {
     characterId: string;
     itemId: string;
@@ -747,6 +766,9 @@ export function createMemoryApi(request: ApiRequest) {
     generateSnapshot,
     extractMemoryEvents,
     listInteractionExperiences,
+    listInteractionExperienceConversations,
+    listInteractionExperienceMessages,
+    proposeInteractionExperience,
     updateInteractionExperience,
     updateInteractionExperienceSettings,
   };

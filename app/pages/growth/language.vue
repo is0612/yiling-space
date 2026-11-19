@@ -76,6 +76,12 @@ async function loadList() {
 function search() { query.value = keyword.value.trim(); page.value = 1; void loadList(); }
 function changeStatus(value: string | number | boolean | undefined) { if (!["ALL", "ACTIVE", "PENDING", "DISABLED", "REJECTED"].includes(String(value))) return; status.value = value as Status | "ALL"; page.value = 1; void loadList(); }
 function changePage(value: number) { page.value = value; void loadList(); }
+function showObservation(habit: Habit) {
+  if (habit.characterId !== characterId.value) return;
+  keyword.value = ""; query.value = "";
+  changeStatus(habit.status);
+  ElMessage.success(habit.status === "PENDING" ? "旁观候选已保存，请核对后确认生效。" : "该片段已有表达习惯记录。");
+}
 function closeEditor() {
   editorSequence += 1; sourceSequence += 1; suggestionSequence += 1; editorOpen.value = false; editorTarget.value = null;
   saving.value = false; suggesting.value = false; editorError.value = ""; suggestionMessage.value = ""; draft.value = blankDraft();
@@ -201,6 +207,11 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
     <header class="page-heading">
       <div><h1>慢慢形成她的说话方式</h1><p>把交流中值得留下的语气、用词和回复长短，整理成有依据的表达习惯。</p></div>
       <div class="toolbar">
+        <GroupExpressionObservationDialog
+          v-if="characterId"
+          :character-id="characterId"
+          @proposed="showObservation"
+        />
         <el-button
           :disabled="!characterId"
           @click="openEditor(null, 'sources')"
@@ -332,12 +343,17 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
             v-if="item.sourceRefs.length"
             class="source-details"
           >
-            <summary>来源依据 · {{ item.sourceRefs.length }} 条{{ item.sourceType === 'EDUCATION_TRANSFER' ? '（私人来源仅保留引用，不展示原文）' : '（保存时摘要）' }}</summary><div
+            <summary>{{ item.sourceType === 'GROUP_OBSERVATION' ? '来源依据 · 群聊观察片段' : `来源依据 · ${item.sourceRefs.length} 条${item.sourceType === 'EDUCATION_TRANSFER' ? '（仅保留私人来源引用）' : '（保存时摘要）'}` }}</summary><div
               v-for="source in item.sourceRefs"
               :key="`${source.type}:${source.id}`"
               class="source-snapshot"
             >
-              <template v-if="item.sourceType === 'EDUCATION_TRANSFER'">
+              <template v-if="item.sourceType === 'GROUP_OBSERVATION'">
+                <p class="muted">
+                  从所选群聊的接话和后续中提炼。其他聊天只使用上面的表达习惯与适用场景。
+                </p>
+              </template>
+              <template v-else-if="item.sourceType === 'EDUCATION_TRANSFER'">
                 <strong>已授权私聊教育来源</strong><p class="muted">
                   原始经验 ID：{{ source.id }}。私人原文不随规则共享。
                 </p>

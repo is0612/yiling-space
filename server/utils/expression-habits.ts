@@ -1,4 +1,5 @@
 import { validateEducationTransferRefs } from "./education-transfer";
+import { assertGroupObservationCurrent, GROUP_OBSERVATION_SOURCE } from "./group-expression-evidence";
 import { validateExperienceReflectionRefs, type ExperienceReflectionRef } from "./experience-reflection";
 import { createError } from "h3";
 import type { Prisma, PrismaClient, CharacterExpressionHabit } from "../../src/generated/prisma/client";
@@ -40,6 +41,31 @@ export async function createExpressionHabit(prisma: PrismaClient, input: Owner &
     return { habit };
   });
 }
+export const GROUP_OBSERVATION_PENDING_LIMIT = 12;
+
+export async function saveGroupObservationHabit(prisma: PrismaClient, input: Owner & { suggestion: { kind: string; content: string; context: string; reason: string }; source: Prisma.InputJsonObject; automatic?: { conversationId: string; leaseToken: string } }) {
+  const parsed = parseExpressionHabitCreate(input.suggestion);
+  return prisma.$transaction(async tx => {
+    // Serialize saves for this character so concurrent requests cannot create duplicate candidates.
+    const owner = await tx.$queryRaw<Array<{ id: string }>>`SELECT "id" FROM "characters" WHERE "id"=${input.characterId}::uuid AND "ownerId"=${input.ownerId}::uuid FOR NO KEY UPDATE`;
+    if (!owner.length) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
+    const refs = [input.source];
+    await assertGroupObservationCurrent(tx, input.characterId, refs);
+    const exact = await tx.characterExpressionHabit.findFirst({ where: { characterId: input.characterId, sourceType: GROUP_OBSERVATION_SOURCE, sourceRefs: { equals: refs } } });
+    if (exact) return { habit: exact, reused: true };
+    if (input.automatic) {
+      const { conversationId, leaseToken } = input.automatic;
+      const lease = await tx.$queryRaw<Array<{ conversationId: string }>>`SELECT "conversationId" FROM "group_observation_progress" WHERE "conversationId"=${conversationId}::uuid AND "enabled" AND "leaseToken"=${leaseToken}::uuid AND "leaseUntil">clock_timestamp() FOR UPDATE`;
+      if (!lease.length) throw createError({ statusCode: 409, statusMessage: "自动观察已停用或由其他任务接手。" });
+      if (await tx.characterExpressionHabit.count({ where: { characterId: input.characterId, sourceType: GROUP_OBSERVATION_SOURCE, status: "PENDING" } }) >= GROUP_OBSERVATION_PENDING_LIMIT) return { habit: null, reused: false };
+      const duplicate = await tx.characterExpressionHabit.findFirst({ where: { characterId: input.characterId, sourceType: GROUP_OBSERVATION_SOURCE, kind: parsed.kind, context: parsed.context, content: parsed.content } });
+      if (duplicate) return { habit: duplicate, reused: true };
+    }
+    const habit = await tx.characterExpressionHabit.create({ data: { characterId: input.characterId, kind: parsed.kind, content: parsed.content, context: parsed.context, reason: parsed.reason, status: "PENDING", chatScope: "ALL", sourceType: GROUP_OBSERVATION_SOURCE, sourceRefs: refs } });
+    await snapshot(tx, habit, input.ownerId, "CREATE");
+    return { habit, reused: false };
+  });
+}
 export async function updateExpressionHabit(prisma: PrismaClient, input: Owner & { habitId: string; body: unknown }) {
   const parsed = parseExpressionHabitPatch(input.body);
   return prisma.$transaction(async tx => {
@@ -61,6 +87,9 @@ export async function updateExpressionHabit(prisma: PrismaClient, input: Owner &
         const row = value as Record<string, unknown>; return { type: row.type, id: row.id, hash: row.hash };
       }));
       await loadExpressionHabitSources(tx, input.characterId, refs);
+    }
+    if (parsed.operation === "ACTIVATE" && current.status === "PENDING" && current.sourceType === GROUP_OBSERVATION_SOURCE) {
+      await assertGroupObservationCurrent(tx, input.characterId, current.sourceRefs);
     }
     // After first acceptance, this domain owns the habit independently from historical evidence.
     const kind = parsed.kind ?? current.kind; const content = parsed.content ?? current.content;

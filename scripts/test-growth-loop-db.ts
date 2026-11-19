@@ -7,7 +7,7 @@ import { enqueueExperienceReflections } from "../server/utils/experience-reflect
 import { processNextReflectionRun } from "../server/utils/reflection-worker";
 import { updateExpressionHabit } from "../server/utils/expression-habits";
 import { loadExpressionHabitsForPrompt } from "../server/utils/expression-habit-retrieval";
-import { readInteractionExperiences } from "../server/utils/interaction-experiences";
+import { generateInteractionExperience, readInteractionExperiences, updateInteractionExperience } from "../server/utils/interaction-experiences";
 
 assert.match(new URL(process.env.DATABASE_URL ?? "").pathname, /^\/yiling_reflection_test_[a-f0-9]{32}$/);
 const db = getPrisma(), originalFetch = globalThis.fetch;
@@ -37,6 +37,12 @@ try {
         ...pair, content: "讨论方案时先说结论", context: "讨论方案", feedbackQuote: "先说结论更好",
         learning: { kind: "EXPRESSION", situation: "讨论方案", misunderstanding: "先铺陈背景", correction: "先说结论更好", nextJudgment: "先说结论" },
       })) };
+    } else if (typeof payload.feedback === "string") {
+      assert(request.messages[0].content.includes("消息相邻不能证明反馈指向你"));
+      output = payload.feedback === "刚才是在说另一位成员，下次先听清我说的是谁。" ? {
+        content: "先确认指代再接话", context: "群聊多人接话", feedbackQuote: "刚才是在说另一位成员",
+        learning: { kind: "REFERENCE", situation: "群聊多人接话", misunderstanding: "误以为在说自己", correction: "反馈说明是在说另一位成员", nextJudgment: "先确认指代再接话" },
+      } : { skip: "no_feedback" };
     } else if (payload.candidate) {
       // Automatic extraction requires an independent semantic review for each candidate.
       reviewCalls++;
@@ -95,5 +101,31 @@ try {
   assert.equal((await processNextReflectionRun(db, { workerId: "loop-strategy-test" })).status, "SUCCEEDED");
   assert.equal(await db.characterExpressionHabit.count({ where: { characterId: character.id, conversationId: otherRoom.id } }), 0,
     "Strategy evidence cannot become expression even if the model supplies expression");
+  const publicScope = await db.memoryScope.create({ data: { characterId: character.id, scopeType: "CHARACTER_GLOBAL", scopeKey: randomUUID() } });
+  const connection = await db.platformConnection.create({ data: { platform: "qq-onebot", platformAccountKey: randomUUID(), displayName: "合成连接" } });
+  const binding = await db.characterChannelBinding.create({ data: { characterId: character.id, connectionId: connection.id } });
+  const createGroup = (externalConversationId: string) => db.conversation.create({ data: { characterId: character.id, memoryScopeId: publicScope.id, channelBindingId: binding.id, externalConversationId } });
+  const sourceGroup = await createGroup("g:1");
+  const siblingGroup = await createGroup("g:2");
+  const readGroup = (conversationId = sourceGroup.id) => readInteractionExperiences(db, { characterId: character.id, conversationId, memoryScopeId: publicScope.id, group: true, query: "群聊多人接话" });
+  const ownerInput = { ownerId: owner.id, characterId: character.id };
+  let acceptedGroupExperience: Awaited<ReturnType<typeof updateInteractionExperience>>["item"] | undefined;
+  for (let index = 0; index < 3; index++) {
+    const at = start + index * 86_400_000;
+    const reply = await db.message.create({ data: { conversationId: sourceGroup.id, role: "ASSISTANT", content: "你是在说我吗？", occurredAt: new Date(at) } });
+    const unrelated = await db.message.create({ data: { conversationId: sourceGroup.id, role: "USER", content: "下午见。", occurredAt: new Date(at + 1000) } });
+    const feedback = await db.message.create({ data: { conversationId: sourceGroup.id, role: "USER", content: "刚才是在说另一位成员，下次先听清我说的是谁。", occurredAt: new Date(at + 2000) } });
+    assert.equal((await generateInteractionExperience(db, { ...ownerInput, assistantMessageId: reply.id, feedbackMessageId: unrelated.id })).item, null);
+    const { item } = await generateInteractionExperience(db, { ...ownerInput, assistantMessageId: reply.id, feedbackMessageId: feedback.id });
+    assert.equal(item?.status, "PENDING");
+    assert(!(await readGroup()).some(row => row.id === item!.id), "Pending group feedback must not influence replies");
+    ({ item: acceptedGroupExperience } = await updateInteractionExperience(db, { ...ownerInput, id: item!.id, revision: item!.revision, operation: "ACCEPT" }));
+    assert((await readGroup()).some(row => row.id === item!.id));
+  }
+  assert.equal((await readGroup()).length, 3);
+  assert.deepEqual(await readGroup(siblingGroup.id), [], "The shared scope does not share the learning across groups");
+  assert.equal(await enqueueExperienceReflections(db), 0, "Even repeated group feedback must not enter the private reflection queue");
+  await updateInteractionExperience(db, { ...ownerInput, id: acceptedGroupExperience!.id, revision: acceptedGroupExperience!.revision, operation: "DISABLE" });
+  assert(!(await readGroup()).some(row => row.id === acceptedGroupExperience!.id));
   console.log("Raw messages → valued short-term experiences → repeated-evidence reflection → PENDING growth → owner activation → scoped future read passed; no candidate auto-promotion, strategy conversion or duplicate processing.");
 } finally { globalThis.fetch = originalFetch; await db.$disconnect(); }

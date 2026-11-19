@@ -9,6 +9,7 @@ import { runSocialRelationshipQueueMaintenance } from "../server/utils/social-re
 import { processNextSocialRelationshipAssessmentTask } from "../server/utils/social-relationship-assessment-ai";
 import { processAutomaticInteractionExperience } from "../server/utils/interaction-experience-automatic";
 import { processEducationTransfer } from "../server/utils/education-transfer";
+import { processAutomaticGroupObservation } from "../server/utils/group-observation-automatic";
 import { processNextReflectionRun } from "../server/utils/reflection-worker";
 import { processNextKnowledgeTopicRun } from "../server/utils/knowledge-topic-worker";
 
@@ -96,6 +97,11 @@ const runner = createGrowthEventRunner({
     } catch (error) {
       reportError("memory-job-error", error);
     }
+    if (signal.aborted) return;
+    try {
+      const observation = await processAutomaticGroupObservation(prisma);
+      if (observation.processed && observation.phase !== "IDLE") process.stdout.write(JSON.stringify({ at: new Date().toISOString(), event: "group-observation-processed", ...observation }) + "\n");
+    } catch { reportError("group-observation-error", new Error("Automatic group observation unavailable")); }
   },
   onError: (pipeline, error) => reportError(
     pipeline === "delivery" ? "growth-event-delivery-error"

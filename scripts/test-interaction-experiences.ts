@@ -55,3 +55,12 @@ assert.throws(()=>parseInteractionSuggestion(JSON.stringify({content:"x",context
 const semanticMock = {interactionExperience:{findMany:async()=>[{id:"understanding",content:"辨别诉求",context:"情绪表达",learning:understanding,createdAt:new Date()}]}} as unknown as PrismaClient;
 assert.equal((await readInteractionExperiences(semanticMock,{characterId:"role",conversationId:"room",memoryScopeId:"private",query:"心烦得很，陪我待一会儿"}))[0]?.id,"understanding","Paraphrased emotional context recalls supported understanding without identical keywords");
 assert.deepEqual(await readInteractionExperiences(semanticMock,{characterId:"role",conversationId:"room",memoryScopeId:"private",query:"今天气温多少"}),[],"Unrelated topic must not always inject judgment card");
+const groupRoom = { id: "source-group", characterId: "role", memoryScopeId: "shared", channelBindingId: "binding", externalConversationId: "g:1", memoryScope: { scopeType: "CHARACTER_GLOBAL" } };
+const groupMock = { interactionExperience: { findMany: async ({ where }: { where: { conversationId: string; status: string; conversation: { externalConversationId: { startsWith: string }; memoryScope: { scopeType: string } } } }) => {
+  const { conversation } = where;
+  if (where.conversationId !== groupRoom.id || where.status !== "ACTIVE" || !groupRoom.externalConversationId.startsWith(conversation.externalConversationId.startsWith) || groupRoom.memoryScope.scopeType !== conversation.memoryScope.scopeType) return [];
+  return [{ id: "accepted", content: "辨别诉求", context: "情绪表达", learning: understanding, createdAt: new Date() }, { id: "legacy-unstructured", content: "先安慰", context: "心烦", createdAt: new Date() }];
+} } } as unknown as PrismaClient;
+const groupInput = { characterId: "role", conversationId: "source-group", memoryScopeId: "shared", group: true, query: "心烦得很，陪我待一会儿" };
+assert.deepEqual((await readInteractionExperiences(groupMock,groupInput)).map(row=>row.id),["accepted"]);
+assert.deepEqual(await readInteractionExperiences(groupMock,{...groupInput,conversationId:"other-group"}),[],"Shared memory scope does not share group experience");

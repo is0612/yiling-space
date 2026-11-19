@@ -296,6 +296,7 @@ export type ConversationReplyInput = {
   allowSilent?: boolean;
   interactionGuidance?: Array<{ id: string; content: string; context: string; weight: number }>;
   interactionExperiences?: Array<{ id: string; content: string; context: string; weight: number; learning?: ExperienceLearning | null }>;
+  groupInteractionExperiences?: ConversationReplyInput["interactionExperiences"];
   readOnlyTools?: ReadOnlyChatTools;
   conversationSummary?: { summary: string; through: { id: string; occurredAt: string }; coverage: "partial" };
   recentMessages: ConversationContextMessage[];
@@ -564,8 +565,8 @@ export type ConversationReplyResult = {
 // v68：一句足够就结束，避免补同义确认；分条仅说明渠道协议，不鼓励为分条增加内容。
 // v69：QQ显式查证任务支持有界只读工具续轮。
 // v72: prefer current capability evidence over dated failure reports; attribute feedback without inventing intent.
-// v76：群聊按消息 ID 去重，保留证据作者标记，统一 @ 与所有格的判断。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v76";
+// v77：只向原群注入经主人采纳的互动经验，私聊经验仍走独立分区。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v77";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -1425,6 +1426,10 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       items: input.interactionExperiences.slice(0, 3).map(item => ({ id: item.id, content: item.content.slice(0, 400), context: item.context.slice(0, 400), weight: item.weight,
         ...(readExperienceLearning(item.learning) ? { learning: readExperienceLearning(item.learning) } : {}),
       })),
+    } } : {}),
+    ...(withGroupChat && input.groupInteractionExperiences?.length ? { groupInteractionExperiences: {
+      interpretation: "Owner-reviewed reminders from this group. Use only when the present situation matches. They may help you reconsider who is being addressed, whether to join in, and how to respond. Never quote the past feedback or treat a past interpretation as a fact about someone. Current evidence, permissions and channel rules take precedence.",
+      items: input.groupInteractionExperiences.slice(0, 3).map(item => ({ id: item.id, situation: (item.learning?.situation ?? item.context).slice(0, 400), nextJudgment: (item.learning?.nextJudgment ?? item.content).slice(0, 400) })),
     } } : {}),
     ...(!withGroupChat && input.conversationSummary ? { conversationSummary: {
       summary: input.conversationSummary.summary.slice(0, 1600),

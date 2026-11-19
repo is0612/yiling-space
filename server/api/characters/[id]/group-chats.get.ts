@@ -63,6 +63,7 @@ export default defineEventHandler(async (event) => {
       lastMessageAt: true,
       updatedAt: true,
       channelBinding: { select: { connection: { select: { displayName: true } } } },
+      groupObservationProgress: { select: { enabled: true, lastError: true } },
       _count: { select: { messages: true } },
     },
   });
@@ -78,6 +79,7 @@ export default defineEventHandler(async (event) => {
       updatedAt: conversation.updatedAt,
       messageCount: conversation._count.messages,
       connectionName: conversation.channelBinding?.connection?.displayName ?? null,
+      automaticObservation: conversation.groupObservationProgress ?? { enabled: false, lastError: null },
     };
   });
 
