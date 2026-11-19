@@ -16,6 +16,7 @@
  *   node scripts/desktop-pack.mjs                 # 构建并打包（不带 .env）
  *   node scripts/desktop-pack.mjs --skip-build    # 复用已有 .output
  *   node scripts/desktop-pack.mjs --with-env      # 连同 .env 一起打（仅限自己迁移，别发给别人）
+ *   node scripts/desktop-pack.mjs --with-data     # 连 .data（密钥/表情/SnowLuma 配置）一起打
  *   node scripts/desktop-pack.mjs --force         # 覆盖已有输出目录
  */
 
@@ -28,6 +29,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
 const skipBuild = args.has("--skip-build");
 const withEnv = args.has("--with-env");
+const withData = args.has("--with-data");
 const force = args.has("--force");
 const outArg = (() => {
   const index = process.argv.indexOf("--out");
@@ -150,6 +152,13 @@ if (withEnv) {
   if (!existsSync(path.join(ROOT, ".env"))) fail("没有 .env，无法 --with-env。");
   cpSync(path.join(ROOT, ".env"), path.join(appDir, ".env"));
   console.warn("  ⚠ 这个包只适合自己迁移；不要把它发给别人或上传。");
+}
+
+if (withData) {
+  step("复制 .data（凭据密钥、SnowLuma 配置、表情包等）");
+  if (!existsSync(path.join(ROOT, ".data"))) fail("没有 .data，无法 --with-data。");
+  cpSync(path.join(ROOT, ".data"), path.join(appDir, ".data"), { recursive: true });
+  console.warn("  ⚠ .data 里含凭据密钥和聊天相关文件；不要把这个包发给别人。");
 }
 
 const required = [
