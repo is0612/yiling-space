@@ -23,6 +23,52 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /characters/{id}/growth/self-understanding:
+    get:
+      operationId: getCharacterSelfUnderstanding
+      tags: [Characters]
+      summary: 读取当前角色的自我认知证据与历史对照
+      description: 仅角色所有者可读。复用现有认知证据选择，只读角色全局记忆与主人可见的关系；不返回原始聊天或会话专属材料，不生成总结。历史缺失表示本次未提供对照。
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: 只读、有限的认知证据及已有历史对照
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [characterId, view]
+                properties:
+                  characterId: { type: string, format: uuid }
+                  view:
+                    type: object
+                    required: [version, identity, presentation, evidence, coverage, notProvided]
+                    properties:
+                      version: { type: integer, enum: [1] }
+                      identity:
+                        type: object
+                        required: [name]
+                        properties:
+                          name: { type: string }
+                      presentation:
+                        type: object
+                        description: 外观单独标记，不视为身份事实；图片仅返回已设置标记。
+                      runtimeEvidence: { type: object, description: 本次读取能力和历史完整性边界 }
+                      evidence:
+                        type: array
+                        maxItems: 24
+                        items: { type: object, description: '域、来源记录 ID、摘录、状态、范围、版本和可用时间；非原文' }
+                      coverage: { type: object, description: 本次选入的有限范围 }
+                      notProvided:
+                        type: array
+                        items: { type: string }
+                      history:
+                        type: array
+                        maxItems: 6
+                        items: { type: object, description: '同一记录的 previous / current 版本对照；时间未知时省略' }
+        '401': { description: 未登录 }
+        '404': { description: 角色 ID 无效、角色不存在或不属于当前账号 }
   /characters/{id}/growth/knowledge/topics:
     parameters:
       - &knowledgeTopicCharacter { name: id, in: path, required: true, schema: { type: string, format: uuid } }

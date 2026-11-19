@@ -5,10 +5,10 @@ import { validateReflectionSourceRefs } from "./reflection-worker";
 import { readExperienceLearning } from "./interaction-experience-domain";
 import { loadSelfUnderstandingHistory } from "./self-understanding-history";
 
-/** Internal adapter only: chat entry points must resolve the actor and readable scopes first. */
+/** Internal adapter: callers must resolve actor, character ownership and readable scopes first. */
 export async function loadSelfUnderstanding(prisma: PrismaClient, input: {
   characterId: string; readableScopeIds: readonly string[]; conversationId?: string; groupChat: boolean;
-  includeHistory?: boolean; profileOwner?: boolean;
+  includeHistory?: boolean; profileOwner?: boolean; includeAllExpressionScenes?: boolean;
 }) {
   const character = await prisma.character.findUniqueOrThrow({ where: { id: input.characterId }, select: { name: true, avatar: true } });
   const scopes = await prisma.memoryScope.findMany({ where: { characterId: input.characterId, id: { in: [...input.readableScopeIds] },
@@ -23,7 +23,7 @@ export async function loadSelfUnderstanding(prisma: PrismaClient, input: {
     prisma.memoryEvent.findMany({ where: eventWhere, orderBy: [{ occurredAt: "desc" }, { id: "desc" }], take: 4 }),
     input.includeHistory ? prisma.memoryEvent.findMany({ where: eventWhere, orderBy: [{ occurredAt: "asc" }, { id: "asc" }], take: 2 }) : Promise.resolve([]),
     prisma.characterPreference.findMany({ where: { characterId: input.characterId, status: "ACTIVE" }, orderBy: { updatedAt: "desc" }, take: 6 }),
-    prisma.characterExpressionHabit.findMany({ where: { characterId: input.characterId, status: "ACTIVE", chatScope: { in: ["ALL", input.groupChat ? "GROUP" : "PRIVATE"] },
+    prisma.characterExpressionHabit.findMany({ where: { characterId: input.characterId, status: "ACTIVE", chatScope: { in: input.includeAllExpressionScenes && input.profileOwner && !input.groupChat ? ["ALL", "GROUP", "PRIVATE"] : ["ALL", input.groupChat ? "GROUP" : "PRIVATE"] },
       OR: [{ conversationId: null, memoryScopeId: null }, ...(room ? [{ conversationId: room.id, memoryScopeId: room.memoryScopeId }] : [])] }, orderBy: { updatedAt: "desc" }, take: 6 }),
     prisma.characterGoal.findMany({ where: { characterId: input.characterId, status: "ACTIVE" }, orderBy: { updatedAt: "desc" }, take: 6 }),
     prisma.knowledgeItem.findMany({ where: { characterId: input.characterId, status: "ACTIVE" }, orderBy: { updatedAt: "desc" }, take: 4 }),
@@ -54,7 +54,9 @@ export async function loadSelfUnderstanding(prisma: PrismaClient, input: {
   for (const row of preferences) evidence.push({ domain: "preferences", id: row.id, text: `${row.kind}: ${row.topic}`, state: "ACTIVE", scope: "character", revision: row.revision, updatedAt: row.updatedAt.toISOString() });
   for (const row of habits) {
     if (row.sourceType === "EXPERIENCE_REFLECT" && (!room || !await prisma.$transaction(tx => validateExperienceReflectionRefs(tx, input.characterId, row.sourceRefs as unknown as ExperienceReflectionRef[], { conversationId: room.id, memoryScopeId: room.memoryScopeId })))) continue;
-    evidence.push({ domain: "language", id: row.id, text: row.content, context: row.context, state: "ACTIVE", scope: row.conversationId ? "private" : "character",
+    evidence.push({ domain: "language", id: row.id, text: row.content, context: input.includeAllExpressionScenes && input.profileOwner && !input.groupChat
+        ? [row.chatScope === "GROUP" ? "适用场景：群聊" : row.chatScope === "PRIVATE" ? "适用场景：私聊" : "适用场景：通用", row.context].filter(Boolean).join(" · ")
+        : row.context, state: "ACTIVE", scope: row.conversationId ? "private" : "character",
       ...(row.conversationId ? { conversationId: row.conversationId } : {}), revision: row.revision, updatedAt: row.updatedAt.toISOString() });
   }
   for (const row of goals) evidence.push({ domain: "goals", id: row.id, text: `${row.title}: ${row.description}`, state: "ACTIVE", scope: "character", revision: row.revision, updatedAt: row.updatedAt.toISOString() });
@@ -86,7 +88,7 @@ export async function loadSelfUnderstanding(prisma: PrismaClient, input: {
   const view = buildSelfUnderstandingView({ name: character.name, avatar: character.avatar ?? undefined, groupChat: input.groupChat, conversationId: room?.id, evidence, scopedMemoryReadSucceeded: scopeIds.length > 0 });
   if (!input.includeHistory) return view;
   try {
-    const history = await loadSelfUnderstandingHistory(prisma, { characterId: input.characterId, current: view.evidence, groupChat: input.groupChat });
+    const history = await loadSelfUnderstandingHistory(prisma, { characterId: input.characterId, current: view.evidence, groupChat: input.groupChat, includeAllExpressionScenes: input.profileOwner && input.includeAllExpressionScenes });
     return { ...view, history };
   } catch {
     // A history query failure is not a successful empty comparison. Keep the

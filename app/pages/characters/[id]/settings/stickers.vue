@@ -3,7 +3,8 @@ import { Delete, EditPen, MagicStick, Picture } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { createCharacterSettingsApi } from "~/api/character-settings";
 
-const api = createCharacterSettingsApi(useApiRequest());
+const request = useApiRequest();
+const api = createCharacterSettingsApi(request);
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
 // 「角色管理」这一级交给顶栏 crumbs：常驻、滚到哪都能点回去；正文的 crumb 只留角色名 + 本页。
@@ -305,10 +306,8 @@ async function submit() {
     form.append("filename", pendingFile.value.name);
     form.append("name", draftName.value.trim().slice(0, 60));
     form.append("usage", draftUsage.value.trim().slice(0, 200));
-    // 文件上传是 multipart，不走 JSON 入口，留着页面自己发。
-    const created = await $fetch<StickerItem & { qq?: QqSideEffect }>(`/api/characters/${encodeURIComponent(id.value)}/stickers`, {
-      method: "POST",
-      body: form,
+    const created = await request<StickerItem & { qq?: QqSideEffect }>({
+      url: `/characters/${encodeURIComponent(id.value)}/stickers`, method: "post", data: form,
     });
     // 新加的这张在「最近添加」里一定排第一。分页之后没法在本页里找它落在哪一页，
     // 索性切回默认排序第一页 —— 否则人刚从别的排序翻到第 5 页，传完什么也看不见。

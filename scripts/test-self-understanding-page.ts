@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import { buildPageHarness, flushMicrotasks } from "./lib/page-harness";
+
+const path = "../app/pages/growth/self-understanding.vue";
+const endpoint = (id: string) => `/api/characters/${id}/growth/self-understanding`;
+const result = (characterId: string, name: string) => ({ characterId, view: { identity: { name }, evidence: [], history: [] } });
+
+const page = buildPageHarness(path);
+const oldA = page.take(endpoint("char-a"));
+assert.equal(oldA.options?.method, "GET");
+assert.equal(oldA.options?.body, undefined);
+page.switchRole("char-b");
+const b = page.take(endpoint("char-b"));
+page.switchRole("char-a");
+const newA = page.take(endpoint("char-a"));
+oldA.resolve(result("char-a", "旧证据"));
+b.reject(new Error("过期错误"));
+await flushMicrotasks();
+assert.equal(page.read("view"), null);
+assert.equal(page.read("error"), "");
+assert.equal(page.read("loading"), true);
+newA.resolve(result("char-a", "新证据"));
+await flushMicrotasks();
+assert.equal(page.read<{ identity: { name: string } }>("view").identity.name, "新证据");
+
+const retry = page.call("load");
+page.take(endpoint("char-a")).resolve(result("char-b", "角色不匹配"));
+await retry;
+assert.equal(page.read("view"), null);
+assert.match(page.read<string>("error"), /没能读取/);
+assert.equal(page.read("loading"), false);
+const source = await page.call<{ path: string; query: { c: string } }>("sourceLink", { domain: "memory", occurredAt: "2026-11-19T00:00:00Z" });
+assert.equal(source.path, "/growth/memory/events");
+assert.equal(source.query.c, "char-a");
+page.switchRole("char-b");
+const late = page.take(endpoint("char-b"));
+page.unmount();
+late.resolve(result("char-b", "不应挂载"));
+await flushMicrotasks();
+assert.equal(page.read("view"), null);
+page.finish();
+console.log("Self-understanding page passed: read-only request, role switch races, wrong-role response, scoped source link and disposal.");

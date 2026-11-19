@@ -21,7 +21,8 @@ definePageMeta({
 });
 
 // setup 里同步捕获本次 SSR 的请求实例，异步流程与事件回调都复用同一个客户端。
-const knowledgeApi = createKnowledgeApi(useApiRequest());
+const request = useApiRequest();
+const knowledgeApi = createKnowledgeApi(request);
 
 type KnowledgeMergeDraft = {
   sourceItemId: string; targetItemId: string; expectedSourceRevision: number; expectedTargetRevision: number;
@@ -366,11 +367,9 @@ async function importDocument(event: Event) {
   form.append("file", file, file.name);
   importingFile.value = true;
   try {
-    // 文件导入是 multipart，统一 JSON 入口不接收 FormData；按约定在页面单独发送。
-    const result = await $fetch<{ chunkCount?: number }>(
-      `/api/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/import`,
-      { method: "POST", body: form },
-    );
+    const result = await request<{ chunkCount?: number }>({
+      url: `/characters/${encodeURIComponent(targetCharacterId)}/growth/knowledge/candidates/import`, method: "post", data: form,
+    });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     const count = result?.chunkCount ?? 1;
     ElMessage.success(

@@ -121,8 +121,7 @@ function progressState() {
  * 等于点了没反应，所以先把旧请求掐掉再发新的。轮询本身不用 force，没必要并发。
  */
 export async function refreshMemoryProgress(options: { force?: boolean } = {}): Promise<MemoryProgressRow[]> {
-  // 这里保留 `$fetch`：轮询只跑在客户端，且必须自己持有 AbortController 掐掉挂死的请求。
-  // 统一入口 `createRequestClient` 目前不暴露 signal 生命周期，交给领域 API 反而拿不回控制权。
+  // 轮询只跑在客户端，继续由这里持有 AbortController；请求客户端透传 signal。
   const { jobs, lastFinished, checkedAt } = progressState();
   if (!import.meta.client) return jobs.value;
   if (inflight) {
@@ -133,8 +132,8 @@ export async function refreshMemoryProgress(options: { force?: boolean } = {}): 
   inflight = controller;
   const timeout = setTimeout(() => controller.abort(), PROGRESS_FETCH_TIMEOUT_MS);
   try {
-    const result = await $fetch<{ jobs: MemoryProgressRow[]; checkedAt: string }>("/api/memory-progress", {
-      signal: controller.signal,
+    const result = await useApiRequest()<{ jobs: MemoryProgressRow[]; checkedAt: string }>({
+      url: "/memory-progress", signal: controller.signal,
     });
     // 「上一轮还在跑、这一轮结束了」是唯一的完成信号：面板据此标一次完成，页面据此刷新列表。
     const wasActive = new Set(jobs.value.filter((job) => isActiveMemoryJob(job.status)).map((job) => job.id));

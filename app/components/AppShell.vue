@@ -19,6 +19,7 @@ import {
   UserFilled,
   VideoPlay,
   Reading,
+  View,
 } from "@element-plus/icons-vue";
 import { readTopbarHeading, type TopbarHeading } from "~/utils/topbar";
 
@@ -118,6 +119,7 @@ const growthNavigation: NavigationItem[] = [
   { key: "growth-language", label: "语言系统", href: "/growth/language", icon: ChatDotRound },
   { key: "growth-reflection", label: "反思系统", href: "/growth/reflection", icon: MagicStick },
   { key: "growth-knowledge", label: "知识系统", href: "/growth/knowledge", icon: Memo },
+  { key: "growth-self-understanding", label: "自我认知", href: "/growth/self-understanding", icon: View },
 ];
 
 const adminNavigation = computed<NavigationItem[]>(() => {

@@ -62,6 +62,7 @@ export async function loadSelfUnderstandingHistory(prisma: PrismaClient, input: 
   characterId: string;
   current: readonly CurrentEvidence[];
   groupChat: boolean;
+  includeAllExpressionScenes?: boolean;
 }): Promise<SelfUnderstandingHistoryEntry[]> {
   const entries: SelfUnderstandingHistoryEntry[] = [];
   const seen = new Set<string>();
@@ -100,7 +101,7 @@ export async function loadSelfUnderstandingHistory(prisma: PrismaClient, input: 
       // expose an older PRIVATE snapshot even within a private request.
       const habit = await prisma.characterExpressionHabit.findFirst({
         where: { ...parent, id, conversationId: null, memoryScopeId: null,
-          chatScope: { in: ["ALL", input.groupChat ? "GROUP" : "PRIVATE"] }, sourceType: { not: "EXPERIENCE_REFLECT" } },
+          chatScope: { in: input.includeAllExpressionScenes && !input.groupChat ? ["ALL", "GROUP", "PRIVATE"] : ["ALL", input.groupChat ? "GROUP" : "PRIVATE"] }, sourceType: { not: "EXPERIENCE_REFLECT" } },
         select: { chatScope: true },
       });
       if (!habit) continue;
