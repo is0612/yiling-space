@@ -47,7 +47,10 @@ function prepareDir(dir) {
 
 const dataDir = path.resolve(env.YILING_DATA_DIR?.trim() || path.join(ROOT, ".data"));
 const hasUserDataArg = passthrough.some((arg) => arg.startsWith("--user-data-dir"));
-if (!hasUserDataArg) {
+let profileDir = "";
+if (hasUserDataArg) {
+  profileDir = passthrough.find((arg) => arg.startsWith("--user-data-dir="))?.slice("--user-data-dir=".length) || "";
+} else {
   const candidates = [
     path.join(ROOT, ".tmp", "electron"),
     path.join(dataDir, "electron"),
@@ -55,8 +58,23 @@ if (!hasUserDataArg) {
   ];
   const profile = candidates.find(prepareDir);
   if (profile) {
+    profileDir = profile;
     env.YILING_ELECTRON_PROFILE = profile;
     passthrough.push(`--user-data-dir=${profile}`);
+  }
+}
+
+/** 已经有实例在跑时，不再起第二套 supervisor；让 Electron 去激活旧窗口。 */
+function instanceAlive() {
+  if (!profileDir) return false;
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(profileDir, "instance.json"), "utf8"));
+    if (!info || !Number.isInteger(info.pid) || !Number.isFinite(info.at)) return false;
+    if (Date.now() - info.at > 6 * 60 * 60 * 1000) return false;
+    process.kill(info.pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -150,18 +168,27 @@ function runElectron(url, noSandbox) {
   });
 }
 
+async function runElectronWithRetry(url, noSandbox) {
+  let code = await runElectron(url, noSandbox);
+  if (!noSandbox && (code === 2147483651 || code === 3)) {
+    console.warn("\n[desktop] 沙箱启动被系统拦截，重试一次 --no-sandbox（不影响功能）。\n");
+    code = await runElectron(url, true);
+  }
+  return code;
+}
+
 (async () => {
+  if (instanceAlive()) {
+    log("existing-instance", { profileDir });
+    process.exit(await runElectronWithRetry("", forceNoSandbox));
+  }
   let supervisor;
   try {
     const started = await startSupervisor();
     supervisor = started.child;
     console.log(`[desktop] runtime ready: ${started.url}`);
 
-    let code = await runElectron(started.url, forceNoSandbox);
-    if (!forceNoSandbox && (code === 2147483651 || code === 3)) {
-      console.warn("\n[desktop] 沙箱启动被系统拦截，重试一次 --no-sandbox（不影响功能）。\n");
-      code = await runElectron(started.url, true);
-    }
+    const code = await runElectronWithRetry(started.url, forceNoSandbox);
     await stopSupervisor(supervisor);
     process.exit(code);
   } catch (error) {

@@ -5,7 +5,18 @@ import { getPrisma } from "./prisma";
 
 const scrypt = promisify(scryptCallback);
 
-export const SESSION_COOKIE_NAME = "yiling_session";
+/**
+ * 会话 Cookie 名。
+ *
+ * 开发版（:3000）和桌面版（随机回环端口）在同一台机器上共享 Cookie 域，
+ * Cookie 又不区分端口；固定用 `yiling_session` 时，两边登录会互相顶掉。
+ * 桌面 supervisor 通过 `YILING_SESSION_COOKIE` 给它一个独立名字，默认仍是旧名，
+ * 老部署和测试不用改任何东西。
+ */
+export const SESSION_COOKIE_NAME = (() => {
+  const configured = process.env.YILING_SESSION_COOKIE?.trim();
+  return configured && /^[A-Za-z0-9_-]{1,64}$/.test(configured) ? configured : "yiling_session";
+})();
 export const SESSION_TOKEN_BYTES = 32;
 export const SESSION_LAST_USED_REFRESH_MS = 5 * 60 * 1000;
 export const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;

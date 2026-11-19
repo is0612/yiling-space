@@ -374,6 +374,8 @@ async function main() {
       NITRO_HOST: "127.0.0.1",
       PORT: String(port),
       YILING_DATA_DIR: DATA_DIR,
+      // 桌面版用独立 Cookie 名，避免和开发版（同一 Cookie 域、不同端口）互相顶登录。
+      YILING_SESSION_COOKIE: process.env.YILING_SESSION_COOKIE || "yiling_session_desktop",
       // QQ 栈由这个 supervisor 起，避免 Nitro 插件再起一套。
       YILING_ONEBOT_AUTOSTART: "0",
     },

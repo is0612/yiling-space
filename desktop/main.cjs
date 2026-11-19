@@ -254,10 +254,52 @@ async function stopSupervisor() {
 }
 
 const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  log("single-instance-lock-failed", { userData: app.getPath("userData") });
+
+/**
+ * Chromium 的锁在少数机器上会因为 userData 权限/残留文件直接返回 false，
+ * 和「真的已经开着一个实例」分不出来。用我们自己的 PID 标记再确认一次：
+ * 标记里的进程还活着才让位；否则照常启动（宁可多开一个，也别双击没反应）。
+ */
+function instanceMarkerPath() {
+  return path.join(app.getPath("userData"), "instance.json");
+}
+
+function markedInstanceAlive() {
+  try {
+    const info = JSON.parse(fs.readFileSync(instanceMarkerPath(), "utf8"));
+    if (!info || !Number.isInteger(info.pid) || !Number.isFinite(info.at)) return false;
+    if (Date.now() - info.at > 6 * 60 * 60 * 1000) return false;
+    process.kill(info.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function markInstance() {
+  try {
+    fs.writeFileSync(instanceMarkerPath(), JSON.stringify({ pid: process.pid, at: Date.now() }), "utf8");
+  } catch {
+    // 写不了就算了，下次顶多多开一个
+  }
+}
+
+function clearInstanceMarker() {
+  try {
+    const info = JSON.parse(fs.readFileSync(instanceMarkerPath(), "utf8"));
+    if (info?.pid === process.pid) fs.unlinkSync(instanceMarkerPath());
+  } catch {
+    // 不是我们写的 / 已经没了
+  }
+}
+
+const yieldToOther = !gotLock && markedInstanceAlive();
+if (yieldToOther) {
+  log("yield-to-existing-instance", { userData: app.getPath("userData") });
   app.quit();
 } else {
+  if (!gotLock) log("starting-without-chromium-lock", { userData: app.getPath("userData") });
+  markInstance();
   app.on("second-instance", () => {
     if (!mainWindow) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -278,6 +320,7 @@ if (!gotLock) {
   });
 
   app.on("before-quit", (event) => {
+    clearInstanceMarker();
     if (!supervisor) return;
     event.preventDefault();
     void stopSupervisor().finally(() => app.quit());

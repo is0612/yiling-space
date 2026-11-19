@@ -43,6 +43,8 @@ run-as-node，后者在部分机器上带不起 SnowLuma），并同时检查面
 
 窗口里按 **F12** 或 **Ctrl+Shift+I** 打开 / 关闭开发者工具；这是窗口内快捷键，不影响其它应用。
 
+桌面版会话 Cookie 使用 `yiling_session_desktop`（开发版仍是 `yiling_session`），两者同时登录不会互相顶掉。
+
 ## 数据目录
 
 默认仍是项目根目录的 `.data/`。桌面端可设置：
