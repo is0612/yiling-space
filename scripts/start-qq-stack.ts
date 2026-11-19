@@ -12,7 +12,7 @@
 import "dotenv/config";
 import { spawn, type ChildProcess } from "node:child_process";
 import net from "node:net";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { superviseMemoryWorker } from "./memory-worker-supervisor.mjs";
@@ -27,7 +27,10 @@ const REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
  *
  * 空值不在这里抛错：3001 已经在听说明协议端跑着，这种情况根本不需要路径。
  */
-const SAVED_SNOWLUMA_HOME = join(REPO_ROOT, ".data", "snowluma-home.json");
+const DATA_DIR = process.env.YILING_DATA_DIR?.trim()
+  ? resolve(process.env.YILING_DATA_DIR.trim())
+  : join(REPO_ROOT, ".data");
+const SAVED_SNOWLUMA_HOME = join(DATA_DIR, "snowluma-home.json");
 
 function readSavedSnowlumaHome(): string {
   try {
@@ -108,7 +111,15 @@ async function waitForPorts(timeoutMs: number): Promise<boolean> {
 function startSnowLuma(): ChildProcess {
   // 用协议端自带的 node（版本是它挑过的），没有才退回当前这个。
   const nodeExe = existsSync(join(SNOWLUMA_HOME, "node.exe")) ? join(SNOWLUMA_HOME, "node.exe") : process.execPath;
-  const child = spawn(nodeExe, ["index.mjs"], { cwd: SNOWLUMA_HOME, stdio: ["ignore", "pipe", "pipe"] });
+  // SnowLuma 的更新临时目录默认落在系统 %TEMP%；部分 Windows 安全策略会让它 mkdir/rmdir 失败，
+  // 表现为启动时 EPERM、面板 5099 永远不起来。把 TEMP 指到数据目录下，它自己就能清理。
+  const tmpRoot = join(DATA_DIR, "tmp");
+  mkdirSync(tmpRoot, { recursive: true });
+  const child = spawn(nodeExe, ["index.mjs"], {
+    cwd: SNOWLUMA_HOME,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, TEMP: tmpRoot, TMP: tmpRoot, TMPDIR: tmpRoot },
+  });
   pipeWithPrefix(child.stdout, "snowluma");
   pipeWithPrefix(child.stderr, "snowluma");
   child.on("error", (error) => log({ event: "snowluma-spawn-failed", error: error.message }));

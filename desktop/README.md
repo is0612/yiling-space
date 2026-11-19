@@ -64,6 +64,20 @@ yarn desktop
   不再只弹一句 `spawn` 错误。
 
 日志在 `<data>/logs/desktop.log` 与 `<data>/logs/desktop-supervisor.log`。
+
+## 便携包
+
+```bash
+node scripts/desktop-pack.mjs                 # 构建 .output 并打包（不带 .env）
+node scripts/desktop-pack.mjs --skip-build    # 复用已有 .output
+node scripts/desktop-pack.mjs --with-env      # 连同 .env 一起打（只适合自己迁移）
+```
+
+产出在 `dist/桌面便携版-<version>/`：`runtime/node.exe` + `app/`（含 `.output`、生产依赖、
+Electron）+ 启动 bat。目标机器只需要 Docker Desktop，不需要 Node/yarn；`.env` 默认不打包，
+首次使用先把 `app/.env.example` 复制成 `app/.env` 并填写数据库/模型配置。
+便携目录请放在可写位置（如 `D:\YilingSpace`），不要放 `Program Files`；当前包约 1 GB。
+
 Electron 的 Chromium profile（缓存，不是用户数据）默认放 `.tmp/electron`；如果那里不可写，
 会依次回退 `<data>/electron` 和系统临时目录。
 
