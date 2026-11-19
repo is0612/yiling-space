@@ -76,6 +76,22 @@ type LocalTaskDetail = LocalTask & {
   }>;
 };
 
+type LocalCommandRequest = {
+  id: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  reason: string;
+  status: "PENDING" | "APPROVING" | "SUCCEEDED" | "FAILED" | "REJECTED";
+  exitCode: number | null;
+  stdout: string | null;
+  stderr: string | null;
+  durationMs: number | null;
+  createdAt: string;
+  error: string | null;
+  root: { id: string; label: string; path: string };
+};
+
 type Entry = {
   name: string;
   path: string;
@@ -149,6 +165,12 @@ const selectedTask = ref<LocalTask | null>(null);
 const taskDetail = ref<LocalTaskDetail | null>(null);
 const taskDetailLoading = ref(false);
 const taskBusy = ref(false);
+const commandVisible = ref(false);
+const commandLoading = ref(false);
+const commandRequests = ref<LocalCommandRequest[]>([]);
+const selectedCommand = ref<LocalCommandRequest | null>(null);
+const commandBusy = ref(false);
+const pendingCommandCount = computed(() => commandRequests.value.filter((request) => request.status === "PENDING").length);
 
 const selectedRoot = computed(() =>
   roots.value.find((root) => root.id === selectedRootId.value) ?? roots.value[0] ?? null,
@@ -579,12 +601,87 @@ async function cancelTask() {
   }
 }
 
+function asCommand(row: unknown): LocalCommandRequest {
+  return row as LocalCommandRequest;
+}
+
+async function loadCommandRequests(showDialog = false) {
+  if (showDialog) commandVisible.value = true;
+  commandLoading.value = true;
+  try {
+    const result = await request<{ requests: LocalCommandRequest[] }>({
+      url: "/local/command-requests",
+      params: { status: "PENDING" },
+    });
+    commandRequests.value = result.requests;
+    if (!selectedCommand.value || !commandRequests.value.some((request) => request.id === selectedCommand.value?.id)) {
+      selectedCommand.value = commandRequests.value[0] ?? null;
+    }
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "读取命令审批失败。"));
+  } finally {
+    commandLoading.value = false;
+  }
+}
+
+async function openCommands() {
+  await loadCommandRequests(true);
+}
+
+async function approveCommand(command: LocalCommandRequest) {
+  try {
+    await ElMessageBox.confirm(
+      `批准执行「${command.command} ${command.args.join(" ")}」？`,
+      "批准执行命令",
+      { type: "warning", confirmButtonText: "批准执行", cancelButtonText: "取消" },
+    );
+    commandBusy.value = true;
+    const result = await request<{ request: LocalCommandRequest }>({
+      url: `/local/command-requests/${command.id}/approve`,
+      method: "post",
+    });
+    selectedCommand.value = result.request;
+    commandRequests.value = commandRequests.value.filter((item) => item.id !== command.id);
+    ElMessage.success(result.request.status === "SUCCEEDED" ? "命令执行成功。" : "命令已执行，但退出状态不是 0。");
+    if (tasksVisible.value) await openTasks();
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(readApiErrorMessage(error, "执行命令失败。"));
+  } finally {
+    commandBusy.value = false;
+  }
+}
+
+async function rejectCommand(command: LocalCommandRequest) {
+  try {
+    const result = await ElMessageBox.prompt("拒绝原因（可留空）", "拒绝执行命令", {
+      confirmButtonText: "拒绝",
+      cancelButtonText: "取消",
+      inputPlaceholder: "例如：这个命令会改太多文件",
+    });
+    commandBusy.value = true;
+    await request({
+      url: `/local/command-requests/${command.id}/reject`,
+      method: "post",
+      data: { reason: result.value ?? "" },
+    });
+    ElMessage.success("已拒绝。");
+    await loadCommandRequests();
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    ElMessage.error(readApiErrorMessage(error, "拒绝命令失败。"));
+  } finally {
+    commandBusy.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     rootInfo.value = await request<RootInfo>({ url: "/local/observe/root" });
     await loadRoots();
     await list("");
     await loadWriteRequests();
+    await loadCommandRequests();
   } catch (error) {
     ElMessage.error(readApiErrorMessage(error, "本地观察初始化失败。"));
   } finally {
@@ -639,6 +736,12 @@ onMounted(async () => {
               @click="openWrites"
             >
               写审批{{ pendingWriteCount ? ` (${pendingWriteCount})` : "" }}
+            </el-button>
+            <el-button
+              :type="pendingCommandCount ? 'warning' : 'default'"
+              @click="openCommands"
+            >
+              命令审批{{ pendingCommandCount ? ` (${pendingCommandCount})` : "" }}
             </el-button>
             <el-button @click="openTasks">
               任务档案
@@ -1102,6 +1205,113 @@ onMounted(async () => {
     </el-dialog>
 
     <el-dialog
+      v-model="commandVisible"
+      title="命令审批"
+      width="900px"
+      append-to-body
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="批准之前不会执行"
+        description="当前只允许 git / node / python / python3 / cargo / go / dotnet，无 shell；每次执行都要你确认。"
+      />
+      <div
+        v-if="!commandLoading && !commandRequests.length"
+        class="write-empty"
+      >
+        没有待审批的命令。
+      </div>
+      <div
+        v-else
+        class="task-grid"
+      >
+        <el-table
+          v-loading="commandLoading"
+          :data="commandRequests"
+          row-key="id"
+          size="small"
+          highlight-current-row
+          class="task-table"
+          @row-click="(row) => selectedCommand = asCommand(row)"
+        >
+          <el-table-column
+            label="目录"
+            width="100"
+          >
+            <template #default="{ row }">{{ row.root.label }}</template>
+          </el-table-column>
+          <el-table-column
+            label="命令"
+            min-width="220"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ row.command }} {{ (row.args || []).join(" ") }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="cwd"
+            label="cwd"
+            width="120"
+            show-overflow-tooltip
+          />
+        </el-table>
+        <div
+          v-if="selectedCommand"
+          class="write-preview"
+        >
+          <div class="preview-head">
+            <span>{{ selectedCommand.root.label }}</span>
+            <span class="result-meta">{{ selectedCommand.cwd || "." }}</span>
+          </div>
+          <pre class="command-line">{{ selectedCommand.command }} {{ selectedCommand.args.join(" ") }}</pre>
+          <div class="write-reason">{{ selectedCommand.reason }}</div>
+          <el-alert
+            v-if="selectedCommand.status === 'SUCCEEDED' || selectedCommand.status === 'FAILED'"
+            :type="selectedCommand.status === 'SUCCEEDED' ? 'success' : 'error'"
+            :closable="false"
+            :title="`退出码 ${selectedCommand.exitCode ?? 'unknown'} · ${selectedCommand.durationMs ?? 0} ms`"
+          />
+          <pre
+            v-if="selectedCommand.stdout || selectedCommand.stderr"
+            class="preview-body command-output"
+          >{{ selectedCommand.stdout || "" }}{{ selectedCommand.stderr ? `\n[stderr]\n${selectedCommand.stderr}` : "" }}</pre>
+          <div class="write-actions">
+            <el-button
+              type="danger"
+              plain
+              :disabled="commandBusy || selectedCommand.status !== 'PENDING'"
+              @click="rejectCommand(selectedCommand)"
+            >
+              拒绝
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="commandBusy"
+              :disabled="selectedCommand.status !== 'PENDING'"
+              @click="approveCommand(selectedCommand)"
+            >
+              批准执行
+            </el-button>
+          </div>
+        </div>
+        <div
+          v-else
+          class="preview-placeholder"
+        >
+          选一条命令查看参数和原因。
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="commandVisible = false">
+          关闭
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
       v-model="tasksVisible"
       title="任务档案"
       width="900px"
@@ -1343,6 +1553,20 @@ onMounted(async () => {
 }
 .write-content {
   max-height: 360px;
+}
+.command-line {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #eef3ff;
+  color: #2f4f8f;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font: 12px/1.6 "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
+}
+.command-output {
+  max-height: 260px;
+  margin-top: 10px;
 }
 .write-actions {
   display: flex;

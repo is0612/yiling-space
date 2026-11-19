@@ -31,6 +31,18 @@
 
 写请求表：`local_write_requests`。工具结果只返回 `PENDING_APPROVAL`，不会返回“已写入”。
 
+## 终端命令（需审批）
+
+可写目录还可以执行终端命令，但同样不能直接跑：
+
+1. 她调用 `propose_terminal_command`，提交 `root / command / args / cwd / reason / taskId`；
+2. 只接受白名单可执行文件：`git`、`node`、`python`、`python3`、`cargo`、`go`、`dotnet`；
+3. 不经过 shell，参数是数组，避免 `&`、管道和命令替换；
+4. 管理页「命令审批」里确认后才执行；
+5. 输出、退出码、耗时写进 `local_command_requests`；关联任务会自动追加一条 `COMMAND` 验收证据，但**不会**替你判断任务通过/失败。
+
+超时 120 秒，stdout/stderr 各截断 64 KB；超时会杀掉整个进程树。
+
 ## 任务档案与验收
 
 一条任务按「目标 → 计划 → 写请求 → 验收证据」串起来：
@@ -41,8 +53,9 @@
 4. 管理页「任务档案」里可以记录 `PASS` / `FAIL` 验收证据，任务相应变成「已验收」/「验收失败」；
 5. 任务也可以取消；已取消/已完成的任务不能再改验收结果。
 
-当前验收证据是**人工记录**（例如“跑过 `test:local-write`，文件内容正确”），不是自动执行测试；终端接入后
-才会由命令结果自动写证据。这条边界是为了避免把执行者自己的说法当成功。
+当前验收证据有两种：写文件验收由你人工记录；终端命令执行会自动追加一条 `COMMAND` 证据（退出码、
+stdout/stderr），但**不会**自动把任务标成通过——最终 PASS/FAIL 仍由你确认。这样避免把执行者
+自己的说法或“退出码 0”直接当成功。
 
 ## 边界
 
@@ -51,7 +64,8 @@
 - `.env*`、`*.key`、`*.pem`、`credentials-encryption.key`、`onebot-*.json` 等敏感文件不可读、不可写；
 - 二进制文件不预览；超过 256 KB 的文件不预览；
 - 读工具只读；写文件必须经过审批，且只能覆盖已存在的授权目录内文件或新建文件；
-- 没有删除、终端、Git 操作。
+- 终端命令必须经过审批，只允许白名单可执行文件，不走 shell；
+- 没有删除操作、没有 Git 专用操作。
 
 ## 审计
 
@@ -70,6 +84,9 @@
 - `GET /api/local/write-requests?status=PENDING`
 - `POST /api/local/write-requests/{id}/approve`
 - `POST /api/local/write-requests/{id}/reject`
+- `GET /api/local/command-requests?status=PENDING`
+- `POST /api/local/command-requests/{id}/approve`
+- `POST /api/local/command-requests/{id}/reject`
 - `GET/POST /api/local/tasks`
 - `GET /api/local/tasks/{id}`
 - `POST /api/local/tasks/{id}/evidence`
@@ -82,7 +99,8 @@
 可以，但只在**桌面聊天**里，且只有管理员：
 
 - 管理员在桌面聊天时，模型会拿到 `list_local_roots` / `list_local_directory` / `read_local_file` /
-  `search_local_files` 四个只读工具；授权目录开启可写时还会拿到 `propose_file_write`（只提交审批，不直接写）；
+  `search_local_files` 四个只读工具；授权目录开启可写时还会拿到 `propose_file_write` 和
+  `propose_terminal_command`（都只提交审批，不直接执行）；
 - 工具只能访问「授权目录」里的内容，走的还是同一套根目录白名单、敏感文件过滤和审计；
 - QQ / 群聊不启用本地文件工具，避免群里的人借她读本机文件；
 - 写文件只能提交审批，不能直接写；QQ 也不启用写工具；

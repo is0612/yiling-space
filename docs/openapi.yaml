@@ -7165,6 +7165,81 @@ paths:
         '409':
           $ref: '#/components/responses/BadRequest'
 
+  /local/command-requests:
+    get:
+      tags: [LocalObserve]
+      summary: 待审批的终端命令
+      description: 仅管理员；默认只返回 PENDING。
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, default: PENDING }
+      responses:
+        '200':
+          description: 命令请求
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items: { $ref: '#/components/schemas/LocalCommandRequest' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /local/command-requests/{id}/approve:
+    post:
+      tags: [LocalObserve]
+      summary: 批准并执行命令
+      description: 仅管理员；白名单可执行文件、无 shell、120 秒超时。
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 执行结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request: { $ref: '#/components/schemas/LocalCommandRequest' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/BadRequest'
+  /local/command-requests/{id}/reject:
+    post:
+      tags: [LocalObserve]
+      summary: 拒绝执行命令
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: 已拒绝
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request: { $ref: '#/components/schemas/LocalCommandRequest' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
 components:
   securitySchemes:
     sessionCookie:
@@ -7208,6 +7283,33 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    LocalCommandRequest:
+      type: object
+      required: [id, rootId, command, args, cwd, reason, status, createdAt, root]
+      properties:
+        id: { type: string, format: uuid }
+        rootId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid, nullable: true }
+        command: { type: string }
+        args:
+          type: array
+          items: { type: string }
+        cwd: { type: string }
+        reason: { type: string }
+        status: { type: string, enum: [PENDING, APPROVING, SUCCEEDED, FAILED, REJECTED] }
+        exitCode: { type: integer, nullable: true }
+        stdout: { type: string, nullable: true }
+        stderr: { type: string, nullable: true }
+        durationMs: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        root:
+          type: object
+          properties:
+            id: { type: string }
+            label: { type: string }
+            path: { type: string }
+            mode: { type: string, enum: [READ_ONLY, READ_WRITE] }
     LocalTask:
       type: object
       required: [id, title, goal, plan, status, createdAt]

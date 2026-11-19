@@ -2122,6 +2122,7 @@ model LocalAccessRoot {
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
   writeRequests LocalWriteRequest[]
+  commandRequests LocalCommandRequest[]
   @@index([enabled, createdAt])
   @@map("local_access_roots")
 }
@@ -2166,6 +2167,7 @@ model LocalTask {
   updatedAt DateTime @updatedAt @db.Timestamptz(6)
   completedAt DateTime? @db.Timestamptz(6)
   writeRequests LocalWriteRequest[]
+  commandRequests LocalCommandRequest[]
   evidence LocalTaskEvidence[]
   @@index([status, createdAt])
   @@map("local_tasks")
@@ -2182,4 +2184,34 @@ model LocalTaskEvidence {
   task LocalTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
   @@index([taskId, createdAt])
   @@map("local_task_evidence")
+}
+
+/// 终端命令提案：管理员批准后才执行；只允许白名单可执行文件、无 shell。
+model LocalCommandRequest {
+  id String @id @default(uuid()) @db.Uuid
+  rootId String @db.Uuid
+  taskId String? @db.Uuid
+  command String @db.VarChar(200)
+  args Json @default("[]") @db.JsonB
+  cwd String @db.VarChar(1000)
+  reason String @db.VarChar(500)
+  status String @default("PENDING") @db.VarChar(20)
+  exitCode Int?
+  stdout String? @db.Text
+  stderr String? @db.Text
+  durationMs Int?
+  actorId String @db.Uuid
+  characterId String? @db.Uuid
+  conversationId String? @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  decidedAt DateTime? @db.Timestamptz(6)
+  startedAt DateTime? @db.Timestamptz(6)
+  finishedAt DateTime? @db.Timestamptz(6)
+  error String? @db.VarChar(500)
+  root LocalAccessRoot @relation(fields: [rootId], references: [id], onDelete: Cascade)
+  task LocalTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  @@index([status, createdAt])
+  @@index([rootId, createdAt])
+  @@index([taskId, createdAt])
+  @@map("local_command_requests")
 }

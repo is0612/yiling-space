@@ -44,6 +44,7 @@ import { requireActor } from "../../../utils/auth";
 import { auditLocalObserve, listLocalDirectory, listLocalObserveRoots, readLocalTextFile, searchLocalProject } from "../../../utils/local-observe";
 import { createLocalWriteRequest } from "../../../utils/local-write";
 import { createLocalTask } from "../../../utils/local-tasks";
+import { createLocalCommandRequest } from "../../../utils/local-command";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
 import { desktopConversationWhere, DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR, lockActiveDesktopConversationForWrite, throwDeletedDesktopConversationRequest, validateDesktopConversationReplay } from "../../../utils/desktop-conversation";
@@ -562,6 +563,35 @@ export default defineEventHandler(async (event) => {
           requestId: request.id,
           path: request.relativePath,
           message: "已提交给主人审批，尚未写入文件。",
+        };
+      },
+      proposeCommand: async (rootValue: string, command: string, argsJson: string, cwd: string, reason: string, taskId?: string) => {
+        const root = await resolveLocalToolRoot(rootValue);
+        let args: unknown;
+        try {
+          args = JSON.parse(argsJson || "[]");
+        } catch {
+          throw new Error("args 必须是 JSON 字符串数组。");
+        }
+        if (!Array.isArray(args)) throw new Error("args 必须是 JSON 字符串数组。");
+        const request = await createLocalCommandRequest({
+          rootId: root.id,
+          command,
+          args: args as string[],
+          cwd,
+          reason,
+          actorId: ownerId,
+          characterId,
+          ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
+          ...(taskId ? { taskId } : {}),
+        });
+        return {
+          status: "PENDING_APPROVAL",
+          requestId: request.id,
+          command: request.command,
+          args: request.args,
+          cwd: request.cwd,
+          message: "已提交给主人审批，命令尚未执行。",
         };
       },
     } : {}),

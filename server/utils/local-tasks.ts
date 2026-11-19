@@ -97,8 +97,30 @@ export async function recordLocalTaskEvidence(id: string, input: {
   return { evidence, task: await getLocalTask(id) };
 }
 
-export async function cancelLocalTask(id: string, actorId: string) {
-  const task = await getLocalTask(id);
+/** 命令执行的自动证据：只追加，不替管理员做最终验收。 */
+export async function appendCommandEvidence(input: {
+  taskId: string;
+  outcome: "PASS" | "FAIL";
+  note: string;
+  actorId: string;
+}) {
+  const task = await getPrisma().localTask.findUnique({ where: { id: input.taskId }, select: { id: true, status: true } });
+  if (!task || task.status === "CANCELLED") return;
+  await getPrisma().localTaskEvidence.create({
+    data: {
+      taskId: input.taskId,
+      kind: "COMMAND",
+      outcome: input.outcome,
+      note: input.note.slice(0, 8000),
+      actorId: input.actorId,
+    },
+  });
+  auditLocalObserve(input.actorId, "task.evidence", {
+    taskId: input.taskId, outcome: input.outcome, kind: "COMMAND",
+  });
+}
+
+export async function cancelLocalTask(id: string, actorId: string) {  const task = await getLocalTask(id);
   if (task.status === "SUCCEEDED" || task.status === "FAILED") {
     throw new LocalObserveError(409, "已完成的任务不能取消。");
   }

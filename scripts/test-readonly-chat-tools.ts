@@ -51,5 +51,8 @@ try {
   const taskTools = createReadOnlyChatTools({ createLocalTask: async () => ({ taskId: "t1" }) });
   assert.equal(taskTools.definitions.length, 2);
   assert.match(await taskTools.call("create_local_task", '{"title":"t","goal":"g","plan":"p"}'), /t1/);
+  const commandTools = createReadOnlyChatTools({ proposeCommand: async () => ({ status: "PENDING_APPROVAL" }) });
+  assert.equal(commandTools.definitions.length, 2);
+  assert.match(await commandTools.call("propose_terminal_command", '{"root":"project","command":"node","args":"[]","reason":"test"}'), /PENDING_APPROVAL/);
   console.log("Read-only tools: whitelist, argument validation, budgets, cached queries, native continuation, reasoning, usage, unsupported-provider fallback and local tools passed (mock only).");
 } finally { globalThis.fetch = original; }

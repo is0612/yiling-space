@@ -12,6 +12,8 @@ export type ReadOnlyChatTools = {
   proposeFileWrite?: (root: string, path: string, content: string, reason: string, taskId?: string) => Promise<unknown>;
   /** 建一条任务档案；不产生文件/命令副作用。 */
   createLocalTask?: (title: string, goal: string, plan: string) => Promise<unknown>;
+  /** 只创建终端命令审批请求，不直接执行。 */
+  proposeCommand?: (root: string, command: string, argsJson: string, cwd: string, reason: string, taskId?: string) => Promise<unknown>;
 };
 
 type LocalToolSpec = {
@@ -83,6 +85,22 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
       ],
       maxRaw: 24000,
       call: async (args: Record<string, string>) => handlers.proposeFileWrite!(args.root ?? "", args.path ?? "", args.content ?? "", args.reason ?? "", args.taskId || undefined),
+    }] : []),
+    ...(handlers.proposeCommand ? [{
+      name: "propose_terminal_command",
+      description: "Propose a terminal command inside an authorized writable directory. Only whitelisted executables (git, node, python, python3, cargo, go, dotnet) are accepted, no shell. This does NOT execute immediately: it creates a pending request that the owner must approve. Never claim the command ran before approval.",
+      fields: [
+        { name: "root", required: true, maxLength: 200 },
+        { name: "command", required: true, maxLength: 200 },
+        { name: "args", required: false, maxLength: 8000 },
+        { name: "cwd", required: false, maxLength: 500 },
+        { name: "reason", required: true, maxLength: 500 },
+        { name: "taskId", required: false, maxLength: 80 },
+      ],
+      maxRaw: 16000,
+      call: async (args: Record<string, string>) => handlers.proposeCommand!(
+        args.root ?? "", args.command ?? "", args.args ?? "[]", args.cwd ?? "", args.reason ?? "", args.taskId || undefined,
+      ),
     }] : []),
   ];
 
