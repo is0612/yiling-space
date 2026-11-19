@@ -175,7 +175,7 @@ onBeforeUnmount(() => { sequence++; });
     />
     <div
       v-else-if="error"
-      class="notice"
+      class="su-notice"
     >
       <el-alert
         :title="error"
@@ -196,7 +196,7 @@ onBeforeUnmount(() => { sequence++; });
         <div class="ident-top">
           <div
             id="ident-heading"
-            class="eyebrow"
+            class="su-eyebrow"
           >
             身份与定位
           </div>
@@ -209,7 +209,7 @@ onBeforeUnmount(() => { sequence++; });
         </div>
         <div class="ident-body">
           <div
-            class="avatar"
+            class="su-avatar"
             aria-hidden="true"
           >
             {{ avatarLetter }}
@@ -217,7 +217,7 @@ onBeforeUnmount(() => { sequence++; });
           <div class="ident-main">
             <div class="ident-name">
               <h2>{{ view.identity.name }}</h2>
-              <span class="pill">当前角色名</span>
+              <span class="name-pill">当前角色名</span>
             </div>
             <div class="ident-meta">
               {{ evidence.length }} 条证据<template v-if="latestUpdate">
@@ -250,23 +250,23 @@ onBeforeUnmount(() => { sequence++; });
         </div>
       </section>
 
-      <div class="kpis">
-        <div class="kpi">
+      <div class="kpi-grid">
+        <div class="kpi-cell">
           <div class="row">
             <span class="lab">证据总数</span><span class="note">{{ Object.values(counts).filter((value) => value > 0).length }} 个域有记录</span>
           </div><b>{{ evidence.length }}</b>
         </div>
-        <div class="kpi">
+        <div class="kpi-cell">
           <div class="row">
             <span class="lab">已采纳反思</span><span class="note">可随新证据修订</span>
           </div><b>{{ reflections.length }}</b>
         </div>
-        <div class="kpi">
+        <div class="kpi-cell">
           <div class="row">
             <span class="lab">修订对照</span><span class="note">旧版仍可核对</span>
           </div><b>{{ historyRows.length }}</b>
         </div>
-        <div class="kpi">
+        <div class="kpi-cell">
           <div class="row">
             <span class="lab">会话经验</span><span class="note">只在原会话生效</span>
           </div><b>{{ counts.experience ?? 0 }}</b>
@@ -274,8 +274,8 @@ onBeforeUnmount(() => { sequence++; });
       </div>
 
       <div class="grid">
-        <aside class="card">
-          <div class="card-h">
+        <aside class="col-card">
+          <div class="col-head">
             <h3>按域查看</h3><span class="meta">{{ evidence.length }}</span>
           </div>
           <div class="domlist">
@@ -301,7 +301,7 @@ onBeforeUnmount(() => { sequence++; });
           </div>
         </aside>
 
-        <section class="card">
+        <section class="col-card">
           <div
             v-if="quote"
             class="quote"
@@ -336,7 +336,7 @@ onBeforeUnmount(() => { sequence++; });
           </div>
 
           <div
-            class="filters"
+            class="su-filters"
             role="group"
             aria-label="按状态筛选"
           >
@@ -409,8 +409,8 @@ onBeforeUnmount(() => { sequence++; });
           </div>
         </section>
 
-        <aside class="card">
-          <div class="card-h">
+        <aside class="col-card">
+          <div class="col-head">
             <h3>成长轨迹</h3><span class="meta">{{ historyRows.length }} 项变化</span>
           </div>
           <div class="tl">
@@ -466,17 +466,17 @@ onBeforeUnmount(() => { sequence++; });
 .phead h1 { margin: 0; font-size: 22px; line-height: 28px; letter-spacing: -.02em; }
 .phead .sub { margin: 4px 0 0; font-size: 12px; line-height: 18px; color: var(--dim); }
 .phead .acts { margin-left: auto; padding-bottom: 3px; }
-.notice { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.su-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 
 .ident { height: 104px; margin-top: 12px; background: var(--surface); border-radius: 10px; padding: 12px 16px 14px; display: flex; flex-direction: column; }
 .ident-top { display: flex; align-items: center; height: 16px; flex: none; }
 .ident-body { display: flex; align-items: center; height: 56px; margin-top: 6px; flex: none; }
-.avatar { width: 56px; height: 56px; border-radius: 10px; background: var(--brand-soft); color: var(--brand-btn); font-size: 24px; font-weight: 700; display: grid; place-items: center; flex: none; }
+.su-avatar { width: 56px; height: 56px; border-radius: 10px; background: var(--brand-soft); color: var(--brand-btn); font-size: 24px; font-weight: 700; display: grid; place-items: center; flex: none; }
 .ident-main { min-width: 0; margin-left: 14px; }
-.eyebrow { font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: .06em; color: var(--dim); }
+.su-eyebrow { font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: .06em; color: var(--dim); }
 .ident-name { display: flex; align-items: center; gap: 8px; }
 .ident-name h2 { margin: 0; font-size: 22px; line-height: 28px; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pill { height: 22px; padding: 0 10px; border-radius: 999px; background: var(--brand-soft); color: var(--brand-btn); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; flex: none; }
+.name-pill { height: 22px; padding: 0 10px; border-radius: 999px; background: var(--brand-soft); color: var(--brand-btn); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; flex: none; }
 .ident-meta { margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--dim); }
 .ident-fields { margin-left: 32px; display: flex; flex-direction: column; justify-content: center; gap: 0; }
 .field-row { display: flex; gap: 24px; }
@@ -489,18 +489,18 @@ onBeforeUnmount(() => { sequence++; });
 .l3 { flex: none; font-size: 12px; color: var(--dim); text-align: right; }
 .l1:hover, .l2:hover, .l3:hover { text-decoration: underline; }
 
-.kpis { display: grid; grid-template-columns: 224px minmax(0, 1fr) minmax(0, 1fr) 296px; gap: 14px; margin-top: 16px; }
-.kpi { background: var(--surface); border-radius: 10px; padding: 12px 16px; }
-.kpi .row { display: flex; align-items: baseline; gap: 8px; }
-.kpi .lab { font-size: 12px; line-height: 16px; color: var(--dim); }
-.kpi .note { margin-left: auto; min-width: 0; font-size: 12px; line-height: 16px; color: var(--dim); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kpi b { display: block; font-size: 22px; line-height: 26px; margin-top: 4px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.kpi-grid { display: grid; grid-template-columns: 224px minmax(0, 1fr) minmax(0, 1fr) 296px; gap: 14px; margin-top: 16px; }
+.kpi-cell { border: 0; box-shadow: none; background: var(--surface); border-radius: 10px; padding: 12px 16px; }
+.kpi-cell .row { display: flex; align-items: baseline; gap: 8px; }
+.kpi-cell .lab { font-size: 12px; line-height: 16px; color: var(--dim); }
+.kpi-cell .note { margin-left: auto; min-width: 0; font-size: 12px; line-height: 16px; color: var(--dim); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-cell b { display: block; font-size: 22px; line-height: 26px; margin-top: 4px; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
 
 .grid { display: grid; grid-template-columns: 224px minmax(0, 1fr) 296px; gap: 14px; margin-top: 14px; height: max(460px, calc(100vh - 378px)); }
-.card { background: var(--surface); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.card-h { display: flex; align-items: baseline; gap: 8px; padding: 16px 16px 8px; flex: none; }
-.card-h h3 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--dim); }
-.card-h .meta { margin-left: auto; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.col-card { border: 0; box-shadow: none; background: var(--surface); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.col-head { display: flex; align-items: baseline; gap: 8px; padding: 16px 16px 8px; flex: none; }
+.col-head h3 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--dim); }
+.col-head .meta { margin-left: auto; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
 
 .domlist { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 6px 0; }
 .domrow { display: flex; align-items: center; gap: 8px; width: 100%; height: 40px; padding: 0 10px; border: 0; border-radius: 8px; background: none; font-family: inherit; font-size: 14px; color: var(--text-2); text-align: left; cursor: pointer; }
@@ -520,7 +520,7 @@ onBeforeUnmount(() => { sequence++; });
 .quote-toggle:hover { text-decoration: underline; }
 .quote p.quiet { color: var(--dim); }
 .q-meta { margin-top: 8px; display: flex; align-items: center; gap: 10px; font-size: 12px; line-height: 18px; color: var(--dim); }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 12px; flex: none; }
+.su-filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 12px; flex: none; }
 .fchip { height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-size: 12px; color: var(--text-2); font-family: inherit; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .fchip b { font-weight: 600; color: var(--dim); font-variant-numeric: tabular-nums; }
 .fchip:hover:not(:disabled) { border-color: var(--brand-btn); }
@@ -530,7 +530,7 @@ onBeforeUnmount(() => { sequence++; });
 
 .list { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); scrollbar-width: thin; mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); }
 .ev { list-style: none; margin: 0; padding: 0; }
-.ev li { display: grid; grid-template-columns: 7px 54px minmax(0, 1fr) 58px; gap: 10px; align-items: center; min-height: 55px; padding: 6px 16px; border-bottom: 1px solid var(--line); }
+.ev li { display: grid; grid-template-columns: 7px 54px minmax(0, 1fr) 58px; gap: 10px; align-items: center; min-height: 58px; padding: 7px 16px; border-bottom: 1px solid var(--line); }
 .ev li:hover { background: var(--bg); }
 .ev-k { font-size: 12px; color: var(--dim); white-space: nowrap; }
 .ev-body { min-width: 0; }
@@ -574,15 +574,15 @@ onBeforeUnmount(() => { sequence++; });
   .ident-body { height: auto; flex-wrap: wrap; gap: 12px 16px; margin-top: 8px; }
   .ident-main { flex: 1 1 180px; }
   .ident-fields { margin-left: 0; flex: 1 1 100%; }
-  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid { grid-template-columns: 200px minmax(0, 1fr); height: auto; }
-  .grid > .card:last-child { grid-column: 1 / -1; max-height: 320px; }
+  .grid > .col-card:last-child { grid-column: 1 / -1; max-height: 320px; }
 }
 @media (max-width: 860px) {
   .ident-fields { margin-left: 0; width: 100%; }
   .field { width: auto; flex: 1; }
   .grid { grid-template-columns: 1fr; }
-  .grid > .card:first-child { max-height: 280px; }
+  .grid > .col-card:first-child { max-height: 280px; }
   .list, .tl { max-height: 420px; }
   .ev li { grid-template-columns: 7px 46px minmax(0, 1fr); }
   .l3 { display: none; }
