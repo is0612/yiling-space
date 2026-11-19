@@ -54,6 +54,15 @@ $env:YILING_DATA_DIR = "$env:LOCALAPPDATA\YilingSpace\data"
 yarn desktop
 ```
 
+## 首次启动
+
+- 数据库迁移后如果 `users` 表为空，supervisor 会自动建一个管理员：
+  - `.env` 里有可用的 `DEV_OWNER_USERNAME` / `DEV_OWNER_PASSWORD` 就用它；
+  - 没有就随机生成密码，写到 `<data>/first-run-admin.txt`，登录后请立刻改密码。
+- 已有用户的数据库不会被动；想关掉自动初始化，设 `YILING_FIRST_ADMIN=0`。
+- Docker 没装 / 没启动 / 登录卡住 / 端口被占用时，窗口会显示错误页和「打开日志目录」按钮，
+  不再只弹一句 `spawn` 错误。
+
 日志在 `<data>/logs/desktop.log` 与 `<data>/logs/desktop-supervisor.log`。
 Electron 的 Chromium profile（缓存，不是用户数据）默认放 `.tmp/electron`；如果那里不可写，
 会依次回退 `<data>/electron` 和系统临时目录。

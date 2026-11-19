@@ -145,10 +145,45 @@ function createWindow() {
   });
 }
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[char]);
+}
+
+function errorPage(message, hint = "") {
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>忆灵空间启动失败</title>
+<style>
+  html,body{height:100%;margin:0;background:#f4f6f9;color:#38414d;font:14px/1.7 "Microsoft YaHei",system-ui,sans-serif}
+  main{max-width:760px;margin:0 auto;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:24px;box-sizing:border-box;text-align:center}
+  .mark{width:52px;height:52px;border-radius:16px;background:#fdecec;display:grid;place-items:center;font-size:26px;color:#d64545}
+  h1{font-size:20px;margin:0}
+  p{margin:0;color:#68717f}
+  .hint{max-width:620px;color:#8a5a00;background:#fff8e6;border:1px solid #f3d9a4;border-radius:10px;padding:10px 14px;font-size:13px;text-align:left}
+  .path{font-size:12px;color:#98a2b3;word-break:break-all}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:4px}
+  button{border:1px solid #d8dee9;background:#fff;color:#38414d;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer}
+  button.primary{background:#4c6ef5;border-color:#4c6ef5;color:#fff}
+  button:hover{filter:brightness(.97)}
+</style></head><body><main>
+  <div class="mark">!</div>
+  <h1>忆灵空间启动失败</h1>
+  <p>${escapeHtml(message)}</p>
+  ${hint ? `<div class="hint">${escapeHtml(hint)}</div>` : ""}
+  <div class="actions">
+    <button class="primary" onclick="window.yilingDesktop?.openLogs()">打开日志目录</button>
+    <button onclick="window.yilingDesktop?.openDataDir()">打开数据目录</button>
+  </div>
+  <div class="path">日志：${escapeHtml(LOG_FILE)}</div>
+</main></body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
 function showError(message, hint = "") {
   log("startup-error", { message, hint });
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.loadURL(loadingPage(`启动失败：${message}`));
+    mainWindow.loadURL(errorPage(message, hint));
+    return;
   }
   dialog.showMessageBox({
     type: "error",

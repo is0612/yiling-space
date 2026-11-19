@@ -22,11 +22,13 @@
  */
 import "dotenv/config";
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "pg";
 import { superviseMemoryWorker } from "./memory-worker-supervisor.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -85,9 +87,16 @@ function log(event, detail = {}) {
   }
 }
 
-function fail(message, hint = "") {
-  log("fatal", { message, ...(hint ? { hint } : {}) });
+function fail(message, hint = "", code = "") {
+  log("fatal", { message, ...(hint ? { hint } : {}), ...(code ? { code } : {}) });
   process.exitCode = 1;
+}
+
+function startupError(message, code, hint) {
+  const error = new Error(message);
+  error.code = code;
+  error.hint = hint;
+  return error;
 }
 
 function sleep(ms) {
@@ -127,7 +136,8 @@ function parseDatabase() {
   };
 }
 
-function run(command, commandArgs, options = {}) {  const result = spawnSync(command, commandArgs, {
+function run(command, commandArgs, options = {}) {
+  const result = spawnSync(command, commandArgs, {
     cwd: ROOT,
     // stdin 必须断开：Electron 的 supervisor stdin 是一条一直开着的管道，
     // Prisma CLI 在继承这条管道时会停在读 stdin 上，表现为 migrate 永远不返回。
@@ -147,21 +157,49 @@ async function ensureDockerDatabase() {
   }
 
   log("db-starting", { host: db.host, port: db.port });
+  const dockerVersion = spawnSync("docker", ["--version"], { stdio: "ignore", env: process.env });
+  if (dockerVersion.error?.code === "ENOENT") {
+    throw startupError(
+      "没有找到 Docker。",
+      "docker_missing",
+      "先安装并启动 Docker Desktop：https://www.docker.com/products/docker-desktop/ 。装好后回到这里重试。",
+    );
+  }
+
   if (!run("docker", ["info"], { stdio: "ignore" })) {
     log("docker-not-running");
+    // 非 Windows / 没装 Desktop 集成时这条会失败，交给下面的 info 再判一次。
     run("docker", ["desktop", "start", "--timeout", "180"], { stdio: "inherit" });
   }
   if (!run("docker", ["info"], { stdio: "ignore" })) {
-    throw new Error("Docker 引擎没有启动。请先打开 Docker Desktop，看到它变绿后再试。");
+    throw startupError(
+      "Docker 引擎没有启动。",
+      "docker_daemon_down",
+      "打开 Docker Desktop，等左下角变成绿色 Running；如果卡在登录/更新，先处理它，再回这里重试。",
+    );
   }
 
   const container = (process.env.YILING_DB_CONTAINER || "").trim();
   const started = container
     ? run("docker", ["start", container], { stdio: "ignore" })
     : run("docker", ["compose", "up", "-d", "db"], { stdio: "ignore" });
-  if (!started) throw new Error("数据库容器起不来；看 docker compose logs db 的真实原因。");
+  if (!started) {
+    throw startupError(
+      "数据库容器起不来。",
+      "db_start_failed",
+      "在项目目录运行 `docker compose logs db` 看真实原因；常见是端口 5432 被别的程序占用。",
+    );
+  }
 
-  await waitPort(db.host, db.port, DB_WAIT_MS, "PostgreSQL");
+  try {
+    await waitPort(db.host, db.port, DB_WAIT_MS, "PostgreSQL");
+  } catch {
+    throw startupError(
+      "数据库容器启动了，但端口一直没有就绪。",
+      "db_timeout",
+      "看 `docker compose logs db`；如果容器反复重启，多半是数据卷/密码和 .env 对不上。",
+    );
+  }
   log("db-ready", { host: db.host, port: db.port });
 }
 
@@ -178,6 +216,67 @@ function migrateDatabase() {
     throw new Error("数据库迁移失败；服务没有启动。先备份并修复迁移，再重试。");
   }
   log("migrate-done");
+}
+
+/**
+ * 全新数据库没有任何管理员时，自动建一个，并把随机密码写到 <data>/first-run-admin.txt。
+ * 桌面版没有安装向导，不能让人卡在登录页外面；已有用户的库完全不动。
+ */
+async function ensureFirstAdmin() {
+  if ((process.env.YILING_FIRST_ADMIN || "").trim() === "0") return;
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("缺少 DATABASE_URL，无法检查管理员账号。");
+
+  const client = new Client({ connectionString });
+  let count = 0;
+  try {
+    await client.connect();
+    const result = await client.query('SELECT count(*)::int AS count FROM "users"');
+    count = result.rows[0]?.count ?? 0;
+  } finally {
+    await client.end().catch(() => {});
+  }
+  if (count > 0) return;
+
+  const username = (process.env.DEV_OWNER_USERNAME || "admin").trim() || "admin";
+  const ownerId = (process.env.DEV_OWNER_ID || "").trim() || randomUUID();
+  let password = (process.env.DEV_OWNER_PASSWORD || "").trim();
+  let generated = false;
+  if (!password || password.startsWith("replace_with_") || password.length < 8) {
+    password = randomBytes(15).toString("base64url");
+    generated = true;
+  }
+
+  const seeded = run(process.execPath, ["--import", "tsx", "scripts/seed-dev-user.ts"], {
+    env: {
+      ...process.env,
+      DEV_OWNER_ID: ownerId,
+      DEV_OWNER_USERNAME: username,
+      DEV_OWNER_PASSWORD: password,
+    },
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  if (!seeded) {
+    throw startupError(
+      "数据库还没有管理员，自动创建失败。",
+      "first_admin_failed",
+      "检查 .env 的 DATABASE_URL 与迁移状态；也可以手动执行 `yarn seed:dev`。",
+    );
+  }
+
+  let passwordFile = "";
+  if (generated) {
+    passwordFile = path.join(DATA_DIR, "first-run-admin.txt");
+    fs.writeFileSync(
+      passwordFile,
+      `username=${username}\npassword=${password}\n\n首次登录后请在「设置」里修改密码。\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+  }
+  log("first-admin-created", {
+    username,
+    ...(passwordFile ? { passwordFile } : { passwordFrom: "env" }),
+  });
 }
 
 function tsxArgs(script) {
@@ -388,6 +487,7 @@ async function main() {
 
   await ensureDockerDatabase();
   migrateDatabase();
+  await ensureFirstAdmin();
 
   const port = await pickPort();
   const url = `http://127.0.0.1:${port}`;
@@ -465,7 +565,11 @@ async function main() {
 }
 
 main().catch((error) => {
-  fail(error instanceof Error ? error.message : String(error));
+  fail(
+    error instanceof Error ? error.message : String(error),
+    error && typeof error === "object" ? error.hint ?? "" : "",
+    error && typeof error === "object" ? error.code ?? "" : "",
+  );
   process.exitCode = 1;
   // 启动失败时把已经起来的子进程收掉，别留半套服务
   for (const child of children) {
