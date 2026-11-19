@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight, Close, Compass, Moon, Sunny } from "@element-plus/icons-vue";
+import { ArrowRight, Close, Moon, Sunny } from "@element-plus/icons-vue";
 import {
   galaxyEdgeKey, galaxyEdgePath, galaxyEdges, galaxyGrowthRoles, galaxyKinds, galaxyNodeIds, galaxyNodes, galaxySize,
   type GalaxyNodeId,
@@ -22,8 +22,24 @@ const connections = computed(() => [
   { label: "向外提供", empty: "星图暂无已收录的传出关系。", edges: galaxyEdges.filter(edge => edge.from === selected.value) },
   { label: "读取或接收", empty: "星图暂无已收录的传入关系。", edges: galaxyEdges.filter(edge => edge.to === selected.value) },
 ]);
-const routes = galaxyEdges.map(edge => ({ ...edge, key: galaxyEdgeKey(edge.from, edge.to), path: galaxyEdgePath(edge) }));
+const routes = galaxyEdges.map((edge, index) => ({ ...edge, index, key: galaxyEdgeKey(edge.from, edge.to), path: galaxyEdgePath(edge) }));
 const visibleRoutes = computed(() => routes.filter(edge => edge.from === selected.value || edge.to === selected.value));
+
+// 轨道与星尘只是底纹：圆心跟随互动核心，强度压到几乎看不见，不参与交互。
+const coreNode = galaxyNodes.core;
+const orbitRings = [
+  { r: 150, width: 0.9, opacity: 0.14, dash: undefined },
+  { r: 262, width: 0.8, opacity: 0.1, dash: undefined },
+  { r: 372, width: 0.7, opacity: 0.07, dash: "2 7" },
+] as const;
+let dustSeed = 20261119;
+const dustRand = () => ((dustSeed = (dustSeed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+const dustStars = Array.from({ length: 64 }, () => ({
+  x: +(dustRand() * galaxySize.width).toFixed(1),
+  y: +(dustRand() * galaxySize.height).toFixed(1),
+  r: +(0.5 + dustRand() * 0.9).toFixed(2),
+  o: +(0.12 + dustRand() * 0.28).toFixed(2),
+}));
 // Draw from the faint tip to the bright head so overlapping samples read as one trail.
 const lightTrail = Array.from({ length: 21 }, (_, index) => {
   const strength = index / 20;
@@ -77,24 +93,6 @@ onBeforeUnmount(() => document.removeEventListener("visibilitychange", syncVisib
       class="galaxy-shell"
       :class="{ 'motion-paused': motionOff || pageHidden }"
     >
-      <header class="galaxy-header">
-        <div>
-          <div class="kicker atlas-eyebrow">
-            <el-icon><Compass /></el-icon> YILING SPACE <span> / </span> CELESTIAL ATLAS
-          </div>
-          <h1>成长星图</h1>
-          <p>探索系统如何协作，以及一次互动如何影响下一次相遇。</p>
-        </div>
-        <el-button
-          class="motion-button"
-          :icon="motionOff ? Sunny : Moon"
-          :aria-pressed="motionOff"
-          @click="motionOff = !motionOff"
-        >
-          {{ motionOff ? '恢复动画' : '暂停动画' }}
-        </el-button>
-      </header>
-
       <div
         class="galaxy-layout"
         :class="{ 'is-exploring': selected }"
@@ -115,6 +113,32 @@ onBeforeUnmount(() => document.removeEventListener("visibilitychange", syncVisib
               aria-hidden="true"
             >
               <defs>
+                <linearGradient
+                  v-for="edge in routes"
+                  :id="`galaxy-flow-${edge.index}`"
+                  :key="`flow-${edge.key}`"
+                  gradientUnits="userSpaceOnUse"
+                  :x1="galaxyNodes[edge.from].x"
+                  :y1="galaxyNodes[edge.from].y"
+                  :x2="galaxyNodes[edge.to].x"
+                  :y2="galaxyNodes[edge.to].y"
+                >
+                  <stop
+                    offset="0"
+                    :stop-color="galaxyNodes[edge.from].color"
+                    stop-opacity=".06"
+                  />
+                  <stop
+                    offset=".55"
+                    :stop-color="galaxyNodes[edge.from].color"
+                    stop-opacity=".64"
+                  />
+                  <stop
+                    offset="1"
+                    :stop-color="galaxyNodes[edge.to].color"
+                    stop-opacity=".95"
+                  />
+                </linearGradient>
                 <marker
                   v-for="(kind, key) in galaxyKinds"
                   :id="`galaxy-arrow-${key}`"
@@ -135,13 +159,55 @@ onBeforeUnmount(() => document.removeEventListener("visibilitychange", syncVisib
                   />
                 </marker>
               </defs>
-              <g class="routes-ghost">
+              <g
+                class="orbits"
+                aria-hidden="true"
+              >
+                <circle
+                  v-for="(ring, index) in orbitRings"
+                  :key="`orbit-${index}`"
+                  :cx="coreNode.x"
+                  :cy="coreNode.y"
+                  :r="ring.r"
+                  fill="none"
+                  stroke="#8fc9ff"
+                  :stroke-width="ring.width"
+                  :stroke-opacity="ring.opacity"
+                  :stroke-dasharray="ring.dash"
+                />
+              </g>
+              <g
+                class="dust"
+                aria-hidden="true"
+              >
+                <circle
+                  v-for="(star, index) in dustStars"
+                  :key="`dust-${index}`"
+                  :cx="star.x"
+                  :cy="star.y"
+                  :r="star.r"
+                  fill="#cfe4ff"
+                  :opacity="star.o"
+                />
+              </g>
+              <g
+                class="flow-glow"
+                aria-hidden="true"
+              >
                 <path
                   v-for="edge in routes"
-                  :key="`ghost-${edge.key}`"
+                  :key="`glow-${edge.key}`"
+                  :d="edge.path"
+                  :stroke="`url(#galaxy-flow-${edge.index})`"
+                />
+              </g>
+              <g class="flow-line">
+                <path
+                  v-for="edge in routes"
+                  :key="`line-${edge.key}`"
                   class="route route-ghost"
                   :d="edge.path"
-                  :stroke="galaxyKinds[edge.kind].color"
+                  :stroke="`url(#galaxy-flow-${edge.index})`"
                   :stroke-dasharray="galaxyKinds[edge.kind].dash"
                 />
               </g>
@@ -150,7 +216,7 @@ onBeforeUnmount(() => document.removeEventListener("visibilitychange", syncVisib
                 :key="edge.key"
                 class="route route-active"
                 :d="edge.path"
-                :stroke="galaxyKinds[edge.kind].color"
+                :stroke="`url(#galaxy-flow-${edge.index})`"
                 :stroke-dasharray="galaxyKinds[edge.kind].dash"
                 :marker-end="`url(#galaxy-arrow-${edge.kind})`"
               />
@@ -162,7 +228,7 @@ onBeforeUnmount(() => document.removeEventListener("visibilitychange", syncVisib
                 <g
                   v-for="(edge, index) in visibleRoutes"
                   :key="edge.key"
-                  :fill="galaxyKinds[edge.kind].color"
+                  :fill="galaxyNodes[edge.to].color"
                 >
                   <circle
                     v-for="(sample, part) in lightTrail"
@@ -309,6 +375,16 @@ onBeforeUnmount(() => document.removeEventListener("visibilitychange", syncVisib
           </aside>
         </Transition>
       </div>
+
+      <button
+        type="button"
+        class="motion-toggle"
+        :aria-label="motionOff ? '恢复动画' : '暂停动画'"
+        :aria-pressed="motionOff"
+        @click="motionOff = !motionOff"
+      >
+        <el-icon><component :is="motionOff ? Sunny : Moon" /></el-icon>
+      </button>
 
       <footer
         class="galaxy-footer"
