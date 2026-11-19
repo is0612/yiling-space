@@ -28,6 +28,11 @@ assert.deepEqual(selectExpressionHabitsForPrompt("早上好", records).map(x => 
 const selected = selectExpressionHabitsForPrompt("有点难过", records);
 assert.deepEqual(selected.map(x => x.id), ["scene", "general"]);
 assert.deepEqual(selectExpressionHabitsForPrompt("难过", records, 1), []);
+// A group-wide wording correction must survive generic style guidance even when
+// the current chat does not explicitly mention the wording being corrected.
+const wordingCorrection = { ...records[0]!, id: "z-correction", kind: "WORDING", content: "闲聊时不用军事比喻描述关系。" };
+const genericTone = { ...records[0]!, id: "a-tone", kind: "TONE", content: "被问到新鲜事时可以轻松一点。", context: "新鲜事" };
+assert.deepEqual(selectExpressionHabitsForPrompt("有什么新鲜事", [genericTone, wordingCorrection], 150, undefined, "GROUP").map(x => x.id), [wordingCorrection.id]);
 assert(JSON.stringify(selected).length <= 800);
 assert.deepEqual(usedExpressionHabitSnapshots(selected, ["invented"]), []);
 assert.deepEqual(readStoredChatSources({ usedSources: { expressionHabits: selected } }).expressionHabits, selected);

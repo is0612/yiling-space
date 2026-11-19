@@ -15,9 +15,11 @@ export function selectExpressionHabitsForPrompt(query: string, rows: readonly Ex
   const ranked = rows.filter(row => row.status === "ACTIVE" && ((row.chatScope ?? "ALL") === "ALL" || row.chatScope === chatScene)).map(row => ({ row,
     score: row.context.trim() ? terms.reduce((sum, term) => sum + (row.context.toLowerCase().includes(term) ? 1 : 0), 0) : 0,
   })).filter(({ row, score }) => !row.context.trim() || score > 0)
-    .sort((a, b) => b.score - a.score
-      // A confirmed rule for this scene must not be starved by generic style examples
-      // merely because their UUIDs happen to sort first.
+    .sort((a, b) =>
+      // Once eligible, a concrete wording choice has priority over tone and length
+      // guidance. A wording correction can apply even when nobody quotes the words.
+      Number(b.row.kind === "WORDING") - Number(a.row.kind === "WORDING")
+      || b.score - a.score
       || Number(Boolean(chatScene) && b.row.chatScope === chatScene) - Number(Boolean(chatScene) && a.row.chatScope === chatScene)
       || a.row.id.localeCompare(b.row.id));
   const selected: ConversationExpressionHabit[] = [];
