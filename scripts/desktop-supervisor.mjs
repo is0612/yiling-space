@@ -212,15 +212,35 @@ function migrateDatabase() {
   const prismaBin = path.join(ROOT, "node_modules", "prisma", "build", "index.js");
   if (!fs.existsSync(prismaBin)) throw new Error("找不到 Prisma CLI（node_modules/prisma 缺失），安装包不完整。");
   const schemaEngine = path.join(ROOT, "node_modules", "@prisma", "engines", "schema-engine-windows.exe");
+  const prismaEnv = {
+    ...process.env,
+    // 便携包里 --ignore-scripts 不会下载 Prisma 引擎；用打进去的二进制，
+    // 避免目标机器写 `%APPDATA%\Prisma` 缓存时被安全策略挡住。
+    ...(fs.existsSync(schemaEngine) ? { PRISMA_SCHEMA_ENGINE_BINARY: schemaEngine } : {}),
+  };
+
+  // 有未应用迁移时先备份；升级把数据写坏时至少有一个 pre-migrate dump。
+  const status = spawnSync(process.execPath, [prismaBin, "migrate", "status"], {
+    cwd: ROOT,
+    env: prismaEnv,
+    encoding: "utf8",
+  });
+  const statusText = `${status.stdout || ""}\n${status.stderr || ""}`;
+  const pending = /not yet been applied|尚未应用|not been applied/i.test(statusText);
+  if (pending) {
+    log("pre-migrate-backup-starting");
+    if (!run(process.execPath, [path.join(ROOT, "scripts", "desktop-backup.mjs"), "backup", "--label", "pre-migrate"], { env: prismaEnv })) {
+      throw startupError(
+        "升级前备份失败，已停止迁移。",
+        "backup_failed",
+        "检查 Docker 容器是否在跑、磁盘空间是否足够；也可以手动执行 `node scripts/desktop-backup.mjs backup`。",
+      );
+    }
+    log("pre-migrate-backup-done");
+  }
+
   log("migrate-starting");
-  if (!run(process.execPath, [prismaBin, "migrate", "deploy"], {
-    env: {
-      ...process.env,
-      // 便携包里 --ignore-scripts 不会下载 Prisma 引擎；用打进去的二进制，
-      // 避免目标机器写 `%APPDATA%\Prisma` 缓存时被安全策略挡住。
-      ...(fs.existsSync(schemaEngine) ? { PRISMA_SCHEMA_ENGINE_BINARY: schemaEngine } : {}),
-    },
-  })) {
+  if (!run(process.execPath, [prismaBin, "migrate", "deploy"], { env: prismaEnv })) {
     throw new Error("数据库迁移失败；服务没有启动。先备份并修复迁移，再重试。");
   }
   log("migrate-done");

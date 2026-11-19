@@ -80,6 +80,14 @@ Electron）+ 启动 bat。目标机器只需要 Docker Desktop，不需要 Node/
 便携目录请放在可写位置（如 `D:\YilingSpace`），不要放 `Program Files`；当前包约 1 GB。
 自己迁移时用 `--with-env --with-data`，包内会带数据库密钥和 SnowLuma 配置；这种包不要转发。
 
+备份：
+```powershell
+yarn desktop:backup                 # 仓库内
+node scripts/desktop-backup.mjs backup
+```
+便携包里双击 `备份数据.bat`。备份在 `<data>/backups/desktop-<时间>/`，含 `database.dump`
+和 `credentials-encryption.key`；恢复前必须先停应用。
+
 Electron 的 Chromium profile（缓存，不是用户数据）默认放 `.tmp/electron`；如果那里不可写，
 会依次回退 `<data>/electron` 和系统临时目录。
 

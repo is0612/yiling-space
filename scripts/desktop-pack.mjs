@@ -182,15 +182,15 @@ setlocal
 cd /d "%~dp0"
 
 if not exist "runtime\\node.exe" (
-  echo 缺少 runtime\\node.exe，安装包不完整。
+  echo Missing runtime\\node.exe. The package is incomplete.
   pause
   exit /b 1
 )
 if not exist "app\\.env" (
   echo.
-  echo 还没有配置 .env。
-  echo 把 app\\.env.example 复制成 app\\.env，填好 DATABASE_URL、模型 Key 后再启动。
-  echo 如果只是迁移自己的机器，重新打包时加 --with-env 可把当前 .env 带过来。
+  echo No app\\.env found.
+  echo Copy app\\.env.example to app\\.env, then fill DATABASE_URL and model keys.
+  echo For personal migration, rebuild with: --with-env --with-data
   echo.
   pause
   exit /b 1
@@ -199,11 +199,24 @@ if not exist "app\\.env" (
 "runtime\\node.exe" "app\\desktop\\launch.cjs"
 if errorlevel 1 (
   echo.
-  echo 启动失败。日志在 app\\.data\\logs\\desktop.log。
+  echo Startup failed. See app\\.data\\logs\\desktop.log.
   pause
 )
 `;
 writeFileSync(path.join(outDir, "启动忆灵空间-桌面版.bat"), bat.replace(/\n/g, "\r\n"), "ascii");
+
+const backupBat = `@echo off
+setlocal
+cd /d "%~dp0"
+if not exist "app\\.env" (
+  echo No app\\.env found.
+  pause
+  exit /b 1
+)
+"runtime\\node.exe" "app\\scripts\\desktop-backup.mjs" backup
+pause
+`;
+writeFileSync(path.join(outDir, "备份数据.bat"), backupBat.replace(/\n/g, "\r\n"), "ascii");
 
 const readme = `忆灵空间 · Windows 桌面便携版 ${version}
 
@@ -223,6 +236,7 @@ const readme = `忆灵空间 · Windows 桌面便携版 ${version}
   - 数据目录默认 app\\.data；也可以设置 YILING_DATA_DIR 指到别处。
   - 如果打包时加了 --with-env，app\\.env 里含数据库密码和模型 Key，不要转发这个包。
   - 首次空库会自动建管理员；没有可用 DEV_OWNER_PASSWORD 时密码写在 app\\.data\\first-run-admin.txt。
+  - 备份：双击「备份数据.bat」，文件在 app\\.data\\backups\\；恢复前必须先停应用。
 `;
 writeFileSync(path.join(outDir, "README.txt"), readme.replace(/\n/g, "\r\n"), "utf8");
 

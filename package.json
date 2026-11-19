@@ -28,6 +28,7 @@
     "desktop:install": "yarn --cwd desktop install",
     "desktop": "yarn --cwd desktop start",
     "desktop:pack": "node scripts/desktop-pack.mjs",
+    "desktop:backup": "node scripts/desktop-backup.mjs backup",
     "docker:pack": "node scripts/docker-pack.mjs",
     "docker:up": "docker compose -f docker-compose.prod.yml up -d",
     "docker:down": "docker compose -f docker-compose.prod.yml down",
