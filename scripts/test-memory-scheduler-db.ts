@@ -15,6 +15,8 @@ const suffix = randomUUID();
 const ownerId = randomUUID();
 const characterId = randomUUID();
 const scopeId = randomUUID();
+const journalCharacterId = randomUUID();
+const otherJournalCharacterId = randomUUID();
 const retentionScopeId = randomUUID();
 const conversationId = randomUUID();
 const blockedConversationId = randomUUID();
@@ -157,7 +159,7 @@ try {
   // Historical event backfill now also queues September evidence. Keep this replay
   // assertion focused on its snapshot instead of accidentally invoking another job's model.
   await prisma.memoryJob.updateMany({
-    where: { memoryScopeId: scopeId, type: "EXTRACT_EVENTS" },
+    where: { memoryScopeId: scopeId, type: { in: ["EXTRACT_EVENTS", "GENERATE_JOURNAL"] } },
     data: { runAt: new Date(now.getTime() + 60_000) },
   });
   const workerResult = await processNextMemoryJob(prisma, {
@@ -805,10 +807,98 @@ try {
     "同一个外部身份范围里的群会话仍按保留策略清理。",
   );
 
+  // Journal catch-up must progress past durable jobs, independently of snapshot enablement.
+  const journalGlobal = randomUUID();
+  const journalOwner = randomUUID();
+  const journalOtherPrivate = randomUUID();
+  const otherGlobal = randomUUID();
+  await prisma.character.createMany({ data: [journalCharacterId, otherJournalCharacterId].map((id) => ({
+    id, ownerId, name: "日记补排隔离测试", basePrompt: "仅用于数据库回归。",
+  })) });
+  await prisma.memoryScope.createMany({ data: [
+    { id: journalGlobal, characterId: journalCharacterId, scopeType: "CHARACTER_GLOBAL", scopeKey: `journal-global:${suffix}` },
+    { id: journalOwner, characterId: journalCharacterId, scopeType: "USER_PRIVATE", userId: ownerId, scopeKey: `journal-owner:${suffix}` },
+    { id: journalOtherPrivate, characterId: journalCharacterId, scopeType: "USER_PRIVATE", scopeKey: `journal-other:${suffix}` },
+    { id: otherGlobal, characterId: otherJournalCharacterId, scopeType: "CHARACTER_GLOBAL", scopeKey: `journal-character-other:${suffix}` },
+  ] });
+  await prisma.characterMemorySetting.create({ data: {
+    characterId: journalCharacterId, autoSnapshotEnabled: false, rawMessageCleanupEnabled: false,
+    timezone: "America/New_York", anchorAt: now, nextSnapshotAt: null,
+  } });
+  const journalConversation = randomUUID();
+  await prisma.conversation.create({ data: { id: journalConversation, characterId: journalCharacterId, memoryScopeId: journalGlobal } });
+  const historyDays = Array.from({ length: 56 }, (_, i) => new Date(Date.UTC(2026, 6, i + 1, 16)));
+  await prisma.message.createMany({ data: historyDays.map((occurredAt) => ({
+    conversationId: journalConversation, role: "USER", eventType: "message", content: "历史日记来源", occurredAt,
+  })) });
+  const dayKey = (date: Date) => date.toISOString().slice(0, 10);
+  const durableStatuses = ["QUEUED", "RUNNING", "RETRY_WAIT", "FAILED", "CANCELLED", "SUCCEEDED", "SKIPPED"] as const;
+  await prisma.memoryJob.createMany({ data: historyDays.slice(0, 26).map((date, i) => ({
+    memoryScopeId: journalGlobal, type: "GENERATE_JOURNAL", status: durableStatuses[i % durableStatuses.length],
+    idempotencyKey: `journal:${journalGlobal}:${dayKey(date)}`, journalDayKey: dayKey(date), journalTarget: "BOTH",
+  })) });
+  await enqueueDueMemorySnapshots(prisma, { now, ownerId });
+  assert.equal(await prisma.memoryJob.count({ where: { memoryScopeId: journalGlobal, type: "GENERATE_JOURNAL" } }), 50,
+    "26 persisted jobs in any status must not starve the next 24 source days.");
+  await enqueueDueMemorySnapshots(prisma, { now, ownerId });
+  assert.equal(await prisma.memoryJob.count({ where: { memoryScopeId: journalGlobal, type: "GENERATE_JOURNAL" } }), 56,
+    "The next pass must finish the remaining six historic days.");
+  await enqueueDueMemorySnapshots(prisma, { now, ownerId });
+  assert.equal(await prisma.memoryJob.count({ where: { memoryScopeId: journalGlobal, type: "GENERATE_JOURNAL" } }), 56);
+
+  const partialDay = "2026-09-01";
+  const skippedDay = "2026-09-02";
+  const decidedAt = new Date("2026-09-02T14:00:00Z");
+  for (const [date, state] of [[partialDay, "PENDING"], [skippedDay, "SKIPPED"]] as const) {
+    await prisma.characterJournal.create({ data: {
+      memoryScopeId: journalGlobal, dayKey: date, handbookState: state, handbookDecidedAt: decidedAt,
+      diaryState: "GENERATED", revisions: { create: { kind: "DIARY", version: 1, content: "人工保留的日记", revisionType: "USER_EDITED" } },
+    } });
+    await prisma.message.create({ data: { conversationId: journalConversation, role: "USER", eventType: "message",
+      content: "补排来源", occurredAt: new Date(`${date}T13:00:00Z`) } });
+  }
+  // Only owner-private ACTIVE events can supply a day when no raw messages survive.
+  for (const [scope, date, status] of [
+    [journalOwner, "2026-09-03", "ACTIVE"], [journalOtherPrivate, "2026-09-04", "ACTIVE"],
+    [otherGlobal, "2026-09-05", "ACTIVE"], [journalOwner, "2026-09-06", "ARCHIVED"],
+  ] as const) {
+    await prisma.memoryEvent.create({ data: { memoryScopeId: scope, dayKey: date, status,
+      occurredAt: new Date(`${date}T16:00:00Z`), title: "历史来源", detail: "日记隔离测试", dedupeKey: date } });
+  }
+  // 03:30 UTC is still the previous New York day. Today must never be queued.
+  await prisma.message.createMany({ data: ["2026-10-24T03:30:00Z", "2026-10-24T05:00:00Z"].map((at) => ({
+    conversationId: journalConversation, role: "USER", eventType: "message", content: "当地日期边界", occurredAt: new Date(at),
+  })) });
+  await enqueueDueMemorySnapshots(prisma, { now, ownerId });
+  const journalJobs = () => prisma.memoryJob.findMany({ where: { memoryScopeId: journalGlobal, type: "GENERATE_JOURNAL" } });
+  let caughtUp = await journalJobs();
+  assert.equal(caughtUp.find((j) => j.journalDayKey === partialDay)?.journalTarget, "HANDBOOK", "Only the missing text may be queued.");
+  assert.equal(caughtUp.some((j) => j.journalDayKey === skippedDay), false, "SKIPPED without later same-day evidence must stay skipped.");
+  assert.equal(caughtUp.some((j) => j.journalDayKey === "2026-09-03"), true, "Owner-private events are valid fallback sources.");
+  for (const date of ["2026-09-04", "2026-09-05", "2026-09-06", "2026-10-24"]) {
+    assert.equal(caughtUp.some((j) => j.journalDayKey === date), false, `Isolated/inactive/today source must not queue ${date}.`);
+  }
+  const localBoundary = caughtUp.find((j) => j.journalDayKey === "2026-10-23")!;
+  assert.equal(localBoundary.periodStart.toISOString(), "2026-10-23T04:00:00.000Z");
+  assert.equal(localBoundary.periodEnd.toISOString(), "2026-10-24T04:00:00.000Z");
+  await prisma.message.create({ data: { conversationId: journalConversation, role: "USER", eventType: "message",
+    content: "决定之后的当日来源", occurredAt: new Date("2026-09-02T15:00:00Z") } });
+  await Promise.all([enqueueDueMemorySnapshots(prisma, { now, ownerId }), enqueueDueMemorySnapshots(prisma, { now, ownerId })]);
+  caughtUp = await journalJobs();
+  const retries = caughtUp.filter((j) => j.journalDayKey === skippedDay);
+  assert.equal(retries.length, 1, "Concurrent catch-up must persist exactly one retry.");
+  assert.equal(retries[0]?.idempotencyKey, `journal:${journalGlobal}:${skippedDay}:HANDBOOK:retry-${decidedAt.getTime()}`);
+  console.log("Journal catch-up DB passed: 56 historical days, 24-day cap, durable status starvation, repeat/concurrent idempotency, partial text, SKIP retry, owner/event isolation and New York boundaries.");
+
   console.log("Memory retention integration passed: safe deletion, blocked-snapshot protection, authorization revocation, widened-retention protection, provenance preservation, accurate audit data, and cleanup scheduling idempotency.");
 
   console.log("Memory DB integration passed: concurrent scheduling/worker claiming, overdue backfill, cursor advancement, repeat-run idempotency, worker replay reuse, lease recovery, and retention cleanup.");
 } finally {
+  const journalCharacterIds = [journalCharacterId, otherJournalCharacterId];
+  await prisma.conversation.deleteMany({ where: { characterId: { in: journalCharacterIds } } });
+  await prisma.memoryScope.deleteMany({ where: { characterId: { in: journalCharacterIds } } });
+  await prisma.characterMemorySetting.deleteMany({ where: { characterId: { in: journalCharacterIds } } });
+  await prisma.character.deleteMany({ where: { id: { in: journalCharacterIds } } });
   await prisma.auditLog.deleteMany({ where: { characterId } });
   await prisma.characterMemorySetting.deleteMany({ where: { characterId } });
   await prisma.conversation.deleteMany({

@@ -39,7 +39,7 @@
 
 ## 生成
 
-- 任务类型 `GENERATE_JOURNAL`，每天为「昨天」（角色时区）排一次。任务显式带 `journalDayKey` / `journalTarget`（`BOTH` / `DIARY` / `HANDBOOK`），Worker 不再从幂等键最后一个冒号后的字段猜日期；旧任务没有这两个字段时才回退解析 `journal:{scope}:{dayKey}[:DIARY|:HANDBOOK][:retry-…]`。
+- 任务类型 `GENERATE_JOURNAL`，按角色时区扫描今天之前有原始消息或 ACTIVE 忆泡的历史来源日期，从早到晚每角色每轮最多补排 24 天，停机超过一天也能逐轮追补。已持久化的同一任务键在限额前排除（含失败、取消等所有状态，需显式重试），不会让最老日期占满限额；已齐全或没有新来源的 SKIPPED 日期也不占限额。任务显式带 `journalDayKey` / `journalTarget`（`BOTH` / `DIARY` / `HANDBOOK`），Worker 不再从幂等键最后一个冒号后的字段猜日期；旧任务没有这两个字段时才回退解析 `journal:{scope}:{dayKey}[:DIARY|:HANDBOOK][:retry-…]`。
 - 取材：角色全局范围 + 角色主人的私人范围（主人 QQ 私聊）；其他用户的私人范围**不读**。按会话配额取，避免一个热闹的群把私聊挤出去。
 - **原始消息优先，忆泡兜底**：原始消息被清理后，只要当天还有 ACTIVE 忆泡，仍可以只用忆泡生成；提示词会明确「只剩忆泡，不能编造对话原文」，细节不足的栏目留空或 SKIP。原始消息和忆泡都没有才落 SKIPPED。
 - 生成顺序：先生成日记，再把这一版日记正文交给手账生成；手账的「一句」只能从这里摘。两份各自一次模型调用，各自可以 SKIP。
@@ -93,6 +93,7 @@
 ## 测试
 
 - `yarn test:journal`：日记长度/空内容、手账栏目渲染、来源 evidence（真实/假 ID/不匹配/事件来源）、一句必须来自给定日记、日期键、角色时区日历、SKIP；最近日记注入（只取最新一版、去重、按字数截断留痕、群聊与无日记时不注入、提示词说明同判据）。
+- `yarn test:memory-scheduler-db`：历史 56 天来源分轮补排、持久化任务所有状态不占 24 天限额、重复/并发幂等、缺份与 SKIP 新来源重评、全局/主人私人来源及其他角色/私人范围隔离、纽约时区日界。
 - `yarn test:journal-db`：两份独立版本、改一份不动另一份、一句追溯、恢复、次日读取、唯一约束、级联删除、调度器、migration 状态回填（隔离 schema）；最近日记读取（最新一版、跳过 SKIPPED、limit 夹取、无日记返回空）。
 - `yarn test:journal-flow-db`：Scheduler → Worker → Service → DB：只有忆泡生成、只缺一份补齐、SKIP 按份记录与新聊天后重评、显式任务参数、旧幂等键兼容、非法任务键失败、清理等待手账、失败重试、并发生成复用、regenerate 与人工编辑并发。
 - `yarn test:chat-reply` / `test:chat-speaker-context` / `test:chat-private-memory`：提示词版本与注入边界。

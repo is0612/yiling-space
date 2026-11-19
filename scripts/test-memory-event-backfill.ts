@@ -63,6 +63,7 @@ function fixture(timezone = "Asia/Shanghai") {
     }),
     $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join("?");
+      if (sql.includes("character_journals")) return []; // Journal catch-up has separate DB coverage.
       assert.match(sql, /c\."memoryScopeId" = \?::uuid/);
       assert.match(sql, /c\."characterId" = \?::uuid/);
       assert.match(sql, /c\."externalConversationId" LIKE 'c:%'/);

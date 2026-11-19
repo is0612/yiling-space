@@ -1064,7 +1064,11 @@ try {
   assert.equal(privateTurn.response.status, "success");
   assert(privateTurn.collaboration?.stages.some(stage => stage.stage === "response" && stage.operations.some(operation => operation.state === "success")));
   assert.deepEqual(privateTurn.growthReads?.map(read => read.domain).sort(), ["goals", "knowledge", "language", "preferences"]);
-  assert.equal(privateTurn.growthReads?.find(read => read.domain === "knowledge")?.status, "not_needed");
+  const privateKnowledgeRead = privateTurn.growthReads?.find(read => read.domain === "knowledge");
+  assert.equal(privateKnowledgeRead?.status, "no_match", "私聊会检索正式知识；空知识库应记录为未命中。");
+  assert.equal(privateKnowledgeRead.candidateCount, 0);
+  assert.equal(privateKnowledgeRead.selectedCount, 0);
+  assert.deepEqual(privateKnowledgeRead.provided, []);
   assert(!privateTurn.memory.sources?.some(source => source.scope === "private"), "An unrelated temporary contact must not receive the owner's private data.");
 
   // ── 主人在群里说的话，即使这一轮没接她，也要落库（storedReason=context）──

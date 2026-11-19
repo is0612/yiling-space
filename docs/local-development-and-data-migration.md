@@ -212,6 +212,8 @@ C:\Users\<用户名>\AppData\Local\Docker\wsl\disk\docker_data.vhdx
 
 > 警告：恢复脚本会清理目标数据库中的既有对象并恢复备份内容。先确认目标数据库正确，并确保已备份目标数据库中需要保留的数据。
 
+恢复使用单个数据库事务：清理既有对象与导入备份一起提交；中途失败时两者一起回滚，避免留下部分恢复的数据。恢复演练新建的空数据库不属于该事务，失败后仍会保留。
+
 运行（或把 `.dump` 文件拖到 `scripts\restore-db.bat` 上）：
 
 ```powershell
@@ -221,6 +223,8 @@ C:\Users\<用户名>\AppData\Local\Docker\wsl\disk\docker_data.vhdx
 将示例文件名替换为实际备份文件名。必须显式传入 `-ConfirmOverwrite`，脚本才会继续执行。
 
 首次恢复到新电脑时，优先恢复到一个空的本地开发数据库。恢复完成后，检查角色数量、消息、长期记忆、快照版本、任务记录和迁移历史，再启动应用。不要在未经检查的情况下把开发数据库备份恢复到含有真实用户数据的生产数据库。
+
+隔离回归可运行 `pwsh -File scripts/test-restore-db.ps1`：仅使用独立、无网络的临时 PostgreSQL 16 容器与合成数据，验证正常恢复和中段失败回滚；需要本机已有 `postgres:16-alpine` 镜像。测试结束删除临时容器，合成备份保留在 `.data/restore-atomicity-<随机标识>/` 供检查，不读取现有 `.env` 或业务库。
 
 ### 5.1 恢复演练（推荐每次改完 schema 跑一次）
 

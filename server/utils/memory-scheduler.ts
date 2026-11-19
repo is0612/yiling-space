@@ -1,10 +1,11 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
-import { localDayHour, resolveDailyEventWindow, resolveDayWindow } from "./memory-event-time";
+import { localDayHour, resolveDayWindow } from "./memory-event-time";
 import { listFriendScopesWithActivity } from "./friends";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_PERIODS_PER_SETTING = 24;
 const MAX_EVENT_BACKFILL_DAYS_PER_SCOPE = 24;
+const MAX_JOURNAL_BACKFILL_DAYS_PER_CHARACTER = 24;
 
 export type DueMemoryPeriod = {
   periodStart: Date;
@@ -368,108 +369,157 @@ export async function enqueueDueMemorySnapshots(
     const journalScopeIds = [globalScopeId, ownerPrivateScopeId].filter((id): id is string => Boolean(id));
     if (journalScopeIds.length > 0) {
       const journalTimeZone = setting.timezone || "Asia/Shanghai";
-      const journalWindow = resolveDailyEventWindow(now, journalTimeZone);
-      const [hasJournalMessage, hasJournalEvent, existingJournal] = await Promise.all([
-        prisma.message.findFirst({
-          where: {
-            conversation: { is: { memoryScopeId: { in: journalScopeIds } } },
-            occurredAt: { gte: journalWindow.start, lt: journalWindow.end },
-          },
-          select: { id: true },
-        }),
-        prisma.memoryEvent.findFirst({
-          where: {
-            memoryScopeId: { in: journalScopeIds },
-            dayKey: journalWindow.dayKey,
-            status: "ACTIVE",
-          },
-          select: { id: true },
-        }),
-        prisma.characterJournal.findUnique({
-          where: { memoryScopeId_dayKey: { memoryScopeId: globalScopeId, dayKey: journalWindow.dayKey } },
-          select: {
-            updatedAt: true,
-            diaryState: true,
-            handbookState: true,
-            diaryDecidedAt: true,
-            handbookDecidedAt: true,
-            revisions: { select: { kind: true } },
-          },
-        }),
-      ]);
-      const hasJournalSource = Boolean(hasJournalMessage || hasJournalEvent);
-      const generatedKinds = new Set((existingJournal?.revisions ?? []).map((revision) => revision.kind));
-      const missingKinds: Array<"DIARY" | "HANDBOOK"> = (["DIARY", "HANDBOOK"] as const)
-        .filter((kind) => !generatedKinds.has(kind));
+      const { dayKey: journalTodayKey } = localDayHour(now, journalTimeZone);
+      const journalToday = resolveDayWindow(journalTodayKey, journalTimeZone);
+      // Persisted jobs of every status are progress. Exclude their exact keys before
+      // LIMIT, including missing-text targets and SKIPPED decisions eligible for retry.
+      const journalDays = await prisma.$queryRaw<Array<{ dayKey: string }>>`
+        WITH sources AS (
+          SELECT to_char(m."occurredAt" AT TIME ZONE ${journalTimeZone}, 'YYYY-MM-DD') AS "dayKey",
+                 m."occurredAt" AS at
+          FROM messages m JOIN conversations c ON c.id = m."conversationId"
+          WHERE c."characterId" = ${setting.characterId}::uuid
+            AND c."memoryScopeId" IN (${globalScopeId}::uuid, ${ownerPrivateScopeId ?? globalScopeId}::uuid)
+            AND m."occurredAt" < ${journalToday.start}
+          UNION ALL
+          SELECT e."dayKey", CASE WHEN e."occurredAt" >= (e."dayKey"::date::timestamp AT TIME ZONE ${journalTimeZone})
+            AND e."occurredAt" < ((e."dayKey"::date + 1)::timestamp AT TIME ZONE ${journalTimeZone})
+            THEN e."occurredAt" END AS at FROM memory_events e
+          JOIN memory_scopes s ON s.id = e."memoryScopeId"
+          WHERE s."characterId" = ${setting.characterId}::uuid
+            AND e."memoryScopeId" IN (${globalScopeId}::uuid, ${ownerPrivateScopeId ?? globalScopeId}::uuid)
+            AND e.status = 'ACTIVE' AND e."dayKey" < ${journalTodayKey}
+        ), days AS (
+          SELECT "dayKey", max(at) AS latest FROM sources GROUP BY "dayKey"
+        ), eligible AS (
+          SELECT d."dayKey", k.kind,
+            CASE WHEN (CASE k.kind WHEN 'DIARY' THEN j."diaryState" ELSE j."handbookState" END) = 'SKIPPED'
+              THEN date_trunc('milliseconds', coalesce(CASE k.kind WHEN 'DIARY' THEN j."diaryDecidedAt"
+                ELSE j."handbookDecidedAt" END, j."updatedAt")) END AS retry
+          FROM days d LEFT JOIN character_journals j
+            ON j."memoryScopeId" = ${globalScopeId}::uuid AND j."dayKey" = d."dayKey"
+          CROSS JOIN (VALUES ('DIARY'), ('HANDBOOK')) k(kind)
+          WHERE NOT EXISTS (SELECT 1 FROM journal_revisions r WHERE r."journalId" = j.id AND r.kind::text = k.kind)
+            AND (j.id IS NULL OR (CASE k.kind WHEN 'DIARY' THEN j."diaryState" ELSE j."handbookState" END) <> 'SKIPPED'
+              OR d.latest > date_trunc('milliseconds', coalesce(CASE k.kind WHEN 'DIARY' THEN j."diaryDecidedAt"
+                ELSE j."handbookDecidedAt" END, j."updatedAt")))
+        ), targets AS (
+          SELECT "dayKey", CASE WHEN count(*) = 2 THEN 'BOTH' ELSE min(kind) END AS target, max(retry) AS retry
+          FROM eligible GROUP BY "dayKey"
+        ), candidates AS (
+          SELECT "dayKey", 'journal:' || ${globalScopeId} || ':' || "dayKey"
+            || CASE WHEN target = 'BOTH' THEN '' ELSE ':' || target END
+            || CASE WHEN retry IS NULL THEN '' ELSE ':retry-' || (extract(epoch FROM retry) * 1000)::bigint::text END
+            AS key FROM targets
+        )
+        SELECT c."dayKey" FROM candidates c WHERE NOT EXISTS (
+          SELECT 1 FROM memory_jobs j WHERE j."idempotencyKey" = c.key
+        ) ORDER BY c."dayKey" ASC LIMIT ${MAX_JOURNAL_BACKFILL_DAYS_PER_CHARACTER}
+      `;
+      for (const day of journalDays) {
+        const journalWindow = { ...resolveDayWindow(day.dayKey, journalTimeZone), dayKey: day.dayKey };
+        const [hasJournalMessage, hasJournalEvent, existingJournal] = await Promise.all([
+          prisma.message.findFirst({
+            where: {
+              conversation: { is: { memoryScopeId: { in: journalScopeIds } } },
+              occurredAt: { gte: journalWindow.start, lt: journalWindow.end },
+            },
+            select: { id: true },
+          }),
+          prisma.memoryEvent.findFirst({
+            where: {
+              memoryScopeId: { in: journalScopeIds },
+              dayKey: journalWindow.dayKey,
+              status: "ACTIVE",
+            },
+            select: { id: true },
+          }),
+          prisma.characterJournal.findUnique({
+            where: { memoryScopeId_dayKey: { memoryScopeId: globalScopeId, dayKey: journalWindow.dayKey } },
+            select: {
+              updatedAt: true,
+              diaryState: true,
+              handbookState: true,
+              diaryDecidedAt: true,
+              handbookDecidedAt: true,
+              revisions: { select: { kind: true } },
+            },
+          }),
+        ]);
+        const hasJournalSource = Boolean(hasJournalMessage || hasJournalEvent);
+        const generatedKinds = new Set((existingJournal?.revisions ?? []).map((revision) => revision.kind));
+        const missingKinds: Array<"DIARY" | "HANDBOOK"> = (["DIARY", "HANDBOOK"] as const)
+          .filter((kind) => !generatedKinds.has(kind));
 
-      /**
-       * 缺一份不代表马上重跑模型：
-       * - 没评估过（PENDING）→ 补；
-       * - 评估过但 SKIPPED → 只有决定时间之后又来了新对话才补；
-       * - 已有正文 / 已人工编辑 → 不在 missingKinds 里，不会被覆盖。
-       */
-      const eligibleKinds: Array<"DIARY" | "HANDBOOK"> = [];
-      let retryDecidedAt: Date | null = null;
-      if (hasJournalSource) {
-        for (const kind of missingKinds) {
-          if (!existingJournal) {
+        /**
+         * 缺一份不代表马上重跑模型：
+         * - 没评估过（PENDING）→ 补；
+         * - 评估过但 SKIPPED → 只有决定时间之后又来了新对话才补；
+         * - 已有正文 / 已人工编辑 → 不在 missingKinds 里，不会被覆盖。
+         */
+        const eligibleKinds: Array<"DIARY" | "HANDBOOK"> = [];
+        let retryDecidedAt: Date | null = null;
+        if (hasJournalSource) {
+          for (const kind of missingKinds) {
+            if (!existingJournal) {
+              eligibleKinds.push(kind);
+              continue;
+            }
+            const state = kind === "DIARY" ? existingJournal.diaryState : existingJournal.handbookState;
+            if (state !== "SKIPPED") {
+              eligibleKinds.push(kind);
+              continue;
+            }
+            const decidedAt = kind === "DIARY"
+              ? existingJournal.diaryDecidedAt ?? existingJournal.updatedAt
+              : existingJournal.handbookDecidedAt ?? existingJournal.updatedAt;
+            const [hasNewMessage, hasNewEvent] = await Promise.all([
+              prisma.message.findFirst({
+                where: {
+                  conversation: { is: { memoryScopeId: { in: journalScopeIds } } },
+                  occurredAt: { gte: journalWindow.start, gt: decidedAt, lt: journalWindow.end },
+                },
+                select: { id: true },
+              }),
+              prisma.memoryEvent.findFirst({
+                where: {
+                  memoryScopeId: { in: journalScopeIds },
+                  dayKey: journalWindow.dayKey,
+                  status: "ACTIVE",
+                  occurredAt: { gte: journalWindow.start, gt: decidedAt, lt: journalWindow.end },
+                },
+                select: { id: true },
+              }),
+            ]);
+            if (!hasNewMessage && !hasNewEvent) continue;
             eligibleKinds.push(kind);
-            continue;
+            if (!retryDecidedAt || decidedAt.getTime() > retryDecidedAt.getTime()) retryDecidedAt = decidedAt;
           }
-          const state = kind === "DIARY" ? existingJournal.diaryState : existingJournal.handbookState;
-          if (state !== "SKIPPED") {
-            eligibleKinds.push(kind);
-            continue;
-          }
-          const decidedAt = kind === "DIARY"
-            ? existingJournal.diaryDecidedAt ?? existingJournal.updatedAt
-            : existingJournal.handbookDecidedAt ?? existingJournal.updatedAt;
-          const [hasNewMessage, hasNewEvent] = await Promise.all([
-            prisma.message.findFirst({
-              where: {
-                conversation: { is: { memoryScopeId: { in: journalScopeIds } } },
-                occurredAt: { gt: decidedAt, lt: journalWindow.end },
-              },
-              select: { id: true },
-            }),
-            prisma.memoryEvent.findFirst({
-              where: {
-                memoryScopeId: { in: journalScopeIds },
-                dayKey: journalWindow.dayKey,
-                status: "ACTIVE",
-                occurredAt: { gt: decidedAt, lt: journalWindow.end },
-              },
-              select: { id: true },
-            }),
-          ]);
-          if (!hasNewMessage && !hasNewEvent) continue;
-          eligibleKinds.push(kind);
-          if (!retryDecidedAt || decidedAt.getTime() > retryDecidedAt.getTime()) retryDecidedAt = decidedAt;
         }
-      }
 
-      if (eligibleKinds.length > 0) {
-        const target: "BOTH" | "DIARY" | "HANDBOOK" = eligibleKinds.length === 2 ? "BOTH" : eligibleKinds[0]!;
-        const suffix = target === "BOTH" ? "" : `:${target}`;
-        const retrySuffix = retryDecidedAt ? `:retry-${retryDecidedAt.getTime()}` : "";
-        const journalJob = await prisma.memoryJob.createMany({
-          data: [{
-            memoryScopeId: globalScopeId,
-            type: "GENERATE_JOURNAL" as const,
-            idempotencyKey: `journal:${globalScopeId}:${journalWindow.dayKey}${suffix}${retrySuffix}`,
-            journalDayKey: journalWindow.dayKey,
-            journalTarget: target,
-            periodStart: journalWindow.start,
-            periodEnd: journalWindow.end,
-            status: "QUEUED" as const,
-            runAt: now,
-            // 模型没配 / 额度用完的情况会退避重试；默认 3 次会在半小时内耗光，
-            // 第二天配置好也补不回来。给到 24 次（配合 30 分钟退避约 12 小时）。
-            maxAttempts: 24,
-          }],
-          skipDuplicates: true,
-        });
-        report.jobsQueued += journalJob.count;
+        if (eligibleKinds.length > 0) {
+          const target: "BOTH" | "DIARY" | "HANDBOOK" = eligibleKinds.length === 2 ? "BOTH" : eligibleKinds[0]!;
+          const suffix = target === "BOTH" ? "" : `:${target}`;
+          const retrySuffix = retryDecidedAt ? `:retry-${retryDecidedAt.getTime()}` : "";
+          const journalJob = await prisma.memoryJob.createMany({
+            data: [{
+              memoryScopeId: globalScopeId,
+              type: "GENERATE_JOURNAL" as const,
+              idempotencyKey: `journal:${globalScopeId}:${journalWindow.dayKey}${suffix}${retrySuffix}`,
+              journalDayKey: journalWindow.dayKey,
+              journalTarget: target,
+              periodStart: journalWindow.start,
+              periodEnd: journalWindow.end,
+              status: "QUEUED" as const,
+              runAt: now,
+              // 模型没配 / 额度用完的情况会退避重试；默认 3 次会在半小时内耗光，
+              // 第二天配置好也补不回来。给到 24 次（配合 30 分钟退避约 12 小时）。
+              maxAttempts: 24,
+            }],
+            skipDuplicates: true,
+          });
+          report.jobsQueued += journalJob.count;
+        }
       }
     }
 

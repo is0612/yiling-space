@@ -145,6 +145,13 @@ const server = http.createServer(async (request, response) => {
     }
 
     const input = JSON.parse(userMessage.content);
+    // Historical journal catch-up can run before retention cleanup in API smoke
+    // tests. Return a valid, explicit mock decision rather than snapshot JSON.
+    if (typeof systemMessage?.content === "string" &&
+      (systemMessage.content.includes("## 写今天的日记（") || systemMessage.content.includes("## 写今天的手账（"))) {
+      sendJson(response, 200, chatCompletion(body, { action: "SKIP", reason: "CI 模拟模型：本轮不生成日记或手账。" }));
+      return;
+    }
     if (typeof systemMessage?.content === "string" && /YILING_CONVERSATION_REPLY_V\d/.test(systemMessage.content)) {
       const forbiddenPromptKeys = ["apiKey", "apiBaseUrl", "model", "temperature", "maxTokens"];
       const leakedSetting = forbiddenPromptKeys.find((key) => Object.prototype.hasOwnProperty.call(input, key));

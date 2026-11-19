@@ -13,7 +13,7 @@ assert.match(new URL(process.env.DATABASE_URL ?? "").pathname, /^\/yiling_reflec
 const db = getPrisma(), originalFetch = globalThis.fetch;
 process.env.LLM_API_KEY = "loop-mock"; process.env.LLM_MODEL = "loop-mock";
 process.env.LLM_BASE_URL = "http://127.0.0.1:4010/v1";
-let experienceCalls = 0, reflectionCalls = 0;
+let experienceCalls = 0, reviewCalls = 0, reflectionCalls = 0;
 try {
   const owner = await db.user.create({ data: { username: `loop-${randomUUID()}`, passwordHash: "fixture" } });
   const character = await db.character.create({ data: { ownerId: owner.id, name: "合成闭环角色", basePrompt: "测试", modelConfig: { interactionExperienceAutoEnabled: true } } });
@@ -37,6 +37,15 @@ try {
         ...pair, content: "讨论方案时先说结论", context: "讨论方案", feedbackQuote: "先说结论更好",
         learning: { kind: "EXPRESSION", situation: "讨论方案", misunderstanding: "先铺陈背景", correction: "先说结论更好", nextJudgment: "先说结论" },
       })) };
+    } else if (payload.candidate) {
+      // Automatic extraction requires an independent semantic review for each candidate.
+      reviewCalls++;
+      assert(request.messages[0].content.includes("独立第二轮语义审核者"));
+      assert.equal(payload.assistant.content, "讨论方案时先铺陈背景");
+      assert.equal(payload.feedback.content, "讨论方案时先说结论更好");
+      assert.equal(payload.candidate.learning.kind, "EXPRESSION");
+      assert(payload.feedback.content.includes(payload.candidate.feedbackQuote));
+      output = { status: "ACTIVE", reason: "明确反馈支持该场景中的表达组织纠正" };
     } else {
       reflectionCalls++;
       assert(payload.sources.every((source: {type:string}) => source.type === "experience"));
@@ -49,10 +58,13 @@ try {
     }
     return Response.json({ choices: [{ message: { content: JSON.stringify(output) }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
   };
-  assert.equal((await processAutomaticInteractionExperience(db)).status, "SUCCEEDED");
+  const automatic = await processAutomaticInteractionExperience(db);
+  assert.equal(automatic.status, "SUCCEEDED", JSON.stringify(automatic));
+  assert.equal(reviewCalls, 3, "Each extracted experience must pass independent semantic review");
   const experiences = await db.interactionExperience.findMany({ where: { characterId: character.id } });
   assert.equal(experiences.length, 3, "Unqualified laughter must not become an experience");
   assert(experiences.every(row => row.feedbackQuote === "先说结论更好"));
+  assert(experiences.every(row => row.status === "ACTIVE"), "Only reviewed ACTIVE evidence may feed reflection");
   assert.equal(await db.characterExpressionHabit.count({ where: { characterId: character.id } }), 0);
   await processAutomaticInteractionExperience(db);
   assert.equal(experienceCalls, 1, "Finished messages must not be analyzed again");

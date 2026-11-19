@@ -137,9 +137,11 @@ if ($isDrill) {
     }
 }
 
-& $docker exec $ContainerName pg_restore --username $dbUser --dbname $targetDb --clean --if-exists --no-owner --no-privileges --exit-on-error $containerPath
+# Keep object cleanup and all restored data in one transaction: an error must not
+# leave the target with dropped tables or only part of the backup applied.
+& $docker exec $ContainerName pg_restore --username $dbUser --dbname $targetDb --clean --if-exists --no-owner --no-privileges --single-transaction --exit-on-error $containerPath
 if ($LASTEXITCODE -ne 0) {
-    throw "pg_restore failed. The target database may be partially restored. Keep the original backup and consider restoring into a fresh empty database."
+    throw "pg_restore failed. The restore transaction was not committed; cleanup and restore changes are rolled back. Keep the original backup and resolve the reported error before retrying."
 }
 
 if ($isDrill) {

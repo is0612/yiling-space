@@ -3,6 +3,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 
 const baseUrl = process.env.SMOKE_BASE_URL || "http://127.0.0.1:3000";
+const mockModelBaseUrl = `http://127.0.0.1:${process.env.LLM_MOCK_PORT || "4010"}/v1`;
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function getJson(response) {
@@ -428,7 +429,7 @@ assert(edited.personality === "角色人设已持久化更新。", "PATCH did no
 const savedChatSettings = await request(`/api/characters/${created.id}`, {
   method: "PATCH",
   body: {
-    chatApiBaseUrl: "http://127.0.0.1:4010/v1",
+    chatApiBaseUrl: mockModelBaseUrl,
     chatApiKey: "ci-only",
     chatModel: "ci-character-model",
     chatTemperature: 0.4,
@@ -437,7 +438,7 @@ const savedChatSettings = await request(`/api/characters/${created.id}`, {
 });
 assert(savedChatSettings.chatModel === "ci-character-model", "Character model override did not round-trip.");
 assert(savedChatSettings.chatTemperature === 0.4 && savedChatSettings.chatMaxTokens === 1024, "Character temperature/token settings did not round-trip.");
-assert(savedChatSettings.chatApiBaseUrl === "http://127.0.0.1:4010/v1", "Character API Base URL did not round-trip.");
+assert(savedChatSettings.chatApiBaseUrl === mockModelBaseUrl, "Character API Base URL did not round-trip.");
 assert(savedChatSettings.chatApiKeyConfigured === true && savedChatSettings.chatApiKeySource === "character", "The character should report its saved API key as configured.");
 /*
  * 明文 Key 是本仓库明确的产品行为：单管理员部署，登录后在模型设置里查看 / 修改 / 清除。
@@ -1037,15 +1038,29 @@ const retriedCleanupTask = await request(`/api/tasks/${retentionCleanupTask.id}/
 assert(retriedCleanupTask.status === "QUEUED", "Cleanup tasks can be re-queued again after authorization is explicitly restored.");
 
 let retentionCleanupResult = null;
-for (let attempt = 0; attempt < 10; attempt += 1) {
+// Historical journal catch-up can legitimately defer cleanup until its sources
+// have been archived. Drain those bounded fixture jobs, then explicitly retry
+// the deferred cleanup instead of assuming the first claim must delete data.
+for (let attempt = 0; attempt < 100; attempt += 1) {
   const result = await request("/api/tasks/worker/run", { method: "POST" });
   if (result.jobId === retentionCleanupTask.id) {
     retentionCleanupResult = result;
+    if (result.status === "SUCCEEDED") break;
+    assert(result.status === "RETRY_WAIT", "Cleanup may only defer while archival dependencies remain.");
+  }
+  if (!result.processed) {
+    if (retentionCleanupResult?.status === "RETRY_WAIT") {
+      await request(`/api/tasks/${retentionCleanupTask.id}/retry`, { method: "POST" });
+      retentionCleanupResult = null;
+      continue;
+    }
     break;
   }
-  if (!result.processed) break;
 }
-assert(retentionCleanupResult?.status === "SUCCEEDED", "Worker should execute the isolated raw-message retention cleanup.");
+assert(retentionCleanupResult?.status === "SUCCEEDED", `Worker should execute the isolated raw-message retention cleanup. Result: ${JSON.stringify(retentionCleanupResult)}; jobs: ${JSON.stringify(await prisma.memoryJob.findMany({
+  where: { memoryScope: { characterId: retentionCharacter.id } },
+  select: { type: true, status: true, attemptCount: true, lastError: true, runAt: true },
+}))}`);
 
 const retentionHistory = await request(
   `/api/characters/${retentionCharacter.id}/chat?conversationId=${retentionConversation.conversationId}`
