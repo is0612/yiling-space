@@ -147,6 +147,7 @@
     "test:chat-request-idempotency-db": "tsx scripts/test-chat-request-idempotency-db.ts",
     "test:chat-conversation-delete-db": "tsx scripts/test-chat-conversation-delete-db.ts",
     "test:auth": "tsx scripts/test-auth.ts",
+    "test:local-observe": "tsx scripts/test-local-observe.ts",
     "test:auth-db": "tsx scripts/test-auth-db.ts",
     "test:auth-admin-reset": "tsx scripts/test-auth-admin-reset.ts",
     "test:auth-flows": "tsx scripts/test-auth-flows.ts",

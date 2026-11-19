@@ -12,6 +12,7 @@ import {
   MagicStick,
   Memo,
   Refresh,
+  Search,
   Setting,
   SwitchButton,
   TrendCharts,
@@ -126,6 +127,7 @@ const adminNavigation = computed<NavigationItem[]>(() => {
   return [
     { key: "qq", label: "QQ 渠道", href: "/qq", icon: ChatLineRound },
     { key: "tasks", label: "任务监控", href: "/tasks", icon: DataAnalysis },
+    { key: "local-observe", label: "本地观察", href: "/local-observe", icon: Search },
     { key: "users", label: "用户管理", href: "/users", icon: UserFilled },
     { key: "settings", label: "系统设置", href: "/settings", icon: Setting },
   ];

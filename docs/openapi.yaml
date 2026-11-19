@@ -6669,6 +6669,152 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /local/observe/root:
+    get:
+      tags: [LocalObserve]
+      summary: 本地只读观察根目录
+      description: 仅管理员。返回项目根目录和只读限制；不接受任意绝对路径。
+      responses:
+        '200':
+          description: 根目录信息
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [root, name, readOnly, maxFileBytes, maxSearchResults]
+                properties:
+                  root: { type: string }
+                  name: { type: string }
+                  readOnly: { type: boolean, enum: [true] }
+                  maxFileBytes: { type: integer }
+                  maxSearchResults: { type: integer }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/BadRequest'
+  /local/observe/list:
+    get:
+      tags: [LocalObserve]
+      summary: 列出项目内目录
+      description: 仅管理员；路径为项目根目录内的相对路径。隐藏 node_modules/.git/.data 等目录和敏感文件。
+      parameters:
+        - in: query
+          name: path
+          schema: { type: string, default: '' }
+          description: 相对路径；留空表示根目录
+      responses:
+        '200':
+          description: 目录内容
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [path, entries, truncated]
+                properties:
+                  path: { type: string }
+                  truncated: { type: boolean }
+                  entries:
+                    type: array
+                    maxItems: 300
+                    items:
+                      type: object
+                      required: [name, path, kind, size, modifiedAt, readable]
+                      properties:
+                        name: { type: string }
+                        path: { type: string }
+                        kind: { type: string, enum: [directory, file, symlink, other] }
+                        size: { type: integer, nullable: true }
+                        modifiedAt: { type: string, format: date-time, nullable: true }
+                        readable: { type: boolean }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /local/observe/read:
+    get:
+      tags: [LocalObserve]
+      summary: 读取项目内文本文件
+      description: 仅管理员；.env、私钥、.data 等敏感文件不可读；超过 256KB 或二进制文件返回错误。
+      parameters:
+        - in: query
+          name: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 文本内容
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [path, size, modifiedAt, content, lines]
+                properties:
+                  path: { type: string }
+                  size: { type: integer }
+                  modifiedAt: { type: string, format: date-time }
+                  content: { type: string }
+                  lines: { type: integer }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/BadRequest'
+        '415':
+          $ref: '#/components/responses/BadRequest'
+  /local/observe/search:
+    get:
+      tags: [LocalObserve]
+      summary: 在项目内搜索文件名或内容
+      description: 仅管理员；最多 100 条结果，跳过忽略目录、敏感文件和二进制文件。
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 100 }
+        - in: query
+          name: path
+          schema: { type: string, default: '' }
+      responses:
+        '200':
+          description: 搜索结果
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [query, matches, truncated, scanned]
+                properties:
+                  query: { type: string }
+                  truncated: { type: boolean }
+                  scanned: { type: integer }
+                  matches:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      required: [path, kind, line, preview]
+                      properties:
+                        path: { type: string }
+                        kind: { type: string, enum: [name, content] }
+                        line: { type: integer, nullable: true }
+                        preview: { type: string }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
 components:
   securitySchemes:
     sessionCookie:
