@@ -179,7 +179,7 @@ OneBot v11 的 `message` 字段是**分段数组**（CQ 码），例如：
 - 群聊 → `send_group_msg`（`group_id`, `message`）。
 - `message` 可以是纯文本，也可以是段数组（`face` / `image` / `at`）。
 - 群聊怎么回由绑定配置 `groupChatMode` 决定，连接级 `replyOnlyWhenMentioned` 只作老数据的兜底：
-  - `mention`：只把「@ 她 / 叫到 `groupAliases` 里的名字 / 已参与话题的后续」放进判断，不开放无关水群；
+  - `mention`：普通回复只由 OneBot 的 @ 本人或戳本人触发；叫名字、@ 全体和话题续接只能当背景。显式的公告、空间确认流程仍按各自规则处理；
   - `ambient`（默认）：被 @ 后跟进 + 自然水群，详见 7.1；
   - `all`：每轮都回，保留老行为（不再有单条快速路径）。
 - 群聊统一走一条攒批管道：@ 也要等 `mentionWindowSeconds`（默认 4 秒），换来的是她能看见前几句。
@@ -204,7 +204,7 @@ OneBot v11 的 `message` 字段是**分段数组**（CQ 码），例如：
 2. **攒批**：按 `bindingId + conversationKey` 缓冲，被 @ 或叫到名字用 `mentionWindowSeconds`（4 秒），
    `all` 档最多 3 秒，其余用 `batchWindowSeconds`（12 秒）；从第一条起最多等 45 秒。
 3. **闸门**（`evaluateGroupChatGate`，纯函数，不花 token，顺序不能改）：
-   静默档（该群在静默期就直接拦，优先级高于 direct）→ `all` → `mention` 档只放 direct/named/topic →
+   静默档（该群在静默期就直接拦，优先级高于 direct）→ `all` → `mention` 档只放 direct →
    安静时段（只挡非 direct）→ 每日上限 → 最短间隔 → direct → named → 话题候选 → `ambientChance` 抽签。
    只有真实 @（at 段 QQ 是她）与 `all` 档会置 `mustReply = true`；名字命中、话题候选、抽签
    都允许模型沉默，也不绕过安静时段；群规限流、日上限、最短间隔对 direct 同样生效。

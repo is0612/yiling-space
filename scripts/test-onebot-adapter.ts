@@ -622,13 +622,26 @@ try {
   assert(rateConversation, "限流群也要有会话记录。");
 
   // 9.5 群聊只回 @ 她的：别人的闲聊不能进模型，@ 了才回。
-  record.bindings[0]!.groupChat.mode = "mention";
-  await emitToGroup(1003, 40, "这是别人在聊天", 555, false);
-  await sleep(1500);
-  assert.equal(await assistantCount(1003), 0, "没有被 @ 时不能落助手消息。");
-  await emitToGroup(1003, 41, "叫她一声", 555, true);
-  await waitFor(async () => (await assistantCount(1003)) >= 1);
-  record.bindings[0]!.groupChat.mode = "all";
+  const mentionBinding = record.bindings[0]!;
+  const previousGroupChat = mentionBinding.groupChat;
+  mentionBinding.groupChat = { ...previousGroupChat, mode: "ambient", aliases: ["测试别名"] };
+  mentionBinding.groupChatModes = { "1003": "mention" };
+  const dispatchMentionGroup = async (id: number, text: string, userId: number, mention: GroupMention) => {
+    const event = resolveOnebotEvent(groupEventOf(1003, id, text, userId, mention));
+    assert(event);
+    return handler(event);
+  };
+  const ignoredMention = { status: "ignored", reason: "not_mentioned" };
+  assert.deepEqual(await dispatchMentionGroup(40, "这是别人在聊天", 555, false), ignoredMention);
+  assert.deepEqual(await dispatchMentionGroup(401, "测试别名在吗", 555, false), ignoredMention);
+  assert.deepEqual(await dispatchMentionGroup(402, "广播不算点名", 555, "all"), ignoredMention);
+  assert.equal((await dispatchMentionGroup(41, "叫她一声", 555, true)).status, "buffered");
+  assert(await waitForGroupRoundLog(1003, "direct"), "真实 @ 应完成回复并登记话题。");
+  assert.equal(await assistantCount(1003), 1);
+  assert.deepEqual(await dispatchMentionGroup(403, "接着刚才的话题", 555, false), ignoredMention,
+    "按群设置仅被 @ 时，同一参与者的无 @ 续句也不能触发回复。");
+  mentionBinding.groupChat = previousGroupChat;
+  mentionBinding.groupChatModes = {};
 
   // 9.6 自然接话：一段连发合成一轮只回一条；闸门不过时整轮不进模型。
   const ambientSettings = {

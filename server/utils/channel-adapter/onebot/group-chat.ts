@@ -285,7 +285,7 @@ export function evaluateGroupChatGate(input: GroupChatGateInput): GroupChatGateR
     }
     return { allowed: true, reason: "all_messages", mustReply: true };
   }
-  if (settings.mode === "mention" && !direct && !input.named && !input.topicCandidate) {
+  if (settings.mode === "mention" && !direct) {
     return { allowed: false, reason: "not_cued", mustReply: false };
   }
 

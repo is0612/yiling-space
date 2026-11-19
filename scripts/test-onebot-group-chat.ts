@@ -122,8 +122,13 @@ assert.equal(
 );
 assert.deepEqual(
   gate({ settings: { ...GROUP_CHAT_DEFAULTS, mode: "mention" }, named: true }),
-  { allowed: true, reason: "named", mustReply: false },
-  "mention 档里名字只是弱线索：可以看一眼，但允许沉默。",
+  { allowed: false, reason: "not_cued", mustReply: false },
+  "仅被 @ 模式不能因名字放行。",
+);
+assert.deepEqual(
+  gate({ settings: { ...GROUP_CHAT_DEFAULTS, mode: "mention" }, topicCandidate: true }),
+  { allowed: false, reason: "not_cued", mustReply: false },
+  "仅被 @ 模式不能因已参与的话题放行。",
 );
 assert.deepEqual(
   gate({ settings: { ...GROUP_CHAT_DEFAULTS, mode: "all" } }),

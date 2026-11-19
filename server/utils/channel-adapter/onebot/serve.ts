@@ -1846,21 +1846,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       groupContext.remember(contextKey, facts);
     }
 
-    // 只计算一次话题候选，避免主人上下文旁路和 mention 闸门使用不同判断。
-    const topicCandidate = isGroupMessage && groupChatMode === "mention"
-      && groupContext.topicCandidate(contextKey, facts ? [facts] : []);
-    // 主人在 mention 档的普通发言只进入攒批，供 flush 在不回复时保存为 context；
-    // 它不因此获得公告、空间或 B 站指令的免 @ 权限。
-    const ownerContextOnly = isGroupMessage && groupChatMode === "mention"
-      && isOwnerEvent && !direct && !named && !topicCandidate;
-
-    // 「仅 @ 时回复」是对整个群聊的开关，指令类消息也受它约束（保持老行为）。
-    // 主人普通发言是唯一例外：先进攒批，后续闸门仍决定不回复、只落库。
-    if (isGroupMessage && groupChatMode === "mention") {
-      if (!direct && !named && !topicCandidate && !isOwnerEvent) {
-        return { status: "ignored", reason: "not_mentioned" };
-      }
-    }
+    // 仅 @ 模式下，名字与活跃话题只作为背景，不能触发普通回复或发起指令。
+    // 主人的普通发言仍进攒批保存上下文，由整轮闸门拒绝无点名的回复。
+    const requiresMention = isGroupMessage && groupChatMode === "mention" && !direct;
+    if (requiresMention && !isOwnerEvent) return { status: "ignored", reason: "not_mentioned" };
+    const ownerContextOnly = requiresMention && isOwnerEvent;
 
     if (!event.content) return { status: "ignored", reason: "missing_fields" };
 

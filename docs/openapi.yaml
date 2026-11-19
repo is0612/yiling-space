@@ -1929,7 +1929,7 @@ paths:
                 replyWindowMinutes: { type: integer, minimum: 1, maximum: 1440, description: '群聊限流窗口（分钟），默认 10。' }
                 replyLimitPerWindow: { type: integer, minimum: 0, maximum: 100, description: '窗口内最多回复几条；0 = 不限。第 N+1 条起静默。' }
                 replyLimitPer10Min: { type: integer, minimum: 0, maximum: 100, description: '兼容旧字段，等价于 replyWindowMinutes=10 的 replyLimitPerWindow。' }
-                groupChatMode: { type: string, enum: [mention, ambient, all], description: '群聊怎么回：mention 仅被 @（不攒批）；ambient 自然接话（默认，攒一批再判、可不说话）；all 每句都回。' }
+                groupChatMode: { type: string, enum: [mention, ambient, all], description: '普通群聊怎么回：mention 仅 @ 本人或戳本人触发回复，仍攒批；ambient 自然接话（默认，攒一批再判、可不说话）；all 每轮都回。' }
                 minGapSeconds: { type: integer, minimum: 0, maximum: 3600, description: '自然接话两条之间的最短间隔（秒）。' }
                 dailyMax: { type: integer, minimum: 0, maximum: 1000, description: '自然接话每天最多说几句（按群，东八区日界；0 = 不限）。' }
                 ambientChance: { type: number, minimum: 0, maximum: 1, description: '跟她无关的闲聊被考虑进去的概率（0-1）。' }

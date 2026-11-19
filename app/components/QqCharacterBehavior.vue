@@ -248,7 +248,7 @@ const modeIndex = computed(() => {
 /** 刻度下面那一句：说清这一档会发生什么，而不是复述选项名 */
 const modeNote = computed(() => {
   if (bind.groupChatMode === "mention") {
-    return "只有 @ 她、或者叫到名字才会看；名字也可能是在叫别的鱼，拿不准就不接。参与过的话题还能接一句；私聊永远会回。";
+    return "普通群聊只在有人 @ 她本人或戳她时才会回复。叫名字、@ 全体或接着聊同一话题都不会触发回复。";
   }
   if (bind.groupChatMode === "all") return "每轮都回（不再逐条），群里一热闹就会刷屏，也最容易一次把额度用完。";
   return "所有消息都可能看一眼：被 @ 一定会回，水群看上下文再决定说不说。";
@@ -761,7 +761,7 @@ async function tryGroupOnce() {
               </el-select>
             </div>
           </div>
-          <em>只改这一个群的档位；节奏、安静、限流仍在下面「节奏与限制」里（所有群共用）。</em>
+          <em>各群独立选择档位，节奏与限制共用。选择「仅被 @」的群，叫名字、@ 全体和话题续接都不会触发普通回复。</em>
         </div>
 
         <!-- 群号表空着 = 收所有群，按群设置没有群号可展示。存过的条目留着不动，
@@ -773,8 +773,7 @@ async function tryGroupOnce() {
           <em>这条绑定现在收所有群；之前按群设过的 {{ overrideCount }} 项还在，填上群号就能看到并修改。</em>
         </div>
 
-        <!-- 别名在「仅被 @」下也生效：后端把「叫到名字」当成弱线索，
-             会结合上下文判断是不是在叫她；只有「每条都回」用不上 -->
+        <!-- 别名可影响自然接话；仅被 @ 的群不会因别名开口。 -->
         <div
           v-if="needsAliases"
           class="beh-field"
@@ -784,7 +783,7 @@ async function tryGroupOnce() {
             v-model="bind.groupAliases"
             placeholder="小夏，夏夏，阿夏"
           />
-          <em>逗号分隔。没 @ 但叫到这些名字，她会看一眼再决定：群里同名的鱼可能不止一条。</em>
+          <em>逗号分隔。自然接话时，没 @ 但叫到这些名字，她会结合上下文判断是不是在叫她。</em>
         </div>
       </div>
 
