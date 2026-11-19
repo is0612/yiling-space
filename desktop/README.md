@@ -47,6 +47,9 @@ run-as-node，后者在部分机器上带不起 SnowLuma），并同时检查面
 窗口大小/位置/最大化状态会记在 Electron userData 的 `window-state.json`，下次按原来的位置打开。
 托盘菜单还可以直接打开数据目录和日志目录。
 
+角色卡 / 对话 Markdown 导出会弹出系统「保存」对话框，由你选择可写目录；不再依赖默认下载目录，
+避免 Windows 在受保护目录上报「需要管理员权限」。
+
 桌面版会话 Cookie 使用 `yiling_session_desktop`（开发版仍是 `yiling_session`），两者同时登录不会互相顶掉。
 
 ## 数据目录

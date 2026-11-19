@@ -11,7 +11,7 @@
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, shell, Tray } = require("electron");
 
 const ROOT = path.resolve(__dirname, "..");
 const DATA_DIR = path.resolve(process.env.YILING_DATA_DIR?.trim() || path.join(ROOT, ".data"));
@@ -139,6 +139,32 @@ function createTray() {
   } catch (error) {
     log("tray-create-failed", { message: error instanceof Error ? error.message : String(error) });
   }
+}
+
+/**
+ * 角色卡/对话 Markdown 都是浏览器下载。默认下载目录如果落在受保护位置，
+ * Windows/Chromium 会报「需要权限」，用户以为应用要管理员。这里统一弹保存对话框，
+ * 让用户自己选一个可写目录（桌面/文档）。
+ */
+function setupDownloads() {
+  session.defaultSession.on("will-download", (_event, item) => {
+    const filename = item.getFilename() || "yiling-export.json";
+    const extension = path.extname(filename).replace(/^\./, "");
+    const options = {
+      title: "保存导出文件",
+      defaultPath: path.join(app.getPath("downloads"), filename),
+      ...(extension ? { filters: [{ name: extension.toUpperCase(), extensions: [extension] }] } : {}),
+    };
+    const selected = mainWindow && !mainWindow.isDestroyed()
+      ? dialog.showSaveDialogSync(mainWindow, options)
+      : dialog.showSaveDialogSync(options);
+    if (!selected) {
+      item.cancel();
+      return;
+    }
+    item.setSavePath(selected);
+    log("download-save", { path: selected });
+  });
 }
 
 function log(message, detail = {}) {
@@ -440,6 +466,7 @@ if (yieldToOther) {
     appReady = true;
     createWindow();
     createTray();
+    setupDownloads();
     startSupervisor();
   }).catch((error) => {
     showError("Electron 启动失败", error instanceof Error ? error.message : String(error));
