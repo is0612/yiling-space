@@ -58,8 +58,9 @@ yarn desktop
 Electron 的 Chromium profile（缓存，不是用户数据）默认放 `.tmp/electron`；如果那里不可写，
 会依次回退 `<data>/electron` 和系统临时目录。
 
-> ⚠️ 如果改了 `YILING_DATA_DIR` 却继续用旧数据库，必须把旧 `.data/credentials-encryption.key`
-> 一起复制过去；否则数据库里的 OneBot/SnowLuma 凭据解不开，页面会提示解密失败。
+> ⚠️ 如果改了 `YILING_DATA_DIR` 却继续用旧数据库，supervisor 会自动把旧 `.data` 里的
+> `credentials-encryption.key` 和 `snowluma-home.json` 复制过去（不搬表情包/语音临时文件）；
+> 否则数据库里的 OneBot/SnowLuma 凭据解不开，页面会提示解密失败。
 
 ## 当前边界
 

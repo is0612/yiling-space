@@ -49,6 +49,31 @@ const WEB_WAIT_MS = Number(process.env.YILING_WEB_WAIT_MS || 60_000);
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
+/**
+ * 换到新的 YILING_DATA_DIR 时，至少把「解旧库凭据」需要的文件带过去：
+ * - credentials-encryption.key：不带的话数据库里的 OneBot/SnowLuma 凭据解不开；
+ * - snowluma-home.json：用户填过的协议端目录，避免重新扫盘/手填。
+ * 不自动搬 stickers / 语音临时文件（体积大，且不是启动必需）。
+ */
+function migrateLegacyDataDir() {
+  const legacy = path.join(ROOT, ".data");
+  if (path.resolve(legacy) === path.resolve(DATA_DIR)) return;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  for (const name of ["credentials-encryption.key", "snowluma-home.json"]) {
+    const source = path.join(legacy, name);
+    const target = path.join(DATA_DIR, name);
+    if (!fs.existsSync(source) || fs.existsSync(target)) continue;
+    try {
+      fs.copyFileSync(source, target);
+      log("data-dir-migrated", { name, from: legacy, to: DATA_DIR });
+    } catch (error) {
+      log("data-dir-migrate-failed", { name, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
+
+migrateLegacyDataDir();
+
 function log(event, detail = {}) {
   const entry = { at: new Date().toISOString(), event, ...detail };
   const line = JSON.stringify(entry);
