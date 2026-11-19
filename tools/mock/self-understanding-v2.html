@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>自我认知 · 认知台（修订）</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --surface:#fff; --line:#e6e9ef;
+    --text:#101620; --text-2:#454f5e; --dim:#68717f;
+    --brand:#d94a76; --brand-btn:#c9416b; --brand-soft:#fdf0f4;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;display:block;background:#dfe3ea}
+  html{scrollbar-width:none}
+  ::-webkit-scrollbar{width:0;height:0}
+  body{font-family:"Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased}
+  a{color:var(--brand-btn);text-decoration:none}
+  .frame{width:1440px;height:900px;display:grid;grid-template-columns:260px minmax(0,1fr);grid-template-rows:minmax(0,1fr);background:var(--bg);overflow:hidden;position:relative}
+
+  .side{background:var(--surface);padding:12px 10px 10px;display:flex;flex-direction:column;border-right:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:10px;padding:2px 4px 10px;flex:none}
+  .brand-mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#ff8fae,#ef5f8b);color:#fff;font-size:17px;font-weight:700;display:grid;place-items:center}
+  .brand-title{font-size:15px;font-weight:700;letter-spacing:-.01em}
+  .brand-title span{color:var(--dim);font-weight:600;font-size:12px;margin-left:3px}
+  .brand-sub{font-size:9px;letter-spacing:.14em;color:var(--dim);margin-top:2px}
+  .nav{flex:1;min-height:0;overflow:hidden;margin-top:4px}
+  .nav-sec{display:flex;align-items:center;gap:6px;padding:13px 8px 4px;color:var(--dim);font-size:12px;font-weight:700;letter-spacing:.02em}
+  .nav-sec i{width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:5px solid #b9c0cb}
+  .nav-link{display:flex;align-items:center;gap:9px;height:34px;padding:0 9px;border-radius:8px;color:var(--text-2);font-size:14px;position:relative}
+  .nav-link .ico{width:16px;height:16px;stroke:#8b94a3;fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;flex:none}
+  .nav-link.on{background:var(--brand-soft);color:var(--brand-btn);font-weight:600}
+  .nav-link.on .ico{stroke:var(--brand)}
+  .nav-link.on::before{content:"";position:absolute;left:-10px;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--brand)}
+  .nav-bottom{flex:none;border-top:1px solid var(--line);padding:10px 8px 4px;display:flex;align-items:center;gap:9px}
+  .nav-ava{width:28px;height:28px;border-radius:50%;background:var(--brand-soft);color:var(--brand-btn);font-size:13px;font-weight:700;display:grid;place-items:center;flex:none}
+  .nav-name{font-size:13px;font-weight:600}
+  .nav-note{font-size:12px;color:var(--dim);margin-top:1px}
+
+  .page{display:flex;flex-direction:column;min-width:0}
+  .top{height:56px;flex:none;background:var(--surface);display:flex;align-items:center;gap:10px;padding:0 18px}
+  .crumb{font-size:14px;color:var(--dim)}
+  .crumb-sep{color:#b9c0cb;font-size:14px}
+  .top h1{margin:0;font-size:18px;font-weight:700;letter-spacing:-.01em}
+  .top-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .icon-btn{width:32px;height:32px;border:1px solid var(--line);border-radius:8px;background:var(--surface);display:grid;place-items:center;cursor:pointer}
+  .icon-btn .ico{width:15px;height:15px;stroke:var(--text-2);fill:none;stroke-width:1.5;stroke-linecap:round}
+  .me{width:30px;height:30px;border-radius:50%;background:#eef0f3;color:var(--text-2);font-size:13px;display:grid;place-items:center}
+
+  .content{flex:1;min-height:0;overflow:hidden;padding:22px 28px 16px}
+
+  .phead{height:50px;display:flex;align-items:flex-end;gap:14px}
+  .phead h1{margin:0;font-size:22px;line-height:28px;letter-spacing:-.02em}
+  .phead .sub{margin:4px 0 0;font-size:12px;line-height:18px;color:var(--dim)}
+  .phead .acts{margin-left:auto;display:flex;align-items:center;gap:8px;padding-bottom:3px}
+  .btn{height:32px;padding:0 14px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text-2);font-size:14px;font-family:inherit;cursor:pointer}
+  .btn.primary{background:var(--brand-btn);border-color:var(--brand-btn);color:#fff;font-weight:600}
+
+  .ident{height:104px;margin-top:12px;background:var(--surface);border-radius:10px;padding:0 16px;display:flex;align-items:center}
+  .avatar{width:56px;height:56px;border-radius:10px;background:var(--brand-soft);color:var(--brand-btn);font-size:24px;font-weight:700;display:grid;place-items:center;flex:none}
+  .ident-main{min-width:0;margin-left:14px}
+  .ident-name{display:flex;align-items:center;gap:8px}
+  .ident-name h2{margin:0;font-size:22px;line-height:28px;letter-spacing:-.01em}
+  .pill{height:22px;padding:0 10px;border-radius:999px;background:var(--brand-soft);color:var(--brand-btn);font-size:12px;font-weight:600;display:inline-flex;align-items:center;flex:none}
+  .ident-meta{margin-top:4px;font-size:12px;line-height:18px;color:var(--dim)}
+  .ident-fields{margin-left:32px;display:flex;flex-direction:column;gap:6px}
+  .field-row{display:flex;gap:24px}
+  .field{width:96px}
+  .f-label{display:block;font-size:12px;line-height:16px;color:var(--dim)}
+  .f-value{display:block;font-size:14px;line-height:20px;margin-top:2px}
+  .legend{font-size:12px;line-height:16px;color:var(--dim)}
+  .eyebrow{font-size:12px;line-height:16px;font-weight:700;letter-spacing:.06em;color:var(--dim);margin-bottom:2px}
+  .weak{font-size:12px;line-height:18px;color:var(--dim);border-bottom:1px dashed #b9c0cb;padding-bottom:1px}
+  .l1{margin-left:auto;font-size:14px;font-weight:600;color:var(--brand-btn)}
+
+  .kpis{display:grid;grid-template-columns:224px 281px 281px 296px;gap:14px;margin-top:16px;height:70px}
+  .kpi{background:var(--surface);border-radius:10px;padding:12px 16px}
+  .kpi .row{display:flex;align-items:baseline;gap:8px}
+  .kpi .lab{font-size:12px;line-height:16px;color:var(--dim)}
+  .kpi .note{margin-left:auto;font-size:12px;line-height:16px;color:var(--dim)}
+  .kpi b{display:block;font-size:22px;line-height:26px;margin-top:4px;font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+
+  .grid{display:grid;grid-template-columns:224px minmax(0,1fr) 296px;gap:14px;margin-top:14px;height:540px}
+  .card{background:var(--surface);border-radius:10px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .card-h{display:flex;align-items:baseline;gap:8px;padding:16px 16px 8px;flex:none}
+  .card-h h3{margin:0;font-size:12px;font-weight:700;letter-spacing:.06em;color:var(--dim)}
+  .card-h .meta{margin-left:auto;font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+
+  .domlist{flex:1;min-height:0;overflow:hidden;padding:2px 6px 0}
+  .domrow{display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;border-radius:8px;font-size:14px;color:var(--text-2)}
+  .domrow b{margin-left:auto;font-size:12px;color:var(--dim);font-weight:600;font-variant-numeric:tabular-nums}
+  .domrow.on{background:var(--brand-soft);color:var(--brand-btn);font-weight:600}
+  .domrow.on b{color:var(--brand-btn)}
+  .domrow.dis{color:#8b94a3}
+  .domrow.dis b{color:#8b94a3}
+  .b-note{margin-top:auto;padding:0 16px 16px;font-size:12px;line-height:20px;color:var(--dim)}
+
+  .quote{padding:16px 16px 12px;flex:none}
+  .quote .lab{font-size:12px;font-weight:700;letter-spacing:.06em;color:var(--dim);margin-bottom:6px}
+  .quote p{margin:0;font-size:14px;line-height:1.7}
+  .q-meta{margin-top:8px;font-size:12px;line-height:18px;color:var(--dim)}
+  .filters{display:flex;gap:8px;padding:0 16px 12px;flex:none}
+  .fchip{height:28px;padding:0 11px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:12px;color:var(--text-2);font-family:inherit;display:inline-flex;align-items:center;gap:5px}
+  .fchip b{font-weight:600;color:var(--dim);font-variant-numeric:tabular-nums}
+  .fchip.on{border-color:var(--brand-btn);background:var(--brand-soft);color:var(--brand-btn);font-weight:600}
+  .fchip.on b{color:var(--brand-btn)}
+
+  .list{flex:1;min-height:0;overflow:hidden;border-top:1px solid var(--line)}
+  .ev{list-style:none;margin:0;padding:0}
+  .ev li{display:grid;grid-template-columns:7px 54px minmax(0,1fr) 104px;gap:10px;align-items:center;height:64px;padding:0 16px;border-bottom:1px solid var(--line)}
+  .ev-k{font-size:12px;color:var(--dim);white-space:nowrap}
+  .ev-t{font-size:14px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ev-m{font-size:12px;line-height:18px;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums}
+  .ev-m em{display:block;font-style:normal}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+  .d-blue{background:#4c5fd5} .d-brand{background:var(--brand)} .d-amber{background:#b57c1f} .d-green{background:#0b7a54} .d-gray{background:#8b94a3}
+
+  .ev-foot{flex:none;height:38px;display:flex;align-items:center;gap:10px;padding:0 16px;border-top:1px solid var(--line);font-size:12px;color:var(--dim)}
+  .ev-foot button{margin-left:auto;height:24px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);font-size:12px;color:var(--text-2);font-family:inherit}
+
+  .tl{flex:1;min-height:0;overflow:hidden;padding:4px 16px 0}
+  .tl-item{position:relative;padding:4px 0 8px 14px;border-left:1px solid var(--line)}
+  .tl-item:last-child{padding-bottom:0;border-left-color:transparent}
+  .tl-item::before{content:"";position:absolute;left:-4px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--brand)}
+  .tl-time{font-size:12px;line-height:16px;color:var(--dim)}
+  .tl-title{font-size:14px;font-weight:600;margin:2px 0 6px}
+  .cmp{border-radius:8px;overflow:hidden}
+  .cmp div{padding:6px 10px;font-size:12px;line-height:18px}
+  .cmp .o{background:var(--bg);color:var(--dim)}
+  .cmp .n{background:var(--surface);color:var(--text);border-left:2px solid var(--brand)}
+  .cmp span{display:block;font-size:12px;line-height:16px;margin-bottom:2px;color:var(--dim)}
+  .cmp .n span{color:var(--brand-btn);font-weight:600}
+  .tl-foot{flex:none;padding:12px 16px 16px;border-top:1px solid var(--line)}
+  .l2{font-size:12px;font-weight:600;color:var(--brand-btn)}
+
+  .empty{flex:1;display:flex;flex-direction:column;justify-content:center;padding:0 48px}
+  .empty h2{margin:0;font-size:22px;line-height:30px;letter-spacing:-.01em}
+  .empty p{margin:8px 0 0;font-size:12px;line-height:20px;color:var(--dim);max-width:430px}
+  .empty .links{margin-top:16px;display:flex;align-items:center;gap:20px}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-board" viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16"><path d="M3 3.5h10a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H7l-3 2.5V10.5H3a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 16 16"><circle cx="8" cy="5.4" r="2.6"/><path d="M3 14c0-2.6 2.2-4.2 5-4.2s5 1.6 5 4.2"/></symbol>
+  <symbol id="i-book" viewBox="0 0 16 16"><path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1.5 1.5 0 0 1 3 12z"/><path d="M3 12h9"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 16 16"><path d="M3 13V8M7.5 13V4.5M12 13V10"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M10 6l-1.4 3.6L5 11l1.4-3.6z"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 16 16"><path d="M8 2l6 3-6 3-6-3z"/><path d="M2 8l6 3 6-3M2 11l6 3 6-3"/></symbol>
+  <symbol id="i-users" viewBox="0 0 16 16"><circle cx="6" cy="5.6" r="2.3"/><path d="M2 13.4c0-2.2 1.8-3.5 4-3.5s4 1.3 4 3.5"/><path d="M11 4.2a2.1 2.1 0 0 1 0 4"/><path d="M12.4 13.4c0-1.6-.6-2.6-1.6-3.2"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 16 16"><path d="M8 2.2l1.3 3.7 3.7 1.3-3.7 1.3L8 12.2 6.7 8.5 3 7.2l3.7-1.3z"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3M6 8.5h4M6 11h4"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 16 16"><path d="M1.6 8S4.2 3.8 8 3.8 14.4 8 14.4 8 11.8 12.2 8 12.2 1.6 8 1.6 8z"/><circle cx="8" cy="8" r="1.9"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.6v3.2h-3.2"/></symbol>
+</svg>
+
+<div class="frame" data-dir="B2" data-shot="03-自我认知-认知台修订">
+  <div class="page">
+    <div class="content">
+      <div class="phead">
+        <div>
+          <h1>她怎样理解自己</h1>
+          <p class="sub">只读 · 展示有界证据，时间为北京时间</p>
+        </div>
+        <div class="acts"><button class="btn primary">刷新证据</button></div>
+      </div>
+
+      <section class="ident">
+        <div class="avatar">鲸</div>
+        <div class="ident-main">
+          <div class="eyebrow">身份与定位</div>
+          <div class="ident-name"><h2>鲸宁宁</h2><span class="pill">当前角色名</span></div>
+          <div class="ident-meta">已相处 47 天 · 最近更新 11-18 18:09</div>
+        </div>
+        <div class="ident-fields">
+          <div class="field-row">
+            <div class="field"><span class="f-label">外观</span><span class="f-value">已设置图片</span></div>
+            <div class="field"><span class="f-label">别称</span><span class="f-value">—</span></div>
+            <div class="field"><span class="f-label">旧名</span><span class="f-value">—</span></div>
+          </div>
+          <div class="legend">— 表示角色数据中没有这条记录，不作为判断依据。</div>
+        </div>
+        <a class="l1" href="#">查看角色资料 →</a>
+      </section>
+
+      <div class="kpis">
+        <div class="kpi"><div class="row"><span class="lab">证据总数</span><span class="note">8 个域</span></div><b>112</b></div>
+        <div class="kpi"><div class="row"><span class="lab">已采纳反思</span><span class="note">可修订</span></div><b>4</b></div>
+        <div class="kpi"><div class="row"><span class="lab">修订对照</span><span class="note">旧版可核</span></div><b>4</b></div>
+        <div class="kpi"><div class="row"><span class="lab">会话经验</span><span class="note">限原会话</span></div><b>12</b></div>
+      </div>
+
+      <div class="grid">
+        <aside class="card">
+          <div class="card-h"><h3>按域查看</h3><span class="meta">112</span></div>
+          <div class="domlist">
+            <div class="domrow on"><i class="dot d-blue"></i>记忆<b>28</b></div>
+            <div class="domrow"><i class="dot d-brand"></i>互动经验<b>12</b></div>
+            <div class="domrow"><i class="dot d-amber"></i>偏好<b>9</b></div>
+            <div class="domrow"><i class="dot d-green"></i>表达习惯<b>28</b></div>
+            <div class="domrow"><i class="dot d-gray"></i>目标与愿望<b>3</b></div>
+            <div class="domrow"><i class="dot d-gray"></i>关系<b>6</b></div>
+            <div class="domrow"><i class="dot d-blue"></i>反思<b>4</b></div>
+            <div class="domrow"><i class="dot d-gray"></i>知识<b>22</b></div>
+          </div>
+          <div class="b-note">本页只读，展示有界证据。<br>纠正请回到来源模块。</div>
+        </aside>
+
+        <section class="card">
+          <div class="quote">
+            <div class="lab">她现在的说法</div>
+            <p>我容易把「先安慰」当成关心，但对方常常需要先被确认发生了什么。下次我先问一句具体情况，再决定要不要安慰。</p>
+            <div class="q-meta">已采纳的解释 · 11-16 · 12 天内 3 次反馈</div>
+          </div>
+          <div class="filters" role="group" aria-label="按域筛选">
+            <button class="fchip on" aria-pressed="true">全部 <b>112</b></button>
+            <button class="fchip" aria-pressed="false">已确认记录</button>
+            <button class="fchip" aria-pressed="false">会话经验</button>
+            <button class="fchip" aria-pressed="false">低可信度</button>
+          </div>
+          <div class="list">
+            <ul class="ev">
+              <li><i class="dot d-blue"></i><span class="ev-k">记忆</span><span class="ev-t">她说周末在家躺了两天，语气是轻松的</span><span class="ev-m">有效记录<em>11-12 · 0.82</em></span></li>
+              <li><i class="dot d-brand"></i><span class="ev-k">互动经验</span><span class="ev-t">说「在电脑前放松」时，不判定成疲惫或需要休息</span><span class="ev-m">会话经验<em>11-15</em></span></li>
+              <li><i class="dot d-gray"></i><span class="ev-k">关系</span><span class="ev-t">与「阿澈」：亲密朋友，相处正常</span><span class="ev-m">已确认记录<em>11-09</em></span></li>
+              <li><i class="dot d-amber"></i><span class="ev-k">偏好</span><span class="ev-t">说话方式：少用感叹号，先给结论再补细节</span><span class="ev-m">有效记录<em>11-14 · v3</em></span></li>
+              <li><i class="dot d-green"></i><span class="ev-k">表达习惯</span><span class="ev-t">句尾少用「啦」，只在群聊里保留</span><span class="ev-m">有效记录<em>11-16 · v3</em></span></li>
+            </ul>
+          </div>
+          <div class="ev-foot">已显示 5 / 112 条<button>再显示 20 条，剩余 107 条</button></div>
+        </section>
+
+        <aside class="card">
+          <div class="card-h"><h3>成长轨迹</h3><span class="meta">3 项变化</span></div>
+          <div class="tl">
+            <div class="tl-item">
+              <div class="tl-time">11 月 16 日 · 表达习惯</div>
+              <div class="tl-title">句尾语气词</div>
+              <div class="cmp">
+                <div class="o"><span>历史版 v2</span>句尾常用「啦」「嘛」，显得亲近</div>
+                <div class="n"><span>当前版 v3</span>句尾少用「啦」，只在群聊里保留</div>
+              </div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-time">11 月 09 日 · 关系</div>
+              <div class="tl-title">与「阿澈」</div>
+              <div class="cmp">
+                <div class="o"><span>历史版 v2</span>亲密朋友 · 疏远</div>
+                <div class="n"><span>当前版 v3</span>亲密朋友 · 正常相处</div>
+              </div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-time">11 月 04 日 · 偏好</div>
+              <div class="tl-title">安慰方式</div>
+              <div class="cmp">
+                <div class="o"><span>历史版 v1</span>先安慰，再问细节</div>
+                <div class="n"><span>当前版 v2</span>先问细节，再决定是否安慰</div>
+              </div>
+            </div>
+          </div>
+          <div class="tl-foot"><a class="l2" href="#">到反思系统核对 →</a></div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="frame" data-dir="B2" data-shot="04-自我认知-空态">
+  <div class="page">
+    <div class="content">
+      <div class="phead">
+        <div>
+          <h1>她怎样理解自己</h1>
+          <p class="sub">只读 · 展示有界证据，时间为北京时间</p>
+        </div>
+        <div class="acts"><button class="btn primary">刷新证据</button></div>
+      </div>
+
+      <section class="ident">
+        <div class="avatar">鲸</div>
+        <div class="ident-main">
+          <div class="eyebrow">身份与定位</div>
+          <div class="ident-name"><h2>鲸宁宁</h2><span class="pill">当前角色名</span></div>
+          <div class="ident-meta">已相处 1 天 · 最近更新 11-19 09:18</div>
+        </div>
+        <div class="ident-fields">
+          <div class="field-row">
+            <div class="field"><span class="f-label">外观</span><span class="f-value">已设置图片</span></div>
+            <div class="field"><span class="f-label">别称</span><span class="f-value">—</span></div>
+            <div class="field"><span class="f-label">旧名</span><span class="f-value">—</span></div>
+          </div>
+          <div class="legend">— 表示角色数据中没有这条记录，不作为判断依据。</div>
+        </div>
+        <a class="l1" href="#">查看角色资料 →</a>
+      </section>
+
+      <div class="kpis">
+        <div class="kpi"><div class="row"><span class="lab">证据总数</span><span class="note">8 个域</span></div><b>0</b></div>
+        <div class="kpi"><div class="row"><span class="lab">已采纳反思</span><span class="note">可修订</span></div><b>0</b></div>
+        <div class="kpi"><div class="row"><span class="lab">修订对照</span><span class="note">旧版可核</span></div><b>0</b></div>
+        <div class="kpi"><div class="row"><span class="lab">会话经验</span><span class="note">限原会话</span></div><b>0</b></div>
+      </div>
+
+      <div class="grid">
+        <aside class="card">
+          <div class="card-h"><h3>按域查看</h3><span class="meta">0</span></div>
+          <div class="domlist">
+            <div class="domrow dis"><i class="dot d-gray"></i>记忆<b>—</b></div>
+            <div class="domrow dis"><i class="dot d-gray"></i>互动经验<b>—</b></div>
+            <div class="domrow dis"><i class="dot d-gray"></i>偏好<b>—</b></div>
+            <div class="domrow dis"><i class="dot d-gray"></i>表达习惯<b>—</b></div>
+            <div class="domrow dis"><i class="dot d-gray"></i>目标与愿望<b>—</b></div>
+            <div class="domrow dis"><i class="dot d-gray"></i>关系<b>—</b></div>
+            <div class="domrow dis"><i class="dot d-gray"></i>反思<b>—</b></div>
+            <div class="domrow dis"><i class="dot d-gray"></i>知识<b>—</b></div>
+          </div>
+          <div class="b-note">本页只读，展示有界证据。<br>纠正请回到来源模块。</div>
+        </aside>
+
+        <section class="card">
+          <div class="empty">
+            <h2>她还没有形成可回溯的自我判断</h2>
+            <p>自我认知来自被纠正过的回应与复盘。她收到的反馈还不够多，这里暂时没有可以核对的判断。</p>
+            <div class="links"><a class="l2" href="#">到反思系统看看 →</a><a class="weak" href="#">查看角色资料 →</a></div>
+          </div>
+        </section>
+
+        <aside class="card">
+          <div class="card-h"><h3>成长轨迹</h3><span class="meta">0 项变化</span></div>
+          <div class="empty" style="padding:0 16px;justify-content:flex-start;margin-top:8px">
+            <p style="margin:0">还没有可对照的修订。记录第一次变化后，这里会保留旧版与当前版。</p>
+          </div>
+          <div class="tl-foot"><a class="l2" href="#">到反思系统核对 →</a></div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const SIDE = `
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-mark">忆</div>
+      <div>
+        <div class="brand-title">忆灵空间<span>Yiling</span></div>
+        <div class="brand-sub">AI CHARACTER HUB</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <div class="nav-sec">工作空间</div>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-board"/></svg>总览</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-chat"/></svg>聊天</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-user"/></svg>角色管理</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-book"/></svg>日记手账</a>
+      <div class="nav-sec"><i></i>成长系统</div>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-chart"/></svg>总览</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-compass"/></svg>成长星图</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-layers"/></svg>记忆系统</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-users"/></svg>社交系统</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-chat"/></svg>语言系统</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-spark"/></svg>反思系统</a>
+      <a class="nav-link" href="#"><svg class="ico"><use href="#i-doc"/></svg>知识系统</a>
+      <a class="nav-link on" href="#"><svg class="ico"><use href="#i-eye"/></svg>自我认知</a>
+    </nav>
+    <div class="nav-bottom">
+      <span class="nav-ava">鲸</span>
+      <div>
+        <div class="nav-name">鲸宁宁</div>
+        <div class="nav-note">当前角色 · 共 3 个</div>
+      </div>
+    </div>
+  </aside>`;
+
+  const TOP = `
+  <header class="top">
+    <span class="crumb">成长系统</span><span class="crumb-sep">/</span>
+    <h1>自我认知</h1>
+    <div class="top-right">
+      <button class="icon-btn" title="刷新"><svg class="ico"><use href="#i-refresh"/></svg></button>
+      <span class="me">管</span>
+    </div>
+  </header>`;
+
+  document.querySelectorAll('.frame').forEach((frame) => {
+    frame.insertAdjacentHTML('afterbegin', SIDE);
+    frame.querySelector('.page').insertAdjacentHTML('afterbegin', TOP);
+  });
+</script>
+</body>
+</html>
