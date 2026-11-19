@@ -135,6 +135,16 @@ onBeforeUnmount(() => document.removeEventListener("visibilitychange", syncVisib
                   />
                 </marker>
               </defs>
+              <g class="routes-ghost">
+                <path
+                  v-for="edge in routes"
+                  :key="`ghost-${edge.key}`"
+                  class="route route-ghost"
+                  :d="edge.path"
+                  :stroke="galaxyKinds[edge.kind].color"
+                  :stroke-dasharray="galaxyKinds[edge.kind].dash"
+                />
+              </g>
               <path
                 v-for="edge in visibleRoutes"
                 :key="edge.key"
