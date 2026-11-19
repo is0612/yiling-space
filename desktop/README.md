@@ -88,6 +88,17 @@ node scripts/desktop-backup.mjs backup
 便携包里双击 `备份数据.bat`。备份在 `<data>/backups/desktop-<时间>/`，含 `database.dump`
 和 `credentials-encryption.key`；恢复前必须先停应用。
 
+## 安装包
+
+```powershell
+node scripts/desktop-installer.mjs --source "D:\YilingSpace-Portable"
+```
+
+产出 `dist/安装包-<version>-本机/`：双击 `安装忆灵空间.bat` 安装到
+`%LOCALAPPDATA%\YilingSpace`，创建桌面/开始菜单快捷方式和 HKCU 卸载项，不需要管理员权限。
+卸载时 `app\.data` 会移到「文档」下的 `YilingSpace-data-<时间>`，不会直接删用户数据。
+这是无管理员脚本安装器，不是 NSIS；要发布给别人的安装包等代码签名后再做。
+
 Electron 的 Chromium profile（缓存，不是用户数据）默认放 `.tmp/electron`；如果那里不可写，
 会依次回退 `<data>/electron` 和系统临时目录。
 
