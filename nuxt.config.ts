@@ -18,7 +18,7 @@ export default defineNuxtConfig({
        * 动态 `import()` 它在 Nitro 里是裸模块 id，静态分析可能拿不到 ——
        * 外部化后运行时直接 require node_modules 里的原文件，和 dev 行为一致。
        */
-      external: ["@audio/decode-amr"],
+      external: ["@audio/decode-amr", "playwright-core"],
     },
   },
   vite: {

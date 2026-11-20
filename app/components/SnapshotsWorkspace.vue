@@ -1219,7 +1219,7 @@ watch(id, () => {
 /* 审核建议的对照组：只说「要改成什么」而不说「现在是什么」，更新类建议没法判断 */
 .a-prev{display:flex;align-items:baseline;gap:8px;margin-top:8px;border-left:2px solid var(--line-strong);padding-left:9px;color:var(--dim);font-size:12px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}
 .a-prev span{flex:none;color:var(--text-2);font-weight:600}
-.a-rejected{margin-left:8px;color:#8f5c05;font-weight:500}
+.a-rejected{margin-left:8px;color:var(--amber);font-weight:500}
 /* 依据留左边，处置结果和「采纳 / 忽略」靠右：一条建议的结论比它的出处更该被先看到 */
 .a-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
 .a-foot small{margin-top:0}

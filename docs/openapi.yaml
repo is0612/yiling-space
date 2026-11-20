@@ -23,6 +23,286 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /roleplay/settings:
+    get:
+      tags: [Roleplay]
+      summary: 读取当前用户独立的扮演模型设置
+      description: 不读取或沿用主人格模型密钥；只返回 hasApiKey，不回显密钥或密文。
+      responses:
+        '200':
+          description: 模型设置
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleplaySettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      tags: [Roleplay]
+      summary: 更新独立扮演模型设置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: '#/components/schemas/RoleplaySettingsInput' }
+      responses:
+        '200':
+          description: 保存后的设置，不含密钥
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleplaySettings' }
+        '400': { description: 设置无效或输入输出预算超过上下文容量 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /roleplay/personas:
+    get:
+      tags: [Roleplay]
+      summary: 当前用户的扮演人设列表（无头像）
+      responses:
+        '200':
+          description: 人设数组
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/RoleplayPersona' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Roleplay]
+      summary: 创建扮演人设
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoleplayPersonaInput' }
+      responses:
+        '200':
+          description: 新人设
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleplayPersona' }
+        '400': { description: 名字或人设为空或超长 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /roleplay/personas/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Roleplay]
+      summary: 修改扮演人设，不自动改变已有存档
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                prompt: { type: string, minLength: 1, maxLength: 40000 }
+                opening: { type: string, maxLength: 12000 }
+      responses:
+        '200':
+          description: 更新的人设
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleplayPersona' }
+        '400': { description: 输入无效 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 人设不存在或不属于当前用户 }
+    delete:
+      tags: [Roleplay]
+      summary: 删除人设，保留已有存档及其人设快照
+      responses:
+        '200': { description: '{ok:true}' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 人设不存在或不属于当前用户 }
+  /roleplay/sessions:
+    get:
+      tags: [Roleplay]
+      summary: 当前用户的独立扮演存档
+      parameters:
+        - { in: query, name: personaId, schema: { type: string, format: uuid }, description: 不传则返回全部，包括人设已删除的存档 }
+      responses:
+        '200':
+          description: 存档数组
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/RoleplaySession' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Roleplay]
+      summary: 创建独立双人聊天存档，复制当前人设
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [personaId]
+              properties:
+                personaId: { type: string, format: uuid }
+                title: { type: string, minLength: 1, maxLength: 200 }
+                hostCharacterId: { type: string, format: uuid, description: 可选，仅用于所属角色用量记账，不注入该角色人设或记忆 }
+      responses:
+        '200':
+          description: 新存档
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleplaySession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 人设或宿主角色不属于当前用户 }
+  /roleplay/sessions/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Roleplay]
+      summary: 读取存档和完整原文（已压缩原文仍保留）
+      responses:
+        '200':
+          description: 存档详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/RoleplaySession' }
+                  - type: object
+                    required: [messages]
+                    properties:
+                      messages: { type: array, items: { $ref: '#/components/schemas/RoleplayMessage' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 存档不存在或不属于当前用户 }
+    patch:
+      tags: [Roleplay]
+      summary: 重命名存档
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200':
+          description: 存档
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleplaySession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 存档不存在或不属于当前用户 }
+        '409': { description: 存档正在处理另一请求 }
+    delete:
+      tags: [Roleplay]
+      summary: 删除存档与其中消息，并解除该存档QQ绑定
+      responses:
+        '200': { description: '{ok:true}' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 存档不存在或不属于当前用户 }
+        '409': { description: 存档正在处理另一请求 }
+  /roleplay/sessions/{id}/messages:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Roleplay]
+      summary: 独立扮演聊天，不调用记忆助手、语境助手或成长任务
+      description: 用户原文先保存。相同 requestId 重试返回已有回答或续做未完成请求，不重复追加消息；未回答请求完成前不同请求返回409。上下文按预算自动压缩，失败不删除原文或无声跳过历史。来源由服务端确定为web，QQ入口内部设置qq。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content, requestId]
+              properties:
+                content: { type: string, minLength: 1, maxLength: 40000 }
+                requestId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 本轮消息及最新存档
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session, userMessage, assistantMessage, replayed]
+                properties:
+                  session: { $ref: '#/components/schemas/RoleplaySession' }
+                  userMessage: { $ref: '#/components/schemas/RoleplayMessage' }
+                  assistantMessage: { $ref: '#/components/schemas/RoleplayMessage' }
+                  replayed: { type: boolean }
+        '400': { description: 输入无效或单条消息超出预算 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 存档不存在或不属于当前用户 }
+        '409': { description: 并发请求、请求内容与原requestId冲突或存在未回答消息 }
+        '502': { description: 模型或压缩失败，用户原文保留，可用相同requestId重试 }
+        '503': { description: 扮演模型尚未配置 }
+  /roleplay/sessions/{id}/apply-persona:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Roleplay]
+      summary: 显式应用最新人设到存档，不改写聊天原文
+      responses:
+        '200':
+          description: 更新人设快照后的存档
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleplaySession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 存档或原人设不存在或不属于当前用户 }
+        '409': { description: 存档正在处理另一请求 }
+  /roleplay/sessions/{id}/compress:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Roleplay]
+      summary: 使用扮演模型压缩较早聊天，保留完整原文
+      responses:
+        '200':
+          description: 更新摘要后的存档
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleplaySession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 存档不存在或不属于当前用户 }
+        '409': { description: 存档正在处理另一请求 }
+        '502': { description: 压缩失败，旧摘要和聊天原文保留 }
+        '503': { description: 扮演模型尚未配置 }
+  /local/browser/observe:
+    post:
+      tags: [LocalObserve]
+      summary: 独立浏览器只读观察
+      description: 仅管理员，复用本机 Chrome/Edge 的程序但使用全新无登录会话。页面资源只允许指定来源的 GET；跨来源、POST、私网、WebSocket、子页面、弹窗和下载被阻止。每次观察结束关闭浏览器，不持久保存截图或 Cookie。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, maxLength: 2048, format: uri }
+      responses:
+        '200':
+          description: 当前视口截图和渲染后的可见文字
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, title, text, truncated, links, screenshot, blockedRequests, limitation]
+                properties:
+                  url: { type: string }
+                  title: { type: string }
+                  text: { type: string, maxLength: 6000 }
+                  truncated: { type: boolean }
+                  links: { type: array, maxItems: 8, items: { type: string } }
+                  screenshot: { type: string, description: PNG data URL，仅返回给发起观察的管理员 }
+                  blockedRequests: { type: integer }
+                  limitation: { type: string }
+        '400':
+          description: 非公开地址、跨来源跳转、浏览器未安装或观察失败
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 非管理员
+        '409':
+          description: 另一项观察尚未结束
   /characters/{id}/chat/local-results:
     get:
       tags: [Characters]
@@ -7451,6 +7731,79 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    RoleplaySettingsInput:
+      type: object
+      properties:
+        apiBaseUrl: { type: string, format: uri, description: OpenAI兼容模型接口地址 }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        apiKey: { type: string, maxLength: 8000, writeOnly: true, description: 留空沿用；服务端加密保存 }
+        clearApiKey: { type: boolean, description: 显式清除密钥，不能同时提供非空apiKey }
+        thinking: { type: boolean }
+        temperature: { type: number, minimum: 0, maximum: 2 }
+        maxTokens: { type: integer, minimum: 256, maximum: 32768 }
+        contextWindowTokens: { type: integer, description: 供应商模型上下文容量 }
+        contextBudgetTokens: { type: integer, description: 输入预算，必须为输出及安全余量留空间 }
+        recentMessageLimit: { type: integer, description: 保留的近期原文条数；更早内容进入摘要 }
+    RoleplaySettings:
+      type: object
+      required: [apiBaseUrl, model, thinking, temperature, maxTokens, contextWindowTokens, contextBudgetTokens, recentMessageLimit, hasApiKey]
+      properties:
+        apiBaseUrl: { type: string }
+        model: { type: string }
+        thinking: { type: boolean }
+        temperature: { type: number }
+        maxTokens: { type: integer }
+        contextWindowTokens: { type: integer }
+        contextBudgetTokens: { type: integer }
+        recentMessageLimit: { type: integer }
+        hasApiKey: { type: boolean }
+    RoleplayPersonaInput:
+      type: object
+      required: [name, prompt]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        prompt: { type: string, minLength: 1, maxLength: 40000 }
+        opening: { type: string, maxLength: 12000 }
+    RoleplayPersona:
+      allOf:
+        - { $ref: '#/components/schemas/RoleplayPersonaInput' }
+        - type: object
+          required: [id, opening, createdAt, updatedAt]
+          properties:
+            id: { type: string, format: uuid }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    RoleplaySession:
+      type: object
+      required: [id, personaId, title, personaSnapshot, summary, summaryThrough, messageCount, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        personaId: { type: string, format: uuid, nullable: true }
+        hostCharacterId: { type: string, format: uuid, nullable: true }
+        title: { type: string }
+        personaSnapshot:
+          type: object
+          required: [name, prompt, opening]
+          properties:
+            name: { type: string }
+            prompt: { type: string }
+            opening: { type: string }
+        summary: { type: string, description: 仅用于本存档上下文压缩，不属于长期记忆 }
+        summaryThrough: { type: integer, description: 摘要覆盖的最后一条消息sequence }
+        messageCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RoleplayMessage:
+      type: object
+      required: [id, sequence, role, content, requestId, source, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        sequence: { type: integer }
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string }
+        requestId: { type: string, nullable: true }
+        source: { type: string, enum: [web, qq, opening] }
+        createdAt: { type: string, format: date-time }
     LocalCommandRequest:
       type: object
       required: [id, rootId, command, args, cwd, reason, status, createdAt, root]

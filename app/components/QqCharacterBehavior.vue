@@ -1622,8 +1622,8 @@ async function tryGroupOnce() {
 .beh-btn:hover:not(:disabled) .el-icon { color: var(--brand); }
 .beh-btn.is-lead { background: var(--brand-soft); color: var(--brand-strong); }
 .beh-btn.is-lead:hover:not(:disabled) { background: var(--brand-line); }
-.beh-btn.is-primary { height: 32px; background: var(--brand-btn); padding: 0 14px; color: #fff; }
-.beh-btn.is-primary:hover:not(:disabled) { background: var(--brand-btn-h); color: #fff; }
+.beh-btn.is-primary { height: 32px; background: var(--brand-btn); padding: 0 14px; color: var(--surface); }
+.beh-btn.is-primary:hover:not(:disabled) { background: var(--brand-btn-h); color: var(--surface); }
 .beh-btn:disabled { opacity: .5; cursor: not-allowed; }
 
 @media (max-width: 860px) {

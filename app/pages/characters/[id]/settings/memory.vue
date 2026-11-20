@@ -511,7 +511,7 @@ watch(id, () => void loadSettings());
 .slider-labels{display:flex;justify-content:space-between;margin-top:-6px;color:var(--faint);font-size:12px}
 .quick-days{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
 /* 粉色底上用品牌实色作为选中态，比黑底更协调 */
-.quick-days .chip.on{border-color:var(--brand-btn);background:var(--brand-btn);color:#fff}
+.quick-days .chip.on{border-color:var(--brand-btn);background:var(--brand-btn);color:var(--surface)}
 
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 18px}
 /* 开关说明现在是多行（同时管阶段总结与忆泡），居中会把开关吊在半空，改成顶对齐；

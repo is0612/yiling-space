@@ -44,6 +44,7 @@ import { requireActor } from "../../../utils/auth";
 import { auditLocalObserve, listLocalDirectory, listLocalObserveRoots, readLocalTextFile, searchLocalProject } from "../../../utils/local-observe";
 import { createLocalWriteRequest } from "../../../utils/local-write";
 import { createLocalTask } from "../../../utils/local-tasks";
+import { observePublicBrowser } from "../../../utils/browser-observe";
 import { readLocalContinuationTask } from "../../../utils/local-chat-results";
 import { createGitBranchRequest, createLocalCommandRequest } from "../../../utils/local-command";
 import { readGitStatus } from "../../../utils/local-git";
@@ -512,6 +513,16 @@ export default defineEventHandler(async (event) => {
     return root;
   };
   const localReadOnlyTools = isAdmin ? {
+    observeBrowser: async (url: string) => {
+      try {
+        const { screenshot: _image, ...result } = await observePublicBrowser(url);
+        auditLocalObserve(ownerId, "browser.observe", { source: "chat", origin: new URL(result.url).origin, status: "success" });
+        return result;
+      } catch (error) {
+        auditLocalObserve(ownerId, "browser.observe", { source: "chat", status: "failed", code: error instanceof Error ? error.message : "BROWSER_OBSERVE_FAILED" });
+        throw error;
+      }
+    },
     ...(localTaskId && existingConversation ? { readLocalTask: async () => {
       const result = await readLocalContinuationTask(ownerId, characterId, existingConversation.id, localTaskId);
       continuationRead = true;

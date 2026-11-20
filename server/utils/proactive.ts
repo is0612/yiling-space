@@ -173,6 +173,8 @@ export async function findDeliveryTarget(characterId: string): Promise<DeliveryT
   if (!conversation?.channelBindingId || !conversation.externalConversationId) return null;
   const userId = conversation.externalConversationId.slice(2);
   if (!userId) return null;
+  // Do not interrupt the same private window with the daily persona during roleplay.
+  if (await prisma.roleplayRoute.findUnique({ where: { bindingId_externalConversationId: { bindingId: conversation.channelBindingId, externalConversationId: conversation.externalConversationId } }, select: { id: true } })) return null;
 
   const connections = await loadOnebotConnections();
   const connection = connections.find((item) => item.bindings.some((binding) => binding.id === conversation.channelBindingId));
@@ -291,6 +293,8 @@ async function deliverIntent(
     return { ok: false, reason: "empty_reply" };
   }
 
+  // The owner may have entered roleplay while the daily reply was generating.
+  if (await prisma.roleplayRoute.findUnique({ where: { bindingId_externalConversationId: { bindingId: target.bindingId, externalConversationId: `c:${target.userId}` } }, select: { id: true } })) return { ok: false, reason: "roleplay_active" };
   try {
     await sendOnebotPrivateMessage(target.config, target.userId, content);
   } catch (error) {

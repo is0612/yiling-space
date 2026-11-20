@@ -935,7 +935,7 @@ watch(id, (next, previous) => {
 /* 模型状态：按角色配置的，所以挂在角色这一行；可点进设置 */
 .model-chip{display:inline-flex;flex:none;align-items:center;gap:5px;border:0;border-radius:999px;background:var(--surface-3);padding:4px 10px;color:var(--text-2);font-size:12px;font-weight:600;cursor:pointer;transition:background .14s var(--ease),color .14s var(--ease)}
 .model-chip:hover{background:var(--surface-2);color:var(--text)}
-.model-chip.is-warn .el-icon{color:#8f5c05}
+.model-chip.is-warn .el-icon{color:var(--amber)}
 .model-chip .el-icon{font-size:12px}
 .model-chip-go{color:var(--dim);font-weight:400}
 .model-chip:hover .model-chip-go{text-decoration:underline}

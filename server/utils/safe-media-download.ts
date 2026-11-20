@@ -333,10 +333,13 @@ export async function downloadSafeMedia(
     headers?: Record<string, string>;
     requiredMimePrefix?: string;
     allowedMimeTypes?: string[];
+    /** Additional authorization for the initial URL and every redirect, before DNS or connection. */
+    authorizeUrl?: (url: URL) => void;
   },
 ): Promise<{ buffer: Buffer; mime: string; finalUrl: string; status: number }> {
   const { prefix, maxBytes, timeoutMs, headers, requiredMimePrefix, allowedMimeTypes } = options;
   let currentUrl = validateMediaUrl(rawUrl, prefix);
+  options.authorizeUrl?.(currentUrl);
   const signal = AbortSignal.timeout(timeoutMs);
 
   // 预检查给出清晰错误；真正建立连接时还会通过 Agent 的 lookup 再校验并固定 IP。
@@ -390,6 +393,7 @@ export async function downloadSafeMedia(
           }
           throw new Error(`${prefix}_DOWNLOAD_FAILED`);
         }
+        options.authorizeUrl?.(next);
         try {
           await assertPublicMediaHost(next.hostname);
         } catch (error) {

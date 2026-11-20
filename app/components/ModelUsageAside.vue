@@ -37,6 +37,8 @@ const KIND_LABELS: Record<string, string> = {
   "context-assistant": "语境助手",
   "knowledge-assistant": "知识处理助手",
   "social-relationship-assistant": "关系评估助手",
+  "roleplay-chat": "扮演聊天",
+  "roleplay-summary": "扮演压缩",
   other: "其他",
 };
 </script>

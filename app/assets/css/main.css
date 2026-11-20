@@ -13,6 +13,9 @@
   /* ── 面 ── */
   --bg: #f4f6f9;
   --surface: #ffffff;
+  /* 实心品牌色块上的文字。它不是「白」，是一个语义角色：
+     换主题（比如深色或护眼）时该跟着变的是它，不是 --surface。 */
+  --on-brand: #ffffff;
   --surface-2: #f8f9fb;
   --surface-3: #f1f3f7;
   --line: #e6e9ef;

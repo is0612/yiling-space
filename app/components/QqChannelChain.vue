@@ -500,7 +500,7 @@ const fix = computed(() => {
   cursor: pointer;
   transition: background .14s var(--ease), color .14s var(--ease);
 }
-.fix-act:hover { background: var(--red); color: #fff; }
+.fix-act:hover { background: var(--red); color: var(--surface); }
 .fix-act:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
 /* 「打开面板」是自动挂不上时的退路，不该和「自动挂上」抢同一档视觉重量 */
 .fix-act.is-quiet { background: transparent; color: var(--dim); }

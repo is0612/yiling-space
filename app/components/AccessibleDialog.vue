@@ -213,11 +213,11 @@ function onKeydown(event: KeyboardEvent) {
 .dialog-actions :deep(button.primary) {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-brand);
 }
 .dialog-actions :deep(button.danger) {
   border-color: var(--red, #c92b41);
   background: var(--red, #c92b41);
-  color: #fff;
+  color: var(--on-brand);
 }
 </style>

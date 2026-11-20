@@ -474,7 +474,7 @@ onMounted(() => {
 }
 .tlink:hover { background: var(--surface-3); color: var(--brand-strong); }
 .tlink.is-danger:hover { background: var(--red-soft); color: var(--red); }
-.tlink.is-ok:hover { background: var(--green-soft); color: #0b7a54; }
+.tlink.is-ok:hover { background: var(--green-soft); color: var(--green); }
 
 /* ── 登录活动 ─────────────────────────────────────── */
 .sec-label { display: flex; align-items: baseline; gap: 8px; margin: var(--sp-5) 0 var(--sp-3); }

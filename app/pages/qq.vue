@@ -2299,7 +2299,7 @@ function copyInstallGuide() {
   background: var(--amber-soft);
   padding: var(--sp-3) var(--sp-4);
 }
-.reloadbar b { flex: none; color: #8f5c05; font-size: 14px; font-weight: 700; }
+.reloadbar b { flex: none; color: var(--amber); font-size: 14px; font-weight: 700; }
 .reloadbar p { min-width: 0; flex: 1; margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.6; }
 .reloadbar .btn { height: 32px; flex: none; border-color: transparent; background: var(--surface); }
 
@@ -2417,7 +2417,7 @@ function copyInstallGuide() {
   white-space: nowrap;
 }
 .mode.is-ambient { background: var(--brand-soft); color: var(--brand-strong); }
-.mode.is-todo { background: var(--amber-soft); color: #8f5c05; }
+.mode.is-todo { background: var(--amber-soft); color: var(--amber); }
 
 .quota {
   justify-self: end;
@@ -2636,9 +2636,9 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
 .run-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 0; }
 .run-state { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
 .run-state .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
-.run-state.is-on { color: #0b7a54; }
+.run-state.is-on { color: var(--green); }
 .run-state.is-on .dot { background: var(--green); }
-.run-state.is-warn { color: #8f5c05; }
+.run-state.is-warn { color: var(--amber); }
 .run-state.is-warn .dot { background: #d79a2b; }
 /* 「自动找到」标：路径不是用户填的就说一声，省得他以为自己填过 */
 .run-tag { margin-left: 2px; border-radius: 999px; background: var(--surface-2); padding: 1px 7px; color: var(--dim); font-size: 12px; }
@@ -2681,7 +2681,7 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
   border-radius: var(--radius-sm);
   background: var(--amber-soft);
   padding: 10px 12px;
-  color: #8f5c05;
+  color: var(--amber);
   font-size: 12px;
   line-height: 1.8;
 }
@@ -2729,7 +2729,7 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
 .endpoint-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .endpoint-copy b { color: var(--text); font-size: 14px; font-weight: 600; }
 .endpoint-copy > span { color: var(--dim); font-size: 12px; line-height: 1.5; }
-.endpoint-note { margin-top: 8px !important; color: #8f5c05 !important; font-size: 12px !important; }
+.endpoint-note { margin-top: 8px !important; color: var(--amber) !important; font-size: 12px !important; }
 
 /* 折叠：默认只露一句话，想动手再展开 */
 .step-more { margin-top: 10px; }
@@ -2792,7 +2792,7 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
   border-radius: var(--radius-sm);
   background: var(--amber-soft);
   padding: 8px 11px;
-  color: #8f5c05 !important;
+  color: var(--amber) !important;
   font-size: 12px !important;
   line-height: 1.7 !important;
 }
@@ -2898,7 +2898,7 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
   border-radius: var(--radius-sm);
   background: var(--amber-soft);
   padding: 8px 10px;
-  color: #8f5c05;
+  color: var(--amber);
   font-size: 12px;
   line-height: 1.7;
 }

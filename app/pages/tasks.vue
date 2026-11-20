@@ -764,8 +764,8 @@ onBeforeUnmount(() => {
 /* 页头按钮：次要动作是纯文字，hover 才出下划线；唯一主操作实心 */
 .tasks-a .btn { height: 36px; border: 0; background: none; box-shadow: none; padding: 0 10px; color: var(--text-2); border-radius: 8px; }
 .tasks-a .btn:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
-.tasks-a .btn.primary { background: var(--brand-btn); padding: 0 14px; color: #fff; }
-.tasks-a .btn.primary:hover { background: var(--brand-btn-h); color: #fff; text-decoration: none; }
+.tasks-a .btn.primary { background: var(--brand-btn); padding: 0 14px; color: var(--surface); }
+.tasks-a .btn.primary:hover { background: var(--brand-btn-h); color: var(--surface); text-decoration: none; }
 
 /* 失败提醒：整行可点，是页面上唯一的暖色块 */
 .alert-row {

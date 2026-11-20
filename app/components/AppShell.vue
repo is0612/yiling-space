@@ -106,6 +106,7 @@ const workspaceNavigation: NavigationItem[] = [
     href: "/journal",
     icon: Reading,
   },
+  { key: "roleplay", label: "角色扮演", href: "/roleplay", icon: MagicStick },
 ];
 
 /**

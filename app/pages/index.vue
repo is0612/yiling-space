@@ -830,11 +830,11 @@ onBeforeUnmount(() => {
 }
 .ov-a .hero-name-row .pill-rose {
   background: var(--red);
-  color: #fff;
+  color: var(--on-brand);
 }
 .ov-a .hero-name-row .pill-amber {
   background: var(--amber);
-  color: #fff;
+  color: var(--on-brand);
 }
 
 /* 角色状态：软底深字三档。类名独立于 pill-*，避开上面那套实心警报式样 */
@@ -885,12 +885,12 @@ onBeforeUnmount(() => {
 }
 .ov-a .btn.primary {
   background: var(--brand-btn);
-  color: #fff;
+  color: var(--on-brand);
   padding: 0 16px;
 }
 .ov-a .btn.primary:hover {
   background: var(--brand-btn-h);
-  color: #fff;
+  color: var(--on-brand);
   text-decoration: none;
 }
 

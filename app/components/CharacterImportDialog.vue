@@ -662,7 +662,7 @@ function formatExportedAt(value: string | null): string {
   font-size: 12px;
   line-height: 1.6;
 }
-.alert.is-error { background: #fdecef; color: var(--rose); }
+.alert.is-error { background: var(--red-soft); color: var(--rose); }
 
 .preview {
   margin-top: var(--sp-4);

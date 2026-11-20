@@ -115,7 +115,7 @@ const ABOUT_ROWS = [
 .status-row dt { color: var(--text-2); font-size: 14px; line-height: 1.5; }
 .status-row dd { margin: 0; color: var(--dim); font-size: 12px; text-align: right; }
 /* 接上了的那一项给绿色文字：圆点之外再给一层文字信号，不只靠颜色区分 */
-.status-row dd.is-live { color: #0b7a54; font-weight: 600; }
+.status-row dd.is-live { color: var(--green); font-weight: 600; }
 
 .aside-hint { margin: 14px 0 0; border-top: 1px solid var(--surface-3); padding-top: 12px; color: var(--dim); font-size: 12px; line-height: 1.75; }
 
@@ -129,7 +129,7 @@ const ABOUT_ROWS = [
   place-items: center;
   border-radius: 8px;
   background: var(--brand-btn);
-  color: #fff;
+  color: var(--on-brand);
   font-size: 14px;
   font-weight: 700;
 }

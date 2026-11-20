@@ -10,6 +10,7 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { dataPath } from "../../data-dir";
 import { getPrisma } from "../../prisma";
+import { handleRoleplayChannel } from "../../roleplay-channel";
 import { ensureGroupMemberIdentity } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
@@ -1634,6 +1635,22 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     binding: OnebotBindingRecord,
   ): Promise<OnebotHandleOutcome> => {
     const sendReply = createReplySender(record.config, event);
+
+    // Isolate roleplay before daily storage, growth and Qzone approval commands.
+    if (event.messageType === "private") {
+      const roleplayResult = await handleRoleplayChannel({
+        platform: ONEBOT_PLATFORM,
+        eventType: "PRIVATE_MESSAGE",
+        characterId: binding.characterId,
+        bindingId: binding.id,
+        externalConversationId: event.conversationKey,
+        externalMessageId: event.messageId,
+        authorUid: event.userId,
+        content: event.content,
+        sendReply,
+      });
+      if (roleplayResult) return roleplayResult;
+    }
 
     const canManageAnnouncement = record.groupAnnouncementEnabled
       && event.messageType === "group"

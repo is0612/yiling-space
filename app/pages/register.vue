@@ -150,7 +150,7 @@ async function submit() {
 .login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
 .login-mark {
   display: flex; width: 44px; height: 44px; align-items: center; justify-content: center;
-  border-radius: var(--radius); background: var(--grad-brand); box-shadow: 0 14px 30px -16px rgba(217, 74, 118, .75); color: #fff;
+  border-radius: var(--radius); background: var(--grad-brand); box-shadow: 0 14px 30px -16px rgba(217, 74, 118, .75); color: var(--surface);
   font-size: 20px; font-weight: 700;
 }
 .login-title { color: var(--text); font-size: 18px; font-weight: 700; letter-spacing: -.02em; }

@@ -2216,3 +2216,97 @@ model LocalCommandRequest {
   @@index([taskId, createdAt])
   @@map("local_command_requests")
 }
+
+/// Lightweight roleplay is deliberately isolated from character growth and memory.
+model RoleplaySetting {
+  ownerId String @id @db.Uuid
+  apiBaseUrl String @default("https://api.deepseek.com")
+  model String @default("deepseek-flash")
+  apiKeyCiphertext String? @db.Text
+  thinking Boolean @default(false)
+  temperature Float @default(0.8)
+  maxTokens Int @default(4096)
+  contextWindowTokens Int @default(65536)
+  contextBudgetTokens Int @default(24000)
+  recentMessageLimit Int @default(40)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  @@map("roleplay_settings")
+}
+
+model RoleplayPersona {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  name String @db.VarChar(100)
+  prompt String @db.Text
+  opening String @default("") @db.Text
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  sessions RoleplaySession[]
+  @@index([ownerId, updatedAt])
+  @@map("roleplay_personas")
+}
+
+model RoleplaySession {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  personaId String? @db.Uuid
+  hostCharacterId String? @db.Uuid
+  title String @db.VarChar(200)
+  personaSnapshot Json @db.JsonB
+  summary String @default("") @db.Text
+  summaryThrough Int @default(0)
+  messageCount Int @default(0)
+  leaseToken String? @db.Uuid
+  leaseUntil DateTime? @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  persona RoleplayPersona? @relation(fields: [personaId], references: [id], onDelete: SetNull)
+  messages RoleplayMessage[]
+  routes RoleplayRoute[]
+  @@index([ownerId, updatedAt])
+  @@map("roleplay_sessions")
+}
+
+model RoleplayMessage {
+  id String @id @default(uuid()) @db.Uuid
+  sessionId String @db.Uuid
+  sequence Int
+  role String @db.VarChar(12)
+  content String @db.Text
+  requestId String? @db.VarChar(100)
+  source String @default("web") @db.VarChar(30)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  session RoleplaySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@unique([sessionId, sequence])
+  @@unique([sessionId, requestId, role])
+  @@map("roleplay_messages")
+}
+
+model RoleplayRoute {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  bindingId String @db.Uuid
+  externalConversationId String @db.VarChar(255)
+  userId String @db.Uuid
+  characterId String @db.Uuid
+  sessionId String @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+  session RoleplaySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@unique([bindingId, externalConversationId])
+  @@index([ownerId])
+  @@map("roleplay_routes")
+}
+
+/// Command receipts make QQ redelivery safe without adding commands to daily memory.
+model RoleplayChannelReceipt {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  bindingId String @db.Uuid
+  externalMessageId String @db.VarChar(255)
+  reply String @db.Text
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  @@unique([bindingId, externalMessageId])
+  @@index([ownerId, createdAt])
+  @@map("roleplay_channel_receipts")
+}

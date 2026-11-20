@@ -1806,10 +1806,10 @@ watch(id, () => {
 
 /* 记录类型标记：单字 + 软底深字（原来借用 pill-* 的底色，这里补齐前景色） */
 .timeline-marker{font-size:12px;font-weight:700}
-.timeline-marker.pill-green{background:var(--green-soft);color:#0b7a54}
+.timeline-marker.pill-green{background:var(--green-soft);color:var(--green)}
 .timeline-marker.pill-purple{background:var(--brand-soft);color:var(--brand-strong)}
 .timeline-marker.pill-blue{background:var(--blue-soft);color:#3d4dab}
-.timeline-marker.pill-amber{background:var(--amber-soft);color:#8f5c05}
+.timeline-marker.pill-amber{background:var(--amber-soft);color:var(--amber)}
 .timeline-marker.pill-gray{background:var(--surface-3);color:var(--text-2)}
 
 /* ── 回收站弹窗 ─────────────────────────────────────── */

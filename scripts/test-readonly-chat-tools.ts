@@ -136,5 +136,12 @@ try {
   assert.match(await gitTools.call("inspect_local_git", '{"root":"project","file":"notes.txt"}'), /invalid_arguments/);
   assert.match(await gitTools.call("propose_git_branch", '{"root":"project","branch":"work/notes","reason":"test"}'), /PENDING_APPROVAL/);
   assert.match(await createReadOnlyChatTools({}).call("inspect_local_git", '{"root":"project"}'), /invalid_tool_call/);
+  let observed = 0;
+  const browserTools = createReadOnlyChatTools({ observeBrowser: async url => { observed++; return { url, text: "rendered fixture" }; } }, "请观察 https://example.com/read");
+  assert.match(await browserTools.call("observe_public_browser", '{"url":"https://example.com/read?secret=private"}'), /tool_unavailable/);
+  assert.equal(observed, 0);
+  assert.match(await browserTools.call("observe_public_browser", '{"url":"https://example.com/read"}'), /rendered fixture/);
+  assert.equal(observed, 1);
+  assert.match(await createReadOnlyChatTools({}).call("observe_public_browser", '{"url":"https://example.com/read"}'), /invalid_tool_call/);
   console.log("Read-only tools: whitelist, argument validation, budgets, cached queries, native continuation, reasoning, usage, unsupported-provider fallback and local tools passed (mock only).");
 } finally { globalThis.fetch = original; }

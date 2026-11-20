@@ -1521,7 +1521,7 @@ onMounted(() => load(1));
   border-radius: 9px;
   background: var(--brand);
   padding: 0 5px;
-  color: #fff;
+  color: var(--on-brand);
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
@@ -1615,7 +1615,7 @@ onMounted(() => load(1));
   transition: background .14s var(--ease), color .14s var(--ease);
 }
 .sel-del:hover { color: var(--red-text); }
-.sel-del.is-armed { background: var(--red); color: #fff; }
+.sel-del.is-armed { background: var(--red); color: var(--surface); }
 .sel-del.is-armed:hover { background: #b32136; }
 .sel-del:disabled { cursor: default; }
 
@@ -1786,7 +1786,7 @@ onMounted(() => load(1));
 .alias-hint { margin: 5px 0 0; color: var(--dim); font-size: 12px; line-height: 1.6; }
 .alias-actions { display: flex; gap: 8px; margin-top: 7px; }
 .alias-actions button { height: 26px; border: 0; border-radius: var(--radius-xs); padding: 0 11px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.a-save { background: var(--brand-btn); color: #fff; }
+.a-save { background: var(--brand-btn); color: var(--surface); }
 .a-save:hover { background: var(--brand-strong); }
 .a-save:disabled { opacity: .5; cursor: default; }
 .a-cancel { background: none; color: var(--dim); }
@@ -1918,7 +1918,7 @@ onMounted(() => load(1));
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--surface);
   content: "";
   transition: transform .16s var(--ease);
 }
@@ -2012,7 +2012,7 @@ onMounted(() => load(1));
 .suggest-actions { display: flex; flex: none; align-items: center; gap: 8px; }
 .suggest-actions button { height: 28px; border: 0; border-radius: 6px; padding: 0 13px; font-size: 12px; font-weight: 600; cursor: pointer; }
 .suggest-actions button:disabled { opacity: .5; cursor: default; }
-.suggest-ok { background: var(--brand-btn); color: #fff; }
+.suggest-ok { background: var(--brand-btn); color: var(--surface); }
 .suggest-no { background: none; color: var(--dim); }
 .suggest-no:hover { color: var(--text); }
 
@@ -2065,7 +2065,7 @@ onMounted(() => load(1));
 }
 .del-cancel { background: none; color: var(--dim); }
 .del-cancel:hover { color: var(--text); }
-.del-ok { margin-left: 8px; background: var(--red); color: #fff; }
+.del-ok { margin-left: 8px; background: var(--red); color: var(--surface); }
 .del-ok:disabled { cursor: default; opacity: .6; }
 
 /* ── 响应式收尾 ── */

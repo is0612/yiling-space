@@ -172,6 +172,7 @@ const taskBusy = ref(false);
 const taskIsClosed = computed(() => ["CANCELLED", "SUCCEEDED", "FAILED"].includes(taskDetail.value?.status ?? ""));
 const commandVisible = ref(false);
 const gitVisible = ref(false);
+const browserVisible = ref(false);
 const commandLoading = ref(false);
 const commandRequests = ref<LocalCommandRequest[]>([]);
 const selectedCommand = ref<LocalCommandRequest | null>(null);
@@ -819,6 +820,7 @@ onMounted(async () => {
             >
               Git
             </el-button>
+            <el-button @click="browserVisible = true">网页观察</el-button>
             <el-button @click="openTasks()">
               任务档案
             </el-button>
@@ -1277,6 +1279,7 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
+    <BrowserObserveDialog v-model="browserVisible" />
     <LocalGitDialog
       v-if="selectedRoot"
       :key="selectedRoot.id"
