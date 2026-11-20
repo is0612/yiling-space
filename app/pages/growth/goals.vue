@@ -256,26 +256,27 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
 
 <template>
   <div class="goals-page">
-    <header class="page-heading">
-      <div><h1>把想做的事，一点一点往前推</h1><p>记录她想做的事、惦记的愿望，以及后来发生的进展。</p></div>
-      <div class="toolbar">
+    <!-- 页头的 h1 归顶栏（那里已经写着「愿望系统」），正文只留一句 lede 和动作。
+         原来 h1 之下还压着一块左侧带粉色竖线的「领域说明」两段话，再下面又一条 info 条 ——
+         两段话里「完成/暂停/放弃都由你确认」「模型不会自动完成、不会创建定时任务」，
+         在候选弹窗和进展弹窗里各说过一遍，页面上再摆一遍只是把人往后推。 -->
+    <PageHeader description="记录她想做的事、惦记的愿望，以及后来发生的进展。">
+      <template #actions>
         <el-button
           :disabled="!characterId"
           @click="openEditor(null, 'sources')"
         >
           从经历提出候选
-        </el-button><el-button
+        </el-button>
+        <el-button
           type="primary"
           :disabled="!characterId"
           @click="openEditor()"
         >
           手动添加目标 / 愿望
         </el-button>
-      </div>
-    </header>
-    <section class="domain-note">
-      <p><strong>愿望可以慢慢长成目标。</strong>先记录想做的事，再为它追加实际进展。完成、暂停和放弃都由你明确确认。</p><p>模型只能提出候选，不会自动宣布完成，也不会创建外部行动或定时任务。</p>
-    </section>
+      </template>
+    </PageHeader>
     <el-empty
       v-if="!characterId"
       description="请先在顶栏选择一个角色。"
@@ -284,12 +285,6 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
       v-else
       class="card goals-workspace"
     >
-      <el-alert
-        title="来源是观察依据，候选需要人工确认才开始推进。每条进展由你手动记录，模型不会自动完成目标。"
-        type="info"
-        :closable="false"
-        show-icon
-      />
       <div class="filters">
         <el-radio-group
           :model-value="status"
@@ -833,16 +828,12 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
 
 <style scoped>
 .goals-page { display: grid; gap: 22px; padding: 28px; color: var(--text-2); }
-.page-heading, .record-heading, .record-footer, .filters, .toolbar, .pagination, .related-links { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.page-heading { align-items: flex-start; }
-h1 { margin: 8px 0 10px; font-size: 25px; }
-h2 { margin: 0; font-size: 17px; }
-h3 { font-size: 15px; }
+.record-heading, .record-footer, .filters, .toolbar, .pagination, .related-links { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+h1 { margin: 8px 0 10px; font-size: 22px; }
+h2 { margin: 0; font-size: 18px; }
+h3 { font-size: 16px; }
 p { font-size: 14px; line-height: 1.7; }
-.page-heading p { color: var(--dim); margin: 0; }
-.domain-note { border-left: 3px solid var(--brand); padding: 2px 18px; }
-.domain-note p { margin: 6px 0; }
-.related-links { justify-content: flex-start; font-size: 13px; margin-top: 10px; }
+.related-links { justify-content: flex-start; font-size: 14px; margin-top: 10px; }
 .related-links a { color: var(--brand-strong); }
 .goals-workspace { padding: 22px; border: 0; box-shadow: none; background: var(--surface); border-radius: 12px; display: grid; gap: 20px; min-width: 0; }
 .filters { justify-content: flex-start; }
@@ -856,14 +847,14 @@ p { font-size: 14px; line-height: 1.7; }
 .muted { color: var(--dim); font-size: 12px; line-height: 1.7; }
 .record-footer { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
 .source-details { padding: 12px; border-radius: 8px; background: var(--surface); }
-.source-details summary { cursor: pointer; font-size: 13px; color: var(--dim); }
+.source-details summary { cursor: pointer; font-size: 14px; color: var(--dim); }
 .source-snapshot { margin-top: 12px; padding: 12px; border-radius: 8px; background: var(--surface); }
-.source-snapshot strong { font-size: 13px; }
+.source-snapshot strong { font-size: 14px; }
 .source-snapshot p { margin: 8px 0; }
 .source-picker { border-top: 1px solid var(--line); padding-top: 18px; margin-bottom: 18px; }
 .source-list { min-height: 100px; max-height: 320px; overflow: auto; margin: 10px 0; }
 .source-option { padding: 12px 8px; border-bottom: 1px solid var(--line); }
-.source-option p { margin: 5px 0; font-size: 13px; }
+.source-option p { margin: 5px 0; font-size: 14px; }
 .source-option :deep(.el-checkbox) { height: auto; max-width: 100%; }
 .source-option :deep(.el-checkbox__label) { white-space: normal; overflow-wrap: anywhere; }
 .chosen-sources { display: flex; flex-wrap: wrap; gap: 8px; }

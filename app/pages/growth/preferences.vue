@@ -258,23 +258,27 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
 
 <template>
   <div class="preferences-page">
-    <header class="page-heading">
-      <div><h1>她自己的喜好与兴趣</h1><p>记录她喜欢什么、避开什么，以及这些偏好为什么形成。主人的喜好仍保留在记忆中。</p></div>
-      <div class="toolbar">
+    <!-- 页头的 h1 归顶栏（那里已经写着「偏好系统」），正文只留一句 lede 和动作，
+         和其他十四个页面同一套 PageHeader 结构。
+         原来这里还有一条常驻 info 条，讲「来源只提供依据 / 确认后才生效 / 停用后不再用于对话」，
+         这三件事分别已经在候选弹窗、保存按钮文案和停用确认弹窗里说过，不必天天摆在页面上。 -->
+    <PageHeader description="记录她喜欢什么、避开什么，以及这些偏好为什么形成。">
+      <template #actions>
         <el-button
           :disabled="!characterId"
           @click="openEditor(null, 'sources')"
         >
           从经历提出候选
-        </el-button><el-button
+        </el-button>
+        <el-button
           type="primary"
           :disabled="!characterId"
           @click="openEditor()"
         >
           手动添加偏好
         </el-button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
     <el-empty
       v-if="!characterId"
       description="请先在顶栏选择一个角色。"
@@ -283,12 +287,6 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
       v-else
       class="card preferences-workspace"
     >
-      <el-alert
-        title="来源提供依据，不自动证明她的喜恶。经历候选需要你填写主题与原因，确认后才会生效；停用后不再用于对话。"
-        type="info"
-        :closable="false"
-        show-icon
-      />
       <div class="filters">
         <el-radio-group
           :model-value="status"
@@ -714,14 +712,12 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
 
 <style scoped>
 .preferences-page { display: grid; gap: 22px; padding: 28px; color: var(--text-2); }
-.page-heading, .record-heading, .record-footer, .filters, .toolbar, .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.page-heading { align-items: flex-start; }
+.record-heading, .record-footer, .filters, .toolbar, .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .eyebrow { color: #728097; font-size: 12px; }
-h1 { margin: 8px 0 10px; font-size: 25px; }
-h2 { margin: 0; font-size: 17px; }
-h3 { font-size: 15px; }
+h1 { margin: 8px 0 10px; font-size: 22px; }
+h2 { margin: 0; font-size: 18px; }
+h3 { font-size: 16px; }
 p { font-size: 14px; line-height: 1.7; }
-.page-heading p { color: #758094; margin: 0; }
 .preferences-workspace { padding: 22px; border: 0; box-shadow: none; background: var(--surface); border-radius: 12px; display: grid; gap: 20px; }
 .filters { justify-content: flex-start; }
 .filters > .el-input { flex: 1; min-width: 180px; max-width: 330px; }
@@ -734,14 +730,14 @@ p { font-size: 14px; line-height: 1.7; }
 .muted { color: var(--dim); font-size: 12px; line-height: 1.7; }
 .record-footer { border-top: 1px solid #eef1f5; margin-top: 16px; padding-top: 12px; }
 .source-details { padding: 12px; border-radius: 8px; background: var(--surface-2); }
-.source-details summary { cursor: pointer; font-size: 13px; color: #536a86; }
+.source-details summary { cursor: pointer; font-size: 14px; color: #536a86; }
 .source-snapshot { margin-top: 12px; padding: 12px; border: 0; border-radius: 8px; background: var(--surface); }
-.source-snapshot strong { font-size: 13px; }
+.source-snapshot strong { font-size: 14px; }
 .source-snapshot p { margin: 8px 0; }
 .source-picker { border-top: 1px solid #e8edf4; padding-top: 18px; margin-bottom: 18px; }
 .source-list { min-height: 100px; max-height: 320px; overflow: auto; margin: 10px 0; }
 .source-option { padding: 12px 8px; border-bottom: 1px solid #edf0f5; }
-.source-option p { margin: 5px 0; font-size: 13px; }
+.source-option p { margin: 5px 0; font-size: 14px; }
 .source-option :deep(.el-checkbox) { height: auto; max-width: 100%; }
 .source-option :deep(.el-checkbox__label) { white-space: normal; overflow-wrap: anywhere; }
 .chosen-sources { display: flex; flex-wrap: wrap; gap: 8px; }

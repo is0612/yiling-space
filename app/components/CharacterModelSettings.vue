@@ -1799,7 +1799,7 @@ watch(id, () => void loadCharacter());
 .ms-a .field-help { max-width: 44em; margin: 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
 .knob .field-help { grid-area: help; }
 .brick-head-txt { min-width: 0; flex: 1; }
-.purpose-note { margin: 12px 0 0; color: var(--dim); font-size: 13px; line-height: 1.7; }
+.purpose-note { margin: 12px 0 0; color: var(--dim); font-size: 14px; line-height: 1.7; }
 .brick-heading { display: flex; align-items: center; gap: var(--sp-2); }
 .brick-title { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; letter-spacing: -.01em; line-height: 1.4; }
 .head-act { flex: none; }
@@ -1825,7 +1825,7 @@ watch(id, () => void loadCharacter());
 }
 .field-link:hover { color: var(--brand-btn-h); text-decoration: underline; }
 .field-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.field-link .el-icon { font-size: 13px; }
+.field-link .el-icon { font-size: 14px; }
 .field-ctl { width: 100%; }
 
 /* 模型下拉 + 「获取模型」同行：select 吃掉剩余宽度，按钮不吃 */

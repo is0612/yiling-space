@@ -818,7 +818,7 @@ function runCharacterCommand(command: string) {
   background: #fff8fa;
   color: var(--brand-strong);
 }
-.chars-a .char-tab .avatar { width: 38px; height: 38px; font-size: 15px; }
+.chars-a .char-tab .avatar { width: 38px; height: 38px; font-size: 16px; }
 .chars-a .tab-body { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
 .chars-a .tab-line { display: flex; min-width: 0; align-items: center; gap: var(--sp-2); }
 .chars-a .tab-name {
@@ -904,7 +904,7 @@ function runCharacterCommand(command: string) {
 .chars-a .d-row dd.is-missing { color: var(--rose); }
 /* 开关那一格：dd 默认是右对齐的文本，开关要自己居中 */
 .chars-a .d-row dd.d-switch { display: flex; align-items: center; }
-.chars-a .d-note { margin: var(--sp-2) 0 0; color: var(--faint); font-size: 11px; line-height: 18px; }
+.chars-a .d-note { margin: var(--sp-2) 0 0; color: var(--faint); font-size: 12px; line-height: 18px; }
 
 /* 空态：虚线框和渐变光晕都去掉，跟总览的引导块同一块白砖 */
 .chars-a .empty-block {

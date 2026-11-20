@@ -1617,7 +1617,7 @@ async function tryGroupOnce() {
   cursor: pointer;
   transition: background .14s var(--ease), color .14s var(--ease);
 }
-.beh-btn .el-icon { color: var(--faint); font-size: 13px; }
+.beh-btn .el-icon { color: var(--faint); font-size: 14px; }
 .beh-btn:hover:not(:disabled) { background: var(--surface-3); color: var(--brand-strong); }
 .beh-btn:hover:not(:disabled) .el-icon { color: var(--brand); }
 .beh-btn.is-lead { background: var(--brand-soft); color: var(--brand-strong); }

@@ -456,13 +456,13 @@ function formatCheckedAt(value: string | null) {
 <style scoped>
 .extraction-content { display: flex; flex-direction: column; gap: 20px; }
 .extraction-section-head, .extraction-job-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.extraction-section-head h3 { margin: 0; font-size: 15px; color: var(--text-2); }
+.extraction-section-head h3 { margin: 0; font-size: 16px; color: var(--text-2); }
 .extraction-summary { margin: 12px 0 6px; font-size: 14px; }
 .extraction-note { margin: 8px 0; font-size: 12px; line-height: 1.7; color: var(--dim); }
-.extraction-error { margin: 8px 0; font-size: 13px; line-height: 1.7; color: var(--el-color-danger); overflow-wrap: anywhere; }
+.extraction-error { margin: 8px 0; font-size: 14px; line-height: 1.7; color: var(--el-color-danger); overflow-wrap: anywhere; }
 .extraction-jobs { display: grid; gap: 10px; margin: 12px 0 0; padding: 0; list-style: none; }
 .extraction-job { padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
-.extraction-job-head { margin-bottom: 10px; font-size: 13px; }
+.extraction-job-head { margin-bottom: 10px; font-size: 14px; }
 .extraction-job-head strong { overflow-wrap: anywhere; }
 .extraction-job-head span { flex-shrink: 0; color: var(--dim); }
 @media (max-width: 600px) {

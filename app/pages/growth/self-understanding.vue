@@ -144,14 +144,11 @@ onBeforeUnmount(() => { sequence++; });
 
 <template>
   <main class="page-wrap self-page">
-    <header class="phead">
-      <div>
-        <h1>她怎样理解自己</h1>
-        <p class="sub">
-          只读 · 展示有界证据，时间为北京时间
-        </p>
-      </div>
-      <div class="acts">
+    <!-- h1 归顶栏（那里写着「自我认知」），正文用统一的 PageHeader。
+         原来标题下挂着一行「只读 · 展示有界证据，时间为北京时间」——
+         时区全站一致，不必每页说一遍；「只读」这一条留下。 -->
+    <PageHeader description="只读页面：只陈列有界证据，不改动任何设定。">
+      <template #actions>
         <el-button
           type="primary"
           :loading="loading"
@@ -160,8 +157,8 @@ onBeforeUnmount(() => { sequence++; });
         >
           刷新证据
         </el-button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <el-empty
       v-if="!characterId"
@@ -242,9 +239,6 @@ onBeforeUnmount(() => { sequence++; });
                 <span class="f-label">旧名</span>
                 <span class="f-value">—</span>
               </div>
-            </div>
-            <div class="legend">
-              — 表示角色数据中没有这条记录，不作为判断依据。
             </div>
           </div>
         </div>
@@ -462,10 +456,6 @@ onBeforeUnmount(() => { sequence++; });
 
 <style scoped>
 .self-page { max-width: 1280px; margin-inline: auto; }
-.phead { display: flex; align-items: flex-end; gap: 14px; }
-.phead h1 { margin: 0; font-size: 22px; line-height: 28px; letter-spacing: -.02em; }
-.phead .sub { margin: 4px 0 0; font-size: 12px; line-height: 18px; color: var(--dim); }
-.phead .acts { margin-left: auto; padding-bottom: 3px; }
 .su-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 
 .ident { height: 104px; margin-top: 12px; background: var(--surface); border-radius: 10px; padding: 12px 16px 14px; display: flex; flex-direction: column; }
@@ -483,7 +473,6 @@ onBeforeUnmount(() => { sequence++; });
 .field { width: 96px; }
 .f-label { display: block; font-size: 12px; line-height: 16px; color: var(--dim); }
 .f-value { display: block; font-size: 14px; line-height: 20px; margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.legend { font-size: 12px; line-height: 16px; color: var(--dim); }
 .l1 { margin-left: auto; flex: none; font-size: 14px; font-weight: 600; color: var(--brand-btn); }
 .l2 { font-size: 12px; font-weight: 600; color: var(--brand-btn); }
 .l3 { flex: none; font-size: 12px; color: var(--dim); text-align: right; }
@@ -508,8 +497,8 @@ onBeforeUnmount(() => { sequence++; });
 .domrow:hover:not(.dis) { background: var(--bg); }
 .domrow.on { background: var(--brand-soft); color: var(--brand-btn); font-weight: 600; }
 .domrow.on b { color: var(--brand-btn); }
-.domrow.dis { color: #8b94a3; cursor: default; }
-.domrow.dis b { color: #8b94a3; }
+.domrow.dis { color: var(--dim); cursor: default; }
+.domrow.dis b { color: var(--dim); }
 .b-note { margin-top: 12px; padding: 8px 16px 16px; font-size: 12px; line-height: 20px; color: var(--dim); }
 
 .quote { padding: 16px 16px 12px; flex: none; }
@@ -536,13 +525,13 @@ onBeforeUnmount(() => { sequence++; });
 .ev-body { min-width: 0; }
 .ev-t { margin: 0; font-size: 14px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev-meta { margin-top: 2px; font-size: 12px; line-height: 18px; color: var(--dim); font-variant-numeric: tabular-nums; }
-.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; background: #8b94a3; }
-.d-memory { background: #4c5fd5; }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; background: var(--dim); }
+.d-memory { background: var(--blue); }
 .d-experience { background: var(--brand); }
-.d-preferences { background: #b57c1f; }
-.d-language { background: #0b7a54; }
-.d-reflection { background: #4c5fd5; }
-.d-goals, .d-social, .d-knowledge { background: #8b94a3; }
+.d-preferences { background: var(--amber); }
+.d-language { background: var(--green); }
+.d-reflection { background: var(--blue); }
+.d-goals, .d-social, .d-knowledge { background: var(--dim); }
 
 .ev-foot { flex: none; min-height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--dim); }
 .ev-foot button { margin-left: auto; height: 24px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); font-size: 12px; color: var(--text-2); font-family: inherit; cursor: pointer; }

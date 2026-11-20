@@ -417,14 +417,14 @@ async function restoreRevision(revision: number) {
 .section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
 .section-heading h2 { margin: 6px 0; font-size: 22px; }
 .eyebrow { font-size: 12px; letter-spacing: 0.12em; color: var(--el-color-primary); }
-.topic-intro { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
+.topic-intro { margin: 0; color: var(--el-text-color-secondary); font-size: 14px; line-height: 1.6; }
 .topic-detail-loading { min-height: 260px; }
 .topic-list-item strong, .topic-detail-heading h3, .topic-detail-heading p, .topic-member strong, .topic-history-item strong { overflow-wrap: anywhere; }
 .topic-list-item { font: inherit; }
 .topic-list-item:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
 .topic-list-item:hover { border-color: var(--el-color-primary-light-5); }
 .topic-member > div, .topic-history-item > div { min-width: 0; }
-.topic-member .topic-member-preview { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; white-space: pre-line; font-size: 13px; line-height: 1.7; color: var(--el-text-color-regular); margin-top: 8px; }
+.topic-member .topic-member-preview { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; white-space: pre-line; font-size: 14px; line-height: 1.7; color: var(--el-text-color-regular); margin-top: 8px; }
 .topic-detail { padding: 18px; border: 1px solid var(--el-border-color-lighter); border-radius: 12px; background: var(--el-bg-color); }
 .topic-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .topic-layout { display: grid; grid-template-columns: minmax(210px, 0.8fr) minmax(0, 2fr); gap: 18px; min-height: 300px; }

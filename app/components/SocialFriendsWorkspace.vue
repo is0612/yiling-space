@@ -1553,7 +1553,7 @@ onMounted(() => load(1));
   padding: 0 12px;
   color: var(--dim);
 }
-.search input { width: 100%; min-width: 0; border: 0; background: none; color: var(--text); font-size: 13px; outline: none; }
+.search input { width: 100%; min-width: 0; border: 0; background: none; color: var(--text); font-size: 14px; outline: none; }
 .search input::placeholder { color: var(--faint); }
 .search:focus-within { outline: 2px solid var(--brand); outline-offset: 2px; }
 
@@ -1756,7 +1756,7 @@ onMounted(() => load(1));
   background: none;
   padding: 0 3px;
   color: var(--brand-strong);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
   opacity: .5;
   cursor: pointer;
@@ -1781,7 +1781,7 @@ onMounted(() => load(1));
 .alias-add:hover { color: var(--brand-strong); text-decoration: underline; text-underline-offset: 3px; }
 
 .alias-editor { margin-top: 9px; border-radius: var(--radius-sm); background: var(--surface-2); padding: 9px 11px 10px; }
-.alias-editor input { width: 100%; border: 0; background: none; color: var(--text); font-size: 13px; line-height: 1.6; outline: none; }
+.alias-editor input { width: 100%; border: 0; background: none; color: var(--text); font-size: 14px; line-height: 1.6; outline: none; }
 .alias-editor input::placeholder { color: var(--faint); }
 .alias-hint { margin: 5px 0 0; color: var(--dim); font-size: 12px; line-height: 1.6; }
 .alias-actions { display: flex; gap: 8px; margin-top: 7px; }
@@ -1844,7 +1844,7 @@ onMounted(() => load(1));
 /* 悬停只变色，不加下划线：「收起 / 调整」是个动作入口，不是正文链接，划一道线会显得像被选中 */
 .adjust:hover { color: var(--brand-strong); }
 .adjust:disabled { color: var(--faint); cursor: default; text-decoration: none; }
-.adjust .caret { font-size: 10px; line-height: 1; }
+.adjust .caret { font-size: 12px; line-height: 1; }
 
 /* 删除键：绝对定位不占行内宽度；DOM 里是卡片最后一个子元素，Tab 最后才到 */
 .del {
@@ -2001,12 +2001,12 @@ onMounted(() => load(1));
 .empty-reset:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* ── 待审备注弹窗 ── */
-.suggest-desc { margin: 0 0 12px; color: var(--dim); font-size: 13px; line-height: 1.7; }
-.suggest-loading, .suggest-empty { padding: 24px 0; color: var(--dim); font-size: 13px; text-align: center; }
+.suggest-desc { margin: 0 0 12px; color: var(--dim); font-size: 14px; line-height: 1.7; }
+.suggest-loading, .suggest-empty { padding: 24px 0; color: var(--dim); font-size: 14px; text-align: center; }
 .suggest-list { display: flex; max-height: 50vh; flex-direction: column; gap: 10px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 .suggest-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-radius: 12px; background: var(--surface-2); padding: 12px 14px; }
 .suggest-main { min-width: 0; flex: 1; }
-.suggest-alias { color: var(--text); font-size: 15px; font-weight: 700; }
+.suggest-alias { color: var(--text); font-size: 16px; font-weight: 700; }
 .suggest-for { margin-left: 8px; color: var(--dim); font-size: 12px; }
 .suggest-reason { margin: 5px 0 0; color: var(--text-2); font-size: 12px; line-height: 1.6; }
 .suggest-actions { display: flex; flex: none; align-items: center; gap: 8px; }

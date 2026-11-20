@@ -762,7 +762,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="local-observe">
+  <div class="page-wrap local-observe">
     <el-alert
       type="info"
       :closable="false"
@@ -930,7 +930,6 @@ onMounted(async () => {
           v-if="searchResult?.matches.length"
           :data="searchResult.matches"
           row-key="path"
-          size="small"
           class="result-table"
           @row-click="openSearchMatch"
         >
@@ -980,7 +979,6 @@ onMounted(async () => {
           v-loading="listing"
           :data="entries"
           row-key="path"
-          size="small"
           class="entry-table"
           @row-click="openEntry"
         >
@@ -1085,7 +1083,6 @@ onMounted(async () => {
         v-loading="manageLoading"
         :data="manageRoots"
         row-key="id"
-        size="small"
         class="manage-table"
       >
         <el-table-column
@@ -1595,11 +1592,12 @@ onMounted(async () => {
 <style scoped>
 .local-observe {
   display: flex;
+  min-width: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--sp-4);
 }
 .observe-card {
-  border-radius: 14px;
+  border-radius: var(--radius);
 }
 .toolbar {
   display: flex;
@@ -1626,15 +1624,15 @@ onMounted(async () => {
   width: 230px;
 }
 .option-path {
-  margin-left: 10px;
-  color: #98a2b3;
+  margin-left: var(--sp-2);
+  color: var(--faint);
   font-size: 12px;
 }
 .manage-add {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(0, 0.8fr) auto;
   gap: 8px;
-  margin: 14px 0;
+  margin: var(--sp-4) 0;
 }
 .manage-table {
   margin-top: 4px;
@@ -1645,28 +1643,28 @@ onMounted(async () => {
 .write-empty {
   padding: 28px 0;
   text-align: center;
-  color: #98a2b3;
+  color: var(--dim);
 }
 .write-grid {
   display: grid;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
-  gap: 14px;
-  margin-top: 14px;
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
 }
 .write-table {
   cursor: pointer;
 }
 .write-preview {
   min-width: 0;
-  border: 1px solid #e4e9f2;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 10px 12px;
-  background: #fafbfe;
+  background: var(--surface-2);
 }
 .write-reason {
   margin-bottom: 8px;
-  color: #68717f;
-  font-size: 13px;
+  color: var(--dim);
+  font-size: 14px;
 }
 .write-content {
   max-height: 360px;
@@ -1674,9 +1672,9 @@ onMounted(async () => {
 .command-line {
   margin: 0 0 8px;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: #eef3ff;
-  color: #2f4f8f;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text-2);
   white-space: pre-wrap;
   word-break: break-all;
   font: 12px/1.6 "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
@@ -1694,8 +1692,8 @@ onMounted(async () => {
 .task-grid {
   display: grid;
   grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-  gap: 14px;
-  margin-top: 14px;
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
 }
 .task-table {
   cursor: pointer;
@@ -1704,10 +1702,10 @@ onMounted(async () => {
   min-width: 0;
   max-height: 560px;
   overflow: auto;
-  border: 1px solid #e4e9f2;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 12px 14px;
-  background: #fafbfe;
+  background: var(--surface-2);
 }
 .task-detail h3 {
   margin: 0 0 8px;
@@ -1724,7 +1722,7 @@ onMounted(async () => {
 }
 .task-section p {
   margin: 4px 0 0;
-  color: #4f5b6d;
+  color: var(--text-2);
   white-space: pre-wrap;
 }
 .task-plan {
@@ -1733,7 +1731,7 @@ onMounted(async () => {
   overflow: auto;
   white-space: pre-wrap;
   font: 12px/1.6 "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
-  color: #4f5b6d;
+  color: var(--text-2);
 }
 .task-readback { white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-write,
@@ -1742,8 +1740,8 @@ onMounted(async () => {
   align-items: flex-start;
   gap: 8px;
   margin-top: 6px;
-  font-size: 13px;
-  color: #4f5b6d;
+  font-size: 14px;
+  color: var(--text-2);
 }
 .task-actions {
   display: flex;
@@ -1753,12 +1751,16 @@ onMounted(async () => {
 }
 .crumb-link {
   border: 0;
+  border-radius: var(--radius-xs);
   background: transparent;
   padding: 0;
-  color: #4c6ef5;
+  color: var(--brand-strong);
   font: inherit;
   cursor: pointer;
+  transition: color .14s var(--ease);
 }
+.crumb-link:hover { color: var(--brand-btn-h); }
+.crumb-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .path-row,
 .search-row {
   display: flex;
@@ -1775,8 +1777,8 @@ onMounted(async () => {
 .browse-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
-  gap: 14px;
-  margin-top: 12px;
+  gap: var(--sp-4);
+  margin-top: var(--sp-3);
 }
 .entry-table,
 .result-table {
@@ -1789,10 +1791,10 @@ onMounted(async () => {
   min-width: 0;
 }
 .entry-icon {
-  color: #4c6ef5;
+  color: var(--brand);
 }
 .muted {
-  color: #8a94a6;
+  color: var(--dim);
 }
 .result-block {
   margin-top: 12px;
@@ -1807,17 +1809,17 @@ onMounted(async () => {
   font-weight: 600;
 }
 .result-meta {
-  color: #8a94a6;
+  color: var(--dim);
   font-size: 12px;
   font-weight: 400;
   word-break: break-all;
 }
 .preview-panel {
   min-width: 0;
-  border: 1px solid #e4e9f2;
-  border-radius: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   padding: 10px 12px;
-  background: #fafbfe;
+  background: var(--surface-2);
 }
 .preview-body {
   margin: 0;
@@ -1826,11 +1828,12 @@ onMounted(async () => {
   white-space: pre-wrap;
   word-break: break-word;
   font: 12px/1.65 "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
-  color: #38414d;
+  color: var(--text-2);
 }
 .preview-placeholder {
-  color: #98a2b3;
-  font-size: 13px;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1.7;
   padding: 18px 4px;
 }
 @media (max-width: 900px) {

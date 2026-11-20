@@ -331,7 +331,7 @@ onMounted(loadSessions);
   border-radius: 8px;
   background: var(--brand-soft);
   color: var(--brand);
-  font-size: 15px;
+  font-size: 16px;
 }
 .panel-h h2 { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; }
 .panel-sub { color: var(--dim); font-size: 12px; }
@@ -366,7 +366,7 @@ onMounted(loadSessions);
   cursor: pointer;
   transition: background .14s var(--ease), color .14s var(--ease);
 }
-.abtn .el-icon { color: var(--faint); font-size: 13px; }
+.abtn .el-icon { color: var(--faint); font-size: 14px; }
 .abtn:hover:not(:disabled) { background: var(--surface-2); color: var(--brand-strong); }
 .abtn:hover:not(:disabled) .el-icon { color: var(--brand); }
 .abtn:disabled { opacity: .45; cursor: not-allowed; }
@@ -383,7 +383,7 @@ onMounted(loadSessions);
   border-radius: 8px;
   background: var(--surface-3);
   color: var(--text-2);
-  font-size: 15px;
+  font-size: 16px;
 }
 /* 只有当前设备上色：一排彩色图标会把「哪个是我」这件事埋掉 */
 .device-symbol.is-current { background: var(--brand-soft); color: var(--brand); }

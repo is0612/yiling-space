@@ -1828,13 +1828,13 @@ watch(id, () => {
 /* ── 群聊记录抽屉 ───────────────────────────────────── */
 /* 群号是这一屏的「主键」，用等宽字把它和正文区分开，别让它看起来像一句话 */
 .gc-hint{margin:0 0 12px;color:var(--dim);font-size:12px;line-height:1.8}
-.gc-empty{border-radius:10px;background:var(--surface-2);padding:20px 16px;color:var(--dim);font-size:13px;line-height:1.8;text-align:center}
+.gc-empty{border-radius:10px;background:var(--surface-2);padding:20px 16px;color:var(--dim);font-size: 14px;line-height:1.8;text-align:center}
 .gc-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:14px;min-height:420px}
 .gc-list{display:flex;flex-direction:column;gap:2px;align-self:start;max-height:70vh;overflow:auto}
 .gc-item{display:flex;flex-direction:column;gap:3px;border:0;border-radius:8px;background:none;padding:9px 11px;text-align:left;cursor:pointer;transition:background .14s var(--ease)}
 .gc-item:hover{background:var(--surface-2)}
 .gc-item.on{background:var(--brand-soft)}
-.gc-item-title{color:var(--text-2);font-size:13px;font-weight:600}
+.gc-item-title{color:var(--text-2);font-size: 14px;font-weight:600}
 .gc-item.on .gc-item-title{color:var(--brand-strong)}
 .gc-item-meta{color:var(--dim);font-size:12px}
 .gc-thread{display:flex;flex-direction:column;min-width:0;border-radius:10px;background:var(--surface-2);padding:12px 14px}
@@ -1849,7 +1849,7 @@ watch(id, () => {
 .gc-name{color:var(--text-2);font-size:12px;font-weight:600}
 .gc-msg.self .gc-name{color:var(--brand-strong)}
 .gc-time{color:var(--dim);font-size:12px}
-.gc-text{margin:0;color:var(--text-2);font-size:13px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}
+.gc-text{margin:0;color:var(--text-2);font-size: 14px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}
 
 @media(max-width:640px){
   .tl-card{padding:12px 14px 8px}
@@ -1892,13 +1892,13 @@ watch(id, () => {
 .timeline-item { border: 0; border-radius: 12px; background: var(--surface-2); padding: 18px; }
 .timeline-item:last-of-type { border-bottom: 0; }
 .timeline-item:hover { background: var(--surface-3); }
-.timeline-summary { color: var(--text-2); max-width: 90ch; font-size: 15px; }
+.timeline-summary { color: var(--text-2); max-width: 90ch; font-size: 16px; }
 .timeline-marker { width: 36px; height: 36px; border-radius: 10px; }
 .memory-actions { gap: 14px; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
 .memory-reading { padding: 2px 0 8px; }
-.memory-reading p { margin: 16px 0 0; color: var(--text-2); font-size: 15px; line-height: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-reading p { margin: 16px 0 0; color: var(--text-2); font-size: 16px; line-height: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mem-src { border-radius: 10px; background: var(--surface-2); border-top: 0; padding: 16px; }
-.mem-src-h { font-size: 13px; margin-bottom: 12px; }
+.mem-src-h { font-size: 14px; margin-bottom: 12px; }
 .mem-src-body { background: var(--surface); max-height: 300px; }
 @media (max-width: 640px) { .timeline-item { padding: 14px; gap: 10px; } .timeline-marker { display: none; } .memory-actions { justify-content: flex-start; flex-wrap: wrap; } }
 </style>

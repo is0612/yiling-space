@@ -720,6 +720,7 @@ await loadList();
             :page-size="PAGE_SIZE"
             unit="天"
             flush
+            compact
             @update:page="page = $event"
           />
         </div>
@@ -1202,7 +1203,7 @@ await loadList();
 .month-label {
   padding: 10px 6px var(--sp-1);
   color: var(--faint);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: .04em;
 }
@@ -1254,12 +1255,12 @@ await loadList();
 .day.wd-sun .day-num { color: var(--faint); }
 .day.is-active.wd-sat .day-num,
 .day.is-active.wd-sun .day-num { color: var(--brand-strong); }
-.day-wd { color: var(--dim); font-size: 11px; font-style: normal; line-height: 1.3; letter-spacing: .02em; }
+.day-wd { color: var(--dim); font-size: 12px; font-style: normal; line-height: 1.3; letter-spacing: .02em; }
 
 .day-body { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .day-top { display: flex; align-items: center; gap: var(--sp-2); }
 /* 标记用「点 + 字」：19 天 × 2 枚药丸太吵，一行里只要读得出有哪两份 */
-.day-marks { display: flex; align-items: center; gap: 9px; color: var(--dim); font-size: 11px; }
+.day-marks { display: flex; align-items: center; gap: 9px; color: var(--dim); font-size: 12px; }
 .mark { display: inline-flex; align-items: center; gap: 4px; }
 .mark::before { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); content: ""; }
 .mark.is-diary::before { background: var(--brand); }
@@ -1269,14 +1270,14 @@ await loadList();
   background: var(--brand-soft);
   padding: 0 5px;
   color: var(--brand-strong);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 16px;
 }
 .day-excerpt {
   overflow: hidden;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1321,7 +1322,7 @@ await loadList();
   font-size: 14px;
   font-weight: 600;
 }
-.reader-month .day-flag { padding: 0 6px; font-size: 11px; line-height: 18px; }
+.reader-month .day-flag { padding: 0 6px; font-size: 12px; line-height: 18px; }
 .reader-sub { color: var(--dim); font-size: 12px; }
 .reader-head-right { display: flex; margin-left: auto; align-items: center; gap: 10px; padding-top: 6px; }
 /* 状态用「写过了 / 没写」两色软底，不用 el-tag 的默认样式 */
@@ -1334,7 +1335,7 @@ await loadList();
   background: var(--green-soft);
   padding: 0 9px;
   color: var(--green);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 .state-chip.is-skip { background: var(--surface-3); color: var(--dim); }
@@ -1392,7 +1393,7 @@ await loadList();
 .op:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 .op:disabled { cursor: progress; opacity: .7; }
 .op:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
-.op .el-icon { font-size: 13px; }
+.op .el-icon { font-size: 14px; }
 .op .n { color: var(--faint); font-variant-numeric: tabular-nums; }
 
 .reader-body { flex: 1; padding-top: var(--sp-5); }
@@ -1407,7 +1408,7 @@ await loadList();
   line-height: 1.4;
   letter-spacing: -.01em;
 }
-.sheet-body { color: var(--text-2); font-size: 15px; line-height: 1.95; }
+.sheet-body { color: var(--text-2); font-size: 16px; line-height: 1.95; }
 /* 段落由模板按空行切开；段内的单换行仍保留（pre-line） */
 .sheet-body p { margin: 0 0 15px; white-space: pre-line; }
 .sheet-body p:last-child { margin-bottom: 0; }
@@ -1442,7 +1443,7 @@ await loadList();
 /* 手账：结构化。「今日一句」用左侧竖线立起来，片段用小标题分块 */
 .hb { display: flex; max-width: 660px; flex-direction: column; gap: var(--sp-5); }
 .quote-card { border-left: 3px solid var(--brand-line); padding: 2px 0 2px var(--sp-4); }
-.quote-text { color: var(--text); font-size: 17px; font-weight: 500; line-height: 1.75; }
+.quote-text { color: var(--text); font-size: 18px; font-weight: 500; line-height: 1.75; }
 .quote-note { margin-top: 6px; color: var(--dim); font-size: 12px; }
 .hb-block h4 {
   display: flex;
@@ -1503,8 +1504,8 @@ await loadList();
   color: var(--brand);
   font-size: 18px;
 }
-.reader-empty h3 { color: var(--text); font-size: 15px; font-weight: 700; }
-.reader-empty p { max-width: 420px; margin-top: 7px; color: var(--dim); font-size: 13px; line-height: 1.75; }
+.reader-empty h3 { color: var(--text); font-size: 16px; font-weight: 700; }
+.reader-empty p { max-width: 420px; margin-top: 7px; color: var(--dim); font-size: 14px; line-height: 1.75; }
 .go {
   height: 32px;
   margin-top: 14px;
@@ -1513,7 +1514,7 @@ await loadList();
   background: var(--brand-btn);
   padding: 0 14px;
   color: #fff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: background .15s var(--ease);

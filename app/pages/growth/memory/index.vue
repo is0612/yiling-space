@@ -114,8 +114,9 @@ onBeforeUnmount(() => { statsRequest += 1; });
       >
         <div class="hero-copy">
           <span class="hero-eyebrow">记忆档案 · {{ character.name }}</span>
+          <!-- 这一句原来是「把对话整理成经历，再从经历中沉淀长期记忆」，
+               和页头 lede「从每天的经历，到值得一直记得的事」是同一句换了个说法，删掉。 -->
           <h2>让每一次相处，都有迹可循</h2>
-          <p>把对话整理成经历，再从经历中沉淀长期记忆。</p>
           <div class="hero-actions">
             <el-button
               type="primary"
@@ -265,17 +266,17 @@ onBeforeUnmount(() => { statsRequest += 1; });
 </template>
 
 <style scoped>
-.memory-home { --memory-mint: #237b69; }
-.memory-settings-link { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 13px; }
+.memory-home { --memory-mint: var(--green); }
+.memory-settings-link { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 14px; }
 .memory-settings-link:hover { color: var(--brand-strong); }
-.memory-hero { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 28px; border: 0; border-radius: 16px; background: linear-gradient(115deg, var(--surface, #fff) 45%, #f0f7f4); padding: 30px; }
+.memory-hero { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 28px; border: 0; border-radius: var(--radius); background: linear-gradient(115deg, var(--surface) 45%, var(--brand-soft)); padding: 30px; }
 .hero-eyebrow { color: var(--memory-mint); font-size: 12px; font-weight: 600; }
-.hero-copy h2 { margin: 12px 0 10px; color: var(--text); font-size: 25px; font-weight: 650; line-height: 1.5; }
+.hero-copy h2 { margin: 12px 0 10px; color: var(--text); font-size: 22px; font-weight: 650; line-height: 1.5; }
 .hero-copy p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.8; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 23px; }
 .hero-actions .el-button { margin: 0; min-height: 36px; }
 .hero-hint { display: block; margin-top: 12px; color: var(--dim); font-size: 12px; line-height: 1.8; }
-.hero-record { align-self: center; border-left: 1px solid #dce9e3; padding-left: 28px; }
+.hero-record { align-self: center; border-left: 1px solid var(--line); padding-left: 28px; }
 .hero-record > span { color: var(--memory-mint); font-size: 12px; font-weight: 600; }
 .record-count { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-top: 12px; color: var(--text); font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .record-count small { color: var(--dim); font-size: 12px; font-weight: 400; }
@@ -285,35 +286,35 @@ onBeforeUnmount(() => { statsRequest += 1; });
 .section-heading h2, .info-heading h2 { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 600; }
 .section-heading > span { color: var(--dim); font-size: 12px; }
 .memory-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.memory-overview-card { --section-color: var(--memory-mint); --section-soft: #edf6f1; display: flex; min-width: 0; flex-direction: column; border: 0; border-radius: 12px; background: var(--surface, #fff); padding: 22px; color: inherit; text-decoration: none; transition: border-color .15s ease, box-shadow .15s ease; }
-.memory-overview-card.blue { --section-color: #476aaf; --section-soft: #edf2fc; }
+.memory-overview-card { --section-color: var(--memory-mint); --section-soft: var(--green-soft); display: flex; min-width: 0; flex-direction: column; border: 0; border-radius: var(--radius); background: var(--surface, #fff); padding: 22px; color: inherit; text-decoration: none; transition: border-color .15s ease, box-shadow .15s ease; }
+.memory-overview-card.blue { --section-color: var(--blue); --section-soft: var(--blue-soft); }
 .memory-overview-card.rose { --section-color: var(--brand-strong); --section-soft: var(--brand-soft); }
 .memory-overview-card:hover { background: var(--surface-2); }
 .memory-overview-card:focus-visible, .memory-settings-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
 .overview-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .section-icon { display: grid; width: 38px; height: 38px; flex: none; place-items: center; border-radius: 11px; background: var(--section-soft); color: var(--section-color); font-size: 20px; }
 .section-question { color: var(--dim); font-size: 12px; }
-.memory-overview-card h3 { margin: 18px 0 8px; color: var(--text); font-size: 17px; font-weight: 600; }
-.memory-overview-card p { margin: 0; color: var(--dim); font-size: 13px; line-height: 1.85; }
+.memory-overview-card h3 { margin: 18px 0 8px; color: var(--text); font-size: 18px; font-weight: 600; }
+.memory-overview-card p { margin: 0; color: var(--dim); font-size: 14px; line-height: 1.85; }
 .section-count { display: flex; align-items: baseline; gap: 8px; margin-top: auto; padding-top: 20px; }
 .section-count strong { color: var(--text-2); font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .section-count span { color: var(--dim); font-size: 12px; }
-.memory-overview-action { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; color: var(--section-color); font-size: 13px; font-weight: 500; }
+.memory-overview-action { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; color: var(--section-color); font-size: 14px; font-weight: 500; }
 .memory-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
-.memory-info-card { min-width: 0; border-radius: 12px; background: var(--surface, #fff); padding: 20px 22px; }
+.memory-info-card { min-width: 0; border-radius: var(--radius); background: var(--surface, #fff); padding: 20px 22px; }
 .info-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .info-heading a { color: var(--dim); font-size: 12px; }
 .info-heading a:hover { color: var(--brand-strong); }
 .memory-info-card p { margin: 12px 0 0; color: var(--dim); font-size: 12px; line-height: 1.9; }
 .memory-info-card > .el-button { margin-top: 12px; }
-.task-state { display: flex; align-items: center; gap: 8px; margin-top: 20px; color: var(--text-2); font-size: 13px; }
+.task-state { display: flex; align-items: center; gap: 8px; margin-top: 20px; color: var(--text-2); font-size: 14px; }
 .state-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--dim); }
-.state-dot.busy { background: #b97821; }
+.state-dot.busy { background: var(--amber); }
 .schedule-details { display: flex; flex-wrap: wrap; gap: 16px 30px; margin: 18px 0 0; }
 .schedule-details > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
 .schedule-details dt { color: var(--dim); font-size: 12px; }
-.schedule-details dd { margin: 0; color: var(--text-2); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.schedule-details dd { margin: 0; color: var(--text-2); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
 .stats-error { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; color: var(--dim); font-size: 12px; }
 @media (max-width: 1100px) { .memory-hero { grid-template-columns: minmax(0, 1fr) 220px; padding: 24px; gap: 20px; } .hero-record { padding-left: 20px; } .memory-overview-card { padding: 18px; } .section-question { max-width: 100px; text-align: right; line-height: 1.6; } }
-@media (max-width: 760px) { .memory-hero { grid-template-columns: 1fr; padding: 22px; } .hero-copy h2 { font-size: 22px; } .hero-record { border-left: 0; border-top: 1px solid #dce9e3; padding: 18px 0 0; } .hero-record p br { display: none; } .memory-overview-grid, .memory-bottom-grid { grid-template-columns: 1fr; } .section-question { max-width: none; } .section-count { padding-top: 16px; } }
+@media (max-width: 760px) { .memory-hero { grid-template-columns: 1fr; padding: 22px; } .hero-copy h2 { font-size: 22px; } .hero-record { border-left: 0; border-top: 1px solid var(--line); padding: 18px 0 0; } .hero-record p br { display: none; } .memory-overview-grid, .memory-bottom-grid { grid-template-columns: 1fr; } .section-question { max-width: none; } .section-count { padding-top: 16px; } }
 </style>

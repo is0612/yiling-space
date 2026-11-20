@@ -70,7 +70,7 @@
   --sp-6: 32px;
   --sp-7: 48px;
 
-  --ctl-h: 36px;
+  --ctl-h: 32px;
   --topbar-h: 56px;
   --side-w: 260px;
 
@@ -512,16 +512,23 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
 @media (max-width: 900px) { .stat-band { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 24px; } }
 
 /* ── 按钮（外壳与概览页用，面板内仍是 Element Plus） ──────── */
+/* ── 按钮三层（2026-11-20 统一，按 qq 页那句「主操作实心，其余降成文字」落实）
+   1. 主操作：实心品牌（.btn.primary / el-button type="primary"），一屏最多一两个；
+   2. 其余操作：透明无框，hover 才出浅底——Element 默认给的是「白底 + 1px 描边」，
+      全站八成按钮都是它，框叠框就是「到处有描边」的来源；换成浅灰块又太重，
+      一排六个灰块比六个细框更抢眼；
+   3. 破坏性操作单独用红色（弹窗确认里保持实心红）。
+   高度都是 32px，和 el-input、分段控件对齐。 */
 .btn {
   display: inline-flex;
   height: var(--ctl-h);
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: #fff;
-  padding: 0 14px;
+  background: transparent;
+  padding: 0 12px;
   color: var(--text-2);
   font-size: 14px;
   font-weight: 600;
@@ -529,7 +536,24 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
   cursor: pointer;
   transition: background .14s var(--ease), border-color .14s var(--ease), color .14s var(--ease);
 }
-.btn:hover { border-color: #cbd2dd; background: var(--surface-2); color: var(--text); }
+.btn:hover { background: var(--surface-2); color: var(--text); }
+.btn.quiet {
+  border-color: transparent;
+  background: transparent;
+  padding: 0 10px;
+}
+.btn.quiet:hover { background: var(--surface-2); color: var(--brand-strong); }
+.btn.quiet.is-danger:hover { background: var(--red-soft); color: var(--red); }
+.btn-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--brand-strong);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-link:hover { color: var(--brand-btn-h); text-decoration: underline; }
 .btn.primary {
   border-color: var(--brand-btn);
   background: var(--brand-btn);
@@ -815,6 +839,25 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
    Element Plus 细节
    ══════════════════════════════════════════════════════════ */
 .el-button { border-radius: var(--radius-sm); font-weight: 500; }
+/* 中性按钮（没写 type 的 el-button）：透明无框，hover 才出浅底，跟 .btn 同一层。
+   Element 默认给的是「白底 + 1px 描边」，和卡片边框、表格线叠在一起会让整页到处是框；
+   换成浅灰块又太重（一排六个灰块比六根细框更抢眼），所以只留 hover 反馈。
+   带 type 的按钮有各自的语义色，不在此列；text / link 本来就是无框的。 */
+.el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--warning):not(.el-button--success):not(.el-button--info):not(.is-text):not(.is-link) {
+  --el-button-bg-color: transparent;
+  --el-button-border-color: transparent;
+  --el-button-text-color: var(--text-2);
+  --el-button-hover-bg-color: var(--surface-2);
+  --el-button-hover-border-color: transparent;
+  --el-button-hover-text-color: var(--text);
+  --el-button-active-bg-color: var(--surface-3);
+  --el-button-active-border-color: transparent;
+  --el-button-disabled-bg-color: transparent;
+  --el-button-disabled-border-color: transparent;
+  --el-button-disabled-text-color: var(--faint);
+}
+/* plain 变体（浅色底 + 同色描边）也只去掉描边，底色保留 */
+.el-button.is-plain { --el-button-border-color: transparent; --el-button-hover-border-color: transparent; }
 .el-button--primary {
   --el-button-bg-color: var(--brand-btn);
   --el-button-border-color: var(--brand-btn);
@@ -919,9 +962,9 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
   border: 0;
   padding: 8px 24px 20px;
 }
-/* 弹窗内按钮统一 36px（项目 --ctl-h），和页面主按钮同高；
-   少了这条，走 footer slot 的弹窗是 36、走页面自定义 .dialog-actions 的是 32，两种高度混在一套界面里 */
-.el-overlay .el-dialog .el-button { min-height: 36px; padding: 0 16px; }
+/* 弹窗内按钮跟页面按钮同高（--ctl-h 32）；以前这里写死 36，
+   理由是「和页面主按钮同高」，但页面主按钮其实一直是 32，反而差出 4px */
+.el-overlay .el-dialog .el-button { min-height: var(--ctl-h); padding: 0 16px; }
 .el-overlay .el-dialog__footer .el-button + .el-button { margin-left: 8px; }
 
 /* ── 确认框（MessageBox）跟 dialog 同一套外形 ──────────────────
@@ -971,7 +1014,7 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
 .el-overlay.is-message-box .el-message-box__container { align-items: flex-start; }
 .el-overlay.is-message-box .el-message-box__status { margin-top: 2px; font-size: 20px; }
 .el-overlay.is-message-box .el-message-box__btns { padding: 20px 0 0; }
-.el-overlay.is-message-box .el-message-box__btns .el-button { min-height: 36px; padding: 0 16px; }
+.el-overlay.is-message-box .el-message-box__btns .el-button { min-height: var(--ctl-h); padding: 0 16px; }
 .el-overlay.is-message-box .el-message-box__btns .el-button + .el-button { margin-left: 8px; }
 
 .el-table { --el-table-border-color: var(--line); --el-table-header-bg-color: var(--surface-2); --el-table-row-hover-bg-color: var(--surface-2); font-size: 14px; }
@@ -982,7 +1025,15 @@ a.topbar-crumb:focus-visible { outline: 2px solid var(--brand); outline-offset: 
 .el-dropdown-menu__item { font-size: 12px; }
 .el-skeleton__item { background: var(--surface-3); }
 .el-switch.is-checked .el-switch__core { background: var(--brand); border-color: var(--brand); }
-.el-radio-button__inner { font-size: 12px; }
+/* 分段控件与按钮同高：Element 的 radio-button 高度靠 font-size + padding 撑出来，
+   字号收到 12 后只有 30px，和同一行的 .el-button（32px）差 2px，眼睛能看出错位。 */
+.el-radio-button__inner {
+  display: inline-flex;
+  height: var(--el-component-size, 32px);
+  align-items: center;
+  padding: 0 15px;
+  font-size: 12px;
+}
 .el-checkbox__label { font-size: 12px; }
 .el-empty__description p { font-size: 12px; }
 

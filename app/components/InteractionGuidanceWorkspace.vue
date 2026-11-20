@@ -75,7 +75,7 @@ onBeforeUnmount(() => { disposed = true; generation++; sequence++; closeAction()
 <template>
   <section class="guidance-workspace card">
     <header class="heading">
-      <div><h2>跨会话长期指导</h2><p>从获授权的教育反馈中提炼理解与应对经验。候选须由主人审核后才生效；原私聊经验仍保留在下方。</p></div>
+      <div><h2>跨会话长期指导</h2><p>从获授权的反馈中提炼的经验，跨会话可用；原私聊经验留在下方。</p></div>
       <el-button
         :loading="loading"
         :disabled="!characterId || busy"
@@ -84,11 +84,11 @@ onBeforeUnmount(() => { disposed = true; generation++; sequence++; closeAction()
         刷新指导
       </el-button>
     </header>
-    <el-alert
-      title="仅共享已采纳的抽象正文和适用场景，不共享私人原文。指导供判断参考，不覆盖当前明确要求、人设、渠道约束和隐私边界。"
-      type="info"
-      :closable="false"
-    />
+    <!-- 隐私边界是承诺，不能删；但不该是一块常驻的灰底条 —— 那是页面上最重的一种构件，
+         用在这里等于把「附注」画成了「警告」。降成一行小字。 -->
+    <p class="guidance-note">
+      只共享已采纳的摘要正文与适用场景，不共享私人原文；供判断参考，不覆盖当前明确要求、人设、渠道约束和隐私边界。
+    </p>
     <el-radio-group
       :model-value="status"
       aria-label="长期指导状态"
@@ -299,6 +299,7 @@ onBeforeUnmount(() => { disposed = true; generation++; sequence++; closeAction()
 
 <style scoped>
 .guidance-workspace { padding: 24px; margin-bottom: 24px; display: grid; gap: 18px; }
+.guidance-note { margin: -6px 0 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
 .heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 h2, h3 { margin: 0; color: var(--text); font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
 p { font-size: 14px; line-height: 1.8; margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }

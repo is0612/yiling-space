@@ -2285,22 +2285,9 @@ function copyInstallGuide() {
 #qq-steps { scroll-margin-top: 16px; }
 .grow { flex: 1; }
 
-/* ── 按钮：主操作实心，其余降成文字 ─────────────────── */
-.btn.quiet {
-  height: 32px;
-  border-color: transparent;
-  background: transparent;
-  padding: 0 10px;
-  color: var(--text-2);
-  font-weight: 600;
-}
-.btn.quiet:hover {
-  border-color: transparent;
-  background: var(--surface-3);
-  color: var(--brand-strong);
-  text-decoration: none;
-}
-.btn.quiet.is-danger:hover { background: var(--red-soft); color: var(--red); }
+/* ── 按钮：主操作实心，其余降成文字 ───────────────────
+   .btn / .btn.quiet 的三层规则在 main.css 里统一了，这里不再覆盖，
+   页面只管用 class，别再各写一份（以前这份只对 QQ 页生效，别的页看起来就不一样） */
 
 /* ── 重连提示：只在等适配器时出现，平时不占版面 ─────── */
 .reloadbar {
@@ -2642,7 +2629,7 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
 .step-body a { display: inline-flex; align-items: center; gap: 4px; color: var(--brand-strong); font-weight: 600; }
 .step-line a:hover,
 .step-body a:hover { text-decoration: underline; text-underline-offset: 3px; }
-.step-line .el-icon { margin-right: 2px; font-size: 13px; vertical-align: -2px; }
+.step-line .el-icon { margin-right: 2px; font-size: 14px; vertical-align: -2px; }
 .sep { margin: 0 5px; color: var(--faint); }
 
 /* 第 4 步：启动按钮 + 复制命令 + 运行状态同一行 */
@@ -2669,7 +2656,7 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
 .admin-pw-value {
   color: var(--text);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
   letter-spacing: .2px;
   user-select: all;
 }
@@ -2880,7 +2867,7 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
   cursor: pointer;
   transition: background .14s var(--ease), color .14s var(--ease);
 }
-.tlink .el-icon { font-size: 13px; }
+.tlink .el-icon { font-size: 14px; }
 .tlink.is-danger:hover { background: var(--red-soft); color: var(--red); }
 
 /* ── 弹窗：三组（身份 / 地址与 Token / 群聊），每组一个小标题 ──────

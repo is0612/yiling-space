@@ -34,8 +34,8 @@ const sections = [
 
 <style scoped>
 .memory-section-nav { display: flex; align-items: center; gap: 6px; margin-bottom: 20px; border-bottom: 1px solid var(--line); padding-bottom: 8px; overflow-x: auto; }
-.memory-section-link { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 7px; min-height: 36px; border-radius: 8px; padding: 0 14px; color: var(--dim); font-size: 13px; text-decoration: none; white-space: nowrap; transition: color .15s ease, background .15s ease; }
-.memory-section-link .el-icon { font-size: 15px; }
+.memory-section-link { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 7px; min-height: 36px; border-radius: 8px; padding: 0 14px; color: var(--dim); font-size: 14px; text-decoration: none; white-space: nowrap; transition: color .15s ease, background .15s ease; }
+.memory-section-link .el-icon { font-size: 16px; }
 .memory-section-link:hover { background: var(--surface); color: var(--text-2); }
 .memory-section-link.active { background: var(--brand-soft); color: var(--brand-strong); font-weight: 600; }
 .memory-section-link:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }

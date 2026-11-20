@@ -236,7 +236,7 @@ onBeforeUnmount(() => { disposed = true; roleVersion += 1; requestVersion += 1; 
       </NuxtLink>
     </nav>
     <PageHeader
-      description="按好友查看当前关系与实际变化，展开后回看每次评估的结果和依据。建议与已发生的变化分别展示。"
+      description="按好友查看当前关系与实际变化，展开后回看每次评估的结果和依据。"
     />
     <el-empty
       v-if="!characterId"

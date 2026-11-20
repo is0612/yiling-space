@@ -14,7 +14,9 @@ const props = withDefaults(defineProps<{
   unit?: string;
   /** 嵌在卡片内部（表格底部）时用，去掉自己的白底和圆角 */
   flush?: boolean;
-}>(), { unit: "条", flush: false });
+  /** 窄列（日记左栏 ~306px）用箭头代替「上一页/下一页」文字，避免挤成两行 */
+  compact?: boolean;
+}>(), { unit: "条", flush: false, compact: false });
 
 const emit = defineEmits<{ "update:page": [value: number] }>();
 
@@ -68,10 +70,11 @@ watch([() => props.totalPages, () => props.total], () => {
       <button
         type="button"
         class="pager-btn"
+        :aria-label="compact ? '上一页' : undefined"
         :disabled="page === 1"
         @click="go(page - 1)"
       >
-        上一页
+        {{ compact ? "‹" : "上一页" }}
       </button>
       <template
         v-for="(item, index) in pageNumbers"
@@ -94,29 +97,32 @@ watch([() => props.totalPages, () => props.total], () => {
       <button
         type="button"
         class="pager-btn"
+        :aria-label="compact ? '下一页' : undefined"
         :disabled="page === totalPages"
         @click="go(page + 1)"
       >
-        下一页
+        {{ compact ? "›" : "下一页" }}
       </button>
     </div>
   </div>
 </template>
 
 <style scoped>
+/* 窄容器（日记左栏 306px）里不能把「上一页」拆成两行：整组换行，按钮自身不许断字 */
 .pager {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
+  flex-wrap: wrap;
   margin-top: var(--sp-4);
   border-radius: 10px;
   background: var(--surface);
   padding: 8px 12px;
 }
 .pager.is-flush { margin-top: 0; border-radius: 0 0 10px 10px; background: none; }
-.pager-info { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-.pager-btns { display: flex; align-items: center; gap: 2px; }
+.pager-info { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pager-btns { display: flex; flex: none; align-items: center; gap: 2px; flex-wrap: nowrap; }
 .pager-btn {
   display: inline-flex;
   height: 28px;
@@ -126,10 +132,11 @@ watch([() => props.totalPages, () => props.total], () => {
   border: 0;
   border-radius: 7px;
   background: none;
-  padding: 0 9px;
+  padding: 0 8px;
   color: var(--text-2);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   transition: background .14s var(--ease), color .14s var(--ease);
 }

@@ -204,9 +204,12 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
 
 <template>
   <div class="expression-page">
-    <header class="page-heading">
-      <div><h1>慢慢形成她的说话方式</h1><p>把交流中值得留下的语气、用词和回复长短，整理成有依据的表达习惯。</p></div>
-      <div class="toolbar">
+    <!-- 页头的 h1 归顶栏（那里已经写着「语言系统」），正文只留一句 lede 和动作。
+         原来 h1 下面压着两段「领域说明」：一段教怎么举例，一段划边界（偏好 / 梗语录 / 角色资料）。
+         举例那层删掉；划边界改成下面的 related-links —— 点得到的地方比读一段话清楚。
+         再下面那条 info 条同理，「确认才生效」在候选弹窗里已经说过。 -->
+    <PageHeader description="把交流中值得留下的语气、用词和回复长短，整理成有依据的表达习惯。">
+      <template #actions>
         <GroupExpressionObservationDialog
           v-if="characterId"
           :character-id="characterId"
@@ -217,29 +220,31 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
           @click="openEditor(null, 'sources')"
         >
           从经历提出候选
-        </el-button><el-button
+        </el-button>
+        <el-button
           type="primary"
           :disabled="!characterId"
           @click="openEditor()"
         >
           手动添加习惯
         </el-button>
-      </div>
-    </header>
-    <section class="domain-note">
-      <p><strong>这里记录「怎么说」。</strong>例如：安慰时先接住情绪；讲步骤时用日常词；闲聊简短，解释再展开。</p>
-      <p>喜欢聊什么属于偏好；需要原样说出的句子放在梗语录；基础语气与对话示例仍在角色资料中维护。</p>
-      <div
-        v-if="characterId"
-        class="related-links"
-      >
-        <NuxtLink :to="settingsHref('catchphrases')">
-          管理梗语录
-        </NuxtLink><NuxtLink :to="settingsHref('model')">
-          模型设置
-        </NuxtLink>
-      </div>
-    </section>
+      </template>
+    </PageHeader>
+    <nav
+      v-if="characterId"
+      class="related-links"
+      aria-label="相关设置"
+    >
+      <span>这里只管「怎么说」。原样复述的句子去</span>
+      <NuxtLink :to="settingsHref('catchphrases')">
+        梗语录
+      </NuxtLink>
+      <span>，语气基调与示例去</span>
+      <NuxtLink :to="settingsHref('model')">
+        模型设置
+      </NuxtLink>
+      <span>。</span>
+    </nav>
     <el-empty
       v-if="!characterId"
       description="请先在顶栏选择一个角色。"
@@ -248,12 +253,6 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
       v-else
       class="card expression-workspace"
     >
-      <el-alert
-        title="来源是观察依据，候选需要人工确认才生效。写清适用场景，避免每一轮都用同一种说法。"
-        type="info"
-        :closable="false"
-        show-icon
-      />
       <div class="filters">
         <el-radio-group
           :model-value="status"
@@ -751,17 +750,16 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
 
 <style scoped>
 .expression-page { display: grid; gap: 22px; padding: 28px; color: var(--text-2); }
-.page-heading, .record-heading, .record-footer, .filters, .toolbar, .pagination, .related-links { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.page-heading { align-items: flex-start; }
-h1 { margin: 8px 0 10px; font-size: 25px; }
-h2 { margin: 0; font-size: 17px; }
-h3 { font-size: 15px; }
+.record-heading, .record-footer, .filters, .toolbar, .pagination, .related-links { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+h1 { margin: 8px 0 10px; font-size: 22px; }
+h2 { margin: 0; font-size: 18px; }
+h3 { font-size: 16px; }
 p { font-size: 14px; line-height: 1.7; }
-.page-heading p { color: var(--dim); margin: 0; }
-.domain-note { border-left: 3px solid var(--brand); padding: 2px 18px; }
-.domain-note p { margin: 6px 0; }
-.related-links { justify-content: flex-start; font-size: 13px; margin-top: 10px; }
-.related-links a { color: var(--brand-strong); }
+/* 边界说明收成一行脚注：三个模块各放什么，靠「去哪儿」而不是「读一段」讲清楚。
+   粉色留给主操作，这行是导航，用 --dim + hover 变粉。 */
+.related-links { justify-content: flex-start; gap: 4px; margin: -4px 0 0; color: var(--dim); font-size: 12px; }
+.related-links a { color: var(--text-2); font-weight: 600; }
+.related-links a:hover { color: var(--brand-strong); }
 .expression-workspace { padding: 22px; border: 0; box-shadow: none; background: var(--surface); border-radius: 12px; display: grid; gap: 20px; min-width: 0; }
 .filters { justify-content: flex-start; }
 .filters > .el-input { flex: 1; min-width: 180px; max-width: 330px; }
@@ -774,14 +772,14 @@ p { font-size: 14px; line-height: 1.7; }
 .muted { color: var(--dim); font-size: 12px; line-height: 1.7; }
 .record-footer { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
 .source-details { padding: 12px; border-radius: 8px; background: var(--surface); }
-.source-details summary { cursor: pointer; font-size: 13px; color: var(--dim); }
+.source-details summary { cursor: pointer; font-size: 14px; color: var(--dim); }
 .source-snapshot { margin-top: 12px; padding: 12px; border-radius: 8px; background: var(--surface); }
-.source-snapshot strong { font-size: 13px; }
+.source-snapshot strong { font-size: 14px; }
 .source-snapshot p { margin: 8px 0; }
 .source-picker { border-top: 1px solid var(--line); padding-top: 18px; margin-bottom: 18px; }
 .source-list { min-height: 100px; max-height: 320px; overflow: auto; margin: 10px 0; }
 .source-option { padding: 12px 8px; border-bottom: 1px solid var(--line); }
-.source-option p { margin: 5px 0; font-size: 13px; }
+.source-option p { margin: 5px 0; font-size: 14px; }
 .source-option :deep(.el-checkbox) { height: auto; max-width: 100%; }
 .source-option :deep(.el-checkbox__label) { white-space: normal; overflow-wrap: anywhere; }
 .chosen-sources { display: flex; flex-wrap: wrap; gap: 8px; }

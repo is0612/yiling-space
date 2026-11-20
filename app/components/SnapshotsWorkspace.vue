@@ -1283,7 +1283,7 @@ watch(id, () => {
 .reading-nav button:hover{background:var(--brand-soft);color:var(--brand-strong)}
 .reading-nav small{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
 .summary-label{margin:22px 0 0;color:var(--text-2);font-size:13px;font-weight:650}
-.d-summary{margin-top:10px;font-size:15px;line-height:2}
+.d-summary{margin-top:10px;font-size: 16px;line-height:2}
 .a-block,.d-sec{scroll-margin-top:90px}
 .a-block + .a-block{margin-top:26px}
 .a-block h4{font-size:14px;margin-bottom:12px;line-height:1.7}

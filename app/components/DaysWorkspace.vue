@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Calendar, Search, ArrowLeft, ArrowRight, Document } from "@element-plus/icons-vue";
+import { Search, ArrowLeft, ArrowRight, Document } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { type Character } from "~/utils/mock-data";
 import { formatDayClock } from "~/utils/day-time";
@@ -507,9 +507,11 @@ await loadDays();
     <MemorySectionNavigation
       active="events"
     />
-    <PageHeader
-      description="沿着日期回看经历，让每一天的人、事和对话都有迹可循。"
-    >
+    <!-- 页头只留动作。原来这里有两层纯复述的说明：
+         「沿着日期回看经历……」是把标题换个说法；
+         「鲸宁宁的经历档案 / 日期与时间按 Asia/Shanghai 显示」——角色在左栏已经选中了，
+         时区是一年看一次的信息，常驻在正文顶上只是噪音。时区降级成统计行的 title。 -->
+    <PageHeader>
       <template #actions>
         <MemoryEventDuplicates
           :character-id="id || ''"
@@ -524,13 +526,6 @@ await loadDays();
         </NuxtLink>
       </template>
     </PageHeader>
-    <div
-      v-if="currentCharacter"
-      class="day-context"
-    >
-      <span><el-icon><Calendar /></el-icon>{{ currentCharacter.name }}的经历档案</span>
-      <span>日期与时间按 {{ timeZone }} 显示</span>
-    </div>
 
     <div
       v-if="!currentCharacter"
@@ -650,21 +645,28 @@ await loadDays();
                 />
               </div>
             </div>
-            <span class="muted-note">
-              {{ detail.eventsTotal }} 条忆泡
-              <template v-if="detail.day?.extractedAt"> · 上次整理 {{ clockOf(detail.day.extractedAt) }}</template>
-              <template v-if="detail.usage.calls">
-                · 整理 {{ detail.usage.calls }} 次 · {{ formatTokens(detail.usage.tokens) }} tokens
-              </template>
-            </span>
-            <div class="day-detail-toolbar">
-              <span>{{ detail.day?.state === 'FINAL' ? '已完成整理' : detail.day?.state === 'DRAFT' ? '尚未收口，可继续整理' : '尚无整理进度' }} · 当前页 {{ activeEvents.length }} 条可见忆泡</span><el-button
+            <!-- 一行 meta：条数 / 上次整理 / 用量 / 原文开关。
+                 原来这里是「一行统计 + 一条灰底状态条」两层，状态条里的
+                 「尚未收口，可继续整理」跟左栏的『还在记』徽标、每条忆泡的『还在记』
+                 是同一件事说三遍；「当前页 N 条可见忆泡」也被底部翻页的「共 N 条」覆盖。 -->
+            <div class="day-detail-meta">
+              <span
+                class="muted-note"
+                :title="`时间按 ${timeZone} 显示`"
+              >
+                {{ detail.eventsTotal }} 条忆泡
+                <template v-if="detail.day?.extractedAt"> · 上次整理 {{ clockOf(detail.day.extractedAt) }}</template>
+                <template v-if="detail.usage.calls">
+                  · 整理 {{ detail.usage.calls }} 次 · {{ formatTokens(detail.usage.tokens) }} tokens
+                </template>
+              </span>
+              <el-button
                 link
                 type="primary"
                 :icon="Document"
                 @click="toggleMessages"
               >
-                {{ showMessages ? '收起当天原文' : '查看当天原文' }}
+                {{ showMessages ? "收起原文" : messagesLoadedFor === selected ? `查看当天原文（${totalMessages} 条）` : "查看当天原文" }}
               </el-button>
             </div>
           </header>
@@ -768,18 +770,13 @@ await loadDays();
             @current-change="(page: number) => { eventsPage = page; void loadDetail(selected, id, page); }"
           />
 
-          <div class="day-originals">
-            <button
-              type="button"
-              class="btn"
-              @click="toggleMessages"
-            >
-              {{ showMessages ? "收起原文" : messagesLoadedFor === selected ? `查看当天原文（${totalMessages} 条）` : "查看当天原文" }}
-            </button>
-            <div
-              v-if="showMessages"
-              class="original-list"
-            >
+          <!-- 原文开关收到页头那一行，这里只负责展开。原来上下各有一个
+               「查看当天原文」，同一个动作两个入口，还得猜哪个带条数。 -->
+          <div
+            v-if="showMessages"
+            class="day-originals"
+          >
+            <div class="original-list">
               <p
                 v-if="messagesLoading && !messageGroups.length"
                 class="muted-note original-empty"
@@ -931,9 +928,9 @@ await loadDays();
 </template>
 
 <style scoped>
-.knowledge-note { margin: 0 0 14px; font-size: 13px; line-height: 1.7; }
+.knowledge-note { margin: 0 0 14px; font-size: 14px; line-height: 1.7; }
 .knowledge-source-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
-.knowledge-source { max-height: 220px; overflow: auto; white-space: pre-wrap; user-select: text; margin: 0 0 16px; padding: 12px; background: var(--surface-2); border-radius: 8px; font-size: 13px; line-height: 1.8; }
+.knowledge-source { max-height: 220px; overflow: auto; white-space: pre-wrap; user-select: text; margin: 0 0 16px; padding: 12px; background: var(--surface-2); border-radius: 8px; font-size: 14px; line-height: 1.8; }
 .day-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 18px; margin-top: 18px; }
 .day-list { padding: 16px; display: flex; flex-direction: column; gap: 6px; }
 .day-list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
@@ -944,7 +941,7 @@ await loadDays();
 .day-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; cursor: pointer; text-align: left; }
 .day-item:hover { background: var(--surface-2, #f6f7fb); }
 .day-item.active { background: var(--surface-2, #f6f7fb); border-color: var(--line); }
-.day-item-label { font-size: 13px; color: var(--text-2); }
+.day-item-label { font-size: 14px; color: var(--text-2); }
 .day-item-meta { font-size: 12px; color: var(--faint); display: inline-flex; gap: 6px; align-items: center; }
 .day-item-draft { padding: 1px 6px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 12px; }
 .day-detail { padding: 18px; }
@@ -958,28 +955,26 @@ await loadDays();
 .event-private { padding: 1px 6px; border-radius: 999px; background: #ede9fe; color: #5b21b6; font-size: 12px; }
 .event-external { padding: 1px 6px; border-radius: 999px; background: #e0f2fe; color: #075985; font-size: 12px; }
 .event-title { font-size: 14px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
-.event-detail { font-size: 13px; color: var(--dim); line-height: 1.8; margin-top: 4px; }
+.event-detail { font-size: 14px; color: var(--dim); line-height: 1.8; margin-top: 4px; }
 .event-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--faint); margin-top: 6px; }
 .event-actions { display: flex; gap: 12px; margin-top: 8px; }
 .btn-link { background: none; border: 0; padding: 0; color: var(--dim); font-size: 12px; cursor: pointer; }
 .btn-link:hover { color: var(--text-2); text-decoration: underline; }
 .day-archived { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
 .archived-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; }
-.archived-title { font-size: 13px; color: var(--faint); }
+.archived-title { font-size: 12px; color: var(--faint); }
 .day-originals { margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 14px; }
 .original-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .original-empty { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); }
 .original-group { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--text-2); }
 .original-group-n { font-weight: 400; color: var(--faint); font-size: 12px; }
-.original-line { display: flex; gap: 8px; font-size: 13px; line-height: 1.7; }
+.original-line { display: flex; gap: 8px; font-size: 14px; line-height: 1.7; }
 /* 定宽而不是自适应：昵称长短不一时，正文那列才不会左右跳。 */
 .original-role { flex: 0 0 6.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 12px; }
 .original-text { color: var(--dim); }
 @media (max-width: 900px) {
   .day-layout { grid-template-columns: 1fr; }
 }
-.day-context { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin: 0 0 16px; color: var(--dim); font-size: 12px; }
-.day-context > span:first-child { display: inline-flex; align-items: center; gap: 7px; color: var(--text-2); font-weight: 500; }
 .card { border: 0; border-radius: 12px; box-shadow: none; }
 .day-layout { grid-template-columns: 290px minmax(0, 1fr); align-items: start; margin-top: 0; }
 .day-list { position: sticky; top: 20px; padding: 18px 14px; max-height: calc(100dvh - 130px); overflow-y: auto; }
@@ -1001,10 +996,11 @@ await loadDays();
 .day-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .day-detail-kicker { color: var(--dim); font-size: 12px; }
 .day-detail-head h2 { margin: 8px 0 0; font-size: 23px; }
-.day-detail-head > .muted-note { display: block; color: var(--dim); line-height: 1.9; }
+/* 统计与原文开关同一行：左侧数据、右侧动作，不再是一条灰底状态条 */
+.day-detail-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-top: 8px; }
+.day-detail-meta > .muted-note { color: var(--dim); font-variant-numeric: tabular-nums; }
 .day-stepper { display: flex; flex: none; gap: 6px; }
 .day-stepper .el-button { margin: 0; padding: 8px; }
-.day-detail-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 14px; border-radius: 8px; background: var(--surface-2); padding: 10px 12px; color: var(--dim); font-size: 12px; }
 .event-card { position: relative; border-top: 0; border-left: 1px solid var(--line); margin-left: 5px; padding: 0 0 26px 22px; }
 .event-card::before { content: ''; position: absolute; top: 5px; left: -5px; width: 9px; height: 9px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px var(--surface); }
 .event-head { color: var(--dim); flex-wrap: wrap; }
@@ -1012,7 +1008,7 @@ await loadDays();
 .event-title { margin: 10px 0 8px; font-size: 16px; line-height: 1.6; overflow-wrap: anywhere; }
 .event-detail { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.95; white-space: pre-wrap; overflow-wrap: anywhere; }
 .event-meta { color: var(--dim); margin-top: 12px; line-height: 1.8; }
-.event-actions { align-items: center; justify-content: flex-end; flex-wrap: wrap; border-radius: 8px; background: var(--surface-2); padding: 8px 12px; margin-top: 14px; }
+.event-actions { align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
 .day-originals { border-top-style: solid; }
 .original-list { border-radius: 10px; background: var(--surface-2); padding: 16px; }
 .original-group { flex-wrap: wrap; }

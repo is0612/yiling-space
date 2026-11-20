@@ -294,7 +294,7 @@ async function loadRunsListOnly() {
 .run-list-item { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 10px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; background: var(--el-bg-color); color: inherit; text-align: left; cursor: pointer; }
 .run-list-item.is-active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .run-list-item strong { font-size: 12px; }
-.run-list-item small, .run-status, .option-meta { color: var(--el-text-color-secondary); font-size: 11px; }
+.run-list-item small, .run-status, .option-meta { color: var(--el-text-color-secondary); font-size: 12px; }
 .run-status { color: var(--el-color-primary); }
 .run-detail { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .run-detail-heading { padding-bottom: 10px; border-bottom: 1px solid var(--el-border-color-lighter); }
@@ -303,12 +303,12 @@ async function loadRunsListOnly() {
 .run-notice.is-warning { color: var(--el-color-warning); }
 .suggestion-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--el-border-color); border-radius: 10px; }
 .suggestion-title { align-items: flex-start; }
-.suggestion-title strong { font-size: 15px; }
+.suggestion-title strong { font-size: 16px; }
 .suggestion-reason { padding: 8px 10px; background: var(--el-fill-color-lighter); border-radius: 6px; }
 .suggestion-members { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .suggestion-members :deep(.el-checkbox) { height: auto; margin-right: 0; white-space: normal; }
 .suggestion-members :deep(.el-checkbox__label) { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
-.suggestion-members small { color: var(--el-text-color-secondary); font-size: 11px; }
+.suggestion-members small { color: var(--el-text-color-secondary); font-size: 12px; }
 .accepted-members span { font-size: 12px; }
 .suggestion-actions { justify-content: flex-start; flex-wrap: wrap; }
 .reviewed-note { color: var(--el-color-success); }

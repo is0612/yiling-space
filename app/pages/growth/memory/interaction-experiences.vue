@@ -229,10 +229,12 @@ function dateTime(value?: string) {
       :character-id="characterId"
     />
 
-    <section class="domain-note">
-      <p><strong>对话空闲 30 分钟后，后台自动收尾。</strong>提炼后由角色独立审核，有依据才自动生效；拿不准的留待确认。</p>
-      <p>没有明确反馈，不对回应效果下结论。这是供类似情境参考的经验记忆，不是必须照做的语言规则。网页和私聊可自动收尾；群里遇到值得学的接话或判断，可以手动选原话提炼，采纳后仅在原群使用。经验会随时间降低召回权重。</p>
-    </section>
+    <!-- 原来这里是左侧带粉色竖线的两段说明，讲了机制、边界、渠道差异四件事。
+         只留可操作的那一句；「不是必须照做的语言规则」「权重会随时间衰减」属于解释性内容，
+         读一次就够，没必要每次进页面都复读。 -->
+    <p class="domain-note">
+      对话空闲 30 分钟后后台自动收尾，有依据才自动生效，拿不准的留给你确认；群里可以手动选原话提炼，采纳后只在原群生效。
+    </p>
 
     <el-empty
       v-if="!characterId"
@@ -538,20 +540,19 @@ function dateTime(value?: string) {
 .workspace-heading { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .workspace-heading h2 { margin: 0; font-size: 16px; color: var(--text); }
 .experience-evidence { margin-top: 16px; }
-.experience-evidence summary { display: list-item; width: fit-content; cursor: pointer; color: var(--dim); font-size: 13px; line-height: 1.8; }
+.experience-evidence summary { display: list-item; width: fit-content; cursor: pointer; color: var(--dim); font-size: 14px; line-height: 1.8; }
 .experience-evidence summary:hover { color: var(--brand); }
 .experience-evidence summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; border-radius: 3px; }
 .experience-evidence[open] summary { color: var(--brand); }
 .structured-experience { min-width: 0; }
-.domain-note { margin: 0 0 18px; border-left: 3px solid var(--brand); padding: 2px 18px; }
-.domain-note p { margin: 6px 0; font-size: 14px; line-height: 1.7; }
-.domain-note p:first-child { color: var(--text-2); }
-.domain-note p:last-child { color: var(--dim); }
+/* 一句话说明，不加盒子：左侧竖线 + 两段正文占掉一屏里最贵的位置，
+   而里面的信息一年读一次就够。 */
+.domain-note { margin: -4px 0 18px; color: var(--dim); font-size: 12px; line-height: 1.7; }
 .automation-panel, .experiences-workspace { border: 0; border-radius: 12px; background: var(--surface, #fff); box-shadow: none; }
 .automation-panel { margin-bottom: 18px; padding: 18px 20px; display: grid; gap: 8px; }
 .panel-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .panel-title { margin: 0; color: var(--text); font-size: 16px; font-weight: 700; }
-.panel-sub { max-width: 760px; margin: 5px 0 0; color: var(--dim); font-size: 13px; line-height: 1.7; }
+.panel-sub { max-width: 760px; margin: 5px 0 0; color: var(--dim); font-size: 14px; line-height: 1.7; }
 .panel-note { margin: 0; color: var(--amber); font-size: 12px; line-height: 1.7; }
 .experiences-workspace { margin-bottom: 12px; padding: 0; display: grid; gap: 0; min-width: 0; overflow: hidden; }
 .filters { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; margin: 0; padding: 20px 24px; border-bottom: 1px solid var(--line); }
@@ -566,8 +567,8 @@ function dateTime(value?: string) {
 .record-title h2 { margin: 0; color: var(--text); font-size: 16px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .learning-details { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px 14px; margin: 14px 0 0; }
 .learning-details dt { color: var(--dim); font-size: 12px; line-height: 1.7; }
-.learning-details dd { margin: 0; color: var(--text-2); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-.context { margin: 14px 0 0; color: var(--text-2); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.learning-details dd { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.context { margin: 14px 0 0; color: var(--text-2); font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 blockquote { margin: 12px 0 0; border-radius: var(--radius-sm); background: var(--surface); padding: 10px 12px; color: var(--dim); font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .record-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

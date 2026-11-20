@@ -684,7 +684,7 @@ function formatExportedAt(value: string | null): string {
   font-weight: 700;
 }
 .preview-id { min-width: 0; flex: 1; }
-.preview-name { color: var(--text); font-size: 15px; font-weight: 600; }
+.preview-name { color: var(--text); font-size: 16px; font-weight: 600; }
 .preview-meta {
   display: flex;
   flex-wrap: wrap;
@@ -697,7 +697,7 @@ function formatExportedAt(value: string | null): string {
 .preview-desc {
   margin: var(--sp-3) 0 0;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
@@ -733,7 +733,7 @@ function formatExportedAt(value: string | null): string {
   align-items: baseline;
   gap: 6px;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .merge-head strong { color: var(--text); font-weight: 600; }

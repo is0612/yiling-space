@@ -88,5 +88,5 @@ const crumbs = computed(() =>
 }
 .ph-back:hover { color: var(--brand-strong); }
 .ph-back:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
-.ph-back .el-icon { font-size: 13px; }
+.ph-back .el-icon { font-size: 14px; }
 </style>

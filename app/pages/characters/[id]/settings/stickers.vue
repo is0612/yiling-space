@@ -1501,7 +1501,7 @@ onMounted(() => {
   background: var(--surface-2);
   padding: var(--sp-2) var(--sp-3);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 /* 状态不只靠颜色一个通道：方向上/下用「入/出」符号一起说，色弱和灰度下也分得清 */
@@ -1597,7 +1597,7 @@ onMounted(() => {
   background: var(--surface-2);
   padding: var(--sp-5) var(--sp-4);
   color: var(--dim);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.7;
   text-align: center;
 }

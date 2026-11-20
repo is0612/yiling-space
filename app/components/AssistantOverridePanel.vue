@@ -355,7 +355,7 @@ async function testConnection() {
 .field-link { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; border-radius: var(--radius-xs); color: var(--brand-strong); font-size: 12px; font-weight: 600; text-decoration: none; }
 .field-link:hover { color: var(--brand-btn-h); text-decoration: underline; }
 .field-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.field-link .el-icon { font-size: 13px; }
+.field-link .el-icon { font-size: 14px; }
 .field-ctl { width: 100%; }
 .model-row { display: flex; width: 100%; align-items: center; gap: 8px; }
 .model-select { min-width: 180px; flex: 1; }

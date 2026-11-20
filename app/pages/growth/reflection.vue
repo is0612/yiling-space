@@ -292,7 +292,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
         <div class="intro-copy">
           <span class="section-kicker">阶段回望</span>
           <h2>{{ activeCharacter.name }}，这段时间有什么变化？</h2>
-          <p>反思只在你主动发起时运行。系统读取当前角色的公开事实、已确认知识与阶段总结，形成带来源的建议，交给你审阅。资料未变化时复用已有结果；新一轮只保留有新增或修改证据的建议。</p>
+          <p>只在你主动发起时运行：读公开事实、已确认的知识与阶段总结，给出带来源的建议供你审阅。资料没变化就复用上次结果。</p>
           <div class="intro-actions">
             <el-select
               :model-value="days"
@@ -690,39 +690,39 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
 
 <style scoped>
 .reflection-page { display: grid; gap: 22px; font-size: 14px; }
-.reflection-intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; padding: 28px; background: linear-gradient(115deg, #fff 35%, #f0f6f5); }
-.section-kicker { color: #647b78; font-size: 12px; font-weight: 600; letter-spacing: .04em; }
-.intro-copy h2 { margin: 9px 0 12px; color: #293e3b; font-size: 23px; line-height: 1.45; }
+.reflection-intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; padding: 28px; background: linear-gradient(115deg, var(--surface) 35%, var(--brand-soft)); }
+.section-kicker { color: var(--dim); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.intro-copy h2 { margin: 9px 0 12px; color: var(--text); font-size: 22px; line-height: 1.45; }
 .intro-copy p { max-width: 670px; margin: 0 0 20px; color: var(--dim); line-height: 1.85; }
 .intro-actions { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .period-select { width: 145px; }
 .muted-note { display: block; margin: 10px 0; color: var(--dim); font-size: 12px; line-height: 1.8; }
-.reflection-summary { display: grid; gap: 18px; min-width: 128px; align-content: center; padding-left: 25px; border-left: 1px solid #dfe9e6; }
+.reflection-summary { display: grid; gap: 18px; min-width: 128px; align-content: center; padding-left: 25px; border-left: 1px solid var(--line); }
 .reflection-summary div { display: grid; grid-template-columns: 45px 1fr; align-items: baseline; gap: 8px; }
-.reflection-summary strong { color: #496d63; font-size: 25px; font-weight: 600; }
+.reflection-summary strong { color: var(--text); font-size: 25px; font-weight: 600; }
 .reflection-summary span { color: var(--dim); font-size: 12px; }
 .reflection-records, .run-list { display: grid; gap: 16px; min-width: 0; }
 .records-toolbar, .run-heading, .suggestion-heading, .reflection-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .record-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .record-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.reflection-intro, .reflection-run { border: 0; border-radius: 12px; box-shadow: none; }
+.reflection-intro, .reflection-run { border: 0; border-radius: var(--radius); box-shadow: none; }
 .reflection-run { padding: 22px; min-width: 0; }
-.run-heading h3 { margin: 6px 0 0; color: #30463f; font-size: 18px; }
+.run-heading h3 { margin: 6px 0 0; color: var(--text); font-size: 18px; }
 .run-meta { display: flex; gap: 8px 18px; flex-wrap: wrap; margin: 15px 0; color: var(--dim); font-size: 12px; }
 .run-failure { display: grid; gap: 12px; justify-items: start; }
 .reflection-empty { margin: 20px 0 3px; color: var(--dim); font-size: 14px; line-height: 1.8; }
-.suggestion-card { margin-top: 18px; padding: 20px; border: 0; border-radius: 12px; background: var(--surface-2); }
-.suggestion-heading h4 { margin: 0; color: #30463f; font-size: 16px; line-height: 1.6; }
+.suggestion-card { margin-top: 18px; padding: 20px; border: 0; border-radius: var(--radius); background: var(--surface-2); }
+.suggestion-heading h4 { margin: 0; color: var(--text); font-size: 16px; line-height: 1.6; }
 .reflection-reasoning { display: grid; gap: 14px; margin: 20px 0; }
 .reflection-reasoning div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 16px; }
-.reflection-reasoning dt { color: #5f766d; font-size: 12px; font-weight: 600; line-height: 1.9; }
+.reflection-reasoning dt { color: var(--dim); font-size: 12px; font-weight: 600; line-height: 1.9; }
 .reflection-reasoning dd { margin: 0; line-height: 1.9; white-space: pre-wrap; overflow-wrap: anywhere; }
-.reflection-sources { border-top: 1px solid #e8eeea; padding-top: 14px; }
-.reflection-sources summary { cursor: pointer; font-size: 12px; color: #647b71; line-height: 1.8; }
+.reflection-sources { border-top: 1px solid var(--line); padding-top: 14px; }
+.reflection-sources summary { cursor: pointer; font-size: 12px; color: var(--dim); line-height: 1.8; }
 .source-card { padding: 14px; margin-top: 12px; border-radius: 8px; background: var(--surface); }
 .source-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.source-heading strong { font-size: 13px; }
-.source-card blockquote { margin: 12px 0; padding-left: 12px; border-left: 2px solid #bacfc3; font-size: 13px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-heading strong { font-size: 14px; }
+.source-card blockquote { margin: 12px 0; padding-left: 12px; border-left: 2px solid var(--line-strong); font-size: 14px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
 .source-identifiers { color: var(--dim); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
 .review-record { margin-top: 16px; font-size: 12px; color: var(--dim); }
 .review-record p { margin: 6px 0; line-height: 1.7; white-space: pre-wrap; }
@@ -733,8 +733,8 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listVersion += 1; clos
 :deep(.el-dialog__body) { display: grid; gap: 12px; }
 @media (max-width: 760px) {
   .reflection-intro { grid-template-columns: 1fr; padding: 20px; gap: 20px; }
-  .intro-copy h2 { font-size: 20px; }
-  .reflection-summary { grid-template-columns: repeat(3, 1fr); border-left: 0; border-top: 1px solid #dfe9e6; padding: 18px 0 0; gap: 12px; }
+  .intro-copy h2 { font-size: 18px; }
+  .reflection-summary { grid-template-columns: repeat(3, 1fr); border-left: 0; border-top: 1px solid var(--line); padding: 18px 0 0; gap: 12px; }
   .reflection-summary div { grid-template-columns: 1fr; gap: 4px; }
   .reflection-run { padding: 18px; }
   .suggestion-card { padding: 16px; }
