@@ -8,6 +8,7 @@ import {
   type LocalObserveRoot,
 } from "./local-observe";
 import { attachContinuationWrite, lockLocalTaskForApproval, recordWriteReadback } from "./local-tasks";
+import { scheduleAutoContinue } from "./auto-continue";
 import { getPrisma } from "./prisma";
 
 export const LOCAL_WRITE_MAX_BYTES = 32 * 1024;
@@ -190,6 +191,7 @@ export async function approveLocalWriteRequest(id: string, actorId: string) {
       path: target.relative,
       status: "applied",
     });
+    scheduleAutoContinue(request.taskId, actorId);
     return { ...applied, ...(recordedReadback ? { readback } : {}) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

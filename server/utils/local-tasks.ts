@@ -147,6 +147,16 @@ export async function attachContinuationWrite(tx: Prisma.TransactionClient, task
 }
 
 /** Browser steps carry no readback of their own: the approval result is the evidence. */
+/** Toggling unattended continuation is allowed only while the task can still run. */
+export async function setLocalTaskAutoContinue(id: string, enabled: boolean, actorId: string) {
+  const task = await getPrisma().localTask.findUnique({ where: { id }, select: { status: true } });
+  if (!task) throw new LocalObserveError(404, "任务不存在。");
+  if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(task.status)) throw new LocalObserveError(409, "任务已结束，不能改自动续办。");
+  await getPrisma().localTask.update({ where: { id }, data: { autoContinue: enabled } });
+  auditLocalObserve(actorId, "task.auto", { taskId: id, status: enabled ? "enabled" : "disabled" });
+  return enabled;
+}
+
 export async function attachContinuationBrowser(tx: Prisma.TransactionClient, taskId: string, requestId: string, label: string) {
   const task = await lockTask(tx, taskId);
   const steps = taskSteps(task.steps);

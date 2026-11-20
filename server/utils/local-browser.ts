@@ -1,6 +1,7 @@
 import { executeBrowserActions, parseBrowserActions, parseBrowserProposal } from "./browser-actions";
 import { auditLocalObserve, LocalObserveError } from "./local-observe";
 import { appendBrowserEvidence, attachContinuationBrowser, lockLocalTaskForApproval } from "./local-tasks";
+import { scheduleAutoContinue } from "./auto-continue";
 import { getPrisma } from "./prisma";
 import { validatePublicWebpageUrl } from "./read-public-webpage";
 
@@ -107,6 +108,8 @@ export async function approveLocalBrowserRequest(id: string, actorId: string) {
       });
     }
     auditLocalObserve(actorId, "browser.apply", { requestId: id, status, steps: result.steps.length });
+    // Only a finished phase may continue; a FILLED form still needs the owner's second confirmation.
+    if (status !== "FILLED") scheduleAutoContinue(request.taskId, actorId);
     return { ...updated, screenshot };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -151,6 +154,7 @@ export async function submitLocalBrowserRequest(id: string, actorId: string) {
       });
     }
     auditLocalObserve(actorId, "browser.apply", { requestId: id, status, submitted: result.submitted });
+    scheduleAutoContinue(request.taskId, actorId);
     return { ...updated, screenshot };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

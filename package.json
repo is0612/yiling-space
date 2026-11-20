@@ -158,6 +158,7 @@
     "test:local-task": "tsx scripts/test-local-task.ts",
     "test:local-command": "tsx scripts/test-local-command.ts",
     "test:local-chat-results": "tsx scripts/test-local-chat-results.ts",
+    "test:auto-continue": "tsx scripts/test-auto-continue.ts",
     "test:auth-db": "tsx scripts/test-auth-db.ts",
     "test:auth-admin-reset": "tsx scripts/test-auth-admin-reset.ts",
     "test:auth-flows": "tsx scripts/test-auth-flows.ts",

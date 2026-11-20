@@ -2160,6 +2160,9 @@ model LocalTask {
   plan String @db.Text
   steps Json @default("[]") @db.JsonB
   status String @default("PLANNED") @db.VarChar(20)
+  /// 无人值守续办：批准完成后由服务端自动发起下一轮，受总开关与次数上限约束。
+  autoContinue Boolean @default(false)
+  autoRounds Int @default(0)
   actorId String @db.Uuid
   characterId String? @db.Uuid
   conversationId String? @db.Uuid

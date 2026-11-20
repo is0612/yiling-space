@@ -61,6 +61,8 @@ type LocalTask = {
 };
 
 type LocalTaskDetail = LocalTask & {
+  autoContinue?: boolean;
+  autoRounds?: number;
   steps: Array<{ title: string; status: string; note?: string; verifyWriteId?: string; request?: { kind: "write" | "command" | "browser"; id: string } }>;
   commandRequests: Array<{ id: string; command: string; status: string; cwd: string; root: { label: string } }>;
   browserRequests: Array<{ id: string; url: string; status: string }>;
@@ -667,6 +669,18 @@ function linkTaskStep(index: number) {
   if (!task || !stepRequestChoice.value) return;
   const [kind, requestId] = stepRequestChoice.value.split(":");
   void saveTaskStep(task.id, { action: "link", index, kind, requestId });
+}
+
+async function toggleAutoContinue(next: string | number | boolean) {
+  const task = taskDetail.value;
+  if (!task) return;
+  try {
+    const result = await request<{ task: LocalTaskDetail }>({ url: `/local/tasks/${task.id}`, method: "patch", data: { autoContinue: Boolean(next) } });
+    if (taskDetail.value?.id === task.id) taskDetail.value = { ...taskDetail.value, ...result.task };
+    ElMessage.success(next ? "已打开自动续办。" : "已关闭自动续办。");
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "更新自动续办失败。"));
+  }
 }
 
 async function cancelTask() {
@@ -1493,6 +1507,20 @@ onMounted(async () => {
           <div class="task-section">
             <b>计划</b>
             <pre class="task-plan">{{ taskDetail.plan }}</pre>
+          </div>
+          <div class="task-section">
+            <b>无人值守续办</b>
+            <p class="muted">
+              打开后，每次审批完成且没有待批项时，她会自动接着做下一轮；最多 {{ 3 }} 轮，随时可以关掉。
+              需要服务端总开关 {{ 'YILING_AUTO_CONTINUE=1' }}。
+            </p>
+            <el-switch
+              :model-value="taskDetail.autoContinue"
+              :disabled="taskBusy || taskDetailLoading || taskIsClosed"
+              active-text="自动继续"
+              @change="toggleAutoContinue"
+            />
+            <span class="muted">已用 {{ taskDetail.autoRounds ?? 0 }} 轮</span>
           </div>
           <div class="task-section">
             <b>执行步骤</b>

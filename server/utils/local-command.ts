@@ -4,6 +4,7 @@ import { auditLocalObserve, LocalObserveError, resolveLocalPath, type LocalObser
 import { appendCommandEvidence, lockLocalTaskForApproval } from "./local-tasks";
 import { getPrisma } from "./prisma";
 import { applyGitBranch, planGitBranch } from "./local-git";
+import { scheduleAutoContinue } from "./auto-continue";
 
 export const LOCAL_COMMAND_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -211,6 +212,7 @@ export async function approveLocalCommandRequest(id: string, actorId: string) {
       });
     }
     auditLocalObserve(actorId, "command.apply", { requestId: id, status, exitCode: result.code, durationMs: result.durationMs });
+    scheduleAutoContinue(request.taskId, actorId);
     return updated;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
