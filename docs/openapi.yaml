@@ -226,7 +226,8 @@ paths:
                   userMessage: { $ref: '#/components/schemas/RoleplayMessage' }
                   assistantMessage: { $ref: '#/components/schemas/RoleplayMessage' }
                   replayed: { type: boolean }
-        '400': { description: 输入无效或单条消息超出预算 }
+        '400': { description: 输入无效 }
+        '413': { description: 单条消息、人设或摘要超出上下文预算，原文保留 }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: 存档不存在或不属于当前用户 }
         '409': { description: 并发请求、请求内容与原requestId冲突或存在未回答消息 }
@@ -264,6 +265,65 @@ paths:
         '409': { description: 存档正在处理另一请求 }
         '502': { description: 压缩失败，旧摘要和聊天原文保留 }
         '503': { description: 扮演模型尚未配置 }
+  /local/browser-requests:
+    get:
+      tags: [LocalObserve]
+      summary: 待审批的网页操作
+      description: 仅管理员；默认只返回 PENDING。
+      parameters:
+        - { in: query, name: status, schema: { type: string, default: PENDING } }
+      responses:
+        '200':
+          description: 网页操作请求
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items: { $ref: '#/components/schemas/LocalBrowserRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: 非管理员 }
+  /local/browser-requests/{id}/approve:
+    post:
+      tags: [LocalObserve]
+      summary: 批准并执行网页操作
+      description: 在独立无登录浏览器中执行一次，成功与否都关闭会话；提交、上传、跨站与密码输入被拒绝。
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: 已执行，返回含截图的请求
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request]
+                properties:
+                  request: { $ref: '#/components/schemas/LocalBrowserRequest' }
+        '400': { description: 步骤或网址无效 }
+        '403': { description: 非管理员 }
+        '409': { description: 已处理或正在执行 }
+  /local/browser-requests/{id}/reject:
+    post:
+      tags: [LocalObserve]
+      summary: 拒绝网页操作
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200': { description: 已拒绝 }
+        '403': { description: 非管理员 }
+        '409': { description: 已处理 }
   /local/browser/observe:
     post:
       tags: [LocalObserve]
@@ -7743,7 +7803,7 @@ components:
         maxTokens: { type: integer, minimum: 256, maximum: 32768 }
         contextWindowTokens: { type: integer, description: 供应商模型上下文容量 }
         contextBudgetTokens: { type: integer, description: 输入预算，必须为输出及安全余量留空间 }
-        recentMessageLimit: { type: integer, description: 保留的近期原文条数；更早内容进入摘要 }
+        recentMessageLimit: { type: integer, minimum: 2, maximum: 500, description: 保留的近期原文条数；更早内容进入摘要 }
     RoleplaySettings:
       type: object
       required: [apiBaseUrl, model, thinking, temperature, maxTokens, contextWindowTokens, contextBudgetTokens, recentMessageLimit, hasApiKey]
@@ -7934,6 +7994,62 @@ components:
             label: { type: string }
             path: { type: string }
             mode: { type: string, enum: [READ_ONLY, READ_WRITE] }
+    LocalBrowserRequest:
+      type: object
+      required: [id, url, actions, reason, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string }
+        actions:
+          type: array
+          maxItems: 10
+          description: 只接受 click / click_text / fill / scroll 四种步骤
+          items:
+            oneOf:
+              - type: object
+                required: [kind, selector]
+                properties:
+                  kind: { type: string, enum: [click] }
+                  selector: { type: string, maxLength: 200 }
+              - type: object
+                required: [kind, selector, value]
+                properties:
+                  kind: { type: string, enum: [fill] }
+                  selector: { type: string, maxLength: 200 }
+                  value: { type: string, maxLength: 2000 }
+              - type: object
+                required: [kind, text]
+                properties:
+                  kind: { type: string, enum: [click_text] }
+                  text: { type: string, maxLength: 120 }
+              - type: object
+                required: [kind, y]
+                properties:
+                  kind: { type: string, enum: [scroll] }
+                  y: { type: integer, minimum: 0, maximum: 20000 }
+        reason: { type: string, maxLength: 500 }
+        status: { type: string, enum: [PENDING, APPROVING, SUCCEEDED, FAILED, REJECTED] }
+        taskId: { type: string, format: uuid, nullable: true }
+        error: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        result:
+          type: object
+          nullable: true
+          properties:
+            steps:
+              type: array
+              items:
+                type: object
+                properties:
+                  action: { type: string }
+                  ok: { type: boolean }
+                  detail: { type: string }
+            title: { type: string }
+            text: { type: string }
+            blockedRequests: { type: integer }
+        screenshot:
+          type: string
+          description: 仅批准响应返回的 PNG data URL，不写入数据库
     LocalObserveRoot:
       type: object
       required: [id, label, path, mode, enabled, builtin]

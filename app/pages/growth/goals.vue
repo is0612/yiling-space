@@ -277,6 +277,12 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
         </el-button>
       </template>
     </PageHeader>
+    <!-- 这句不能删：`test:goals-page` 守着它，而且它是这一页唯一一处告诉人
+         「模型只提候选、不会自己把目标标成完成」的地方。原来压在这句周围的两段领域说明
+         已经删掉了，只留这一句。 -->
+    <p class="domain-note">
+      模型不会自动完成目标：只能提出候选，也不会创建外部行动或定时任务；完成、暂停、放弃都由你确认。
+    </p>
     <el-empty
       v-if="!characterId"
       description="请先在顶栏选择一个角色。"
@@ -835,6 +841,7 @@ h3 { font-size: 16px; }
 p { font-size: 14px; line-height: 1.7; }
 .related-links { justify-content: flex-start; font-size: 14px; margin-top: 10px; }
 .related-links a { color: var(--brand-strong); }
+.domain-note { margin: -4px 0 16px; color: var(--dim); font-size: 12px; line-height: 1.7; }
 .goals-workspace { padding: 22px; border: 0; box-shadow: none; background: var(--surface); border-radius: 12px; display: grid; gap: 20px; min-width: 0; }
 .filters { justify-content: flex-start; }
 .filters > .el-input { flex: 1; min-width: 180px; max-width: 330px; }

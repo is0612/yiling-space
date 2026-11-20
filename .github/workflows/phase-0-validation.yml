@@ -164,6 +164,11 @@ jobs:
       - name: 隐私门禁
         run: yarn run check:privacy
 
+      # 样式契约：组件里不许写死十六进制色、字号只允许六档。
+      # 预算 42 = 当前历史遗留数量，只许减不许加（见 scripts/check-tokens.mjs 头注释）。
+      - name: 样式契约门禁
+        run: yarn run check:tokens
+
       - name: 周期记忆调度单元测试
         run: yarn run test:scheduler
 
@@ -297,3 +302,13 @@ jobs:
 
       - name: 检查 OpenAPI 契约
         run: npx --yes @redocly/cli@latest lint --extends=minimal docs/openapi.yaml
+
+      # 一条命令跑完 package.json 里所有 test:*（185 条，约 20 分钟）。
+      #
+      # 在这之前，上面那批 step 是手写的：197 个 test 脚本里只有 40 个被点名跑过，
+      # 其余 157 个从来没在流水线上出现过 —— 测试写了，但不构成门禁。
+      # 这条跑起来之后，新增测试自动进入 CI，不需要记得回来改 workflow。
+      #
+      # 上面那些同名单条 step 现在是重复的，可以删；先留着是为了让这次改动只做加法。
+      - name: 全部测试（test:all）
+        run: yarn run test:all

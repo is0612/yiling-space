@@ -1248,8 +1248,9 @@ async function runChannelTurn(input: {
   /**
    * 手账那句只在「她自己的对话」里注入：网页对话与主人私聊。
    * 群聊不传（手账是写给她自己的，群里复述就是泄露），对普通人的私聊也不传。
+   * 判据用 `isGroup` 而不是 `input.group`：群元数据是可选的，群聊本身不是。
    */
-  const journalLine = !input.group && messages[0]?.speaker?.isOwner === true
+  const journalLine = !isGroup && messages[0]?.speaker?.isOwner === true
     ? await readPreviousJournalLine(
         prisma,
         character.id,
@@ -1265,7 +1266,7 @@ async function runChannelTurn(input: {
    * 一句是她带走的情绪，正文是「我前几天写过什么」——她要能聊起自己写的东西，
    * 而不是只在被问生日时才从手账里翻出一句。截断在 `chat-reply` 的载荷里做。
    */
-  const journalRecent = !input.group && messages[0]?.speaker?.isOwner === true
+  const journalRecent = !isGroup && messages[0]?.speaker?.isOwner === true
     ? await readRecentJournals(prisma, { characterId: character.id, limit: 2 })
         .then((entries) => dropDuplicateJournalQuote(entries, journalLine))
         .catch(() => [])
@@ -2429,9 +2430,19 @@ async function runChannelTurn(input: {
               })),
             }
           : {}),
+        /**
+         * 「这一轮是群聊」只认 `isGroup`，不认 `input.group` 有没有值。
+         *
+         * 这两者必须同源：助理回合身份在 `createAssistantTurnContext` 里按 `isGroup` 写成
+         * `channel: "qq-group"`，`assertAssistantTurnChannel` 再拿 `chatInput.groupChat` 去校对。
+         * 如果 groupChat 按「群里带了元数据」算，一条缺 `group` 的群消息就会变成身份说群聊、
+         * chatInput 说私聊，断言抛错、整轮 abort —— 而且是在写库事务之前 abort，于是群会话
+         * 归位、旧忆泡搬家、这一轮消息落库全都不发生，日志里只有一句 ignored。
+         * 群元数据（背景、成员、锚点）仍然只在 `input.group` 有值时附带，缺了只是语境变薄。
+         */
+        ...(isGroup ? { groupChat: true } : {}),
         ...(input.group
           ? {
-              groupChat: true,
               direct: input.group.direct,
               ...(backgroundLines.length
                 ? {

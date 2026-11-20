@@ -143,5 +143,17 @@ try {
   assert.match(await browserTools.call("observe_public_browser", '{"url":"https://example.com/read"}'), /rendered fixture/);
   assert.equal(observed, 1);
   assert.match(await createReadOnlyChatTools({}).call("observe_public_browser", '{"url":"https://example.com/read"}'), /invalid_tool_call/);
+  let proposed = 0;
+  const actionTools = createReadOnlyChatTools({ proposeBrowserActions: async (url, actions) => {
+    proposed++;
+    assert.equal(url, "https://example.com/read");
+    assert.deepEqual(JSON.parse(actions), [{ kind: "click", selector: "#more" }]);
+    return { status: "PENDING_APPROVAL", requestId: "browser-fixture" };
+  } }, "请观察 https://example.com/read");
+  assert.match(await actionTools.call("propose_browser_actions", '{"url":"https://example.com/read?x=1","actions":"[]","reason":"t"}'), /tool_unavailable/);
+  assert.equal(proposed, 0);
+  assert.match(await actionTools.call("propose_browser_actions", '{"url":"https://example.com/read","actions":"[{\\"kind\\":\\"click\\",\\"selector\\":\\"#more\\"}]","reason":"展开"}'), /PENDING_APPROVAL/);
+  assert.equal(proposed, 1);
+  assert.match(await createReadOnlyChatTools({}).call("propose_browser_actions", '{"url":"https://example.com/read","actions":"[]","reason":"t"}'), /invalid_tool_call/);
   console.log("Read-only tools: whitelist, argument validation, budgets, cached queries, native continuation, reasoning, usage, unsupported-provider fallback and local tools passed (mock only).");
 } finally { globalThis.fetch = original; }

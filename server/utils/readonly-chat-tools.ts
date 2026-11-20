@@ -7,6 +7,8 @@ export type ReadOnlyChatTools = {
   localRoots?: () => Promise<unknown>;
   readLocalTask?: () => Promise<unknown>;
   observeBrowser?: (url: string) => Promise<unknown>;
+  /** 只创建审批请求，不操作网页。 */
+  proposeBrowserActions?: (url: string, actionsJson: string, reason: string, taskId?: string) => Promise<unknown>;
   listLocalFiles?: (root: string, path: string) => Promise<unknown>;
   readLocalFile?: (root: string, path: string) => Promise<unknown>;
   searchLocalFiles?: (root: string, query: string, path: string) => Promise<unknown>;
@@ -55,6 +57,21 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
         const url = new URL(args.url ?? "").toString();
         if (!browserUrls.has(url)) throw new Error("网址必须由用户在本轮消息明确给出。");
         return handlers.observeBrowser!(url);
+      },
+    }] : []),
+    ...(handlers.proposeBrowserActions ? [{
+      name: "propose_browser_actions", description: 'Propose clicks, text entry or scrolling on the exact page URL given in the user\'s current message. Creates a pending request only: no page is touched until the owner approves. Pass actions as a JSON array string whose steps are exactly: {"kind":"click","selector":"#id"}, {"kind":"click_text","text":"visible label"}, {"kind":"fill","selector":"#id","value":"text"}, {"kind":"scroll","y":600} or {"kind":"scroll","direction":"down"}. Use simple CSS selectors from the observed page. Submission, upload, password fields and cross-site navigation are blocked.',
+      fields: [
+        { name: "url", required: true, maxLength: 2048 },
+        { name: "actions", required: true, maxLength: 4000 },
+        { name: "reason", required: true, maxLength: 500 },
+        { name: "taskId", required: false, maxLength: 80 },
+      ],
+      maxRaw: 8000,
+      call: async (args: Record<string, string>) => {
+        const url = new URL(args.url ?? "").toString();
+        if (!browserUrls.has(url)) throw new Error("网址必须由用户在本轮消息明确给出。");
+        return handlers.proposeBrowserActions!(url, args.actions ?? "", args.reason ?? "", args.taskId || undefined);
       },
     }] : []),
     ...(handlers.readLocalTask ? [{

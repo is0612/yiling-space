@@ -271,6 +271,27 @@ export async function appendCommandEvidence(input: {
   });
 }
 
+/** 网页操作的自动证据：同样只追加，最终验收仍由管理员决定。 */
+export async function appendBrowserEvidence(input: {
+  taskId: string;
+  outcome: "PASS" | "FAIL";
+  note: string;
+  actorId: string;
+}) {
+  const task = await getPrisma().localTask.findUnique({ where: { id: input.taskId }, select: { id: true, status: true } });
+  if (!task || task.status === "CANCELLED") return;
+  await getPrisma().localTaskEvidence.create({
+    data: {
+      taskId: input.taskId,
+      kind: "BROWSER",
+      outcome: input.outcome,
+      note: input.note.slice(0, 8000),
+      actorId: input.actorId,
+    },
+  });
+  auditLocalObserve(input.actorId, "task.evidence", { taskId: input.taskId, outcome: input.outcome, kind: "BROWSER" });
+}
+
 export async function cancelLocalTask(id: string, actorId: string) {
   const revoked = await getPrisma().$transaction(async tx => {
     await lockTask(tx, id);

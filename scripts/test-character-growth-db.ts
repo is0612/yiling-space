@@ -4,6 +4,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
 import { retryReflection } from "../server/utils/reflection-service";
 import { importCharacterCard, loadCharacterExportBundle } from "../server/utils/character-transfer";
+import { CHARACTER_BUNDLE_VERSION } from "../server/utils/character-portable";
 const target = new URL(process.env.DATABASE_URL ?? "");
 assert(["localhost", "127.0.0.1", "[::1]"].includes(target.hostname) && /yiling_growth_card_test_/.test(target.pathname));
 const prisma = getPrisma(); const roles: string[] = []; let ownerId = "";
@@ -19,7 +20,10 @@ try {
  await prisma.knowledgeItem.create({ data: { characterId: source.id, sourceType: "CHAT", title: "不携带", content: "PRIVATE_CHAT_MARKER" } });
  const run = await prisma.reflectionRun.create({ data: { characterId: source.id, requestKey: randomUUID(), status: "RUNNING", periodStart: new Date(Date.now()-86400000), periodEnd: new Date() } });
  await prisma.reflectionSuggestion.create({ data: { runId: run.id, title: "继续核验", observation: "来源有核验", inference: "可能有帮助", recommendation: "继续核验", sourceRefs: [{ key: `memory:${event.id}`, type: "memory", id: event.id, hash: createHash("sha256").update(JSON.stringify([event.title,event.detail])).digest("hex"), title: event.title, excerpt: event.detail }] } });
- const exported = await loadCharacterExportBundle({ characterId: source.id, ownerId, includeFriends: false }); assert(exported); assert.equal(exported.bundle.formatVersion,5); assert(!JSON.stringify(exported.bundle).includes("PRIVATE_CHAT_MARKER"));
+ const exported = await loadCharacterExportBundle({ characterId: source.id, ownerId, includeFriends: false }); assert(exported); // 版本断言不要写死数字：角色卡已经从 v5 走到 v7（v7 补了表达习惯/目标/偏好），
+  // 写死 5 的后果是这条测试从 v6 起就一直红着 —— 而它从来没在 CI 里跑过，没人发现。
+  // 直接对常量断言：升版本时改的是 CHARACTER_BUNDLE_VERSION，这里自动跟上。
+  assert.equal(exported.bundle.formatVersion, CHARACTER_BUNDLE_VERSION); assert(!JSON.stringify(exported.bundle).includes("PRIVATE_CHAT_MARKER"));
  const imported = await importCharacterCard({ raw: exported.bundle, ownerId }); roles.push(imported.characterId);
  assert.equal(await prisma.knowledgeItem.count({where:{characterId:imported.characterId}}),1);
  const importedRun = await prisma.reflectionRun.findFirstOrThrow({where:{characterId:imported.characterId}});

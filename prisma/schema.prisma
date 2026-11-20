@@ -2169,6 +2169,7 @@ model LocalTask {
   completedAt DateTime? @db.Timestamptz(6)
   writeRequests LocalWriteRequest[]
   commandRequests LocalCommandRequest[]
+  browserRequests LocalBrowserRequest[]
   evidence LocalTaskEvidence[]
   @@index([status, createdAt])
   @@map("local_tasks")
@@ -2215,6 +2216,28 @@ model LocalCommandRequest {
   @@index([rootId, createdAt])
   @@index([taskId, createdAt])
   @@map("local_command_requests")
+}
+
+/// 管理员审批后才会执行的独立浏览器操作（仅本页点击、填写、滚动）。
+model LocalBrowserRequest {
+  id String @id @default(uuid()) @db.Uuid
+  actorId String @db.Uuid
+  characterId String? @db.Uuid
+  conversationId String? @db.Uuid
+  taskId String? @db.Uuid
+  url String @db.VarChar(2048)
+  actions Json @default("[]") @db.JsonB
+  reason String @db.VarChar(500)
+  status String @default("PENDING") @db.VarChar(20)
+  result Json? @db.JsonB
+  error String? @db.VarChar(500)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  decidedAt DateTime? @db.Timestamptz(6)
+  finishedAt DateTime? @db.Timestamptz(6)
+  task LocalTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  @@index([status, createdAt])
+  @@index([actorId, createdAt])
+  @@map("local_browser_requests")
 }
 
 /// Lightweight roleplay is deliberately isolated from character growth and memory.

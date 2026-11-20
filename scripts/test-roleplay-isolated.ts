@@ -95,6 +95,8 @@ try {
     assert((await db.modelUsage.count({ where: { userId: owner.id, kind: "roleplay-chat" } })) > 0);
     assert(contextCost(contextMessages("a", "", [{ role: "user", sequence: 1, content: "中" }])) > 0);
     assert.throws(() => validateSettings({ contextWindowTokens: 100, maxTokens: 100, contextBudgetTokens: 100 }));
+    assert.throws(() => validateSettings({ recentMessageLimit: 1 }));
+    assert.equal(validateSettings({ recentMessageLimit: 2 }).recentMessageLimit, 2);
     await service.deleteSession(owner.id, second.id);
     assert.equal(await db.roleplayMessage.count({ where: { sessionId: second.id } }), 0);
     await service.updateSettings(owner.id, { clearApiKey: true });

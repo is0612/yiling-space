@@ -27,6 +27,7 @@ export function validateSettings(value: Record<string, unknown>): RoleplaySettin
   if (typeof temperature !== "number" || !Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw createError({ statusCode: 400, statusMessage: "temperature 必须在 0 到 2 之间。" });
   if (value.thinking !== undefined && typeof value.thinking !== "boolean") throw createError({ statusCode: 400, statusMessage: "thinking 必须是布尔值。" });
   if (out.maxTokens < 256 || out.maxTokens > 32768) throw createError({ statusCode: 400, statusMessage: "maxTokens 必须在 256 到 32768 之间。" });
+  if (out.recentMessageLimit < 2) throw createError({ statusCode: 400, statusMessage: "recentMessageLimit 至少为 2，以保留最近一轮双人对话。" });
   out.temperature = temperature;
   out.thinking = typeof value.thinking === "boolean" ? value.thinking : d.thinking;
   if (out.contextBudgetTokens + out.maxTokens + 1024 > out.contextWindowTokens) throw createError({ statusCode: 400, statusMessage: "上下文预算加输出上限及安全余量不能超过模型上下文容量。" });

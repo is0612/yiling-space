@@ -1598,6 +1598,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
   let toolRounds = 0;
   let toolCallCount = 0;
   let hasPendingWrite = false;
+  let hasPendingBrowser = false;
   const toolUsage: ModelUsageTokens[] = [];
 
   const requestReply = async (
@@ -1758,9 +1759,12 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       for (const call of calls) {
         const content = await readOnlyTools.call(call.function.name, call.function.arguments);
         toolHistory.push({ role: "tool", tool_call_id: call.id, content });
-        if (call.function.name === "propose_file_write") {
+        if (call.function.name === "propose_file_write" || call.function.name === "propose_browser_actions") {
           const result = asRecord(asRecord(JSON.parse(content))?.result);
-          if (result?.status === "PENDING_APPROVAL" && typeof result.requestId === "string" && result.requestId) hasPendingWrite = true;
+          if (result?.status === "PENDING_APPROVAL" && typeof result.requestId === "string" && result.requestId) {
+            if (call.function.name === "propose_file_write") hasPendingWrite = true;
+            else hasPendingBrowser = true;
+          }
         }
       }
       diagnostic.complete("success", diagnosticPayload);
@@ -1781,8 +1785,12 @@ export async function generateConversationReply(input: ConversationReplyInput, o
      */
     const parsedReply = asRecord(parseJsonLoose(responseText, { expect: "object" }));
     // A saved approval must stay visible even if the model cannot produce its closing message.
-    const parsed: Record<string, unknown> | null = hasPendingWrite && !(typeof parsedReply?.reply === "string" && parsedReply.reply.trim())
-      ? { reply: "写入申请已提交，文件还没有写入。请到「本地观察 → 写审批」核对并批准。" }
+    const pendingNote = hasPendingWrite && hasPendingBrowser
+      ? "写入和网页操作申请都已提交，两边都还没有执行。请到「本地观察」核对并批准。"
+      : hasPendingWrite ? "写入申请已提交，文件还没有写入。请到「本地观察 → 写审批」核对并批准。"
+      : hasPendingBrowser ? "网页操作申请已提交，页面还没有操作。请到「本地观察 → 网页操作」核对并批准。" : "";
+    const parsed: Record<string, unknown> | null = pendingNote && !(typeof parsedReply?.reply === "string" && parsedReply.reply.trim())
+      ? { reply: pendingNote }
       : parsedReply;
     if (!parsed) {
       /**

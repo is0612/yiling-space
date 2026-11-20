@@ -136,7 +136,7 @@ async function savePersona() {
     const result = editingId.value ? await api.updatePersona(editingId.value, data) : await api.createPersona(data);
     if (!alive) return;
     personas.value = [result, ...personas.value.filter((p) => p.id !== result.id)]; personaDialog.value = false;
-    if (!selectedPersonaId.value) await selectPersona(result.id);
+    if (!editingId.value && !selectedPersonaId.value) await selectPersona(result.id);
   } catch (e) { if (alive) report(e, "保存人设失败"); } finally { if (alive) personaSaving.value = false; }
 }
 async function removePersona(persona: RoleplayPersona) {
@@ -590,7 +590,8 @@ onBeforeUnmount(() => { alive = false; ++listVersion; ++detailVersion; });
           <el-form-item label="最大输出 tokens">
             <el-input-number
               v-model="settingsForm.maxTokens"
-              :min="1"
+              :min="256"
+              :max="32768"
               :step="1024"
             />
           </el-form-item>
@@ -612,8 +613,8 @@ onBeforeUnmount(() => { alive = false; ++listVersion; ++detailVersion; });
           <el-form-item label="最近消息条数">
             <el-input-number
               v-model="settingsForm.recentMessageLimit"
-              :min="1"
-              :max="200"
+              :min="2"
+              :max="500"
             />
           </el-form-item>
         </div>
@@ -659,14 +660,14 @@ h2 { font-size: 16px; margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .summary-box { margin: 8px 0; }
 .summary-box :deep(.el-collapse-item__content) { max-height: 220px; overflow: auto; }
 .chat-messages { flex: 1; min-height: 160px; overflow: auto; padding: 10px 2px; }
-.chat-message { margin: 0 0 18px; padding: 12px 14px; border-radius: 10px; background: #f5f7fa; max-width: 90%; width: fit-content; }
-.chat-message.user { margin-left: auto; background: #eaf5f1; }
+.chat-message { margin: 0 0 18px; padding: 12px 14px; border-radius: 10px; background: var(--surface-3); max-width: 90%; width: fit-content; }
+.chat-message.user { margin-left: auto; background: var(--green-soft); }
 .message-speaker { font-size: 12px; color: var(--el-text-color-secondary); }
 .preserve { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; margin: 6px 0 0; }
 .composer { border-top: 1px solid var(--el-border-color-lighter); padding-top: 12px; }
 .composer-footer { margin-top: 8px; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; margin-top: 20px; }
-.command { font-size: 13px; line-height: 1.7; margin: 8px 0; }
+.command { font-size: 12px; line-height: 1.7; margin: 8px 0; }
 @media (max-width: 1200px) { .roleplay-layout { grid-template-columns: 190px 210px minmax(280px, 1fr); } }
 @media (max-width: 960px) { .roleplay-layout { grid-template-columns: 1fr 1fr; } .chat-panel { grid-column: 1 / -1; height: 650px; } }
 @media (max-width: 600px) { .roleplay-page { padding: 12px; } .roleplay-layout { grid-template-columns: 1fr; } .chat-panel { grid-column: auto; } .settings-grid { grid-template-columns: 1fr; } }

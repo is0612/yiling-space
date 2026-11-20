@@ -45,6 +45,7 @@ import { auditLocalObserve, listLocalDirectory, listLocalObserveRoots, readLocal
 import { createLocalWriteRequest } from "../../../utils/local-write";
 import { createLocalTask } from "../../../utils/local-tasks";
 import { observePublicBrowser } from "../../../utils/browser-observe";
+import { createLocalBrowserRequest } from "../../../utils/local-browser";
 import { readLocalContinuationTask } from "../../../utils/local-chat-results";
 import { createGitBranchRequest, createLocalCommandRequest } from "../../../utils/local-command";
 import { readGitStatus } from "../../../utils/local-git";
@@ -522,6 +523,19 @@ export default defineEventHandler(async (event) => {
         auditLocalObserve(ownerId, "browser.observe", { source: "chat", status: "failed", code: error instanceof Error ? error.message : "BROWSER_OBSERVE_FAILED" });
         throw error;
       }
+    },
+    proposeBrowserActions: async (url: string, actionsJson: string, reason: string, taskId?: string) => {
+      requireContinuationRead();
+      if (localTaskId && taskId && taskId !== localTaskId) throw new Error("续办不能改到其他任务。");
+      let actions: unknown;
+      try { actions = JSON.parse(actionsJson || "[]"); } catch { throw new Error("actions 必须是 JSON 数组。"); }
+      const request = await createLocalBrowserRequest({
+        url, actions, reason, actorId: ownerId, characterId,
+        ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
+        ...(taskId ?? localTaskId ? { taskId: taskId ?? localTaskId! } : {}),
+      });
+      return { status: "PENDING_APPROVAL", requestId: request.id, url: request.url, actions: request.actions,
+        message: "申请已提交，等待主人批准；网页尚未操作。请在「本地观察 → 网页操作」核对步骤。" };
     },
     ...(localTaskId && existingConversation ? { readLocalTask: async () => {
       const result = await readLocalContinuationTask(ownerId, characterId, existingConversation.id, localTaskId);

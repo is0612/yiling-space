@@ -235,7 +235,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
       class="related-links"
       aria-label="相关设置"
     >
-      <span>这里只管「怎么说」。原样复述的句子去</span>
+      <span>这里记录「怎么说」。原样复述的句子去</span>
       <NuxtLink :to="settingsHref('catchphrases')">
         梗语录
       </NuxtLink>

@@ -79,8 +79,8 @@ async function observe() {
 
 <style scoped>
 .browser-form { margin-top: 16px; }
-.browser-image { width: 100%; border: 1px solid #e4e9f2; border-radius: 8px; }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: 13px; }
-p { overflow-wrap: anywhere; font-size: 13px; }
+.browser-image { width: 100%; border: 1px solid var(--line); border-radius: 8px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font-size: 12px; }
+p { overflow-wrap: anywhere; font-size: 12px; }
 summary { cursor: pointer; }
 </style>

@@ -37,6 +37,8 @@ const verbose = args.verbose === "true";
 const only = args.only ? new RegExp(args.only, "i") : null;
 const skip = args.skip ? new RegExp(args.skip, "i") : null;
 
+const SCRIPT_REF = /scripts\/[A-Za-z0-9._-]+\.(?:ts|mjs)/g;
+
 const all = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts)
   .filter(([name]) => name.startsWith("test:"))
   // 自己不能跑自己。`test` / `test:all` 都指向本脚本，不过滤掉就是无限递归 ——
@@ -44,7 +46,43 @@ const all = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, "package.j
   // 判据用「命令里引用了本文件」而不是写死名字，以后换入口名也不会漏。
   .filter(([name, command]) => !/test-all\.mjs/.test(command) && name !== "test" && name !== "test:all");
 
-let selected = all;
+/**
+ * 有一部分 `test:*-db` 不能单独跑：它们自己会断言「只能在一次性数据库里执行」，
+ * 因为写的是真表，跑在主库上会污染真实数据。父运行器 `test:*-isolated` 会先建临时库、
+ * 跑迁移、再逐个拉起这些子测试。
+ *
+ * 守卫有两种写法，都要认：
+ *   - 库名断言：`yiling_memory_test_<32hex>`（memory 那一族）
+ *   - 环境变量：`YILING_CHAT_ISOLATED_DB=1`（chat 那一族）
+ *
+ * 识别分两步，缺一不可：
+ *   1. 这个测试源码里**确实有**守卫（不是靠名字后缀猜 —— 后缀会骗人，守卫不会）；
+ *   2. 它确实被别的测试引用：父运行器在自己的 TS 源码里 spawn 它，不在 npm 命令里，
+ *      所以要读父脚本的源码找引用。
+ */
+const ISOLATION_GUARD = /yiling_memory_test_|ISOLATED_DB/;
+const childRefs = new Set();
+function readScript(file) {
+  try { return fs.readFileSync(path.join(ROOT, file), "utf8"); } catch { return ""; }
+}
+for (const [, command] of all) {
+  const own = (command.match(SCRIPT_REF) ?? [])[0];
+  if (!own) continue;
+  const source = readScript(own);
+  if (!ISOLATION_GUARD.test(source)) continue;
+  for (const ref of source.match(/[A-Za-z0-9._-]+\.(?:ts|mjs)/g) ?? []) childRefs.add(ref);
+}
+function basenameOf(command) {
+  const own = (command.match(SCRIPT_REF) ?? [])[0];
+  return own ? own.split("/").pop() : null;
+}
+const children = all.filter(([, command]) => childRefs.has(basenameOf(command)));
+const standalone = all.filter(([, command]) => !childRefs.has(basenameOf(command)));
+
+let selected = args.children === "true" ? all : standalone;
+if (args.children === "true" && children.length) {
+  console.log(`（--children：连 ${children.length} 条「由 isolated 运行器带起来的子测试」也一起跑，会失败，仅供排查）`);
+}
 if (args.db === "true") selected = selected.filter(([name]) => /-db\b/.test(name));
 if (only) selected = selected.filter(([name]) => only.test(name));
 if (skip) selected = selected.filter(([name]) => !skip.test(name));
@@ -52,6 +90,13 @@ if (skip) selected = selected.filter(([name]) => !skip.test(name));
 if (!selected.length) {
   console.error("没有匹配的 test 脚本。");
   process.exit(1);
+}
+
+// --list 只列清单不跑：想知道「这条命令到底会跑什么」时用，比读代码快。
+if (args.list === "true") {
+  for (const [name] of selected) console.log(name);
+  console.log(`\n共 ${selected.length} 条（另有 ${children.length} 条隔离库子测试由父运行器带起来，不在此列）`);
+  process.exit(0);
 }
 
 /** 时间要按人看得懂的方式显示：一条 0.3s 和一条 42s 差两个数量级，统一成秒不够用。 */
