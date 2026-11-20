@@ -174,6 +174,7 @@ const commandVisible = ref(false);
 const gitVisible = ref(false);
 const browserVisible = ref(false);
 const browserActionVisible = ref(false);
+const pendingBrowserCount = ref(0);
 const commandLoading = ref(false);
 const commandRequests = ref<LocalCommandRequest[]>([]);
 const selectedCommand = ref<LocalCommandRequest | null>(null);
@@ -446,6 +447,20 @@ async function loadWriteRequests(showDialog = false) {
   } finally {
     writeLoading.value = false;
   }
+}
+
+async function refreshPendingBrowserCount() {
+  try {
+    const result = await request<{ requests: unknown[] }>({ url: "/local/browser-requests", params: { status: "PENDING" } });
+    pendingBrowserCount.value = result.requests.length;
+  } catch {
+    pendingBrowserCount.value = 0;
+  }
+}
+
+async function openBrowserActions() {
+  browserActionVisible.value = true;
+  await refreshPendingBrowserCount();
 }
 
 async function openWrites() {
@@ -754,6 +769,7 @@ onMounted(async () => {
     await list("");
     await loadWriteRequests();
     await loadCommandRequests();
+    await refreshPendingBrowserCount();
   } catch (error) {
     ElMessage.error(readApiErrorMessage(error, "本地观察初始化失败。"));
   } finally {
@@ -822,7 +838,12 @@ onMounted(async () => {
               Git
             </el-button>
             <el-button @click="browserVisible = true">网页观察</el-button>
-            <el-button @click="browserActionVisible = true">网页操作</el-button>
+            <el-button
+              :type="pendingBrowserCount ? 'warning' : 'default'"
+              @click="openBrowserActions"
+            >
+              网页操作{{ pendingBrowserCount ? ` (${pendingBrowserCount})` : "" }}
+            </el-button>
             <el-button @click="openTasks()">
               任务档案
             </el-button>
