@@ -3,7 +3,7 @@ import { readApiErrorMessage } from "~/utils/api-error";
 const visible = defineModel<boolean>({ required: true });
 const request = useApiRequest();
 type Step = { kind: string; selector?: string; text?: string; value?: string; y?: number; direction?: string };
-type Row = { id: string; url: string; actions: Step[]; reason: string; status: string; error: string | null;
+type Row = { id: string; url: string; actions: Step[]; submitSelector?: string | null; reason: string; status: string; error: string | null;
   createdAt: string; result: { steps?: { action: string; ok: boolean; detail?: string }[]; title?: string; text?: string; blockedRequests?: number } | null };
 const rows = ref<Row[]>([]);
 const busy = ref(false);
@@ -37,13 +37,37 @@ function stepLabel(step: Step) {
   return `滚动到 ${step.y}px`;
 }
 
+const submitBusy = ref("");
+
 async function load() {
   if (!visible.value) return;
   busy.value = true;
   errorText.value = "";
-  try { rows.value = (await request<{ requests: Row[] }>({ url: "/local/browser-requests", params: { status: "PENDING" } })).requests; }
-  catch (error) { errorText.value = readApiErrorMessage(error, "读取网页操作审批失败。"); }
+  try {
+    const [pending, filled] = await Promise.all([
+      request<{ requests: Row[] }>({ url: "/local/browser-requests", params: { status: "PENDING" } }),
+      request<{ requests: Row[] }>({ url: "/local/browser-requests", params: { status: "FILLED" } }),
+    ]);
+    rows.value = [...filled.requests, ...pending.requests].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  } catch (error) { errorText.value = readApiErrorMessage(error, "读取网页操作审批失败。"); }
   finally { busy.value = false; }
+}
+
+/** Second approval: this is the only step that lets the form actually post. */
+async function submit(row: Row) {
+  try {
+    await ElMessageBox.confirm(`确认把已填写的内容通过「${row.url}」提交出去？这一步会真的发送数据。`,
+      "确认提交", { type: "warning", confirmButtonText: "确认提交", cancelButtonText: "取消" });
+    submitBusy.value = row.id;
+    errorText.value = "";
+    const result = await request<{ request: Row }>({ url: `/local/browser-requests/${row.id}/submit`, method: "post" });
+    message.value = result.request.status === "SUCCEEDED" ? "已提交，页面已更新。" : "提交失败，页面没有发出数据。";
+    detail.value = result.request.result?.steps?.map(step => `${step.ok ? "✓" : "✗"} ${step.action}${step.detail ? `（${step.detail}）` : ""}`).join("\n") ?? "";
+    await load();
+  } catch (error) {
+    if (error === "cancel" || error === "close") return;
+    errorText.value = readApiErrorMessage(error, "提交失败。");
+  } finally { submitBusy.value = ""; }
 }
 
 async function approve(row: Row) {
@@ -90,10 +114,23 @@ watch(visible, value => { if (value) void load(); });
       <p class="url">{{ row.url }}</p>
       <p class="reason">原因：{{ row.reason }}</p>
       <ol><li v-for="(step, index) in row.actions" :key="index">{{ stepLabel(step) }}</li></ol>
+      <p v-if="row.submitSelector" class="submit-note">
+        提交按钮：{{ row.submitSelector }} · 需要两步批准，第一步只填写，不会发出数据。
+      </p>
+      <el-alert
+        v-if="row.status === 'FILLED'"
+        type="warning"
+        :closable="false"
+        class="block"
+        title="已经填好，等待你确认提交"
+        description="下面列出实际填入的内容。确认后会重新打开页面、按同样的步骤填写，然后点提交按钮发出数据。"
+      />
+      <pre v-if="row.status === 'FILLED' && row.result?.steps?.length" class="steps">{{ row.result.steps.map(step => `${step.ok ? '✓' : '✗'} ${step.action}${step.detail ? ` ${step.detail}` : ''}`).join('\n') }}</pre>
       <div class="actions">
-        <el-button :loading="previewBusy === row.id" :disabled="busy" @click="preview(row)">先看页面</el-button>
-        <el-button type="primary" :loading="busy" @click="approve(row)">批准并执行</el-button>
-        <el-button :disabled="busy" @click="reject(row)">拒绝</el-button>
+        <el-button :loading="previewBusy === row.id" :disabled="busy || submitBusy === row.id" @click="preview(row)">先看页面</el-button>
+        <el-button v-if="row.status === 'PENDING'" type="primary" :loading="busy" @click="approve(row)">批准并填写</el-button>
+        <el-button v-if="row.status === 'FILLED'" type="danger" :loading="submitBusy === row.id" @click="submit(row)">确认提交</el-button>
+        <el-button :disabled="busy || submitBusy === row.id" @click="reject(row)">{{ row.status === 'FILLED' ? '不提交了' : '拒绝' }}</el-button>
       </div>
       <div v-if="previews[row.id]" class="preview">
         <p class="reason">页面标题：{{ previews[row.id]!.title || "(无)" }}</p>
@@ -113,6 +150,7 @@ watch(visible, value => { if (value) void load(); });
 .actions { margin-top: 10px; display: flex; gap: 8px; }
 .steps { white-space: pre-wrap; font-size: 12px; margin-top: 12px; }
 ol { margin: 8px 0 0; padding-left: 20px; font-size: 12px; }
+.submit-note { font-size: 12px; color: var(--muted, #6b7280); margin: 6px 0; }
 .preview { margin-top: 12px; }
 .preview img { width: 100%; border: 1px solid var(--line); border-radius: 8px; }
 .preview summary { cursor: pointer; }

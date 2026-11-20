@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getPrisma } from "../server/utils/prisma";
-import { createLocalBrowserRequest } from "../server/utils/local-browser";
+import { createLocalBrowserRequest, getLocalBrowserRequest, rejectLocalBrowserRequest, submitLocalBrowserRequest } from "../server/utils/local-browser";
 import { readLocalContinuationTask, readLocalChatResults } from "../server/utils/local-chat-results";
 import { approveLocalWriteRequest, createLocalWriteRequest } from "../server/utils/local-write";
 
@@ -71,6 +71,16 @@ try {
   const taskWithBrowserStep = await db.localTask.findUniqueOrThrow({ where: { id: taskId! }, select: { steps: true } });
   assert.ok((taskWithBrowserStep.steps as unknown as { request?: { kind: string } }[]).some(step => step.request?.kind === "browser"));
   await db.localBrowserRequest.deleteMany({ where: { id: steppedBrowser.id } });
+
+  const twoPhase = await createLocalBrowserRequest({ actorId: actor, characterId, conversationId: first.id,
+    url: "https://example.com/", reason: "two phase",
+    actions: [{ kind: "fill", selector: "#name", value: "只填写" }, { kind: "submit", selector: "form button" }] });
+  assert.equal(twoPhase.submitSelector, "form button");
+  assert.deepEqual(twoPhase.actions, [{ kind: "fill", selector: "#name", value: "只填写" }], "Submit is stored apart from the steps");
+  await assert.rejects(() => submitLocalBrowserRequest(twoPhase.id, actor), /还没有填好/, "Submitting before the fill phase is refused");
+  await rejectLocalBrowserRequest(twoPhase.id, actor, "test");
+  assert.equal((await getLocalBrowserRequest(twoPhase.id)).status, "REJECTED");
+  await db.localBrowserRequest.deleteMany({ where: { id: twoPhase.id } });
 
   const firstBrowser = await createLocalBrowserRequest({ actorId: actor, characterId, conversationId: first.id,
     url: "https://example.com/", actions: [{ kind: "scroll", y: 200 }], reason: "dedupe" });

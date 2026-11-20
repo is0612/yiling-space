@@ -1,4 +1,4 @@
-import { executeBrowserActions, parseBrowserActions } from "./browser-actions";
+import { executeBrowserActions, parseBrowserActions, parseBrowserProposal } from "./browser-actions";
 import { auditLocalObserve, LocalObserveError } from "./local-observe";
 import { appendBrowserEvidence, attachContinuationBrowser, lockLocalTaskForApproval } from "./local-tasks";
 import { getPrisma } from "./prisma";
@@ -27,25 +27,27 @@ function normalizeUrl(input: unknown) {
 
 export async function createLocalBrowserRequest(input: LocalBrowserInput) {
   const url = normalizeUrl(input.url);
-  let actions;
+  let proposal;
   try {
-    actions = parseBrowserActions(input.actions);
+    proposal = parseBrowserProposal(input.actions);
   } catch (error) {
     throw new LocalObserveError(400, error instanceof Error ? error.message : "网页操作步骤无效。");
   }
+  const { actions, submitSelector } = proposal;
   const reason = typeof input.reason === "string" ? input.reason.trim().slice(0, 500) : "";
   if (!reason) throw new LocalObserveError(400, "网页操作必须说明原因。");
   const request = await getPrisma().$transaction(async tx => {
     await lockLocalTaskForApproval(tx, input.taskId, input.actorId);
     // The same steps on the same page, still awaiting approval, are one request — not a queue of duplicates.
     const duplicate = await tx.localBrowserRequest.findFirst({
-      where: { actorId: input.actorId, url, actions: { equals: actions }, status: { in: ["PENDING", "APPROVING"] } },
+      where: { actorId: input.actorId, url, actions: { equals: actions }, submitSelector, status: { in: ["PENDING", "APPROVING", "FILLED"] } },
       select: { id: true },
     });
     if (duplicate) throw new LocalObserveError(409, "这项相同的网页操作已经在等待批准，不要重复提交。");
     const created = await tx.localBrowserRequest.create({ data: {
       url,
       actions,
+      submitSelector,
       reason,
       actorId: input.actorId,
       ...(input.characterId ? { characterId: input.characterId } : {}),
@@ -86,22 +88,25 @@ export async function approveLocalBrowserRequest(id: string, actorId: string) {
     });
     if (claimed.count !== 1) throw new LocalObserveError(409, "这个请求正在被处理。");
   });
+  const submitSelector = request.submitSelector ?? null;
   try {
+    // Phase one never submits: a filled form stops at FILLED and waits for a second, separate confirmation.
     const result = await executeBrowserActions(url, actions);
     // The screenshot is for the approver's eyes only; keep the row small and text-based.
     const { screenshot, ...stored } = result;
+    const status = result.steps.some(step => !step.ok) ? "FAILED" : submitSelector ? "FILLED" : "SUCCEEDED";
     const updated = await getPrisma().localBrowserRequest.update({
       where: { id },
-      data: { status: "SUCCEEDED", result: stored, finishedAt: new Date() },
+      data: { status, result: stored, finishedAt: status === "FILLED" ? null : new Date(),
+        ...(status === "FAILED" ? { error: result.steps.find(step => !step.ok)?.detail?.slice(0, 500) ?? "执行失败" } : {}) },
     });
-    if (request.taskId) {
+    if (request.taskId && status !== "FILLED") {
       await appendBrowserEvidence({
-        taskId: request.taskId, outcome: "PASS", actorId,
-        note: [`网页：${url}`, ...result.steps.map(step => `${step.ok ? "✓" : "✗"} ${step.action}${step.detail ? `（${step.detail}）` : ""}`),
-          `页面标题：${result.title || "(无)"}`, `已阻止 ${result.blockedRequests} 个请求`].join("\n"),
+        taskId: request.taskId, outcome: status === "SUCCEEDED" ? "PASS" : "FAIL", actorId,
+        note: [browserEvidenceNote(url, result), submitSelector ? "尚未提交，等待再次确认。" : ""].filter(Boolean).join("\n"),
       });
     }
-    auditLocalObserve(actorId, "browser.apply", { requestId: id, status: "SUCCEEDED", steps: result.steps.length });
+    auditLocalObserve(actorId, "browser.apply", { requestId: id, status, steps: result.steps.length });
     return { ...updated, screenshot };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -114,11 +119,63 @@ export async function approveLocalBrowserRequest(id: string, actorId: string) {
   }
 }
 
+/** Phase two: the only path that lets a same-origin form actually post. */
+export async function submitLocalBrowserRequest(id: string, actorId: string) {
+  const request = await getLocalBrowserRequest(id);
+  if (request.status !== "FILLED") throw new LocalObserveError(409, "这项申请还没有填好，或者已经处理过了。");
+  const submitSelector = request.submitSelector;
+  if (!submitSelector) throw new LocalObserveError(409, "这项申请没有提交步骤。");
+  const actions = parseBrowserActions(request.actions);
+  const url = normalizeUrl(request.url);
+  await getPrisma().$transaction(async tx => {
+    await lockLocalTaskForApproval(tx, request.taskId);
+    const claimed = await tx.localBrowserRequest.updateMany({
+      where: { id, taskId: request.taskId, status: "FILLED" },
+      data: { status: "APPROVING", decidedAt: new Date() },
+    });
+    if (claimed.count !== 1) throw new LocalObserveError(409, "这个请求正在被处理。");
+  });
+  try {
+    const result = await executeBrowserActions(url, actions, submitSelector);
+    const { screenshot, ...stored } = result;
+    const status = result.submitted ? "SUCCEEDED" : "FAILED";
+    const updated = await getPrisma().localBrowserRequest.update({
+      where: { id },
+      data: { status, result: stored, finishedAt: new Date(),
+        ...(status === "FAILED" ? { error: result.steps.find(step => !step.ok)?.detail?.slice(0, 500) ?? "提交失败" } : {}) },
+    });
+    if (request.taskId) {
+      await appendBrowserEvidence({
+        taskId: request.taskId, outcome: status === "SUCCEEDED" ? "PASS" : "FAIL", actorId,
+        note: browserEvidenceNote(url, result),
+      });
+    }
+    auditLocalObserve(actorId, "browser.apply", { requestId: id, status, submitted: result.submitted });
+    return { ...updated, screenshot };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await getPrisma().localBrowserRequest.update({
+      where: { id }, data: { status: "FAILED", error: message.slice(0, 500), finishedAt: new Date() },
+    }).catch(() => {});
+    auditLocalObserve(actorId, "browser.apply", { requestId: id, status: "failed", error: message.slice(0, 300) });
+    if (error instanceof LocalObserveError) throw error;
+    throw new LocalObserveError(500, `网页提交失败：${browserErrorMessage(message)}`);
+  }
+}
+
+function browserEvidenceNote(url: string, result: { steps: { ok: boolean; action: string; detail?: string }[]; title: string; blockedRequests: number; submitted?: boolean }) {
+  return [`网页：${url}`,
+    ...result.steps.map(step => `${step.ok ? "✓" : "✗"} ${step.action}${step.detail ? `（${step.detail}）` : ""}`),
+    `页面标题：${result.title || "(无)"}`, `已阻止 ${result.blockedRequests} 个请求`, result.submitted ? "已提交表单。" : ""]
+    .filter(Boolean).join("\n");
+}
+
 export async function rejectLocalBrowserRequest(id: string, actorId: string, reason = "") {
   const request = await getLocalBrowserRequest(id);
-  if (request.status !== "PENDING") throw new LocalObserveError(409, "这个请求已经处理过了。");
+  // A filled-but-unconfirmed form can still be refused; it simply never gets submitted.
+  if (request.status !== "PENDING" && request.status !== "FILLED") throw new LocalObserveError(409, "这个请求已经处理过了。");
   const updated = await getPrisma().localBrowserRequest.updateMany({
-    where: { id, status: "PENDING" },
+    where: { id, status: { in: ["PENDING", "FILLED"] } },
     data: { status: "REJECTED", decidedAt: new Date(), error: reason.trim().slice(0, 500) || null },
   });
   if (updated.count !== 1) throw new LocalObserveError(409, "这个请求正在被处理。");

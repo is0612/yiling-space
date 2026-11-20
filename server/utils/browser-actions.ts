@@ -10,7 +10,8 @@ export type BrowserAction =
   | { kind: "scroll"; direction: "down" | "up" | "top" | "bottom" };
 
 export type BrowserActionResult = { steps: Array<{ action: string; ok: boolean; detail?: string }>; url: string;
-  title: string; text: string; screenshot: string; blockedRequests: number; limitation: string };
+  title: string; text: string; screenshot: string; blockedRequests: number; limitation: string; submitted: boolean };
+export type BrowserProposal = { actions: BrowserAction[]; submitSelector: string | null };
 
 const MAX_ACTIONS = 10;
 const LIMITATION = "独立无登录会话：只允许本页点击、填写与滚动；任何发送、提交、跳转、上传、下载和跨站资源都被阻止。";
@@ -22,12 +23,37 @@ export class BrowserActionError extends Error {
 
 const SHAPES = '{"kind":"click","selector":"#id"}、{"kind":"click_text","text":"按钮文字"}、{"kind":"fill","selector":"#id","value":"内容"}、{"kind":"scroll","y":600}';
 
-/** Parses the stored/requested action list. Unknown shapes are rejected wholesale, never partially applied. */
-export function parseBrowserActions(value: unknown): BrowserAction[] {
+/**
+ * Parses the requested steps. A final `{"kind":"submit","selector":"#id"}` is not an ordinary step: it is split out
+ * so the first approval can fill and screenshot the form without ever sending it.
+ */
+export function parseBrowserProposal(value: unknown): BrowserProposal {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_ACTIONS) {
     throw new BrowserActionError(`actions 必须是 1–${MAX_ACTIONS} 步的数组。`);
   }
-  return value.map((item, index) => {
+  const submitIndex = value.findIndex(item => (item as Record<string, unknown> | null)?.kind === "submit");
+  if (submitIndex !== -1 && submitIndex !== value.length - 1) {
+    throw new BrowserActionError("submit 只能是最后一步，前面用来填写和点击。");
+  }
+  const steps = submitIndex === -1 ? value : value.slice(0, -1);
+  let submitSelector: string | null = null;
+  if (submitIndex !== -1) {
+    const row = value[submitIndex] as Record<string, unknown>;
+    const selector = typeof row.selector === "string" ? row.selector.trim() : "";
+    if (!selector) throw new BrowserActionError("submit 需要 selector（提交按钮的选择器）。");
+    if (selector.length > 200 || /[{}]/.test(selector)) throw new BrowserActionError("submit 的 selector 最多 200 字符，且不能含花括号。");
+    submitSelector = selector;
+  }
+  if (!steps.length && !submitSelector) throw new BrowserActionError("至少需要一步操作。");
+  return { actions: steps.map((item, index) => parseOne(item, index)), submitSelector };
+}
+
+/** Steps only; kept for callers that cannot submit (observation and read-only previews). */
+export function parseBrowserActions(value: unknown): BrowserAction[] {
+  return parseBrowserProposal(value).actions;
+}
+
+function parseOne(item: unknown, index: number): BrowserAction {
     const where = `第 ${index + 1} 步`;
     const row = item as Record<string, unknown> | null;
     if (!row || typeof row !== "object" || Array.isArray(row)) throw new BrowserActionError(`${where}不是对象；每步形如 ${SHAPES}。`);
@@ -62,8 +88,7 @@ export function parseBrowserActions(value: unknown): BrowserAction[] {
       if (!Number.isFinite(y) || y < 0 || y > 20000) throw new BrowserActionError(`${where}的 y 必须是 0–20000 的数字，收到 ${JSON.stringify(row.y)}。`);
       return { kind, y } as BrowserAction;
     }
-    throw new BrowserActionError(`${where}的 kind 只能是 click / click_text / fill / scroll，收到 ${JSON.stringify(kind)}；每步形如 ${SHAPES}。`);
-  });
+    throw new BrowserActionError(`${where}的 kind 只能是 click / click_text / fill / scroll / submit，收到 ${JSON.stringify(kind)}；每步形如 ${SHAPES}。`);
 }
 
 export function describeBrowserAction(action: BrowserAction) {
@@ -129,7 +154,8 @@ async function runActions(page: Page, actions: BrowserAction[]) {
         await page.evaluate(y => window.scrollTo({ top: y, behavior: "instant" }), target);
       }
       await page.waitForTimeout(300);
-      steps.push({ action: label, ok: true });
+      // Filled values are the thing being confirmed later, so keep them (bounded) in the stored result.
+      steps.push({ action: label, ok: true, ...(action.kind === "fill" ? { detail: `= ${action.value.slice(0, 160)}` } : {}) });
     } catch (error) {
       steps.push({ action: label, ok: false, detail: error instanceof Error ? error.message.slice(0, 160) : "执行失败" });
       break;
@@ -138,13 +164,45 @@ async function runActions(page: Page, actions: BrowserAction[]) {
   return steps;
 }
 
-export async function executeBrowserActions(rawUrl: string, actions: BrowserAction[]): Promise<BrowserActionResult> {
+/**
+ * Fills the page. With `submitSelector` the run also clicks the submit button — only the second approval passes it,
+ * and only same-origin submissions are let through by the session.
+ */
+export async function executeBrowserActions(rawUrl: string, actions: BrowserAction[], submitSelector?: string | null): Promise<BrowserActionResult> {
   validatePublicWebpageUrl(rawUrl);
-  const session = await openIsolatedPage(rawUrl, { timeoutMs: 30000 });
+  const session = await openIsolatedPage(rawUrl, { timeoutMs: submitSelector ? 40000 : 30000, allowSubmit: Boolean(submitSelector) });
   try {
     const steps = await runActions(session.page, actions);
-    const snapshot = await session.snapshot();
-    return { steps, ...snapshot, blockedRequests: session.stats.blocked, limitation: LIMITATION };
+    const before = await session.snapshot();
+    if (!submitSelector) return { steps, ...before, blockedRequests: session.stats.blocked, limitation: LIMITATION, submitted: false };
+    if (steps.some(step => !step.ok)) {
+      steps.push({ action: `提交 ${submitSelector}`, ok: false, detail: "前面的步骤未完成，已取消提交" });
+      return { steps, ...before, blockedRequests: session.stats.blocked, limitation: LIMITATION, submitted: false };
+    }
+    const label = `提交 ${submitSelector}`;
+    try {
+      const target = session.page.locator(submitSelector);
+      if (await target.count() !== 1) throw new Error("提交按钮没有唯一匹配");
+      const element = target.first();
+      if (!await element.isVisible()) throw new Error("提交按钮不可见");
+      const formAction = await element.evaluate(node => {
+        const form = (node as HTMLElement).closest("form");
+        return form ? (form as HTMLFormElement).action : location.href;
+      });
+      // A form that posts elsewhere is exactly the case the two-phase approval exists for; refuse it instead.
+      const resolved = new URL(formAction, before.url);
+      if (resolved.origin !== new URL(before.url).origin) throw new Error("表单会提交到其他网站，已阻止");
+      session.armSubmit();
+      await element.click({ timeout: 8000 });
+      await session.page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
+      await session.page.waitForTimeout(500);
+      steps.push({ action: label, ok: true });
+      const after = await session.snapshot();
+      return { steps, ...after, blockedRequests: session.stats.blocked, limitation: LIMITATION, submitted: true };
+    } catch (error) {
+      steps.push({ action: label, ok: false, detail: error instanceof Error ? error.message.slice(0, 160) : "提交失败" });
+      return { steps, ...before, blockedRequests: session.stats.blocked, limitation: LIMITATION, submitted: false };
+    }
   } finally {
     await session.close();
   }

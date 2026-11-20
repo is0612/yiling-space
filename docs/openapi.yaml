@@ -315,6 +315,26 @@ paths:
         '400': { description: 步骤或网址无效 }
         '403': { description: 非管理员 }
         '409': { description: 已处理或正在执行 }
+  /local/browser-requests/{id}/submit:
+    post:
+      tags: [LocalObserve]
+      summary: 确认提交已填好的表单
+      description: 仅当请求处于 FILLED 时可用。重新打开页面、重放填写步骤，然后点提交按钮；只允许同源表单，目标地址再做一次公网校验。
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: 已提交或提交失败（失败时 status 为 FAILED 并带 error）
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [request]
+                properties:
+                  request: { $ref: '#/components/schemas/LocalBrowserRequest' }
+        '400': { description: 步骤无效 }
+        '403': { description: 非管理员 }
+        '409': { description: 还没填好或已经处理过 }
   /local/browser-requests/{id}/reject:
     post:
       tags: [LocalObserve]
@@ -8054,7 +8074,8 @@ components:
                   kind: { type: string, enum: [scroll] }
                   y: { type: integer, minimum: 0, maximum: 20000 }
         reason: { type: string, maxLength: 500 }
-        status: { type: string, enum: [PENDING, APPROVING, SUCCEEDED, FAILED, REJECTED] }
+        submitSelector: { type: string, maxLength: 200, nullable: true, description: 两阶段流程的提交按钮；第一阶段不会点它 }
+        status: { type: string, enum: [PENDING, APPROVING, FILLED, SUCCEEDED, FAILED, REJECTED] }
         taskId: { type: string, format: uuid, nullable: true }
         error: { type: string, nullable: true }
         createdAt: { type: string, format: date-time }

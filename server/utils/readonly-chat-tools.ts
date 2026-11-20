@@ -60,7 +60,7 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
       },
     }] : []),
     ...(handlers.proposeBrowserActions ? [{
-      name: "propose_browser_actions", description: 'Propose clicks, text entry or scrolling on the exact page URL given in the user\'s current message. Creates a pending request only: no page is touched until the owner approves. Pass actions as a JSON array string whose steps are exactly: {"kind":"click","selector":"#id"}, {"kind":"click_text","text":"visible label"}, {"kind":"fill","selector":"#id","value":"text"}, {"kind":"scroll","y":600} or {"kind":"scroll","direction":"down"}. Use simple CSS selectors from the observed page. Submission, upload, password fields and cross-site navigation are blocked.',
+      name: "propose_browser_actions", description: 'Propose clicks, text entry or scrolling on the exact page URL given in the user\'s current message. Creates a pending request only: no page is touched until the owner approves. Pass actions as a JSON array string whose steps are exactly: {"kind":"click","selector":"#id"}, {"kind":"click_text","text":"visible label"}, {"kind":"fill","selector":"#id","value":"text"}, {"kind":"scroll","y":600} or {"kind":"scroll","direction":"down"}. A form can end with {"kind":"submit","selector":"#id"}: the owner first approves filling, sees the exact values, and only a second approval sends it. Use simple CSS selectors from the observed page. Upload, password fields and cross-site navigation are always blocked.',
       fields: [
         { name: "url", required: true, maxLength: 2048 },
         { name: "actions", required: true, maxLength: 4000 },

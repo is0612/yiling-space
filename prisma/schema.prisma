@@ -2227,6 +2227,8 @@ model LocalBrowserRequest {
   taskId String? @db.Uuid
   url String @db.VarChar(2048)
   actions Json @default("[]") @db.JsonB
+  /// 最后一步提交按钮；只有第二阶段批准后才会点它，第一阶段的截图不含提交。
+  submitSelector String? @db.VarChar(200)
   reason String @db.VarChar(500)
   status String @default("PENDING") @db.VarChar(20)
   result Json? @db.JsonB

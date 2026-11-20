@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import { downloadSafeMedia } from "./safe-media-download";
+import { assertPublicMediaHost, downloadSafeMedia } from "./safe-media-download";
 import { validatePublicWebpageUrl } from "./read-public-webpage";
 
 export type BrowserObservation = { url: string; title: string; text: string; truncated: boolean; links: string[];
@@ -30,7 +30,18 @@ function browserExecutable() {
   return found;
 }
 
-export type IsolatedPage = { page: Page; stats: { blocked: number }; snapshot: () => Promise<{ url: string; title: string; text: string; truncated: boolean; links: string[]; screenshot: string }>; close: () => Promise<void> };
+/**
+ * A confirmed submission is the only traffic that leaves through the browser itself, so the destination is
+ * re-checked against the public-address rules right before it is forwarded.
+ */
+async function assertSubmitTarget(url: URL) {
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("BROWSER_SUBMIT_BLOCKED");
+  await assertPublicMediaHost(url.hostname).catch(() => { throw new Error("BROWSER_SUBMIT_BLOCKED"); });
+}
+
+export type IsolatedPage = { page: Page; stats: { blocked: number }; snapshot: () => Promise<{ url: string; title: string; text: string; truncated: boolean; links: string[]; screenshot: string }>;
+  /** Allows same-origin non-GET traffic from here on; only the confirmed submit step calls this. */
+  armSubmit: () => void; close: () => Promise<void> };
 
 /**
  * Opens one public page in a fresh unauthenticated browser and hands back a bounded snapshot function.
@@ -38,7 +49,7 @@ export type IsolatedPage = { page: Page; stats: { blocked: number }; snapshot: (
  * Every request is proxied through the pinned-DNS downloader, only same-origin GET is forwarded, and the
  * response CSP forbids form submission — so even an approved click cannot post data off the machine.
  */
-export async function openIsolatedPage(raw: string, options: { timeoutMs?: number } = {}): Promise<IsolatedPage> {
+export async function openIsolatedPage(raw: string, options: { timeoutMs?: number; allowSubmit?: boolean } = {}): Promise<IsolatedPage> {
   const requested = validatePublicWebpageUrl(raw);
   if (browserBusy) throw new Error("BROWSER_BUSY");
   browserBusy = true;
@@ -68,12 +79,21 @@ export async function openIsolatedPage(raw: string, options: { timeoutMs?: numbe
       viewport: { width: 1280, height: 800 }, storageState: { cookies: [], origins: [] } });
     await context.routeWebSocket("**/*", socket => socket.close());
     let bytes = first.buffer.length, count = 0, active = 0;
+    let armed = false;
     const stats = { blocked: 0 };
     await context.route("**/*", async route => {
       const request = route.request();
       let reserved = false;
       try {
         const url = authorizeBrowserUrl(request.url(), requested.origin);
+        // After the confirmed submit step, same-origin non-GET leaves the machine for real and is not proxied.
+        if (armed && request.method() !== "GET") {
+          await assertSubmitTarget(url);
+          count += 1;
+          if (count > 40) throw new Error("BROWSER_REQUEST_BUDGET");
+          await route.continue();
+          return;
+        }
         if (request.method() !== "GET" || request.isNavigationRequest() && (request.frame() !== context?.pages()[0]?.mainFrame()
           || url.toString() !== initial.toString()) || ++count > 40 || active >= 4 || bytes > 4 * 1024 * 1024) throw Error();
         active++; reserved = true;
@@ -84,7 +104,7 @@ export async function openIsolatedPage(raw: string, options: { timeoutMs?: numbe
         if (bytes > 4 * 1024 * 1024) throw Error();
         // Do not forward cookies, authorization, Set-Cookie, downloads, or page-supplied headers.
         await route.fulfill({ status: response.status, body: response.buffer, headers: { "content-type": response.mime,
-          "content-security-policy": "form-action 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'self'",
+          "content-security-policy": `${options.allowSubmit ? "form-action 'self'" : "form-action 'none'"}; frame-src 'none'; object-src 'none'; worker-src 'none'; base-uri 'self'`,
           "cache-control": "no-store" } });
       } catch { stats.blocked++; await route.abort().catch(() => {}); }
       finally { if (reserved) active--; }
@@ -110,7 +130,7 @@ export async function openIsolatedPage(raw: string, options: { timeoutMs?: numbe
     };
     // Hard stop for callers that never call close (crashes, ignored promises).
     setTimeout(() => void close(), totalTimeoutMs).unref?.();
-    return { page, stats, snapshot, close };
+    return { page, stats, snapshot, armSubmit: () => { armed = true; }, close };
   } catch (error) {
     await close();
     const rawMessage = error instanceof Error ? error.message : "";

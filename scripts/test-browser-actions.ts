@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { Response, fetch as undiciFetch } from "undici";
 import { setMediaFetchForTest } from "../server/utils/safe-media-download";
-import { parseBrowserActions } from "../server/utils/browser-actions";
+import { parseBrowserActions, parseBrowserProposal } from "../server/utils/browser-actions";
 import { executeBrowserActions } from "../server/utils/browser-actions";
 
 assert.throws(() => parseBrowserActions([]));
@@ -10,6 +10,10 @@ assert.throws(() => parseBrowserActions([{ kind: "click", selector: "div{color:r
 assert.throws(() => parseBrowserActions([{ kind: "fill", selector: "#a", value: "x".repeat(2001) }]));
 assert.throws(() => parseBrowserActions([{ kind: "scroll", y: 10_000_000 }]));
 assert.deepEqual(parseBrowserActions([{ kind: "scroll", direction: "down" }]), [{ kind: "scroll", direction: "down" }]);
+assert.deepEqual(parseBrowserProposal([{ kind: "fill", selector: "#a", value: "x" }, { kind: "submit", selector: "#go" }]),
+  { actions: [{ kind: "fill", selector: "#a", value: "x" }], submitSelector: "#go" });
+assert.throws(() => parseBrowserProposal([{ kind: "submit", selector: "#go" }, { kind: "fill", selector: "#a", value: "x" }]), /submit 只能是最后一步/);
+assert.throws(() => parseBrowserProposal([{ kind: "submit" }]), /submit 需要 selector/);
 assert.throws(() => parseBrowserActions([{ kind: "scroll", direction: "sideways" }]), /direction 只能是/);
 assert.throws(() => parseBrowserActions([{ kind: "press", key: "Enter" }]));
 assert.throws(() => parseBrowserActions(Array.from({ length: 11 }, () => ({ kind: "scroll", y: 1 }))));

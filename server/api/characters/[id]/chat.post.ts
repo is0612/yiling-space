@@ -536,7 +536,10 @@ export default defineEventHandler(async (event) => {
         ...(taskId ?? localTaskId ? { taskId: taskId ?? localTaskId! } : {}),
       });
       return { status: "PENDING_APPROVAL", requestId: request.id, url: request.url, actions: request.actions,
-        message: "申请已提交，等待主人批准；网页尚未操作。请在「本地观察 → 网页操作」核对步骤。" };
+        submitSelector: request.submitSelector,
+        message: request.submitSelector
+          ? "申请已提交，等待主人批准填写；提交按钮要等主人看到填写结果后再单独确认一次。"
+          : "申请已提交，等待主人批准；网页尚未操作。请在「本地观察 → 网页操作」核对步骤。" };
     },
     ...(localTaskId && existingConversation ? { readLocalTask: async () => {
       const result = await readLocalContinuationTask(ownerId, characterId, existingConversation.id, localTaskId);
