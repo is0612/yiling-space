@@ -1,3 +1,5 @@
+import { loadPromptEventCandidates } from "../prompt-event-candidates";
+import { loadPromptMemoryCandidates } from "../prompt-memory-candidates";
 import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
 import { readInteractionGuidance } from "../interaction-guidance";
@@ -1405,39 +1407,17 @@ async function runChannelTurn(input: {
   const speakerUids = isGroup
     ? [...new Set(messages.map((message) => (message.authorPlatformUid || message.authorOpenId || "").trim()).filter(Boolean))]
     : [];
-  // 记忆、阶段总结、忆泡、熟人卡、熟客榜、跨窗口六类检索互不依赖，并行查。排序与筛选仍在各自原处。
-  const [memoryCandidates, snapshotCandidates, eventCandidates, knownIdentities, acquaintanceRows, crossChannelRows] = await Promise.all([
-    prisma.memoryItem.findMany({
-      where: { memoryScopeId: { in: readableScopeIds }, status: "ACTIVE", deletedAt: null },
-      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-      take: 300,
-      select: {
-        id: true, category: true, content: true, confidence: true, updatedAt: true, createdAt: true,
-        validFrom: true, memoryScopeId: true, importance: true, lastRecalledAt: true, recallCount: true,
-      },
-    }),
-    prisma.memorySnapshot.findMany({
-      where: { memoryScopeId: { in: readableScopeIds }, status: "CURRENT" },
-      orderBy: [{ createdAt: "desc" }, { version: "desc" }],
-      take: 80,
-      select: { id: true, summary: true, periodStart: true, periodEnd: true, version: true, createdAt: true, memoryScopeId: true },
-    }),
-    prisma.memoryEvent.findMany({
-      where: {
-        memoryScopeId: { in: readableScopeIds },
-        status: "ACTIVE",
-        // 群聊只取本群发生的事：范围是全局的，不按会话过滤就会把别的群的
-        // participants 算进「这个群」（2026-11-04 实况）。
-        ...(isGroup ? { conversationId: { in: existingConversation ? [existingConversation.id] : [] } } : {}),
-      },
-      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-      take: 200,
-      select: {
-        id: true, occurredAt: true, timeOfDay: true, place: true, participants: true,
-        keywords: true, title: true, detail: true, memoryScopeId: true,
-        // 按账号检索要读引用列（5–12 位数字当 QQ 号匹配）。
-        participantRefs: true,
-      },
+  const eventRetrievalNow = new Date();
+  const participantName = parseEventParticipantQuery(retrievalQuery);
+  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName, { characterId: input.characterId, platform: input.platform }) : [];
+  // 名字解析后，六类检索并行查；授权范围及群聊会话边界仍由本入口确定。
+  const [{ memories: memoryCandidates, snapshots: snapshotCandidates }, eventCandidates, knownIdentities, acquaintanceRows, crossChannelRows] = await Promise.all([
+    loadPromptMemoryCandidates(prisma, { readableScopeIds, query: retrievalQuery }),
+    loadPromptEventCandidates(prisma, {
+      readableScopeIds, query: retrievalQuery, participantIds, now: eventRetrievalNow,
+      timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+      // 群聊仍只取本群；会话尚不存在时返回空，不退回全局读取。
+      groupConversationId: isGroup ? existingConversation?.id ?? null : undefined,
     }),
     speakerUids.length
       ? prisma.externalIdentity.findMany({
@@ -1514,11 +1494,9 @@ async function runChannelTurn(input: {
     scope: snapshot.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
   }));
 
-  // 忆泡和网页对话走同一套选择逻辑：先按日期框住，框不住才退化成关键词。
-  // 名字先解析成账号：群名片改过之后，只有账号还能认出「这是同一个人」。
-  const participantName = parseEventParticipantQuery(retrievalQuery);
-  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName, { characterId: input.characterId, platform: input.platform }) : [];
+  // 忆泡与网页共用候选读取和预算选择；人物账号已在取候选前解析。
   const eventSelection = selectEventsForPrompt(retrievalQuery, eventCandidates, {
+    now: eventRetrievalNow,
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
     tokenBudget: resolveEventTokenBudget(character.modelConfig),
     limit: resolveEventItemLimit(character.modelConfig),

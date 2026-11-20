@@ -12,8 +12,8 @@ import { readKnowledgeCollectScope } from "../../../utils/knowledge-collect-poli
  * **一行 = 一条关系**，不是一个账号。同一个 QQ 号在两个角色的群里出现，会有两行；
  * 平台身份类型是账号级共享的，交流权限和互动次数则按角色分开。
  *
- * 群成员第一次发言就会建立「遇到过」记录（interactionCount = 0），方便提前标记 AI / 禁止交流；
- * 只有她真的回复了对方，互动次数才会增加。这里只返回关系元信息，不返回对话或记忆正文。
+ * 群成员第一次发言不再建立关系：只有她真的回复了对方（或私聊收到消息）才建一行，
+ * 计数随之从 1 开始。这里只返回关系元信息，不返回对话或记忆正文。
  *
  * 分页在这儿做，因为名单会一直长（群里认人会一直往上加）：
  * `?characterId=&q=&source=ALL|PRIVATE|GROUP&sort=recent|count|closeness|known&dir=asc|desc&page=1&pageSize=12`
@@ -32,12 +32,16 @@ const DEFAULT_PAGE_SIZE = 12;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * 名单包括已互动朋友和群里遇到过、但还没来往的人。
- * 零互动的群成员也要能被提前标记身份/交流权限；互动次数仍用于区分熟悉程度。
+ * 名单只要真的聊过天的人（`interactionCount > 0`）。
+ *
+ * 群成员第一次发言不再建档，一行都没有；历史遗留的「聊过 0 次」关系由
+ * `scripts/cleanup-zero-interaction-friends.ts` 清掉，这里再挡一层，
+ * 保证清完之前页面也不会冒出「只见过」的人。
  */
 const FRIEND_BASE: Prisma.MemoryScopeWhereInput = {
   scopeType: "EXTERNAL_IDENTITY",
   externalIdentityId: { not: null },
+  interactionCount: { gt: 0 },
 };
 
 /** 库里存 qq-onebot / wechat，页面显示 QQ / 微信；搜「QQ」也得能搜到。 */

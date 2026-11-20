@@ -5,8 +5,8 @@
  * 一行 = 某角色认识的某个人（一条关系），不是一个账号。同一个 QQ 号跟两个角色都聊过
  * 就有两行。页面通过全局角色选择器确定当前角色，再读取该角色的关系名单。
  *
- * 私聊来访或群里发过言的人都会出现在名单；群成员第一次发言只建立「遇到过」记录，
- * 不增加互动次数。只有她真的回了对方，群聊互动次数才 +1。
+ * 只有真的聊过天才进名单：私聊收到消息，或她在群里回了谁。群里只是发言、没被搭理的
+ * 人不会留下任何记录 —— 否则几百人的群几天就把这一页灌满「只见过」的陌生人。
  *
  * 卡片按「名片」排版：上面是「他是谁、聊过几次、多久没见」，设置默认折成一行摘要，
  * 点「调整」才铺开。理由见 docs 里的视觉/体验规范：540 条规模下这一页的读法是
@@ -135,6 +135,8 @@ function strengthOf(friend: Friend): Strength {
 const STRENGTH_LABEL: Record<Strength, string> = {
   l3: "常来往",
   l2: "说过话",
+  // 接口只返回聊过天的关系，`l1` 正常数据里不会出现；留着是为了不让手工塞进库里的
+  // 0 次关系渲染成「说过话」。
   l1: "只见过",
   block: "不交流",
 };
@@ -547,11 +549,6 @@ const allSelected = computed(
   () => friends.value.length > 0 && friends.value.every((friend) => selectedIds.value.includes(friend.scopeId)),
 );
 
-/** 勾选里混进聊过天的人时提醒一句，把「我清的是零互动群友」变成可见事实。 */
-const selectedInteracted = computed(
-  () => selectedFriends.value.filter((friend) => friend.interactionCount >= 1).length,
-);
-
 function isPicked(friend: Friend) {
   return selectedIds.value.includes(friend.scopeId);
 }
@@ -787,7 +784,7 @@ onMounted(() => load(1));
     :class="{ 'is-selecting': selecting }"
   >
     <PageHeader
-      description="私聊来访、群里见过的人都会记录下来。可以手动标记真人 / AI，并按当前角色决定她是否与对方交流。"
+      description="只有真的聊过天的人才会记录在这里。可以手动标记真人 / AI，并按当前角色决定她是否与对方交流。"
     >
       <template #actions>
         <button
@@ -911,14 +908,7 @@ onMounted(() => load(1));
         >
           {{ allSelected ? "取消全选" : `全选本页 ${friends.length} 人` }}
         </button>
-        <span
-          v-if="selectedInteracted"
-          class="sel-note"
-        >已选里 {{ selectedInteracted }} 个聊过天</span>
-        <span
-          v-else
-          class="sel-note is-plain"
-        >多选时卡片上的身份 / 交流暂时不能改</span>
+        <span class="sel-note is-plain">多选时卡片上的身份 / 交流暂时不能改</span>
         <button
           type="button"
           class="sel-del"
@@ -938,7 +928,7 @@ onMounted(() => load(1));
           <span class="band-krow">
             <span
               class="band-k"
-              title="私聊来访或在群里发过言的人都会出现"
+              title="只有私聊收到消息、或她在群里回过的人才会出现在这里"
             >{{ currentCharacter?.name ?? "她" }}认识的人</span>
             <span class="band-f">私聊 {{ sourceCounts.private }} · 群里 {{ sourceCounts.group }}</span>
           </span>
@@ -966,12 +956,12 @@ onMounted(() => load(1));
         class="empty"
       >
         <span class="empty-ico"><el-icon><User /></el-icon></span>
-        <h3>{{ stats.total ? "没有找到这个人" : "还没遇到人" }}</h3>
+        <h3>{{ stats.total ? "没有找到这个人" : "还没有聊过天的人" }}</h3>
         <p v-if="stats.total">
           换个关键词，或者把来源切回「全部」。
         </p>
         <p v-else>
-          有人私聊她或在群里发言后，就会出现在这里；即使还没互动，也能先设置身份和交流权限。
+          有人私聊她，或者她在群里回过谁之后，才会出现在这里。
         </p>
         <p
           v-if="stats.total && activeFilterLabel"
@@ -1444,7 +1434,7 @@ onMounted(() => load(1));
           >
             {{ friend.displayName || friend.platformUid
             }}<em
-              v-if="friend.conversationCount > 0"
+              v-if="friend.interactionCount > 0"
               class="del-names-count"
             >聊过 {{ friend.interactionCount }}</em>
           </li>
@@ -1472,13 +1462,13 @@ onMounted(() => load(1));
             她给对方起的备注（{{ deleteSingle ? deleteSingle.aliases.join("、") : `${deleteAliasTotal} 条` }}）
           </li>
         </ul>
-        <!-- 只在群里见过的人没有单独会话，conversationCount 就是 0，也是「清名单」时最常见的那种。
+        <!-- 只在群里聊过的人没有单独会话，conversationCount 就是 0。
              直接把「0 段对话」摆出来会让人以为「没什么可删的，你确定要点吗」，所以这里只说清原因。 -->
         <p
           v-if="!deleteConversationTotal"
           class="del-note"
         >
-          {{ deleteIsBatch ? "选中的这些人" : "这个人" }}只在群里出现过、没单独聊过天，所以没有对话和记忆要删。
+          {{ deleteIsBatch ? "选中的这些人" : "这个人" }}只在群里聊过、没有单独私聊，所以没有对话和记忆要删。
         </p>
         <p class="del-note">
           平台账号本身不删 —— 同一个号跟别的角色聊过的话，那边不受影响。{{ deleteIsBatch ? "这些人" : "对方" }}下次再来，会重新建一条空关系，从 0 开始算。

@@ -44,6 +44,9 @@ const saving = ref(false); const editorError = ref(""); const suggesting = ref(f
 const sourceType = ref<SourceType>("MEMORY_EVENT"); const sourceKeyword = ref(""); const sources = ref<Source[]>([]); const selectedSources = ref<Source[]>([]);
 const sourcePage = ref(1); const sourceTotal = ref(0); const sourceLoading = ref(false); const sourceError = ref("");
 const actionOpen = ref(false); const actionTarget = ref<(Target & { item: Habit; operation: Operation }) | null>(null); const acting = ref(false); const actionError = ref("");
+const selfReviewing = ref(false);
+const selfReviewUsed = ref(0);
+const selfReviewLimit = ref(5);
 const historyOpen = ref(false); const historyTarget = ref<(Target & { item: Habit }) | null>(null); const historyItems = ref<History[]>([]); const historyPage = ref(1); const historyTotal = ref(0); const historyLoading = ref(false); const historyError = ref("");
 let generation = 0; let listSequence = 0; let editorSequence = 0; let sourceSequence = 0; let suggestionSequence = 0; let draftRevision = 0; let actionSequence = 0; let historySequence = 0; let historyRequest = 0; let disposed = false;
 function settingsHref(section: "model" | "catchphrases") { return `/characters/${encodeURIComponent(characterId.value)}/settings/${section}`; }
@@ -73,6 +76,24 @@ async function loadList() {
   } catch (error) { if (current(target) && target.sequence === listSequence) loadError.value = errorText(error, "读取表达习惯失败，请重试。"); }
   finally { if (current(target) && target.sequence === listSequence) loading.value = false; }
 }
+async function runSelfReview() {
+  if (!characterId.value || selfReviewing.value) return;
+  selfReviewing.value = true;
+  try {
+    const result = await growthApi.selfReviewLanguageHabits(characterId.value);
+    selfReviewUsed.value = result.used;
+    selfReviewLimit.value = result.limit;
+    if (result.skipped === "daily_limit") ElMessage.info("今天的自审额度已经用完。");
+    else if (result.skipped === "no_candidates") ElMessage.info("没有带来源的待确认候选，暂时不需要她审。");
+    else ElMessage.success(`她自己处理了 ${result.reviewed.length} 条，今天还剩 ${result.remaining} 条额度。`);
+    await loadList();
+  } catch (error) {
+    ElMessage.error(errorText(error, "自审失败，请检查模型配置。"));
+  } finally {
+    selfReviewing.value = false;
+  }
+}
+
 function search() { query.value = keyword.value.trim(); page.value = 1; void loadList(); }
 function changeStatus(value: string | number | boolean | undefined) { if (!["ALL", "ACTIVE", "PENDING", "DISABLED", "REJECTED"].includes(String(value))) return; status.value = value as Status | "ALL"; page.value = 1; void loadList(); }
 function changePage(value: number) { page.value = value; void loadList(); }
@@ -288,8 +309,17 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
           @click="loadList"
         >
           刷新
+        </el-button><el-button
+          :loading="selfReviewing"
+          :disabled="!characterId"
+          @click="runSelfReview"
+        >
+          让她自己审（今日 {{ selfReviewUsed }}/{{ selfReviewLimit }}）
         </el-button>
       </div>
+      <p class="muted">
+        她自己审只会处理「待确认」且带来源的候选，最多每天 {{ selfReviewLimit }} 条；审核结果会标成「她自己收的」，你可以随时停用。
+      </p>
       <el-alert
         v-if="loadError"
         :title="loadError"
@@ -370,7 +400,10 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
             人工记录 · 由你确认她的表达方式
           </p>
           <footer class="record-footer">
-            <span class="muted">版本 {{ item.revision }} · 更新于 {{ dateTime(item.updatedAt) }}</span><div class="toolbar">
+            <span class="muted">
+              <el-tag v-if="item.reviewedBy === 'SELF'" size="small" type="warning">她自己收的</el-tag>
+              版本 {{ item.revision }} · 更新于 {{ dateTime(item.updatedAt) }}
+            </span><div class="toolbar">
               <el-button
                 v-if="item.status !== 'REJECTED'"
                 text

@@ -1,3 +1,5 @@
+import { loadPromptEventCandidates } from "../../../utils/prompt-event-candidates";
+import { loadPromptMemoryCandidates } from "../../../utils/prompt-memory-candidates";
 import { readInteractionExperiences } from "../../../utils/interaction-experiences";
 import { asksSelfUnderstandingHistory, wantsSelfUnderstanding, selfUnderstandingReferences } from "../../../utils/self-understanding";
 import { loadSelfUnderstanding } from "../../../utils/self-understanding-reader";
@@ -243,19 +245,13 @@ export default defineEventHandler(async (event) => {
       occurredAt: item.occurredAt.toISOString(),
     }));
 
-  const memoryCandidates = await prisma.memoryItem.findMany({
-    where: { memoryScopeId: { in: readableScopeIds }, status: "ACTIVE", deletedAt: null },
-    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-    take: 300,
-    select: {
-      id: true, category: true, content: true, confidence: true, updatedAt: true, createdAt: true,
-      validFrom: true, memoryScopeId: true, importance: true, lastRecalledAt: true, recallCount: true,
-    },
-  });
   const retrievalQuery = [
     message,
     ...recentMessages.filter((item) => item.role === "USER").slice(-2).map((item) => item.content),
   ].join("\n");
+  const { memories: memoryCandidates, snapshots: snapshotCandidates } = await loadPromptMemoryCandidates(prisma, {
+    readableScopeIds, query: retrievalQuery,
+  });
   const memoryRank = rankMemoriesWithBudget(retrievalQuery, memoryCandidates, {
     limit: resolveMemoryItemLimit(character.modelConfig),
     tokenBudget: resolveMemoryTokenBudget(character.modelConfig),
@@ -272,12 +268,6 @@ export default defineEventHandler(async (event) => {
     occurredAt: (memory.validFrom ?? memory.createdAt).toISOString(),
   }));
 
-  const snapshotCandidates = await prisma.memorySnapshot.findMany({
-    where: { memoryScopeId: { in: readableScopeIds }, status: "CURRENT" },
-    orderBy: [{ createdAt: "desc" }, { version: "desc" }],
-    take: 80,
-    select: { id: true, summary: true, periodStart: true, periodEnd: true, version: true, createdAt: true, memoryScopeId: true },
-  });
   const snapshotRank = rankSnapshotsWithBudget(retrievalQuery, snapshotCandidates, {
     limit: 4,
     tokenBudget: resolveSnapshotTokenBudget(character.modelConfig),
@@ -292,18 +282,6 @@ export default defineEventHandler(async (event) => {
     scope: scopeOriginById.get(snapshot.memoryScopeId) ?? "character",
   }));
 
-  // 忆泡：先按问句里的日期框住那一天，框不住才退化成关键词。
-  const eventCandidates = await prisma.memoryEvent.findMany({
-    where: { memoryScopeId: { in: readableScopeIds }, status: "ACTIVE" },
-    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-    take: 200,
-    select: {
-      id: true, occurredAt: true, timeOfDay: true, place: true, participants: true,
-      keywords: true, title: true, detail: true, memoryScopeId: true,
-      // 按账号检索要读引用列（5–12 位数字当 QQ 号匹配）。
-      participantRefs: true,
-    },
-  });
   /**
    * 名字是入口，账号才是身份。
    *
@@ -311,9 +289,15 @@ export default defineEventHandler(async (event) => {
    * 查不到。先把名字解析成平台账号，再让检索用 `participantRefs` 兜住改名。
    * 认不出是谁（或问句里没提人）就不传，退回纯字符串匹配。
    */
+  const eventRetrievalNow = new Date();
   const participantName = parseEventParticipantQuery(retrievalQuery);
   const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName, { characterId, platform: "web" }) : [];
+  const eventCandidates = await loadPromptEventCandidates(prisma, {
+    readableScopeIds, query: retrievalQuery, participantIds, now: eventRetrievalNow,
+    timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+  });
   const eventSelection = selectEventsForPrompt(retrievalQuery, eventCandidates, {
+    now: eventRetrievalNow,
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
     tokenBudget: resolveEventTokenBudget(character.modelConfig),
     limit: resolveEventItemLimit(character.modelConfig),

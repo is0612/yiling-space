@@ -245,6 +245,12 @@ export function selectEventsForPrompt<T extends EventCandidate>(
     }
   }
 
+  // A named/identified person with no evidence must not fall through to an unrelated
+  // timeline, especially for “first meeting”. Empty is different from somebody else's first event.
+  if (participantId || (participant && (participant.length >= 2 || wantedIds.size > 0))) {
+    return { ...applyBudget([], tokenBudget, selectionLimit), range, mode: timeIntent ?? "participant" };
+  }
+
   let candidates = ranked(inRange(events));
   if (timeIntent) {
     // 有主题词时先筛主题，再按时间取首/末；没有主题命中就只按时间，不编造筛选条件。

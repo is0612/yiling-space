@@ -10,7 +10,9 @@
  * 1. 正常一次：次数 +1，时间落在消息时刻；
  * 2. 乱序来一条更旧的：次数照加，时间不许倒退；
  * 3. 来一条更新的：时间推进；
- * 4. 传一个 Invalid Date：不许抛 —— 抛了调用方 `catch` 掉就是静默丢一次记账。
+ * 4. 传一个 Invalid Date：不许抛 —— 抛了调用方 `catch` 掉就是静默丢一次记账；
+ * 5. 群里只发言、她没搭理的人不建档：不写关系，也不写平台身份。
+ *    已有关系被标成 AI / 禁聊后，群里再遇到仍要沿用那套规则。
  *
  * 只用自己造的用户/角色/身份，finally 里清干净。
  */
@@ -18,7 +20,7 @@ import "dotenv/config";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { getPrisma } from "../server/utils/prisma";
-import { ensureGroupMemberIdentity, recordFriendInteraction } from "../server/utils/friends";
+import { readGroupMemberProfile, recordFriendInteraction } from "../server/utils/friends";
 
 const prisma = getPrisma();
 const suffix = randomUUID();
@@ -61,42 +63,23 @@ try {
     ],
   });
 
-  // 群里遇到过但还没回复的人也要可管理，建立关系不能冒充一次互动。
-  const seenOnly = await ensureGroupMemberIdentity({
+  // 群里只是发言、她还没搭理过的人：不建档，也不写平台身份。
+  const seenOnly = await readGroupMemberProfile({
     characterId,
     platform: PLATFORM,
     platformUid: seenOnlyUid,
-    displayName: "还没互动的 AI 鱼",
   });
   assert.deepEqual(seenOnly, { kind: "UNKNOWN", friendChatPolicy: "DEFAULT" });
   const seenOnlyScope = await prisma.memoryScope.findUnique({
     where: { scopeKey: `character:${characterId}:external:${PLATFORM}:${seenOnlyUid}` },
-    select: { interactionCount: true, firstSource: true, friendChatPolicy: true },
+    select: { id: true },
   });
-  assert.deepEqual(seenOnlyScope, {
-    interactionCount: 0,
-    firstSource: "GROUP",
-    friendChatPolicy: "DEFAULT",
-  }, "只在群里出现过的人不增加互动次数，但需要出现在身份管理名单。");
-
-  await prisma.externalIdentity.update({
-    where: { platform_platformUid: { platform: PLATFORM, platformUid: seenOnlyUid } },
-    data: { kind: "AI", kindSource: "MANUAL" },
-  });
-  await prisma.memoryScope.updateMany({
-    where: {
-      characterId,
-      externalIdentity: { is: { platform: PLATFORM, platformUid: seenOnlyUid } },
-    },
-    data: { friendChatPolicy: "BLOCK" },
-  });
-  const seenAgain = await ensureGroupMemberIdentity({
-    characterId,
-    platform: PLATFORM,
-    platformUid: seenOnlyUid,
-    displayName: "改过群名的 AI 鱼",
-  });
-  assert.deepEqual(seenAgain, { kind: "AI", friendChatPolicy: "BLOCK" }, "后续遇到不会覆盖手动身份和交流权限。");
+  assert.equal(seenOnlyScope, null, "只在群里出现过、还没聊过的人不该进好友档案。");
+  assert.equal(
+    await prisma.externalIdentity.count({ where: { platform: PLATFORM, platformUid: seenOnlyUid } }),
+    0,
+    "没聊过的人连平台身份都不该写 —— 群里的发言量足以把身份表灌满。",
+  );
 
   const mid = new Date(Date.now() - 3 * MINUTE * 60);
 
@@ -152,6 +135,19 @@ try {
     where: { id: relation.id },
     data: { friendChatPolicy: "BLOCK" },
   });
+
+  // 已经聊过、被人工标成 AI + 禁聊的人，群里再遇到时必须继续沿用这套规则 ——
+  // 不建档不等于不认人。
+  const knownProfile = await readGroupMemberProfile({
+    characterId,
+    platform: PLATFORM,
+    platformUid,
+  });
+  assert.deepEqual(
+    knownProfile,
+    { kind: "AI", friendChatPolicy: "BLOCK" },
+    "已有关系继续沿用人工身份与交流权限。",
+  );
 
   await recordFriendInteraction({
     characterId: otherCharacterId,

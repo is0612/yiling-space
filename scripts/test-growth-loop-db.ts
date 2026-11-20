@@ -51,7 +51,7 @@ try {
       assert.equal(payload.feedback.content, "讨论方案时先说结论更好");
       assert.equal(payload.candidate.learning.kind, "EXPRESSION");
       assert(payload.feedback.content.includes(payload.candidate.feedbackQuote));
-      output = { status: "ACTIVE", reason: "明确反馈支持该场景中的表达组织纠正" };
+      output = { status: "ACTIVE", reason: "明确反馈支持该场景中的表达组织纠正", attribution: "USER_SUPPORTED", feedbackQuote: payload.candidate.feedbackQuote };
     } else {
       reflectionCalls++;
       assert(payload.sources.every((source: {type:string}) => source.type === "experience"));

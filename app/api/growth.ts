@@ -80,6 +80,9 @@ export type LanguageHabit = {
   context: string;
   reason: string;
   status: LanguageStatus;
+  /** OWNER = 你审核；SELF = 她自己审核后生效。 */
+  reviewedBy?: "OWNER" | "SELF" | null;
+  reviewedAt?: string | null;
   revision: number;
   sourceType: "MANUAL" | "SOURCES" | "EXPERIENCE_REFLECT" | "EDUCATION_TRANSFER" | "GROUP_OBSERVATION";
   conversationId?: string | null;
@@ -562,6 +565,12 @@ export function createGrowthApi(request: ApiRequest) {
     });
   }
 
+  function selfReviewLanguageHabits(characterId: string): Promise<{
+    reviewed: Array<{ id: string; status: string }>; remaining: number; used: number; limit: number; skipped: string | null;
+  }> {
+    return request({ url: `${languageBase(characterId)}/self-review`, method: "post" });
+  }
+
   function observeGroupLanguage(characterId: string, selection: { conversationId: string; openingId: string; responseId: string; outcomeId: string }) {
     return request<{ habit: LanguageHabit | null; reused: boolean }>({
       url: `${languageBase(characterId)}/observe-group`, method: "post", data: selection,
@@ -821,6 +830,7 @@ export function createGrowthApi(request: ApiRequest) {
     listLanguageHabits,
     listLanguageSources,
     suggestLanguageHabit,
+    selfReviewLanguageHabits,
     observeGroupLanguage,
     setAutomaticGroupLanguage,
     saveLanguageHabit,

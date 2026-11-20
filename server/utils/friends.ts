@@ -4,11 +4,10 @@
  * 关系直接落在 `EXTERNAL_IDENTITY` 记忆范围上（`scopeKey` 里带 characterId），不另建朋友关系表：
  * 平台账号身份存在 `ExternalIdentity`，角色自己的交流权限与互动次数存在 `MemoryScope`。
  *
- * 群成员第一次发言就会先建立「遇到过」关系，供管理员提前标注真人 / AI 和交流权限；
- * 这一步不增加互动次数。计数口径：
- * - 私聊：对方发来消息就 +1。
- * - 群聊：只有她真的回了谁才 +1（`pipeline.ts` 用 `replyToMessageId`/`atMessageId` 反查作者）。
- *   群里没被搭理的发言不增加互动数，避免一个活跃群几天就攒出几百个"朋友"。
+ * 只有**真的聊过**才建关系：私聊对方发来消息就 +1；群聊只有她真的回了谁才 +1
+ * （`pipeline.ts` 用 `replyToMessageId`/`atMessageId` 反查作者）。
+ * 群里没被搭理的发言不留任何行 —— 否则一个活跃群几天就攒出几百个「只见过」的人，
+ * 好友档案会被从没说过话的群友淹没（2026-11-21 起改为这条口径）。
  *
  * 另有一张 `group_members`，它记录「谁在哪个群说过话」，用于群成员与角色归属等统计；
  * 身份管理本身不依赖它，平台身份与角色关系由上面的两张表负责。
@@ -20,7 +19,7 @@
 
 import type { Prisma } from "../../src/generated/prisma/client";
 import { getPrisma } from "./prisma";
-import { ensureExternalIdentityScope } from "./identity-scope";
+import { buildExternalIdentityScopeKey, ensureExternalIdentityScope } from "./identity-scope";
 import { readReviewedFriendRelationship, type FriendRelationshipContext } from "../../shared/utils/friend-relationship-context";
 
 export type FriendSource = "PRIVATE" | "GROUP";
@@ -96,83 +95,32 @@ export async function recordFriendInteraction(input: {
 }
 
 /**
- * 记录群里遇到过的人，但不增加互动次数。
+ * 读群里这个人的身份分类与交流权限。
  *
- * 群成员可能从未被她回复过；依然需要在「她的朋友」页手动标记 AI / 真人，
- * 否则无法在第一次正式互动前设置禁聊规则。互动次数仍只由 recordFriendInteraction 增加。
+ * **只读，不建档。** 关系行只由 `recordFriendInteraction` 在真的聊过之后创建，
+ * 所以群里第一次见到的人这里查不到 —— 那正是预期：她按默认规则处理（未知身份、
+ * 默认交流策略），不往好友档案里塞一行「聊过 0 次」。
+ *
+ * 保留这个查询是因为已经有关系的人（聊过之后才建的，或者历史遗留的）可能被手动
+ * 标成 AI 或禁止交流，群入口在这一步就要拦住，不能等到回复时才发现。
  */
-export async function ensureGroupMemberIdentity(input: {
+export async function readGroupMemberProfile(input: {
   characterId: string;
   platform: string;
   platformUid: string;
-  displayName?: string | null;
 }): Promise<{ kind: "UNKNOWN" | "HUMAN" | "AI"; friendChatPolicy: "DEFAULT" | "ALLOW" | "BLOCK" } | null> {
   const platformUid = (input.platformUid ?? "").trim();
   if (!platformUid) return null;
 
-  const prisma = getPrisma();
-  const existing = await prisma.externalIdentity.findUnique({
-    where: { platform_platformUid: { platform: input.platform, platformUid } },
-    select: {
-      id: true,
-      displayName: true,
-      kind: true,
-      memoryScopes: {
-        where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
-        take: 1,
-        select: { id: true, firstSource: true, friendChatPolicy: true },
-      },
-    },
+  const relation = await getPrisma().memoryScope.findUnique({
+    where: { scopeKey: buildExternalIdentityScopeKey(input.characterId, input.platform, platformUid) },
+    select: { friendChatPolicy: true, externalIdentity: { select: { kind: true } } },
   });
 
-  let identityId: string;
-  let kind: "UNKNOWN" | "HUMAN" | "AI";
-  let relation = existing?.memoryScopes[0] ?? null;
-  if (existing) {
-    identityId = existing.id;
-    kind = existing.kind;
-    if (input.displayName && input.displayName.slice(0, 255) !== existing.displayName) {
-      await prisma.externalIdentity.update({
-        where: { id: existing.id },
-        data: { displayName: input.displayName.slice(0, 255) },
-      });
-    }
-  } else {
-    const created = await prisma.externalIdentity.upsert({
-      where: { platform_platformUid: { platform: input.platform, platformUid } },
-      create: {
-        platform: input.platform,
-        platformUid,
-        displayName: input.displayName?.slice(0, 255) || null,
-        status: "UNVERIFIED",
-      },
-      update: {
-        ...(input.displayName ? { displayName: input.displayName.slice(0, 255) } : {}),
-      },
-      select: { id: true, kind: true },
-    });
-    identityId = created.id;
-    kind = created.kind;
-  }
-
-  if (!relation) {
-    const scope = await ensureExternalIdentityScope(input.characterId, input.platform, platformUid, identityId);
-    await prisma.memoryScope.updateMany({
-      where: { id: scope.scopeId, firstSource: null },
-      data: { firstSource: "GROUP" },
-    });
-    relation = await prisma.memoryScope.findUnique({
-      where: { id: scope.scopeId },
-      select: { id: true, firstSource: true, friendChatPolicy: true },
-    });
-  } else if (relation.firstSource === null) {
-    await prisma.memoryScope.updateMany({
-      where: { id: relation.id, firstSource: null },
-      data: { firstSource: "GROUP" },
-    });
-  }
-
-  return { kind, friendChatPolicy: relation?.friendChatPolicy ?? "DEFAULT" };
+  return {
+    kind: relation?.externalIdentity?.kind ?? "UNKNOWN",
+    friendChatPolicy: relation?.friendChatPolicy ?? "DEFAULT",
+  };
 }
 
 /**

@@ -104,11 +104,9 @@ console.log("\n[2] mention 模式 · 主人普通发言");
  * 这里塞一个「什么方法都能调、调用即记录」的代理，保证 handler 里的落库旁路
  * （连接活性、群活跃度）不会真连库，也不会抛。
  *
- * 朋友/身份落地后，群聊入口会先给发言人预登记一条外部身份与关系
- * （`ensureGroupMemberIdentity`），这条链路会读 `upsert` 的返回值：
- * 全返回 null 的话，`created.id` 直接抛 `Cannot read properties of null`
- * —— 看起来像「群友消息把 handler 打崩了」，其实是桩没模拟出「新建行」。
- * 这里只给身份/关系这几个方法补上最小返回值，其余仍是 null（缺行、无会话）。
+ * 群聊入口会先读发言人的身份与交流策略（`readGroupMemberProfile`）。这条链路只查
+ * 已有的关系行：查不到（桩返回 null）就按「未知身份 + 默认策略」处理，不写库。
+ * 这里仍补上身份/关系几个方法的最小返回值，避免桩在别的旁路上因缺行而炸。
  */
 const prismaCalls: string[] = [];
 function createStubPrisma(): unknown {

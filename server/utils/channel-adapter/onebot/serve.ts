@@ -12,7 +12,7 @@ import { dataPath } from "../../data-dir";
 import { getPrisma } from "../../prisma";
 import { handleRoleplayChannel, parseRoleplayCommand, findRoleplayChannelReplay } from "../../roleplay-channel";
 import { readDailyQuota } from "../../model-usage";
-import { ensureGroupMemberIdentity } from "../../friends";
+import { readGroupMemberProfile } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
 import type { OnebotSegment } from "./types";
@@ -1725,15 +1725,14 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     let speakerPolicy: "DEFAULT" | "ALLOW" | "BLOCK" = isOwnerEvent ? "ALLOW" : "DEFAULT";
 
     if (isGroupMessage && event.userId.trim()) {
-      // 每个在群里发过言的人都先建立一个「遇到过」关系，互动次数仍只在她真正回复后增加。
-      // 这样她可以在第一次正式交流前，就把某条鱼标记为 AI / 禁止交流。
+      // 只读已有关系，不建档：关系行只在她真的回过这个人之后才由记账链路创建，
+      // 群里没被搭理的发言不该出现在好友档案里。没聊过的人按未知身份 + 默认策略处理。
       const identity = isOwnerEvent
         ? null
-        : await ensureGroupMemberIdentity({
+        : await readGroupMemberProfile({
             characterId: binding.characterId,
             platform: ONEBOT_PLATFORM,
             platformUid: event.userId.trim(),
-            displayName: event.displayName,
           });
       if (identity) {
         speakerKind = identity.kind;

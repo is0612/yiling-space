@@ -66,7 +66,7 @@ export async function saveGroupObservationHabit(prisma: PrismaClient, input: Own
     return { habit, reused: false };
   });
 }
-export async function updateExpressionHabit(prisma: PrismaClient, input: Owner & { habitId: string; body: unknown }) {
+export async function updateExpressionHabit(prisma: PrismaClient, input: Owner & { habitId: string; body: unknown; reviewedBy?: "OWNER" | "SELF" }) {
   const parsed = parseExpressionHabitPatch(input.body);
   return prisma.$transaction(async tx => {
     await lockPreferenceOwner(tx, input.ownerId, input.characterId);
@@ -97,7 +97,11 @@ export async function updateExpressionHabit(prisma: PrismaClient, input: Owner &
     if (current.sourceType === "EXPERIENCE_REFLECT" && chatScope === "GROUP") throw createError({ statusCode: 400, statusMessage: "原私聊经验不能扩展到群聊。" });
     const context = parsed.context ?? current.context; const reason = parsed.reason ?? current.reason;
     if (parsed.operation === "EDIT" && kind === current.kind && content === current.content && context === current.context && chatScope === (current.chatScope ?? "ALL") && reason === current.reason) return { habit: current };
-    const changed = await tx.characterExpressionHabit.updateMany({ where: { id: current.id, characterId: input.characterId, revision: parsed.expectedRevision, status: current.status }, data: { kind, content, context, chatScope, reason, status, revision: { increment: 1 } } });
+    // A status decision records who made it; edits keep the previous reviewer untouched.
+    const decision = parsed.operation === "ACTIVATE" || parsed.operation === "REJECT" || parsed.operation === "DISABLE";
+    const changed = await tx.characterExpressionHabit.updateMany({ where: { id: current.id, characterId: input.characterId, revision: parsed.expectedRevision, status: current.status },
+      data: { kind, content, context, chatScope, reason, status, revision: { increment: 1 },
+        ...(decision ? { reviewedBy: input.reviewedBy ?? "OWNER", reviewedAt: new Date() } : {}) } });
     if (changed.count !== 1) throw createError({ statusCode: 409, statusMessage: "表达习惯刚刚发生变化，请刷新后再试。" });
     const habit = await tx.characterExpressionHabit.findUniqueOrThrow({ where: { id: current.id } });
     await snapshot(tx, habit, input.ownerId, parsed.operation);

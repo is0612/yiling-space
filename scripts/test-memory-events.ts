@@ -672,8 +672,8 @@ const renamed = [
 ];
 assert.equal(
   selectEventsForPrompt("和鱼小刚都聊过什么", renamed, { now, timeZone: TZ }).mode,
-  "keyword",
-  "只比字符串时，改名后的新名字查不到旧忆泡（这正是要修的缺口）",
+  "participant",
+  "明确人物没有匹配时保留人物模式，不用他人事件填空",
 );
 const byRenamedAccount = selectEventsForPrompt("和鱼小刚都聊过什么", renamed, {
   now, timeZone: TZ, participantIds: ["100001"],
@@ -689,6 +689,11 @@ assert.deepEqual(byOldName.items.map((item) => item.id), ["n1"], "名字与账�
 const unrelatedAccount = selectEventsForPrompt("和鱼小刚都聊过什么", renamed, {
   now, timeZone: TZ, participantIds: ["999999"],
 });
-assert.equal(unrelatedAccount.mode, "keyword", "账号对不上时不能硬凑成按人过滤");
+assert.equal(unrelatedAccount.mode, "participant", "账号对不上时仍说明是在查人物，结果为空");
+assert.equal(unrelatedAccount.items.length, 0, "没有该人物证据时不能借用他人事件");
+assert.equal(selectEventsForPrompt("第一次见到陌生昵称是什么时候", people, { now, timeZone: TZ }).items.length, 0,
+  "未知人物首次经历不能退回其他人的最早事件");
+assert.equal(selectEventsForPrompt("第一次见到999999是什么时候", people, { now, timeZone: TZ }).items.length, 0,
+  "未知账号首次经历也不能退回其他人的最早事件");
 
 console.log("忆泡测试通过：相对/绝对日期、时段收窄、周起点、空区间、关键词回退、预算保底、幂等键、按天窗口、日期键与小时键、原文兜底与单条截断、时间线状态、近义去重、参与者过滤与取首、近期忆泡、参与者清洗与反查名字、改名刷新、按账号检索。");

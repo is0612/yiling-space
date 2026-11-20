@@ -1949,6 +1949,9 @@ model CharacterExpressionHabit {
   chatScope String @default("ALL") @db.VarChar(10)
   reason String @db.VarChar(1000)
   status String @default("PENDING") @db.VarChar(20)
+  /// OWNER = 管理员审核；SELF = 她自己审核后生效，可撤销。
+  reviewedBy String? @db.VarChar(20)
+  reviewedAt DateTime? @db.Timestamptz(6)
   revision Int @default(1)
   /// GROUP_OBSERVATION references a selected group window; its approved habit has role-wide scope.
   sourceType String @default("MANUAL") @db.VarChar(20)
