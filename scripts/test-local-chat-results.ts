@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getPrisma } from "../server/utils/prisma";
+import { createLocalBrowserRequest } from "../server/utils/local-browser";
 import { readLocalContinuationTask, readLocalChatResults } from "../server/utils/local-chat-results";
 import { approveLocalWriteRequest, createLocalWriteRequest } from "../server/utils/local-write";
 
@@ -63,6 +64,11 @@ try {
   await assert.rejects(() => readLocalContinuationTask(actor, characterId, first.id, taskId!), { statusCode: 409 });
   await db.localBrowserRequest.update({ where: { id: browserPending.id }, data: { status: "SUCCEEDED" } });
   assert.equal((await readLocalChatResults(actor, characterId, first.id)).tasks[0]?.canContinue, true);
+  const firstBrowser = await createLocalBrowserRequest({ actorId: actor, characterId, conversationId: first.id,
+    url: "https://example.com/", actions: [{ kind: "scroll", y: 200 }], reason: "dedupe" });
+  await assert.rejects(() => createLocalBrowserRequest({ actorId: actor, characterId, conversationId: first.id,
+    url: "https://example.com/", actions: [{ kind: "scroll", y: 200 }], reason: "dedupe again" }), /不要重复提交/);
+  await db.localBrowserRequest.deleteMany({ where: { id: firstBrowser.id } });
   // A standalone request in the same conversation is shown but must not freeze an unrelated task.
   const standalone = await db.localBrowserRequest.create({ data: { actorId: actor, characterId, conversationId: first.id,
     url: "https://example.com/", actions: [{ kind: "scroll", y: 10 }], reason: "standalone" } });

@@ -35,6 +35,12 @@ export async function createLocalBrowserRequest(input: LocalBrowserInput) {
   if (!reason) throw new LocalObserveError(400, "网页操作必须说明原因。");
   const request = await getPrisma().$transaction(async tx => {
     await lockLocalTaskForApproval(tx, input.taskId, input.actorId);
+    // The same steps on the same page, still awaiting approval, are one request — not a queue of duplicates.
+    const duplicate = await tx.localBrowserRequest.findFirst({
+      where: { actorId: input.actorId, url, actions: { equals: actions }, status: { in: ["PENDING", "APPROVING"] } },
+      select: { id: true },
+    });
+    if (duplicate) throw new LocalObserveError(409, "这项相同的网页操作已经在等待批准，不要重复提交。");
     return tx.localBrowserRequest.create({ data: {
       url,
       actions,
