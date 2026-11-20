@@ -127,5 +127,3 @@ export function browserErrorMessage(code: string) {
   };
   return messages[code] ?? "独立浏览器会话已关闭。";
 }
-
-
