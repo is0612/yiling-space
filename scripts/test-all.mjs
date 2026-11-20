@@ -52,25 +52,42 @@ const all = Object.entries(JSON.parse(fs.readFileSync(path.join(ROOT, "package.j
  * 跑迁移、再逐个拉起这些子测试。
  *
  * 守卫有两种写法，都要认：
- *   - 库名断言：`yiling_memory_test_<32hex>`（memory 那一族）
+ *   - 库名断言：`yiling_<族>_test_<32hex>`（memory / days / knowledge-topic /
+ *     social-assessment / social-bf / growth-event-center 各一族，名字各不相同）
  *   - 环境变量：`YILING_CHAT_ISOLATED_DB=1`（chat 那一族）
  *
- * 识别分两步，缺一不可：
+ * 所以判据不能写具体的族名 —— 写 `yiling_memory_test_` 就漏掉了后来新增的五族，
+ * 那五条会以「拒绝执行：当前库不是一次性测试库」的形式失败，看起来像真 bug。
+ * 认的是**形状**：源码里出现一次性库名的构造或断言（`_test_` 前缀）。
+ *
+ * 识别分三步，缺一不可：
  *   1. 这个测试源码里**确实有**守卫（不是靠名字后缀猜 —— 后缀会骗人，守卫不会）；
- *   2. 它确实被别的测试引用：父运行器在自己的 TS 源码里 spawn 它，不在 npm 命令里，
- *      所以要读父脚本的源码找引用。
+ *   2. 它自己**会拉起别的脚本**（`spawnSync` 之类）—— 只有父运行器才建临时库；
+ *   3. 被它拉起的那个文件名，才算子测试。
+ *
+ * 第 2 步不能省，而且**取引用之前必须先剥掉注释**。父运行器的 JSDoc 里爱写
+ * 「配套 `test-xxx-isolated.ts`」「做法同 `test-yyy-isolated.ts`」，那些是散文不是派生关系；
+ * 不剥注释就会平白把隔壁父运行器也塞进子测试清单，结果是它们悄悄不跑了。
  */
-const ISOLATION_GUARD = /yiling_memory_test_|ISOLATED_DB/;
+const ISOLATION_GUARD = /_test_|ISOLATED_DB/;
+const SPAWNS_SCRIPT = /\bspawn(?:Sync)?\s*\(|\bexecFile(?:Sync)?\s*\(/;
 const childRefs = new Set();
 function readScript(file) {
   try { return fs.readFileSync(path.join(ROOT, file), "utf8"); } catch { return ""; }
 }
+/** 块注释与整行 `//` 注释都不算「引用了这个脚本」。 */
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
 for (const [, command] of all) {
   const own = (command.match(SCRIPT_REF) ?? [])[0];
   if (!own) continue;
-  const source = readScript(own);
-  if (!ISOLATION_GUARD.test(source)) continue;
-  for (const ref of source.match(/[A-Za-z0-9._-]+\.(?:ts|mjs)/g) ?? []) childRefs.add(ref);
+  const source = stripComments(readScript(own));
+  if (!ISOLATION_GUARD.test(source) || !SPAWNS_SCRIPT.test(source)) continue;
+  const self = own.split("/").pop();
+  for (const ref of source.match(/[A-Za-z0-9._-]+\.(?:ts|mjs)/g) ?? []) {
+    if (ref !== self) childRefs.add(ref);
+  }
 }
 function basenameOf(command) {
   const own = (command.match(SCRIPT_REF) ?? [])[0];
