@@ -10,7 +10,8 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { dataPath } from "../../data-dir";
 import { getPrisma } from "../../prisma";
-import { handleRoleplayChannel } from "../../roleplay-channel";
+import { handleRoleplayChannel, parseRoleplayCommand, findRoleplayChannelReplay } from "../../roleplay-channel";
+import { readDailyQuota } from "../../model-usage";
 import { ensureGroupMemberIdentity } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
@@ -39,7 +40,7 @@ import {
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
 import { GROUP_MUTE_MS, createGroupMuteStore, isQuietRequest, isResumeRequest } from "./group-mute";
 import { createGroupActivityRecorder } from "../../group-activity";
-import { ONEBOT_PLATFORM, readOnebotMentions, readOnebotReplyToId } from "./types";
+import { ONEBOT_PLATFORM, readOnebotMentions, readOnebotReplyToId, readOnebotRoleplayText } from "./types";
 import {
   resolveVoiceTtsSettings,
   synthesizeSpeechSilk,
@@ -202,7 +203,14 @@ async function isGroupReplyLimited(
       },
     },
   });
-  return recentReplies >= binding.replyLimitPerWindow;
+  const roleplayReplies = await getPrisma().roleplayMessage.count({
+    where: {
+      role: "assistant", source: "qq-group",
+      createdAt: { gte: new Date(Date.now() - windowMs) },
+      session: { groupBindingId: binding.id, groupConversationId: event.conversationKey },
+    },
+  });
+  return recentReplies + roleplayReplies >= binding.replyLimitPerWindow;
 }
 
 function announcementErrorMessage(error: unknown): string {
@@ -1094,6 +1102,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
    * 写库要为每群维护一行状态加清理任务，不划算。
    */
   const groupMute = createGroupMuteStore();
+  // Register mode switches before awaiting DB so following events queue behind the switch.
+  const roleplayTransitions = new Map<string, number>();
   /**
    * 群活跃度落库（节流）。和 `groupContext` 的分工：那边是给这一轮模型看的短期背景，
    * 这边是给**另一个进程**的主动找话题判断「这个群多久没动静」用的。
@@ -1268,6 +1278,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     const groupEvent = items[0]!.event;
     const contextKey = `${binding.id}:${groupEvent.conversationKey}`;
     const prisma = getPrisma();
+    // A batch buffered before the explicit mode switch must not speak as the daily persona afterward.
+    if (await prisma.roleplayRoute.findUnique({ where: { bindingId_externalConversationId: { bindingId: binding.id, externalConversationId: groupEvent.conversationKey } }, select: { id: true } })) return;
     const originalIds = originalItems.map((item) => item.event.messageId);
     const backgroundLines = groupContext.background(contextKey, originalIds);
     const analysisBackgroundLines = groupContext.background(contextKey, originalIds, {
@@ -1451,7 +1463,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
           select: { occurredAt: true },
         })
       : null;
-    const spokenToday = conversation
+    const dailySpokenToday = conversation
       ? await prisma.message.count({
           where: {
             conversationId: conversation.id,
@@ -1461,6 +1473,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         })
       : 0;
 
+    const spokenToday = dailySpokenToday + await prisma.roleplayMessage.count({ where: { role: "assistant", source: "qq-group", createdAt: { gte: groupChatDayStart() }, session: { groupBindingId: binding.id, groupConversationId: groupEvent.conversationKey } } });
     const now = new Date();
     const lastSpokeAt = lastAssistant?.occurredAt ?? null;
     /**
@@ -1882,6 +1895,70 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     touchLastEventAt();
     const binding = routeOnebotEventToBinding(record.bindings, event);
     if (!binding) return { status: "ignored", reason: "no_binding" };
+    if (event.messageType === "group" && event.groupId) {
+      const key = `${binding.id}:${event.conversationKey}`;
+      const content = event.poke ? event.content : readOnebotRoleplayText(event.data, event.selfId || record.accountQq);
+      const command = parseRoleplayCommand(content);
+      const replayInput = { platform: ONEBOT_PLATFORM, eventType: "GROUP_MESSAGE", characterId: binding.characterId, bindingId: binding.id, externalConversationId: event.conversationKey, externalMessageId: event.messageId, authorUid: event.userId, content };
+      const knownReplay = !command ? await findRoleplayChannelReplay(replayInput) : null;
+      if (command) roleplayTransitions.set(key, (roleplayTransitions.get(key) ?? 0) + 1);
+      try {
+        const active = command || knownReplay || roleplayTransitions.has(key) || await getPrisma().roleplayRoute.findUnique({
+          where: { bindingId_externalConversationId: { bindingId: binding.id, externalConversationId: event.conversationKey } }, select: { id: true },
+        });
+        if (active) return await enqueueConversation(key, async () => {
+          // Re-read inside the queue: an earlier switch/exit can change this event's destination.
+          const route = await getPrisma().roleplayRoute.findUnique({ where: { bindingId_externalConversationId: { bindingId: binding.id, externalConversationId: event.conversationKey } }, select: { id: true, sessionId: true } });
+          const replay = !command ? await findRoleplayChannelReplay(replayInput) : null;
+          if (replay && replay.sessionId !== route?.sessionId) return { status: "duplicate" };
+          if (!command && !route) return handleRoutedEvent(event, binding);
+          const addressed = event.poke !== undefined || isSelfMentioned(event, record.accountQq);
+          if (route && !command && !content.trim()) return { status: "ignored", reason: "missing_fields" };
+          const isOwner = Boolean(record.ownerQq) && event.userId === record.ownerQq;
+          if (command && !isOwner) return { status: "ignored", reason: "roleplay_owner_only" };
+          if (route && !command && addressed) {
+            if (!isOwner) {
+              const identity = await getPrisma().externalIdentity.findUnique({
+                where: { platform_platformUid: { platform: ONEBOT_PLATFORM, platformUid: event.userId } },
+                select: { kind: true, memoryScopes: { where: { characterId: binding.characterId }, select: { friendChatPolicy: true }, take: 1 } },
+              });
+              if (shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT")) return { status: "ignored", reason: "friend_policy_blocked" };
+            }
+            if (isOwner || event.senderRole !== "member") {
+              if (groupMute.isMuted(key) && isResumeRequest(content)) groupMute.unmute(key);
+              else if (isQuietRequest(content)) groupMute.mute(key);
+            }
+            if (groupMute.isMuted(key)) return { status: "ignored", reason: "roleplay_group_muted" };
+            // A completed turn may need transport retry; it is not a new generation.
+            if (!replay?.completed) {
+              if (await isGroupReplyLimited(binding, event)) return { status: "ignored", reason: "group_reply_limit" };
+              const settings = groupChatForGroup(binding.groupChat, binding.groupChatModes, event.groupId);
+              if (settings.dailyMax > 0) {
+                const since = groupChatDayStart();
+                const [daily, stories] = await Promise.all([
+                  getPrisma().message.count({ where: { role: "ASSISTANT", occurredAt: { gte: since }, conversation: { channelBindingId: binding.id, externalConversationId: event.conversationKey } } }),
+                  getPrisma().roleplayMessage.count({ where: { role: "assistant", source: "qq-group", createdAt: { gte: since }, session: { groupBindingId: binding.id, groupConversationId: event.conversationKey } } }),
+                ]);
+                if (daily + stories >= settings.dailyMax) return { status: "ignored", reason: "daily_limit" };
+              }
+              const character = await getPrisma().character.findUnique({ where: { id: binding.characterId }, select: { modelConfig: true } });
+              if (character && (await readDailyQuota(binding.characterId, character.modelConfig)).exceeded) return { status: "ignored", reason: "daily_quota_exceeded" };
+            }
+          }
+          const result = await handleRoleplayChannel({
+            platform: ONEBOT_PLATFORM, eventType: "GROUP_MESSAGE", characterId: binding.characterId,
+            bindingId: binding.id, externalConversationId: event.conversationKey, externalMessageId: event.messageId,
+            authorUid: event.userId, content, addressed, sendReply: createReplySender(record.config, event),
+          });
+          return result ?? handleRoutedEvent(event, binding);
+        });
+      } finally {
+        if (command) {
+          const left = (roleplayTransitions.get(key) ?? 1) - 1;
+          if (left > 0) roleplayTransitions.set(key, left); else roleplayTransitions.delete(key);
+        }
+      }
+    }
     /**
      * 图片直链可能不在推送事件里（只有 `file`）：缺就回查一次。
      *

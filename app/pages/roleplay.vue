@@ -89,16 +89,20 @@ async function send() {
   } catch (e) { if (alive) report(e, "发送失败，原文已保留，可重试"); }
   finally { if (alive) working.value = false; }
 }
-async function sessionAction(action: "compress" | "apply") {
+async function sessionAction(action: "compress" | "apply" | "rebuild") {
   if (busy.value || !detail.value) return;
   const id = detail.value.id;
   if (action === "apply") {
     try { await ElMessageBox.confirm("将当前人设应用到这份存档，聊天记录和摘要保留。确认更新？", "应用新人设", { type: "warning" }); } catch { return; }
     if (busy.value || detail.value?.id !== id) return;
   }
+  if (action === "rebuild") {
+    try { await ElMessageBox.confirm("忽略旧摘要，从完整聊天原文重新整理。会调用扮演模型，原文保留；失败时旧摘要也保留。", "重建历史摘要", { type: "warning" }); } catch { return; }
+    if (busy.value || detail.value?.id !== id) return;
+  }
   working.value = true; error.value = "";
   try {
-    const session = action === "apply" ? await api.applyPersona(id) : await api.compress(id);
+    const session = action === "apply" ? await api.applyPersona(id) : await api.compress(id, action === "rebuild");
     if (alive && detail.value?.id === id) { detail.value = { ...session, messages: detail.value.messages }; upsertSession(session); ElMessage.success(action === "apply" ? "已应用当前人设" : "摘要已更新"); }
   } catch (e) { if (alive) report(e, action === "apply" ? "应用人设失败" : "压缩失败，聊天原文保留"); }
   finally { if (alive) working.value = false; }
@@ -181,7 +185,7 @@ onBeforeUnmount(() => { alive = false; ++listVersion; ++detailVersion; });
       <div class="actions">
         <el-popover
           placement="bottom-end"
-          title="QQ 主人私聊命令"
+          title="QQ 扮演切换命令（仅主人）"
           :width="340"
           trigger="click"
         >
@@ -191,6 +195,9 @@ onBeforeUnmount(() => { alive = false; ++listVersion; ++detailVersion; });
             class="command"
           >
             <code>{{ command }}</code><br>{{ meaning }}
+          </p>
+          <p class="muted">
+            群里由主人切换，开启后群友需 @ 她参与。本群只可继续本群存档，私聊及其他群存档不会带入。
           </p>
           <template #reference>
             <el-button>QQ 切换帮助</el-button>
@@ -324,7 +331,7 @@ onBeforeUnmount(() => { alive = false; ++listVersion; ++detailVersion; });
             {{ session.title }}
           </el-button>
           <p class="muted">
-            {{ session.messageCount }} 条消息 · {{ session.id.slice(0, 8) }}
+            {{ session.messageCount }} 条消息 · {{ session.id.slice(0, 8) }}{{ session.groupBindingId ? ' · 群聊存档' : '' }}
           </p>
           <div class="actions">
             <el-button
@@ -365,6 +372,12 @@ onBeforeUnmount(() => { alive = false; ++listVersion; ++detailVersion; });
             </el-button>
           </div>
           <el-alert
+            v-if="detail.groupBindingId"
+            title="这是群聊存档，在这里发送的内容也会成为该群后续扮演的上下文。私人话题请另开对话。"
+            type="warning"
+            :closable="false"
+          />
+          <el-alert
             v-if="changedPersona"
             title="人设已修改，本存档仍使用原版本。"
             type="info"
@@ -391,6 +404,13 @@ onBeforeUnmount(() => { alive = false; ++listVersion; ++detailVersion; });
               >
                 已覆盖至第 {{ detail.summaryThrough }} 条消息，完整原文仍保留。
               </p>
+              <el-button
+                v-if="detail.summary"
+                :disabled="busy"
+                @click="sessionAction('rebuild')"
+              >
+                从原文重建摘要
+              </el-button>
             </el-collapse-item>
           </el-collapse>
           <div

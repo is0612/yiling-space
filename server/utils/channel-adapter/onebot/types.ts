@@ -156,6 +156,20 @@ export function readOnebotMessageText(data: unknown): string {
   return "";
 }
 
+/** Roleplay uses real mention segments for addressing but never sends platform IDs to the model. */
+export function readOnebotRoleplayText(data: unknown, selfId: string): string {
+  const message = (data as { message?: unknown } | null)?.message;
+  if (Array.isArray(message)) {
+    return readOnebotMessageText({ message: message.flatMap((segment: OnebotSegment) => {
+      if (segment?.type !== "at") return [segment];
+      return String(segment.data?.qq ?? "") === selfId ? [] : [{ type: "text", data: { text: "@群成员 " } }];
+    }) });
+  }
+  return readOnebotMessageText(data)
+    .replace(/\[CQ:at,qq=([^,\]]+)[^\]]*\]/gu, (_match, target: string) => target === selfId ? "" : "@群成员 ")
+    .replace(/\[CQ:reply,[^\]]*\]/gu, "").trim();
+}
+
 /** 一条消息里 @ 到的对象，按「是不是她 / 全体 / 别人」分类。同名不算，只看 qq。 */
 export type OnebotMentionTarget = "self" | "other" | "all";
 

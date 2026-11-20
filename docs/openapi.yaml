@@ -254,6 +254,15 @@ paths:
     post:
       tags: [Roleplay]
       summary: 使用扮演模型压缩较早聊天，保留完整原文
+      description: 摘要以独立档案任务生成，历史消息只作为JSON数据；校验结构与覆盖序号后保存，续聊台词或无效结构不会覆盖旧摘要。rebuild=true忽略旧摘要，从完整原文分段重新整理，最多8段，全部成功后保存。
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rebuild: { type: boolean, default: false, description: 从原文重建摘要，原文保留，任一段失败时旧摘要不变 }
       responses:
         '200':
           description: 更新摘要后的存档
@@ -7855,6 +7864,8 @@ components:
         id: { type: string, format: uuid }
         personaId: { type: string, format: uuid, nullable: true }
         hostCharacterId: { type: string, format: uuid, nullable: true }
+        groupBindingId: { type: string, format: uuid, nullable: true, description: 不可变群归属，私人存档为空；只能由QQ入口创建 }
+        groupConversationId: { type: string, nullable: true, description: 不可变原群会话键；群存档仅可在原绑定原群继续 }
         title: { type: string }
         personaSnapshot:
           type: object
@@ -7877,7 +7888,7 @@ components:
         role: { type: string, enum: [user, assistant] }
         content: { type: string }
         requestId: { type: string, nullable: true }
-        source: { type: string, enum: [web, qq, opening] }
+        source: { type: string, enum: [web, qq, qq-group, opening] }
         createdAt: { type: string, format: date-time }
     LocalCommandRequest:
       type: object

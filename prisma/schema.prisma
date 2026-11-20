@@ -2274,6 +2274,9 @@ model RoleplaySession {
   ownerId String @db.Uuid
   personaId String? @db.Uuid
   hostCharacterId String? @db.Uuid
+  /// Immutable public group scope; null means a private story.
+  groupBindingId String? @db.Uuid
+  groupConversationId String? @db.VarChar(255)
   title String @db.VarChar(200)
   personaSnapshot Json @db.JsonB
   summary String @default("") @db.Text
@@ -2287,6 +2290,7 @@ model RoleplaySession {
   messages RoleplayMessage[]
   routes RoleplayRoute[]
   @@index([ownerId, updatedAt])
+  @@index([groupBindingId, groupConversationId])
   @@map("roleplay_sessions")
 }
 
@@ -2302,6 +2306,7 @@ model RoleplayMessage {
   session RoleplaySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   @@unique([sessionId, sequence])
   @@unique([sessionId, requestId, role])
+  @@index([requestId, source, role])
   @@map("roleplay_messages")
 }
 

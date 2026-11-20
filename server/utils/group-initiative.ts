@@ -195,6 +195,8 @@ async function speakInGroup(input: {
 }): Promise<{ ok: boolean; reason: string; content?: string; detail?: string }> {
   const { character, candidate, now } = input;
   const prisma = getPrisma();
+  const roleplayActive = () => prisma.roleplayRoute.findUnique({ where: { bindingId_externalConversationId: { bindingId: candidate.binding.id, externalConversationId: candidate.externalConversationId } }, select: { id: true } });
+  if (await roleplayActive()) return { ok: false, reason: "roleplay_active" };
   const modelSettings = resolveChatModelSettings(character.modelConfig);
   const apiKey = await resolveCharacterApiKey(character.modelConfig, modelSettings.apiBaseUrl).catch(() => "");
   if (!apiKey || !modelSettings.model) {
@@ -241,6 +243,7 @@ async function speakInGroup(input: {
     return { ok: false, reason: "nothing_to_say" };
   }
 
+  if (await roleplayActive()) return { ok: false, reason: "roleplay_active" };
   try {
     await sendOnebotGroupMessage(candidate.connection.config, candidate.groupId, content);
   } catch (error) {

@@ -10,7 +10,7 @@ export async function callRoleplayModel(settings: RoleplaySettings, apiKey: stri
   const record = (status: string, usage?: ModelUsageTokens | null) => recordModelUsage({ kind: accounting.summary ? "roleplay-summary" : "roleplay-chat", model: settings.model, userId: accounting.ownerId, characterId: accounting.characterId, usage, metadata: { roleplaySessionId: accounting.sessionId, status } });
   let response: Response;
   try {
-    response = await fetch(endpoint, { method: "POST", redirect: "error", headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: settings.model, messages, temperature: settings.temperature, max_tokens: settings.maxTokens, ...(endpoint.hostname === "api.deepseek.com" ? { thinking: { type: settings.thinking ? "enabled" : "disabled" } } : {}) }), signal: AbortSignal.timeout(90000) });
+    response = await fetch(endpoint, { method: "POST", redirect: "error", headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: settings.model, messages, temperature: settings.temperature, max_tokens: settings.maxTokens, ...(accounting.summary ? { response_format: { type: "json_object" } } : {}), ...(endpoint.hostname === "api.deepseek.com" ? { thinking: { type: settings.thinking ? "enabled" : "disabled" } } : {}) }), signal: AbortSignal.timeout(90000) });
   } catch {
     await record("network_error");
     throw createError({ statusCode: 502, statusMessage: "角色扮演模型连接失败或超时，消息已保留，可使用相同请求编号重试。" });

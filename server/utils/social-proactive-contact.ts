@@ -598,6 +598,13 @@ export async function runSocialProactiveContactTick(
           break;
         }
 
+        // Daily social outreach must not interrupt a group roleplay session.
+        if (await prisma.roleplayRoute.findFirst({ where: { characterId: character.id, externalConversationId: `g:${freshGroup.groupId}` }, select: { id: true } })) {
+          results.push({ ...skip("roleplay_active", friendName), groupId: freshGroup.groupId });
+          handled = true;
+          break;
+        }
+
         // 在途检查只保留循环开头那一处：`claimAttempt` 靠 scopeId+dedupeKey 唯一键
         // 原子占位，真并发时它会返回 false 并记为 duplicate_attempt，这里再查一次是多余的。
         const claimed = await claimAttempt({

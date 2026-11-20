@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { Client } from "pg";
 import { getPrisma } from "../server/utils/prisma";
 import { testRoleplayChannelDatabase } from "./test-roleplay-channel";
+import { testRoleplayGroupDatabase } from "./test-roleplay-group";
 import * as service from "../server/utils/roleplay-service";
 import { contextMessages, contextCost, validateSettings } from "../server/utils/roleplay-context";
 
@@ -31,6 +32,7 @@ try {
     const host = await db.character.create({ data: { ownerId: owner.id, name: "Test host", basePrompt: "Host identity must not leak" } });
     const settings = await service.updateSettings(owner.id, { apiKey: "mock-only-secret", apiBaseUrl: "http://127.0.0.1:4567/v1", model: "mock", thinking: false, recentMessageLimit: 4 });
     await testRoleplayChannelDatabase(db, owner.id, host.id);
+    await testRoleplayGroupDatabase(db, owner.id, host.id);
     assert(settings.hasApiKey); assert(!JSON.stringify(settings).includes("mock-only-secret"));
     assert.match((await db.roleplaySetting.findUniqueOrThrow({ where: { ownerId: owner.id } })).apiKeyCiphertext!, /^v1\./);
     const persona = await service.createPersona(owner.id, { name: "测试角色", prompt: "You are a fictional conversational companion.", opening: "Hello" });
@@ -39,14 +41,22 @@ try {
     assert.deepEqual(await service.listPersonas(stranger), []);
     await assert.rejects(service.getRoleplaySession(stranger, session.id));
     await assert.rejects(service.createRoleplaySession(stranger, { personaId: persona.id }));
-    let calls = 0; let fail = false;
+    let calls = 0; let fail = false; let invalidSummary = false;
     const payloads: Record<string, unknown>[] = [];
     globalThis.fetch = async (_url, init) => {
       calls++;
       const payload = JSON.parse(String(init?.body)); payloads.push(payload);
       if (fail) return new Response("", { status: 503 });
-      const summary = String(payload.messages[0].content).startsWith("Summarize");
-      return new Response(JSON.stringify({ choices: [{ message: { content: summary ? "Earlier turns were friendly greetings." : "Mock answer" }, finish_reason: "stop" }], usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 } }));
+      const summary = payload.response_format?.type === "json_object";
+      let content = "Mock answer";
+      if (summary) {
+        assert.deepEqual(payload.messages.map((m: { role: string }) => m.role), ["system", "user"]);
+        const source = JSON.parse(payload.messages[1].content);
+        assert(Array.isArray(source.transcript));
+        assert(!payload.messages[0].content.includes("Name: 测试角色"));
+        content = invalidSummary ? "（继续演出下一句，而不是总结）" : JSON.stringify({ facts: ["双方进行了问候。"], openThreads: [], currentState: ["对话尚未结束。"], coveredThrough: source.throughSequence });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }], usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 } }));
     };
     const a = await service.sendMessage(owner.id, session.id, { content: "Hi", requestId: request("a") });
     assert.equal(a.replayed, false);
@@ -68,6 +78,20 @@ try {
     const countBefore = await db.roleplayMessage.count({ where: { sessionId: session.id } });
     const compressed = await service.compressSession(owner.id, session.id);
     assert(compressed.summaryThrough > 0);
+    assert.equal(await db.roleplayMessage.count({ where: { sessionId: session.id } }), countBefore);
+    assert.match(compressed.summary, /【已发生与关系】/u);
+    const savedThrough = compressed.summaryThrough;
+    invalidSummary = true;
+    await assert.rejects(service.compressSession(owner.id, session.id, { rebuild: true }));
+    assert.equal((await service.getRoleplaySession(owner.id, session.id)).summary, compressed.summary);
+    assert.equal((await service.getRoleplaySession(owner.id, session.id)).summaryThrough, savedThrough);
+    invalidSummary = false;
+    await db.roleplaySession.update({ where: { id: session.id }, data: { summary: "旧的错误续聊文本" } });
+    const rebuilt = await service.compressSession(owner.id, session.id, { rebuild: true });
+    const rebuildSource = JSON.parse((payloads.at(-1)!.messages as { content: string }[])[1]!.content);
+    assert.equal(rebuildSource.previousSummary, "");
+    assert.equal(rebuildSource.transcript[0].sequence, 1);
+    assert(!rebuilt.summary.includes("错误续聊"));
     assert.equal(await db.roleplayMessage.count({ where: { sessionId: session.id } }), countBefore);
     await service.updatePersona(owner.id, persona.id, { prompt: "Updated persona" });
     assert.notEqual(((await service.getRoleplaySession(owner.id, session.id)).personaSnapshot as { prompt: string }).prompt, "Updated persona");

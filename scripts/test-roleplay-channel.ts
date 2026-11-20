@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { PrismaClient } from "../src/generated/prisma/client";
 import { handleRoleplayChannel, isRoleplayOwner, parseRoleplayCommand, resolveRoleplayTarget } from "../server/utils/roleplay-channel";
 import { findDeliveryTarget } from "../server/utils/proactive";
+import { readOnebotRoleplayText } from "../server/utils/channel-adapter/onebot/types";
 
 export function testRoleplayChannelLogic() {
   assert.deepEqual(parseRoleplayCommand(" /扮演 开始 测试人设 "), { action: "start", target: "测试人设" });
@@ -12,6 +13,11 @@ export function testRoleplayChannelLogic() {
   assert.equal(parseRoleplayCommand("我们来玩/扮演吧"), null);
   assert.equal(parseRoleplayCommand("/扮演模式"), null);
   assert.equal(parseRoleplayCommand("/扮演 状态 多余参数")?.action, "help");
+  const mentionedCommand = readOnebotRoleplayText({ message: [{ type: "at", data: { qq: "123456789" } }, { type: "text", data: { text: " /扮演 开始 测试人设" } }] }, "123456789");
+  assert.equal(parseRoleplayCommand(mentionedCommand)?.action, "start");
+  assert.equal(readOnebotRoleplayText({ message: "[CQ:at,qq=123456789] /扮演 状态" }, "123456789"), "/扮演 状态");
+  assert.equal(readOnebotRoleplayText({ message: [{ type: "at", data: { qq: "123456789" } }] }, "123456789"), "");
+  assert(!readOnebotRoleplayText({ message: [{ type: "at", data: { qq: "987654321" } }] }, "123456789").includes("987654321"));
   const items = [{ id: "abcdef01-1111", name: "同名" }, { id: "abcdef02-1111", name: "同名" }];
   assert.equal(resolveRoleplayTarget(items, "同名"), null);
   assert.equal(resolveRoleplayTarget(items, "abcdef01")?.id, items[0]!.id);
@@ -51,7 +57,8 @@ export async function testRoleplayChannelDatabase(db: PrismaClient, ownerId: str
   await call("/扮演 状态"); assert(replies.at(-1)!.includes(route.sessionId.slice(0, 8)));
   await call("/扮演 存档"); assert(replies.at(-1)!.includes(route.sessionId.slice(0, 8)));
   const outsider = await handleRoleplayChannel({ ...base, authorUid: "987654321", externalConversationId: "c:987654321", content: "/扮演 列表", externalMessageId: randomUUID() }, db);
-  assert.equal(outsider, null);
+  assert.equal(outsider?.status, "replied");
+  assert.match(replies.at(-1)!, /仅主人/u);
   const group = await handleRoleplayChannel({ ...base, eventType: "GROUP_MESSAGE", content: "/扮演 列表", externalMessageId: randomUUID() }, db);
   assert.equal(group, null);
   await call("/扮演 退出");
@@ -75,6 +82,26 @@ export async function testRoleplayChannelDatabase(db: PrismaClient, ownerId: str
     assert.equal(requests, 1, "duplicate QQ message must not invoke model twice");
     assert.equal(await db.roleplayMessage.count({ where: { sessionId: route.sessionId, role: "user" } }), 1);
     assert.equal(replies.at(-1), "QQ独立回复");
+    const legacyMessage = randomUUID();
+    const h = createHash("sha256").update(`${binding.id}:${legacyMessage}`).digest("hex").slice(0, 32);
+    const legacyId = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    await db.roleplayMessage.create({ data: { sessionId: route.sessionId, sequence: 4, role: "user", content: "旧版未答消息", requestId: legacyId, source: "qq" } });
+    await db.roleplaySession.update({ where: { id: route.sessionId }, data: { messageCount: 4 } });
+    await call("旧版未答消息", legacyMessage);
+    assert.equal(await db.roleplayMessage.count({ where: { sessionId: route.sessionId, requestId: legacyId } }), 2);
+    const legacyStart = randomUUID();
+    await db.roleplayChannelReceipt.create({ data: { ownerId, bindingId: binding.id, externalMessageId: legacyStart, reply: "旧版开始回执" } });
+    const beforeSessions = await db.roleplaySession.count();
+    await call(`/扮演 开始 ${persona.id}`, legacyStart);
+    assert.equal(await db.roleplaySession.count(), beforeSessions);
+    assert.equal(replies.at(-1), "旧版开始回执");
+    await call(`/扮演 开始 ${persona.id}`);
+    const switchedCalls = requests;
+    assert.equal((await call("QQ扮演消息", messageId))?.status, "duplicate");
+    assert.equal(requests, switchedCalls);
+    await call("/扮演 退出");
+    assert.equal((await call(" 旧版未答消息  ", legacyMessage))?.status, "duplicate");
+    assert.equal(requests, switchedCalls);
   } finally { globalThis.fetch = fetchBefore; }
   assert.equal(await db.message.count(), dailyBefore, "roleplay commands and text must never enter daily messages");
   await db.roleplaySession.delete({ where: { id: route.sessionId } });

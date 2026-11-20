@@ -10,6 +10,7 @@ export type RoleplayPersona = { id: string; name: string; prompt: string; openin
 export type RoleplayPersonaInput = Pick<RoleplayPersona, "name" | "prompt" | "opening">;
 export type RoleplaySession = {
   id: string; personaId: string | null; title: string;
+  groupBindingId: string | null; groupConversationId: string | null;
   personaSnapshot: RoleplayPersonaInput; summary: string; summaryThrough: number;
   messageCount: number; createdAt: string; updatedAt: string;
 };
@@ -39,7 +40,7 @@ export function createRoleplayApi(request: ApiRequest) {
     deleteSession: (id: string) => request<unknown>({ url: sessionPath(id), method: "delete" }),
     sendMessage: (id: string, data: { content: string; requestId: string }) => request<RoleplaySendResult>({ url: `${sessionPath(id)}/messages`, method: "post", data, timeout: 240_000 }),
     applyPersona: (id: string) => request<RoleplaySession>({ url: `${sessionPath(id)}/apply-persona`, method: "post" }),
-    compress: (id: string) => request<RoleplaySession>({ url: `${sessionPath(id)}/compress`, method: "post", timeout: 240_000 }),
+    compress: (id: string, rebuild = false) => request<RoleplaySession>({ url: `${sessionPath(id)}/compress`, method: "post", data: { rebuild }, timeout: 240_000 }),
   };
 }
 

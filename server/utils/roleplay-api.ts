@@ -35,7 +35,11 @@ export async function roleplayApi(event: H3Event, operation: string) {
       return service.sendMessage(ownerId, id, { content: b.content, requestId: b.requestId, source: "web" });
     }
     case "applyPersonaId": return service.applyPersona(ownerId, id);
-    case "compressId": return service.compressSession(ownerId, id);
+    case "compressId": {
+      const options = await readBody(event);
+      if (options !== undefined && (!options || typeof options !== "object" || Array.isArray(options) || (options.rebuild !== undefined && typeof options.rebuild !== "boolean"))) throw createError({ statusCode: 400, statusMessage: "rebuild 必须是布尔值。" });
+      return service.compressSession(ownerId, id, { rebuild: options?.rebuild === true });
+    }
     default: throw createError({ statusCode: 404 });
   }
 }
