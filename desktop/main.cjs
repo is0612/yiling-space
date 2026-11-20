@@ -212,6 +212,43 @@ function setupDownloads() {
   });
 }
 
+/**
+ * 渲染进程只加载本机 127.0.0.1 上的页面，但没有 CSP 时 Electron 会在控制台报
+ * 「Insecure Content-Security-Policy」，并且真的允许页面执行任意远端脚本。
+ * 这里补一条最小策略，只放开页面确实用到的：
+ *   - 'unsafe-inline'（script / style）：Nuxt 的内联 importmap、运行时注入的样式
+ *   - https://q1.qlogo.cn：QQ 公开头像，浏览器直连（见 SocialFriendsWorkspace 的 avatarUrl）
+ *   - data: / blob:：语音、表情、预览的本地对象 URL
+ * 不含 'unsafe-eval'：Vue 模板在构建期就编译好了，代码里也没有 new Function / eval。
+ * 模型接口都是服务端（Nitro）转发，前端不直连，所以 connect-src 只留自身。
+ */
+const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https://q1.qlogo.cn",
+  "media-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self' ws://127.0.0.1:* ws://localhost:*",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+function setupContentSecurityPolicy() {
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: ["http://127.0.0.1/*", "http://localhost/*"] },
+    (details, callback) => {
+      const headers = { ...(details.responseHeaders || {}) };
+      const existing = Object.keys(headers).some((key) => key.toLowerCase() === "content-security-policy");
+      if (!existing) headers["Content-Security-Policy"] = [APP_CSP];
+      callback({ responseHeaders: headers });
+    },
+  );
+}
+
 function log(message, detail = {}) {
   const line = JSON.stringify({ at: new Date().toISOString(), message, ...detail });
   console.log(`[desktop] ${line}`);
@@ -223,13 +260,17 @@ function log(message, detail = {}) {
 }
 
 function loadingPage(message) {
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>忆灵空间</title>
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>忆灵空间</title>
 <style>
-  html,body{height:100%;margin:0;background:#f4f6f9;color:#38414d;font:14px/1.7 "Microsoft YaHei",system-ui,sans-serif}
-  main{height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px}
-  .mark{width:44px;height:44px;border-radius:14px;background:#e8eefb;display:grid;place-items:center;font-size:20px;color:#4c6ef5}
+  /* 与 app/assets/css/main.css 同一套值：底色 #f4f6f9、品牌 #c9416b、字号 16/14/12 */
+  html,body{height:100%;margin:0;background:#f4f6f9;color:#101620;font:14px/1.7 "Microsoft YaHei",system-ui,sans-serif}
+  main{height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+  .mark{width:44px;height:44px;border-radius:10px;background:#c9416b;display:grid;place-items:center;font-size:20px;font-weight:700;color:#fff}
+  strong{font-size:16px;font-weight:700;letter-spacing:.01em}
   p{margin:0;color:#68717f}
-  small{color:#98a2b3}
+  small{color:#9aa3b1;font-size:12px}
 </style></head><body><main><div class="mark">忆</div><strong>忆灵空间</strong><p>${message}</p><small>首次启动会检查 Docker 数据库，可能需要几十秒</small></main></body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
@@ -322,19 +363,22 @@ function escapeHtml(value) {
 }
 
 function errorPage(message, hint = "") {
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>忆灵空间启动失败</title>
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>忆灵空间启动失败</title>
 <style>
-  html,body{height:100%;margin:0;background:#f4f6f9;color:#38414d;font:14px/1.7 "Microsoft YaHei",system-ui,sans-serif}
+  html,body{height:100%;margin:0;background:#f4f6f9;color:#101620;font:14px/1.7 "Microsoft YaHei",system-ui,sans-serif}
   main{max-width:760px;margin:0 auto;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:24px;box-sizing:border-box;text-align:center}
-  .mark{width:52px;height:52px;border-radius:16px;background:#fdecec;display:grid;place-items:center;font-size:26px;color:#d64545}
-  h1{font-size:20px;margin:0}
+  .mark{width:52px;height:52px;border-radius:10px;background:#fdecee;display:grid;place-items:center;font-size:26px;color:#c92b41}
+  h1{font-size:18px;margin:0;font-weight:700}
   p{margin:0;color:#68717f}
-  .hint{max-width:620px;color:#8a5a00;background:#fff8e6;border:1px solid #f3d9a4;border-radius:10px;padding:10px 14px;font-size:13px;text-align:left}
-  .path{font-size:12px;color:#98a2b3;word-break:break-all}
+  /* hint 走 main.css 的 --amber 三件套，别再单独调一套黄 */
+  .hint{max-width:620px;color:#8f5c05;background:#fdf6e7;border:1px solid #ecd9b4;border-radius:10px;padding:10px 14px;font-size:14px;line-height:1.7;text-align:left}
+  .path{font-size:12px;color:#9aa3b1;word-break:break-all}
   .actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:4px}
-  button{border:1px solid #d8dee9;background:#fff;color:#38414d;border-radius:8px;padding:8px 16px;font-size:13px;cursor:pointer}
-  button.primary{background:#4c6ef5;border-color:#4c6ef5;color:#fff}
-  button:hover{filter:brightness(.97)}
+  button{border:1px solid #dbe0e9;background:#fff;color:#454f5e;border-radius:8px;padding:7px 14px;font-size:14px;cursor:pointer;transition:background .14s ease,border-color .14s ease}
+  button.primary{background:#c9416b;border-color:#c9416b;color:#fff}
+  button.primary:hover{background:#b8375f;border-color:#b8375f}
 </style></head><body><main>
   <div class="mark">!</div>
   <h1>忆灵空间启动失败</h1>
@@ -514,6 +558,7 @@ if (yieldToOther) {
 
   app.whenReady().then(() => {
     appReady = true;
+    setupContentSecurityPolicy();
     createTray();
     createApplicationMenu();
     createWindow();
