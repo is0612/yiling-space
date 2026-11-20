@@ -82,13 +82,15 @@ type ScopeCounts = {
 };
 
 /** 有对话或记忆就绝不删；社交附属数据只在 `--include-with-data` 下允许存在。 */
-function isDeletable(counts: ScopeCounts, hasAssessmentTask: boolean): boolean {
+function isDeletable(counts: ScopeCounts, task: { status: string } | null): boolean {
   const structural = counts.conversations + counts.memoryItems + counts.snapshots
     + counts.events + counts.eventDays + counts.jobs + counts.journals;
   if (structural > 0) return false;
-  // 正在跑或跑过评估的任务仍按保守处理：默认不删，加开关后也只删没有任务的。
-  if (hasAssessmentTask) return false;
+  // 正在跑的评估绝不能动：它可能在删的同时往这条关系里写结果。
+  if (task?.status === "RUNNING") return false;
   if (includeWithData) return true;
+  // 默认模式把「有评估任务 / 社交记录」也算作有数据，只清完全空的那种。
+  if (task) return false;
   const social = counts.aliasSuggestions + counts.socialExperiences + counts.socialRelationChanges
     + counts.socialAssessments + counts.socialProactiveContactAttempts;
   return social === 0;
@@ -108,7 +110,7 @@ async function findZeroFriends(): Promise<{ candidates: ZeroFriend[]; kept: numb
       createdAt: true,
       character: { select: { name: true } },
       externalIdentity: { select: { platform: true, platformUid: true, displayName: true } },
-      socialAssessmentTask: { select: { id: true } },
+      socialAssessmentTask: { select: { id: true, status: true } },
       _count: { select: { ...STRUCTURAL_SCOPE_COUNTS, ...SOCIAL_SCOPE_COUNTS } },
     },
   });
@@ -116,7 +118,7 @@ async function findZeroFriends(): Promise<{ candidates: ZeroFriend[]; kept: numb
   const candidates: ZeroFriend[] = [];
   let kept = 0;
   for (const scope of scopes) {
-    if (!scope.externalIdentity || !isDeletable(scope._count, Boolean(scope.socialAssessmentTask))) {
+    if (!scope.externalIdentity || !isDeletable(scope._count, scope.socialAssessmentTask)) {
       kept += 1;
       continue;
     }
@@ -140,6 +142,11 @@ async function main() {
   ]);
 
   console.log(`好友关系共 ${totalFriends} 条；聊过 0 次且无任何关联数据的候选 ${candidates.length} 条；保留 ${kept} 条。`);
+  console.log(
+    includeWithData
+      ? "模式：连社交经历 / 评估记录一起清（--include-with-data）。"
+      : "模式：只清完全空的；加 --include-with-data 可连社交经历 / 评估一起清。",
+  );
 
   if (candidates.length) {
     const byCharacter = new Map<string, number>();
@@ -176,14 +183,14 @@ async function main() {
       where: { id: item.scopeId },
       select: {
         interactionCount: true,
-        socialAssessmentTask: { select: { id: true } },
+        socialAssessmentTask: { select: { id: true, status: true } },
         _count: { select: { ...STRUCTURAL_SCOPE_COUNTS, ...SOCIAL_SCOPE_COUNTS } },
       },
     });
     if (
       !fresh
       || fresh.interactionCount > 0
-      || !isDeletable(fresh._count, Boolean(fresh.socialAssessmentTask))
+      || !isDeletable(fresh._count, fresh.socialAssessmentTask)
     ) {
       skipped += 1;
       continue;
