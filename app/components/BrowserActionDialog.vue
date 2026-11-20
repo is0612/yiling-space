@@ -2,7 +2,7 @@
 import { readApiErrorMessage } from "~/utils/api-error";
 const visible = defineModel<boolean>({ required: true });
 const request = useApiRequest();
-type Step = { kind: string; selector?: string; text?: string; value?: string; y?: number };
+type Step = { kind: string; selector?: string; text?: string; value?: string; y?: number; direction?: string };
 type Row = { id: string; url: string; actions: Step[]; reason: string; status: string; error: string | null;
   createdAt: string; result: { steps?: { action: string; ok: boolean; detail?: string }[]; title?: string; text?: string; blockedRequests?: number } | null };
 const rows = ref<Row[]>([]);
@@ -10,11 +10,30 @@ const busy = ref(false);
 const message = ref("");
 const errorText = ref("");
 const detail = ref("");
+const previews = ref<Record<string, { screenshot: string; title: string; text: string }>>({});
+const previewBusy = ref("");
+
+/** Read-only look at the page before approving, so the steps can be checked against what is actually there. */
+async function preview(row: Row) {
+  previewBusy.value = row.id;
+  errorText.value = "";
+  try {
+    const view = await request<{ screenshot: string; title: string; text: string }>({
+      url: "/local/browser/observe", method: "post", data: { url: row.url }, timeout: 30000,
+    });
+    previews.value = { ...previews.value, [row.id]: { screenshot: view.screenshot, title: view.title, text: view.text } };
+  } catch (error) {
+    errorText.value = readApiErrorMessage(error, "预览页面失败。");
+  } finally {
+    previewBusy.value = "";
+  }
+}
 
 function stepLabel(step: Step) {
   if (step.kind === "click") return `点击 ${step.selector}`;
   if (step.kind === "click_text") return `点击文字「${step.text}」`;
   if (step.kind === "fill") return `填写 ${step.selector}：${step.value}`;
+  if (step.direction) return `向${step.direction === "up" ? "上" : step.direction === "top" ? "顶部" : step.direction === "bottom" ? "底部" : "下"}滚动`;
   return `滚动到 ${step.y}px`;
 }
 
@@ -72,8 +91,14 @@ watch(visible, value => { if (value) void load(); });
       <p class="reason">原因：{{ row.reason }}</p>
       <ol><li v-for="(step, index) in row.actions" :key="index">{{ stepLabel(step) }}</li></ol>
       <div class="actions">
+        <el-button :loading="previewBusy === row.id" :disabled="busy" @click="preview(row)">先看页面</el-button>
         <el-button type="primary" :loading="busy" @click="approve(row)">批准并执行</el-button>
         <el-button :disabled="busy" @click="reject(row)">拒绝</el-button>
+      </div>
+      <div v-if="previews[row.id]" class="preview">
+        <p class="reason">页面标题：{{ previews[row.id]!.title || "(无)" }}</p>
+        <img :src="previews[row.id]!.screenshot" alt="批准前预览的页面截图">
+        <details><summary>页面可见文字</summary><pre class="steps">{{ previews[row.id]!.text }}</pre></details>
       </div>
       <p v-if="row.error" class="reason">失败原因：{{ row.error }}</p>
     </article>
@@ -88,4 +113,7 @@ watch(visible, value => { if (value) void load(); });
 .actions { margin-top: 10px; display: flex; gap: 8px; }
 .steps { white-space: pre-wrap; font-size: 12px; margin-top: 12px; }
 ol { margin: 8px 0 0; padding-left: 20px; font-size: 12px; }
+.preview { margin-top: 12px; }
+.preview img { width: 100%; border: 1px solid var(--line); border-radius: 8px; }
+.preview summary { cursor: pointer; }
 </style>

@@ -378,9 +378,24 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [tasks, truncated]
+                required: [tasks, browserRequests, truncated]
                 properties:
                   truncated: { type: boolean }
+                  browserRequests:
+                    type: array
+                    maxItems: 10
+                    description: 本会话的网页操作请求（含未关联任务的），只用于展示状态
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        url: { type: string }
+                        actions: { type: array, items: { type: object } }
+                        reason: { type: string }
+                        status: { type: string }
+                        taskId: { type: string, format: uuid, nullable: true }
+                        error: { type: string, nullable: true }
+                        result: { type: object, nullable: true }
                   tasks:
                     type: array
                     maxItems: 20

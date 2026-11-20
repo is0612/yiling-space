@@ -11,7 +11,8 @@ export async function readLocalContinuationTask(actorId: string, characterId: st
   const db = getPrisma();
   const pending = await db.localWriteRequest.count({ where: { taskId, status: { in: ["PENDING", "APPROVING"] } } });
   const commands = await db.localCommandRequest.count({ where: { taskId, status: { in: ["PENDING", "APPROVING"] } } });
-  if (pending || commands) throw createError({ statusCode: 409, message: "先处理当前待审批或正在执行的请求，再继续任务。" });
+  const browser = await db.localBrowserRequest.count({ where: { taskId, status: { in: ["PENDING", "APPROVING"] } } });
+  if (pending || commands || browser) throw createError({ statusCode: 409, message: "先处理当前待审批或正在执行的请求，再继续任务。" });
   const detail = await getLocalTask(taskId);
   return { id: task.id, title: task.title, plan: task.plan, status: task.status, steps: detail.steps,
     writeRequests: task.writeRequests, evidence: detail.evidence.slice(0, 6).map(({ kind, outcome, note }) => ({ kind, outcome, note: note.slice(0, 3000) })), commandRequests: detail.commandRequests,
@@ -35,10 +36,19 @@ export async function readLocalChatResults(actorId: string, characterId: string,
       evidence: { where: { kind: "WRITE_READBACK" }, orderBy: { createdAt: "asc" }, select: { id: true, outcome: true, note: true, createdAt: true } },
     },
   });
-  const pendingCommands = await db.localCommandRequest.findMany({
-    where: { taskId: { in: tasks.map(task => task.id) }, status: { in: ["PENDING", "APPROVING"] } }, select: { taskId: true },
-  });
-  const commandTaskIds = new Set(pendingCommands.map(row => row.taskId));
+  const taskIds = tasks.map(task => task.id);
+  const [pendingCommands, pendingBrowser, browserRequests] = await Promise.all([
+    db.localCommandRequest.findMany({ where: { taskId: { in: taskIds }, status: { in: ["PENDING", "APPROVING"] } }, select: { taskId: true } }),
+    db.localBrowserRequest.findMany({ where: { taskId: { in: taskIds }, status: { in: ["PENDING", "APPROVING"] } }, select: { taskId: true } }),
+    // Standalone browser requests (no task) still belong to this conversation's result card.
+    db.localBrowserRequest.findMany({
+      where: { actorId, characterId, conversationId }, orderBy: [{ createdAt: "desc" }], take: 10,
+      select: { id: true, url: true, actions: true, reason: true, status: true, error: true, createdAt: true, taskId: true,
+        result: true },
+    }),
+  ]);
+  const blockedTaskIds = new Set([...pendingCommands, ...pendingBrowser].map(row => row.taskId).filter((id): id is string => Boolean(id)));
   return { tasks: tasks.map(task => ({ ...task, canContinue: !["SUCCEEDED", "FAILED", "CANCELLED"].includes(task.status)
-    && !commandTaskIds.has(task.id) && !task.writeRequests.some(row => ["PENDING", "APPROVING"].includes(row.status)) })), truncated: tasks.length === 20 };
+    && !blockedTaskIds.has(task.id) && !task.writeRequests.some(row => ["PENDING", "APPROVING"].includes(row.status)) })),
+  browserRequests, truncated: tasks.length === 20 };
 }

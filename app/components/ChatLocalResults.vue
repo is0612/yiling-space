@@ -8,6 +8,17 @@ type Task = { id: string; title: string; plan: string; status: string; resultNot
   evidence: { id: string; outcome: string; note: string; createdAt: string }[];
   canContinue: boolean };
 const tasks = ref<Task[]>([]);
+type BrowserRow = { id: string; url: string; actions: { kind: string; selector?: string; text?: string; y?: number; direction?: string }[];
+  reason: string; status: string; error: string | null; createdAt: string; taskId: string | null;
+  result: { title?: string; steps?: { action: string; ok: boolean; detail?: string }[]; blockedRequests?: number } | null };
+const browserRows = ref<BrowserRow[]>([]);
+const browserStatus: Record<string, string> = { PENDING: "等待你批准", APPROVING: "执行中", SUCCEEDED: "已执行", FAILED: "执行失败", REJECTED: "已拒绝" };
+function actionLine(action: BrowserRow["actions"][number]) {
+  if (action.kind === "click") return `点击 ${action.selector}`;
+  if (action.kind === "click_text") return `点击「${action.text}」`;
+  if (action.kind === "fill") return `填写 ${action.selector}`;
+  return action.direction ? `向${{ down: "下", up: "上", top: "顶部", bottom: "底部" }[action.direction] ?? action.direction}滚动` : `滚动到 ${action.y}px`;
+}
 const errorText = ref("");
 const busy = ref(false);
 const labels: Record<string, string> = { PLANNED: "已计划", WAITING_APPROVAL: "等待你审批", RUNNING: "等待你验收", SUCCEEDED: "你已验收通过", FAILED: "验收未通过", CANCELLED: "已取消" };
@@ -21,13 +32,15 @@ async function refresh() {
   const current = ++version;
   busy.value = true;
   try {
-    const data = await request<{ tasks: Task[] }>({ url: `/characters/${props.characterId}/chat/local-results`, params: { conversationId: props.conversationId } });
+    const data = await request<{ tasks: Task[]; browserRequests?: BrowserRow[] }>({ url: `/characters/${props.characterId}/chat/local-results`, params: { conversationId: props.conversationId } });
     if (disposed || current !== version) return;
     tasks.value = data.tasks;
+    browserRows.value = data.browserRequests ?? [];
     errorText.value = "";
   } catch (error) {
     if (!disposed && current === version) {
       tasks.value = [];
+      browserRows.value = [];
       errorText.value = readApiErrorMessage(error, "任务结果暂时无法更新。");
     }
   } finally {
@@ -45,7 +58,7 @@ onBeforeUnmount(() => { disposed = true; version++; clearTimeout(timer); documen
 
 <template>
   <section
-    v-if="tasks.length || errorText"
+    v-if="tasks.length || browserRows.length || errorText"
     class="local-results"
     aria-label="本地任务结果"
   >
@@ -65,6 +78,24 @@ onBeforeUnmount(() => { disposed = true; version++; clearTimeout(timer); documen
       :closable="false"
       :title="errorText"
     />
+    <article
+      v-for="row in browserRows"
+      :key="row.id"
+      class="result-task"
+    >
+      <div class="result-heading">
+        <strong>网页操作 · {{ row.result?.title || row.url }}</strong>
+        <el-tag
+          size="small"
+          :type="row.status === 'FAILED' ? 'danger' : 'info'"
+        >{{ browserStatus[row.status] ?? row.status }}</el-tag>
+      </div>
+      <p>{{ row.url }}</p>
+      <p>{{ row.actions.map(actionLine).join("；") }}</p>
+      <p v-if="row.status === 'PENDING'">还没有操作网页，请到「本地观察 → 网页操作」核对并批准。</p>
+      <p v-if="row.error">失败原因：{{ row.error }}</p>
+      <p v-if="row.result?.steps?.length">已执行 {{ row.result.steps.filter(step => step.ok).length }} 步；阻止 {{ row.result.blockedRequests ?? 0 }} 个请求。</p>
+    </article>
     <article
       v-for="task in tasks"
       :key="task.id"

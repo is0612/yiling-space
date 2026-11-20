@@ -54,6 +54,21 @@ try {
   await approveLocalWriteRequest(next.id, actor);
   assert.equal((await readLocalContinuationTask(actor, characterId, first.id, taskId!)).steps.length, 4);
   assert.equal((await readLocalChatResults(actor, characterId, first.id)).tasks[0]?.evidence.length, 2);
+  const browserPending = await db.localBrowserRequest.create({ data: { actorId: actor, characterId, conversationId: first.id,
+    taskId: taskId!, url: "https://example.com/", actions: [{ kind: "scroll", direction: "down" }], reason: "test" } });
+  const withBrowser = await readLocalChatResults(actor, characterId, first.id);
+  assert.equal(withBrowser.browserRequests.length, 1);
+  assert.equal(withBrowser.browserRequests[0]?.status, "PENDING");
+  assert.equal(withBrowser.tasks[0]?.canContinue, false, "A pending browser request on this task blocks continuation");
+  await assert.rejects(() => readLocalContinuationTask(actor, characterId, first.id, taskId!), { statusCode: 409 });
+  await db.localBrowserRequest.update({ where: { id: browserPending.id }, data: { status: "SUCCEEDED" } });
+  assert.equal((await readLocalChatResults(actor, characterId, first.id)).tasks[0]?.canContinue, true);
+  // A standalone request in the same conversation is shown but must not freeze an unrelated task.
+  const standalone = await db.localBrowserRequest.create({ data: { actorId: actor, characterId, conversationId: first.id,
+    url: "https://example.com/", actions: [{ kind: "scroll", y: 10 }], reason: "standalone" } });
+  assert.equal((await readLocalChatResults(actor, characterId, first.id)).tasks[0]?.canContinue, true);
+  await db.localBrowserRequest.deleteMany({ where: { id: { in: [browserPending.id, standalone.id] } } });
+
   await db.conversation.delete({ where: { id: first.id } });
   await assert.rejects(() => readLocalChatResults(actor, characterId, first.id), { statusCode: 404 });
   console.log("Chat results: owner/character/conversation isolation, channel refusal, readback, repeat polling and deleted conversation passed.");
