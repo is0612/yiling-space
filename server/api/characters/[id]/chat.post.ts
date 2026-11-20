@@ -30,13 +30,13 @@ import { reconcileGrowthReadUsage, type GrowthReadDiagnostic } from "../../../ut
 import { resolveCharacterApiKey } from "../../../utils/credential-encryption";
 import { CLOSE_FRIEND_LIMIT, listAcquaintances } from "../../../utils/friends";
 import {
-  extractMemoryAssistantSearchTerms, rankMemoriesWithBudget, rankSnapshotsWithBudget,
+  extractMemoryAssistantSearchTerms,
   resolveMemoryItemLimit, resolveMemoryTokenBudget, resolveRecentMessageLimit, resolveSnapshotTokenBudget,
 } from "../../../utils/memory-retrieval";
 import {
   parseEventParticipantQuery, resolveEventItemLimit, resolveEventTokenBudget, resolveEventRecentDays,
-  selectEventsForPrompt, selectRecentEvents,
 } from "../../../utils/memory-event-retrieval";
+import { selectPromptMemoryContext } from "../../../utils/prompt-memory-selection";
 import {
   resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
 } from "../../../utils/message-retrieval";
@@ -252,35 +252,6 @@ export default defineEventHandler(async (event) => {
   const { memories: memoryCandidates, snapshots: snapshotCandidates } = await loadPromptMemoryCandidates(prisma, {
     readableScopeIds, query: retrievalQuery,
   });
-  const memoryRank = rankMemoriesWithBudget(retrievalQuery, memoryCandidates, {
-    limit: resolveMemoryItemLimit(character.modelConfig),
-    tokenBudget: resolveMemoryTokenBudget(character.modelConfig),
-  });
-  const memories = memoryRank.items.map((memory) => ({
-    id: memory.id,
-    category: memory.category,
-    content: memory.content.slice(0, 1200),
-    confidence: memory.confidence,
-    relevanceScore: memory.relevanceScore,
-    scope: scopeOriginById.get(memory.memoryScopeId) ?? "character",
-    // 「这条记忆是什么时候的」：有 validFrom 就用它（那才是事实成立的时间），
-    // 否则退回入库时间。没有这行，模型答不出「什么时候」，只能含糊过去。
-    occurredAt: (memory.validFrom ?? memory.createdAt).toISOString(),
-  }));
-
-  const snapshotRank = rankSnapshotsWithBudget(retrievalQuery, snapshotCandidates, {
-    limit: 4,
-    tokenBudget: resolveSnapshotTokenBudget(character.modelConfig),
-  });
-  const snapshots = snapshotRank.items.map((snapshot) => ({
-    id: snapshot.id,
-    summary: snapshot.summary.slice(0, 3000),
-    periodStart: snapshot.periodStart.toISOString(),
-    periodEnd: snapshot.periodEnd.toISOString(),
-    version: snapshot.version,
-    relevanceScore: snapshot.relevanceScore,
-    scope: scopeOriginById.get(snapshot.memoryScopeId) ?? "character",
-  }));
 
   /**
    * 名字是入口，账号才是身份。
@@ -296,61 +267,32 @@ export default defineEventHandler(async (event) => {
     readableScopeIds, query: retrievalQuery, participantIds, now: eventRetrievalNow,
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
   });
-  const eventSelection = selectEventsForPrompt(retrievalQuery, eventCandidates, {
+  /**
+   * 记忆、阶段总结、忆泡的选择与整形和 QQ 共用一份（`prompt-memory-selection.ts`）：
+   * 预算、600 字截断、scope 标签、名字刷新只在这里定义一次。
+   *
+   * 最近几天的忆泡（`recentEventDays`，默认关）也在里面：它不看问句，只按时间带背景。
+   */
+  const { memories, snapshots, events, recentEvents, eventSelection, selection: memorySelection } = await selectPromptMemoryContext({
+    query: retrievalQuery,
     now: eventRetrievalNow,
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
-    tokenBudget: resolveEventTokenBudget(character.modelConfig),
-    limit: resolveEventItemLimit(character.modelConfig),
-    ...(participantIds.length ? { participantIds } : {}),
+    memoryCandidates,
+    snapshotCandidates,
+    eventCandidates,
+    participantIds,
+    limits: {
+      memoryItems: resolveMemoryItemLimit(character.modelConfig),
+      memoryTokens: resolveMemoryTokenBudget(character.modelConfig),
+      snapshots: 4,
+      snapshotTokens: resolveSnapshotTokenBudget(character.modelConfig),
+      events: resolveEventItemLimit(character.modelConfig),
+      eventTokens: resolveEventTokenBudget(character.modelConfig),
+      recentEventDays: resolveEventRecentDays(character.modelConfig),
+    },
+    scopeOf: (memoryScopeId) => scopeOriginById.get(memoryScopeId) ?? "character",
+    loadParticipantNames: (items) => resolveEventParticipantNames(prisma, items),
   });
-
-  /**
-   * 最近几天的忆泡：不看问句，无条件当背景带上。
-   *
-   * 和上面 `events` 是两条路：那条要靠时间或关键词命中，群里没人提问时它一条都不会带；
-   * 这条只按时间取「最近几天我干了什么」，让她不至于对昨天一无所知。默认关（0），
-   * 打开后会多占几百 token，所以做成按角色的开关。
-   */
-  const recentEventDays = resolveEventRecentDays(character.modelConfig);
-  const recentEventSelection = recentEventDays > 0
-    ? selectRecentEvents(eventCandidates, {
-        days: recentEventDays,
-        excludeIds: new Set(eventSelection.items.map((event) => event.id)),
-      })
-    : null;
-  const recentEventItems = recentEventSelection?.items ?? [];
-
-  /**
-   * 名字刷新的唯一入口：忆泡存的是**记那一刻**的名字，群名片随时会改。
-   * 两批一起过一遍，一次查询搞定（见 `participant-names.ts`）。
-   */
-  const participantsByEvent = await resolveEventParticipantNames(
-    prisma,
-    [...eventSelection.items, ...recentEventItems],
-  );
-  const participantsAt = (index: number, fallback: readonly string[]): string[] =>
-    participantsByEvent[index] ?? [...fallback];
-
-  const events = eventSelection.items.map((event, index) => ({
-    id: event.id,
-    occurredAt: event.occurredAt.toISOString(),
-    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
-    ...(event.place ? { place: event.place } : {}),
-    participants: participantsAt(index, event.participants),
-    title: event.title,
-    detail: event.detail.slice(0, 600),
-    scope: scopeOriginById.get(event.memoryScopeId) ?? "character",
-  }));
-  const recentEvents = recentEventItems.map((event, index) => ({
-    id: event.id,
-    occurredAt: event.occurredAt.toISOString(),
-    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
-    ...(event.place ? { place: event.place } : {}),
-    participants: participantsAt(eventSelection.items.length + index, event.participants),
-    title: event.title,
-    detail: event.detail.slice(0, 600),
-    scope: scopeOriginById.get(event.memoryScopeId) ?? "character",
-  }));
 
   // 忆泡还没覆盖到那一段时，用原始对话兜底 —— 原文一直在库里，只是以前没有检索入口。
   // 只在问句确实指向某一天时才查，避免和最近对话窗口重复。
@@ -1017,10 +959,10 @@ export default defineEventHandler(async (event) => {
         memoriesAvailable: memories.length,
         snapshotsAvailable: snapshots.length,
         privateScopeActive,
-        memoryTokens: memoryRank.usedTokens,
-        memoryDropped: memoryRank.dropped,
-        snapshotTokens: snapshotRank.usedTokens,
-        snapshotDropped: snapshotRank.dropped,
+        memoryTokens: memorySelection.memory.usedTokens,
+        memoryDropped: memorySelection.memory.dropped,
+        snapshotTokens: memorySelection.snapshot.usedTokens,
+        snapshotDropped: memorySelection.snapshot.dropped,
       },
     };
     // Commit messages and the replayable response atomically. A database failure must not

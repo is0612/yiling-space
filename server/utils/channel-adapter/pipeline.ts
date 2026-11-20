@@ -1,4 +1,5 @@
 import { loadPromptEventCandidates } from "../prompt-event-candidates";
+import { selectPromptMemoryContext } from "../prompt-memory-selection";
 import { loadPromptMemoryCandidates } from "../prompt-memory-candidates";
 import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
@@ -43,7 +44,7 @@ import {
   type CrossChannelCandidate,
   type CrossChannelLine,
 } from "../cross-channel-context";
-import { parseEventParticipantQuery, resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget, selectEventsForPrompt, selectRecentEvents } from "../memory-event-retrieval";
+import { parseEventParticipantQuery, resolveEventItemLimit, resolveEventRecentDays, resolveEventTokenBudget } from "../memory-event-retrieval";
 import { rehomeConversationScope } from "../memory-event-move";
 import {
   resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
@@ -58,7 +59,7 @@ import {
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
 import { resolveCharacterApiKey, resolveCharacterAsrApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
 import {
-  extractMemoryAssistantSearchTerms, rankMemoriesWithBudget, rankSnapshotsWithBudget,
+  extractMemoryAssistantSearchTerms,
   resolveMemoryItemLimit, resolveMemoryTokenBudget, resolveRecentMessageLimit, resolveSnapshotTokenBudget,
 } from "../memory-retrieval";
 import { recordModelUsage, readDailyQuota, toUsageTokens } from "../model-usage";
@@ -1465,90 +1466,32 @@ async function runChannelTurn(input: {
     { now: new Date(), ownerUid: ownerPlatformUid },
   ).lines;
 
-  const memoryRank = rankMemoriesWithBudget(retrievalQuery, memoryCandidates, {
-    limit: resolveMemoryItemLimit(character.modelConfig),
-    tokenBudget: resolveMemoryTokenBudget(character.modelConfig),
-  });
-  const memories = memoryRank.items.map((memory) => ({
-    id: memory.id,
-    category: memory.category,
-    content: memory.content.slice(0, 1200),
-    confidence: memory.confidence,
-    relevanceScore: memory.relevanceScore,
-    scope: memory.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
-    // 和网页对话一致：有 validFrom 用它，否则退回入库时间。
-    occurredAt: (memory.validFrom ?? memory.createdAt).toISOString(),
-  }));
-
-  const snapshotRank = rankSnapshotsWithBudget(retrievalQuery, snapshotCandidates, {
-    limit: 4,
-    tokenBudget: resolveSnapshotTokenBudget(character.modelConfig),
-  });
-  const snapshots = snapshotRank.items.map((snapshot) => ({
-    id: snapshot.id,
-    summary: snapshot.summary.slice(0, 3000),
-    periodStart: snapshot.periodStart.toISOString(),
-    periodEnd: snapshot.periodEnd.toISOString(),
-    version: snapshot.version,
-    relevanceScore: snapshot.relevanceScore,
-    scope: snapshot.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
-  }));
-
-  // 忆泡与网页共用候选读取和预算选择；人物账号已在取候选前解析。
-  const eventSelection = selectEventsForPrompt(retrievalQuery, eventCandidates, {
+  // 记忆、阶段总结、忆泡的选择与整形和网页共用一份（`prompt-memory-selection.ts`）。
+  // 差别只在 scope 标签怎么算：这里按「是不是角色全局范围」判断，网页按会话范围来源判断。
+  const {
+    memories, snapshots, events, recentEvents, eventSelection, selection: memorySelection,
+  } = await selectPromptMemoryContext({
+    query: retrievalQuery,
     now: eventRetrievalNow,
     timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
-    tokenBudget: resolveEventTokenBudget(character.modelConfig),
-    limit: resolveEventItemLimit(character.modelConfig),
-    ...(participantIds.length ? { participantIds } : {}),
+    memoryCandidates,
+    snapshotCandidates,
+    eventCandidates,
+    participantIds,
+    limits: {
+      memoryItems: resolveMemoryItemLimit(character.modelConfig),
+      memoryTokens: resolveMemoryTokenBudget(character.modelConfig),
+      snapshots: 4,
+      snapshotTokens: resolveSnapshotTokenBudget(character.modelConfig),
+      events: resolveEventItemLimit(character.modelConfig),
+      eventTokens: resolveEventTokenBudget(character.modelConfig),
+      recentEventDays: resolveEventRecentDays(character.modelConfig),
+    },
+    scopeOf: (memoryScopeId) => (memoryScopeId === globalScope.id ? "character" : "private"),
+    loadParticipantNames: (items) => resolveEventParticipantNames(prisma, items),
   });
 
-  /**
-   * 最近几天的忆泡：不看问句，无条件当背景带上（开关 `eventRecentDays`，默认关）。
-   *
-   * 群聊里没有人会问「前天我做了什么」，靠命中检索的那一路在闲聊时一条都不带 ——
-   * 有人提「昨天那个」她就只能顺着编。这条按时间取最近几天，和问句无关。
-   */
-  const recentEventDays = resolveEventRecentDays(character.modelConfig);
-  const recentEventSelection = recentEventDays > 0
-    ? selectRecentEvents(eventCandidates, {
-        days: recentEventDays,
-        excludeIds: new Set(eventSelection.items.map((event) => event.id)),
-      })
-    : null;
-  const recentEventItems = recentEventSelection?.items ?? [];
 
-  /**
-   * 忆泡存的是**记那一刻**的名字，而群名片会改（「小明」→「小刚」）。
-   * 注入前统一换成当前叫法，锚点是 `participantRefs` 里的平台账号。
-   */
-  const participantsByEvent = await resolveEventParticipantNames(
-    prisma,
-    [...eventSelection.items, ...recentEventItems],
-  );
-  const participantsAt = (index: number, fallback: readonly string[]): string[] =>
-    participantsByEvent[index] ?? [...fallback];
-
-  const events = eventSelection.items.map((event, index) => ({
-    id: event.id,
-    occurredAt: event.occurredAt.toISOString(),
-    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
-    ...(event.place ? { place: event.place } : {}),
-    participants: participantsAt(index, event.participants),
-    title: event.title,
-    detail: event.detail.slice(0, 600),
-    scope: event.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
-  }));
-  const recentEvents = recentEventItems.map((event, index) => ({
-    id: event.id,
-    occurredAt: event.occurredAt.toISOString(),
-    ...(event.timeOfDay ? { timeOfDay: event.timeOfDay } : {}),
-    ...(event.place ? { place: event.place } : {}),
-    participants: participantsAt(eventSelection.items.length + index, event.participants),
-    title: event.title,
-    detail: event.detail.slice(0, 600),
-    scope: event.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
-  }));
 
   // 忆泡还没覆盖到那一段时用原文兜底；只在问句指向某一天时才查。
   let rawMessages: Array<{

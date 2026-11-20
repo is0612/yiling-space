@@ -672,8 +672,8 @@ const renamed = [
 ];
 assert.equal(
   selectEventsForPrompt("和鱼小刚都聊过什么", renamed, { now, timeZone: TZ }).mode,
-  "participant",
-  "明确人物没有匹配时保留人物模式，不用他人事件填空",
+  "keyword",
+  "只有名字、没解析出账号时退回关键词检索：命中不了自然也是空，不能硬凑成按人过滤",
 );
 const byRenamedAccount = selectEventsForPrompt("和鱼小刚都聊过什么", renamed, {
   now, timeZone: TZ, participantIds: ["100001"],

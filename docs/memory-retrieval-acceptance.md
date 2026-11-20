@@ -64,3 +64,13 @@
 本批没有扩展原文检索，没有新增表或迁移，没有重写存量数据，也没有更换提示词模板。补查仍有上限，显示名补查为精确匹配，语义改写、歧义昵称及更大历史集合的完整性没有被证明；“现存记录中最早”也不能证明现实中第一次。候选和预算通过不等于模型正确采用。真实模型及 QQ 自然会话尚未验收，生产大数据量查询耗时未量测。
 
 第二批已实际通过 `yarn test:memory-events`、`yarn test:chat-isolated`（含新增忆泡隔离库验收）、`yarn test:assistant-collaboration-isolated`（实际 QQ 管道历史及证据边界）、`yarn test:onebot`、`yarn test:owner-timeline-retrieval`、`yarn test:chat-private-memory`，以及最终 `yarn typecheck`、`yarn build` 和变更文件定向 ESLint。新增数据库用例首次清理顺序触发会话外键，调整后成功复现未知人物错误回退；选择器修复后相关断言、清理及完整隔离运行器均通过。构建仍保留既有 BigInt/es2019 目标与打包耗时警告。本批不运行全部项目测试或宣称自然语义效果通过。
+
+## 第三批：选择与整形层共用（2026-11-21）
+
+网页 `chat.post.ts` 与 QQ `channel-adapter/pipeline.ts` 此前各写一遍：预算装配、scope 标签、忆泡 600 字截断、参与者名字刷新。已抽到 `server/utils/prompt-memory-selection.ts`，两入口只保留各自的范围判定（网页按会话范围来源，QQ 按「是不是角色全局范围」）、候选读取和后续提示词组装。
+
+顺带修掉一处时钟不一致：近期忆泡（`eventRecentDays`）原本在共用函数内重新取 `new Date()`，与同一轮的日期补查不是同一时刻；现在共用入口传入的 `now`，跨零点时「最近几天」和「某一天」不会对不上。
+
+同批修正第二批引入的过度收紧：`parseEventParticipantQuery` 会把「海边的约定」里的「海边」当成人名，若一律按「未知人物→空」处理，正常提问会一条忆泡都拿不到。现在只有拿到真实账号、或明确问「第一次见到某人」时才强制空结果；只有名字没有账号时退回关键词检索，命中不了自然也是空。
+
+新增 `test-prompt-memory-selection.ts`（入口 `test:memory-selection`）覆盖：范围标签、`validFrom` 回退、忆泡截断与改名、近期忆泡去重与下标对齐、预算首条保底、空结果不查参与者名字。两入口的类型检查与实际回归见提交记录；本批不新增表、不改提示词文案。

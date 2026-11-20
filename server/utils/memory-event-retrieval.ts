@@ -245,9 +245,11 @@ export function selectEventsForPrompt<T extends EventCandidate>(
     }
   }
 
-  // A named/identified person with no evidence must not fall through to an unrelated
-  // timeline, especially for “first meeting”. Empty is different from somebody else's first event.
-  if (participantId || (participant && (participant.length >= 2 || wantedIds.size > 0))) {
+  // 明确人物没有匹配时不能回退到他人时间线，但「X 的约定 / X 的事」这类说法分不清是人物还是话题
+  // （问「海边的约定」会把「海边」当成一个人），所以只有拿到真实账号、或问「第一次见到某人」时
+  // 才强制空结果；其余情况让关键词检索自己判断，命中不了自然也是空。
+  const askedAboutPerson = Boolean(participantId) || wantedIds.size > 0 || (timeIntent === "first" && Boolean(participant));
+  if (askedAboutPerson) {
     return { ...applyBudget([], tokenBudget, selectionLimit), range, mode: timeIntent ?? "participant" };
   }
 
