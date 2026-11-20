@@ -1,0 +1,1 @@
+ALTER TABLE "local_tasks" ADD COLUMN "steps" JSONB NOT NULL DEFAULT '[]';

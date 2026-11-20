@@ -42,7 +42,7 @@ export default defineEventHandler(async (event) => {
     return { connectionId: record.id, wsUrl: record.config.wsUrl, host: endpoint?.host ?? "", port: endpoint?.port ?? 0, reachable,
       accountState: presence.get(record.id) === "waiting_login" ? "waiting_login" as const : reachable ? "ready" as const : "unknown" as const };
   }));
-  const selected = chooseOnebotRuntimeConnection(records, new Set(gateways.filter(item => item.accountState === "ready").map(item => item.connectionId)), requested);
+  const selected = chooseOnebotRuntimeConnection(records, new Set(gateways.filter(item => item.accountState === "ready").map(item => item.connectionId)), requested, presence);
   const gateway = gateways.find(item => item.connectionId === selected?.id) ?? null;
   return { adapter, snowluma, gateway, gateways, selectedConnectionId: selected?.id ?? null, autostart };
 });

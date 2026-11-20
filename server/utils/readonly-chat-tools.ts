@@ -9,9 +9,11 @@ export type ReadOnlyChatTools = {
   readLocalFile?: (root: string, path: string) => Promise<unknown>;
   searchLocalFiles?: (root: string, query: string, path: string) => Promise<unknown>;
   /** 只创建审批请求，不直接写盘。 */
-  proposeFileWrite?: (root: string, path: string, content: string, reason: string, taskId?: string) => Promise<unknown>;
+  proposeFileWrite?: (root: string, path: string, content: string, reason: string, taskId?: string, acceptance?: string) => Promise<unknown>;
   /** 建一条任务档案；不产生文件/命令副作用。 */
   createLocalTask?: (title: string, goal: string, plan: string) => Promise<unknown>;
+  inspectGit?: (root: string, cwd: string) => Promise<unknown>;
+  proposeGitBranch?: (root: string, cwd: string, branch: string, reason: string) => Promise<unknown>;
   /** 只创建终端命令审批请求，不直接执行。 */
   proposeCommand?: (root: string, command: string, argsJson: string, cwd: string, reason: string, taskId?: string) => Promise<unknown>;
 };
@@ -36,7 +38,7 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
   const localSpecs: LocalToolSpec[] = [
     ...(handlers.localRoots ? [{
       name: "list_local_roots",
-      description: "List the local directories the owner has explicitly authorized for read-only observation. Call this before reading files if you do not know the root name.",
+      description: "List local observation roots and their modes. READ_ONLY roots allow viewing only; READ_WRITE roots allow proposing file writes for human approval. Call this when the destination is unclear.",
       fields: [],
       call: async () => handlers.localRoots!(),
     }] : []),
@@ -75,20 +77,33 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
     }] : []),
     ...(handlers.proposeFileWrite ? [{
       name: "propose_file_write",
-      description: "Propose writing a UTF-8 text file inside an authorized writable directory. This does NOT write immediately: it creates a pending request that the owner must approve. Never claim the file was written.",
+      description: "Propose a UTF-8 file write for human approval. A standalone proposal creates its own task and readback steps; describe the user's observable acceptance criteria. Do not call create_local_task first for a standalone file write. No file is written before approval.",
       fields: [
         { name: "root", required: true, maxLength: 200 },
         { name: "path", required: true, maxLength: 500 },
         { name: "content", required: true, maxLength: 20000 },
         { name: "reason", required: true, maxLength: 500 },
+        { name: "acceptance", required: false, maxLength: 1000 },
         { name: "taskId", required: false, maxLength: 80 },
       ],
-      maxRaw: 24000,
-      call: async (args: Record<string, string>) => handlers.proposeFileWrite!(args.root ?? "", args.path ?? "", args.content ?? "", args.reason ?? "", args.taskId || undefined),
+      maxRaw: 26000,
+      call: async (args: Record<string, string>) => handlers.proposeFileWrite!(args.root ?? "", args.path ?? "", args.content ?? "", args.reason ?? "", args.taskId || undefined, args.acceptance || undefined),
+    }] : []),
+    ...(handlers.inspectGit ? [{
+      name: "inspect_local_git",
+      description: "Read the current Git branch and list working-tree and staged changes at an authorized repository root. Returns file names and status only, without diff contents.",
+      fields: [{ name: "root", required: true, maxLength: 200 }, { name: "cwd", required: false, maxLength: 500 }],
+      call: async (args: Record<string, string>) => handlers.inspectGit!(args.root ?? "", args.cwd ?? ""),
+    }] : []),
+    ...(handlers.proposeGitBranch ? [{
+      name: "propose_git_branch",
+      description: "Request human approval to create a local branch at the current commit. Does not switch branches or execute immediately. Use only when explicitly requested by the user.",
+      fields: [{ name: "root", required: true, maxLength: 200 }, { name: "cwd", required: false, maxLength: 500 }, { name: "branch", required: true, maxLength: 100 }, { name: "reason", required: true, maxLength: 500 }],
+      call: async (args: Record<string, string>) => handlers.proposeGitBranch!(args.root ?? "", args.cwd ?? "", args.branch ?? "", args.reason ?? ""),
     }] : []),
     ...(handlers.proposeCommand ? [{
       name: "propose_terminal_command",
-      description: "Propose a terminal command inside an authorized writable directory. Only whitelisted executables (git, node, python, python3, cargo, go, dotnet) are accepted, no shell. This does NOT execute immediately: it creates a pending request that the owner must approve. Never claim the command ran before approval.",
+      description: "Propose a terminal command inside an authorized writable directory. Only whitelisted executables (node, python, python3, cargo, go, dotnet) are accepted, without a shell. Use the dedicated Git tools for Git. This does NOT execute immediately: it creates a pending request that the owner must approve. Never claim the command ran before approval.",
       fields: [
         { name: "root", required: true, maxLength: 200 },
         { name: "command", required: true, maxLength: 200 },

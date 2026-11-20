@@ -44,7 +44,9 @@ import { requireActor } from "../../../utils/auth";
 import { auditLocalObserve, listLocalDirectory, listLocalObserveRoots, readLocalTextFile, searchLocalProject } from "../../../utils/local-observe";
 import { createLocalWriteRequest } from "../../../utils/local-write";
 import { createLocalTask } from "../../../utils/local-tasks";
-import { createLocalCommandRequest } from "../../../utils/local-command";
+import { createGitBranchRequest, createLocalCommandRequest } from "../../../utils/local-command";
+import { readGitStatus } from "../../../utils/local-git";
+import { resolveObserveRoot } from "../../../utils/local-observe";
 import { readTrimmedString, requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
 import { desktopConversationWhere, DELETED_DESKTOP_CONVERSATION_REQUEST_ERROR, lockActiveDesktopConversationForWrite, throwDeletedDesktopConversationRequest, validateDesktopConversationReplay } from "../../../utils/desktop-conversation";
@@ -497,7 +499,14 @@ export default defineEventHandler(async (event) => {
     return root;
   };
   const localReadOnlyTools = isAdmin ? {
-    localRoots: async () => localRootsForTools.map((root) => ({ id: root.id, label: root.label, path: root.path })),
+    localRoots: async () => localRootsForTools.map(({ id, label, path, mode }) => ({ id, label, path, mode })),
+    inspectGit: async (rootValue: string, cwd: string) => {
+      const { id } = await resolveLocalToolRoot(rootValue);
+      const root = await resolveObserveRoot(id);
+      const result = readGitStatus(root.path, cwd);
+      auditLocalObserve(ownerId, "git.inspect", { source: "chat", rootId: id, cwd });
+      return result;
+    },
     createLocalTask: async (title: string, goal: string, plan: string) => {
       const task = await createLocalTask({
         title, goal, plan, actorId: ownerId, characterId,
@@ -546,7 +555,7 @@ export default defineEventHandler(async (event) => {
       }
     },
     ...(localRootsForTools.some((root) => root.mode === "READ_WRITE") ? {
-      proposeFileWrite: async (rootValue: string, path: string, content: string, reason: string, taskId?: string) => {
+      proposeFileWrite: async (rootValue: string, path: string, content: string, reason: string, taskId?: string, acceptance?: string) => {
         const root = await resolveLocalToolRoot(rootValue);
         const request = await createLocalWriteRequest({
           rootId: root.id,
@@ -556,14 +565,23 @@ export default defineEventHandler(async (event) => {
           actorId: ownerId,
           characterId,
           ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
-          ...(taskId ? { taskId } : {}),
+          ...(taskId ? { taskId } : { taskPlan: {
+            title: `写入文件：${path}`, goal: message,
+            acceptance: acceptance?.trim() || "文件保存在指定目录，内容与需求一致。",
+          } }),
         });
         return {
           status: "PENDING_APPROVAL",
           requestId: request.id,
+          taskId: request.taskId,
           path: request.relativePath,
-          message: "已提交给主人审批，尚未写入文件。",
+          message: "尚未写入。请在本地观察 → 写审批查看并批准；任务档案可查看结果。",
         };
+      },
+      proposeGitBranch: async (rootValue: string, cwd: string, branch: string, reason: string) => {
+        const root = await resolveLocalToolRoot(rootValue);
+        const request = await createGitBranchRequest({ rootId: root.id, cwd, branch, reason, actorId: ownerId, characterId });
+        return { status: "PENDING_APPROVAL", requestId: request.id, branch };
       },
       proposeCommand: async (rootValue: string, command: string, argsJson: string, cwd: string, reason: string, taskId?: string) => {
         const root = await resolveLocalToolRoot(rootValue);

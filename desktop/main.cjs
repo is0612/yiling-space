@@ -63,10 +63,14 @@ let supervisorStopping = false;
 let appReady = false;
 let currentUrl = "";
 let tray = null;
+let trayReady = false;
+let closeToTray = false;
 let isQuitting = false;
 let saveStateTimer = null;
 const WINDOW_STATE_FILE = () => path.join(app.getPath("userData"), "window-state.json");
 const ICON_PATH = path.join(__dirname, "assets", "icon.png");
+const WINDOWS_TRAY_ICON = path.join(__dirname, "assets", "icon.ico");
+if (process.platform === "win32") app.setAppUserModelId("YilingSpace.Desktop");
 
 function loadWindowState() {
   const fallback = { width: 1440, height: 900, maximized: false };
@@ -119,10 +123,46 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+function createApplicationMenu() {
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: "文件",
+      submenu: [
+        { label: "打开忆灵空间", click: showMainWindow },
+        { label: "打开数据目录", click: () => void shell.openPath(DATA_DIR) },
+        { label: "打开日志目录", click: () => void shell.openPath(LOG_DIR) },
+        { type: "separator" },
+        {
+          label: "关闭窗口时保留在托盘",
+          type: "checkbox",
+          checked: closeToTray,
+          enabled: trayReady,
+          click: (item) => { closeToTray = item.checked; },
+        },
+        { label: "退出忆灵空间", accelerator: "CommandOrControl+Shift+Q", click: () => { isQuitting = true; app.quit(); } },
+      ],
+    },
+    {
+      label: "视图",
+      submenu: [
+        { role: "reload", label: "重新加载页面" },
+        { role: "toggleDevTools", label: "开发者工具" },
+        { type: "separator" },
+        { role: "resetZoom", label: "实际大小" },
+        { role: "zoomIn", label: "放大" },
+        { role: "zoomOut", label: "缩小" },
+      ],
+    },
+  ]));
+}
+
 function createTray() {
   try {
-    const image = nativeImage.createFromPath(ICON_PATH);
-    const icon = image.isEmpty() ? image : image.resize({ width: 16, height: 16 });
+    const png = nativeImage.createFromBuffer(fs.readFileSync(ICON_PATH));
+    const windowsIcon = process.platform === "win32" ? nativeImage.createFromPath(WINDOWS_TRAY_ICON) : null;
+    const icon = windowsIcon && !windowsIcon.isEmpty() ? windowsIcon : png.resize({ width: 32, height: 32 });
+    if (icon.isEmpty()) throw new Error("托盘图标无法加载");
+    // The development launcher can reach electron.exe through different Windows path aliases.
     tray = new Tray(icon);
     tray.setToolTip("忆灵空间");
     const menu = Menu.buildFromTemplate([
@@ -136,7 +176,12 @@ function createTray() {
     tray.setContextMenu(menu);
     tray.on("click", showMainWindow);
     tray.on("double-click", showMainWindow);
+    trayReady = true;
+    log("tray-registered", { icon: windowsIcon && !windowsIcon.isEmpty() ? "ico" : "png" });
   } catch (error) {
+    tray?.destroy();
+    tray = null;
+    trayReady = false;
     log("tray-create-failed", { message: error instanceof Error ? error.message : String(error) });
   }
 }
@@ -202,7 +247,7 @@ function createWindow() {
     backgroundColor: "#f4f6f9",
     title: "忆灵空间",
     icon: ICON_PATH,
-    autoHideMenuBar: true,
+    autoHideMenuBar: process.platform !== "win32",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -224,6 +269,11 @@ function createWindow() {
   mainWindow.on("close", (event) => {
     saveWindowState();
     if (isQuitting) return;
+    // Electron 建好了图标也不代表 Explorer 已显示；只有用户主动开启才隐藏。
+    if (!trayReady || !closeToTray) {
+      isQuitting = true;
+      return;
+    }
     event.preventDefault();
     mainWindow?.hide();
   });
@@ -464,8 +514,9 @@ if (yieldToOther) {
 
   app.whenReady().then(() => {
     appReady = true;
-    createWindow();
     createTray();
+    createApplicationMenu();
+    createWindow();
     setupDownloads();
     startSupervisor();
   }).catch((error) => {

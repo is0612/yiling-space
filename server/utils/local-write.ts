@@ -7,7 +7,7 @@ import {
   validateLocalWritablePath,
   type LocalObserveRoot,
 } from "./local-observe";
-import { advanceTaskForWrite } from "./local-tasks";
+import { lockLocalTaskForApproval, recordWriteReadback } from "./local-tasks";
 import { getPrisma } from "./prisma";
 
 export const LOCAL_WRITE_MAX_BYTES = 32 * 1024;
@@ -22,6 +22,8 @@ export type LocalWriteRequestInput = {
   characterId?: string;
   conversationId?: string;
   taskId?: string;
+  /** A chat proposal owns a new task; neither is saved without the other. */
+  taskPlan?: { title: string; goal: string; acceptance: string };
 };
 
 function hashContent(content: Buffer | string) {
@@ -47,17 +49,24 @@ export async function createLocalWriteRequest(input: LocalWriteRequestInput) {
   const reason = input.reason.trim().slice(0, 500);
   if (!reason) throw new LocalObserveError(400, "写文件必须说明原因。");
   const root = await writableRoot(input.rootId);
-  if (input.taskId) {
-    const task = await getPrisma().localTask.findUnique({ where: { id: input.taskId }, select: { id: true } });
-    if (!task) throw new LocalObserveError(404, "任务不存在。");
-  }
   const target = validateLocalWritablePath(root.path, input.relativePath);
   if (target.exists && target.size > MAX_EXISTING_BYTES) {
     throw new LocalObserveError(413, "目标文件超过 2 MB，暂不支持覆盖。");
   }
   const baseHash = target.exists ? hashContent(fs.readFileSync(target.real)) : null;
-  const request = await getPrisma().localWriteRequest.create({
-    data: {
+  const plan = input.taskPlan;
+  if (plan && (input.taskId || !plan.title.trim() || !plan.goal.trim() || !plan.acceptance.trim())) {
+    throw new LocalObserveError(400, "新任务必须包含标题、目标和验收标准，不能同时指定已有任务。");
+  }
+  const request = await getPrisma().$transaction(async tx => {
+    await lockLocalTaskForApproval(tx, input.taskId, input.actorId);
+    const taskId = plan ? (await tx.localTask.create({ data: {
+      title: plan.title.trim().slice(0, 200), goal: plan.goal.trim().slice(0, 4000),
+      plan: `1. 审批后写入 ${target.relative}\n2. 读回文件，核对是否与批准的内容一致\n\n验收标准：${plan.acceptance.trim().slice(0, 1000)}`,
+      actorId: input.actorId, characterId: input.characterId, conversationId: input.conversationId,
+      status: "WAITING_APPROVAL",
+    } })).id : input.taskId;
+    const created = await tx.localWriteRequest.create({ data: {
       rootId: root.id,
       relativePath: target.relative,
       content: input.content,
@@ -66,10 +75,17 @@ export async function createLocalWriteRequest(input: LocalWriteRequestInput) {
       actorId: input.actorId,
       ...(input.characterId ? { characterId: input.characterId } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
-      ...(input.taskId ? { taskId: input.taskId } : {}),
-    },
+      ...(taskId ? { taskId } : {}),
+    } });
+    if (taskId) await tx.localTask.update({ where: { id: taskId }, data: {
+      status: "WAITING_APPROVAL",
+      ...(plan ? { steps: [
+        { title: `写入 ${target.relative}`, state: "TODO", request: { kind: "write", id: created.id } },
+        { title: "读回文件，核对保存内容", state: "TODO", verifyWriteId: created.id },
+      ] } : {}),
+    } });
+    return created;
   });
-  await advanceTaskForWrite(input.taskId, "WAITING_APPROVAL");
   auditLocalObserve(input.actorId, "write.request", {
     requestId: request.id,
     rootId: root.id,
@@ -108,11 +124,14 @@ async function markFailed(id: string, message: string) {
 export async function approveLocalWriteRequest(id: string, actorId: string) {
   const request = await getLocalWriteRequest(id);
   if (request.status !== "PENDING") throw new LocalObserveError(409, "这个请求已经处理过了。");
-  const claimed = await getPrisma().localWriteRequest.updateMany({
-    where: { id, status: "PENDING" },
-    data: { status: "APPROVING", decidedAt: new Date() },
+  await getPrisma().$transaction(async tx => {
+    await lockLocalTaskForApproval(tx, request.taskId);
+    const claimed = await tx.localWriteRequest.updateMany({
+      where: { id, taskId: request.taskId, status: "PENDING" },
+      data: { status: "APPROVING", decidedAt: new Date() },
+    });
+    if (claimed.count !== 1) throw new LocalObserveError(409, "这个请求正在被处理。");
   });
-  if (claimed.count !== 1) throw new LocalObserveError(409, "这个请求正在被处理。");
 
   try {
     const root = await writableRoot(request.rootId);
@@ -128,10 +147,34 @@ export async function approveLocalWriteRequest(id: string, actorId: string) {
     } finally {
       fs.rmSync(temporary, { force: true });
     }
-    const applied = await getPrisma().localWriteRequest.update({
-      where: { id },
-      data: { status: "APPLIED", appliedAt: new Date() },
-      include: { root: { select: { id: true, label: true, path: true, mode: true, enabled: true } } },
+    const savedPath = target.real;
+    let readback: { path: string; matches: boolean; preview?: string; truncated?: boolean } = { path: savedPath, matches: false };
+    if (request.taskId) {
+      try {
+        const saved = validateLocalWritablePath(root.path, request.relativePath);
+        if (saved.real === savedPath && saved.exists && saved.size <= LOCAL_WRITE_MAX_BYTES && fs.statSync(savedPath).isFile()) {
+          const actual = fs.readFileSync(savedPath);
+          const matches = actual.equals(Buffer.from(request.content, "utf8"));
+          if (matches) {
+            const text = actual.toString("utf8");
+            readback = { path: savedPath, matches, preview: text.slice(0, 6000), truncated: text.length > 6000 };
+          }
+        }
+      } catch { /* The write happened, but readback could not be verified. */ }
+    }
+    let recordedReadback = false;
+    const applied = await getPrisma().$transaction(async tx => {
+      await lockLocalTaskForApproval(tx, request.taskId);
+      if (request.taskId) {
+        recordedReadback = await recordWriteReadback(tx, request.taskId, id, actorId, readback);
+        const pending = await tx.localWriteRequest.findFirst({ where: { taskId: request.taskId, status: "PENDING" }, select: { id: true } });
+        await tx.localTask.update({ where: { id: request.taskId }, data: { status: pending ? "WAITING_APPROVAL" : "RUNNING" } });
+      }
+      return tx.localWriteRequest.update({
+        where: { id },
+        data: { status: "APPLIED", appliedAt: new Date() },
+        include: { root: { select: { id: true, label: true, path: true, mode: true, enabled: true } } },
+      });
     });
     auditLocalObserve(actorId, "write.apply", {
       requestId: id,
@@ -140,8 +183,7 @@ export async function approveLocalWriteRequest(id: string, actorId: string) {
       path: target.relative,
       status: "applied",
     });
-    await advanceTaskForWrite(request.taskId, "RUNNING");
-    return applied;
+    return { ...applied, ...(recordedReadback ? { readback } : {}) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await markFailed(id, message);

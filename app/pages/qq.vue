@@ -1366,6 +1366,14 @@ function copyInstallGuide() {
           </button>
 
           <div class="row-body">
+            <button
+              type="button"
+              class="btn quiet"
+              :disabled="reconnecting || stopping"
+              @click="void reconnectConnection(row.connection)"
+            >
+              重连这个账号
+            </button>
             <QqCharacterBehavior
               v-if="row.binding && row.character"
               :character-id="row.character.id"

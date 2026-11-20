@@ -282,7 +282,7 @@ export function validateLocalWritablePath(root: string, input: unknown) {
   return { ...resolved, exists, size };
 }
 
-function assertReadableName(relative: string) {
+export function assertReadableName(relative: string) {
   const base = path.basename(relative);
   if (isSensitive(base)) throw new LocalObserveError(403, "这个文件被本地观察的敏感名单挡住。");
   for (const part of relative.split("/")) {
@@ -463,7 +463,7 @@ export function searchLocalProject(root: string, queryInput: unknown, pathInput:
 /** 只追加审计，不记录文件正文；写失败不影响只读请求。 */
 export function auditLocalObserve(
   actorId: string,
-  action: "list" | "read" | "search" | "root.add" | "root.update" | "root.delete" | "write.request" | "write.apply" | "write.reject" | "task.create" | "task.evidence" | "task.cancel" | "command.request" | "command.apply" | "command.reject",
+  action: "list" | "read" | "search" | "root.add" | "root.update" | "root.delete" | "write.request" | "write.apply" | "write.reject" | "task.create" | "task.evidence" | "task.cancel" | "task.steps" | "command.request" | "command.apply" | "command.reject" | "git.inspect",
   detail: Record<string, unknown>,
 ) {
   try {

@@ -1,0 +1,54 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { applyGitBranch, planGitBranch, readGitDiff, readGitStatus } from "../server/utils/local-git";
+
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "yiling-git-"));
+const root = path.join(sandbox, "repo");
+fs.mkdirSync(root);
+const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.test", ...args], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+try {
+  git("init", "-q", "-b", "main");
+  fs.writeFileSync(path.join(root, "notes.txt"), "original\n");
+  git("add", "notes.txt");
+  git("commit", "-qm", "initial");
+  fs.writeFileSync(path.join(root, "notes.txt"), "staged\n");
+  fs.writeFileSync(path.join(root, ".ENV.local"), "private test fixture\n");
+  git("add", "-f", "notes.txt", ".ENV.local");
+  fs.writeFileSync(path.join(root, "notes.txt"), "unstaged\n");
+  const status = readGitStatus(root, "");
+  assert.deepEqual(status.entries, [{ code: "MM", path: "notes.txt", staged: true, unstaged: true, untracked: false }]);
+  const stagedPatch = readGitDiff(root, "", "notes.txt", true).diff;
+  assert.match(stagedPatch, /\+staged/);
+  assert.doesNotMatch(stagedPatch, /unstaged/);
+  const worktreePatch = readGitDiff(root, "", "notes.txt", false).diff;
+  assert.match(worktreePatch, /\+unstaged/);
+  assert.doesNotMatch(worktreePatch, /\+staged/);
+  fs.writeFileSync(path.join(root, "new.txt"), "new file\n");
+  assert.match(readGitDiff(root, "", "new.txt", false).diff, /@@ -0,0 \+1,1 @@\n\+new file$/);
+  fs.writeFileSync(path.join(root, ".git", "info", "exclude"), "ignored.txt\n");
+  fs.writeFileSync(path.join(root, "ignored.txt"), "ignored fixture\n");
+  assert.throws(() => readGitDiff(root, "", "ignored.txt", false), /没有可查看/);
+  git("config", "filter.fixture.required", "true");
+  assert.throws(() => readGitStatus(root, ""), /文件过滤器/);
+  assert.throws(() => readGitDiff(root, "", "notes.txt", false), /文件过滤器/);
+  git("config", "--unset", "filter.fixture.required");
+  assert.throws(() => readGitDiff(root, "", ".ENV.local", false));
+  assert.throws(() => readGitDiff(root, "", "."));
+  assert.throws(() => readGitStatus(sandbox, ""));
+  assert.throws(() => planGitBranch(root, "", "--force"));
+  const proposal = planGitBranch(root, "", "work/notes");
+  assert.equal(git("branch", "--list", "work/notes"), "");
+  assert.equal(applyGitBranch(root, "", proposal.args).code, 0);
+  assert.equal(git("branch", "--show-current"), "main");
+  assert.equal(git("rev-parse", "work/notes"), proposal.args[3]);
+  const stale = planGitBranch(root, "", "work/stale");
+  git("commit", "-qm", "next");
+  assert.throws(() => applyGitBranch(root, "", stale.args), /当前提交已变化/);
+  assert.equal(git("branch", "--list", "work/stale"), "");
+  console.log("Git tests passed: working-tree and staged diffs, untracked files, filtered paths, exact repository, pinned branch creation and stale approval.");
+} finally {
+  fs.rmSync(sandbox, { recursive: true, force: true });
+}

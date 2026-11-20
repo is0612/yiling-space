@@ -175,7 +175,10 @@ const compactFacts = computed(() => {
  */
 const fix = computed(() => {
   const root = rootIndex.value;
-  if (root === -2) return { title: "当前账号未登录，暂不连接", detail: "其他已登录账号不受影响。需要使用这个账号时，先在 QQ 客户端登录，再点重连。", action: { kind: "open-steps" as ChainActionKind, label: "查看登录步骤" } };
+  if (root === -2) {
+    const account = props.connection?.appId ? `配置的 QQ ${props.connection.appId}` : "此连接配置的 QQ 账号";
+    return { title: "当前账号未登录，暂不连接", detail: `SnowLuma 没识别到${account}。请核对 QQ 客户端登录的是同一个账号，再点重连。其他已登录账号不受影响。`, action: { kind: "open-steps" as ChainActionKind, label: "查看登录步骤" } };
+  }
   if (root === -1) return null;
 
   if (root === 1) {

@@ -20,7 +20,9 @@ export async function readOnebotAccountPresence(records: readonly OnebotConnecti
   }
   return output;
 }
-export function chooseOnebotRuntimeConnection<T extends { id: string }>(records: readonly T[], readyIds: ReadonlySet<string>, requested?: string): T | undefined {
+export function chooseOnebotRuntimeConnection<T extends { id: string }>(records: readonly T[], readyIds: ReadonlySet<string>, requested?: string, presence?: ReadonlyMap<string, OnebotAccountPresence>): T | undefined {
   if (requested) { const record = records.find(item => item.id === requested); if (!record) throw createError({ statusCode: 404, statusMessage: "QQ 连接不存在或已停用。" }); return record; }
-  return records.find(record => readyIds.has(record.id)) ?? records[0];
+  return records.find(record => readyIds.has(record.id))
+    ?? records.find(record => presence?.get(record.id) === "logged_in")
+    ?? records[0];
 }

@@ -2158,6 +2158,7 @@ model LocalTask {
   title String @db.VarChar(200)
   goal String @db.Text
   plan String @db.Text
+  steps Json @default("[]") @db.JsonB
   status String @default("PLANNED") @db.VarChar(20)
   actorId String @db.Uuid
   characterId String? @db.Uuid

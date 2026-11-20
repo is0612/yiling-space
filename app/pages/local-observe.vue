@@ -35,6 +35,8 @@ type LocalObserveRoot = {
 
 type LocalWriteRequest = {
   id: string;
+  taskId?: string | null;
+  readback?: { path: string; matches: boolean; preview?: string; truncated?: boolean };
   relativePath: string;
   content: string;
   reason: string;
@@ -59,6 +61,8 @@ type LocalTask = {
 };
 
 type LocalTaskDetail = LocalTask & {
+  steps: Array<{ title: string; status: string; note?: string; verifyWriteId?: string; request?: { kind: "write" | "command"; id: string } }>;
+  commandRequests: Array<{ id: string; command: string; status: string; cwd: string; root: { label: string } }>;
   writeRequests: Array<{
     id: string;
     relativePath: string;
@@ -165,7 +169,9 @@ const selectedTask = ref<LocalTask | null>(null);
 const taskDetail = ref<LocalTaskDetail | null>(null);
 const taskDetailLoading = ref(false);
 const taskBusy = ref(false);
+const taskIsClosed = computed(() => ["CANCELLED", "SUCCEEDED", "FAILED"].includes(taskDetail.value?.status ?? ""));
 const commandVisible = ref(false);
+const gitVisible = ref(false);
 const commandLoading = ref(false);
 const commandRequests = ref<LocalCommandRequest[]>([]);
 const selectedCommand = ref<LocalCommandRequest | null>(null);
@@ -452,12 +458,16 @@ async function approveWrite(write: LocalWriteRequest) {
       { type: "warning", confirmButtonText: "批准写入", cancelButtonText: "取消" },
     );
     writeBusy.value = true;
-    await request({ url: `/local/write-requests/${write.id}/approve`, method: "post" });
-    ElMessage.success("已写入。");
+    const { request: applied } = await request<{ request: LocalWriteRequest }>({ url: `/local/write-requests/${write.id}/approve`, method: "post" });
+    if (applied.readback && !applied.readback.matches) ElMessage.warning("已写入，但读回核对未通过。请查看任务档案。");
+    else ElMessage.success(applied.readback ? "已写入并读回核对，请查看任务结果。" : "已写入。");
     await loadWriteRequests();
+    if (applied.taskId && applied.readback) {
+      writeVisible.value = false;
+      await openTasks(applied.taskId);
+    } else if (tasksVisible.value) await openTasks();
     await refreshManage();
     await list(currentPath.value);
-    if (tasksVisible.value) await openTasks();
   } catch (error) {
     if (error === "cancel" || error === "close") return;
     ElMessage.error(readApiErrorMessage(error, "写入失败。"));
@@ -511,26 +521,33 @@ function taskStatusType(status: string) {
   } as Record<string, "info" | "warning" | "primary" | "success" | "danger">)[status] ?? "info";
 }
 
+let taskDetailRequest = 0;
 async function loadTaskDetail(id: string) {
+  const version = ++taskDetailRequest;
+  stepRequestChoice.value = "";
   taskDetailLoading.value = true;
   try {
     const result = await request<{ task: LocalTaskDetail }>({ url: `/local/tasks/${id}` });
-    taskDetail.value = result.task;
+    if (version === taskDetailRequest && selectedTask.value?.id === id) taskDetail.value = result.task;
   } catch (error) {
+    if (version !== taskDetailRequest) return;
     taskDetail.value = null;
     ElMessage.error(readApiErrorMessage(error, "读取任务详情失败。"));
   } finally {
-    taskDetailLoading.value = false;
+    if (version === taskDetailRequest) taskDetailLoading.value = false;
   }
 }
 
-async function openTasks() {
+async function openTasks(taskId?: string) {
   tasksVisible.value = true;
   tasksLoading.value = true;
   try {
     const result = await request<{ tasks: LocalTask[] }>({ url: "/local/tasks" });
     tasks.value = result.tasks;
-    if (!selectedTask.value || !tasks.value.some((task) => task.id === selectedTask.value?.id)) {
+    if (taskId) {
+      selectedTask.value = tasks.value.find(task => task.id === taskId)
+        ?? (await request<{ task: LocalTaskDetail }>({ url: `/local/tasks/${taskId}` })).task;
+    } else if (!selectedTask.value || !tasks.value.some((task) => task.id === selectedTask.value?.id)) {
       selectedTask.value = tasks.value[0] ?? null;
     }
     if (selectedTask.value) await loadTaskDetail(selectedTask.value.id);
@@ -580,11 +597,64 @@ async function recordTask(outcome: "PASS" | "FAIL") {
   }
 }
 
+const stepRequestChoice = ref("");
+const currentTaskStep = computed(() => taskDetail.value?.steps.findIndex(step => step.status !== "DONE") ?? -1);
+const availableStepRequests = computed(() => {
+  const task = taskDetail.value;
+  if (!task) return [];
+  const linked = new Set(task.steps.flatMap(step => step.request ? [`${step.request.kind}:${step.request.id}`] : []));
+  return [
+    ...task.writeRequests.map(row => ({ value: `write:${row.id}`, label: `写文件 · ${row.root.label}/${row.relativePath} · ${row.status}` })),
+    ...task.commandRequests.map(row => ({ value: `command:${row.id}`, label: `命令 · ${row.root.label} / ${row.command} · ${row.status}` })),
+  ].filter(entry => !linked.has(entry.value));
+});
+const stepLabels: Record<string, string> = {
+  TODO: "待处理", DONE: "已完成", FAILED: "失败", CANCELLED: "已取消",
+  RUNNING: "执行中", WAITING_APPROVAL: "待审批", BLOCKED: "等前一步",
+};
+
+async function saveTaskStep(taskId: string, data: Record<string, unknown>) {
+  if (taskBusy.value || taskDetail.value?.id !== taskId) return;
+  taskBusy.value = true;
+  try {
+    await request({ url: `/local/tasks/${taskId}/steps`, method: "post", data });
+    stepRequestChoice.value = "";
+    if (selectedTask.value?.id === taskId) await loadTaskDetail(taskId);
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "保存步骤失败。"));
+  } finally {
+    taskBusy.value = false;
+  }
+}
+
+async function promptTaskStep(action: "plan" | "done" | "fail", index?: number) {
+  const task = taskDetail.value;
+  if (!task) return;
+  try {
+    const { value } = await ElMessageBox.prompt(action === "plan" ? "每行一个步骤，按执行顺序填写。" : "请记录这一步的实际结果。", action === "plan" ? "建立步骤" : action === "done" ? "完成步骤" : "标记步骤失败", {
+      inputType: "textarea", confirmButtonText: "保存", cancelButtonText: "取消",
+      inputValidator: text => Boolean(text?.trim()) || "请填写内容。",
+    });
+    await saveTaskStep(task.id, action === "plan"
+      ? { action, titles: value.split(/\r?\n/).map(line => line.trim()).filter(Boolean) }
+      : { action, index, note: value });
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") ElMessage.error("未能记录步骤。");
+  }
+}
+
+function linkTaskStep(index: number) {
+  const task = taskDetail.value;
+  if (!task || !stepRequestChoice.value) return;
+  const [kind, requestId] = stepRequestChoice.value.split(":");
+  void saveTaskStep(task.id, { action: "link", index, kind, requestId });
+}
+
 async function cancelTask() {
   const task = selectedTask.value;
   if (!task) return;
   try {
-    await ElMessageBox.confirm(`取消任务「${task.title}」？`, "取消任务", {
+    await ElMessageBox.confirm(`取消任务「${task.title}」？关联的待审批请求会一并撤销，已经执行的操作不会回滚。`, "取消任务", {
       type: "warning",
       confirmButtonText: "取消任务",
       cancelButtonText: "返回",
@@ -743,7 +813,13 @@ onMounted(async () => {
             >
               命令审批{{ pendingCommandCount ? ` (${pendingCommandCount})` : "" }}
             </el-button>
-            <el-button @click="openTasks">
+            <el-button
+              :disabled="!selectedRoot"
+              @click="gitVisible = true"
+            >
+              Git
+            </el-button>
+            <el-button @click="openTasks()">
               任务档案
             </el-button>
           </div>
@@ -1204,6 +1280,15 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
+    <LocalGitDialog
+      v-if="selectedRoot"
+      :key="selectedRoot.id"
+      v-model="gitVisible"
+      :root-id="selectedRoot.id"
+      :writable="selectedRoot.mode === 'READ_WRITE' && !selectedRoot.builtin"
+      @proposed="loadCommandRequests()"
+    />
+
     <el-dialog
       v-model="commandVisible"
       title="命令审批"
@@ -1215,10 +1300,10 @@ onMounted(async () => {
         :closable="false"
         show-icon
         title="批准之前不会执行"
-        description="当前只允许 git / node / python / python3 / cargo / go / dotnet，无 shell；每次执行都要你确认。"
+        description="终端命令和 Git 新建分支都在这里审批。Git 请求只新建分支，不切换当前分支。"
       />
       <div
-        v-if="!commandLoading && !commandRequests.length"
+        v-if="!commandLoading && !commandRequests.length && !selectedCommand"
         class="write-empty"
       >
         没有待审批的命令。
@@ -1384,6 +1469,37 @@ onMounted(async () => {
             <pre class="task-plan">{{ taskDetail.plan }}</pre>
           </div>
           <div class="task-section">
+            <b>执行步骤</b>
+            <el-button
+              v-if="!taskDetail.steps.length && !taskIsClosed"
+              text
+              :disabled="taskBusy || taskDetailLoading"
+              @click="promptTaskStep('plan')"
+            >
+              建立步骤
+            </el-button>
+            <ol v-if="taskDetail.steps.length">
+              <li
+                v-for="(step, index) in taskDetail.steps"
+                :key="index"
+              >
+                {{ step.title }} · {{ stepLabels[step.status] ?? step.status }}
+                <p v-if="step.note">{{ step.note }}</p>
+                <div v-if="step.status === 'TODO' && !step.verifyWriteId && index === currentTaskStep && !taskIsClosed">
+                  <el-button text :disabled="taskBusy || taskDetailLoading" @click="promptTaskStep('done', index)">记录完成</el-button>
+                  <el-button text :disabled="taskBusy || taskDetailLoading" @click="promptTaskStep('fail', index)">记录失败</el-button>
+                  <template v-if="availableStepRequests.length">
+                    <el-select v-model="stepRequestChoice" placeholder="选择本任务的审批请求" :disabled="taskBusy || taskDetailLoading">
+                      <el-option v-for="item in availableStepRequests" :key="item.value" :value="item.value" :label="item.label" />
+                    </el-select>
+                    <el-button text :disabled="!stepRequestChoice || taskBusy || taskDetailLoading" @click="linkTaskStep(index)">关联审批</el-button>
+                  </template>
+                </div>
+              </li>
+            </ol>
+            <p v-else class="muted">还没有执行步骤。</p>
+          </div>
+          <div class="task-section">
             <b>写请求</b>
             <div
               v-if="!taskDetail.writeRequests.length"
@@ -1424,7 +1540,8 @@ onMounted(async () => {
               >
                 {{ item.outcome }}
               </el-tag>
-              <span>{{ item.note }}</span>
+              <span v-if="item.kind === 'WRITE_READBACK'" class="task-readback">{{ item.note }}</span>
+              <span v-else>{{ item.note }}</span>
             </div>
           </div>
           <div
@@ -1436,7 +1553,7 @@ onMounted(async () => {
           </div>
           <div class="task-actions">
             <el-button
-              :disabled="taskBusy || taskDetail.status === 'CANCELLED'"
+              :disabled="taskBusy || taskDetailLoading || taskIsClosed"
               @click="cancelTask"
             >
               取消任务
@@ -1444,7 +1561,7 @@ onMounted(async () => {
             <el-button
               type="danger"
               plain
-              :disabled="taskBusy || taskDetail.status === 'CANCELLED'"
+              :disabled="taskBusy || taskDetailLoading || taskIsClosed"
               @click="recordTask('FAIL')"
             >
               验收失败
@@ -1452,7 +1569,7 @@ onMounted(async () => {
             <el-button
               type="primary"
               :loading="taskBusy"
-              :disabled="taskDetail.status === 'CANCELLED'"
+              :disabled="taskBusy || taskDetailLoading || taskIsClosed"
               @click="recordTask('PASS')"
             >
               验收通过
@@ -1618,6 +1735,7 @@ onMounted(async () => {
   font: 12px/1.6 "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
   color: #4f5b6d;
 }
+.task-readback { white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-write,
 .task-evidence {
   display: flex;

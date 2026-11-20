@@ -7107,11 +7107,45 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /local/tasks/{id}/steps:
+    post:
+      tags: [LocalObserve]
+      summary: 建立或更新任务步骤
+      description: 仅管理员。plan 一次建立有序步骤；link、done、fail 仅对当前步骤生效。
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [plan, link, done, fail] }
+                titles: { type: array, minItems: 1, maxItems: 20, items: { type: string, maxLength: 160 } }
+                index: { type: integer, minimum: 0, description: 步骤下标从零开始 }
+                kind: { type: string, enum: [write, command] }
+                requestId: { type: string, format: uuid }
+                note: { type: string, maxLength: 1000 }
+      responses:
+        '200':
+          description: 更新后的任务
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task: { $ref: '#/components/schemas/LocalTask' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: 任务已结束或当前步骤不可更新
   /local/tasks/{id}/evidence:
     post:
       tags: [LocalObserve]
       summary: 记录验收证据
-      description: PASS / FAIL 会改变任务状态；INFO 只追加记录。
+      description: 任务未结束时可追加人工记录。PASS / FAIL 需要先处理所有待审批或执行中的请求；INFO 只追加记录。
       parameters:
         - in: path
           name: id
@@ -7127,7 +7161,6 @@ paths:
               properties:
                 outcome: { type: string, enum: [PASS, FAIL, INFO] }
                 note: { type: string, maxLength: 4000 }
-                kind: { type: string, maxLength: 20, default: MANUAL }
       responses:
         '200':
           description: 已记录
@@ -7165,6 +7198,80 @@ paths:
         '409':
           $ref: '#/components/responses/BadRequest'
 
+  /local/observe/git:
+    get:
+      tags: [LocalObserve]
+      summary: 查看当前分支和改动
+      description: 仅管理员。指定 file 时返回该文件的工作区差异；staged=1 时返回暂存差异。
+      parameters:
+        - { in: query, name: rootId, required: true, schema: { type: string } }
+        - { in: query, name: cwd, schema: { type: string, maxLength: 500 } }
+        - { in: query, name: file, schema: { type: string, maxLength: 500 } }
+        - { in: query, name: staged, schema: { type: string, enum: ['0', '1'], default: '0' } }
+      responses:
+        '200':
+          description: 暂存区摘要或单文件差异
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [cwd, branch, entries, truncated]
+                    properties:
+                      cwd: { type: string }
+                      branch: { type: string, nullable: true }
+                      entries:
+                        type: array
+                        maxItems: 100
+                        items:
+                          type: object
+                          properties:
+                            code: { type: string }
+                            path: { type: string }
+                            staged: { type: boolean }
+                            unstaged: { type: boolean }
+                            untracked: { type: boolean }
+                      truncated: { type: boolean }
+                  - type: object
+                    required: [path, staged, untracked, diff]
+                    properties:
+                      path: { type: string }
+                      staged: { type: boolean }
+                      untracked: { type: boolean }
+                      diff: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /local/observe/git-branch:
+    post:
+      tags: [LocalObserve]
+      summary: 提议新建本地分支
+      description: 仅管理员。锁定当前提交并生成待审批请求，不创建或切换分支。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rootId, branch, reason]
+              properties:
+                rootId: { type: string, format: uuid }
+                cwd: { type: string, maxLength: 500 }
+                branch: { type: string, maxLength: 100 }
+                reason: { type: string, maxLength: 500 }
+                taskId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 待审批
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, status]
+                properties:
+                  requestId: { type: string, format: uuid }
+                  status: { type: string, enum: [PENDING] }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /local/command-requests:
     get:
       tags: [LocalObserve]
@@ -7322,6 +7429,36 @@ components:
         resultNote: { type: string, nullable: true }
         createdAt: { type: string, format: date-time }
         completedAt: { type: string, format: date-time, nullable: true }
+        steps:
+          type: array
+          maxItems: 20
+          description: 详情返回从关联审批推导的状态
+          items:
+            type: object
+            required: [title, state]
+            properties:
+              title: { type: string }
+              state: { type: string, enum: [TODO, DONE, FAILED] }
+              status: { type: string, enum: [TODO, DONE, FAILED, CANCELLED, RUNNING, WAITING_APPROVAL, BLOCKED] }
+              note: { type: string }
+              request:
+                type: object
+                properties:
+                  kind: { type: string, enum: [write, command] }
+                  id: { type: string, format: uuid }
+        commandRequests:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              command: { type: string }
+              cwd: { type: string }
+              status: { type: string }
+              root:
+                type: object
+                properties:
+                  label: { type: string }
         writeRequests:
           type: array
           items:
@@ -7365,6 +7502,15 @@ components:
         createdAt: { type: string, format: date-time }
         decidedAt: { type: string, format: date-time, nullable: true }
         appliedAt: { type: string, format: date-time, nullable: true }
+        readback:
+          type: object
+          description: 批准带自动核对步骤的请求后返回；它不是用户的最终验收结论
+          required: [path, matches]
+          properties:
+            path: { type: string }
+            matches: { type: boolean }
+            preview: { type: string, maxLength: 6000 }
+            truncated: { type: boolean }
         error: { type: string, nullable: true }
         root:
           type: object

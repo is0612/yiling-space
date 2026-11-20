@@ -1,12 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { auditLocalObserve, LocalObserveError, resolveLocalPath, type LocalObserveRoot } from "./local-observe";
-import { appendCommandEvidence } from "./local-tasks";
+import { appendCommandEvidence, lockLocalTaskForApproval } from "./local-tasks";
 import { getPrisma } from "./prisma";
+import { applyGitBranch, planGitBranch } from "./local-git";
 
 export const LOCAL_COMMAND_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_BYTES = 64 * 1024;
-const ALLOWED_COMMANDS = new Set(["git", "node", "python", "python3", "cargo", "go", "dotnet"]);
+const ALLOWED_COMMANDS = new Set(["node", "python", "python3", "cargo", "go", "dotnet"]);
 
 export type LocalCommandInput = {
   rootId: string;
@@ -61,18 +62,26 @@ async function resolveCommandCwd(root: LocalObserveRoot, cwdInput: unknown) {
   return { relative: resolved.relative, absolute: target };
 }
 
+export async function createGitBranchRequest(input: Omit<LocalCommandInput, "command" | "args"> & { branch: string }) {
+  const root = await writableRoot(input.rootId);
+  const plan = planGitBranch(root.path, input.cwd, input.branch);
+  return storeCommandRequest({ ...input, command: "git-branch", ...plan });
+}
+
 export async function createLocalCommandRequest(input: LocalCommandInput) {
-  const command = normalizeCommand(input.command);
+  return storeCommandRequest({ ...input, command: normalizeCommand(input.command) });
+}
+
+async function storeCommandRequest(input: LocalCommandInput) {
+  const { command } = input;
   const args = normalizeArgs(input.args);
   const reason = typeof input.reason === "string" ? input.reason.trim().slice(0, 500) : "";
   if (!reason) throw new LocalObserveError(400, "执行命令必须说明原因。");
   const root = await writableRoot(input.rootId);
   const cwd = await resolveCommandCwd(root, input.cwd);
-  if (input.taskId) {
-    const task = await getPrisma().localTask.findUnique({ where: { id: input.taskId }, select: { id: true } });
-    if (!task) throw new LocalObserveError(404, "任务不存在。");
-  }
-  const request = await getPrisma().localCommandRequest.create({
+  const request = await getPrisma().$transaction(async tx => {
+    await lockLocalTaskForApproval(tx, input.taskId, input.actorId);
+    return tx.localCommandRequest.create({
     data: {
       rootId: root.id,
       ...(input.taskId ? { taskId: input.taskId } : {}),
@@ -84,6 +93,7 @@ export async function createLocalCommandRequest(input: LocalCommandInput) {
       ...(input.characterId ? { characterId: input.characterId } : {}),
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
     },
+    });
   });
   auditLocalObserve(input.actorId, "command.request", {
     requestId: request.id, rootId: root.id, command, args, cwd: cwd.relative,
@@ -155,16 +165,21 @@ async function executeCommand(command: string, args: string[], cwd: string) {
 export async function approveLocalCommandRequest(id: string, actorId: string) {
   const request = await getLocalCommandRequest(id);
   if (request.status !== "PENDING") throw new LocalObserveError(409, "这个请求已经处理过了。");
-  const claimed = await getPrisma().localCommandRequest.updateMany({
-    where: { id, status: "PENDING" },
-    data: { status: "APPROVING", decidedAt: new Date() },
+  await getPrisma().$transaction(async tx => {
+    await lockLocalTaskForApproval(tx, request.taskId);
+    const claimed = await tx.localCommandRequest.updateMany({
+      where: { id, taskId: request.taskId, status: "PENDING" },
+      data: { status: "APPROVING", decidedAt: new Date() },
+    });
+    if (claimed.count !== 1) throw new LocalObserveError(409, "这个请求正在被处理。");
   });
-  if (claimed.count !== 1) throw new LocalObserveError(409, "这个请求正在被处理。");
   try {
     const root = await writableRoot(request.rootId);
     const cwd = await resolveCommandCwd(root, request.cwd);
-    const args = Array.isArray(request.args) ? request.args.filter((value): value is string => typeof value === "string") : [];
-    const result = await executeCommand(request.command, args, cwd.absolute);
+    const args = normalizeArgs(request.args);
+    const result = request.command === "git-branch"
+      ? applyGitBranch(root.path, request.cwd, args)
+      : await executeCommand(normalizeCommand(request.command), args, cwd.absolute);
     const status = result.code === 0 && !result.timedOut ? "SUCCEEDED" : "FAILED";
     const error = result.timedOut ? `命令超时（${LOCAL_COMMAND_TIMEOUT_MS / 1000} 秒）` : result.error ?? (result.code === 0 ? null : `退出码 ${result.code}`);
     const updated = await getPrisma().localCommandRequest.update({

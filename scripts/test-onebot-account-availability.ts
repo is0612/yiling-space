@@ -16,6 +16,8 @@ globalThis.fetch = async input => {
 try {
   const states = await readOnebotAccountPresence(records, 9999);
   assert.equal(states.get("offline"), "waiting_login"); assert.equal(states.get("online"), "logged_in");
+  assert.equal(chooseOnebotRuntimeConnection(records, new Set(), undefined, states)?.id, "online");
+  assert.equal(chooseOnebotRuntimeConnection(records, new Set(), "offline", states)?.id, "offline");
   assert.equal(calls, 2, "Shared credentials read panel once, never hook another account");
   calls = 0; globalThis.fetch = async () => { calls++; return new Response("error", { status: 401 }); };
   const unknown = await readOnebotAccountPresence(records, 9999); assert.equal(unknown.get("offline"), "unknown"); assert.equal(unknown.get("online"), "unknown"); assert.equal(calls, 1);
