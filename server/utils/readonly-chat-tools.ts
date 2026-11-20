@@ -5,6 +5,7 @@ export type ReadOnlyChatTools = {
   searchKnowledge?: (query: string) => Promise<unknown>;
   /** 本地只读观察：root 是授权目录的 id 或显示名。 */
   localRoots?: () => Promise<unknown>;
+  readLocalTask?: () => Promise<unknown>;
   listLocalFiles?: (root: string, path: string) => Promise<unknown>;
   readLocalFile?: (root: string, path: string) => Promise<unknown>;
   searchLocalFiles?: (root: string, query: string, path: string) => Promise<unknown>;
@@ -36,6 +37,10 @@ export function createReadOnlyChatTools(handlers: ReadOnlyChatTools, currentMess
     { name: "read_public_webpage", description: "Read a public webpage when the current user asks to examine a URL or external information. No login, local files or private network access.", field: "url" },
   ];
   const localSpecs: LocalToolSpec[] = [
+    ...(handlers.readLocalTask ? [{
+      name: "read_current_local_task", description: "Read the server-selected task's plan, completed operations, evidence and remaining steps. Call this first when continuing a task; never repeat completed work or claim user acceptance. New file or command proposals require human approval.",
+      fields: [], call: async () => handlers.readLocalTask!(),
+    }] : []),
     ...(handlers.localRoots ? [{
       name: "list_local_roots",
       description: "List local observation roots and their modes. READ_ONLY roots allow viewing only; READ_WRITE roots allow proposing file writes for human approval. Call this when the destination is unclear.",

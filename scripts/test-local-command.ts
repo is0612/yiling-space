@@ -82,6 +82,10 @@ try {
   console.log("Local command tests passed: approval lifecycle, evidence, generic Git rejection and approved branch creation.");
 } finally {
   if (rootId) await getPrisma().localAccessRoot.delete({ where: { id: rootId } }).catch(() => {});
+  await getPrisma().localTask.deleteMany({ where: { actorId } }).catch(() => {
+    console.error("本轮命令测试任务清理失败。");
+    process.exitCode = 1;
+  });
   fs.rmSync(rootPath, { recursive: true, force: true });
   await getPrisma().$disconnect().catch(() => {});
 }

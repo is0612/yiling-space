@@ -67,6 +67,7 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
 const suffix = randomUUID();
 const characterId = randomUUID();
 const connectionId = randomUUID();
+let fixtureUserId = "";
 
 /**
  * 固定的小号 key。`platform_connections` 上有 `(platform, platformAccountKey)` 唯一约束,
@@ -98,7 +99,7 @@ async function purgeStaleFixtures(): Promise<void> {
     await prisma.characterChannelBinding.deleteMany({ where: { connectionId: id } }).catch(() => undefined);
     await prisma.platformConnection.deleteMany({ where: { id } }).catch(() => undefined);
   }
-  await prisma.user.deleteMany({ where: { username: { startsWith: "onebot-test-" } } }).catch(() => undefined);
+  // Do not delete other runs' users by prefix; this run cleans only its own fixture below.
 }
 let conversationId = "";
 let bindingId = "";
@@ -152,6 +153,7 @@ try {
   //    先清上一次中断留下的同名 fixture，否则唯一约束直接挡住这一轮。
   await purgeStaleFixtures();
   const user = await prisma.user.create({ data: { username: `onebot-test-${suffix}`, passwordHash: "x", role: "ADMIN" }, select: { id: true } });
+  fixtureUserId = user.id;
   await prisma.character.create({
     data: {
       id: characterId,
@@ -1237,6 +1239,11 @@ try {
   await prisma.externalIdentity.deleteMany({ where: { platform: "qq-onebot", platformUid: { in: ["111", "222"] } } }).catch(() => undefined);
   await prisma.character.deleteMany({ where: { id: characterId } }).catch(() => undefined);
   await prisma.platformConnection.deleteMany({ where: { id: connectionId } }).catch(() => undefined);
-  await prisma.user.deleteMany({ where: { username: { startsWith: "onebot-test-" } } }).catch(() => undefined);
+  if (fixtureUserId) {
+    await prisma.user.deleteMany({ where: { id: fixtureUserId, username: `onebot-test-${suffix}` } }).catch(() => {
+      console.error("OneBot 测试账号清理失败，请按本轮 fixture ID 检查关联数据。");
+      process.exitCode = 1;
+    });
+  }
   await prisma.$disconnect();
 }

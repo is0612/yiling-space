@@ -19,6 +19,7 @@ definePageMeta({
 });
 
 const route = useRoute();
+const { isAdmin } = useAuthSession();
 // setup 里同步捕获本次 SSR 的请求实例，之后在事件回调里复用。
 const chatApi = createChatApi(useApiRequest());
 const characters = useCharacterList();
@@ -49,6 +50,8 @@ const sending = ref(false);
 const pendingRequestKey = ref<string | null>(null);
 const pendingRequestContent = ref<string | null>(null);
 const pendingRequestConversationId = ref<string | null>(null);
+const pendingRequestLocalTaskId = ref<string | null>(null);
+const continuation = ref<{ id: string; message: string; conversationId: string; characterId: string } | null>(null);
 const exporting = ref(false);
 const chatSessionState = createChatSessionState();
 const messagePanel = ref<HTMLElement | null>(null);
@@ -469,6 +472,15 @@ function onComposerKeydown(evt: Event | KeyboardEvent) {
   void sendMessage();
 }
 
+function continueLocalTask(task: { id: string; title: string }) {
+  if (sending.value || loading.value || !conversationId.value || !id.value || conversationView.value !== "ACTIVE") return;
+  if (draft.value.trim()) { ElMessage.info("请先发送或保存输入框里的内容，再继续任务。"); return; }
+  const message = `继续任务「${task.title}」。请先读取已有执行结果，不重复完成的操作；若还有下一步，请提出需要我审批的申请。若已完成，只说明结果，等我验收。`;
+  continuation.value = { id: task.id, message, conversationId: conversationId.value, characterId: id.value };
+  draft.value = message;
+  void sendMessage();
+}
+
 async function sendMessage() {
   const content = draft.value.trim();
   if (!content || sending.value) return;
@@ -481,14 +493,19 @@ async function sendMessage() {
     return;
   }
 
+  const localTaskId = continuation.value?.message === content && continuation.value.conversationId === conversationId.value
+    && continuation.value.characterId === id.value ? continuation.value.id : null;
+  if (!localTaskId) continuation.value = null;
   if (
     !pendingRequestKey.value ||
+    pendingRequestLocalTaskId.value !== localTaskId ||
     pendingRequestContent.value !== content ||
     pendingRequestConversationId.value !== conversationId.value
   ) {
     pendingRequestKey.value = crypto.randomUUID();
     pendingRequestContent.value = content;
     pendingRequestConversationId.value = conversationId.value;
+    pendingRequestLocalTaskId.value = localTaskId;
   }
   const requestKey = pendingRequestKey.value;
   const targetConversationId = conversationId.value;
@@ -503,11 +520,14 @@ async function sendMessage() {
       requestKey,
       message: content,
       conversationId: targetConversationId,
+      ...(localTaskId ? { localTaskId } : {}),
     });
     if (!chatSessionState.isCurrent(ticket, requestContext())) return;
     pendingRequestKey.value = null;
     pendingRequestContent.value = null;
     pendingRequestConversationId.value = null;
+    pendingRequestLocalTaskId.value = null;
+    continuation.value = null;
 
     conversationId.value = result.conversationId;
     messages.value.push(result.userMessage, result.assistantMessage);
@@ -558,7 +578,6 @@ watch(id, (next, previous) => {
         {{ modelConfigured ? character?.chatModel || "模型已配置" : "模型未配置" }}
         <span class="model-chip-go">{{ modelConfigured ? "设置" : "去设置" }}</span>
       </button>
-      <span class="chat-character-hint">角色可在左侧栏切换</span>
     </div>
 
     <div
@@ -822,6 +841,16 @@ watch(id, (next, previous) => {
             </article>
           </template>
 
+          <ChatLocalResults
+            v-if="isAdmin && id && conversationId && !loading"
+            :key="`${id}:${conversationId}`"
+            :character-id="id"
+            :conversation-id="conversationId"
+            :revision="messages.length"
+            :disabled="sending || loading || conversationView !== 'ACTIVE'"
+            @continue-task="continueLocalTask"
+          />
+
           <div
             v-if="sending"
             class="thinking"
@@ -901,7 +930,6 @@ watch(id, (next, previous) => {
 .chat-character-context{display:flex;flex:none;align-items:center;gap:10px;margin:0 0 12px;padding:0 4px}
 .chat-character-avatar{width:30px;height:30px;border-radius:9px;font-size:12px;font-weight:700}
 .chat-character-context>strong{color:var(--text);font-size:14px;font-weight:650}
-.chat-character-hint{color:var(--dim);font-size:12px}
 
 
 /* 模型状态：按角色配置的，所以挂在角色这一行；可点进设置 */
@@ -1000,11 +1028,13 @@ watch(id, (next, previous) => {
 /* ── 输入区 ────────────────────────────────────────── */
 /* 凹下去的一块画布色：和整个 App 的「白砖浮在画布上」同一套明度差，
    比再加一条分隔线更像这个项目的东西 */
-.composer{flex:none;margin:0 16px 16px;border-radius:10px;background:var(--bg);padding:10px 12px 10px}
-.composer :deep(.el-textarea__inner){border-radius:8px;background:var(--surface);box-shadow:0 0 0 1px var(--line) inset;padding:9px 11px;font-size:14px;line-height:1.7}
-.composer :deep(.el-textarea__inner:focus){box-shadow:0 0 0 1px var(--brand) inset}
+/* 输入区是一张白卡：输入框、提示、发送都在同一块面上，不再「灰托盘里套一个白框」 */
+.composer{flex:none;margin:0 16px 16px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:8px 10px;transition:border-color .14s var(--ease)}
+.composer:focus-within{border-color:var(--brand-line)}
+.composer :deep(.el-textarea__inner){border:0;border-radius:0;background:transparent;box-shadow:none;padding:6px 4px;font-size:14px;line-height:1.7}
+.composer :deep(.el-textarea__inner:focus){box-shadow:none}
 .composer-note{display:flex;align-items:center;gap:6px;margin-bottom:8px;color:var(--text-2);font-size:12px;line-height:1.6}
-.composer-note .el-icon{flex:none;color:var(--amber);font-size:13px}
+.composer-note .el-icon{flex:none;color:var(--amber);font-size: 14px}
 .composer-note.is-warn{color:var(--text-2)}
 .composer-note-link{border:0;background:none;padding:0;color:var(--brand-strong);font-size:12px;font-weight:600;cursor:pointer}
 .composer-note-link:hover{text-decoration:underline}

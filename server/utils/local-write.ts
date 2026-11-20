@@ -7,7 +7,7 @@ import {
   validateLocalWritablePath,
   type LocalObserveRoot,
 } from "./local-observe";
-import { lockLocalTaskForApproval, recordWriteReadback } from "./local-tasks";
+import { attachContinuationWrite, lockLocalTaskForApproval, recordWriteReadback } from "./local-tasks";
 import { getPrisma } from "./prisma";
 
 export const LOCAL_WRITE_MAX_BYTES = 32 * 1024;
@@ -22,6 +22,7 @@ export type LocalWriteRequestInput = {
   characterId?: string;
   conversationId?: string;
   taskId?: string;
+  avoidCompletedDuplicate?: boolean;
   /** A chat proposal owns a new task; neither is saved without the other. */
   taskPlan?: { title: string; goal: string; acceptance: string };
 };
@@ -60,6 +61,11 @@ export async function createLocalWriteRequest(input: LocalWriteRequestInput) {
   }
   const request = await getPrisma().$transaction(async tx => {
     await lockLocalTaskForApproval(tx, input.taskId, input.actorId);
+    if (input.avoidCompletedDuplicate && input.taskId) {
+      const duplicate = await tx.localWriteRequest.findFirst({ where: { taskId: input.taskId, rootId: root.id,
+        relativePath: target.relative, content: input.content, status: { in: ["PENDING", "APPROVING", "APPLIED"] } }, select: { id: true } });
+      if (duplicate) throw new LocalObserveError(409, "这项相同写入已经申请或完成，不要重复执行。");
+    }
     const taskId = plan ? (await tx.localTask.create({ data: {
       title: plan.title.trim().slice(0, 200), goal: plan.goal.trim().slice(0, 4000),
       plan: `1. 审批后写入 ${target.relative}\n2. 读回文件，核对是否与批准的内容一致\n\n验收标准：${plan.acceptance.trim().slice(0, 1000)}`,
@@ -77,6 +83,7 @@ export async function createLocalWriteRequest(input: LocalWriteRequestInput) {
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(taskId ? { taskId } : {}),
     } });
+    if (input.avoidCompletedDuplicate && taskId) await attachContinuationWrite(tx, taskId, created.id, target.relative);
     if (taskId) await tx.localTask.update({ where: { id: taskId }, data: {
       status: "WAITING_APPROVAL",
       ...(plan ? { steps: [

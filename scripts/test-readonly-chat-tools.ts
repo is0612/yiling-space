@@ -118,6 +118,10 @@ try {
   assert.match(await localTools.call("read_local_file", '{"root":"project"}'), /invalid_arguments/);
   assert.match(await localTools.call("list_local_roots", '{"extra":"x"}'), /invalid_arguments/);
   assert.match(await localTools.call("propose_file_write", '{"root":"project","path":"a.txt","content":"x","reason":"test"}'), /PENDING_APPROVAL/);
+  const resumeTools = createReadOnlyChatTools({ readLocalTask: async () => ({ id: "current", status: "RUNNING", completed: ["write"] }) });
+  assert.match(await resumeTools.call("read_current_local_task", "{}"), /current/);
+  assert.match(await resumeTools.call("read_current_local_task", '{"taskId":"another"}'), /invalid_arguments/);
+  assert.match(await createReadOnlyChatTools({}).call("read_current_local_task", "{}"), /invalid_tool_call/);
   const taskTools = createReadOnlyChatTools({ createLocalTask: async () => ({ taskId: "t1" }) });
   assert.equal(taskTools.definitions.length, 2);
   assert.match(await taskTools.call("create_local_task", '{"title":"t","goal":"g","plan":"p"}'), /t1/);

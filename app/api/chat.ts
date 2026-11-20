@@ -158,11 +158,12 @@ export function createChatApi(request: ApiRequest) {
     requestKey: string;
     message: string;
     conversationId?: string | null;
+    localTaskId?: string;
   }): Promise<ChatSendResponse> {
     return request<ChatSendResponse>({
       url: chatPath(payload.characterId),
       method: "post",
-      data: { requestKey: payload.requestKey, message: payload.message, conversationId: payload.conversationId ?? undefined },
+      data: { requestKey: payload.requestKey, message: payload.message, conversationId: payload.conversationId ?? undefined, ...(payload.localTaskId ? { localTaskId: payload.localTaskId } : {}) },
     });
   }
 

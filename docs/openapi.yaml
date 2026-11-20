@@ -23,6 +23,67 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /characters/{id}/chat/local-results:
+    get:
+      tags: [Characters]
+      summary: 查询当前桌面会话的本地任务结果
+      description: 仅角色所属管理员；不生成消息、不读取新文件、不调用模型。返回最近 20 个关联任务及已有磁盘核对证据。
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: query, name: conversationId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: 本地任务状态和持久化证据
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tasks, truncated]
+                properties:
+                  truncated: { type: boolean }
+                  tasks:
+                    type: array
+                    maxItems: 20
+                    items:
+                      type: object
+                      required: [id, title, plan, status, writeRequests, evidence, canContinue]
+                      properties:
+                        id: { type: string, format: uuid }
+                        title: { type: string }
+                        plan: { type: string }
+                        status: { type: string }
+                        canContinue: { type: boolean, description: 任务未结束且没有待审批或执行中请求 }
+                        resultNote: { type: string, nullable: true }
+                        createdAt: { type: string, format: date-time }
+                        writeRequests:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id: { type: string, format: uuid }
+                              relativePath: { type: string }
+                              status: { type: string }
+                              appliedAt: { type: string, format: date-time, nullable: true }
+                              error: { type: string, nullable: true }
+                              root:
+                                type: object
+                                properties:
+                                  label: { type: string }
+                        evidence:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id: { type: string, format: uuid }
+                              outcome: { type: string, enum: [PASS, FAIL] }
+                              note: { type: string, description: 执行时持久化的文件位置与读回预览 }
+                              createdAt: { type: string, format: date-time }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 非管理员
+        '404':
+          $ref: '#/components/responses/NotFound'
   /characters/{id}/growth/self-understanding:
     get:
       operationId: getCharacterSelfUnderstanding
@@ -7940,6 +8001,10 @@ components:
       required: [message]
       properties:
         conversationId: { type: string, format: uuid }
+        localTaskId:
+          type: string
+          format: uuid
+          description: 管理员显式续办当前会话未结束的任务；必须同时指定 conversationId。有待审批或执行中请求时拒绝，字段参与幂等指纹。
         requestKey:
           type: string
           format: uuid

@@ -44,6 +44,7 @@ import { requireActor } from "../../../utils/auth";
 import { auditLocalObserve, listLocalDirectory, listLocalObserveRoots, readLocalTextFile, searchLocalProject } from "../../../utils/local-observe";
 import { createLocalWriteRequest } from "../../../utils/local-write";
 import { createLocalTask } from "../../../utils/local-tasks";
+import { readLocalContinuationTask } from "../../../utils/local-chat-results";
 import { createGitBranchRequest, createLocalCommandRequest } from "../../../utils/local-command";
 import { readGitStatus } from "../../../utils/local-git";
 import { resolveObserveRoot } from "../../../utils/local-observe";
@@ -76,10 +77,15 @@ export default defineEventHandler(async (event) => {
   const requestedConversationId = typeof rawConversationId === "string" && rawConversationId
     ? requireUuid(rawConversationId, "会话")
     : null;
+  const localTaskId = body?.localTaskId === undefined ? null : requireUuid(String(body.localTaskId), "本地任务");
+  if (localTaskId) {
+    if (!isAdmin) throw createError({ statusCode: 403, message: "本地任务续办仅限管理员。" });
+    if (!requestedConversationId) throw createError({ statusCode: 400, message: "续办必须指定原会话。" });
+  }
   // Bind a stable idempotency key to the exact user input and target conversation.
   // The hash contains no credentials or model configuration.
   const requestHash = createHash("sha256")
-    .update(JSON.stringify({ message, conversationId: requestedConversationId }))
+    .update(JSON.stringify({ message, conversationId: requestedConversationId, ...(localTaskId ? { localTaskId } : {}) }))
     .digest("hex");
 
   const prisma = getPrisma();
@@ -491,6 +497,13 @@ export default defineEventHandler(async (event) => {
   const turnDetail = createModelTurnDetail(false, [{ content: message, speaker: "主人" }], "web");
   let generated;
   const generationStartedAt = Date.now();
+  if (localTaskId) {
+    if (!existingConversation) throw createError({ statusCode: 404, message: "原会话不存在。" });
+    await readLocalContinuationTask(ownerId, characterId, existingConversation.id, localTaskId);
+  }
+  let continuationRead = false;
+  const requireContinuationRead = () => { if (localTaskId && !continuationRead) throw new Error("续办前必须先调用 read_current_local_task 核对已有结果。"); };
+  const proposedWriteIds: string[] = [];
   const localRootsForTools = isAdmin ? await listLocalObserveRoots(false).catch(() => []) : [];
   const resolveLocalToolRoot = async (value: string) => {
     const root = localRootsForTools.find((item) =>
@@ -499,6 +512,11 @@ export default defineEventHandler(async (event) => {
     return root;
   };
   const localReadOnlyTools = isAdmin ? {
+    ...(localTaskId && existingConversation ? { readLocalTask: async () => {
+      const result = await readLocalContinuationTask(ownerId, characterId, existingConversation.id, localTaskId);
+      continuationRead = true;
+      return result;
+    } } : {}),
     localRoots: async () => localRootsForTools.map(({ id, label, path, mode }) => ({ id, label, path, mode })),
     inspectGit: async (rootValue: string, cwd: string) => {
       const { id } = await resolveLocalToolRoot(rootValue);
@@ -508,6 +526,7 @@ export default defineEventHandler(async (event) => {
       return result;
     },
     createLocalTask: async (title: string, goal: string, plan: string) => {
+      if (localTaskId) throw new Error("当前在续办已有任务，请勿重新建任务。");
       const task = await createLocalTask({
         title, goal, plan, actorId: ownerId, characterId,
         ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
@@ -556,6 +575,9 @@ export default defineEventHandler(async (event) => {
     },
     ...(localRootsForTools.some((root) => root.mode === "READ_WRITE") ? {
       proposeFileWrite: async (rootValue: string, path: string, content: string, reason: string, taskId?: string, acceptance?: string) => {
+        requireContinuationRead();
+        if (localTaskId && taskId && taskId !== localTaskId) throw new Error("续办不能改到其他任务。");
+        taskId ??= localTaskId ?? undefined;
         const root = await resolveLocalToolRoot(rootValue);
         const request = await createLocalWriteRequest({
           rootId: root.id,
@@ -564,12 +586,14 @@ export default defineEventHandler(async (event) => {
           reason,
           actorId: ownerId,
           characterId,
+          avoidCompletedDuplicate: Boolean(localTaskId),
           ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
           ...(taskId ? { taskId } : { taskPlan: {
             title: `写入文件：${path}`, goal: message,
             acceptance: acceptance?.trim() || "文件保存在指定目录，内容与需求一致。",
           } }),
         });
+        proposedWriteIds.push(request.id);
         return {
           status: "PENDING_APPROVAL",
           requestId: request.id,
@@ -579,11 +603,16 @@ export default defineEventHandler(async (event) => {
         };
       },
       proposeGitBranch: async (rootValue: string, cwd: string, branch: string, reason: string) => {
+        requireContinuationRead();
         const root = await resolveLocalToolRoot(rootValue);
-        const request = await createGitBranchRequest({ rootId: root.id, cwd, branch, reason, actorId: ownerId, characterId });
+        const request = await createGitBranchRequest({ rootId: root.id, cwd, branch, reason, actorId: ownerId, characterId,
+          ...(localTaskId ? { taskId: localTaskId } : {}), ...(existingConversation ? { conversationId: existingConversation.id } : {}) });
         return { status: "PENDING_APPROVAL", requestId: request.id, branch };
       },
       proposeCommand: async (rootValue: string, command: string, argsJson: string, cwd: string, reason: string, taskId?: string) => {
+        requireContinuationRead();
+        if (localTaskId && taskId && taskId !== localTaskId) throw new Error("续办不能改到其他任务。");
+        taskId ??= localTaskId ?? undefined;
         const root = await resolveLocalToolRoot(rootValue);
         let args: unknown;
         try {
@@ -910,6 +939,20 @@ export default defineEventHandler(async (event) => {
     await lockActiveDesktopConversationForWrite(tx, {
       id: conversation.id, characterId, memoryScopeId, lastMessageAt: assistantAt,
     });
+    if (proposedWriteIds.length) {
+      const proposals = await tx.localWriteRequest.findMany({
+        where: { id: { in: proposedWriteIds }, actorId: ownerId, characterId, conversationId: null },
+        select: { id: true, taskId: true },
+      });
+      await tx.localWriteRequest.updateMany({
+        where: { id: { in: proposals.map(row => row.id) }, actorId: ownerId, characterId, conversationId: null },
+        data: { conversationId: conversation.id },
+      });
+      await tx.localTask.updateMany({
+        where: { id: { in: proposals.flatMap(row => row.taskId ? [row.taskId] : []) }, actorId: ownerId, characterId, conversationId: null },
+        data: { conversationId: conversation.id },
+      });
+    }
     const userMessage = await tx.message.create({
       data: {
         conversationId: conversation.id,

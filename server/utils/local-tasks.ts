@@ -124,6 +124,24 @@ export async function updateLocalTaskStep(id: string, input: { index: unknown; a
   return getLocalTask(id);
 }
 
+export async function attachContinuationWrite(tx: Prisma.TransactionClient, taskId: string, writeId: string, file: string) {
+  const task = await lockTask(tx, taskId);
+  const steps = taskSteps(task.steps);
+  const requests = await stepRequests(tx, taskId);
+  const index = steps.findIndex(step => stepStatus(step, requests) !== "DONE");
+  const write = { title: `写入 ${file}`, state: "TODO" as const, request: { kind: "write" as const, id: writeId } };
+  const verify = { title: "读回文件，核对保存内容", state: "TODO" as const, verifyWriteId: writeId };
+  if (index === -1) steps.push(write, verify);
+  else {
+    const current = steps[index]!;
+    if (current.state !== "TODO" || current.request || current.verifyWriteId) throw new LocalObserveError(409, "当前步骤需要先处理，不能跳过。");
+    steps[index] = { ...current, request: write.request };
+    steps.splice(index + 1, 0, verify);
+  }
+  if (steps.length > 20) throw new LocalObserveError(409, "步骤已达上限，请建立新任务。");
+  await tx.localTask.update({ where: { id: taskId }, data: { steps } });
+}
+
 export async function recordWriteReadback(tx: Prisma.TransactionClient, taskId: string, writeId: string, actorId: string, result: {
   path: string; matches: boolean; preview?: string; truncated?: boolean;
 }) {
