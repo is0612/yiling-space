@@ -9,6 +9,13 @@ import {
 } from "../server/utils/chat-model-config";
 import { decryptApiKeyWithKey, encryptApiKeyWithKey, isMemoryAssistantApiKeySaved, resolveCharacterApiKey, resolveCharacterMemoryAssistantApiKey } from "../server/utils/credential-encryption";
 
+// 这些断言测的是「完全没配置时」的默认值。本机 .env 里若有 LLM_BASE_URL / LLM_MODEL，
+// 会让默认值随环境漂移：同一个测试在 CI 绿、在开发者机器上红（2026-11-21 全量验证踩到）。
+// 默认值用例不读环境，先清掉，别让环境参与断言。
+delete process.env.LLM_BASE_URL;
+delete process.env.LLM_MODEL;
+delete process.env.LLM_API_KEY;
+
 const defaults = resolveChatModelSettings({}, "ci-default-model");
 assert.equal(defaults.model, "ci-default-model");
 assert.equal(defaults.temperature, 0.7);

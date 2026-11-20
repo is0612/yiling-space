@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { isolatedTestFiles } from "./test-isolation-map.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -18,7 +19,7 @@ try {
   const env = { ...process.env, DATABASE_URL: target.toString(), LLM_API_KEY: "", LLM_MODEL: "" };
   for (const [entry, args] of [
     ["node_modules/prisma/build/index.js", ["migrate", "deploy"]],
-    ["node_modules/tsx/dist/cli.mjs", ["scripts/test-expression-habits-db.ts"]],
+    ...isolatedTestFiles(import.meta.url).map(file => ["node_modules/tsx/dist/cli.mjs", [`scripts/${file}`]] as const),
   ] as const) {
     const result = spawnSync(process.execPath, [entry, ...args], { env, stdio: "inherit" });
     if (result.error) throw result.error;

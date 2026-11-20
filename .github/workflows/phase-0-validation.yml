@@ -126,15 +126,6 @@ jobs:
       - name: 生成 Prisma Client
         run: yarn run db:generate
 
-      - name: 目标与愿望回归
-        run: yarn test:goals && yarn test:goals-page && yarn test:goals-isolated
-
-      - name: 表达习惯与页面回归
-        run: yarn test:expression-habits && yarn test:expression-habits-page && yarn test:expression-habits-isolated
-
-      - name: 偏好系统与页面回归
-        run: yarn test:preferences && yarn test:preferences-page && yarn test:preferences-isolated
-
       - name: 应用初始数据库迁移
         run: yarn run db:migrate:deploy
 
@@ -169,100 +160,8 @@ jobs:
       - name: 样式契约门禁
         run: yarn run check:tokens
 
-      - name: 周期记忆调度单元测试
-        run: yarn run test:scheduler
-
-      - name: 数据库调度器并发与幂等集成测试
-        run: yarn run test:scheduler-db
-
-      - name: AI 记忆来源与输出校验测试
-        run: yarn run test:memory-ai
-
-      - name: 记忆提炼请求凭据隔离测试
-        run: yarn run test:memory-ai-request
-
-      - name: 对话记忆检索测试
-        run: yarn run test:memory-retrieval
-
-      - name: 只读记忆助手检索与权限隔离测试
-        run: yarn run test:memory-assistant
-
-      - name: 忆泡时间解析与去重逻辑测试
-        run: yarn run test:memory-events
-
-      - name: 忆泡落库、去重与软删除数据库集成测试
-        run: yarn run test:memory-events-db
-
-      - name: 日记与手账逻辑与数据库集成测试
-        run: yarn run test:journal && yarn run test:journal-db
-
-      - name: 日记与手账调度 / Worker 链路测试
-        run: yarn run test:journal-flow-db
-
-      - name: 角色模型参数校验测试
-        run: yarn run test:chat-model-config
-
-      - name: 对话模型提示词凭据隔离测试
-        run: yarn run test:chat-reply
-
-      - name: 私人记忆范围隔离测试
-        run: yarn run test:chat-private-memory
-
-      - name: 私人记忆范围数据库隔离测试
-        run: yarn run test:chat-private-memory-db
-
-      - name: 聊天请求幂等性数据库集成测试
-        run: yarn run test:chat-request-idempotency-db
-
-      - name: 管理员登录与会话鉴权单元测试
-        run: yarn run test:auth
-
-      - name: 会话与登录限流数据库集成测试
-        run: yarn run test:auth-db
-
-      - name: 跨平台身份隔离数据库测试
-        run: yarn run test:identity
-
-      - name: QQ 小号（OneBot）渠道端到端测试
-        run: yarn run test:onebot
-
-      - name: QQ 红包事件脱敏诊断测试
-        run: yarn run test:onebot-red-packet-diagnostics
-
-      - name: 渠道消息落库 metadata 测试
-        run: yarn run test:channel-message-metadata
-
-      # 其余纯逻辑/数据库测试：以前只在本地 verify:local 里跑，CI 漏了 30 个。
-      # 合成一条，避免 workflow 里堆三十个 step，也避免和 verify:local 漂移。
-      - name: 知识文档导入安全解析测试
-        run: yarn run test:knowledge-import
-
-      - name: 知识主题聚类 Worker 数据库与并发集成测试
-        run: yarn run test:knowledge-topic-isolated
-
-      - name: 其余单元与集成测试
-        run: yarn run test:unit-suite
-
-      # 三个 runner 各自建一个一次性数据库、跑完即删，跑的是 23 个连库子测试
-      # （含几个没有独立 npm 命令的 -db 文件）。它们以前两边都没接线，
-      # 2026-11-05 梳理时补上：这些测试写好了却没人跑，等于没写。
-      - name: 一次性数据库隔离测试
-        run: yarn run test:isolated
-
-      - name: 助手协作诊断保存与权限隔离测试
-        run: yarn run test:assistant-collaboration-isolated
-
-      - name: 社交关系任务队列隔离测试
-        run: yarn run test:social-relationship-queue-isolated
-
-      - name: 社交关系评估助手与 AI 执行器隔离测试
-        run: yarn run test:social-relationship-assessment-isolated
-
-      - name: 社交关系人工确认事务隔离测试
-        run: yarn run test:social-relationship-review-isolated
-
-      - name: 统一成长事件中心事务与租约隔离测试
-        run: yarn run test:growth-event-center-isolated
+      - name: 验证共享测试清单
+        run: yarn run check:tests
 
       - name: ESLint 检查
         run: yarn run lint
@@ -303,12 +202,7 @@ jobs:
       - name: 检查 OpenAPI 契约
         run: npx --yes @redocly/cli@latest lint --extends=minimal docs/openapi.yaml
 
-      # 一条命令跑完 package.json 里所有 test:*（185 条，约 20 分钟）。
-      #
-      # 在这之前，上面那批 step 是手写的：197 个 test 脚本里只有 40 个被点名跑过，
-      # 其余 157 个从来没在流水线上出现过 —— 测试写了，但不构成门禁。
-      # 这条跑起来之后，新增测试自动进入 CI，不需要记得回来改 workflow。
-      #
-      # 上面那些同名单条 step 现在是重复的，可以删；先留着是为了让这次改动只做加法。
-      - name: 全部测试（test:all）
+      # 与本地共用 package.json 测试入口及显式隔离父子清单。
+      # 展开组合命令后按具体脚本去重；隔离子测试只由其父运行器执行。
+      - name: 全部测试（共享清单，去重执行）
         run: yarn run test:all

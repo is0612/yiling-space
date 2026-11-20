@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { isolatedTestFiles } from "./test-isolation-map.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -26,8 +27,7 @@ try {
     assert.equal(result.status, 0, `Isolated chat check failed: ${args.join(" ")}`);
   };
   run("node_modules/prisma/build/index.js", ["migrate", "deploy"]);
-  for (const script of ["test-desktop-conversation-db.ts", "test-chat-conversation-delete-db.ts",
-    "test-chat-request-idempotency-db.ts", "test-chat-private-memory-db.ts", "test-web-collaboration-db.ts", "test-prompt-memory-candidates-db.ts", "test-prompt-event-candidates-db.ts"]) {
+  for (const script of isolatedTestFiles(import.meta.url)) {
     run("node_modules/tsx/dist/cli.mjs", [`scripts/${script}`]);
   }
   console.log("Isolated chat checks passed; no business fixtures or paid models were used.");

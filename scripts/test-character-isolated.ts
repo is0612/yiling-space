@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { isolatedTestFiles } from "./test-isolation-map.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -26,11 +27,7 @@ try {
     assert.equal(result.status, 0, `Isolated character check failed: ${args.join(" ")}`);
   };
   run("node_modules/prisma/build/index.js", ["migrate", "deploy"]);
-  for (const script of [
-    "test-character-portable-db.ts",
-    "test-character-sync-root-db.ts",
-    "test-character-delete-db.ts",
-  ]) {
+  for (const script of isolatedTestFiles(import.meta.url)) {
     run("node_modules/tsx/dist/cli.mjs", [`scripts/${script}`]);
   }
   console.log("Isolated character database checks passed; business data was not used for fixtures.");

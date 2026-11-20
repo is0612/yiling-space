@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { isolatedTestFiles } from "./test-isolation-map.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -38,7 +39,7 @@ try {
     assert.equal(result.status, 0, `Isolated check failed: ${args.join(" ")}`);
   };
   run("node_modules/prisma/build/index.js", ["migrate", "deploy"]);
-  run("node_modules/tsx/dist/cli.mjs", ["scripts/test-backfill-social-experiences-db.ts"]);
+  for (const script of isolatedTestFiles(import.meta.url)) run("node_modules/tsx/dist/cli.mjs", [`scripts/${script}`]);
   console.log("Isolated social backfill checks passed; business database was not used for tests.");
 } finally {
   try {

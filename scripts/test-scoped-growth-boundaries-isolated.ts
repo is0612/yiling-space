@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { isolatedTestFiles } from "./test-isolation-map.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -13,7 +14,7 @@ let created = false;
 try {
   await admin.query(`CREATE DATABASE "${name}"`); created = true;
   const env = { ...process.env, DATABASE_URL: target.toString(), LLM_API_KEY: "", LLM_MODEL: "" };
-  for (const args of [["node_modules/prisma/build/index.js", "migrate", "deploy"], ["node_modules/tsx/dist/cli.mjs", "scripts/test-scoped-growth-boundaries-db.ts"]]) {
+  for (const args of [["node_modules/prisma/build/index.js", "migrate", "deploy"], ...isolatedTestFiles(import.meta.url).map(file => ["node_modules/tsx/dist/cli.mjs", `scripts/${file}`])]) {
     const result = spawnSync(process.execPath, args, { env, stdio: "inherit" });
     if (result.error) throw result.error;
     assert.equal(result.status, 0, `Scoped growth isolated check failed: ${args[args.length - 1]}`);
