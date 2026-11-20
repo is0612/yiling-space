@@ -64,6 +64,14 @@ try {
   await assert.rejects(() => readLocalContinuationTask(actor, characterId, first.id, taskId!), { statusCode: 409 });
   await db.localBrowserRequest.update({ where: { id: browserPending.id }, data: { status: "SUCCEEDED" } });
   assert.equal((await readLocalChatResults(actor, characterId, first.id)).tasks[0]?.canContinue, true);
+  const steppedBrowser = await createLocalBrowserRequest({ actorId: actor, characterId, conversationId: first.id, taskId: taskId!,
+    attachStep: true, url: "https://example.com/", actions: [{ kind: "scroll", y: 120 }], reason: "step" });
+  const stepped = await readLocalContinuationTask(actor, characterId, first.id, taskId!).catch(() => null);
+  assert.equal(stepped, null, "A pending browser step blocks continuation until it is approved");
+  const taskWithBrowserStep = await db.localTask.findUniqueOrThrow({ where: { id: taskId! }, select: { steps: true } });
+  assert.ok((taskWithBrowserStep.steps as unknown as { request?: { kind: string } }[]).some(step => step.request?.kind === "browser"));
+  await db.localBrowserRequest.deleteMany({ where: { id: steppedBrowser.id } });
+
   const firstBrowser = await createLocalBrowserRequest({ actorId: actor, characterId, conversationId: first.id,
     url: "https://example.com/", actions: [{ kind: "scroll", y: 200 }], reason: "dedupe" });
   await assert.rejects(() => createLocalBrowserRequest({ actorId: actor, characterId, conversationId: first.id,

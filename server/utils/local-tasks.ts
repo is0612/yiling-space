@@ -49,7 +49,7 @@ function cleanText(value: unknown, max: number, field: string) {
 type LocalTaskStep = {
   title: string;
   state: "TODO" | "DONE" | "FAILED";
-  request?: { kind: "write" | "command"; id: string };
+  request?: { kind: "write" | "command" | "browser"; id: string };
   note?: string;
   verifyWriteId?: string;
 };
@@ -59,7 +59,7 @@ function taskSteps(value: Prisma.JsonValue): LocalTaskStep[] {
   return Array.isArray(value) ? value as unknown as LocalTaskStep[] : [];
 }
 
-function stepStatus(step: LocalTaskStep, requests: { write: Map<string, string>; command: Map<string, string> }, cancelled = false) {
+function stepStatus(step: LocalTaskStep, requests: { write: Map<string, string>; command: Map<string, string>; browser: Map<string, string> }, cancelled = false) {
   if (!step.request) return step.state === "TODO" && cancelled ? "CANCELLED" : step.state;
   const status = requests[step.request.kind].get(step.request.id);
   if (status === "APPLIED" || status === "SUCCEEDED") return "DONE";
@@ -73,7 +73,9 @@ async function stepRequests(tx: Prisma.TransactionClient, taskId: string) {
   const select = { id: true, status: true } as const;
   const writes = await tx.localWriteRequest.findMany({ where, select });
   const commands = await tx.localCommandRequest.findMany({ where, select });
-  return { write: new Map(writes.map(row => [row.id, row.status])), command: new Map(commands.map(row => [row.id, row.status])) };
+  const browsers = await tx.localBrowserRequest.findMany({ where, select });
+  return { write: new Map(writes.map(row => [row.id, row.status])), command: new Map(commands.map(row => [row.id, row.status])),
+    browser: new Map(browsers.map(row => [row.id, row.status])) };
 }
 
 export async function setLocalTaskSteps(id: string, titles: unknown, actorId: string) {
@@ -104,11 +106,13 @@ export async function updateLocalTaskStep(id: string, input: { index: unknown; a
     if (steps.findIndex(item => stepStatus(item, requests) !== "DONE") !== index) throw new LocalObserveError(409, "请先完成前面的步骤。");
     if (action === "link") {
       if (step.request || step.state !== "TODO") throw new LocalObserveError(409, "该步骤已经关联审批或已有结论。");
-      if ((kind !== "write" && kind !== "command") || typeof requestId !== "string"
+      if ((kind !== "write" && kind !== "command" && kind !== "browser") || typeof requestId !== "string"
         || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(requestId)) throw new LocalObserveError(400, "审批请求无效。");
       if (steps.some(item => item.request?.kind === kind && item.request.id === requestId)) throw new LocalObserveError(409, "该请求已关联其他步骤。");
       const where = { id: requestId, taskId: id };
-      const row = kind === "write" ? await tx.localWriteRequest.findFirst({ where }) : await tx.localCommandRequest.findFirst({ where });
+      const row = kind === "write" ? await tx.localWriteRequest.findFirst({ where })
+        : kind === "command" ? await tx.localCommandRequest.findFirst({ where })
+        : await tx.localBrowserRequest.findFirst({ where });
       if (!row) throw new LocalObserveError(404, "只能关联当前任务里的审批请求。");
       step.request = { kind, id: requestId };
     } else if (action === "done" || action === "fail") {
@@ -137,6 +141,23 @@ export async function attachContinuationWrite(tx: Prisma.TransactionClient, task
     if (current.state !== "TODO" || current.request || current.verifyWriteId) throw new LocalObserveError(409, "当前步骤需要先处理，不能跳过。");
     steps[index] = { ...current, request: write.request };
     steps.splice(index + 1, 0, verify);
+  }
+  if (steps.length > 20) throw new LocalObserveError(409, "步骤已达上限，请建立新任务。");
+  await tx.localTask.update({ where: { id: taskId }, data: { steps } });
+}
+
+/** Browser steps carry no readback of their own: the approval result is the evidence. */
+export async function attachContinuationBrowser(tx: Prisma.TransactionClient, taskId: string, requestId: string, label: string) {
+  const task = await lockTask(tx, taskId);
+  const steps = taskSteps(task.steps);
+  const requests = await stepRequests(tx, taskId);
+  const index = steps.findIndex(step => stepStatus(step, requests) !== "DONE");
+  const step = { title: `网页操作 ${label}`.slice(0, 160), state: "TODO" as const, request: { kind: "browser" as const, id: requestId } };
+  if (index === -1) steps.push(step);
+  else {
+    const current = steps[index]!;
+    if (current.state !== "TODO" || current.request || current.verifyWriteId) throw new LocalObserveError(409, "当前步骤需要先处理，不能跳过。");
+    steps[index] = { ...current, request: step.request };
   }
   if (steps.length > 20) throw new LocalObserveError(409, "步骤已达上限，请建立新任务。");
   await tx.localTask.update({ where: { id: taskId }, data: { steps } });
@@ -197,6 +218,7 @@ export async function getLocalTask(id: string) {
         },
       },
       commandRequests: { orderBy: { createdAt: "desc" }, select: { id: true, status: true, command: true, cwd: true, root: { select: { label: true } } } },
+      browserRequests: { orderBy: { createdAt: "desc" }, select: { id: true, status: true, url: true } },
       evidence: { orderBy: { createdAt: "desc" } },
     },
   });
@@ -204,6 +226,7 @@ export async function getLocalTask(id: string) {
   const requests = {
     write: new Map(task.writeRequests.map(row => [row.id, row.status])),
     command: new Map(task.commandRequests.map(row => [row.id, row.status])),
+    browser: new Map(task.browserRequests.map(row => [row.id, row.status])),
   };
   let blocked = false;
   const steps = taskSteps(task.steps).map(step => {

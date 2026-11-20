@@ -1,6 +1,6 @@
 import { executeBrowserActions, parseBrowserActions } from "./browser-actions";
 import { auditLocalObserve, LocalObserveError } from "./local-observe";
-import { appendBrowserEvidence, lockLocalTaskForApproval } from "./local-tasks";
+import { appendBrowserEvidence, attachContinuationBrowser, lockLocalTaskForApproval } from "./local-tasks";
 import { getPrisma } from "./prisma";
 import { validatePublicWebpageUrl } from "./read-public-webpage";
 
@@ -12,6 +12,8 @@ export type LocalBrowserInput = {
   characterId?: string;
   conversationId?: string;
   taskId?: string;
+  /** Continuation mode: record this action as the task's next step. */
+  attachStep?: boolean;
 };
 
 function normalizeUrl(input: unknown) {
@@ -41,7 +43,7 @@ export async function createLocalBrowserRequest(input: LocalBrowserInput) {
       select: { id: true },
     });
     if (duplicate) throw new LocalObserveError(409, "这项相同的网页操作已经在等待批准，不要重复提交。");
-    return tx.localBrowserRequest.create({ data: {
+    const created = await tx.localBrowserRequest.create({ data: {
       url,
       actions,
       reason,
@@ -50,6 +52,10 @@ export async function createLocalBrowserRequest(input: LocalBrowserInput) {
       ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.taskId ? { taskId: input.taskId } : {}),
     } });
+    if (input.attachStep && input.taskId) {
+      await attachContinuationBrowser(tx, input.taskId, created.id, new URL(url).pathname || "/");
+    }
+    return created;
   });
   auditLocalObserve(input.actorId, "browser.request", { requestId: request.id, origin: new URL(url).origin, steps: actions.length });
   return request;

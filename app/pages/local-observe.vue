@@ -61,8 +61,9 @@ type LocalTask = {
 };
 
 type LocalTaskDetail = LocalTask & {
-  steps: Array<{ title: string; status: string; note?: string; verifyWriteId?: string; request?: { kind: "write" | "command"; id: string } }>;
+  steps: Array<{ title: string; status: string; note?: string; verifyWriteId?: string; request?: { kind: "write" | "command" | "browser"; id: string } }>;
   commandRequests: Array<{ id: string; command: string; status: string; cwd: string; root: { label: string } }>;
+  browserRequests: Array<{ id: string; url: string; status: string }>;
   writeRequests: Array<{
     id: string;
     relativePath: string;
@@ -623,6 +624,7 @@ const availableStepRequests = computed(() => {
   return [
     ...task.writeRequests.map(row => ({ value: `write:${row.id}`, label: `写文件 · ${row.root.label}/${row.relativePath} · ${row.status}` })),
     ...task.commandRequests.map(row => ({ value: `command:${row.id}`, label: `命令 · ${row.root.label} / ${row.command} · ${row.status}` })),
+    ...(task.browserRequests ?? []).map((row) => ({ value: `browser:${row.id}`, label: `网页 · ${row.url} · ${row.status}` })),
   ].filter(entry => !linked.has(entry.value));
 });
 const stepLabels: Record<string, string> = {

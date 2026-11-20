@@ -531,6 +531,7 @@ export default defineEventHandler(async (event) => {
       try { actions = JSON.parse(actionsJson || "[]"); } catch { throw new Error("actions 必须是 JSON 数组。"); }
       const request = await createLocalBrowserRequest({
         url, actions, reason, actorId: ownerId, characterId,
+        attachStep: Boolean(localTaskId),
         ...(existingConversation?.id ? { conversationId: existingConversation.id } : {}),
         ...(taskId ?? localTaskId ? { taskId: taskId ?? localTaskId! } : {}),
       });
