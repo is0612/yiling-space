@@ -1483,7 +1483,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [chat, channel, snapshot, events, journal, proactive, vision, sticker-label, catchphrase-mine, memory-assistant, context-assistant, other]
+            enum: [chat, channel, snapshot, events, journal, proactive, vision, sticker-label, catchphrase-mine, memory-assistant, context-assistant, knowledge-assistant, roleplay-chat, roleplay-summary, other]
         - name: model
           in: query
           description: 精确匹配已记录模型名，不能为空白。
