@@ -2112,7 +2112,7 @@ model InteractionExperienceActivation {
   @@map("interaction_experience_activation")
 }
 
-/// 本地观察授权目录。mode 目前只有 READ_ONLY；写权限后续单独加审批。
+/// 本地观察授权目录。READ_WRITE 只表示「可以提议」；写文件、命令、网页操作仍各自需要管理员批准。
 model LocalAccessRoot {
   id String @id @default(uuid()) @db.Uuid
   path String @unique @db.VarChar(1000)

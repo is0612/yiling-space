@@ -189,6 +189,7 @@ yarn onebot:stack
 - [互动经验](docs/interaction-experiences.md) · [表达习惯](docs/expression-habits.md) · [社交系统](docs/social-relationship-system.md) — 私聊教育如何经审核变成跨场景可用的抽象规则。
 - [教育跨场景迁移验收](docs/education-transfer-acceptance.md) — 2026-11-15 的工程回归：迁移、测试、八条安全边界与遗留项。
 - [QQ 空间](docs/qq-qzone.md) — 发说说、看好友动态、评论别人的说说（草稿 + 确认）。
+- [本地观察与执行](docs/local-observe.md) — 授权目录、写文件/命令/Git 审批、任务与验收、浏览器只读观察与两阶段填表提交。
 - [角色卡导入导出](docs/character-card.md) · [跨平台身份](docs/cross-platform-identity.md)。
 - [数据模型](docs/data-model.md) · [Prisma Schema](prisma/schema.prisma) · [OpenAPI 契约](docs/openapi.yaml)。
 
