@@ -89,6 +89,37 @@ export function isQzoneAutoAskTime(
   return false;
 }
 
+/**
+ * 主动问的软闸门：安静时段 + 最短间隔。
+ *
+ * 固定时间点只回答「今天哪几刻可以问」，回答不了「昨晚刚问过，今早还要不要再问一次」。
+ * 所以再加两条更保守的默认：夜间 23:00–08:00 不问；两次主动问至少隔 3 小时。
+ * 先写成常量，真要按角色调再升成配置。
+ */
+export const QZONE_AUTO_QUIET_FROM = 23 * 60;
+export const QZONE_AUTO_QUIET_TO = 8 * 60;
+export const QZONE_AUTO_MIN_INTERVAL_MINUTES = 180;
+
+export function isQzoneQuietHour(now: Date, fromMinutes = QZONE_AUTO_QUIET_FROM, toMinutes = QZONE_AUTO_QUIET_TO): boolean {
+  const current = clockMinutesCst(now);
+  // 跨零点：23:00–08:00 是「>= 23:00 或 < 08:00」，不是 between。
+  return fromMinutes <= toMinutes ? (current >= fromMinutes && current < toMinutes) : (current >= fromMinutes || current < toMinutes);
+}
+
+export function evaluateQzoneAutoAskTiming(input: {
+  now: Date;
+  lastAskedAt?: Date | null;
+  minIntervalMinutes?: number;
+}): { allowed: boolean; reason: string } {
+  if (isQzoneQuietHour(input.now)) return { allowed: false, reason: "quiet_hours" };
+  const minInterval = input.minIntervalMinutes ?? QZONE_AUTO_MIN_INTERVAL_MINUTES;
+  if (input.lastAskedAt && minInterval > 0) {
+    const elapsed = (input.now.getTime() - input.lastAskedAt.getTime()) / 60_000;
+    if (elapsed < minInterval) return { allowed: false, reason: "too_soon" };
+  }
+  return { allowed: true, reason: "ok" };
+}
+
 /** 当天（东八区）已经主动问了几次。落在 `onebot_qzone_actions` 里按「主动」标记统计。 */
 export async function countQzoneAutoAskedToday(connectionId: string): Promise<number> {
   const prisma = getPrisma();
@@ -107,6 +138,16 @@ export async function countQzoneAutoAskedToday(connectionId: string): Promise<nu
       createdAt: { gte: dayStart },
     },
   });
+}
+
+/** 最近一次主动问的时间；没有就问 null。 */
+export async function latestQzoneAutoAskedAt(connectionId: string): Promise<Date | null> {
+  const row = await getPrisma().onebotQzoneAction.findFirst({
+    where: { connectionId, topic: { contains: "主动" } },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+  return row?.createdAt ?? null;
 }
 
 function buildAutoAskSystemPrompt(characterName: string, persona: string, styleExamples: string): string {
@@ -396,6 +437,8 @@ const QZONE_AUTO_REASON_LABELS: Record<string, string> = {
   pending_exists: "已经有一条待确认的空间动作",
   not_scheduled: "没到设定的时间点",
   daily_limit: "今天已经问够次数了",
+  quiet_hours: "现在是她不该打扰你的时段（23:00–08:00）",
+  too_soon: "距离上次主动问还不到 3 小时",
   ok: "已经问她同不同意了",
 };
 
@@ -438,6 +481,16 @@ export async function runQzoneAutoTick(): Promise<QzoneAutoTickResult[]> {
     const askedToday = await countQzoneAutoAskedToday(candidate.connectionId);
     if (candidate.qzoneAutoAskDailyMax > 0 && askedToday >= candidate.qzoneAutoAskDailyMax) {
       results.push(skip("daily_limit"));
+      continue;
+    }
+
+    // 软闸门：深夜不问；距上次主动问不到 3 小时也不问。
+    const timing = evaluateQzoneAutoAskTiming({
+      now: new Date(),
+      lastAskedAt: await latestQzoneAutoAskedAt(candidate.connectionId),
+    });
+    if (!timing.allowed) {
+      results.push(skip(timing.reason));
       continue;
     }
 

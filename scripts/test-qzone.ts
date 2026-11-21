@@ -22,6 +22,8 @@ import {
 import {
   evaluateQzoneAutoGate,
   isQzoneAutoAskTime,
+  evaluateQzoneAutoAskTiming,
+  isQzoneQuietHour,
   parseQzoneAutoAsk,
 } from "../server/utils/channel-adapter/onebot/qzone-proactive";
 import { readClockMinutes } from "../server/utils/proactive-settings";
@@ -217,6 +219,25 @@ assert.equal(readClockMinutes("25:00"), null);
 // 到点判定：容差 5 分钟窗口内算到点。
 const at = (h: number, m: number) => new Date(Date.UTC(2026, 10, 2, h - 8, m)); // 构造东八区 h:m
 assert(isQzoneAutoAskTime(at(12, 0), ["12:00"]), "整点到点。");
+
+// 软闸门：安静时段 + 最短间隔。夜间跨零点要判对，不能写成 between。
+assert.equal(isQzoneQuietHour(at(23, 30)), true, "23:30 属于安静时段");
+assert.equal(isQzoneQuietHour(at(3, 0)), true, "凌晨 3 点属于安静时段");
+assert.equal(isQzoneQuietHour(at(7, 59)), true, "07:59 还在安静时段里");
+assert.equal(isQzoneQuietHour(at(8, 0)), false, "08:00 起可以问");
+assert.equal(isQzoneQuietHour(at(12, 0)), false);
+assert.equal(isQzoneQuietHour(at(22, 59)), false, "23 点之前不算");
+
+const noon = at(12, 0);
+assert.equal(evaluateQzoneAutoAskTiming({ now: noon, lastAskedAt: null }).allowed, true, "没问过就放行");
+assert.equal(evaluateQzoneAutoAskTiming({ now: noon, lastAskedAt: new Date(noon.getTime() - 60 * 60 * 1000) }).reason, "too_soon",
+  "距上次不到 3 小时不问");
+assert.equal(evaluateQzoneAutoAskTiming({ now: noon, lastAskedAt: new Date(noon.getTime() - 3 * 60 * 60 * 1000) }).allowed, true,
+  "满 3 小时可以再问");
+assert.equal(evaluateQzoneAutoAskTiming({ now: at(2, 0), lastAskedAt: null }).reason, "quiet_hours", "深夜不问，哪怕从没问过");
+assert.equal(evaluateQzoneAutoAskTiming({ now: noon, lastAskedAt: noon, minIntervalMinutes: 0 }).allowed, true,
+  "间隔设 0 等于不限制");
+assert.equal(evaluateQzoneAutoAskTiming({ now: noon, lastAskedAt: noon, minIntervalMinutes: 300 }).reason, "too_soon");
 assert(isQzoneAutoAskTime(at(12, 4), ["12:00"]), "到点后 4 分钟还在容差内。");
 assert(!isQzoneAutoAskTime(at(12, 6), ["12:00"]), "超过容差就错过这次。");
 assert(!isQzoneAutoAskTime(at(11, 59), ["12:00"]), "到点前不算。");
