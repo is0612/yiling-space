@@ -131,6 +131,20 @@ export function parseEventParticipantIdQuery(query: string): string | null {
   return match?.[1] ?? null;
 }
 
+/** 从结构化引用里取出记那一刻的显示名：改名之后，问旧名字还能找到。 */
+function refDisplayNamesOf(event: EventCandidate): string[] {
+  const refs = event.participantRefs;
+  if (!Array.isArray(refs)) return [];
+  const names: string[] = [];
+  for (const ref of refs) {
+    if (!ref || typeof ref !== "object") continue;
+    const record = ref as Record<string, unknown>;
+    const name = typeof record.displayName === "string" ? record.displayName.trim() : "";
+    if (name) names.push(name);
+  }
+  return names;
+}
+
 /** 从结构化引用里取出所有外部账号 id。引用是 JSON 列，读坏了就当没有。 */
 function externalIdsOf(event: EventCandidate): string[] {
   const refs = event.participantRefs;
@@ -224,10 +238,13 @@ export function selectEventsForPrompt<T extends EventCandidate>(
   const wantedIds = new Set(options.participantIds ?? []);
   if (participant && (participant.length >= 2 || wantedIds.size > 0)) {
     const wanted = normalize(participant);
-    const byName = events.filter((event) => event.participants.some((person) => {
-      const name = normalize(person);
+    const matchesName = (raw: string) => {
+      const name = normalize(raw);
       return name.length >= 2 && (name.includes(wanted) || wanted.includes(name));
-    }));
+    };
+    const byName = events.filter((event) =>
+      // 先看当前显示名，再看引用里记的历史名字：群名片改成「小刚」之后，问「小明」也得找得到。
+      event.participants.some(matchesName) || refDisplayNamesOf(event).some(matchesName));
     const byAccount = wantedIds.size
       ? events.filter((event) => externalIdsOf(event).some((id) => wantedIds.has(id)))
       : [];

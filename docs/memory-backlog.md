@@ -34,7 +34,9 @@
 - `participantRefs` 的 external 项带 `displayName`；
 - 存量 `yarn backfill:participants --apply` 清洗 75 条（剔自己），泛称剩 35 条无证据可补。
 
-**仍可做**：`sourceMessageIds` 为空的旧忆泡补不出名字（没有反查入口）；改名后按旧昵称检索仍靠 `participants`，没走 `displayName`。
+**仍可做**：`sourceMessageIds` 为空的旧忆泡补不出名字（没有反查入口）。
+
+**已落地（2026-11-21）**：按人检索现在同时匹配当前显示名与 `participantRefs.displayName` —— 群名片改成新名字之后，问旧名字照样找得到（回归在 `test:memory-events`）。边界：单字昵称仍按既有规则不参与按人过滤；引用为空的老忆泡没有历史名字可查；候选层（`prompt-event-candidates.ts`）在历史超过 200 条时按名字补查只覆盖 `participants`，还没按引用里的历史名字补查。
 
 ## P1 · 参与者身份引用（原始方案，留档）
 

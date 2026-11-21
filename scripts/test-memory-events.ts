@@ -681,10 +681,32 @@ const byRenamedAccount = selectEventsForPrompt("和鱼小刚都聊过什么", re
 assert.equal(byRenamedAccount.mode, "participant", "解析出账号后，新名字也能查到旧名记下的忆泡");
 assert.deepEqual(byRenamedAccount.items.map((item) => item.id), ["n1"]);
 
-const byOldName = selectEventsForPrompt("和青都聊过什么", renamed, {
+const byOldName = selectEventsForPrompt("和青禾都聊过什么", renamed, {
   now, timeZone: TZ, participantIds: ["100001"],
 });
 assert.deepEqual(byOldName.items.map((item) => item.id), ["n1"], "名字与账号命中同一条时不能重复出现");
+
+// 改名之后：忆泡里存的是新名字，引用里留着旧名字；问旧名字也要找得到。
+const renamedWithHistory = [
+  {
+    id: "h1", title: "陪鱼小刚看完比赛", detail: "聊到很晚",
+    occurredAt: new Date("2026-11-05T12:00:00+08:00"), participants: ["鱼小刚"], keywords: ["比赛"],
+    participantRefs: [{ kind: "external", platform: "qq-onebot", externalId: "100001", displayName: "青禾" }],
+  },
+];
+const byOldDisplayName = selectEventsForPrompt("和青禾都聊过什么", renamedWithHistory, { now, timeZone: TZ });
+assert.equal(byOldDisplayName.mode, "participant", "问旧名字也要按人过滤，不能退化成关键词碰运气");
+assert.deepEqual(byOldDisplayName.items.map((item) => item.id), ["h1"], "历史显示名要能命中断言");
+assert.deepEqual(
+  selectEventsForPrompt("和青禾都聊过什么", renamedWithHistory, { now, timeZone: TZ, participantIds: ["100001"] }).items.map((item) => item.id),
+  ["h1"],
+  "账号与历史名字命中同一条时不能重复出现",
+);
+assert.equal(
+  selectEventsForPrompt("和青禾都聊过什么", [{ ...renamedWithHistory[0]!, participantRefs: [] }], { now, timeZone: TZ }).items.length,
+  0,
+  "没有引用就只剩当前显示名，问旧名字命中不了——这是既有边界，不该被伪装成能查到",
+);
 
 const unrelatedAccount = selectEventsForPrompt("和鱼小刚都聊过什么", renamed, {
   now, timeZone: TZ, participantIds: ["999999"],
