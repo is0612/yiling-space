@@ -1,67 +1,9 @@
+// 日记/手账的响应形状与后端共用（`shared/types/journal.ts`）；请求类型留在本文件。
 import type { ApiRequest } from "../utils/request";
-
-export type JournalKind = "DIARY" | "HANDBOOK";
-
-export type JournalListItem = {
-  id: string;
-  dayKey: string;
-  status: "ACTIVE" | "SKIPPED";
-  diaryTitle: string | null;
-  diaryFirstLine: string;
-  handbookQuote: string | null;
-  diaryVersion: number;
-  handbookVersion: number;
-  updatedAt: string;
-};
-
-export type JournalRevision = {
-  id: string;
-  kind: JournalKind;
-  version: number;
-  title: string | null;
-  content: string;
-  thought: string | null;
-  quote: string | null;
-  tags: string[];
-  sourceDiaryRevisionId: string | null;
-  sourceDiaryVersion: number | null;
-  revisionType: string;
-  promptVersion: string | null;
-  model: string | null;
-  editedByUserId: string | null;
-  createdAt: string;
-  sources: { messages: number; events: number };
-};
-
-export type JournalDetail = {
-  id: string;
-  dayKey: string;
-  status: "ACTIVE" | "SKIPPED";
-  skipReason: string | null;
-  createdAt: string;
-  updatedAt: string;
-  diaryState: "PENDING" | "GENERATED" | "SKIPPED";
-  handbookState: "PENDING" | "GENERATED" | "SKIPPED";
-  diaryDecidedAt: string | null;
-  handbookDecidedAt: string | null;
-  revisionCounts: { diary: number; handbook: number };
-  diary: JournalRevision | null;
-  handbook: JournalRevision | null;
-};
-
-export type JournalPage = {
-  items: JournalListItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  hasMore: boolean;
-  timeZone: string;
-  todayKey: string;
-  yesterdayKey: string;
-};
-
-export type JournalWriteResult = { status: string; reason?: string };
+import type {
+  JournalDetail, JournalKind, JournalListItem, JournalPage, JournalRevision, JournalWriteResult,
+} from "#shared/types/journal";
+export type * from "#shared/types/journal";
 
 export type ListJournalsReq = {
   characterId: string;
