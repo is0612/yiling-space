@@ -3,6 +3,7 @@ import type { Character, Snapshot, SnapshotDetail, SnapshotSourceMessage } from 
 import type { MemoryProgressRow } from "../composables/useMemoryProgress";
 // 记忆条目的形状与枚举与后端共用一份（`shared/types/memory.ts`）；页面沿用 `MemoryRow` 这个名字。
 import type { MemoryCategory, MemoryItem, MemoryPage } from "#shared/types/memory";
+import type { SnapshotPage } from "#shared/types/snapshot";
 export type { MEMORY_CATEGORIES, MEMORY_STATUSES, MEMORY_SCOPE_TYPES, MemoryCategory, MemoryItem, MemoryPage } from "#shared/types/memory";
 export type MemoryRow = MemoryItem;
 
@@ -223,25 +224,9 @@ export type MemoryEventDuplicatePayload = {
   pairsLimited: boolean;
 };
 
-export type SnapshotPage = {
-  items: Snapshot[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  counts: { automatic: number; manual: number; current: number; superseded: number };
-  stats: { messages: number; latestDate: string | null; automatic: number; manual: number };
-};
+// 分页形状与后端共用（`shared/types/snapshot.ts`）。
+export type { SnapshotPage, SnapshotSourcePage } from "#shared/types/snapshot";
 
-export type SnapshotSourcePage = {
-  items: SnapshotSourceMessage[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
-
-/** `snapshots/generate`：手动触发一次阶段总结。 */
 export type SnapshotGenerateResult = {
   queued: string[];
   skipped: string[];

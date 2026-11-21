@@ -1,4 +1,4 @@
-import type { SnapshotAnalysis } from "../../app/utils/mock-data";
+import type { Snapshot, SnapshotDetail } from "../../shared/types/snapshot";
 
 /**
  * 快照的两种视图：列表只给「一行能显示的字段」，详情才带 AI 提炼结果。
@@ -7,39 +7,11 @@ import type { SnapshotAnalysis } from "../../app/utils/mock-data";
  * 一页 10 份就可能上兆。现在列表只留计数（消息数、事件数、待审核条数），
  * 点开某一版才去取详情，「来源消息与原文」再单独分页拉。
  */
-export type MemorySnapshotSummaryDto = {
-  id: string;
-  /** 自动归档的序号；手动存档恒为 0，不进「第 N 份」序列 */
-  number: number;
-  /** 列表与详情的标题：自动归档「第 N 份」，手动存档「存档」 */
-  label: string;
-  version: number;
-  date: string;
-  range: string;
-  summary: string;
-  events: number;
-  messages: number;
-  status: "当前版本" | "已被替代";
-  statusTone: "green" | "gray";
-  kind: "AUTOMATIC" | "MANUAL";
-  generatedBy?: string;
-  model?: { name?: string; provider?: string; promptTemplateVersion?: string };
-  /** 模型提出、但没过 confidence/来源校验被丢弃的长期记忆变化条数 */
-  reviewRejected?: number;
-  /** 重新提炼留下的、还没人处置的审核建议条数（列表角的「待审核 N」） */
-  pendingReview: number;
-};
+/** 列表行 = 共享契约的 `Snapshot`；别名保留，避免改一圈调用方。 */
+export type MemorySnapshotSummaryDto = Snapshot;
 
-export type MemorySnapshotDetailDto = MemorySnapshotSummaryDto & {
-  analysis?: SnapshotAnalysis;
-  /**
-   * 依据消息 id → 它在来源列表里的序号（1 起）。
-   *
-   * 来源消息改成翻页后，前端手里只有当前这一页，没法再从数组下标推算「#3」。
-   * 序号由服务端按全量顺序算好给出来，翻到第几页都指同一条。
-   */
-  evidenceIndex: Record<string, number>;
-};
+/** 详情 = 共享契约的 `SnapshotDetail`。 */
+export type MemorySnapshotDetailDto = SnapshotDetail;
 
 type SnapshotReview = {
   changeIndex: number;

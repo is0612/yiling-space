@@ -179,71 +179,16 @@ export type TimelineEntry = {
   importance?: number;
 };
 
-export type SnapshotAnalysis = {
-  importantEvents: Array<{ title: string; detail: string; evidenceMessageIds: string[] }>;
-  factAndPreferenceChanges: Array<{ description: string; changeType: string; evidenceMessageIds: string[] }>;
-  relationshipChanges: Array<{ description: string; evidenceMessageIds: string[] }>;
-  goalsAndCommitments: Array<{ description: string; status: string; evidenceMessageIds: string[] }>;
-  unresolvedTopics: Array<{ description: string; evidenceMessageIds: string[] }>;
-  differencesFromPrevious: string[];
-  memoryChangesApplied: Array<{
-    action: string;
-    result: string;
-    category?: string;
-    content?: string;
-    memoryItemId?: string;
-    supersededMemoryId?: string;
-    /** 被这条建议指向的旧记忆当前的内容 / 类别，用来做「改成什么 vs 现在是什么」的对照 */
-    supersededCategory?: string;
-    supersededContent?: string;
-    confidence?: number;
-    evidenceMessageIds?: string[];
-    /** 人工处置结果；undefined 表示还没人处理过 */
-    reviewDecision?: "ACCEPTED" | "IGNORED";
-    reviewMemoryItemId?: string;
-    reviewOutcome?: string;
-  }>;
-};
+// 快照相关形状统一放在 shared 契约里；这里 re-export 保持既有 import 路径可用，
+// 同时服务端不再需要反过来 import 前端的 mock-data。
+export type {
+  Snapshot,
+  SnapshotAnalysis,
+  SnapshotDetail,
+  SnapshotSourceMessage,
+} from "#shared/types/snapshot";
 
-export type SnapshotSourceMessage = {
-  /** 在整份来源里的序号（1 起）；来源消息分页后由服务端给，不再靠数组下标猜 */
-  index?: number;
-  id: string;
-  role: string;
-  eventType: string;
-  content: string;
-  occurredAt: string;
-  conversationTitle: string | null;
-};
-
-/** 列表行：只带一行能显示的字段，不含 AI 提炼结果与来源原文。 */
-export type Snapshot = {
-  id: string;
-  number: number;
-  /** 自动归档「第 N 份」，手动存档「存档」；缺省时由 kind 推导 */
-  label?: string;
-  version: number;
-  date: string;
-  range: string;
-  summary: string;
-  events: number;
-  messages: number;
-  status: "当前版本" | "已被替代";
-  statusTone: "green" | "gray";
-  kind?: "AUTOMATIC" | "MANUAL";
-  generatedBy?: string;
-  model?: { name?: string; provider?: string; promptTemplateVersion?: string };
-  reviewRejected?: number;
-  /** 待人工处置的审核建议条数；列表角标直接用它 */
-  pendingReview?: number;
-};
-
-/** 详情：摘要 + AI 提炼结果；来源原文走 `/snapshots/{id}/sources` 分页接口。 */
-export type SnapshotDetail = Snapshot & {
-  analysis?: SnapshotAnalysis;
-  /** 依据消息 id → 来源列表里的序号；「依据 #3」靠它，不依赖当前这一页 */
-  evidenceIndex?: Record<string, number>;
-};
+import type { Snapshot } from "#shared/types/snapshot";
 
 export type DemoTask = {
   id: string;
@@ -375,6 +320,10 @@ export const initialSnapshots: Snapshot[] = [
     messages: 46,
     status: "当前版本",
     statusTone: "green",
+
+    kind: "AUTOMATIC",
+
+    pendingReview: 0,
   },
   {
     id: "snap-11",
@@ -388,6 +337,10 @@ export const initialSnapshots: Snapshot[] = [
     messages: 39,
     status: "当前版本",
     statusTone: "green",
+
+    kind: "AUTOMATIC",
+
+    pendingReview: 0,
   },
   {
     id: "snap-10",
@@ -401,6 +354,10 @@ export const initialSnapshots: Snapshot[] = [
     messages: 31,
     status: "已被替代",
     statusTone: "gray",
+
+    kind: "AUTOMATIC",
+
+    pendingReview: 0,
   },
 ];
 

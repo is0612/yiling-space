@@ -8,6 +8,7 @@ import {
   formatSnapshotDate,
   toMemorySnapshotSummaries,
 } from "../../../../utils/memory-snapshot-dto";
+import type { SnapshotPage } from "../../../../../shared/types/snapshot";
 
 /**
  * 阶段总结列表。
