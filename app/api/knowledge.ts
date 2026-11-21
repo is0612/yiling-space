@@ -1,35 +1,23 @@
 import type { ApiRequest } from "../utils/request";
 
-export type KnowledgeResult = {
-  isKnowledge: boolean;
-  recommendation: "CREATE" | "DUPLICATE" | "CONFLICT" | "DISCARD";
-  title: string;
-  content: string;
-  category: string;
-  tags: string[];
-  confidence: number;
-  reason: string;
-  relatedItemIds: string[];
-  confirmedRelatedItemIds?: string[];
-};
-
-// 知识条目相关形状与后端共用（`shared/types/knowledge.ts`）；这里只保留组合类型。
-import type { KnowledgeEntry, KnowledgeItem, KnowledgePagination, KnowledgeRelatedItem, KnowledgeRelationView } from "#shared/types/knowledge";
+// 知识条目与候选的形状都与后端共用（`shared/types/knowledge.ts`）；这里只保留组合类型。
+import type { KnowledgeCandidate, KnowledgeEntry, KnowledgeItem, KnowledgePagination, KnowledgeRelatedItem, KnowledgeRelationView } from "#shared/types/knowledge";
 export type {
+  KNOWLEDGE_RECOMMENDATIONS,
+  KnowledgeCandidate,
   KnowledgeEntry,
   KnowledgeItem,
   KnowledgeItemRevision,
   KnowledgeItemStatus,
   KnowledgePagination,
+  KnowledgeRecommendation,
   KnowledgeRelatedItem,
   KnowledgeRelationView,
+  KnowledgeResult,
 } from "#shared/types/knowledge";
 
-export type Candidate = {
-  id: string; sourceType: string; sourceRef: unknown; rawContent: string; status: string;
-  processedResult: KnowledgeResult | null; processingError: string | null; processedAt: string | null; createdAt: string;
-  relatedItems: KnowledgeRelatedItem[];
-};
+/** 历史名字，页面里都写 `Candidate`；指向契约里的 `KnowledgeCandidate`。 */
+export type Candidate = KnowledgeCandidate;
 
 export type WorkspaceData = { candidates: Candidate[]; items: KnowledgeItem[]; candidateCount: number; itemCount: number };
 

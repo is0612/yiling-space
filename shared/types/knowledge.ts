@@ -87,3 +87,47 @@ export type KnowledgeItemRevision = {
 };
 
 export type KnowledgePagination = { page: number; pageSize: number; total: number; pageCount: number };
+
+/** AI 对一条候选的判断：建新条目 / 判重 / 冲突 / 丢弃。这是固定四值。 */
+export const KNOWLEDGE_RECOMMENDATIONS = ["CREATE", "DUPLICATE", "CONFLICT", "DISCARD"] as const;
+export type KnowledgeRecommendation = typeof KNOWLEDGE_RECOMMENDATIONS[number];
+
+/**
+ * 模型对候选内容的判断结果，落在 `knowledge_candidates.processedResult` 这个 Json 列里。
+ *
+ * `confirmedRelatedItemIds` 是「用户在关联里确认过」的那部分，只有部分流程会写。
+ */
+export type KnowledgeResult = {
+  isKnowledge: boolean;
+  recommendation: KnowledgeRecommendation;
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  confidence: number;
+  reason: string;
+  relatedItemIds: string[];
+  confirmedRelatedItemIds?: string[];
+};
+
+/**
+ * 知识候选（`knowledge_candidates` 的一行）。
+ *
+ * `status` 保持自由字符串：候选的状态流转比条目复杂（PENDING / 处理中 /
+ * DISMISSED / ACCEPTED 由不同流程写入），写死枚举会让新增流程先在类型层挂一次。
+ * 条目的四值状态是有状态机的，候选的没有。
+ */
+export type KnowledgeCandidate = {
+  id: string;
+  sourceType: string;
+  sourceRef: unknown;
+  rawContent: string;
+  status: string;
+  /** 还没跑过 AI 判断时是 null；跑失败时看 `processingError`。 */
+  processedResult: KnowledgeResult | null;
+  processingError: string | null;
+  processedAt: string | null;
+  createdAt: string;
+  /** 建议关联到的现有条目（服务端按 `relatedItemIds` 现查，只给一行够用的字段）。 */
+  relatedItems: KnowledgeRelatedItem[];
+};

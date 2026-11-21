@@ -62,3 +62,47 @@ for (const status of KNOWLEDGE_ITEM_STATUSES) {
 }
 
 console.log("KnowledgeEntry contract: 12 字段白名单、外键隔离、ISO 日期、status 四值、sourceRef 原样带出均符合 shared/types/knowledge.ts。");
+
+// ── 候选（第二片） ─────────────────────────────────────────────
+
+import { toKnowledgeCandidate, type KnowledgeCandidateRow } from "../server/utils/knowledge-candidate-dto";
+
+const candidateRow = {
+  id: "55555555-5555-4555-8555-555555555555",
+  characterId: "22222222-2222-4222-8222-222222222222",
+  sourceType: "MEMORY_EVENT",
+  sourceRef: { type: "MEMORY_EVENT", id: "66666666-6666-4666-8666-666666666666" },
+  rawContent: "她提到喜欢北斗七星。",
+  status: "PENDING",
+  processedResult: {
+    isKnowledge: true,
+    recommendation: "CREATE",
+    title: "她喜欢的星座",
+    content: "她提到过喜欢北斗七星。",
+    category: "GENERAL",
+    tags: ["星座"],
+    confidence: 0.7,
+    reason: "明确陈述了偏好",
+    relatedItemIds: [],
+  },
+  processingError: null,
+  processedAt: at,
+  createdAt: at,
+  updatedAt: at,
+} as unknown as KnowledgeCandidateRow;
+
+const candidate = toKnowledgeCandidate(candidateRow);
+assert.deepEqual(
+  Object.keys(candidate).sort(),
+  ["createdAt", "id", "processedAt", "processedResult", "processingError", "rawContent", "sourceRef", "sourceType", "status"],
+  "候选整形只产出 9 个字段（relatedItems 由调用方挂）",
+);
+for (const leaked of ["characterId", "updatedAt", "relatedItems"]) {
+  assert.ok(!(leaked in (candidate as unknown as Record<string, unknown>)), `候选不应带 ${leaked}`);
+}
+assert.match(candidate.createdAt, ISO, "候选 createdAt 必须是 ISO 字符串");
+assert.match(candidate.processedAt ?? "", ISO, "候选 processedAt 必须是 ISO 字符串");
+assert.equal(candidate.processedResult?.recommendation, "CREATE", "processedResult 原样带出");
+assert.equal(toKnowledgeCandidate({ ...candidateRow, processedAt: null } as unknown as KnowledgeCandidateRow).processedAt, null, "未处理的候选 processedAt 是 null");
+
+console.log("KnowledgeCandidate contract: 9 字段白名单、外键隔离、processedAt null 语义、processedResult 原样带出。");

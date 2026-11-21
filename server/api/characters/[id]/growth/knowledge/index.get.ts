@@ -3,6 +3,7 @@ import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
 import { toKnowledgeEntry } from "../../../../../utils/knowledge-item-dto";
+import { toKnowledgeCandidate } from "../../../../../utils/knowledge-candidate-dto";
 
 type JsonRecord = Record<string, unknown>;
 function asRecord(value: unknown): JsonRecord {
@@ -71,7 +72,7 @@ export default defineEventHandler(async (event) => {
     const result = asRecord(candidate.processedResult);
     const ids = stringIds(result.relatedItemIds);
     return {
-      ...candidate,
+      ...toKnowledgeCandidate(candidate),
       relatedItems: ids.map(id => candidateTargetById.get(id)).filter((item): item is (typeof candidateTargets)[number] => Boolean(item)),
     };
   });
