@@ -4,10 +4,11 @@ import type { PrismaClient } from "../../src/generated/prisma/client";
 import { getPrisma } from "./prisma";
 import * as roleplay from "./roleplay-service";
 
-const HELP = "扮演命令：\n/扮演 列表\n/扮演 开始 人设编号或名称（新建存档）\n/扮演 存档\n/扮演 继续 存档编号\n/扮演 状态\n/扮演 退出\n退出保留存档，回到日常聊天。";
+const HELP = "扮演命令：\n&扮演 列表\n&扮演 开始 人设编号或名称（新建存档）\n&扮演 存档\n&扮演 继续 存档编号\n&扮演 状态\n&扮演 退出\n退出保留存档，回到日常聊天。";
 export type RoleplayCommand = { action: "help" | "list" | "start" | "sessions" | "resume" | "status" | "exit"; target: string };
 export function parseRoleplayCommand(content: string): RoleplayCommand | null {
-  const match = /^\/扮演(?:\s+([\s\S]*))?$/u.exec(content.trim());
+  // OneBot CQ-string messages may encode the leading ampersand as &amp;.
+  const match = /^(?:&|&amp;)扮演(?:\s+([\s\S]*))?$/u.exec(content.trim());
   if (!match) return null;
   const text = (match[1] ?? "").trim();
   const split = /^(\S+)(?:\s+([\s\S]*))?$/u.exec(text);
@@ -61,8 +62,8 @@ export async function findRoleplayChannelReplay(input: Omit<RoleplayChannelInput
 function readableError(error: unknown): string {
   const status = typeof error === "object" && error !== null && "statusCode" in error ? Number(error.statusCode) : 0;
   if (status === 409) return "这份存档正在回复，或上一条消息尚未完成。请在角色扮演页面查看并重试上一条消息。";
-  if (status === 404) return "人设或存档已不存在，请用 /扮演 列表 或 /扮演 存档 重新选择。";
-  return "扮演回复未完成，聊天仍保留在独立存档里。请到角色扮演页面检查模型设置并重试；也可用 /扮演 退出 回到日常聊天。";
+  if (status === 404) return "人设或存档已不存在，请用 &扮演 列表 或 &扮演 存档 重新选择。";
+  return "扮演回复未完成，聊天仍保留在独立存档里。请到角色扮演页面检查模型设置并重试；也可用 &扮演 退出 回到日常聊天。";
 }
 export type RoleplayChannelInput = {
   platform: string; eventType: string; characterId: string; bindingId: string; externalConversationId: string;
@@ -104,16 +105,16 @@ export async function handleRoleplayChannel(input: RoleplayChannelInput, prisma:
         let text = HELP;
         if (command.action === "list") {
           const items = await tx.roleplayPersona.findMany({ where: { ownerId }, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], take: 50 });
-          text = items.length ? `扮演人设：\n${items.map(item => `${item.id.slice(0, 8)}  ${item.name}`).join("\n")}\n发送 /扮演 开始 编号 新开对话。最多显示最近50项，完整列表在网页查看。` : "还没有扮演人设，请先在角色扮演页面添加。";
+          text = items.length ? `扮演人设：\n${items.map(item => `${item.id.slice(0, 8)}  ${item.name}`).join("\n")}\n发送 &扮演 开始 编号 新开对话。最多显示最近50项，完整列表在网页查看。` : "还没有扮演人设，请先在角色扮演页面添加。";
         } else if (command.action === "sessions") {
           const items = await tx.roleplaySession.findMany({ where: { ownerId, ...scope }, orderBy: [{ updatedAt: "desc" }, { id: "asc" }], take: 30 });
-          text = items.length ? `最近存档：\n${items.map(item => `${item.id.slice(0, 8)}  ${item.title}`).join("\n")}\n发送 /扮演 继续 编号。最多显示最近30份，完整列表在网页查看。` : "还没有存档，发送 /扮演 列表 选择人设。";
+          text = items.length ? `最近存档：\n${items.map(item => `${item.id.slice(0, 8)}  ${item.title}`).join("\n")}\n发送 &扮演 继续 编号。最多显示最近30份，完整列表在网页查看。` : "还没有存档，发送 &扮演 列表 选择人设。";
         } else if (command.action === "exit") {
           const removed = await tx.roleplayRoute.deleteMany({ where: { bindingId: input.bindingId, externalConversationId: input.externalConversationId, ownerId } });
           text = removed.count ? "已退出扮演，存档已保留。现在回到日常聊天。" : "现在是日常聊天，没有正在使用的扮演存档。";
         } else if (command.action === "status") {
           const route = await tx.roleplayRoute.findUnique({ where: routeWhere, include: { session: true } });
-          text = route?.ownerId === ownerId && route.characterId === input.characterId && route.session.groupBindingId === scope.groupBindingId && route.session.groupConversationId === scope.groupConversationId ? `正在扮演：${route.session.title}\n存档：${route.sessionId.slice(0, 8)}\n退出：/扮演 退出` : "现在是日常聊天。发送 /扮演 列表 查看人设。";
+          text = route?.ownerId === ownerId && route.characterId === input.characterId && route.session.groupBindingId === scope.groupBindingId && route.session.groupConversationId === scope.groupConversationId ? `正在扮演：${route.session.title}\n存档：${route.sessionId.slice(0, 8)}\n退出：&扮演 退出` : "现在是日常聊天。发送 &扮演 列表 查看人设。";
         } else if (command.action === "start" || command.action === "resume") {
           if (!command.target) text = HELP;
           else {
@@ -121,18 +122,18 @@ export async function handleRoleplayChannel(input: RoleplayChannelInput, prisma:
             if (command.action === "start") {
               const personas = await tx.roleplayPersona.findMany({ where: { ownerId } });
               const persona = resolveRoleplayTarget(personas, command.target);
-              if (!persona) text = "没有唯一匹配的人设，请发送 /扮演 列表，使用人设编号。";
+              if (!persona) text = "没有唯一匹配的人设，请发送 &扮演 列表，使用人设编号。";
               else session = await roleplay.createRoleplaySession(ownerId, { personaId: persona.id, hostCharacterId: input.characterId, ...(isGroup ? { groupContext: { bindingId: input.bindingId, conversationId: input.externalConversationId } } : {}) }, tx);
             } else {
               const sessions = await tx.roleplaySession.findMany({ where: { ownerId, ...scope }, select: { id: true, title: true } });
               const selected = resolveRoleplayTarget(sessions, command.target);
-              if (!selected) text = "没有唯一匹配的存档，请发送 /扮演 存档，使用存档编号。";
+              if (!selected) text = "没有唯一匹配的存档，请发送 &扮演 存档，使用存档编号。";
               else session = await tx.roleplaySession.findFirst({ where: { ownerId, id: selected.id, ...scope } });
             }
             if (session) {
               const data = { ownerId, userId: ownerId, characterId: input.characterId, sessionId: session.id };
               await tx.roleplayRoute.upsert({ where: routeWhere, create: { ...data, bindingId: input.bindingId, externalConversationId: input.externalConversationId }, update: data });
-              text = `已${command.action === "start" ? "开始" : "继续"}扮演：${session.title}\n存档：${session.id.slice(0, 8)}\n接下来的消息只进入这份存档。退出：/扮演 退出`;
+              text = `已${command.action === "start" ? "开始" : "继续"}扮演：${session.title}\n存档：${session.id.slice(0, 8)}\n接下来的消息只进入这份存档。退出：&扮演 退出`;
             }
           }
         }
@@ -156,7 +157,7 @@ export async function handleRoleplayChannel(input: RoleplayChannelInput, prisma:
     ? route.session.groupBindingId === input.bindingId && route.session.groupConversationId === input.externalConversationId
     : route.session.groupBindingId === null && route.session.groupConversationId === null;
   if (!scopeMatches || route.ownerId !== ownerId || route.characterId !== input.characterId || route.userId !== ownerId) {
-    await input.sendReply("扮演绑定已变更，请用 /扮演 退出 后重新选择存档。");
+    await input.sendReply("扮演绑定已变更，请用 &扮演 退出 后重新选择存档。");
     return { status: "replied", conversationId: route.sessionId };
   }
   let reply: string;

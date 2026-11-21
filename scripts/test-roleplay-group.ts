@@ -45,7 +45,7 @@ export async function testRoleplayGroupDatabase(db: PrismaClient, ownerId: strin
   };
   try {
     const privateKey = `c:${ownerQq}`;
-    await call(privateKey, `/扮演 开始 ${persona.id}`);
+    await call(privateKey, `&扮演 开始 ${persona.id}`);
     const privateRoute = await route(privateKey); assert(privateRoute);
     await call(privateKey, "PRIVATE_STORY_SENTINEL");
     const privateSession = await db.roleplaySession.findUniqueOrThrow({ where: { id: privateRoute.sessionId } });
@@ -53,10 +53,10 @@ export async function testRoleplayGroupDatabase(db: PrismaClient, ownerId: strin
     assert.equal(privateSession.groupConversationId, null);
 
     // Owner commands work without an @; a group member cannot start or inspect archives.
-    await call(groups[0], `/扮演 开始 ${persona.id}`, { authorUid: memberQq, addressed: true });
+    await call(groups[0], `&扮演 开始 ${persona.id}`, { authorUid: memberQq, addressed: true });
     assert.equal(await route(groups[0]), null);
     const startId = randomUUID();
-    await call(groups[0], `/扮演 开始 ${persona.id}`, { messageId: startId });
+    await call(groups[0], `&扮演 开始 ${persona.id}`, { messageId: startId });
     const firstRoute = await route(groups[0]); assert(firstRoute, "bare owner command must start group roleplay");
     const groupSession = await db.roleplaySession.findUniqueOrThrow({ where: { id: firstRoute.sessionId } });
     assert.equal(groupSession.groupBindingId, binding.id);
@@ -64,45 +64,45 @@ export async function testRoleplayGroupDatabase(db: PrismaClient, ownerId: strin
     assert.notEqual(groupSession.id, privateRoute.sessionId);
     assert.equal(groupSession.summary, "");
     assert.equal(await db.roleplayMessage.count({ where: { sessionId: groupSession.id } }), 1, "group starts with only its own opening");
-    await call(groups[0], `/扮演 开始 ${persona.id}`, { messageId: startId });
+    await call(groups[0], `&扮演 开始 ${persona.id}`, { messageId: startId });
     assert.equal((await route(groups[0]))?.sessionId, groupSession.id);
     assert.equal(await db.roleplaySession.count({ where: { ownerId, personaId: persona.id, groupBindingId: binding.id, groupConversationId: groups[0] } }), 1, "command redelivery must not create duplicate group archives");
 
     // Reusing a platform message id in a second group must not replay the first group's receipt.
-    await call(groups[1], `/扮演 开始 ${persona.id}`, { messageId: startId });
+    await call(groups[1], `&扮演 开始 ${persona.id}`, { messageId: startId });
     const secondRoute = await route(groups[1]); assert(secondRoute);
     assert.notEqual(secondRoute.sessionId, firstRoute.sessionId);
     assert.equal((await db.roleplaySession.findUniqueOrThrow({ where: { id: secondRoute.sessionId } })).groupConversationId, groups[1]);
 
-    await call(groups[0], "/扮演 存档");
+    await call(groups[0], "&扮演 存档");
     assert(lastReply(groups[0]).includes(firstRoute.sessionId.slice(0, 8)));
     assert(!lastReply(groups[0]).includes(privateRoute.sessionId.slice(0, 8)));
     assert(!lastReply(groups[0]).includes(secondRoute.sessionId.slice(0, 8)));
-    await call(privateKey, "/扮演 存档");
+    await call(privateKey, "&扮演 存档");
     assert(lastReply(privateKey).includes(privateRoute.sessionId.slice(0, 8)));
     assert(!lastReply(privateKey).includes(firstRoute.sessionId.slice(0, 8)));
 
     const callsBeforeDenied = payloads.length;
     const repliesBeforeDenied = replies.length;
-    await call(groups[0], "/扮演 存档", { authorUid: memberQq, addressed: true });
+    await call(groups[0], "&扮演 存档", { authorUid: memberQq, addressed: true });
     for (const item of replies.slice(repliesBeforeDenied)) {
       assert(!item.text.includes(privateRoute.sessionId.slice(0, 8)));
       assert(!item.text.includes(firstRoute.sessionId.slice(0, 8)));
       assert(!item.text.includes(secondRoute.sessionId.slice(0, 8)));
     }
-    await call(groups[0], "/扮演 退出", { authorUid: memberQq, addressed: true });
-    await call(groups[0], `/扮演 继续 ${secondRoute.sessionId}`, { authorUid: memberQq, addressed: true });
+    await call(groups[0], "&扮演 退出", { authorUid: memberQq, addressed: true });
+    await call(groups[0], `&扮演 继续 ${secondRoute.sessionId}`, { authorUid: memberQq, addressed: true });
     assert.equal((await route(groups[0]))?.sessionId, firstRoute.sessionId);
     assert.equal(payloads.length, callsBeforeDenied, "member commands must never invoke model");
 
     // Scope remains immutable: neither complete UUID nor prefix bypasses channel restrictions.
     for (const target of [privateRoute.sessionId, secondRoute.sessionId]) {
-      await call(groups[0], `/扮演 继续 ${target}`);
+      await call(groups[0], `&扮演 继续 ${target}`);
       assert.equal((await route(groups[0]))?.sessionId, firstRoute.sessionId);
     }
-    await call(privateKey, `/扮演 继续 ${firstRoute.sessionId}`);
+    await call(privateKey, `&扮演 继续 ${firstRoute.sessionId}`);
     assert.equal((await route(privateKey))?.sessionId, privateRoute.sessionId);
-    await call(groups[0], `/扮演 继续 ${firstRoute.sessionId}`, { bindingId: otherBinding.id });
+    await call(groups[0], `&扮演 继续 ${firstRoute.sessionId}`, { bindingId: otherBinding.id });
     assert.equal(await route(groups[0], otherBinding.id), null, "same group under another binding is a different scope");
     const unchanged = await db.roleplaySession.findUniqueOrThrow({ where: { id: firstRoute.sessionId } });
     assert.equal(unchanged.groupBindingId, binding.id);
@@ -146,15 +146,15 @@ export async function testRoleplayGroupDatabase(db: PrismaClient, ownerId: strin
     assert.notEqual(ownerTurn.content.slice(0, -"GROUP_A_OWNER_TURN".length), aliasPrefix, "different members must have distinct aliases");
 
     // Exit is local to this binding/group and retains the story for a later explicit resume.
-    await call(groups[0], "/扮演 退出");
+    await call(groups[0], "&扮演 退出");
     assert.equal(await route(groups[0]), null);
     assert.equal((await route(privateKey))?.sessionId, privateRoute.sessionId);
     assert.equal((await route(groups[1]))?.sessionId, secondRoute.sessionId);
     assert(await db.roleplaySession.findUnique({ where: { id: firstRoute.sessionId } }));
-    await call(groups[0], `/扮演 继续 ${firstRoute.sessionId}`);
+    await call(groups[0], `&扮演 继续 ${firstRoute.sessionId}`);
     assert.equal((await route(groups[0]))?.sessionId, firstRoute.sessionId);
     const beforeFinalExit = payloads.length;
-    await call(groups[0], "/扮演 退出");
+    await call(groups[0], "&扮演 退出");
     assert.equal(await call(groups[0], "退出后的正常群消息", { addressed: true }), null);
     assert.equal(payloads.length, beforeFinalExit);
     assert.equal(await db.message.count(), dailyBefore, "group roleplay must not write daily message records");
@@ -221,7 +221,7 @@ async function testRoleplayGroupAdapter(db: PrismaClient, ownerId: string, chara
     // Buffer a real ordinary group event first; its timer fires only after explicit roleplay starts.
     const buffered = await handler(event("DAILY_BUFFER_SENTINEL", true, ownerQq));
     assert.equal(buffered.status, "buffered");
-    const start = await handler(event(`/扮演 开始 ${personaId}`, false, ownerQq));
+    const start = await handler(event(`&扮演 开始 ${personaId}`, false, ownerQq));
     assert.equal(start.status, "replied", "owner must start with bare command through actual adapter");
     const active = await db.roleplayRoute.findUniqueOrThrow({ where: { bindingId_externalConversationId: { bindingId: binding.id, externalConversationId: `g:${groupId}` } } });
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -274,16 +274,16 @@ async function testRoleplayGroupAdapter(db: PrismaClient, ownerId: string, chara
     const blocked = await db.externalIdentity.upsert({ where: { platform_platformUid: { platform: "qq-onebot", platformUid: memberQq } }, create: { platform: "qq-onebot", platformUid: memberQq }, update: {} });
     const blockedScope = await db.memoryScope.create({ data: { characterId, scopeType: "EXTERNAL_IDENTITY", externalIdentityId: blocked.id, scopeKey: `blocked-replay-test:${randomUUID()}`, friendChatPolicy: "BLOCK" } });
     const beforeMemberCommand = sent.length;
-    await handler(event("/扮演 状态", true));
+    await handler(event("&扮演 状态", true));
     assert.equal(sent.length, beforeMemberCommand, "non-owner commands stay silent, including blocked members");
     await db.memoryScope.delete({ where: { id: blockedScope.id } });
-    await handler(event(`/扮演 开始 ${personaId}`, false, ownerQq));
+    await handler(event(`&扮演 开始 ${personaId}`, false, ownerQq));
     const beforeOldReplay = modelCalls;
     assert.equal((await handler(failedTurn)).status, "duplicate");
     assert.equal(modelCalls, beforeOldReplay);
 
     // An @ segment before a command must be stripped by the production parser.
-    assert.equal((await handler(event("/扮演 退出", true, ownerQq))).status, "replied");
+    assert.equal((await handler(event("&扮演 退出", true, ownerQq))).status, "replied");
     assert.equal(await db.roleplayRoute.count({ where: { bindingId: binding.id } }), 0);
     const beforeExitReplay = sent.length;
     assert.equal((await handler(failedTurn)).status, "duplicate");
