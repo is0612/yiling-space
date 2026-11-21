@@ -1082,6 +1082,214 @@ async function loadChannelTurnRawMessages(input: {
   });
 }
 
+/**
+ * 落库：会话归位/创建、本轮消息、群成员、她的回复 —— 全在一个事务里。
+ *
+ * 为什么必须同事务：「消息写进去了但成员表没记」会让熟客榜在某个群永远筛不出人来，
+ * 而这种缺口事后无从发现（只能靠翻消息表重建）。
+ */
+async function persistChannelTurnResult(input: {
+  prisma: PrismaClient;
+  existingConversation: ChannelTurnConversation | null;
+  isGroup: boolean;
+  globalScope: { id: string };
+  ownerPrivateScopeId: string | null;
+  isOwnerTurn: boolean;
+  turn: {
+    characterId: string;
+    platform: string;
+    bindingId: string;
+    externalConversationId: string;
+    memberObservations?: ChannelTurnMessage[];
+  };
+  conversationScopeId: string;
+  groupId: string | null;
+  title: string;
+  messages: ChannelTurnMessage[];
+  privateMessagesRecorded: boolean;
+  now: Date;
+  assistantAt: Date;
+  generated: Awaited<ReturnType<typeof generateGroupContextReply>>;
+  observedReadOnlyAiEvidence: boolean;
+  privateHistorySelection: ChannelTurnWindow["privateHistorySelection"];
+  selfUnderstanding: ChannelTurnGrowthPreparation["selfUnderstanding"];
+  replyFaces: string[];
+  replySticker: StickerCatalogEntry | null;
+  replyVoice: boolean;
+  replySegments: string[];
+  goals: ChannelTurnGrowthPreparation["goals"];
+  expressionHabits: ChannelTurnGrowthPreparation["expressionHabits"];
+  preferences: ChannelTurnGrowthPreparation["preferences"];
+}): Promise<string> {
+  const {
+    prisma, existingConversation, isGroup, globalScope, ownerPrivateScopeId, isOwnerTurn, turn,
+    conversationScopeId, groupId, title, messages, privateMessagesRecorded, now, assistantAt, generated,
+    observedReadOnlyAiEvidence, privateHistorySelection, selfUnderstanding, replyFaces, replySticker,
+    replyVoice, replySegments, goals, expressionHabits, preferences,
+  } = input;
+  return await prisma.$transaction(async (tx) => {
+    let conversation = existingConversation;
+    /**
+     * 已有会话可能要换记忆范围。两条路，方向都是单向的：
+     *
+     * - 群聊 → 角色全局（`resolveGroupScopeRepair`）：新建时写 global，但历史会话可能还挂在
+     *   建群那一刻的外部身份范围下。不修则群消息永不进忆泡、她在群里也查不到自己的话。
+     * - 主人私聊 → 主人专属范围（`resolveOwnerPrivateScopeRepair`）：会话按
+     *   `(binding, externalConversationId)` 唯一、找到就复用，早于该功能建出来的会话仍挂在
+     *   这个 QQ 的 EXTERNAL_IDENTITY 上，之后主人说的每一句都落在外面。
+     *
+     * 两个都返回 null 表示不用动。私聊的预落库（`recordPrivateTurnMessages`）只处理主人
+     * 范围那一半，群聊不走那条路，所以群聊的归位只能落在下面这个事务里。
+     */
+    if (conversation) {
+      const repairScopeId = resolveGroupScopeRepair({
+        isGroup,
+        globalScopeId: globalScope.id,
+        currentScopeId: conversation.memoryScopeId,
+      }) ?? resolveOwnerPrivateScopeRepair({
+        isOwnerTurn,
+        ownerPrivateScopeId,
+        currentScopeId: conversation.memoryScopeId,
+      });
+      if (repairScopeId) {
+        // 旧范围里已经整理出的忆泡跟着会话走：否则新范围读不到，归位后还会重复提一遍。
+        const moved = await rehomeConversationScope(tx, {
+          conversationId: conversation.id,
+          fromScopeId: conversation.memoryScopeId,
+          toScopeId: repairScopeId,
+        });
+        if (isGroup && (moved.moved || moved.merged)) {
+          console.log("[scope] 群会话归位到全局范围 " + JSON.stringify({
+            conversationId: conversation.id,
+            moved: moved.moved,
+            merged: moved.merged,
+            days: moved.days,
+          }));
+        }
+        conversation = { ...conversation, memoryScopeId: repairScopeId };
+      }
+    } else {
+      conversation = await tx.conversation.create({
+        data: {
+          characterId: turn.characterId,
+          // 群聊挂在角色全局 scope 下：它属于一群人，不属于某一个外部身份。
+          memoryScopeId: conversationScopeId,
+          channelBindingId: turn.bindingId,
+          externalConversationId: turn.externalConversationId,
+          title,
+          status: "ACTIVE",
+          // kind/groupId 让「这段记录属于哪个群」可查；记忆页的群聊记录按它分组。
+          metadata: {
+            platform: turn.platform,
+            kind: isGroup ? "group" : "private",
+            ...(groupId ? { groupId } : {}),
+          },
+        },
+        select: { id: true, title: true, memoryScopeId: true },
+      });
+    }
+    // 一轮 N 条一次写入（P3）：逐条 create 是 N 次往返。去重前面已做，
+    // 撞唯一约束仍整个事务回滚，行为与逐条一致。
+    // 私聊已经在模型调用前预落库了，这里不再重复写。
+    if (!privateMessagesRecorded) {
+      await tx.message.createMany({
+        data: messages.map((message, index) => ({
+          conversationId: conversation.id,
+          externalMessageId: message.externalMessageId,
+          role: "USER" as const,
+          content: message.content,
+          // 一条一轮时保持原来的「处理时刻」，多条时用各自的收到时刻，别让并发把顺序搅乱。
+          occurredAt: messages.length === 1 ? now : (message.occurredAt ?? new Date(now.getTime() - (messages.length - index))),
+          metadata: buildStoredMessageMetadata({
+            platform: turn.platform,
+            storedReason: generated.action === "reply" ? "replied" : "silent",
+            message,
+          }),
+        })),
+      });
+    }
+    /**
+     * 群成员归属：谁在这个群里说过话。
+     *
+     * 和上面的消息落库同一个事务 —— 「消息写进去了但成员表没记」会让熟客榜在某个群
+     * 永远筛不出人来，而这种缺口事后无从发现（只能靠翻消息表重建）。
+     *
+     * 记的是**所有开口的人**，不是「她回过的人」：这张表要回答「这个屋里都有谁」，
+     * 熟客榜再拿它跟「她回过谁」取交集。混成一件事，她就只认得自己搭理过的几个人，
+     * 对同一个群里天天见的其他人无从判断。
+     */
+    if (isGroup) {
+      for (const member of buildGroupMemberDeltas(turn.memberObservations ?? messages)) {
+        await tx.groupMember.upsert({
+          where: {
+            conversationId_platformUid: { conversationId: conversation.id, platformUid: member.platformUid },
+          },
+          create: {
+            conversationId: conversation.id,
+            characterId: turn.characterId,
+            platformUid: member.platformUid,
+            displayName: member.displayName,
+            messageCount: member.count,
+            firstSpokeAt: member.firstSpokeAt,
+            lastSpokeAt: member.lastSpokeAt,
+          },
+          update: {
+            messageCount: { increment: member.count },
+            // 只往前推：乱序补录一条旧消息时不要把「最后说话时间」拉回去。
+            lastSpokeAt: member.lastSpokeAt,
+            ...(member.displayName ? { displayName: member.displayName } : {}),
+          },
+        });
+      }
+    }
+    if (generated.action === "reply") {
+      await tx.message.create({
+        data: {
+          conversationId: conversation.id,
+          role: "ASSISTANT",
+          content: generated.reply,
+          occurredAt: assistantAt,
+          metadata: {
+            source: "channel",
+            platform: turn.platform,
+            generatedBy: generated.localHistoryReceipt ? "local-history-receipt" : "llm",
+            ...(observedReadOnlyAiEvidence ? { excludeFromGrowth: true, growthExclusionReason: "read_only_ai_context" } : {}),
+            model: generated.model,
+            provider: generated.provider,
+            promptTemplateVersion: generated.promptTemplateVersion,
+            usedMemoryIds: generated.usedMemoryIds,
+            usedSnapshotIds: generated.usedSnapshotIds,
+            usedPreferenceIds: generated.usedPreferenceIds ?? [],
+            usedExpressionHabitIds: generated.usedExpressionHabitIds ?? [],
+            usedGoalIds: generated.usedGoalIds ?? [],
+            ...(privateHistorySelection ? { privateHistorySelection } : {}),
+            ...(selfUnderstanding && !generated.localHistoryReceipt ? { providedSelfUnderstandingSources: selfUnderstandingReferences(selfUnderstanding) } : {}),
+            usedGoals: usedGoalSnapshots(goals, generated.usedGoalIds ?? []),
+            usedExpressionHabits: usedExpressionHabitSnapshots(expressionHabits, generated.usedExpressionHabitIds ?? []),
+            usedPreferences: usedPreferenceSnapshots(preferences, generated.usedPreferenceIds ?? []),
+            ...(generated.usedRawMessageIds.length ? { usedRawMessageIds: generated.usedRawMessageIds } : {}),
+            ...(generated.usedEventIds.length ? { usedEventIds: generated.usedEventIds } : {}),
+            ...(generated.usedCatchphraseIds.length ? { usedCatchphraseIds: generated.usedCatchphraseIds } : {}),
+            // 表情段不进 content：正文要能原样重放给下一轮模型，混进 [face] 会被当成用户打的字。
+            ...(replyFaces.length ? { faceIds: replyFaces } : {}),
+            ...(replySticker ? { stickerId: replySticker.id } : {}),
+            // 只记「这一条是语音」，不存音频：音频发完就没了，存下来也没法重放给模型。
+            ...(replyVoice ? { voice: true } : {}),
+            // 这一轮在 QQ 上弹了几条。content 里保留着换行，这里只留个数方便排查
+            // 「她怎么一下发了三条」—— 单条时不记，免得 metadata 里多一个恒为 1 的字段。
+            ...(replySegments.length > 1 ? { replySegments: replySegments.length } : {}),
+          },
+        },
+        select: { id: true },
+      });
+      await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: assistantAt } });
+    } else {
+      await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: messages[messages.length - 1]!.occurredAt ?? now } });
+    }
+    return conversation.id;
+  });
+}
+
 type ChannelTurnMemoryLoader = {
   loadMemoryCandidates: (
     searchQuery: string,
@@ -3176,167 +3384,34 @@ async function runChannelTurn(input: {
   const replySegments = replyVoice || !input.segmentCapable
     ? []
     : splitReplySegments(generated.reply);
-  const conversationId = await prisma.$transaction(async (tx) => {
-    let conversation = existingConversation;
-    /**
-     * 已有会话可能要换记忆范围。两条路，方向都是单向的：
-     *
-     * - 群聊 → 角色全局（`resolveGroupScopeRepair`）：新建时写 global，但历史会话可能还挂在
-     *   建群那一刻的外部身份范围下。不修则群消息永不进忆泡、她在群里也查不到自己的话。
-     * - 主人私聊 → 主人专属范围（`resolveOwnerPrivateScopeRepair`）：会话按
-     *   `(binding, externalConversationId)` 唯一、找到就复用，早于该功能建出来的会话仍挂在
-     *   这个 QQ 的 EXTERNAL_IDENTITY 上，之后主人说的每一句都落在外面。
-     *
-     * 两个都返回 null 表示不用动。私聊的预落库（`recordPrivateTurnMessages`）只处理主人
-     * 范围那一半，群聊不走那条路，所以群聊的归位只能落在下面这个事务里。
-     */
-    if (conversation) {
-      const repairScopeId = resolveGroupScopeRepair({
-        isGroup,
-        globalScopeId: globalScope.id,
-        currentScopeId: conversation.memoryScopeId,
-      }) ?? resolveOwnerPrivateScopeRepair({
-        isOwnerTurn,
-        ownerPrivateScopeId,
-        currentScopeId: conversation.memoryScopeId,
-      });
-      if (repairScopeId) {
-        // 旧范围里已经整理出的忆泡跟着会话走：否则新范围读不到，归位后还会重复提一遍。
-        const moved = await rehomeConversationScope(tx, {
-          conversationId: conversation.id,
-          fromScopeId: conversation.memoryScopeId,
-          toScopeId: repairScopeId,
-        });
-        if (isGroup && (moved.moved || moved.merged)) {
-          console.log("[scope] 群会话归位到全局范围 " + JSON.stringify({
-            conversationId: conversation.id,
-            moved: moved.moved,
-            merged: moved.merged,
-            days: moved.days,
-          }));
-        }
-        conversation = { ...conversation, memoryScopeId: repairScopeId };
-      }
-    } else {
-      conversation = await tx.conversation.create({
-        data: {
-          characterId: input.characterId,
-          // 群聊挂在角色全局 scope 下：它属于一群人，不属于某一个外部身份。
-          memoryScopeId: conversationScopeId,
-          channelBindingId: input.bindingId,
-          externalConversationId: input.externalConversationId,
-          title,
-          status: "ACTIVE",
-          // kind/groupId 让「这段记录属于哪个群」可查；记忆页的群聊记录按它分组。
-          metadata: {
-            platform: input.platform,
-            kind: isGroup ? "group" : "private",
-            ...(groupId ? { groupId } : {}),
-          },
-        },
-        select: { id: true, title: true, memoryScopeId: true },
-      });
-    }
-    // 一轮 N 条一次写入（P3）：逐条 create 是 N 次往返。去重前面已做，
-    // 撞唯一约束仍整个事务回滚，行为与逐条一致。
-    // 私聊已经在模型调用前预落库了，这里不再重复写。
-    if (!privateMessagesRecorded) {
-      await tx.message.createMany({
-        data: messages.map((message, index) => ({
-          conversationId: conversation.id,
-          externalMessageId: message.externalMessageId,
-          role: "USER" as const,
-          content: message.content,
-          // 一条一轮时保持原来的「处理时刻」，多条时用各自的收到时刻，别让并发把顺序搅乱。
-          occurredAt: messages.length === 1 ? now : (message.occurredAt ?? new Date(now.getTime() - (messages.length - index))),
-          metadata: buildStoredMessageMetadata({
-            platform: input.platform,
-            storedReason: generated.action === "reply" ? "replied" : "silent",
-            message,
-          }),
-        })),
-      });
-    }
-    /**
-     * 群成员归属：谁在这个群里说过话。
-     *
-     * 和上面的消息落库同一个事务 —— 「消息写进去了但成员表没记」会让熟客榜在某个群
-     * 永远筛不出人来，而这种缺口事后无从发现（只能靠翻消息表重建）。
-     *
-     * 记的是**所有开口的人**，不是「她回过的人」：这张表要回答「这个屋里都有谁」，
-     * 熟客榜再拿它跟「她回过谁」取交集。混成一件事，她就只认得自己搭理过的几个人，
-     * 对同一个群里天天见的其他人无从判断。
-     */
-    if (isGroup) {
-      for (const member of buildGroupMemberDeltas(input.memberObservations ?? messages)) {
-        await tx.groupMember.upsert({
-          where: {
-            conversationId_platformUid: { conversationId: conversation.id, platformUid: member.platformUid },
-          },
-          create: {
-            conversationId: conversation.id,
-            characterId: input.characterId,
-            platformUid: member.platformUid,
-            displayName: member.displayName,
-            messageCount: member.count,
-            firstSpokeAt: member.firstSpokeAt,
-            lastSpokeAt: member.lastSpokeAt,
-          },
-          update: {
-            messageCount: { increment: member.count },
-            // 只往前推：乱序补录一条旧消息时不要把「最后说话时间」拉回去。
-            lastSpokeAt: member.lastSpokeAt,
-            ...(member.displayName ? { displayName: member.displayName } : {}),
-          },
-        });
-      }
-    }
-    if (generated.action === "reply") {
-      await tx.message.create({
-        data: {
-          conversationId: conversation.id,
-          role: "ASSISTANT",
-          content: generated.reply,
-          occurredAt: assistantAt,
-          metadata: {
-            source: "channel",
-            platform: input.platform,
-            generatedBy: generated.localHistoryReceipt ? "local-history-receipt" : "llm",
-            ...(observedReadOnlyAiEvidence ? { excludeFromGrowth: true, growthExclusionReason: "read_only_ai_context" } : {}),
-            model: generated.model,
-            provider: generated.provider,
-            promptTemplateVersion: generated.promptTemplateVersion,
-            usedMemoryIds: generated.usedMemoryIds,
-            usedSnapshotIds: generated.usedSnapshotIds,
-            usedPreferenceIds: generated.usedPreferenceIds ?? [],
-            usedExpressionHabitIds: generated.usedExpressionHabitIds ?? [],
-            usedGoalIds: generated.usedGoalIds ?? [],
-            ...(privateHistorySelection ? { privateHistorySelection } : {}),
-            ...(selfUnderstanding && !generated.localHistoryReceipt ? { providedSelfUnderstandingSources: selfUnderstandingReferences(selfUnderstanding) } : {}),
-            usedGoals: usedGoalSnapshots(goals, generated.usedGoalIds ?? []),
-            usedExpressionHabits: usedExpressionHabitSnapshots(expressionHabits, generated.usedExpressionHabitIds ?? []),
-            usedPreferences: usedPreferenceSnapshots(preferences, generated.usedPreferenceIds ?? []),
-            ...(generated.usedRawMessageIds.length ? { usedRawMessageIds: generated.usedRawMessageIds } : {}),
-            ...(generated.usedEventIds.length ? { usedEventIds: generated.usedEventIds } : {}),
-            ...(generated.usedCatchphraseIds.length ? { usedCatchphraseIds: generated.usedCatchphraseIds } : {}),
-            // 表情段不进 content：正文要能原样重放给下一轮模型，混进 [face] 会被当成用户打的字。
-            ...(replyFaces.length ? { faceIds: replyFaces } : {}),
-            ...(replySticker ? { stickerId: replySticker.id } : {}),
-            // 只记「这一条是语音」，不存音频：音频发完就没了，存下来也没法重放给模型。
-            ...(replyVoice ? { voice: true } : {}),
-            // 这一轮在 QQ 上弹了几条。content 里保留着换行，这里只留个数方便排查
-            // 「她怎么一下发了三条」—— 单条时不记，免得 metadata 里多一个恒为 1 的字段。
-            ...(replySegments.length > 1 ? { replySegments: replySegments.length } : {}),
-          },
-        },
-        select: { id: true },
-      });
-      await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: assistantAt } });
-    } else {
-      await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: messages[messages.length - 1]!.occurredAt ?? now } });
-    }
-    return conversation.id;
+  const conversationId = await persistChannelTurnResult({
+    prisma,
+    existingConversation,
+    isGroup,
+    globalScope,
+    ownerPrivateScopeId,
+    isOwnerTurn,
+    turn: input,
+    conversationScopeId,
+    groupId,
+    title,
+    messages,
+    privateMessagesRecorded,
+    now,
+    assistantAt,
+    generated,
+    observedReadOnlyAiEvidence,
+    privateHistorySelection,
+    selfUnderstanding,
+    replyFaces,
+    replySticker,
+    replyVoice,
+    replySegments,
+    goals,
+    expressionHabits,
+    preferences,
   });
+
   if (pendingWorkingContext && contextRuntime && isGroup) {
     try {
       const references = pendingWorkingContext.evidenceMessageIds;
