@@ -4,21 +4,13 @@ import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 import { createHash } from "node:crypto";
 import { formatMentionContent, type ConversationMessageMention } from "./conversation-message";
+// 分类枚举与前端共用一份（shared/types/memory.ts）：这里只保留服务端的类型别名。
+import { MEMORY_CATEGORIES, type MemoryCategory } from "../../shared/types/memory";
 
 export const MEMORY_EVENTS_TEMPLATE_VERSION = "memory-events-v2";
 
-export const MEMORY_CATEGORIES = [
-  "FACT",
-  "PREFERENCE",
-  "RELATIONSHIP",
-  "COMMITMENT",
-  "GOAL",
-  "EVENT",
-  "SUMMARY",
-  "OTHER",
-] as const;
-
-export type MemoryCategoryValue = (typeof MEMORY_CATEGORIES)[number];
+/** 记忆分类：历史名字，指向共享契约，避免改一圈调用方。 */
+export type MemoryCategoryValue = MemoryCategory;
 export type MemoryChangeAction = "ADD" | "UPDATE" | "INVALIDATE";
 
 export type MemoryAiMessage = {

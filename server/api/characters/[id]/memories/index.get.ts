@@ -3,6 +3,8 @@ import type { Prisma } from "../../../../../src/generated/prisma/client";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import { MEMORY_CATEGORIES, MEMORY_SCOPE_TYPES, MEMORY_STATUSES, type MemoryPage } from "../../../../../shared/types/memory";
+import { toMemoryItem } from "../../../../utils/memory-item-dto";
 
 /**
  * 角色长期记忆的列表：页码分页 + 关键词 / 分类 / 状态 / 范围筛选。
@@ -17,9 +19,9 @@ import { getPrisma } from "../../../../utils/prisma";
  * 统计（消息数 / 事件数 / 承诺数）不在这里顺带返回：那是另一个维度，用 `/memory-stats`。
  */
 
-const CATEGORIES = ["FACT", "PREFERENCE", "RELATIONSHIP", "COMMITMENT", "GOAL", "EVENT", "SUMMARY", "OTHER"] as const;
-const STATUSES = ["ACTIVE", "SUPERSEDED", "ARCHIVED", "INVALIDATED", "TRASHED"] as const;
-const SCOPES = ["CHARACTER_GLOBAL", "USER_PRIVATE", "EXTERNAL_IDENTITY"] as const;
+// 枚举与前端共用一份（shared/types/memory.ts），不再在这里维护第三个副本。
+
+
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -51,14 +53,14 @@ export default defineEventHandler(async (event) => {
   const requestedPage = positiveInt(query.page, 1);
 
   // 非法值当作「没传」，不做报错：筛选器多打一个字不该整页 400。
-  const category = (CATEGORIES as readonly string[]).includes(categoryRaw)
-    ? categoryRaw as (typeof CATEGORIES)[number]
+  const category = (MEMORY_CATEGORIES as readonly string[]).includes(categoryRaw)
+    ? categoryRaw as MemoryPage["items"][number]["category"]
     : undefined;
-  const status = (STATUSES as readonly string[]).includes(statusRaw)
-    ? statusRaw as (typeof STATUSES)[number]
+  const status = (MEMORY_STATUSES as readonly string[]).includes(statusRaw)
+    ? statusRaw as MemoryPage["items"][number]["status"]
     : undefined;
-  const scope = (SCOPES as readonly string[]).includes(scopeRaw)
-    ? scopeRaw as (typeof SCOPES)[number]
+  const scope = (MEMORY_SCOPE_TYPES as readonly string[]).includes(scopeRaw)
+    ? scopeRaw as MemoryPage["items"][number]["scopeType"]
     : undefined;
 
   const where: Prisma.MemoryItemWhereInput = {
@@ -92,17 +94,7 @@ export default defineEventHandler(async (event) => {
   });
 
   return {
-    items: rows.map((row) => ({
-      id: row.id,
-      category: row.category,
-      content: row.content,
-      status: row.status,
-      scopeType: row.memoryScope.scopeType,
-      importance: row.importance,
-      validTo: row.validTo?.toISOString() ?? null,
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
-    })),
+    items: rows.map(toMemoryItem),
     total,
     page,
     pageSize,

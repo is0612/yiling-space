@@ -1,28 +1,10 @@
 import type { ApiRequest } from "../utils/request";
 import type { Character, Snapshot, SnapshotDetail, SnapshotSourceMessage } from "../utils/mock-data";
 import type { MemoryProgressRow } from "../composables/useMemoryProgress";
-
-export type MemoryCategory = "FACT" | "PREFERENCE" | "RELATIONSHIP" | "COMMITMENT" | "GOAL" | "EVENT" | "SUMMARY" | "OTHER";
-
-export type MemoryRow = {
-  id: string;
-  category: string;
-  content: string;
-  status: string;
-  scopeType: string;
-  importance: number;
-  validTo: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type MemoryPage = {
-  items: MemoryRow[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
+// 记忆条目的形状与枚举与后端共用一份（`shared/types/memory.ts`）；页面沿用 `MemoryRow` 这个名字。
+import type { MemoryCategory, MemoryItem, MemoryPage } from "#shared/types/memory";
+export type { MEMORY_CATEGORIES, MEMORY_STATUSES, MEMORY_SCOPE_TYPES, MemoryCategory, MemoryItem, MemoryPage } from "#shared/types/memory";
+export type MemoryRow = MemoryItem;
 
 export type MemoryStats = {
   memory: number;
