@@ -382,8 +382,8 @@ function handbookBase(overrides: Record<string, unknown> = {}) {
    * 版本号是给人看的「这次改了什么」，改动提示词必须一起升；发言人规则是 P1-3 的
    * 实际生效点 —— 字段传对了但提示词没要求，模型照样会把群友的经历写成她的。
    */
-  assert.equal(DIARY_PROMPT_VERSION, "journal-diary-v3", "日记提示词版本变化要同步这里");
-  assert.equal(HANDBOOK_PROMPT_VERSION, "journal-handbook-v3", "手账提示词版本变化要同步这里");
+  assert.equal(DIARY_PROMPT_VERSION, "journal-diary-v4", "日记提示词版本变化要同步这里");
+  assert.equal(HANDBOOK_PROMPT_VERSION, "journal-handbook-v4", "手账提示词版本变化要同步这里");
 
   const promptInput: JournalAiInput = {
     apiKey: "test-key",
@@ -405,6 +405,10 @@ function handbookBase(overrides: Record<string, unknown> = {}) {
   for (const [label, prompt] of [["日记", diaryPrompt], ["手账", handbookPrompt]] as const) {
     assert(prompt.includes("speaker"), `${label}提示词要提到 speaker 字段，否则模型不知道按谁区分`);
     assert(prompt.includes("isOwner"), `${label}提示词要提到 isOwner，否则分不出主人`);
+    assert(prompt.includes("没看到后续不等于事情没发生"), `${label}不能把取材缺失当作未完成的证据`);
+    assert(prompt.includes("区分计划、承诺、已完成与已验证"), `${label}必须保留事项的证据阶段`);
+    assert(prompt.includes("同一事项有后续更正"), `${label}必须考虑状态随时间变化`);
+    assert(prompt.includes("你的旧回复和日记也可能有误"), `${label}不能用先前自述证明能力状态`);
     assert(
       /别人|群友/.test(prompt),
       `${label}提示词要明确「别人经历的事不能写成自己做的」`,

@@ -18,8 +18,8 @@ import { parseJsonLoose } from "./loose-json";
 import { callRawModel } from "./raw-llm";
 import type { ModelUsageTokens } from "./model-usage";
 
-export const DIARY_PROMPT_VERSION = "journal-diary-v3";
-export const HANDBOOK_PROMPT_VERSION = "journal-handbook-v3";
+export const DIARY_PROMPT_VERSION = "journal-diary-v4";
+export const HANDBOOK_PROMPT_VERSION = "journal-handbook-v4";
 
 /**
  * 日记的硬性下限只用来挡住空内容、纯符号和明显重复的占位文本；
@@ -488,6 +488,13 @@ async function callJournalModel(
   return { text, usage };
 }
 
+// 取材有配额和截断；缺少结果记录不是「尚未完成」的证据。
+const JOURNAL_FACT_BOUNDARY = [
+  "- 材料可能经过抽样或截断，没看到后续不等于事情没发生；不要从缺少记录推断尚未完成、没有效果或对方没有兑现。",
+  "- 区分计划、承诺、已完成与已验证：只按来源明确支持的阶段写。同一事项有后续更正时按时间交代变化，不把早先印象写成截至当天仍成立的事实；没有结果依据就只写当时讨论的内容。",
+  "- 能力是否可用不能靠有没有显式展示或你先前的自述判断；你的旧回复和日记也可能有误。感受可以主观，关于他人行为、功能状态和因果的事实结论仍须有来源支持。",
+];
+
 export function diarySystemPrompt(input: JournalAiInput): string {
   return [
     composeCharacterPrompt(input.basePrompt.slice(0, 12_000), input.styleExamples),
@@ -503,6 +510,7 @@ export function diarySystemPrompt(input: JournalAiInput): string {
     "- **看清被 @ 的是谁**：消息上的 `mentions` 是 @ 对象（target=self 是你，all 是全体，other 是别人；speaker/kind 是对方的显示名与身份）。@other 的话不是对你说的；@ 后面的称呼、外号属于那个对象，不能写进你自己的日记里当成别人在叫你。",
     "- 别人说的事是**别人的**：群友去旅行、群友心情不好、主人今天很累，都不是你经历的事。你可以写「听谁说起」，但不能写成自己做的、自己的情绪。只有你自己说过的、真正参与过的事才用第一人称当作亲历。",
     "- 分不清某句话是谁说的，就别把它写进日记。",
+    ...JOURNAL_FACT_BOUNDARY,
     ...(input.messages.length === 0 && input.events.length > 0
       ? ["- 这一天的原始消息已经不在，只剩下忆泡。只能根据忆泡的标题和详情写；不要编造对话原文，也不要假装记得未记录的场景。细节不够就写短，或者 SKIP。"]
       : []),
@@ -538,6 +546,7 @@ export function handbookSystemPrompt(input: JournalAiInput): string {
     "- 标签：1-5 个主题词。",
     "- **认清说话的人**：`role: assistant` 才是你自己；`role: user` 要看 `speaker` / `isOwner`，群聊里可能是主人、群友，甚至别的 bot。别人经历的事只能记成「听谁说起」，不能记成自己做的。",
     "- **看清被 @ 的是谁**：`mentions` 是 @ 对象；target=other 不是你在被叫，@ 后面的称呼属于对方，不能记成你的外号或别人对你的称呼。",
+    ...JOURNAL_FACT_BOUNDARY,
     ...(input.messages.length === 0 && input.events.length > 0
       ? ["- 这一天的原始消息已经不在，只剩下忆泡。只能根据忆泡的标题和详情写；不要编造对话原文或未记录的场景。某个栏目没有来源支撑就留空。"]
       : []),

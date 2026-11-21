@@ -55,6 +55,14 @@ try {
   assert.match(system(), /journalRecent are entries you wrote yourself/);
   assert.match(system(), /never the user's/);
   assert.match(system(), /do not recite an entry in full/);
+  assert.match(system(), /may be mistaken or outdated/);
+  assert.match(system(), /missing follow-up is not evidence/);
+  assert.match(system(), /do not invent why you wrote it/);
+  assert.match(system(), /A chat acknowledgement does not edit the saved journal/);
+
+  // 只有昨日一句、没有近期正文时，也不能把旧状态当现状。
+  await generateConversationReply({ ...base, journalLine: { dayKey: "2026-11-14", quote: "当时讨论了一个计划" } });
+  assert.match(system(), /dated personal account that may be mistaken or outdated/);
 
   // 群聊永远不给：手账是写给她自己的，群里复述就是泄露。
   await generateConversationReply({ ...base, groupChat: true, journalRecent });

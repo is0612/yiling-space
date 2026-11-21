@@ -42,6 +42,7 @@ import { localDayKey, resolveDailyEventWindow, resolveDayWindow } from "./memory
 import { resolveChatTimeZone } from "./chat-time-context";
 import { selectPeriodSourceMessages } from "./memory-source-selection";
 import { journalRevisionSelect } from "./journal-dto";
+import { collectJournalEventSources } from "./journal-event-sources";
 import {
   conversationOriginLabel,
   readMessageIsOwner,
@@ -55,7 +56,7 @@ export const JOURNAL_MESSAGE_BUDGET = 150;
 export const JOURNAL_PER_CONVERSATION = 80;
 /** 单条消息进提示词时的截断长度。 */
 export const JOURNAL_AI_MESSAGE_CHARS = 800;
-export const JOURNAL_EVENT_LIMIT = 30;
+export { JOURNAL_EVENT_SOURCE_LIMIT as JOURNAL_EVENT_LIMIT } from "./journal-event-sources";
 
 export type JournalTextKind = "DIARY" | "HANDBOOK";
 export type JournalGenerationTarget = JournalTextKind | "BOTH";
@@ -320,12 +321,7 @@ export async function collectJournalSources(
         occurredAt: { gte: start, lt: end },
       },
     }),
-    prisma.memoryEvent.findMany({
-      where: { memoryScopeId: { in: input.scopeIds }, dayKey: input.dayKey, status: "ACTIVE" },
-      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-      take: JOURNAL_EVENT_LIMIT,
-      select: { id: true, occurredAt: true, title: true, detail: true },
-    }),
+    collectJournalEventSources(prisma, input),
   ]);
 
   const messages: JournalAiMessage[] = selected.map((message) => ({

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { resolveDailyEventWindow, resolveDayWindow } from "../server/utils/memory-event-time";
+import { collectJournalEventSources } from "../server/utils/journal-event-sources";
 import { enqueueDueMemorySnapshots } from "../server/utils/memory-scheduler";
 import {
   collectJournalSources,
@@ -171,6 +172,62 @@ async function verifyJournalStateMigration(): Promise<void> {
   } finally {
     await prisma.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
   }
+}
+
+async function verifyJournalEventSampling(): Promise<void> {
+  // 临时表仅当前事务可见，提交自动删除；真实业务表不参与这些边界用例。
+  await prisma.$transaction(async tx => {
+    await tx.$executeRaw`CREATE TEMP TABLE memory_events (
+      id uuid PRIMARY KEY, "memoryScopeId" uuid NOT NULL, "dayKey" text NOT NULL,
+      status text NOT NULL, "occurredAt" timestamptz NOT NULL, title text NOT NULL, detail text NOT NULL
+    ) ON COMMIT DROP`;
+    const globalScope = randomUUID(), privateScope = randomUUID(), otherScope = randomUUID();
+    const dayKey = "2026-11-20";
+    const start = resolveDayWindow(dayKey, TIME_ZONE).start;
+    const input = { scopeIds: [globalScope, privateScope], dayKey, timeZone: TIME_ZONE };
+    // 两个合法范围各覆盖六个当地时段；另放他人范围、停用及其他日期的数据。
+    for (const scopeId of [globalScope, privateScope, otherScope]) {
+      await tx.$executeRaw`INSERT INTO pg_temp.memory_events
+        SELECT md5(${scopeId} || ':' || n::text)::uuid, ${scopeId}::uuid, ${dayKey}, 'ACTIVE',
+          ${start}::timestamptz + (n / 10) * interval '4 hours' + (n % 10) * interval '1 minute',
+          n::text, ${scopeId} FROM generate_series(0, 59) n`;
+    }
+    await tx.$executeRaw`INSERT INTO pg_temp.memory_events VALUES
+      (${randomUUID()}::uuid, ${globalScope}::uuid, ${dayKey}, 'DISABLED', ${start}, 'excluded', 'excluded'),
+      (${randomUUID()}::uuid, ${globalScope}::uuid, '2026-11-19', 'ACTIVE', ${start}, 'excluded', 'excluded')`;
+    const events = await collectJournalEventSources(tx, input);
+    assert.equal(events.length, 30);
+    assert.equal(new Set(events.map(e => e.id)).size, 30, '分组不能重复取同一条忆泡');
+    assert(events.every(e => e.detail === globalScope || e.detail === privateScope), '拒绝其他范围、日期和停用来源');
+    for (const scopeId of input.scopeIds) {
+      for (let bucket = 0; bucket < 6; bucket++) {
+        assert(events.some(e => e.detail === scopeId && Math.floor(Number(e.title) / 10) === bucket), '两个范围的全天各时段都应覆盖');
+        assert(events.some(e => e.detail === scopeId && Number(e.title) === bucket * 10 + 9), '各组保留最新更正');
+      }
+    }
+    assert.deepEqual(events, await collectJournalEventSources(tx, { ...input, scopeIds: [...input.scopeIds, globalScope] }), '重复范围与相同时间查询结果稳定');
+    assert(events.every((e, i) => !i || events[i - 1]!.occurredAt <= e.occurredAt), '送入模型前恢复时间顺序');
+    assert.deepEqual(await collectJournalEventSources(tx, { ...input, scopeIds: [] }), []);
+    const smallInput = { ...input, scopeIds: [otherScope] };
+    await tx.$executeRaw`DELETE FROM pg_temp.memory_events WHERE "memoryScopeId" = ${otherScope}::uuid AND title::integer >= 7`;
+    assert.equal((await collectJournalEventSources(tx, smallInput)).length, 7, '低于预算时全部保留，不因空时段少取');
+    await tx.$executeRaw`INSERT INTO pg_temp.memory_events
+      SELECT md5(${otherScope} || ':hot:' || n::text)::uuid, ${otherScope}::uuid, ${dayKey}, 'ACTIVE',
+        ${start}::timestamptz + interval '23 hours' + n * interval '1 minute',
+        'hot:' || n::text, ${otherScope} FROM generate_series(0, 49) n`;
+    const sparse = await collectJournalEventSources(tx, smallInput);
+    assert.equal(sparse.length, 30, '稀疏时段的剩余额度应让给热闹时段');
+    assert(sparse.some(e => e.title === 'hot:49'), '单时段超过预算时仍保留最后的状态更正');
+    assert.equal(sparse.filter(e => !e.title.startsWith('hot:')).length, 7, '不能为最新时段丢掉较早且有额度的记录');
+    // 夏令时回拨日有 25 小时；按当地小时分桶，末尾事件仍属于当天最后一组。
+    const dst = { scopeIds: [randomUUID()], dayKey: '2026-10-25', timeZone: 'Europe/Helsinki' };
+    const window = resolveDayWindow(dst.dayKey, dst.timeZone);
+    for (const at of [window.start, new Date(window.end.getTime() - 1)]) {
+      await tx.$executeRaw`INSERT INTO pg_temp.memory_events VALUES
+        (${randomUUID()}::uuid, ${dst.scopeIds[0]}::uuid, ${dst.dayKey}, 'ACTIVE', ${at}, 'dst', 'dst')`;
+    }
+    assert.equal((await collectJournalEventSources(tx, dst)).length, 2, '非24小时日期不能漏掉日末');
+  });
 }
 
 async function main() {
@@ -692,6 +749,7 @@ async function main() {
   assert.deepEqual(await readRecentJournals(prisma, { characterId: recentEmpty.characterId, limit: 2 }), [], "没有日记时返回空");
 
   // P3-2：隔离 schema 里验证 migration 的状态回填结果。
+  await verifyJournalEventSampling();
   await verifyJournalStateMigration();
 }
 
