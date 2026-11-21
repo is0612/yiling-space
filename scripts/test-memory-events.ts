@@ -686,6 +686,30 @@ const byOldName = selectEventsForPrompt("和青禾都聊过什么", renamed, {
 });
 assert.deepEqual(byOldName.items.map((item) => item.id), ["n1"], "名字与账号命中同一条时不能重复出现");
 
+// 「你还记得 X 吗」这类说法以前解析不出人名，会退回关键词；现在要能认出是谁。
+assert.equal(parseEventParticipantQuery("你还记得昔涟吗"), "昔涟");
+assert.equal(parseEventParticipantQuery("记得青禾吗"), "青禾");
+assert.equal(parseEventParticipantQuery("想起小七了"), "小七");
+assert.equal(parseEventParticipantQuery("你认识阿蓝吗"), "阿蓝");
+assert.equal(parseEventParticipantQuery("你还记得海边的约定吗"), null, "宾语是事不是人，别当人名");
+assert.equal(parseEventParticipantQuery("你还记得我们第一次见面吗"), null, "问「第一次见面」不能把「面吗」当人名");
+// 「和好了」这类连词+语气词仍可能被当成名字（既有歧义）；关键是别因此把整轮锁死。
+assert.equal(
+  selectEventsForPrompt("你还记得和好了一起吃饭吗", [], { now, timeZone: TZ }).mode,
+  "keyword",
+  "认错名字时也必须退回关键词，不能强制按人过滤返回空",
+);
+
+// 端到端：问旧名字 + 忆泡存新名字，靠引用里的历史名字接上。
+const renameChain = [{
+  id: "rc1", title: "陪涟小鱼看比赛", detail: "聊到很晚",
+  occurredAt: new Date("2026-11-06T12:00:00+08:00"), participants: ["涟小鱼"], keywords: ["比赛"],
+  participantRefs: [{ kind: "external", platform: "qq-onebot", externalId: "100001", displayName: "昔涟" }],
+}];
+const remembered = selectEventsForPrompt("你还记得昔涟吗", renameChain, { now, timeZone: TZ });
+assert.equal(remembered.mode, "participant", "「记得某人吗」要走进按人过滤");
+assert.deepEqual(remembered.items.map((item) => item.id), ["rc1"], "旧名字要能接到改了名的那条忆泡");
+
 // 改名之后：忆泡里存的是新名字，引用里留着旧名字；问旧名字也要找得到。
 const renamedWithHistory = [
   {
