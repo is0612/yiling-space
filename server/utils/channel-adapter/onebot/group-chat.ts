@@ -15,24 +15,8 @@ import { usageDayKey } from "../../model-usage";
 
 export type GroupChatMode = "mention" | "ambient" | "all";
 
-export type GroupChatSettings = {
-  /** mention = 只回 @ 她的；ambient = 判断着接话（默认）；all = 每句都回（老行为）。 */
-  mode: GroupChatMode;
-  /** 最后一条消息之后安静这么久，算一轮结束。 */
-  batchWindowSeconds: number;
-  /** 被 @ 时等这么久就处理，不用等整轮聊完 —— 点名叫她还要等十秒，太迟钝。 */
-  mentionWindowSeconds: number;
-  /** 两条回复之间至少隔多久。 */
-  minGapSeconds: number;
-  /** 每天最多说几句（按群算，东八区日界）。 */
-  dailyMax: number;
-  quietStart: string;
-  quietEnd: string;
-  /** 跟她完全无关的闲聊，被放进去看一眼的概率。 */
-  ambientChance: number;
-  /** 群里怎么叫她（昵称、简称）。留空就只认 @ 和角色名。 */
-  aliases: string[];
-};
+/** 形状与 `shared/types/qq.ts` 共用；`GroupChatMode` 保留为内部别名。 */
+import type { GroupChatSettings } from "../../../../shared/types/qq";
 
 /**
  * 默认取「自然」档：接得上就说、接不上就潜水。

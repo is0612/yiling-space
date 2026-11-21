@@ -13,8 +13,8 @@ import {
   readGroupChatModeOverrides,
   resolveGroupChatSettings,
   type GroupChatModeOverrides,
-  type GroupChatSettings,
 } from "./group-chat";
+import type { GroupChatSettings } from "../../../../shared/types/qq";
 import { ONEBOT_PLATFORM } from "./types";
 import { QZONE_DEFAULT_LIMITS } from "./qzone";
 

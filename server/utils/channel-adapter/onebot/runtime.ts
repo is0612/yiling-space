@@ -381,15 +381,7 @@ export async function saveSnowlumaHome(input: string): Promise<{ ok: boolean; ho
   return { ok: true, home };
 }
 
-export type SnowlumaStatus = {
-  home: string;
-  /** 这个目录是怎么来的，页面据此决定要不要标「自动找到」 */
-  source: SnowlumaHomeSource;
-  /** start.bat 在不在（找不到就别假装能启动） */
-  installed: boolean;
-  running: boolean;
-  panelPort: number;
-};
+/** 形状与 `shared/types/qq.ts` 共用；这里只保留内部别名 `SnowlumaHomeSource`。 */
 
 /** 面板端口以它自己的 config/runtime.json 为准，读不到就用 5099 */
 async function snowlumaPanelPort(home: string): Promise<number> {
