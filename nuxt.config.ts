@@ -6,6 +6,13 @@ export default defineNuxtConfig({
   css: ["~/assets/css/main.css"],
   modules: ["@element-plus/nuxt"],
   nitro: {
+    /**
+     * 服务端只跑在本机 Node 20.19+ 上（`engines.node`），没必要按 es2019 降级编译。
+     * 不写这条时 `server/utils/safe-media-download.ts` 的 IP 计算（BigInt 字面量）
+     * 会刷一串「Big integer literals are not available in es2019」——那是构建器
+     * 在按浏览器年代降级，运行时根本不吃这套。
+     */
+    esbuild: { options: { target: "node20" } },
     externals: {
       /**
        * silk-wasm 的 wasm 是运行时 `readFileSync` 读的，静态分析看不见 ——
