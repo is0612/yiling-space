@@ -19,8 +19,11 @@ const experience = {
 const ref: EducationSource = { version: 1, type: "experience", key: `experience:${experience.id}`, id: experience.id,
   hash: experienceReflectionHash(experience), conversationId: privateRoom, memoryScopeId: privateScope,
   feedbackMessageId: experience.feedbackMessageId, proposer: { kind: "authorized", platform: "qq-onebot", identity: "123456789" }, educationMode: "explicit" };
-type Habit = { id: string; characterId: string; kind: string; content: string; context: string; reason: string; revision: number; status: string; conversationId: string | null; memoryScopeId: string | null; sourceType: string; sourceRefs: unknown };
-const candidate = (): Habit => ({ id: "habit", characterId, kind: "WORDING", content: "避免机械反问", context: "", reason: "private-reason-marker", revision: 1, status: "PENDING", conversationId: null, memoryScopeId: null, sourceType: "EDUCATION_TRANSFER", sourceRefs: [ref] });
+// 形状照真实 `character_expression_habits` 行造：DTO 整形会读 chatScope / reviewedBy / createdAt，
+// 少一个字段就等于在测一个数据库里不存在的对象。
+type Habit = { id: string; characterId: string; kind: string; content: string; context: string; chatScope: string; reason: string; status: string; reviewedBy: string | null; reviewedAt: Date | null; revision: number; sourceType: string; conversationId: string | null; memoryScopeId: string | null; sourceRefs: unknown; createdAt: Date; updatedAt: Date };
+const mockNow = new Date("2026-11-22T00:00:00.000Z");
+const candidate = (): Habit => ({ id: "habit", characterId, kind: "WORDING", content: "避免机械反问", context: "", chatScope: "ALL", reason: "private-reason-marker", status: "PENDING", reviewedBy: null, reviewedAt: null, revision: 1, sourceType: "EDUCATION_TRANSFER", conversationId: null, memoryScopeId: null, sourceRefs: [ref], createdAt: mockNow, updatedAt: mockNow });
 let habit = candidate(), authorized = true, stale = false, feedbackPresent = true, evidenceReads = 0, updates = 0, cas = true;
 const history: unknown[] = [], audits: unknown[] = [];
 const db = {
@@ -96,7 +99,9 @@ const reader = {
 } as unknown as PrismaClient;
 const selected = await loadExpressionHabitsForPrompt(reader, characterId, "你好");
 assert.deepEqual(selected.map(row => row.id), ["habit-0"]);
-assert.deepEqual(Object.keys(selected[0]!).sort(), ["content", "context", "id", "kind", "revision"]);
+// 真实行带 chatScope（DB 默认 "ALL"），选择器会把它一并带进载荷（类型允许；提示词暂未使用）。
+// 之前这里断言只有 5 个字段，是因为 mock 缺 chatScope —— 那是测试在迁就 mock，不是真实行为。
+assert.deepEqual(Object.keys(selected[0]!).sort(), ["chatScope", "content", "context", "id", "kind", "revision"]);
 for (const marker of ["sourceRefs", "reason", privateRoom, privateScope, ref.id, ref.feedbackMessageId, ref.proposer.identity]) assert(!JSON.stringify(selected).includes(marker));
 assert.deepEqual(await loadExpressionHabitsForPrompt(reader, "unrelated-character", "你好"), []);
 assert.equal(queries, 2);

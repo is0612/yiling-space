@@ -6,8 +6,8 @@ import {
   EXPRESSION_CHAT_SCOPES, LANGUAGE_KINDS, LANGUAGE_STATUSES,
   type ChatScope, type LanguageKind, type LanguageStatus,
 } from "../../shared/types/growth";
-export { EXPRESSION_CHAT_SCOPES };
 export type ExpressionChatScope = ChatScope;
+/** 不导出 EXPRESSION_CHAT_SCOPES：同名 re-export 会与 shared 的自动导入撞车。 */
 export function parseExpressionChatScope(value: unknown): ExpressionChatScope {
   if (!(EXPRESSION_CHAT_SCOPES as readonly unknown[]).includes(value)) throw createError({ statusCode: 400, statusMessage: "聊天范围无效。" });
   return value as ExpressionChatScope;

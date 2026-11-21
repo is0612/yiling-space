@@ -1,6 +1,6 @@
 import { createError } from "h3";
-import type { Prisma, PrismaClient, CharacterPreference } from "../../src/generated/prisma/client";
-import type { GrowthSource, Preference, PreferenceKind, PreferenceStatus } from "../../shared/types/growth";
+import type { Prisma, PrismaClient, CharacterPreference, CharacterPreferenceRevision } from "../../src/generated/prisma/client";
+import type { GrowthSource, Preference, PreferenceHistory, PreferenceKind, PreferenceStatus } from "../../shared/types/growth";
 import { parsePreferenceCreate, parsePreferencePatch, parsePreferenceSources, preferenceNextStatus, preferencePage } from "./preferences-domain";
 import { assertPreferenceOwner, loadPreferenceSources, lockPreferenceOwner } from "./preferences-sources";
 
@@ -8,9 +8,10 @@ import { assertPreferenceOwner, loadPreferenceSources, lockPreferenceOwner } fro
  * 把 Prisma 行整形成 API DTO（`shared/types/growth.ts` 的 `Preference`）。
  *
  * 和 `publicGoal` 同一套理由：日期显式转 ISO（`JSON.stringify(Date)` 本来就是 ISO，
- * 线上行为不变）、JSON 列显式转数组、裸字符串列在边界收窄成契约枚举。
+ * 线上行为不变）、JSON 列显式转数组、裸字符串列用编译期断言对齐契约枚举
+ * （`as` 不校验运行时取值，守卫在 `parsePreference*` 与 `preferenceNextStatus`）。
  */
-function toPreferenceDto(row: CharacterPreference): Preference {
+export function toPreferenceDto(row: CharacterPreference): Preference {
   return {
     ...row,
     kind: row.kind as PreferenceKind,
@@ -22,6 +23,21 @@ function toPreferenceDto(row: CharacterPreference): Preference {
   };
 }
 
+/** 历史条目 = 修订行（\`character_preference_revisions\`）：没有 characterId / updatedAt。 */
+export const toPreferenceHistoryDto = (row: CharacterPreferenceRevision): PreferenceHistory => ({
+  id: row.id,
+  preferenceId: row.preferenceId,
+  revision: row.revision,
+  action: row.action,
+  kind: row.kind as PreferenceKind,
+  topic: row.topic,
+  reason: row.reason,
+  status: row.status as PreferenceStatus,
+  sourceType: row.sourceType as PreferenceHistory["sourceType"],
+  sourceRefs: row.sourceRefs as unknown as GrowthSource[],
+  actorId: row.actorId,
+  createdAt: row.createdAt.toISOString(),
+});
 async function snapshot(tx: Prisma.TransactionClient, preference: CharacterPreference, actorId: string, action: string) {
   await tx.characterPreferenceRevision.create({ data: {
     preferenceId: preference.id, revision: preference.revision, action, kind: preference.kind, topic: preference.topic,
@@ -83,5 +99,5 @@ export async function listPreferenceHistory(prisma: PrismaClient, input: { owner
   if (!await prisma.characterPreference.findFirst({ where: { id: input.preferenceId, characterId: input.characterId }, select: { id: true } })) throw createError({ statusCode: 404, statusMessage: "偏好不存在。" });
   const where = { preferenceId: input.preferenceId, preference: { characterId: input.characterId, character: { ownerId: input.ownerId } } };
   const [items, total] = await Promise.all([prisma.characterPreferenceRevision.findMany({ where, orderBy: { revision: "desc" }, skip: (input.page - 1) * input.pageSize, take: input.pageSize }), prisma.characterPreferenceRevision.count({ where })]);
-  return preferencePage(items, total, input.page, input.pageSize);
+  return preferencePage(items.map(toPreferenceHistoryDto), total, input.page, input.pageSize);
 }

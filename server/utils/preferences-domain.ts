@@ -5,7 +5,7 @@ import {
   PREFERENCE_KINDS, PREFERENCE_STATUSES,
   type PreferenceKind, type PreferenceStatus,
 } from "../../shared/types/growth";
-export { PREFERENCE_KINDS, PREFERENCE_STATUSES, type PreferenceKind, type PreferenceStatus };
+// 不再 re-export 枚举：同名会被 Nuxt 自动导入判为重复。引用方直接从 shared 取。
 
 export type PreferenceSourceRef = { type: "MEMORY_EVENT" | "REFLECTION_SUGGESTION"; id: string; hash: string };
 export type PreferenceSourceSnapshot = PreferenceSourceRef & { title: string; summary: string };

@@ -2,19 +2,41 @@ import { validateEducationTransferRefs } from "./education-transfer";
 import { assertGroupObservationCurrent, GROUP_OBSERVATION_SOURCE } from "./group-expression-evidence";
 import { validateExperienceReflectionRefs, type ExperienceReflectionRef } from "./experience-reflection";
 import { createError } from "h3";
-import type { Prisma, PrismaClient, CharacterExpressionHabit } from "../../src/generated/prisma/client";
+import type { Prisma, PrismaClient, CharacterExpressionHabit, CharacterExpressionHabitRevision } from "../../src/generated/prisma/client";
 import { parseExpressionHabitCreate, parseExpressionHabitPatch, parseExpressionHabitSources, expressionHabitNextStatus, expressionHabitPage } from "./expression-habits-domain";
 import { loadPreferenceSources, lockPreferenceOwner, listPreferenceSources } from "./preferences-sources";
 import type { PreferenceSourceRef } from "./preferences-domain";
-import type { GrowthSource, LanguageHabit, LanguageKind, LanguageStatus } from "../../shared/types/growth";
+import type { LanguageHabit, LanguageHabitSourceRef, LanguageHistory, LanguageKind, LanguageStatus } from "../../shared/types/growth";
 
 /**
  * 把 Prisma 行整形成 API DTO（`shared/types/growth.ts` 的 `LanguageHabit`）。
  *
  * 与 `publicGoal` / `toPreferenceDto` 同一套理由：日期显式转 ISO（线上字节不变）、
- * JSON 列显式转数组、裸字符串列在边界收窄成契约枚举。
+ * JSON 列显式转数组、裸字符串列用编译期断言对齐契约枚举（`as` 不校验运行时取值，
+ * 守卫在 `parseExpressionHabit*` 与 `expressionHabitNextStatus`）。来源引用按
+ * `sourceType` 分支的真实结构断言成联合类型，并不是统一当成一种快照。
  */
-function toLanguageHabitDto(row: CharacterExpressionHabit): LanguageHabit {
+/** 历史条目 = 修订行（\`character_expression_habit_revisions\`）：没有 characterId / reviewedBy。 */
+export const toLanguageHistoryDto = (row: CharacterExpressionHabitRevision): LanguageHistory => ({
+  id: row.id,
+  habitId: row.habitId,
+  revision: row.revision,
+  action: row.action,
+  kind: row.kind as LanguageKind,
+  content: row.content,
+  context: row.context,
+  chatScope: (row.chatScope ?? undefined) as LanguageHistory["chatScope"],
+  reason: row.reason,
+  status: row.status as LanguageStatus,
+  sourceType: row.sourceType as LanguageHistory["sourceType"],
+  sourceRefs: row.sourceRefs as unknown as LanguageHabitSourceRef[],
+  conversationId: row.conversationId,
+  memoryScopeId: row.memoryScopeId,
+  actorId: row.actorId,
+  createdAt: row.createdAt.toISOString(),
+});
+
+export function toLanguageHabitDto(row: CharacterExpressionHabit): LanguageHabit {
   return {
     ...row,
     kind: row.kind as LanguageKind,
@@ -23,7 +45,7 @@ function toLanguageHabitDto(row: CharacterExpressionHabit): LanguageHabit {
     sourceType: row.sourceType as LanguageHabit["sourceType"],
     reviewedBy: (row.reviewedBy ?? null) as LanguageHabit["reviewedBy"],
     reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
-    sourceRefs: row.sourceRefs as unknown as GrowthSource[],
+    sourceRefs: row.sourceRefs as unknown as LanguageHabitSourceRef[],
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -144,7 +166,7 @@ export async function listExpressionHabitHistory(prisma: PrismaClient, input: Ow
   if (!await prisma.characterExpressionHabit.findFirst({ where: { id: input.habitId, characterId: input.characterId }, select: { id: true } })) throw createError({ statusCode: 404, statusMessage: "表达习惯不存在。" });
   const where = { habitId: input.habitId, habit: { characterId: input.characterId, character: { ownerId: input.ownerId } } };
   const [items, total] = await Promise.all([prisma.characterExpressionHabitRevision.findMany({ where, orderBy: { revision: "desc" }, skip: (input.page - 1) * input.pageSize, take: input.pageSize }), prisma.characterExpressionHabitRevision.count({ where })]);
-  return expressionHabitPage(items, total, input.page, input.pageSize);
+  return expressionHabitPage(items.map(toLanguageHistoryDto), total, input.page, input.pageSize);
 }
 export async function listExpressionHabitSources(prisma: PrismaClient, input: Owner & { type: PreferenceSourceRef["type"]; q: string; page: number; pageSize: number }) {
   return listPreferenceSources(prisma, input);

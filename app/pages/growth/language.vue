@@ -6,6 +6,7 @@ import {
   type GrowthSource as Source,
   type GrowthSourceType as SourceType,
   type LanguageHabit as Habit,
+  type LanguageHabitSourceRef,
   type LanguageHistory as History,
   type LanguageKind as Kind,
   type LanguageStatus as Status,
@@ -30,6 +31,30 @@ const characterId = computed(() => activeCharacter.value?.id ?? "");
 const kindLabels: Record<Kind, string> = { TONE: "语气", WORDING: "用词", LENGTH: "回复长短" };
 const statusLabels: Record<Status, string> = { ACTIVE: "已生效", PENDING: "待确认", DISABLED: "已停用", REJECTED: "已驳回" };
 const sourceLabels: Record<SourceType, string> = { MEMORY_EVENT: "公开忆泡", REFLECTION_SUGGESTION: "已接受反思" };
+/**
+ * 来源列表按 `sourceType` 渲染，不能当成同一种快照读字段：
+ * 群观察没有 `id` / `title`，本会话经验没有 `title` / `summary`，教育来源带自己的身份信息。
+ * 这三个函数负责把联合类型收窄，模板里就不要再用 `as` 断言去糊字段。
+ */
+function sourceKey(source: LanguageHabitSourceRef): string {
+  return source.type === "GROUP_OBSERVATION" ? `GROUP_OBSERVATION:${source.hash}` : `${source.type}:${source.id}`;
+}
+/** 经验类来源（本会话经验 / 教育来源）只有 id，没有标题：用前 8 位让它可辨认。 */
+function sourceTitle(source: LanguageHabitSourceRef): string {
+  if (source.type === "GROUP_OBSERVATION") return "群聊观察片段";
+  if (source.type === "experience") return `本会话经验 #${source.id.slice(0, 8)}`;
+  return `${sourceLabels[source.type] || "来源"} · ${source.title}`;
+}
+/** 公开快照有 summary；经验类来源不带原文，只给一句说明，避免看起来像内容缺失。 */
+function sourceSummary(source: LanguageHabitSourceRef): string {
+  if (source.type === "GROUP_OBSERVATION") return "从所选群聊的接话和后续中提炼。";
+  if (source.type === "experience") return "私人原文不随规则共享。";
+  return source.summary;
+}
+/** 教育来源要单独显示完整的经验 ID（页面文案里写的是「原始经验 ID」）。 */
+function experienceSourceId(source: LanguageHabitSourceRef): string {
+  return source.type === "experience" ? source.id : "";
+}
 const actionLabels: Record<string, string> = { CREATE: "创建", EDIT: "编辑", ACTIVATE: "确认生效", REJECT: "驳回", DISABLE: "停用" };
 const examples: Record<Kind, string> = { TONE: "例如：对方正在难过时，先温和回应，不急着开玩笑。", WORDING: "例如：解释步骤时，多用日常说法，少堆专业术语。", LENGTH: "例如：日常问候简短回应，需要解释时再展开。" };
 const chatScopeLabels: Record<ChatScope, string> = { ALL: "所有聊天", GROUP: "仅群聊", PRIVATE: "仅私聊" };
@@ -372,9 +397,9 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
             v-if="item.sourceRefs.length"
             class="source-details"
           >
-            <summary>{{ item.sourceType === 'GROUP_OBSERVATION' ? '来源依据 · 群聊观察片段' : `来源依据 · ${item.sourceRefs.length} 条${item.sourceType === 'EDUCATION_TRANSFER' ? '（仅保留私人来源引用）' : '（保存时摘要）'}` }}</summary><div
+            <summary>{{ item.sourceType === 'GROUP_OBSERVATION' ? '来源依据 · 群聊观察片段' : `来源依据 · ${item.sourceRefs.length} 条${item.sourceType === 'EDUCATION_TRANSFER' ? '（仅保留私人来源引用）' : '（保存时摘要）'}` }}            </summary><div
               v-for="source in item.sourceRefs"
-              :key="`${source.type}:${source.id}`"
+              :key="sourceKey(source)"
               class="source-snapshot"
             >
               <template v-if="item.sourceType === 'GROUP_OBSERVATION'">
@@ -384,11 +409,11 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
               </template>
               <template v-else-if="item.sourceType === 'EDUCATION_TRANSFER'">
                 <strong>已授权私聊教育来源</strong><p class="muted">
-                  原始经验 ID：{{ source.id }}。私人原文不随规则共享。
+                  原始经验 ID：{{ experienceSourceId(source) }}。私人原文不随规则共享。
                 </p>
               </template>
               <template v-else>
-                <strong>{{ sourceLabels[source.type] || '本会话经验' }} · {{ source.title }}</strong><p>{{ source.summary || (source as Source & { excerpt?: string }).excerpt }}</p>
+                <strong>{{ sourceTitle(source) }}</strong><p>{{ sourceSummary(source) }}</p>
               </template>
             </div><p class="muted">
               候选确认时会重新核对来源；已确认的表达习惯独立保留。

@@ -1,6 +1,6 @@
 import { createError } from "h3";
-import type { Prisma, PrismaClient, CharacterGoal } from "../../src/generated/prisma/client";
-import type { Goal, GoalKind, GoalStatus, GrowthSource } from "../../shared/types/growth";
+import type { Prisma, PrismaClient, CharacterGoal, CharacterGoalRevision } from "../../src/generated/prisma/client";
+import type { Goal, GoalHistory, GoalKind, GoalStatus, GrowthSource } from "../../shared/types/growth";
 import { parseGoalCreate, parseGoalPatch, parseGoalProgress, parseGoalSources, goalNextStatus, goalProgressPayloadHash, goalPage } from "./goals-domain";
 import { loadPreferenceSources, lockPreferenceOwner, listPreferenceSources } from "./preferences-sources";
 import type { PreferenceSourceRef } from "./preferences-domain";
@@ -10,6 +10,22 @@ export async function loadGoalSources(tx: Prisma.TransactionClient, characterId:
   try { return await loadPreferenceSources(tx, characterId, refs); }
   catch (error) { if (error && typeof error === "object" && "statusCode" in error && error.statusCode === 409) throw createError({ statusCode: 409, statusMessage: "目标来源已失效、变更或不属于当前角色公开范围，请重新选择。" }); throw error; }
 }
+/** 历史条目 = 修订行（\`character_goal_revisions\`）：形状与 \`Goal\` 不同，单独整形。 */
+export const toGoalHistoryDto = (row: CharacterGoalRevision): GoalHistory => ({
+  id: row.id,
+  goalId: row.goalId,
+  revision: row.revision,
+  action: row.action,
+  kind: row.kind as GoalKind,
+  title: row.title,
+  description: row.description,
+  reason: row.reason,
+  status: row.status as GoalStatus,
+  sourceType: row.sourceType as GoalHistory["sourceType"],
+  sourceRefs: row.sourceRefs as unknown as GrowthSource[],
+  actorId: row.actorId,
+  createdAt: row.createdAt.toISOString(),
+});
 const progressSelect = { id: true, goalId: true, requestKey: true, content: true, sourceRefs: true, createdAt: true } as const;
 const goalInclude = { _count: { select: { progress: true } }, progress: { select: progressSelect, orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }], take: 1 } };
 type ProgressDto = Prisma.CharacterGoalProgressGetPayload<{ select: typeof progressSelect }>;
@@ -20,12 +36,14 @@ type ProgressDto = Prisma.CharacterGoalProgressGetPayload<{ select: typeof progr
  * ISO 字符串，所以线上行为一个字节都不变；但类型从「隐式推断」变成「对着契约检查」——
  * 以后谁动了 Prisma 字段或 DTO 字段，这里会直接报错，不再靠前后端各自记得同步。
  */
-function publicGoal(row: Prisma.CharacterGoalGetPayload<{ include: typeof goalInclude }>): Goal {
+export function publicGoal(row: Prisma.CharacterGoalGetPayload<{ include: typeof goalInclude }>): Goal {
   const { _count, progress, ...goal } = row;
   return {
     ...goal,
-    // DB 列是裸字符串（没有库级枚举约束）：在 API 边界收窄成契约里的字面量联合。
-    // 越界值不会被悄悄发出去，前端拿到的类型承诺是真的。
+    // DB 列是裸字符串（没有库级枚举约束）：这里的 `as` 只是**编译期**断言，
+    // 运行时不会校验取值。真正的守卫在写入侧：`parseGoalCreate` / `parseGoalPatch` 只接受
+    // 白名单枚举，`goalNextStatus` 也只产出合法状态。这三处断言的作用是让类型检查盯住
+    // 「形状是否还对得上契约」，不是替代运行时校验。
     kind: goal.kind as GoalKind,
     status: goal.status as GoalStatus,
     sourceType: goal.sourceType as Goal["sourceType"],
@@ -97,7 +115,7 @@ export async function listGoals(prisma: PrismaClient, input: Owner & { status: s
 async function assertGoal(prisma: PrismaClient, input: Owner & { goalId: string }) { await own(prisma, input); if (!await prisma.characterGoal.findFirst({ where: { id: input.goalId, characterId: input.characterId }, select: { id: true } })) throw createError({ statusCode: 404, statusMessage: "目标不存在。" }); }
 export async function listGoalHistory(prisma: PrismaClient, input: Owner & { goalId: string; page: number; pageSize: number }) {
   await assertGoal(prisma, input); const where = { goalId: input.goalId, goal: { characterId: input.characterId, character: { ownerId: input.ownerId } } };
-  const [rows, total] = await Promise.all([prisma.characterGoalRevision.findMany({ where, orderBy: { revision: "desc" }, skip: (input.page - 1) * input.pageSize, take: input.pageSize }), prisma.characterGoalRevision.count({ where })]); return goalPage(rows, total, input.page, input.pageSize);
+  const [rows, total] = await Promise.all([prisma.characterGoalRevision.findMany({ where, orderBy: { revision: "desc" }, skip: (input.page - 1) * input.pageSize, take: input.pageSize }), prisma.characterGoalRevision.count({ where })]); return goalPage(rows.map(toGoalHistoryDto), total, input.page, input.pageSize);
 }
 export async function listGoalProgress(prisma: PrismaClient, input: Owner & { goalId: string; page: number; pageSize: number }) {
   await assertGoal(prisma, input); const where = { goalId: input.goalId, goal: { characterId: input.characterId, character: { ownerId: input.ownerId } } };

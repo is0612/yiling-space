@@ -3,7 +3,8 @@ import { createError } from "h3";
 import { parsePreferenceSources, PREFERENCE_UUID, type PreferenceSourceRef } from "./preferences-domain";
 // 枚举与前端共用一份：校验用数组、类型用派生结果，不再各自维护。
 import { GOAL_KINDS, GOAL_STATUSES, type GoalKind, type GoalStatus } from "../../shared/types/growth";
-export { GOAL_KINDS, GOAL_STATUSES, type GoalKind, type GoalStatus };
+// 不再 re-export 任何枚举（含类型）：Nuxt 自动导入按导出名去重，同名即警告。
+// 引用方直接从 `shared/types/growth` 取。
 
 /** 分页形状与前端共用（`GrowthPage`），服务端只负责算 pageCount。 */
 export function goalPage<T>(items: T[], total: number, page: number, pageSize: number) {
