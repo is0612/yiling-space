@@ -17,6 +17,8 @@ export function conversationOriginLabel(conversation: ConversationOriginRef): st
   const group = /^g:(\d+)$/.exec(key);
   if (group?.[1]) return `QQ群 ${group[1]}`;
   if (key.startsWith("c:")) return "私聊";
+  // 她说说的会话：不是聊天，但同样是她的经历，标签要能一眼分开。
+  if (key.startsWith("q:")) return "QQ空间";
   return "本地对话";
 }
 

@@ -81,6 +81,7 @@ import {
   writeQzoneAudit,
   type QzoneFeed,
 } from "./qzone";
+import { recordQzonePostMemory } from "../../qzone-memory";
 
 export type OnebotHandleOutcome =
   | { status: "replied"; conversationId: string }
@@ -661,6 +662,16 @@ async function handleQzoneConfirm(
         kind,
         requestedBy: pending.requestedBy,
         ok: true,
+      });
+      // 她发过的说说也是一段经历：写进消息链路，周期快照/忆泡/检索才看得见。
+      // 失败只记日志，绝不因为「没记住」把已经发出去的说说说成失败。
+      await recordQzonePostMemory(getPrisma(), {
+        characterId: pending.characterId ?? binding.characterId,
+        accountQq: record.accountQq,
+        content: pending.content,
+        tid: result.tid,
+      }).catch((error) => {
+        console.warn("[qzone] 说说没能写进记忆：", error instanceof Error ? error.message : error);
       });
       // 没有 tid 也是成功：协议端发出了但没说 tid 的情况很常见。让人去确认，
       // 千万不要「那就再发一次」。
