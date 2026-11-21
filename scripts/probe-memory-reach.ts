@@ -22,6 +22,7 @@ import { resolveChatTimeZone } from "../server/utils/chat-time-context";
 import { loadPromptMemoryCandidates } from "../server/utils/prompt-memory-candidates";
 import { loadPromptEventCandidates } from "../server/utils/prompt-event-candidates";
 import { selectPromptMemoryContext } from "../server/utils/prompt-memory-selection";
+import { diagnoseMemoryReach } from "../server/utils/memory-reach-diagnosis";
 import {
   rankMemoriesWithBudget, resolveMemoryItemLimit, resolveMemoryTokenBudget, resolveSnapshotTokenBudget,
 } from "../server/utils/memory-retrieval";
@@ -97,11 +98,10 @@ const rows = targetId
 const report = rows.map(candidate => {
   const rank = scoredIndex.get(candidate.id);
   const inPrompt = selectedIds.has(candidate.id);
-  const reason = inPrompt
-    ? "已放入提示词"
-    : rank === undefined
-      ? "关键词没命中（问句和这条记忆没有共同词）"
-      : "命中但被条数或 token 预算挤掉";
+  const diagnosis = diagnoseMemoryReach({
+    stored: { status: "ACTIVE", deletedAt: null, inReadableScope: true },
+    inCandidates: true, rank, inPrompt,
+  });
   return {
     id: candidate.id,
     category: candidate.category,
@@ -109,14 +109,23 @@ const report = rows.map(candidate => {
     matched: rank !== undefined,
     rank: rank === undefined ? null : rank + 1,
     inPrompt,
-    reason,
+    reason: diagnosis.reason,
   };
 });
 
-const missingInScope = targetId && !rows.length
+// 目标不在候选集时，仍要分清「库里没有」「范围读不到」「只是没命中」。
+const storedTarget = targetId && !rows.length
   ? await prisma.memoryItem.findFirst({
       where: { id: targetId },
       select: { id: true, status: true, deletedAt: true, memoryScopeId: true },
+    })
+  : null;
+const targetDiagnosis = targetId && !rows.length
+  ? diagnoseMemoryReach({
+      stored: storedTarget
+        ? { status: storedTarget.status, deletedAt: storedTarget.deletedAt, inReadableScope: readableScopeIds.includes(storedTarget.memoryScopeId) }
+        : null,
+      inCandidates: false, rank: undefined, inPrompt: false,
     })
   : null;
 
@@ -128,9 +137,9 @@ if (!targetId) {
   console.log("\n本轮最相关的几条（--memory=<id> 可单独追问一条）：");
   for (const row of report) console.log(`- ${row.id} [${row.category}/${row.scope}] 第 ${row.rank} 位 ${row.inPrompt ? "✓ 已放入" : "✗ 未放入"}`);
 } else if (!rows.length) {
-  console.log(`\n目标 ${targetId} 不在候选集里：`);
-  if (!missingInScope) console.log("- 库里没有这条记忆（或已被删除）。");
-  else console.log(`- 状态 ${missingInScope.status}${missingInScope.deletedAt ? "（已删除）" : ""}，范围 ${missingInScope.memoryScopeId}；该范围不在本次可读范围，或不在候选查询窗口内。`);
+  console.log(`\n目标 ${targetId} 没进这一轮：`);
+  console.log(`- [${targetDiagnosis?.verdict}] ${targetDiagnosis?.reason}`);
+  if (storedTarget) console.log(`  状态 ${storedTarget.status}，范围 ${storedTarget.memoryScopeId}`);
 } else {
   for (const row of report) {
     console.log(`\n${row.id}`);
