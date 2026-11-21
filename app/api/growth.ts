@@ -1,44 +1,10 @@
 import type { ApiRequest } from "../utils/request";
-
-export type GrowthSourceType = "MEMORY_EVENT" | "REFLECTION_SUGGESTION";
-export type GrowthSource = {
-  type: GrowthSourceType;
-  id: string;
-  title: string;
-  summary: string;
-  hash: string;
-  occurredAt?: string;
-};
-export type GrowthPagination = { page: number; pageSize: number; total: number; pageCount: number };
-export type GrowthPage<T> = { items: T[]; pagination: GrowthPagination };
-
-export type GoalKind = "GOAL" | "WISH";
-export type GoalStatus = "ACTIVE" | "PENDING" | "PAUSED" | "COMPLETED" | "ABANDONED" | "REJECTED";
-export type GoalProgress = {
-  id: string;
-  goalId: string;
-  content: string;
-  sourceRefs: GrowthSource[];
-  createdAt: string;
-};
-export type Goal = {
-  id: string;
-  characterId: string;
-  kind: GoalKind;
-  title: string;
-  description: string;
-  reason: string;
-  status: GoalStatus;
-  revision: number;
-  sourceType: "MANUAL" | "SOURCES";
-  sourceRefs: GrowthSource[];
-  createdAt: string;
-  updatedAt: string;
-  progressCount?: number;
-  latestProgress?: GoalProgress | null;
-};
-export type GoalHistory = Goal & { action: string };
-export type GoalSuggestion = { kind: GoalKind; title: string; description: string; reason: string };
+// 成长域的形状与前后端共用一份（`shared/types/growth.ts`）：不再在这里手抄。
+import type {
+  GrowthSourceType, GrowthSource, GrowthPagination, GrowthPage,
+  GoalKind, GoalStatus, GoalProgress, Goal, GoalHistory, GoalSuggestion,
+} from "#shared/types/growth";
+export type * from "#shared/types/growth";
 
 export type PreferenceKind = "LIKE" | "DISLIKE" | "INTEREST";
 export type PreferenceStatus = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";

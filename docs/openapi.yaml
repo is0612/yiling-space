@@ -8479,6 +8479,8 @@ components:
             kind: { type: string, enum: [owner, authorized] }
             platform: { type: string, enum: [desktop, qq-onebot] }
             identity: { type: string }
+    # 与 `shared/types/growth.ts` 的 `Goal` 一一对应，字段与枚举必须同改。
+    # 服务端由 `publicGoal()` 的返回类型守住，前端直接引用 `#shared` 契约。
     CharacterGoal:
       type: object
       required: [id, characterId, kind, title, description, reason, status, revision, sourceType, sourceRefs, createdAt, updatedAt]

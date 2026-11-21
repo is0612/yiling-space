@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
 import { createError } from "h3";
 import { parsePreferenceSources, PREFERENCE_UUID, type PreferenceSourceRef } from "./preferences-domain";
-export const GOAL_KINDS = ["GOAL", "WISH"] as const;
-export const GOAL_STATUSES = ["PENDING", "ACTIVE", "PAUSED", "COMPLETED", "ABANDONED", "REJECTED"] as const;
-export type GoalKind = typeof GOAL_KINDS[number];
-export type GoalStatus = typeof GOAL_STATUSES[number];
+// 枚举与前端共用一份：校验用数组、类型用派生结果，不再各自维护。
+import { GOAL_KINDS, GOAL_STATUSES, type GoalKind, type GoalStatus } from "../../shared/types/growth";
+export { GOAL_KINDS, GOAL_STATUSES, type GoalKind, type GoalStatus };
+
+/** 分页形状与前端共用（`GrowthPage`），服务端只负责算 pageCount。 */
+export function goalPage<T>(items: T[], total: number, page: number, pageSize: number) {
+  return { items, pagination: { page, pageSize, total, pageCount: Math.max(1, Math.ceil(total / pageSize)) } };
+}
 function bad(message: string): never { throw createError({ statusCode: 400, statusMessage: message }); }
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) bad("目标请求无效。");
@@ -67,4 +71,3 @@ export function parseGoalListQuery(query: Record<string, unknown>) {
   if (query.q !== undefined && (typeof query.q !== "string" || query.q.length > 100)) bad("搜索词最多100字。");
   return { page: positive(query.page, 1, 10000), pageSize: positive(query.pageSize, 20, 50), status: status as GoalStatus | "ALL", q: typeof query.q === "string" ? query.q.trim() : "" };
 }
-export function goalPage<T>(items: T[], total: number, page: number, pageSize: number) { return { items, pagination: { page, pageSize, total, pageCount: Math.max(1, Math.ceil(total / pageSize)) } }; }

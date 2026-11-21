@@ -1,5 +1,6 @@
 import { createError } from "h3";
 import type { Prisma, PrismaClient, CharacterGoal } from "../../src/generated/prisma/client";
+import type { Goal, GoalKind, GoalStatus, GrowthSource } from "../../shared/types/growth";
 import { parseGoalCreate, parseGoalPatch, parseGoalProgress, parseGoalSources, goalNextStatus, goalProgressPayloadHash, goalPage } from "./goals-domain";
 import { loadPreferenceSources, lockPreferenceOwner, listPreferenceSources } from "./preferences-sources";
 import type { PreferenceSourceRef } from "./preferences-domain";
@@ -12,7 +13,35 @@ export async function loadGoalSources(tx: Prisma.TransactionClient, characterId:
 const progressSelect = { id: true, goalId: true, requestKey: true, content: true, sourceRefs: true, createdAt: true } as const;
 const goalInclude = { _count: { select: { progress: true } }, progress: { select: progressSelect, orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }], take: 1 } };
 type ProgressDto = Prisma.CharacterGoalProgressGetPayload<{ select: typeof progressSelect }>;
-function publicGoal<T extends { _count: { progress: number }; progress: ProgressDto[] }>(row: T) { const { _count, progress, ...goal } = row; return { ...goal, progressCount: _count.progress, latestProgress: progress[0] ?? null }; }
+/**
+ * 把 Prisma 行整形成 API DTO（`shared/types/growth.ts` 的 `Goal`）。
+ *
+ * 日期在这里显式转 ISO 字符串、JSON 列显式转数组：`JSON.stringify(Date)` 的结果本来就是
+ * ISO 字符串，所以线上行为一个字节都不变；但类型从「隐式推断」变成「对着契约检查」——
+ * 以后谁动了 Prisma 字段或 DTO 字段，这里会直接报错，不再靠前后端各自记得同步。
+ */
+function publicGoal(row: Prisma.CharacterGoalGetPayload<{ include: typeof goalInclude }>): Goal {
+  const { _count, progress, ...goal } = row;
+  return {
+    ...goal,
+    // DB 列是裸字符串（没有库级枚举约束）：在 API 边界收窄成契约里的字面量联合。
+    // 越界值不会被悄悄发出去，前端拿到的类型承诺是真的。
+    kind: goal.kind as GoalKind,
+    status: goal.status as GoalStatus,
+    sourceType: goal.sourceType as Goal["sourceType"],
+    createdAt: goal.createdAt.toISOString(),
+    updatedAt: goal.updatedAt.toISOString(),
+    sourceRefs: goal.sourceRefs as unknown as GrowthSource[],
+    progressCount: _count.progress,
+    latestProgress: progress[0]
+      ? {
+          ...progress[0],
+          createdAt: progress[0].createdAt.toISOString(),
+          sourceRefs: progress[0].sourceRefs as unknown as GrowthSource[],
+        }
+      : null,
+  };
+}
 async function snapshot(tx: Prisma.TransactionClient, goal: CharacterGoal, actorId: string, action: string, progressId?: string) {
   await tx.characterGoalRevision.create({ data: { goalId: goal.id, revision: goal.revision, action, kind: goal.kind, title: goal.title, description: goal.description, reason: goal.reason, status: goal.status, sourceType: goal.sourceType, sourceRefs: goal.sourceRefs as Prisma.InputJsonValue, actorId } });
   await tx.auditLog.create({ data: { actorType: "USER", actorId, characterId: goal.characterId, action: `goal.${action.toLowerCase()}`, entityType: "CharacterGoal", entityId: goal.id, details: { revision: goal.revision, status: goal.status, ...(progressId ? { progressId } : {}) } } });
