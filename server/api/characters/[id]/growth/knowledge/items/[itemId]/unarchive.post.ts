@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import { requireActorUserId } from "../../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../../utils/prisma";
+import { toKnowledgeEntry } from "../../../../../../../utils/knowledge-item-dto";
 import { applyKnowledgeLifecycle, KNOWLEDGE_LIFECYCLE_RULES, parseLifecycleBody } from "../../../../../../../utils/knowledge-lifecycle";
 
 /** ARCHIVED → ACTIVE：取消归档，重新参与检索。 */
@@ -17,5 +18,5 @@ export default defineEventHandler(async (event) => {
   const item = await prisma.$transaction(tx => applyKnowledgeLifecycle(tx, {
     characterId, itemId, operation: "UNARCHIVE", expectedRevision,
   }));
-  return { item, message: KNOWLEDGE_LIFECYCLE_RULES.UNARCHIVE.message };
+  return { item: toKnowledgeEntry(item), message: KNOWLEDGE_LIFECYCLE_RULES.UNARCHIVE.message };
 });

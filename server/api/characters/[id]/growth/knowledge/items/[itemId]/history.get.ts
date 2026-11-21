@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../../utils/prisma";
+import { toKnowledgeRevision } from "../../../../../../../utils/knowledge-item-dto";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
@@ -25,5 +26,5 @@ export default defineEventHandler(async (event) => {
       tags: true, confidence: true, status: true, sourceType: true, sourceRef: true, createdAt: true,
     },
   });
-  return { itemId: item.id, currentRevision: item.revision, revisions };
+  return { itemId: item.id, currentRevision: item.revision, revisions: revisions.map(toKnowledgeRevision) };
 });

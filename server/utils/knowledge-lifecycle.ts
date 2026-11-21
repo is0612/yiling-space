@@ -1,5 +1,6 @@
 import { createError } from "h3";
 import type { Prisma } from "../../src/generated/prisma/client";
+import type { KnowledgeEntryRow } from "./knowledge-item-dto";
 
 /**
  * 正式知识的生命周期规则。
@@ -110,7 +111,7 @@ export async function applyKnowledgeLifecycle(
     operation: KnowledgeLifecycleOperation;
     expectedRevision: number;
   },
-): Promise<{ id: string; status: string; revision: number }> {
+): Promise<KnowledgeEntryRow> {
   const rule = KNOWLEDGE_LIFECYCLE_RULES[input.operation];
 
   const current = await tx.knowledgeItem.findFirst({
@@ -164,7 +165,17 @@ export async function applyKnowledgeLifecycle(
     },
   });
 
-  return { id: current.id, status: rule.to, revision: current.revision + 1 };
+  // 再查一次：`updateMany` 不回行，而 `updatedAt` 是数据库自己写的。
+  // 返回整行而不是 `{ id, status, revision }` —— 生命周期接口的响应里 item 是条目本身，
+  // 只回三个字段会让前端拿到的这条"半成品"没法替换列表里的那一行。
+  const fresh = await tx.knowledgeItem.findUniqueOrThrow({
+    where: { id: current.id },
+    select: {
+      id: true, title: true, content: true, category: true, tags: true, confidence: true,
+      status: true, sourceType: true, sourceRef: true, revision: true, createdAt: true, updatedAt: true,
+    },
+  });
+  return fresh;
 }
 
 /**

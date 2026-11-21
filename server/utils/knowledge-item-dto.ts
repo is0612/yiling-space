@@ -1,4 +1,4 @@
-import type { KnowledgeEntry, KnowledgeItemStatus } from "../../shared/types/knowledge";
+import type { KnowledgeEntry, KnowledgeItemRevision, KnowledgeItemStatus } from "../../shared/types/knowledge";
 
 /**
  * 整形前的行：`knowledge_items` 的本表标量。
@@ -43,5 +43,43 @@ export function toKnowledgeEntry(row: KnowledgeEntryRow): KnowledgeEntry {
     revision: row.revision,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export type KnowledgeRevisionRow = {
+  id: string;
+  revision: number;
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  confidence: number | null;
+  status: string;
+  sourceType: string;
+  sourceRef: unknown;
+  createdAt: Date;
+};
+
+/**
+ * 历史版本（`knowledge_item_revisions` 的一行）。
+ *
+ * 注意：表里还有一个 `action` 列（CONTENT_EDIT / MERGE / ARCHIVE / RESTORE…），
+ * 但历史接口从来没有 select 它，前端也拿不到「这一版是哪次操作造成的」。
+ * 契约按真实响应定义，不含 `action` —— 要显示它得先让接口 select 出来，
+ * 不是在这里凭空加一个字段。
+ */
+export function toKnowledgeRevision(row: KnowledgeRevisionRow): KnowledgeItemRevision {
+  return {
+    id: row.id,
+    revision: row.revision,
+    title: row.title,
+    content: row.content,
+    category: row.category,
+    tags: row.tags,
+    confidence: row.confidence,
+    status: row.status,
+    sourceType: row.sourceType,
+    sourceRef: row.sourceRef,
+    createdAt: row.createdAt.toISOString(),
   };
 }

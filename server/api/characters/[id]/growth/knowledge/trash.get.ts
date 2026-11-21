@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
+import { toKnowledgeEntry } from "../../../../../utils/knowledge-item-dto";
 
 /**
  * 当前角色的回收站。
@@ -54,7 +55,7 @@ export default defineEventHandler(async (event) => {
       })
     : [];
   const auditedItemIds = new Set(auditRelations.flatMap(relation => [relation.sourceItemId, relation.targetItemId]));
-  const rows = items.map(item => ({ ...item, canPermanentlyDelete: !auditedItemIds.has(item.id) }));
+  const rows = items.map(item => ({ ...toKnowledgeEntry(item), canPermanentlyDelete: !auditedItemIds.has(item.id) }));
 
   return {
     characterId,
