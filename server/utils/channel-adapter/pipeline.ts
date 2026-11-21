@@ -1290,6 +1290,191 @@ async function persistChannelTurnResult(input: {
   });
 }
 
+type ChannelTurnChatInputContext = {
+  preferences: ChannelTurnGrowthPreparation["preferences"];
+  expressionHabits: ChannelTurnGrowthPreparation["expressionHabits"];
+  goals: ChannelTurnGrowthPreparation["goals"];
+  memories: ChannelTurnRetrieval["memories"];
+  snapshots: ChannelTurnRetrieval["snapshots"];
+  events: ChannelTurnRetrieval["events"];
+  recentEvents: ChannelTurnRetrieval["recentEvents"];
+  rawMessages: ChannelTurnRawMessage[];
+  selfUnderstanding: ChannelTurnGrowthPreparation["selfUnderstanding"];
+  journalLine: ChannelTurnReplyToggles["journalLine"];
+  journalRecent: ChannelTurnReplyToggles["journalRecent"];
+  journalFacts: ChannelTurnRetrieval["journalFacts"];
+  groupActivity: ChannelTurnRetrieval["groupActivity"];
+  catchphrasePrompt: ChannelTurnReplyToggles["catchphrasePrompt"];
+  emojiFaces: ChannelTurnReplyToggles["emojiFaces"];
+  stickerCatalog: ChannelTurnReplyToggles["stickerCatalog"];
+  interactionGuidance: Awaited<ReturnType<typeof readInteractionGuidance>>;
+  interactionExperiences: Awaited<ReturnType<typeof readInteractionExperiences>>;
+  conversationSummary: Awaited<ReturnType<typeof prepareConversationSummary>>;
+  groupAcquaintances: Array<{ name: string; note: string }> | undefined;
+  acquaintances: ChannelTurnRetrieval["acquaintanceRows"];
+  privateKnowledgeItems: ChannelTurnGrowthPreparation["privateKnowledgeItems"];
+  voiceSettings: ChannelTurnReplyToggles["voiceSettings"];
+  voicePlanned: boolean;
+  allowSilent: boolean;
+  useTranscript: boolean;
+  isGroup: boolean;
+  character: { name: string; basePrompt: string; styleExamples: string | null; modelConfig: ChannelTurnCharacter["modelConfig"] };
+  chatSettings: ReturnType<typeof resolveChatModelSettings>;
+  apiKey: string;
+  currentMessage: string;
+  chatTimeZone: string;
+  messages: ChannelTurnMessage[];
+  backgroundLines: NonNullable<ChannelGroupTurnContext["background"]>;
+  recentMessages: ConversationContextMessage[];
+  recentStoredMessages: ChannelTurnStoredMessage[];
+  crossChannel: CrossChannelLine[];
+  readOnlyTools: Record<string, unknown> | undefined;
+  ownerHistoryHold: boolean;
+  turn: {
+    platform: string;
+    group?: ChannelGroupTurnContext;
+    voiceCapable?: boolean;
+    segmentCapable?: boolean;
+  };
+};
+
+/**
+ * 组装这一轮进模型的载荷。
+ *
+ * 纯数据构造、无副作用：所有「查库/判定」都已在前面完成，这里只负责把结果摆到
+ * 提示词该在的位置，并按群聊/私聊、语音/分条、主人/群友等维度决定哪些段出现。
+ * 群元数据（背景、成员、锚点）缺了只是语境变薄，不改变「这是群聊」这个事实。
+ */
+function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters<typeof generateGroupContextReply>[0]["chatInput"] {
+  const {
+    preferences, expressionHabits, goals, memories, snapshots, events, recentEvents, rawMessages,
+    selfUnderstanding, journalLine, journalRecent, journalFacts, groupActivity, catchphrasePrompt,
+    emojiFaces, stickerCatalog, interactionGuidance, interactionExperiences, conversationSummary,
+    groupAcquaintances, acquaintances, privateKnowledgeItems, voiceSettings, voicePlanned, allowSilent,
+    useTranscript, isGroup, character, chatSettings, apiKey, currentMessage, chatTimeZone, messages,
+    backgroundLines, recentMessages, recentStoredMessages, crossChannel, readOnlyTools, ownerHistoryHold, turn,
+  } = ctx;
+  return {
+        ...(turn.platform === "qq-onebot" && !(ownerHistoryHold) && qqReadOnlyTaskRequested(currentMessage) ? { readOnlyTools } : {}),
+        preferences,
+        expressionHabits,
+        goals,
+        characterName: character.name,
+        characterPrompt: character.basePrompt.slice(0, 12_000),
+        ...(!useTranscript && messages[0]!.speaker ? { speaker: messages[0]!.speaker } : {}),
+        styleExamples: (character.styleExamples ?? "").slice(0, 8000),
+        model: chatSettings.model,
+        apiKey,
+        apiBaseUrl: chatSettings.apiBaseUrl,
+        temperature: chatSettings.temperature,
+        maxTokens: chatSettings.maxTokens,
+        thinking: chatSettings.thinking,
+        currentMessage,
+        ...(!isGroup && messages[0]?.quotedMessage ? { quotedMessage: messages[0].quotedMessage } : {}),
+        timeZone: chatTimeZone,
+        ...(journalLine ? { journalLine } : {}),
+        ...(journalRecent.length ? { journalRecent } : {}),
+        ...(journalFacts.length ? { journalFacts } : {}),
+        ...(groupActivity ? { groupActivity } : {}),
+        events,
+        ...(recentEvents.length ? { recentEvents } : {}),
+        rawMessages,
+        ...(useTranscript
+          ? {
+              transcript: messages.map((message) => ({
+                id: message.externalMessageId,
+                ...(message.member ? { member: message.member } : {}),
+                speaker: message.authorDisplayName ?? "",
+                content: message.promptContent ?? message.content,
+                // 谁是主人必须逐行带：顶层 speaker 在群聊路径下不会传（一轮里好几个人说话），
+                // 漏掉这一行，模型只能从「谁说话口吻像主人」里猜，结果就是对谁都喊主人。
+                isOwner: message.speaker?.isOwner === true,
+                // 这一行 @ 的是谁：只给 `@member_n` 不够，模型不知道代号背后是谁。
+                ...(message.mentions?.length ? { mentions: message.mentions } : {}),
+                // 他引用的哪一句：带上作者和原文，模型才看得出这句在接谁的话。
+                ...(message.quotedMessage ? {
+                  quoted: {
+                    id: message.quotedMessage.messageId,
+                    ...(message.quotedMessage.member ? { member: message.quotedMessage.member } : {}),
+                    ...(message.quotedMessage.speaker ? { speaker: message.quotedMessage.speaker } : {}),
+                    ...(message.quotedMessage.content ? { content: message.quotedMessage.content } : {}),
+                    ...(message.quotedMessage.isSelf ? { isSelf: true } : {}),
+                    ...conversationSourcePolicy(message.quotedMessage),
+                  },
+                } : {}),
+                ...(message.occurredAt ? { occurredAt: message.occurredAt.toISOString() } : {}),
+              })),
+            }
+          : {}),
+        /**
+         * 「这一轮是群聊」只认 `isGroup`，不认 `turn.group` 有没有值。
+         *
+         * 这两者必须同源：助理回合身份在 `createAssistantTurnContext` 里按 `isGroup` 写成
+         * `channel: "qq-group"`，`assertAssistantTurnChannel` 再拿 `chatInput.groupChat` 去校对。
+         * 如果 groupChat 按「群里带了元数据」算，一条缺 `group` 的群消息就会变成身份说群聊、
+         * chatInput 说私聊，断言抛错、整轮 abort —— 而且是在写库事务之前 abort，于是群会话
+         * 归位、旧忆泡搬家、这一轮消息落库全都不发生，日志里只有一句 ignored。
+         * 群元数据（背景、成员、锚点）仍然只在 `turn.group` 有值时附带，缺了只是语境变薄。
+         */
+        ...(isGroup ? { groupChat: true } : {}),
+        ...(turn.group
+          ? {
+              direct: turn.group.direct,
+              ...(backgroundLines.length
+                ? {
+                    groupBackground: backgroundLines.map((line) => ({
+                      id: line.id,
+                      member: line.member,
+                      speaker: line.speaker,
+                      content: line.text,
+                      ...conversationSourcePolicy(line),
+                      ...(line.mentions?.length ? { mentions: line.mentions } : {}),
+                      ...(line.quoted ? { quoted: { id: line.quoted.id,
+                        ...(line.quoted.member ? { member: line.quoted.member } : {}),
+                        ...(line.quoted.speaker ? { speaker: line.quoted.speaker } : {}),
+                        ...(line.quoted.text ? { content: line.quoted.text } : {}),
+                        ...(typeof line.quoted.isSelf === "boolean" ? { isSelf: line.quoted.isSelf } : {}),
+                        ...conversationSourcePolicy(line.quoted),
+                      } } : {}),
+                      occurredAt: new Date(line.at).toISOString(),
+                    })),
+                  }
+                : {}),
+              ...(turn.group.anchors.length ? { groupAnchors: turn.group.anchors } : {}),
+              ...(turn.group.members?.length ? { groupMembers: turn.group.members } : {}),
+            }
+          : {}),
+        ...(allowSilent ? { allowSilent } : {}),
+        // 当前会话只有在渠道支持、角色开关开启且 TTS 配置完整时，才算真的能发语音。
+        voiceEnabled: turn.voiceCapable === true
+          && isVoiceReplyEnabled(character.modelConfig)
+          && Boolean(voiceSettings),
+        // 能不能分条发，是渠道的事，不看角色配置 —— QQ 一条一条弹是平台习惯，不是设定。
+        ...(turn.segmentCapable ? { segmentedReply: true } : {}),
+        ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
+        ...(acquaintances ? { acquaintances } : {}),
+        ...(interactionGuidance.length ? { interactionGuidance } : {}),
+        ...(selfUnderstanding ? { selfUnderstanding } : {}),
+        ...(interactionExperiences.length ? (isGroup ? { groupInteractionExperiences: interactionExperiences } : { interactionExperiences }) : {}),
+        ...(conversationSummary ? { conversationSummary } : {}),
+        recentMessages: conversationSummary ? recentMessages.filter(row => {
+          const source = recentStoredMessages.find(item => (item.externalMessageId || item.id) === row.id);
+          return !source || source.occurredAt.toISOString() > conversationSummary.through.occurredAt ||
+            (source.occurredAt.toISOString() === conversationSummary.through.occurredAt && source.id > conversationSummary.through.id);
+        }) : recentMessages,
+        // 他在群里说的那几句：单独一路，不并进 recentMessages（见上面 crossChannel 的注释）。
+        ...(crossChannel.length ? { crossChannel: { label: "QQ 群", lines: crossChannel } } : {}),
+        memories,
+        snapshots,
+        ...(privateKnowledgeItems.length ? { knowledgeItems: privateKnowledgeItems } : {}),
+        ...(emojiFaces ? { emojiFaces } : {}),
+        ...(stickerCatalog?.length ? { emojiStickers: stickerCatalog } : {}),
+        // 告诉她「这一条会被念出来」：语气、长度、不要表情符号都靠这一段。
+        ...(voicePlanned ? { voiceReply: true } : {}),
+        ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
+  };
+}
+
 type ChannelTurnMemoryLoader = {
   loadMemoryCandidates: (
     searchQuery: string,
@@ -3161,125 +3346,48 @@ async function runChannelTurn(input: {
         return { sources, coverage };
       } } } : {}),
       loadCandidates: loadMemoryCandidates,
-      chatInput: {
-        ...(input.platform === "qq-onebot" && !(ownerHistoryHold) && qqReadOnlyTaskRequested(currentMessage) ? { readOnlyTools } : {}),
+      chatInput: buildChannelTurnChatInput({
         preferences,
         expressionHabits,
         goals,
-        characterName: character.name,
-        characterPrompt: character.basePrompt.slice(0, 12_000),
-        ...(!useTranscript && messages[0]!.speaker ? { speaker: messages[0]!.speaker } : {}),
-        styleExamples: (character.styleExamples ?? "").slice(0, 8000),
-        model: chatSettings.model,
-        apiKey,
-        apiBaseUrl: chatSettings.apiBaseUrl,
-        temperature: chatSettings.temperature,
-        maxTokens: chatSettings.maxTokens,
-        thinking: chatSettings.thinking,
-        currentMessage,
-        ...(!isGroup && messages[0]?.quotedMessage ? { quotedMessage: messages[0].quotedMessage } : {}),
-        timeZone: chatTimeZone,
-        ...(journalLine ? { journalLine } : {}),
-        ...(journalRecent.length ? { journalRecent } : {}),
-        ...(journalFacts.length ? { journalFacts } : {}),
-        ...(groupActivity ? { groupActivity } : {}),
-        events,
-        ...(recentEvents.length ? { recentEvents } : {}),
-        rawMessages,
-        ...(useTranscript
-          ? {
-              transcript: messages.map((message) => ({
-                id: message.externalMessageId,
-                ...(message.member ? { member: message.member } : {}),
-                speaker: message.authorDisplayName ?? "",
-                content: message.promptContent ?? message.content,
-                // 谁是主人必须逐行带：顶层 speaker 在群聊路径下不会传（一轮里好几个人说话），
-                // 漏掉这一行，模型只能从「谁说话口吻像主人」里猜，结果就是对谁都喊主人。
-                isOwner: message.speaker?.isOwner === true,
-                // 这一行 @ 的是谁：只给 `@member_n` 不够，模型不知道代号背后是谁。
-                ...(message.mentions?.length ? { mentions: message.mentions } : {}),
-                // 他引用的哪一句：带上作者和原文，模型才看得出这句在接谁的话。
-                ...(message.quotedMessage ? {
-                  quoted: {
-                    id: message.quotedMessage.messageId,
-                    ...(message.quotedMessage.member ? { member: message.quotedMessage.member } : {}),
-                    ...(message.quotedMessage.speaker ? { speaker: message.quotedMessage.speaker } : {}),
-                    ...(message.quotedMessage.content ? { content: message.quotedMessage.content } : {}),
-                    ...(message.quotedMessage.isSelf ? { isSelf: true } : {}),
-                    ...conversationSourcePolicy(message.quotedMessage),
-                  },
-                } : {}),
-                ...(message.occurredAt ? { occurredAt: message.occurredAt.toISOString() } : {}),
-              })),
-            }
-          : {}),
-        /**
-         * 「这一轮是群聊」只认 `isGroup`，不认 `input.group` 有没有值。
-         *
-         * 这两者必须同源：助理回合身份在 `createAssistantTurnContext` 里按 `isGroup` 写成
-         * `channel: "qq-group"`，`assertAssistantTurnChannel` 再拿 `chatInput.groupChat` 去校对。
-         * 如果 groupChat 按「群里带了元数据」算，一条缺 `group` 的群消息就会变成身份说群聊、
-         * chatInput 说私聊，断言抛错、整轮 abort —— 而且是在写库事务之前 abort，于是群会话
-         * 归位、旧忆泡搬家、这一轮消息落库全都不发生，日志里只有一句 ignored。
-         * 群元数据（背景、成员、锚点）仍然只在 `input.group` 有值时附带，缺了只是语境变薄。
-         */
-        ...(isGroup ? { groupChat: true } : {}),
-        ...(input.group
-          ? {
-              direct: input.group.direct,
-              ...(backgroundLines.length
-                ? {
-                    groupBackground: backgroundLines.map((line) => ({
-                      id: line.id,
-                      member: line.member,
-                      speaker: line.speaker,
-                      content: line.text,
-                      ...conversationSourcePolicy(line),
-                      ...(line.mentions?.length ? { mentions: line.mentions } : {}),
-                      ...(line.quoted ? { quoted: { id: line.quoted.id,
-                        ...(line.quoted.member ? { member: line.quoted.member } : {}),
-                        ...(line.quoted.speaker ? { speaker: line.quoted.speaker } : {}),
-                        ...(line.quoted.text ? { content: line.quoted.text } : {}),
-                        ...(typeof line.quoted.isSelf === "boolean" ? { isSelf: line.quoted.isSelf } : {}),
-                        ...conversationSourcePolicy(line.quoted),
-                      } } : {}),
-                      occurredAt: new Date(line.at).toISOString(),
-                    })),
-                  }
-                : {}),
-              ...(input.group.anchors.length ? { groupAnchors: input.group.anchors } : {}),
-              ...(input.group.members?.length ? { groupMembers: input.group.members } : {}),
-            }
-          : {}),
-        ...(allowSilent ? { allowSilent } : {}),
-        // 当前会话只有在渠道支持、角色开关开启且 TTS 配置完整时，才算真的能发语音。
-        voiceEnabled: input.voiceCapable === true
-          && isVoiceReplyEnabled(character.modelConfig)
-          && Boolean(voiceSettings),
-        // 能不能分条发，是渠道的事，不看角色配置 —— QQ 一条一条弹是平台习惯，不是设定。
-        ...(input.segmentCapable ? { segmentedReply: true } : {}),
-        ...(groupAcquaintances?.length ? { groupAcquaintances } : {}),
-        ...(acquaintances ? { acquaintances } : {}),
-        ...(interactionGuidance.length ? { interactionGuidance } : {}),
-        ...(selfUnderstanding ? { selfUnderstanding } : {}),
-        ...(interactionExperiences.length ? (isGroup ? { groupInteractionExperiences: interactionExperiences } : { interactionExperiences }) : {}),
-        ...(conversationSummary ? { conversationSummary } : {}),
-        recentMessages: conversationSummary ? recentMessages.filter(row => {
-          const source = recentStoredMessages.find(item => (item.externalMessageId || item.id) === row.id);
-          return !source || source.occurredAt.toISOString() > conversationSummary.through.occurredAt ||
-            (source.occurredAt.toISOString() === conversationSummary.through.occurredAt && source.id > conversationSummary.through.id);
-        }) : recentMessages,
-        // 他在群里说的那几句：单独一路，不并进 recentMessages（见上面 crossChannel 的注释）。
-        ...(crossChannel.length ? { crossChannel: { label: "QQ 群", lines: crossChannel } } : {}),
         memories,
         snapshots,
-        ...(privateKnowledgeItems.length ? { knowledgeItems: privateKnowledgeItems } : {}),
-        ...(emojiFaces ? { emojiFaces } : {}),
-        ...(stickerCatalog?.length ? { emojiStickers: stickerCatalog } : {}),
-        // 告诉她「这一条会被念出来」：语气、长度、不要表情符号都靠这一段。
-        ...(voicePlanned ? { voiceReply: true } : {}),
-        ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
-      },
+        events,
+        recentEvents,
+        rawMessages,
+        selfUnderstanding,
+        journalLine,
+        journalRecent,
+        journalFacts,
+        groupActivity,
+        catchphrasePrompt,
+        emojiFaces,
+        stickerCatalog,
+        interactionGuidance,
+        interactionExperiences,
+        conversationSummary,
+        groupAcquaintances,
+        acquaintances,
+        privateKnowledgeItems,
+        voiceSettings,
+        voicePlanned,
+        allowSilent,
+        useTranscript,
+        isGroup,
+        character,
+        chatSettings,
+        apiKey,
+        currentMessage,
+        chatTimeZone,
+        messages,
+        backgroundLines,
+        recentMessages,
+        recentStoredMessages,
+        crossChannel,
+        readOnlyTools,
+        ownerHistoryHold,
+        turn: input,
+      }),
     });
   } catch (error) {
     if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: [...growthReads.values()] });
