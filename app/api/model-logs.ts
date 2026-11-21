@@ -84,6 +84,7 @@ export type ModelTurnDetailResponse = {
       memory: { count: number; usedTokens: number; dropped: number };
       snapshot: { count: number; usedTokens: number; dropped: number };
       event: { count: number; usedTokens: number; dropped: number; mode?: "range" | "participant" | "first" | "latest" | "keyword"; recent?: number };
+      used?: { memory: number; snapshot: number; event: number };
     };
     messages: TurnMessage[];
     context: {

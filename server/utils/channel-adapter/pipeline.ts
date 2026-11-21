@@ -2426,8 +2426,15 @@ async function runChannelTurn(input: {
   }, generated.action === "silent") });
   turnDetail.update({
     response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation },
-    // 与网页同一份口径：找到几条、放进去几条、预算挤掉几条。
-    retrieval: memorySelection,
+    // 与网页同一份口径：找到几条、放进去几条、预算挤掉几条，外加模型自报引用了几条。
+    retrieval: {
+      ...memorySelection,
+      used: {
+        memory: memories.filter((memory) => generated.usedMemoryIds.includes(memory.id)).length,
+        snapshot: snapshots.filter((snapshot) => generated.usedSnapshotIds.includes(snapshot.id)).length,
+        event: events.filter((event) => generated.usedEventIds.includes(event.id)).length,
+      },
+    },
   });
   const generationDurationMs = Date.now() - generationStartedAt;
   // 在落消息/发送前保存模型阶段结果，渠道发送失败也能从助手日志打开本轮详情。

@@ -9,6 +9,8 @@ export type TurnRetrievalStats = {
   memory: TurnSegmentStats;
   snapshot: TurnSegmentStats;
   event: TurnSegmentStats & { mode?: "range" | "participant" | "first" | "latest" | "keyword"; recent?: number };
+  /** 模型自报引用了几条（已按来源白名单过滤）。与上面的 count 对比，才能分出「没检索到」「被挤掉」「放进去了没用上」。 */
+  used?: { memory: number; snapshot: number; event: number };
 };
 export type TurnDetailPatch = {
   collaboration?: unknown;
@@ -58,7 +60,12 @@ function retrievalStats(value: unknown): TurnRetrievalStats | undefined {
   const mode = EVENT_MODES.find(item => item === eventRow.mode);
   // 兼容两种形状：入口传的是选择层原样（recentEvent.count），落盘再读回时是 event.recent。
   const recent = countOf(object(row.recentEvent).count) ?? countOf(eventRow.recent);
-  return { memory, snapshot, event: { ...event, ...(mode ? { mode } : {}), ...(recent === undefined ? {} : { recent }) } };
+  const usedRow = object(row.used);
+  const usedMemory = countOf(usedRow.memory), usedSnapshot = countOf(usedRow.snapshot), usedEvent = countOf(usedRow.event);
+  const used = usedMemory === undefined || usedSnapshot === undefined || usedEvent === undefined
+    ? undefined
+    : { memory: usedMemory, snapshot: usedSnapshot, event: usedEvent };
+  return { memory, snapshot, event: { ...event, ...(mode ? { mode } : {}), ...(recent === undefined ? {} : { recent }) }, ...(used ? { used } : {}) };
 }
 /** Explicit allowlist: diagnostics are evidence summaries, never serialized prompts/provider reasoning. */
 export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {

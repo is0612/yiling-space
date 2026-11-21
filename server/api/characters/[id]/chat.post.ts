@@ -823,7 +823,15 @@ export default defineEventHandler(async (event) => {
     response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation },
     collaboration: turnContext.snapshot(),
     // 「她为什么没想起那件事」：找到几条、放进去几条、被预算挤掉几条，只记数字不记正文。
-    retrieval: memorySelection,
+    // used 是模型自报引用（已过来源白名单），和 count 一比就能分出「没检索到」和「放进去了没用上」。
+    retrieval: {
+      ...memorySelection,
+      used: {
+        memory: memories.filter((memory) => generated.usedMemoryIds.includes(memory.id)).length,
+        snapshot: snapshots.filter((snapshot) => generated.usedSnapshotIds.includes(snapshot.id)).length,
+        event: events.filter((event) => generated.usedEventIds.includes(event.id)).length,
+      },
+    },
     growthReads: reconcileGrowthReadUsage([...growthReads.values()], {
       preferences: generated.usedPreferenceIds, language: generated.usedExpressionHabitIds, goals: generated.usedGoalIds,
     }, generated.action === "silent"),

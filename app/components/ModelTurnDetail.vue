@@ -24,6 +24,10 @@ const retrievalSummary = computed(() => {
     `忆泡 ${stats.event.count} 条${stats.event.mode ? `（${eventModeLabels[stats.event.mode]}）` : ""}`,
   ];
   if (stats.event.recent) parts.push(`另带近期 ${stats.event.recent} 条`);
+  if (stats.used) {
+    // 和上面「放进去几条」对照：0 引用可能是模型没用，也可能是根本没检索到。
+    parts.push(`模型引用：记忆 ${stats.used.memory} / 快照 ${stats.used.snapshot} / 忆泡 ${stats.used.event}`);
+  }
   return `本轮放入：${parts.join("、")}`;
 });const growthReadStatuses = { not_needed: "本轮无需读取", no_match: "没有匹配条目", failed: "读取失败", budget_excluded: "匹配条目未选入", provided: "已选入模型上下文" };
 function growthReferenceLabel(read: GrowthReadDiagnostic) {

@@ -20,7 +20,7 @@ const capture = createModelTurnDetail(false, [{ content: "本轮" }]);
 capture.update({ memory: { status: "no_sources", query: "昨天" } });
 capture.update({ collaboration: { version: 1, elapsedMs: 12, stages: [] }, growthReads: [{ domain: "knowledge", status: "provided" }] });
 capture.update({ retrieval: { memory: { count: 3, usedTokens: 420, dropped: 7 }, snapshot: { count: 1, usedTokens: 600, dropped: 2 },
-  event: { count: 2, usedTokens: 180, dropped: 0, mode: "range" }, recentEvent: { count: 1 } } });
+  event: { count: 2, usedTokens: 180, dropped: 0, mode: "range" }, recentEvent: { count: 1 }, used: { memory: 1, snapshot: 0, event: 2 } } });
 capture.update({ response: { action: "reply", reply: "没找到", explanation: "没有相关证据" } });
 const restored = readModelTurnDetail(capture.serialize());
 assert.equal(restored?.memory.status, "no_sources");
@@ -33,6 +33,8 @@ assert.equal(retrieval?.memory.count, 3, "记忆分段统计要保留");
 assert.equal(retrieval?.memory.dropped, 7, "「被预算挤掉几条」正是排查要看的那一项");
 assert.equal(retrieval?.event.mode, "range", "忆泡是按时段还是关键词选的要留下");
 assert.equal(retrieval?.event.recent, 1, "近期背景忆泡条数单独记");
+assert.deepEqual(retrieval?.used, { memory: 1, snapshot: 0, event: 2 }, "模型自报引用要和「放进去几条」分开记");
+assert.deepEqual(restored?.retrieval?.used, retrieval?.used, "落盘再读回不能丢引用计数");
 // 只有数字：脏字段、未知 mode、负数与超大值都不该原样落盘。
 const dirty = sanitizeModelTurnDetail({
   version: 1, groupChat: true, messages: [], context: { status: "success" }, memory: { status: "success" }, response: { status: "success" },
