@@ -868,6 +868,318 @@ async function attachVoiceTranscripts(
   });
 }
 
+const channelTurnCharacterSelect = {
+  id: true,
+  name: true,
+  ownerId: true,
+  basePrompt: true,
+  styleExamples: true,
+  status: true,
+  modelConfig: true,
+  memorySetting: { select: { timezone: true } },
+  memoryScopes: { where: { scopeType: "CHARACTER_GLOBAL" as const }, select: { id: true } },
+} satisfies Prisma.CharacterSelect;
+
+type ChannelTurnCharacter = Prisma.CharacterGetPayload<{ select: typeof channelTurnCharacterSelect }>;
+
+const channelTurnConversationSelect = {
+  id: true,
+  title: true,
+  memoryScopeId: true,
+} satisfies Prisma.ConversationSelect;
+
+type ChannelTurnConversation = Prisma.ConversationGetPayload<{ select: typeof channelTurnConversationSelect }>;
+
+type ChannelTurnPreparation =
+  | {
+      ok: true;
+      /** 批内去重 + 幂等过滤后、本轮真的要处理的消息。 */
+      messages: ChannelTurnMessage[];
+      character: ChannelTurnCharacter;
+      globalScope: { id: string };
+      existingConversation: ChannelTurnConversation | null;
+    }
+  /** 任何一步不过关都直接给出整轮结果，调用方原样返回。 */
+  | { ok: false; result: ChannelMessageResult };
+
+/**
+ * 入口三件事：批内去重、角色与全局范围、幂等检查 + 会话查找。
+ *
+ * 同一批里可能出现同一条消息两次（网关重投、或者两个适配器都连着 —— 后者已经在
+ * `run-onebot-adapter.ts` 里用单实例标记挡住）。不去重的话，整轮会撞
+ * `messages(conversationId, externalMessageId)` 唯一约束，事务回滚，**整轮都不回**：
+ * 一条重复消息把同一轮里别人的话也一起拖死。
+ */
+async function prepareChannelTurn(
+  prisma: PrismaClient,
+  input: {
+    characterId: string;
+    bindingId: string;
+    externalConversationId: string;
+    messages: ChannelTurnMessage[];
+  },
+): Promise<ChannelTurnPreparation> {
+  const seenInBatch = new Set<string>();
+  let messages = input.messages
+    .filter((message) => message.externalMessageId && message.content)
+    .filter((message) => {
+      if (seenInBatch.has(message.externalMessageId)) return false;
+      seenInBatch.add(message.externalMessageId);
+      return true;
+    })
+    .slice(-10);
+  if (!messages.length) return { ok: false, result: { status: "ignored", reason: "missing_fields" } };
+
+  // Character lookup comes first: a paused or archived character must not answer channel
+  // messages, and rejecting early also avoids creating an external identity for a dead character.
+  const character = await prisma.character.findUnique({
+    where: { id: input.characterId },
+    select: channelTurnCharacterSelect,
+  });
+  if (!character) return { ok: false, result: { status: "ignored", reason: "character_missing" } };
+  if (character.status !== "ACTIVE") return { ok: false, result: { status: "ignored", reason: "character_inactive" } };
+  const globalScope = character.memoryScopes[0];
+  if (!globalScope) return { ok: false, result: { status: "ignored", reason: "no_global_scope" } };
+
+  // Idempotency: a QQ message id is unique for the application, so a re-delivered event is dropped
+  // regardless of whether its conversation has been created yet. 群聊一轮里有几条，全查一遍。
+  // 会话查找与幂等检查互不依赖，一起发，省一个 RTT（P3）。
+  const [seen, foundConversation] = await Promise.all([
+    prisma.message.findMany({
+      where: { externalMessageId: { in: messages.map((message) => message.externalMessageId) } },
+      select: { externalMessageId: true },
+    }),
+    prisma.conversation.findFirst({
+      where: { channelBindingId: input.bindingId, externalConversationId: input.externalConversationId },
+      select: channelTurnConversationSelect,
+    }),
+  ]);
+  // 私聊预落库会建会话，后面的正常路径要接着用这一条，不能再建第二个。
+  if (seen.length) {
+    const seenIds = new Set(seen.map((row) => row.externalMessageId));
+    const fresh = messages.filter((message) => !seenIds.has(message.externalMessageId));
+    if (!fresh.length) return { ok: false, result: { status: "duplicate" } };
+    messages = fresh;
+  }
+
+  return { ok: true, messages, character, globalScope, existingConversation: foundConversation };
+}
+
+type ChannelTurnModelPreparation =
+  | {
+      ok: true;
+      chatSettings: ReturnType<typeof resolveChatModelSettings>;
+      apiKey: string;
+      voiceApiKey: string;
+      asrApiKey: string;
+      /** 图/语音已转成文字、可以直接进提示词的消息。 */
+      messages: ChannelTurnMessage[];
+    }
+  | { ok: false; result: ChannelMessageResult };
+
+/**
+ * 模型配置、日额度与图/语音预处理。
+ *
+ * 图先变成文字再进提示词（没开看图开关时什么都不做）；语音同理，先转写。
+ * 预落库写的是原始正文（`[图片]` / `[语音]`），图/语音转成文字后要把落库那几行
+ * 同步成同一份文字 —— 否则记录页看到的和忆泡读到的不一致。同步失败只记日志。
+ */
+async function prepareChannelTurnModel(input: {
+  prisma: PrismaClient;
+  character: ChannelTurnCharacter;
+  isGroup: boolean;
+  characterId: string;
+  bindingId: string;
+  platform: string;
+  messages: ChannelTurnMessage[];
+  privateMessagesRecorded: boolean;
+  existingConversation: ChannelTurnConversation | null;
+}): Promise<ChannelTurnModelPreparation> {
+  const { prisma, character } = input;
+  let messages = input.messages;
+  const chatSettings = resolveChatModelSettings(character.modelConfig);
+  let apiKey = "";
+  try {
+    apiKey = await resolveCharacterApiKey(character.modelConfig, chatSettings.apiBaseUrl);
+  } catch {
+    return { ok: false, result: { status: "ignored", reason: "api_key_decrypt_failed" } };
+  }
+  if (!apiKey || !chatSettings.model) return { ok: false, result: { status: "ignored", reason: "model_not_configured" } };
+
+  /**
+   * 语音 Key 与聊天 Key 是**两把**：语音几乎总是另一家服务商
+   * （DeepSeek / 通义这类纯文本服务商的 /audio/speech 直接 404），
+   * 而它常常是页面上单独填的。解密失败按没配处理，不影响聊天。
+   */
+  const voiceApiKey = await resolveCharacterVoiceApiKey(character.modelConfig).catch(() => "");
+  /** 识别专用 Key：合成与识别不是一家时（Breeze + MiniMax）必须分开，否则识别侧 401。 */
+  const asrApiKey = await resolveCharacterAsrApiKey(character.modelConfig).catch(() => "");
+
+  // 额度用完就静默不回：渠道里抛错会把一条普通聊天变成失败事件，还会触发重试。
+  const quota = await readDailyQuota(input.characterId, character.modelConfig);
+  if (quota.exceeded) return { ok: false, result: { status: "ignored", reason: "daily_quota_exceeded" } };
+
+  // 图先变成文字再进提示词；角色没开看图开关时这一步什么都不做。
+  messages = await attachImageDescriptions(messages, {
+    modelConfig: character.modelConfig,
+    chatModel: chatSettings.model,
+    apiBaseUrl: chatSettings.apiBaseUrl,
+    apiKey,
+    characterId: input.characterId,
+    bindingId: input.bindingId,
+  });
+
+  // 语音同理：先转写成文字再进提示词，没开「听懂语音」时原样保留 `[语音]`。
+  messages = await attachVoiceTranscripts(messages, {
+    modelConfig: character.modelConfig,
+    chatModel: chatSettings.model,
+    apiBaseUrl: chatSettings.apiBaseUrl,
+    apiKey,
+    voiceApiKey,
+    asrApiKey,
+  });
+
+  if (input.privateMessagesRecorded && input.existingConversation) {
+    for (const message of messages) {
+      await prisma.message.updateMany({
+        where: { conversationId: input.existingConversation.id, externalMessageId: message.externalMessageId },
+        data: { content: message.content },
+      }).catch(() => undefined);
+    }
+  }
+
+  // 「偷表情包」：群里的图值得收就存进她的表情库。只收群聊、不看她自己发的图，
+  // 由开关 `modelConfig.stickerAutoCollect` 控制（默认关）。失败静默，不影响这轮回复。
+  if (input.isGroup) {
+    const collectCandidates = messages.flatMap((message) =>
+      (message.images ?? []).filter((img) => img.url).map((img) => ({
+        url: img.url,
+        ...(img.summary ? { summary: img.summary } : {}),
+      })),
+    );
+    if (collectCandidates.length) {
+      await collectStickersFromTurn(collectCandidates, {
+        characterId: input.characterId,
+        ...(input.bindingId ? { bindingId: input.bindingId } : {}),
+        modelConfig: character.modelConfig,
+        chatModel: chatSettings.model,
+        chatApiBaseUrl: chatSettings.apiBaseUrl,
+        chatApiKey: apiKey,
+      }).catch(() => undefined);
+    }
+  }
+
+  return { ok: true, chatSettings, apiKey, voiceApiKey, asrApiKey, messages };
+}
+
+type ChannelTurnPrivateContext = {
+  /** 第一个说话人的外部身份范围；群聊恒为 null。 */
+  primaryIdentityScopeId: string | null;
+  isOwnerTurn: boolean;
+  ownerPrivateScopeId: string | null;
+  /** 本会话消息与这轮回复应该落入的记忆范围。 */
+  conversationScopeId: string;
+  /** 私聊已在模型调用前落库时置真，尾部事务不再重复写。 */
+  privateMessagesRecorded: boolean;
+  existingConversation: ChannelTurnConversation | null;
+};
+
+/**
+ * 私聊的进门准备：记「她认识这个人」、解析主人专属私人范围、定下会话要落的范围，
+ * 并把私聊消息**先落库**——模型没配 / Key 坏 / 额度用完时下面会 early return，
+ * 但这句话已经留在记录里；私聊不进清理，所以它之后还能参与忆泡整理。
+ *
+ * 群聊不在这里记身份：谁在群里冒一句就建一条身份，一个活跃群几天就能攒出几百个
+ * 没跟她说过话的「朋友」—— 那不是朋友，是群成员名单。群聊等她**真的回了谁**再记，
+ * 见尾部回复发出的那段（`isGroup` 分支）。
+ */
+async function prepareChannelTurnPrivateContext(input: {
+  prisma: PrismaClient;
+  isGroup: boolean;
+  characterId: string;
+  characterOwnerId: string;
+  platform: string;
+  bindingId: string;
+  externalConversationId: string;
+  globalScopeId: string;
+  messages: ChannelTurnMessage[];
+  existingConversation: ChannelTurnConversation | null;
+}): Promise<ChannelTurnPrivateContext> {
+  const { prisma, isGroup } = input;
+  let primaryIdentityScopeId: string | null = null;
+  const identityScopeByAuthor = new Map<string, string | null>();
+  if (!isGroup) {
+    for (const message of input.messages) {
+      const platformUid = (message.authorPlatformUid || message.authorOpenId || "").trim();
+      if (!platformUid || identityScopeByAuthor.has(platformUid)) continue;
+      const touch = await recordFriendInteraction({
+        characterId: input.characterId,
+        platform: input.platform,
+        platformUid,
+        displayName: message.authorDisplayName,
+        source: "PRIVATE",
+        at: message.occurredAt,
+      }).catch(() => null);
+      identityScopeByAuthor.set(platformUid, touch?.scopeId ?? null);
+    }
+  }
+  {
+    const first = input.messages[0]!;
+    const firstUid = (first.authorPlatformUid || first.authorOpenId || "").trim();
+    primaryIdentityScopeId = firstUid ? identityScopeByAuthor.get(firstUid) ?? null : null;
+  }
+
+  // 主人专属私人范围：说话人明确是主人（私聊里渠道传 isOwner）时，会话挂到角色主人的
+  // USER_PRIVATE 范围，而不是该账号的外部身份范围。这样主人的私聊走「角色主人私人记忆」，
+  // 由调度器单独排快照，且只在主人自己的对话里可读 —— 不会混进全局、也不会串给群友。
+  const isOwnerTurn = !isGroup && input.messages[0]?.speaker?.isOwner === true;
+  let ownerPrivateScopeId: string | null = null;
+  if (isOwnerTurn) {
+    ownerPrivateScopeId = await ensureOwnerPrivateScope(input.characterId, input.characterOwnerId);
+  }
+
+  const conversationScopeId = isGroup
+    ? input.globalScopeId
+    : (isOwnerTurn && ownerPrivateScopeId ? ownerPrivateScopeId : (primaryIdentityScopeId ?? input.globalScopeId));
+
+  let privateMessagesRecorded = false;
+  let existingConversation = input.existingConversation;
+  if (!isGroup) {
+    const repairScopeId = resolveOwnerPrivateScopeRepair({
+      isOwnerTurn,
+      ownerPrivateScopeId,
+      currentScopeId: existingConversation?.memoryScopeId ?? conversationScopeId,
+    });
+    const title = existingConversation?.title
+      || (input.messages[0]!.promptContent ?? input.messages[0]!.content).slice(0, 80);
+    const recorded = await recordPrivateTurnMessages({
+      prisma,
+      characterId: input.characterId,
+      bindingId: input.bindingId,
+      platform: input.platform,
+      externalConversationId: input.externalConversationId,
+      conversation: existingConversation,
+      messages: input.messages,
+      targetScopeId: conversationScopeId,
+      repairScopeId,
+      title,
+    });
+    if (recorded) {
+      existingConversation = recorded;
+      privateMessagesRecorded = true;
+    }
+  }
+
+  return {
+    primaryIdentityScopeId,
+    isOwnerTurn,
+    ownerPrivateScopeId,
+    conversationScopeId,
+    privateMessagesRecorded,
+    existingConversation,
+  };
+}
+
 /**
  * The reusable channel event pipeline: idempotent ingest → character binding → character-global
  * memory retrieval → model reply → persistence → send back. This is platform-agnostic apart from
@@ -899,216 +1211,49 @@ async function runChannelTurn(input: {
 }): Promise<ChannelMessageResult> {
   const prisma = getPrisma();
   const isGroup = input.eventType === "GROUP_MESSAGE";
-  /**
-   * 同一批里可能出现同一条消息两次（网关重投、或者两个适配器都连着 —— 后者已经在
-   * `run-onebot-adapter.ts` 里用单实例标记挡住）。不去重的话，整轮会撞
-   * `messages(conversationId, externalMessageId)` 唯一约束，事务回滚，**整轮都不回**：
-   * 一条重复消息把同一轮里别人的话也一起拖死。
-   */
-  const seenInBatch = new Set<string>();
-  let messages = input.messages
-    .filter((message) => message.externalMessageId && message.content)
-    .filter((message) => {
-      if (seenInBatch.has(message.externalMessageId)) return false;
-      seenInBatch.add(message.externalMessageId);
-      return true;
-    })
-    .slice(-10);
-  if (!messages.length) return { status: "ignored", reason: "missing_fields" };
+  const prepared = await prepareChannelTurn(prisma, input);
+  if (!prepared.ok) return prepared.result;
+  let messages = prepared.messages;
+  const character = prepared.character;
+  const globalScope = prepared.globalScope;
+  let existingConversation = prepared.existingConversation;
 
-  // Character lookup comes first: a paused or archived character must not answer channel
-  // messages, and rejecting early also avoids creating an external identity for a dead character.
-  const character = await prisma.character.findUnique({
-    where: { id: input.characterId },
-    select: {
-      id: true,
-      name: true,
-      ownerId: true,
-      basePrompt: true,
-      styleExamples: true,
-      status: true,
-      modelConfig: true,
-      memorySetting: { select: { timezone: true } },
-      memoryScopes: { where: { scopeType: "CHARACTER_GLOBAL" }, select: { id: true } },
-    },
+  const privateContext = await prepareChannelTurnPrivateContext({
+    prisma,
+    isGroup,
+    characterId: input.characterId,
+    characterOwnerId: character.ownerId,
+    platform: input.platform,
+    bindingId: input.bindingId,
+    externalConversationId: input.externalConversationId,
+    globalScopeId: globalScope.id,
+    messages,
+    existingConversation,
   });
-  if (!character) return { status: "ignored", reason: "character_missing" };
-  if (character.status !== "ACTIVE") return { status: "ignored", reason: "character_inactive" };
-  const globalScope = character.memoryScopes[0];
-  if (!globalScope) return { status: "ignored", reason: "no_global_scope" };
+  const primaryIdentityScopeId = privateContext.primaryIdentityScopeId;
+  const isOwnerTurn = privateContext.isOwnerTurn;
+  const ownerPrivateScopeId = privateContext.ownerPrivateScopeId;
+  const conversationScopeId = privateContext.conversationScopeId;
+  const privateMessagesRecorded = privateContext.privateMessagesRecorded;
+  existingConversation = privateContext.existingConversation;
 
-  // Idempotency: a QQ message id is unique for the application, so a re-delivered event is dropped
-  // regardless of whether its conversation has been created yet. 群聊一轮里有几条，全查一遍。
-  // 会话查找与幂等检查互不依赖，一起发，省一个 RTT（P3）。
-  const [seen, foundConversation] = await Promise.all([
-    prisma.message.findMany({
-      where: { externalMessageId: { in: messages.map((message) => message.externalMessageId) } },
-      select: { externalMessageId: true },
-    }),
-    prisma.conversation.findFirst({
-      where: { channelBindingId: input.bindingId, externalConversationId: input.externalConversationId },
-      select: { id: true, title: true, memoryScopeId: true },
-    }),
-  ]);
-  // 私聊预落库会建会话，后面的正常路径要接着用这一条，不能再建第二个。
-  let existingConversation = foundConversation;
-  if (seen.length) {
-    const seenIds = new Set(seen.map((row) => row.externalMessageId));
-    const fresh = messages.filter((message) => !seenIds.has(message.externalMessageId));
-    if (!fresh.length) return { status: "duplicate" };
-    messages = fresh;
-  }
-
-  /**
-   * 私聊：一进来就记一次「她认识这个人」，并把会话要落的身份范围准备好。
-   *
-   * 群聊不在这里记。谁在群里冒一句就建一条身份，一个活跃群几天就能攒出几百个没跟她
-   * 说过话的「朋友」—— 那不是朋友，是群成员名单。群聊等她**真的回了谁**再记，
-   * 见下面回复发出的那段（`isGroup` 分支）。
-   */
-  let primaryIdentityScopeId: string | null = null;
-  const identityScopeByAuthor = new Map<string, string | null>();
-  if (!isGroup) {
-    for (const message of messages) {
-      const platformUid = (message.authorPlatformUid || message.authorOpenId || "").trim();
-      if (!platformUid || identityScopeByAuthor.has(platformUid)) continue;
-      const touch = await recordFriendInteraction({
-        characterId: input.characterId,
-        platform: input.platform,
-        platformUid,
-        displayName: message.authorDisplayName,
-        source: "PRIVATE",
-        at: message.occurredAt,
-      }).catch(() => null);
-      identityScopeByAuthor.set(platformUid, touch?.scopeId ?? null);
-    }
-  }
-  {
-    const first = messages[0]!;
-    const firstUid = (first.authorPlatformUid || first.authorOpenId || "").trim();
-    primaryIdentityScopeId = firstUid ? identityScopeByAuthor.get(firstUid) ?? null : null;
-  }
-
-  // 主人专属私人范围：说话人明确是主人（私聊里渠道传 isOwner）时，会话挂到角色主人的
-  // USER_PRIVATE 范围，而不是该账号的外部身份范围。这样主人的私聊走「角色主人私人记忆」，
-  // 由调度器单独排快照，且只在主人自己的对话里可读 —— 不会混进全局、也不会串给群友。
-  const isOwnerTurn = !isGroup && messages[0]?.speaker?.isOwner === true;
-  let ownerPrivateScopeId: string | null = null;
-  if (isOwnerTurn) {
-    ownerPrivateScopeId = await ensureOwnerPrivateScope(input.characterId, character.ownerId);
-  }
-
-  const conversationScopeId = isGroup
-    ? globalScope.id
-    : (isOwnerTurn && ownerPrivateScopeId ? ownerPrivateScopeId : (primaryIdentityScopeId ?? globalScope.id));
-
-  /**
-   * 私聊先落库，再判断回不回。模型没配 / Key 坏 / 额度用完时下面会 early return，
-   * 但这句话已经留在记录里；私聊不进清理，所以它之后还能参与忆泡整理。
-   */
-  let privateMessagesRecorded = false;
-  if (!isGroup) {
-    const repairScopeId = resolveOwnerPrivateScopeRepair({
-      isOwnerTurn,
-      ownerPrivateScopeId,
-      currentScopeId: existingConversation?.memoryScopeId ?? conversationScopeId,
-    });
-    const title = existingConversation?.title
-      || (messages[0]!.promptContent ?? messages[0]!.content).slice(0, 80);
-    const recorded = await recordPrivateTurnMessages({
-      prisma,
-      characterId: input.characterId,
-      bindingId: input.bindingId,
-      platform: input.platform,
-      externalConversationId: input.externalConversationId,
-      conversation: existingConversation,
-      messages,
-      targetScopeId: conversationScopeId,
-      repairScopeId,
-      title,
-    });
-    if (recorded) {
-      existingConversation = recorded;
-      privateMessagesRecorded = true;
-    }
-  }
-
-  const chatSettings = resolveChatModelSettings(character.modelConfig);
-  let apiKey = "";
-  try {
-    apiKey = await resolveCharacterApiKey(character.modelConfig, chatSettings.apiBaseUrl);
-  } catch {
-    return { status: "ignored", reason: "api_key_decrypt_failed" };
-  }
-  if (!apiKey || !chatSettings.model) return { status: "ignored", reason: "model_not_configured" };
-
-  /**
-   * 语音 Key 与聊天 Key 是**两把**：语音几乎总是另一家服务商
-   * （DeepSeek / 通义这类纯文本服务商的 /audio/speech 直接 404），
-   * 而它常常是页面上单独填的。解密失败按没配处理，不影响聊天。
-   */
-  const voiceApiKey = await resolveCharacterVoiceApiKey(character.modelConfig).catch(() => "");
-  /** 识别专用 Key：合成与识别不是一家时（Breeze + MiniMax）必须分开，否则识别侧 401。 */
-  const asrApiKey = await resolveCharacterAsrApiKey(character.modelConfig).catch(() => "");
-
-  // 额度用完就静默不回：渠道里抛错会把一条普通聊天变成失败事件，还会触发重试。
-  const quota = await readDailyQuota(input.characterId, character.modelConfig);
-  if (quota.exceeded) return { status: "ignored", reason: "daily_quota_exceeded" };
-
-  // 图先变成文字再进提示词；角色没开看图开关时这一步什么都不做。
-  messages = await attachImageDescriptions(messages, {
-    modelConfig: character.modelConfig,
-    chatModel: chatSettings.model,
-    apiBaseUrl: chatSettings.apiBaseUrl,
-    apiKey,
+  const modelPrep = await prepareChannelTurnModel({
+    prisma,
+    character,
+    isGroup,
     characterId: input.characterId,
     bindingId: input.bindingId,
+    platform: input.platform,
+    messages,
+    privateMessagesRecorded,
+    existingConversation,
   });
-
-  // 语音同理：先转写成文字再进提示词，没开「听懂语音」时原样保留 `[语音]`。
-  messages = await attachVoiceTranscripts(messages, {
-    modelConfig: character.modelConfig,
-    chatModel: chatSettings.model,
-    apiBaseUrl: chatSettings.apiBaseUrl,
-    apiKey,
-    voiceApiKey,
-    asrApiKey,
-  });
-
-  /**
-   * 预落库写的是原始正文（`[图片]` / `[语音]`）。图/语音在进模型前才变成文字，
-   * 这里把落库那几行同步成同一份文字 —— 否则记录页看到的和忆泡读到的不一致。
-   * 失败只记日志：描述是锦上添花，不能拦住回复。
-   */
-  if (privateMessagesRecorded && existingConversation) {
-    for (const message of messages) {
-      await prisma.message.updateMany({
-        where: { conversationId: existingConversation.id, externalMessageId: message.externalMessageId },
-        data: { content: message.content },
-      }).catch(() => undefined);
-    }
-  }
-
-  // 「偷表情包」：群里的图值得收就存进她的表情库。只收群聊、不看她自己发的图，
-  // 由开关 `modelConfig.stickerAutoCollect` 控制（默认关）。失败静默，不影响这轮回复。
-  if (isGroup) {
-    const collectCandidates = messages.flatMap((message) =>
-      (message.images ?? []).filter((img) => img.url).map((img) => ({
-        url: img.url,
-        ...(img.summary ? { summary: img.summary } : {}),
-      })),
-    );
-    if (collectCandidates.length) {
-      await collectStickersFromTurn(collectCandidates, {
-        characterId: input.characterId,
-        ...(input.bindingId ? { bindingId: input.bindingId } : {}),
-        modelConfig: character.modelConfig,
-        chatModel: chatSettings.model,
-        chatApiBaseUrl: chatSettings.apiBaseUrl,
-        chatApiKey: apiKey,
-      }).catch(() => undefined);
-    }
-  }
+  if (!modelPrep.ok) return modelPrep.result;
+  const chatSettings = modelPrep.chatSettings;
+  const apiKey = modelPrep.apiKey;
+  const voiceApiKey = modelPrep.voiceApiKey;
+  const asrApiKey = modelPrep.asrApiKey;
+  messages = modelPrep.messages;
 
   // 最近对话窗口与表情额度历史都依赖同一个会话，一起查（P3）。emojiFrequency 提前到这里。
   const emojiFrequency = resolveEmojiFrequency(character.modelConfig);
