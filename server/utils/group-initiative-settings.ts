@@ -1,3 +1,5 @@
+import type { GroupInitiativeSettings } from "../../shared/types/character";
+
 /**
  * QQ 群「自己找话题」的设置与硬闸门。全是纯函数：判定必须在调模型之前完成。
  *
@@ -10,19 +12,7 @@
 
 import { formatClockMinutes, inQuietHours, readClockMinutes } from "./proactive-settings";
 
-export type GroupInitiativeSettings = {
-  enabled: boolean;
-  /** 群里安静了多少分钟才算「冷场」。 */
-  idleMinutes: number;
-  /** 每个群每天最多主动开几次话题。 */
-  dailyMax: number;
-  /** 同一个群两次尝试之间至少隔多久（分钟）。 */
-  minGapMinutes: number;
-  /** 安静时段起点（含），对她主动开口同样有效 —— 凌晨的群不需要被叫醒。 */
-  quietStart: string;
-  /** 安静时段终点（不含）。允许跨午夜。 */
-  quietEnd: string;
-};
+
 
 /**
  * 默认值取「克制但不至于从不开口」那一档，`enabled` **默认 false**。

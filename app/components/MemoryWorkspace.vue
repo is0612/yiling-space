@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowDown, Collection, Search, Delete } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { type Character } from "~/utils/mock-data";
+import { type DemoCharacter } from "~/utils/mock-data";
 import MemorySectionNavigation from "~/components/MemorySectionNavigation.vue";
 import { createMemoryApi } from "~/api/memory";
 
@@ -88,7 +88,7 @@ await useCharacterListData();
  */
 const { id } = useCharacterSelection("/growth/memory/long-term");
 
-const currentCharacter = ref<Character | null>(null);
+const currentCharacter = ref<DemoCharacter | null>(null);
 const memoryDialogOpen = ref(false);
 const memorySaving = ref(false);
 const draftMemoryCategory = ref<MemoryCategory>("FACT");
@@ -230,7 +230,7 @@ const commitmentCount = computed(() => memoryStats.value.commitment);
  * 以前这里 spread 了 initialCharacters[0]，于是兜底会捎上示例角色的头像、色调和人设；
  * 现在只补页面上真正会读的字段。列表为空的情况交给模板里的 no-character 整块处理。
  */
-const emptyCharacter = computed<Character>(() => ({
+const emptyCharacter = computed<DemoCharacter>(() => ({
   id: id.value,
   name: "角色加载中",
   alias: "数据库档案",
@@ -246,7 +246,7 @@ const emptyCharacter = computed<Character>(() => ({
   memoryCount: 0,
   latestSnapshot: "暂无总结",
 }));
-const character = computed<Character>(() => currentCharacter.value ?? emptyCharacter.value);
+const character = computed<DemoCharacter>(() => currentCharacter.value ?? emptyCharacter.value);
 
 /**
  * 排序：最新在最前，直接沿用服务端给的顺序。

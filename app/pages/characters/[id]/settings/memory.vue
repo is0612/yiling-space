@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Calendar, InfoFilled, RefreshLeft, Lock, Select } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { initialCharacters, type Character } from "~/utils/mock-data";
+import { initialCharacters, type DemoCharacter } from "~/utils/mock-data";
 import { createCharacterSettingsApi } from "~/api/character-settings";
 
 // 标题放顶栏（AppShell 读 route.meta.topbar），正文页头只留 crumb 和说明。
@@ -23,7 +23,7 @@ const backTarget = computed(() => router.resolve({
   query: { ...route.query, c: id.value },
 }).fullPath);
 const backLabel = computed(() => route.query.from === "characters" ? "返回角色管理" : "返回长期记忆");
-const character = ref<Character>({ ...initialCharacters[0]!, id: "", name: "角色加载中" });
+const character = ref<DemoCharacter>({ ...initialCharacters[0]!, id: "", name: "角色加载中" });
 /**
  * 归档间隔的边界：默认 3 天，最多 8 天（2026-11-03 从 1–365 收紧）。
  *

@@ -1,5 +1,5 @@
 import { validateChatApiBaseUrl } from "./chat-model-config";
-import { KNOWLEDGE_COLLECT_SCOPES } from "./knowledge-collect-policy";
+import { KNOWLEDGE_COLLECT_SCOPES } from "../../shared/types/character";
 
 export function readKnowledgeAssistantSettingsPatch(body: Record<string, unknown>): {
   config: Record<string, unknown>;

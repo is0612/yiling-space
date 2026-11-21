@@ -5,7 +5,7 @@
  * 于是必然「刚聊完又凑上来」「同一句话反复说」。有池子才有「攒着想问的事轮到了」。
  */
 
-import type { ProactiveSettings } from "./proactive-settings";
+import type { ProactiveSettings } from "../../shared/types/character";
 
 /** 开口的方式。分类不是为了好看：不同 kind 的语气和边界完全不同（索取 ≠ 倾诉）。 */
 export const PROACTIVE_KINDS = {

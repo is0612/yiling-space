@@ -1,24 +1,12 @@
+import type { ProactiveSettings } from "../../shared/types/character";
+
 /**
  * 主动找话的设置与硬闸门。全是纯函数：判定必须在调模型之前完成，「不该发」时一次 token 都不花。
  */
 
 import { usageDayKey } from "./model-usage";
 
-export type ProactiveSettings = {
-  enabled: boolean;
-  /** 每天最多主动几条。 */
-  dailyMax: number;
-  /** 两条之间的最小间隔（分钟）。 */
-  minGapMinutes: number;
-  /** 安静时段起点（含）。 */
-  quietStart: string;
-  /** 安静时段终点（不含）。允许跨午夜。 */
-  quietEnd: string;
-  /** 主人最近这么多分钟内说过话，就当作「还在聊」，不打扰。 */
-  userActiveMinutes: number;
-  /** 挑目的的最低置信度。 */
-  minConfidence: number;
-};
+
 
 /**
  * 全部默认值取「最不打扰」那一档，`enabled` 默认 **false**：

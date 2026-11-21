@@ -24,14 +24,12 @@ import {
   parseMessage,
   type ProactiveMaterials,
 } from "./proactive-prompt";
-import {
-  evaluateProactiveGate,
+import { evaluateProactiveGate,
   goalDedupeKey,
   pickIntent,
   proactiveDayKey,
-  resolveProactiveSettings,
-  type ProactiveSettings,
-} from "./proactive-settings";
+  resolveProactiveSettings } from "./proactive-settings";
+import type { ProactiveSettings } from "../../shared/types/character";
 import { callRawModel } from "./raw-llm";
 
 /** 池子里少于这个数就补一次。留余量是为了「挑」真的在挑，而不是永远只有一条可选。 */

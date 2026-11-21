@@ -16,8 +16,9 @@
  */
 import type { PrismaClient } from "../../src/generated/prisma/client";
 
-export const KNOWLEDGE_COLLECT_SCOPES = ["ALL", "SELECTED"] as const;
-export type KnowledgeCollectScope = (typeof KNOWLEDGE_COLLECT_SCOPES)[number];
+// 枚举与前端共用一份（shared/types/character.ts）；不在服务端再导出同名常量，
+// 否则 Nuxt 自动导入会把两处当成重复。
+import { KNOWLEDGE_COLLECT_SCOPES, type KnowledgeCollectScope } from "../../shared/types/character";
 
 /** 缺省 ALL：老角色没有这个键，行为必须和升级前一模一样。 */
 export function readKnowledgeCollectScope(modelConfig: unknown): KnowledgeCollectScope {

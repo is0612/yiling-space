@@ -1,169 +1,16 @@
-export type CharacterStatus = "运行中" | "已暂停" | "未连接";
 export type TimelineType = "message" | "memory" | "snapshot" | "event" | "memoryEvent";
 
-export type Character = {
-  id: string;
-  /** 稳定同步根 ID；旧接口或旧缓存可能缺省或为 null。 */
-  originId?: string | null;
-  name: string;
-  alias: string;
-  description: string;
-  avatar: string;
-  avatarTone: "purple" | "peach" | "mint" | "blue";
-  status: CharacterStatus;
-  channels: string[];
-  intervalDays: number;
-  /** 已排期但还没到生效边界的归档周期；null / 缺省 = 没有待生效的改动。 */
-  pendingIntervalDays?: number | null;
-  nextSnapshot: string;
-  memoryCount: number;
-  latestSnapshot: string;
-  personality: string;
-  /** 对话示例：只用于对齐语气（聊天 / QQ 被动回复注入）。 */
-  examples?: string;
-  /** 这个角色在对话里怎么称呼你；空字符串 = 不特意称呼。 */
-  userAddress?: string;
-  /** ISO 时间：角色资料弹窗页脚左侧显示「上次保存」。 */
-  updatedAt?: string;
-  // 模型参数：接口一直有返回，之前类型里漏了，导致「模型设置」拿不到。
-  // 全部可选 —— 列表接口和详情接口返回的字段并不完全一致。
-  chatModel?: string;
-  chatTemperature?: number;
-  chatMaxTokens?: number;
-  /** 深度思考开关；默认开（跟随 DeepSeek 平台默认）。只在 DeepSeek 系模型上真正生效。 */
-  chatThinking?: boolean;
-  chatApiBaseUrl?: string;
-  /** 明文 Key（2026-11-12 起不再加密存储）；空 = 没配。页面用密码框回显。 */
-  chatApiKey?: string;
-  chatApiKeyConfigured?: boolean;
-  chatApiKeySource?: "character" | "environment" | "missing";
-  /** 记忆助手是否启用、模型配置和 Key 保存状态。 */
-  memoryAssistantEnabled?: boolean;
-  memoryAssistantModel?: string;
-  /** 记忆助手独立采样温度；旧角色缺省为 0.1。 */
-  memoryAssistantTemperature?: number;
-  /** 记忆助手单次检索的估算输入 Token 上限；旧角色缺省为 12288。 */
-  memoryAssistantMaxInputTokens?: number;
-  /** 记忆助手单次检索的最大输出 Token；旧角色缺省为 2048。 */
-  memoryAssistantMaxOutputTokens?: number;
-  memoryAssistantApiBaseUrl?: string;
-  memoryAssistantApiKey?: string;
-  memoryAssistantApiKeyConfigured?: boolean;
-  memoryAssistantConfigured?: boolean;
-  /** 语境助手是否启用、模型配置和 Key 保存状态。 */
-  contextAssistantEnabled?: boolean;
-  contextAssistantModel?: string;
-  /** 语境助手独立采样温度；旧角色缺省为 0.1。 */
-  contextAssistantTemperature?: number;
-  /** 语境助手单次检索的估算输入 Token 上限；旧角色缺省为 16384。 */
-  contextAssistantMaxInputTokens?: number;
-  /** 语境助手单次检索的最大输出 Token；旧角色缺省为 2048。 */
-  contextAssistantMaxOutputTokens?: number;
-  contextAssistantApiBaseUrl?: string;
-  contextAssistantApiKey?: string;
-  contextAssistantApiKeyConfigured?: boolean;
-  contextAssistantConfigured?: boolean;
-  knowledgeAutoCollectEnabled?: boolean;
-  /** 聊天知识候选收谁的：ALL 全体 / SELECTED 仅被标记的好友与主人。 */
-  knowledgeCollectScope?: "ALL" | "SELECTED";
-  knowledgeAssistantEnabled?: boolean;
-  knowledgeAssistantModel?: string;
-  knowledgeAssistantTemperature?: number;
-  knowledgeAssistantMaxInputTokens?: number;
-  knowledgeAssistantMaxOutputTokens?: number;
-  knowledgeAssistantApiBaseUrl?: string;
-  knowledgeAssistantApiKey?: string;
-  knowledgeAssistantApiKeyConfigured?: boolean;
-  knowledgeAssistantConfigured?: boolean;
-  /** 关系评估助手：同样支持留空跟随对话模型。 */
-  socialRelationshipAssessmentAssistantEnabled?: boolean;
-  socialRelationshipAssessmentAssistantModel?: string;
-  socialRelationshipAssessmentAssistantTemperature?: number;
-  socialRelationshipAssessmentAssistantMaxInputTokens?: number;
-  socialRelationshipAssessmentAssistantMaxOutputTokens?: number;
-  socialRelationshipAssessmentAssistantApiBaseUrl?: string;
-  socialRelationshipAssessmentAssistantApiKey?: string;
-  socialRelationshipAssessmentAssistantApiKeyConfigured?: boolean;
-  socialRelationshipAssessmentAssistantConfigured?: boolean;
-  /** 每日 token 额度，0 = 不限。 */
-  dailyTokenLimit?: number;
-  /** 每次对话注入记忆 / 快照的 token 预算。 */
-  memoryTokenBudget?: number;
-  snapshotTokenBudget?: number;
-  /** 每次注入多少条长期记忆；默认 20。 */
-  memoryItemLimit?: number;
-  /** 每次回复回看多少条已落库消息；网页对话约等于「轮数 × 2」。 */
-  recentMessageLimit?: number;
-  /** 最近几天的忆泡无条件当背景带上；0 = 不带。 */
-  eventRecentDays?: number;
-  /** QQ 渠道回复是否附一张表情。 */
-  emojiEnabled?: boolean;
-  /** 表情额度：多少分钟内最多贴几张（滑动窗口，按每个群 / 私聊分别算）。 */
-  emojiWindowMinutes?: number;
-  emojiPerWindow?: number;
-  /** QQ 群里发来的图是否交给视觉模型读。 */
-  imageUnderstanding?: boolean;
-  /** 群里发来的图是否自动收进她的表情库。 */
-  stickerAutoCollect?: boolean;
-  /** 群聊之后是否自动扫一遍群里的梗（捡到的先进待确认）。 */
-  catchphraseAutoMine?: boolean;
-  /** 她的回复能否发成语音条。 */
-  voiceEnabled?: boolean;
-  /** 她听不听得懂别人发的语音。 */
-  voiceTranscribe?: boolean;
-  /** 发语音的概率（0-100）。 */
-  voiceChance?: number;
-  /** 两条语音之间至少隔多少分钟；0 = 不冷却。 */
-  voiceCooldownMinutes?: number;
-  /** 语音服务地址；空 = 用环境变量或角色聊天地址。 */
-  voiceApiBaseUrl?: string;
-  /** 明文语音 Key；空 = 没配。 */
-  voiceApiKey?: string;
-  voiceApiKeyConfigured?: boolean;
-  /** 语音合成模型 / 音色 / 识别模型。 */
-  ttsModel?: string;
-  ttsVoice?: string;
-  asrModel?: string;
-  /** 语音服务商：openai（含兼容接口）/ minimax / breeze；空 = 按地址自动判断。 */
-  ttsProvider?: string;
-  /** MiniMax 的 GroupId。 */
-  ttsGroupId?: string;
-  /** Breeze 的语气指令；空 = 用环境变量。 */
-  ttsInstructions?: string;
-  /** 语速 0.5–2.0；0 = 用环境变量或默认 1。 */
-  ttsSpeed?: number;
-  /** 识别专用：服务商 / 地址 / Key 是否已保存。 */
-  asrProvider?: string;
-  asrApiBaseUrl?: string;
-  asrApiKey?: string;
-  asrApiKeyConfigured?: boolean;
-  /** 看图（图片）模型；空 = 回落到环境变量 / 对话模型。 */
-  visionModel?: string;
-  /** 看图服务地址；空 = 用环境变量或角色聊天地址。 */
-  visionApiBaseUrl?: string;
-  /** 明文看图 Key；空 = 没配（会回落到对话模型）。 */
-  visionApiKey?: string;
-  visionApiKeyConfigured?: boolean;
-  /** 主动找话设置；服务端返回时一定带默认值填充。 */
-  proactive?: {
-    enabled: boolean;
-    dailyMax: number;
-    minGapMinutes: number;
-    quietStart: string;
-    quietEnd: string;
-    userActiveMinutes: number;
-    minConfidence: number;
-  };
-  /** 群聊「冷场了自己找话题」；同样由服务端补齐默认值。 */
-  groupInitiative?: {
-    enabled: boolean;
-    idleMinutes: number;
-    dailyMax: number;
-    minGapMinutes: number;
-    quietStart: string;
-    quietEnd: string;
-  };
-};
+// 角色的形状与后端共用一份（`shared/types/character.ts`）。
+// 这里原先是一份「全可选」的副本，注释里还写着「列表和详情字段不完全一致」——
+// 其实所有接口都走同一个 characterInclude + toCharacterDto，形状早就统一了。
+export type {
+  Character,
+  CharacterStatus,
+  AvatarTone,
+  ProactiveSettings,
+  GroupInitiativeSettings,
+} from "#shared/types/character";
+import type { Character } from "#shared/types/character";
 
 export type TimelineEntry = {
   id: string;
@@ -181,14 +28,6 @@ export type TimelineEntry = {
 
 // 快照相关形状统一放在 shared 契约里；这里 re-export 保持既有 import 路径可用，
 // 同时服务端不再需要反过来 import 前端的 mock-data。
-export type {
-  Snapshot,
-  SnapshotAnalysis,
-  SnapshotDetail,
-  SnapshotSourceMessage,
-} from "#shared/types/snapshot";
-
-import type { Snapshot } from "#shared/types/snapshot";
 
 export type DemoTask = {
   id: string;
@@ -201,7 +40,19 @@ export type DemoTask = {
   time: string;
 };
 
-export const initialCharacters: Character[] = [
+
+// 快照相关形状同样在 shared 契约里；这里 re-export 保持既有 import 路径可用。
+export type {
+  Snapshot,
+  SnapshotAnalysis,
+  SnapshotDetail,
+  SnapshotSourceMessage,
+} from "#shared/types/snapshot";
+
+/** 演示数据：真实接口字段很多，占位数据不需要填满。 */
+export type DemoCharacter = Partial<Character> & Pick<Character, "id" | "name" | "alias" | "description" | "avatar" | "avatarTone" | "status" | "channels" | "intervalDays" | "nextSnapshot" | "memoryCount" | "latestSnapshot" | "personality">;
+
+export const initialCharacters: DemoCharacter[] = [
   {
     id: "big-fish",
     name: "大肥鱼",

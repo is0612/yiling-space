@@ -4,8 +4,9 @@ import { resolveChatModelSettings } from "./chat-model-config";
 import { resolveEmojiFrequency } from "./emoji-frequency";
 import { MEMORY_TOKEN_BUDGET_DEFAULT, SNAPSHOT_TOKEN_BUDGET_DEFAULT, resolveMemoryItemLimit, resolveRecentMessageLimit } from "./memory-retrieval";
 import { resolveEventRecentDays } from "./memory-event-retrieval";
-import { resolveProactiveSettings, type ProactiveSettings } from "./proactive-settings";
-import { resolveGroupInitiativeSettings, type GroupInitiativeSettings } from "./group-initiative-settings";
+import { resolveProactiveSettings } from "./proactive-settings";
+import type { GroupInitiativeSettings, ProactiveSettings } from "../../shared/types/character";
+import { resolveGroupInitiativeSettings } from "./group-initiative-settings";
 import { API_KEY_FIELDS, isAsrApiKeySaved, isContextAssistantApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isSocialRelationshipAssessmentAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved, readApiKeyFieldPlain } from "./credential-encryption";
 import { ASSISTANT_FIELDS, summarizeAssistantConnection } from "./assistant-inheritance";
 import { readKnowledgeCollectScope } from "./knowledge-collect-policy";
@@ -15,147 +16,15 @@ function positiveNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }
 
-export type CharacterDto = {
-  id: string;
-  /** 稳定同步根 ID：同一角色在不同设备上的本地实例通过它识别；本机新建角色以自己的 id 为根。 */
-  originId: string;
-  name: string;
-  alias: string;
-  description: string;
-  avatar: string;
-  avatarTone: "purple" | "peach" | "mint" | "blue";
-  status: "运行中" | "已暂停" | "未连接";
-  channels: string[];
-  /** 正在生效的归档周期。 */
-  intervalDays: number;
-  /** 已排期但还没到生效边界的归档周期；null = 没有待生效的改动。 */
-  pendingIntervalDays: number | null;
-  nextSnapshot: string;
-  memoryCount: number;
-  latestSnapshot: string;
-  personality: string;
-  /** 对话示例：只用于对齐语气，聊天 / QQ 被动回复会注入。 */
-  examples: string;
-  /** 角色在对话里怎么称呼用户；空字符串表示不特意称呼。 */
-  userAddress: string;
-  /** ISO 时间：弹窗页脚左侧显示「上次保存」。 */
-  updatedAt: string;
-  chatModel: string;
-  chatTemperature: number;
-  chatMaxTokens: number;
-  /** 深度思考开关；默认开（跟随 DeepSeek 平台默认）。只在 DeepSeek 系模型上真正生效。 */
-  chatThinking: boolean;
-  chatApiBaseUrl: string;
-  /** 明文 Key。2026-11-12 起不再加密存储，页面用密码框回显；空 = 没配。 */
-  chatApiKey: string;
-  chatApiKeyConfigured: boolean;
-  chatApiKeySource: "character" | "environment" | "missing";
-  /** 记忆助手专用模型配置。留空 = 跟随对话模型。 */
-  memoryAssistantEnabled: boolean;
-  memoryAssistantModel: string;
-  memoryAssistantTemperature: number;
-  memoryAssistantMaxInputTokens: number;
-  memoryAssistantMaxOutputTokens: number;
-  memoryAssistantApiBaseUrl: string;
-  memoryAssistantApiKey: string;
-  memoryAssistantApiKeyConfigured: boolean;
-  memoryAssistantConfigured: boolean;
-  contextAssistantEnabled: boolean;
-  contextAssistantModel: string;
-  contextAssistantTemperature: number;
-  contextAssistantMaxInputTokens: number;
-  contextAssistantMaxOutputTokens: number;
-  contextAssistantApiBaseUrl: string;
-  contextAssistantApiKey: string;
-  contextAssistantApiKeyConfigured: boolean;
-  contextAssistantConfigured: boolean;
-  /** 知识处理助手配置；留空即跟随对话模型。 */
-  knowledgeAutoCollectEnabled: boolean;
-  /** 聊天知识候选收谁的：ALL 全体 / SELECTED 仅被标记的好友与主人。 */
-  knowledgeCollectScope: "ALL" | "SELECTED";
-  knowledgeAssistantEnabled: boolean;
-  knowledgeAssistantModel: string;
-  knowledgeAssistantTemperature: number;
-  knowledgeAssistantMaxInputTokens: number;
-  knowledgeAssistantMaxOutputTokens: number;
-  knowledgeAssistantApiBaseUrl: string;
-  knowledgeAssistantApiKey: string;
-  knowledgeAssistantApiKeyConfigured: boolean;
-  knowledgeAssistantConfigured: boolean;
-  /** 关系评估助手配置；留空即跟随对话模型。 */
-  socialRelationshipAssessmentAssistantEnabled: boolean;
-  socialRelationshipAssessmentAssistantModel: string;
-  socialRelationshipAssessmentAssistantTemperature: number;
-  socialRelationshipAssessmentAssistantMaxInputTokens: number;
-  socialRelationshipAssessmentAssistantMaxOutputTokens: number;
-  socialRelationshipAssessmentAssistantApiBaseUrl: string;
-  socialRelationshipAssessmentAssistantApiKey: string;
-  socialRelationshipAssessmentAssistantApiKeyConfigured: boolean;
-  socialRelationshipAssessmentAssistantConfigured: boolean;
-  /** 每日 token 额度，0 = 不限。 */
-  dailyTokenLimit: number;
-  /** 每次对话注入的记忆 / 快照 token 预算。 */
-  memoryTokenBudget: number;
-  snapshotTokenBudget: number;
-  /** 每次注入多少条长期记忆；默认 20（以前写死 12，比预算更早卡住）。 */
-  memoryItemLimit: number;
-  /** 每次回复回看多少条已落库消息；桌面端约等于「轮数 × 2」。 */
-  recentMessageLimit: number;
-  /** 最近几天的忆泡无条件当背景带上；0 = 不带。 */
-  eventRecentDays: number;
-  /** QQ 渠道回复是否允许附一张表情；默认关。 */
-  emojiEnabled: boolean;
-  /** 表情额度：多少分钟内最多贴几次（贴图与内置表情共用一个额度，按会话分别算）。 */
-  emojiWindowMinutes: number;
-  emojiPerWindow: number;
-  /** QQ 群里发来的图是否交给视觉模型读；默认关。 */
-  imageUnderstanding: boolean;
-  /** 群里发来的图是否自动收进她的表情库（「偷表情包」）；默认关。 */
-  stickerAutoCollect: boolean;
-  /** 群聊之后是否自动扫一遍群里的梗（捡到的先进待确认）；默认关。 */
-  catchphraseAutoMine: boolean;
-  /** 她的回复能不能发成语音条；默认关。 */
-  voiceEnabled: boolean;
-  /** 她听不听得懂别人发的语音（自动转写）；默认关。 */
-  voiceTranscribe: boolean;
-  /** 发语音的概率（0-100），默认 25。 */
-  voiceChance: number;
-  /** 两条语音之间至少隔多少分钟（0 = 不冷却），默认 20。 */
-  voiceCooldownMinutes: number;
-  /** 语音服务地址（页面上填的）；空 = 用环境变量或角色聊天地址。 */
-  voiceApiBaseUrl: string;
-  /** 明文语音 Key；空 = 没配。 */
-  voiceApiKey: string;
-  voiceApiKeyConfigured: boolean;
-  /** 语音合成模型 / 音色 / 识别模型；空 = 用环境变量。 */
-  ttsModel: string;
-  ttsVoice: string;
-  asrModel: string;
-  /** 语音服务商：openai（含兼容接口）/ minimax / breeze。空 = 按地址自动判断。 */
-  ttsProvider: string;
-  /** MiniMax 的 GroupId（查询参数）。 */
-  ttsGroupId: string;
-  /** Breeze 的演技指令；空 = 用环境变量。 */
-  ttsInstructions: string;
-  /** 语速 0.5–2.0；0 = 用环境变量或默认 1。 */
-  ttsSpeed: number;
-  /** 识别专用地址；空 = 用环境变量 `VOICE_ASR_BASE_URL` 或语音地址。 */
-  asrApiBaseUrl: string;
-  /** 明文识别 Key（合成与识别不是同一家时用）。 */
-  asrApiKey: string;
-  asrApiKeyConfigured: boolean;
-  /** 看图（图片）模型：空 = 回落到环境变量 / 对话模型，所以"没配"是正常状态。 */
-  visionModel: string;
-  /** 看图服务地址；空 = 用环境变量或角色聊天地址。 */
-  visionApiBaseUrl: string;
-  /** 明文看图 Key；空 = 没配（会回落到对话模型）。 */
-  visionApiKey: string;
-  visionApiKeyConfigured: boolean;
-  /** 主动找话设置；未配置过时是默认值（enabled=false）。 */
-  proactive: ProactiveSettings;
-  /** 群内「冷场了自己找话题」；未配置过时是默认值（enabled=false）。 */
-  groupInitiative: GroupInitiativeSettings;
-};
+/**
+
+ * 角色的 API 形状 = 共享契约（`shared/types/character.ts` 的 `Character`）。
+ *
+ * 保留 `CharacterDto` 这个名字：服务端一圈调用方都这么写，改成 `Character` 只是噪音。
+ * 字段定义只在 shared 里维护一份 —— 以前它躺在这里，前端又抄了一份「全可选」的版本，
+ * 于是「列表和详情字段不一样」这种说法被当成事实传了下去。
+ */
+export type CharacterDto = Character;
 
 type CharacterRecord = {
   id: string;
@@ -379,6 +248,9 @@ export function toCharacterDto(input: unknown): CharacterDto {
     ttsModel: typeof config.ttsModel === "string" ? config.ttsModel : "",
     ttsVoice: typeof config.ttsVoice === "string" ? config.ttsVoice : "",
     asrModel: typeof config.asrModel === "string" ? config.asrModel : "",
+    // 识别服务商：`[id].patch.ts` 一直能写进 modelConfig，但这里以前没回，
+    // 于是页面回显永远退回「自动」—— 用户改过也看不出来。补上这一行才算闭环。
+    asrProvider: typeof config.asrProvider === "string" ? config.asrProvider : "",
     ttsProvider: typeof config.ttsProvider === "string" ? config.ttsProvider : "",
     ttsGroupId: typeof config.ttsGroupId === "string" ? config.ttsGroupId : "",
     ttsInstructions: typeof config.ttsInstructions === "string" ? config.ttsInstructions : "",
