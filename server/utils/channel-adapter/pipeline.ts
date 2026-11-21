@@ -965,6 +965,526 @@ async function prepareChannelTurn(
   return { ok: true, messages, character, globalScope, existingConversation: foundConversation };
 }
 
+const channelTurnRecentMessageSelect = {
+  id: true,
+  role: true,
+  content: true,
+  occurredAt: true,
+  metadata: true,
+  externalMessageId: true,
+} satisfies Prisma.MessageSelect;
+
+type ChannelTurnStoredMessage = Prisma.MessageGetPayload<{ select: typeof channelTurnRecentMessageSelect }>;
+
+type ChannelTurnRawMessage = {
+  id: string;
+  role: string;
+  content: string;
+  occurredAt: string;
+  /** 群聊原文的发言人与主人标记：不带上，她读到的就是一句句没有主人的话。 */
+  speaker?: string;
+  isOwner?: boolean;
+  scope: "character" | "private";
+};
+
+/**
+ * 忆泡还没覆盖到那一段时用原文兜底；只在问句指向某一天时才查。
+ *
+ * 截断在 `selectRawMessagesForPrompt` 里做（并按截断后的长度算预算），这里不要再切一刀：
+ * 两处各有一个上限时，短的那个生效、长的那个没人知道它已经失效了。
+ */
+async function loadChannelTurnRawMessages(input: {
+  prisma: PrismaClient;
+  character: ChannelTurnCharacter;
+  isGroup: boolean;
+  platform: string;
+  characterId: string;
+  eventSelectionRange: { start: Date; end: Date } | null | undefined;
+  readableScopeIds: string[];
+  retrievalQuery: string;
+  recentStoredMessages: ChannelTurnStoredMessage[];
+  crossChannel: CrossChannelLine[];
+  globalScopeId: string;
+  group?: ChannelGroupTurnContext;
+}): Promise<ChannelTurnRawMessage[]> {
+  const { prisma, isGroup } = input;
+  if (!input.eventSelectionRange) return [];
+  const rawCandidates = await prisma.message.findMany({
+    where: {
+      conversation: { memoryScopeId: { in: input.readableScopeIds } },
+      occurredAt: { gte: input.eventSelectionRange.start, lt: input.eventSelectionRange.end },
+    },
+    orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+    take: 200,
+    select: {
+      id: true, role: true, content: true, occurredAt: true, metadata: true,
+      conversation: { select: { memoryScopeId: true } },
+    },
+  });
+  let rawPromptCandidates = rawCandidates;
+  if (isGroup && rawCandidates.length) {
+    const rawUids = [...new Set(
+      rawCandidates
+        .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
+        .map((item) => readStoredAuthorOpenId(item.metadata))
+        .filter(Boolean),
+    )];
+    if (rawUids.length) {
+      const rawIdentities = await prisma.externalIdentity.findMany({
+        where: { platform: input.platform, platformUid: { in: rawUids } },
+        select: {
+          platformUid: true,
+          kind: true,
+          memoryScopes: {
+            where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+            take: 1,
+            select: { friendChatPolicy: true },
+          },
+        },
+      });
+      const rawPolicyByUid = new Map(rawIdentities.map((identity) => [
+        identity.platformUid,
+        {
+          kind: identity.kind,
+          policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
+        },
+      ] as const));
+      rawPromptCandidates = rawCandidates.filter((item) => {
+        if (item.role !== "USER") return true;
+        const speaker = readStoredSpeaker(item.metadata);
+        const uid = readStoredAuthorOpenId(item.metadata);
+        if (speaker.isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) return true;
+        const identity = rawPolicyByUid.get(uid);
+        return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
+      });
+    }
+  }
+  const selected = selectRawMessagesForPrompt(input.retrievalQuery, rawPromptCandidates, {
+    timeZone: resolveChatTimeZone(input.character.memorySetting?.timezone),
+    tokenBudget: resolveRawMessageTokenBudget(input.character.modelConfig),
+    limit: resolveRawMessageLimit(input.character.modelConfig),
+    // 已经通过跨窗口旁路带进来的那几条不要再算一遍：同一句在提示词里出现两次，
+    // 模型会当成两件事，或者以为对方重复说过。
+    excludeIds: new Set([...input.recentStoredMessages.map((message) => message.id), ...input.crossChannel.map((line) => line.id)]),
+  });
+  return selected.items.map((message) => {
+    const speaker = readStoredSpeaker(message.metadata);
+    return {
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      occurredAt: message.occurredAt.toISOString(),
+      // 原文兜底也要说清是谁讲的：只给 role，群聊里每一句都是「user」。
+      ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
+      ...(speaker.isOwner ? { isOwner: true } : {}),
+      scope: message.conversation.memoryScopeId === input.globalScopeId ? ("character" as const) : ("private" as const),
+    };
+  });
+}
+
+type ChannelTurnRetrieval = {
+  groupActivity: Awaited<ReturnType<typeof buildGroupActivityContext>> | null;
+  journalFacts: Awaited<ReturnType<typeof loadJournalFacts>>;
+  retrievalQuery: string;
+  readableScopeIds: string[];
+  ownerPlatformUid: string;
+  crossChannel: CrossChannelLine[];
+  participantName: ReturnType<typeof parseEventParticipantQuery>;
+  participantIds: string[];
+  memories: Awaited<ReturnType<typeof selectPromptMemoryContext>>["memories"];
+  snapshots: Awaited<ReturnType<typeof selectPromptMemoryContext>>["snapshots"];
+  events: Awaited<ReturnType<typeof selectPromptMemoryContext>>["events"];
+  recentEvents: Awaited<ReturnType<typeof selectPromptMemoryContext>>["recentEvents"];
+  eventSelection: Awaited<ReturnType<typeof selectPromptMemoryContext>>["eventSelection"];
+  memorySelection: Awaited<ReturnType<typeof selectPromptMemoryContext>>["selection"];
+  /** 未选择的原始候选：深度检索（loadMemoryCandidates）要在它们之上合并补查结果。 */
+  memoryCandidates: Awaited<ReturnType<typeof loadPromptMemoryCandidates>>["memories"];
+  snapshotCandidates: Awaited<ReturnType<typeof loadPromptMemoryCandidates>>["snapshots"];
+  eventCandidates: Awaited<ReturnType<typeof loadPromptEventCandidates>>;
+  /** 本轮说话人的身份与互动次数（群聊熟人卡用）。 */
+  knownIdentities: Array<{
+    platformUid: string;
+    displayName: string | null;
+    memoryScopes: Array<{ interactionCount: number; lastInteractedAt: Date | null }>;
+  }> | null;
+  acquaintanceRows: Awaited<ReturnType<typeof listAcquaintances>> | null;
+};
+
+/**
+ * 记忆检索与装配：按需的问题背景（群活跃度、手账事实）、六类候选并行查询、
+ * 跨窗口旁路，以及与网页共用的选择整形（`prompt-memory-selection.ts`）。
+ * 差别只在 scope 标签怎么算：这里按「是不是角色全局范围」判断，网页按会话范围来源判断。
+ */
+async function retrieveChannelTurnContext(input: {
+  prisma: PrismaClient;
+  character: ChannelTurnCharacter;
+  isGroup: boolean;
+  platform: string;
+  characterId: string;
+  messages: ChannelTurnMessage[];
+  currentMessage: string;
+  recentMessages: ConversationContextMessage[];
+  recentStoredMessages: ChannelTurnStoredMessage[];
+  existingConversation: ChannelTurnConversation | null;
+  isOwnerTurn: boolean;
+  ownerPrivateScopeId: string | null;
+  primaryIdentityScopeId: string | null;
+  globalScopeId: string;
+  group?: ChannelGroupTurnContext;
+}): Promise<ChannelTurnRetrieval> {
+  const { prisma, character, isGroup, currentMessage, existingConversation } = input;
+
+  /**
+   * 「这个群里谁跟我聊过」这类问题，名单由代码数出来。
+   *
+   * 只在群聊、且这一轮确实在问人时查：统计要扫一段消息，普通闲聊不该为它付代价。
+   * 失败只少一段背景，不能拦住这轮回复。
+   */
+  const groupActivity = isGroup && existingConversation && input.group && isGroupActivityQuery(currentMessage)
+    ? await buildGroupActivityContext({
+        prisma,
+        conversationId: existingConversation.id,
+        characterId: input.characterId,
+        platform: input.platform,
+        query: currentMessage,
+        timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+        selfQq: input.group.selfQq,
+        ownerQq: input.group.ownerQq,
+        selfNames: input.group.selfNames?.length ? input.group.selfNames : [character.name],
+      }).catch(() => null)
+    : null;
+
+  /**
+   * 生日、名字、外观这类「关于她本人」的稳定事实，手账里才有。
+   * 只在她确实被问到时查，且不查能力类（语音/看图）—— 那些看当前配置，别看旧手账。
+   */
+  const journalFacts = isSelfFactQuery(currentMessage)
+    ? await loadJournalFacts(prisma, { characterId: character.id, query: currentMessage }).catch(() => [])
+    : [];
+
+  const retrievalQuery = [
+    currentMessage,
+    ...input.recentMessages.filter((item) => item.role === "USER").slice(-2).map((item) => item.content),
+  ].join("\n");
+
+  // Retrieval scope: character-global (shared persona) plus the author's own identity scope
+  // (per-platform private memory). 群聊只用全局：一轮里好几个人，谁的私人记忆都不该端出来。
+  // 主人私聊用 owner 的 USER_PRIVATE 范围，**同时带上主人自己 QQ 的旧身份范围**：
+  // 会话在归位前可能还挂在 EXTERNAL_IDENTITY 上，旧记忆/忆泡写在那里，不带就永远读不到。
+  // 两个范围都属于同一个主人，不涉及把别人的私人记忆端出来。
+  const readableScopeIds = isGroup
+    ? [input.globalScopeId]
+    : (input.isOwnerTurn && input.ownerPrivateScopeId
+      ? [input.globalScopeId, input.ownerPrivateScopeId, ...(input.primaryIdentityScopeId ? [input.primaryIdentityScopeId] : [])]
+      : (input.primaryIdentityScopeId ? [input.globalScopeId, input.primaryIdentityScopeId] : [input.globalScopeId]));
+
+  /**
+   * 他在群里说过的话 —— 跨窗口旁路的取数。
+   *
+   * 为什么需要：群聊和私聊是两个 `Conversation`，`recentStoredMessages` 写死按当前
+   * 会话 id 取。于是他在群里说的，私聊里她一句都接不到，只能回「这边真没接到」。
+   * 记忆层那条路（忆泡/长期记忆）补的是「那几天」，这条补的是「刚才这两小时」。
+   *
+   * 三个限定，缺一条都不能上：
+   * 1. **只在主人私聊时查**（`isOwnerTurn`）。群友不进这条路：他在群里说的话，
+   *    别的群友的私聊里不该出现；主人自己本来就在那个群里，把他自己说过的话
+   *    接回私聊不涉及第三人。
+   * 2. 只查 `g:` 群会话，且只认 `authorOpenId` 等于他本人的那些行 —— 群里第三人
+   *    说的话一个字都不带（这不是「群聊转播」，是「我刚才说的那句你听见没」）。
+   * 3. 她的回应由纯函数按「紧跟在他后面」二次筛（`selectCrossChannelContext`），
+   *    这里先把候选放宽拿全，别在 SQL 里写一半逻辑。
+   */
+  const ownerPlatformUid = input.isOwnerTurn
+    ? (input.messages[0]!.authorPlatformUid || input.messages[0]!.authorOpenId || "").trim()
+    : "";
+  const crossChannelLookup = ownerPlatformUid
+    ? prisma.message.findMany({
+        where: {
+          occurredAt: { gte: new Date(Date.now() - CROSS_CHANNEL_WINDOW_MINUTES * 60_000) },
+          conversation: {
+            characterId: input.characterId,
+            externalConversationId: { startsWith: "g:" },
+          },
+          OR: [
+            { metadata: { path: ["authorOpenId"], equals: ownerPlatformUid } },
+            { role: "ASSISTANT" },
+          ],
+        },
+        // 倒序取最近 200 条：热群两小时能滚过上千条，正序取会把「刚才」整段挤掉。
+        orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+        take: 200,
+        select: {
+          id: true, role: true, content: true, occurredAt: true, metadata: true,
+          conversation: { select: { id: true, externalConversationId: true } },
+        },
+      })
+    : Promise.resolve([]);
+
+  // 熟人卡要用的说话人 id 也算在这里，好和记忆检索一起并行（P3）。
+  const speakerUids = isGroup
+    ? [...new Set(input.messages.map((message) => (message.authorPlatformUid || message.authorOpenId || "").trim()).filter(Boolean))]
+    : [];
+  const eventRetrievalNow = new Date();
+  const participantName = parseEventParticipantQuery(retrievalQuery);
+  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName, { characterId: input.characterId, platform: input.platform }) : [];
+  // 名字解析后，六类检索并行查；授权范围及群聊会话边界仍由本入口确定。
+  const [{ memories: memoryCandidates, snapshots: snapshotCandidates }, eventCandidates, knownIdentities, acquaintanceRows, crossChannelRows] = await Promise.all([
+    loadPromptMemoryCandidates(prisma, { readableScopeIds, query: retrievalQuery }),
+    loadPromptEventCandidates(prisma, {
+      readableScopeIds, query: retrievalQuery, participantIds, now: eventRetrievalNow,
+      timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+      // 群聊仍只取本群；会话尚不存在时返回空，不退回全局读取。
+      groupConversationId: isGroup ? existingConversation?.id ?? null : undefined,
+    }),
+    speakerUids.length
+      ? prisma.externalIdentity.findMany({
+          where: { platform: input.platform, platformUid: { in: speakerUids } },
+          select: {
+            platformUid: true,
+            displayName: true,
+            memoryScopes: {
+              where: { characterId: input.characterId },
+              select: { interactionCount: true, lastInteractedAt: true },
+            },
+          },
+        }).catch(() => null)
+      : Promise.resolve(null),
+    // 「我认识谁」，分三档：私聊的、跨群的、还有眼前这个屋里的。
+    // 群聊传会话 id → 多一档 `inThisGroup`：她要靠它决定对谁热络、对谁客气；
+    // 另外两档是背景，让她知道「我在别处也有一堆熟人」，别一进群就像个没朋友的。
+    // 私聊会话这里没有 `inThisGroup`。
+    listAcquaintances({
+      characterId: input.characterId,
+      limit: CLOSE_FRIEND_LIMIT,
+      conversationId: isGroup ? existingConversation?.id ?? null : null,
+    }).catch(() => null),
+    // 跨窗口旁路失败只应该少一段背景，不能拦住这一轮回复。
+    Promise.resolve(crossChannelLookup).catch(() => []),
+  ]);
+  /**
+   * 跨窗口旁路：他在群里说的那几句 + 她当时的回应。
+   *
+   * 它是**另一个窗口**的记录，不是本窗口的历史 —— 所以单独一路传给提示词，
+   * 绝不并进 `recentMessages`。并进去模型会以为自己刚在这个窗口里说过这些，
+   * 下一句就可能接着「刚才」往下说，而这个「刚才」对方根本没听见。
+   */
+  const crossChannel: CrossChannelLine[] = selectCrossChannelContext(
+    crossChannelRows.map((row): CrossChannelCandidate => ({
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      occurredAt: row.occurredAt,
+      conversationId: row.conversation.id,
+      groupLabel: groupLabelFromConversationKey(row.conversation.externalConversationId ?? ""),
+      authorOpenId: readStoredAuthorOpenId(row.metadata),
+      authorDisplayName: readStoredSpeaker(row.metadata).speaker ?? "",
+    })),
+    { now: new Date(), ownerUid: ownerPlatformUid },
+  ).lines;
+
+  // 记忆、阶段总结、忆泡的选择与整形和网页共用一份（`prompt-memory-selection.ts`）。
+  const {
+    memories, snapshots, events, recentEvents, eventSelection, selection: memorySelection,
+  } = await selectPromptMemoryContext({
+    query: retrievalQuery,
+    now: eventRetrievalNow,
+    timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+    memoryCandidates,
+    snapshotCandidates,
+    eventCandidates,
+    participantIds,
+    ...(isGroup && (character.modelConfig as Record<string, unknown> | null)?.personCueEnabled === true
+      ? { personCue: { speakerIds: speakerUids, platform: input.platform } } : {}),
+    limits: {
+      memoryItems: resolveMemoryItemLimit(character.modelConfig),
+      memoryTokens: resolveMemoryTokenBudget(character.modelConfig),
+      snapshots: 4,
+      snapshotTokens: resolveSnapshotTokenBudget(character.modelConfig),
+      events: resolveEventItemLimit(character.modelConfig),
+      eventTokens: resolveEventTokenBudget(character.modelConfig),
+      recentEventDays: resolveEventRecentDays(character.modelConfig),
+    },
+    scopeOf: (memoryScopeId) => (memoryScopeId === input.globalScopeId ? "character" : "private"),
+    loadParticipantNames: (items) => resolveEventParticipantNames(prisma, items),
+  });
+
+  return {
+    groupActivity,
+    journalFacts,
+    retrievalQuery,
+    readableScopeIds,
+    ownerPlatformUid,
+    crossChannel,
+    participantName,
+    participantIds,
+    memories,
+    snapshots,
+    events,
+    recentEvents,
+    eventSelection,
+    memorySelection,
+    memoryCandidates,
+    snapshotCandidates,
+    eventCandidates,
+    knownIdentities,
+    acquaintanceRows,
+  };
+}
+
+type ChannelTurnWindow = {
+  contextRuntime: Awaited<ReturnType<typeof resolveContextAssistantRuntime>>;
+  /** 最近窗口：按时间倒序，最新一条在 [0]。 */
+  recentStoredMessages: ChannelTurnStoredMessage[];
+  emojiHistory: Array<{ occurredAt: Date; metadata: Prisma.JsonValue }>;
+  emojiFrequency: ReturnType<typeof resolveEmojiFrequency>;
+  /** SQL-selection evidence only, not a claim about post-summary prompt usage. No text or ids. */
+  privateHistorySelection?: { version: 1; userRows: number; assistantRows: number };
+  /** 已按时间正序、过滤屏蔽与系统播报、整形为提示词载荷的最近消息。 */
+  recentMessages: ConversationContextMessage[];
+};
+
+/**
+ * 最近对话窗口 + 表情额度历史（同一个会话，一起查，省 RTT）。
+ *
+ * 窗口里被标为 AI / 禁止交流的对象、以及别的机器人的系统播报都不进提示词：
+ * 旧消息仍保存在聊天记录里，只是不再占提示词位置。这里用**宽判据**
+ * （`looksLikeSystemMessage`）：误判也只是这一行不进提示词，原文还在库里；
+ * 写入侧用的是窄判据，两件事别搞反。
+ */
+async function loadChannelTurnWindow(input: {
+  prisma: PrismaClient;
+  character: ChannelTurnCharacter;
+  isGroup: boolean;
+  platform: string;
+  characterId: string;
+  messages: ChannelTurnMessage[];
+  privateMessagesRecorded: boolean;
+  existingConversation: ChannelTurnConversation | null;
+  group?: ChannelGroupTurnContext;
+  chatApiBaseUrl: string;
+}): Promise<ChannelTurnWindow> {
+  const { prisma, character, isGroup, existingConversation } = input;
+  const emojiFrequency = resolveEmojiFrequency(character.modelConfig);
+  const contextRuntime = isGroup ? await resolveContextAssistantRuntime(character.modelConfig, input.chatApiBaseUrl) : null;
+  const [recentStoredMessages, emojiHistory] = await Promise.all([
+    existingConversation
+      ? prisma.message.findMany({
+          where: {
+            conversationId: existingConversation.id,
+            // 私聊预落库之后，这条消息已经在库里了；它作为 currentMessage 单独进提示词，
+            // 不能又出现在 recentMessages 里（模型会以为自己说过两遍）。
+            ...(input.privateMessagesRecorded
+              ? { OR: [
+                  // Our own replies have no platform message id. SQL NULL NOT IN (...) is
+                  // not true, so an unguarded NOT IN silently erased all assistant history.
+                  { externalMessageId: null },
+                  { externalMessageId: { notIn: input.messages.map((message) => message.externalMessageId) } },
+                ] }
+              : {}),
+          },
+          orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+          take: contextRuntime ? Math.max(120, resolveRecentMessageLimit(character.modelConfig)) : resolveRecentMessageLimit(character.modelConfig),
+          select: channelTurnRecentMessageSelect,
+        })
+      : Promise.resolve([]),
+    existingConversation
+      ? prisma.message.findMany({
+          where: {
+            conversationId: existingConversation.id,
+            role: "ASSISTANT",
+            occurredAt: { gte: new Date(Date.now() - emojiFrequency.windowMinutes * 60_000) },
+          },
+          select: { occurredAt: true, metadata: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const privateHistorySelection = input.privateMessagesRecorded ? {
+    version: 1 as const,
+    userRows: recentStoredMessages.filter(row => row.role === "USER").length,
+    assistantRows: recentStoredMessages.filter(row => row.role === "ASSISTANT").length,
+  } : undefined;
+
+  // 被标记为 AI / 禁止交流的对象，旧消息仍保存在聊天记录中，但不再进入后续群聊提示词。
+  const blockedRecentMessageIds = new Set<string>();
+  if (isGroup && recentStoredMessages.length) {
+    const historicalUids = [...new Set(
+      recentStoredMessages
+        .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
+        .map((item) => readStoredAuthorOpenId(item.metadata))
+        .filter(Boolean),
+    )];
+    if (historicalUids.length) {
+      const historicalIdentities = await prisma.externalIdentity.findMany({
+        where: { platform: input.platform, platformUid: { in: historicalUids } },
+        select: {
+          platformUid: true,
+          kind: true,
+          memoryScopes: {
+            where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+            take: 1,
+            select: { friendChatPolicy: true },
+          },
+        },
+      });
+      const historicalPolicyByUid = new Map(historicalIdentities.map((identity) => [
+        identity.platformUid,
+        {
+          kind: identity.kind,
+          policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
+        },
+      ] as const));
+      for (const item of recentStoredMessages) {
+        if (item.role !== "USER") continue;
+        const speaker = readStoredSpeaker(item.metadata);
+        const uid = readStoredAuthorOpenId(item.metadata);
+        if (speaker.isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) continue;
+        const identity = historicalPolicyByUid.get(uid);
+        if (shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT")) {
+          blockedRecentMessageIds.add(item.id);
+        }
+      }
+    }
+  }
+
+  const recentMessages: ConversationContextMessage[] = [...recentStoredMessages]
+    .reverse()
+    .filter((item) => item.role === "USER" || item.role === "ASSISTANT")
+    .filter((item) => !blockedRecentMessageIds.has(item.id))
+    .filter((item) => !(item.role === "USER" && looksLikeSystemMessage(item.content)))
+    .map((item) => {
+      // 历史 USER 行也可能 @ 了别人：只带 role/content 时，模型会把 `@数字`
+      // 或 `@member_n` 当成在说它自己。正文按 mentions 代号化，目标信息一起带出去。
+      const mentions = item.role === "USER" ? readMessageMentions(item.metadata) : [];
+      return {
+        id: item.externalMessageId || item.id,
+        role: item.role as "USER" | "ASSISTANT",
+        content: (mentions.length
+          ? formatMentionContent(item.content, mentions)
+          : item.content).slice(0, 1800),
+        occurredAt: item.occurredAt.toISOString(),
+        // 只有她自己的话不需要发言人；USER 的话一律带上，否则群里几条历史分不清是谁说的。
+        ...(item.role === "USER" ? readStoredSpeaker(item.metadata) : {}),
+        ...(mentions.length
+          ? { mentions: mentions.map(({ qq: _qq, ...rest }) => rest) }
+          : {}),
+        // 她自己发过图的回复：标出来，让她认得「那张图是我贴的」。
+        ...(item.role === "ASSISTANT" && readStoredStickerFlag(item.metadata) ? { hadSticker: true } : {}),
+        // 她自己发过语音的那条：同理，不带出去她就不知道自己刚才在「说话」。
+        ...(item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata) ? { hadVoice: true } : {}),
+      };
+    });
+
+  return {
+    contextRuntime,
+    recentStoredMessages,
+    emojiHistory,
+    emojiFrequency,
+    ...(privateHistorySelection ? { privateHistorySelection } : {}),
+    recentMessages,
+  };
+}
+
 type ChannelTurnModelPreparation =
   | {
       ok: true;
@@ -1256,89 +1776,24 @@ async function runChannelTurn(input: {
   messages = modelPrep.messages;
 
   // 最近对话窗口与表情额度历史都依赖同一个会话，一起查（P3）。emojiFrequency 提前到这里。
-  const emojiFrequency = resolveEmojiFrequency(character.modelConfig);
-  const contextRuntime = isGroup ? await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl) : null;
-  const [recentStoredMessages, emojiHistory] = await Promise.all([
-    existingConversation
-      ? prisma.message.findMany({
-          where: {
-            conversationId: existingConversation.id,
-            // 私聊预落库之后，这条消息已经在库里了；它作为 currentMessage 单独进提示词，
-            // 不能又出现在 recentMessages 里（模型会以为自己说过两遍）。
-            ...(privateMessagesRecorded
-              ? { OR: [
-                  // Our own replies have no platform message id. SQL NULL NOT IN (...) is
-                  // not true, so an unguarded NOT IN silently erased all assistant history.
-                  { externalMessageId: null },
-                  { externalMessageId: { notIn: messages.map((message) => message.externalMessageId) } },
-                ] }
-              : {}),
-          },
-          orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-          take: contextRuntime ? Math.max(120, resolveRecentMessageLimit(character.modelConfig)) : resolveRecentMessageLimit(character.modelConfig),
-          select: { id: true, role: true, content: true, occurredAt: true, metadata: true, externalMessageId: true },
-        })
-      : Promise.resolve([]),
-    existingConversation
-      ? prisma.message.findMany({
-          where: {
-            conversationId: existingConversation.id,
-            role: "ASSISTANT",
-            occurredAt: { gte: new Date(Date.now() - emojiFrequency.windowMinutes * 60_000) },
-          },
-          select: { occurredAt: true, metadata: true },
-        })
-      : Promise.resolve([]),
-  ]);
-
-  // SQL-selection evidence only, not a claim about post-summary prompt usage. No text or ids.
-  const privateHistorySelection = privateMessagesRecorded ? {
-    version: 1,
-    userRows: recentStoredMessages.filter(row => row.role === "USER").length,
-    assistantRows: recentStoredMessages.filter(row => row.role === "ASSISTANT").length,
-  } : undefined;
-
-  // 被标记为 AI / 禁止交流的对象，旧消息仍保存在聊天记录中，但不再进入后续群聊提示词。
-  const blockedRecentMessageIds = new Set<string>();
-  if (isGroup && recentStoredMessages.length) {
-    const historicalUids = [...new Set(
-      recentStoredMessages
-        .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
-        .map((item) => readStoredAuthorOpenId(item.metadata))
-        .filter(Boolean),
-    )];
-    if (historicalUids.length) {
-      const historicalIdentities = await prisma.externalIdentity.findMany({
-        where: { platform: input.platform, platformUid: { in: historicalUids } },
-        select: {
-          platformUid: true,
-          kind: true,
-          memoryScopes: {
-            where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
-            take: 1,
-            select: { friendChatPolicy: true },
-          },
-        },
-      });
-      const historicalPolicyByUid = new Map(historicalIdentities.map((identity) => [
-        identity.platformUid,
-        {
-          kind: identity.kind,
-          policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
-        },
-      ] as const));
-      for (const item of recentStoredMessages) {
-        if (item.role !== "USER") continue;
-        const speaker = readStoredSpeaker(item.metadata);
-        const uid = readStoredAuthorOpenId(item.metadata);
-        if (speaker.isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) continue;
-        const identity = historicalPolicyByUid.get(uid);
-        if (shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT")) {
-          blockedRecentMessageIds.add(item.id);
-        }
-      }
-    }
-  }
+  const window = await loadChannelTurnWindow({
+    prisma,
+    character,
+    isGroup,
+    platform: input.platform,
+    characterId: input.characterId,
+    messages,
+    privateMessagesRecorded,
+    existingConversation,
+    ...(input.group ? { group: input.group } : {}),
+    chatApiBaseUrl: chatSettings.apiBaseUrl,
+  });
+  const contextRuntime = window.contextRuntime;
+  const recentStoredMessages = window.recentStoredMessages;
+  const emojiHistory = window.emojiHistory;
+  const emojiFrequency = window.emojiFrequency;
+  const privateHistorySelection = window.privateHistorySelection;
+  const recentMessages = window.recentMessages;
 
   // 表情要看三件事：渠道收不收（清单）、角色开没开开关、这个会话的额度用没用完。
   // 只看前两个的话，一个爱发表情的角色会在每句后面都挂一张。
@@ -1441,222 +1896,49 @@ async function runChannelTurn(input: {
     : [];
 
   /**
-   * 别人的系统播报不进窗口。
-   *
-   * 群里同时跑几个机器人时，它们对同一条命令各回一次（实测「管理命令仅管理员可用。」
-   * 一天 34 条），onebot 会当普通群友消息收进来。这些行留在窗口里有两个坏处：
-   * 一是白白占掉 40 条里的一大截，二是模型会把它们当「群友在说话」跟着接。
-   *
-   * 这里用**宽判据**（`looksLikeSystemMessage`）：误判也只是这一行不进提示词，
-   * 原文还在库里，群聊原文页照常能看到。写入侧用的是窄判据，两件事别搞反。
+   * 别人的系统播报不进窗口（宽判据过滤在 loadChannelTurnWindow 里做）。
    */
-  const recentMessages: ConversationContextMessage[] = [...recentStoredMessages]
-    .reverse()
-    .filter((item) => item.role === "USER" || item.role === "ASSISTANT")
-    .filter((item) => !blockedRecentMessageIds.has(item.id))
-    .filter((item) => !(item.role === "USER" && looksLikeSystemMessage(item.content)))
-    .map((item) => {
-      // 历史 USER 行也可能 @ 了别人：只带 role/content 时，模型会把 `@数字`
-      // 或 `@member_n` 当成在说它自己。正文按 mentions 代号化，目标信息一起带出去。
-      const mentions = item.role === "USER" ? readMessageMentions(item.metadata) : [];
-      return {
-        id: item.externalMessageId || item.id,
-        role: item.role as "USER" | "ASSISTANT",
-        content: (mentions.length
-          ? formatMentionContent(item.content, mentions)
-          : item.content).slice(0, 1800),
-        occurredAt: item.occurredAt.toISOString(),
-        // 只有她自己的话不需要发言人；USER 的话一律带上，否则群里几条历史分不清是谁说的。
-        ...(item.role === "USER" ? readStoredSpeaker(item.metadata) : {}),
-        ...(mentions.length
-          ? { mentions: mentions.map(({ qq: _qq, ...rest }) => rest) }
-          : {}),
-        // 她自己发过图的回复：标出来，让她认得「那张图是我贴的」。
-        ...(item.role === "ASSISTANT" && readStoredStickerFlag(item.metadata) ? { hadSticker: true } : {}),
-        // 她自己发过语音的那条：同理，不带出去她就不知道自己刚才在「说话」。
-        ...(item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata) ? { hadVoice: true } : {}),
-      };
-    });
-
   const modelText = (message: ChannelTurnMessage) => message.promptContent ?? message.content;
   const currentMessage = messages.length === 1
     ? modelText(messages[0]!)
     : messages.map((message) => `${message.authorDisplayName || "群友"}：${modelText(message)}`).join("\n");
 
-  /**
-   * 「这个群里谁跟我聊过」这类问题，名单由代码数出来。
-   *
-   * 只在群聊、且这一轮确实在问人时查：统计要扫一段消息，普通闲聊不该为它付代价。
-   * 失败只少一段背景，不能拦住这轮回复。
-   */
-  const groupActivity = isGroup && existingConversation && input.group && isGroupActivityQuery(currentMessage)
-    ? await buildGroupActivityContext({
-        prisma,
-        conversationId: existingConversation.id,
-        characterId: input.characterId,
-        platform: input.platform,
-        query: currentMessage,
-        timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
-        selfQq: input.group.selfQq,
-        ownerQq: input.group.ownerQq,
-        selfNames: input.group.selfNames?.length ? input.group.selfNames : [character.name],
-      }).catch(() => null)
-    : null;
-
-  /**
-   * 生日、名字、外观这类「关于她本人」的稳定事实，手账里才有。
-   * 只在她确实被问到时查，且不查能力类（语音/看图）—— 那些看当前配置，别看旧手账。
-   */
-  const journalFacts = isSelfFactQuery(currentMessage)
-    ? await loadJournalFacts(prisma, { characterId: character.id, query: currentMessage }).catch(() => [])
-    : [];
-
-  const retrievalQuery = [
+  const retrieval = await retrieveChannelTurnContext({
+    prisma,
+    character,
+    isGroup,
+    platform: input.platform,
+    characterId: input.characterId,
+    messages,
     currentMessage,
-    ...recentMessages.filter((item) => item.role === "USER").slice(-2).map((item) => item.content),
-  ].join("\n");
-
-  // Retrieval scope: character-global (shared persona) plus the author's own identity scope
-  // (per-platform private memory). 群聊只用全局：一轮里好几个人，谁的私人记忆都不该端出来。
-  // 主人私聊用 owner 的 USER_PRIVATE 范围，**同时带上主人自己 QQ 的旧身份范围**：
-  // 会话在归位前可能还挂在 EXTERNAL_IDENTITY 上，旧记忆/忆泡写在那里，不带就永远读不到。
-  // 两个范围都属于同一个主人，不涉及把别人的私人记忆端出来。
-  const readableScopeIds = isGroup
-    ? [globalScope.id]
-    : (isOwnerTurn && ownerPrivateScopeId
-      ? [globalScope.id, ownerPrivateScopeId, ...(primaryIdentityScopeId ? [primaryIdentityScopeId] : [])]
-      : (primaryIdentityScopeId ? [globalScope.id, primaryIdentityScopeId] : [globalScope.id]));
-
-  /**
-   * 他在群里说过的话 —— 跨窗口旁路的取数。
-   *
-   * 为什么需要：群聊和私聊是两个 `Conversation`，`recentStoredMessages` 写死按当前
-   * 会话 id 取。于是他在群里说的，私聊里她一句都接不到，只能回「这边真没接到」。
-   * 记忆层那条路（忆泡/长期记忆）补的是「那几天」，这条补的是「刚才这两小时」。
-   *
-   * 三个限定，缺一条都不能上：
-   * 1. **只在主人私聊时查**（`isOwnerTurn`）。群友不进这条路：他在群里说的话，
-   *    别的群友的私聊里不该出现；主人自己本来就在那个群里，把他自己说过的话
-   *    接回私聊不涉及第三人。
-   * 2. 只查 `g:` 群会话，且只认 `authorOpenId` 等于他本人的那些行 —— 群里第三人
-   *    说的话一个字都不带（这不是「群聊转播」，是「我刚才说的那句你听见没」）。
-   * 3. 她的回应由纯函数按「紧跟在他后面」二次筛（`selectCrossChannelContext`），
-   *    这里先把候选放宽拿全，别在 SQL 里写一半逻辑。
-   */
-  const ownerPlatformUid = isOwnerTurn
-    ? (messages[0]!.authorPlatformUid || messages[0]!.authorOpenId || "").trim()
-    : "";
-  const crossChannelLookup = ownerPlatformUid
-    ? prisma.message.findMany({
-        where: {
-          occurredAt: { gte: new Date(Date.now() - CROSS_CHANNEL_WINDOW_MINUTES * 60_000) },
-          conversation: {
-            characterId: input.characterId,
-            externalConversationId: { startsWith: "g:" },
-          },
-          OR: [
-            { metadata: { path: ["authorOpenId"], equals: ownerPlatformUid } },
-            { role: "ASSISTANT" },
-          ],
-        },
-        // 倒序取最近 200 条：热群两小时能滚过上千条，正序取会把「刚才」整段挤掉。
-        orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-        take: 200,
-        select: {
-          id: true, role: true, content: true, occurredAt: true, metadata: true,
-          conversation: { select: { id: true, externalConversationId: true } },
-        },
-      })
-    : Promise.resolve([]);
-
-  // 熟人卡要用的说话人 id 也算在这里，好和记忆检索一起并行（P3）。
-  const speakerUids = isGroup
-    ? [...new Set(messages.map((message) => (message.authorPlatformUid || message.authorOpenId || "").trim()).filter(Boolean))]
-    : [];
-  const eventRetrievalNow = new Date();
-  const participantName = parseEventParticipantQuery(retrievalQuery);
-  const participantIds = participantName ? await resolveParticipantAccounts(prisma, participantName, { characterId: input.characterId, platform: input.platform }) : [];
-  // 名字解析后，六类检索并行查；授权范围及群聊会话边界仍由本入口确定。
-  const [{ memories: memoryCandidates, snapshots: snapshotCandidates }, eventCandidates, knownIdentities, acquaintanceRows, crossChannelRows] = await Promise.all([
-    loadPromptMemoryCandidates(prisma, { readableScopeIds, query: retrievalQuery }),
-    loadPromptEventCandidates(prisma, {
-      readableScopeIds, query: retrievalQuery, participantIds, now: eventRetrievalNow,
-      timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
-      // 群聊仍只取本群；会话尚不存在时返回空，不退回全局读取。
-      groupConversationId: isGroup ? existingConversation?.id ?? null : undefined,
-    }),
-    speakerUids.length
-      ? prisma.externalIdentity.findMany({
-          where: { platform: input.platform, platformUid: { in: speakerUids } },
-          select: {
-            platformUid: true,
-            displayName: true,
-            memoryScopes: {
-              where: { characterId: input.characterId },
-              select: { interactionCount: true, lastInteractedAt: true },
-            },
-          },
-        }).catch(() => null)
-      : Promise.resolve(null),
-    // 「我认识谁」，分三档：私聊的、跨群的、还有眼前这个屋里的。
-    // 群聊传会话 id → 多一档 `inThisGroup`：她要靠它决定对谁热络、对谁客气；
-    // 另外两档是背景，让她知道「我在别处也有一堆熟人」，别一进群就像个没朋友的。
-    // 私聊会话这里没有 `inThisGroup`。
-    listAcquaintances({
-      characterId: input.characterId,
-      limit: CLOSE_FRIEND_LIMIT,
-      conversationId: isGroup ? existingConversation?.id ?? null : null,
-    }).catch(() => null),
-    // 跨窗口旁路失败只应该少一段背景，不能拦住这一轮回复。
-    Promise.resolve(crossChannelLookup).catch(() => []),
-  ]);
-  /**
-   * 跨窗口旁路：他在群里说的那几句 + 她当时的回应。
-   *
-   * 它是**另一个窗口**的记录，不是本窗口的历史 —— 所以单独一路传给提示词，
-   * 绝不并进 `recentMessages`。并进去模型会以为自己刚在这个窗口里说过这些，
-   * 下一句就可能接着「刚才」往下说，而这个「刚才」对方根本没听见。
-   */
-  const crossChannel: CrossChannelLine[] = selectCrossChannelContext(
-    crossChannelRows.map((row): CrossChannelCandidate => ({
-      id: row.id,
-      role: row.role,
-      content: row.content,
-      occurredAt: row.occurredAt,
-      conversationId: row.conversation.id,
-      groupLabel: groupLabelFromConversationKey(row.conversation.externalConversationId ?? ""),
-      authorOpenId: readStoredAuthorOpenId(row.metadata),
-      authorDisplayName: readStoredSpeaker(row.metadata).speaker ?? "",
-    })),
-    { now: new Date(), ownerUid: ownerPlatformUid },
-  ).lines;
-
-  // 记忆、阶段总结、忆泡的选择与整形和网页共用一份（`prompt-memory-selection.ts`）。
-  // 差别只在 scope 标签怎么算：这里按「是不是角色全局范围」判断，网页按会话范围来源判断。
-  const {
-    memories, snapshots, events, recentEvents, eventSelection, selection: memorySelection,
-  } = await selectPromptMemoryContext({
-    query: retrievalQuery,
-    now: eventRetrievalNow,
-    timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
-    memoryCandidates,
-    snapshotCandidates,
-    eventCandidates,
-    participantIds,
-    ...(isGroup && (character.modelConfig as Record<string, unknown> | null)?.personCueEnabled === true
-      ? { personCue: { speakerIds: speakerUids, platform: input.platform } } : {}),
-    limits: {
-      memoryItems: resolveMemoryItemLimit(character.modelConfig),
-      memoryTokens: resolveMemoryTokenBudget(character.modelConfig),
-      snapshots: 4,
-      snapshotTokens: resolveSnapshotTokenBudget(character.modelConfig),
-      events: resolveEventItemLimit(character.modelConfig),
-      eventTokens: resolveEventTokenBudget(character.modelConfig),
-      recentEventDays: resolveEventRecentDays(character.modelConfig),
-    },
-    scopeOf: (memoryScopeId) => (memoryScopeId === globalScope.id ? "character" : "private"),
-    loadParticipantNames: (items) => resolveEventParticipantNames(prisma, items),
+    recentMessages,
+    recentStoredMessages,
+    existingConversation,
+    isOwnerTurn,
+    ownerPrivateScopeId,
+    primaryIdentityScopeId,
+    globalScopeId: globalScope.id,
+    ...(input.group ? { group: input.group } : {}),
   });
+  const groupActivity = retrieval.groupActivity;
+  const journalFacts = retrieval.journalFacts;
+  const retrievalQuery = retrieval.retrievalQuery;
+  const readableScopeIds = retrieval.readableScopeIds;
+  const ownerPlatformUid = retrieval.ownerPlatformUid;
+  const crossChannel = retrieval.crossChannel;
+  const participantName = retrieval.participantName;
+  const participantIds = retrieval.participantIds;
+  const memories = retrieval.memories;
+  const snapshots = retrieval.snapshots;
+  const events = retrieval.events;
+  const recentEvents = retrieval.recentEvents;
+  const eventSelection = retrieval.eventSelection;
+  const memorySelection = retrieval.memorySelection;
+  const memoryCandidates = retrieval.memoryCandidates;
+  const snapshotCandidates = retrieval.snapshotCandidates;
+  const eventCandidates = retrieval.eventCandidates;
+  const knownIdentities = retrieval.knownIdentities;
+  const acquaintanceRows = retrieval.acquaintanceRows;
 
   // 装配计划：只描述「这一轮打算放哪几类来源、各多少额度」，不驱动下面的查询。
   const questionKind: "date" | "topic" | "none" = eventSelection.range
@@ -1680,91 +1962,20 @@ async function runChannelTurn(input: {
   });
 
   // 忆泡还没覆盖到那一段时用原文兜底；只在问句指向某一天时才查。
-  let rawMessages: Array<{
-    id: string;
-    role: string;
-    content: string;
-    occurredAt: string;
-    /** 群聊原文的发言人与主人标记：不带上，她读到的就是一句句没有主人的话。 */
-    speaker?: string;
-    isOwner?: boolean;
-    scope: "character" | "private";
-  }> = [];
-  if (eventSelection.range) {
-    const rawCandidates = await prisma.message.findMany({
-      where: {
-        conversation: { memoryScopeId: { in: readableScopeIds } },
-        occurredAt: { gte: eventSelection.range.start, lt: eventSelection.range.end },
-      },
-      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-      take: 200,
-      select: {
-        id: true, role: true, content: true, occurredAt: true, metadata: true,
-        conversation: { select: { memoryScopeId: true } },
-      },
-    });
-    let rawPromptCandidates = rawCandidates;
-    if (isGroup && rawCandidates.length) {
-      const rawUids = [...new Set(
-        rawCandidates
-          .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
-          .map((item) => readStoredAuthorOpenId(item.metadata))
-          .filter(Boolean),
-      )];
-      if (rawUids.length) {
-        const rawIdentities = await prisma.externalIdentity.findMany({
-          where: { platform: input.platform, platformUid: { in: rawUids } },
-          select: {
-            platformUid: true,
-            kind: true,
-            memoryScopes: {
-              where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
-              take: 1,
-              select: { friendChatPolicy: true },
-            },
-          },
-        });
-        const rawPolicyByUid = new Map(rawIdentities.map((identity) => [
-          identity.platformUid,
-          {
-            kind: identity.kind,
-            policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
-          },
-        ] as const));
-        rawPromptCandidates = rawCandidates.filter((item) => {
-          if (item.role !== "USER") return true;
-          const speaker = readStoredSpeaker(item.metadata);
-          const uid = readStoredAuthorOpenId(item.metadata);
-          if (speaker.isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) return true;
-          const identity = rawPolicyByUid.get(uid);
-          return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
-        });
-      }
-    }
-    const selected = selectRawMessagesForPrompt(retrievalQuery, rawPromptCandidates, {
-      timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
-      tokenBudget: resolveRawMessageTokenBudget(character.modelConfig),
-      limit: resolveRawMessageLimit(character.modelConfig),
-      // 已经通过跨窗口旁路带进来的那几条不要再算一遍：同一句在提示词里出现两次，
-      // 模型会当成两件事，或者以为对方重复说过。
-      excludeIds: new Set([...recentStoredMessages.map((message) => message.id), ...crossChannel.map((line) => line.id)]),
-    });
-    rawMessages = selected.items.map((message) => {
-      const speaker = readStoredSpeaker(message.metadata);
-      return {
-        id: message.id,
-        role: message.role,
-        // 截断在 selectRawMessagesForPrompt 里做（并按截断后的长度算预算），这里不要再切一刀：
-        // 两处各有一个上限时，短的那个生效、长的那个没人知道它已经失效了。
-        content: message.content,
-        occurredAt: message.occurredAt.toISOString(),
-        // 原文兜底也要说清是谁讲的：只给 role，群聊里每一句都是「user」。
-        ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
-        ...(speaker.isOwner ? { isOwner: true } : {}),
-        scope: message.conversation.memoryScopeId === globalScope.id ? ("character" as const) : ("private" as const),
-      };
-    });
-  }
+  const rawMessages = await loadChannelTurnRawMessages({
+    prisma,
+    character,
+    isGroup,
+    platform: input.platform,
+    characterId: input.characterId,
+    eventSelectionRange: eventSelection.range,
+    readableScopeIds,
+    retrievalQuery,
+    recentStoredMessages,
+    crossChannel,
+    globalScopeId: globalScope.id,
+    ...(input.group ? { group: input.group } : {}),
+  });
 
   // 群聊一轮是「几个人在聊」，不是「某个人在对我说话」：交给 transcript。
   // 进了群聊管道就一律用群聊语境 —— 被 @ 时虽然不允许沉默，但同样需要上下文。
