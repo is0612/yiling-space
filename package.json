@@ -109,6 +109,7 @@
     "test:memory-reach": "tsx scripts/test-memory-reach-diagnosis.ts",
     "test:context-plan": "tsx scripts/test-context-plan.ts",
     "test:cleanup-guard": "tsx scripts/test-cleanup-guard.ts",
+    "test:day-range": "tsx scripts/test-day-range.ts",
     "test:memory-context": "tsx scripts/test-memory-context.ts",
     "test:memory-event-duplicates": "tsx scripts/test-memory-event-duplicates.ts",
     "test:memory-event-duplicates-isolated": "tsx scripts/test-memory-event-duplicates-isolated.ts",

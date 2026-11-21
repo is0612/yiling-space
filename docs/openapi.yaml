@@ -3903,6 +3903,14 @@ paths:
           in: query
           description: 每页日期数，默认 20，最大 100。
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: from
+          in: query
+          description: 区间起（YYYY-MM-DD，含）。与 `to` 同时给出时改走区间模式：不分页，返回区间内每一天（含没有记录的日子），供忆泡月历取整月。
+          schema: { type: string, example: "2026-11-01" }
+        - name: to
+          in: query
+          description: 区间止（YYYY-MM-DD，含）。格式不合法或先后颠倒时按「没给区间」处理，回落到分页模式。
+          schema: { type: string, example: "2026-11-30" }
       responses:
         '200':
           description: 日期列表与角色时区的今天

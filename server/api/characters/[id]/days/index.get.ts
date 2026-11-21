@@ -3,6 +3,7 @@ import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
 import { localDayKey } from "../../../../utils/memory-event-time";
+import { enumerateDayKeys, isDayKey } from "../../../../utils/day-range";
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -28,6 +29,11 @@ export default defineEventHandler(async (event) => {
   const params = getQuery(event);
   const pageSize = positiveInt(params.pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
   const requestedPage = positiveInt(params.page, 1);
+  // 日历按月取数：给区间就不再分页，一个月最多 31 行。
+  const from = isDayKey(params.from) ? String(params.from) : "";
+  const to = isDayKey(params.to) ? String(params.to) : "";
+  const ranged = Boolean(from && to && from <= to);
+
   const query = String(params.q ?? "").trim().slice(0, 40);
 
   if (query) {
@@ -67,6 +73,33 @@ export default defineEventHandler(async (event) => {
       extractedAt: progressByDay.get(row.dayKey)?.toISOString() ?? null,
     }));
     return { today, timeZone, days: rows, query, page, pageSize, total, totalPages };
+  }
+
+  if (ranged) {
+    const rowsInRange = await prisma.memoryEventDay.groupBy({
+      by: ["dayKey"],
+      where: { memoryScope: { is: { characterId } }, dayKey: { gte: from, lte: to } },
+      orderBy: { dayKey: "asc" },
+      _sum: { eventCount: true },
+      _max: { extractedAt: true },
+    });
+    const stateRows = await prisma.memoryEventDay.findMany({
+      where: { memoryScope: { is: { characterId } }, dayKey: { gte: from, lte: to }, state: "DRAFT" },
+      select: { dayKey: true },
+    });
+    const draftDays = new Set(stateRows.map((row) => row.dayKey));
+    // 范围里没有记录的日子也要出现：日历要画满一个月，「这天没整理」本身是信息。
+    const byDay = new Map(rowsInRange.map((row) => [row.dayKey, row]));
+    const days = enumerateDayKeys(from, to).map((dayKey) => {
+      const row = byDay.get(dayKey);
+      return {
+        dayKey,
+        state: row ? (draftDays.has(dayKey) ? "DRAFT" as const : "FINAL" as const) : null,
+        eventCount: row?._sum.eventCount ?? 0,
+        extractedAt: row?._max.extractedAt?.toISOString() ?? null,
+      };
+    });
+    return { today, timeZone, days, query: "", from, to, page: 1, pageSize: days.length || 1, total: days.length, totalPages: 1 };
   }
 
   // 同一天可能有多个记忆范围；按 dayKey 聚合后再分页，并补入尚未出现的今天。

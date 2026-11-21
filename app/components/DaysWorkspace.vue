@@ -540,6 +540,13 @@ await loadDays();
       v-else
       class="day-layout"
     >
+      <MemoryCalendar
+        v-if="id"
+        :character-id="id"
+        :selected="selected"
+        :today="today"
+        @select="selectDay"
+      />
       <aside class="card day-list">
         <div class="day-list-head">
           <h2>有记录的日子</h2>

@@ -449,6 +449,9 @@ export function createMemoryApi(request: ApiRequest) {
     characterId: string;
     page: number;
     pageSize: number;
+    /** 日历按月取数：给了区间就不分页，返回区间内每一天（含没有记录的日子）。 */
+    from?: string;
+    to?: string;
     keyword?: string;
   }): Promise<MemoryDayPage> {
     return request<MemoryDayPage>({
@@ -458,6 +461,7 @@ export function createMemoryApi(request: ApiRequest) {
         page: payload.page,
         pageSize: payload.pageSize,
         ...(payload.keyword ? { q: payload.keyword } : {}),
+        ...(payload.from && payload.to ? { from: payload.from, to: payload.to } : {}),
       },
     });
   }
