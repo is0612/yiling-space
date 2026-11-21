@@ -79,3 +79,64 @@ export type MemoryEvent = {
   sourceMessageIds: string[];
   scope: MemoryEventScope;
 };
+
+// ── 日子（按角色时区切的一天） ────────────────────────────────
+
+export type MemoryDayRow = {
+  dayKey: string;
+  /** null = 这天还没有任何整理记录（日历上仍要画出来）。 */
+  state: "DRAFT" | "FINAL" | null;
+  eventCount: number;
+  extractedAt: string | null;
+};
+
+export type MemoryDayMessage = {
+  id: string;
+  role: string;
+  content: string;
+  occurredAt: string;
+  author: string | null;
+  member: string | null;
+};
+
+export type MemoryDayMessageGroup = {
+  id: string;
+  title: string;
+  total: number;
+  messages: MemoryDayMessage[];
+};
+
+/**
+ * 日子列表。`query` / `from` / `to` 是筛选回显：范围查询时服务端把入参原样带回，
+ * 页面拿它就能把日历与搜索框填回原状，不用自己再记一份。
+ */
+export type MemoryDayPage = {
+  today: string;
+  timeZone: string;
+  days: MemoryDayRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  query?: string;
+  from?: string;
+  to?: string;
+};
+
+export type MemoryDayDetail = {
+  day: MemoryDayRow | null;
+  events: MemoryEvent[];
+  usage: { calls: number; tokens: number };
+  timeZone: string;
+  eventsTotal: number;
+  eventsPage: number;
+  eventsPageSize: number;
+  eventsTotalPages: number;
+};
+
+export type MemoryDayMessages = {
+  dayKey: string;
+  timeZone: string;
+  messageGroups: MemoryDayMessageGroup[];
+  totalMessages: number;
+};

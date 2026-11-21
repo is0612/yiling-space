@@ -2,6 +2,7 @@ import { createError, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import type { MemoryDayPage } from "../../../../../shared/types/memory";
 import { localDayKey } from "../../../../utils/memory-event-time";
 import { enumerateDayKeys, isDayKey } from "../../../../utils/day-range";
 
@@ -72,7 +73,7 @@ export default defineEventHandler(async (event) => {
       eventCount: row._count._all,
       extractedAt: progressByDay.get(row.dayKey)?.toISOString() ?? null,
     }));
-    return { today, timeZone, days: rows, query, page, pageSize, total, totalPages };
+    return { today, timeZone, days: rows, query, page, pageSize, total, totalPages } satisfies MemoryDayPage;
   }
 
   if (ranged) {
@@ -99,7 +100,7 @@ export default defineEventHandler(async (event) => {
         extractedAt: row?._max.extractedAt?.toISOString() ?? null,
       };
     });
-    return { today, timeZone, days, query: "", from, to, page: 1, pageSize: days.length || 1, total: days.length, totalPages: 1 };
+    return { today, timeZone, days, query: "", from, to, page: 1, pageSize: days.length || 1, total: days.length, totalPages: 1 } satisfies MemoryDayPage;
   }
 
   // 同一天可能有多个记忆范围；按 dayKey 聚合后再分页，并补入尚未出现的今天。

@@ -2,12 +2,13 @@ import type { ApiRequest } from "../utils/request";
 import type { Character, Snapshot, SnapshotDetail, SnapshotSourceMessage } from "../utils/mock-data";
 import type { MemoryProgressRow } from "../composables/useMemoryProgress";
 // 记忆条目的形状与枚举与后端共用一份（`shared/types/memory.ts`）；页面沿用 `MemoryRow` 这个名字。
-import type { MemoryCategory, MemoryEvent, MemoryItem, MemoryPage } from "#shared/types/memory";
+import type { MemoryCategory, MemoryDayDetail, MemoryDayMessages, MemoryDayPage, MemoryEvent, MemoryItem, MemoryPage } from "#shared/types/memory";
 import type { SnapshotPage } from "#shared/types/snapshot";
 export type {
   MEMORY_CATEGORIES, MEMORY_STATUSES, MEMORY_SCOPE_TYPES,
   MEMORY_EVENT_STATES, MEMORY_EVENT_STATUSES, MEMORY_EVENT_SCOPES,
   MemoryCategory, MemoryEvent, MemoryEventScope, MemoryEventState, MemoryEventStatus,
+  MemoryDayDetail, MemoryDayMessage, MemoryDayMessageGroup, MemoryDayMessages, MemoryDayPage, MemoryDayRow,
   MemoryItem, MemoryPage,
 } from "#shared/types/memory";
 export type MemoryRow = MemoryItem;
@@ -118,60 +119,8 @@ export type PrivateChatPayload = {
   nextCursor: PrivateChatCursor;
 };
 
-export type MemoryDayRow = {
-  dayKey: string;
-  state: "DRAFT" | "FINAL" | null;
-  eventCount: number;
-  extractedAt: string | null;
-};
-
 /** 忆泡：与后端共用同一份契约（`shared/types/memory.ts` 的 `MemoryEvent`）。 */
 export type MemoryDayEvent = MemoryEvent;
-
-export type MemoryDayMessage = {
-  id: string;
-  role: string;
-  content: string;
-  occurredAt: string;
-  author: string | null;
-  member: string | null;
-};
-
-export type MemoryDayMessageGroup = {
-  id: string;
-  title: string;
-  total: number;
-  messages: MemoryDayMessage[];
-};
-
-export type MemoryDayPage = {
-  today: string;
-  timeZone: string;
-  days: MemoryDayRow[];
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-};
-
-export type MemoryDayDetail = {
-  day: MemoryDayRow | null;
-  events: MemoryDayEvent[];
-  usage: { calls: number; tokens: number };
-  timeZone: string;
-  eventsTotal: number;
-  eventsTruncated: boolean;
-  eventsPage: number;
-  eventsPageSize: number;
-  eventsTotalPages: number;
-};
-
-export type MemoryDayMessages = {
-  dayKey: string;
-  timeZone: string;
-  messageGroups: MemoryDayMessageGroup[];
-  totalMessages: number;
-};
 
 export type MemoryEventKnowledgeResult = {
   requestId: string;

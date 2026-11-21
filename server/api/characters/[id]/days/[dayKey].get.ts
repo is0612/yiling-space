@@ -3,6 +3,7 @@ import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
 import { toMemoryEvent } from "../../../../utils/memory-event-dto";
+import type { MemoryDayDetail } from "../../../../../shared/types/memory";
 import { resolveDayWindow } from "../../../../utils/memory-event-time";
 
 /**
@@ -100,5 +101,5 @@ export default defineEventHandler(async (event) => {
       : { dayKey, state: null, eventCount: 0, extractedAt: null },
     events: events.map(toMemoryEvent),
     usage: { calls: usage._count._all, tokens: usage._sum.totalTokens ?? 0 },
-  };
+  } satisfies MemoryDayDetail;
 });

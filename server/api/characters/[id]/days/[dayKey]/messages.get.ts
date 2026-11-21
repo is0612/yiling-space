@@ -2,6 +2,7 @@ import { createError, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
+import type { MemoryDayMessages } from "../../../../../../shared/types/memory";
 import { resolveDayWindow } from "../../../../../utils/memory-event-time";
 import { readMessageSpeaker } from "../../../../../utils/conversation-message";
 
@@ -112,5 +113,5 @@ export default defineEventHandler(async (event) => {
     timeZone,
     messageGroups,
     totalMessages: messageGroups.reduce((sum, group) => sum + group.total, 0),
-  };
+  } satisfies MemoryDayMessages;
 });
