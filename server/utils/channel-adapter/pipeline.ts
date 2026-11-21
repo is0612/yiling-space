@@ -1473,7 +1473,7 @@ async function runChannelTurn(input: {
   // 记忆、阶段总结、忆泡的选择与整形和网页共用一份（`prompt-memory-selection.ts`）。
   // 差别只在 scope 标签怎么算：这里按「是不是角色全局范围」判断，网页按会话范围来源判断。
   const {
-    memories, snapshots, events, recentEvents, eventSelection, selection: memorySelection,
+    memories, snapshots, events: selectedEvents, recentEvents, eventSelection, selection: memorySelection,
   } = await selectPromptMemoryContext({
     query: retrievalQuery,
     now: eventRetrievalNow,
@@ -1494,6 +1494,40 @@ async function runChannelTurn(input: {
     scopeOf: (memoryScopeId) => (memoryScopeId === globalScope.id ? "character" : "private"),
     loadParticipantNames: (items) => resolveEventParticipantNames(prisma, items),
   });
+
+  /**
+   * 人物线索（`modelConfig.personCueEnabled`，默认关）：
+   * 这一轮谁在说话，就补一条「我和 TA 在**这个群**里发生过的事」。
+   *
+   * 只在群聊、只在本群候选里挑、只补一条、必须和已选忆泡去重；找不到就不补。
+   * 认人只按账号（`participantRefs.externalId`），改名不影响。
+   */
+  const personCue = (() => {
+    const enabled = isGroup && (character.modelConfig as Record<string, unknown> | null)?.personCueEnabled === true;
+    if (!enabled || !speakerUids.length) return null;
+    const exclude = new Set([...eventSelection.items.map(item => item.id), ...recentEvents.map(item => item.id)]);
+    const picked = pickPersonCueEvent({
+      query: retrievalQuery,
+      events: eventCandidates,
+      speakerIds: speakerUids,
+      excludeIds: exclude,
+      now: eventRetrievalNow,
+      timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
+    });
+    if (!picked.event) return null;
+    const cue = picked.event;
+    return {
+      id: cue.id,
+      occurredAt: cue.occurredAt.toISOString(),
+      ...(cue.timeOfDay ? { timeOfDay: cue.timeOfDay } : {}),
+      ...(cue.place ? { place: cue.place } : {}),
+      participants: [...cue.participants],
+      title: cue.title,
+      detail: cue.detail.slice(0, PROMPT_EVENT_DETAIL_MAX_CHARS),
+      scope: (cue.memoryScopeId === globalScope.id ? "character" : "private") as "character" | "private",
+    };
+  })();
+  const events = personCue ? [...selectedEvents, personCue] : selectedEvents;
 
 
 

@@ -107,6 +107,7 @@
     "test:memory-budget": "tsx scripts/test-memory-budget.ts",
     "test:memory-selection": "tsx scripts/test-prompt-memory-selection.ts",
     "test:memory-reach": "tsx scripts/test-memory-reach-diagnosis.ts",
+    "test:person-cue": "tsx scripts/test-person-cue.ts",
     "test:context-plan": "tsx scripts/test-context-plan.ts",
     "test:cleanup-guard": "tsx scripts/test-cleanup-guard.ts",
     "test:day-range": "tsx scripts/test-day-range.ts",
