@@ -19,6 +19,8 @@ assert(!JSON.stringify(detail).includes("apiKey"));
 const capture = createModelTurnDetail(false, [{ content: "本轮" }]);
 capture.update({ memory: { status: "no_sources", query: "昨天" } });
 capture.update({ collaboration: { version: 1, elapsedMs: 12, stages: [] }, growthReads: [{ domain: "knowledge", status: "provided" }] });
+capture.update({ retrieval: { memory: { count: 3, usedTokens: 420, dropped: 7 }, snapshot: { count: 1, usedTokens: 600, dropped: 2 },
+  event: { count: 2, usedTokens: 180, dropped: 0, mode: "range" }, recentEvent: { count: 1 } } });
 capture.update({ response: { action: "reply", reply: "没找到", explanation: "没有相关证据" } });
 const restored = readModelTurnDetail(capture.serialize());
 assert.equal(restored?.memory.status, "no_sources");
@@ -26,6 +28,23 @@ assert.equal(restored?.collaboration?.elapsedMs, 12, "private collaboration diag
 assert.equal(restored?.growthReads, undefined, "private growth-read diagnostics remain excluded");
 assert.equal(restored?.response.status, "success");
 assert.equal(restored?.response.explanation, "没有相关证据");
+const retrieval = restored?.retrieval;
+assert.equal(retrieval?.memory.count, 3, "记忆分段统计要保留");
+assert.equal(retrieval?.memory.dropped, 7, "「被预算挤掉几条」正是排查要看的那一项");
+assert.equal(retrieval?.event.mode, "range", "忆泡是按时段还是关键词选的要留下");
+assert.equal(retrieval?.event.recent, 1, "近期背景忆泡条数单独记");
+// 只有数字：脏字段、未知 mode、负数与超大值都不该原样落盘。
+const dirty = sanitizeModelTurnDetail({
+  version: 1, groupChat: true, messages: [], context: { status: "success" }, memory: { status: "success" }, response: { status: "success" },
+  retrieval: { memory: { count: -5, usedTokens: 1e9, dropped: "3" }, snapshot: { count: 1, usedTokens: 2, dropped: 0 }, event: { count: 0, usedTokens: 0, dropped: 0, mode: "guess", prompt: "secret" }, apiKey: "secret" },
+});
+assert.equal(dirty.retrieval, undefined, "缺项或类型不对时整块丢弃，不写半截统计");
+const clamped = sanitizeModelTurnDetail({
+  version: 1, groupChat: false, messages: [], context: { status: "success" }, memory: { status: "success" }, response: { status: "success" },
+  retrieval: { memory: { count: -5, usedTokens: 999_999_999, dropped: 3.6 }, snapshot: { count: 0, usedTokens: 0, dropped: 0 }, event: { count: 0, usedTokens: 0, dropped: 0 }, extra: "secret" },
+});
+assert.deepEqual(clamped.retrieval, { memory: { count: 0, usedTokens: 100_000, dropped: 4 }, snapshot: { count: 0, usedTokens: 0, dropped: 0 }, event: { count: 0, usedTokens: 0, dropped: 0 } });
+assert(!JSON.stringify(clamped).includes("secret"));
 const controls = createModelTurnDetail(true, Array.from({ length: 20 }, () => ({ content: String.fromCharCode(1).repeat(1200) })));
 assert(controls.serialize().length <= 80_000);
 assert(readModelTurnDetail(controls.serialize()));

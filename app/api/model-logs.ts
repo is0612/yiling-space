@@ -79,6 +79,12 @@ export type ModelTurnDetailResponse = {
     channel?: "qq-private" | "web";
     collaboration?: TurnCollaboration;
     growthReads?: GrowthReadDiagnostic[];
+    /** 本轮各类来源放进去几条、被预算挤掉几条；只有数字，没有正文。 */
+    retrieval?: {
+      memory: { count: number; usedTokens: number; dropped: number };
+      snapshot: { count: number; usedTokens: number; dropped: number };
+      event: { count: number; usedTokens: number; dropped: number; mode?: "range" | "participant" | "first" | "latest" | "keyword"; recent?: number };
+    };
     messages: TurnMessage[];
     context: {
       status: "not_enabled" | "not_applicable" | "success" | "failed";

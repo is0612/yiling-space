@@ -3,9 +3,17 @@ import { sanitizeAssistantTurnDiagnostics, type AssistantTurnDiagnostics } from 
 
 export type TurnEvidence = { id?: string; member?: string; speaker?: string; content: string; occurredAt?: string };
 export type TurnSource = { id: string; type: "memory" | "snapshot" | "event" | "message"; scope: "character" | "private"; title?: string; content: string; occurredAt?: string };
+/** 本轮某类来源「放进去几条、用掉多少预算、被挤掉几条」。只有数字，没有正文。 */
+export type TurnSegmentStats = { count: number; usedTokens: number; dropped: number };
+export type TurnRetrievalStats = {
+  memory: TurnSegmentStats;
+  snapshot: TurnSegmentStats;
+  event: TurnSegmentStats & { mode?: "range" | "participant" | "first" | "latest" | "keyword"; recent?: number };
+};
 export type TurnDetailPatch = {
   collaboration?: unknown;
   growthReads?: unknown;
+  retrieval?: unknown;
   context?: { status: "not_enabled" | "not_applicable" | "success" | "failed"; summary?: string; participation?: "invited" | "observing" | "uncertain"; uncertainty?: string; evidence?: TurnEvidence[] };
   memory?: { status: "not_needed" | "not_enabled" | "no_sources" | "failed" | "success"; query?: string; candidateCount?: number; sources?: TurnSource[] };
   response?: { action: "reply" | "silent"; reply: string; explanation?: string };
@@ -15,6 +23,7 @@ export type ModelTurnDetail = {
   channel?: "qq-private" | "web";
   collaboration?: AssistantTurnDiagnostics;
   growthReads?: GrowthReadDiagnostic[];
+  retrieval?: TurnRetrievalStats;
   context: NonNullable<TurnDetailPatch["context"]>;
   memory: NonNullable<TurnDetailPatch["memory"]>;
   response: { status: "success" | "failed"; action?: "reply" | "silent"; reply?: string; explanation?: string };
@@ -31,6 +40,26 @@ function evidence(value: unknown): TurnEvidence[] {
     return { content: text(row.content, 1200) ?? "", id: text(row.id, 120), member: text(row.member, 80), speaker: text(row.speaker, 80), occurredAt: text(row.occurredAt, 40) };
   }).filter(row => row.content);
 }
+function countOf(value: unknown, max = 100_000): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(0, Math.round(value))) : undefined;
+}
+/** 三个数字缺一就不记录：宁可没有这一行，也不写出「选了 3 条、挤掉 undefined 条」。 */
+function segmentStats(value: unknown): TurnSegmentStats | undefined {
+  const row = object(value);
+  const count = countOf(row.count), usedTokens = countOf(row.usedTokens), dropped = countOf(row.dropped);
+  if (count === undefined || usedTokens === undefined || dropped === undefined) return undefined;
+  return { count, usedTokens, dropped };
+}
+const EVENT_MODES = ["range", "participant", "first", "latest", "keyword"] as const;
+function retrievalStats(value: unknown): TurnRetrievalStats | undefined {
+  const row = object(value), eventRow = object(row.event);
+  const memory = segmentStats(row.memory), snapshot = segmentStats(row.snapshot), event = segmentStats(eventRow);
+  if (!memory || !snapshot || !event) return undefined;
+  const mode = EVENT_MODES.find(item => item === eventRow.mode);
+  // 兼容两种形状：入口传的是选择层原样（recentEvent.count），落盘再读回时是 event.recent。
+  const recent = countOf(object(row.recentEvent).count) ?? countOf(eventRow.recent);
+  return { memory, snapshot, event: { ...event, ...(mode ? { mode } : {}), ...(recent === undefined ? {} : { recent }) } };
+}
 /** Explicit allowlist: diagnostics are evidence summaries, never serialized prompts/provider reasoning. */
 export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   const raw = object(value), context = object(raw.context), memory = object(raw.memory), response = object(raw.response);
@@ -38,6 +67,7 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   const collaboration = sanitizeAssistantTurnDiagnostics(raw.collaboration);
   const channel = !groupChat && (raw.channel === "qq-private" || raw.channel === "web") ? raw.channel : undefined;
   const growthReads = groupChat || channel ? sanitizeGrowthReadDiagnostics(raw.growthReads) : undefined;
+  const retrieval = retrievalStats(raw.retrieval);
   const sources: TurnSource[] = (Array.isArray(memory.sources) ? memory.sources : []).slice(0, 8).flatMap(item => {
     const row = object(item);
     if (!["memory", "snapshot", "event", "message"].includes(String(row.type)) || !["character", "private"].includes(String(row.scope)) || (groupChat && row.scope !== "character")) return [];
@@ -50,6 +80,7 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
     ...(channel ? { channel } : {}),
     ...(collaboration ? { collaboration } : {}),
     ...(growthReads ? { growthReads } : {}),
+    ...(retrieval ? { retrieval } : {}),
     context: {
       status: ["not_enabled", "not_applicable", "success", "failed"].includes(String(context.status)) ? context.status as ModelTurnDetail["context"]["status"] : "not_enabled",
       summary: text(context.summary, 1600), uncertainty: text(context.uncertainty, 400),
@@ -78,6 +109,10 @@ export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence
       if (patch.collaboration !== undefined) detail.collaboration = sanitizeAssistantTurnDiagnostics(patch.collaboration);
       if (patch.context) detail.context = patch.context;
       if (patch.memory) detail.memory = patch.memory;
+      if (patch.retrieval !== undefined) {
+        const stats = retrievalStats(patch.retrieval);
+        if (stats) detail.retrieval = stats;
+      }
       if (patch.response) detail.response = { status: "success", ...patch.response };
     },
     serialize() {

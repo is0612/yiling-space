@@ -14,7 +14,18 @@ const detail = computed(() => props.result.detail);
 const collaboration = computed(() => detail.value.collaboration);
 const growthReads = computed(() => detail.value.growthReads);
 const growthDomains = { preferences: "偏好", language: "语言习惯", goals: "愿望", knowledge: "知识" };
-const growthReadStatuses = { not_needed: "本轮无需读取", no_match: "没有匹配条目", failed: "读取失败", budget_excluded: "匹配条目未选入", provided: "已选入模型上下文" };
+/** 本轮各类来源放进去几条、被预算挤掉几条；没有这项诊断就不显示。 */
+const retrievalSummary = computed(() => {
+  const stats = detail.value.retrieval;
+  if (!stats) return "";
+  const parts = [
+    `记忆 ${stats.memory.count} 条（挤掉 ${stats.memory.dropped}）`,
+    `快照 ${stats.snapshot.count} 条（挤掉 ${stats.snapshot.dropped}）`,
+    `忆泡 ${stats.event.count} 条${stats.event.mode ? `（${eventModeLabels[stats.event.mode]}）` : ""}`,
+  ];
+  if (stats.event.recent) parts.push(`另带近期 ${stats.event.recent} 条`);
+  return `本轮放入：${parts.join("、")}`;
+});const growthReadStatuses = { not_needed: "本轮无需读取", no_match: "没有匹配条目", failed: "读取失败", budget_excluded: "匹配条目未选入", provided: "已选入模型上下文" };
 function growthReferenceLabel(read: GrowthReadDiagnostic) {
   if (read.domain === "knowledge") return "知识暂未回传引用";
   return read.usedIds.length ? `模型自报引用 ${read.usedIds.length} 条` : "未记录模型自报引用，不代表未受影响";
@@ -48,6 +59,8 @@ const memoryLabels = {
 };
 const participationLabels = { invited: "受邀参与", observing: "旁观对话", uncertain: "参与关系不确定" };
 const sourceLabels = { memory: "长期记忆", snapshot: "周期快照", event: "忆泡", message: "原始消息" };
+/** 忆泡是按什么选出来的：让她说「那天」却只带了关键词结果时，这里能看出差别。 */
+const eventModeLabels = { range: "按日期", participant: "按人物", first: "第一次", latest: "最近一次", keyword: "按关键词" };
 const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
   timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
   hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
@@ -152,6 +165,12 @@ function messageAuthor(message: TurnMessage) {
       <el-tag :type="detail.memory.status === 'failed' ? 'warning' : 'info'">
         {{ memoryLabels[detail.memory.status] }}
       </el-tag>
+      <p
+        v-if="retrievalSummary"
+        class="plain-text"
+      >
+        {{ retrievalSummary }}
+      </p>
       <p
         v-if="detail.memory.query"
         class="plain-text"

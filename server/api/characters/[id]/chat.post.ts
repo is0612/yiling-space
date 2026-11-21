@@ -822,6 +822,8 @@ export default defineEventHandler(async (event) => {
   turnDetail.update({
     response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation },
     collaboration: turnContext.snapshot(),
+    // 「她为什么没想起那件事」：找到几条、放进去几条、被预算挤掉几条，只记数字不记正文。
+    retrieval: memorySelection,
     growthReads: reconcileGrowthReadUsage([...growthReads.values()], {
       preferences: generated.usedPreferenceIds, language: generated.usedExpressionHabitIds, goals: generated.usedGoalIds,
     }, generated.action === "silent"),
