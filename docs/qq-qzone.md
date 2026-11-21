@@ -255,8 +255,11 @@ yarn probe:qzone     # 真实通道（只读）
 
 - **点赞**：接口是 `internal_dolike_app`，参数（`unikey` / `curkey`）要从动态列表里带出来，
   当前解析只保留 tid/uin，先不做。
-- **说说正文进记忆**：现在只落在 `onebot_qzone_actions`，还没写进 `messages`。
-  她记得「我发过一条关于雨的说说」要等这一步。
+- **说说正文进记忆**（2026-11-21 已做）：发布成功后把正文写成一条 `ASSISTANT` 消息，
+  挂在角色全局范围的「空间」会话（`externalConversationId = q:<QQ号>`、
+  `channelBindingId` 留空，所以不会混进桌面端「我的对话」），来源标签是「QQ空间」。
+  同一个 tid 只写一次，没有 tid 时按「同一天同一条正文」去重；写失败只记日志，
+  不会把已经发出去的说说说成失败。回归 `test-qzone-memory-db`。
 - **主动问的频率**（2026-11-21 补）：已加两条保守默认——夜间 23:00–08:00 不问
   （`quiet_hours`），两次主动问至少隔 3 小时（`too_soon`）；判定在
   `evaluateQzoneAutoAskTiming`，回归在 `test:qzone`。仍是常量而非按角色配置：
