@@ -4,34 +4,9 @@ import type {
   GrowthSourceType, GrowthSource, GrowthPagination, GrowthPage,
   GoalKind, GoalStatus, GoalProgress, Goal, GoalHistory, GoalSuggestion,
   PreferenceKind, PreferenceStatus, Preference, PreferenceHistory, PreferenceSuggestion,
+  ChatScope, LanguageKind, LanguageStatus, LanguageHabit, LanguageHistory, LanguageSuggestion,
 } from "#shared/types/growth";
 export type * from "#shared/types/growth";
-
-export type ChatScope = "ALL" | "GROUP" | "PRIVATE";
-export type LanguageKind = "TONE" | "WORDING" | "LENGTH";
-export type LanguageStatus = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";
-export type LanguageHabit = {
-  id: string;
-  characterId: string;
-  kind: LanguageKind;
-  chatScope?: ChatScope;
-  content: string;
-  context: string;
-  reason: string;
-  status: LanguageStatus;
-  /** OWNER = 你审核；SELF = 她自己审核后生效。 */
-  reviewedBy?: "OWNER" | "SELF" | null;
-  reviewedAt?: string | null;
-  revision: number;
-  sourceType: "MANUAL" | "SOURCES" | "EXPERIENCE_REFLECT" | "EDUCATION_TRANSFER" | "GROUP_OBSERVATION";
-  conversationId?: string | null;
-  memoryScopeId?: string | null;
-  sourceRefs: GrowthSource[];
-  createdAt: string;
-  updatedAt: string;
-};
-export type LanguageHistory = LanguageHabit & { action: string };
-export type LanguageSuggestion = { kind: LanguageKind; content: string; context: string; reason: string };
 
 export type ReflectionSourceRef = {
   key: string;

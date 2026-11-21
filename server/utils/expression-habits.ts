@@ -6,6 +6,28 @@ import type { Prisma, PrismaClient, CharacterExpressionHabit } from "../../src/g
 import { parseExpressionHabitCreate, parseExpressionHabitPatch, parseExpressionHabitSources, expressionHabitNextStatus, expressionHabitPage } from "./expression-habits-domain";
 import { loadPreferenceSources, lockPreferenceOwner, listPreferenceSources } from "./preferences-sources";
 import type { PreferenceSourceRef } from "./preferences-domain";
+import type { GrowthSource, LanguageHabit, LanguageKind, LanguageStatus } from "../../shared/types/growth";
+
+/**
+ * 把 Prisma 行整形成 API DTO（`shared/types/growth.ts` 的 `LanguageHabit`）。
+ *
+ * 与 `publicGoal` / `toPreferenceDto` 同一套理由：日期显式转 ISO（线上字节不变）、
+ * JSON 列显式转数组、裸字符串列在边界收窄成契约枚举。
+ */
+function toLanguageHabitDto(row: CharacterExpressionHabit): LanguageHabit {
+  return {
+    ...row,
+    kind: row.kind as LanguageKind,
+    status: row.status as LanguageStatus,
+    chatScope: (row.chatScope ?? undefined) as LanguageHabit["chatScope"],
+    sourceType: row.sourceType as LanguageHabit["sourceType"],
+    reviewedBy: (row.reviewedBy ?? null) as LanguageHabit["reviewedBy"],
+    reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
+    sourceRefs: row.sourceRefs as unknown as GrowthSource[],
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
 
 type Owner = { ownerId: string; characterId: string };
 async function assertOwner(tx: PrismaClient | Prisma.TransactionClient, input: Owner) {
@@ -38,7 +60,7 @@ export async function createExpressionHabit(prisma: PrismaClient, input: Owner &
       kind: parsed.kind, content: parsed.content, context: parsed.context, chatScope: parsed.chatScope, reason: parsed.reason, status: parsed.status,
       sourceType: sourceRefs.length ? "SOURCES" : "MANUAL", sourceRefs } });
     await snapshot(tx, habit, input.ownerId, "CREATE");
-    return { habit };
+    return { habit: toLanguageHabitDto(habit) };
   });
 }
 export const GROUP_OBSERVATION_PENDING_LIMIT = 12;
@@ -52,18 +74,18 @@ export async function saveGroupObservationHabit(prisma: PrismaClient, input: Own
     const refs = [input.source];
     await assertGroupObservationCurrent(tx, input.characterId, refs);
     const exact = await tx.characterExpressionHabit.findFirst({ where: { characterId: input.characterId, sourceType: GROUP_OBSERVATION_SOURCE, sourceRefs: { equals: refs } } });
-    if (exact) return { habit: exact, reused: true };
+    if (exact) return { habit: toLanguageHabitDto(exact), reused: true };
     if (input.automatic) {
       const { conversationId, leaseToken } = input.automatic;
       const lease = await tx.$queryRaw<Array<{ conversationId: string }>>`SELECT "conversationId" FROM "group_observation_progress" WHERE "conversationId"=${conversationId}::uuid AND "enabled" AND "leaseToken"=${leaseToken}::uuid AND "leaseUntil">clock_timestamp() FOR UPDATE`;
       if (!lease.length) throw createError({ statusCode: 409, statusMessage: "自动观察已停用或由其他任务接手。" });
       if (await tx.characterExpressionHabit.count({ where: { characterId: input.characterId, sourceType: GROUP_OBSERVATION_SOURCE, status: "PENDING" } }) >= GROUP_OBSERVATION_PENDING_LIMIT) return { habit: null, reused: false };
       const duplicate = await tx.characterExpressionHabit.findFirst({ where: { characterId: input.characterId, sourceType: GROUP_OBSERVATION_SOURCE, kind: parsed.kind, context: parsed.context, content: parsed.content } });
-      if (duplicate) return { habit: duplicate, reused: true };
+      if (duplicate) return { habit: toLanguageHabitDto(duplicate), reused: true };
     }
     const habit = await tx.characterExpressionHabit.create({ data: { characterId: input.characterId, kind: parsed.kind, content: parsed.content, context: parsed.context, reason: parsed.reason, status: "PENDING", chatScope: "ALL", sourceType: GROUP_OBSERVATION_SOURCE, sourceRefs: refs } });
     await snapshot(tx, habit, input.ownerId, "CREATE");
-    return { habit, reused: false };
+    return { habit: toLanguageHabitDto(habit), reused: false };
   });
 }
 export async function updateExpressionHabit(prisma: PrismaClient, input: Owner & { habitId: string; body: unknown; reviewedBy?: "OWNER" | "SELF" }) {
@@ -96,7 +118,7 @@ export async function updateExpressionHabit(prisma: PrismaClient, input: Owner &
     const chatScope = parsed.chatScope ?? current.chatScope ?? "ALL";
     if (current.sourceType === "EXPERIENCE_REFLECT" && chatScope === "GROUP") throw createError({ statusCode: 400, statusMessage: "原私聊经验不能扩展到群聊。" });
     const context = parsed.context ?? current.context; const reason = parsed.reason ?? current.reason;
-    if (parsed.operation === "EDIT" && kind === current.kind && content === current.content && context === current.context && chatScope === (current.chatScope ?? "ALL") && reason === current.reason) return { habit: current };
+    if (parsed.operation === "EDIT" && kind === current.kind && content === current.content && context === current.context && chatScope === (current.chatScope ?? "ALL") && reason === current.reason) return { habit: toLanguageHabitDto(current) };
     // A status decision records who made it; edits keep the previous reviewer untouched.
     const decision = parsed.operation === "ACTIVATE" || parsed.operation === "REJECT" || parsed.operation === "DISABLE";
     const changed = await tx.characterExpressionHabit.updateMany({ where: { id: current.id, characterId: input.characterId, revision: parsed.expectedRevision, status: current.status },
@@ -105,7 +127,7 @@ export async function updateExpressionHabit(prisma: PrismaClient, input: Owner &
     if (changed.count !== 1) throw createError({ statusCode: 409, statusMessage: "表达习惯刚刚发生变化，请刷新后再试。" });
     const habit = await tx.characterExpressionHabit.findUniqueOrThrow({ where: { id: current.id } });
     await snapshot(tx, habit, input.ownerId, parsed.operation);
-    return { habit };
+    return { habit: toLanguageHabitDto(habit) };
   });
 }
 export async function listExpressionHabits(prisma: PrismaClient, input: Owner & { status: string; q: string; page: number; pageSize: number }) {

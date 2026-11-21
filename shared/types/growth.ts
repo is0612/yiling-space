@@ -90,3 +90,37 @@ export type PreferenceHistory = {
 };
 
 export type PreferenceSuggestion = { kind: PreferenceKind; topic: string; reason: string };
+
+/** 表达习惯（前端旧名 Language*）的适用范围：全局 / 群 / 私聊。 */
+export const EXPRESSION_CHAT_SCOPES = ["ALL", "GROUP", "PRIVATE"] as const;
+export type ChatScope = typeof EXPRESSION_CHAT_SCOPES[number];
+
+export const LANGUAGE_KINDS = ["TONE", "WORDING", "LENGTH"] as const;
+export type LanguageKind = typeof LANGUAGE_KINDS[number];
+
+export const LANGUAGE_STATUSES = ["PENDING", "ACTIVE", "REJECTED", "DISABLED"] as const;
+export type LanguageStatus = typeof LANGUAGE_STATUSES[number];
+
+export type LanguageHabit = {
+  id: string;
+  characterId: string;
+  kind: LanguageKind;
+  chatScope?: ChatScope;
+  content: string;
+  context: string;
+  reason: string;
+  status: LanguageStatus;
+  /** OWNER = 你审核；SELF = 她自己审核后生效。 */
+  reviewedBy?: "OWNER" | "SELF" | null;
+  reviewedAt?: string | null;
+  revision: number;
+  sourceType: "MANUAL" | "SOURCES" | "EXPERIENCE_REFLECT" | "EDUCATION_TRANSFER" | "GROUP_OBSERVATION";
+  conversationId?: string | null;
+  memoryScopeId?: string | null;
+  sourceRefs: GrowthSource[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LanguageHistory = LanguageHabit & { action: string };
+export type LanguageSuggestion = { kind: LanguageKind; content: string; context: string; reason: string };

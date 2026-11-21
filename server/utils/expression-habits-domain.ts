@@ -1,16 +1,21 @@
 import { createError } from "h3";
 import { parsePreferenceSources, type PreferenceSourceRef } from "./preferences-domain";
-
-export const EXPRESSION_CHAT_SCOPES = ["ALL", "GROUP", "PRIVATE"] as const;
-export type ExpressionChatScope = typeof EXPRESSION_CHAT_SCOPES[number];
+// 枚举与前端共用一份（`shared/types/growth.ts`）。服务端保留 Expression* 命名，
+// 前端用 Language*：同一集合，别名 re-export，不再各自维护字面量。
+import {
+  EXPRESSION_CHAT_SCOPES, LANGUAGE_KINDS, LANGUAGE_STATUSES,
+  type ChatScope, type LanguageKind, type LanguageStatus,
+} from "../../shared/types/growth";
+export { EXPRESSION_CHAT_SCOPES };
+export type ExpressionChatScope = ChatScope;
 export function parseExpressionChatScope(value: unknown): ExpressionChatScope {
   if (!(EXPRESSION_CHAT_SCOPES as readonly unknown[]).includes(value)) throw createError({ statusCode: 400, statusMessage: "聊天范围无效。" });
   return value as ExpressionChatScope;
 }
-export const EXPRESSION_HABIT_KINDS = ["TONE", "WORDING", "LENGTH"] as const;
-export const EXPRESSION_HABIT_STATUSES = ["PENDING", "ACTIVE", "REJECTED", "DISABLED"] as const;
-export type ExpressionHabitKind = typeof EXPRESSION_HABIT_KINDS[number];
-export type ExpressionHabitStatus = typeof EXPRESSION_HABIT_STATUSES[number];
+export const EXPRESSION_HABIT_KINDS = LANGUAGE_KINDS;
+export const EXPRESSION_HABIT_STATUSES = LANGUAGE_STATUSES;
+export type ExpressionHabitKind = LanguageKind;
+export type ExpressionHabitStatus = LanguageStatus;
 function bad(message: string): never { throw createError({ statusCode: 400, statusMessage: message }); }
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) bad("表达习惯请求无效。");
