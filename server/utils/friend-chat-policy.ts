@@ -1,4 +1,10 @@
 export type FriendIdentityKind = "UNKNOWN" | "HUMAN" | "AI";
+/**
+ * 与 `shared/types/identities.ts` 的值一致。
+ *
+ * 暂不改成从 shared 导入：`channel-adapter/onebot/client.ts` 还在另一条线里改，
+ * 动它会把两边的未提交改动搅在一起。等那边收工后再统一，届时这条注释一起删。
+ */
 export type FriendChatPolicy = "DEFAULT" | "ALLOW" | "BLOCK";
 
 /** 连续只包含 AI 发言的群聊轮数上限；真人参与后由适配器清零。 */
