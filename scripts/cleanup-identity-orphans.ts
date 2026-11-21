@@ -24,12 +24,14 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
+import { announceCleanupTarget, readCleanupTarget } from "../server/utils/cleanup-guard";
 
-const apply = process.argv.includes("--apply");
 const connectionString = process.env.DATABASE_URL;
-if (!connectionString) throw new Error("缺少 DATABASE_URL，清理脚本无法运行。");
-
+const target = readCleanupTarget(connectionString);
+const apply = target.apply;
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
+
+announceCleanupTarget(target);
 
 type Orphan = {
   id: string;

@@ -22,13 +22,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
+import { announceCleanupTarget, readCleanupTarget } from "../server/utils/cleanup-guard";
 import { removeCharacterStickerDirs } from "../server/utils/character-delete";
 
-const apply = process.argv.includes("--apply");
 const connectionString = process.env.DATABASE_URL;
-if (!connectionString) throw new Error("缺少 DATABASE_URL，清理脚本无法运行。");
-
+const target = readCleanupTarget(connectionString);
+const apply = target.apply;
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
+
+announceCleanupTarget(target);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
