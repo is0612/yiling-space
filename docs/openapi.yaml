@@ -5308,6 +5308,37 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /characters/{characterId}/memory-cleanup:
+    parameters:
+      - $ref: '#/components/parameters/CharacterId'
+    get:
+      tags: [MemorySettings]
+      operationId: getCharacterMemoryCleanup
+      summary: 最近一次原始消息清理的结果
+      description: 读审计里最新一条 `message.retention_cleanup`（实体是记忆范围，所以按角色全部范围取最新）。没清理过时 `cleanup` 为 null。只读，不改任何数据。
+      responses:
+        '200':
+          description: 最近一次清理的统计；没有记录时 cleanup 为 null
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleanup]
+                properties:
+                  cleanup:
+                    type: object
+                    nullable: true
+                    required: [at, cutoff, deletedMessages, contextMessages, contextCutoff]
+                    properties:
+                      at: { type: string, format: date-time, description: 这次清理的时间 }
+                      cutoff: { type: string, format: date-time, nullable: true, description: 删除截止时间；证据类消息按它算 }
+                      deletedMessages: { type: integer, nullable: true, description: 共删除多少条原文；读不出时为 null }
+                      contextMessages: { type: integer, nullable: true, description: 其中纯上下文行（她看过没开口）有多少条 }
+                      contextCutoff: { type: string, format: date-time, nullable: true, description: 上下文行的 7 天截止时间 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /characters/{characterId}/memory-settings:
     parameters:
       - $ref: '#/components/parameters/CharacterId'

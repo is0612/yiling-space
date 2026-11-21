@@ -16,6 +16,14 @@ export type MemorySettings = {
   cancelledPendingJobs?: number;
 };
 
+/** 最近一次原始消息清理的结果；没有清理过时为 null。 */
+export type MemoryCleanupSummary = {
+  at: string;
+  cutoff: string | null;
+  deletedMessages: number | null;
+  contextMessages: number | null;
+  contextCutoff: string | null;
+};
 export type MemorySettingsPatch = {
   snapshotIntervalDays: number;
   timezone: string;
@@ -277,6 +285,12 @@ export function createCharacterSettingsApi(request: ApiRequest) {
 
   function getMemorySettings(characterId: string): Promise<MemorySettings> {
     return request<MemorySettings>({ url: `${characterBase(characterId)}/memory-settings`, method: "get" });
+  }
+
+  function getMemoryCleanup(characterId: string): Promise<{ cleanup: MemoryCleanupSummary | null }> {
+    return request<{ cleanup: MemoryCleanupSummary | null }>({
+      url: `${characterBase(characterId)}/memory-cleanup`, method: "get",
+    });
   }
 
   function updateMemorySettings(characterId: string, data: MemorySettingsPatch): Promise<MemorySettings> {

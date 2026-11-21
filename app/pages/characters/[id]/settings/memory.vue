@@ -46,12 +46,19 @@ const anchor = ref("2026-10-21T09:00:00");
 const retention = ref(0);
 const savedRetention = ref(0);
 const savedRetentionCleanupEnabled = ref(false);
+const cleanupSummary = ref<{ at: string; deletedMessages: number | null; contextMessages: number | null } | null>(null);
 const autoSnapshot = ref(false);
 const nextSnapshotAt = ref<string | null>(null);
 const effectivePolicy = ref("下一个周期生效");
 const loading = ref(true);
 const saving = ref(false);
 const safeInterval = computed(() => Math.min(INTERVAL_MAX_DAYS, Math.max(1, Number(interval.value) || INTERVAL_DEFAULT_DAYS)));
+
+/** 清理记录的时间按角色时区显示到分钟：这是给人核对用的，不需要秒。 */
+function formatCleanupTime(iso: string): string {
+  const stamp = formatAnchor(iso, timezone.value);
+  return stamp.slice(0, 16).replace("T", " ");
+}
 
 function formatAnchor(iso: string, timeZone: string): string {
   const parts = new Intl.DateTimeFormat("en-CA", {

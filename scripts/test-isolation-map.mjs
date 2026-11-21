@@ -10,7 +10,7 @@ export const isolatedSuites = {
   "test-character-isolated.ts": ["test-character-portable-db.ts", "test-character-sync-root-db.ts", "test-character-delete-db.ts"],
   "test-chat-isolated.ts": [
     "test-desktop-conversation-db.ts", "test-chat-conversation-delete-db.ts", "test-chat-request-idempotency-db.ts",
-    "test-chat-private-memory-db.ts", "test-web-collaboration-db.ts", "test-prompt-memory-candidates-db.ts", "test-prompt-event-candidates-db.ts",
+    "test-chat-private-memory-db.ts", "test-web-collaboration-db.ts", "test-memory-cleanup-summary-db.ts", "test-prompt-memory-candidates-db.ts", "test-prompt-event-candidates-db.ts",
   ],
   "test-days-pagination-isolated.ts": ["test-days-pagination-db.ts"],
   "test-growth-event-center-isolated.ts": [

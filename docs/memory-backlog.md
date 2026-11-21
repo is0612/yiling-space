@@ -67,7 +67,7 @@
 
 清理任务现在分两档：`storedReason = "silent"`（她看过但没开口的纯上下文行）保留 **7 天**；`replied` / `mentioned`（证据类）按角色设置的保留天数走。取 `min(7, 角色设置)`，用户数字更小时以用户为准。审计新增 `contextCutoff` / `contextMessages`。
 
-**仍可做**：设置页还没把这条规则写进文案；`contextMessages` 还没有对应的页面展示。
+**已落地（2026-11-21）**：设置页的保留期限下面已经写明分层保留规则；「上次清理」一行读审计里的 `message.retention_cleanup`，显示删了多少条、其中纯上下文多少条（`GET /characters/{id}/memory-cleanup`，回归 `test-memory-cleanup-summary-db` 挂在 chat 一次性库套件里）。
 
 `storedReason` 已经落库（`replied` / `silent` / `mentioned`），但清理仍只有「按天数」一刀切。
 
