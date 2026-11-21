@@ -1082,6 +1082,140 @@ async function loadChannelTurnRawMessages(input: {
   });
 }
 
+type ChannelTurnReplyToggles = {
+  /** 仅当渠道能发语音、角色开关打开且 TTS 配置完整时非空。 */
+  voiceSettings: VoiceTtsSettings | null;
+  /** 生成**之前**定下的「这一轮说不说」，要进提示词。 */
+  voicePlanned: boolean;
+  stickerCatalog: ReturnType<typeof pickStickerCatalog> | undefined;
+  emojiFaces: ReadonlyArray<{ id: string; name: string }> | undefined;
+  catchphrasePrompt: ReturnType<typeof toCatchphrasePromptEntries>;
+  journalLine: Awaited<ReturnType<typeof readPreviousJournalLine>>;
+  journalRecent: Awaited<ReturnType<typeof readRecentJournals>>;
+};
+
+/**
+ * 这一轮的表达开关：表情/贴图额度、语音、梗语录、手账。
+ *
+ * 语音必须在**生成之前**决定 —— 关键是模型得知道自己在说话。生成后再判定的话，
+ * 提示词里压根没提语音，她会回「我只有打字和嘴硬」：内容解释得通，
+ * 但暴露了她根本不知道这条要被念出来。所以这里先定「这一轮说不说」，
+ * 生成后只用 `canSpeakReply` 复核长度。
+ *
+ * 手账只在「她自己的对话」里注入：网页对话与主人私聊。群聊不传（手账是写给她自己的，
+ * 群里复述就是泄露），对普通人的私聊也不传。
+ */
+async function decideChannelTurnReplyToggles(input: {
+  prisma: PrismaClient;
+  character: ChannelTurnCharacter;
+  isGroup: boolean;
+  messages: ChannelTurnMessage[];
+  recentStoredMessages: ChannelTurnStoredMessage[];
+  emojiHistory: Array<{ occurredAt: Date; metadata: Prisma.JsonValue }>;
+  emojiFrequency: ReturnType<typeof resolveEmojiFrequency>;
+  chatSettings: ReturnType<typeof resolveChatModelSettings>;
+  apiKey: string;
+  voiceApiKey: string;
+  voiceCapable: boolean | undefined;
+  stickerCatalog: ReadonlyArray<StickerCatalogEntry> | undefined;
+  faceCatalog: ReadonlyArray<{ id: string; name: string }> | undefined;
+}): Promise<ChannelTurnReplyToggles> {
+  const { prisma, character, isGroup } = input;
+  // 表情要看三件事：渠道收不收（清单）、角色开没开开关、这个会话的额度用没用完。
+  // 只看前两个的话，一个爱发表情的角色会在每句后面都挂一张。
+  const lastAssistant = input.recentStoredMessages.find((item) => item.role === "ASSISTANT");
+  const lastStickerId = lastAssistant ? readStoredStickerId(lastAssistant.metadata) : null;
+  /**
+   * 上一条语音是什么时候发的。语音冷却看它：连着两条都在「说话」像在读稿。
+   * recentStoredMessages 是按时间倒序取的，所以第一条命中的就是最近一条。
+   */
+  const lastVoiceAt = input.recentStoredMessages.find(
+    (item) => item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata),
+  )?.occurredAt ?? null;
+
+  // 判定只看开关、冷却、概率（用户明确要语音时跳过冷却与概率，但不跳过开关）。
+  const voiceRequested = input.voiceCapable === true
+    && input.messages.some((message) => isVoiceRequested(message.promptContent ?? message.content));
+  const voiceSettings = input.voiceCapable === true
+    ? resolveVoiceTtsSettings({
+        modelConfig: character.modelConfig,
+        chatModel: input.chatSettings.model,
+        chatApiBaseUrl: input.chatSettings.apiBaseUrl,
+        chatApiKey: input.apiKey,
+        voiceApiKey: input.voiceApiKey,
+      })
+    : null;
+  const voicePlanned = Boolean(voiceSettings) && planVoiceReply({
+    modelConfig: character.modelConfig,
+    lastVoiceAt,
+    force: voiceRequested,
+  });
+
+  /**
+   * 额度：「每 N 分钟最多 N 张」，按**这个会话**算（A 群贴过三张不该让 B 群闭嘴）。
+   *
+   * 只取窗口内的助手消息，不看全部：`recentStoredMessages` 只是最近对话窗口（默认 40 条），
+   * 热聊时几十条可能还没覆盖十分钟，用它数会少算。
+   */
+  const emojiBudgetSpent = isEmojiBudgetSpent(input.emojiHistory, new Date(), input.emojiFrequency);
+  // 表情包优先于内置表情：有素材库就只给素材库（并剔除上一张，避免她一直贴同一张）。
+  // 这一条要走语音时一律不给：语音条后面再挂一张图，等于把两种表达叠在一起说同一件事。
+  const stickerCatalog = input.stickerCatalog?.length
+    && isEmojiEnabled(character.modelConfig)
+    && !emojiBudgetSpent
+    && !voicePlanned
+    ? pickStickerCatalog(input.stickerCatalog, lastStickerId)
+    : undefined;
+  const emojiFaces = !stickerCatalog?.length
+    && input.faceCatalog?.length
+    && isEmojiEnabled(character.modelConfig)
+    && !emojiBudgetSpent
+    && !voicePlanned
+    ? input.faceCatalog
+    : undefined;
+
+  /**
+   * 梗语录：和表情包不同，**不从调用方传**，流水线自己查。
+   *
+   * 表情包要按渠道能力决定（有的渠道发不了图），梗是纯文字、哪个渠道都能说；
+   * 交给每个 adapter 各自去查，只会有一边忘了接。角色级的文字习惯应该在角色级生效。
+   */
+  const catchphrasePrompt = toCatchphrasePromptEntries(
+    pickCatchphraseCatalog(await loadCatchphraseCatalog(character.id)),
+  );
+
+  // 判据用 `isGroup` 而不是 `input.group`：群元数据是可选的，群聊本身不是。
+  const ownerTurn = !isGroup && input.messages[0]?.speaker?.isOwner === true;
+  const journalLine = ownerTurn
+    ? await readPreviousJournalLine(
+        prisma,
+        character.id,
+        new Date(),
+        resolveChatTimeZone(character.memorySetting?.timezone),
+      )
+    : null;
+  /**
+   * 同一扇门里的「她自己写过什么」：最近两天的日记正文 + 当天手账。
+   * 一句是她带走的情绪，正文是「我前几天写过什么」——她要能聊起自己写的东西。
+   * 截断在 `chat-reply` 的载荷里做。
+   */
+  const journalRecent = ownerTurn
+    ? await readRecentJournals(prisma, { characterId: character.id, limit: 2 })
+        .then((entries) => dropDuplicateJournalQuote(entries, journalLine))
+        .catch(() => [])
+    : [];
+
+  return {
+    voiceSettings,
+    voicePlanned,
+    stickerCatalog,
+    emojiFaces,
+    catchphrasePrompt,
+    journalLine,
+    journalRecent,
+  };
+}
+
 type ChannelTurnGrowthPreparation = {
   selfUnderstanding: Awaited<ReturnType<typeof loadSelfUnderstanding>> | undefined;
   growthReads: Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>;
@@ -2109,105 +2243,28 @@ async function runChannelTurn(input: {
   const privateHistorySelection = window.privateHistorySelection;
   const recentMessages = window.recentMessages;
 
-  // 表情要看三件事：渠道收不收（清单）、角色开没开开关、这个会话的额度用没用完。
-  // 只看前两个的话，一个爱发表情的角色会在每句后面都挂一张。
-  const lastAssistant = recentStoredMessages.find((item) => item.role === "ASSISTANT");
-  const lastStickerId = lastAssistant ? readStoredStickerId(lastAssistant.metadata) : null;
-  /**
-   * 上一条语音是什么时候发的。语音冷却看它：连着两条都在「说话」像在读稿。
-   * recentStoredMessages 是按时间倒序取的，所以第一条命中的就是最近一条。
-   */
-  const lastVoiceAt = recentStoredMessages.find(
-    (item) => item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata),
-  )?.occurredAt ?? null;
-
-  /**
-   * 语音必须在**生成之前**决定 —— 关键是模型得知道自己在说话。
-   *
-   * 生成后再判定的话，提示词里压根没提语音，她会回「我只有打字和嘴硬」
-   * 「我这打字声你当语音听吧」：内容解释得通，但暴露了她根本不知道这条要被念出来。
-   * 所以这里先定「这一轮说不说」，把结果放进提示词，再让它写；
-   * 生成后只用 `canSpeakReply` 复核长度，超长就降级发文字。
-   *
-   * 判定只看开关、冷却、概率（用户明确要语音时跳过冷却与概率，但不跳过开关）。
-   */
-  const voiceRequested = input.voiceCapable === true
-    && messages.some((message) => isVoiceRequested(message.promptContent ?? message.content));
-  const voiceSettings = input.voiceCapable === true
-    ? resolveVoiceTtsSettings({
-        modelConfig: character.modelConfig,
-        chatModel: chatSettings.model,
-        chatApiBaseUrl: chatSettings.apiBaseUrl,
-        chatApiKey: apiKey,
-        voiceApiKey,
-      })
-    : null;
-  const voicePlanned = Boolean(voiceSettings) && planVoiceReply({
-    modelConfig: character.modelConfig,
-    lastVoiceAt,
-    force: voiceRequested,
+  const toggles = await decideChannelTurnReplyToggles({
+    prisma,
+    character,
+    isGroup,
+    messages,
+    recentStoredMessages,
+    emojiHistory,
+    emojiFrequency,
+    chatSettings,
+    apiKey,
+    voiceApiKey,
+    voiceCapable: input.voiceCapable,
+    stickerCatalog: input.stickerCatalog,
+    faceCatalog: input.faceCatalog,
   });
-
-  /**
-   * 额度：「每 N 分钟最多 N 张」，按**这个会话**算（A 群贴过三张不该让 B 群闭嘴）。
-   *
-   * 只取窗口内的助手消息，不看全部：`recentStoredMessages` 只是最近对话窗口（默认 40 条），
-   * 热聊时几十条可能还没覆盖十分钟，用它数会少算。
-   * `emojiFrequency` 与 `emojiHistory` 已和最近窗口一起并行查好（见上）。
-   */
-  const emojiBudgetSpent = isEmojiBudgetSpent(emojiHistory, new Date(), emojiFrequency);
-  // 表情包优先于内置表情：有素材库就只给素材库（并剔除上一张，避免她一直贴同一张）。
-  // 这一条要走语音时一律不给：语音条后面再挂一张图，等于把两种表达叠在一起说同一件事。
-  const stickerCatalog = input.stickerCatalog?.length
-    && isEmojiEnabled(character.modelConfig)
-    && !emojiBudgetSpent
-    && !voicePlanned
-    ? pickStickerCatalog(input.stickerCatalog, lastStickerId)
-    : undefined;
-  const emojiFaces = !stickerCatalog?.length
-    && input.faceCatalog?.length
-    && isEmojiEnabled(character.modelConfig)
-    && !emojiBudgetSpent
-    && !voicePlanned
-    ? input.faceCatalog
-    : undefined;
-
-  /**
-   * 梗语录：和表情包不同，**不从调用方传**，流水线自己查。
-   *
-   * 表情包要按渠道能力决定（有的渠道发不了图），梗是纯文字、哪个渠道都能说；
-   * 交给每个 adapter 各自去查，只会有一边忘了接。角色级的文字习惯应该在角色级生效。
-   */
-  const catchphrasePrompt = toCatchphrasePromptEntries(
-    pickCatchphraseCatalog(await loadCatchphraseCatalog(character.id)),
-  );
-
-  /**
-   * 手账那句只在「她自己的对话」里注入：网页对话与主人私聊。
-   * 群聊不传（手账是写给她自己的，群里复述就是泄露），对普通人的私聊也不传。
-   * 判据用 `isGroup` 而不是 `input.group`：群元数据是可选的，群聊本身不是。
-   */
-  const journalLine = !isGroup && messages[0]?.speaker?.isOwner === true
-    ? await readPreviousJournalLine(
-        prisma,
-        character.id,
-        new Date(),
-        resolveChatTimeZone(character.memorySetting?.timezone),
-      )
-    : null;
-
-  /**
-   * 同一扇门里的「她自己写过什么」：最近两天的日记正文 + 当天手账。
-   *
-   * 判据与 `journalLine` 逐字一致：主人私聊才给，群聊和普通好友私聊一律没有。
-   * 一句是她带走的情绪，正文是「我前几天写过什么」——她要能聊起自己写的东西，
-   * 而不是只在被问生日时才从手账里翻出一句。截断在 `chat-reply` 的载荷里做。
-   */
-  const journalRecent = !isGroup && messages[0]?.speaker?.isOwner === true
-    ? await readRecentJournals(prisma, { characterId: character.id, limit: 2 })
-        .then((entries) => dropDuplicateJournalQuote(entries, journalLine))
-        .catch(() => [])
-    : [];
+  const voiceSettings = toggles.voiceSettings;
+  const voicePlanned = toggles.voicePlanned;
+  const stickerCatalog = toggles.stickerCatalog;
+  const emojiFaces = toggles.emojiFaces;
+  const catchphrasePrompt = toggles.catchphrasePrompt;
+  const journalLine = toggles.journalLine;
+  const journalRecent = toggles.journalRecent;
 
   /**
    * 别人的系统播报不进窗口（宽判据过滤在 loadChannelTurnWindow 里做）。
