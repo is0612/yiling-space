@@ -1082,6 +1082,307 @@ async function loadChannelTurnRawMessages(input: {
   });
 }
 
+type ChannelTurnMemoryLoader = {
+  loadMemoryCandidates: (
+    searchQuery: string,
+    lookupOptions?: { participantName?: string; deterministicTimeline: boolean },
+  ) => Promise<Awaited<ReturnType<typeof buildMemoryAssistantCandidates>>>;
+  /** 主人历史分页读到的覆盖范围；尾部 `saveOwnerHistoryContext` 要带着它续期。 */
+  ownerHistoryCoverage: () => OwnerHistoryCoverage | undefined;
+};
+
+/**
+ * 深度检索：记忆助手/只读工具要按任意查询词补查旧记忆时走这里。
+ *
+ * 与聊天前置阶段的检索不同，这里按主题词与时间范围**补查**，不再局限于最近 300 条。
+ * 主人历史任务链优先：有授权与计划时只读那一页，并记下覆盖范围。
+ *
+ * 群聊的可见性过滤（被标为 AI / 禁止交流的人）在这里重复一遍：深度检索会跨会话取数，
+ * 不能假设前置过滤已经覆盖到。认不出作者就不给，漏一条只是少个候选。
+ */
+function createChannelTurnMemoryLoader(input: {
+  prisma: PrismaClient;
+  characterId: string;
+  platform: string;
+  isGroup: boolean;
+  groupOwnerQq?: string;
+  currentMessage: string;
+  chatTimeZone: string;
+  readableScopeIds: string[];
+  globalScopeId: string;
+  isOwnerTurn: boolean;
+  primaryIdentityScopeId: string | null;
+  existingConversation: ChannelTurnConversation | null;
+  messages: ChannelTurnMessage[];
+  recentStoredMessages: ChannelTurnStoredMessage[];
+  crossChannel: CrossChannelLine[];
+  rawMessages: ChannelTurnRawMessage[];
+  memoryCandidates: ChannelTurnRetrieval["memoryCandidates"];
+  snapshotCandidates: ChannelTurnRetrieval["snapshotCandidates"];
+  eventCandidates: ChannelTurnRetrieval["eventCandidates"];
+  ownerHistoryAuth: OwnerHistoryAuthorization | null;
+  ownerHistoryPlan: ReturnType<typeof planOwnerHistory> | null;
+  ownerHistoryStored: Awaited<ReturnType<typeof loadOwnerHistoryContext>>;
+}): ChannelTurnMemoryLoader {
+  const { prisma, isGroup } = input;
+  let ownerHistoryCoverage: OwnerHistoryCoverage | undefined;
+
+  const loadMemoryCandidates = async (searchQuery: string, lookupOptions?: { participantName?: string; deterministicTimeline: boolean }) => {
+        if (input.ownerHistoryAuth && input.ownerHistoryPlan) {
+          if (!input.ownerHistoryStored) throw new Error("Owner history authorization or continuity unavailable");
+          const participantIds = input.ownerHistoryPlan.participantName
+            ? await resolveParticipantAccounts(prisma, input.ownerHistoryPlan.participantName, { characterId: input.characterId, platform: input.platform }) : [];
+          const page = await loadOwnerHistoryPage(prisma, input.characterId, input.ownerHistoryPlan, participantIds);
+          ownerHistoryCoverage = page.coverage;
+          return page.sources;
+        }
+        // 人物名只从主人原始问题解析一次；不从记忆助手模板查询串反向解析。
+        const searchParticipantName = lookupOptions?.participantName ?? parseEventParticipantQuery(input.currentMessage);
+        const searchParticipantIds = searchParticipantName
+          ? await resolveParticipantAccounts(prisma, searchParticipantName, { characterId: input.characterId, platform: input.platform })
+          : [];
+        const searchRange = parseEventTimeRange(searchQuery, new Date(), input.chatTimeZone);
+        const searchTerms = extractMemoryAssistantSearchTerms(searchQuery, 20);
+        const contentMatches = searchTerms.map((term) => ({
+          content: { contains: term, mode: "insensitive" as const },
+        }));
+        const rangeWhere = searchRange
+          ? { occurredAt: { gte: searchRange.start, lt: searchRange.end } }
+          : {};
+        const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(searchQuery);
+        const wantsLatest = /最近一次|上一次|上回|上次|最后一次/u.test(searchQuery);
+        const eventOrder = wantsFirst ? "asc" as const : "desc" as const;
+        const rawMessageOrder = wantsFirst ? "asc" as const : "desc" as const;
+
+        // 深度检索按主题和时间补查旧记忆，不再只局限于聊天前置阶段的 300 条记录。
+        const [targetedMemories, targetedSnapshots, targetedEvents] = await Promise.all([
+          searchTerms.length
+            ? prisma.memoryItem.findMany({
+                where: {
+                  memoryScopeId: { in: input.readableScopeIds },
+                  status: "ACTIVE",
+                  deletedAt: null,
+                  OR: searchTerms.map((term) => ({ content: { contains: term, mode: "insensitive" as const } })),
+                },
+                orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+                take: 180,
+                select: {
+                  id: true, category: true, content: true, confidence: true, updatedAt: true, createdAt: true,
+                  validFrom: true, memoryScopeId: true, importance: true, lastRecalledAt: true, recallCount: true,
+                },
+              })
+            : Promise.resolve([]),
+          searchRange || searchTerms.length
+            ? prisma.memorySnapshot.findMany({
+                where: {
+                  memoryScopeId: { in: input.readableScopeIds },
+                  status: "CURRENT",
+                  ...(searchRange
+                    ? { periodStart: { lt: searchRange.end }, periodEnd: { gte: searchRange.start } }
+                    : {}),
+                  ...(searchTerms.length
+                    ? { OR: searchTerms.map((term) => ({ summary: { contains: term, mode: "insensitive" as const } })) }
+                    : {}),
+                },
+                orderBy: [{ periodEnd: "desc" }, { version: "desc" }],
+                take: 120,
+                select: {
+                  id: true, summary: true, periodStart: true, periodEnd: true, version: true, createdAt: true, memoryScopeId: true,
+                },
+              })
+            : Promise.resolve([]),
+          searchRange || searchTerms.length || wantsFirst || wantsLatest
+            ? prisma.memoryEvent.findMany({
+                where: {
+                  memoryScopeId: { in: input.readableScopeIds },
+                  status: "ACTIVE",
+                  ...(isGroup ? { conversationId: { in: input.existingConversation ? [input.existingConversation.id] : [] } } : {}),
+                  ...rangeWhere,
+                  ...(searchTerms.length
+                    ? {
+                        OR: searchTerms.flatMap((term) => [
+                          { title: { contains: term, mode: "insensitive" as const } },
+                          { detail: { contains: term, mode: "insensitive" as const } },
+                          { keywords: { has: term } },
+                        ]),
+                      }
+                    : {}),
+                },
+                orderBy: [{ occurredAt: eventOrder }, { id: eventOrder }],
+                take: searchRange ? 500 : 350,
+                select: {
+                  id: true, occurredAt: true, timeOfDay: true, place: true, participants: true,
+                  keywords: true, title: true, detail: true, memoryScopeId: true, participantRefs: true,
+                },
+              })
+            : Promise.resolve([]),
+        ]);
+
+        // 主题词没有命中或命中很少时，仍给语义检索器一小批同时间段候选，兼容同义表达。
+        const fallbackEvents = (searchRange || searchTerms.length || wantsFirst || wantsLatest) && targetedEvents.length < 16
+          ? await prisma.memoryEvent.findMany({
+              where: {
+                memoryScopeId: { in: input.readableScopeIds },
+                status: "ACTIVE",
+                ...(isGroup ? { conversationId: { in: input.existingConversation ? [input.existingConversation.id] : [] } } : {}),
+                ...rangeWhere,
+              },
+              orderBy: [{ occurredAt: eventOrder }, { id: eventOrder }],
+              take: searchRange ? 500 : 350,
+              select: {
+                id: true, occurredAt: true, timeOfDay: true, place: true, participants: true,
+                keywords: true, title: true, detail: true, memoryScopeId: true, participantRefs: true,
+              },
+            })
+          : [];
+        const uniqueById = <T extends { id: string }>(items: T[]): T[] =>
+          [...new Map(items.map((item) => [item.id, item])).values()];
+        const assistantMemoryCandidates = uniqueById([...input.memoryCandidates, ...targetedMemories]);
+        const assistantSnapshotCandidates = uniqueById([...input.snapshotCandidates, ...targetedSnapshots]);
+        const assistantEventCandidates = uniqueById([...input.eventCandidates, ...targetedEvents, ...fallbackEvents]);
+
+        // Do not mark the whole recent query as seen: the group composer keeps only six
+        // recent rows and the analyzer may clip more. Only explicitly supplied evidence is excluded.
+        const excludedHistoryIds = historyExcludedIds({
+          groupChat: isGroup,
+          recentIds: input.recentStoredMessages.map(item => item.id),
+          suppliedIds: [...input.crossChannel.map(item => item.id), ...input.rawMessages.map(item => item.id)],
+        });
+        const historySelect = {
+          id: true, conversationId: true, role: true, content: true, occurredAt: true, metadata: true,
+          conversation: { select: { memoryScopeId: true } },
+        } satisfies Prisma.MessageSelect;
+        type HistoryRow = Prisma.MessageGetPayload<{ select: typeof historySelect }>;
+        const filterHistory = async (rows: HistoryRow[]): Promise<HistoryRow[]> => {
+          if (!isGroup || !rows.length) return rows;
+          const uids = [...new Set(rows.filter(row => row.role === "USER")
+            .map(row => readStoredAuthorOpenId(row.metadata)).filter(Boolean))];
+          const identities = uids.length ? await prisma.externalIdentity.findMany({
+            where: { platform: input.platform, platformUid: { in: uids } },
+            select: { platformUid: true, kind: true, memoryScopes: {
+              where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
+              take: 1, select: { friendChatPolicy: true },
+            } },
+          }) : [];
+          const byUid = new Map(identities.map(identity => [identity.platformUid, identity]));
+          return rows.filter(row => {
+            if (row.role !== "USER") return true;
+            const uid = readStoredAuthorOpenId(row.metadata);
+            if (readStoredSpeaker(row.metadata).isOwner || (input.groupOwnerQq && uid === input.groupOwnerQq)) return true;
+            const identity = byUid.get(uid);
+            return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT");
+          });
+        };
+        const loadHistory = async (baseWhere: Prisma.MessageWhereInput): Promise<HistoryRow[]> => {
+          const where: Prisma.MessageWhereInput = { AND: [baseWhere, {
+            role: { in: ["USER", "ASSISTANT"] },
+            id: { notIn: [...excludedHistoryIds] },
+            OR: [
+              { externalMessageId: null },
+              { externalMessageId: { notIn: input.messages.map(message => message.externalMessageId) } },
+            ],
+          }] };
+          const matched = await prisma.message.findMany({
+            where: { AND: [where, ...(contentMatches.length ? [{ OR: contentMatches }] : [])] },
+            orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
+            take: searchRange ? 500 : 350, select: historySelect,
+          });
+          return loadMessageHistoryCoverage({
+            matched,
+            window: input.recentStoredMessages.map(row => ({ ...row,
+              conversationId: input.existingConversation?.id ?? "",
+              conversation: { memoryScopeId: isGroup ? input.globalScopeId : "" },
+            })).filter(row => isGroup && row.conversationId && !searchRange && !wantsFirst),
+            excludeIds: excludedHistoryIds,
+            filterVisible: filterHistory,
+            oldestFirst: wantsFirst,
+            fallbackLimit: searchRange ? 120 : 80,
+            fetchPage: ({ excludeIds, cursor, take }) => prisma.message.findMany({
+              where: { AND: [where, { id: { notIn: excludeIds } }, ...(cursor ? [historyCursorWhere(cursor, rawMessageOrder)] : [])] },
+              orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }], take, select: historySelect,
+            }),
+            fetchNeighbors: (anchor, direction) => {
+              const order = direction === "before" ? "desc" as const : "asc" as const;
+              return prisma.message.findMany({
+                where: { AND: [where, { conversationId: anchor.conversationId,
+                  occurredAt: { gte: new Date(anchor.occurredAt.getTime() - 120_000), lte: new Date(anchor.occurredAt.getTime() + 120_000) },
+                }, historyCursorWhere(anchor, order)] },
+                orderBy: [{ occurredAt: order }, { id: order }], take: 2, select: historySelect,
+              });
+            },
+          });
+        };
+        // Every query, including neighboring rows, retains the authorized room/private predicate.
+        const rawRowsByScope = isGroup
+          ? (input.existingConversation ? [await loadHistory({ conversationId: input.existingConversation.id, ...rangeWhere })] : [])
+          : await Promise.all(input.readableScopeIds.filter(scopeId => scopeId !== input.globalScopeId)
+            .map(scopeId => loadHistory(buildPrivateScopeRawMessageWhere(scopeId, searchRange))));
+        // 主人私聊可以回看角色全局范围中「指定熟人自己发过的群消息」：
+        // 仅在明确识别到人物账号时启用，只取该人物的 USER 原文，不把整群聊天搬进私聊。
+        // 普通好友私聊仍然只能检索当前用户自己的 private scope。
+        const ownerTimelineScopeIds = resolveOwnerTimelineGroupScopeIds({
+          isOwnerTurn: input.isOwnerTurn,
+          globalScopeId: input.globalScopeId,
+          // 旧群会话可能仍挂在主人自己的 EXTERNAL_IDENTITY；普通好友不会获得这个额外范围。
+          ownerIdentityScopeId: input.primaryIdentityScopeId,
+        });
+        const ownerGroupRawRows = !isGroup && input.isOwnerTurn && searchParticipantIds.length
+          ? await prisma.message.findMany({
+              where: buildOwnerTimelineGroupRawMessageWhere({
+                memoryScopeIds: ownerTimelineScopeIds,
+                platform: input.platform,
+                participantIds: searchParticipantIds,
+                range: searchRange,
+              }),
+              orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
+              take: 500,
+              select: {
+                id: true, role: true, content: true, occurredAt: true, metadata: true,
+                conversation: { select: { memoryScopeId: true } },
+              },
+            })
+          : [];
+        const ownerTimelineQuery = shouldUseOnlyTargetGroupRawRows({
+          isGroup,
+          isOwnerTurn: input.isOwnerTurn,
+          participantName: searchParticipantName ?? null,
+          wantsTimeline: wantsFirst || wantsLatest,
+        });
+        const rawRowsForAssistant = ownerTimelineQuery
+          ? ownerGroupRawRows
+          : [...rawRowsByScope.flat(), ...ownerGroupRawRows];
+        const assistantRawMessages = rawRowsForAssistant.map((row) => {
+          const speaker = readStoredSpeaker(row.metadata);
+          return {
+            id: row.id,
+            ...( "conversationId" in row && typeof row.conversationId === "string" ? { conversationId: row.conversationId } : {}),
+            role: row.role,
+            content: row.role === "USER"
+              ? formatMentionContent(row.content, readMessageMentions(row.metadata))
+              : row.content,
+            occurredAt: row.occurredAt,
+            memoryScopeId: row.conversation.memoryScopeId,
+            ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
+            ...(speaker.isOwner ? { isOwner: true } : {}),
+          };
+        });
+        return buildMemoryAssistantCandidates({
+          query: searchQuery,
+          memories: assistantMemoryCandidates,
+          snapshots: assistantSnapshotCandidates,
+          events: assistantEventCandidates,
+          rawMessages: assistantRawMessages,
+          excludeRawMessageIds: excludedHistoryIds,
+          scopeOf: (scopeId) => scopeId === input.globalScopeId ? "character" : "private",
+          timeZone: input.chatTimeZone,
+          ...(searchParticipantIds.length ? { participantIds: searchParticipantIds } : {}),
+          allowPrivate: !isGroup,
+        });
+  };
+
+  return { loadMemoryCandidates, ownerHistoryCoverage: () => ownerHistoryCoverage };
+}
+
 type ChannelTurnReplyToggles = {
   /** 仅当渠道能发语音、角色开关打开且 TTS 配置完整时非空。 */
   voiceSettings: VoiceTtsSettings | null;
@@ -2523,259 +2824,31 @@ async function runChannelTurn(input: {
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
   })), collaboration && !isGroup ? "qq-private" : undefined);
-  let ownerHistoryCoverage: OwnerHistoryCoverage | undefined;
-  const loadMemoryCandidates = async (searchQuery: string, lookupOptions?: { participantName?: string; deterministicTimeline: boolean }) => {
-        if (ownerHistoryAuth && ownerHistoryPlan) {
-          if (!ownerHistoryStored) throw new Error("Owner history authorization or continuity unavailable");
-          const participantIds = ownerHistoryPlan.participantName
-            ? await resolveParticipantAccounts(prisma, ownerHistoryPlan.participantName, { characterId: input.characterId, platform: input.platform }) : [];
-          const page = await loadOwnerHistoryPage(prisma, input.characterId, ownerHistoryPlan, participantIds);
-          ownerHistoryCoverage = page.coverage;
-          return page.sources;
-        }
-        // 人物名只从主人原始问题解析一次；不从记忆助手模板查询串反向解析。
-        const searchParticipantName = lookupOptions?.participantName ?? parseEventParticipantQuery(currentMessage);
-        const searchParticipantIds = searchParticipantName
-          ? await resolveParticipantAccounts(prisma, searchParticipantName, { characterId: input.characterId, platform: input.platform })
-          : [];
-        const searchRange = parseEventTimeRange(searchQuery, new Date(), chatTimeZone);
-        const searchTerms = extractMemoryAssistantSearchTerms(searchQuery, 20);
-        const contentMatches = searchTerms.map((term) => ({
-          content: { contains: term, mode: "insensitive" as const },
-        }));
-        const rangeWhere = searchRange
-          ? { occurredAt: { gte: searchRange.start, lt: searchRange.end } }
-          : {};
-        const wantsFirst = /第一次|首次|最开始|初次|头一回/u.test(searchQuery);
-        const wantsLatest = /最近一次|上一次|上回|上次|最后一次/u.test(searchQuery);
-        const eventOrder = wantsFirst ? "asc" as const : "desc" as const;
-        const rawMessageOrder = wantsFirst ? "asc" as const : "desc" as const;
-
-        // 深度检索按主题和时间补查旧记忆，不再只局限于聊天前置阶段的 300 条记录。
-        const [targetedMemories, targetedSnapshots, targetedEvents] = await Promise.all([
-          searchTerms.length
-            ? prisma.memoryItem.findMany({
-                where: {
-                  memoryScopeId: { in: readableScopeIds },
-                  status: "ACTIVE",
-                  deletedAt: null,
-                  OR: searchTerms.map((term) => ({ content: { contains: term, mode: "insensitive" as const } })),
-                },
-                orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-                take: 180,
-                select: {
-                  id: true, category: true, content: true, confidence: true, updatedAt: true, createdAt: true,
-                  validFrom: true, memoryScopeId: true, importance: true, lastRecalledAt: true, recallCount: true,
-                },
-              })
-            : Promise.resolve([]),
-          searchRange || searchTerms.length
-            ? prisma.memorySnapshot.findMany({
-                where: {
-                  memoryScopeId: { in: readableScopeIds },
-                  status: "CURRENT",
-                  ...(searchRange
-                    ? { periodStart: { lt: searchRange.end }, periodEnd: { gte: searchRange.start } }
-                    : {}),
-                  ...(searchTerms.length
-                    ? { OR: searchTerms.map((term) => ({ summary: { contains: term, mode: "insensitive" as const } })) }
-                    : {}),
-                },
-                orderBy: [{ periodEnd: "desc" }, { version: "desc" }],
-                take: 120,
-                select: {
-                  id: true, summary: true, periodStart: true, periodEnd: true, version: true, createdAt: true, memoryScopeId: true,
-                },
-              })
-            : Promise.resolve([]),
-          searchRange || searchTerms.length || wantsFirst || wantsLatest
-            ? prisma.memoryEvent.findMany({
-                where: {
-                  memoryScopeId: { in: readableScopeIds },
-                  status: "ACTIVE",
-                  ...(isGroup ? { conversationId: { in: existingConversation ? [existingConversation.id] : [] } } : {}),
-                  ...rangeWhere,
-                  ...(searchTerms.length
-                    ? {
-                        OR: searchTerms.flatMap((term) => [
-                          { title: { contains: term, mode: "insensitive" as const } },
-                          { detail: { contains: term, mode: "insensitive" as const } },
-                          { keywords: { has: term } },
-                        ]),
-                      }
-                    : {}),
-                },
-                orderBy: [{ occurredAt: eventOrder }, { id: eventOrder }],
-                take: searchRange ? 500 : 350,
-                select: {
-                  id: true, occurredAt: true, timeOfDay: true, place: true, participants: true,
-                  keywords: true, title: true, detail: true, memoryScopeId: true, participantRefs: true,
-                },
-              })
-            : Promise.resolve([]),
-        ]);
-
-        // 主题词没有命中或命中很少时，仍给语义检索器一小批同时间段候选，兼容同义表达。
-        const fallbackEvents = (searchRange || searchTerms.length || wantsFirst || wantsLatest) && targetedEvents.length < 16
-          ? await prisma.memoryEvent.findMany({
-              where: {
-                memoryScopeId: { in: readableScopeIds },
-                status: "ACTIVE",
-                ...(isGroup ? { conversationId: { in: existingConversation ? [existingConversation.id] : [] } } : {}),
-                ...rangeWhere,
-              },
-              orderBy: [{ occurredAt: eventOrder }, { id: eventOrder }],
-              take: searchRange ? 500 : 350,
-              select: {
-                id: true, occurredAt: true, timeOfDay: true, place: true, participants: true,
-                keywords: true, title: true, detail: true, memoryScopeId: true, participantRefs: true,
-              },
-            })
-          : [];
-        const uniqueById = <T extends { id: string }>(items: T[]): T[] =>
-          [...new Map(items.map((item) => [item.id, item])).values()];
-        const assistantMemoryCandidates = uniqueById([...memoryCandidates, ...targetedMemories]);
-        const assistantSnapshotCandidates = uniqueById([...snapshotCandidates, ...targetedSnapshots]);
-        const assistantEventCandidates = uniqueById([...eventCandidates, ...targetedEvents, ...fallbackEvents]);
-
-        // Do not mark the whole recent query as seen: the group composer keeps only six
-        // recent rows and the analyzer may clip more. Only explicitly supplied evidence is excluded.
-        const excludedHistoryIds = historyExcludedIds({
-          groupChat: isGroup,
-          recentIds: recentStoredMessages.map(item => item.id),
-          suppliedIds: [...crossChannel.map(item => item.id), ...rawMessages.map(item => item.id)],
-        });
-        const historySelect = {
-          id: true, conversationId: true, role: true, content: true, occurredAt: true, metadata: true,
-          conversation: { select: { memoryScopeId: true } },
-        } satisfies Prisma.MessageSelect;
-        type HistoryRow = Prisma.MessageGetPayload<{ select: typeof historySelect }>;
-        const filterHistory = async (rows: HistoryRow[]): Promise<HistoryRow[]> => {
-          if (!isGroup || !rows.length) return rows;
-          const uids = [...new Set(rows.filter(row => row.role === "USER")
-            .map(row => readStoredAuthorOpenId(row.metadata)).filter(Boolean))];
-          const identities = uids.length ? await prisma.externalIdentity.findMany({
-            where: { platform: input.platform, platformUid: { in: uids } },
-            select: { platformUid: true, kind: true, memoryScopes: {
-              where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
-              take: 1, select: { friendChatPolicy: true },
-            } },
-          }) : [];
-          const byUid = new Map(identities.map(identity => [identity.platformUid, identity]));
-          return rows.filter(row => {
-            if (row.role !== "USER") return true;
-            const uid = readStoredAuthorOpenId(row.metadata);
-            if (readStoredSpeaker(row.metadata).isOwner || (input.group?.ownerQq && uid === input.group.ownerQq)) return true;
-            const identity = byUid.get(uid);
-            return !shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT");
-          });
-        };
-        const loadHistory = async (baseWhere: Prisma.MessageWhereInput): Promise<HistoryRow[]> => {
-          const where: Prisma.MessageWhereInput = { AND: [baseWhere, {
-            role: { in: ["USER", "ASSISTANT"] },
-            id: { notIn: [...excludedHistoryIds] },
-            OR: [
-              { externalMessageId: null },
-              { externalMessageId: { notIn: messages.map(message => message.externalMessageId) } },
-            ],
-          }] };
-          const matched = await prisma.message.findMany({
-            where: { AND: [where, ...(contentMatches.length ? [{ OR: contentMatches }] : [])] },
-            orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-            take: searchRange ? 500 : 350, select: historySelect,
-          });
-          return loadMessageHistoryCoverage({
-            matched,
-            window: recentStoredMessages.map(row => ({ ...row,
-              conversationId: existingConversation?.id ?? "",
-              conversation: { memoryScopeId: isGroup ? globalScope.id : "" },
-            })).filter(row => isGroup && row.conversationId && !searchRange && !wantsFirst),
-            excludeIds: excludedHistoryIds,
-            filterVisible: filterHistory,
-            oldestFirst: wantsFirst,
-            fallbackLimit: searchRange ? 120 : 80,
-            fetchPage: ({ excludeIds, cursor, take }) => prisma.message.findMany({
-              where: { AND: [where, { id: { notIn: excludeIds } }, ...(cursor ? [historyCursorWhere(cursor, rawMessageOrder)] : [])] },
-              orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }], take, select: historySelect,
-            }),
-            fetchNeighbors: (anchor, direction) => {
-              const order = direction === "before" ? "desc" as const : "asc" as const;
-              return prisma.message.findMany({
-                where: { AND: [where, { conversationId: anchor.conversationId,
-                  occurredAt: { gte: new Date(anchor.occurredAt.getTime() - 120_000), lte: new Date(anchor.occurredAt.getTime() + 120_000) },
-                }, historyCursorWhere(anchor, order)] },
-                orderBy: [{ occurredAt: order }, { id: order }], take: 2, select: historySelect,
-              });
-            },
-          });
-        };
-        // Every query, including neighboring rows, retains the authorized room/private predicate.
-        const rawRowsByScope = isGroup
-          ? (existingConversation ? [await loadHistory({ conversationId: existingConversation.id, ...rangeWhere })] : [])
-          : await Promise.all(readableScopeIds.filter(scopeId => scopeId !== globalScope.id)
-            .map(scopeId => loadHistory(buildPrivateScopeRawMessageWhere(scopeId, searchRange))));
-        // 主人私聊可以回看角色全局范围中「指定熟人自己发过的群消息」：
-        // 仅在明确识别到人物账号时启用，只取该人物的 USER 原文，不把整群聊天搬进私聊。
-        // 普通好友私聊仍然只能检索当前用户自己的 private scope。
-        const ownerTimelineScopeIds = resolveOwnerTimelineGroupScopeIds({
-          isOwnerTurn,
-          globalScopeId: globalScope.id,
-          // 旧群会话可能仍挂在主人自己的 EXTERNAL_IDENTITY；普通好友不会获得这个额外范围。
-          ownerIdentityScopeId: primaryIdentityScopeId,
-        });
-        const ownerGroupRawRows = !isGroup && isOwnerTurn && searchParticipantIds.length
-          ? await prisma.message.findMany({
-              where: buildOwnerTimelineGroupRawMessageWhere({
-                memoryScopeIds: ownerTimelineScopeIds,
-                platform: input.platform,
-                participantIds: searchParticipantIds,
-                range: searchRange,
-              }),
-              orderBy: [{ occurredAt: rawMessageOrder }, { id: rawMessageOrder }],
-              take: 500,
-              select: {
-                id: true, role: true, content: true, occurredAt: true, metadata: true,
-                conversation: { select: { memoryScopeId: true } },
-              },
-            })
-          : [];
-        const ownerTimelineQuery = shouldUseOnlyTargetGroupRawRows({
-          isGroup,
-          isOwnerTurn,
-          participantName: searchParticipantName ?? null,
-          wantsTimeline: wantsFirst || wantsLatest,
-        });
-        const rawRowsForAssistant = ownerTimelineQuery
-          ? ownerGroupRawRows
-          : [...rawRowsByScope.flat(), ...ownerGroupRawRows];
-        const assistantRawMessages = rawRowsForAssistant.map((row) => {
-          const speaker = readStoredSpeaker(row.metadata);
-          return {
-            id: row.id,
-            ...( "conversationId" in row && typeof row.conversationId === "string" ? { conversationId: row.conversationId } : {}),
-            role: row.role,
-            content: row.role === "USER"
-              ? formatMentionContent(row.content, readMessageMentions(row.metadata))
-              : row.content,
-            occurredAt: row.occurredAt,
-            memoryScopeId: row.conversation.memoryScopeId,
-            ...(speaker.speaker ? { speaker: speaker.speaker } : {}),
-            ...(speaker.isOwner ? { isOwner: true } : {}),
-          };
-        });
-        return buildMemoryAssistantCandidates({
-          query: searchQuery,
-          memories: assistantMemoryCandidates,
-          snapshots: assistantSnapshotCandidates,
-          events: assistantEventCandidates,
-          rawMessages: assistantRawMessages,
-          excludeRawMessageIds: excludedHistoryIds,
-          scopeOf: (scopeId) => scopeId === globalScope.id ? "character" : "private",
-          timeZone: chatTimeZone,
-          ...(searchParticipantIds.length ? { participantIds: searchParticipantIds } : {}),
-          allowPrivate: !isGroup,
-        });
-  };
+  const memoryLoader = createChannelTurnMemoryLoader({
+    prisma,
+    characterId: input.characterId,
+    platform: input.platform,
+    isGroup,
+    ...(input.group?.ownerQq ? { groupOwnerQq: input.group.ownerQq } : {}),
+    currentMessage,
+    chatTimeZone,
+    readableScopeIds,
+    globalScopeId: globalScope.id,
+    isOwnerTurn,
+    primaryIdentityScopeId,
+    existingConversation,
+    messages,
+    recentStoredMessages,
+    crossChannel,
+    rawMessages,
+    memoryCandidates,
+    snapshotCandidates,
+    eventCandidates,
+    ownerHistoryAuth,
+    ownerHistoryPlan,
+    ownerHistoryStored,
+  });
+  const loadMemoryCandidates = memoryLoader.loadMemoryCandidates;
 
   const toolReads: Array<{ name: string; status: string; count: number }> = [];
   const observeToolRead = async (name: string, load: () => Promise<unknown[]>): Promise<unknown[]> => {
@@ -2875,8 +2948,9 @@ async function runChannelTurn(input: {
       ...(ownerHistoryHold ? { suppressHistoryLookup: true } : {}),
       ...(ownerHistoryPlan && ownerHistoryLookup ? { requiredHistoryLookup: { query: ownerHistoryPlan.query, mode: ownerHistoryPlan.mode, load: async () => {
         const sources = await loadMemoryCandidates(ownerHistoryPlan!.query);
-        if (!ownerHistoryCoverage) throw new Error("History coverage unavailable");
-        return { sources, coverage: ownerHistoryCoverage };
+        const coverage = memoryLoader.ownerHistoryCoverage();
+        if (!coverage) throw new Error("History coverage unavailable");
+        return { sources, coverage };
       } } } : {}),
       loadCandidates: loadMemoryCandidates,
       chatInput: {
@@ -3043,11 +3117,11 @@ async function runChannelTurn(input: {
       ...(generated.ownerHistoryCoverage ? { ownerHistoryCoverage: JSON.stringify(generated.ownerHistoryCoverage) } : {}),
       action: generated.action, durationMs: generationDurationMs, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
   });
-  if (ownerHistoryAuth && (ownerHistoryStored || ownerHistoryCoverage)) {
+  if (ownerHistoryAuth && (ownerHistoryStored || memoryLoader.ownerHistoryCoverage())) {
     const nextPlan = ownerHistoryPlan ? { ...ownerHistoryPlan,
       // A completed read starts a fresh TTL. A later short follow-up must not inherit an
       // expired task merely because nothing was re-saved after the original request.
-      ...(ownerHistoryCoverage ? { anchoredAt: ownerHistoryNow.toISOString() } : {}),
+      ...(memoryLoader.ownerHistoryCoverage() ? { anchoredAt: ownerHistoryNow.toISOString() } : {}),
       ...(generated.ownerHistoryCoverage ? { start: generated.ownerHistoryCoverage.start,
         end: generated.ownerHistoryCoverage.end, cursor: generated.ownerHistoryCoverage.oldestCursor } : {}),
       evidenceIds: generated.memoryAssistantStatus === "success"
