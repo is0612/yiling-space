@@ -3,36 +3,9 @@ import type { ApiRequest } from "../utils/request";
 import type {
   GrowthSourceType, GrowthSource, GrowthPagination, GrowthPage,
   GoalKind, GoalStatus, GoalProgress, Goal, GoalHistory, GoalSuggestion,
+  PreferenceKind, PreferenceStatus, Preference, PreferenceHistory, PreferenceSuggestion,
 } from "#shared/types/growth";
 export type * from "#shared/types/growth";
-
-export type PreferenceKind = "LIKE" | "DISLIKE" | "INTEREST";
-export type PreferenceStatus = "ACTIVE" | "PENDING" | "DISABLED" | "REJECTED";
-export type Preference = {
-  id: string;
-  characterId: string;
-  kind: PreferenceKind;
-  topic: string;
-  reason: string;
-  status: PreferenceStatus;
-  revision: number;
-  sourceType: "MANUAL" | "SOURCES";
-  sourceRefs: GrowthSource[];
-  createdAt: string;
-  updatedAt: string;
-};
-export type PreferenceHistory = {
-  id: string;
-  revision: number;
-  kind: PreferenceKind;
-  topic: string;
-  reason: string;
-  status: PreferenceStatus;
-  operation?: string;
-  action?: string;
-  createdAt: string;
-};
-export type PreferenceSuggestion = { kind: PreferenceKind; topic: string; reason: string };
 
 export type ChatScope = "ALL" | "GROUP" | "PRIVATE";
 export type LanguageKind = "TONE" | "WORDING" | "LENGTH";

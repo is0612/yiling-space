@@ -1,7 +1,26 @@
 import { createError } from "h3";
 import type { Prisma, PrismaClient, CharacterPreference } from "../../src/generated/prisma/client";
+import type { GrowthSource, Preference, PreferenceKind, PreferenceStatus } from "../../shared/types/growth";
 import { parsePreferenceCreate, parsePreferencePatch, parsePreferenceSources, preferenceNextStatus, preferencePage } from "./preferences-domain";
 import { assertPreferenceOwner, loadPreferenceSources, lockPreferenceOwner } from "./preferences-sources";
+
+/**
+ * 把 Prisma 行整形成 API DTO（`shared/types/growth.ts` 的 `Preference`）。
+ *
+ * 和 `publicGoal` 同一套理由：日期显式转 ISO（`JSON.stringify(Date)` 本来就是 ISO，
+ * 线上行为不变）、JSON 列显式转数组、裸字符串列在边界收窄成契约枚举。
+ */
+function toPreferenceDto(row: CharacterPreference): Preference {
+  return {
+    ...row,
+    kind: row.kind as PreferenceKind,
+    status: row.status as PreferenceStatus,
+    sourceType: row.sourceType as Preference["sourceType"],
+    sourceRefs: row.sourceRefs as unknown as GrowthSource[],
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
 
 async function snapshot(tx: Prisma.TransactionClient, preference: CharacterPreference, actorId: string, action: string) {
   await tx.characterPreferenceRevision.create({ data: {
@@ -22,7 +41,7 @@ export async function createPreference(prisma: PrismaClient, input: { ownerId: s
       kind: parsed.kind, topic: parsed.topic, reason: parsed.reason, status: parsed.status,
       sourceType: sourceRefs.length ? "SOURCES" : "MANUAL", sourceRefs } });
     await snapshot(tx, preference, input.ownerId, "CREATE");
-    return { preference };
+    return { preference: toPreferenceDto(preference) };
   });
 }
 export async function updatePreference(prisma: PrismaClient, input: { ownerId: string; characterId: string; preferenceId: string; body: unknown }) {
@@ -43,12 +62,12 @@ export async function updatePreference(prisma: PrismaClient, input: { ownerId: s
       await loadPreferenceSources(tx, input.characterId, refs);
     }
     const kind = parsed.kind ?? current.kind; const topic = parsed.topic ?? current.topic; const reason = parsed.reason ?? current.reason;
-    if (parsed.operation === "EDIT" && kind === current.kind && topic === current.topic && reason === current.reason) return { preference: current };
+    if (parsed.operation === "EDIT" && kind === current.kind && topic === current.topic && reason === current.reason) return { preference: toPreferenceDto(current) };
     const changed = await tx.characterPreference.updateMany({ where: { id: current.id, characterId: input.characterId, revision: parsed.expectedRevision, status: current.status }, data: { kind, topic, reason, status, revision: { increment: 1 } } });
     if (changed.count !== 1) throw createError({ statusCode: 409, statusMessage: "偏好刚刚发生变化，请刷新后再试。" });
     const preference = await tx.characterPreference.findUniqueOrThrow({ where: { id: current.id } });
     await snapshot(tx, preference, input.ownerId, parsed.operation);
-    return { preference };
+    return { preference: toPreferenceDto(preference) };
   });
 }
 export async function listPreferences(prisma: PrismaClient, input: { ownerId: string; characterId: string; status: string; q: string; page: number; pageSize: number }) {
@@ -57,7 +76,7 @@ export async function listPreferences(prisma: PrismaClient, input: { ownerId: st
     ...(input.status === "ALL" ? {} : { status: input.status }),
     ...(input.q ? { OR: [{ topic: { contains: input.q, mode: "insensitive" } }, { reason: { contains: input.q, mode: "insensitive" } }] } : {}) };
   const [items, total] = await Promise.all([prisma.characterPreference.findMany({ where, orderBy: [{ updatedAt: "desc" }, { id: "desc" }], skip: (input.page - 1) * input.pageSize, take: input.pageSize }), prisma.characterPreference.count({ where })]);
-  return preferencePage(items, total, input.page, input.pageSize);
+  return preferencePage(items.map(toPreferenceDto), total, input.page, input.pageSize);
 }
 export async function listPreferenceHistory(prisma: PrismaClient, input: { ownerId: string; characterId: string; preferenceId: string; page: number; pageSize: number }) {
   await assertPreferenceOwner(prisma, input.ownerId, input.characterId);

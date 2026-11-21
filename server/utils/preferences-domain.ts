@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { createError } from "h3";
+// 枚举与前端共用一份（`shared/types/growth.ts`）；这里 re-export 以保持既有 import 路径可用。
+import {
+  PREFERENCE_KINDS, PREFERENCE_STATUSES,
+  type PreferenceKind, type PreferenceStatus,
+} from "../../shared/types/growth";
+export { PREFERENCE_KINDS, PREFERENCE_STATUSES, type PreferenceKind, type PreferenceStatus };
 
-export const PREFERENCE_KINDS = ["LIKE", "DISLIKE", "INTEREST"] as const;
-export const PREFERENCE_STATUSES = ["PENDING", "ACTIVE", "REJECTED", "DISABLED"] as const;
-export type PreferenceKind = typeof PREFERENCE_KINDS[number];
-export type PreferenceStatus = typeof PREFERENCE_STATUSES[number];
 export type PreferenceSourceRef = { type: "MEMORY_EVENT" | "REFLECTION_SUGGESTION"; id: string; hash: string };
 export type PreferenceSourceSnapshot = PreferenceSourceRef & { title: string; summary: string };
 export const PREFERENCE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

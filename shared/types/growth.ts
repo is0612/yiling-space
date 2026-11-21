@@ -56,3 +56,37 @@ export type Goal = {
 
 export type GoalHistory = Goal & { action: string };
 export type GoalSuggestion = { kind: GoalKind; title: string; description: string; reason: string };
+
+export const PREFERENCE_KINDS = ["LIKE", "DISLIKE", "INTEREST"] as const;
+export type PreferenceKind = typeof PREFERENCE_KINDS[number];
+
+export const PREFERENCE_STATUSES = ["PENDING", "ACTIVE", "REJECTED", "DISABLED"] as const;
+export type PreferenceStatus = typeof PREFERENCE_STATUSES[number];
+
+export type Preference = {
+  id: string;
+  characterId: string;
+  kind: PreferenceKind;
+  topic: string;
+  reason: string;
+  status: PreferenceStatus;
+  revision: number;
+  sourceType: "MANUAL" | "SOURCES";
+  sourceRefs: GrowthSource[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PreferenceHistory = {
+  id: string;
+  revision: number;
+  kind: PreferenceKind;
+  topic: string;
+  reason: string;
+  status: PreferenceStatus;
+  operation?: string;
+  action?: string;
+  createdAt: string;
+};
+
+export type PreferenceSuggestion = { kind: PreferenceKind; topic: string; reason: string };
