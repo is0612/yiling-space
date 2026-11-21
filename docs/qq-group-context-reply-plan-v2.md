@@ -1,8 +1,7 @@
 # QQ 群聊上下文与话题参与：实施交接方案 v2
 
-状态：方案定稿，尚未实现。
-适用：QQ OneBot 普通群聊。交给实施者时以本文为准；v1（`docs/qq-group-context-reply-plan.md`）保留作历史对照，不再作为实施依据。
-本轮只写方案，不修改业务代码。
+状态：已于 2026-11 落地实现。「攒批 → 闸门 → 模型判断」结构、话题候选（`topicCandidate`）、名字弱线索（`named`）均已在 `server/utils/channel-adapter/onebot/group-chat.ts` 实现并有回归；现行行为的权威描述以 `CLAUDE.md` 4.3 为准，本文保留作设计记录。
+v1（`docs/qq-group-context-reply-plan.md`）保留作历史对照，不再作为实施依据。
 
 ---
 

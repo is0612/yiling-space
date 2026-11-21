@@ -1,6 +1,6 @@
 # QQ 群聊上下文与话题参与：实施交接方案
 
-状态：讨论后形成的实施方案，尚未实现。交给 DeepSeek 时可直接要求按此文实施；本轮只新增本文，不修改业务代码。
+状态：历史方案。已被 v2（`qq-group-context-reply-plan-v2.md`）取代，且 v2 已于 2026-11 落地实现；本文保留作历史对照，不再作为实施依据。现行行为以 `CLAUDE.md` 4.3 与 `server/utils/channel-adapter/onebot/group-chat.ts` 为准。
 
 ## 1. 用户确认的产品目标
 
