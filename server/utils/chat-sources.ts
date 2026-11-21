@@ -1,4 +1,5 @@
-import { readStoredMemoryScopeOrigin, type MemoryScopeOrigin } from "./memory-scope-access";
+import { readStoredMemoryScopeOrigin } from "./memory-scope-access";
+import type { MemoryScopeOrigin } from "../../shared/types/chat";
 
 export type StoredChatMemorySource = {
   id: string;

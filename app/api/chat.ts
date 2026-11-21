@@ -1,89 +1,10 @@
+// 对话页的形状与后端共用（`shared/types/chat.ts`）。
 import type { ApiRequest } from "../utils/request";
-
-export type ChatCharacter = {
-  id: string;
-  name: string;
-  chatModel: string;
-  chatTemperature: number;
-  chatMaxTokens: number;
-  chatApiBaseUrl: string;
-  chatApiKeyConfigured: boolean;
-  chatApiKeySource: "character" | "environment" | "missing";
-};
-
-export type MemoryScopeOrigin = "character" | "private";
-
-export type ChatMemorySource = {
-  id: string;
-  category: string;
-  content: string;
-  scope?: MemoryScopeOrigin;
-};
-
-export type ChatSnapshotSource = {
-  id: string;
-  summary: string;
-  periodStart: string;
-  periodEnd: string;
-  version: number;
-  scope?: MemoryScopeOrigin;
-};
-
-export type ChatMessage = {
-  id: string;
-  role: "USER" | "ASSISTANT";
-  content: string;
-  occurredAt: string;
-  sources?: { memories: ChatMemorySource[]; snapshots: ChatSnapshotSource[] };
-};
-
-export type ConversationSummary = {
-  id: string;
-  title: string;
-  lastMessageAt: string | null;
-  updatedAt: string;
-  messageCount: number;
-};
-
-export type ChatHistoryResponse = {
-  character: ChatCharacter;
-  modelConfigured: boolean;
-  conversations: ConversationSummary[];
-  selectedConversationId: string | null;
-  messages: ChatMessage[];
-};
-
-export type ChatExportPage = {
-  conversationId: string;
-  title: string;
-  status: "ACTIVE" | "ARCHIVED";
-  page: number;
-  pageSize: number;
-  total: number;
-  messages: ChatMessage[];
-};
-
-export type ChatSendResponse = {
-  conversationId: string;
-  title: string;
-  userMessage: ChatMessage;
-  assistantMessage: ChatMessage;
-  model: { name: string; provider: string; promptTemplateVersion: string };
-  retrieval: { memoriesAvailable: number; snapshotsAvailable: number; privateScopeActive?: boolean };
-};
-
-export type ConversationUpdateResult = {
-  id: string;
-  title: string;
-  status: "ACTIVE" | "ARCHIVED";
-  updatedAt: string;
-};
-
-export type DeleteConversationResult = {
-  deletedMessages: number;
-  retainedMemories: number;
-  retainedSnapshotSources: number;
-};
+import type {
+  ChatCharacter, ChatExportPage, ChatHistoryResponse, ChatMessage, ChatMemorySource, ChatSendResponse,
+  ChatSnapshotSource, ConversationSummary, ConversationUpdateResult, DeleteConversationResult, MemoryScopeOrigin,
+} from "#shared/types/chat";
+export type * from "#shared/types/chat";
 
 const characterPath = (characterId: string) => `/characters/${encodeURIComponent(characterId)}`;
 const chatPath = (characterId: string) => `${characterPath(characterId)}/chat`;

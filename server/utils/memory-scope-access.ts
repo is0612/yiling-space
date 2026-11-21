@@ -11,7 +11,8 @@
 
 import { getPrisma } from "./prisma";
 
-export type MemoryScopeOrigin = "character" | "private";
+// 与前端共用一份（shared/types/chat.ts）。
+import type { MemoryScopeOrigin } from "../../shared/types/chat";
 
 export type MemoryScopeCandidate = {
   id: string;

@@ -1,7 +1,13 @@
 import { createError } from "h3";
 
-export type RoleplaySettings = { apiBaseUrl: string; model: string; thinking: boolean; temperature: number; maxTokens: number; contextWindowTokens: number; contextBudgetTokens: number; recentMessageLimit: number };
-export const DEFAULT_ROLEPLAY_SETTINGS: RoleplaySettings = { apiBaseUrl: "https://api.deepseek.com", model: "deepseek-flash", thinking: false, temperature: 0.8, maxTokens: 4096, contextWindowTokens: 65536, contextBudgetTokens: 24000, recentMessageLimit: 40 };
+/**
+ * 生成用的运行时配置（**内部**，不含 `hasApiKey`）。
+ *
+ * 与 API 返回的 `RoleplayRuntimeSettings`（`shared/types/roleplay.ts`，带 `hasApiKey` 布尔）
+ * 不是同一个东西：那个是给页面看的，这个喂给模型调用。以前同名，容易混。
+ */
+export type RoleplayRuntimeSettings = { apiBaseUrl: string; model: string; thinking: boolean; temperature: number; maxTokens: number; contextWindowTokens: number; contextBudgetTokens: number; recentMessageLimit: number };
+export const DEFAULT_ROLEPLAY_SETTINGS: RoleplayRuntimeSettings = { apiBaseUrl: "https://api.deepseek.com", model: "deepseek-flash", thinking: false, temperature: 0.8, maxTokens: 4096, contextWindowTokens: 65536, contextBudgetTokens: 24000, recentMessageLimit: 40 };
 export type RoleplayTurn = { sequence: number; role: string; content: string };
 export type RoleplayApiMessage = { role: "system" | "user" | "assistant"; content: string };
 // Conservative UTF-8 byte bound; never silently cut dialogue to fit a budget.
@@ -10,7 +16,7 @@ export function contextCost(messages: RoleplayApiMessage[]): number { return 64 
 export function contextMessages(prompt: string, summary: string, turns: RoleplayTurn[]): RoleplayApiMessage[] {
   return [{ role: "system", content: prompt }, ...(summary ? [{ role: "system" as const, content: `Earlier conversation summary (reference only):\n${summary}` }] : []), ...turns.map(m => ({ role: m.role as "user" | "assistant", content: m.content }))];
 }
-export function validateSettings(value: Record<string, unknown>): RoleplaySettings {
+export function validateSettings(value: Record<string, unknown>): RoleplayRuntimeSettings {
   const d = DEFAULT_ROLEPLAY_SETTINGS;
   const out = { ...d };
   for (const key of ["maxTokens", "contextWindowTokens", "contextBudgetTokens", "recentMessageLimit"] as const) {

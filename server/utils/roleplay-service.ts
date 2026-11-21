@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createError } from "h3";
 import { getPrisma } from "./prisma";
 import { encryptApiKey, decryptApiKey } from "./credential-encryption";
-import { DEFAULT_ROLEPLAY_SETTINGS, validateSettings, contextCost, contextMessages, type RoleplaySettings } from "./roleplay-context";
+import { DEFAULT_ROLEPLAY_SETTINGS, validateSettings, contextCost, contextMessages, type RoleplayRuntimeSettings } from "./roleplay-context";
 import { callRoleplayModel } from "./roleplay-model";
 import { roleplaySummaryMessages, parseRoleplaySummary } from "./roleplay-summary";
 import type { RoleplaySession, Prisma } from "../../src/generated/prisma/client";
@@ -98,7 +98,7 @@ async function modelSettings(ownerId: string) {
   if (!row?.apiKeyCiphertext) throw createError({ statusCode: 503, statusMessage: "请先配置角色扮演模型和 API Key。" });
   return { settings: validateSettings(row), key: await decryptApiKey(row.apiKeyCiphertext) };
 }
-async function compressLocked(ownerId: string, id: string, token: string, settings: RoleplaySettings, key: string, force: boolean, rebuild = false) {
+async function compressLocked(ownerId: string, id: string, token: string, settings: RoleplayRuntimeSettings, key: string, force: boolean, rebuild = false) {
   const session = await getRoleplaySession(ownerId, id);
   const previousSummary = rebuild ? "" : session.summary;
   const remaining = session.messages.filter(m => m.sequence > (rebuild ? 0 : session.summaryThrough));

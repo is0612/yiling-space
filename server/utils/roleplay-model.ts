@@ -1,9 +1,9 @@
 import { createError } from "h3";
 import { buildChatCompletionsEndpoint } from "./chat-model-config";
 import { readModelUsage, recordModelUsage, type ModelUsageTokens } from "./model-usage";
-import { contextCost, type RoleplayApiMessage, type RoleplaySettings } from "./roleplay-context";
+import { contextCost, type RoleplayApiMessage, type RoleplayRuntimeSettings } from "./roleplay-context";
 
-export async function callRoleplayModel(settings: RoleplaySettings, apiKey: string, messages: RoleplayApiMessage[], accounting: { ownerId: string; sessionId: string; characterId?: string | null; summary?: boolean }): Promise<string> {
+export async function callRoleplayModel(settings: RoleplayRuntimeSettings, apiKey: string, messages: RoleplayApiMessage[], accounting: { ownerId: string; sessionId: string; characterId?: string | null; summary?: boolean }): Promise<string> {
   if (!apiKey) throw createError({ statusCode: 503, statusMessage: "请先配置角色扮演模型 API Key。" });
   if (contextCost(messages) > settings.contextBudgetTokens) throw createError({ statusCode: 413, statusMessage: "角色扮演上下文超过预算，请缩短人设或消息、压缩历史或提高预算。" });
   const endpoint = buildChatCompletionsEndpoint(settings.apiBaseUrl);
