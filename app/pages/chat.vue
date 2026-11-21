@@ -565,8 +565,14 @@ watch(id, (next, previous) => {
 
 <template>
   <div class="page-wrap chat-page">
-    <div v-if="id" class="chat-character-context">
-      <span class="avatar chat-character-avatar" :class="'avatar-' + (current?.avatarTone || 'mint')">{{ characterInitial }}</span>
+    <div
+      v-if="id"
+      class="chat-character-context"
+    >
+      <span
+        class="avatar chat-character-avatar"
+        :class="'avatar-' + (current?.avatarTone || 'mint')"
+      >{{ characterInitial }}</span>
       <strong>{{ current?.name || character?.name || "当前角色" }}</strong>
       <button
         type="button"

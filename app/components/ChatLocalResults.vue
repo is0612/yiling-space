@@ -88,13 +88,21 @@ onBeforeUnmount(() => { disposed = true; version++; clearTimeout(timer); documen
         <el-tag
           size="small"
           :type="row.status === 'FAILED' ? 'danger' : 'info'"
-        >{{ browserStatus[row.status] ?? row.status }}</el-tag>
+        >
+          {{ browserStatus[row.status] ?? row.status }}
+        </el-tag>
       </div>
       <p>{{ row.url }}</p>
       <p>{{ row.actions.map(actionLine).join("；") }}</p>
-      <p v-if="row.status === 'PENDING'">还没有操作网页，请到「本地观察 → 网页操作」核对并批准。</p>
-      <p v-if="row.error">失败原因：{{ row.error }}</p>
-      <p v-if="row.result?.steps?.length">已执行 {{ row.result.steps.filter(step => step.ok).length }} 步；阻止 {{ row.result.blockedRequests ?? 0 }} 个请求。</p>
+      <p v-if="row.status === 'PENDING'">
+        还没有操作网页，请到「本地观察 → 网页操作」核对并批准。
+      </p>
+      <p v-if="row.error">
+        失败原因：{{ row.error }}
+      </p>
+      <p v-if="row.result?.steps?.length">
+        已执行 {{ row.result.steps.filter(step => step.ok).length }} 步；阻止 {{ row.result.blockedRequests ?? 0 }} 个请求。
+      </p>
     </article>
     <article
       v-for="task in tasks"

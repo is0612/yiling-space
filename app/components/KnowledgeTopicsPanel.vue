@@ -298,118 +298,367 @@ async function restoreRevision(revision: number) {
 <template>
   <section class="knowledge-section topic-manager">
     <div class="section-heading">
-      <div><span class="eyebrow">TOPICS</span><h2>知识主题</h2><p class="topic-intro">将相关知识整理到同一主题，保留条目来源与版本记录。</p></div>
+      <div>
+        <span class="eyebrow">TOPICS</span><h2>知识主题</h2><p class="topic-intro">
+          将相关知识整理到同一主题，保留条目来源与版本记录。
+        </p>
+      </div>
       <div class="topic-toolbar">
-        <el-radio-group v-model="status" size="small">
-          <el-radio-button value="ACTIVE">活动主题</el-radio-button>
-          <el-radio-button value="ARCHIVED">已归档</el-radio-button>
+        <el-radio-group
+          v-model="status"
+          size="small"
+        >
+          <el-radio-button value="ACTIVE">
+            活动主题
+          </el-radio-button>
+          <el-radio-button value="ARCHIVED">
+            已归档
+          </el-radio-button>
         </el-radio-group>
-        <el-button type="primary" @click="openCreate">新建主题</el-button>
-        <el-button :loading="loading" @click="loadTopics">刷新</el-button>
+        <el-button
+          type="primary"
+          @click="openCreate"
+        >
+          新建主题
+        </el-button>
+        <el-button
+          :loading="loading"
+          @click="loadTopics"
+        >
+          刷新
+        </el-button>
       </div>
     </div>
 
-    <div v-loading="loading" class="topic-layout">
+    <div
+      v-loading="loading"
+      class="topic-layout"
+    >
       <aside class="topic-list">
-        <button v-for="topic in topics" :key="topic.id" type="button" class="topic-list-item" :class="{ 'is-active': selectedId === topic.id }" @click="selectedId = topic.id">
+        <button
+          v-for="topic in topics"
+          :key="topic.id"
+          type="button"
+          class="topic-list-item"
+          :class="{ 'is-active': selectedId === topic.id }"
+          @click="selectedId = topic.id"
+        >
           <strong>{{ topic.name }}</strong>
           <span>{{ topic.memberCount }} 条知识 · v{{ topic.revision }}</span>
         </button>
-        <el-empty v-if="!loading && !topics.length" :description="status === 'ARCHIVED' ? '暂无已归档主题。' : '还没有主题，点击「新建主题」开始整理。'" />
+        <el-empty
+          v-if="!loading && !topics.length"
+          :description="status === 'ARCHIVED' ? '暂无已归档主题。' : '还没有主题，点击「新建主题」开始整理。'"
+        />
       </aside>
 
-      <div v-if="detailLoading" v-loading="true" class="topic-detail topic-detail-loading" aria-label="正在加载主题详情" />
-      <div v-else-if="detail" class="topic-detail">
+      <div
+        v-if="detailLoading"
+        v-loading="true"
+        class="topic-detail topic-detail-loading"
+        aria-label="正在加载主题详情"
+      />
+      <div
+        v-else-if="detail"
+        class="topic-detail"
+      >
         <div class="topic-detail-heading">
           <div><h3>{{ detail.name }}</h3><p>{{ detail.description || "暂无主题说明" }}</p></div>
           <div class="topic-toolbar">
-            <el-button @click="openHistory">历史版本</el-button>
-            <el-button :disabled="detail.status !== 'ACTIVE' || splitCandidates.length < 2" @click="openSplit">拆分主题</el-button>
-            <el-button :disabled="detail.status !== 'ACTIVE' || !mergeCandidates.length" @click="openMerge">合并到…</el-button>
-            <el-button :disabled="detail.status === 'MERGED'" @click="openEdit">编辑</el-button>
-            <el-button :disabled="detail.status === 'MERGED'" @click="toggleArchive">{{ detail.status === "ARCHIVED" ? "恢复主题" : "归档主题" }}</el-button>
+            <el-button @click="openHistory">
+              历史版本
+            </el-button>
+            <el-button
+              :disabled="detail.status !== 'ACTIVE' || splitCandidates.length < 2"
+              @click="openSplit"
+            >
+              拆分主题
+            </el-button>
+            <el-button
+              :disabled="detail.status !== 'ACTIVE' || !mergeCandidates.length"
+              @click="openMerge"
+            >
+              合并到…
+            </el-button>
+            <el-button
+              :disabled="detail.status === 'MERGED'"
+              @click="openEdit"
+            >
+              编辑
+            </el-button>
+            <el-button
+              :disabled="detail.status === 'MERGED'"
+              @click="toggleArchive"
+            >
+              {{ detail.status === "ARCHIVED" ? "恢复主题" : "归档主题" }}
+            </el-button>
           </div>
         </div>
-        <div class="topic-meta">版本 v{{ detail.revision }} · {{ detail.members.filter(member => member.valid).length }} 条有效知识 · {{ detail.members.length }} 条成员记录</div>
-
-        <div v-if="detail.status === 'MERGED'" class="topic-warning">
-          此主题已合并<template v-if="detail.mergedInto">至「{{ detail.mergedInto.name }}」</template>，仅保留历史追溯，不可继续编辑。
+        <div class="topic-meta">
+          版本 v{{ detail.revision }} · {{ detail.members.filter(member => member.valid).length }} 条有效知识 · {{ detail.members.length }} 条成员记录
         </div>
-        <div v-if="detail.status !== 'MERGED'" class="topic-add-members">
-          <el-select v-model="selectedItemIds" multiple filterable clearable collapse-tags :max-collapse-tags="3" placeholder="搜索并选择可用知识" style="width: 100%">
-            <el-option v-for="item in availableItems" :key="item.id" :label="item.title" :value="item.id" />
+
+        <div
+          v-if="detail.status === 'MERGED'"
+          class="topic-warning"
+        >
+          此主题已合并<template v-if="detail.mergedInto">
+            至「{{ detail.mergedInto.name }}」
+          </template>，仅保留历史追溯，不可继续编辑。
+        </div>
+        <div
+          v-if="detail.status !== 'MERGED'"
+          class="topic-add-members"
+        >
+          <el-select
+            v-model="selectedItemIds"
+            multiple
+            filterable
+            clearable
+            collapse-tags
+            :max-collapse-tags="3"
+            placeholder="搜索并选择可用知识"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in availableItems"
+              :key="item.id"
+              :label="item.title"
+              :value="item.id"
+            />
           </el-select>
-          <el-button type="primary" :disabled="!selectedItemIds.length" :loading="addingMembers" @click="addMembers">添加到主题</el-button>
+          <el-button
+            type="primary"
+            :disabled="!selectedItemIds.length"
+            :loading="addingMembers"
+            @click="addMembers"
+          >
+            添加到主题
+          </el-button>
         </div>
 
         <div class="topic-members">
-          <article v-for="member in detail.members" :key="member.id" class="topic-member">
+          <article
+            v-for="member in detail.members"
+            :key="member.id"
+            class="topic-member"
+          >
             <div>
               <strong>{{ member.item?.title || '知识条目不可用' }}</strong>
-              <p v-if="member.valid">{{ member.item?.category || "未分类" }}<span v-if="member.itemRevisionChanged"> · 加入主题后知识已更新</span></p>
-              <p v-else class="topic-invalid">成员不可用：{{ member.invalidReason || "状态异常" }}</p>
-              <p v-if="member.valid && member.item?.content" class="topic-member-preview">{{ member.item.content }}</p>
+              <p v-if="member.valid">
+                {{ member.item?.category || "未分类" }}<span v-if="member.itemRevisionChanged"> · 加入主题后知识已更新</span>
+              </p>
+              <p
+                v-else
+                class="topic-invalid"
+              >
+                成员不可用：{{ member.invalidReason || "状态异常" }}
+              </p>
+              <p
+                v-if="member.valid && member.item?.content"
+                class="topic-member-preview"
+              >
+                {{ member.item.content }}
+              </p>
             </div>
-            <el-button v-if="detail.status !== 'MERGED'" text type="danger" :disabled="!member.valid" @click="removeMember(member.itemId, member.item?.title || '该知识')">移除</el-button>
+            <el-button
+              v-if="detail.status !== 'MERGED'"
+              text
+              type="danger"
+              :disabled="!member.valid"
+              @click="removeMember(member.itemId, member.item?.title || '该知识')"
+            >
+              移除
+            </el-button>
           </article>
-          <el-empty v-if="!detail.members.length" description="这个主题还没有知识成员。" />
+          <el-empty
+            v-if="!detail.members.length"
+            description="这个主题还没有知识成员。"
+          />
         </div>
       </div>
-      <el-empty v-else-if="!loading && topics.length" description="选择一个主题查看详情。" />
+      <el-empty
+        v-else-if="!loading && topics.length"
+        description="选择一个主题查看详情。"
+      />
     </div>
 
-    <el-dialog v-model="formOpen" :title="editing ? '编辑主题' : '新建主题'" width="min(560px, 92vw)">
+    <el-dialog
+      v-model="formOpen"
+      :title="editing ? '编辑主题' : '新建主题'"
+      width="min(560px, 92vw)"
+    >
       <el-form label-position="top">
-        <el-form-item label="主题名称"><el-input v-model="formName" maxlength="80" show-word-limit placeholder="例如：表达习惯与互动偏好" /></el-form-item>
-        <el-form-item label="主题说明"><el-input v-model="formDescription" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="简要说明这个主题包含什么内容" /></el-form-item>
+        <el-form-item label="主题名称">
+          <el-input
+            v-model="formName"
+            maxlength="80"
+            show-word-limit
+            placeholder="例如：表达习惯与互动偏好"
+          />
+        </el-form-item>
+        <el-form-item label="主题说明">
+          <el-input
+            v-model="formDescription"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            placeholder="简要说明这个主题包含什么内容"
+          />
+        </el-form-item>
       </el-form>
-      <template #footer><el-button @click="formOpen = false">取消</el-button><el-button type="primary" :loading="saving" :disabled="!formName.trim()" @click="saveTopic">保存</el-button></template>
+      <template #footer>
+        <el-button @click="formOpen = false">
+          取消
+        </el-button><el-button
+          type="primary"
+          :loading="saving"
+          :disabled="!formName.trim()"
+          @click="saveTopic"
+        >
+          保存
+        </el-button>
+      </template>
     </el-dialog>
 
-    <el-dialog v-model="splitOpen" title="拆分主题" width="min(620px, 94vw)">
+    <el-dialog
+      v-model="splitOpen"
+      title="拆分主题"
+      width="min(620px, 94vw)"
+    >
       <el-form label-position="top">
         <el-form-item label="新主题名称">
-          <el-input v-model="splitName" maxlength="200" show-word-limit placeholder="输入拆分后主题的名称" />
+          <el-input
+            v-model="splitName"
+            maxlength="200"
+            show-word-limit
+            placeholder="输入拆分后主题的名称"
+          />
         </el-form-item>
         <el-form-item label="新主题说明">
-          <el-input v-model="splitDescription" type="textarea" :rows="3" maxlength="5000" show-word-limit placeholder="可选，说明新主题的范围" />
+          <el-input
+            v-model="splitDescription"
+            type="textarea"
+            :rows="3"
+            maxlength="5000"
+            show-word-limit
+            placeholder="可选，说明新主题的范围"
+          />
         </el-form-item>
         <el-form-item label="移动到新主题的知识">
-          <el-select v-model="splitMemberItemIds" multiple filterable collapse-tags :max-collapse-tags="4" placeholder="选择要拆分出去的有效知识" style="width: 100%">
-            <el-option v-for="member in splitCandidates" :key="member.itemId" :label="member.item?.title || member.itemId" :value="member.itemId" />
+          <el-select
+            v-model="splitMemberItemIds"
+            multiple
+            filterable
+            collapse-tags
+            :max-collapse-tags="4"
+            placeholder="选择要拆分出去的有效知识"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="member in splitCandidates"
+              :key="member.itemId"
+              :label="member.item?.title || member.itemId"
+              :value="member.itemId"
+            />
           </el-select>
           <small class="topic-dialog-hint">原主题至少保留一条有效知识。已失效成员不会出现在可选列表中。</small>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="splitOpen = false">取消</el-button>
-        <el-button type="primary" :loading="splitting" :disabled="!splitName.trim() || !splitMemberItemIds.length || splitMemberItemIds.length >= splitCandidates.length" @click="submitSplit">确认拆分</el-button>
+        <el-button @click="splitOpen = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="splitting"
+          :disabled="!splitName.trim() || !splitMemberItemIds.length || splitMemberItemIds.length >= splitCandidates.length"
+          @click="submitSplit"
+        >
+          确认拆分
+        </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="mergeOpen" title="合并主题" width="min(560px, 92vw)">
-      <p class="topic-dialog-copy">选择一个活动主题作为保留目标。当前主题将变为“已合并”，不会被物理删除。</p>
-      <el-select v-model="mergeTargetId" filterable placeholder="选择目标主题" style="width: 100%">
-        <el-option v-for="topic in mergeCandidates" :key="topic.id" :label="`${topic.name} · v${topic.revision} · ${topic.memberCount} 条知识`" :value="topic.id" />
+    <el-dialog
+      v-model="mergeOpen"
+      title="合并主题"
+      width="min(560px, 92vw)"
+    >
+      <p class="topic-dialog-copy">
+        选择一个活动主题作为保留目标。当前主题将变为“已合并”，不会被物理删除。
+      </p>
+      <el-select
+        v-model="mergeTargetId"
+        filterable
+        placeholder="选择目标主题"
+        style="width: 100%"
+      >
+        <el-option
+          v-for="topic in mergeCandidates"
+          :key="topic.id"
+          :label="`${topic.name} · v${topic.revision} · ${topic.memberCount} 条知识`"
+          :value="topic.id"
+        />
       </el-select>
       <template #footer>
-        <el-button @click="mergeOpen = false">取消</el-button>
-        <el-button type="danger" :loading="merging" :disabled="!mergeTargetId" @click="submitMerge">确认合并</el-button>
+        <el-button @click="mergeOpen = false">
+          取消
+        </el-button>
+        <el-button
+          type="danger"
+          :loading="merging"
+          :disabled="!mergeTargetId"
+          @click="submitMerge"
+        >
+          确认合并
+        </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="historyOpen" title="主题历史版本" width="min(680px, 94vw)">
-      <div v-loading="historyLoading" class="topic-history">
-        <article v-for="revision in revisions" :key="revision.id" class="topic-history-item">
+    <el-dialog
+      v-model="historyOpen"
+      title="主题历史版本"
+      width="min(680px, 94vw)"
+    >
+      <div
+        v-loading="historyLoading"
+        class="topic-history"
+      >
+        <article
+          v-for="revision in revisions"
+          :key="revision.id"
+          class="topic-history-item"
+        >
           <div><strong>版本 v{{ revision.revision }} · {{ revision.name }}</strong><p>{{ revision.description || "无主题说明" }}</p><small>{{ new Date(revision.createdAt).toLocaleString() }} · {{ revision.status }}</small></div>
-          <el-button v-if="detail && revision.revision < detail.revision && revision.status !== 'MERGED' && detail.status !== 'MERGED'" type="primary" plain @click="restoreRevision(revision.revision)">恢复此版本</el-button>
-          <el-tag v-else-if="detail?.revision === revision.revision" type="success">当前版本</el-tag>
+          <el-button
+            v-if="detail && revision.revision < detail.revision && revision.status !== 'MERGED' && detail.status !== 'MERGED'"
+            type="primary"
+            plain
+            @click="restoreRevision(revision.revision)"
+          >
+            恢复此版本
+          </el-button>
+          <el-tag
+            v-else-if="detail?.revision === revision.revision"
+            type="success"
+          >
+            当前版本
+          </el-tag>
         </article>
-        <el-empty v-if="!historyLoading && !revisions.length" description="暂无历史版本。" />
+        <el-empty
+          v-if="!historyLoading && !revisions.length"
+          description="暂无历史版本。"
+        />
       </div>
     </el-dialog>
 
-    <KnowledgeTopicDiscoveryPanel :character-id="characterId" :items="items" @changed="loadTopics" />
+    <KnowledgeTopicDiscoveryPanel
+      :character-id="characterId"
+      :items="items"
+      @changed="loadTopics"
+    />
   </section>
 </template>
 

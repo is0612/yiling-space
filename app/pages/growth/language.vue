@@ -401,7 +401,11 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
           </p>
           <footer class="record-footer">
             <span class="muted">
-              <el-tag v-if="item.reviewedBy === 'SELF'" size="small" type="warning">她自己收的</el-tag>
+              <el-tag
+                v-if="item.reviewedBy === 'SELF'"
+                size="small"
+                type="warning"
+              >她自己收的</el-tag>
               版本 {{ item.revision }} · 更新于 {{ dateTime(item.updatedAt) }}
             </span><div class="toolbar">
               <el-button

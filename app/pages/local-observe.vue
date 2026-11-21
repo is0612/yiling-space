@@ -853,7 +853,9 @@ onMounted(async () => {
             >
               Git
             </el-button>
-            <el-button @click="browserVisible = true">网页观察</el-button>
+            <el-button @click="browserVisible = true">
+              网页观察
+            </el-button>
             <el-button
               :type="pendingBrowserCount ? 'warning' : 'default'"
               @click="openBrowserActions"
@@ -996,7 +998,9 @@ onMounted(async () => {
             label="行"
             width="60"
           >
-            <template #default="{ row }">{{ row.line ?? "" }}</template>
+            <template #default="{ row }">
+              {{ row.line ?? "" }}
+            </template>
           </el-table-column>
           <el-table-column
             prop="preview"
@@ -1049,13 +1053,17 @@ onMounted(async () => {
             label="大小"
             width="86"
           >
-            <template #default="{ row }">{{ formatSize(row.size) }}</template>
+            <template #default="{ row }">
+              {{ formatSize(row.size) }}
+            </template>
           </el-table-column>
           <el-table-column
             label="修改时间"
             width="150"
           >
-            <template #default="{ row }">{{ formatDate(row.modifiedAt) }}</template>
+            <template #default="{ row }">
+              {{ formatDate(row.modifiedAt) }}
+            </template>
           </el-table-column>
         </el-table>
 
@@ -1272,7 +1280,9 @@ onMounted(async () => {
             label="时间"
             width="145"
           >
-            <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+            <template #default="{ row }">
+              {{ formatDate(row.createdAt) }}
+            </template>
           </el-table-column>
         </el-table>
         <div
@@ -1365,7 +1375,9 @@ onMounted(async () => {
             label="目录"
             width="100"
           >
-            <template #default="{ row }">{{ row.root.label }}</template>
+            <template #default="{ row }">
+              {{ row.root.label }}
+            </template>
           </el-table-column>
           <el-table-column
             label="命令"
@@ -1392,7 +1404,9 @@ onMounted(async () => {
             <span class="result-meta">{{ selectedCommand.cwd || "." }}</span>
           </div>
           <pre class="command-line">{{ selectedCommand.command }} {{ selectedCommand.args.join(" ") }}</pre>
-          <div class="write-reason">{{ selectedCommand.reason }}</div>
+          <div class="write-reason">
+            {{ selectedCommand.reason }}
+          </div>
           <el-alert
             v-if="selectedCommand.status === 'SUCCEEDED' || selectedCommand.status === 'FAILED'"
             :type="selectedCommand.status === 'SUCCEEDED' ? 'success' : 'error'"
@@ -1538,20 +1552,54 @@ onMounted(async () => {
                 :key="index"
               >
                 {{ step.title }} · {{ stepLabels[step.status] ?? step.status }}
-                <p v-if="step.note">{{ step.note }}</p>
+                <p v-if="step.note">
+                  {{ step.note }}
+                </p>
                 <div v-if="step.status === 'TODO' && !step.verifyWriteId && index === currentTaskStep && !taskIsClosed">
-                  <el-button text :disabled="taskBusy || taskDetailLoading" @click="promptTaskStep('done', index)">记录完成</el-button>
-                  <el-button text :disabled="taskBusy || taskDetailLoading" @click="promptTaskStep('fail', index)">记录失败</el-button>
+                  <el-button
+                    text
+                    :disabled="taskBusy || taskDetailLoading"
+                    @click="promptTaskStep('done', index)"
+                  >
+                    记录完成
+                  </el-button>
+                  <el-button
+                    text
+                    :disabled="taskBusy || taskDetailLoading"
+                    @click="promptTaskStep('fail', index)"
+                  >
+                    记录失败
+                  </el-button>
                   <template v-if="availableStepRequests.length">
-                    <el-select v-model="stepRequestChoice" placeholder="选择本任务的审批请求" :disabled="taskBusy || taskDetailLoading">
-                      <el-option v-for="item in availableStepRequests" :key="item.value" :value="item.value" :label="item.label" />
+                    <el-select
+                      v-model="stepRequestChoice"
+                      placeholder="选择本任务的审批请求"
+                      :disabled="taskBusy || taskDetailLoading"
+                    >
+                      <el-option
+                        v-for="item in availableStepRequests"
+                        :key="item.value"
+                        :value="item.value"
+                        :label="item.label"
+                      />
                     </el-select>
-                    <el-button text :disabled="!stepRequestChoice || taskBusy || taskDetailLoading" @click="linkTaskStep(index)">关联审批</el-button>
+                    <el-button
+                      text
+                      :disabled="!stepRequestChoice || taskBusy || taskDetailLoading"
+                      @click="linkTaskStep(index)"
+                    >
+                      关联审批
+                    </el-button>
                   </template>
                 </div>
               </li>
             </ol>
-            <p v-else class="muted">还没有执行步骤。</p>
+            <p
+              v-else
+              class="muted"
+            >
+              还没有执行步骤。
+            </p>
           </div>
           <div class="task-section">
             <b>写请求</b>
@@ -1594,7 +1642,10 @@ onMounted(async () => {
               >
                 {{ item.outcome }}
               </el-tag>
-              <span v-if="item.kind === 'WRITE_READBACK'" class="task-readback">{{ item.note }}</span>
+              <span
+                v-if="item.kind === 'WRITE_READBACK'"
+                class="task-readback"
+              >{{ item.note }}</span>
               <span v-else>{{ item.note }}</span>
             </div>
           </div>

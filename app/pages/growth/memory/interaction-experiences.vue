@@ -357,7 +357,9 @@ function dateTime(value?: string) {
               <strong>适用场景：</strong>{{ item.context || "未记录" }}
             </p>
             <blockquote><strong>反馈依据：</strong>{{ item.feedbackQuote }}</blockquote>
-            <p v-if="item.review"><strong>角色自审核{{ item.review.current ? '' : '（修改前）' }}：</strong>{{ ({ ACTIVE: '通过', PENDING: '待确认', REJECTED: '不通过' } as Record<string, string>)[item.review.status] }} · {{ item.review.reason }}</p>
+            <p v-if="item.review">
+              <strong>角色自审核{{ item.review.current ? '' : '（修改前）' }}：</strong>{{ ({ ACTIVE: '通过', PENDING: '待确认', REJECTED: '不通过' } as Record<string, string>)[item.review.status] }} · {{ item.review.reason }}
+            </p>
             <footer class="record-footer">
               <span class="muted">
                 召回权重 {{ weight(item.weight) }} · 仅原会话 · 形成于 {{ dateTime(item.createdAt) }}

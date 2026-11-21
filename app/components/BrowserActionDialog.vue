@@ -102,19 +102,63 @@ watch(visible, value => { if (value) void load(); });
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="网页操作审批" width="min(880px, 94vw)" append-to-body>
-    <el-alert type="info" :closable="false"
+  <el-dialog
+    v-model="visible"
+    title="网页操作审批"
+    width="min(880px, 94vw)"
+    append-to-body
+  >
+    <el-alert
+      type="info"
+      :closable="false"
       title="批准后才会执行，且只作用于这一次独立浏览器会话"
-      description="只允许本页点击、按文字点击、填写和滚动；提交表单、上传文件、跳转其他网站都会被阻止。" />
-    <el-alert v-if="errorText" type="error" :title="errorText" :closable="false" class="block" />
-    <el-alert v-if="message" type="success" :title="message" :closable="false" class="block" />
-    <pre v-if="detail" class="steps">{{ detail }}</pre>
-    <el-empty v-if="!busy && !rows.length" description="没有待批准的网页操作" />
-    <article v-for="row in rows" :key="row.id" class="row">
-      <p class="url">{{ row.url }}</p>
-      <p class="reason">原因：{{ row.reason }}</p>
-      <ol><li v-for="(step, index) in row.actions" :key="index">{{ stepLabel(step) }}</li></ol>
-      <p v-if="row.submitSelector" class="submit-note">
+      description="只允许本页点击、按文字点击、填写和滚动；提交表单、上传文件、跳转其他网站都会被阻止。"
+    />
+    <el-alert
+      v-if="errorText"
+      type="error"
+      :title="errorText"
+      :closable="false"
+      class="block"
+    />
+    <el-alert
+      v-if="message"
+      type="success"
+      :title="message"
+      :closable="false"
+      class="block"
+    />
+    <pre
+      v-if="detail"
+      class="steps"
+    >{{ detail }}</pre>
+    <el-empty
+      v-if="!busy && !rows.length"
+      description="没有待批准的网页操作"
+    />
+    <article
+      v-for="row in rows"
+      :key="row.id"
+      class="row"
+    >
+      <p class="url">
+        {{ row.url }}
+      </p>
+      <p class="reason">
+        原因：{{ row.reason }}
+      </p>
+      <ol>
+        <li
+          v-for="(step, index) in row.actions"
+          :key="index"
+        >
+          {{ stepLabel(step) }}
+        </li>
+      </ol>
+      <p
+        v-if="row.submitSelector"
+        class="submit-note"
+      >
         提交按钮：{{ row.submitSelector }} · 需要两步批准，第一步只填写，不会发出数据。
       </p>
       <el-alert
@@ -125,21 +169,66 @@ watch(visible, value => { if (value) void load(); });
         title="已经填好，等待你确认提交"
         description="下面列出实际填入的内容。确认后会重新打开页面、按同样的步骤填写，然后点提交按钮发出数据。"
       />
-      <pre v-if="row.status === 'FILLED' && row.result?.steps?.length" class="steps">{{ row.result.steps.map(step => `${step.ok ? '✓' : '✗'} ${step.action}${step.detail ? ` ${step.detail}` : ''}`).join('\n') }}</pre>
+      <pre
+        v-if="row.status === 'FILLED' && row.result?.steps?.length"
+        class="steps"
+      >{{ row.result.steps.map(step => `${step.ok ? '✓' : '✗'} ${step.action}${step.detail ? ` ${step.detail}` : ''}`).join('\n') }}</pre>
       <div class="actions">
-        <el-button :loading="previewBusy === row.id" :disabled="busy || submitBusy === row.id" @click="preview(row)">先看页面</el-button>
-        <el-button v-if="row.status === 'PENDING'" type="primary" :loading="busy" @click="approve(row)">批准并填写</el-button>
-        <el-button v-if="row.status === 'FILLED'" type="danger" :loading="submitBusy === row.id" @click="submit(row)">确认提交</el-button>
-        <el-button :disabled="busy || submitBusy === row.id" @click="reject(row)">{{ row.status === 'FILLED' ? '不提交了' : '拒绝' }}</el-button>
+        <el-button
+          :loading="previewBusy === row.id"
+          :disabled="busy || submitBusy === row.id"
+          @click="preview(row)"
+        >
+          先看页面
+        </el-button>
+        <el-button
+          v-if="row.status === 'PENDING'"
+          type="primary"
+          :loading="busy"
+          @click="approve(row)"
+        >
+          批准并填写
+        </el-button>
+        <el-button
+          v-if="row.status === 'FILLED'"
+          type="danger"
+          :loading="submitBusy === row.id"
+          @click="submit(row)"
+        >
+          确认提交
+        </el-button>
+        <el-button
+          :disabled="busy || submitBusy === row.id"
+          @click="reject(row)"
+        >
+          {{ row.status === 'FILLED' ? '不提交了' : '拒绝' }}
+        </el-button>
       </div>
-      <div v-if="previews[row.id]" class="preview">
-        <p class="reason">页面标题：{{ previews[row.id]!.title || "(无)" }}</p>
-        <img :src="previews[row.id]!.screenshot" alt="批准前预览的页面截图">
+      <div
+        v-if="previews[row.id]"
+        class="preview"
+      >
+        <p class="reason">
+          页面标题：{{ previews[row.id]!.title || "(无)" }}
+        </p>
+        <img
+          :src="previews[row.id]!.screenshot"
+          alt="批准前预览的页面截图"
+        >
         <details><summary>页面可见文字</summary><pre class="steps">{{ previews[row.id]!.text }}</pre></details>
       </div>
-      <p v-if="row.error" class="reason">失败原因：{{ row.error }}</p>
+      <p
+        v-if="row.error"
+        class="reason"
+      >
+        失败原因：{{ row.error }}
+      </p>
     </article>
-    <template #footer><el-button @click="visible = false">关闭</el-button></template>
+    <template #footer>
+      <el-button @click="visible = false">
+        关闭
+      </el-button>
+    </template>
   </el-dialog>
 </template>
 

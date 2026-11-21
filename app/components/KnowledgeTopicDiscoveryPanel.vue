@@ -159,10 +159,22 @@ async function loadRunsListOnly() {
         <h3>自动主题发现</h3>
         <p>选择正式知识，让知识助手寻找它们之间的联系。发现结果只会成为待审核建议，不会自动修改知识库。</p>
       </div>
-      <el-button type="primary" plain @click="openDiscovery">发现与审核建议</el-button>
+      <el-button
+        type="primary"
+        plain
+        @click="openDiscovery"
+      >
+        发现与审核建议
+      </el-button>
     </div>
 
-    <el-dialog v-model="open" title="主题发现与建议审核" width="min(1040px, 96vw)" top="4vh" destroy-on-close>
+    <el-dialog
+      v-model="open"
+      title="主题发现与建议审核"
+      width="min(1040px, 96vw)"
+      top="4vh"
+      destroy-on-close
+    >
       <div class="discovery-input">
         <div class="discovery-input-copy">
           <strong>发起一次发现</strong>
@@ -179,22 +191,43 @@ async function loadRunsListOnly() {
           placeholder="选择需要整理的正式知识"
           style="width: 100%"
         >
-          <el-option v-for="item in activeItems" :key="item.id" :label="item.title" :value="item.id">
+          <el-option
+            v-for="item in activeItems"
+            :key="item.id"
+            :label="item.title"
+            :value="item.id"
+          >
             <span>{{ item.title }}</span>
             <small class="option-meta">{{ item.category || "未分类" }}</small>
           </el-option>
         </el-select>
         <div class="discovery-input-actions">
           <span>{{ selectedInputIds.length }} / 50 条已选择</span>
-          <el-button type="primary" :disabled="!selectedInputIds.length" :loading="starting" @click="startRun">开始发现</el-button>
+          <el-button
+            type="primary"
+            :disabled="!selectedInputIds.length"
+            :loading="starting"
+            @click="startRun"
+          >
+            开始发现
+          </el-button>
         </div>
       </div>
 
       <div class="discovery-workspace">
-        <aside class="run-list" v-loading="loading">
+        <aside
+          v-loading="loading"
+          class="run-list"
+        >
           <div class="run-list-heading">
             <strong>发现批次</strong>
-            <el-button text :loading="loading" @click="refresh">刷新</el-button>
+            <el-button
+              text
+              :loading="loading"
+              @click="refresh"
+            >
+              刷新
+            </el-button>
           </div>
           <button
             v-for="run in runs"
@@ -208,10 +241,17 @@ async function loadRunsListOnly() {
             <strong>{{ run.inputCount }} 条知识 · {{ run.suggestionCount }} 条建议</strong>
             <small>{{ new Date(run.createdAt).toLocaleString() }}</small>
           </button>
-          <el-empty v-if="!loading && !runs.length" description="还没有发现批次。" :image-size="64" />
+          <el-empty
+            v-if="!loading && !runs.length"
+            description="还没有发现批次。"
+            :image-size="64"
+          />
         </aside>
 
-        <div class="run-detail" v-loading="loading && !runDetail">
+        <div
+          v-loading="loading && !runDetail"
+          class="run-detail"
+        >
           <template v-if="runDetail">
             <div class="run-detail-heading">
               <div>
@@ -223,16 +263,28 @@ async function loadRunsListOnly() {
               </el-tag>
             </div>
 
-            <div v-if="runDetail.status === 'QUEUED' || runDetail.status === 'PROCESSING'" class="run-notice">
+            <div
+              v-if="runDetail.status === 'QUEUED' || runDetail.status === 'PROCESSING'"
+              class="run-notice"
+            >
               后台正在分析。点击左侧刷新按钮可查看最新状态，不需要重复提交同一批知识。
             </div>
-            <div v-if="runDetail.status === 'FAILED' || runDetail.status === 'STALE'" class="run-notice is-warning">
+            <div
+              v-if="runDetail.status === 'FAILED' || runDetail.status === 'STALE'"
+              class="run-notice is-warning"
+            >
               {{ runDetail.lastError || (runDetail.status === 'STALE' ? "输入知识已变化，请重新发起发现。" : "任务执行失败，请检查知识助手配置后重试。") }}
             </div>
 
             <template v-if="runDetail.status === 'READY'">
-              <div class="review-summary">待审核 {{ pendingCount }} 条。你可以按建议采纳，也可以只选其中部分知识；未采纳的知识不会被移动或删除。</div>
-              <article v-for="suggestion in runDetail.suggestions" :key="suggestion.id" class="suggestion-card">
+              <div class="review-summary">
+                待审核 {{ pendingCount }} 条。你可以按建议采纳，也可以只选其中部分知识；未采纳的知识不会被移动或删除。
+              </div>
+              <article
+                v-for="suggestion in runDetail.suggestions"
+                :key="suggestion.id"
+                class="suggestion-card"
+              >
                 <div class="suggestion-title">
                   <div>
                     <strong>{{ suggestion.name }}</strong>
@@ -242,41 +294,112 @@ async function loadRunsListOnly() {
                     {{ suggestion.status === 'PENDING' ? "待审核" : suggestion.status === 'ACCEPTED' ? "已采纳" : "已忽略" }}
                   </el-tag>
                 </div>
-                <p class="suggestion-reason">整理理由：{{ suggestion.reason }}</p>
+                <p class="suggestion-reason">
+                  整理理由：{{ suggestion.reason }}
+                </p>
                 <el-checkbox-group
                   v-if="suggestion.status === 'PENDING'"
                   v-model="selectedMembers[suggestion.id]"
                   class="suggestion-members"
                 >
-                  <el-checkbox v-for="member in suggestion.members" :key="member.itemId" :value="member.itemId" :disabled="!member.item || member.item.status !== 'ACTIVE'">
+                  <el-checkbox
+                    v-for="member in suggestion.members"
+                    :key="member.itemId"
+                    :value="member.itemId"
+                    :disabled="!member.item || member.item.status !== 'ACTIVE'"
+                  >
                     {{ member.item?.title || "知识已不可用" }}
                     <small v-if="member.item">{{ member.item.category || "未分类" }} · v{{ member.item.revision }}</small>
                   </el-checkbox>
                 </el-checkbox-group>
-                <div v-else class="suggestion-members accepted-members">
-                  <span v-for="member in suggestion.acceptedMembers" :key="member.itemId">{{ member.item?.title || "知识已不可用" }}</span>
+                <div
+                  v-else
+                  class="suggestion-members accepted-members"
+                >
+                  <span
+                    v-for="member in suggestion.acceptedMembers"
+                    :key="member.itemId"
+                  >{{ member.item?.title || "知识已不可用" }}</span>
                 </div>
-                <div v-if="suggestion.status === 'PENDING'" class="suggestion-actions">
-                  <el-button type="primary" :loading="reviewingId === suggestion.id" :disabled="!!reviewingId || !(selectedMembers[suggestion.id]?.length)" @click="acceptSuggestion(suggestion.id, 'CREATE')">采纳并新建主题</el-button>
-                  <el-select v-model="applyTopicIds[suggestion.id]" clearable filterable placeholder="选择已有活动主题" style="width: 190px">
-                    <el-option v-for="topic in activeTopics" :key="topic.id" :label="topic.name" :value="topic.id" />
+                <div
+                  v-if="suggestion.status === 'PENDING'"
+                  class="suggestion-actions"
+                >
+                  <el-button
+                    type="primary"
+                    :loading="reviewingId === suggestion.id"
+                    :disabled="!!reviewingId || !(selectedMembers[suggestion.id]?.length)"
+                    @click="acceptSuggestion(suggestion.id, 'CREATE')"
+                  >
+                    采纳并新建主题
+                  </el-button>
+                  <el-select
+                    v-model="applyTopicIds[suggestion.id]"
+                    clearable
+                    filterable
+                    placeholder="选择已有活动主题"
+                    style="width: 190px"
+                  >
+                    <el-option
+                      v-for="topic in activeTopics"
+                      :key="topic.id"
+                      :label="topic.name"
+                      :value="topic.id"
+                    />
                   </el-select>
-                  <el-button :loading="reviewingId === suggestion.id" :disabled="!!reviewingId || !applyTopicIds[suggestion.id] || !(selectedMembers[suggestion.id]?.length)" @click="acceptSuggestion(suggestion.id, 'APPLY')">加入已有主题</el-button>
-                  <el-button text type="danger" :loading="reviewingId === suggestion.id" :disabled="!!reviewingId" @click="dismissSuggestion(suggestion.id)">忽略</el-button>
+                  <el-button
+                    :loading="reviewingId === suggestion.id"
+                    :disabled="!!reviewingId || !applyTopicIds[suggestion.id] || !(selectedMembers[suggestion.id]?.length)"
+                    @click="acceptSuggestion(suggestion.id, 'APPLY')"
+                  >
+                    加入已有主题
+                  </el-button>
+                  <el-button
+                    text
+                    type="danger"
+                    :loading="reviewingId === suggestion.id"
+                    :disabled="!!reviewingId"
+                    @click="dismissSuggestion(suggestion.id)"
+                  >
+                    忽略
+                  </el-button>
                 </div>
-                <div v-else-if="suggestion.status === 'ACCEPTED'" class="reviewed-note">已审核 · {{ suggestion.acceptedMemberItemIds?.length || 0 }} 条知识实际采纳</div>
+                <div
+                  v-else-if="suggestion.status === 'ACCEPTED'"
+                  class="reviewed-note"
+                >
+                  已审核 · {{ suggestion.acceptedMemberItemIds?.length || 0 }} 条知识实际采纳
+                </div>
               </article>
-              <div v-if="runDetail.ungroupedItems.length" class="ungrouped-block">
+              <div
+                v-if="runDetail.ungroupedItems.length"
+                class="ungrouped-block"
+              >
                 <strong>暂未发现明确主题的知识（{{ runDetail.ungroupedItems.length }}）</strong>
-                <p v-for="item in runDetail.ungroupedItems" :key="item.id">{{ item.title }}</p>
+                <p
+                  v-for="item in runDetail.ungroupedItems"
+                  :key="item.id"
+                >
+                  {{ item.title }}
+                </p>
               </div>
-              <el-empty v-if="!runDetail.suggestions.length" description="这批知识没有形成主题建议，未归组内容仍可在上方查看。" />
+              <el-empty
+                v-if="!runDetail.suggestions.length"
+                description="这批知识没有形成主题建议，未归组内容仍可在上方查看。"
+              />
             </template>
           </template>
-          <el-empty v-else description="选择一个发现批次，或先发起新的发现。" />
+          <el-empty
+            v-else
+            description="选择一个发现批次，或先发起新的发现。"
+          />
         </div>
       </div>
-      <template #footer><el-button @click="open = false">关闭</el-button></template>
+      <template #footer>
+        <el-button @click="open = false">
+          关闭
+        </el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
