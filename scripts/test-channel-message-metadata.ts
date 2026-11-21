@@ -38,6 +38,22 @@ assert.deepEqual(
   ["self", "all"],
   "@ 她 / @全体 要原样保留。",
 );
+assert.deepEqual(
+  buildStoredMessageMetadata({
+    ...base,
+    message: {
+      authorOpenId: "556", content: "我接这句",
+      quotedMessage: { messageId: "9001", content: "昨天说的那个", speaker: "甲", member: "member_2", isSelf: false },
+    },
+  }).quotedMessage,
+  { messageId: "9001", content: "昨天说的那个", speaker: "甲", member: "member_2", isSelf: false },
+  "引用了哪一句、被引用的是谁，都要落库；只留正文会让提炼时不知道这句话在接什么。",
+);
+assert.equal(
+  buildStoredMessageMetadata({ ...base, message: { authorOpenId: "556", content: "没引用" } }).quotedMessage,
+  undefined,
+  "没有引用段时不能凭空写 quotedMessage。",
+);
 const mentionMetadata = buildStoredMessageMetadata({
   ...base,
   message: {

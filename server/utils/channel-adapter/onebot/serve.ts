@@ -1532,6 +1532,24 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       return;
     }
 
+    /**
+     * 这一批引用到的原文：只在进程内窗口里查，最多解析 4 条。
+     *
+     * 群里引用很密，每条都回查网关会把回复拖慢；查不到就只给 id，
+     * 提示词明确要求「看不见就说看不见」，不许替对方补一句原文。
+     */
+    const quotedByMessageId = new Map(items.slice(0, 4).flatMap((item) => {
+      const replyTo = item.facts.replyToMessageId;
+      if (!replyTo) return [];
+      const quoted = groupContext.quoteOf(contextKey, replyTo);
+      return [[item.event.messageId, {
+        messageId: replyTo,
+        ...(quoted?.text ? { content: quoted.text } : {}),
+        ...(quoted?.speaker ? { speaker: quoted.speaker } : {}),
+        ...(quoted?.member ? { member: quoted.member } : {}),
+        isSelf: quoted?.isSelf === true,
+      }] as const];
+    }));
     const currentIds = items.map((item) => item.event.messageId);
     const result = await handleChannelBatch({
       platform: ONEBOT_PLATFORM,
@@ -1550,6 +1568,10 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         // 被 @ 的是谁：代号 + 显示名 + 身份，语境助手、最终回复与长期记忆共用这一份。
         ...(mentionInfoByMessageId.get(item.event.messageId)?.length
           ? { mentions: mentionInfoByMessageId.get(item.event.messageId)! }
+          : {}),
+        // 他引用的是哪一句：模型要能看出「这句是在接谁的话」，而不是只看到正文。
+        ...(quotedByMessageId.has(item.event.messageId)
+          ? { quotedMessage: quotedByMessageId.get(item.event.messageId)! }
           : {}),
         // 入模的正文把 @ 换成代号；落库仍是原样。
         promptContent: groupContext.formatText(contextKey, item.event.content),

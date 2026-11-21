@@ -493,11 +493,13 @@ export function buildGroupMemberDeltas(messages: ReadonlyArray<{
   return [...byUid.values()];
 }
 
-/** 群聊这一轮的上下文：本轮是否 @ 她、之前几句、她参与过的话题。 */export type ChannelGroupTurnContext = {
+/** 群聊这一轮的上下文：本轮是否 @ 她、之前几句、她参与过的话题。 */
+export type ChannelGroupTurnContext = {
   direct: boolean;
   background: Array<{
     id: string; at: number; member: string; speaker: string; text: string;
     mentions?: Array<{ target: "self" | "other" | "all"; member?: string; speaker?: string }>;
+    quoted?: { id: string; member?: string; speaker?: string; text?: string; isSelf: boolean };
   }>;
   analysisBackground?: Array<{
     id: string; at: number; member: string; speaker: string; text: string;
@@ -2370,6 +2372,16 @@ async function runChannelTurn(input: {
                 isOwner: message.speaker?.isOwner === true,
                 // 这一行 @ 的是谁：只给 `@member_n` 不够，模型不知道代号背后是谁。
                 ...(message.mentions?.length ? { mentions: message.mentions } : {}),
+                // 他引用的哪一句：带上作者和原文，模型才看得出这句在接谁的话。
+                ...(message.quotedMessage ? {
+                  quoted: {
+                    id: message.quotedMessage.messageId,
+                    ...(message.quotedMessage.member ? { member: message.quotedMessage.member } : {}),
+                    ...(message.quotedMessage.speaker ? { speaker: message.quotedMessage.speaker } : {}),
+                    ...(message.quotedMessage.content ? { content: message.quotedMessage.content } : {}),
+                    ...(message.quotedMessage.isSelf ? { isSelf: true } : {}),
+                  },
+                } : {}),
                 ...(message.occurredAt ? { occurredAt: message.occurredAt.toISOString() } : {}),
               })),
             }
@@ -2396,6 +2408,7 @@ async function runChannelTurn(input: {
                       speaker: line.speaker,
                       content: line.text,
                       ...(line.mentions?.length ? { mentions: line.mentions } : {}),
+                      ...(line.quoted ? { quoted: line.quoted } : {}),
                       occurredAt: new Date(line.at).toISOString(),
                     })),
                   }

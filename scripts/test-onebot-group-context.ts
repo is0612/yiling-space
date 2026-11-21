@@ -339,4 +339,22 @@ for (let i = 0; i < 140; i++) extended.remember("busy", facts({ messageId: `busy
 assert.equal(extended.background("busy", []).length, 40);
 assert.equal(extended.background("busy", [], { windowMs: minutes(15), maxMessages: 120, maxChars: 24000 }).length, 120);
 
-console.log("群聊上下文测试通过：成员代号、@ 结构化解析（顺序/QQ/显示名/同名不同 QQ）、@ 代号化、背景预算与 @ 对象、话题建立/候选/过期/续期上限、并行话题淘汰、@ 与引用解析、原始 @ QQ、群内归属（自述优先于群名片、查不到人就不上表）、@ 别人之后的续话窗口。");
+// 引用：窗口内的原文要能取到作者与正文；不在窗口里只留 id，不许编。
+const quoted = createGroupContext({ selfQq: SELF, now: () => now });
+quoted.remember("g:q", facts({ messageId: "q1", senderQq: "111", displayName: "甲", text: "昨天说的那个" }));
+quoted.remember("g:q", facts({ messageId: "q2", senderQq: "222", displayName: "乙", text: "我接这句", replyToMessageId: "q1" }));
+quoted.remember("g:q", facts({ messageId: "q3", senderQq: "222", displayName: "乙", text: "接旧的", replyToMessageId: "missing-id" }));
+assert.deepEqual(quoted.quoteOf("g:q", "q1"), {
+  id: "q1", member: quoted.memberCode("g:q", "111"), speaker: "甲", text: "昨天说的那个", isSelf: false,
+}, "引用要能取到被引用那条的作者与正文");
+assert.equal(quoted.quoteOf("g:q", "missing-id"), null, "窗口里没有就返回空，调用方不得猜");
+const backgrounds = quoted.background("g:q", []);
+assert.deepEqual(backgrounds.find(line => line.id === "q2")?.quoted, {
+  id: "q1", member: quoted.memberCode("g:q", "111"), speaker: "甲", text: "昨天说的那个", isSelf: false,
+});
+assert.deepEqual(backgrounds.find(line => line.id === "q3")?.quoted, { id: "missing-id", isSelf: false },
+  "查不到的引用只保留 id，正文为空");
+now += minutes(6);
+assert.equal(quoted.quoteOf("g:q", "q1"), null, "超出窗口时限的旧消息也不提供原文");
+
+console.log("群聊上下文测试通过：成员代号、@ 结构化解析（顺序/QQ/显示名/同名不同 QQ）、@ 代号化、背景预算与 @ 对象、话题建立/候选/过期/续期上限、并行话题淘汰、@ 与引用解析、原始 @ QQ、群内归属（自述优先于群名片、查不到人就不上表）、@ 别人之后的续话窗口、引用原文与作者、窗口外的引用只保留 id。");

@@ -43,7 +43,7 @@ try {
   const result = await generateConversationReply(input);
   assert.deepEqual(result.usedPreferenceIds, ["like"]);
   assert.match(captured, /this character's own confirmed likes/);
-  assert.match(captured, /conversation-retrieval-v78|YILING_CONVERSATION_REPLY_V78/);
+  assert.match(captured, /conversation-retrieval-v79|YILING_CONVERSATION_REPLY_V79/);
   silent = true;
   const resultSilent = await generateConversationReply({ ...input, groupChat: true, allowSilent: true, transcript: [{ id: "msg", speaker: "群友", content: "星空" }] });
   assert.deepEqual(resultSilent.usedPreferenceIds, []);

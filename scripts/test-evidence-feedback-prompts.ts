@@ -21,7 +21,7 @@ const base = { characterName: "测试角色", characterPrompt: "轻松直率，�
 };
 try {
   const result = await generateConversationReply(base);
-  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v78");
+  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v79");
   const system = request!.messages.find(message => message.role === "system")!.content;
   const payload = request!.messages.find(message => message.role === "user")!.content;
   assert(system.includes("current server-supplied capabilities and fresh retrieved original evidence take precedence"));

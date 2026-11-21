@@ -69,6 +69,17 @@ export type GroupBackgroundLine = {
   text: string;
   /** 这条背景里 @ 的对象；模型看背景时也要知道 @member_n 指的是谁。 */
   mentions?: Array<{ target: GroupMentionTarget; member?: string; speaker?: string }>;
+  /** 这条背景引用的是哪一句（窗口内能查到原文时才有）。 */
+  quoted?: GroupQuotedLine;
+};
+
+/** 被引用那条：谁说的、说了什么。查不到原文时只有 id，调用方不得补猜。 */
+export type GroupQuotedLine = {
+  id: string;
+  member?: string;
+  speaker?: string;
+  text?: string;
+  isSelf: boolean;
 };
 
 export type GroupTopicAnchor = { id: string; label: string };
@@ -310,6 +321,28 @@ export class GroupContext {
     return out;
   }
 
+  /**
+   * 被引用那条的原文与作者；不在窗口里就返回 null。
+   *
+   * 只查进程内窗口，不为一句引用去调网关：群里引用很频繁，每条一次 HTTP
+   * 会把回复拖慢到没法用。查不到就只给 id，提示词要求「不知道就说不知道」。
+   */
+  quoteOf(key: string, replyToMessageId: string, maxAgeMs = this.windowMs): GroupQuotedLine | null {
+    if (!replyToMessageId) return null;
+    const state = this.state(key);
+    const now = this.now();
+    const found = state.messages.find((message) =>
+      message.messageId === replyToMessageId && now - message.at <= maxAgeMs);
+    if (!found) return null;
+    return {
+      id: found.messageId,
+      member: this.memberCode(key, found.senderQq),
+      speaker: found.displayName,
+      text: this.truncate(this.formatText(key, found.text)),
+      isSelf: Boolean(this.selfQq) && found.senderQq === this.selfQq,
+    };
+  }
+
   /** 本轮之外、仍在窗口内的背景，按时间正序；超预算时从最旧的开始丢。 */
   background(key: string, excludeIds: readonly string[], limits?: { windowMs: number; maxMessages: number; maxChars: number }): GroupBackgroundLine[] {
     const state = this.state(key);
@@ -331,6 +364,9 @@ export class GroupContext {
         speaker: message.displayName,
         text: this.truncate(this.formatText(key, message.text)),
         ...(mentions.length ? { mentions } : {}),
+        ...(message.replyToMessageId
+          ? { quoted: this.quoteOf(key, message.replyToMessageId) ?? { id: message.replyToMessageId, isSelf: false } }
+          : {}),
       });
     }
     // 从最旧的开始丢，直到总量进预算；至少保留最后一条。
