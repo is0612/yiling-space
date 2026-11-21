@@ -713,7 +713,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; clo
 <style scoped>
 .preferences-page { display: grid; gap: 22px; padding: 28px; color: var(--text-2); }
 .record-heading, .record-footer, .filters, .toolbar, .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.eyebrow { color: #728097; font-size: 12px; }
+.eyebrow { color: var(--dim); font-size: 12px; }
 h1 { margin: 8px 0 10px; font-size: 22px; }
 h2 { margin: 0; font-size: 18px; }
 h3 { font-size: 16px; }
@@ -728,15 +728,15 @@ p { font-size: 14px; line-height: 1.7; }
 .record-title h2 { overflow-wrap: anywhere; }
 .reason, .source-snapshot p, .source-option p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .muted { color: var(--dim); font-size: 12px; line-height: 1.7; }
-.record-footer { border-top: 1px solid #eef1f5; margin-top: 16px; padding-top: 12px; }
+.record-footer { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
 .source-details { padding: 12px; border-radius: 8px; background: var(--surface-2); }
-.source-details summary { cursor: pointer; font-size: 14px; color: #536a86; }
+.source-details summary { cursor: pointer; font-size: 14px; color: var(--text-2); }
 .source-snapshot { margin-top: 12px; padding: 12px; border: 0; border-radius: 8px; background: var(--surface); }
 .source-snapshot strong { font-size: 14px; }
 .source-snapshot p { margin: 8px 0; }
-.source-picker { border-top: 1px solid #e8edf4; padding-top: 18px; margin-bottom: 18px; }
+.source-picker { border-top: 1px solid var(--line); padding-top: 18px; margin-bottom: 18px; }
 .source-list { min-height: 100px; max-height: 320px; overflow: auto; margin: 10px 0; }
-.source-option { padding: 12px 8px; border-bottom: 1px solid #edf0f5; }
+.source-option { padding: 12px 8px; border-bottom: 1px solid var(--line); }
 .source-option p { margin: 5px 0; font-size: 14px; }
 .source-option :deep(.el-checkbox) { height: auto; max-width: 100%; }
 .source-option :deep(.el-checkbox__label) { white-space: normal; overflow-wrap: anywhere; }

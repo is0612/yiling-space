@@ -1606,7 +1606,7 @@ onMounted(() => load(1));
 }
 .sel-del:hover { color: var(--red-text); }
 .sel-del.is-armed { background: var(--red); color: var(--surface); }
-.sel-del.is-armed:hover { background: #b32136; }
+.sel-del.is-armed:hover { background: var(--red); }
 .sel-del:disabled { cursor: default; }
 
 /* ── 网格：1440 = 四列 × 三行 = 12 张 ── */
@@ -1888,7 +1888,7 @@ onMounted(() => load(1));
 .opt:hover { background: var(--surface-2); }
 .opt input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .opt:has(input:checked) { background: var(--brand-soft); box-shadow: inset 0 0 0 1px var(--brand-line); color: var(--brand-strong); }
-.opt.is-block:has(input:checked) { background: var(--red-soft); box-shadow: inset 0 0 0 1px #f3c9cf; color: var(--red-text); }
+.opt.is-block:has(input:checked) { background: var(--red-soft); box-shadow: inset 0 0 0 1px var(--red); color: var(--red-text); }
 .opt:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 2px; }
 .opt-wide { width: max-content; max-width: 100%; justify-self: start; justify-content: flex-start; gap: 4px; }
 .pv-on { display: none; }

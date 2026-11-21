@@ -778,13 +778,13 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   background: var(--red-soft);
   padding: 10px 14px;
-  color: #8c2434;
+  color: var(--red-text);
   font-size: 14px;
   text-align: left;
   cursor: pointer;
   transition: background .14s var(--ease);
 }
-.alert-row:hover { background: #fbe0e4; }
+.alert-row:hover { background: var(--red-soft); }
 .alert-row .el-icon { flex: none; font-size: 14px; }
 .alert-row strong { font-weight: 700; }
 .alert-row .go { margin-left: auto; }
@@ -975,7 +975,7 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   background: var(--red-soft);
   padding: 11px 14px;
-  color: #8c2434;
+  color: var(--red-text);
   font-size: 12px;
   line-height: 1.75;
 }

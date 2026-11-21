@@ -794,7 +794,7 @@ function runCharacterCommand(command: string) {
    左侧竖条和侧栏 `.sidebar-link.active::before` 是同一套「当前项」语汇，灰度下照样看得见 */
 .chars-a .char-tab.is-on,
 .chars-a .char-tab.is-on:hover {
-  background: #fff8fa;
+  background: var(--brand-soft);
   box-shadow: inset 0 0 0 1px var(--brand-line), inset 3px 0 0 var(--brand);
 }
 .chars-a .char-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
@@ -815,7 +815,7 @@ function runCharacterCommand(command: string) {
 .chars-a .char-tab.is-add:hover,
 .chars-a .char-tab.is-add:focus-visible {
   border-color: var(--brand-line);
-  background: #fff8fa;
+  background: var(--brand-soft);
   color: var(--brand-strong);
 }
 .chars-a .char-tab .avatar { width: 38px; height: 38px; font-size: 16px; }

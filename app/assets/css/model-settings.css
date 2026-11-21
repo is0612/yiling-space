@@ -1,7 +1,7 @@
 /* Unified model workspace only. All selectors are scoped beneath its root. */
 .model-settings-workspace { max-width: 1760px; margin: 0 auto; }
 .model-settings-workspace .model-workspace-eyebrow { display: inline-flex; align-items: center; gap: 7px; color: var(--brand-strong); font-size: 12px; font-weight: 600; letter-spacing: .08em; }
-.model-settings-workspace .model-role-indicator { display: inline-flex; align-items: center; gap: 7px; max-width: 240px; color: var(--text-2); font-size: 13px; overflow-wrap: anywhere; }
+.model-settings-workspace .model-role-indicator { display: inline-flex; align-items: center; gap: 7px; max-width: 240px; color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
 .model-settings-workspace .model-role-indicator > span { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--brand); }
 .model-settings-workspace .model-workspace-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); align-items: start; gap: 24px; }
 .model-settings-workspace .model-capability-sidebar { position: sticky; top: 78px; min-width: 0; padding: 18px 12px 14px; border-radius: 12px; background: var(--surface); }
@@ -11,7 +11,7 @@
 .model-settings-workspace .model-capability-nav { display: flex; flex-direction: column; gap: 20px; padding-top: 18px; }
 .model-settings-workspace .model-nav-group { min-width: 0; }
 .model-settings-workspace .model-nav-group h2 { display: flex; align-items: center; gap: 7px; margin: 0 10px 8px; color: var(--dim); font-size: 12px; font-weight: 500; line-height: 1.6; }
-.model-settings-workspace .model-nav-group .el-button { display: flex; width: 100%; min-height: 40px; height: auto; justify-content: space-between; margin: 3px 0 0; border: 1px solid transparent; border-radius: 8px; padding: 10px; background: transparent; color: var(--text-2); font-size: 13px; line-height: 1.4; text-align: left; white-space: normal; }
+.model-settings-workspace .model-nav-group .el-button { display: flex; width: 100%; min-height: 40px; height: auto; justify-content: space-between; margin: 3px 0 0; border: 1px solid transparent; border-radius: 8px; padding: 10px; background: transparent; color: var(--text-2); font-size: 14px; line-height: 1.4; text-align: left; white-space: normal; }
 .model-settings-workspace .model-nav-group .el-button > span { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 6px; }
 .model-settings-workspace .model-nav-label { display: inline-flex; align-items: center; gap: 8px; }
 .model-settings-workspace .model-nav-group .el-button .el-icon { flex: none; color: var(--dim); font-size: 16px; opacity: 1; }
@@ -38,11 +38,11 @@
 .model-settings-workspace .model-settings-panel .brick { box-shadow: none; }
 .model-settings-workspace .model-settings-panel .field { min-width: 0; }
 .model-settings-workspace .model-settings-panel .el-input, .model-settings-workspace .model-settings-panel .el-select { max-width: 100%; }
-.model-settings-workspace .model-settings-panel .el-form-item__label { color: var(--text-2); font-size: 13px; }
+.model-settings-workspace .model-settings-panel .el-form-item__label { color: var(--text-2); font-size: 12px; }
 .model-settings-workspace .model-settings-panel .el-form-item__content { min-width: 0; }
 .model-settings-workspace .model-settings-panel .el-input__wrapper, .model-settings-workspace .model-settings-panel .el-select__wrapper { min-height: 36px; border-radius: 7px; }
-.model-settings-workspace .model-settings-panel .el-input__inner, .model-settings-workspace .model-settings-panel .el-select__placeholder { font-size: 13px; }
-.model-settings-workspace .model-settings-panel .card-head h2 { font-size: 15px; line-height: 1.5; }
+.model-settings-workspace .model-settings-panel .el-input__inner, .model-settings-workspace .model-settings-panel .el-select__placeholder { font-size: 14px; }
+.model-settings-workspace .model-settings-panel .card-head h2 { font-size: 16px; line-height: 1.5; }
 @media (max-width: 1080px) {
   .model-settings-workspace .model-workspace-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 18px; }
   .model-settings-workspace .model-settings-panel .knob { grid-template-columns: minmax(0, 1fr) 220px; gap: 8px 16px; }

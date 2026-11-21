@@ -308,7 +308,7 @@ button, input, textarea, select { font: inherit; }
 .character-switcher-trigger { display: flex; width: 100%; align-items: center; gap: 9px; border: 0; border-radius: 8px; background: transparent; padding: 8px 6px; color: var(--text-2); text-align: left; cursor: pointer; }
 .character-switcher-trigger:hover { background: var(--surface); }
 .character-switcher-trigger:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.character-switcher-avatar { font-size: 13px; }
+.character-switcher-avatar { font-size: 12px; }
 .character-switcher-copy { display: flex; min-width: 0; flex-direction: column; }
 .character-switcher-copy .admin-name, .character-switcher-copy .admin-note { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .character-switcher-arrow { flex: none; color: var(--faint); font-size: 12px; }

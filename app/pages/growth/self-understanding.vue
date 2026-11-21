@@ -517,6 +517,7 @@ onBeforeUnmount(() => { sequence++; });
 .fchip.on b { color: var(--brand-btn); }
 .fchip:disabled { opacity: .5; cursor: default; }
 
+/* token-allow: mask-image 里的 #000 是透明度通道，不参与配色，换成令牌反而没意义 */
 .list { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--line); scrollbar-width: thin; mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); }
 .ev { list-style: none; margin: 0; padding: 0; }
 .ev li { display: grid; grid-template-columns: 7px 54px minmax(0, 1fr) 58px; gap: 10px; align-items: center; min-height: 58px; padding: 7px 16px; border-bottom: 1px solid var(--line); }
@@ -538,6 +539,7 @@ onBeforeUnmount(() => { sequence++; });
 .ev-foot button:hover { border-color: var(--brand-btn); color: var(--brand-btn); }
 .empty-inline { margin: 0; padding: 20px 16px; font-size: 12px; line-height: 20px; color: var(--dim); }
 
+/* token-allow: mask-image 里的 #000 是透明度通道，不参与配色，换成令牌反而没意义 */
 .tl { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 16px 0; scrollbar-width: thin; mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent); }
 .tl-item { position: relative; padding: 4px 0 8px 14px; border-left: 1px solid var(--line); }
 .tl-item:last-child { border-left-color: transparent; }

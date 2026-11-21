@@ -174,7 +174,7 @@ watch(visible, (open) => { if (open) void inspect(); });
 .git-block { margin-top: 16px; }
 .git-files { padding: 0; list-style: none; max-height: 220px; overflow: auto; }
 .git-files li { display: flex; align-items: center; gap: 8px; min-height: 30px; }
-.git-code { width: 28px; color: #8a94a6; font-family: Consolas, monospace; font-size: 12px; }
+.git-code { width: 28px; color: var(--dim); font-family: Consolas, monospace; font-size: 12px; }
 .git-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.git-diff { max-height: 240px; overflow: auto; padding: 12px; background: #f5f7fa; font-size: 12px; }
+.git-diff { max-height: 240px; overflow: auto; padding: 12px; background: var(--surface-2); font-size: 12px; }
 </style>

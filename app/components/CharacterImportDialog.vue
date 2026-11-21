@@ -648,7 +648,7 @@ function formatExportedAt(value: string | null): string {
 .drop:focus-visible,
 .drop.is-dragging {
   border-color: var(--brand-line);
-  background: #fff8fa;
+  background: var(--brand-soft);
   outline: none;
 }
 .drop.is-error { border-color: var(--rose); }
@@ -714,9 +714,9 @@ function formatExportedAt(value: string | null): string {
 .private-note {
   margin: var(--sp-3) 0 0;
   border-radius: 8px;
-  background: #fff8ec;
+  background: var(--amber-soft);
   padding: 8px 10px;
-  color: #8a5a12;
+  color: var(--amber);
   font-size: 12px;
   line-height: 1.6;
 }

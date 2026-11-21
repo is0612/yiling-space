@@ -179,7 +179,7 @@ watch(() => props.characterId, () => { void loadMonth(month.value); });
   font-weight: 600;
 }
 .calendar-day {
-  font-size: 13px;
+  font-size: 12px;
 }
 .calendar-count {
   font-size: 12px;

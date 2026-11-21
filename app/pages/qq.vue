@@ -2639,7 +2639,7 @@ a.chip.is-link:hover b { color: var(--brand-strong); }
 .run-state.is-on { color: var(--green); }
 .run-state.is-on .dot { background: var(--green); }
 .run-state.is-warn { color: var(--amber); }
-.run-state.is-warn .dot { background: #d79a2b; }
+.run-state.is-warn .dot { background: var(--amber); }
 /* 「自动找到」标：路径不是用户填的就说一声，省得他以为自己填过 */
 .run-tag { margin-left: 2px; border-radius: 999px; background: var(--surface-2); padding: 1px 7px; color: var(--dim); font-size: 12px; }
 /* 面板密码：一条虚线小砖，值用等宽字体、可整段选中。刻意不做成输入框 ——

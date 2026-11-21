@@ -1799,7 +1799,7 @@ watch(id, () => {
 .memory-actions .el-button + .el-button{margin-left:0}
 /* Element 默认 primary 是 #d94a76=4.05:1，换成本项目的深一档（5.25:1） */
 .memory-actions :deep(.el-button.is-link.el-button--primary){color:var(--brand-strong)}
-.memory-actions :deep(.el-button.is-link.el-button--primary:hover){color:#a8305a}
+.memory-actions :deep(.el-button.is-link.el-button--primary:hover){color:var(--brand-btn-h)}
 .row-more{display:inline-flex;align-items:center;gap:2px;border:0;border-radius:var(--radius-xs);background:none;padding:0 4px;color:var(--text-2);font-size:12px;font-weight:400;cursor:pointer;transition:color .14s var(--ease)}
 .row-more:hover{color:var(--text)}
 .row-more .el-icon{font-size:12px}
@@ -1808,7 +1808,7 @@ watch(id, () => {
 .timeline-marker{font-size:12px;font-weight:700}
 .timeline-marker.pill-green{background:var(--green-soft);color:var(--green)}
 .timeline-marker.pill-purple{background:var(--brand-soft);color:var(--brand-strong)}
-.timeline-marker.pill-blue{background:var(--blue-soft);color:#3d4dab}
+.timeline-marker.pill-blue{background:var(--blue-soft);color:var(--blue)}
 .timeline-marker.pill-amber{background:var(--amber-soft);color:var(--amber)}
 .timeline-marker.pill-gray{background:var(--surface-3);color:var(--text-2)}
 

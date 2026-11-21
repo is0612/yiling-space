@@ -154,10 +154,10 @@ onBeforeUnmount(() => { disposed = true; version++; clearTimeout(timer); documen
 </template>
 
 <style scoped>
-.local-results { margin: 16px 0; padding: 14px; border: 1px solid var(--border, #e4e9f2); border-radius: 12px; font-size: 13px; }
+.local-results { margin: 16px 0; padding: 14px; border: 1px solid var(--border, #e4e9f2); border-radius: 12px; font-size: 12px; }
 .result-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .result-task { padding: 12px 0; border-top: 1px solid var(--border, #e4e9f2); }
-.result-task pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 13px; }
+.result-task pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 12px; }
 .result-task p { overflow-wrap: anywhere; }
 .result-evidence { margin-top: 12px; }
 summary { cursor: pointer; }
