@@ -33,15 +33,24 @@ assert.equal(toCharacterDto(record).knowledgeCollectScope, "ALL");
 assert.equal(toCharacterDto({ ...record, modelConfig: { knowledgeCollectScope: "SELECTED" } }).knowledgeCollectScope, "SELECTED");
 assert.equal(toCharacterDto({ ...record, modelConfig: { knowledgeCollectScope: "WHATEVER" } }).knowledgeCollectScope, "ALL");
 
-/** 只回放我们要的行，并记下被问了几次 —— 「ALL 模式一次都不查库」本身是契约。 */
-function fakePrisma(row: Record<string, unknown> | null) {
-  const state = { calls: 0, lastArgs: undefined as unknown };
+/** 分开模拟身份排除与来源白名单：ALL 免白名单查询，但仍须查已验证 AI 身份。 */
+function fakePrisma(row: Record<string, unknown> | null, ai = false) {
+  const state = { calls: 0, identityCalls: 0, whitelistCalls: 0, lastArgs: undefined as unknown, identityArgs: undefined as unknown };
   return {
     state,
     client: {
       memoryScope: {
         findFirst: async (args: unknown) => {
           state.calls += 1;
+          const query = args as { select?: { externalIdentity?: unknown }; where?: { externalIdentity?: { kind?: string } } };
+          if (query.select?.externalIdentity || query.where?.externalIdentity?.kind === "AI") {
+            state.identityCalls += 1;
+            state.identityArgs = args;
+            return query.select?.externalIdentity
+              ? { externalIdentity: { kind: ai ? "AI" : "HUMAN" } }
+              : ai ? { id: "ai-scope" } : null;
+          }
+          state.whitelistCalls += 1;
           state.lastArgs = args;
           return row;
         },
@@ -58,7 +67,12 @@ type GroupDeps = Parameters<typeof isGroupKnowledgeSource>[0];
   assert.equal(await isPrivateKnowledgeSource(client as unknown as PrivateDeps, {
     characterId: "c1", memoryScopeId: "s1", isOwnerTurn: false, scope: "ALL",
   }), true);
-  assert.equal(state.calls, 0, "ALL 模式不该为白名单多查一次库");
+  assert.equal(state.identityCalls, 1, "ALL 仍须排除已验证的 AI 来源");
+  assert.equal(state.whitelistCalls, 0, "ALL 模式不该额外查来源白名单");
+  assert.deepEqual(state.identityArgs, {
+    where: { id: "s1", characterId: "c1" },
+    select: { externalIdentity: { select: { kind: true } } },
+  }, "身份检查必须限定角色与当前范围");
 }
 {
   // 主人的私聊挂 USER_PRIVATE 范围，那一行取 knowledgeCollectEnabled 只会是 false；
@@ -97,7 +111,13 @@ type GroupDeps = Parameters<typeof isGroupKnowledgeSource>[0];
     characterId: "c1", platform: "qq-onebot",
     evidence: [{ platformUid: "10001", isOwner: false }], scope: "ALL",
   }), true);
-  assert.equal(state.calls, 0);
+  assert.equal(state.identityCalls, 1, "群聊 ALL 仍须查 AI 身份");
+  assert.equal(state.whitelistCalls, 0, "群聊 ALL 不查来源白名单");
+  assert.deepEqual(state.identityArgs, {
+    where: { characterId: "c1", scopeType: "EXTERNAL_IDENTITY",
+      externalIdentity: { platform: "qq-onebot", platformUid: { in: ["10001"] }, kind: "AI" } },
+    select: { id: true },
+  }, "群聊身份排除必须限定角色、平台与证据账号");
 }
 {
   const { state, client } = fakePrisma(null);
@@ -105,7 +125,8 @@ type GroupDeps = Parameters<typeof isGroupKnowledgeSource>[0];
     characterId: "c1", platform: "qq-onebot",
     evidence: [{ platformUid: "10001", isOwner: false }, { platformUid: "10002", isOwner: true }], scope: "SELECTED",
   }), true);
-  assert.equal(state.calls, 0, "证据里有主人就不必再查白名单");
+  assert.equal(state.identityCalls, 1, "混合证据仍须排除非主人 AI 来源");
+  assert.equal(state.whitelistCalls, 0, "证据里有主人就不必再查白名单");
 }
 {
   const { state, client } = fakePrisma({ id: "scope-1" });
@@ -132,4 +153,25 @@ type GroupDeps = Parameters<typeof isGroupKnowledgeSource>[0];
   assert.equal(state.calls, 0);
 }
 
-console.log("Knowledge collect source tests passed: default ALL, owner always collected, fail-closed on unknown authors.");
+// ALL 只绕过来源白名单，不绕过 AI 排除；SELECTED 的授权也不能覆盖 AI 排除。
+for (const scope of ["ALL", "SELECTED"] as const) {
+  const privateAi = fakePrisma({ knowledgeCollectEnabled: true }, true);
+  assert.equal(await isPrivateKnowledgeSource(privateAi.client as unknown as PrivateDeps, {
+    characterId: "c1", memoryScopeId: "s1", isOwnerTurn: false, scope,
+  }), false, `${scope} 私聊不能自动收集 AI 来源`);
+  assert.equal(privateAi.state.identityCalls, 1);
+  assert.equal(privateAi.state.whitelistCalls, 0, "AI 命中后不再查白名单");
+
+  for (const includeOwner of [false, true]) {
+    const groupAi = fakePrisma({ id: "selected-scope" }, true);
+    assert.equal(await isGroupKnowledgeSource(groupAi.client as unknown as GroupDeps, {
+      characterId: "c1", platform: "qq-onebot", scope,
+      evidence: [{ platformUid: "10001", isOwner: false },
+        ...(includeOwner ? [{ platformUid: "10002", isOwner: true }] : [])],
+    }), false, `${scope} 群聊混有 AI 证据时不能由主人或白名单绕过排除`);
+    assert.equal(groupAi.state.identityCalls, 1);
+    assert.equal(groupAi.state.whitelistCalls, 0);
+  }
+}
+
+console.log("Knowledge collect source tests passed: default ALL, owner shortcut, scoped AI exclusion before whitelist, fail-closed on unknown authors.");

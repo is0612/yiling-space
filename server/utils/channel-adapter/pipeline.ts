@@ -22,6 +22,8 @@ import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client"
 import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem, type ConversationQuotedMessage } from "../chat-reply";
 import {
   formatMentionContent,
+  conversationSourcePolicy,
+  type ConversationSourcePolicy,
   readMessageMentions,
   sanitizeMessageMentions,
   type ConversationMessageMention,
@@ -179,6 +181,8 @@ export type ChannelTurnMessage = {
   /** Optional author display name for identity metadata. */
   authorDisplayName?: string;
   quotedMessage?: ConversationQuotedMessage;
+  kind?: "AI" | "HUMAN" | "UNKNOWN";
+  excludeFromGrowth?: true;
   content: string;
   /** 这条消息 @ 的是谁（self / other / all）。落库给忆泡提炼判断对象用。 */
   mentionTargets?: string[];
@@ -228,6 +232,8 @@ export type ChannelMessageInput = {
     ownerDisplayName?: string;
   };
   quotedMessage?: ConversationQuotedMessage;
+  kind?: "AI" | "HUMAN" | "UNKNOWN";
+  excludeFromGrowth?: true;
   content: string;
   /**
    * 这条消息 @ 的是谁：`self` = 她本人，`other` = 别的群成员/别的 bot，`all` = @全体。
@@ -293,6 +299,8 @@ export function buildStoredMessageMetadata(input: {
     speaker?: { isOwner?: boolean };
     voices?: unknown[];
     quotedMessage?: ConversationQuotedMessage;
+    kind?: "AI" | "HUMAN" | "UNKNOWN";
+    excludeFromGrowth?: true;
     content: string;
   };
 }): Prisma.InputJsonObject {
@@ -302,6 +310,7 @@ export function buildStoredMessageMetadata(input: {
     source: "channel",
     platform: input.platform,
     storedReason: input.storedReason,
+    ...conversationSourcePolicy(message),
     // 谁被 @ 了：提炼忆泡时用来判断「这句话是不是冲她说的」。
     ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
     // 被 @ 的具体是谁：代号 / 显示名 / 身份。昵称会改，认人仍以 qq 为准。
@@ -499,11 +508,18 @@ export type ChannelGroupTurnContext = {
   background: Array<{
     id: string; at: number; member: string; speaker: string; text: string;
     mentions?: Array<{ target: "self" | "other" | "all"; member?: string; speaker?: string }>;
-    quoted?: { id: string; member?: string; speaker?: string; text?: string; isSelf: boolean };
+    kind?: "AI" | "HUMAN" | "UNKNOWN";
+    readOnly?: true;
+    excludeFromGrowth?: true;
+    quoted?: { id: string; member?: string; speaker?: string; text?: string; isSelf?: boolean } & ConversationSourcePolicy;
   }>;
   analysisBackground?: Array<{
     id: string; at: number; member: string; speaker: string; text: string;
     mentions?: Array<{ target: "self" | "other" | "all"; member?: string; speaker?: string }>;
+    kind?: "AI" | "HUMAN" | "UNKNOWN";
+    readOnly?: true;
+    excludeFromGrowth?: true;
+    quoted?: { id: string; member?: string; speaker?: string; text?: string; isSelf?: boolean } & ConversationSourcePolicy;
   }>;
   anchors: Array<{ id: string; label: string }>;
   /** 群内归属（「X的Y」「@某人 主人夸我了」学来的）。空数组 = 这轮没学到，不注入。 */
@@ -2266,6 +2282,12 @@ async function runChannelTurn(input: {
     },
   };
   let generated;
+  const observedReadOnlyAiEvidence = isGroup && (
+    messages.some(row => Boolean(row.quotedMessage?.content) && conversationSourcePolicy(row.quotedMessage).excludeFromGrowth === true)
+    || [...backgroundLines, ...(input.group?.analysisBackground ?? [])].some(row =>
+      (Boolean(row.text) && conversationSourcePolicy(row).excludeFromGrowth === true)
+      || (Boolean(row.quoted?.text) && conversationSourcePolicy(row.quoted).excludeFromGrowth === true))
+  );
   const generationStartedAt = Date.now();
   try {
     generated = await generateGroupContextReply({
@@ -2277,7 +2299,11 @@ async function runChannelTurn(input: {
       onWorkingContext: async value => { pendingWorkingContext = value; },
       analysisBackground: input.group?.analysisBackground?.map(line => ({
         id: line.id, member: line.member, speaker: line.speaker, content: line.text,
+        ...conversationSourcePolicy(line),
         ...(line.mentions?.length ? { mentions: line.mentions } : {}),
+        ...(line.quoted ? { quoted: { id: line.quoted.id, member: line.quoted.member,
+          speaker: line.quoted.speaker, content: line.quoted.text, isSelf: line.quoted.isSelf,
+          ...conversationSourcePolicy(line.quoted) } } : {}),
         occurredAt: new Date(line.at).toISOString(),
       })),
       loadKnowledge: loadKnowledgeWithLexical,
@@ -2380,6 +2406,7 @@ async function runChannelTurn(input: {
                     ...(message.quotedMessage.speaker ? { speaker: message.quotedMessage.speaker } : {}),
                     ...(message.quotedMessage.content ? { content: message.quotedMessage.content } : {}),
                     ...(message.quotedMessage.isSelf ? { isSelf: true } : {}),
+                    ...conversationSourcePolicy(message.quotedMessage),
                   },
                 } : {}),
                 ...(message.occurredAt ? { occurredAt: message.occurredAt.toISOString() } : {}),
@@ -2407,8 +2434,15 @@ async function runChannelTurn(input: {
                       member: line.member,
                       speaker: line.speaker,
                       content: line.text,
+                      ...conversationSourcePolicy(line),
                       ...(line.mentions?.length ? { mentions: line.mentions } : {}),
-                      ...(line.quoted ? { quoted: line.quoted } : {}),
+                      ...(line.quoted ? { quoted: { id: line.quoted.id,
+                        ...(line.quoted.member ? { member: line.quoted.member } : {}),
+                        ...(line.quoted.speaker ? { speaker: line.quoted.speaker } : {}),
+                        ...(line.quoted.text ? { content: line.quoted.text } : {}),
+                        ...(typeof line.quoted.isSelf === "boolean" ? { isSelf: line.quoted.isSelf } : {}),
+                        ...conversationSourcePolicy(line.quoted),
+                      } } : {}),
                       occurredAt: new Date(line.at).toISOString(),
                     })),
                   }
@@ -2676,6 +2710,7 @@ async function runChannelTurn(input: {
             source: "channel",
             platform: input.platform,
             generatedBy: generated.localHistoryReceipt ? "local-history-receipt" : "llm",
+            ...(observedReadOnlyAiEvidence ? { excludeFromGrowth: true, growthExclusionReason: "read_only_ai_context" } : {}),
             model: generated.model,
             provider: generated.provider,
             promptTemplateVersion: generated.promptTemplateVersion,
@@ -2907,6 +2942,7 @@ export async function handleChannelMessage(input: ChannelMessageInput): Promise<
       ...(input.authorDisplayName ? { authorDisplayName: input.authorDisplayName } : {}),
       content: input.content,
       ...(input.quotedMessage ? { quotedMessage: input.quotedMessage } : {}),
+      ...conversationSourcePolicy(input),
       ...(input.images?.length ? { images: input.images } : {}),
       ...(input.voices?.length ? { voices: input.voices } : {}),
       ...(input.speaker ? { speaker: input.speaker } : {}),

@@ -15,6 +15,7 @@
  *   - 两份都没有内容时落一条 SKIPPED 标记，不生成空文本。
  */
 
+import { filterAutomaticSources } from "./automatic-source-policy";
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { resolveChatModelSettings } from "./chat-model-config";
 import { lockMemoryJobLease, type MemoryJobLease } from "./memory-job-lease";
@@ -272,7 +273,7 @@ export async function collectJournalSources(
       },
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
       take: 20,
-      select: { id: true, externalConversationId: true },
+      select: { id: true, externalConversationId: true, characterId: true },
     }),
     prisma.conversation.findMany({
       where: {
@@ -282,7 +283,7 @@ export async function collectJournalSources(
       },
       orderBy: [{ lastMessageAt: "desc" }, { updatedAt: "desc" }],
       take: 40,
-      select: { id: true, externalConversationId: true },
+      select: { id: true, externalConversationId: true, characterId: true },
     }),
   ]);
   const conversations = [...directConversations, ...groupConversations];
@@ -295,7 +296,8 @@ export async function collectJournalSources(
       select: { id: true, role: true, content: true, occurredAt: true, metadata: true },
     });
     const origin = conversationOriginLabel(conversation);
-    return rows.map((row) => ({
+    const eligible = await filterAutomaticSources(prisma, conversation.characterId, rows.map(row => ({ ...row, conversationId: conversation.id })));
+    return eligible.map((row) => ({
       ...row,
       conversationId: conversation.id,
       origin,

@@ -1,3 +1,4 @@
+import { filterAutomaticSources } from "./automatic-source-policy";
 import { resolveChatModelSettings } from "./chat-model-config";
 import { resolveCharacterApiKey } from "./credential-encryption";
 import { recordModelUsage, toUsageTokens } from "./model-usage";
@@ -103,7 +104,7 @@ async function loadPeriodSourceMessages(
   conversations: Array<{ id: string; externalConversationId: string | null }>,
   periodStart: Date,
   periodEnd: Date,
-  options: { perConversation?: number; budget?: number } = {},
+  options: { perConversation?: number; budget?: number; characterId: string },
 ): Promise<PeriodSourceMessage[]> {
   const perConversationWindow = Math.max(1, Math.trunc(options.perConversation ?? PER_CONVERSATION_SOURCE_WINDOW));
   const batches = await Promise.all(conversations.map(async (conversation) => {
@@ -114,7 +115,8 @@ async function loadPeriodSourceMessages(
       select: { id: true, role: true, eventType: true, content: true, occurredAt: true, metadata: true },
     });
     const origin = conversationOriginLabel(conversation);
-    return rows.map((row) => ({
+    const eligible = await filterAutomaticSources(prisma, options.characterId, rows.map(row => ({ ...row, conversationId: conversation.id })));
+    return eligible.map((row) => ({
       ...row,
       conversationId: conversation.id,
       origin,
@@ -310,7 +312,11 @@ export async function runDailyEventJob(
         events: Awaited<ReturnType<typeof analyzeMemoryPeriod>>["analysis"]["events"];
         evidence: PeriodSourceMessage[];
       }> = [];
-      for (const originalGroup of groups) {
+      for (const rawGroup of groups) {
+        // Keep raw chunks/cursors for progress, but only allowed evidence reaches extraction.
+        // An all-AI chunk still commits its cursor below and never calls a model.
+        const originalGroup = await filterAutomaticSources(prisma, scope.characterId, rawGroup);
+        if (!originalGroup.length) continue;
         const conversationId = originalGroup[0]!.conversationId;
         /**
          * 新消息预算按前文的**上限**预留，不再查一遍实际前文再算。
@@ -341,7 +347,8 @@ export async function runDailyEventJob(
             conversationId, periodStart: job.periodStart, periodEnd: job.periodEnd, first: group[0]!,
             newMessageTokens: group.reduce((sum, row) => sum + estimateTokens(JSON.stringify(row)), 0),
           });
-          const contextMessages: PeriodSourceMessage[] = contextRows.map((row) => {
+          const eligibleContext = await filterAutomaticSources(prisma, scope.characterId, contextRows);
+          const contextMessages: PeriodSourceMessage[] = eligibleContext.map((row) => {
             const origin = conversationOriginLabel(row.conversation);
             return {
               ...row, origin,
@@ -1292,7 +1299,7 @@ export async function processNextMemoryJob(
 
     // 按会话配额取来源：每个会话先保住自己最新的一条，再在总预算内按时间填满。
     const sourceMessages = await loadPeriodSourceMessages(
-      prisma, periodConversations, job.periodStart, job.periodEnd,
+      prisma, periodConversations, job.periodStart, job.periodEnd, { characterId: scope.characterId },
     );
     const aiMessages = selectAiMessages(sourceMessages);
     // activeItems is newest-first, so the model sees the latest memory state.

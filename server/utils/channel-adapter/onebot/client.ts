@@ -9,6 +9,7 @@
  *   其余 notice / request / meta_event 一律忽略。
  */
 
+import { isReadOnlyFriendContent, shouldHideFriendContent, type FriendIdentityKind, type FriendChatPolicy } from "../../friend-chat-policy";
 import {
   onebotConversationKey,
   readOnebotDisplayName,
@@ -283,6 +284,92 @@ export async function resolveOnebotPrivateQuote(
   } catch {
     return unresolved;
   }
+}
+
+export type OnebotGroupQuote = {
+  messageId: string; authorQq?: string; speaker?: string; content?: string; isSelf?: boolean;
+  kind?: FriendIdentityKind; readOnly?: true; excludeFromGrowth?: true;
+};
+export type OnebotGroupQuoteForTurn = Omit<OnebotGroupQuote, "authorQq"> & { member?: string };
+
+/** Missing outbound receipts do not prevent a same-room read of a single original message. */
+export async function resolveOnebotGroupQuote(
+  config: OnebotConnectionConfig,
+  event: OnebotResolvedEvent,
+  options?: { timeoutMs?: number },
+): Promise<OnebotGroupQuote | undefined> {
+  if (event.messageType !== "group") return undefined;
+  const messageId = readOnebotReplyToId(event.data);
+  if (!messageId) return undefined;
+  const unresolved = { messageId };
+  if (!/^-?\d+$/u.test(messageId) || !/^\d+$/u.test(event.groupId) || !/^\d+$/u.test(event.selfId)) return unresolved;
+  try {
+    const raw = await callOnebotAction(config, "get_msg", { message_id: messageId }, { timeoutMs: options?.timeoutMs ?? 3_000 });
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return unresolved;
+    const data = raw as Record<string, unknown>;
+    if (data.message_type !== "group" || String(data.group_id ?? "") !== event.groupId
+      || String(data.message_id ?? "") !== messageId) return unresolved;
+    const sender = data.sender && typeof data.sender === "object" && !Array.isArray(data.sender)
+      ? data.sender as Record<string, unknown> : {};
+    const authorQq = String(sender.user_id ?? data.user_id ?? "");
+    if (!/^\d+$/u.test(authorQq) || (data.user_id !== undefined && String(data.user_id) !== authorQq)) return unresolved;
+    const content = readOnebotMessageText(data).trim();
+    if (!content) return unresolved;
+    return { messageId, authorQq, speaker: readOnebotDisplayName(data).slice(0, 80),
+      content: content.slice(0, 2000), isSelf: authorQq === event.selfId };
+  } catch { return unresolved; }
+}
+
+/** Resolve unique targets, not the first four message positions; never send here. */
+export async function resolveOnebotGroupQuotes(
+  config: OnebotConnectionConfig,
+  events: readonly OnebotResolvedEvent[],
+  options: {
+    cached: (messageId: string) => OnebotGroupQuote | undefined;
+    canReadAuthor: (authorQq: string) => boolean | Promise<boolean>;
+    authorPolicy?: (authorQq: string) => { kind: FriendIdentityKind; policy: FriendChatPolicy } | Promise<{ kind: FriendIdentityKind; policy: FriendChatPolicy }>;
+    formatText: (text: string) => string;
+    memberCode: (authorQq: string) => string;
+    remember?: (messageId: string, quote: OnebotGroupQuoteForTurn & { authorQq?: string }) => void;
+    timeoutMs?: number;
+  },
+): Promise<Map<string, OnebotGroupQuoteForTurn>> {
+  const targets = new Map<string, OnebotResolvedEvent>();
+  const result = new Map<string, OnebotGroupQuoteForTurn>();
+  const room = events.find(event => event.messageType === "group");
+  if (!room) return result;
+  const eligible = events.filter(event => event.messageType === "group" && event.groupId === room.groupId && event.selfId === room.selfId);
+  for (const event of eligible) {
+    const id = readOnebotReplyToId(event.data);
+    if (!id) continue;
+    result.set(event.messageId, { messageId: id });
+    if (!targets.has(id) && targets.size < 4) targets.set(id, event);
+  }
+  const authors = new Map<string, string>();
+  const resolved = new Map(await Promise.all([...targets].map(async ([id, event]) => {
+    const cached = options.cached(id);
+    const quote = cached?.messageId === id && cached.content && cached.authorQq ? cached : await resolveOnebotGroupQuote(config, event, { timeoutMs: options.timeoutMs });
+    if (!quote?.content || !quote.authorQq || !await options.canReadAuthor(quote.authorQq)) return [id, { messageId: id }] as const;
+    const policy = await options.authorPolicy?.(quote.authorQq);
+    if (policy && shouldHideFriendContent(policy.kind, policy.policy)) return [id, { messageId: id }] as const;
+    authors.set(id, quote.authorQq);
+    return [id, { messageId: id, content: options.formatText(quote.content).slice(0, 2000),
+      ...(policy ? { kind: policy.kind } : {}),
+      ...(policy?.kind === "AI" ? { excludeFromGrowth: true as const } : {}),
+      ...(policy && isReadOnlyFriendContent(policy.kind, policy.policy) ? { readOnly: true as const } : {}),
+      ...(quote.speaker ? { speaker: quote.speaker } : {}), member: options.memberCode(quote.authorQq),
+      ...(quote.isSelf !== undefined ? { isSelf: quote.isSelf } : {}),
+    }] as const;
+  })));
+  for (const event of eligible) {
+    const id = readOnebotReplyToId(event.data);
+    if (resolved.has(id)) {
+      const quote = resolved.get(id)!;
+      result.set(event.messageId, quote);
+      options.remember?.(event.messageId, { ...quote, ...(authors.has(id) ? { authorQq: authors.get(id) } : {}) });
+    }
+  }
+  return result;
 }
 
 /**
@@ -631,6 +718,7 @@ export async function callOnebotAction(
   config: OnebotConnectionConfig,
   action: string,
   params: Record<string, unknown>,
+  options?: { timeoutMs: number },
 ): Promise<unknown> {
   const response = await fetch(config.httpUrl + "/" + action, {
     method: "POST",
@@ -639,7 +727,7 @@ export async function callOnebotAction(
       ...(config.httpToken ? { authorization: "Bearer " + config.httpToken } : {}),
     },
     body: JSON.stringify(params),
-    signal: AbortSignal.timeout(ONEBOT_ACTION_TIMEOUT_MS),
+    signal: AbortSignal.timeout(options ? Math.max(1, Math.min(ONEBOT_ACTION_TIMEOUT_MS, options.timeoutMs)) : ONEBOT_ACTION_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`ONEBOT_SEND_HTTP_${response.status}: 发送 OneBot 消息失败。`);

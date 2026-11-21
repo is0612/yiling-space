@@ -345,14 +345,14 @@ quoted.remember("g:q", facts({ messageId: "q1", senderQq: "111", displayName: "�
 quoted.remember("g:q", facts({ messageId: "q2", senderQq: "222", displayName: "乙", text: "我接这句", replyToMessageId: "q1" }));
 quoted.remember("g:q", facts({ messageId: "q3", senderQq: "222", displayName: "乙", text: "接旧的", replyToMessageId: "missing-id" }));
 assert.deepEqual(quoted.quoteOf("g:q", "q1"), {
-  id: "q1", member: quoted.memberCode("g:q", "111"), speaker: "甲", text: "昨天说的那个", isSelf: false,
+  id: "q1", authorQq: "111", member: quoted.memberCode("g:q", "111"), speaker: "甲", text: "昨天说的那个", isSelf: false,
 }, "引用要能取到被引用那条的作者与正文");
 assert.equal(quoted.quoteOf("g:q", "missing-id"), null, "窗口里没有就返回空，调用方不得猜");
 const backgrounds = quoted.background("g:q", []);
 assert.deepEqual(backgrounds.find(line => line.id === "q2")?.quoted, {
-  id: "q1", member: quoted.memberCode("g:q", "111"), speaker: "甲", text: "昨天说的那个", isSelf: false,
+  id: "q1", authorQq: "111", member: quoted.memberCode("g:q", "111"), speaker: "甲", text: "昨天说的那个", isSelf: false,
 });
-assert.deepEqual(backgrounds.find(line => line.id === "q3")?.quoted, { id: "missing-id", isSelf: false },
+assert.deepEqual(backgrounds.find(line => line.id === "q3")?.quoted, { id: "missing-id" },
   "查不到的引用只保留 id，正文为空");
 now += minutes(6);
 assert.equal(quoted.quoteOf("g:q", "q1"), null, "超出窗口时限的旧消息也不提供原文");

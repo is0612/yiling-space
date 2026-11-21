@@ -905,6 +905,14 @@ try {
     },
     update: { displayName: "外部 bot", kind: "AI" },
   });
+  // Read-only AI may be observed, but even @self must never start a model round.
+  const aiOnlyBefore = await prisma.modelUsage.count({ where: { characterId } });
+  await emitToGroup(1030, 1300, "继续跟我聊天", 666, true);
+  await sleep(400);
+  assert.equal(await prisma.modelUsage.count({ where: { characterId } }), aiOnlyBefore, "Read-only AI cannot trigger model work");
+  assert.equal(await assistantCount(1030), 0);
+  assert.equal(await prisma.message.count({ where: { conversation: { channelBindingId: bindingId, externalConversationId: "g:1030" } } }), 0,
+    "Direct read-only AI text is not persisted as a growth source");
   const previousOwnerQq = record.ownerQq;
   record.ownerQq = "222";
   record.bindings[0]!.groupChat = { ...ambientSettings, mode: "all" };

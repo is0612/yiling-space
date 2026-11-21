@@ -1,3 +1,4 @@
+import { filterAutomaticSources } from "./automatic-source-policy";
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { callRawModel } from "./raw-llm";
 import { parseJsonLoose } from "./loose-json";
@@ -55,10 +56,12 @@ export async function refreshConversationSummary(prisma: PrismaClient, input: Su
     ...(input.excludeExternalMessageIds?.length ? { AND: [{ OR: [{ externalMessageId: null }, { externalMessageId: { notIn: input.excludeExternalMessageIds } }] }] } : {}),
     ...(previous && cursor ? { OR: [{ occurredAt: { gt: cursor } }, { occurredAt: cursor, id: { gt: previous.cursor.id } }] } : {}) },
     orderBy: [{ occurredAt: "asc" }, { id: "asc" }], take: 25,
-    select: { id: true, role: true, content: true, occurredAt: true } });
+    select: { id: true, conversationId: true, role: true, content: true, occurredAt: true, metadata: true } });
   const now = input.now ?? new Date();
   if (!rows.length || !shouldSummarizeConversation(rows.length, rows[rows.length - 1]!.occurredAt, now)) return result();
-  const batch = rows.length >= 24 ? rows.slice(0, 20) : rows;
+  const rawBatch = rows.length >= 24 ? rows.slice(0, 20) : rows;
+  const batch = await filterAutomaticSources(prisma, input.characterId, rawBatch);
+  if (!batch.length) return result();
   if (JSON.stringify(batch).length > 24_000) return result();
   try {
     const text = await callRawModel({ model: input.model, apiKey: input.apiKey, apiBaseUrl: input.apiBaseUrl,
@@ -76,7 +79,7 @@ export async function refreshConversationSummary(prisma: PrismaClient, input: Su
      */
     const trimmed = parsed.summary.trim();
     const summary = trimmed.length > 1600 ? `…${trimmed.slice(-1599)}` : trimmed;
-    const last = batch[batch.length - 1]!;
+    const last = rawBatch[rawBatch.length - 1]!;
     const next: Summary = { revision: (previous?.revision ?? 0) + 1, summary, cursor: { id: last.id, occurredAt: last.occurredAt.toISOString() } };
     const saved = await prisma.conversation.updateMany({ where: { ...where, metadata: { equals: metadata as Prisma.InputJsonObject } },
       data: { metadata: { ...metadata, continuitySummary: next } as Prisma.InputJsonObject } });

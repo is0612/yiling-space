@@ -4,6 +4,7 @@ import { readModelUsage, recordModelUsage, type ModelUsageTokens } from "./model
 import { CATCHPHRASE_STATUS, invalidateCatchphraseCache } from "./catchphrases";
 import { getPrisma } from "./prisma";
 import { looksLikeSystemMessage } from "./system-message";
+import { filterAutomaticSources } from "./automatic-source-policy";
 
 /**
  * 从群聊里「捡梗」：她注意到群里反复在用的某句话，候选交给用户点头后才算她的口头禅。
@@ -351,7 +352,7 @@ export async function mineCatchphrases(input: {
     conversations.map((item) => [item.id, item.externalConversationId?.replace(/^g:/, "QQ群 ") ?? "群聊"]),
   );
 
-  const messages = await prisma.message.findMany({
+  const sourceRows = await prisma.message.findMany({
     where: {
       conversationId: { in: conversations.map((item) => item.id) },
       role: "USER",
@@ -359,8 +360,9 @@ export async function mineCatchphrases(input: {
     },
     orderBy: { occurredAt: "desc" },
     take: input.maxMessages ?? MINE_MAX_MESSAGES,
-    select: { content: true, occurredAt: true, conversationId: true, metadata: true },
+    select: { id: true, role: true, content: true, occurredAt: true, conversationId: true, metadata: true },
   });
+  const messages = await filterAutomaticSources(prisma, character.id, sourceRows);
   if (!messages.length) {
     return { scanned: 0, candidates: 0, created: 0, skipped: 0 };
   }

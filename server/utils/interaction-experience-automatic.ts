@@ -1,3 +1,4 @@
+import { filterAutomaticSources } from "./automatic-source-policy";
 import { parseJsonLoose } from "./loose-json";
 import { randomUUID, createHash } from "node:crypto";
 import type { PrismaClient } from "../../src/generated/prisma/client";
@@ -62,13 +63,16 @@ export async function processAutomaticInteractionExperience(prisma: PrismaClient
             const prior = progress.cursorAt ? await prisma.message.findFirst({ where: { conversationId: room.id, role: "ASSISTANT", occurredAt: { gte: progress.anchorAt }, OR: [{ occurredAt: { lt: progress.cursorAt } }, { occurredAt: progress.cursorAt, id: { lte: progress.cursorId! } }] }, orderBy: [{ occurredAt: "desc" }, { id: "desc" }] }) : null;
             const preceding = await prisma.message.findMany({ where: { conversationId: room.id, occurredAt: { gte: progress.anchorAt }, OR: [{ occurredAt: { lt: batch[0]!.occurredAt } }, { occurredAt: batch[0]!.occurredAt, id: { lt: batch[0]!.id } }], role: { in: ["USER", "ASSISTANT"] } }, orderBy: [{ occurredAt: "desc" }, { id: "desc" }], take: 8 });
             let contextChars = 0;
-            const contextRows = preceding.filter(row => { if (contextChars + row.content.length > 4000) return false; contextChars += row.content.length; return true; }).reverse();
+            const allowedBatch = await filterAutomaticSources(prisma, room.characterId, batch);
+            const allowedPreceding = await filterAutomaticSources(prisma, room.characterId, preceding);
+            const allowedPrior = prior ? (await filterAutomaticSources(prisma, room.characterId, [prior]))[0] : undefined;
+            const contextRows = allowedPreceding.filter(row => { if (contextChars + row.content.length > 4000) return false; contextChars += row.content.length; return true; }).reverse();
             const pairs: Array<{
                 assistant: typeof end;
                 feedback: typeof end;
             }> = [];
-            let assistant: typeof end | undefined = prior ?? undefined;
-            for (const message of batch) {
+            let assistant: typeof end | undefined = allowedPrior;
+            for (const message of allowedBatch) {
                 if (message.role === "ASSISTANT")
                     assistant = message;
                 else if (assistant)
@@ -107,7 +111,7 @@ export async function processAutomaticInteractionExperience(prisma: PrismaClient
                     }
                 };
                 try {
-                const text = await trackedCall("interaction-experience-auto", usageCallback => callRawModel({ retry: false, timeoutCapMs: 120000, model: settings.model, apiKey: key, apiBaseUrl: settings.apiBaseUrl, systemPrompt: interactionExperiencePrompt + ' 自动批量模式优先：messages含原始请求与前文，pairs仅允许指定回复和反馈ID；contextOnly消息只用于理解不能独立形成经验。仅输出{ "experiences": [{ "assistantMessageId":"输入ID", "feedbackMessageId":"输入ID", "content":"经验", "context":"场景", "feedbackQuote":"原文", "learning":{"kind":"UNDERSTANDING|REFERENCE|SITUATION|STRATEGY|EXPRESSION","situation":"当时情境","misunderstanding":"误解或空字符串","correction":"用户支持的纠正","nextJudgment":"下次判断"}}]}，没有合格项返回空数组，最多3条。不要输出单项skip对象。', userPrompt: JSON.stringify({ pairs: eligible.map(p => ({ assistantMessageId: p.assistant.id, feedbackMessageId: p.feedback.id })), messages: [...new Map([...contextRows, ...batch, ...eligible.flatMap(p => [p.assistant, p.feedback])].filter(m => m.content.length <= 16000).map(m => [m.id, {id:m.id,role:m.role,content:m.content,contextOnly:contextRows.some(row=>row.id===m.id)}])).values()].slice(-48) }), onUsage: usageCallback }));
+                const text = await trackedCall("interaction-experience-auto", usageCallback => callRawModel({ retry: false, timeoutCapMs: 120000, model: settings.model, apiKey: key, apiBaseUrl: settings.apiBaseUrl, systemPrompt: interactionExperiencePrompt + ' 自动批量模式优先：messages含原始请求与前文，pairs仅允许指定回复和反馈ID；contextOnly消息只用于理解不能独立形成经验。仅输出{ "experiences": [{ "assistantMessageId":"输入ID", "feedbackMessageId":"输入ID", "content":"经验", "context":"场景", "feedbackQuote":"原文", "learning":{"kind":"UNDERSTANDING|REFERENCE|SITUATION|STRATEGY|EXPRESSION","situation":"当时情境","misunderstanding":"误解或空字符串","correction":"用户支持的纠正","nextJudgment":"下次判断"}}]}，没有合格项返回空数组，最多3条。不要输出单项skip对象。', userPrompt: JSON.stringify({ pairs: eligible.map(p => ({ assistantMessageId: p.assistant.id, feedbackMessageId: p.feedback.id })), messages: [...new Map([...contextRows, ...allowedBatch, ...eligible.flatMap(p => [p.assistant, p.feedback])].filter(m => m.content.length <= 16000).map(m => [m.id, {id:m.id,role:m.role,content:m.content,contextOnly:contextRows.some(row=>row.id===m.id)}])).values()].slice(-48) }), onUsage: usageCallback }));
                 const parsed = parseJsonLoose(text, { expect: "object" }) as {
                     experiences?: unknown[];
                 };
@@ -135,7 +139,7 @@ export async function processAutomaticInteractionExperience(prisma: PrismaClient
                     const renewed = await prisma.interactionExperienceProgress.updateMany({ where: { conversationId: room.id, token, status: "RUNNING", leaseUntil: { gte: new Date() } }, data: { leaseUntil: new Date(Date.now() + 300000) } });
                     if (!renewed.count) throw new Error("LEASE_LOST");
                     if ((await readDailyQuota(room.characterId, room.character.modelConfig)).exceeded) throw new Error("MODEL_UNAVAILABLE");
-                    draft.review = await trackedCall("interaction-experience-review", usageCallback => reviewInteractionExperience({ model: settings.model, apiKey: key, apiBaseUrl: settings.apiBaseUrl, onUsage: usageCallback, evidence: { messages: [...contextRows, ...batch].map(m => ({ id: m.id, role: m.role, content: m.content, occurredAt: m.occurredAt })), assistant: { id: draft.pair.assistant.id, content: draft.pair.assistant.content }, feedback: { id: draft.pair.feedback.id, content: draft.pair.feedback.content }, candidate: draft.suggestion } }));
+                    draft.review = await trackedCall("interaction-experience-review", usageCallback => reviewInteractionExperience({ model: settings.model, apiKey: key, apiBaseUrl: settings.apiBaseUrl, onUsage: usageCallback, evidence: { messages: [...contextRows, ...allowedBatch].map(m => ({ id: m.id, role: m.role, content: m.content, occurredAt: m.occurredAt })), assistant: { id: draft.pair.assistant.id, content: draft.pair.assistant.content }, feedback: { id: draft.pair.feedback.id, content: draft.pair.feedback.content }, candidate: draft.suggestion } }));
                     await Promise.all(usageWrites);
                 }
                 } finally { await Promise.all(usageWrites); }
@@ -154,7 +158,8 @@ export async function processAutomaticInteractionExperience(prisma: PrismaClient
                     throw new Error("SOURCE_CHANGED");
                 for (const { pair, suggestion, review } of drafts) {
                     const source = await tx.message.findMany({ where: { id: { in: [pair.assistant.id, pair.feedback.id] }, conversationId: room.id } });
-                    const a = source.find(m => m.id === pair.assistant.id), f = source.find(m => m.id === pair.feedback.id);
+                    const permitted = await filterAutomaticSources(tx, room.characterId, source);
+                    const a = permitted.find(m => m.id === pair.assistant.id), f = permitted.find(m => m.id === pair.feedback.id);
                     if (!a || !f || hash(a, f, room.memoryScopeId) !== hash(pair.assistant, pair.feedback, room.memoryScopeId))
                         throw new Error("SOURCE_CHANGED");
                     validateInteractionEvidence(a, f);

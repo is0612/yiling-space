@@ -40,8 +40,13 @@ export async function isPrivateKnowledgeSource(
   prisma: PrismaLike,
   input: { characterId: string; memoryScopeId: string | null; isOwnerTurn: boolean; scope: KnowledgeCollectScope },
 ): Promise<boolean> {
-  if (input.scope === "ALL") return true;
   if (input.isOwnerTurn) return true;
+  if (input.memoryScopeId) {
+    const source = await prisma.memoryScope.findFirst({ where: { id: input.memoryScopeId, characterId: input.characterId },
+      select: { externalIdentity: { select: { kind: true } } } });
+    if (source?.externalIdentity?.kind === "AI") return false;
+  }
+  if (input.scope === "ALL") return true;
   if (!input.memoryScopeId) return false;
   const row = await prisma.memoryScope.findFirst({
     where: { id: input.memoryScopeId, characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY" },
@@ -67,6 +72,12 @@ export async function isGroupKnowledgeSource(
     scope: KnowledgeCollectScope;
   },
 ): Promise<boolean> {
+  const sourceUids = [...new Set(input.evidence.filter(item => !item.isOwner).map(item => item.platformUid).filter(Boolean))];
+  if (sourceUids.length) {
+    const ai = await prisma.memoryScope.findFirst({ where: { characterId: input.characterId, scopeType: "EXTERNAL_IDENTITY",
+      externalIdentity: { platform: input.platform, platformUid: { in: sourceUids }, kind: "AI" } }, select: { id: true } });
+    if (ai) return false;
+  }
   if (input.scope === "ALL") return true;
   if (input.evidence.some((item) => item.isOwner)) return true;
   const uids = [...new Set(input.evidence.map((item) => item.platformUid).filter(Boolean))];

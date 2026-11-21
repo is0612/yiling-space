@@ -43,6 +43,11 @@ export type GroupMessageFacts = {
    * 上游解析一次，这里原样存；入模时再由 memberCode 代号化。
    */
   mentions?: GroupMentionFact[];
+  /** Resolved after the reply gate; used for later background without a second read. */
+  quoted?: GroupQuotedLine;
+  kind?: "AI" | "HUMAN" | "UNKNOWN";
+  readOnly?: true;
+  excludeFromGrowth?: true;
 };
 
 /**
@@ -71,6 +76,9 @@ export type GroupBackgroundLine = {
   mentions?: Array<{ target: GroupMentionTarget; member?: string; speaker?: string }>;
   /** 这条背景引用的是哪一句（窗口内能查到原文时才有）。 */
   quoted?: GroupQuotedLine;
+  kind?: "AI" | "HUMAN" | "UNKNOWN";
+  readOnly?: true;
+  excludeFromGrowth?: true;
 };
 
 /** 被引用那条：谁说的、说了什么。查不到原文时只有 id，调用方不得补猜。 */
@@ -79,7 +87,12 @@ export type GroupQuotedLine = {
   member?: string;
   speaker?: string;
   text?: string;
-  isSelf: boolean;
+  isSelf?: boolean;
+  /** Internal policy check only; prompt serializers must never expose platform IDs. */
+  authorQq?: string;
+  kind?: "AI" | "HUMAN" | "UNKNOWN";
+  readOnly?: true;
+  excludeFromGrowth?: true;
 };
 
 export type GroupTopicAnchor = { id: string; label: string };
@@ -175,6 +188,7 @@ export class GroupContext {
     const state = this.state(key);
     if (state.messages.some((item) => item.messageId === message.messageId)) return;
     state.messages.push({ ...message });
+    if (message.readOnly) { this.prune(state); return; }
     this.learnOwnership(state, message);
     // 这条 @ 的是别人：记下来，他后面那几句多半还是在跟那个人讲。
     const mentionQqs = this.mentionQqsOf(message);
@@ -288,7 +302,7 @@ export class GroupContext {
     const nameOfQq = new Map<string, string>();
     const qqOfName = new Map<string, string>();
     for (const message of state.messages) {
-      if (!message.senderQq || !message.displayName || excludedSenders.has(message.senderQq)) continue;
+      if (!message.senderQq || !message.displayName || message.readOnly || excludedSenders.has(message.senderQq)) continue;
       nameOfQq.set(message.senderQq, message.displayName);
       if (!qqOfName.has(message.displayName)) qqOfName.set(message.displayName, message.senderQq);
     }
@@ -321,21 +335,23 @@ export class GroupContext {
     return out;
   }
 
-  /**
-   * 被引用那条的原文与作者；不在窗口里就返回 null。
-   *
-   * 只查进程内窗口，不为一句引用去调网关：群里引用很频繁，每条一次 HTTP
-   * 会把回复拖慢到没法用。查不到就只给 id，提示词要求「不知道就说不知道」。
-   */
-  quoteOf(key: string, replyToMessageId: string, maxAgeMs = this.windowMs): GroupQuotedLine | null {
+  /** Store only the resolved quote of an existing same-room inbound message. */
+  rememberQuote(key: string, messageId: string, quoted: GroupQuotedLine): void {
+    const message = this.state(key).messages.find(row => row.messageId === messageId);
+    if (message && message.replyToMessageId === quoted.id) message.quoted = { ...quoted };
+  }
+
+  /** Window lookup is free; callers may resolve misses after the normal reply gate. */
+  quoteOf(key: string, replyToMessageId: string, maxAgeMs = this.windowMs, excludedSenders: ReadonlySet<string> = new Set()): GroupQuotedLine | null {
     if (!replyToMessageId) return null;
     const state = this.state(key);
     const now = this.now();
     const found = state.messages.find((message) =>
       message.messageId === replyToMessageId && now - message.at <= maxAgeMs);
-    if (!found) return null;
+    if (!found || excludedSenders.has(found.senderQq)) return null;
     return {
       id: found.messageId,
+      authorQq: found.senderQq,
       member: this.memberCode(key, found.senderQq),
       speaker: found.displayName,
       text: this.truncate(this.formatText(key, found.text)),
@@ -344,7 +360,7 @@ export class GroupContext {
   }
 
   /** 本轮之外、仍在窗口内的背景，按时间正序；超预算时从最旧的开始丢。 */
-  background(key: string, excludeIds: readonly string[], limits?: { windowMs: number; maxMessages: number; maxChars: number }): GroupBackgroundLine[] {
+  background(key: string, excludeIds: readonly string[], limits?: { windowMs: number; maxMessages: number; maxChars: number }, excludedSenders: ReadonlySet<string> = new Set()): GroupBackgroundLine[] {
     const state = this.state(key);
     const now = this.now();
     const excluded = new Set(excludeIds);
@@ -357,6 +373,9 @@ export class GroupContext {
         ...(mention.target === "other" ? { member: this.memberCode(key, mention.qq) } : {}),
         ...(mention.name ? { speaker: mention.name.slice(0, 40) } : {}),
       }));
+      const candidateQuote = message.quoted ?? (message.replyToMessageId
+        ? this.quoteOf(key, message.replyToMessageId, limits?.windowMs ?? this.windowMs, excludedSenders) : null);
+      const safeQuote = candidateQuote?.authorQq && excludedSenders.has(candidateQuote.authorQq) ? null : candidateQuote;
       lines.push({
         id: message.messageId,
         at: message.at,
@@ -364,16 +383,20 @@ export class GroupContext {
         speaker: message.displayName,
         text: this.truncate(this.formatText(key, message.text)),
         ...(mentions.length ? { mentions } : {}),
+        ...(message.kind ? { kind: message.kind } : {}),
+        ...(message.readOnly ? { readOnly: true as const } : {}),
+        ...(message.excludeFromGrowth ? { excludeFromGrowth: true as const } : {}),
         ...(message.replyToMessageId
-          ? { quoted: this.quoteOf(key, message.replyToMessageId) ?? { id: message.replyToMessageId, isSelf: false } }
+          ? { quoted: safeQuote ?? { id: message.replyToMessageId } }
           : {}),
       });
     }
     // 从最旧的开始丢，直到总量进预算；至少保留最后一条。
-    let total = lines.reduce((sum, line) => sum + line.text.length, 0);
+    const sizeOf = (line: GroupBackgroundLine) => line.text.length + (line.quoted?.text?.length ?? 0);
+    let total = lines.reduce((sum, line) => sum + sizeOf(line), 0);
     while ((total > (limits?.maxChars ?? this.maxChars) || lines.length > (limits?.maxMessages ?? this.maxMessages)) && lines.length > 1) {
       const dropped = lines.shift();
-      total -= dropped?.text.length ?? 0;
+      total -= dropped ? sizeOf(dropped) : 0;
     }
     return lines;
   }

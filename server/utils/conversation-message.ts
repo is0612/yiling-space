@@ -60,6 +60,19 @@ export function readMessageMentionTargets(metadata: unknown): string[] {
 export type MessageMentionTarget = "self" | "other" | "all";
 export type MessageMentionKind = "AI" | "HUMAN" | "UNKNOWN";
 
+/** Provenance is data for interpretation, not permission to interact or learn. */
+export type ConversationSourcePolicy = {
+  kind?: MessageMentionKind;
+  readOnly?: true;
+  excludeFromGrowth?: true;
+};
+export function conversationSourcePolicy(value: unknown): ConversationSourcePolicy {
+  const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const kind = row.kind === "AI" || row.kind === "HUMAN" || row.kind === "UNKNOWN" ? row.kind : undefined;
+  return { ...(kind ? { kind } : {}), ...(row.readOnly === true ? { readOnly: true as const } : {}),
+    ...(kind === "AI" || row.readOnly === true || row.excludeFromGrowth === true ? { excludeFromGrowth: true as const } : {}) };
+}
+
 /**
  * 一条消息里被 @ 的对象（按 at 段出现顺序）。
  *

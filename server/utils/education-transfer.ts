@@ -1,3 +1,4 @@
+import { filterAutomaticSources } from "./automatic-source-policy";
 import { createChannelPolicyCandidate, CHANNEL_POLICY_KIND, CHANNEL_POLICY_CONTENT, CHANNEL_POLICY_SOURCE_KINDS } from "./channel-behavior-policy";
 import { createInteractionGuidanceCandidate } from "./interaction-guidance";
 import { parseExpressionChatScope } from "./expression-habits-domain";
@@ -39,9 +40,13 @@ async function evidence(db: DB, characterId: string, ids: string[], kinds: reado
     if (!learning || !kinds.includes(learning.kind) || row.memoryScopeId !== row.conversation.memoryScopeId) continue;
     const feedback = await db.message.findFirst({ where: { id: row.feedbackMessageId, conversationId: row.conversationId, role: "USER" } });
     if (!feedback) continue;
+    const assistant = row.assistantMessageId ? await db.message.findFirst({ where: { id: row.assistantMessageId, conversationId: row.conversationId, role: "ASSISTANT" } }) : null;
+    const allowed = await filterAutomaticSources(db, characterId, [feedback, ...(assistant ? [assistant] : [])]);
+    if (!allowed.some(source => source.id === feedback.id) || (assistant && !allowed.some(source => source.id === assistant.id))) continue;
+    const cleanFeedback = allowed.find(source => source.id === feedback.id)!;
     const room = row.conversation, scope = room.memoryScope;
     const proposer = educationProposer({ channelBindingId: room.channelBindingId, conversationKey: room.externalConversationId, ownerId: room.character.ownerId, scopeType: scope.scopeType, scopeUserId: scope.userId, educationEnabled: (scope as typeof scope & { educationEnabled?: boolean }).educationEnabled === true, scopePlatformUid: scope.externalIdentity?.platformUid, platform: room.channelBinding?.connection.platform, ownerQq: String(record(room.channelBinding?.connection.metadata).ownerQq ?? ""), metadata: feedback.metadata, role: feedback.role });
-    if (proposer) result.push({ row, feedback, proposer });
+    if (proposer) result.push({ row, feedback: cleanFeedback, proposer });
   }
   return result;
 }

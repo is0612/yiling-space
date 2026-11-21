@@ -1,3 +1,4 @@
+import { automaticKnowledgeLines } from "./automatic-source-policy";
 import type { AssistantTurnContext } from "./assistant-turn-context";
 import { assertAssistantTurnChannel, executeAssistantGroupTurn, runAssistantTurnStage, skipAssistantTurnStage, validateAssistantTurnEvidence, snapshotAssistantTurnData } from "./assistant-turn-execution";
 import type { TurnDetailPatch } from "./model-turn-detail";
@@ -121,7 +122,7 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
   if (analysis.knowledgeCandidate && input.onKnowledgeCandidate) {
     const candidateIds = new Set(analysis.knowledgeCandidate.evidenceMessageIds);
     const seen = new Set<string>();
-    const selected = currentSources
+    const selected = automaticKnowledgeLines(currentSources)
       .filter(line => {
         if (!line.id || !candidateIds.has(line.id) || seen.has(line.id)) return false;
         seen.add(line.id);

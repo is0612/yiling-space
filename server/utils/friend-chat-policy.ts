@@ -19,6 +19,15 @@ export function shouldBlockFriendSpeaker(
   return identityKind === "AI";
 }
 
+/** Reading and interaction are separate: non-interacting AI can be observed, blocked humans cannot. */
+export function shouldHideFriendContent(kind: FriendIdentityKind, policy: FriendChatPolicy): boolean {
+  return kind !== "AI" && policy === "BLOCK";
+}
+
+export function isReadOnlyFriendContent(kind: FriendIdentityKind, policy: FriendChatPolicy): boolean {
+  return kind === "AI" && shouldBlockFriendSpeaker(kind, policy);
+}
+
 /** 一轮只有在每条消息都来自已标记 AI 时，才计入连续 AI 对话保护。 */
 export function isAiOnlyGroupRound(identityKinds: readonly FriendIdentityKind[]): boolean {
   return identityKinds.length > 0 && identityKinds.every((kind) => kind === "AI");

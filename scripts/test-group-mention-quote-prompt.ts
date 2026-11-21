@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { generateConversationReply } from "../server/utils/chat-reply";
+import { analyzeGroupContext } from "../server/utils/context-assistant";
 
 const originalFetch = globalThis.fetch;
 let body: { messages: Array<{ role: string; content: string }> } | null = null;
@@ -32,7 +33,7 @@ try {
       },
       {
         id: "m2", member: "member_3", speaker: "乙", content: "我没说过", isOwner: false,
-        quoted: { id: "m1", member: "member_2", speaker: "甲", content: "@member_3 你昨天说的那个" },
+        quoted: { id: "m1", member: "member_2", speaker: "甲", content: "@member_3 你昨天说的那个",kind:"AI",readOnly:true,excludeFromGrowth:true },
       },
       {
         id: "m3", member: "member_4", speaker: "丙", content: "这话我接不上", isOwner: false,
@@ -54,7 +55,7 @@ try {
 
   const reply = transcript.find((line) => line.id === "m2")!;
   assert.deepEqual(reply.quoted, {
-    id: "m1", member: "member_2", speaker: "甲", content: "@member_3 你昨天说的那个", available: true,
+    id: "m1", member: "member_2", speaker: "甲", content: "@member_3 你昨天说的那个", available: true,kind:"AI",readOnly:true,excludeFromGrowth:true,
   }, "a quote must carry the quoted author and text");
 
   const missing = transcript.find((line) => line.id === "m3")!;
@@ -67,6 +68,27 @@ try {
 
   // 群聊里的引用不能混成一整轮的单条引语（那是私聊语义）。
   assert.equal(payload.quotedMessage, undefined, "private single-quote field must stay out of group payloads");
+  assert(prompt.includes("never generalize to all quotes"));
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    const input = JSON.parse(request.messages.find((m: {role: string}) => m.role === "user").content);
+    assert.equal(input.transcript[0].quoted.content, "VISIBLE_QUOTE");
+    assert.equal(input.transcript[0].quoted.available, true);
+    assert.equal(input.transcript[0].quoted.isSelf, true);
+    assert.deepEqual({kind:input.groupBackground[0].kind,readOnly:input.groupBackground[0].readOnly,excludeFromGrowth:input.groupBackground[0].excludeFromGrowth},
+      {kind:"AI",readOnly:true,excludeFromGrowth:true});
+    assert.equal(input.groupBackground[0].quoted.available, false);
+    assert.equal(input.groupBackground[0].quoted.content, null);
+    assert(!JSON.stringify(input).includes("SECRET_AUTHOR_ACCOUNT"));
+    assert(request.messages[0].content.includes("readOnly AI is context"));
+    return Response.json({choices:[{message:{content:JSON.stringify({summary:"One quote is available, another is not.",evidenceMessageIds:["cq"],participation:"invited"})},finish_reason:"stop"}]});
+  };
+  await analyzeGroupContext({model:"context",apiKey:"test-only",apiBaseUrl:"https://model.invalid/v1",temperature:0,maxInputTokens:8192,maxOutputTokens:2048}, {
+    characterName:"角色",characterPrompt:"自然交流",model:"mock",apiKey:"test",apiBaseUrl:"https://model.invalid/v1",
+    groupChat:true,currentMessage:"能看到引用吗",recentMessages:[],memories:[],snapshots:[],
+    transcript:[{id:"cq",content:"看这句",quoted:{id:"original",content:"VISIBLE_QUOTE",isSelf:true,authorQq:"SECRET_AUTHOR_ACCOUNT"} as {id:string;content:string;isSelf:boolean}}],
+    groupBackground:[{id:"missing",content:"只读AI背景",kind:"AI",readOnly:true,excludeFromGrowth:true,quoted:{id:"unavailable",kind:"AI",readOnly:true,excludeFromGrowth:true}}],
+  });
   console.log("Group mention and quote prompt rendering passed (mock model, no database).");
 } finally {
   globalThis.fetch = originalFetch;

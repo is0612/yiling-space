@@ -16,7 +16,7 @@ import { readGroupMemberProfile } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
 import type { OnebotSegment } from "./types";
-import { fillOnebotImageUrls, resolveOnebotPrivateQuote, sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
+import { fillOnebotImageUrls, resolveOnebotGroupQuotes, resolveOnebotPrivateQuote, sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
 import { parseBindingRoutingKeys, type OnebotBindingRecord, type OnebotConnectionRecord } from "./configure";
 import { ONEBOT_FACES, toOnebotFaceSegments } from "./faces";
 import { handleChannelBatch, handleChannelMessage, buildStoredMessageMetadata, type ChannelReplySender } from "../pipeline";
@@ -35,6 +35,8 @@ import {
   MAX_CONSECUTIVE_AI_ROUNDS,
   nextConsecutiveAiRounds,
   shouldBlockFriendSpeaker,
+  shouldHideFriendContent,
+  isReadOnlyFriendContent,
   shouldPauseAiOnlyRound,
 } from "../../friend-chat-policy";
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
@@ -1266,6 +1268,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
               storedReason,
               message: {
                 authorOpenId: item.event.userId,
+                ...(item.facts.kind ? { kind: item.facts.kind } : {}),
+                ...(item.facts.excludeFromGrowth ? { excludeFromGrowth: true as const } : {}),
                 ...(item.event.displayName ? { authorDisplayName: item.event.displayName } : {}),
                 member: groupContext.memberCode(contextKey, item.event.userId),
                 ...(item.facts.mentionTargets.length ? { mentionTargets: item.facts.mentionTargets } : {}),
@@ -1293,8 +1297,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     // A batch buffered before the explicit mode switch must not speak as the daily persona afterward.
     if (await prisma.roleplayRoute.findUnique({ where: { bindingId_externalConversationId: { bindingId: binding.id, externalConversationId: groupEvent.conversationKey } }, select: { id: true } })) return;
     const originalIds = originalItems.map((item) => item.event.messageId);
-    const backgroundLines = groupContext.background(contextKey, originalIds);
-    const analysisBackgroundLines = groupContext.background(contextKey, originalIds, {
+    let backgroundLines = groupContext.background(contextKey, originalIds);
+    let analysisBackgroundLines = groupContext.background(contextKey, originalIds, {
       windowMs: 15 * 60_000,
       maxMessages: 120,
       maxChars: 24_000,
@@ -1321,7 +1325,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       originalItems.flatMap((item) => (item.facts.mentions ?? []).map((mention) => mention.qq))
         .filter((qq) => qq && qq !== "all" && qq !== selfQq),
     )];
-    const identityUids = [...new Set([...authorUids, ...mentionUids])];
+    const quoteAuthorUids = [...backgroundLines, ...analysisBackgroundLines].flatMap(line => line.quoted?.authorQq ? [line.quoted.authorQq] : []);
+    const identityUids = [...new Set([...authorUids, ...mentionUids, ...quoteAuthorUids])];
     const identities = identityUids.length
       ? await prisma.externalIdentity.findMany({
           where: { platform: ONEBOT_PLATFORM, platformUid: { in: identityUids } },
@@ -1346,7 +1351,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       },
     ] as const));
     const isBlockedUid = (uid: string) => {
-      if (record.ownerQq && uid === record.ownerQq) return false;
+      if (uid === selfQq || (record.ownerQq && uid === record.ownerQq)) return false;
       const identity = identityByUid.get(uid);
       return shouldBlockFriendSpeaker(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
     };
@@ -1356,7 +1361,16 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     const policyFor = (item: PendingGroupMessage) => item.isOwner
       ? "ALLOW" as const
       : identityByUid.get(item.event.userId)?.policy ?? "DEFAULT" as const;
-    const blockedSpeakerUids = new Set(authorUids.filter(isBlockedUid));
+    const blockedSpeakerUids = new Set([...authorUids, ...quoteAuthorUids].filter(isBlockedUid));
+    const hiddenSpeakerUids = new Set([...authorUids, ...quoteAuthorUids].filter(uid => {
+      if (uid === selfQq || uid === record.ownerQq) return false;
+      const identity = identityByUid.get(uid);
+      return shouldHideFriendContent(identity?.kind ?? "UNKNOWN", identity?.policy ?? "DEFAULT");
+    }));
+    backgroundLines = groupContext.background(contextKey, originalIds, undefined, hiddenSpeakerUids);
+    analysisBackgroundLines = groupContext.background(contextKey, originalIds, {
+      windowMs: 15 * 60_000, maxMessages: 120, maxChars: 24_000,
+    }, hiddenSpeakerUids);
     const blockedMessageIds = new Set(
       originalItems
         .filter((item) => shouldBlockFriendSpeaker(kindFor(item), policyFor(item)))
@@ -1364,10 +1378,27 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     );
     const blockedContextMessageIds = new Set(
       [...contextUidByMessageId.entries()]
-        .filter(([, uid]) => isBlockedUid(uid))
+        .filter(([, uid]) => hiddenSpeakerUids.has(uid))
         .map(([messageId]) => messageId),
     );
     const excludedContextIds = new Set([...blockedMessageIds, ...blockedContextMessageIds]);
+    const boundReadOnlyBackground = (lines: typeof backgroundLines): typeof backgroundLines => {
+      let readOnlyCount = 0, chars = 0;
+      return lines.filter(line => {
+        const uid = contextUidByMessageId.get(line.id);
+        if (uid && hiddenSpeakerUids.has(uid)) return false;
+        const identity = uid ? identityByUid.get(uid) : undefined;
+        const readOnly = identity && isReadOnlyFriendContent(identity.kind, identity.policy);
+        if (!readOnly) return true;
+        const text = line.text.slice(0, 300);
+        if (readOnlyCount >= 2 || chars + text.length > 600) return false;
+        readOnlyCount++; chars += text.length;
+        Object.assign(line, { text, kind: "AI", readOnly: true, excludeFromGrowth: true });
+        return true;
+      });
+    };
+    backgroundLines = boundReadOnlyBackground(backgroundLines);
+    analysisBackgroundLines = boundReadOnlyBackground(analysisBackgroundLines);
     items = originalItems.filter((item) => !blockedMessageIds.has(item.event.messageId));
     if (!items.length) {
       logGroupRound(groupEvent.groupId, {
@@ -1544,24 +1575,42 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       return;
     }
 
-    /**
-     * 这一批引用到的原文：只在进程内窗口里查，最多解析 4 条。
-     *
-     * 群里引用很密，每条都回查网关会把回复拖慢；查不到就只给 id，
-     * 提示词明确要求「看不见就说看不见」，不许替对方补一句原文。
-     */
-    const quotedByMessageId = new Map(items.slice(0, 4).flatMap((item) => {
-      const replyTo = item.facts.replyToMessageId;
-      if (!replyTo) return [];
-      const quoted = groupContext.quoteOf(contextKey, replyTo);
-      return [[item.event.messageId, {
-        messageId: replyTo,
-        ...(quoted?.text ? { content: quoted.text } : {}),
-        ...(quoted?.speaker ? { speaker: quoted.speaker } : {}),
-        ...(quoted?.member ? { member: quoted.member } : {}),
-        isSelf: quoted?.isSelf === true,
-      }] as const];
-    }));
+    // Only after the zero-cost gate and reply quota: at most four unique targets,
+    // resolved concurrently, with window hits preferred over short same-room get_msg reads.
+    type QuotePolicy = { kind: "AI" | "HUMAN" | "UNKNOWN"; policy: "DEFAULT" | "ALLOW" | "BLOCK" };
+    const quotePolicies = new Map<string, Promise<QuotePolicy>>();
+    const quotePolicyFor = (uid: string): Promise<QuotePolicy> => {
+      if (uid === selfQq || uid === record.ownerQq) return Promise.resolve({ kind: "HUMAN", policy: "ALLOW" });
+      if (identityByUid.has(uid)) return Promise.resolve(identityByUid.get(uid)!);
+      if (!quotePolicies.has(uid)) quotePolicies.set(uid, (async () => {
+        try {
+          const identity = await prisma.externalIdentity.findUnique({
+            where: { platform_platformUid: { platform: ONEBOT_PLATFORM, platformUid: uid } },
+            select: { kind: true, memoryScopes: { where: { characterId: binding.characterId, scopeType: "EXTERNAL_IDENTITY" }, take: 1, select: { friendChatPolicy: true } } },
+          });
+          return { kind: identity?.kind ?? "UNKNOWN", policy: identity?.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT" };
+        } catch { return { kind: "UNKNOWN", policy: "BLOCK" }; }
+      })());
+      return quotePolicies.get(uid)!;
+    };
+    const quotedByMessageId = await resolveOnebotGroupQuotes(record.config, items.map(item => ({ ...item.event, selfId: item.event.selfId || record.accountQq })), {
+      cached: id => {
+        const value = groupContext.quoteOf(contextKey, id);
+        return value ? { messageId: value.id, authorQq: value.authorQq, speaker: value.speaker, content: value.text, isSelf: value.isSelf } : undefined;
+      },
+      canReadAuthor: async uid => { const policy = await quotePolicyFor(uid); return !shouldHideFriendContent(policy.kind, policy.policy); },
+      authorPolicy: quotePolicyFor,
+      formatText: text => groupContext.formatText(contextKey, text),
+      memberCode: uid => uid === selfQq ? "self" : groupContext.memberCode(contextKey, uid),
+      remember: (messageId, quoted) => groupContext.rememberQuote(contextKey, messageId, { id: quoted.messageId,
+        ...(quoted.content ? { text: quoted.content } : {}), ...(quoted.member ? { member: quoted.member } : {}),
+        ...(quoted.speaker ? { speaker: quoted.speaker } : {}), ...(quoted.isSelf !== undefined ? { isSelf: quoted.isSelf } : {}),
+        ...(quoted.authorQq ? { authorQq: quoted.authorQq } : {}),
+        ...(quoted.kind ? { kind: quoted.kind } : {}),
+        ...(quoted.readOnly ? { readOnly: true as const } : {}),
+        ...(quoted.excludeFromGrowth ? { excludeFromGrowth: true as const } : {}),
+      }),
+    });
     const currentIds = items.map((item) => item.event.messageId);
     const result = await handleChannelBatch({
       platform: ONEBOT_PLATFORM,
@@ -1573,6 +1622,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         externalMessageId: item.event.messageId,
         authorOpenId: item.event.userId,
         authorPlatformUid: item.event.userId,
+        kind: kindFor(item),
+        ...(kindFor(item) === "AI" ? { excludeFromGrowth: true as const } : {}),
         ...(item.event.displayName ? { authorDisplayName: item.event.displayName } : {}),
         content: item.event.content,
         // 谁被 @ 了：落库给提炼用 —— 「@ 的是别的 bot」这类事不能再记成她的事。
@@ -1773,6 +1824,10 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         speakerPolicy = identity.friendChatPolicy;
       }
 
+      if (facts) {
+        facts.kind = speakerKind;
+        if (speakerKind === "AI") facts.excludeFromGrowth = true;
+      }
       // 只统计群里发生了什么；屏蔽只影响她看见的语境和是否回复。
       if (event.content) {
         groupActivity.record({
@@ -1789,6 +1844,9 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
 
       // 先在入口过滤：被禁止的对象不参与对话，也不能通过 @ 绕过。
       if (shouldBlockFriendSpeaker(speakerKind, speakerPolicy)) {
+        if (facts && event.content && isReadOnlyFriendContent(speakerKind, speakerPolicy)) {
+          groupContext.remember(contextKey, { ...facts, kind: "AI", readOnly: true, excludeFromGrowth: true });
+        }
         return { status: "ignored", reason: "friend_policy_blocked" };
       }
 
@@ -1810,7 +1868,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
 
     // 先进短期上下文：只记允许参与的发言；后续被闸门拒绝的消息仍可作为背景。
     if (isGroupMessage && event.content && facts) {
-      groupContext.remember(contextKey, facts);
+      groupContext.remember(contextKey, { ...facts, kind: speakerKind,
+        ...(speakerKind === "AI" ? { excludeFromGrowth: true as const } : {}) });
     }
 
     // 仅 @ 模式下，名字与活跃话题只作为背景，不能触发普通回复或发起指令。
