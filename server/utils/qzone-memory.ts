@@ -53,7 +53,12 @@ export async function recordQzonePostMemory(
   // 好友可见（4）/ 仅自己（64）的正文不写进全局记忆：群聊读得到的东西不能比主人以为的更多。
   if ((input.visible ?? 1) !== 1) return { recorded: false, reason: "not_public" };
 
-  const scope = await prisma.memoryScope.findFirst({
+  return prisma.$transaction(async (tx) => {
+    // NULL binding 不受现有会话 unique 保护；同角色/账号的创建与写消息必须串行。
+    const lockKey = JSON.stringify(["qzone-memory", input.characterId, accountQq]);
+    await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+  const scope = await tx.memoryScope.findFirst({
     where: { characterId: input.characterId, scopeType: "CHARACTER_GLOBAL" },
     select: { id: true },
   });
@@ -61,11 +66,14 @@ export async function recordQzonePostMemory(
 
   const externalConversationId = qzoneConversationKey(accountQq);
   // 归属按「角色 + QQ」：同一个号挂两个角色时各写各的，不能拿 externalConversationId 单独查。
-  const existing = await prisma.conversation.findFirst({
+  const existing = await tx.conversation.findFirst({
     where: { characterId: input.characterId, channelBindingId: null, externalConversationId },
-    select: { id: true },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, memoryScopeId: true },
   });
-  const conversation = existing ?? await prisma.conversation.create({
+  // 错挂私人范围或其他角色范围时拒绝写入，不静默改写历史会话归属。
+  if (existing && existing.memoryScopeId !== scope.id) throw new Error("QZONE_MEMORY_SCOPE_MISMATCH");
+  const conversation = existing ?? await tx.conversation.create({
     data: {
       characterId: input.characterId,
       memoryScopeId: scope.id,
@@ -77,16 +85,22 @@ export async function recordQzonePostMemory(
     select: { id: true },
   });
 
-  const duplicate = await prisma.message.findFirst({
-    where: { conversationId: conversation.id, metadata: { path: ["qzoneActionId"], equals: actionId } },
+  const externalMessageId = `qzone-action:${actionId}`;
+  const duplicate = await tx.message.findFirst({
+    where: { conversationId: conversation.id, OR: [
+      { externalMessageId },
+      // 兼容尚未写 externalMessageId 的旧消息。
+      { metadata: { path: ["qzoneActionId"], equals: actionId } },
+    ] },
     select: { id: true },
   });
   if (duplicate) return { recorded: false, reason: "duplicate" };
 
   const occurredAt = input.occurredAt ?? new Date();
-  await prisma.message.create({
+  await tx.message.create({
     data: {
       conversationId: conversation.id,
+      externalMessageId,
       role: "ASSISTANT",
       content,
       occurredAt,
@@ -97,8 +111,12 @@ export async function recordQzonePostMemory(
       } satisfies Prisma.InputJsonObject,
     },
   });
-  await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: occurredAt } });
+  await tx.conversation.updateMany({
+    where: { id: conversation.id, OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: occurredAt } }] },
+    data: { lastMessageAt: occurredAt },
+  });
   return { recorded: true };
+  });
 }
 
 /**

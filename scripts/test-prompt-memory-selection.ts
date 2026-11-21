@@ -96,4 +96,34 @@ await selectPromptMemoryContext({
 });
 assert.equal(lookedUp, false, "空结果不触发参与者名字查询");
 
-console.log("记忆选择层测试通过：范围标签、validFrom 回退、忆泡截断与改名、近期去重与下标对齐、首条保底、空结果不查库。");
+// Optional cues share the real selector: no reserved budget, no extra slot,
+// no duplicate in recent background, and names/diagnostics use the same path.
+const cueCandidate = eventCandidate("cue", day(1), {
+  title: "一起吃饭", detail: "共享晚餐", keywords: [],
+  participantRefs: [{ kind: "external", platform: "qq-onebot", externalId: "member-a" }],
+});
+const cueInput = {
+  ...base, query: "完全不同的话题", eventCandidates: [cueCandidate],
+  personCue: { speakerIds: ["member-a"], platform: "qq-onebot" },
+  loadParticipantNames: async (items: readonly PromptEventCandidate[]) => items.map(() => ["当前名字"]),
+};
+const cueResult = await selectPromptMemoryContext(cueInput);
+assert.equal(cueResult.events[0]?.id, "cue");
+assert.deepEqual(cueResult.events[0]?.participants, ["当前名字"]);
+assert.equal(cueResult.selection.event.count, cueResult.events.length);
+assert(cueResult.selection.event.usedTokens > 0);
+const tightCue = await selectPromptMemoryContext({ ...cueInput, limits: { ...base.limits, eventTokens: 1 } });
+assert.equal(tightCue.events.length, 0, "optional cue never uses mandatory first-item budget exception");
+const backgroundCue = await selectPromptMemoryContext({ ...cueInput, limits: { ...base.limits, recentEventDays: 3 } });
+assert.equal(backgroundCue.events.length, 0, "recent background already contains this cue");
+assert.equal(backgroundCue.recentEvents[0]?.id, "cue");
+const wrongPlatformCue = await selectPromptMemoryContext({ ...cueInput, personCue: { speakerIds: ["member-a"], platform: "another-platform" } });
+assert.equal(wrongPlatformCue.events.length, 0, "same numeric/account string across platforms is not same identity");
+const directCandidate = eventCandidate("direct", day(2), { title: "目标主题", detail: "目标主题", keywords: ["目标主题"] });
+const oneSlot = await selectPromptMemoryContext({ ...cueInput, query: "目标主题", eventCandidates: [directCandidate, cueCandidate], limits: { ...base.limits, events: 1 } });
+assert.deepEqual(oneSlot.events.map(item => item.id), ["direct"], "cue cannot exceed item limit or displace direct answer");
+const directOnly = await selectPromptMemoryContext({ ...cueInput, query: "目标主题", eventCandidates: [directCandidate] });
+const remainingBudget = await selectPromptMemoryContext({ ...cueInput, query: "目标主题", eventCandidates: [directCandidate, cueCandidate], limits: { ...base.limits, eventTokens: directOnly.selection.event.usedTokens } });
+assert.deepEqual(remainingBudget.events.map(item => item.id), ["direct"], "cue requires genuinely spare tokens");
+
+console.log("记忆选择层测试通过：范围、截断、改名、近期去重、首条保底、人物线索预算/条数/平台与诊断。");

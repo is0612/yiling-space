@@ -25,14 +25,14 @@ export type PersonCueResult<T extends PersonCueEvent> = {
 };
 
 /** 从结构化引用里取外部账号；读坏了就当没有这条。 */
-function externalIdsOf(event: PersonCueEvent): string[] {
+function externalIdsOf(event: PersonCueEvent, platform?: string): string[] {
   const refs = event.participantRefs;
   if (!Array.isArray(refs)) return [];
   const ids: string[] = [];
   for (const ref of refs) {
     if (!ref || typeof ref !== "object") continue;
     const record = ref as Record<string, unknown>;
-    if (record.kind !== "external") continue;
+    if (record.kind !== "external" || (platform && record.platform !== platform)) continue;
     const id = typeof record.externalId === "string" ? record.externalId.trim() : "";
     if (id) ids.push(id);
   }
@@ -49,6 +49,7 @@ export function pickPersonCueEvent<T extends PersonCueEvent>(input: {
   query: string;
   events: readonly T[];
   speakerIds: readonly string[];
+  platform?: string;
   excludeIds?: ReadonlySet<string>;
   now?: Date;
   timeZone?: string;
@@ -58,7 +59,7 @@ export function pickPersonCueEvent<T extends PersonCueEvent>(input: {
   const exclude = input.excludeIds ?? new Set<string>();
   const candidates = input.events.filter(event => {
     if (exclude.has(event.id)) return false;
-    return externalIdsOf(event).some(id => speakers.has(id));
+    return externalIdsOf(event, input.platform).some(id => speakers.has(id));
   });
   if (!candidates.length) return { event: null, reason: "no_match" };
 

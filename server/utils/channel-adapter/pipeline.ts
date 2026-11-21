@@ -1472,47 +1472,8 @@ async function runChannelTurn(input: {
 
   // 记忆、阶段总结、忆泡的选择与整形和网页共用一份（`prompt-memory-selection.ts`）。
   // 差别只在 scope 标签怎么算：这里按「是不是角色全局范围」判断，网页按会话范围来源判断。
-  /**
-   * 人物线索（`modelConfig.personCueEnabled`，默认关）：
-   * 这一轮谁在说话，就补一条「我和 TA 在**这个群**里发生过的事」。
-   *
-   * 只在群聊、只在本群候选里挑、只补一条、必须和已选忆泡去重；找不到就不补。
-   * 认人只按账号（`participantRefs.externalId`），改名不影响。
-   *
-   * 它**计入忆泡预算**：先挑出线索、算出它占多少 token，再从忆泡预算里扣掉，
-   * 这样它不会让这一轮的总量超出用户设的上限。
-   */
-  const personCuePick = (() => {
-    const enabled = isGroup && (character.modelConfig as Record<string, unknown> | null)?.personCueEnabled === true;
-    if (!enabled || !speakerUids.length) return null;
-    // 这里还不能拿「已选忆泡」去重（选择还没跑），所以先挑、选完再排重。
-    const picked = pickPersonCueEvent({
-      query: retrievalQuery,
-      events: eventCandidates,
-      speakerIds: speakerUids,
-      now: eventRetrievalNow,
-      timeZone: resolveChatTimeZone(character.memorySetting?.timezone),
-    });
-    if (!picked.event) return null;
-    const cue = picked.event;
-    return {
-      id: cue.id,
-      tokens: estimateTokens(`${cue.title}\n${cue.detail.slice(0, PROMPT_EVENT_DETAIL_MAX_CHARS)}`),
-      item: {
-        id: cue.id,
-        occurredAt: cue.occurredAt.toISOString(),
-        ...(cue.timeOfDay ? { timeOfDay: cue.timeOfDay } : {}),
-        ...(cue.place ? { place: cue.place } : {}),
-        participants: [...cue.participants],
-        title: cue.title,
-        detail: cue.detail.slice(0, PROMPT_EVENT_DETAIL_MAX_CHARS),
-        scope: (cue.memoryScopeId === globalScope.id ? "character" : "private") as "character" | "private",
-      },
-    };
-  })();
-
   const {
-    memories, snapshots, events: selectedEvents, recentEvents, eventSelection, selection: memorySelection,
+    memories, snapshots, events, recentEvents, eventSelection, selection: memorySelection,
   } = await selectPromptMemoryContext({
     query: retrievalQuery,
     now: eventRetrievalNow,
@@ -1521,23 +1482,20 @@ async function runChannelTurn(input: {
     snapshotCandidates,
     eventCandidates,
     participantIds,
+    ...(isGroup && (character.modelConfig as Record<string, unknown> | null)?.personCueEnabled === true
+      ? { personCue: { speakerIds: speakerUids, platform: input.platform } } : {}),
     limits: {
       memoryItems: resolveMemoryItemLimit(character.modelConfig),
       memoryTokens: resolveMemoryTokenBudget(character.modelConfig),
       snapshots: 4,
       snapshotTokens: resolveSnapshotTokenBudget(character.modelConfig),
       events: resolveEventItemLimit(character.modelConfig),
-      // 线索先占一份，剩下的才给普通忆泡：总预算不变。
-      eventTokens: Math.max(1, resolveEventTokenBudget(character.modelConfig) - (personCuePick?.tokens ?? 0)),
+      eventTokens: resolveEventTokenBudget(character.modelConfig),
       recentEventDays: resolveEventRecentDays(character.modelConfig),
     },
     scopeOf: (memoryScopeId) => (memoryScopeId === globalScope.id ? "character" : "private"),
     loadParticipantNames: (items) => resolveEventParticipantNames(prisma, items),
   });
-
-  // 线索恰好也被普通检索选中时不算重复：直接去掉它，别让同一条忆泡出现两次。
-  const personCue = personCuePick && !selectedEvents.some(item => item.id === personCuePick.id) ? personCuePick.item : null;
-  const events = personCue ? [...selectedEvents, personCue] : selectedEvents;
 
   // 装配计划：只描述「这一轮打算放哪几类来源、各多少额度」，不驱动下面的查询。
   const questionKind: "date" | "topic" | "none" = eventSelection.range

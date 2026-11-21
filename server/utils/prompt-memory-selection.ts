@@ -10,7 +10,8 @@
  * 本模块不决定要不要回、不写库。行为与抽取前逐字节一致。
  */
 
-import { rankMemoriesWithBudget, rankSnapshotsWithBudget, type BudgetedRank } from "./memory-retrieval";
+import { pickPersonCueEvent } from "./person-cue";
+import { estimateTokens, rankMemoriesWithBudget, rankSnapshotsWithBudget, type BudgetedRank } from "./memory-retrieval";
 import { selectEventsForPrompt, selectRecentEvents, type EventCandidate, type SelectedEvents } from "./memory-event-retrieval";
 
 /** 忆泡注入提示词时的正文上限。改这个数字等于改提示词内容，两边必须一起变。 */
@@ -111,6 +112,8 @@ export async function selectPromptMemoryContext<TEvent extends PromptEventCandid
   snapshotCandidates: PromptSnapshotCandidate[];
   eventCandidates: TEvent[];
   participantIds: readonly string[];
+  /** Caller supplies only authorized current-group candidates; omitted means disabled. */
+  personCue?: { speakerIds: readonly string[]; platform: string };
   limits: {
     memoryItems: number;
     memoryTokens: number;
@@ -168,6 +171,28 @@ export async function selectPromptMemoryContext<TEvent extends PromptEventCandid
       })
     : null;
   const recentEventItems = recentEventSelection?.items ?? [];
+
+  // Optional cues use only spare ordinary-event budget and slots. Never displace
+  // a direct answer, never receive the first-item oversize exception.
+  if (input.personCue && eventSelection.items.length < input.limits.events) {
+    const picked = pickPersonCueEvent({
+      query: input.query,
+      events: input.eventCandidates,
+      speakerIds: input.personCue.speakerIds,
+      platform: input.personCue.platform,
+      excludeIds: new Set([...eventSelection.items, ...recentEventItems].map(item => item.id)),
+    }).event;
+    if (picked) {
+      const tokens = estimateTokens([
+        picked.title, picked.detail, picked.place ?? "", picked.timeOfDay ?? "",
+        picked.keywords.join(" "), picked.participants.join(" "),
+      ].filter(Boolean).join("\n"));
+      if (eventSelection.usedTokens + tokens <= input.limits.eventTokens) {
+        eventSelection.items.push({ ...picked, relevanceScore: 0, tokens });
+        eventSelection.usedTokens += tokens;
+      }
+    }
+  }
 
   const participantNames = eventSelection.items.length + recentEventItems.length
     ? await input.loadParticipantNames([...eventSelection.items, ...recentEventItems])

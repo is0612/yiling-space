@@ -112,6 +112,45 @@ try {
   assert.equal(await prisma.message.count({ where: { conversationId: conversationA.id } }), before + 1);
   assert(await prisma.message.findFirst({ where: { conversationId: conversationA.id, metadata: { path: ["qzoneActionId"], equals: legacyAction.id } } }));
 
+  // 真并发：同一新账号、同一动作一起进来，只允许建一个会话和一条消息。
+  const concurrentAccount = "200000002";
+  const concurrentInput = { characterId: characterA, accountQq: concurrentAccount, actionId: "concurrent-action", content: "并发发布", occurredAt: new Date("2026-11-21T12:00:00Z") };
+  const concurrent = await Promise.all(Array.from({ length: 8 }, () => recordQzonePostMemory(prisma, concurrentInput)));
+  assert.equal(concurrent.filter(result => result.recorded).length, 1);
+  assert.equal(concurrent.filter(result => result.reason === "duplicate").length, 7);
+  const concurrentConversations = await prisma.conversation.findMany({ where: { characterId: characterA, externalConversationId: qzoneConversationKey(concurrentAccount) } });
+  assert.equal(concurrentConversations.length, 1, "事务锁覆盖首次会话创建");
+  const concurrentConversation = concurrentConversations[0]!;
+  assert.equal(await prisma.message.count({ where: { conversationId: concurrentConversation.id } }), 1);
+  assert.equal((await prisma.message.findFirstOrThrow({ where: { conversationId: concurrentConversation.id } })).externalMessageId, "qzone-action:concurrent-action");
+
+  // 并发不同动作同正文，每件真事都要留下；另一角色同账号同动作也独立归属。
+  const distinct = await Promise.all([
+    ...Array.from({ length: 4 }, (_, index) => recordQzonePostMemory(prisma, { ...concurrentInput, actionId: `distinct-${index}` })),
+    recordQzonePostMemory(prisma, { ...concurrentInput, characterId: characterB }),
+  ]);
+  assert(distinct.every(result => result.recorded));
+  assert.equal(await prisma.message.count({ where: { conversationId: concurrentConversation.id } }), 5);
+  const otherConversation = await prisma.conversation.findFirstOrThrow({ where: { characterId: characterB, externalConversationId: qzoneConversationKey(concurrentAccount) } });
+  assert.equal(otherConversation.memoryScopeId, scopeB);
+  assert.notEqual(otherConversation.id, concurrentConversation.id);
+  assert.equal(await prisma.message.count({ where: { conversationId: otherConversation.id } }), 1);
+
+  // 兼容只有 metadata 动作键的旧消息，不补写第二份。
+  await prisma.message.create({ data: { conversationId: concurrentConversation.id, role: "ASSISTANT", content: "旧格式", occurredAt: concurrentInput.occurredAt, metadata: { source: "qzone", kind: "qzone", qzoneActionId: "metadata-only" } } });
+  assert.deepEqual(await recordQzonePostMemory(prisma, { ...concurrentInput, actionId: "metadata-only" }), { recorded: false, reason: "duplicate" });
+
+  // 历史补记不得让会话的最新时间倒退。
+  await recordQzonePostMemory(prisma, { ...concurrentInput, actionId: "historical", occurredAt: new Date("2020-01-01T00:00:00Z") });
+  assert.equal((await prisma.conversation.findUniqueOrThrow({ where: { id: concurrentConversation.id } })).lastMessageAt?.toISOString(), concurrentInput.occurredAt.toISOString());
+
+  // 已有会话错误挂到其他角色范围时拒绝；事务不留下消息或更改时间。
+  const badAccount = "200000003";
+  const badConversation = await prisma.conversation.create({ data: { characterId: characterA, memoryScopeId: scopeB, externalConversationId: qzoneConversationKey(badAccount) } });
+  await assert.rejects(recordQzonePostMemory(prisma, { ...concurrentInput, accountQq: badAccount }), /QZONE_MEMORY_SCOPE_MISMATCH/u);
+  assert.equal(await prisma.message.count({ where: { conversationId: badConversation.id } }), 0);
+  assert.equal((await prisma.conversation.findUniqueOrThrow({ where: { id: badConversation.id } })).lastMessageAt, null);
+
   // 8) 来源标签：空间会话不该被显示成「本地对话」。
   assert.equal(conversationOriginLabel({ externalConversationId: qzoneConversationKey(accountQq) }), "QQ空间");
   assert.equal(conversationOriginLabel({ externalConversationId: "g:123456789" }), "QQ群 123456789");
