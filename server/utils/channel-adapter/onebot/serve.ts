@@ -668,8 +668,9 @@ async function handleQzoneConfirm(
       await recordQzonePostMemory(getPrisma(), {
         characterId: pending.characterId ?? binding.characterId,
         accountQq: record.accountQq,
+        actionId: pending.id,
         content: pending.content,
-        tid: result.tid,
+        visible: pending.visible,
       }).catch((error) => {
         console.warn("[qzone] 说说没能写进记忆：", error instanceof Error ? error.message : error);
       });

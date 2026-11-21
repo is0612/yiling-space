@@ -255,7 +255,7 @@ yarn probe:qzone     # 真实通道（只读）
 
 - **点赞**：接口是 `internal_dolike_app`，参数（`unikey` / `curkey`）要从动态列表里带出来，
   当前解析只保留 tid/uin，先不做。
-- **说说正文进记忆**（2026-11-21 已做）：发布成功后把正文写成一条 `ASSISTANT` 消息，
+- **说说正文进记忆**（2026-11-21 已做，同日修正）：发布成功后把正文写成一条 `ASSISTANT` 消息，
   挂在角色全局范围的「空间」会话（`externalConversationId = q:<QQ号>`、
   `channelBindingId` 留空，所以不会混进桌面端「我的对话」），来源标签是「QQ空间」。
   同一个 tid 只写一次，没有 tid 时按「同一天同一条正文」去重；写失败只记日志，

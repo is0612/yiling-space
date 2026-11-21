@@ -35,6 +35,19 @@ assert.equal(retrieval?.event.mode, "range", "忆泡是按时段还是关键词�
 assert.equal(retrieval?.event.recent, 1, "近期背景忆泡条数单独记");
 assert.deepEqual(retrieval?.used, { memory: 1, snapshot: 0, event: 2 }, "模型自报引用要和「放进去几条」分开记");
 assert.deepEqual(restored?.retrieval?.used, retrieval?.used, "落盘再读回不能丢引用计数");
+// 计划必须真的落盘：update 只处理 retrieval 那次，contextPlan 被静默丢掉了。
+const withPlan = createModelTurnDetail(false, [{ content: "本轮" }], "web");
+withPlan.update({
+  contextPlan: {
+    surface: "desktop", totalBudget: 5100,
+    segments: [{ source: "memory", reason: "always", budget: 1800, limit: 20, used: 900, items: 4, optional: true }],
+  },
+});
+const planRoundTrip = readModelTurnDetail(withPlan.serialize());
+assert.equal(planRoundTrip?.contextPlan?.segments.length, 1, "计划要能从序列化结果里读回来");
+assert.equal(planRoundTrip?.contextPlan?.segments[0]?.used, 900);
+assert.equal(planRoundTrip?.contextPlan?.surface, "desktop");
+
 // 只有数字：脏字段、未知 mode、负数与超大值都不该原样落盘。
 const dirty = sanitizeModelTurnDetail({
   version: 1, groupChat: true, messages: [], context: { status: "success" }, memory: { status: "success" }, response: { status: "success" },

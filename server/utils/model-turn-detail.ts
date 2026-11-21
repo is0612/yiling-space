@@ -42,6 +42,7 @@ export type ModelTurnDetail = {
   collaboration?: AssistantTurnDiagnostics;
   growthReads?: GrowthReadDiagnostic[];
   retrieval?: TurnRetrievalStats;
+  contextPlan?: TurnContextPlanStats;
   context: NonNullable<TurnDetailPatch["context"]>;
   memory: NonNullable<TurnDetailPatch["memory"]>;
   response: { status: "success" | "failed"; action?: "reply" | "silent"; reply?: string; explanation?: string };
@@ -157,6 +158,10 @@ export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence
       if (patch.retrieval !== undefined) {
         const stats = retrievalStats(patch.retrieval);
         if (stats) detail.retrieval = stats;
+      }
+      if (patch.contextPlan !== undefined) {
+        const plan = contextPlanStats(patch.contextPlan);
+        if (plan) detail.contextPlan = plan;
       }
       if (patch.response) detail.response = { status: "success", ...patch.response };
     },
