@@ -1,7 +1,12 @@
-export type PrivateChatCursor = { occurredAt: Date; id: string };
+/**
+ * 内部键集游标（带 Date）。与响应里的 `PrivateChatCursor`（`{ before, beforeId }`）
+ * 不是一回事：那个是传输形状的字符串，这个是查询用的时间戳 + id。
+ * 之前两者同名，跨层读代码很容易以为是同一个东西。
+ */
+export type PrivateChatKeyset = { occurredAt: Date; id: string };
 
 /** Parse the stable timestamp+id keyset cursor used by private-chat pagination. */
-export function readPrivateChatCursor(rawAt: unknown, rawId: unknown): PrivateChatCursor | null {
+export function readPrivateChatCursor(rawAt: unknown, rawId: unknown): PrivateChatKeyset | null {
   if (rawAt === undefined && rawId === undefined) return null;
   if (typeof rawAt !== "string" || typeof rawId !== "string" || !rawId.trim()) {
     throw new Error("before and beforeId must be provided together.");
@@ -12,7 +17,7 @@ export function readPrivateChatCursor(rawAt: unknown, rawId: unknown): PrivateCh
   return { occurredAt, id: rawId.trim() };
 }
 
-export function privateChatCursorWhere(cursor: PrivateChatCursor) {
+export function privateChatCursorWhere(cursor: PrivateChatKeyset) {
   return {
     OR: [
       { occurredAt: { lt: cursor.occurredAt } },

@@ -2,219 +2,38 @@ import type { ApiRequest } from "../utils/request";
 import type { Character, Snapshot, SnapshotDetail, SnapshotSourceMessage } from "../utils/mock-data";
 import type { MemoryProgressRow } from "../composables/useMemoryProgress";
 // 记忆条目的形状与枚举与后端共用一份（`shared/types/memory.ts`）；页面沿用 `MemoryRow` 这个名字。
-import type { MemoryCategory, MemoryDayDetail, MemoryDayMessages, MemoryDayPage, MemoryEvent, MemoryItem, MemoryPage } from "#shared/types/memory";
+import type {
+  GroupChatPayload, InteractionExperienceItem, InteractionExperiencePage, MemoryCategory, MemoryDayDetail, MemoryDayMessages,
+  MemoryDayPage, MemoryDetail, MemoryEvent, MemoryEventDuplicatePayload, MemoryEventKnowledgeResult,
+  MemoryExtractResult, MemoryExtractionPreview, MemoryItem, MemoryPage, MemoryStats,
+  PrivateChatCursor, PrivateChatPayload, RecycleBinPage, SnapshotGenerateResult,
+} from "#shared/types/memory";
 import type { SnapshotPage } from "#shared/types/snapshot";
 export type {
   MEMORY_CATEGORIES, MEMORY_STATUSES, MEMORY_SCOPE_TYPES,
   MEMORY_EVENT_STATES, MEMORY_EVENT_STATUSES, MEMORY_EVENT_SCOPES,
   MemoryCategory, MemoryEvent, MemoryEventScope, MemoryEventState, MemoryEventStatus,
+  GroupChatGroup, GroupChatMessage, GroupChatPayload, PrivateChatChat, PrivateChatMessage, PrivateChatPayload, PrivateChatCursor,
   MemoryDayDetail, MemoryDayMessage, MemoryDayMessageGroup, MemoryDayMessages, MemoryDayPage, MemoryDayRow,
   MemoryItem, MemoryPage,
 } from "#shared/types/memory";
 export type MemoryRow = MemoryItem;
 
-export type MemoryStats = {
-  memory: number;
-  commitment: number;
-  message: number;
-  event: number;
-  snapshot: number;
-  memoryEvent: number;
-};
 
-export type MemoryDetail = {
-  id: string;
-  category: MemoryCategory;
-  content: string;
-  sourceMessageId: string | null;
-  sourceSnapshotId: string | null;
-  sourceMessage: {
-    id: string;
-    role: string;
-    eventType: string;
-    content: string;
-    occurredAt: string;
-    conversation: { id: string; title: string | null };
-  } | null;
-  sourceSnapshot: {
-    id: string;
-    summary: string;
-    periodStart: string;
-    periodEnd: string;
-    version: number;
-    status: string;
-  } | null;
-};
-
-export type RecycleBinEntry = {
-  id: string;
-  category: MemoryCategory;
-  content: string;
-  statusBeforeTrash: "ACTIVE" | "SUPERSEDED" | "ARCHIVED" | "INVALIDATED" | null;
-  deletedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type RecycleBinPage = {
-  items: RecycleBinEntry[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-};
-
-export type GroupChatGroup = {
-  conversationId: string;
-  groupId: string | null;
-  label: string;
-  lastMessageAt: string | null;
-  updatedAt: string;
-  messageCount: number;
-  connectionName: string | null;
-  automaticObservation?: { enabled: boolean; lastError: string | null };
-};
-
-export type GroupChatMessage = {
-  id: string;
-  role: string;
-  content: string;
-  occurredAt: string;
-  author: string | null;
-  member: string | null;
-};
-
-export type GroupChatPayload = {
-  groups: GroupChatGroup[];
-  selectedConversationId: string | null;
-  messages: GroupChatMessage[];
-};
-
-export type PrivateChatChat = {
-  conversationId: string;
-  qq: string | null;
-  label: string;
-  lastMessageAt: string | null;
-  updatedAt: string;
-  messageCount: number;
-  connectionName: string | null;
-};
-
-export type PrivateChatMessage = {
-  id: string;
-  role: string;
-  content: string;
-  occurredAt: string;
-  author: string | null;
-  isOwner: boolean;
-};
-
-export type PrivateChatCursor = { before: string; beforeId: string } | null;
-
-export type PrivateChatPayload = {
-  chats: PrivateChatChat[];
-  selectedConversationId: string | null;
-  messages: PrivateChatMessage[];
-  hasMore: boolean;
-  nextCursor: PrivateChatCursor;
-};
 
 /** 忆泡：与后端共用同一份契约（`shared/types/memory.ts` 的 `MemoryEvent`）。 */
 export type MemoryDayEvent = MemoryEvent;
-
-export type MemoryEventKnowledgeResult = {
-  requestId: string;
-  eventId: string | null;
-  status: "PENDING" | "CREATED" | "SKIPPED";
-  candidateId: string | null;
-  created: boolean;
-};
-
-export type MemoryExtractionPreview = {
-  characterId: string;
-  characterName: string;
-  timeZone: string;
-  checkedAt: string;
-  totalMessages: number;
-  rows: Array<{ key: string; dayKey: string; conversationLabel: string; scopeLabel: string; pendingMessages: number }>;
-  truncated: boolean;
-  hasLegacyOwnerChats: boolean;
-  notice: string | null;
-};
 
 export type MemoryProgressPayload = {
   jobs: MemoryProgressRow[];
   checkedAt: string;
 };
 
-export type MemoryEventDuplicateEntry = {
-  id: string;
-  title: string;
-  detail: string;
-  sourceMessageIds: string[];
-};
-
-export type MemoryEventDuplicatePair = {
-  keep: MemoryEventDuplicateEntry;
-  candidate: MemoryEventDuplicateEntry;
-  reason: string;
-  token: string;
-};
-
-export type MemoryEventDuplicatePayload = {
-  pairs: MemoryEventDuplicatePair[];
-  checkedCount: number;
-  pairsLimited: boolean;
-};
 
 // 分页形状与后端共用（`shared/types/snapshot.ts`）。
 export type { SnapshotPage, SnapshotSourcePage } from "#shared/types/snapshot";
 
-export type SnapshotGenerateResult = {
-  queued: string[];
-  skipped: string[];
-  processed: Array<{ status: string; message: string }>;
-  pending: number;
-  advancedTo: string | null;
-  processing?: boolean;
-};
 
-/** `memory-events/extract`：整理昨天与今天的忆泡。 */
-export type MemoryExtractResult = {
-  queued: string[];
-  processed: Array<{ status: string; message: string }>;
-  notice?: "queued" | "running" | "no-new-messages";
-  processing?: boolean;
-};
-
-export type InteractionExperienceItem = {
-  review?: { status: string; reason: string; reviewedAt: string; revision: number; current: boolean } | null;
-  id: string;
-  content: string;
-  context: string;
-  feedbackQuote: string;
-  status: string;
-  revision: number;
-  conversationId: string;
-  weight: number;
-  createdAt?: string;
-  updatedAt?: string;
-  learning?: unknown;
-};
-
-export type InteractionExperienceAutomation = {
-  enabled: boolean;
-  status: string;
-  lastError: string | null;
-  nextRunAt?: string | null;
-  lastCompletedAt?: string | null;
-};
-
-export type InteractionExperiencePage = {
-  items: InteractionExperienceItem[];
-  pagination?: { page: number; pageSize: number; total: number; pageCount: number };
-  automation?: InteractionExperienceAutomation;
-};
 
 const characterBase = (characterId: string) => `/characters/${encodeURIComponent(characterId)}`;
 const memoryPath = (memoryId: string) => `/memories/${encodeURIComponent(memoryId)}`;

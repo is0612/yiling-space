@@ -140,3 +140,213 @@ export type MemoryDayMessages = {
   messageGroups: MemoryDayMessageGroup[];
   totalMessages: number;
 };
+
+// ── 统计 / 详情 / 回收站 ─────────────────────────────────────
+
+export type MemoryStats = {
+  memory: number;
+  commitment: number;
+  message: number;
+  event: number;
+  snapshot: number;
+  memoryEvent: number;
+};
+
+/** 单条记忆的详情：多带来源消息与来源快照两级上下文。 */
+export type MemoryDetail = {
+  id: string;
+  category: MemoryCategory;
+  content: string;
+  sourceMessageId: string | null;
+  sourceSnapshotId: string | null;
+  sourceMessage: {
+    id: string;
+    role: string;
+    eventType: string;
+    content: string;
+    occurredAt: string;
+    conversation: { id: string; title: string | null };
+  } | null;
+  sourceSnapshot: {
+    id: string;
+    summary: string;
+    periodStart: string;
+    periodEnd: string;
+    version: number;
+    status: string;
+  } | null;
+};
+
+export type RecycleBinEntry = {
+  id: string;
+  category: MemoryCategory;
+  content: string;
+  statusBeforeTrash: "ACTIVE" | "SUPERSEDED" | "ARCHIVED" | "INVALIDATED" | null;
+  deletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RecycleBinPage = {
+  items: RecycleBinEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+// ── 群聊 / 私聊视图（记忆页的取材面板） ──────────────────────────
+
+export type GroupChatGroup = {
+  conversationId: string;
+  groupId: string | null;
+  label: string;
+  lastMessageAt: string | null;
+  updatedAt: string;
+  messageCount: number;
+  connectionName: string | null;
+  automaticObservation?: { enabled: boolean; lastError: string | null };
+};
+
+export type GroupChatMessage = {
+  id: string;
+  role: string;
+  content: string;
+  occurredAt: string;
+  author: string | null;
+  member: string | null;
+};
+
+export type GroupChatPayload = {
+  groups: GroupChatGroup[];
+  selectedConversationId: string | null;
+  messages: GroupChatMessage[];
+};
+
+export type PrivateChatChat = {
+  conversationId: string;
+  qq: string | null;
+  label: string;
+  lastMessageAt: string | null;
+  updatedAt: string;
+  messageCount: number;
+  connectionName: string | null;
+};
+
+export type PrivateChatMessage = {
+  id: string;
+  role: string;
+  content: string;
+  occurredAt: string;
+  author: string | null;
+  isOwner: boolean;
+};
+
+/** 私聊游标：`null` 表示已经到最早一条。 */
+export type PrivateChatCursor = { before: string; beforeId: string } | null;
+
+/**
+ * 私聊取材面板：与群聊对称——给的是**会话列表** + 当前选中的那个，不是单个会话。
+ *
+ * 前端类型原先写成 `chat: PrivateChatChat | null`，与后端实际返回的 `chats` /
+ * `selectedConversationId` 对不上；页面读的是 `chats`，所以类型是错的、运行时是对的。
+ */
+export type PrivateChatPayload = {
+  chats: PrivateChatChat[];
+  selectedConversationId: string | null;
+  messages: PrivateChatMessage[];
+  /** 还有更早的消息可以继续往前翻。 */
+  hasMore: boolean;
+  nextCursor: PrivateChatCursor;
+};
+
+// ── 提取 / 重复检测 / 进度 ────────────────────────────────────
+
+/** 把一条忆泡转成知识候选的结果。 */
+export type MemoryEventKnowledgeResult = {
+  requestId: string;
+  eventId: string | null;
+  status: "PENDING" | "CREATED" | "SKIPPED";
+  candidateId: string | null;
+  created: boolean;
+};
+
+export type MemoryExtractionPreview = {
+  characterId: string;
+  characterName: string;
+  timeZone: string;
+  checkedAt: string;
+  totalMessages: number;
+  rows: Array<{ key: string; dayKey: string; conversationLabel: string; scopeLabel: string; pendingMessages: number }>;
+  truncated: boolean;
+  hasLegacyOwnerChats: boolean;
+  notice: string | null;
+};
+
+export type MemoryEventDuplicateEntry = {
+  id: string;
+  title: string;
+  detail: string;
+  sourceMessageIds: string[];
+};
+
+export type MemoryEventDuplicatePair = {
+  keep: MemoryEventDuplicateEntry;
+  candidate: MemoryEventDuplicateEntry;
+  reason: string;
+  token: string;
+};
+
+export type MemoryEventDuplicatePayload = {
+  pairs: MemoryEventDuplicatePair[];
+  checkedCount: number;
+  pairsLimited: boolean;
+};
+
+export type SnapshotGenerateResult = {
+  queued: string[];
+  skipped: string[];
+  processed: Array<{ status: string; message: string }>;
+  pending: number;
+  advancedTo: string | null;
+  processing?: boolean;
+};
+
+/** `memory-events/extract`：整理昨天与今天的忆泡。 */
+export type MemoryExtractResult = {
+  queued: string[];
+  processed: Array<{ status: string; message: string }>;
+  notice?: "queued" | "running" | "no-new-messages";
+  processing?: boolean;
+};
+
+// ── 互动经验（对话里学到的相处方式） ──────────────────────────────
+
+export type InteractionExperienceItem = {
+  review?: { status: string; reason: string; reviewedAt: string; revision: number; current: boolean } | null;
+  id: string;
+  content: string;
+  context: string;
+  feedbackQuote: string;
+  status: string;
+  revision: number;
+  conversationId: string;
+  weight: number;
+  createdAt?: string;
+  updatedAt?: string;
+  learning?: unknown;
+};
+
+export type InteractionExperienceAutomation = {
+  enabled: boolean;
+  status: string;
+  lastError: string | null;
+  nextRunAt?: string | null;
+  lastCompletedAt?: string | null;
+};
+
+export type InteractionExperiencePage = {
+  items: InteractionExperienceItem[];
+  pagination?: { page: number; pageSize: number; total: number; pageCount: number };
+  automation?: InteractionExperienceAutomation;
+};
