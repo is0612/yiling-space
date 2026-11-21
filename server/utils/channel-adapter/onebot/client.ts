@@ -292,32 +292,60 @@ export type OnebotGroupQuote = {
 };
 export type OnebotGroupQuoteForTurn = Omit<OnebotGroupQuote, "authorQq"> & { member?: string };
 
+/**
+ * 回查一条引用的结果。
+ *
+ * 失败必须分种类：只有 `fetch` 是**瞬时**的（网关抖动、超时、HTTP 不通），值得重试一次；
+ * `shape` / `empty` 是这条消息本身的样子（不存在、形状对不上、只有一张图没有正文），
+ * 再问一遍也不会变，`skip` 则是这条消息压根没有引用段。
+ *
+ * 以前这四种一起揉成 `{ messageId }` 静默返回，于是「他在回谁」会在没有任何记录的情况下
+ * 消失 —— 模型看到的只剩一句悬空的问话，很容易当成冲自己来的（2026-11-21 21:31 实测）。
+ */
+type OnebotGroupQuoteRead =
+  | { quote: OnebotGroupQuote }
+  | { quote?: undefined; messageId?: string; failure: "skip" | "shape" | "empty" | "fetch"; detail?: string };
+
+/** 默认 3 秒对网关冷启动偏紧；重试翻倍，但不越过这个上限。 */
+const ONEBOT_QUOTE_RETRY_CAP_MS = 5_000;
+
+async function readOnebotGroupQuote(
+  config: OnebotConnectionConfig,
+  event: OnebotResolvedEvent,
+  options?: { timeoutMs?: number },
+): Promise<OnebotGroupQuoteRead> {
+  if (event.messageType !== "group") return { failure: "skip" };
+  const messageId = readOnebotReplyToId(event.data);
+  if (!messageId) return { failure: "skip" };
+  if (!/^-?\d+$/u.test(messageId) || !/^\d+$/u.test(event.groupId) || !/^\d+$/u.test(event.selfId)) return { messageId, failure: "shape" };
+  try {
+    const raw = await callOnebotAction(config, "get_msg", { message_id: messageId }, { timeoutMs: options?.timeoutMs ?? 3_000 });
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { messageId, failure: "shape" };
+    const data = raw as Record<string, unknown>;
+    if (data.message_type !== "group" || String(data.group_id ?? "") !== event.groupId
+      || String(data.message_id ?? "") !== messageId) return { messageId, failure: "shape" };
+    const sender = data.sender && typeof data.sender === "object" && !Array.isArray(data.sender)
+      ? data.sender as Record<string, unknown> : {};
+    const authorQq = String(sender.user_id ?? data.user_id ?? "");
+    if (!/^\d+$/u.test(authorQq) || (data.user_id !== undefined && String(data.user_id) !== authorQq)) return { messageId, failure: "shape" };
+    const content = readOnebotMessageText(data).trim();
+    if (!content) return { messageId, failure: "empty" };
+    return { quote: { messageId, authorQq, speaker: readOnebotDisplayName(data).slice(0, 80),
+      content: content.slice(0, 2000), isSelf: authorQq === event.selfId } };
+  } catch (error) {
+    return { messageId, failure: "fetch", detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** Missing outbound receipts do not prevent a same-room read of a single original message. */
 export async function resolveOnebotGroupQuote(
   config: OnebotConnectionConfig,
   event: OnebotResolvedEvent,
   options?: { timeoutMs?: number },
 ): Promise<OnebotGroupQuote | undefined> {
-  if (event.messageType !== "group") return undefined;
-  const messageId = readOnebotReplyToId(event.data);
-  if (!messageId) return undefined;
-  const unresolved = { messageId };
-  if (!/^-?\d+$/u.test(messageId) || !/^\d+$/u.test(event.groupId) || !/^\d+$/u.test(event.selfId)) return unresolved;
-  try {
-    const raw = await callOnebotAction(config, "get_msg", { message_id: messageId }, { timeoutMs: options?.timeoutMs ?? 3_000 });
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return unresolved;
-    const data = raw as Record<string, unknown>;
-    if (data.message_type !== "group" || String(data.group_id ?? "") !== event.groupId
-      || String(data.message_id ?? "") !== messageId) return unresolved;
-    const sender = data.sender && typeof data.sender === "object" && !Array.isArray(data.sender)
-      ? data.sender as Record<string, unknown> : {};
-    const authorQq = String(sender.user_id ?? data.user_id ?? "");
-    if (!/^\d+$/u.test(authorQq) || (data.user_id !== undefined && String(data.user_id) !== authorQq)) return unresolved;
-    const content = readOnebotMessageText(data).trim();
-    if (!content) return unresolved;
-    return { messageId, authorQq, speaker: readOnebotDisplayName(data).slice(0, 80),
-      content: content.slice(0, 2000), isSelf: authorQq === event.selfId };
-  } catch { return unresolved; }
+  const read = await readOnebotGroupQuote(config, event, options);
+  if (read.quote) return read.quote;
+  return read.messageId ? { messageId: read.messageId } : undefined;
 }
 
 /** Resolve unique targets, not the first four message positions; never send here. */
@@ -348,7 +376,26 @@ export async function resolveOnebotGroupQuotes(
   const authors = new Map<string, string>();
   const resolved = new Map(await Promise.all([...targets].map(async ([id, event]) => {
     const cached = options.cached(id);
-    const quote = cached?.messageId === id && cached.content && cached.authorQq ? cached : await resolveOnebotGroupQuote(config, event, { timeoutMs: options.timeoutMs });
+    let read: OnebotGroupQuoteRead;
+    if (cached?.messageId === id && cached.content && cached.authorQq) {
+      read = { quote: cached };
+    } else {
+      read = await readOnebotGroupQuote(config, event, { timeoutMs: options.timeoutMs });
+      if (!read.quote && read.failure === "fetch") {
+        // 丢的是「他在回谁」，事后无法重建；这条请求只有一次，重试成本远低于答错人。
+        const retryTimeoutMs = Math.min(ONEBOT_QUOTE_RETRY_CAP_MS, (options.timeoutMs ?? 3_000) * 2);
+        read = await readOnebotGroupQuote(config, event, { timeoutMs: retryTimeoutMs });
+        if (!read.quote) {
+          // 失败必须留下痕迹：否则下一次还是「她突然把别人的话接成自己的」，
+          // 而日志里什么都没有。
+          console.warn("[onebot] 引用取不到", {
+            groupId: event.groupId, messageId: id, attempts: 2,
+            reason: read.failure, detail: read.detail,
+          });
+        }
+      }
+    }
+    const quote = read.quote;
     if (!quote?.content || !quote.authorQq || !await options.canReadAuthor(quote.authorQq)) return [id, { messageId: id }] as const;
     const policy = await options.authorPolicy?.(quote.authorQq);
     if (policy && shouldHideFriendContent(policy.kind, policy.policy)) return [id, { messageId: id }] as const;

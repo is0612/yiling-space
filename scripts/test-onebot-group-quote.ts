@@ -8,11 +8,14 @@ import { generateConversationReply } from "../server/utils/chat-reply";
 const SELF = "999999999", ROOM = "123456789", AUTHOR = "111111111", BLOCKED = "222222222";
 const payloads = new Map<string, unknown>();
 const calls: string[] = [];
+/** -400 第一次断连、第二次正常；-401 每次都断连。 */
+let flakyReads = 0;
 const server = createServer(async (req, res) => {
   assert.equal(req.url, "/get_msg", "Quote reads must not send any messages");
   let text = ""; for await (const part of req) text += part;
   const id = String(JSON.parse(text).message_id); calls.push(id);
   if (id === "-99") return; // Deliberately never answer; client must abort promptly.
+  if (id === "-401" || (id === "-400" && flakyReads++ === 0)) { req.socket.destroy(); return; }
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify({ retcode: 0, data: payloads.get(id) }));
 });
@@ -124,6 +127,29 @@ try {
   });
   assert.equal(aiAllowed.get("25")?.readOnly,undefined);
   assert.equal(aiAllowed.get("25")?.excludeFromGrowth,true,"AI ALLOW does not imply training permission");
+
+  // 网关抖动时必须重试一次：丢的是「他在回谁」，事后无法重建。
+  payloads.set("-400", message("-400", AUTHOR, "重试成功的原文"));
+  {
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      const retried = await resolveOnebotGroupQuotes(config, [event("30", "-400")], options);
+      assert.equal(retried.get("30")?.content, "重试成功的原文", "A transient gateway failure is retried once and used");
+      assert.equal(calls.filter((id) => id === "-400").length, 2, "Exactly one retry read, not a loop");
+      assert.equal(warnings.length, 0, "A retry that succeeds stays silent");
+
+      const downStart = calls.length;
+      const unreadable = await resolveOnebotGroupQuotes(config, [event("31", "-401")], options);
+      assert.deepEqual(unreadable.get("31"), { messageId: "-401" }, "A quote that stays unreadable keeps only its ID");
+      assert.equal(calls.length - downStart, 2, "A failed read retries once, then gives up");
+      assert.equal(warnings.length, 1, "An unresolved quote is reported exactly once");
+      assert.match(String(warnings[0]?.[0]), /引用取不到/u);
+    } finally {
+      console.warn = originalWarn;
+    }
+  }
   const inbound=event("22","-300");remember(inbound);
   context.rememberQuote(key,"22",{id:"-300",authorQq:BLOCKED,text:"BLOCKED_BACKGROUND_TEXT",isSelf:false});
   assert.deepEqual(context.background(key,[],undefined,new Set([BLOCKED])).find(row=>row.id==="22")?.quoted,{id:"-300"});
@@ -155,4 +181,4 @@ try {
   server.closeAllConnections();
   await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
 }
-console.log("OneBot group quote inbound HTTP integration passed: self/other, old, group identity, policy, timeout, de-duplication and four-target budget; no real QQ or database.");
+console.log("OneBot group quote inbound HTTP integration passed: self/other, old, group identity, policy, timeout, retry-on-flaky-gateway, unresolved-reporting, de-duplication and four-target budget; no real QQ or database.");
