@@ -2,45 +2,17 @@ import type { ApiRequest } from "../utils/request";
 
 // 话题主体的形状与后端共用（`shared/types/knowledge.ts`）。
 import type { KnowledgeTopicStatus, KnowledgeTopicSummary } from "#shared/types/knowledge";
-export type { KnowledgeTopicPage, KnowledgeTopicStatus, KnowledgeTopicSummary } from "#shared/types/knowledge";
+export type {
+  KnowledgeTopicDetail, KnowledgeTopicMember, KnowledgeTopicPage, KnowledgeTopicRevision,
+  KnowledgeTopicRevisionDetail, KnowledgeTopicRunDetail, KnowledgeTopicRunStatus,
+  KnowledgeTopicRunSummary, KnowledgeTopicStatus, KnowledgeTopicSuggestionStatus, KnowledgeTopicSummary,
+} from "#shared/types/knowledge";
 
-export type KnowledgeTopicMember = {
-  id: string; itemId: string; itemRevision: number; createdAt: string; valid: boolean;
-  itemRevisionChanged: boolean; invalidReason: string | null;
-  item: { id: string; title: string; content: string; category: string; tags: string[]; status: string; revision: number; updatedAt: string } | null;
-};
-export type KnowledgeTopicRevision = {
-  id: string; revision: number; name: string; description: string; status: KnowledgeTopicStatus;
-  mergedIntoId: string | null; createdAt: string; memberCount?: number;
-};
-export type KnowledgeTopicDetail = KnowledgeTopicSummary & {
-  members: KnowledgeTopicMember[];
-  revisions: KnowledgeTopicRevision[];
-  mergedInto: { id: string; name: string; status: string } | null;
-};
-export type KnowledgeTopicRevisionDetail = KnowledgeTopicRevision & {
-  members: Array<{ itemId: string; itemRevision: number }>;
-};
+// 话题详情 / 版本 / 运行记录的形状同样在 shared 契约里。
+import type {
+  KnowledgeTopicDetail, KnowledgeTopicMember, KnowledgeTopicRevision, KnowledgeTopicRevisionDetail, KnowledgeTopicRunDetail, KnowledgeTopicRunStatus, KnowledgeTopicRunSummary, KnowledgeTopicSuggestionStatus,
+} from "#shared/types/knowledge";
 
-export type KnowledgeTopicRunStatus = "QUEUED" | "PROCESSING" | "READY" | "FAILED" | "STALE";
-export type KnowledgeTopicSuggestionStatus = "PENDING" | "ACCEPTED" | "DISMISSED";
-export type KnowledgeTopicRunSummary = {
-  id: string; status: KnowledgeTopicRunStatus; attemptCount: number; maxAttempts: number;
-  lastError: string | null; createdAt: string; updatedAt: string; completedAt: string | null;
-  runAt: string; inputCount: number; ungroupedCount: number; suggestionCount: number;
-};
-export type KnowledgeTopicRunDetail = {
-  id: string; status: KnowledgeTopicRunStatus; attemptCount: number; maxAttempts: number;
-  lastError: string | null; createdAt: string; updatedAt: string; completedAt: string | null; runAt: string;
-  inputSnapshot: Array<{ itemId: string; revision: number; item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null }>;
-  ungroupedItems: Array<{ id: string; title: string; category: string; status: string; revision: number; updatedAt: string }>;
-  suggestions: Array<{
-    id: string; name: string; description: string; reason: string; memberItemIds: string[];
-    acceptedMemberItemIds: string[] | null; status: KnowledgeTopicSuggestionStatus; reviewedAt: string | null; createdAt: string;
-    members: Array<{ itemId: string; item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null }>;
-    acceptedMembers: Array<{ itemId: string; item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null }>;
-  }>;
-};
 const base = (characterId: string) => `/characters/${encodeURIComponent(characterId)}/growth/knowledge/topics`;
 const topicPath = (characterId: string, topicId: string) => `${base(characterId)}/${encodeURIComponent(topicId)}`;
 

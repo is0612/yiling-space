@@ -160,3 +160,111 @@ export type KnowledgeTopicPage = {
   topics: KnowledgeTopicSummary[];
   pagination: { page: number; pageSize: number; total: number; pageCount: number };
 };
+
+/** 话题成员：`valid` 是「这条关联现在还算数」，`itemRevisionChanged` 说明条目在入组后改过。 */
+export type KnowledgeTopicMember = {
+  id: string;
+  itemId: string;
+  itemRevision: number;
+  createdAt: string;
+  valid: boolean;
+  itemRevisionChanged: boolean;
+  invalidReason: string | null;
+  item: {
+    id: string;
+    title: string;
+    content: string;
+    category: string;
+    tags: string[];
+    status: string;
+    revision: number;
+    updatedAt: string;
+  } | null;
+};
+
+/** 话题的历史版本（成员数可选：列表场景不算）。 */
+export type KnowledgeTopicRevision = {
+  id: string;
+  revision: number;
+  name: string;
+  description: string;
+  status: KnowledgeTopicStatus;
+  mergedIntoId: string | null;
+  createdAt: string;
+  memberCount?: number;
+};
+
+export type KnowledgeTopicDetail = KnowledgeTopicSummary & {
+  members: KnowledgeTopicMember[];
+  revisions: KnowledgeTopicRevision[];
+  mergedInto: { id: string; name: string; status: string } | null;
+};
+
+export type KnowledgeTopicRevisionDetail = KnowledgeTopicRevision & {
+  members: Array<{ itemId: string; itemRevision: number }>;
+};
+
+export const KNOWLEDGE_TOPIC_RUN_STATUSES = ["QUEUED", "PROCESSING", "READY", "FAILED", "STALE"] as const;
+export type KnowledgeTopicRunStatus = typeof KNOWLEDGE_TOPIC_RUN_STATUSES[number];
+
+export const KNOWLEDGE_TOPIC_SUGGESTION_STATUSES = ["PENDING", "ACCEPTED", "DISMISSED"] as const;
+export type KnowledgeTopicSuggestionStatus = typeof KNOWLEDGE_TOPIC_SUGGESTION_STATUSES[number];
+
+/** 一次「让模型看这批条目、归成话题」的运行记录。 */
+export type KnowledgeTopicRunSummary = {
+  id: string;
+  status: KnowledgeTopicRunStatus;
+  attemptCount: number;
+  maxAttempts: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  runAt: string;
+  inputCount: number;
+  ungroupedCount: number;
+  suggestionCount: number;
+};
+
+/**
+ * 运行详情：带输入快照、没归进任何话题的条目、以及每条建议。
+ *
+ * `acceptedMemberItemIds` 是用户在实际采纳时删掉几条之后的结果，
+ * 与 `memberItemIds`（模型原始建议）分开留着，方便对照。
+ */
+export type KnowledgeTopicRunDetail = {
+  id: string;
+  status: KnowledgeTopicRunStatus;
+  attemptCount: number;
+  maxAttempts: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  runAt: string;
+  inputSnapshot: Array<{
+    itemId: string;
+    revision: number;
+    item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null;
+  }>;
+  ungroupedItems: Array<{ id: string; title: string; category: string; status: string; revision: number; updatedAt: string }>;
+  suggestions: Array<{
+    id: string;
+    name: string;
+    description: string;
+    reason: string;
+    memberItemIds: string[];
+    acceptedMemberItemIds: string[] | null;
+    status: KnowledgeTopicSuggestionStatus;
+    reviewedAt: string | null;
+    createdAt: string;
+    members: Array<{
+      itemId: string;
+      item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null;
+    }>;
+    acceptedMembers: Array<{
+      itemId: string;
+      item: { id: string; title: string; category: string; status: string; revision: number; updatedAt: string } | null;
+    }>;
+  }>;
+};
