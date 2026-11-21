@@ -1082,6 +1082,320 @@ async function loadChannelTurnRawMessages(input: {
   });
 }
 
+type ChannelTurnGrowthPreparation = {
+  selfUnderstanding: Awaited<ReturnType<typeof loadSelfUnderstanding>> | undefined;
+  growthReads: Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>;
+  goals: Awaited<ReturnType<typeof loadGoalsForPrompt>>;
+  expressionHabits: Awaited<ReturnType<typeof loadExpressionHabitsForPrompt>>;
+  preferences: Awaited<ReturnType<typeof loadPreferencesForPrompt>>;
+  /** 私聊在这里建好；群聊要等工作上下文证据过滤后再建（见主干）。 */
+  collaboration: ReturnType<typeof createAssistantTurnContext> | undefined;
+  loadKnowledge: (searchQuery: string) => Promise<ConversationKnowledgeItem[]>;
+  loadKnowledgeWithLexical: (query?: string) => Promise<ConversationKnowledgeItem[]>;
+  ownerHistoryAuth: OwnerHistoryAuthorization | null;
+  ownerHistoryStored: Awaited<ReturnType<typeof loadOwnerHistoryContext>>;
+  ownerHistoryPlan: ReturnType<typeof planOwnerHistory> | null;
+  ownerHistoryLookup: boolean;
+  ownerHistoryHold: boolean;
+  ownerHistoryNow: Date;
+  privateKnowledgeItems: ConversationKnowledgeItem[];
+};
+
+/**
+ * 增长域读取（目标/表达习惯/偏好/自我理解）+ 主人私聊历史任务链 + 私聊知识分析。
+ *
+ * 这一整块只做「读」与「候选登记」：知识候选落库单独兜一层，写库失败不阻断回复。
+ * 授权边界：ownerHistoryAuth 只由已验证的主人轮次授予，绝不来自工具查询或落库 metadata。
+ */
+async function prepareChannelTurnGrowth(input: {
+  prisma: PrismaClient;
+  character: ChannelTurnCharacter;
+  isGroup: boolean;
+  platform: string;
+  characterId: string;
+  bindingId: string;
+  externalConversationId: string;
+  chatSettings: ReturnType<typeof resolveChatModelSettings>;
+  apiKey: string;
+  messages: ChannelTurnMessage[];
+  currentMessage: string;
+  recentMessages: ConversationContextMessage[];
+  recentStoredMessages: ChannelTurnStoredMessage[];
+  existingConversation: ChannelTurnConversation | null;
+  isOwnerTurn: boolean;
+  ownerPrivateScopeId: string | null;
+  ownerPlatformUid: string;
+  conversationScopeId: string;
+  readableScopeIds: string[];
+  chatTimeZone: string;
+  turnId: string;
+}): Promise<ChannelTurnGrowthPreparation> {
+  const { prisma, character, isGroup, currentMessage, existingConversation } = input;
+
+  const selfUnderstanding = wantsSelfUnderstanding(currentMessage, { groupChat: isGroup, previousMessage: input.recentStoredMessages[0] })
+    ? await loadSelfUnderstanding(prisma, { characterId: character.id, readableScopeIds: input.readableScopeIds, conversationId: existingConversation?.id, groupChat: isGroup, profileOwner: input.isOwnerTurn, includeHistory: asksSelfUnderstandingHistory(currentMessage, !isGroup) }).catch(() => { console.warn("[self-understanding] channel evidence unavailable"); return undefined; })
+    : undefined;
+  const growthReads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();
+  const observeGrowthRead = input.platform === "qq-onebot"
+    ? (entry: GrowthReadDiagnostic) => { growthReads.set(entry.domain, entry); }
+    : undefined;
+  if (observeGrowthRead) observeGrowthRead(createGrowthReadDiagnostic("knowledge"));
+  const goals = await loadGoalsForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
+  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, character.id, currentMessage, observeGrowthRead,
+    !isGroup && existingConversation ? { conversationId: existingConversation.id, memoryScopeId: input.conversationScopeId } : undefined, isGroup ? "GROUP" : "PRIVATE").catch(() => []);
+  const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
+  // Private context can be created before its dedicated knowledge analysis. The evidence
+  // list is limited to this conversation's current and already-authorized recent messages.
+  const collaboration = !isGroup && input.platform === "qq-onebot" && Boolean(existingConversation?.id || input.externalConversationId?.trim())
+    ? createAssistantTurnContext({
+        turnId: input.turnId,
+        identity: { characterId: character.id, channel: "qq-private", channelBindingId: input.bindingId,
+          conversationKey: existingConversation?.id ?? input.externalConversationId, readableScopeIds: input.readableScopeIds, allowPrivate: true },
+        evidenceIds: [...new Set([
+          ...input.messages.map(item => item.externalMessageId),
+          ...input.recentMessages.map(item => item.id),
+        ].filter((id): id is string => typeof id === "string" && Boolean(id)))],
+      })
+    : undefined;
+
+  // Formal knowledge lookup is shared by group and private paths and is always character-scoped.
+  const loadKnowledge = (searchQuery: string): Promise<ConversationKnowledgeItem[]> =>
+    loadChatKnowledge(prisma, input.characterId, searchQuery, observeGrowthRead);
+
+  /**
+   * 词法兜底：不依赖分析器给的 `knowledgeQuery`，直接用这一轮原文再查一次。
+   *
+   * 为什么需要：分析器只在它认为「这是可复用的知识话题」时才给 query（提示词里明确排除了
+   * 闲聊、个人经历和「可以直接回答」的问题），于是一条完全命中知识库的问题也可能一次都不查。
+   * 词法匹配是确定性计算、不花 token，问什么就查什么，比让模型判断「要不要查」更稳。
+   */
+  const lexicalKnowledgeQuery = (): string => {
+    const source = isGroup ? input.messages.slice(-3) : input.messages;
+    return source.map(item => item.content).join("\n").replace(/\s+/g, " ").trim().slice(0, 240);
+  };
+  const loadKnowledgeWithLexical = async (query?: string): Promise<ConversationKnowledgeItem[]> => {
+    const merged = new Map<string, ConversationKnowledgeItem>();
+    for (const candidate of [query, lexicalKnowledgeQuery()]) {
+      const trimmed = candidate?.trim();
+      if (!trimmed) continue;
+      for (const item of await loadKnowledge(trimmed).catch(() => [])) merged.set(item.id, item);
+    }
+    // 与分析器结果合并后仍守同一条上限：知识段是参考，不是把整库塞进提示词。
+    return [...merged.values()].slice(0, 8);
+  };
+
+  // This capability is granted by the verified owner turn, never by a tool query or stored metadata.
+  const ownerHistoryAuth: OwnerHistoryAuthorization | null = !isGroup && input.platform === "qq-onebot" && input.isOwnerTurn && input.ownerPrivateScopeId && existingConversation && input.ownerPlatformUid
+    ? { characterId: input.characterId, bindingId: input.bindingId, privateScopeId: input.ownerPrivateScopeId,
+        conversationId: existingConversation.id, ownerUid: input.ownerPlatformUid } : null;
+  const ownerHistoryNow = new Date();
+  const ownerHistoryStored = ownerHistoryAuth
+    ? await loadOwnerHistoryContext(prisma, ownerHistoryAuth, ownerHistoryNow).catch(() => null) : null;
+  const ownerJournalTurn = Boolean(ownerHistoryAuth && isOwnerJournalTurn(currentMessage,
+    input.recentStoredMessages.filter(row => row.role === "USER").slice(0, 8).reverse().map(row => row.content)));
+  let ownerHistoryPlan = ownerHistoryAuth && !ownerJournalTurn
+    ? planOwnerHistory(currentMessage, ownerHistoryStored?.plan ?? null, ownerHistoryNow, input.chatTimeZone) : null;
+  // Resolve a referential room only from the owner's own recent explicit room references,
+  // then verify the room against this character's QQ group conversations.
+  const bareHistoryRetry = /^(?:现在呢|还是呢|再看看|再试试)[？?。！!\s]*$/u.test(currentMessage);
+  if (ownerHistoryAuth && !ownerJournalTurn && (!ownerHistoryPlan || !ownerHistoryPlan.groupId)
+    && (bareHistoryRetry || /那个群|这个群/u.test(currentMessage))) {
+    const roomCandidates = [...new Set(input.recentStoredMessages.filter(row => row.role === "USER"
+      && row.occurredAt.getTime() >= ownerHistoryNow.getTime() - 2 * 3_600_000).flatMap(row => {
+        const match = /(?:群(?:号)?\s*[:：]?\s*(\d{5,12})|(\d{5,12})\s*(?:这个群|那个群|群|那边|这边))/u.exec(row.content);
+        return match?.slice(1).filter((value): value is string => Boolean(value)) ?? [];
+      }))];
+    if (roomCandidates.length) {
+      const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId,
+        externalConversationId: { in: roomCandidates.map(id => `g:${id}`) },
+        channelBinding: { connection: { platform: "qq-onebot" } } },
+        select: { externalConversationId: true }, take: 40 });
+      const verified = new Set(rooms.map(room => room.externalConversationId));
+      const groupId = roomCandidates.find(id => verified.has(`g:${id}`));
+      if (groupId) {
+        ownerHistoryPlan = ownerHistoryPlan
+          ? { ...ownerHistoryPlan, groupId }
+          // The live task expired or died with the adapter; a bare retry still deserves a real read.
+          : planRestartedHistoryRetry(groupId, ownerHistoryNow, input.chatTimeZone);
+      }
+    }
+  }
+  let ownerHistoryLookup = Boolean(ownerHistoryPlan);
+  let ownerHistoryAnalyzed = false;
+  let ownerHistoryHold = ownerJournalTurn;
+  const suppliedPendingGroup = Boolean(ownerHistoryStored?.plan && !ownerHistoryStored.plan.groupId
+    && ownerHistoryPlan?.groupId && /^\d{5,12}$/u.test(currentMessage.trim()));
+  const suppliedDateRetry = Boolean(ownerHistoryStored?.plan && ownerHistoryPlan && isOwnerHistoryDateRetry(currentMessage));
+  if (suppliedPendingGroup || suppliedDateRetry) {
+    // The owner supplied a missing group or a new date, not a new semantic request.
+    ownerHistoryAnalyzed = true;
+    skipAssistantTurnStage(collaboration, "context", "not_needed");
+  } else if (ownerHistoryAuth && !ownerJournalTurn && (ownerHistoryStored?.plan || ownerHistoryPlan)) {
+    const runtime = await resolveContextAssistantRuntime(character.modelConfig, input.chatSettings.apiBaseUrl);
+    ownerHistoryAnalyzed = true;
+    if (runtime) {
+      let usage: import("../model-usage").ModelUsageTokens | undefined;
+      try {
+        const intent = await runAssistantTurnStage(collaboration, "context", "owner-history-intent",
+          { message: currentMessage, previous: ownerHistoryStored?.plan?.query ?? "" },
+          () => analyzeOwnerHistoryIntent(runtime, { message: currentMessage,
+            recent: input.recentMessages.slice(-8).map(row => ({ role: row.role, content: row.content })),
+            previous: ownerHistoryStored?.plan ?? null }, value => { usage = value; }));
+        const decision = applyOwnerHistoryIntent(ownerHistoryStored?.plan ?? null, ownerHistoryPlan, intent, currentMessage);
+        ownerHistoryPlan = decision.plan;
+        ownerHistoryLookup = decision.lookup;
+        ownerHistoryHold = intent.action === "hold";
+        await recordModelUsage({ kind: "context-assistant", model: runtime.model, usage: toUsageTokens(usage),
+          characterId: input.characterId, channelBindingId: input.bindingId,
+          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+          metadata: { status: "success", source: "owner-history-intent", turnId: input.turnId, action: intent.action } }).catch(() => undefined);
+      } catch {
+        ownerHistoryLookup = Boolean(ownerHistoryPlan);
+        await recordModelUsage({ kind: "context-assistant", model: runtime.model, usage: toUsageTokens(usage),
+          characterId: input.characterId, channelBindingId: input.bindingId,
+          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+          metadata: { status: "failed", source: "owner-history-intent", turnId: input.turnId } }).catch(() => undefined);
+      }
+    } else {
+      ownerHistoryLookup = Boolean(ownerHistoryPlan);
+      skipAssistantTurnStage(collaboration, "context", "not_enabled");
+    }
+  }
+
+  // One private analyzer call can both request a knowledge lookup and nominate candidate evidence.
+  // The local gate runs regardless of the auto-collect switch: retrieval must keep working when
+  // capture is disabled. Only current-round original messages enter this private-only analysis.
+  const modelConfigForKnowledge = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
+    ? character.modelConfig as Record<string, unknown> : {};
+  // Reading approved knowledge is independent of the optional model analysis for
+  // query rewriting/candidate capture. Natural questions must reach this reader
+  // even when the cheap analyzer gate is false or its model is unavailable.
+  let privateKnowledgeItems: ConversationKnowledgeItem[] = !isGroup
+    ? await loadKnowledgeWithLexical().catch(() => []) : [];
+  if (!isGroup) {
+    const privateMessages = input.messages.map(item => ({
+      id: item.externalMessageId,
+      speaker: item.authorDisplayName ?? "",
+      content: item.content,
+    }));
+    if (privateContextPurpose(ownerHistoryAnalyzed, shouldAnalyzePrivateKnowledge(privateMessages)) === "knowledge") {
+      const privateContextRuntime = await resolveContextAssistantRuntime(character.modelConfig, input.chatSettings.apiBaseUrl);
+      if (privateContextRuntime) {
+        try {
+          const result = await runAssistantTurnStage(collaboration, "context", "private-knowledge-analysis",
+            { characterId: input.characterId, channelBindingId: input.bindingId, conversationKey: existingConversation?.id ?? input.externalConversationId,
+              messageIds: privateMessages.map(item => item.id), runtimeModel: privateContextRuntime.model },
+            observer => analyzePrivateKnowledgeCandidate(privateContextRuntime, character.name, privateMessages, observer));
+          await recordModelUsage({
+            kind: "context-assistant",
+            model: privateContextRuntime.model,
+            usage: toUsageTokens(result.usage),
+            characterId: input.characterId,
+            channelBindingId: input.bindingId,
+            ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+            metadata: { status: "success", turnId: input.turnId, source: "private-knowledge-analysis" },
+          }).catch(() => undefined);
+
+          // Retrieval is independent of auto-collection: only confirmed ACTIVE items are searchable.
+          if (result.knowledgeQuery && !privateKnowledgeItems.length) {
+            privateKnowledgeItems = await runAssistantTurnStage(collaboration, "knowledge", result.knowledgeQuery,
+              { characterId: input.characterId, readableScopeIds: input.readableScopeIds, query: result.knowledgeQuery },
+              () => loadKnowledgeWithLexical(result.knowledgeQuery!), items => items.length === 0).catch(() => []);
+          } else {
+            // The unconditional local read above already handled the original question.
+            skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
+          }
+
+          const collectScope = readKnowledgeCollectScope(modelConfigForKnowledge);
+          const wantCandidate = modelConfigForKnowledge.knowledgeAutoCollectEnabled === true && result.evidenceMessageIds.length > 0;
+          // 第二道闸门只决定「收谁的」，不碰检索：上面的 knowledgeQuery 照常查。
+          // 判不出来（没有外部身份范围）就不收 —— SELECTED 模式下宁可漏也不要噪音。
+          const allowedSource = wantCandidate
+            ? await isPrivateKnowledgeSource(prisma, {
+                characterId: input.characterId,
+                memoryScopeId: existingConversation?.memoryScopeId ?? input.conversationScopeId,
+                isOwnerTurn: input.isOwnerTurn,
+                scope: collectScope,
+              }).catch(() => false)
+            : false;
+          if (allowedSource) {
+            // 落库单独兜一层：写库失败不该被算成「模型调用失败」，也不能静默消失 ——
+            // 否则线上只是「候选没出现」，没有任何痕迹可查。
+            try {
+              const selected = privateMessages.filter(item => result.evidenceMessageIds.includes(item.id));
+              const rawContent = selected.map(item => `[${item.speaker || "好友"}] ${item.content.slice(0, 4_000)}`).join("\n").slice(0, 20_000);
+              if (rawContent.trim()) {
+                const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+                const duplicate = await prisma.knowledgeCandidate.findFirst({
+                  where: { characterId: input.characterId, sourceType: "CHAT", rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
+                  select: { id: true },
+                });
+                if (!duplicate) {
+                  await prisma.knowledgeCandidate.create({
+                    data: {
+                      characterId: input.characterId,
+                      sourceType: "CHAT",
+                      rawContent,
+                      sourceRef: {
+                        ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+                        messageIds: selected.map(item => item.id),
+                        speakers: [...new Set(selected.map(item => item.speaker).filter(Boolean))],
+                        reason: result.reason,
+                        capturedAt: new Date().toISOString(),
+                        channel: "PRIVATE",
+                      } satisfies Prisma.InputJsonObject,
+                    },
+                  });
+                }
+              }
+            } catch (error) {
+              console.warn(
+                "[knowledge] 私聊知识候选写入失败（不影响本轮回复）：",
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+          }
+        } catch (error) {
+          await recordModelUsage({
+            kind: "context-assistant",
+            model: privateContextRuntime.model,
+            usage: toUsageTokens(error instanceof Error && "usage" in error ? (error as Error & { usage?: import("../model-usage").ModelUsageTokens }).usage : undefined),
+            characterId: input.characterId,
+            channelBindingId: input.bindingId,
+            ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+            metadata: { status: "failed", turnId: input.turnId, source: "private-knowledge-analysis" },
+          }).catch(() => undefined);
+          skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
+        }
+      } else {
+        skipAssistantTurnStage(collaboration, "context", "not_enabled");
+        skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
+      }
+    } else {
+      if (!ownerHistoryAnalyzed) skipAssistantTurnStage(collaboration, "context", "not_needed");
+      skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
+    }
+  }
+
+  return {
+    selfUnderstanding,
+    growthReads,
+    goals,
+    expressionHabits,
+    preferences,
+    collaboration,
+    loadKnowledge,
+    loadKnowledgeWithLexical,
+    ownerHistoryAuth,
+    ownerHistoryStored,
+    ownerHistoryPlan,
+    ownerHistoryLookup,
+    ownerHistoryHold,
+    ownerHistoryNow,
+    privateKnowledgeItems,
+  };
+}
+
 type ChannelTurnRetrieval = {
   groupActivity: Awaited<ReturnType<typeof buildGroupActivityContext>> | null;
   journalFacts: Awaited<ReturnType<typeof loadJournalFacts>>;
@@ -2028,254 +2342,45 @@ async function runChannelTurn(input: {
   const chatTimeZone = resolveChatTimeZone(character.memorySetting?.timezone);
   const memoryAssistant = await resolveMemoryAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
 
-  const selfUnderstanding = wantsSelfUnderstanding(currentMessage, { groupChat: isGroup, previousMessage: recentStoredMessages[0] })
-    ? await loadSelfUnderstanding(prisma, { characterId: character.id, readableScopeIds, conversationId: existingConversation?.id, groupChat: isGroup, profileOwner: isOwnerTurn, includeHistory: asksSelfUnderstandingHistory(currentMessage, !isGroup) }).catch(() => { console.warn("[self-understanding] channel evidence unavailable"); return undefined; })
-    : undefined;
-  const growthReads = new Map<GrowthReadDiagnostic["domain"], GrowthReadDiagnostic>();
-  const observeGrowthRead = input.platform === "qq-onebot"
-    ? (entry: GrowthReadDiagnostic) => { growthReads.set(entry.domain, entry); }
-    : undefined;
-  if (observeGrowthRead) observeGrowthRead(createGrowthReadDiagnostic("knowledge"));
-  const goals = await loadGoalsForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
-  const expressionHabits = await loadExpressionHabitsForPrompt(prisma, character.id, currentMessage, observeGrowthRead,
-    !isGroup && existingConversation ? { conversationId: existingConversation.id, memoryScopeId: conversationScopeId } : undefined, isGroup ? "GROUP" : "PRIVATE").catch(() => []);
-  const preferences = await loadPreferencesForPrompt(prisma, character.id, currentMessage, observeGrowthRead).catch(() => []);
   const turnId = randomUUID();
-  // Private context can be created before its dedicated knowledge analysis. The evidence
-  // list is limited to this conversation's current and already-authorized recent messages.
-  let collaboration = !isGroup && input.platform === "qq-onebot" && Boolean(existingConversation?.id || input.externalConversationId?.trim())
-    ? createAssistantTurnContext({
-        turnId,
-        identity: { characterId: character.id, channel: "qq-private", channelBindingId: input.bindingId,
-          conversationKey: existingConversation?.id ?? input.externalConversationId, readableScopeIds, allowPrivate: true },
-        evidenceIds: [...new Set([
-          ...messages.map(item => item.externalMessageId),
-          ...recentMessages.map(item => item.id),
-        ].filter((id): id is string => typeof id === "string" && Boolean(id)))],
-      })
-    : undefined;
-
-  // Formal knowledge lookup is shared by group and private paths and is always character-scoped.
-  const loadKnowledge = (searchQuery: string): Promise<ConversationKnowledgeItem[]> =>
-    loadChatKnowledge(prisma, input.characterId, searchQuery, observeGrowthRead);
-
-  /**
-   * 词法兜底：不依赖分析器给的 `knowledgeQuery`，直接用这一轮原文再查一次。
-   *
-   * 为什么需要：分析器只在它认为「这是可复用的知识话题」时才给 query（提示词里明确排除了
-   * 闲聊、个人经历和「可以直接回答」的问题），于是一条完全命中知识库的问题也可能一次都不查。
-   * 词法匹配是确定性计算、不花 token，问什么就查什么，比让模型判断「要不要查」更稳。
-   */
-  const lexicalKnowledgeQuery = (): string => {
-    const source = isGroup ? messages.slice(-3) : messages;
-    return source.map(item => item.content).join("\n").replace(/\s+/g, " ").trim().slice(0, 240);
-  };
-  const loadKnowledgeWithLexical = async (query?: string): Promise<ConversationKnowledgeItem[]> => {
-    const merged = new Map<string, ConversationKnowledgeItem>();
-    for (const candidate of [query, lexicalKnowledgeQuery()]) {
-      const trimmed = candidate?.trim();
-      if (!trimmed) continue;
-      for (const item of await loadKnowledge(trimmed).catch(() => [])) merged.set(item.id, item);
-    }
-    // 与分析器结果合并后仍守同一条上限：知识段是参考，不是把整库塞进提示词。
-    return [...merged.values()].slice(0, 8);
-  };
-
-  // This capability is granted by the verified owner turn, never by a tool query or stored metadata.
-  const ownerHistoryAuth: OwnerHistoryAuthorization | null = !isGroup && input.platform === "qq-onebot" && isOwnerTurn && ownerPrivateScopeId && existingConversation && ownerPlatformUid
-    ? { characterId: input.characterId, bindingId: input.bindingId, privateScopeId: ownerPrivateScopeId,
-        conversationId: existingConversation.id, ownerUid: ownerPlatformUid } : null;
-  const ownerHistoryNow = new Date();
-  const ownerHistoryStored = ownerHistoryAuth
-    ? await loadOwnerHistoryContext(prisma, ownerHistoryAuth, ownerHistoryNow).catch(() => null) : null;
-  const ownerJournalTurn = Boolean(ownerHistoryAuth && isOwnerJournalTurn(currentMessage,
-    recentStoredMessages.filter(row => row.role === "USER").slice(0, 8).reverse().map(row => row.content)));
-  let ownerHistoryPlan = ownerHistoryAuth && !ownerJournalTurn
-    ? planOwnerHistory(currentMessage, ownerHistoryStored?.plan ?? null, ownerHistoryNow, chatTimeZone) : null;
-  // Resolve a referential room only from the owner's own recent explicit room references,
-  // then verify the room against this character's QQ group conversations.
-  const bareHistoryRetry = /^(?:现在呢|还是呢|再看看|再试试)[？?。！!\s]*$/u.test(currentMessage);
-  if (ownerHistoryAuth && !ownerJournalTurn && (!ownerHistoryPlan || !ownerHistoryPlan.groupId)
-    && (bareHistoryRetry || /那个群|这个群/u.test(currentMessage))) {
-    const roomCandidates = [...new Set(recentStoredMessages.filter(row => row.role === "USER"
-      && row.occurredAt.getTime() >= ownerHistoryNow.getTime() - 2 * 3_600_000).flatMap(row => {
-        const match = /(?:群(?:号)?\s*[:：]?\s*(\d{5,12})|(\d{5,12})\s*(?:这个群|那个群|群|那边|这边))/u.exec(row.content);
-        return match?.slice(1).filter((value): value is string => Boolean(value)) ?? [];
-      }))];
-    if (roomCandidates.length) {
-      const rooms = await prisma.conversation.findMany({ where: { characterId: input.characterId,
-        externalConversationId: { in: roomCandidates.map(id => `g:${id}`) },
-        channelBinding: { connection: { platform: "qq-onebot" } } },
-        select: { externalConversationId: true }, take: 40 });
-      const verified = new Set(rooms.map(room => room.externalConversationId));
-      const groupId = roomCandidates.find(id => verified.has(`g:${id}`));
-      if (groupId) {
-        ownerHistoryPlan = ownerHistoryPlan
-          ? { ...ownerHistoryPlan, groupId }
-          // The live task expired or died with the adapter; a bare retry still deserves a real read.
-          : planRestartedHistoryRetry(groupId, ownerHistoryNow, chatTimeZone);
-      }
-    }
-  }
-  let ownerHistoryLookup = Boolean(ownerHistoryPlan);
-  let ownerHistoryIntentFailed = false;
-  let ownerHistoryAnalyzed = false;
-  let ownerHistoryHold = ownerJournalTurn;
-  const suppliedPendingGroup = Boolean(ownerHistoryStored?.plan && !ownerHistoryStored.plan.groupId
-    && ownerHistoryPlan?.groupId && /^\d{5,12}$/u.test(currentMessage.trim()));
-  const suppliedDateRetry = Boolean(ownerHistoryStored?.plan && ownerHistoryPlan && isOwnerHistoryDateRetry(currentMessage));
-  if (suppliedPendingGroup || suppliedDateRetry) {
-    // The owner supplied a missing group or a new date, not a new semantic request.
-    ownerHistoryAnalyzed = true;
-    skipAssistantTurnStage(collaboration, "context", "not_needed");
-  } else if (ownerHistoryAuth && !ownerJournalTurn && (ownerHistoryStored?.plan || ownerHistoryPlan)) {
-    const runtime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
-    ownerHistoryAnalyzed = true;
-    if (runtime) {
-      let usage: import("../model-usage").ModelUsageTokens | undefined;
-      try {
-        const intent = await runAssistantTurnStage(collaboration, "context", "owner-history-intent",
-          { message: currentMessage, previous: ownerHistoryStored?.plan?.query ?? "" },
-          () => analyzeOwnerHistoryIntent(runtime, { message: currentMessage,
-            recent: recentMessages.slice(-8).map(row => ({ role: row.role, content: row.content })),
-            previous: ownerHistoryStored?.plan ?? null }, value => { usage = value; }));
-        const decision = applyOwnerHistoryIntent(ownerHistoryStored?.plan ?? null, ownerHistoryPlan, intent, currentMessage);
-        ownerHistoryPlan = decision.plan;
-        ownerHistoryLookup = decision.lookup;
-        ownerHistoryHold = intent.action === "hold";
-        await recordModelUsage({ kind: "context-assistant", model: runtime.model, usage: toUsageTokens(usage),
-          characterId: input.characterId, channelBindingId: input.bindingId,
-          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-          metadata: { status: "success", source: "owner-history-intent", turnId, action: intent.action } }).catch(() => undefined);
-      } catch {
-        ownerHistoryIntentFailed = true;
-        ownerHistoryLookup = Boolean(ownerHistoryPlan);
-        await recordModelUsage({ kind: "context-assistant", model: runtime.model, usage: toUsageTokens(usage),
-          characterId: input.characterId, channelBindingId: input.bindingId,
-          ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-          metadata: { status: "failed", source: "owner-history-intent", turnId } }).catch(() => undefined);
-      }
-    } else {
-      ownerHistoryIntentFailed = true;
-      ownerHistoryLookup = Boolean(ownerHistoryPlan);
-      skipAssistantTurnStage(collaboration, "context", "not_enabled");
-    }
-  }
-
-  // One private analyzer call can both request a knowledge lookup and nominate candidate evidence.
-  // The local gate runs regardless of the auto-collect switch: retrieval must keep working when
-  // capture is disabled. Only current-round original messages enter this private-only analysis.
-  const modelConfigForKnowledge = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
-    ? character.modelConfig as Record<string, unknown> : {};
-  // Reading approved knowledge is independent of the optional model analysis for
-  // query rewriting/candidate capture. Natural questions must reach this reader
-  // even when the cheap analyzer gate is false or its model is unavailable.
-  let privateKnowledgeItems: ConversationKnowledgeItem[] = !isGroup
-    ? await loadKnowledgeWithLexical().catch(() => []) : [];
-  if (!isGroup) {
-    const privateMessages = messages.map(item => ({
-      id: item.externalMessageId,
-      speaker: item.authorDisplayName ?? "",
-      content: item.content,
-    }));
-    if (privateContextPurpose(ownerHistoryAnalyzed, shouldAnalyzePrivateKnowledge(privateMessages)) === "knowledge") {
-      const privateContextRuntime = await resolveContextAssistantRuntime(character.modelConfig, chatSettings.apiBaseUrl);
-      if (privateContextRuntime) {
-        try {
-          const result = await runAssistantTurnStage(collaboration, "context", "private-knowledge-analysis",
-            { characterId: input.characterId, channelBindingId: input.bindingId, conversationKey: existingConversation?.id ?? input.externalConversationId,
-              messageIds: privateMessages.map(item => item.id), runtimeModel: privateContextRuntime.model },
-            observer => analyzePrivateKnowledgeCandidate(privateContextRuntime, character.name, privateMessages, observer));
-          await recordModelUsage({
-            kind: "context-assistant",
-            model: privateContextRuntime.model,
-            usage: toUsageTokens(result.usage),
-            characterId: input.characterId,
-            channelBindingId: input.bindingId,
-            ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-            metadata: { status: "success", turnId, source: "private-knowledge-analysis" },
-          }).catch(() => undefined);
-
-          // Retrieval is independent of auto-collection: only confirmed ACTIVE items are searchable.
-          if (result.knowledgeQuery && !privateKnowledgeItems.length) {
-            privateKnowledgeItems = await runAssistantTurnStage(collaboration, "knowledge", result.knowledgeQuery,
-              { characterId: input.characterId, readableScopeIds, query: result.knowledgeQuery },
-              () => loadKnowledgeWithLexical(result.knowledgeQuery!), items => items.length === 0).catch(() => []);
-          } else {
-            // The unconditional local read above already handled the original question.
-            skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
-          }
-
-          const collectScope = readKnowledgeCollectScope(modelConfigForKnowledge);
-          const wantCandidate = modelConfigForKnowledge.knowledgeAutoCollectEnabled === true && result.evidenceMessageIds.length > 0;
-          // 第二道闸门只决定「收谁的」，不碰检索：上面的 knowledgeQuery 照常查。
-          // 判不出来（没有外部身份范围）就不收 —— SELECTED 模式下宁可漏也不要噪音。
-          const allowedSource = wantCandidate
-            ? await isPrivateKnowledgeSource(prisma, {
-                characterId: input.characterId,
-                memoryScopeId: existingConversation?.memoryScopeId ?? conversationScopeId,
-                isOwnerTurn,
-                scope: collectScope,
-              }).catch(() => false)
-            : false;
-          if (allowedSource) {
-            // 落库单独兜一层：写库失败不该被算成「模型调用失败」，也不能静默消失 ——
-            // 否则线上只是「候选没出现」，没有任何痕迹可查。
-            try {
-              const selected = privateMessages.filter(item => result.evidenceMessageIds.includes(item.id));
-              const rawContent = selected.map(item => `[${item.speaker || "好友"}] ${item.content.slice(0, 4_000)}`).join("\n").slice(0, 20_000);
-              if (rawContent.trim()) {
-                const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
-                const duplicate = await prisma.knowledgeCandidate.findFirst({
-                  where: { characterId: input.characterId, sourceType: "CHAT", rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
-                  select: { id: true },
-                });
-                if (!duplicate) {
-                  await prisma.knowledgeCandidate.create({
-                    data: {
-                      characterId: input.characterId,
-                      sourceType: "CHAT",
-                      rawContent,
-                      sourceRef: {
-                        ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-                        messageIds: selected.map(item => item.id),
-                        speakers: [...new Set(selected.map(item => item.speaker).filter(Boolean))],
-                        reason: result.reason,
-                        capturedAt: new Date().toISOString(),
-                        channel: "PRIVATE",
-                      } satisfies Prisma.InputJsonObject,
-                    },
-                  });
-                }
-              }
-            } catch (error) {
-              console.warn(
-                "[knowledge] 私聊知识候选写入失败（不影响本轮回复）：",
-                error instanceof Error ? error.message : String(error),
-              );
-            }
-          }
-        } catch (error) {
-          await recordModelUsage({
-            kind: "context-assistant",
-            model: privateContextRuntime.model,
-            usage: toUsageTokens(error instanceof Error && "usage" in error ? (error as Error & { usage?: import("../model-usage").ModelUsageTokens }).usage : undefined),
-            characterId: input.characterId,
-            channelBindingId: input.bindingId,
-            ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-            metadata: { status: "failed", turnId, source: "private-knowledge-analysis" },
-          }).catch(() => undefined);
-          skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
-        }
-      } else {
-        skipAssistantTurnStage(collaboration, "context", "not_enabled");
-        skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
-      }
-    } else {
-      if (!ownerHistoryAnalyzed) skipAssistantTurnStage(collaboration, "context", "not_needed");
-      skipAssistantTurnStage(collaboration, "knowledge", "not_needed");
-    }
-  }
+  const growth = await prepareChannelTurnGrowth({
+    prisma,
+    character,
+    isGroup,
+    platform: input.platform,
+    characterId: input.characterId,
+    bindingId: input.bindingId,
+    externalConversationId: input.externalConversationId,
+    chatSettings,
+    apiKey,
+    messages,
+    currentMessage,
+    recentMessages,
+    recentStoredMessages,
+    existingConversation,
+    isOwnerTurn,
+    ownerPrivateScopeId,
+    ownerPlatformUid,
+    conversationScopeId,
+    readableScopeIds,
+    chatTimeZone,
+    turnId,
+  });
+  const selfUnderstanding = growth.selfUnderstanding;
+  const growthReads = growth.growthReads;
+  const goals = growth.goals;
+  const expressionHabits = growth.expressionHabits;
+  const preferences = growth.preferences;
+  let collaboration = growth.collaboration;
+  const loadKnowledge = growth.loadKnowledge;
+  const loadKnowledgeWithLexical = growth.loadKnowledgeWithLexical;
+  const ownerHistoryAuth = growth.ownerHistoryAuth;
+  const ownerHistoryStored = growth.ownerHistoryStored;
+  const ownerHistoryPlan = growth.ownerHistoryPlan;
+  const ownerHistoryLookup = growth.ownerHistoryLookup;
+  const ownerHistoryHold = growth.ownerHistoryHold;
+  const ownerHistoryNow = growth.ownerHistoryNow;
+  const privateKnowledgeItems = growth.privateKnowledgeItems;
 
   const interactionGuidance = await readInteractionGuidance(prisma, { characterId: input.characterId, query: currentMessage, chatScene: isGroup ? "GROUP" : "PRIVATE" }).catch(() => []);
   const interactionExperiences = existingConversation ? await readInteractionExperiences(prisma, {
