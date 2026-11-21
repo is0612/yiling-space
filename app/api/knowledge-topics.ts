@@ -1,10 +1,9 @@
 import type { ApiRequest } from "../utils/request";
 
-export type KnowledgeTopicStatus = "ACTIVE" | "ARCHIVED" | "MERGED";
-export type KnowledgeTopicSummary = {
-  id: string; name: string; description: string; status: KnowledgeTopicStatus; revision: number;
-  mergedIntoId: string | null; mergedAt: string | null; createdAt: string; updatedAt: string; memberCount: number;
-};
+// 话题主体的形状与后端共用（`shared/types/knowledge.ts`）。
+import type { KnowledgeTopicStatus, KnowledgeTopicSummary } from "#shared/types/knowledge";
+export type { KnowledgeTopicPage, KnowledgeTopicStatus, KnowledgeTopicSummary } from "#shared/types/knowledge";
+
 export type KnowledgeTopicMember = {
   id: string; itemId: string; itemRevision: number; createdAt: string; valid: boolean;
   itemRevisionChanged: boolean; invalidReason: string | null;
@@ -22,11 +21,6 @@ export type KnowledgeTopicDetail = KnowledgeTopicSummary & {
 export type KnowledgeTopicRevisionDetail = KnowledgeTopicRevision & {
   members: Array<{ itemId: string; itemRevision: number }>;
 };
-export type KnowledgeTopicPage = {
-  topics: KnowledgeTopicSummary[];
-  pagination: { page: number; pageSize: number; total: number; pageCount: number };
-};
-
 
 export type KnowledgeTopicRunStatus = "QUEUED" | "PROCESSING" | "READY" | "FAILED" | "STALE";
 export type KnowledgeTopicSuggestionStatus = "PENDING" | "ACCEPTED" | "DISMISSED";

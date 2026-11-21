@@ -2,8 +2,11 @@ import { createError, defineEventHandler, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../utils/prisma";
+import { toKnowledgeTopicSummary } from "../../../../../../utils/knowledge-topic-dto";
+import { KNOWLEDGE_TOPIC_STATUSES } from "../../../../../../../shared/types/knowledge";
 
-const TOPIC_STATUSES = new Set(["ACTIVE", "ARCHIVED", "MERGED"]);
+// 枚举与前端共用一份（shared/types/knowledge.ts）。
+const TOPIC_STATUSES: ReadonlySet<string> = new Set(KNOWLEDGE_TOPIC_STATUSES);
 
 export default defineEventHandler(async event => {
   const ownerId = await requireActorUserId(event);
@@ -44,7 +47,7 @@ export default defineEventHandler(async event => {
     prisma.knowledgeTopic.count({ where }),
   ]);
   return {
-    topics: topics.map(({ _count, ...topic }) => ({ ...topic, memberCount: _count.members })),
+    topics: topics.map(({ _count, ...topic }) => toKnowledgeTopicSummary(topic, _count.members)),
     pagination: { page, pageSize, total, pageCount: Math.max(1, Math.ceil(total / pageSize)) },
   };
 });

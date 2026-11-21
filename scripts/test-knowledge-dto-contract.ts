@@ -153,3 +153,42 @@ const shaped = toKnowledgeEntry(fakeRow as unknown as KnowledgeEntryRow);
 assert.equal(Object.keys(shaped).length, 12, "生命周期返回的 item 应能被整形成完整条目");
 
 console.log("KnowledgeRevision + lifecycle contract: 11 字段白名单、action 不外泄、完整条目整形衔接正确。");
+
+// ── 话题列表（第四片） ─────────────────────────────────────────
+
+import { toKnowledgeTopicSummary, type KnowledgeTopicRow } from "../server/utils/knowledge-topic-dto";
+import { KNOWLEDGE_TOPIC_STATUSES } from "../shared/types/knowledge";
+
+const topicRow = {
+  id: "99999999-9999-4999-8999-999999999999",
+  characterId: "22222222-2222-4222-8222-222222222222",
+  name: "星座与观星",
+  description: "她提起过的星座、观星经历",
+  status: "ACTIVE",
+  revision: 2,
+  mergedIntoId: null,
+  mergedAt: null,
+  createdAt: at,
+  updatedAt: at,
+} as unknown as KnowledgeTopicRow;
+
+const topic = toKnowledgeTopicSummary(topicRow, 4);
+assert.deepEqual(
+  Object.keys(topic).sort(),
+  ["createdAt", "description", "id", "memberCount", "mergedAt", "mergedIntoId", "name", "revision", "status", "updatedAt"],
+  "话题列表行只应有契约里的 10 个字段",
+);
+assert.ok(!("characterId" in (topic as unknown as Record<string, unknown>)), "话题不应带 characterId");
+assert.match(topic.createdAt, ISO, "话题 createdAt 必须是 ISO 字符串");
+assert.equal(topic.memberCount, 4, "memberCount 由调用方传入的聚合值拍平");
+assert.equal(topic.mergedAt, null, "未合并的话题 mergedAt 是 null");
+assert.ok(KNOWLEDGE_TOPIC_STATUSES.includes(topic.status));
+
+// 合并后的话题：mergedIntoId / mergedAt 有值，status 是 MERGED
+const merged = toKnowledgeTopicSummary({ ...topicRow, status: "MERGED", mergedIntoId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", mergedAt: at } as unknown as KnowledgeTopicRow, 0);
+assert.equal(merged.status, "MERGED");
+assert.equal(merged.mergedIntoId, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+assert.match(merged.mergedAt ?? "", ISO, "mergedAt 有值时应是 ISO 字符串");
+assert.equal(merged.memberCount, 0, "合并后成员数可以是 0");
+
+console.log("KnowledgeTopic contract: 10 字段白名单、外键隔离、mergedAt null 与合并态均符合 shared/types/knowledge.ts。");

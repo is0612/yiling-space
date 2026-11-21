@@ -131,3 +131,32 @@ export type KnowledgeCandidate = {
   /** 建议关联到的现有条目（服务端按 `relatedItemIds` 现查，只给一行够用的字段）。 */
   relatedItems: KnowledgeRelatedItem[];
 };
+
+export const KNOWLEDGE_TOPIC_STATUSES = ["ACTIVE", "ARCHIVED", "MERGED"] as const;
+export type KnowledgeTopicStatus = typeof KNOWLEDGE_TOPIC_STATUSES[number];
+
+/**
+ * 话题（`knowledge_topics`）在列表里的形状。
+ *
+ * `memberCount` 只数**当前仍可用**的成员（历史链接保留但不算数），由服务端聚合后拍平。
+ * `mergedIntoId` / `mergedAt` 只在被合并的话题上有值 —— 合并后话题不删除，留痕。
+ *
+ * `status` 用三值：话题有合并这个终态，跟条目的四值不同，别套用。
+ */
+export type KnowledgeTopicSummary = {
+  id: string;
+  name: string;
+  description: string;
+  status: KnowledgeTopicStatus;
+  revision: number;
+  mergedIntoId: string | null;
+  mergedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  memberCount: number;
+};
+
+export type KnowledgeTopicPage = {
+  topics: KnowledgeTopicSummary[];
+  pagination: { page: number; pageSize: number; total: number; pageCount: number };
+};
