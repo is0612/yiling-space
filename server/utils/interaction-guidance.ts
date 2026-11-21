@@ -5,9 +5,9 @@ import { assertPreferenceOwner, lockPreferenceOwner } from "./preferences-source
 import { preferenceQueryTerms } from "./preference-retrieval";
 import { parsePreferenceListQuery, preferencePage } from "./preferences-domain";
 
-export const GUIDANCE_KINDS = ["UNDERSTANDING", "REFERENCE", "SITUATION", "STRATEGY"] as const;
+// 与前端共用一份（shared/types/growth.ts）。
+import { GUIDANCE_KINDS, type GuidanceKind } from "../../shared/types/growth";
 export const GUIDANCE_REASON = "来自已授权教育反馈的抽象互动指导；由主人核对后采纳，不携带私人原文。";
-export type GuidanceKind = typeof GUIDANCE_KINDS[number];
 type Owner = { ownerId: string; characterId: string };
 type ChatScope = "ALL" | "GROUP" | "PRIVATE";
 const bad = (message: string): never => { throw createError({ statusCode: 400, statusMessage: message }); };

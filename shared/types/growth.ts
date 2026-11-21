@@ -207,3 +207,269 @@ export type LanguageHistory = {
   createdAt: string;
 };
 export type LanguageSuggestion = { kind: LanguageKind; content: string; context: string; reason: string };
+
+// ── 反思（周期回顾产出可采纳的结论） ──────────────────────────────
+
+export type ReflectionSourceRef = {
+  key: string;
+  type: "memory" | "knowledge" | "snapshot" | "experience";
+  id: string;
+  title: string;
+  hash: string;
+  excerpt: string;
+};
+
+export const REFLECTION_SUGGESTION_STATUSES = ["PENDING", "ACCEPTED", "REJECTED", "DEFERRED"] as const;
+export type ReflectionSuggestionStatus = typeof REFLECTION_SUGGESTION_STATUSES[number];
+export type ReflectionDecision = "ACCEPTED" | "REJECTED" | "DEFERRED";
+
+export type ReflectionSuggestion = {
+  id: string;
+  title: string;
+  observation: string;
+  inference: string;
+  recommendation: string;
+  sourceRefs: ReflectionSourceRef[];
+  status: ReflectionSuggestionStatus;
+  reviewNote: string | null;
+  reviewedAt: string | null;
+  acceptedAt: string | null;
+};
+
+export type ReflectionRun = {
+  id: string;
+  periodStart: string;
+  periodEnd: string;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  attemptCount: number;
+  maxAttempts: number;
+  runAt: string;
+  lastError: string | null;
+  model: string | null;
+  promptVersion: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  conversationId?: string | null;
+  memoryScopeId?: string | null;
+  suggestions: ReflectionSuggestion[];
+};
+
+export type ReflectionList = {
+  items: ReflectionRun[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  hasMore: boolean;
+};
+
+export type ReflectionDeleteResult = { deletedRuns: number; deletedSuggestions: number };
+
+// ── 事件投递（内部队列的可观测视图） ──────────────────────────────
+
+export const DELIVERY_STATUSES = ["QUEUED", "RUNNING", "SUCCEEDED", "RETRY_WAIT", "FAILED", "SKIPPED", "CANCELLED"] as const;
+export type DeliveryStatus = typeof DELIVERY_STATUSES[number];
+
+export type Delivery = {
+  id: string;
+  eventId: string;
+  consumerKey: string;
+  status: DeliveryStatus;
+  attemptCount: number;
+  maxAttempts: number;
+  runAt: string;
+  lockedAt: string | null;
+  lockedBy: string | null;
+  leaseExpiresAt: string | null;
+  fencingToken: number;
+  lastError: string | null;
+  processedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  eventType: string;
+  sourceDomain: string;
+  aggregateType: string;
+  aggregateId: string;
+  occurredAt: string;
+  leaseExpired: boolean;
+  queueDelayMs: number;
+};
+
+export type DeliveryDetail = Delivery & {
+  audits: Array<{ id: string; actorType: string; actorId: string | null; createdAt: string; details: unknown }>;
+};
+
+export type DeliverySummary = {
+  statusCounts: Record<DeliveryStatus, number>;
+  readyCount: number;
+  stuckCount: number;
+  oldestReadyAt: string | null;
+};
+
+export type DeliveryList = {
+  items: Delivery[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  hasMore: boolean;
+  summary: DeliverySummary;
+};
+
+// ── 关系评估（她自己判断和某个人的关系走到哪一步） ──────────────────
+
+export const ASSESSMENT_FILTERS = ["ALL", "ACTIONABLE", "ACCEPTED", "REJECTED", "STALE", "FAILED", "RUNNING"] as const;
+export type AssessmentFilter = typeof ASSESSMENT_FILTERS[number];
+export type AssessmentDecision = "ACCEPTED" | "REJECTED" | "DEFERRED";
+
+export type AssessmentEvidence = {
+  id: string;
+  kind: "NEW" | "CONTEXT";
+  occurredAt: string;
+  title: string;
+  detail: string;
+  participants: string[];
+  confidence: number | null;
+  eventStatus: string;
+};
+
+export type Assessment = {
+  id: string;
+  scopeId: string;
+  friend: { displayName: string; platform: string; platformUid: string; kind: string };
+  currentRelationship: { stage: string; status: string; version: number };
+  generation: number;
+  triggerReasons: string[];
+  evaluatedStage: string;
+  evaluatedStatus: string;
+  relationshipVersion: number;
+  outcome: string | null;
+  suggestedStage: string | null;
+  suggestedStatus: string | null;
+  reason: string | null;
+  observations: unknown;
+  confidence: number | null;
+  modelName: string | null;
+  promptVersion: string | null;
+  status: string;
+  reviewStatus: string;
+  reviewedAt: string | null;
+  reviews: { decision: string; note: string | null; createdAt: string }[];
+  error: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  evidence: AssessmentEvidence[];
+  canReview: boolean;
+  staleReason: string | null;
+};
+
+export type AssessmentPersonGroup = {
+  scopeId: string;
+  friend: Assessment["friend"];
+  currentRelationship: Assessment["currentRelationship"];
+  assessmentCount: number;
+  matchingCount: number;
+  latestAssessment: Pick<Assessment, "id" | "status" | "outcome" | "reviewStatus" | "createdAt"> | null;
+  changes: {
+    id: string;
+    fromStage: string;
+    toStage: string;
+    fromStatus: string | null;
+    toStatus: string | null;
+    createdAt: string;
+  }[];
+  changeCount: number;
+};
+
+export type AssessmentSummary = { all: number; actionable: number; accepted: number; failed: number; running: number };
+
+export type AssessmentPeopleResult = {
+  items: AssessmentPersonGroup[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  summary: AssessmentSummary;
+};
+
+export type AssessmentPageResult = {
+  items: Assessment[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  hasMore: boolean;
+  summary: AssessmentSummary;
+};
+
+export type AssessmentReviewResult = { applied: boolean; stale?: boolean };
+
+// ── 成长概览（一段时间里她变化了什么） ────────────────────────────
+
+export type GrowthOverviewConclusion = {
+  id: string;
+  title: string;
+  observation: string;
+  inference: string;
+  recommendation: string;
+  acceptedAt: string;
+  sourceRefs: unknown[];
+};
+
+export type GrowthOverview = {
+  character: { id: string; name: string };
+  period: { days: number; start: string; end: string };
+  generatedAt: string;
+  stats: { memories: number; knowledge: number; relationships: number; conclusions: number };
+  pending: { reflections: number; knowledge: number; relationships: number };
+  conclusions: GrowthOverviewConclusion[];
+  timeline: {
+    id: string;
+    type: "reflection" | "knowledge" | "relationship" | "snapshot";
+    title: string;
+    at: string;
+    description: string;
+    href: string;
+  }[];
+  delivery: { failed: number; stuck: number; ready: number };
+};
+
+// ── 互动指引（她学到的相处方式） ────────────────────────────────
+
+export const GUIDANCE_STATUSES = ["PENDING", "ACTIVE", "DISABLED", "REJECTED"] as const;
+export type GuidanceStatus = typeof GUIDANCE_STATUSES[number];
+
+export const GUIDANCE_KINDS = ["UNDERSTANDING", "REFERENCE", "SITUATION", "STRATEGY"] as const;
+export type GuidanceKind = typeof GUIDANCE_KINDS[number];
+
+export type GuidanceItem = {
+  id: string;
+  characterId: string;
+  kind: GuidanceKind;
+  content: string;
+  context: string;
+  chatScope: ChatScope;
+  reason: string;
+  status: GuidanceStatus;
+  revision: number;
+  sourceRefs?: unknown[];
+  createdAt: string;
+  updatedAt: string;
+  action?: string;
+};
+
+/** 渠道策略：目前只有「群里 @ 她不回」这一类。 */
+export type ChannelPolicyItem = {
+  id: string;
+  characterId: string;
+  kind: "GROUP_AT_DISABLED";
+  chatScope: "GROUP";
+  content: string;
+  status: GuidanceStatus;
+  revision: number;
+  sourceRefs?: unknown[];
+  createdAt: string;
+  updatedAt?: string;
+  action?: string;
+};

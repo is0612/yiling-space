@@ -10,17 +10,23 @@ export const REFLECTION_PROMPT_VERSION = "reflection-v4";
 const LEASE_MS = 5 * 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 type Database = PrismaClient | Prisma.TransactionClient;
-export type ReflectionSourceRef = { key: string; type: "memory" | "knowledge" | "snapshot" | "experience"; id: string; hash: string; conversationId?: string; memoryScopeId?: string };
-export type ReflectionSource = ReflectionSourceRef & { title: string; excerpt: string };
+/**
+ * 反思的**证据引用**（内部）：带会话与范围锚点，没有展示用的 title / excerpt。
+ *
+ * 与 API 返回的 `ReflectionSourceRef`（`shared/types/growth.ts`，带 title / excerpt）
+ * 不是同一个东西 —— 那个是给页面看来源摘要的。以前同名，容易以为是同一种引用。
+ */
+export type ReflectionEvidenceRef = { key: string; type: "memory" | "knowledge" | "snapshot" | "experience"; id: string; hash: string; conversationId?: string; memoryScopeId?: string };
+export type ReflectionSource = ReflectionEvidenceRef & { title: string; excerpt: string };
 export type NormalizedReflectionSuggestion = {
-  title: string; observation: string; inference: string; recommendation: string; sourceRefs: ReflectionSourceRef[]; expression?: { kind: "TONE" | "WORDING" | "LENGTH"; content: string; context: string };
+  title: string; observation: string; inference: string; recommendation: string; sourceRefs: ReflectionEvidenceRef[]; expression?: { kind: "TONE" | "WORDING" | "LENGTH"; content: string; context: string };
 };
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 function digest(title: string, content: string) { return createHash("sha256").update(JSON.stringify([title, content])).digest("hex"); }
 function snapshotTitle(start: Date, end: Date) { return `阶段总结 ${start.toISOString()} — ${end.toISOString()}`; }
-function source(type: ReflectionSourceRef["type"], id: string, title: string, content: string): ReflectionSource {
+function source(type: ReflectionEvidenceRef["type"], id: string, title: string, content: string): ReflectionSource {
   return { key: `${type}:${id}`, type, id, hash: digest(title, content), title: title.slice(0, 200), excerpt: content.slice(0, 600) };
 }
 
@@ -53,7 +59,7 @@ export async function collectReflectionSources(prisma: Database, characterId: st
   ];
 }
 
-function validRef(value: unknown): value is ReflectionSourceRef {
+function validRef(value: unknown): value is ReflectionEvidenceRef {
   const ref = record(value);
   return ref.valid !== false && ["memory", "knowledge", "snapshot", "experience"].includes(String(ref.type)) && typeof ref.id === "string" && UUID.test(ref.id)
     && ref.key === `${ref.type}:${ref.id}` && typeof ref.hash === "string" && /^[a-f0-9]{64}$/.test(ref.hash);
@@ -104,7 +110,7 @@ export async function validateReflectionSourceRefs(tx: Prisma.TransactionClient,
 }
 
 /** Malformed protocol fails the run; invalid individual suggestions are discarded in full. */
-export function normalizeReflectionSuggestions(value: unknown, allowedSources: readonly ReflectionSourceRef[]): NormalizedReflectionSuggestion[] {
+export function normalizeReflectionSuggestions(value: unknown, allowedSources: readonly ReflectionEvidenceRef[]): NormalizedReflectionSuggestion[] {
   const root = record(value);
   if (value === null || Array.isArray(value) || typeof value !== "object" || !Array.isArray(root.suggestions) || root.suggestions.length > 3) throw new Error("反思模型输出格式无效。");
   const allowed = new Map(allowedSources.filter(validRef).map(ref => [ref.key, ref]));
@@ -129,7 +135,7 @@ export function normalizeReflectionSuggestions(value: unknown, allowedSources: r
   return output;
 }
 
-export function reflectionSourcesHash(sources: readonly ReflectionSourceRef[]): string {
+export function reflectionSourcesHash(sources: readonly ReflectionEvidenceRef[]): string {
   return createHash("sha256").update(JSON.stringify(sources.map(({ key, hash }) => [key, hash]).sort((a, b) => a[0]!.localeCompare(b[0]!) || a[1]!.localeCompare(b[1]!)))).digest("hex");
 }
 
