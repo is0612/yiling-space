@@ -13,18 +13,27 @@ servers:
     description: 当前部署的同源 API
 tags:
   - name: Auth
+    description: 管理员登录、会话与账号管理
   - name: Characters
+    description: 角色档案、模型参数与可移植导入导出
   - name: Memories
+    description: 长期记忆、忆泡与原文检索
   - name: Snapshots
+    description: 周期快照的生成、版本与审核
   - name: MemorySettings
+    description: 记忆周期、时区与保留策略
   - name: Tasks
+    description: 记忆任务队列、重试与停滞检测
   - name: Channels
+    description: 渠道连接与角色绑定
   - name: Stickers
+    description: 表情包库与 QQ 收藏夹同步
 security:
   - sessionCookie: []
 paths:
   /roleplay/settings:
     get:
+      operationId: getRoleplaySettings
       tags: [Roleplay]
       summary: 读取当前用户独立的扮演模型设置
       description: 不读取或沿用主人格模型密钥；只返回 hasApiKey，不回显密钥或密文。
@@ -36,6 +45,7 @@ paths:
               schema: { $ref: '#/components/schemas/RoleplaySettings' }
         '401': { $ref: '#/components/responses/Unauthorized' }
     put:
+      operationId: putRoleplaySettings
       tags: [Roleplay]
       summary: 更新独立扮演模型设置
       requestBody:
@@ -55,6 +65,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
   /roleplay/personas:
     get:
+      operationId: getRoleplayPersonas
       tags: [Roleplay]
       summary: 当前用户的扮演人设列表（无头像）
       responses:
@@ -65,6 +76,7 @@ paths:
               schema: { type: array, items: { $ref: '#/components/schemas/RoleplayPersona' } }
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
+      operationId: postRoleplayPersonas
       tags: [Roleplay]
       summary: 创建扮演人设
       requestBody:
@@ -84,6 +96,7 @@ paths:
     parameters:
       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     patch:
+      operationId: patchRoleplayPersonasById
       tags: [Roleplay]
       summary: 修改扮演人设，不自动改变已有存档
       requestBody:
@@ -106,6 +119,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: 人设不存在或不属于当前用户 }
     delete:
+      operationId: deleteRoleplayPersonasById
       tags: [Roleplay]
       summary: 删除人设，保留已有存档及其人设快照
       responses:
@@ -114,6 +128,7 @@ paths:
         '404': { description: 人设不存在或不属于当前用户 }
   /roleplay/sessions:
     get:
+      operationId: getRoleplaySessions
       tags: [Roleplay]
       summary: 当前用户的独立扮演存档
       parameters:
@@ -126,6 +141,7 @@ paths:
               schema: { type: array, items: { $ref: '#/components/schemas/RoleplaySession' } }
         '401': { $ref: '#/components/responses/Unauthorized' }
     post:
+      operationId: postRoleplaySessions
       tags: [Roleplay]
       summary: 创建独立双人聊天存档，复制当前人设
       requestBody:
@@ -151,6 +167,7 @@ paths:
     parameters:
       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     get:
+      operationId: getRoleplaySessionsById
       tags: [Roleplay]
       summary: 读取存档和完整原文（已压缩原文仍保留）
       responses:
@@ -168,6 +185,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: 存档不存在或不属于当前用户 }
     patch:
+      operationId: patchRoleplaySessionsById
       tags: [Roleplay]
       summary: 重命名存档
       requestBody:
@@ -189,6 +207,7 @@ paths:
         '404': { description: 存档不存在或不属于当前用户 }
         '409': { description: 存档正在处理另一请求 }
     delete:
+      operationId: deleteRoleplaySessionsById
       tags: [Roleplay]
       summary: 删除存档与其中消息，并解除该存档QQ绑定
       responses:
@@ -200,6 +219,7 @@ paths:
     parameters:
       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     post:
+      operationId: postRoleplaySessionsByIdMessages
       tags: [Roleplay]
       summary: 独立扮演聊天，不调用记忆助手、语境助手或成长任务
       description: 用户原文先保存。相同 requestId 重试返回已有回答或续做未完成请求，不重复追加消息；未回答请求完成前不同请求返回409。上下文按预算自动压缩，失败不删除原文或无声跳过历史。来源由服务端确定为web，QQ入口内部设置qq。
@@ -237,6 +257,7 @@ paths:
     parameters:
       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     post:
+      operationId: postRoleplaySessionsByIdApplyPersona
       tags: [Roleplay]
       summary: 显式应用最新人设到存档，不改写聊天原文
       responses:
@@ -252,6 +273,7 @@ paths:
     parameters:
       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
     post:
+      operationId: postRoleplaySessionsByIdCompress
       tags: [Roleplay]
       summary: 使用扮演模型压缩较早聊天，保留完整原文
       description: 摘要以独立档案任务生成，历史消息只作为JSON数据；校验结构与覆盖序号后保存，续聊台词或无效结构不会覆盖旧摘要。rebuild=true忽略旧摘要，从完整原文分段重新整理，最多8段，全部成功后保存。
@@ -275,7 +297,30 @@ paths:
         '502': { description: 压缩失败，旧摘要和聊天原文保留 }
         '503': { description: 扮演模型尚未配置 }
   /local/tasks/{id}:
+    get:
+      operationId: getLocalTasksById
+      tags: [LocalObserve]
+      summary: 任务详情
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 任务
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task: { $ref: '#/components/schemas/LocalTask' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
     patch:
+      operationId: patchLocalTasksById
       tags: [LocalObserve]
       summary: 开关任务的自动续办
       description: 仅管理员。打开后，审批完成且无待批请求时由服务端自动发起下一轮；仍受环境总开关与轮次上限约束。
@@ -306,6 +351,7 @@ paths:
         '409': { description: 任务已结束，不能修改 }
   /local/browser-requests:
     get:
+      operationId: getLocalBrowserRequests
       tags: [LocalObserve]
       summary: 待审批的网页操作
       description: 仅管理员；默认只返回 PENDING。
@@ -327,6 +373,7 @@ paths:
         '403': { description: 非管理员 }
   /local/browser-requests/{id}/approve:
     post:
+      operationId: postLocalBrowserRequestsByIdApprove
       tags: [LocalObserve]
       summary: 批准并执行网页操作
       description: 在独立无登录浏览器中执行一次，成功与否都关闭会话；提交、上传、跨站与密码输入被拒绝。
@@ -347,6 +394,7 @@ paths:
         '409': { description: 已处理或正在执行 }
   /local/browser-requests/{id}/submit:
     post:
+      operationId: postLocalBrowserRequestsByIdSubmit
       tags: [LocalObserve]
       summary: 确认提交已填好的表单
       description: 仅当请求处于 FILLED 时可用。重新打开页面、重放填写步骤，然后点提交按钮；只允许同源表单，目标地址再做一次公网校验。
@@ -367,6 +415,7 @@ paths:
         '409': { description: 还没填好或已经处理过 }
   /local/browser-requests/{id}/reject:
     post:
+      operationId: postLocalBrowserRequestsByIdReject
       tags: [LocalObserve]
       summary: 拒绝网页操作
       parameters:
@@ -385,6 +434,7 @@ paths:
         '409': { description: 已处理 }
   /local/browser/observe:
     post:
+      operationId: postLocalBrowserObserve
       tags: [LocalObserve]
       summary: 独立浏览器只读观察
       description: 仅管理员，复用本机 Chrome/Edge 的程序但使用全新无登录会话。页面资源只允许指定来源的 GET；跨来源、POST、私网、WebSocket、子页面、弹窗和下载被阻止。每次观察结束关闭浏览器，不持久保存截图或 Cookie。
@@ -424,6 +474,7 @@ paths:
           description: 另一项观察尚未结束
   /characters/{id}/chat/local-results:
     get:
+      operationId: getCharactersByIdChatLocalResults
       tags: [Characters]
       summary: 查询当前桌面会话的本地任务结果
       description: 仅角色所属管理员；不生成消息、不读取新文件、不调用模型。返回最近 20 个关联任务及已有磁盘核对证据。
@@ -548,6 +599,7 @@ paths:
     parameters:
       - &knowledgeTopicCharacter { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     get:
+      operationId: getCharactersByIdGrowthKnowledgeTopics
       summary: 按角色列出知识主题
       description: 所有主题接口均要求角色归属；其他角色的资源按不存在处理。主题操作只修改组织关系，不修改正式知识。
       parameters:
@@ -561,6 +613,7 @@ paths:
         '401': &knowledgeTopicUnauthorized { description: 未登录 }
         '404': &knowledgeTopicMissing { description: 资源不存在或不属于当前用户或角色 }
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopics
       summary: 创建空主题
       requestBody:
         required: true
@@ -582,6 +635,7 @@ paths:
       - *knowledgeTopicCharacter
       - &knowledgeTopicId { name: topicId, in: path, required: true, schema: { type: string, format: uuid } }
     get:
+      operationId: getCharactersByIdGrowthKnowledgeTopicsByTopicId
       summary: 读取主题及其成员
       responses:
         '200': { description: '返回 topic，包含成员有效性、成员知识当前版本、最近历史摘要及合并目标' }
@@ -589,6 +643,7 @@ paths:
         '401': *knowledgeTopicUnauthorized
         '404': *knowledgeTopicMissing
     patch:
+      operationId: patchCharactersByIdGrowthKnowledgeTopicsByTopicId
       summary: 编辑、归档或恢复主题
       description: 至少提供 name、description、status 之一。传 revision 可拒绝过期写入；已合并主题不可编辑。
       requestBody:
@@ -609,9 +664,12 @@ paths:
         '401': *knowledgeTopicUnauthorized
         '404': *knowledgeTopicMissing
         '409': &knowledgeTopicConflict { description: 版本过期、状态不允许或领域约束冲突 }
+  # 已知歧义（Redocly no-ambiguous-paths）：`topics/runs` 与 `topics/{topicId}` 在路径上重叠。
+  # 实际路由里 topics 下的 id 都是 uuid，不会与 runs 撞车；改名等于改对外契约，因此保持现状。
   /characters/{id}/growth/knowledge/topics/{topicId}/members:
     parameters: [*knowledgeTopicCharacter, *knowledgeTopicId]
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopicsByTopicIdMembers
       summary: 将活动知识加入活动主题
       requestBody:
         required: true
@@ -635,6 +693,7 @@ paths:
       - *knowledgeTopicId
       - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
     delete:
+      operationId: deleteCharactersByIdGrowthKnowledgeTopicsByTopicIdMembersByItemId
       summary: 从活动主题移除成员引用
       requestBody:
         content:
@@ -649,6 +708,7 @@ paths:
   /characters/{id}/growth/knowledge/topics/{topicId}/split:
     parameters: [*knowledgeTopicCharacter, *knowledgeTopicId]
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopicsByTopicIdSplit
       summary: 将选中成员拆到新主题
       description: memberItemIds 必须是当前成员的非空真子集。事务内保留原成员的知识版本引用。
       requestBody:
@@ -668,6 +728,7 @@ paths:
   /characters/{id}/growth/knowledge/topics/{topicId}/merge:
     parameters: [*knowledgeTopicCharacter, *knowledgeTopicId]
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopicsByTopicIdMerge
       summary: 将路径指定的源主题并入另一个活动主题
       description: 目标主题保留身份，来源标为 MERGED 并保留历史；合并成员引用时去重。
       requestBody:
@@ -690,6 +751,7 @@ paths:
   /characters/{id}/growth/knowledge/topics/{topicId}/revisions:
     parameters: [*knowledgeTopicCharacter, *knowledgeTopicId]
     get:
+      operationId: getCharactersByIdGrowthKnowledgeTopicsByTopicIdRevisions
       summary: 列出历史版本
       parameters:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
@@ -704,6 +766,7 @@ paths:
       - *knowledgeTopicId
       - &knowledgeTopicRevisionParam { name: revision, in: path, required: true, schema: *knowledgeTopicVersion }
     get:
+      operationId: getCharactersByIdGrowthKnowledgeTopicsByTopicIdRevisionsByRevision
       summary: 读取指定历史快照
       responses:
         '200': { description: '返回 topicId、currentRevision、snapshot（含成员 ID 和加入版本）' }
@@ -713,6 +776,7 @@ paths:
   /characters/{id}/growth/knowledge/topics/{topicId}/revisions/{revision}/restore:
     parameters: [*knowledgeTopicCharacter, *knowledgeTopicId, *knowledgeTopicRevisionParam]
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopicsByTopicIdRevisionsByRevisionRestore
       summary: 以新版本恢复单主题历史快照
       description: 主题及快照均不能是已合并状态，历史成员必须仍是同角色活动知识。
       requestBody:
@@ -729,6 +793,7 @@ paths:
   /characters/{id}/growth/knowledge/topics/{topicId}/revert:
     parameters: [*knowledgeTopicCharacter, *knowledgeTopicId]
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopicsByTopicIdRevert
       summary: 原子撤销最近主题操作
       description: 拆分与合并的关联主题一并校验版本与恢复；任一主题过期即整笔拒绝。
       requestBody:
@@ -750,6 +815,7 @@ paths:
   /characters/{id}/growth/knowledge/topics/runs:
     parameters: [*knowledgeTopicCharacter]
     get:
+      operationId: getCharactersByIdGrowthKnowledgeTopicsRuns
       summary: 列出主题发现批次
       parameters:
         - { name: status, in: query, schema: { type: string, enum: [QUEUED, PROCESSING, READY, FAILED, STALE] } }
@@ -761,6 +827,7 @@ paths:
         '401': *knowledgeTopicUnauthorized
         '404': *knowledgeTopicMissing
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopicsRuns
       summary: 提交异步主题发现批次
       description: 保存同角色活动知识的 ID 与版本快照，排队后立即返回。Worker 异步处理，输入变化时标记 STALE。
       requestBody:
@@ -779,6 +846,7 @@ paths:
       - *knowledgeTopicCharacter
       - { name: runId, in: path, required: true, schema: { type: string, format: uuid } }
     get:
+      operationId: getCharactersByIdGrowthKnowledgeTopicsRunsByRunId
       summary: 查询批次进度、建议与未归组知识
       responses:
         '200': { description: '返回 run，包含状态、输入快照 inputSnapshot、未归组知识 ungroupedItems、建议 suggestions' }
@@ -790,6 +858,7 @@ paths:
       - *knowledgeTopicCharacter
       - &knowledgeTopicSuggestionId { name: suggestionId, in: path, required: true, schema: { type: string, format: uuid } }
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopicsSuggestionsBySuggestionIdAccept
       summary: 采纳全部或部分建议成员
       description: CREATE 创建主题且不能传 topicId；APPLY 必须提供活动目标主题。省略 memberItemIds 则采纳全部，否则须为建议成员的非空子集。采纳时复验所选知识的归属、状态与输入版本。
       requestBody:
@@ -812,6 +881,7 @@ paths:
   /characters/{id}/growth/knowledge/topics/suggestions/{suggestionId}/dismiss:
     parameters: [*knowledgeTopicCharacter, *knowledgeTopicSuggestionId]
     post:
+      operationId: postCharactersByIdGrowthKnowledgeTopicsSuggestionsBySuggestionIdDismiss
       summary: 忽略待审核建议
       responses:
         '200': { description: '返回 id、status（DISMISSED）；不会修改主题或正式知识' }
@@ -821,6 +891,7 @@ paths:
         '409': *knowledgeTopicConflict
   /characters/{id}/growth/channel-policies:
     get:
+      operationId: getCharactersByIdGrowthChannelPolicies
       tags: [Channels]
       summary: 角色主人读取渠道教育策略候选
       parameters:
@@ -842,6 +913,7 @@ paths:
         '404': { description: 无权访问或角色不存在 }
   /characters/{id}/growth/channel-policies/{policyId}:
     patch:
+      operationId: patchCharactersByIdGrowthChannelPoliciesByPolicyId
       tags: [Channels]
       summary: 主人采纳停用或驳回固定渠道策略
       description: 仅GROUP_AT_DISABLED。仅影响所有QQ绑定的被动群回复at段，引用正文保留，不影响主动好友公告。首次采纳复验explicit来源和当前教育权限，采纳后独立管理。不接受编辑任意action或正文。
@@ -874,6 +946,7 @@ paths:
         '409': { description: 版本来源权限或状态已变化 }
   /characters/{id}/growth/channel-policies/{policyId}/history:
     get:
+      operationId: getCharactersByIdGrowthChannelPoliciesByPolicyIdHistory
       tags: [Channels]
       summary: 主人读取渠道策略历史
       parameters:
@@ -895,6 +968,7 @@ paths:
         '404': { description: 无权访问或不存在 }
   /characters/{id}/growth/interaction-guidance:
     get:
+      operationId: getCharactersByIdGrowthInteractionGuidance
       tags: [Growth]
       summary: 当前角色的跨会话抽象互动指导（仅角色主人）
       parameters:
@@ -916,6 +990,7 @@ paths:
         '404': { description: 无权访问的角色或角色不存在 }
   /characters/{id}/growth/interaction-guidance/{guidanceId}:
     patch:
+      operationId: patchCharactersByIdGrowthInteractionGuidanceByGuidanceId
       tags: [Growth]
       summary: 主人编辑、采纳、驳回或停用抽象互动指导
       description: 首次采纳校验私人来源版本及当前教育权限；采纳后指导独立管理。状态变更不能同时编辑内容。不能修改来源或由请求指定生效状态。
@@ -952,6 +1027,7 @@ paths:
         '409': { description: 版本、来源或授权已变化 }
   /characters/{id}/growth/interaction-guidance/{guidanceId}/history:
     get:
+      operationId: getCharactersByIdGrowthInteractionGuidanceByGuidanceIdHistory
       tags: [Growth]
       summary: 当前角色抽象互动指导的修订历史
       parameters:
@@ -975,6 +1051,7 @@ paths:
     parameters:
       - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
     get:
+      operationId: getCharactersByCharacterIdGrowthInteractionExperiences
       tags: [Memories]
       summary: 分页查看自动形成的短期互动经验（仅角色拥有者）
       parameters:
@@ -987,6 +1064,7 @@ paths:
         '401': { description: 未登录 }
         '404': { description: 角色不存在或无权访问 }
     post:
+      operationId: postCharactersByCharacterIdGrowthInteractionExperiences
       tags: [Memories]
       summary: 主人从实际反馈手动提炼经验候选
       description: 网页和私聊日常经验可在后台收尾时自动提炼。本接口让角色主人主动选取网页、可读私聊或群聊中的反馈；校验同会话助手回复与随后USER反馈、期间没有其他助手回复。模型须逐字引用反馈，群聊还要求指出明确针对所选回复的反馈并提供结构化判断。沉默不算反馈，隐私边界拒绝作为临时经验。新候选为PENDING，需PATCH采纳才在原会话的相关情境召回；相同证据返回既有项。
@@ -1011,6 +1089,7 @@ paths:
         '503': { description: 模型未配置 }
   /characters/{characterId}/growth/interaction-experiences/settings:
     patch:
+      operationId: patchCharactersByCharacterIdGrowthInteractionExperiencesSettings
       tags: [Memories]
       summary: 启用或关闭角色自动形成互动经验
       description: 仅角色拥有者可操作；独立开关，不改变自动忆泡或阶段总结。合并角色配置并检查并发版本，写审计。关闭阻止新自动整理，已有生效经验仍按原会话召回。
@@ -1034,6 +1113,7 @@ paths:
         '409': { description: 角色配置并发修改，请刷新重试 }
   /characters/{characterId}/growth/interaction-experiences/evidence:
     get:
+      operationId: getCharactersByCharacterIdGrowthInteractionExperiencesEvidence
       tags: [Memories]
       summary: 选择当前角色的会话与反馈证据
       parameters:
@@ -1046,6 +1126,7 @@ paths:
         '404': { description: 角色不存在或无权访问 }
   /characters/{characterId}/growth/interaction-experiences/{experienceId}:
     patch:
+      operationId: patchCharactersByCharacterIdGrowthInteractionExperiencesByExperienceId
       tags: [Memories]
       summary: 编辑、采纳、驳回或停用临时互动经验
       description: 仅角色拥有者；乐观版本检查。PENDING可ACCEPT或REJECT；ACTIVE可DISABLE。EDIT不改变状态或衰减起点。采纳重新校验反馈证据。所有修改写审计。召回只允许原conversation与原memoryScope，不向其他会话传播。
@@ -1084,6 +1165,7 @@ paths:
         '409': { description: 状态、版本或证据冲突 }
   /characters/{characterId}/growth/goals:
     get:
+      operationId: getCharactersByCharacterIdGrowthGoals
       tags: [Characters]
       summary: 分页搜索当前角色的目标与愿望与候选
       description: 仅角色拥有者可读；角色自己的目标与愿望与他人的私人喜好分离。来源快照不表示来源仍有效。
@@ -1108,6 +1190,7 @@ paths:
         '404': { description: 角色或条目不存在或无权访问 }
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
     post:
+      operationId: postCharactersByCharacterIdGrowthGoals
       tags: [Characters]
       summary: 手动创建目标与愿望或保存有来源的待确认候选
       description: 最多5条来源。仅当前角色公开ACTIVE忆泡和ACCEPTED反思建议可用；来源指纹事务内校验。有来源只能PENDING，手动可明确ACTIVE。版本与审计同事务。
@@ -1136,6 +1219,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/goals/sources:
     get:
+      operationId: getCharactersByCharacterIdGrowthGoalsSources
       tags: [Characters]
       summary: 分页选择当前角色的公开目标与愿望依据
       parameters:
@@ -1152,6 +1236,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/goals/suggest:
     post:
+      operationId: postCharactersByCharacterIdGrowthGoalsSuggest
       tags: [Characters]
       summary: 用户明确调用聊天模型提出一条目标与愿望草稿
       description: 不创建候选或正式目标与愿望。只读所选1至5条公开来源摘要，调用前后校验指纹，最多60秒；使用角色聊天配置和每日额度，other/source=goal-suggestion记账。模型证据不足可返回null；不透传供应商错误。
@@ -1178,6 +1263,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/goals/{goalId}:
     patch:
+      operationId: patchCharactersByCharacterIdGrowthGoalsByGoalId
       tags: [Characters]
       summary: 编辑目标与愿望或人工确认、暂停、恢复、完成、放弃和驳回
       description: expectedRevision为当前版本。EDIT限PENDING/ACTIVE/PAUSED；ACTIVATE限PENDING/PAUSED；PAUSE限ACTIVE；COMPLETE和ABANDON限ACTIVE/PAUSED；REJECT限PENDING。COMPLETED/ABANDONED/REJECTED为不可编辑终态。首次采纳重新验证来源，已确认目标独立保留。状态操作不得混合编辑，无变化不增版本，冲突409。
@@ -1207,6 +1293,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/goals/{goalId}/history:
     get:
+      operationId: getCharactersByCharacterIdGrowthGoalsByGoalIdHistory
       tags: [Characters]
       summary: 分页读取目标与愿望的追加式完整版本历史
       parameters:
@@ -1226,6 +1313,7 @@ paths:
       - { name: characterId, in: path, required: true, schema: { type: string, format: uuid } }
       - { name: goalId, in: path, required: true, schema: { type: string, format: uuid } }
     get:
+      operationId: getCharactersByCharacterIdGrowthGoalsByGoalIdProgress
       tags: [Characters]
       summary: 分页读取不可变的目标进展记录
       parameters:
@@ -1236,6 +1324,7 @@ paths:
         '401': { description: 未登录 }
         '404': { description: 目标不存在或无权读取 }
     post:
+      operationId: postCharactersByCharacterIdGrowthGoalsByGoalIdProgress
       tags: [Characters]
       summary: 为进行中或暂停目标人工追加进展
       description: 记录与目标revision递增、PROGRESS完整版本及USER审计同事务。requestKey在目标内唯一；相同key和规范化正文/来源重试返回原进展，不重复写。先校验拥有者，再处理幂等重放，因此目标已完成或版本变化后仍可重放同一操作。相同key不同内容409；expectedRevision不参与payload指纹。新写只允许ACTIVE/PAUSED当前版本。来源最多5条公开依据，写入时重验。没有自动修改目标状态。
@@ -1260,6 +1349,7 @@ paths:
         '409': { description: 版本或状态不符、同key不同内容、来源失效 }
   /characters/{characterId}/growth/language:
     get:
+      operationId: getCharactersByCharacterIdGrowthLanguage
       tags: [Characters]
       summary: 分页搜索当前角色的表达习惯与候选
       description: 仅角色拥有者可读；角色自己的表达习惯与他人的私人喜好分离。来源快照不表示来源仍有效。
@@ -1284,6 +1374,7 @@ paths:
         '404': { description: 角色或条目不存在或无权访问 }
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
     post:
+      operationId: postCharactersByCharacterIdGrowthLanguage
       tags: [Characters]
       summary: 手动创建表达习惯或保存有来源的待确认候选
       description: 最多5条来源。仅当前角色公开ACTIVE忆泡和ACCEPTED反思建议可用；来源指纹事务内校验。有来源只能PENDING，手动可明确ACTIVE。版本与审计同事务。
@@ -1313,6 +1404,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/language/sources:
     get:
+      operationId: getCharactersByCharacterIdGrowthLanguageSources
       tags: [Characters]
       summary: 分页选择当前角色的公开表达习惯依据
       parameters:
@@ -1329,6 +1421,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/language/suggest:
     post:
+      operationId: postCharactersByCharacterIdGrowthLanguageSuggest
       tags: [Characters]
       summary: 用户明确调用聊天模型提出一条表达习惯草稿
       description: 不创建候选或正式表达习惯。只读所选1至5条公开来源摘要，调用前后校验指纹，最多60秒；使用角色聊天配置和每日额度，other/source=expression-habit-suggestion记账。模型证据不足可返回null；不透传供应商错误。
@@ -1355,6 +1448,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/language/observe-group:
     post:
+      operationId: postCharactersByCharacterIdGrowthLanguageObserveGroup
       tags: [Characters]
       summary: 从所选群聊片段提炼待确认的表达习惯
       description: 仅角色拥有者可操作。三条依据必须在当前角色同一已记录QQ全局群聊内，按开场、接话、后续排序。读取包含中间消息的片段，最多12条且不超过15分钟，不接受角色自己参与的片段。已知机器人和系统播报不能作为依据。模型看到去标识后的有界文本；无明确后续可返回空。新候选一律PENDING，默认ALL，首次采纳重验来源，后续聊天只读取抽象表达和适用场景。
@@ -1384,6 +1478,7 @@ paths:
         '502': { description: 模型调用、响应解析或抽象检查失败 }
         '503': { description: 模型未配置 }
     patch:
+      operationId: patchCharactersByCharacterIdGrowthLanguageObserveGroup
       tags: [Characters]
       summary: 按群开启或关闭自动观察
       description: 默认关闭。只使用开启后已经落库的新群聊，不扩大消息留存范围。关闭不删除候选，并阻止尚未保存的自动候选提交。候选仍需主人确认。
@@ -1407,6 +1502,7 @@ paths:
         '404': { description: 角色或群不属于当前主人、不存在或不可观察 }
   /characters/{characterId}/growth/language/{habitId}:
     patch:
+      operationId: patchCharactersByCharacterIdGrowthLanguageByHabitId
       tags: [Characters]
       summary: 编辑表达习惯或人工确认、驳回、停用与重新启用
       description: expectedRevision为当前版本。EDIT不改变状态；ACTIVATE仅PENDING或DISABLED，REJECT仅PENDING，DISABLE仅ACTIVE。首次采纳重新验证来源，已生效记录独立于来源生命周期。状态操作不得同时编辑内容。无变化编辑不新增版本；冲突返回409。
@@ -1437,6 +1533,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/language/{habitId}/history:
     get:
+      operationId: getCharactersByCharacterIdGrowthLanguageByHabitIdHistory
       tags: [Characters]
       summary: 分页读取表达习惯的追加式完整版本历史
       parameters:
@@ -1453,6 +1550,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/preferences:
     get:
+      operationId: getCharactersByCharacterIdGrowthPreferences
       tags: [Characters]
       summary: 分页搜索当前角色的偏好与候选
       description: 仅角色拥有者可读；角色自己的偏好与他人的私人喜好分离。来源快照不表示来源仍有效。
@@ -1477,6 +1575,7 @@ paths:
         '404': { description: 角色或条目不存在或无权访问 }
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
     post:
+      operationId: postCharactersByCharacterIdGrowthPreferences
       tags: [Characters]
       summary: 手动创建偏好或保存有来源的待确认候选
       description: 最多5条来源。仅当前角色公开ACTIVE忆泡和ACCEPTED反思建议可用；来源指纹事务内校验。有来源只能PENDING，手动可明确ACTIVE。版本与审计同事务。
@@ -1504,6 +1603,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/preferences/sources:
     get:
+      operationId: getCharactersByCharacterIdGrowthPreferencesSources
       tags: [Characters]
       summary: 分页选择当前角色的公开偏好依据
       parameters:
@@ -1520,6 +1620,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/preferences/suggest:
     post:
+      operationId: postCharactersByCharacterIdGrowthPreferencesSuggest
       tags: [Characters]
       summary: 用户明确调用聊天模型提出一条偏好草稿
       description: 不创建候选或正式偏好。只读所选1至5条公开来源摘要，调用前后校验指纹，最多60秒；使用角色聊天配置和每日额度，other/source=preference-suggestion记账。模型证据不足可返回null；不透传供应商错误。
@@ -1546,6 +1647,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/preferences/{preferenceId}:
     patch:
+      operationId: patchCharactersByCharacterIdGrowthPreferencesByPreferenceId
       tags: [Characters]
       summary: 编辑偏好或人工确认、驳回、停用与重新启用
       description: expectedRevision为当前版本。EDIT不改变状态；ACTIVATE仅PENDING或DISABLED，REJECT仅PENDING，DISABLE仅ACTIVE。首次采纳重新验证来源，已生效记录独立于来源生命周期。状态操作不得同时编辑内容。无变化编辑不新增版本；冲突返回409。
@@ -1574,6 +1676,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/growth/preferences/{preferenceId}/history:
     get:
+      operationId: getCharactersByCharacterIdGrowthPreferencesByPreferenceIdHistory
       tags: [Characters]
       summary: 分页读取偏好的追加式完整版本历史
       parameters:
@@ -1590,6 +1693,7 @@ paths:
         '409': { description: 版本冲突、状态冲突或来源已变更失效 }
   /characters/{characterId}/usage/logs:
     get:
+      operationId: getCharactersByCharacterIdUsageLogs
       tags: [Characters]
       summary: 读取角色的模型操作用量记录
       description: |
@@ -1688,6 +1792,7 @@ paths:
           description: 角色不存在或不属于当前用户
   /characters/{characterId}/usage/logs/{logId}/turn:
     get:
+      operationId: getCharactersByCharacterIdUsageLogsByLogIdTurn
       tags: [Characters]
       summary: 查看模型日志关联的本轮消息、语境分析、记忆证据与回应说明
       description: |
@@ -1854,6 +1959,7 @@ paths:
           description: 角色或日志不存在、不属于当前用户，或历史详情未保存
   /auth/session:
     get:
+      operationId: getAuthSession
       tags: [Auth]
       summary: 获取当前管理员会话状态
       description: "匿名访问返回 200 且 mode 为 anonymous，便于前端决定是否跳转登录页；只有传入失效 Cookie 时才返回 reason=invalid_session。"
@@ -1867,6 +1973,7 @@ paths:
                 $ref: '#/components/schemas/SessionResponse'
   /auth/login:
     post:
+      operationId: postAuthLogin
       tags: [Auth]
       summary: 管理员登录
       description: 使用用户名和密码换取服务端会话。密码使用 scrypt 校验；连续失败会按用户名与来源地址限流。成功时通过 `Set-Cookie` 下发 HttpOnly、SameSite=Strict 的会话 Cookie。
@@ -1899,6 +2006,7 @@ paths:
           description: 登录失败次数过多，已被临时限流
   /auth/logout:
     post:
+      operationId: postAuthLogout
       tags: [Auth]
       summary: 退出登录
       description: 撤销当前会话并清除 Cookie；没有会话时同样返回 204，避免失效 Cookie 让浏览器卡在已登录状态。
@@ -1907,6 +2015,7 @@ paths:
           description: 已退出并清除会话
   /auth/register:
     post:
+      operationId: postAuthRegister
       tags: [Auth]
       summary: 邮箱自助注册
       description: "用邮箱创建普通用户账号并自动登录。邮箱即登录标识（同时存入 email 与 username），不发送验证邮件；新密码要求 10 至 128 个字符且同时包含字母和数字。注册默认关闭，需将 YILING_ALLOW_REGISTRATION 设为 true 才开放。"
@@ -1939,6 +2048,7 @@ paths:
           description: 注册尝试过于频繁，已被临时限流
   /auth/password:
     post:
+      operationId: postAuthPassword
       tags: [Auth]
       summary: 修改管理员密码
       description: "校验当前密码后写入新的 scrypt 哈希。成功后撤销其他所有会话，发起修改的会话保持有效。新密码要求 10 至 128 个字符，且同时包含字母和数字，不能与当前密码相同。"
@@ -1972,6 +2082,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /auth/sessions:
     get:
+      operationId: getAuthSessions
       tags: [Auth]
       summary: 列出当前账号的有效登录会话
       description: 只返回未撤销且未过期的会话；会话令牌哈希不会出现在响应中，设备信息由 User-Agent 派生。
@@ -1994,6 +2105,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /auth/sessions/{sessionId}:
     delete:
+      operationId: deleteAuthSessionsBySessionId
       tags: [Auth]
       summary: 撤销指定的登录会话
       description: 只能撤销属于当前账号的会话；其他账号的会话与不存在的会话同样返回 404。撤销当前正在使用的会话时会同时清除 Cookie。
@@ -2021,6 +2133,7 @@ paths:
           $ref: '#/components/responses/NotFound'
   /auth/sessions/revoke-others:
     post:
+      operationId: postAuthSessionsRevokeOthers
       tags: [Auth]
       summary: 退出其他所有设备
       description: 撤销除当前会话外的全部有效会话，当前设备保持登录。
@@ -2038,6 +2151,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /admin/users:
     get:
+      operationId: getAdminUsers
       tags: [Auth]
       summary: 分页列出账号（仅管理员）
       description: 只返回身份与活动统计（角色数、最后活跃时间），不包含任何对话或记忆内容。分页由服务端做，`stats` 按全表统计，与当前页无关。
@@ -2076,6 +2190,7 @@ paths:
           description: 仅管理员可访问
   /admin/users/{userId}:
     patch:
+      operationId: patchAdminUsersByUserId
       tags: [Auth]
       summary: 维护账号（仅管理员）
       description: 修改显示名、启用/停用账号、或强制重置密码。不能停用自己的账号，也不能停用最后一个可用管理员。
@@ -2114,6 +2229,7 @@ paths:
           $ref: '#/components/responses/NotFound'
   /admin/channels:
     get:
+      operationId: getAdminChannels
       tags: [Auth]
       summary: 列出渠道连接（仅管理员）
       description: |
@@ -2138,6 +2254,7 @@ paths:
         '403':
           description: 仅管理员可访问
     post:
+      operationId: postAdminChannels
       tags: [Auth]
       summary: 创建或更新渠道连接（仅管理员）
       description: |
@@ -2177,6 +2294,7 @@ paths:
           description: 仅管理员可访问
   /admin/channels/{connectionId}:
     delete:
+      operationId: deleteAdminChannelsByConnectionId
       tags: [Auth]
       summary: 删除渠道连接（仅管理员）
       description: |
@@ -2216,6 +2334,7 @@ paths:
           $ref: '#/components/responses/NotFound'
   /admin/channels/{connectionId}/reload:
     post:
+      operationId: postAdminChannelsByConnectionIdReload
       tags: [Auth]
       summary: 请求 QQ 适配器重新读取设置并连接（仅管理员）
       description: |
@@ -2247,6 +2366,7 @@ paths:
           description: QQ 连接不存在或已停用
   /admin/channels/onebot/runtime:
     get:
+      operationId: getAdminChannelsOnebotRuntime
       tags: [Auth]
       summary: QQ 渠道链路现状（仅管理员）
       description: |
@@ -2280,6 +2400,7 @@ paths:
           description: 仅管理员可访问
   /admin/channels/onebot/runtime/ensure:
     post:
+      operationId: postAdminChannelsOnebotRuntimeEnsure
       tags: [Auth]
       summary: 补齐 QQ 链路（仅管理员）
       description: |
@@ -2303,6 +2424,7 @@ paths:
           description: 仅管理员可访问
   /admin/channels/onebot/runtime/stop:
     post:
+      operationId: postAdminChannelsOnebotRuntimeStop
       tags: [Auth]
       summary: 停掉整条 QQ 链路（仅管理员）
       description: |
@@ -2327,6 +2449,7 @@ paths:
           description: 仅管理员可访问
   /admin/channels/onebot/runtime/provision:
     post:
+      operationId: postAdminChannelsOnebotRuntimeProvision
       tags: [Auth]
       summary: 用存下的面板密码对齐 SnowLuma 节点（仅管理员）
       description: |
@@ -2352,6 +2475,7 @@ paths:
           description: 仅管理员可访问
   /admin/channels/onebot/runtime/hook:
     post:
+      operationId: postAdminChannelsOnebotRuntimeHook
       tags: [Auth]
       summary: 把这个 QQ 号挂到 SnowLuma 面板上（仅管理员）
       description: |
@@ -2385,6 +2509,7 @@ paths:
           description: 面板还没应答
   /admin/channels/onebot/runtime/adapter:
     post:
+      operationId: postAdminChannelsOnebotRuntimeAdapter
       tags: [Auth]
       summary: 启动适配器（仅管理员）
       description: 打开命令行窗口跑 yarn onebot:run；已在跑时 409。同时撤销「自动补起」开关。
@@ -2401,6 +2526,7 @@ paths:
         '409':
           description: 已在运行
     delete:
+      operationId: deleteAdminChannelsOnebotRuntimeAdapter
       tags: [Auth]
       summary: 停止适配器（仅管理员）
       description: 按 pid 树收干净并删除 pid 文件。单独停某一段用，整条停用 /runtime/stop。
@@ -2416,6 +2542,7 @@ paths:
           description: 仅管理员可访问
   /admin/channels/onebot/runtime/snowluma:
     post:
+      operationId: postAdminChannelsOnebotRuntimeSnowluma
       tags: [Auth]
       summary: 启动 SnowLuma（仅管理员）
       description: 在它自己的目录跑 start.bat；没装时 400、已在跑时 409。同时撤销「自动补起」开关。
@@ -2434,6 +2561,7 @@ paths:
         '409':
           description: 已在运行
     delete:
+      operationId: deleteAdminChannelsOnebotRuntimeSnowluma
       tags: [Auth]
       summary: 停止 SnowLuma（仅管理员）
       description: 按面板端口 owner 往上找 start.bat 一次收干净。单独停某一段用，整条停用 /runtime/stop。
@@ -2449,6 +2577,7 @@ paths:
           description: 仅管理员可访问
   /admin/channels/onebot/quota:
     get:
+      operationId: getAdminChannelsOnebotQuota
       tags: [Auth]
       summary: QQ 渠道当日 token 额度（仅管理员）
       description: 只算 QQ 渠道真绑了角色的号，返回每日用量与剩余。
@@ -2478,6 +2607,7 @@ paths:
           description: 仅管理员可访问
   /admin/channels/{connectionId}/bindings:
     post:
+      operationId: postAdminChannelsByConnectionIdBindings
       tags: [Auth]
       summary: 绑定角色到渠道连接（仅管理员）
       description: 可选 routingKey 限制到一个或多个群 openid（逗号分隔，也接受字符串数组）；不填则为该连接的默认绑定。
@@ -2518,6 +2648,7 @@ paths:
           $ref: '#/components/responses/NotFound'
   /admin/channels/{connectionId}/bindings/{bindingId}:
     delete:
+      operationId: deleteAdminChannelsByConnectionIdBindingsByBindingId
       tags: [Auth]
       summary: 解除角色绑定（仅管理员）
       parameters:
@@ -2540,6 +2671,7 @@ paths:
           $ref: '#/components/responses/NotFound'
   /health:
     get:
+      operationId: getHealth
       tags: [Auth]
       summary: 存活探针
       description: 只返回进程存活信息，不依赖数据库，供负载均衡与探活使用。
@@ -2559,6 +2691,7 @@ paths:
                   time: { type: string, format: date-time }
   /admin/health:
     get:
+      operationId: getAdminHealth
       tags: [Auth]
       summary: 就绪探针（仅管理员）
       description: 返回数据库连通性与任务队列计数（queued / running / succeeded / failed）。
@@ -2587,6 +2720,7 @@ paths:
           description: 仅管理员可访问
   /admin/audit:
     get:
+      operationId: getAdminAudit
       tags: [Auth]
       summary: 分页读取审计活动（仅管理员）
       description: 默认返回鉴权相关审计（登录、登出、注册、改密、撤销会话）；可用 action 精确筛选。审计表只增不减，因此分页由服务端做（旧参数 limit 仍按 pageSize 解释）。
@@ -2636,6 +2770,7 @@ paths:
           description: 仅管理员可访问
   /admin/identities/aliases/suggestions:
     get:
+      operationId: getAdminIdentitiesAliasesSuggestions
       tags: [Auth]
       summary: 读取有效好友范围的待审备注（仅管理员）
       description: 仅返回 PENDING 且范围为 EXTERNAL_IDENTITY、关联平台身份非空的建议；按创建时间倒序最多返回 100 条。全局及私人范围的无对象建议不计入好友页待审角标。
@@ -2651,6 +2786,7 @@ paths:
           description: 仅管理员可访问
   /admin/identities/aliases/suggestions/{id}:
     post:
+      operationId: postAdminIdentitiesAliasesSuggestionsById
       tags: [Auth]
       summary: 采纳或拒绝一条待审备注（仅管理员）
       description: 同一好友范围加行锁串行审核；仅处理 PENDING。采纳按备注归一化、去本名与最多 8 条的规则保存，返回实际 aliases。拒绝保留 REJECTED 行防止重复建议，不删除历史。
@@ -2681,6 +2817,7 @@ paths:
           description: 仅管理员可访问
   /admin/identities:
     get:
+      operationId: getAdminIdentities
       tags: [Auth]
       summary: 分页读取「她遇到过的人」（仅管理员）
       description: |
@@ -2781,7 +2918,9 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: 仅管理员可访问
+  /admin/identities/{id}:
     patch:
+      operationId: patchAdminIdentitiesById
       tags: [Auth]
       summary: 修改朋友身份与交流权限（仅管理员）
       description: |
@@ -2914,6 +3053,7 @@ paths:
           description: 指定的角色不存在或不属于当前账号
   /characters:
     get:
+      operationId: getCharacters
       tags: [Characters]
       summary: 获取角色列表
       parameters:
@@ -2944,6 +3084,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
+      operationId: postCharacters
       tags: [Characters]
       summary: 创建角色
       description: '请求体必须为对象。userAddress 未提供时默认「主人」，显式空字符串（或仅空白）表示不特意称呼；名称及资料字段按现有长度限制校验。'
@@ -3025,6 +3166,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterId
       tags: [Characters]
       summary: 获取角色详情
       responses:
@@ -3043,6 +3185,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
     patch:
+      operationId: patchCharactersByCharacterId
       tags: [Characters]
       summary: 更新角色
       description: '请求体必须为对象。资料字段 name/personality/examples/userAddress/alias/description 传入时必须为字符串；缺省不修改，空字符串可清空可选资料，名称不可为空。'
@@ -3151,6 +3294,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterIdMemoryScopes
       tags: [Memories]
       summary: 获取角色的记忆范围（全局、已验证用户、外部身份隔离范围）
       responses:
@@ -3297,6 +3441,7 @@ paths:
           description: 模型尚未配置
   /characters/{characterId}/chat/context-assistant/models:
     get:
+      operationId: getCharactersByCharacterIdChatContextAssistantModels
       tags: [Characters]
       summary: 获取语境助手独立服务商模型清单
       description: 仅使用已保存的语境助手独立 Key。地址留空跟随聊天地址；无需先启用助手或填写模型名。最多返回 200 个去重模型。
@@ -3320,6 +3465,7 @@ paths:
         '404': { description: 角色不存在或不属于当前用户 }
   /characters/{characterId}/chat/test-context-assistant-connection:
     post:
+      operationId: postCharactersByCharacterIdChatTestContextAssistantConnection
       tags: [Characters]
       summary: 测试语境助手独立模型连接
       description: 使用已保存的语境助手模型和独立 Key 发送简短 Chat Completions 请求，不要求启用助手，不读取或修改对话与记忆。
@@ -4195,6 +4341,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterIdConversations
       tags: [Memories]
       summary: 获取角色的会话列表
       parameters:
@@ -4225,6 +4372,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
+      operationId: postCharactersByCharacterIdConversations
       tags: [Memories]
       summary: 创建角色会话
       requestBody:
@@ -4302,6 +4450,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     get:
+      operationId: getConversationsByConversationIdMessages
       tags: [Memories]
       summary: 获取会话原始消息
       parameters:
@@ -4335,6 +4484,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
     post:
+      operationId: postConversationsByConversationIdMessages
       tags: [Memories]
       summary: 写入标准化的原始消息或事件
       description: 外部渠道适配器后续可调用同一内部服务；生产实现必须进行来源鉴权与重复消息去重。
@@ -4365,6 +4515,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterIdMemories
       tags: [Memories]
       summary: 检索角色的长期记忆（关键词 + 分类 + 状态，游标分页）
       description: 时间线只载最近数百条，这个接口走全库检索。按 `(updatedAt, id)` 做 keyset 分页：记忆会不断更新，用 offset 会漏条目或重复，所以游标是不透明字符串，客户端原样回传即可。非法 `category` / `status` / `scope` 视为未传，不报错。响应是裸对象，不套 `ApiResponse` 外壳（与 `/timeline` 一致）。
@@ -4714,6 +4865,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterIdSnapshots
       tags: [Snapshots]
       summary: 阶段总结列表（分页）
       description: >-
@@ -4795,6 +4947,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
     post:
+      operationId: postCharactersByCharacterIdSnapshots
       tags: [Snapshots]
       summary: 生成手动快照或排入自动 AI 快照重新提炼
       requestBody:
@@ -4856,6 +5009,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     get:
+      operationId: getCharactersByCharacterIdSnapshotsBySnapshotId
       tags: [Snapshots]
       summary: 单份阶段总结详情（含 AI 提炼结果）
       description: 点开列表里某一版才请求。返回摘要字段 + `analysis`（重要事件、事实与偏好变化、关系、目标承诺、待跟进话题、与上一版的差异、长期记忆变化与审核建议）+ `evidenceIndex`（依据消息 id → 来源列表序号）。来源原文不在这里。
@@ -4905,6 +5059,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     get:
+      operationId: getCharactersByCharacterIdSnapshotsBySnapshotIdSources
       tags: [Snapshots]
       summary: 阶段总结的来源消息与原文（分页）
       description: 页面上展开「来源消息与原文」才请求。按来源记录创建顺序升序分页，`index` 是全量序号，翻到第几页都指同一条。
@@ -5021,6 +5176,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     post:
+      operationId: postCharactersByCharacterIdSnapshotsBySnapshotIdReview
       tags: [Snapshots]
       summary: 逐条采纳或忽略重新提炼提出的长期记忆建议
       description: |
@@ -5078,6 +5234,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     get:
+      operationId: getSnapshotsBySnapshotId
       tags: [Snapshots]
       summary: 获取快照版本详情
       responses:
@@ -5097,6 +5254,7 @@ paths:
           $ref: '#/components/responses/NotFound'
   /snapshots/{snapshotId}/regenerate:
     post:
+      operationId: postSnapshotsBySnapshotIdRegenerate
       tags: [Snapshots]
       summary: 为相同逻辑快照请求生成新版本
       parameters:
@@ -5117,6 +5275,7 @@ paths:
           $ref: '#/components/responses/NotFound'
   /snapshots/{snapshotId}/versions:
     get:
+      operationId: getSnapshotsBySnapshotIdVersions
       tags: [Snapshots]
       summary: 获取逻辑快照的所有版本
       parameters:
@@ -5145,6 +5304,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterIdMemorySettings
       tags: [MemorySettings]
       summary: 获取角色记忆设置
       responses:
@@ -5161,6 +5321,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     put:
+      operationId: putCharactersByCharacterIdMemorySettings
       tags: [MemorySettings]
       summary: 更新角色记忆周期和相关设置
       requestBody:
@@ -6220,6 +6381,7 @@ paths:
         required: true
         schema: { type: string, format: uuid }
     get:
+      operationId: getTasksByTaskId
       tags: [Tasks]
       summary: 获取任务详情
       responses:
@@ -6308,6 +6470,7 @@ paths:
           description: 任务状态不允许取消
   /channels:
     get:
+      operationId: getChannels
       tags: [Channels]
       summary: 获取已配置的平台连接
       responses:
@@ -6323,6 +6486,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterIdChannels
       tags: [Channels]
       summary: 获取角色绑定的渠道
       responses:
@@ -6338,6 +6502,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterIdStickers
       tags: [Stickers]
       summary: 获取角色的表情包清单（分页）
       description: |
@@ -6398,6 +6563,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
     post:
+      operationId: postCharactersByCharacterIdStickers
       tags: [Stickers]
       summary: 上传一张表情包
       description: |
@@ -6463,6 +6629,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     post:
+      operationId: postCharactersByCharacterIdStickersUsageSuggestion
       tags: [Stickers]
       summary: 按名字生成一句「什么时候用」（上传框用，图还没入库）
       description: |
@@ -6517,6 +6684,7 @@ paths:
       - $ref: '#/components/parameters/CharacterId'
       - $ref: '#/components/parameters/StickerId'
     patch:
+      operationId: patchCharactersByCharacterIdStickersByStickerId
       tags: [Stickers]
       summary: 改名字 / 使用场景 / 启用状态
       description: |
@@ -6541,6 +6709,7 @@ paths:
                   - type: object
                     properties:
                       qqDesc:
+                        type: object
                         allOf:
                           - $ref: '#/components/schemas/QqSideEffect'
                         nullable: true
@@ -6552,6 +6721,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
     delete:
+      operationId: deleteCharactersByCharacterIdStickersByStickerId
       tags: [Stickers]
       summary: 删除一张表情包（进回收站 + 同步删 QQ）
       description: |
@@ -6587,6 +6757,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     post:
+      operationId: postCharactersByCharacterIdStickersQqSync
       tags: [Stickers]
       summary: 与 QQ 收藏夹对一次账（双向同步）
       description: |
@@ -6627,6 +6798,7 @@ paths:
     parameters:
       - $ref: '#/components/parameters/CharacterId'
     get:
+      operationId: getCharactersByCharacterIdStickersTrash
       tags: [Stickers]
       summary: 回收站列表
       description: |
@@ -6658,6 +6830,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
     delete:
+      operationId: deleteCharactersByCharacterIdStickersTrash
       tags: [Stickers]
       summary: 清空回收站
       description: |
@@ -6686,6 +6859,7 @@ paths:
       - $ref: '#/components/parameters/CharacterId'
       - $ref: '#/components/parameters/StickerId'
     post:
+      operationId: postCharactersByCharacterIdStickersTrashByStickerIdRestore
       tags: [Stickers]
       summary: 从回收站恢复一张
       description: |
@@ -6711,6 +6885,7 @@ paths:
       - $ref: '#/components/parameters/CharacterId'
       - $ref: '#/components/parameters/StickerId'
     delete:
+      operationId: deleteCharactersByCharacterIdStickersTrashByStickerIdPurge
       tags: [Stickers]
       summary: 从回收站里彻底删除
       description: 行和磁盘文件一起清，不可恢复。只对**已经在回收站里**的生效 —— 列表上点删除是软删，两者语义分开。
@@ -6738,6 +6913,7 @@ paths:
       - $ref: '#/components/parameters/CharacterId'
       - $ref: '#/components/parameters/StickerId'
     get:
+      operationId: getCharactersByCharacterIdStickersByStickerIdImage
       tags: [Stickers]
       summary: 取表情包图片本体
       description: 给管理页显示缩略图用。必须走接口而不是静态目录 —— 图在 `.data/` 下，放开静态访问等于把用户私人素材公开。
@@ -6769,6 +6945,7 @@ paths:
       - $ref: '#/components/parameters/CharacterId'
       - $ref: '#/components/parameters/StickerId'
     post:
+      operationId: postCharactersByCharacterIdStickersByStickerIdRelabel
       tags: [Stickers]
       summary: 让视觉模型再看一次这张图，重写名字与场景
       description: |
@@ -6813,6 +6990,7 @@ paths:
       - $ref: '#/components/parameters/CharacterId'
       - $ref: '#/components/parameters/StickerId'
     post:
+      operationId: postCharactersByCharacterIdStickersByStickerIdUsageSuggestion
       tags: [Stickers]
       summary: 给编辑弹窗的「什么时候用」生成一句
       description: |
@@ -6985,8 +7163,8 @@ paths:
                     properties:
                       diary: { type: integer }
                       handbook: { type: integer }
-                  diary: { allOf: [{ $ref: '#/components/schemas/JournalRevision' }], nullable: true }
-                  handbook: { allOf: [{ $ref: '#/components/schemas/JournalRevision' }], nullable: true }
+                  diary: { type: object, allOf: [{ $ref: '#/components/schemas/JournalRevision' }], nullable: true }
+                  handbook: { type: object, allOf: [{ $ref: '#/components/schemas/JournalRevision' }], nullable: true }
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -7146,6 +7324,7 @@ paths:
 
   /local/observe/root:
     get:
+      operationId: getLocalObserveRoot
       tags: [LocalObserve]
       summary: 本地只读观察根目录
       description: 仅管理员。返回项目根目录和只读限制；不接受任意绝对路径。
@@ -7169,6 +7348,7 @@ paths:
           $ref: '#/components/responses/BadRequest'
   /local/observe/list:
     get:
+      operationId: getLocalObserveList
       tags: [LocalObserve]
       summary: 列出项目内目录
       description: 仅管理员；路径为项目根目录内的相对路径。隐藏 node_modules/.git/.data 等目录和敏感文件。
@@ -7216,6 +7396,7 @@ paths:
           $ref: '#/components/responses/NotFound'
   /local/observe/read:
     get:
+      operationId: getLocalObserveRead
       tags: [LocalObserve]
       summary: 读取项目内文本文件
       description: 仅管理员；.env、私钥、.data 等敏感文件不可读；超过 256KB 或二进制文件返回错误。
@@ -7257,6 +7438,7 @@ paths:
           $ref: '#/components/responses/BadRequest'
   /local/observe/search:
     get:
+      operationId: getLocalObserveSearch
       tags: [LocalObserve]
       summary: 在项目内搜索文件名或内容
       description: 仅管理员；最多 100 条结果，跳过忽略目录、敏感文件和二进制文件。
@@ -7307,6 +7489,7 @@ paths:
 
   /local/observe/roots:
     get:
+      operationId: getLocalObserveRoots
       tags: [LocalObserve]
       summary: 可观察的授权目录
       description: 仅管理员；只返回启用的目录，内置项目目录永远在第一位。
@@ -7326,6 +7509,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /local/roots:
     get:
+      operationId: getLocalRoots
       tags: [LocalObserve]
       summary: 管理授权目录
       description: 仅管理员；包含停用目录和内置项目目录。
@@ -7344,6 +7528,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
+      operationId: postLocalRoots
       tags: [LocalObserve]
       summary: 添加授权目录
       description: 仅管理员；必须是已存在的绝对目录，不能是盘符根、Windows 系统目录或整个用户目录。
@@ -7377,6 +7562,7 @@ paths:
           $ref: '#/components/responses/BadRequest'
   /local/roots/{id}:
     patch:
+      operationId: patchLocalRootsById
       tags: [LocalObserve]
       summary: 启用/停用授权目录
       parameters:
@@ -7412,6 +7598,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
     delete:
+      operationId: deleteLocalRootsById
       tags: [LocalObserve]
       summary: 移除授权目录
       description: 只移除白名单，不删除磁盘文件。
@@ -7437,6 +7624,7 @@ paths:
 
   /local/write-requests:
     get:
+      operationId: getLocalWriteRequests
       tags: [LocalObserve]
       summary: 待审批的写文件请求
       description: 仅管理员；默认只返回 PENDING。
@@ -7460,6 +7648,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /local/write-requests/{id}/approve:
     post:
+      operationId: postLocalWriteRequestsByIdApprove
       tags: [LocalObserve]
       summary: 批准并写入
       description: 仅管理员；批准后才会真正写文件；文件在请求后被改过会返回 409。
@@ -7483,6 +7672,7 @@ paths:
           $ref: '#/components/responses/BadRequest'
   /local/write-requests/{id}/reject:
     post:
+      operationId: postLocalWriteRequestsByIdReject
       tags: [LocalObserve]
       summary: 拒绝写文件
       parameters:
@@ -7512,6 +7702,7 @@ paths:
 
   /local/tasks:
     get:
+      operationId: getLocalTasks
       tags: [LocalObserve]
       summary: 任务档案
       description: 仅管理员；最近 50 条，可按状态过滤。
@@ -7534,6 +7725,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
     post:
+      operationId: postLocalTasks
       tags: [LocalObserve]
       summary: 手动建任务档案
       requestBody:
@@ -7560,30 +7752,9 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /local/tasks/{id}:
-    get:
-      tags: [LocalObserve]
-      summary: 任务详情
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        '200':
-          description: 任务
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  task: { $ref: '#/components/schemas/LocalTask' }
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
   /local/tasks/{id}/steps:
     post:
+      operationId: postLocalTasksByIdSteps
       tags: [LocalObserve]
       summary: 建立或更新任务步骤
       description: 仅管理员。plan 一次建立有序步骤；link、done、fail 仅对当前步骤生效。
@@ -7618,6 +7789,7 @@ paths:
           description: 任务已结束或当前步骤不可更新
   /local/tasks/{id}/evidence:
     post:
+      operationId: postLocalTasksByIdEvidence
       tags: [LocalObserve]
       summary: 记录验收证据
       description: 任务未结束时可追加人工记录。PASS / FAIL 需要先处理所有待审批或执行中的请求；INFO 只追加记录。
@@ -7652,6 +7824,7 @@ paths:
           $ref: '#/components/responses/BadRequest'
   /local/tasks/{id}/cancel:
     post:
+      operationId: postLocalTasksByIdCancel
       tags: [LocalObserve]
       summary: 取消任务
       parameters:
@@ -7675,6 +7848,7 @@ paths:
 
   /local/observe/git:
     get:
+      operationId: getLocalObserveGit
       tags: [LocalObserve]
       summary: 查看当前分支和改动
       description: 仅管理员。指定 file 时返回该文件的工作区差异；staged=1 时返回暂存差异。
@@ -7718,6 +7892,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /local/observe/git-branch:
     post:
+      operationId: postLocalObserveGitBranch
       tags: [LocalObserve]
       summary: 提议新建本地分支
       description: 仅管理员。锁定当前提交并生成待审批请求，不创建或切换分支。
@@ -7749,6 +7924,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /local/command-requests:
     get:
+      operationId: getLocalCommandRequests
       tags: [LocalObserve]
       summary: 待审批的终端命令
       description: 仅管理员；默认只返回 PENDING。
@@ -7772,6 +7948,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
   /local/command-requests/{id}/approve:
     post:
+      operationId: postLocalCommandRequestsByIdApprove
       tags: [LocalObserve]
       summary: 批准并执行命令
       description: 仅管理员；白名单可执行文件、无 shell、120 秒超时。
@@ -7795,6 +7972,7 @@ paths:
           $ref: '#/components/responses/BadRequest'
   /local/command-requests/{id}/reject:
     post:
+      operationId: postLocalCommandRequestsByIdReject
       tags: [LocalObserve]
       summary: 拒绝执行命令
       parameters:
@@ -8636,21 +8814,6 @@ components:
             id: { type: string, format: uuid }
             conversationId: { type: string, format: uuid }
             ingestedAt: { type: string, format: date-time }
-    TimelineEntry:
-      type: object
-      required: [id, type, occurredAt, title]
-      properties:
-        id: { type: string }
-        type: { type: string, enum: [message, memory, snapshot] }
-        occurredAt: { type: string, format: date-time }
-        title: { type: string }
-        summary: { type: string, nullable: true }
-        channel: { type: string, nullable: true }
-        sourceRef: { type: string, nullable: true }
-        snapshotVersion: { type: integer, nullable: true }
-        details:
-          type: object
-          additionalProperties: true
     CharacterInput:
       type: object
       required: [name, basePrompt]
