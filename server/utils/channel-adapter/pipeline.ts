@@ -1290,6 +1290,234 @@ async function persistChannelTurnResult(input: {
   });
 }
 
+/**
+ * 群聊工作摘要落库：模型这一轮总结出的「刚才聊到哪」。
+ *
+ * 证据 id 只认本会话里真实存在的行；有一条对不上就不写摘要（只留证据），
+ * 免得下一轮拿着半截摘要当上下文。失败只记日志，不阻断已经发出的回复。
+ */
+async function saveChannelTurnWorkingContext(input: {
+  prisma: PrismaClient;
+  conversationId: string;
+  characterId: string;
+  messages: ChannelTurnMessage[];
+  workingContext: Awaited<ReturnType<typeof loadConversationWorkingContext>>;
+  pendingWorkingContext: { summary: string; evidenceMessageIds: string[] } | undefined;
+  contextRuntime: unknown;
+  isGroup: boolean;
+}): Promise<void> {
+  const { prisma, conversationId, characterId, messages, workingContext, pendingWorkingContext, contextRuntime, isGroup } = input;
+  if (!pendingWorkingContext || !contextRuntime || !isGroup) return;
+  try {
+    const references = pendingWorkingContext.evidenceMessageIds;
+    const sources = await prisma.message.findMany({
+      where: { conversationId, OR: [{ id: { in: references.filter(id => /^[0-9a-f-]{36}$/iu.test(id)) } }, { externalMessageId: { in: references } }] },
+      select: { id: true, externalMessageId: true, occurredAt: true },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }], take: 24,
+    });
+    const cursor = await prisma.message.findFirst({
+      where: { conversationId, role: "USER", externalMessageId: { in: messages.map(row => row.externalMessageId) } },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }], select: { id: true, occurredAt: true },
+    });
+    const complete = references.every(id => sources.some(row => row.id === id || row.externalMessageId === id));
+    if (sources.length && cursor) await saveConversationWorkingContext(prisma, {
+      conversationId, characterId: characterId, expectedRevision: workingContext?.revision ?? 0,
+      summary: complete ? pendingWorkingContext.summary : "", evidenceMessageIds: sources.map(row => row.id),
+      cursor,
+    });
+  } catch {
+    console.warn("[context] 工作摘要保存失败，下轮仍可读取原始记录。");
+  }
+}
+
+/**
+ * 发送这一轮回复，并在发完之后记账：朋友关系、贴纸使用次数、梗冷却、顺手扫梗。
+ *
+ * 记账一律放在发送之后：不能让记账拖住已经生成的那句话。
+ * 语音轮次不带引用与 @ —— 语音段与额外段并存时 QQ 客户端不渲染语音。
+ */
+async function deliverChannelTurnReply(input: {
+  prisma: PrismaClient;
+  character: ChannelTurnCharacter;
+  platform: string;
+  characterId: string;
+  sendReply: ChannelReplySender;
+  isGroup: boolean;
+  messages: ChannelTurnMessage[];
+  generated: Awaited<ReturnType<typeof generateGroupContextReply>>;
+  replyFaces: string[];
+  replySticker: StickerCatalogEntry | null;
+  replyVoice: boolean;
+  replySegments: string[];
+  voiceSettings: VoiceTtsSettings | null;
+}): Promise<void> {
+  const { prisma, character, platform, characterId, sendReply, isGroup, messages, generated,
+    replyFaces, replySticker, replyVoice, replySegments, voiceSettings } = input;
+  if (generated.action !== "reply") return;
+  /**
+   * 语音条只发一个 record 段 —— 引用和 @ 都不带。
+   *
+   * 这不是审美取舍，是实测出来的硬限制（2026-11-01 01:02，某群）：
+   * `[回复:12345678] [语音]` 两条段拼在一条消息里发出去，协议端日志显示
+   * PTT 上传成功（11871 字节、96ms），服务端回显她自己的消息也同时带着
+   * 「回复」和「语音」两个元素 —— 但 QQ 客户端**只渲染了引用块，语音条不见**。
+   * 用户看到的就是一条空引用：「又是引用，然后发语音，结果语音不出来」。
+   *
+   * 同一批语音里不带引用的那条全部正常播放（25/25）。所以规律是：
+   * **语音段与额外段并存时客户端不渲染语音**，而不是发送失败。
+   *
+   * 取舍：语音能播出来 ≫ 看得出在回谁。语音轮次因此退化成「一条纯语音」。
+   * `at` 也一并去掉 —— 同样是额外段，没有理由相信它比引用更安全。
+   * 别为了「让语音也带上引用或 @」再把这两行改回去，除非协议端/客户端换了。
+   */
+  const quoteTarget = replyVoice
+    ? undefined
+    : pickQuoteTarget(generated.groupDecision?.replyToMessageId, messages.at(-1)?.externalMessageId);
+  const requestedAtTarget = replyVoice ? undefined : generated.groupDecision?.atMessageId;
+  const atTarget = platform === "qq-onebot" && isGroup
+    ? await filterPassiveGroupAt(prisma, characterId, requestedAtTarget)
+    : requestedAtTarget;
+  const replyOptions = replyFaces.length || replySticker || replyVoice || quoteTarget || atTarget || replySegments.length > 1
+    ? {
+        ...(replyFaces.length ? { faces: replyFaces } : {}),
+        ...(replySticker
+          ? {
+              sticker: {
+                id: replySticker.id,
+                filePath: replySticker.filePath,
+                qqEmojiId: replySticker.qqEmojiId ?? null,
+              },
+            }
+          : {}),
+        ...(replyVoice && voiceSettings ? { voice: true, voiceSettings } : {}),
+        ...(quoteTarget ? { replyToMessageId: quoteTarget } : {}),
+        ...(atTarget ? { atMessageId: atTarget } : {}),
+        // 只有真的拆开了才带，单条时渠道那边连这个字段都看不到。
+        ...(replySegments.length > 1 ? { segments: replySegments } : {}),
+      }
+    : undefined;
+  await sendReply(generated.reply, replyOptions);
+  /**
+   * 群聊里「跟谁互动过」＝她真的回了谁。
+   *
+   * 对象从三处取：她引用的那条、她 @ 的那条、两样都没有就是这轮最新的一句（她接的
+   * 就是这句话）。`silent` 走不到这个分支，所以没被搭理的发言不会变成朋友 —— 这正
+   * 是「她回过的人才算」的落地位置。
+   *
+   * **引用的是本批之外的消息时，退回本轮最新一条**（判定见 `pickFriendTargets`）：
+   * 她引用历史消息、或者上一轮的尾巴时，按 id 匹配会一条都不中，整轮白记 ——
+   * 她明明回了，关系行却停在几小时前（2026-11-02 复核「她的朋友」页面时发现）。
+   *
+   * 放在发完之后：朋友簿晚半秒无所谓，不能让记账拖住已经生成的那句话。
+   */
+  if (isGroup) {
+    const targets = pickFriendTargets(messages, {
+      replyToMessageId: quoteTarget,
+      atMessageId: atTarget,
+    });
+    const recordedAuthors = new Set<string>();
+    for (const message of targets) {
+      const platformUid = (message.authorPlatformUid || message.authorOpenId || "").trim();
+      if (!platformUid || recordedAuthors.has(platformUid)) continue;
+      recordedAuthors.add(platformUid);
+      await recordFriendInteraction({
+        characterId: characterId,
+        platform: platform,
+        platformUid,
+        displayName: message.authorDisplayName,
+        source: "GROUP",
+        at: message.occurredAt,
+      }).catch(() => undefined);
+    }
+  }
+  // 记一次使用：页面要能看出「哪几张她根本没用过」。写失败不影响已经发出去的回复。
+  if (replySticker) {
+    await prisma.characterSticker.update({
+      where: { id: replySticker.id },
+      data: { useCount: { increment: 1 }, lastUsedAt: new Date() },
+    }).catch(() => undefined);
+  }
+  // 梗的记账同理：漏记就等于没有冷却，那句「不烧心吗」会连着刷。
+  await markCatchphrasesUsed(character.id, generated.usedCatchphraseIds);
+  // 顺手扫一遍群里的梗（开关默认关、6 小时最多一次、不 await）。
+  // 放在回复发完之后：扫梗绝不能挡住她说这一句话。
+  maybeAutoMineCatchphrases(character.modelConfig, character.id);
+}
+
+/**
+ * 尾段记账：记忆召回计数 + 记忆助手的用量与诊断。
+ *
+ * 两者都不影响已经发出去的回复：任何失败都只吞掉，不改变这一轮的结果。
+ */
+async function recordChannelTurnTailUsage(input: {
+  prisma: PrismaClient;
+  characterId: string;
+  bindingId: string;
+  conversationId: string;
+  turnId: string;
+  generated: Awaited<ReturnType<typeof generateGroupContextReply>>;
+  turnDetail: ReturnType<typeof createModelTurnDetail>;
+}): Promise<void> {
+  const { prisma, characterId, bindingId, conversationId, turnId, generated, turnDetail } = input;
+  if (generated.usedMemoryIds.length) {
+    await prisma.memoryItem.updateMany({
+      where: { id: { in: generated.usedMemoryIds } },
+      data: { lastRecalledAt: new Date(), recallCount: { increment: 1 } },
+    }).catch(() => undefined);
+  }
+
+  if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
+    let memoryDiagnostics: {
+      queryLength?: number;
+      candidateCount?: number;
+      sourceCount: number;
+      memorySourceCount: number;
+      snapshotSourceCount: number;
+      eventSourceCount: number;
+      messageSourceCount: number;
+    } = {
+      sourceCount: 0, memorySourceCount: 0, snapshotSourceCount: 0,
+      eventSourceCount: 0, messageSourceCount: 0,
+    };
+    try {
+      const detail = JSON.parse(turnDetail.serialize()) as {
+        memory?: { query?: unknown; candidateCount?: unknown; sources?: Array<{ type?: unknown }> };
+      };
+      const memory = detail.memory ?? {};
+      const sources = Array.isArray(memory.sources) ? memory.sources : [];
+      const count = (type: string) => sources.filter((source) => source.type === type).length;
+      memoryDiagnostics = {
+        ...(typeof memory.query === "string" ? { queryLength: memory.query.length } : {}),
+        ...(typeof memory.candidateCount === "number" ? { candidateCount: memory.candidateCount } : {}),
+        sourceCount: sources.length,
+        memorySourceCount: count("memory"),
+        snapshotSourceCount: count("snapshot"),
+        eventSourceCount: count("event"),
+        messageSourceCount: count("message"),
+      };
+    } catch {
+      // 诊断序列化失败不能影响回复或用量记账。
+    }
+    await recordModelUsage({
+      kind: "memory-assistant",
+      model: generated.memoryAssistantModel,
+      usage: toUsageTokens(generated.memoryAssistantUsage),
+      characterId: characterId,
+      channelBindingId: bindingId,
+      conversationId,
+      metadata: {
+        status: generated.memoryAssistantStatus,
+        turnId,
+        ...memoryDiagnostics,
+        ...(generated.memoryAssistantFailureReason ? { reason: generated.memoryAssistantFailureReason } : {}),
+        ...(typeof generated.memoryAssistantAttempts === "number" ? { attempts: generated.memoryAssistantAttempts } : {}),
+        ...(generated.memoryAssistantFinishReason ? { finishReason: generated.memoryAssistantFinishReason } : {}),
+        ...(typeof generated.memoryAssistantHttpStatus === "number" ? { httpStatus: generated.memoryAssistantHttpStatus } : {}),
+      },
+    });
+  }
+}
+
 type ChannelTurnChatInputContext = {
   preferences: ChannelTurnGrowthPreparation["preferences"];
   expressionHabits: ChannelTurnGrowthPreparation["expressionHabits"];
@@ -3520,176 +3748,44 @@ async function runChannelTurn(input: {
     preferences,
   });
 
-  if (pendingWorkingContext && contextRuntime && isGroup) {
-    try {
-      const references = pendingWorkingContext.evidenceMessageIds;
-      const sources = await prisma.message.findMany({
-        where: { conversationId, OR: [{ id: { in: references.filter(id => /^[0-9a-f-]{36}$/iu.test(id)) } }, { externalMessageId: { in: references } }] },
-        select: { id: true, externalMessageId: true, occurredAt: true },
-        orderBy: [{ occurredAt: "desc" }, { id: "desc" }], take: 24,
-      });
-      const cursor = await prisma.message.findFirst({
-        where: { conversationId, role: "USER", externalMessageId: { in: messages.map(row => row.externalMessageId) } },
-        orderBy: [{ occurredAt: "desc" }, { id: "desc" }], select: { id: true, occurredAt: true },
-      });
-      const complete = references.every(id => sources.some(row => row.id === id || row.externalMessageId === id));
-      if (sources.length && cursor) await saveConversationWorkingContext(prisma, {
-        conversationId, characterId: input.characterId, expectedRevision: workingContext?.revision ?? 0,
-        summary: complete ? pendingWorkingContext.summary : "", evidenceMessageIds: sources.map(row => row.id),
-        cursor,
-      });
-    } catch {
-      console.warn("[context] 工作摘要保存失败，下轮仍可读取原始记录。");
-    }
-  }
+  await saveChannelTurnWorkingContext({
+    prisma,
+    conversationId,
+    characterId: input.characterId,
+    messages,
+    workingContext,
+    pendingWorkingContext,
+    contextRuntime,
+    isGroup,
+  });
 
-  if (generated.action === "reply") {
-    /**
-     * 语音条只发一个 record 段 —— 引用和 @ 都不带。
-     *
-     * 这不是审美取舍，是实测出来的硬限制（2026-11-01 01:02，某群）：
-     * `[回复:12345678] [语音]` 两条段拼在一条消息里发出去，协议端日志显示
-     * PTT 上传成功（11871 字节、96ms），服务端回显她自己的消息也同时带着
-     * 「回复」和「语音」两个元素 —— 但 QQ 客户端**只渲染了引用块，语音条不见**。
-     * 用户看到的就是一条空引用：「又是引用，然后发语音，结果语音不出来」。
-     *
-     * 同一批语音里不带引用的那条全部正常播放（25/25）。所以规律是：
-     * **语音段与额外段并存时客户端不渲染语音**，而不是发送失败。
-     *
-     * 取舍：语音能播出来 ≫ 看得出在回谁。语音轮次因此退化成「一条纯语音」。
-     * `at` 也一并去掉 —— 同样是额外段，没有理由相信它比引用更安全。
-     * 别为了「让语音也带上引用或 @」再把这两行改回去，除非协议端/客户端换了。
-     */
-    const quoteTarget = replyVoice
-      ? undefined
-      : pickQuoteTarget(generated.groupDecision?.replyToMessageId, messages.at(-1)?.externalMessageId);
-    const requestedAtTarget = replyVoice ? undefined : generated.groupDecision?.atMessageId;
-    const atTarget = input.platform === "qq-onebot" && isGroup
-      ? await filterPassiveGroupAt(prisma, input.characterId, requestedAtTarget)
-      : requestedAtTarget;
-    const replyOptions = replyFaces.length || replySticker || replyVoice || quoteTarget || atTarget || replySegments.length > 1
-      ? {
-          ...(replyFaces.length ? { faces: replyFaces } : {}),
-          ...(replySticker
-            ? {
-                sticker: {
-                  id: replySticker.id,
-                  filePath: replySticker.filePath,
-                  qqEmojiId: replySticker.qqEmojiId ?? null,
-                },
-              }
-            : {}),
-          ...(replyVoice && voiceSettings ? { voice: true, voiceSettings } : {}),
-          ...(quoteTarget ? { replyToMessageId: quoteTarget } : {}),
-          ...(atTarget ? { atMessageId: atTarget } : {}),
-          // 只有真的拆开了才带，单条时渠道那边连这个字段都看不到。
-          ...(replySegments.length > 1 ? { segments: replySegments } : {}),
-        }
-      : undefined;
-    await input.sendReply(generated.reply, replyOptions);
-    /**
-     * 群聊里「跟谁互动过」＝她真的回了谁。
-     *
-     * 对象从三处取：她引用的那条、她 @ 的那条、两样都没有就是这轮最新的一句（她接的
-     * 就是这句话）。`silent` 走不到这个分支，所以没被搭理的发言不会变成朋友 —— 这正
-     * 是「她回过的人才算」的落地位置。
-     *
-     * **引用的是本批之外的消息时，退回本轮最新一条**（判定见 `pickFriendTargets`）：
-     * 她引用历史消息、或者上一轮的尾巴时，按 id 匹配会一条都不中，整轮白记 ——
-     * 她明明回了，关系行却停在几小时前（2026-11-02 复核「她的朋友」页面时发现）。
-     *
-     * 放在发完之后：朋友簿晚半秒无所谓，不能让记账拖住已经生成的那句话。
-     */
-    if (isGroup) {
-      const targets = pickFriendTargets(messages, {
-        replyToMessageId: quoteTarget,
-        atMessageId: atTarget,
-      });
-      const recordedAuthors = new Set<string>();
-      for (const message of targets) {
-        const platformUid = (message.authorPlatformUid || message.authorOpenId || "").trim();
-        if (!platformUid || recordedAuthors.has(platformUid)) continue;
-        recordedAuthors.add(platformUid);
-        await recordFriendInteraction({
-          characterId: input.characterId,
-          platform: input.platform,
-          platformUid,
-          displayName: message.authorDisplayName,
-          source: "GROUP",
-          at: message.occurredAt,
-        }).catch(() => undefined);
-      }
-    }
-    // 记一次使用：页面要能看出「哪几张她根本没用过」。写失败不影响已经发出去的回复。
-    if (replySticker) {
-      await prisma.characterSticker.update({
-        where: { id: replySticker.id },
-        data: { useCount: { increment: 1 }, lastUsedAt: new Date() },
-      }).catch(() => undefined);
-    }
-    // 梗的记账同理：漏记就等于没有冷却，那句「不烧心吗」会连着刷。
-    await markCatchphrasesUsed(character.id, generated.usedCatchphraseIds);
-    // 顺手扫一遍群里的梗（开关默认关、6 小时最多一次、不 await）。
-    // 放在回复发完之后：扫梗绝不能挡住她说这一句话。
-    maybeAutoMineCatchphrases(character.modelConfig, character.id);
-  }
-  if (generated.usedMemoryIds.length) {
-    await prisma.memoryItem.updateMany({
-      where: { id: { in: generated.usedMemoryIds } },
-      data: { lastRecalledAt: new Date(), recallCount: { increment: 1 } },
-    }).catch(() => undefined);
-  }
 
-  if (generated.memoryAssistantModel && generated.memoryAssistantStatus) {
-    let memoryDiagnostics: {
-      queryLength?: number;
-      candidateCount?: number;
-      sourceCount: number;
-      memorySourceCount: number;
-      snapshotSourceCount: number;
-      eventSourceCount: number;
-      messageSourceCount: number;
-    } = {
-      sourceCount: 0, memorySourceCount: 0, snapshotSourceCount: 0,
-      eventSourceCount: 0, messageSourceCount: 0,
-    };
-    try {
-      const detail = JSON.parse(turnDetail.serialize()) as {
-        memory?: { query?: unknown; candidateCount?: unknown; sources?: Array<{ type?: unknown }> };
-      };
-      const memory = detail.memory ?? {};
-      const sources = Array.isArray(memory.sources) ? memory.sources : [];
-      const count = (type: string) => sources.filter((source) => source.type === type).length;
-      memoryDiagnostics = {
-        ...(typeof memory.query === "string" ? { queryLength: memory.query.length } : {}),
-        ...(typeof memory.candidateCount === "number" ? { candidateCount: memory.candidateCount } : {}),
-        sourceCount: sources.length,
-        memorySourceCount: count("memory"),
-        snapshotSourceCount: count("snapshot"),
-        eventSourceCount: count("event"),
-        messageSourceCount: count("message"),
-      };
-    } catch {
-      // 诊断序列化失败不能影响回复或用量记账。
-    }
-    await recordModelUsage({
-      kind: "memory-assistant",
-      model: generated.memoryAssistantModel,
-      usage: toUsageTokens(generated.memoryAssistantUsage),
-      characterId: input.characterId,
-      channelBindingId: input.bindingId,
-      conversationId,
-      metadata: {
-        status: generated.memoryAssistantStatus,
-        turnId,
-        ...memoryDiagnostics,
-        ...(generated.memoryAssistantFailureReason ? { reason: generated.memoryAssistantFailureReason } : {}),
-        ...(typeof generated.memoryAssistantAttempts === "number" ? { attempts: generated.memoryAssistantAttempts } : {}),
-        ...(generated.memoryAssistantFinishReason ? { finishReason: generated.memoryAssistantFinishReason } : {}),
-        ...(typeof generated.memoryAssistantHttpStatus === "number" ? { httpStatus: generated.memoryAssistantHttpStatus } : {}),
-      },
-    });
-  }
+
+  await deliverChannelTurnReply({
+    prisma,
+    character,
+    platform: input.platform,
+    characterId: input.characterId,
+    sendReply: input.sendReply,
+    isGroup,
+    messages,
+    generated,
+    replyFaces,
+    replySticker,
+    replyVoice,
+    replySegments,
+    voiceSettings,
+  });
+
+  await recordChannelTurnTailUsage({
+    prisma,
+    characterId: input.characterId,
+    bindingId: input.bindingId,
+    conversationId,
+    turnId,
+    generated,
+    turnDetail,
+  });
   const decision = generated.groupDecision ? { groupDecision: generated.groupDecision } : {};
   return generated.action === "silent"
     ? { status: "silent", conversationId, ...decision }
