@@ -1,0 +1,64 @@
+/**
+ * KnowledgeEntry（知识条目）响应契约回归。
+ *
+ * 守四件事：
+ * 1. 输出字段集 = `shared/types/knowledge.ts` 的 `KnowledgeEntry`；
+ * 2. 不泄漏 `characterId` / `candidateId` 这两个内部外键（列表接口以前直接 spread 行）；
+ * 3. 日期是 ISO 字符串，不再依赖 Nitro 把 `Date` 序列化掉；
+ * 4. `status` 落在四值状态机里，`category` / `sourceType` 保持自由字符串
+ *    （来源类型会扩展，写死枚举只会让新来源先挂一次类型）。
+ *
+ * `canPermanentlyDelete` 是回收站接口单独派生的展示字段，不由这个整形函数产出 ——
+ * 这里断言它不出现，避免有人把它塞进通用整形、让别处的条目凭空多一个 true/false。
+ */
+import assert from "node:assert/strict";
+import { toKnowledgeEntry, type KnowledgeEntryRow } from "../server/utils/knowledge-item-dto";
+import { KNOWLEDGE_ITEM_STATUSES } from "../shared/types/knowledge";
+
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const at = new Date("2026-11-22T00:00:00.000Z");
+
+// 照真实 `knowledge_items` 行造：带上不该发出去的外键与内部列。
+const row = {
+  id: "11111111-1111-4111-8111-111111111111",
+  characterId: "22222222-2222-4222-8222-222222222222",
+  candidateId: "33333333-3333-4333-8333-333333333333",
+  title: "她喜欢的星座",
+  content: "她提到过喜欢北斗七星。",
+  category: "GENERAL",
+  tags: ["星座"],
+  confidence: 0.7,
+  status: "ACTIVE",
+  sourceType: "MEMORY_EVENT",
+  sourceRef: { type: "MEMORY_EVENT", id: "44444444-4444-4444-8444-444444444444" },
+  revision: 3,
+  createdAt: at,
+  updatedAt: at,
+} as unknown as KnowledgeEntryRow;
+
+const entry = toKnowledgeEntry(row);
+assert.deepEqual(
+  Object.keys(entry).sort(),
+  ["category", "confidence", "content", "createdAt", "id", "revision", "sourceRef", "sourceType", "status", "tags", "title", "updatedAt"],
+  "KnowledgeEntry 只应有契约里的 12 个字段",
+);
+for (const leaked of ["characterId", "candidateId", "canPermanentlyDelete"]) {
+  assert.ok(!(leaked in (entry as unknown as Record<string, unknown>)), `条目不应带 ${leaked}`);
+}
+
+assert.match(entry.createdAt, ISO, "createdAt 必须是 ISO 8601 UTC 字符串");
+assert.match(entry.updatedAt, ISO, "updatedAt 必须是 ISO 8601 UTC 字符串");
+assert.ok(KNOWLEDGE_ITEM_STATUSES.includes(entry.status), "status 必须落在四值状态机内");
+assert.equal(entry.sourceType, "MEMORY_EVENT", "sourceType 是自由字符串，不参与枚举校验");
+assert.equal(entry.category, "GENERAL", "category 是自由字符串");
+
+// sourceRef 原样带出（不同来源结构不同，不做裁剪也不做包装）
+assert.deepEqual(entry.sourceRef, row.sourceRef);
+// confidence 的 null 语义要保留（手动条目可能没算分）
+assert.equal(toKnowledgeEntry({ ...row, confidence: null } as unknown as KnowledgeEntryRow).confidence, null);
+// 四种状态都能整出来
+for (const status of KNOWLEDGE_ITEM_STATUSES) {
+  assert.equal(toKnowledgeEntry({ ...row, status } as unknown as KnowledgeEntryRow).status, status);
+}
+
+console.log("KnowledgeEntry contract: 12 字段白名单、外键隔离、ISO 日期、status 四值、sourceRef 原样带出均符合 shared/types/knowledge.ts。");

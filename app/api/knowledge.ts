@@ -13,12 +13,17 @@ export type KnowledgeResult = {
   confirmedRelatedItemIds?: string[];
 };
 
-export type KnowledgeRelatedItem = { id: string; title: string; content: string; category: string; tags: string[]; revision: number };
-
-export type KnowledgeRelationView = {
-  id: string; sourceItemId: string; targetItemId: string; relationType: string; status: string; resolution: string | null; metadata: unknown; updatedAt: string;
-  relatedItem: { id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null; status: string; revision: number; sourceType: string; sourceRef: unknown };
-};
+// 知识条目相关形状与后端共用（`shared/types/knowledge.ts`）；这里只保留组合类型。
+import type { KnowledgeEntry, KnowledgeItem, KnowledgePagination, KnowledgeRelatedItem, KnowledgeRelationView } from "#shared/types/knowledge";
+export type {
+  KnowledgeEntry,
+  KnowledgeItem,
+  KnowledgeItemRevision,
+  KnowledgeItemStatus,
+  KnowledgePagination,
+  KnowledgeRelatedItem,
+  KnowledgeRelationView,
+} from "#shared/types/knowledge";
 
 export type Candidate = {
   id: string; sourceType: string; sourceRef: unknown; rawContent: string; status: string;
@@ -26,23 +31,7 @@ export type Candidate = {
   relatedItems: KnowledgeRelatedItem[];
 };
 
-export type KnowledgeEntry = {
-  id: string; title: string; content: string; category: string; tags: string[]; confidence: number | null;
-  status: string; sourceType: string; sourceRef: unknown; revision: number; createdAt: string; updatedAt: string;
-  /** 回收站接口给的展示派生字段：参与过合并审计链时为 false。只用于禁用按钮，不能当作删除依据。 */
-  canPermanentlyDelete?: boolean;
-};
-
-export type KnowledgeItem = KnowledgeEntry & { relations: KnowledgeRelationView[] };
-
-export type KnowledgeItemRevision = {
-  id: string; revision: number; title: string; content: string; category: string; tags: string[];
-  confidence: number | null; status: string; sourceType: string; sourceRef: unknown; createdAt: string;
-};
-
 export type WorkspaceData = { candidates: Candidate[]; items: KnowledgeItem[]; candidateCount: number; itemCount: number };
-
-export type KnowledgePagination = { page: number; pageSize: number; total: number; pageCount: number };
 
 export type KnowledgeArchivePage = { items: KnowledgeEntry[]; itemPagination: KnowledgePagination };
 

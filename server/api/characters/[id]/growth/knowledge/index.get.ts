@@ -2,6 +2,7 @@ import { createError, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
+import { toKnowledgeEntry } from "../../../../../utils/knowledge-item-dto";
 
 type JsonRecord = Record<string, unknown>;
 function asRecord(value: unknown): JsonRecord {
@@ -76,7 +77,7 @@ export default defineEventHandler(async (event) => {
   });
 
   const items = rawItems.map((item) => ({
-    ...item,
+    ...toKnowledgeEntry(item),
     relations: relations
       .filter(relation => relation.sourceItemId === item.id || relation.targetItemId === item.id)
       .map(relation => ({
@@ -87,7 +88,7 @@ export default defineEventHandler(async (event) => {
         status: relation.status,
         resolution: relation.resolution,
         metadata: relation.metadata,
-        updatedAt: relation.updatedAt,
+        updatedAt: relation.updatedAt.toISOString(),
         relatedItem: relation.sourceItemId === item.id ? relation.targetItem : relation.sourceItem,
       })),
   }));
