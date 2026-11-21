@@ -37,7 +37,14 @@ const NAME_MAX_CHARS = 60;
 
 export type StickerUsageFailureReason = "no-name" | "no-model" | "model-failed" | "unusable-usage";
 
-export type StickerUsageSuggestion =
+/**
+ * 内部结果：要么拿到 usage，要么带失败原因。
+ *
+ * 与 API 返回的 `StickerUsageSuggestion`（`shared/types/character-settings.ts`，
+ * `{ usage, source }`）不是同一个东西 —— 那个是成功后只剩两个字段的形状。
+ * 以前两者同名，读代码容易以为是同一种结果。
+ */
+export type StickerUsageOutcome =
   | { ok: true; usage: string; source: "vision" | "name" }
   | { ok: false; reason: StickerUsageFailureReason };
 
@@ -120,7 +127,7 @@ async function suggestWithVision(
   imageDataUrl: string,
   settings: { model: string; apiBaseUrl: string; apiKey: string },
   context: StickerCollectContext,
-): Promise<StickerUsageSuggestion> {
+): Promise<StickerUsageOutcome> {
   let endpoint: URL;
   try {
     endpoint = buildChatCompletionsEndpoint(settings.apiBaseUrl);
@@ -185,7 +192,7 @@ async function suggestWithName(
   name: string,
   settings: { model: string; apiBaseUrl: string; apiKey: string },
   context: StickerCollectContext,
-): Promise<StickerUsageSuggestion> {
+): Promise<StickerUsageOutcome> {
   const systemPrompt = [
     "你给一张 QQ 表情包写「什么时候用」。用户只告诉了你这张表情的名字，你没看到图。",
     "只回一句话，20 字内，写具体时机：什么场合、对谁、什么情绪下用这张。",
@@ -227,7 +234,7 @@ export async function suggestStickerUsage(input: {
   /** 这张图当前存的那份（data url）。没有文件时传空，退化成只看名字。 */
   imageDataUrl?: string;
   context: StickerCollectContext;
-}): Promise<StickerUsageSuggestion> {
+}): Promise<StickerUsageOutcome> {
   const name = input.name.trim().slice(0, NAME_MAX_CHARS);
   if (!name) return { ok: false, reason: "no-name" };
 

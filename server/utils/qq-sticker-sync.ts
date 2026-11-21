@@ -234,33 +234,6 @@ export function uniqueStickerName(base: string, taken: ReadonlySet<string>): str
   return `${trimmed.slice(0, 50)} ${Date.now().toString(36)}`;
 }
 
-export type StickerSyncReport = {
-  ok: boolean;
-  connectionId: string;
-  /** QQ 收藏夹这次拉到多少条。 */
-  qqTotal: number;
-  /** 本地一共多少行（含回收站）。 */
-  localTotal: number;
-  imported: number;
-  /** 导下来时发现本地已有同一张图，改成把 QQ 的 id 绑上去（不重复存图）。 */
-  adopted: number;
-  importedFailed: number;
-  rebound: number;
-  restored: number;
-  trashed: number;
-  retriedDelete: number;
-  retryDeleteFailed: number;
-  pushed: number;
-  pushFailed: number;
-  pushMissingFile: number;
-  /** 把本地名字写进 QQ 备注的条数。 */
-  namesSynced: number;
-  nameSyncFailed: number;
-  importOverflow: number;
-  pushOverflow: number;
-  /** 说明性提示（安全阀触发、部分失败等）。非空时页面要按警告展示。 */
-  warnings: string[];
-};
 
 /**
  * 找到这个角色绑的那个 QQ 连接。

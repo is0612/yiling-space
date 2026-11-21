@@ -231,16 +231,6 @@ export async function markCatchphrasesUsed(
 }
 
 /** 捡回来时的依据。弹窗要回答「她凭什么觉得这是梗」，只给台词是答不上的。 */
-export type CatchphraseEvidence = {
-  /** 从哪个群捡的（群号或会话标题）。 */
-  groupLabel?: string;
-  /** 观察窗口内出现几次。 */
-  count?: number;
-  /** 几个人说过。一个人反复说同一句是口吃，不是梗。 */
-  speakers?: number;
-  /** 原话几条，最多 3 条。 */
-  samples?: string[];
-};
 
 export type CatchphraseDto = {
   id: string;

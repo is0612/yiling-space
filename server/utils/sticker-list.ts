@@ -11,7 +11,6 @@
 
 /** 页面上的五档排序。值就是接口参数，改文案不用改这里。 */
 export const STICKER_SORTS = ["recent", "oldest", "mostUsed", "lastUsed", "fresh"] as const;
-export type StickerSortKey = (typeof STICKER_SORTS)[number];
 
 /** 默认一页 12 张：与页面原来的分页档位一致，一屏两列刚好。 */
 export const STICKER_PAGE_SIZE_DEFAULT = 12;
