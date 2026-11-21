@@ -12,10 +12,26 @@ export type TurnRetrievalStats = {
   /** 模型自报引用了几条（已按来源白名单过滤）。与上面的 count 对比，才能分出「没检索到」「被挤掉」「放进去了没用上」。 */
   used?: { memory: number; snapshot: number; event: number };
 };
+export type TurnPlanSegmentStats = {
+  source: "recentMessages" | "memory" | "snapshot" | "event" | "rawMessage" | "crossChannel" | "knowledge";
+  budget: number;
+  limit: number;
+  reason: "always" | "question_has_date" | "question_has_topic" | "keyword_hit" | "owner_cross_channel";
+  optional: boolean;
+  used: number;
+  items: number;
+};
+/** 这一轮「计划放哪些来源」与真实用量；由 context-plan.ts 生成，本文件只做白名单清洗。 */
+export type TurnContextPlanStats = {
+  surface: "desktop" | "private" | "group";
+  totalBudget: number;
+  segments: TurnPlanSegmentStats[];
+};
 export type TurnDetailPatch = {
   collaboration?: unknown;
   growthReads?: unknown;
   retrieval?: unknown;
+  contextPlan?: unknown;
   context?: { status: "not_enabled" | "not_applicable" | "success" | "failed"; summary?: string; participation?: "invited" | "observing" | "uncertain"; uncertainty?: string; evidence?: TurnEvidence[] };
   memory?: { status: "not_needed" | "not_enabled" | "no_sources" | "failed" | "success"; query?: string; candidateCount?: number; sources?: TurnSource[] };
   response?: { action: "reply" | "silent"; reply: string; explanation?: string };
@@ -67,6 +83,26 @@ function retrievalStats(value: unknown): TurnRetrievalStats | undefined {
     : { memory: usedMemory, snapshot: usedSnapshot, event: usedEvent };
   return { memory, snapshot, event: { ...event, ...(mode ? { mode } : {}), ...(recent === undefined ? {} : { recent }) }, ...(used ? { used } : {}) };
 }
+const PLAN_SOURCES = ["recentMessages", "memory", "snapshot", "event", "rawMessage", "crossChannel", "knowledge"] as const;
+const PLAN_REASONS = ["always", "question_has_date", "question_has_topic", "keyword_hit", "owner_cross_channel"] as const;
+function contextPlanStats(value: unknown): TurnContextPlanStats | undefined {
+  const row = object(value);
+  const surface = (["desktop", "private", "group"] as const).find(item => item === row.surface);
+  const totalBudget = countOf(row.totalBudget);
+  if (!surface || totalBudget === undefined) return undefined;
+  const segments = (Array.isArray(row.segments) ? row.segments : []).slice(0, 12).flatMap(item => {
+    const segment = object(item);
+    const source = PLAN_SOURCES.find((candidate) => candidate === segment.source);
+    const reason = PLAN_REASONS.find((candidate) => candidate === segment.reason);
+    const budget = countOf(segment.budget), limit = countOf(segment.limit);
+    const used = countOf(segment.used), items = countOf(segment.items);
+    if (!source || !reason || budget === undefined || limit === undefined || used === undefined || items === undefined) return [];
+    return [{ source, reason, budget, limit, used, items, optional: segment.optional === true }];
+  });
+  // 一段都留不下就没有意义，整块丢弃，避免出现空计划被当成「什么都没放」。
+  if (!segments.length) return undefined;
+  return { surface, totalBudget, segments };
+}
 /** Explicit allowlist: diagnostics are evidence summaries, never serialized prompts/provider reasoning. */
 export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   const raw = object(value), context = object(raw.context), memory = object(raw.memory), response = object(raw.response);
@@ -75,6 +111,7 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   const channel = !groupChat && (raw.channel === "qq-private" || raw.channel === "web") ? raw.channel : undefined;
   const growthReads = groupChat || channel ? sanitizeGrowthReadDiagnostics(raw.growthReads) : undefined;
   const retrieval = retrievalStats(raw.retrieval);
+  const contextPlan = contextPlanStats(raw.contextPlan);
   const sources: TurnSource[] = (Array.isArray(memory.sources) ? memory.sources : []).slice(0, 8).flatMap(item => {
     const row = object(item);
     if (!["memory", "snapshot", "event", "message"].includes(String(row.type)) || !["character", "private"].includes(String(row.scope)) || (groupChat && row.scope !== "character")) return [];
@@ -88,6 +125,7 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
     ...(collaboration ? { collaboration } : {}),
     ...(growthReads ? { growthReads } : {}),
     ...(retrieval ? { retrieval } : {}),
+    ...(contextPlan ? { contextPlan } : {}),
     context: {
       status: ["not_enabled", "not_applicable", "success", "failed"].includes(String(context.status)) ? context.status as ModelTurnDetail["context"]["status"] : "not_enabled",
       summary: text(context.summary, 1600), uncertainty: text(context.uncertainty, 400),

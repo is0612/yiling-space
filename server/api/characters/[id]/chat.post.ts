@@ -37,6 +37,8 @@ import {
   parseEventParticipantQuery, resolveEventItemLimit, resolveEventTokenBudget, resolveEventRecentDays,
 } from "../../../utils/memory-event-retrieval";
 import { selectPromptMemoryContext } from "../../../utils/prompt-memory-selection";
+import { fillContextPlanUsage, planContextTurn } from "../../../utils/context-plan";
+import { estimateTokens } from "../../../utils/memory-retrieval";
 import {
   resolveRawMessageLimit, resolveRawMessageTokenBudget, selectRawMessagesForPrompt,
 } from "../../../utils/message-retrieval";
@@ -292,6 +294,30 @@ export default defineEventHandler(async (event) => {
     },
     scopeOf: (memoryScopeId) => scopeOriginById.get(memoryScopeId) ?? "character",
     loadParticipantNames: (items) => resolveEventParticipantNames(prisma, items),
+  });
+
+  /**
+   * 装配计划：只描述「这一轮打算放哪几类来源、各多少额度」，不驱动下面的查询。
+   * 写进回合详情，才能回答「配了 1800 token 的预算，这一轮实际用上多少」。
+   */
+  const questionKind: "date" | "topic" | "none" = eventSelection.range
+    ? "date"
+    : (participantIds.length || participantName ? "topic" : "none");
+  const contextPlan = planContextTurn({
+    surface: "desktop",
+    isOwner: true,
+    questionKind,
+    limits: {
+      recentMessages: resolveRecentMessageLimit(character.modelConfig),
+      memoryItems: resolveMemoryItemLimit(character.modelConfig),
+      memoryTokens: resolveMemoryTokenBudget(character.modelConfig),
+      snapshotItems: 4,
+      snapshotTokens: resolveSnapshotTokenBudget(character.modelConfig),
+      eventItems: resolveEventItemLimit(character.modelConfig),
+      eventTokens: resolveEventTokenBudget(character.modelConfig),
+      rawMessageItems: resolveRawMessageLimit(character.modelConfig),
+      rawMessageTokens: resolveRawMessageTokenBudget(character.modelConfig),
+    },
   });
 
   // 忆泡还没覆盖到那一段时，用原始对话兜底 —— 原文一直在库里，只是以前没有检索入口。
@@ -822,6 +848,14 @@ export default defineEventHandler(async (event) => {
   turnDetail.update({
     response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation },
     collaboration: turnContext.snapshot(),
+    // 计划与真实用量：配额配了没用上，还是根本没查，一眼能分开。
+    contextPlan: fillContextPlanUsage(contextPlan, {
+      recentMessages: { used: estimateTokens(recentMessages.map((item) => item.content).join("\n")), items: recentMessages.length },
+      memory: { used: memorySelection.memory.usedTokens, items: memorySelection.memory.count },
+      snapshot: { used: memorySelection.snapshot.usedTokens, items: memorySelection.snapshot.count },
+      event: { used: memorySelection.event.usedTokens, items: memorySelection.event.count + memorySelection.recentEvent.count },
+      rawMessage: { used: estimateTokens(rawMessages.map((item) => item.content).join("\n")), items: rawMessages.length },
+    }),
     // 「她为什么没想起那件事」：找到几条、放进去几条、被预算挤掉几条，只记数字不记正文。
     // used 是模型自报引用（已过来源白名单），和 count 一比就能分出「没检索到」和「放进去了没用上」。
     retrieval: {

@@ -1,5 +1,7 @@
 import { loadPromptEventCandidates } from "../prompt-event-candidates";
 import { selectPromptMemoryContext } from "../prompt-memory-selection";
+import { fillContextPlanUsage, planContextTurn } from "../context-plan";
+import { estimateTokens as estimateContextTokens } from "../memory-retrieval";
 import { loadPromptMemoryCandidates } from "../prompt-memory-candidates";
 import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
@@ -1493,6 +1495,27 @@ async function runChannelTurn(input: {
 
 
 
+  // 装配计划：只描述「这一轮打算放哪几类来源、各多少额度」，不驱动下面的查询。
+  const questionKind: "date" | "topic" | "none" = eventSelection.range
+    ? "date"
+    : (participantIds.length || participantName ? "topic" : "none");
+  const contextPlan = planContextTurn({
+    surface: isGroup ? "group" : "private",
+    isOwner: isOwnerTurn,
+    questionKind,
+    limits: {
+      recentMessages: resolveRecentMessageLimit(character.modelConfig),
+      memoryItems: resolveMemoryItemLimit(character.modelConfig),
+      memoryTokens: resolveMemoryTokenBudget(character.modelConfig),
+      snapshotItems: 4,
+      snapshotTokens: resolveSnapshotTokenBudget(character.modelConfig),
+      eventItems: resolveEventItemLimit(character.modelConfig),
+      eventTokens: resolveEventTokenBudget(character.modelConfig),
+      rawMessageItems: resolveRawMessageLimit(character.modelConfig),
+      rawMessageTokens: resolveRawMessageTokenBudget(character.modelConfig),
+    },
+  });
+
   // 忆泡还没覆盖到那一段时用原文兜底；只在问句指向某一天时才查。
   let rawMessages: Array<{
     id: string;
@@ -2427,6 +2450,14 @@ async function runChannelTurn(input: {
   turnDetail.update({
     response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation },
     // 与网页同一份口径：找到几条、放进去几条、预算挤掉几条，外加模型自报引用了几条。
+    contextPlan: fillContextPlanUsage(contextPlan, {
+      recentMessages: { used: estimateContextTokens(recentMessages.map((item) => item.content).join("\n")), items: recentMessages.length },
+      memory: { used: memorySelection.memory.usedTokens, items: memorySelection.memory.count },
+      snapshot: { used: memorySelection.snapshot.usedTokens, items: memorySelection.snapshot.count },
+      event: { used: memorySelection.event.usedTokens, items: memorySelection.event.count + memorySelection.recentEvent.count },
+      rawMessage: { used: estimateContextTokens(rawMessages.map((item) => item.content).join("\n")), items: rawMessages.length },
+      crossChannel: { used: estimateContextTokens(crossChannel.map((line) => line.content).join("\n")), items: crossChannel.length },
+    }),
     retrieval: {
       ...memorySelection,
       used: {

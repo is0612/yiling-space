@@ -1,6 +1,6 @@
 # 上下文装配策略层（ContextPlan）
 
-> 状态：设计（2026-11-16），完整 ContextPlan 尚未实现。网页与 QQ 已共享长期记忆、快照、忆泡的**候选读取**（`prompt-memory-candidates.ts` / `prompt-event-candidates.ts`）和**选择与整形**（`prompt-memory-selection.ts`：预算装配、scope 标签、忆泡 600 字截断、名字刷新），见 [检索验收](memory-retrieval-acceptance.md)。这仍是写死的顺序与条件，不是计划驱动装配，不改变本文 P0 / P1 的验收状态。
+> 状态：**P0 观测已落地（2026-11-21）**，P1 仍未开始。网页与 QQ 已共享候选读取（`prompt-memory-candidates.ts` / `prompt-event-candidates.ts`）和选择与整形（`prompt-memory-selection.ts`），并按本文第 4 节实现 `planContextTurn`（`server/utils/context-plan.ts`）：计划只**描述**要放哪些来源、各自额度与理由，写进回合详情的 `contextPlan`，**不驱动**查询与渲染——回复内容与配 P0 前一致。真实用量（`used` / `items`）由共用选择层的统计回填，回归见 `test:context-plan`。
 > 定位：回答「这一轮提示词里放什么」。不改变提示词怎么写，也不替代闸门、预算与范围校验。
 
 ---
