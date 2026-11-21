@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createServer } from "node:net";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { encryptApiKey } from "../server/utils/credential-encryption";
@@ -15,11 +16,43 @@ import { connectOnebot, POKE_CONTENT, resolveOnebotEvent, resolveOnebotPokeEvent
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error("缺少 DATABASE_URL，OneBot 渠道测试无法运行。");
 
-process.env.LLM_BASE_URL = "http://127.0.0.1:4010/v1";
+/** Reserve distinct ephemeral ports together, then release before the mock processes bind. */
+async function allocateMockPorts(): Promise<number[]> {
+  const reservations: ReturnType<typeof createServer>[] = [];
+  try {
+    const ports: number[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const server = createServer();
+      reservations.push(server);
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("无法分配 mock 端口。");
+      ports.push(address.port);
+    }
+    assert.equal(new Set(ports).size, 3, "mock 端口必须互异");
+    return ports;
+  } finally {
+    await Promise.all(reservations.map(server => new Promise<void>((resolve, reject) => {
+      if (!server.listening) return resolve();
+      server.close(error => error ? reject(error) : resolve());
+    })));
+  }
+}
+const [llmPort, wsPort, httpPort] = await allocateMockPorts();
+const llmBaseUrl = `http://127.0.0.1:${llmPort}/v1`;
+const onebotWsUrl = `ws://127.0.0.1:${wsPort}`;
+const onebotHttpUrl = `http://127.0.0.1:${httpPort}`;
+process.env.LLM_BASE_URL = llmBaseUrl;
 process.env.LLM_API_KEY = "ci-only";
 process.env.LLM_MODEL = "ci-channel-test";
-process.env.ONEBOT_WS_URL = "ws://127.0.0.1:4030";
-process.env.ONEBOT_HTTP_URL = "http://127.0.0.1:4031";
+process.env.ONEBOT_WS_URL = onebotWsUrl;
+process.env.ONEBOT_HTTP_URL = onebotHttpUrl;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,23 +66,40 @@ function spawnServer(script: string, env: NodeJS.ProcessEnv, readyMarker: string
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
+    let settled = false;
     const onData = (data: Buffer) => {
       out += data.toString("utf8");
-      if (out.includes(readyMarker)) {
+      if (out.includes(readyMarker) && !settled) {
+        settled = true;
         cleanup();
         resolve(child);
       }
     };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // A failed child is never returned to the caller's children list.
+      // Kill it here, including timeout while the process is still alive.
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      reject(error);
+    };
+    const onError = (error: Error) => fail(error);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      fail(new Error(`${script} 就绪前退出（code=${code}, signal=${signal}）。输出：${out.slice(0, 500)}`));
+    const timer = setTimeout(() => {
+      fail(new Error(`${script} 未在超时内就绪。输出：${out.slice(0, 500)}`));
+    }, 20_000);
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(`${script} 未在超时内就绪。输出：${out.slice(0, 500)}`));
-    }, 20_000);
+    child.once("error", onError);
+    child.once("exit", onExit);
     function cleanup() {
       clearTimeout(timer);
       child.stdout.off("data", onData);
       child.stderr.off("data", onData);
+      child.off("error", onError);
+      child.off("exit", onExit);
     }
   });
 }
@@ -146,8 +196,8 @@ const groupRoundSizes = (groupId: number): string[] => roundLogs
 
 const children: ChildProcess[] = [];
 try {
-  children.push(await spawnServer("scripts/mock-llm-server.mjs", { LLM_MOCK_PORT: "4010", LLM_MOCK_API_KEY: "ci-only" }, "mock-llm-ready"));
-  children.push(await spawnServer("scripts/mock-onebot-gateway.mjs", { ONEBOT_MOCK_HTTP_PORT: "4031", ONEBOT_MOCK_WS_PORT: "4030", ONEBOT_MOCK_REQUIRE_TOKEN: "mock-ws-token" }, "mock-onebot-ready"));
+  children.push(await spawnServer("scripts/mock-llm-server.mjs", { LLM_MOCK_PORT: String(llmPort), LLM_MOCK_API_KEY: "ci-only" }, "mock-llm-ready"));
+  children.push(await spawnServer("scripts/mock-onebot-gateway.mjs", { ONEBOT_MOCK_HTTP_PORT: String(httpPort), ONEBOT_MOCK_WS_PORT: String(wsPort), ONEBOT_MOCK_REQUIRE_TOKEN: "mock-ws-token" }, "mock-onebot-ready"));
 
   // 1. Seed a character (with a global scope) and an OneBot connection + default binding.
   //    先清上一次中断留下的同名 fixture，否则唯一约束直接挡住这一轮。
@@ -167,8 +217,8 @@ try {
     },
   });
   const credentialsCiphertext = Buffer.from(await encryptApiKey(JSON.stringify({
-    wsUrl: "ws://127.0.0.1:4030",
-    httpUrl: "http://127.0.0.1:4031",
+    wsUrl: onebotWsUrl,
+    httpUrl: onebotHttpUrl,
     accessToken: "mock-ws-token",
     httpToken: "mock-http-token",
   })), "utf8");
@@ -197,8 +247,8 @@ try {
   const records = await loadOnebotConnections(undefined, { includeDisabled: true });
   const record = records.find((item) => item.id === connectionId);
   assert(record, "The adapter must discover the OneBot connection.");
-  assert.equal(record.config.wsUrl, "ws://127.0.0.1:4030");
-  assert.equal(record.config.httpUrl, "http://127.0.0.1:4031");
+  assert.equal(record.config.wsUrl, onebotWsUrl);
+  assert.equal(record.config.httpUrl, onebotHttpUrl);
   assert.equal(record.config.accessToken, "mock-ws-token");
   assert.equal(record.config.httpToken, "mock-http-token");
   // 这个用例显式设了「所有消息都回复」，后面才好用「不 @ 也回」的群消息验证端到端链路。
@@ -299,7 +349,7 @@ try {
 
   // 3b. WS 鉴权与握手次数：token 只能挂查询参数（Node 内置 WebSocket 加不了自定义头），
   // 且一次连接只该有一次握手 —— 反复重连会在这条断言上炸。
-  const readHandshakes = async () => ((await (await fetch("http://127.0.0.1:4031/__mock/handshakes")).json()) as {
+  const readHandshakes = async () => ((await (await fetch(`${onebotHttpUrl}/__mock/handshakes`)).json()) as {
     handshakes: Array<{ url: string; query: Record<string, string>; authorization: string | null; authorized: boolean }>;
   }).handshakes;
   const firstHandshakes = await readHandshakes();
@@ -312,7 +362,7 @@ try {
   );
 
   // 4. Emit a group message event and wait for a reply.
-  await fetch("http://127.0.0.1:4031/__mock/emit", {
+  await fetch(`${onebotHttpUrl}/__mock/emit`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -330,12 +380,12 @@ try {
   });
 
   await waitFor(async () => {
-    const res = await fetch("http://127.0.0.1:4031/__mock/messages");
+    const res = await fetch(`${onebotHttpUrl}/__mock/messages`);
     const payload = await res.json() as { messages: unknown[] };
     return payload.messages.length >= 1;
   });
 
-  const sent = (await (await fetch("http://127.0.0.1:4031/__mock/messages")).json()) as { messages: Array<Record<string, unknown>> };
+  const sent = (await (await fetch(`${onebotHttpUrl}/__mock/messages`)).json()) as { messages: Array<Record<string, unknown>> };
   assert.equal(sent.messages.length, 1, "Exactly one reply must be sent for one event.");
   const sentMessage = sent.messages[0]!;
   assert.equal(sentMessage.action, "send_group_msg");
@@ -360,7 +410,7 @@ try {
   assert(identity, "An ExternalIdentity must be upserted for the OneBot author.");
 
   // 6. A re-delivered event with the same message id is deduplicated.
-  await fetch("http://127.0.0.1:4031/__mock/emit", {
+  await fetch(`${onebotHttpUrl}/__mock/emit`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -377,16 +427,16 @@ try {
     }),
   });
   await sleep(1500);
-  const afterDuplicate = (await (await fetch("http://127.0.0.1:4031/__mock/messages")).json()) as { messages: unknown[] };
+  const afterDuplicate = (await (await fetch(`${onebotHttpUrl}/__mock/messages`)).json()) as { messages: unknown[] };
   assert.equal(afterDuplicate.messages.length, 1, "A duplicate event must not trigger a second reply.");
 
   // 7. 表情：开关打开后正文一条、表情单独一条；额度用完后只发正文（不再跟表情）。
   // 额度显式配成「1 分钟 1 张」：默认 10 分钟 3 张的话，下面两条回复都还在额度里，
   // 断言就验不到「用完就停」这件事了。
-  const readSent = async () => ((await (await fetch("http://127.0.0.1:4031/__mock/messages")).json()) as {
+  const readSent = async () => ((await (await fetch(`${onebotHttpUrl}/__mock/messages`)).json()) as {
     messages: Array<{ action: string; body: Record<string, unknown> }>;
   }).messages;
-  const emitText = (messageId: number, text: string) => fetch("http://127.0.0.1:4031/__mock/emit", {
+  const emitText = (messageId: number, text: string) => fetch(`${onebotHttpUrl}/__mock/emit`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -454,10 +504,10 @@ try {
   });
   record.groupAnnouncementEnabled = true;
 
-  const readNotices = async () => ((await (await fetch("http://127.0.0.1:4031/__mock/notices")).json()) as {
+  const readNotices = async () => ((await (await fetch(`${onebotHttpUrl}/__mock/notices`)).json()) as {
     notices: Array<{ body: Record<string, unknown> }>;
   }).notices;
-  const emitAs = (messageId: number, userId: number, role: string, text: string) => fetch("http://127.0.0.1:4031/__mock/emit", {
+  const emitAs = (messageId: number, userId: number, role: string, text: string) => fetch(`${onebotHttpUrl}/__mock/emit`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -554,7 +604,7 @@ try {
     text: string,
     userId = 444,
     mention: GroupMention = false,
-  ) => fetch("http://127.0.0.1:4031/__mock/emit", {
+  ) => fetch(`${onebotHttpUrl}/__mock/emit`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ event: groupEventOf(groupId, messageId, text, userId, mention) }),
@@ -566,7 +616,7 @@ try {
     messageId: number,
     message: string,
     userId = 444,
-  ) => fetch("http://127.0.0.1:4031/__mock/emit", {
+  ) => fetch(`${onebotHttpUrl}/__mock/emit`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -940,7 +990,7 @@ try {
    * 他就戳她一下 —— 这比再打一遍字轻得多。所以「戳她」必须能把她叫醒，
    * 而「戳别人」跟她毫无关系，连背景都不该进。
    */
-  const emitPoke = (groupId: number, userId: number, targetId: number) => fetch("http://127.0.0.1:4031/__mock/emit", {
+  const emitPoke = (groupId: number, userId: number, targetId: number) => fetch(`${onebotHttpUrl}/__mock/emit`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -1015,8 +1065,8 @@ try {
    * 事件形状按网关真实下发来造：**顶层没有 group_id**，只有 sender 里那个。
    * 上一版按顶层 group_id 解析，这个用例照样通过，线上却一条都发不出去。
    */
-  await fetch("http://127.0.0.1:4031/__mock/reset", { method: "POST" });
-  await fetch("http://127.0.0.1:4031/__mock/emit", {
+  await fetch(`${onebotHttpUrl}/__mock/reset`, { method: "POST" });
+  await fetch(`${onebotHttpUrl}/__mock/emit`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -1033,12 +1083,12 @@ try {
     }),
   });
   await waitFor(async () => {
-    const res = await fetch("http://127.0.0.1:4031/__mock/messages");
+    const res = await fetch(`${onebotHttpUrl}/__mock/messages`);
     const payload = await res.json() as { messages: Array<{ action: string }> };
     // 等「私聊回复」本身，而不是「有任意消息」—— reset 之后可能还有上一条用例的回执飘进来。
     return payload.messages.some((item) => item.action === "send_private_msg");
   });
-  const tempSent = (await (await fetch("http://127.0.0.1:4031/__mock/messages")).json()) as {
+  const tempSent = (await (await fetch(`${onebotHttpUrl}/__mock/messages`)).json()) as {
     messages: Array<{ action: string; body: Record<string, unknown> }>;
   };
   // 按 action 找，不按顺序取第一条：上一条用例的回执可能晚于 reset 落到这个数组里。
