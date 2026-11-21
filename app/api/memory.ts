@@ -2,9 +2,14 @@ import type { ApiRequest } from "../utils/request";
 import type { Character, Snapshot, SnapshotDetail, SnapshotSourceMessage } from "../utils/mock-data";
 import type { MemoryProgressRow } from "../composables/useMemoryProgress";
 // 记忆条目的形状与枚举与后端共用一份（`shared/types/memory.ts`）；页面沿用 `MemoryRow` 这个名字。
-import type { MemoryCategory, MemoryItem, MemoryPage } from "#shared/types/memory";
+import type { MemoryCategory, MemoryEvent, MemoryItem, MemoryPage } from "#shared/types/memory";
 import type { SnapshotPage } from "#shared/types/snapshot";
-export type { MEMORY_CATEGORIES, MEMORY_STATUSES, MEMORY_SCOPE_TYPES, MemoryCategory, MemoryItem, MemoryPage } from "#shared/types/memory";
+export type {
+  MEMORY_CATEGORIES, MEMORY_STATUSES, MEMORY_SCOPE_TYPES,
+  MEMORY_EVENT_STATES, MEMORY_EVENT_STATUSES, MEMORY_EVENT_SCOPES,
+  MemoryCategory, MemoryEvent, MemoryEventScope, MemoryEventState, MemoryEventStatus,
+  MemoryItem, MemoryPage,
+} from "#shared/types/memory";
 export type MemoryRow = MemoryItem;
 
 export type MemoryStats = {
@@ -120,19 +125,8 @@ export type MemoryDayRow = {
   extractedAt: string | null;
 };
 
-export type MemoryDayEvent = {
-  id: string;
-  occurredAt: string;
-  timeOfDay: string | null;
-  place: string | null;
-  participants: string[];
-  title: string;
-  detail: string;
-  state: "DRAFT" | "FINAL";
-  status: "ACTIVE" | "ARCHIVED";
-  confidence: number | null;
-  scope: "character" | "private" | "external";
-};
+/** 忆泡：与后端共用同一份契约（`shared/types/memory.ts` 的 `MemoryEvent`）。 */
+export type MemoryDayEvent = MemoryEvent;
 
 export type MemoryDayMessage = {
   id: string;

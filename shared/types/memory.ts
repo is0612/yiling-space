@@ -42,3 +42,40 @@ export type MemoryPage = {
   pageSize: number;
   totalPages: number;
 };
+
+export const MEMORY_EVENT_STATES = ["DRAFT", "FINAL"] as const;
+export type MemoryEventState = typeof MEMORY_EVENT_STATES[number];
+
+export const MEMORY_EVENT_STATUSES = ["ACTIVE", "ARCHIVED"] as const;
+export type MemoryEventStatus = typeof MEMORY_EVENT_STATUSES[number];
+
+/** 范围是给页面看的语义（角色全局 / 当前用户私人 / 外部身份），不是 `scopeType` 原值。 */
+export const MEMORY_EVENT_SCOPES = ["character", "private", "external"] as const;
+export type MemoryEventScope = typeof MEMORY_EVENT_SCOPES[number];
+
+/**
+ * 一条忆泡（`memory_events`）。
+ *
+ * `dayKey` 可选：日子详情按 dayKey 取数据、不重复回传，编辑接口会带上。
+ * 这是两个接口真实响应的并集 —— 不要因为「另一处没有」就把它删掉，
+ * 也不要因为「这里没有」就要求那边补上。
+ *
+ * 时间线的条目（`toMemoryTimelineDtos`）是跨实体的联合形状，不是忆泡本身，
+ * 不套用这个类型。
+ */
+export type MemoryEvent = {
+  id: string;
+  dayKey?: string;
+  occurredAt: string;
+  /** 模糊时段（上午/下午/深夜…）；null = 只知道日期。 */
+  timeOfDay: string | null;
+  place: string | null;
+  participants: string[];
+  title: string;
+  detail: string;
+  state: MemoryEventState;
+  status: MemoryEventStatus;
+  confidence: number | null;
+  sourceMessageIds: string[];
+  scope: MemoryEventScope;
+};

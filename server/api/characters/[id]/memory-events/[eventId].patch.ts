@@ -3,6 +3,7 @@ import type { Prisma } from "../../../../../src/generated/prisma/client";
 import { requireActorUserId } from "../../../../utils/auth";
 import { readTrimmedString, requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import { toMemoryEvent } from "../../../../utils/memory-event-dto";
 import { EVENT_TIME_OF_DAY, type EventTimeOfDay } from "../../../../utils/memory-ai";
 
 /**
@@ -93,6 +94,8 @@ export default defineEventHandler(async (event) => {
         detail: true,
         state: true,
         status: true,
+        confidence: true,
+        sourceMessageIds: true,
         memoryScope: { select: { scopeType: true } },
       },
     });
@@ -119,19 +122,5 @@ export default defineEventHandler(async (event) => {
     return result;
   });
 
-  return {
-    id: updated.id,
-    dayKey: updated.dayKey,
-    occurredAt: updated.occurredAt.toISOString(),
-    timeOfDay: updated.timeOfDay,
-    place: updated.place,
-    participants: updated.participants,
-    title: updated.title,
-    detail: updated.detail,
-    state: updated.state,
-    status: updated.status,
-    scope: updated.memoryScope.scopeType === "USER_PRIVATE"
-      ? "private"
-      : updated.memoryScope.scopeType === "EXTERNAL_IDENTITY" ? "external" : "character",
-  };
+  return toMemoryEvent(updated);
 });

@@ -2,6 +2,7 @@ import { createError, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import { toMemoryEvent } from "../../../../utils/memory-event-dto";
 import { resolveDayWindow } from "../../../../utils/memory-event-time";
 
 /**
@@ -97,22 +98,7 @@ export default defineEventHandler(async (event) => {
     day: day
       ? { ...day, extractedAt: day.extractedAt?.toISOString() ?? null }
       : { dayKey, state: null, eventCount: 0, extractedAt: null },
-    events: events.map((entry) => ({
-      id: entry.id,
-      occurredAt: entry.occurredAt.toISOString(),
-      timeOfDay: entry.timeOfDay,
-      place: entry.place,
-      participants: entry.participants,
-      title: entry.title,
-      detail: entry.detail,
-      state: entry.state,
-      status: entry.status,
-      confidence: entry.confidence,
-      sourceMessageIds: entry.sourceMessageIds,
-      scope: entry.memoryScope.scopeType === "USER_PRIVATE"
-        ? "private"
-        : entry.memoryScope.scopeType === "EXTERNAL_IDENTITY" ? "external" : "character",
-    })),
+    events: events.map(toMemoryEvent),
     usage: { calls: usage._count._all, tokens: usage._sum.totalTokens ?? 0 },
   };
 });
