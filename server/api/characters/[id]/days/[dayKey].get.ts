@@ -2,6 +2,7 @@ import { createError, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import { readableMemoryScopeWhere } from "../../../../utils/memory-scope-access";
 import { toMemoryEvent } from "../../../../utils/memory-event-dto";
 import type { MemoryDayDetail } from "../../../../../shared/types/memory";
 import { resolveDayWindow } from "../../../../utils/memory-event-time";
@@ -35,7 +36,7 @@ export default defineEventHandler(async (event) => {
    * 「上次整理」会随机显示到私聊那份较早的时间上。
    */
   const dayRows = await prisma.memoryEventDay.findMany({
-    where: { dayKey, memoryScope: { is: { characterId } } },
+    where: { dayKey, memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } } },
     select: { dayKey: true, state: true, eventCount: true, extractedAt: true },
   });
   const day = dayRows.length
@@ -50,7 +51,7 @@ export default defineEventHandler(async (event) => {
     }
     : null;
 
-  const eventWhere = { dayKey, memoryScope: { is: { characterId } } };
+  const eventWhere = { dayKey, memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } } };
   const eventsTotal = await prisma.memoryEvent.count({ where: eventWhere });
   const params = getQuery(event);
   const pageSize = 20;

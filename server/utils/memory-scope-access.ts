@@ -1,14 +1,17 @@
 /**
- * Memory scope access rules for chat retrieval.
+ * Memory scope access rules for chat retrieval and the owner-facing memory pages.
  *
- * Design constraints (see CLAUDE.md):
+ * Design constraints (see CLAUDE.md, docs/memory-system.md §9.1):
  * - Character-global memory is shared knowledge and always readable in this character's chat.
  * - User-private memory is only readable by its owning user.
  * - A private scope that comes from an external identity may only be read after that identity
  *   was verified and linked to the acting user. Unverified identities are never merged.
+ * - Real platform scopes are stored with `scopeType = EXTERNAL_IDENTITY` (see identity-scope.ts);
+ *   older rows used `USER_PRIVATE` + `externalIdentityId`. Both shapes follow the same rule.
  * - Unknown scope types are denied by default.
  */
 
+import { Prisma } from "../../src/generated/prisma/client";
 import { getPrisma } from "./prisma";
 
 // 与前端共用一份（shared/types/chat.ts）。
@@ -59,6 +62,29 @@ export async function ensureOwnerPrivateScope(characterId: string, ownerUserId: 
   return scope.id;
 }
 
+/** 外部身份是否已由管理员验证并绑定到当前用户。缺失身份关系时一律视为未验证。 */
+function isVerifiedIdentityOf(scope: MemoryScopeCandidate, actingUserId: string): boolean {
+  if (!scope.externalIdentityId) return false;
+  const identity = scope.externalIdentity;
+  return identity?.status === "VERIFIED" && identity.linkedUserId === actingUserId;
+}
+
+/**
+ * 单条范围是否可被当前用户读取。`resolveChatMemoryScopes` 与数据库 where/sql 三个入口
+ * 必须保持同一套规则；改这里之前先对照 `readableMemoryScopeWhere` 与
+ * `readableMemoryScopeSql`，不要只改一处。
+ */
+export function isMemoryScopeReadable(scope: MemoryScopeCandidate, actingUserId: string): boolean {
+  if (scope.scopeType === "CHARACTER_GLOBAL") return true;
+  if (scope.scopeType === "EXTERNAL_IDENTITY") return isVerifiedIdentityOf(scope, actingUserId);
+  if (scope.scopeType === "USER_PRIVATE") {
+    // 历史数据里外部身份私人记忆曾写成 USER_PRIVATE + externalIdentityId。
+    if (scope.externalIdentityId) return isVerifiedIdentityOf(scope, actingUserId);
+    return Boolean(scope.userId) && scope.userId === actingUserId;
+  }
+  return false;
+}
+
 /**
  * Returns every memory scope the acting user may read in this character's chat, in a stable
  * order: character-global scopes first, then the user's own private scopes.
@@ -87,22 +113,57 @@ export function resolveChatMemoryScopes(
   }
 
   for (const scope of scopes) {
-    if (scope.scopeType !== "USER_PRIVATE") continue;
-
-    // Identity-scoped memory: require a verified link to the acting user.
-    if (scope.externalIdentityId) {
-      const identity = scope.externalIdentity;
-      if (identity?.status === "VERIFIED" && identity.linkedUserId === actingUserId) {
-        push(scope, "private");
-      }
-      continue;
-    }
-
-    // Direct user-scoped memory: only the owner may read it.
-    if (scope.userId && scope.userId === actingUserId) push(scope, "private");
+    if (scope.scopeType === "CHARACTER_GLOBAL") continue;
+    if (isMemoryScopeReadable(scope, actingUserId)) push(scope, "private");
   }
 
   return accessible;
+}
+
+/**
+ * Prisma 侧的同一套规则，供记忆列表 / 回收站 / 阶段总结等按角色查询的接口使用。
+ *
+ * 只按 `characterId` 过滤是不够的：那样会把其他站内用户的 USER_PRIVATE 和未验证外部身份
+ * 的私人记忆一起列出来。角色主人能看的只有「角色全局 + 自己的私人 + 已验证绑定自己的外部」。
+ */
+export function readableMemoryScopeWhere(actingUserId: string): Prisma.MemoryScopeWhereInput {
+  return {
+    OR: [
+      { scopeType: "CHARACTER_GLOBAL" },
+      { scopeType: "USER_PRIVATE", userId: actingUserId, externalIdentityId: null },
+      // 历史外部身份私人记忆（USER_PRIVATE + externalIdentityId）。
+      {
+        scopeType: "USER_PRIVATE",
+        externalIdentityId: { not: null },
+        externalIdentity: { is: { status: "VERIFIED", linkedUserId: actingUserId } },
+      },
+      {
+        scopeType: "EXTERNAL_IDENTITY",
+        externalIdentityId: { not: null },
+        externalIdentity: { is: { status: "VERIFIED", linkedUserId: actingUserId } },
+      },
+    ],
+  };
+}
+
+/**
+ * 与 `readableMemoryScopeWhere` 等价的原始 SQL 片段，用于先锁行再校验的接口。
+ * 调用方自己拼 `AND ${readableMemoryScopeSql(ownerId)}`，别名固定为 `s`（memory_scopes）。
+ */
+export function readableMemoryScopeSql(actingUserId: string): Prisma.Sql {
+  return Prisma.sql`(
+    s."scopeType" = 'CHARACTER_GLOBAL'
+    OR (s."scopeType" = 'USER_PRIVATE' AND s."externalIdentityId" IS NULL AND s."userId" = ${actingUserId}::uuid)
+    OR (
+      s."externalIdentityId" IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM external_identities i
+        WHERE i.id = s."externalIdentityId"
+          AND i.status = 'VERIFIED'
+          AND i."linkedUserId" = ${actingUserId}::uuid
+      )
+    )
+  )`;
 }
 
 /**

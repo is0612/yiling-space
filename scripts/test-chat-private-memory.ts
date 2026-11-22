@@ -36,31 +36,46 @@ const accessible = resolveChatMemoryScopes([
     externalIdentity: { status: "VERIFIED", linkedUserId: otherUserId },
   },
   { id: "scope-dangling", scopeType: "USER_PRIVATE", userId: null, externalIdentityId: null },
-  { id: "scope-external", scopeType: "EXTERNAL_IDENTITY", externalIdentityId: "identity-4" },
+  // Real platform scopes are EXTERNAL_IDENTITY, not USER_PRIVATE + externalIdentityId.
+  { id: "scope-external-own", scopeType: "EXTERNAL_IDENTITY", externalIdentityId: "identity-4", externalIdentity: { status: "VERIFIED", linkedUserId: actingUserId } },
+  { id: "scope-external-other", scopeType: "EXTERNAL_IDENTITY", externalIdentityId: "identity-5", externalIdentity: { status: "VERIFIED", linkedUserId: otherUserId } },
+  { id: "scope-external-unverified", scopeType: "EXTERNAL_IDENTITY", externalIdentityId: "identity-6", externalIdentity: { status: "UNVERIFIED", linkedUserId: null } },
+  { id: "scope-external-revoked", scopeType: "EXTERNAL_IDENTITY", externalIdentityId: "identity-7", externalIdentity: { status: "REVOKED", linkedUserId: actingUserId } },
+  { id: "scope-external-dangling", scopeType: "EXTERNAL_IDENTITY", externalIdentityId: "identity-8", externalIdentity: null },
+  { id: "scope-unknown", scopeType: "SOMETHING_ELSE", userId: actingUserId },
 ], actingUserId);
 
 assert.deepEqual(
   accessible.map((scope) => scope.id),
-  ["scope-global", "scope-own", "scope-verified-identity"],
+  ["scope-global", "scope-own", "scope-verified-identity", "scope-external-own"],
   "Only global scopes and the acting user's own verified private scopes may be read.",
 );
 assert.deepEqual(
   accessible.map((scope) => scope.origin),
-  ["character", "private", "private"],
+  ["character", "private", "private", "private"],
   "Scope origins must be labelled so the prompt can separate shared from private context.",
 );
-assert(
-  !accessible.some((scope) => scope.id === "scope-other-user"),
-  "Another user's private scope must never be readable.",
+assert.equal(
+  accessible.find((scope) => scope.id === "scope-external-own")?.scopeType,
+  "USER_PRIVATE",
+  "A verified external identity scope is still private content in the prompt.",
 );
-assert(
-  !accessible.some((scope) => scope.id === "scope-unverified-identity"),
-  "Unverified external identities must not be merged into the acting user's context.",
-);
-assert(
-  !accessible.some((scope) => scope.id === "scope-external"),
-  "Only CHARACTER_GLOBAL and USER_PRIVATE scopes are readable in chat.",
-);
+for (const denied of [
+  "scope-other-user",
+  "scope-unverified-identity",
+  "scope-verified-other",
+  "scope-dangling",
+  "scope-external-other",
+  "scope-external-unverified",
+  "scope-external-revoked",
+  "scope-external-dangling",
+  "scope-unknown",
+]) {
+  assert(
+    !accessible.some((scope) => scope.id === denied),
+    `A scope with no verified link to the acting user must not be readable: ${denied}`,
+  );
+}
 
 // 2. Duplicates collapse so a scope cannot be counted twice.
 const deduped = resolveChatMemoryScopes([

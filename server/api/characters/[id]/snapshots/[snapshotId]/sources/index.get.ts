@@ -3,6 +3,7 @@ import type { Prisma } from "../../../../../../../src/generated/prisma/client";
 import { requireActorUserId } from "../../../../../../utils/auth";
 import { requireUuid } from "../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../utils/prisma";
+import { readableMemoryScopeWhere } from "../../../../../../utils/memory-scope-access";
 
 /**
  * 一份阶段总结的「来源消息与原文」，分页返回。
@@ -35,7 +36,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const snapshot = await prisma.memorySnapshot.findFirst({
-    where: { id: snapshotId, memoryScope: { is: { characterId } } },
+    where: { id: snapshotId, memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } } },
     select: { id: true },
   });
   if (!snapshot) {

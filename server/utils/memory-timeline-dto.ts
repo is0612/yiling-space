@@ -148,7 +148,8 @@ export function toMemoryTimelineDtos(input: {
 
   for (const memory of input.memoryItems) {
     const statusLabel = memoryStatusLabels[memory.status];
-    const isPrivate = memory.memoryScope.scopeType === "USER_PRIVATE";
+    // 真实平台范围是 EXTERNAL_IDENTITY；它同样不是共享知识，不能标成「长期记忆」。
+    const isPrivate = memory.memoryScope.scopeType === "USER_PRIVATE" || memory.memoryScope.scopeType === "EXTERNAL_IDENTITY";
     records.push({
       timestamp: memory.updatedAt.getTime(),
       entry: {
@@ -187,7 +188,7 @@ export function toMemoryTimelineDtos(input: {
   }
 
   for (const event of input.events ?? []) {
-    const isPrivate = event.memoryScope.scopeType === "USER_PRIVATE";
+    const isPrivate = event.memoryScope.scopeType === "USER_PRIVATE" || event.memoryScope.scopeType === "EXTERNAL_IDENTITY";
     const parts = [
       event.timeOfDay ?? "",
       event.place ? "地点：" + event.place : "",

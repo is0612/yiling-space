@@ -195,13 +195,13 @@ try {
     select: { id: true },
   });
 
-  const purged = await purgeTrashedMemories(activeId);
+  const purged = await purgeTrashedMemories(activeId, ownerId);
   assert.equal(purged.deleted, 2, "只清本角色回收站里的两条");
   assert.equal(await prisma.memoryItem.count({ where: { id: activeMemory.id } }), 1, "活跃记忆不能跟着没");
   assert.equal(await prisma.memoryItem.count({ where: { id: { in: [trashedOne.id, trashedTwo.id] } } }), 0);
   assert.equal(await prisma.memoryItem.count({ where: { id: otherTrashed.id } }), 1, "别的角色的回收站不能动");
 
-  const again = await purgeTrashedMemories(activeId);
+  const again = await purgeTrashedMemories(activeId, ownerId);
   assert.deepEqual(again, { deleted: 0, preservedSnapshotReferences: 0 }, "空回收站再清一次是 0，不报错");
 
   console.log("表情包分页与回收站清空（落库）：全部通过");

@@ -2,6 +2,7 @@ import { createError, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../utils/auth";
 import { requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
+import { readableMemoryScopeWhere } from "../../../utils/memory-scope-access";
 
 /**
  * 记忆系统的几个计数：长期记忆、承诺与约定、已记录对话 / 平台事件、阶段总结、忆泡。
@@ -22,10 +23,11 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
   }
 
+  const readableScope = readableMemoryScopeWhere(ownerId);
   const conversationWhere = { conversation: { is: { characterId } } };
   const [memory, commitment, message, platformEvent, snapshot, memoryEvent] = await Promise.all([
     prisma.memoryItem.count({
-      where: { status: { not: "TRASHED" }, memoryScope: { is: { characterId } } },
+      where: { status: { not: "TRASHED" }, memoryScope: { is: { characterId, ...readableScope } } },
     }),
     // 与页面上「承诺与约定 N 项」同一个口径：角色全局范围里还在生效的承诺。
     prisma.memoryItem.count({
@@ -37,8 +39,8 @@ export default defineEventHandler(async (event) => {
     }),
     prisma.message.count({ where: conversationWhere }),
     prisma.message.count({ where: { ...conversationWhere, eventType: { not: "message" } } }),
-    prisma.memorySnapshot.count({ where: { memoryScope: { is: { characterId } } } }),
-    prisma.memoryEvent.count({ where: { status: "ACTIVE", memoryScope: { is: { characterId } } } }),
+    prisma.memorySnapshot.count({ where: { memoryScope: { is: { characterId, ...readableScope } } } }),
+    prisma.memoryEvent.count({ where: { status: "ACTIVE", memoryScope: { is: { characterId, ...readableScope } } } }),
   ]);
 
   return { memory, commitment, message, event: platformEvent, snapshot, memoryEvent };

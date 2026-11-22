@@ -5,6 +5,7 @@ import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
 import { MEMORY_CATEGORIES, MEMORY_SCOPE_TYPES, MEMORY_STATUSES, type MemoryPage } from "../../../../../shared/types/memory";
 import { toMemoryItem } from "../../../../utils/memory-item-dto";
+import { readableMemoryScopeWhere } from "../../../../utils/memory-scope-access";
 
 /**
  * 角色长期记忆的列表：页码分页 + 关键词 / 分类 / 状态 / 范围筛选。
@@ -66,7 +67,9 @@ export default defineEventHandler(async (event) => {
   const where: Prisma.MemoryItemWhereInput = {
     // 默认不带回收站：要找已删的条目有专门的回收站入口
     status: status ?? { not: "TRASHED" },
-    memoryScope: { is: { characterId, ...(scope ? { scopeType: scope } : {}) } },
+    // 角色所有者不等于能读所有人的私人记忆：只放行角色全局、本人私人、
+    // 以及已验证绑定本人的外部身份范围（与聊天检索同一套规则）。
+    memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId), ...(scope ? { scopeType: scope } : {}) } },
   };
   if (category) where.category = category;
   if (keyword) where.content = { contains: keyword, mode: "insensitive" };

@@ -2,6 +2,7 @@ import { createError, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import { readableMemoryScopeWhere } from "../../../../utils/memory-scope-access";
 import type { MemoryDayPage } from "../../../../../shared/types/memory";
 import { localDayKey } from "../../../../utils/memory-event-time";
 import { enumerateDayKeys, isDayKey } from "../../../../utils/day-range";
@@ -39,7 +40,7 @@ export default defineEventHandler(async (event) => {
 
   if (query) {
     const where = {
-      memoryScope: { is: { characterId } },
+      memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } },
       status: "ACTIVE" as const,
       OR: [
         { title: { contains: query, mode: "insensitive" as const } },
@@ -56,7 +57,7 @@ export default defineEventHandler(async (event) => {
     const page = Math.min(requestedPage, totalPages);
     const current = grouped.slice((page - 1) * pageSize, page * pageSize);
     const dayKeys = current.map((row) => row.dayKey);
-    const progressWhere = { memoryScope: { is: { characterId } }, dayKey: { in: dayKeys } };
+    const progressWhere = { memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } }, dayKey: { in: dayKeys } };
     const [progressRows, draftRows] = await Promise.all([
       prisma.memoryEventDay.groupBy({
         by: ["dayKey"], where: progressWhere, _max: { extractedAt: true },
@@ -79,13 +80,13 @@ export default defineEventHandler(async (event) => {
   if (ranged) {
     const rowsInRange = await prisma.memoryEventDay.groupBy({
       by: ["dayKey"],
-      where: { memoryScope: { is: { characterId } }, dayKey: { gte: from, lte: to } },
+      where: { memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } }, dayKey: { gte: from, lte: to } },
       orderBy: { dayKey: "asc" },
       _sum: { eventCount: true },
       _max: { extractedAt: true },
     });
     const stateRows = await prisma.memoryEventDay.findMany({
-      where: { memoryScope: { is: { characterId } }, dayKey: { gte: from, lte: to }, state: "DRAFT" },
+      where: { memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } }, dayKey: { gte: from, lte: to }, state: "DRAFT" },
       select: { dayKey: true },
     });
     const draftDays = new Set(stateRows.map((row) => row.dayKey));
@@ -106,7 +107,7 @@ export default defineEventHandler(async (event) => {
   // 同一天可能有多个记忆范围；按 dayKey 聚合后再分页，并补入尚未出现的今天。
   const groupedRows = await prisma.memoryEventDay.groupBy({
     by: ["dayKey"],
-    where: { memoryScope: { is: { characterId } } },
+    where: { memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } } },
     orderBy: { dayKey: "desc" },
     _sum: { eventCount: true },
     _max: { extractedAt: true },
@@ -121,7 +122,7 @@ export default defineEventHandler(async (event) => {
   const dayKeys = allDayKeys.slice((page - 1) * pageSize, page * pageSize);
   const draftRows = await prisma.memoryEventDay.findMany({
     where: {
-      memoryScope: { is: { characterId } },
+      memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } },
       state: "DRAFT",
       dayKey: { in: dayKeys },
     },

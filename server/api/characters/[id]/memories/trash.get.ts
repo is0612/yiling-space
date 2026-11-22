@@ -2,6 +2,7 @@ import { createError, getQuery, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
+import { readableMemoryScopeWhere } from "../../../../utils/memory-scope-access";
 
 /**
  * 记忆回收站：只列软删除的长期记忆，按删除时间倒序分页。
@@ -29,7 +30,10 @@ export default defineEventHandler(async (event) => {
   const pageSize = positiveInt(query.pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
   const requestedPage = positiveInt(query.page, 1);
 
-  const where = { status: "TRASHED" as const, memoryScope: { is: { characterId } } };
+  const where = {
+    status: "TRASHED" as const,
+    memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } },
+  };
   const total = await prisma.memoryItem.count({ where });
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(requestedPage, totalPages);

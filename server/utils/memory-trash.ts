@@ -11,17 +11,20 @@ export type PurgeTrashedMemoriesResult = {
   preservedSnapshotReferences: number;
 };
 
-export async function purgeTrashedMemories(characterId: string): Promise<PurgeTrashedMemoriesResult> {
+export async function purgeTrashedMemories(characterId: string, actingUserId: string): Promise<PurgeTrashedMemoriesResult> {
   const { getPrisma } = await import("./prisma");
+  const { readableMemoryScopeSql } = await import("./memory-scope-access");
   const prisma = getPrisma();
 
   return prisma.$transaction(async (tx) => {
     // 先把这批行锁住：并发有人点单条「恢复」时，锁等待结束后那条已经不是 TRASHED，
     // 下面的 deleteMany 会按最新状态再筛一次，不会把刚恢复的那条一起删掉。
+    // 范围同样要卡住：角色主人在回收站里也不能永久删除别人的私人记忆。
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT m.id FROM memory_items m
       JOIN memory_scopes s ON s.id = m."memoryScopeId"
       WHERE s."characterId" = ${characterId}::uuid AND m.status::text = 'TRASHED'
+        AND ${readableMemoryScopeSql(actingUserId)}
       FOR UPDATE OF m
     `;
     const ids = locked.map((row) => row.id);

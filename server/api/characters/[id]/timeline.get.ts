@@ -4,6 +4,7 @@ import { requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
 import { toMemoryTimelineDtos } from "../../../utils/memory-timeline-dto";
 import { localDayKey } from "../../../utils/memory-event-time";
+import { readableMemoryScopeWhere } from "../../../utils/memory-scope-access";
 
 /** 允许按需裁剪的种类。记忆页要 memory + snapshot + 忆泡，消息/平台事件不进这条流。 */
 const ALL_KINDS = new Set(["message", "memory", "snapshot", "memoryEvent"]);
@@ -44,9 +45,11 @@ export default defineEventHandler(async (event) => {
   const limit = Math.min(Math.max(Number(query.limit) || 300, 1), 500);
 
   const conversationWhere = { conversation: { is: { characterId } } };
-  const memoryWhere = { status: { not: "TRASHED" as const }, memoryScope: { is: { characterId } } };
-  const snapshotWhere = { memoryScope: { is: { characterId } } };
-  const eventWhere = { status: "ACTIVE" as const, memoryScope: { is: { characterId } } };
+  // 只取当前用户可读的范围：角色全局 + 本人私人 + 已验证绑定本人的外部身份。
+  const readableScope = readableMemoryScopeWhere(ownerId);
+  const memoryWhere = { status: { not: "TRASHED" as const }, memoryScope: { is: { characterId, ...readableScope } } };
+  const snapshotWhere = { memoryScope: { is: { characterId, ...readableScope } } };
+  const eventWhere = { status: "ACTIVE" as const, memoryScope: { is: { characterId, ...readableScope } } };
 
   const [messages, memoryItems, snapshots, events, messageCount, eventCount, memoryCount, snapshotCount, memoryEventCount] = await Promise.all([
     includeMessages
@@ -132,7 +135,7 @@ export default defineEventHandler(async (event) => {
 
   // 每天的整理进度：页面靠它显示「上次整理 14:20」，并区分「今天还在长」。
   const days = kinds.has("memoryEvent") ? await prisma.memoryEventDay.findMany({
-    where: { memoryScope: { is: { characterId } } },
+    where: { memoryScope: { is: { characterId, ...readableScope } } },
     orderBy: { dayKey: "desc" },
     take: 60,
     select: { dayKey: true, state: true, eventCount: true, extractedAt: true },

@@ -2,6 +2,7 @@ import { createError, getRouterParam } from "h3";
 import { requireActorUserId } from "../../utils/auth";
 import { requireUuid } from "../../utils/local-api";
 import { getPrisma } from "../../utils/prisma";
+import { readableMemoryScopeWhere } from "../../utils/memory-scope-access";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
@@ -10,7 +11,7 @@ export default defineEventHandler(async (event) => {
   const memory = await prisma.memoryItem.findFirst({
     where: {
       id: memoryId,
-      memoryScope: { is: { character: { is: { ownerId } } } },
+      memoryScope: { is: { character: { is: { ownerId } }, ...readableMemoryScopeWhere(ownerId) } },
     },
     select: {
       id: true,

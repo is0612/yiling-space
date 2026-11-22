@@ -2,6 +2,7 @@ import { createError, getRouterParam } from "h3";
 import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
+import { readableMemoryScopeWhere } from "../../../../../utils/memory-scope-access";
 import {
   buildSnapshotSequence,
   toMemorySnapshotDetail,
@@ -28,7 +29,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const snapshot = await prisma.memorySnapshot.findFirst({
-    where: { id: snapshotId, memoryScope: { is: { characterId } } },
+    where: { id: snapshotId, memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } } },
     select: {
       id: true,
       snapshotKey: true,
@@ -58,7 +59,7 @@ export default defineEventHandler(async (event) => {
     }),
     prisma.memorySnapshot.groupBy({
       by: ["snapshotKey"],
-      where: { memoryScope: { is: { characterId } }, kind: "AUTOMATIC" },
+      where: { memoryScope: { is: { characterId, ...readableMemoryScopeWhere(ownerId) } }, kind: "AUTOMATIC" },
       _min: { createdAt: true },
     }),
   ]);

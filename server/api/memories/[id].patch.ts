@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import { requireActorUserId } from "../../utils/auth";
 import { requireUuid, readTrimmedString } from "../../utils/local-api";
 import { getPrisma } from "../../utils/prisma";
+import { readableMemoryScopeSql, readableMemoryScopeWhere } from "../../utils/memory-scope-access";
 
 const memoryCategories = [
   "FACT",
@@ -54,12 +55,13 @@ export default defineEventHandler(async (event) => {
       JOIN memory_scopes s ON s.id = m."memoryScopeId"
       JOIN characters c ON c.id = s."characterId"
       WHERE m.id = ${memoryId}::uuid AND c."ownerId" = ${ownerId}::uuid
+        AND ${readableMemoryScopeSql(ownerId)}
       FOR UPDATE OF m
     `;
     const existing = await tx.memoryItem.findFirst({
       where: {
         id: memoryId,
-        memoryScope: { is: { character: { is: { ownerId } } } },
+        memoryScope: { is: { character: { is: { ownerId } }, ...readableMemoryScopeWhere(ownerId) } },
       },
       select: { id: true, status: true },
     });

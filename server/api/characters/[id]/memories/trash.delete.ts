@@ -18,5 +18,5 @@ export default defineEventHandler(async (event) => {
   const character = await prisma.character.findFirst({ where: { id: characterId, ownerId }, select: { id: true } });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
-  return purgeTrashedMemories(characterId);
+  return purgeTrashedMemories(characterId, ownerId);
 });

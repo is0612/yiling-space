@@ -9,6 +9,7 @@ import {
   toMemorySnapshotSummaries,
 } from "../../../../utils/memory-snapshot-dto";
 import type { SnapshotPage } from "../../../../../shared/types/snapshot";
+import { readableMemoryScopeWhere } from "../../../../utils/memory-scope-access";
 
 /**
  * 阶段总结列表。
@@ -59,8 +60,10 @@ export default defineEventHandler(async (event) => {
    * 自动 / 手动两个数要一直是全量，否则收起手动存档时「手动存档 N」这个入口会消失；
    * 当前 / 已替代两个数再按 kind 收窄，跟着当前视图走。
    */
+  // 阶段总结也按记忆范围隔离：朋友私聊的总结不能被角色主人当成本人的总结翻阅。
+  const readableScope = readableMemoryScopeWhere(ownerId);
   const countWhere: Prisma.MemorySnapshotWhereInput = {
-    memoryScope: { is: { characterId } },
+    memoryScope: { is: { characterId, ...readableScope } },
     ...(keyword ? { summary: { contains: keyword, mode: "insensitive" as const } } : {}),
   };
   const where: Prisma.MemorySnapshotWhereInput = {
@@ -79,11 +82,11 @@ export default defineEventHandler(async (event) => {
     // 「第 N 份」要按全量自动归档排，不能只看这一页。
     prisma.memorySnapshot.groupBy({
       by: ["snapshotKey"],
-      where: { memoryScope: { is: { characterId } }, kind: "AUTOMATIC" },
+      where: { memoryScope: { is: { characterId, ...readableScope } }, kind: "AUTOMATIC" },
       _min: { createdAt: true },
     }),
     prisma.memorySnapshot.findFirst({
-      where: { memoryScope: { is: { characterId } } },
+      where: { memoryScope: { is: { characterId, ...readableScope } } },
       orderBy: [{ createdAt: "desc" }, { version: "desc" }],
       select: { createdAt: true },
     }),
@@ -91,12 +94,12 @@ export default defineEventHandler(async (event) => {
       where: {
         sourceType: "MESSAGE",
         messageId: { not: null },
-        snapshot: { is: { memoryScope: { is: { characterId } } } },
+        snapshot: { is: { memoryScope: { is: { characterId, ...readableScope } } } },
       },
     }),
     // 统计带上的「历史归档 / 另有 N 份手动存档」是全量口径：搜索和翻页时不该跟着变。
-    prisma.memorySnapshot.count({ where: { memoryScope: { is: { characterId } }, kind: "AUTOMATIC" } }),
-    prisma.memorySnapshot.count({ where: { memoryScope: { is: { characterId } }, kind: "MANUAL" } }),
+    prisma.memorySnapshot.count({ where: { memoryScope: { is: { characterId, ...readableScope } }, kind: "AUTOMATIC" } }),
+    prisma.memorySnapshot.count({ where: { memoryScope: { is: { characterId, ...readableScope } }, kind: "MANUAL" } }),
   ]);
 
   const countOf = (predicate: (row: typeof grouped[number]) => boolean) => grouped
