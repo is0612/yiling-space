@@ -51,13 +51,23 @@ export function protectPgDirectory(directory) {
   pgCommand("icacls.exe", [directory, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F"]);
   // grant:r does not remove an unrelated explicit Everyone/Users ACE. Fail closed rather
   // than claiming a previously modified root is private just because inheritance is off.
+  // A local-Administrators ACE is accepted: elevated installs add it by default, and an
+  // administrator can take ownership regardless, so rejecting it only breaks installation.
+  // Report the offending SID(s) so a real failure is diagnosable instead of a bare code.
+  let report;
   try {
-    windowsPrivateOperation("$v=([Console]::In.ReadToEnd()|ConvertFrom-Json);$a=Get-Acl -LiteralPath $v.directory;" +
-      "if(-not $a.AreAccessRulesProtected){throw 'ACL inheritance is not protected'};" +
-      "foreach($r in $a.Access){if($r.AccessControlType -eq 'Allow'){" +
-      "$s=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value;" +
-      "if($s -ne $v.sid -and $s -ne 'S-1-5-18'){throw 'Unexpected explicit allow ACL'}}};'ok'", { directory, sid });
-  } catch { throw new Error("desktop_pg_directory_acl_rejected"); }
+    report = JSON.parse(windowsPrivateOperation("$v=([Console]::In.ReadToEnd()|ConvertFrom-Json);$a=Get-Acl -LiteralPath $v.directory;" +
+      "$allows=@();foreach($r in $a.Access){if($r.AccessControlType -eq 'Allow'){" +
+      "try{$s=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value}catch{$s='unknown'};" +
+      "$allows+=@{sid=$s;rights=$r.FileSystemRights.ToString()}}};" +
+      "@{protected=$a.AreAccessRulesProtected;allows=$allows}|ConvertTo-Json -Compress -Depth 4", { directory, sid }));
+  } catch { throw new Error("desktop_pg_directory_acl_rejected:inspection_failed:" + directory); }
+  if (!report || report.protected !== true) throw new Error("desktop_pg_directory_acl_rejected:inheritance_not_protected:" + directory);
+  const allowed = new Set([sid, "S-1-5-18", "S-1-5-32-544"]);
+  const unexpected = (Array.isArray(report.allows) ? report.allows : []).filter(entry => !allowed.has(entry?.sid));
+  if (unexpected.length) {
+    throw new Error("desktop_pg_directory_acl_rejected:unexpected_allow:" + unexpected.map(entry => entry.sid).join(",") + ":" + directory);
+  }
 }
 export async function availablePgPort() {
   const server = net.createServer();

@@ -25,7 +25,7 @@
 
 ## 凭据、权限与统一配置
 
-根目录关闭 ACL 继承，仅授予当前用户和 SYSTEM 权限；如果旧根目录存在额外显式 Allow 主体，则拒绝继续，不能只调用 grant:r 就宣称它已私有。该校验不等于完整的全树离线安全审计；尚未实测另一 Windows 账号的实际访问。
+根目录关闭 ACL 继承，仅授予当前用户和 SYSTEM；另接受本机 Administrators：以管理员身份安装时 Windows 会给新目录加这一条，而管理员本就能取得所有权，拒绝它只会让安装失败（Everyone/Users 等其它显式 Allow 主体仍拒绝）。如果旧根目录存在额外显式 Allow 主体，则拒绝继续并报告主体 SID 与目录，不能只调用 grant:r 就宣称它已私有。该校验不等于完整的全树离线安全审计；尚未实测另一 Windows 账号的实际访问。
 
 DPAPI 使用 CurrentUser 和实例 entropy。凭据只通过私有 stdin/捕获 stdout 进出固定的 PowerShell 加解密脚本，不进入命令行、URL 日志、渲染层、ready 事件或 Session。初始化 pwfile 用后删除；dump 必需密码仅传入该子进程环境。SQL 连接只使用当前实例配置，不读取 `.env` 或旧 DATABASE_URL，并显式覆盖 PGOPTIONS、SSL 与文本编码。
 
