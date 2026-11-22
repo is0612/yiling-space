@@ -19,13 +19,12 @@ assert.equal(buildOnebotReplyMessage("嗯", ""), "嗯");
 assert.equal(buildOnebotReplyMessage("嗯", undefined), "嗯");
 
 /**
- * 引用 + @：QQ 的引用块只是把原文贴出来，被回的人收不到提醒，只有 at 段才亮红点。
- * 顺序固定 reply → at → text，@ 落在正文开头。
+ * 模型同时申请引用与提醒时，发送侧保留引用、去掉提醒。
+ * 引用说明在接哪一句，不需要再弹一次提醒。
  */
 const withAt = buildOnebotReplyMessage("这账谁结", "123456", "10000001");
 assert.ok(Array.isArray(withAt));
-assert.deepEqual(withAt.map((segment) => segment.type), ["reply", "at", "text"], "顺序必须是 reply → at → text。");
-assert.deepEqual(withAt[1]!.data, { qq: "10000001" }, "at 段的 qq 是被引用那条消息的作者。");
+assert.deepEqual(withAt.map((segment) => segment.type), ["reply", "text"], "引用优先，不叠加提醒。");
 
 // 号不合法（拿不到作者、或作者是她自己）就当没有 @，引用照发。
 const replyOnly = buildOnebotReplyMessage("这账谁结", "123456", null);

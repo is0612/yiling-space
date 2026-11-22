@@ -16,7 +16,7 @@ try {
   const historicalView = { ...view, history: [{ domain: "preferences" as const, id: "p-1", scope: "character" as const,
     previous: { revision: 1, excerpt: "INTEREST: 园艺" }, current: { revision: 2, excerpt: "LIKE: 园艺", recordedAt: "2026-11-18T00:00:00Z" } }] };
   const reply = await generateConversationReply({ ...input, selfUnderstanding: historicalView });
-  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v82");
+  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v85");
   const system = requests[0]!.messages.find(row => row.role === "system")!.content;
   assert(system.includes("presentation is appearance only"));
   assert(system.includes("provisional discussion, never confirmed facts or automatic writes"));

@@ -5,6 +5,7 @@ import { estimateTokens as estimateContextTokens } from "../memory-retrieval";
 import { loadPromptMemoryCandidates } from "../prompt-memory-candidates";
 import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
+import { readDeliveredAtMention, readDeliveredAtTarget, blockedDeliveredAtTargets } from "./reply-delivery";
 import { readInteractionGuidance } from "../interaction-guidance";
 import { asksSelfUnderstandingHistory, wantsSelfUnderstanding, selfUnderstandingReferences } from "../self-understanding";
 import { loadSelfUnderstanding } from "../self-understanding-reader";
@@ -149,9 +150,23 @@ export type ChannelReplyOptions = {
    * 这样渠道不必为了合成再查一次库、再解密一次凭据。
    */
   voiceSettings?: VoiceTtsSettings;
+  /** Report the first successful text delivery before later segments/media can fail. */
+  onDelivery?: (delivery: ChannelReplyDelivery) => Promise<void>;
 };
 
-export type ChannelReplySender = (text: string, options?: ChannelReplyOptions) => Promise<void>;
+/** Internal delivery facts; platform identifiers must never be copied into prompt payloads. */
+export type ChannelReplyDelivery = {
+  at?: {
+    requestedMessageId: string;
+    targetQq?: string;
+    status: "sent" | "suppressed" | "unknown";
+    reason?: string;
+    sentAt?: string;
+    attemptedAt?: string;
+  };
+};
+
+export type ChannelReplySender = (text: string, options?: ChannelReplyOptions) => Promise<void | ChannelReplyDelivery>;
 
 /**
  * 渠道会话键 `g:<群号>` / `c:<账号>` 里取出群号。
@@ -505,6 +520,8 @@ export function buildGroupMemberDeltas(messages: ReadonlyArray<{
 /** 群聊这一轮的上下文：本轮是否 @ 她、之前几句、她参与过的话题。 */
 export type ChannelGroupTurnContext = {
   direct: boolean;
+  /** Internal identity resolver from the current group cache; never serialize the callback or QQ. */
+  resolveMember?: (qq: string) => { member: string; speaker?: string } | null;
   background: Array<{
     id: string; at: number; member: string; speaker: string; text: string;
     mentions?: Array<{ target: "self" | "other" | "all"; member?: string; speaker?: string }>;
@@ -1120,7 +1137,7 @@ async function persistChannelTurnResult(input: {
   goals: ChannelTurnGrowthPreparation["goals"];
   expressionHabits: ChannelTurnGrowthPreparation["expressionHabits"];
   preferences: ChannelTurnGrowthPreparation["preferences"];
-}): Promise<string> {
+}): Promise<{ conversationId: string; assistantMessageId?: string }> {
   const {
     prisma, existingConversation, isGroup, globalScope, ownerPrivateScopeId, isOwnerTurn, turn,
     conversationScopeId, groupId, title, messages, privateMessagesRecorded, now, assistantAt, generated,
@@ -1242,8 +1259,9 @@ async function persistChannelTurnResult(input: {
         });
       }
     }
+    let assistantMessageId: string | undefined;
     if (generated.action === "reply") {
-      await tx.message.create({
+      const assistantMessage = await tx.message.create({
         data: {
           conversationId: conversation.id,
           role: "ASSISTANT",
@@ -1282,11 +1300,12 @@ async function persistChannelTurnResult(input: {
         },
         select: { id: true },
       });
+      assistantMessageId = assistantMessage.id;
       await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: assistantAt } });
     } else {
       await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: messages[messages.length - 1]!.occurredAt ?? now } });
     }
-    return conversation.id;
+    return { conversationId: conversation.id, ...(assistantMessageId ? { assistantMessageId } : {}) };
   });
 }
 
@@ -1350,6 +1369,7 @@ async function deliverChannelTurnReply(input: {
   replyVoice: boolean;
   replySegments: string[];
   voiceSettings: VoiceTtsSettings | null;
+  recordDelivery: (delivery: ChannelReplyDelivery) => Promise<void>;
 }): Promise<void> {
   const { prisma, character, platform, characterId, sendReply, isGroup, messages, generated,
     replyFaces, replySticker, replyVoice, replySegments, voiceSettings } = input;
@@ -1396,7 +1416,25 @@ async function deliverChannelTurnReply(input: {
         ...(replySegments.length > 1 ? { segments: replySegments } : {}),
       }
     : undefined;
-  await sendReply(generated.reply, replyOptions);
+  // Preserve the model's request even when this layer suppresses it before the sender sees it.
+  const requestedAt = generated.groupDecision?.atMessageId;
+  let reported = false;
+  const reportDelivery = async (delivery: ChannelReplyDelivery) => {
+    reported = true;
+    await input.recordDelivery(delivery.at || !requestedAt || atTarget ? delivery : { at: {
+      requestedMessageId: requestedAt, status: "suppressed", reason: replyVoice ? "voice" : "passive_policy",
+    } });
+  };
+  const delivery = await sendReply(generated.reply, {
+    ...replyOptions,
+    onDelivery: reportDelivery,
+  });
+  if (delivery?.at) await reportDelivery(delivery);
+  else if (!reported && requestedAt && !atTarget) await reportDelivery({ at: {
+    requestedMessageId: requestedAt,
+    status: "suppressed",
+    reason: replyVoice ? "voice" : "passive_policy",
+  } });
   /**
    * 群聊里「跟谁互动过」＝她真的回了谁。
    *
@@ -2777,12 +2815,13 @@ async function loadChannelTurnWindow(input: {
 
   // 被标记为 AI / 禁止交流的对象，旧消息仍保存在聊天记录中，但不再进入后续群聊提示词。
   const blockedRecentMessageIds = new Set<string>();
+  let blockedAtTargets = new Set<string>();
   if (isGroup && recentStoredMessages.length) {
     const historicalUids = [...new Set(
       recentStoredMessages
         .filter((item) => item.role === "USER" && !readStoredSpeaker(item.metadata).isOwner)
         .map((item) => readStoredAuthorOpenId(item.metadata))
-        .filter(Boolean),
+        .filter(Boolean).concat(recentStoredMessages.map(item => readDeliveredAtTarget(item.metadata)).filter((uid): uid is string => Boolean(uid))),
     )];
     if (historicalUids.length) {
       const historicalIdentities = await prisma.externalIdentity.findMany({
@@ -2796,14 +2835,18 @@ async function loadChannelTurnWindow(input: {
             select: { friendChatPolicy: true },
           },
         },
-      });
-      const historicalPolicyByUid = new Map(historicalIdentities.map((identity) => [
+      }).catch(() => null);
+      blockedAtTargets = blockedDeliveredAtTargets(recentStoredMessages.map(item => readDeliveredAtTarget(item.metadata)).filter((uid): uid is string => Boolean(uid)), historicalIdentities);
+      const historicalPolicyByUid = new Map((historicalIdentities ?? []).map((identity) => [
         identity.platformUid,
         {
           kind: identity.kind,
           policy: identity.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT",
         },
       ] as const));
+      for (const [uid, identity] of historicalPolicyByUid) {
+        if (shouldBlockFriendSpeaker(identity.kind, identity.policy)) blockedAtTargets.add(uid);
+      }
       for (const item of recentStoredMessages) {
         if (item.role !== "USER") continue;
         const speaker = readStoredSpeaker(item.metadata);
@@ -2825,18 +2868,24 @@ async function loadChannelTurnWindow(input: {
     .map((item) => {
       // 历史 USER 行也可能 @ 了别人：只带 role/content 时，模型会把 `@数字`
       // 或 `@member_n` 当成在说它自己。正文按 mentions 代号化，目标信息一起带出去。
-      const mentions = item.role === "USER" ? readMessageMentions(item.metadata) : [];
+      const mentions = item.role === "USER"
+        ? readMessageMentions(item.metadata)
+        : isGroup ? readDeliveredAtMention(item.metadata, qq => blockedAtTargets.has(qq) ? null : input.group?.resolveMember?.(qq) ?? null) : [];
       return {
         id: item.externalMessageId || item.id,
         role: item.role as "USER" | "ASSISTANT",
-        content: (mentions.length
-          ? formatMentionContent(item.content, mentions)
+        content: (item.role === "USER" && mentions.length
+          ? formatMentionContent(item.content, readMessageMentions(item.metadata))
           : item.content).slice(0, 1800),
         occurredAt: item.occurredAt.toISOString(),
         // 只有她自己的话不需要发言人；USER 的话一律带上，否则群里几条历史分不清是谁说的。
         ...(item.role === "USER" ? readStoredSpeaker(item.metadata) : {}),
         ...(mentions.length
-          ? { mentions: mentions.map(({ qq: _qq, ...rest }) => rest) }
+          ? { mentions: mentions.map(mention => ({ target: mention.target,
+              ...(mention.member ? { member: mention.member } : {}),
+              ...(mention.speaker ? { speaker: mention.speaker } : {}),
+              ...(mention.kind ? { kind: mention.kind } : {}),
+            })) }
           : {}),
         // 她自己发过图的回复：标出来，让她认得「那张图是我贴的」。
         ...(item.role === "ASSISTANT" && readStoredStickerFlag(item.metadata) ? { hadSticker: true } : {}),
@@ -3375,13 +3424,16 @@ async function runChannelTurn(input: {
     ? await loadConversationWorkingContext(prisma, { conversationId: existingConversation.id, characterId: input.characterId }).catch(() => null)
     : null;
   let workingEvidence = workingContext?.evidence ?? [];
+  let blockedWorkingAtTargets = new Set<string>();
   if (workingEvidence.length) {
-    const uids = [...new Set(workingEvidence.filter(row => row.role === "USER").map(row => readStoredAuthorOpenId(row.metadata)).filter(Boolean))];
+    const uids = [...new Set(workingEvidence.flatMap(row => [row.role === "USER" ? readStoredAuthorOpenId(row.metadata) : "", readDeliveredAtTarget(row.metadata) ?? ""]).filter(Boolean))];
     const identities = uids.length ? await prisma.externalIdentity.findMany({
       where: { platform: input.platform, platformUid: { in: uids } },
       select: { platformUid: true, kind: true, memoryScopes: { where: { characterId: input.characterId }, select: { friendChatPolicy: true } } },
-    }) : [];
-    const blocked = new Set(identities.filter(row => shouldBlockFriendSpeaker(row.kind, row.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT")).map(row => row.platformUid));
+    }).catch(() => null) : [];
+    blockedWorkingAtTargets = blockedDeliveredAtTargets(workingEvidence.map(row => readDeliveredAtTarget(row.metadata)).filter((uid): uid is string => Boolean(uid)), identities);
+    const blocked = new Set((identities ?? []).filter(row => shouldBlockFriendSpeaker(row.kind, row.memoryScopes[0]?.friendChatPolicy ?? "DEFAULT")).map(row => row.platformUid));
+    for (const uid of blocked) blockedWorkingAtTargets.add(uid);
     workingEvidence = workingEvidence.filter(row => row.role === "ASSISTANT" || readStoredSpeaker(row.metadata).isOwner || !blocked.has(readStoredAuthorOpenId(row.metadata)));
   }
   const previousWorkingContext = workingContext && workingEvidence.length ? {
@@ -3392,6 +3444,7 @@ async function runChannelTurn(input: {
       content: formatMentionContent(row.content, readMessageMentions(row.metadata).map(mention => ({ ...mention, member: mention.speaker || "群成员" }))).replace(/@member_\d+/gu, "@群成员"),
       occurredAt: row.occurredAt.toISOString(),
       ...readStoredSpeaker(row.metadata),
+      ...(row.role === "ASSISTANT" ? { mentions: readDeliveredAtMention(row.metadata, qq => blockedWorkingAtTargets.has(qq) ? null : input.group?.resolveMember?.(qq) ?? null) } : {}),
     })),
   } : undefined;
   // Group analysis needs its validated working-context evidence, so preserve its later
@@ -3720,7 +3773,7 @@ async function runChannelTurn(input: {
   const replySegments = replyVoice || !input.segmentCapable
     ? []
     : splitReplySegments(generated.reply);
-  const conversationId = await persistChannelTurnResult({
+  const { conversationId, assistantMessageId } = await persistChannelTurnResult({
     prisma,
     existingConversation,
     isGroup,
@@ -3761,6 +3814,25 @@ async function runChannelTurn(input: {
 
 
 
+  let recordedDelivery = "";
+  const recordDelivery = async (delivery: ChannelReplyDelivery) => {
+    if (!assistantMessageId || !delivery.at) return;
+    const encoded = JSON.stringify(delivery);
+    if (encoded === recordedDelivery) return;
+    try {
+      const row = await prisma.message.findUnique({ where: { id: assistantMessageId }, select: { metadata: true } });
+      if (!row) return;
+      const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {};
+      await prisma.message.update({ where: { id: assistantMessageId }, data: { metadata: {
+        ...metadata, replyDelivery: JSON.parse(encoded) as Prisma.InputJsonValue,
+      } } });
+      recordedDelivery = encoded;
+    } catch {
+      // Delivery has already happened; persistence failure must never trigger a resend.
+      console.warn("[channel] reply delivery metadata could not be saved", { assistantMessageId });
+    }
+  };
+
   await deliverChannelTurnReply({
     prisma,
     character,
@@ -3775,6 +3847,7 @@ async function runChannelTurn(input: {
     replyVoice,
     replySegments,
     voiceSettings,
+    recordDelivery,
   });
 
   await recordChannelTurnTailUsage({

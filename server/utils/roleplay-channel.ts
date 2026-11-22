@@ -3,6 +3,7 @@ import { createError } from "h3";
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import { getPrisma } from "./prisma";
 import * as roleplay from "./roleplay-service";
+import type { ChannelReplySender } from "./channel-adapter/pipeline";
 
 const HELP = "扮演命令：\n&扮演 列表\n&扮演 开始 人设编号或名称（新建存档）\n&扮演 存档\n&扮演 继续 存档编号\n&扮演 状态\n&扮演 退出\n退出保留存档，回到日常聊天。";
 export type RoleplayCommand = { action: "help" | "list" | "start" | "sessions" | "resume" | "status" | "exit"; target: string };
@@ -67,7 +68,7 @@ function readableError(error: unknown): string {
 }
 export type RoleplayChannelInput = {
   platform: string; eventType: string; characterId: string; bindingId: string; externalConversationId: string;
-  externalMessageId: string; authorUid: string; content: string; addressed?: boolean; sendReply: (text: string) => Promise<void>;
+  externalMessageId: string; authorUid: string; content: string; addressed?: boolean; sendReply: ChannelReplySender;
 };
 /** Called before the normal channel pipeline: no roleplay text reaches daily messages or growth. */
 export async function handleRoleplayChannel(input: RoleplayChannelInput, prisma: PrismaClient = getPrisma()): Promise<{ status: "replied"; conversationId: string } | { status: "duplicate" } | { status: "ignored"; reason: string } | null> {

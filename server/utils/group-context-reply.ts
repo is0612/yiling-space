@@ -99,7 +99,9 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
     ...(input.analysisBackground ?? input.chatInput.groupBackground ?? []),
   ];
   // Validated carried originals remain available after they leave the recent window.
-  const replySources: typeof currentSources = [...currentSources, ...(input.previousWorkingContext?.evidence ?? [])];
+  // 不标 `typeof currentSources`：evidence 的来源形状与 transcript 不同（role / mentions 的有无），
+  // 标了就要求两者是同一个联合成员，编译期直接拒掉 —— 下面只读 id/member/speaker/content 四个字段。
+  const replySources = [...currentSources, ...(input.previousWorkingContext?.evidence ?? [])];
   if (analysis.workingEvidenceMessageIds?.length && input.onWorkingContext) {
     await input.onWorkingContext({ summary: analysis.workingSummary ?? "", evidenceMessageIds: analysis.workingEvidenceMessageIds }).catch(() => undefined);
   }
@@ -109,13 +111,18 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
       if (!line.id || !evidenceIds.has(line.id) || seenEvidence.has(line.id)) return false;
       seenEvidence.add(line.id);
       return true;
-    }).slice(0, 12).map(line => ({
-      id: line.id,
-      ...(line.member ? { member: line.member } : {}),
-      ...(line.speaker ? { speaker: line.speaker } : {}),
-      content: line.content.slice(0, 600),
-      ...(line.occurredAt ? { occurredAt: line.occurredAt } : {}),
-    }));
+    }).slice(0, 12).map(line => {
+      // `member` 只在部分来源上存在（transcript 行没有），联合类型上不能直接读；
+      // 这里只是给证据挑一个展示名，缺了退回 speaker 就够了。
+      const member = "member" in line && typeof line.member === "string" ? line.member : undefined;
+      return {
+        id: line.id,
+        ...(member ? { member } : {}),
+        ...(line.speaker ? { speaker: line.speaker } : {}),
+        content: line.content.slice(0, 600),
+        ...(line.occurredAt ? { occurredAt: line.occurredAt } : {}),
+      };
+    });
   report({ context: { status: "success", summary: analysis.summary, participation: analysis.participation,
     ...(analysis.uncertainty ? { uncertainty: analysis.uncertainty } : {}), evidence } });
 

@@ -16,10 +16,10 @@ import { readGroupMemberProfile } from "../../friends";
 import { loadStickerCatalog, MAX_STICKER_BYTES } from "../../stickers";
 import type { OnebotConnectionConfig, OnebotOutgoingMessage, OnebotResolvedEvent } from "./client";
 import type { OnebotSegment } from "./types";
-import { fillOnebotImageUrls, resolveOnebotGroupQuotes, resolveOnebotPrivateQuote, sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
+import { isOnebotSendRejected, fillOnebotImageUrls, resolveOnebotGroupQuotes, resolveOnebotPrivateQuote, sendOnebotCustomFace, sendOnebotGroupMessage, sendOnebotPrivateMessage } from "./client";
 import { parseBindingRoutingKeys, type OnebotBindingRecord, type OnebotConnectionRecord } from "./configure";
 import { ONEBOT_FACES, toOnebotFaceSegments } from "./faces";
-import { handleChannelBatch, handleChannelMessage, buildStoredMessageMetadata, type ChannelReplySender } from "../pipeline";
+import { handleChannelBatch, handleChannelMessage, buildStoredMessageMetadata, type ChannelReplySender, type ChannelReplyDelivery } from "../pipeline";
 import type { ConversationMessageMention } from "../../conversation-message";
 import {
   createGroupChatBuffer,
@@ -43,6 +43,7 @@ import { createGroupContext, type GroupMessageFacts } from "./group-context";
 import { GROUP_MUTE_MS, createGroupMuteStore, isQuietRequest, isResumeRequest } from "./group-mute";
 import { createGroupActivityRecorder } from "../../group-activity";
 import { ONEBOT_PLATFORM, readOnebotMentions, readOnebotReplyToId, readOnebotRoleplayText } from "./types";
+import { claimGroupAt, groupAtKey } from "./at-cooldown";
 import {
   resolveVoiceTtsSettings,
   synthesizeSpeechSilk,
@@ -240,7 +241,7 @@ async function handleAnnouncementDraft(
   event: OnebotResolvedEvent,
   binding: OnebotBindingRecord,
   topic: string,
-  sendReply: (text: string) => Promise<void>,
+  sendReply: ChannelReplySender,
 ): Promise<OnebotHandleOutcome> {
   if (await findDuplicateAnnouncementEvent(event.messageId)) return { status: "duplicate" };
 
@@ -292,7 +293,7 @@ async function handleAnnouncementConfirm(
   record: OnebotConnectionRecord,
   event: OnebotResolvedEvent,
   binding: OnebotBindingRecord,
-  sendReply: (text: string) => Promise<void>,
+  sendReply: ChannelReplySender,
 ): Promise<OnebotHandleOutcome> {
   if (await findDuplicateAnnouncementEvent(event.messageId)) return { status: "duplicate" };
 
@@ -411,7 +412,7 @@ export function qzoneErrorMessage(error: unknown): string {
 async function replyQzoneToOutcome(
   binding: OnebotBindingRecord,
   event: OnebotResolvedEvent,
-  sendReply: (text: string) => Promise<void>,
+  sendReply: ChannelReplySender,
   reply: string,
 ): Promise<OnebotHandleOutcome> {
   // 这个查询就是「按绑定 + 会话键找会话」，与公告无关，只是借住在那儿。
@@ -427,7 +428,7 @@ async function handleQzonePostDraft(
   event: OnebotResolvedEvent,
   binding: OnebotBindingRecord,
   topic: string,
-  sendReply: (text: string) => Promise<void>,
+  sendReply: ChannelReplySender,
 ): Promise<OnebotHandleOutcome> {
   let reply: string;
   try {
@@ -471,7 +472,7 @@ async function handleQzoneBrowse(
   event: OnebotResolvedEvent,
   binding: OnebotBindingRecord,
   request: { targetUin: string },
-  sendReply: (text: string) => Promise<void>,
+  sendReply: ChannelReplySender,
 ): Promise<OnebotHandleOutcome> {
   let reply: string;
   try {
@@ -559,7 +560,7 @@ async function handleQzoneCommentDraft(
   event: OnebotResolvedEvent,
   binding: OnebotBindingRecord,
   request: { index: number | null; body: string },
-  sendReply: (text: string) => Promise<void>,
+  sendReply: ChannelReplySender,
 ): Promise<OnebotHandleOutcome> {
   const feeds = readQzoneFeeds(record.id, event.conversationKey);
   if (!feeds.length) {
@@ -619,7 +620,7 @@ async function handleQzoneConfirm(
   event: OnebotResolvedEvent,
   binding: OnebotBindingRecord,
   kind: "POST" | "COMMENT",
-  sendReply: (text: string) => Promise<void>,
+  sendReply: ChannelReplySender,
 ): Promise<OnebotHandleOutcome> {
   const pending = await findPendingQzoneAction(record.id, kind);
   if (!pending) {
@@ -748,7 +749,7 @@ async function handleQzoneApproval(
   event: OnebotResolvedEvent,
   binding: OnebotBindingRecord,
   approve: boolean,
-  sendReply: (text: string) => Promise<void>,
+  sendReply: ChannelReplySender,
 ): Promise<OnebotHandleOutcome> {
   const [pendingPost, pendingComment] = await Promise.all([
     findPendingQzoneAction(record.id, "POST"),
@@ -822,22 +823,23 @@ async function resolveOwnerDisplayName(record: OnebotConnectionRecord, event: On
  * 表情必须单独一条 —— 拼进正文会卡在句子中间，而且它发失败也没必要让正文背锅。
  */
 /**
- * 把正文和可选的「引用回复」「@ 原文作者」拼成出站消息。
+ * 把正文和可选的「引用回复」「@ 某人」拼成出站消息。
  *
  * 群聊里多条鱼并存时，引用让「我接的是哪一句」不再靠猜：模型给的 replyToMessageId
  * 是 transcript 里那条消息的 QQ 真实 message id，这里转成 OneBot reply 段拼在正文前。
  * id 必须是纯数字（QQ message id），否则退回纯文本 —— 宁可少引一次，也不发坏段。
  *
- * 引用之后还要 @ 原文作者：QQ 的引用块只是把原文贴出来，被回的人**收不到提醒**，
- * 只有 `at` 段才会让他那边亮红点。少了这一段的表现正是「引用了，但没 @ 人」。
- * 顺序固定 reply → at → text：QQ 客户端把 @ 显示在正文开头，先回引用再叫名字。
+ * **引用不附带 @**。QQ 的引用块本身就把原文摆出来了，读的人一眼看得见她在接哪句；
+ * 再补一个 at 段只是多弹一次提醒。「凡引用必 @」是上一版的写法，用户的评价是
+ * 「经常 @ 也不好」—— @ 留给「单独对某人说、希望他看见」那种场合，见 `at-cooldown.ts`。
+ * 引用与提醒互斥：有有效引用时只发 reply → text，否则可发 at → text。
  */
 export function buildQuoteSegments(replyToMessageId?: string, atQq?: string | null): OnebotSegment[] {
   const segments: OnebotSegment[] = [];
   if (replyToMessageId && /^\d+$/.test(replyToMessageId)) {
     segments.push({ type: "reply", data: { id: replyToMessageId } });
   }
-  if (atQq && /^\d+$/.test(atQq)) {
+  if (!segments.length && atQq && /^\d+$/.test(atQq)) {
     segments.push({ type: "at", data: { qq: atQq } });
   }
   return segments;
@@ -941,13 +943,13 @@ function segmentGapMs(): number {
 }
 
 
-function createReplySender(
+export function createReplySender(
   config: OnebotConnectionConfig,
   target: Pick<OnebotResolvedEvent, "messageType" | "groupId" | "userId" | "tempGroupId">,
   /**
-   * 引用回复要 @ 原文作者，但模型手上只有 message id（提示词里不能出现真实账号），
-   * 所以真实 QQ 号由这里按 id 现查。`selfQq` 用来挡掉「引用自己发的」那种情况 ——
-   * 自己叫自己名字很傻。只有群聊会传，私聊没有 @ 这回事。
+   * 点名的 id 翻译成真实 QQ 号：模型手上只有 message id（提示词里不能出现真实账号），
+   * 所以由这里按 id 现查。`selfQq` 用来挡掉「引用自己发的」那种情况 —— 自己叫自己
+   * 名字很傻。只有群聊会传，私聊没有 @ 这回事。
    */
   quote?: { resolveAtQq?: (messageId: string) => string | null; selfQq?: string },
 ): ChannelReplySender {
@@ -963,18 +965,47 @@ function createReplySender(
       return Promise.resolve();
     };
 
-    /**
-     * 该 @ 谁：只在模型明确「点名」时（`options.atMessageId` 指向某人的一句话）。
-     *
-     * 不再跟着引用走 —— 「凡引用必 @」是上一版的写法，群里每条回复都弹一次提醒，
-     * 用户的原话是「经常 @ 也不好」。引的是她自己发的也不 @（自己叫自己名字很傻）。
-     */
-    const atQq = (): string | null => {
-      const atMessage = options?.atMessageId;
-      if (!atMessage || target.messageType !== "group" || !quote?.resolveAtQq) return null;
-      const qq = quote.resolveAtQq(atMessage);
-      if (!qq || qq === quote.selfQq) return null;
-      return qq;
+    const delivery: ChannelReplyDelivery = {};
+    let atTarget: string | null = null;
+    let reservation: ReturnType<typeof claimGroupAt> | undefined;
+    const requested = options?.atMessageId;
+    if (requested) {
+      const qq = quote?.resolveAtQq?.(requested);
+      const reason = target.messageType !== "group" || !target.groupId ? "not_group"
+        : options?.voice ? "voice" : options?.replyToMessageId ? "quote"
+        : !qq || !/^\d+$/.test(qq) ? "unresolved" : qq === quote?.selfQq ? "self" : undefined;
+      delivery.at = { requestedMessageId: requested, ...(qq ? { targetQq: qq } : {}), status: "suppressed", ...(reason ? { reason } : {}) };
+      if (!reason && qq) {
+        reservation = claimGroupAt(groupAtKey(quote?.selfQq || config.httpUrl, target.groupId, qq));
+        if (reservation.allowed) atTarget = qq;
+        else {
+          delivery.at.reason = "cooldown";
+          console.log("[onebot] 跳过 @ " + JSON.stringify({ reason: "cooldown", sinceSeconds: Math.round(reservation.sinceMs / 1000) }));
+        }
+      }
+    }
+    const sendText = async (text: string) => {
+      try {
+        await send(buildOnebotReplyMessage(text, options?.replyToMessageId, atTarget));
+        if (atTarget && reservation?.allowed) {
+          const sentAt = Date.now();
+          reservation.commit(sentAt);
+          delivery.at = { requestedMessageId: requested!, targetQq: atTarget, status: "sent", sentAt: new Date(sentAt).toISOString() };
+        }
+      } catch (error) {
+        const rejected = isOnebotSendRejected(error);
+        if (reservation?.allowed) {
+          if (rejected) reservation.release();
+          else reservation.commit();
+        }
+        if (delivery.at && atTarget) {
+          delivery.at = { ...delivery.at, status: rejected ? "suppressed" : "unknown", reason: rejected ? "send_failed" : "unconfirmed",
+            ...(!rejected ? { attemptedAt: new Date().toISOString() } : {}) };
+        }
+        if (delivery.at) await options?.onDelivery?.(delivery);
+        throw error;
+      }
+      await options?.onDelivery?.(delivery);
     };
 
     // 语音条替代正文：发了语音就不再补一条文字，否则同一句话会被说两遍。
@@ -982,11 +1013,6 @@ function createReplySender(
     if (options?.voice && options.voiceSettings) {
       const silk = await synthesizeSpeechSilk(reply, options.voiceSettings);
       if (silk?.length) {
-        // 语音条同样要带引用和 @：只发语音不带这两段，被回的人根本不知道是在跟他说话。
-        // 一次算好：既给 `withQuote` 用，也给下面那行日志用（结果只取决于 options）。
-        const atTarget = atQq();
-        const withQuote = (segments: OnebotSegment[]): OnebotSegment[] =>
-          [...buildQuoteSegments(options.replyToMessageId, atTarget), ...segments];
 
         /**
          * 先 `file://` 再 `base64://`。
@@ -1006,23 +1032,21 @@ function createReplySender(
 
         for (const attempt of attempts) {
           try {
-            await send(withQuote(buildVoiceSegment(attempt.file)));
-            /**
-             * `quoted` 单独记：带引用的语音在 QQ 里是「引用框里嵌一条语音」，
-             * 渲染本来就不如纯语音稳。日后有人报「发不出去」，先看这一项 ——
-             * `quoted:true` 又确实发出去了，那就是客户端/服务端展示的问题，
-             * 不是没发；反过来就得继续查发送。
-             */
+            await send(buildVoiceSegment(attempt.file));
+            // QQ 语音只发 record 段；引用和提醒不能叠加。
             console.log("[onebot] 语音已发送 " + JSON.stringify({
               via: attempt.via,
               bytes: silk.length,
-              quoted: Boolean(options.replyToMessageId),
-              at: Boolean(atTarget),
+              quoted: false,
+              at: false,
             }));
-            return;
           } catch (error) {
+            if (!isOnebotSendRejected(error)) throw error;
             console.error(`[onebot] 语音发送失败（${attempt.via}）：`, error instanceof Error ? error.message : String(error));
+            continue;
           }
+          await options?.onDelivery?.(delivery);
+          return delivery;
         }
       }
     }
@@ -1042,13 +1066,15 @@ function createReplySender(
      */
     const replySegments = options?.segments?.length ? options.segments : [reply];
     if (replySegments.length <= 1) {
-      await send(buildOnebotReplyMessage(reply, options?.replyToMessageId, atQq()));
+      await sendText(reply);
+      // 单条也记一笔 @ 目标：这是事后唯一能查到「她今天叫了谁」的地方。
+      if (atTarget) console.log("[onebot] 已 @ " + JSON.stringify({ groupId: target.groupId, qq: atTarget }));
     } else {
-      await send(buildOnebotReplyMessage(replySegments[0]!, options?.replyToMessageId, atQq()));
+      await sendText(replySegments[0]!);
       console.log("[onebot] 回复分条发送 " + JSON.stringify({
         segments: replySegments.length,
         quoted: Boolean(options?.replyToMessageId),
-        at: Boolean(atQq()),
+        at: Boolean(atTarget),
       }));
       for (const segment of replySegments.slice(1)) {
         await sleep(segmentGapMs());
@@ -1056,7 +1082,7 @@ function createReplySender(
           await send(segment);
         } catch (error) {
           console.error("[onebot] 分条发送中断：", error instanceof Error ? error.message : String(error));
-          return;
+          return delivery;
         }
       }
     }
@@ -1077,7 +1103,7 @@ function createReplySender(
         try {
           await sendOnebotCustomFace(config, target, sticker.qqEmojiId);
           console.log("[onebot] 收藏表情已发送 " + JSON.stringify({ emojiId: sticker.qqEmojiId, stickerId: sticker.id }));
-          return;
+          return delivery;
         } catch (error) {
           // 收藏里那张可能已经被删了（QQ 侧改动还没同步回来），退回图片段，这一条不丢。
           console.error(
@@ -1087,18 +1113,19 @@ function createReplySender(
         }
       }
       const segments = await loadStickerSegments(sticker.filePath);
-      if (!segments.length) return;
+      if (!segments.length) return delivery;
       await send(segments).catch((error) => {
         console.error("[onebot] 表情发送失败：", error instanceof Error ? error.message : String(error));
       });
-      return;
+      return delivery;
     }
 
     const faceSegments = toOnebotFaceSegments(options?.faces ?? []);
-    if (!faceSegments.length) return;
+    if (!faceSegments.length) return delivery;
     await send(faceSegments).catch((error) => {
       console.error("[onebot] 内置表情发送失败：", error instanceof Error ? error.message : String(error));
     });
+    return delivery;
   };
 }
 
@@ -1671,12 +1698,13 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         // 谁是谁的人：让她判断「我的鱼」「我家宝」时能查表，而不是猜自己。
         members: groupContext.members(contextKey, blockedSpeakerUids),
         // 「谁在跟她说话」的统计要用：@ 的是这个号、叫的是这些名字，才算冲她说的。
+        resolveMember: (qq) => blockedSpeakerUids.has(qq) ? null : ({ member: qq === record.accountQq ? "self" : groupContext.memberCode(contextKey, qq) }),
         selfQq: record.accountQq,
         ownerQq: record.ownerQq,
         selfNames: [binding.characterName, ...binding.groupChat.aliases],
       },
       sendReply: createReplySender(record.config, groupEvent, {
-        // 引用谁就 @ 谁：transcript 里只有 message id，真实 QQ 号留在进程内查。
+        // 模型点名的是某条消息（id），这里翻成那句的真实 QQ 号 —— transcript 里不出现账号。
         resolveAtQq: (messageId) => {
           const uid = groupContext.senderOf(contextKey, messageId, 15 * 60_000);
           return uid && !blockedSpeakerUids.has(uid) ? uid : null;
@@ -1732,7 +1760,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     event: OnebotResolvedEvent,
     binding: OnebotBindingRecord,
   ): Promise<OnebotHandleOutcome> => {
-    const sendReply = createReplySender(record.config, event);
+    const sender = createReplySender(record.config, event);
+    const sendReply = async (text: string): Promise<void> => { await sender(text); };
 
     // Isolate roleplay before daily storage, growth and Qzone approval commands.
     if (event.messageType === "private") {

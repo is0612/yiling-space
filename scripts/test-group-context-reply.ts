@@ -140,7 +140,7 @@ try {
     ["old-owner", "USER", true, undefined], ["old-reply", "ASSISTANT", undefined, true],
   ]);
 
-  const previousOnly = { summary: "之前约好继续话题。", evidence: [{ id: "previous-only", role: "ASSISTANT" as const, content: "PREVIOUS_ONLY_ORIGINAL_" + "字".repeat(700), occurredAt: "2026-11-05T00:00:00Z" }] };
+  const previousOnly = { summary: "之前约好继续话题。", evidence: [{ id: "previous-only", role: "ASSISTANT" as const, content: "PREVIOUS_ONLY_ORIGINAL_" + "字".repeat(700), occurredAt: "2026-11-05T00:00:00Z", mentions: [{ target: "other" as const, member: "member_7" }] }] };
   reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, evidenceMessageIds: ["previous-only", "invented"], knowledgeCandidate: { evidenceMessageIds: ["previous-only"], reason: "must not collect carried-only evidence" } }) : response({ ...reply, usedMemoryIds: [] }));
   let carriedCandidate = false;
   await run({ previousWorkingContext: previousOnly, onKnowledgeCandidate: async () => { carriedCandidate = true; } });
@@ -149,6 +149,10 @@ try {
   assert(!JSON.stringify(calls[1]!.messages).includes("字".repeat(601)), "Carried originals retain the 600-character final evidence bound.");
   assert.deepEqual(details[0]?.context?.evidence?.map(item => item.id), ["previous-only"]);
   assert.equal(carriedCandidate, false, "Carried evidence may support a reply without expanding knowledge collection scope.");
+  const carriedAnalysis = JSON.parse(calls[0]!.messages.find(row => row.role === "user")!.content);
+  const carriedFinal = JSON.parse(calls[1]!.messages.find(row => row.role === "user")!.content);
+  assert.deepEqual(carriedAnalysis.previousWorkingContext.evidence[0].mentions, [{ target: "other", member: "member_7" }]);
+  assert.deepEqual(carriedFinal.groupBackground.find((row: { id: string }) => row.id === "previous-only").mentions, [{ target: "other", member: "member_7" }], "Selected prior ASSISTANT reminders must survive final background assembly.");
 
   reset(body => body.model === "context" ? response({ ...analysis, memoryQuery: undefined, participation: "observing" }) : response({ ...reply, action: "silent", reply: "", usedMemoryIds: [] }));
   const silent = await run();

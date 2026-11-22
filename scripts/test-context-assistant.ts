@@ -149,6 +149,17 @@ try {
   // This only proves mocked output passes through validation and the instruction is present.
   // It does not establish a real model's ability to understand quoted Chinese commands.
 
+  // Carried ASSISTANT evidence retains actual notification targets, with raw identities stripped.
+  reset();
+  const previous = { summary: "Earlier exchange", evidence: [{ id: "carried-own", role: "ASSISTANT" as const,
+    content: "之前叫过这位群友。", occurredAt: "2026-11-05T02:50:00Z",
+    mentions: [{ target: "other" as const, member: "member_7", qq: "123456789", untrusted: "drop-me" }] }] };
+  await analyzeGroupContext(runtime, input, previous);
+  const carriedPayload = JSON.parse(requests[0]!.messages[1]!.content);
+  assert.deepEqual(carriedPayload.previousWorkingContext.evidence[0].mentions, [{ target: "other", member: "member_7" }]);
+  assert(!JSON.stringify(carriedPayload).includes("123456789"));
+  assert(!JSON.stringify(carriedPayload).includes("drop-me"));
+
   // Nicknames must not promote a group member to the owner, including missing legacy flags.
   reset();
   await analyzeGroupContext(runtime, { ...input,

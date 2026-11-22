@@ -3,7 +3,7 @@ import { startAssistantRequest, type AssistantRequestObserver } from "./assistan
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
 import { ASSISTANT_FIELDS, resolveAssistantConnection } from "./assistant-inheritance";
 import type { ConversationReplyInput } from "./chat-reply";
-import { conversationSourcePolicy, type ConversationSourcePolicy } from "./conversation-message";
+import { conversationSourcePolicy, type ConversationSourcePolicy, type MessageMentionKind } from "./conversation-message";
 import type { MemoryAssistantRuntime } from "./memory-assistant";
 import { parseJsonLoose } from "./loose-json";
 import { readModelUsage, type ModelUsageTokens } from "./model-usage";
@@ -23,7 +23,7 @@ export type ContextAnalysis = {
 /** Temporary continuity carried into the next analysis: summary + the original lines it rests on. */
 export type PreviousWorkingContext = {
   summary: string;
-  evidence: Array<{ id: string; role: "USER" | "ASSISTANT"; content: string; speaker?: string; isOwner?: boolean; occurredAt: string }>;
+  evidence: Array<{ id: string; role: "USER" | "ASSISTANT"; content: string; speaker?: string; isOwner?: boolean; occurredAt: string; mentions?: PublicMention[] }>;
 };
 
 /**
@@ -126,7 +126,7 @@ Distinguish real invitations from quotation, examples, teaching, hypotheticals a
 // escaped controls and JSON syntax. This is a selection guard, not reported provider usage.
 function tokens(value: string): number { return Buffer.byteLength(value, "utf8"); }
 const SYSTEM_RESERVE = 256;
-type PublicMention = { target: "self" | "other" | "all"; member?: string; speaker?: string; kind?: string };
+type PublicMention = { target: "self" | "other" | "all"; member?: string; speaker?: string; kind?: MessageMentionKind };
 type PublicMessage = ConversationSourcePolicy & {
   content: string; id?: string; member?: string; speaker?: string; occurredAt?: string;
   isOwner?: boolean; role?: string; hadSticker?: boolean; hadVoice?: boolean; mentions?: PublicMention[];
@@ -277,7 +277,7 @@ function publicInput(input: ConversationReplyInput, maxInputTokens: number, prev
     for (const source of previous.evidence.slice(-12).reverse()) {
       const row = message(source, true);
       if (!row.id || !row.content || (row.role !== "USER" && row.role !== "ASSISTANT")) continue;
-      const candidate: PreviousWorkingContext["evidence"][number] = { id: row.id, role: row.role, content: row.content.slice(0, 600), occurredAt: row.occurredAt ?? "", ...(row.speaker ? { speaker: row.speaker } : {}), ...(row.isOwner !== undefined ? { isOwner: row.isOwner } : {}) };
+      const candidate: PreviousWorkingContext["evidence"][number] = { id: row.id, role: row.role, content: row.content.slice(0, 600), occurredAt: row.occurredAt ?? "", ...(row.speaker ? { speaker: row.speaker } : {}), ...(row.isOwner !== undefined ? { isOwner: row.isOwner } : {}), ...(row.mentions?.length ? { mentions: row.mentions } : {}) };
       saved.evidence.unshift(candidate);
       if (cost() > maxInputTokens) saved.evidence.shift();
     }
