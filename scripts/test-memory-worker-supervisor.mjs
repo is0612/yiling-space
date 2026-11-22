@@ -40,6 +40,13 @@ try {
   assert.ok(alive(restartedPid), "crashed fake Worker should restart");
   await second.stop();
   await waitFor(() => !alive(restartedPid));
+  const databaseA = await superviseMemoryWorker({ ...options, identityKey: "synthetic-instance-a" }); instances.push(databaseA);
+  const databaseB = await superviseMemoryWorker({ ...options, identityKey: "synthetic-instance-b" }); instances.push(databaseB);
+  const duplicateA = await superviseMemoryWorker({ ...options, identityKey: "synthetic-instance-a" }); instances.push(duplicateA);
+  assert.equal(databaseA.owned(), true);
+  assert.equal(databaseB.owned(), true, "different databases in the same checkout need independent Workers");
+  assert.equal(duplicateA.owned(), false, "the same database namespace must still deduplicate");
+  await duplicateA.stop(); await databaseA.stop(); await databaseB.stop();
   const disabled = await superviseMemoryWorker({ ...options, env: { YILING_WORKER_DISABLED: "1" } });
   assert.equal(disabled.disabled, true); assert.equal(disabled.owned(), false);
   await disabled.stop();

@@ -169,8 +169,11 @@ export async function openDesktopPostgres({ binDir, rootDir, expectedInstanceId,
       const attemptedAt = Date.now();
       let startError;
       try {
+        // 集群固定跑 UTC：Prisma 走驱动适配器时，原始 SQL 返回的 timestamptz 按会话时区读成
+        // 「本地墙上时间当 UTC」，服务器时区非 UTC 时整体偏移，租约 / 回填这类比较会直接判空。
+        // 库里所有时间列都是 timestamptz（存的是绝对时刻），改会话默认时区不动数据。
         pgCommand(pgExecutable(binDir, "pg_ctl"), ["-D", dataDir, "-l", path.join(root, "postgres.log"),
-          "-o", `-p ${port} -c listen_addresses=127.0.0.1`, "-w", "-t", "30", "start"], env);
+          "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c timezone=UTC`, "-w", "-t", "30", "start"], env);
       } catch (error) { startError = error; }
       if (fs.existsSync(pidFile)) {
         const actual = inspectPostmaster(null);
@@ -270,6 +273,32 @@ export async function openDesktopPostgres({ binDir, rootDir, expectedInstanceId,
       if (!fs.statSync(temporary).size) throw new Error("desktop_pg_empty_backup");
       fs.renameSync(temporary, file);
       return file;
+    },
+    async restoreEmptyDatabase(file) {
+      assertBound(); await adminVerify();
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || !stat.size) throw new Error("desktop_pg_invalid_restore_file");
+      const client = new Client(clientConfig());
+      try {
+        await client.connect();
+        const objects = await client.query(`SELECT EXISTS (
+          SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+            AND c.relkind IN ('r','p','v','m','S','f','c')
+          UNION ALL SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+          UNION ALL SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace
+          WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND t.typtype IN ('d','e')
+          UNION ALL SELECT 1 FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema','public')
+            AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%'
+        ) AS populated`);
+        const active = await client.query("SELECT count(*)::integer AS n FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()");
+        if (objects.rows[0].populated || active.rows[0].n) throw new Error("desktop_pg_restore_target_not_empty_or_idle");
+      } finally { await client.end().catch(() => {}); }
+      pgCommand(pgExecutable(binDir, "pg_restore"), ["--host", "127.0.0.1", "--port", String(port), "--username", BUSINESS,
+        "--dbname", BUSINESS, "--no-owner", "--no-privileges", "--single-transaction", "--exit-on-error", fs.realpathSync(file)],
+      { ...env, PGPASSWORD: credentials.password }, 180_000);
+      await adminVerify();
     },
     async close() {
       if (closed) return;

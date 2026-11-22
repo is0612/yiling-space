@@ -5,7 +5,7 @@
  * 它只做一件事：把忆灵空间在本机可靠地跑起来，并把「现在到哪一步」用 JSON 行报出来。
  * Electron 主进程之后只需要启动它、读 ready 事件、加载 url；不需要自己懂 Docker/Prisma/Worker。
  *
- *   数据库（Docker）→ prisma migrate deploy → Nitro → Scheduler → Worker → ready
+ *   显式数据库运行时 → 迁移/备份闸门 → Nitro → Scheduler → Worker → ready
  *
  * 为什么先做无界面版：
  *   - 可以直接在命令行验证，不需要先装 Electron；
@@ -17,8 +17,8 @@
  *   node scripts/desktop-supervisor.mjs --port 0 --skip-migrate --no-worker --no-scheduler
  *
  * 输出：stdout 每行一个 JSON；同时追加到 <data>/logs/desktop-supervisor.log。
- * 退出：SIGINT / SIGTERM 会按 Worker → Scheduler → Nitro 的顺序停；数据库容器不主动停，
- *       避免把用户本来就在用的 Docker 或另一个实例的数据库一起关掉。
+ * 退出：先停消费者，再停自有 embedded 数据库；已有 Docker/external 实例不主动停，
+ *       避免把用户本来就在用的服务一起关掉。
  */
 import "dotenv/config";
 import { spawn, spawnSync } from "node:child_process";
@@ -30,6 +30,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { superviseMemoryWorker } from "./memory-worker-supervisor.mjs";
+import { resolveDesktopDatabaseMode, openBoundDesktopDatabase, desktopPgBin } from "./desktop-database-config.mjs";
+import { createDesktopPgBackup } from "./desktop-pg-backup.mjs";
+import { applyDesktopPgMigrations } from "./desktop-pg-migrations.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = new Set(process.argv.slice(2));
@@ -41,6 +44,10 @@ const argValue = (name, fallback = "") => {
 const SKIP_MIGRATE = args.has("--skip-migrate");
 const NO_WORKER = args.has("--no-worker");
 const NO_SCHEDULER = args.has("--no-scheduler");
+const NO_QQ = args.has("--no-qq");
+let databaseRuntime = null;
+let databaseEnvironment = process.env;
+let workerHandle = null;
 const PARENT_STDIN = args.has("--parent-stdin");
 const REQUESTED_PORT = Number(argValue("--port", "0"));
 const DATA_DIR = path.resolve(process.env.YILING_DATA_DIR?.trim() || path.join(ROOT, ".data"));
@@ -74,11 +81,19 @@ function migrateLegacyDataDir() {
   }
 }
 
-migrateLegacyDataDir();
-
 function log(event, detail = {}) {
   const entry = { at: new Date().toISOString(), event, ...detail };
-  const line = JSON.stringify(entry);
+  let line = JSON.stringify(entry);
+  const databaseUrl = databaseEnvironment.DATABASE_URL;
+  if (databaseUrl) {
+    line = line.split(databaseUrl).join("[database-url]");
+    try {
+      const password = new URL(databaseUrl).password;
+      for (const secret of [password, decodeURIComponent(password)]) {
+        if (secret && secret.length >= 8) line = line.split(secret).join("[database-password]");
+      }
+    } catch { /* malformed configuration is reported separately, never echoed here */ }
+  }
   process.stdout.write(line + "\n");
   try {
     fs.appendFileSync(LOG_FILE, line + "\n", "utf8");
@@ -127,7 +142,7 @@ async function waitPort(host, port, totalMs, label) {
 }
 
 function parseDatabase() {
-  const raw = process.env.DATABASE_URL;
+  const raw = databaseEnvironment.DATABASE_URL;
   if (!raw) throw new Error("缺少 DATABASE_URL；先跑 yarn setup 或配置 .env。");
   const url = new URL(raw);
   return {
@@ -142,7 +157,7 @@ function run(command, commandArgs, options = {}) {
     // stdin 必须断开：Electron 的 supervisor stdin 是一条一直开着的管道，
     // Prisma CLI 在继承这条管道时会停在读 stdin 上，表现为 migrate 永远不返回。
     stdio: ["ignore", "inherit", "inherit"],
-    env: process.env,
+    env: databaseEnvironment,
     ...options,
   });
   return result.status === 0;
@@ -157,7 +172,7 @@ async function ensureDockerDatabase() {
   }
 
   log("db-starting", { host: db.host, port: db.port });
-  const dockerVersion = spawnSync("docker", ["--version"], { stdio: "ignore", env: process.env });
+  const dockerVersion = spawnSync("docker", ["--version"], { stdio: "ignore", env: databaseEnvironment });
   if (dockerVersion.error?.code === "ENOENT") {
     throw startupError(
       "没有找到 Docker。",
@@ -213,7 +228,7 @@ function migrateDatabase() {
   if (!fs.existsSync(prismaBin)) throw new Error("找不到 Prisma CLI（node_modules/prisma 缺失），安装包不完整。");
   const schemaEngine = path.join(ROOT, "node_modules", "@prisma", "engines", "schema-engine-windows.exe");
   const prismaEnv = {
-    ...process.env,
+    ...databaseEnvironment,
     // 便携包里 --ignore-scripts 不会下载 Prisma 引擎；用打进去的二进制，
     // 避免目标机器写 `%APPDATA%\Prisma` 缓存时被安全策略挡住。
     ...(fs.existsSync(schemaEngine) ? { PRISMA_SCHEMA_ENGINE_BINARY: schemaEngine } : {}),
@@ -252,7 +267,7 @@ function migrateDatabase() {
  */
 async function ensureFirstAdmin() {
   if ((process.env.YILING_FIRST_ADMIN || "").trim() === "0") return;
-  const connectionString = process.env.DATABASE_URL;
+  const connectionString = databaseEnvironment.DATABASE_URL;
   if (!connectionString) throw new Error("缺少 DATABASE_URL，无法检查管理员账号。");
 
   const client = new Client({ connectionString });
@@ -277,7 +292,7 @@ async function ensureFirstAdmin() {
 
   const seeded = run(process.execPath, ["--import", "tsx", "scripts/seed-dev-user.ts"], {
     env: {
-      ...process.env,
+      ...databaseEnvironment,
       DEV_OWNER_ID: ownerId,
       DEV_OWNER_USERNAME: username,
       DEV_OWNER_PASSWORD: password,
@@ -328,6 +343,7 @@ async function pickPort() {
 async function waitHttp(url, totalMs) {
   const deadline = Date.now() + totalMs;
   while (Date.now() < deadline) {
+    if (shutdownRequested) return false;
     try {
       const response = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1500) });
       if (response.ok) return true;
@@ -409,7 +425,7 @@ function startScheduler() {
   }
   const child = track(spawn(process.execPath, tsxArgs("scripts/run-memory-scheduler.ts").concat("--watch"), {
     cwd: ROOT,
-    env: process.env,
+    env: { ...databaseEnvironment, ...(databaseRuntime ? { PGAPPNAME: "yiling-desktop-scheduler" } : {}) },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   }), "scheduler");
@@ -440,6 +456,12 @@ function findNodeExecutable() {
 }
 
 async function startQqStackIfNeeded() {
+  if (NO_QQ) { log("qq-stack-disabled"); return; }
+  if (databaseRuntime) {
+    // Existing global ports do not prove a QQ stack belongs to this newly bound database.
+    log("qq-stack-manual-required", { reason: "embedded-instance-routing-not-bound" });
+    return;
+  }
   // 3001/3002/5099 都在听 = 用户手动跑过 `yarn onebot:stack`，不要再起第二套。
   // 只看 3001 不够：网关可能活着但面板已经死了（5099 没人应答），
   // 这时页面会报「面板端口没人应答」，必须重新拉起 SnowLuma。
@@ -454,7 +476,7 @@ async function startQqStackIfNeeded() {
   const stack = track(spawn(nodeBin, tsxArgs("scripts/start-qq-stack.ts").concat("--managed"), {
     cwd: ROOT,
     env: {
-      ...process.env,
+      ...databaseEnvironment,
       // supervisor 已经管了 Worker；watchdog 也不是桌面启动的必需品。
       YILING_WORKER_DISABLED: "1",
       YILING_WATCHDOG_DISABLED: "1",
@@ -503,26 +525,85 @@ async function startWorker() {
   }
   return await superviseMemoryWorker({
     root: ROOT,
-    env: process.env,
+    identityKey: databaseRuntime ? "embedded:" + databaseRuntime.descriptor().instanceId + ":" + databaseRuntime.descriptor().systemIdentifier : "",
+    env: { ...databaseEnvironment, ...(databaseRuntime ? { PGAPPNAME: "yiling-desktop-worker" } : {}) },
     command: process.execPath,
     args: tsxArgs("scripts/run-memory-worker.ts").concat("--watch"),
     log: (entry) => log("worker", entry),
   });
 }
 
+let startupInProgress = true;
+let shutdownPromise = null;
+function shutdown(reason, exitCode = 0) {
+  if (shutdownPromise) return shutdownPromise;
+  stopping = true;
+  shutdownPromise = (async () => {
+    log("stopping", { reason });
+    try { await stopQqStack(); } catch { log("qq-stack-stop-failed"); exitCode = 1; }
+    try { await workerHandle?.stop(); } catch { log("worker-stop-failed"); exitCode = 1; }
+    for (const child of [...children]) {
+      if (child.exitCode !== null || child.signalCode !== null) continue;
+      const wait = new Promise(resolve => { const timer = setTimeout(resolve, 2000); child.once("exit", () => { clearTimeout(timer); resolve(); }); });
+      try { child.kill("SIGTERM"); } catch { /* already gone */ }
+      await wait;
+      if (child.exitCode === null && child.signalCode === null) {
+        const killed = new Promise(resolve => { const timer = setTimeout(resolve, 3000); child.once("exit", () => { clearTimeout(timer); resolve(); }); });
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        await killed;
+      }
+      if (child.exitCode === null && child.signalCode === null) { log("child-stop-unconfirmed"); exitCode = 1; }
+    }
+    try { await databaseRuntime?.close(); } catch { log("db-stop-unconfirmed", { dataDir: DATA_DIR }); exitCode = 1; }
+    log("stopped", { exitCode });
+    process.exit(exitCode);
+  })();
+  return shutdownPromise;
+}
+function checkStartupCancellation() {
+  if (shutdownRequested) throw new Error("desktop_startup_cancelled");
+}
+requestShutdown = reason => {
+  shutdownRequested = true;
+  if (!startupInProgress) void shutdown(reason);
+};
+process.once("SIGINT", () => requestShutdown("SIGINT"));
+process.once("SIGTERM", () => requestShutdown("SIGTERM"));
+
 async function main() {
   log("starting", { root: ROOT, dataDir: DATA_DIR });
-
-  await ensureDockerDatabase();
-  migrateDatabase();
+  checkStartupCancellation();
+  const mode = resolveDesktopDatabaseMode(DATA_DIR);
+  log("db-runtime", { runtime: mode });
+  if (mode === "embedded") {
+    databaseRuntime = await openBoundDesktopDatabase({ dataDir: DATA_DIR, binDir: desktopPgBin(ROOT) });
+    databaseEnvironment = databaseRuntime.childEnvironment({ ...process.env, YILING_DB_RUNTIME: "embedded", YILING_DATA_DIR: DATA_DIR });
+    checkStartupCancellation();
+    if (SKIP_MIGRATE) throw new Error("desktop_embedded_skip_migrate_refused");
+    await applyDesktopPgMigrations({ applicationRoot: ROOT, runtime: databaseRuntime,
+      backup: () => createDesktopPgBackup({ runtime: databaseRuntime, dataDir: DATA_DIR, label: "pre-migrate", quiescent: true }),
+      log: entry => log(entry.event, { status: entry.status }) });
+  } else {
+    migrateLegacyDataDir();
+    if (mode === "docker") await ensureDockerDatabase();
+    else {
+      const client = new Client({ connectionString: databaseEnvironment.DATABASE_URL, connectionTimeoutMillis: 5000 });
+      try { await client.connect(); await client.query("SELECT 1"); } finally { await client.end().catch(() => {}); }
+    }
+    checkStartupCancellation();
+    migrateDatabase();
+  }
+  checkStartupCancellation();
   await ensureFirstAdmin();
+  checkStartupCancellation();
 
   const port = await pickPort();
   const url = `http://127.0.0.1:${port}`;
   const nitro = track(spawn(process.execPath, [path.join(ROOT, "scripts", "local-production-entry.mjs")], {
     cwd: ROOT,
     env: {
-      ...process.env,
+      ...databaseEnvironment,
+      ...(databaseRuntime ? { PGAPPNAME: "yiling-desktop-web" } : {}),
       NODE_ENV: "production",
       NITRO_HOST: "127.0.0.1",
       PORT: String(port),
@@ -536,75 +617,33 @@ async function main() {
     windowsHide: true,
   }), "nitro");
   pipeLines(nitro, "nitro");
+  nitro.once("exit", (code, signal) => {
+    if (stopping) return;
+    log("web-exited", { code, signal });
+    shutdownRequested = true;
+    if (!startupInProgress) void shutdown("web-exited", 1);
+  });
 
   const ready = await waitHttp(url, WEB_WAIT_MS);
   if (!ready) throw new Error(`网页服务没有在 ${Math.round(WEB_WAIT_MS / 1000)} 秒内就绪。`);
   log("web-ready", { url });
 
+  checkStartupCancellation();
   startScheduler();
-  const worker = await startWorker();
+  workerHandle = await startWorker();
+  checkStartupCancellation();
   await startQqStackIfNeeded();
-
+  checkStartupCancellation();
+  startupInProgress = false;
   log("ready", { url, pid: process.pid, dataDir: DATA_DIR });
 
-  const shutdown = async (reason) => {
-    if (stopping) return;
-    stopping = true;
-    log("stopping", { reason });
-    try {
-      await stopQqStack();
-    } catch (error) {
-      log("qq-stack-stop-failed", { message: error instanceof Error ? error.message : String(error) });
-    }
-    try {
-      await worker?.stop();
-    } catch (error) {
-      log("worker-stop-failed", { message: error instanceof Error ? error.message : String(error) });
-    }
-    for (const child of [...children]) {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // 已经退出
-      }
-    }
-    await sleep(1000);
-    for (const child of children) {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // 已经退出
-      }
-    }
-    log("stopped");
-    process.exit(0);
-  };
-
-  process.once("SIGINT", () => void shutdown("SIGINT"));
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
-  requestShutdown = shutdown;
-  if (shutdownRequested) void shutdown("stdin-early");
-
-  nitro.once("exit", (code, signal) => {
-    if (stopping) return;
-    log("web-exited", { code, signal });
-    void shutdown("web-exited");
-  });
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   fail(
     error instanceof Error ? error.message : String(error),
     error && typeof error === "object" ? error.hint ?? "" : "",
     error && typeof error === "object" ? error.code ?? "" : "",
   );
-  process.exitCode = 1;
-  // 启动失败时把已经起来的子进程收掉，别留半套服务
-  for (const child of children) {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // 已经退出
-    }
-  }
+  await shutdown("startup-failed", 1);
 });

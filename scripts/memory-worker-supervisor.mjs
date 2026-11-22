@@ -8,6 +8,7 @@ const parentGuard = new URL("./memory-worker-parent.mjs", import.meta.url).href;
 /** One local owner per checkout. A second launcher waits and can take over when the owner exits. */
 export async function superviseMemoryWorker({
   root,
+  identityKey = "",
   env = process.env,
   log = (entry) => console.log(`[worker] ${JSON.stringify(entry)}`),
   command = process.execPath,
@@ -21,7 +22,8 @@ export async function superviseMemoryWorker({
     return { stop: async () => {}, owned: () => false, disabled: true };
   }
   const checkout = path.resolve(root);
-  const identity = createHash("sha256").update(process.platform === "win32" ? checkout.toLowerCase() : checkout).digest("hex");
+  const canonical = process.platform === "win32" ? checkout.toLowerCase() : checkout;
+  const identity = createHash("sha256").update(identityKey ? canonical + "\0" + identityKey : canonical).digest("hex");
   const firstPort = 20_000 + Number.parseInt(identity.slice(0, 6), 16) % 30_000;
   // Windows may reserve whole port ranges. Keep the original first choice so existing
   // owners remain discoverable, then spread deterministic fallbacks across the range.

@@ -33,7 +33,7 @@ export function verifyPgBinaries(binDir) {
   const versions = {};
   for (const name of TOOLS) {
     const file = pgExecutable(binDir, name);
-    if (!fs.statSync(file).isFile()) throw new Error("embedded_pg_binary_missing");
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error("embedded_pg_binary_missing");
     const version = pgCommand(file, ["--version"]);
     if (!/\(PostgreSQL\) 16\./u.test(version)) throw new Error("embedded_pg_requires_version_16");
     versions[name] = version;

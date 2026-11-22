@@ -15,6 +15,8 @@ import { spawnSync } from "node:child_process";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveDesktopDatabaseMode, openBoundDesktopDatabase, desktopPgBin } from "./desktop-database-config.mjs";
+import { createDesktopPgBackup } from "./desktop-pg-backup.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -40,9 +42,10 @@ function readEnvFile() {
   return values;
 }
 
-const envFile = readEnvFile();
-const databaseUrl = process.env.DATABASE_URL || envFile.DATABASE_URL || "";
 const dataDir = path.resolve(process.env.YILING_DATA_DIR?.trim() || path.join(ROOT, ".data"));
+const runtimeMode = resolveDesktopDatabaseMode(dataDir);
+const envFile = runtimeMode === "embedded" ? {} : readEnvFile();
+const databaseUrl = process.env.DATABASE_URL || envFile.DATABASE_URL || "";
 const backupRoot = path.join(dataDir, "backups");
 const container = (process.env.YILING_DB_CONTAINER || envFile.YILING_DB_CONTAINER || "yiling-hub-db").trim();
 
@@ -124,7 +127,7 @@ function backup() {
 function prune() {
   if (!existsSync(backupRoot)) return;
   const entries = readdirSync(backupRoot)
-    .filter((name) => name.startsWith("desktop-"))
+    .filter((name) => name.startsWith("desktop-") && !name.endsWith(".partial"))
     .map((name) => ({ name, full: path.join(backupRoot, name), at: statSync(path.join(backupRoot, name)).mtimeMs }))
     .sort((a, b) => b.at - a.at);
   for (const entry of entries.slice(10)) {
@@ -142,7 +145,7 @@ if (command === "list") {
     console.log("还没有备份。");
     process.exit(0);
   }
-  const names = readdirSync(backupRoot).filter((name) => name.startsWith("desktop-")).sort().reverse();
+  const names = readdirSync(backupRoot).filter((name) => name.startsWith("desktop-") && !name.endsWith(".partial")).sort().reverse();
   if (!names.length) console.log("还没有备份。");
   for (const name of names) {
     const file = path.join(backupRoot, name, "database.dump");
@@ -153,4 +156,13 @@ if (command === "list") {
 }
 
 if (command !== "backup") fail(`未知命令：${command}`, "可用：backup / list");
-backup();
+if (runtimeMode === "embedded") {
+  // A running supervisor owns this instance lock. Do not bypass it for a torn SQL/assets snapshot.
+  const runtime = await openBoundDesktopDatabase({ dataDir, binDir: desktopPgBin(ROOT) });
+  try {
+    const target = await createDesktopPgBackup({ runtime, dataDir, label: label || "manual", quiescent: true });
+    console.log(`✓ 内嵌数据库与配套文件备份完成：${target}`);
+  } finally { await runtime.close(); }
+} else if (runtimeMode === "external") {
+  fail("外部数据库的桌面备份工具尚未配置。", "请使用与该服务端匹配的备份流程；不会自动改用Docker容器。");
+} else backup();

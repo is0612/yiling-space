@@ -101,7 +101,7 @@ export async function createEmbeddedPgPrototype({ binDir, parentDir }) {
     const attemptedAt = Math.floor(Date.now() / 1000);
     try {
       execute(executable(binDir, "pg_ctl"), ["-D", dataDir, "-l", path.join(root, "postgres.log"),
-        "-o", `-p ${port} -c listen_addresses=127.0.0.1`, "-w", "-t", "30", "start"], env);
+        "-o", `-p ${port} -c listen_addresses=127.0.0.1 -c timezone=UTC`, "-w", "-t", "30", "start"], env);
     } finally {
       // A failed/wait-timed-out pg_ctl can still have started postgres. Never lose that owner.
       if (fs.existsSync(path.join(dataDir, "postmaster.pid"))) {
