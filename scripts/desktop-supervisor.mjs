@@ -34,6 +34,7 @@ import { resolveDesktopDatabaseMode, openBoundDesktopDatabase, desktopPgBin } fr
 import { createDesktopPgBackup } from "./desktop-pg-backup.mjs";
 import { applyDesktopPgMigrations } from "./desktop-pg-migrations.mjs";
 import parentWatchApi from "./desktop-parent-watch.cjs";
+import privateAuth from "./desktop-auth-ipc.cjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHILD_PARENT_GUARD = new URL("./memory-worker-parent.mjs", import.meta.url).href;
@@ -51,6 +52,13 @@ let databaseRuntime = null;
 let databaseEnvironment = process.env;
 let workerHandle = null;
 let launcherWatch = null;
+const IDENTITY_CONTROL = process.env.YILING_DESKTOP_PACKAGED === "1" && typeof process.send === "function";
+let identityDownstream = null;
+const identityUpstream = IDENTITY_CONTROL ? privateAuth.createDesktopAuthPeer(process, { role: "child", handle: async (method, value) => {
+  if (!["status", "bind", "issue", "unbind"].includes(method)) throw new Error("desktop_identity_method_refused");
+  if (!identityDownstream) throw new Error("desktop_identity_not_initialized");
+  return identityDownstream.request(method, value);
+} }) : null;
 const PARENT_STDIN = args.has("--parent-stdin");
 const REQUESTED_PORT = Number(argValue("--port", "0"));
 const DATA_DIR = path.resolve(process.env.YILING_DATA_DIR?.trim() || path.join(ROOT, ".data"));
@@ -324,6 +332,7 @@ async function ensureFirstAdmin() {
     username,
     ...(passwordFile ? { passwordFile } : { passwordFrom: "env" }),
   });
+  return ownerId; // Only the account actually created from an empty database may bootstrap ownership.
 }
 
 function tsxArgs(script) {
@@ -548,6 +557,9 @@ function shutdown(reason, exitCode = 0) {
     try { await stopQqStack(); } catch { log("qq-stack-stop-failed"); exitCode = 1; }
     try { await workerHandle?.stop(); } catch { log("worker-stop-failed"); exitCode = 1; }
     log("worker-stopped");
+    if (identityDownstream) {
+      try { await identityDownstream.request("revoke"); } catch { log("desktop-identity-session-cleanup-unconfirmed"); }
+    }
     for (const child of [...children]) {
       if (child.exitCode !== null || child.signalCode !== null) continue;
       const wait = new Promise(resolve => { const timer = setTimeout(resolve, 2000); child.once("exit", () => { clearTimeout(timer); resolve(); }); });
@@ -563,6 +575,7 @@ function shutdown(reason, exitCode = 0) {
     log("consumers-stopped");
     try { await databaseRuntime?.close(); } catch { log("db-stop-unconfirmed", { dataDir: DATA_DIR }); exitCode = 1; }
     log("db-stop-finished");
+    identityDownstream?.dispose(); identityUpstream?.dispose();
     await launcherWatch?.stop();
     log("stopped", { exitCode });
     process.exit(exitCode);
@@ -590,6 +603,7 @@ async function main() {
   checkStartupCancellation();
   const mode = resolveDesktopDatabaseMode(DATA_DIR);
   log("db-runtime", { runtime: mode });
+  if (IDENTITY_CONTROL && mode !== "embedded") throw new Error("desktop_identity_embedded_binding_required");
   if (mode === "embedded") {
     databaseRuntime = await openBoundDesktopDatabase({ dataDir: DATA_DIR, binDir: desktopPgBin(ROOT) });
     databaseEnvironment = databaseRuntime.childEnvironment({ ...process.env, YILING_DB_RUNTIME: "embedded", YILING_DATA_DIR: DATA_DIR });
@@ -609,7 +623,7 @@ async function main() {
     migrateDatabase();
   }
   checkStartupCancellation();
-  await ensureFirstAdmin();
+  const freshUserId = await ensureFirstAdmin();
   checkStartupCancellation();
 
   const port = await pickPort();
@@ -623,6 +637,7 @@ async function main() {
       NITRO_HOST: "127.0.0.1",
       PORT: String(port),
       YILING_DATA_DIR: DATA_DIR,
+      YILING_DESKTOP_IDENTITY_CONTROL: IDENTITY_CONTROL ? "1" : "0",
       // 桌面版用独立 Cookie 名，避免和开发版（同一 Cookie 域、不同端口）互相顶登录。
       YILING_SESSION_COOKIE: process.env.YILING_SESSION_COOKIE || "yiling_session_desktop",
       // QQ 栈由这个 supervisor 起，避免 Nitro 插件再起一套。
@@ -643,6 +658,16 @@ async function main() {
   const ready = await waitHttp(url, WEB_WAIT_MS);
   if (!ready) throw new Error(`网页服务没有在 ${Math.round(WEB_WAIT_MS / 1000)} 秒内就绪。`);
   log("web-ready", { url });
+  if (IDENTITY_CONTROL) {
+    identityDownstream = privateAuth.createDesktopAuthPeer(nitro, { role: "parent" });
+    if (!await identityDownstream.ready || !await identityUpstream.ready) throw new Error("desktop_identity_channel_closed");
+    const binding = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "desktop-database.json"), "utf8"));
+    const descriptor = databaseRuntime.descriptor();
+    if (!binding.installationId || binding.instanceId !== descriptor.instanceId || binding.systemIdentifier !== descriptor.systemIdentifier) throw new Error("desktop_identity_context_invalid");
+    await identityDownstream.request("initialize", { identity: { installationId: binding.installationId,
+      databaseInstanceId: descriptor.instanceId, systemIdentifier: descriptor.systemIdentifier }, ...(freshUserId ? { freshUserId } : {}) });
+    log("desktop-identity-ready"); // State only; no token, nonce or session credential is logged.
+  }
 
   checkStartupCancellation();
   startScheduler();

@@ -15,16 +15,23 @@ const DEFAULT_ADMIN_PASSWORD = "admin123";
 
 /**
  * 只在开发模式预填并显示提示：生产构建里把管理员密码印在登录页上等于公开后门。
- * 如果部署版也想省掉输入，把这里改成 `true` 即可。
+ * 桌面免登录走受保护安装绑定与主进程 Cookie 注入，不能靠显示或预填默认密码实现。
  */
 const showDefaultAdmin = Boolean(import.meta.dev);
 
 const { refresh } = useAuthSession();
+const { enabled: desktopIdentityEnabled, state: desktopIdentityState, bindCurrentAccount } = useDesktopIdentity();
 const authApi = createAuthApi(useApiRequest());
 const username = ref(showDefaultAdmin ? DEFAULT_ADMIN_USERNAME : "");
 const password = ref(showDefaultAdmin ? DEFAULT_ADMIN_PASSWORD : "");
 const submitting = ref(false);
+const binding = ref(false);
 const errorMessage = ref("");
+
+/** 只有安装版私有桥可用且尚未绑定（含已解绑）时才提供"登录并绑定"。 */
+const canBindCurrentDevice = computed(
+  () => desktopIdentityEnabled.value && (desktopIdentityState.value === "unbound" || desktopIdentityState.value === "revoked"),
+);
 
 const readErrorMessage = readApiErrorMessage;
 
@@ -47,6 +54,47 @@ async function submit() {
   } finally {
     submitting.value = false;
   }
+}
+
+/**
+ * 先走普通 HTTP 登录，再让本机主进程用已登录的 HttpOnly Cookie 作证明完成绑定。
+ * 绑定失败不等于密码错误：仍然已是登录状态，只是没完成本机免登录。
+ */
+async function submitAndBind() {
+  if (submitting.value || binding.value) return;
+  errorMessage.value = "";
+  if (!username.value.trim() || !password.value) {
+    errorMessage.value = "请填写用户名和密码。";
+    return;
+  }
+  submitting.value = true;
+  try {
+    await authApi.login({ username: username.value.trim(), password: password.value });
+    password.value = "";
+    await refresh();
+  } catch (error) {
+    errorMessage.value = readErrorMessage(error, "登录失败，请检查用户名和密码后重试。");
+    return;
+  } finally {
+    submitting.value = false;
+  }
+
+  binding.value = true;
+  try {
+    const result = await bindCurrentAccount();
+    if (result.ok) {
+      ElMessage.success("已登录并绑定本机。");
+    } else if (result.cancelled) {
+      ElMessage.success("已登录。");
+    } else {
+      ElMessage.warning("已登录，但未完成本机绑定。");
+    }
+  } catch (error) {
+    ElMessage.warning(readErrorMessage(error, "已登录，但未完成本机绑定。"));
+  } finally {
+    binding.value = false;
+  }
+  await navigateTo("/");
 }
 </script>
 
@@ -120,6 +168,24 @@ async function submit() {
         >
           登录
         </el-button>
+        <el-button
+          v-if="canBindCurrentDevice"
+          type="primary"
+          plain
+          size="large"
+          class="login-submit login-bind"
+          :loading="binding"
+          :disabled="submitting"
+          @click="submitAndBind"
+        >
+          登录并绑定本机
+        </el-button>
+        <p
+          v-if="canBindCurrentDevice"
+          class="login-bind-note"
+        >
+          绑定后，这台电脑下次启动可直接进入，无需重复输入密码。绑定由桌面程序确认，不会把密码交给页面外的地方。
+        </p>
       </el-form>
 
       <p class="login-note">
@@ -171,6 +237,8 @@ async function submit() {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 600;
 }
 .login-submit { width: 100%; margin-top: 4px; }
+.login-bind { margin-top: 8px; }
+.login-bind-note { margin: 8px 0 0; color: var(--dim); font-size: 12px; line-height: 1.6; }
 .login-note { margin: 18px 0 0; color: var(--dim); font-size: 12px; line-height: 1.7; }
 .login-note.is-centered { text-align: center; margin-top: 10px; }
 .register-link { color: var(--brand-strong); font-weight: 600; }

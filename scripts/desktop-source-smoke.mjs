@@ -13,12 +13,12 @@ const root = fs.mkdtempSync(path.join(parent, "source-"));
 protectPgDirectory(root); // Only this new synthetic fixture, never the user's source/data directories.
 const desktop = path.join(root, "desktop"), scripts = path.join(root, "scripts");
 fs.mkdirSync(desktop); fs.mkdirSync(scripts);
-for (const file of ["main.cjs", "launch.cjs"]) fs.copyFileSync(path.resolve("desktop", file), path.join(desktop, file));
+for (const file of ["main.cjs", "launch.cjs", "preload.cjs", "identity.cjs"]) fs.copyFileSync(path.resolve("desktop", file), path.join(desktop, file));
 fs.cpSync(path.resolve("desktop", "assets"), path.join(desktop, "assets"), { recursive: true });
 fs.writeFileSync(path.join(desktop, "package.json"), JSON.stringify({ name: "source-regression-fixture", productName: "Source startup fixture", main: "main.cjs", version: "0.0.0" }));
 fs.mkdirSync(path.join(desktop, "node_modules", "electron"), { recursive: true });
 fs.writeFileSync(path.join(desktop, "node_modules", "electron", "index.js"), "module.exports=" + JSON.stringify(electron));
-fs.copyFileSync(path.resolve("scripts", "desktop-parent-watch.cjs"), path.join(scripts, "desktop-parent-watch.cjs"));
+for (const file of ["desktop-parent-watch.cjs", "desktop-auth-ipc.cjs"]) fs.copyFileSync(path.resolve("scripts", file), path.join(scripts, file));
 // Explicit source-mode fixture. Backend HTTP and bootstrap are mocks; Node launcher,
 // Electron executable/main/profile/window and shutdown are real. No DB or QQ is used.
 fs.writeFileSync(path.join(scripts, "desktop-package-state.mjs"), "export async function preparePackagedDesktop({env}){return {packaged:false,env:{...env},release:async()=>{}}};export function peekPackagedDesktop(){throw Error('not an installed package')}");

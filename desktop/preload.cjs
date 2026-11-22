@@ -5,4 +5,8 @@ contextBridge.exposeInMainWorld("yilingDesktop", {
   version: () => ipcRenderer.invoke("desktop:version"),
   openDataDir: () => ipcRenderer.invoke("desktop:open-data-dir"),
   openLogs: () => ipcRenderer.invoke("desktop:open-logs"),
+  identityStatus: () => ipcRenderer.invoke("desktop:identity-status"),
+  bindCurrentAccount: () => ipcRenderer.invoke("desktop:identity-bind"),
+  reconnectIdentity: () => ipcRenderer.invoke("desktop:identity-reconnect"),
+  quit: () => ipcRenderer.invoke("desktop:quit"),
 });

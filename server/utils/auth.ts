@@ -333,25 +333,44 @@ export async function requireAdminActor(event: H3Event): Promise<Extract<ActorCo
 // Session and login-attempt persistence
 // ---------------------------------------------------------------------------
 
+type PreparedSession = {
+  token: string;
+  tokenHash: string;
+  expiresAt: Date;
+  ipHash: string | null;
+  userAgent: string | null;
+};
+
+/** Shared token/hash/TTL policy so every session issuer behaves the same way. */
+function prepareSession(input: { ip?: string; userAgent?: string }): PreparedSession {
+  const token = createSessionToken();
+  return {
+    token,
+    tokenHash: hashSessionToken(token),
+    expiresAt: new Date(Date.now() + sessionTtlMs()),
+    ipHash: input.ip ? hashClientAddress(input.ip) : null,
+    userAgent: input.userAgent ? input.userAgent.slice(0, 255) : null,
+  };
+}
+
+function sessionCreateData(userId: string, prepared: PreparedSession) {
+  return {
+    userId,
+    tokenHash: prepared.tokenHash,
+    expiresAt: prepared.expiresAt,
+    ipHash: prepared.ipHash,
+    userAgent: prepared.userAgent,
+  };
+}
+
 export async function createSession(input: {
   userId: string;
   ip?: string;
   userAgent?: string;
 }): Promise<{ token: string; expiresAt: Date }> {
-  const token = createSessionToken();
-  const ttlMs = sessionTtlMs();
-  const expiresAt = new Date(Date.now() + ttlMs);
-  await getPrisma().session.create({
-    data: {
-      userId: input.userId,
-      tokenHash: hashSessionToken(token),
-      expiresAt,
-      ipHash: input.ip ? hashClientAddress(input.ip) : null,
-      userAgent: input.userAgent ? input.userAgent.slice(0, 255) : null,
-    },
-    select: { id: true },
-  });
-  return { token, expiresAt };
+  const prepared = prepareSession(input);
+  await getPrisma().session.create({ data: sessionCreateData(input.userId, prepared), select: { id: true } });
+  return { token: prepared.token, expiresAt: prepared.expiresAt };
 }
 
 /**
@@ -370,9 +389,7 @@ export async function createSessionForVerifiedPassword(input: {
   userAgent?: string;
 }): Promise<{ token: string; expiresAt: Date } | null> {
   const prisma = getPrisma();
-  const token = createSessionToken();
-  const ttlMs = sessionTtlMs();
-  const expiresAt = new Date(Date.now() + ttlMs);
+  const prepared = prepareSession(input);
 
   const created = await prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ passwordHash: string; status: string }>>`
@@ -385,19 +402,51 @@ export async function createSessionForVerifiedPassword(input: {
     if (!row || row.passwordHash !== input.expectedPasswordHash || row.status !== "ACTIVE") return false;
 
     await tx.session.create({
-      data: {
-        userId: input.userId,
-        tokenHash: hashSessionToken(token),
-        expiresAt,
-        ipHash: input.ip ? hashClientAddress(input.ip) : null,
-        userAgent: input.userAgent ? input.userAgent.slice(0, 255) : null,
-      },
+      data: sessionCreateData(input.userId, prepared),
       select: { id: true },
     });
     return true;
   });
 
-  return created ? { token, expiresAt } : null;
+  return created ? { token: prepared.token, expiresAt: prepared.expiresAt } : null;
+}
+
+/**
+ * Issues a session for the desktop owner after the private desktop control service has already
+ * verified the OS installation identity and the owner binding (loopback-only IPC, never HTTP).
+ *
+ * This function takes no password or token proof on purpose — it must not be exposed as a public
+ * route, and a password hash must never be treated as proof here. The account row is locked and
+ * re-checked inside the transaction so a concurrent disable/delete cannot mint a session for an
+ * inactive account. It never changes the password, role or account status, and it uses the same
+ * token, hashing and TTL policy as password logins.
+ */
+export async function createSessionForVerifiedDesktopOwner(input: {
+  userId: string;
+  userAgent?: string;
+}): Promise<{ id: string; token: string; expiresAt: Date } | null> {
+  if (typeof input?.userId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.userId)) {
+    return null;
+  }
+  const prepared = prepareSession({ userAgent: input.userAgent });
+
+  const created = await getPrisma().$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ status: string }>>`
+      SELECT "status"::text AS "status"
+      FROM "users"
+      WHERE "id" = ${input.userId}::uuid
+      FOR UPDATE
+    `;
+    if (rows[0]?.status !== "ACTIVE") return null;
+
+    const row = await tx.session.create({
+      data: sessionCreateData(input.userId, prepared),
+      select: { id: true },
+    });
+    return { id: row.id };
+  });
+
+  return created ? { id: created.id, token: prepared.token, expiresAt: prepared.expiresAt } : null;
 }
 
 /** Prisma reports unique-constraint violations as P2002 regardless of which index tripped. */

@@ -21,11 +21,24 @@ import {
   Reading,
   View,
 } from "@element-plus/icons-vue";
+import { ElMessage } from "element-plus";
 import { readTopbarHeading, type TopbarHeading } from "~/utils/topbar";
+import { readApiErrorMessage } from "~/utils/api-error";
 
 const route = useRoute();
 const { displayName, logout, isLocalDevIdentity, isAdmin } = useAuthSession();
+const {
+  enabled: desktopIdentityEnabled,
+  bound: desktopIdentityBound,
+  canBind: desktopIdentityCanBind,
+  busy: desktopIdentityBusy,
+  bindCurrentAccount,
+  reconnectIdentity,
+  quit: quitDesktopApp,
+} = useDesktopIdentity();
 const loggingOut = ref(false);
+const exiting = ref(false);
+const bindingIdentity = ref(false);
 const avatarLetter = computed(() => (displayName.value || "管").slice(0, 1));
 
 /**
@@ -53,6 +66,56 @@ async function handleLogout() {
   } finally {
     loggingOut.value = false;
   }
+}
+
+/** 安装版：退出应用只走主进程，不在网页里清会话；源码/网页保持原退出登录。 */
+const exitLabel = computed(() => (desktopIdentityEnabled.value ? "退出应用" : "退出"));
+async function handleExit() {
+  if (exiting.value) return;
+  if (!desktopIdentityEnabled.value) {
+    await handleLogout();
+    return;
+  }
+  exiting.value = true;
+  try {
+    await quitDesktopApp();
+  } finally {
+    exiting.value = false;
+  }
+}
+
+async function handleReconnectIdentity() {
+  if (desktopIdentityBusy.value) return;
+  try {
+    const result = await reconnectIdentity();
+    if (!result.ok) {
+      ElMessage.warning("重新连接本机身份失败，请重新登录。");
+      return;
+    }
+    ElMessage.success("已重新连接本机身份。");
+    await navigateTo("/");
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "重新连接本机身份失败，请重新登录。"));
+  }
+}
+
+async function handleBindIdentity() {
+  if (bindingIdentity.value) return;
+  bindingIdentity.value = true;
+  try {
+    const result = await bindCurrentAccount();
+    if (result.ok) ElMessage.success("已绑定当前账号为本机主人。");
+    else if (result.cancelled) ElMessage.info("已取消绑定。");
+    else ElMessage.warning("未完成本机绑定。");
+  } catch (error) {
+    ElMessage.error(readApiErrorMessage(error, "未完成本机绑定。"));
+  } finally {
+    bindingIdentity.value = false;
+  }
+}
+
+function handleIdentityCommand(command: string) {
+  if (command === "bind-identity") void handleBindIdentity();
 }
 type NavigationItem = {
   key: string;
@@ -352,8 +415,42 @@ function isActive(item: NavigationItem) {
           >
             <el-icon><Refresh /></el-icon>{{ refreshing ? "刷新中" : "刷新" }}
           </button>
+          <el-button
+            v-if="desktopIdentityBound"
+            text
+            size="small"
+            :loading="desktopIdentityBusy"
+            @click="handleReconnectIdentity"
+          >
+            <el-icon><Refresh /></el-icon>重新连接本机身份
+          </el-button>
           <span class="env-indicator"><span class="env-dot" />{{ isLocalDevIdentity ? "本地开发" : "已登录" }}</span>
-          <div class="user-pill">
+          <el-dropdown
+            v-if="desktopIdentityCanBind"
+            trigger="click"
+            placement="bottom-end"
+            @command="handleIdentityCommand"
+          >
+            <div class="user-pill">
+              <el-avatar :size="30">
+                {{ avatarLetter }}
+              </el-avatar><span>{{ displayName }}</span>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  command="bind-identity"
+                  :disabled="bindingIdentity"
+                >
+                  绑定当前账号为本机主人
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <div
+            v-else
+            class="user-pill"
+          >
             <el-avatar :size="30">
               {{ avatarLetter }}
             </el-avatar><span>{{ displayName }}</span>
@@ -361,10 +458,10 @@ function isActive(item: NavigationItem) {
           <el-button
             text
             size="small"
-            :loading="loggingOut"
-            @click="handleLogout"
+            :loading="loggingOut || exiting"
+            @click="handleExit"
           >
-            <el-icon><SwitchButton /></el-icon>退出
+            <el-icon><SwitchButton /></el-icon>{{ exitLabel }}
           </el-button>
         </div>
       </header>

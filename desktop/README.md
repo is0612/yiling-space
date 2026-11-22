@@ -31,10 +31,11 @@ node scripts/desktop-installer.mjs --source 'dist/YilingSpace-Payload-<version>'
 
 ## 程序与数据
 
-- 程序选用支持的 ASCII 路径；中文 profile 会选择 OS Public 中仅当前 SID/SYSTEM 可访问的私有程序目录，不能用未知预占目录。
+- 程序选用支持的 ASCII 路径；中文 profile 会选择 OS Public 中以当前 SID/SYSTEM 为主、兼容本机 Administrators 的私有程序目录，不能用未知预占目录。
 - 数据与安装状态位于当前用户 LocalAppData 的独立目录，不随程序更新/卸载删除；中文数据路径已在隔离测试中验证。
 - 安装状态将 installationId 与数据库 binding 关联。已有数据丢失或身份不符时拒绝补建空库；安装 metadata 损坏也不回退源码 Docker 路径。
-- 初始化空库后仍创建管理员，随机密码保存在私有数据目录的 first-run-admin.txt；通过窗口菜单可打开数据目录。免登录尚未实施，已有用户密码不改。
+- 初始化空库后仍创建管理员，只自动绑定本次确实首建的精确账号；已有库先正常登录，再明确「绑定当前账号为本机主人」。绑定后通过私有进程通道在加载页面前注入 HttpOnly/Secure/Strict Cookie，普通浏览器仍需登录；源码入口不启用该免登录。
+- 随机首次密码仍保存在私有 first-run-admin.txt 供手动登录/恢复，已有账号密码不改。文件菜单可重新连接或取消本机免登录，解绑只撤本安装会话、不删数据。实现与未验边界见 [桌面身份记录](../docs/desktop-identity.md)。
 
 关闭窗口默认退出；可在文件菜单选择本次驻留托盘。文件菜单的退出项（Ctrl+Shift+Q）彻底退出。窗口几何信息保存在 profile 的 window-state.json。桌面 Cookie 与开发 Cookie 名称分开，安装版 profile 也相互隔离。
 

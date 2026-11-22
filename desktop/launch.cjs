@@ -8,11 +8,12 @@ process.stdout.on("error", () => {});
 process.stderr.on("error", () => {});
 const ROOT = path.resolve(__dirname, "..");
 const { windowsProcessBirth } = require(path.join(ROOT, "scripts", "desktop-parent-watch.cjs"));
+const { createDesktopAuthPeer } = require(path.join(ROOT, "scripts", "desktop-auth-ipc.cjs"));
 const passthrough = process.argv.slice(2).filter(arg => arg !== "--no-sandbox");
 const forceNoSandbox = process.argv.includes("--no-sandbox");
 let env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
 for (const key of ["YILING_DESKTOP_PARENT_PID", "YILING_DESKTOP_PARENT_BIRTH", "YILING_DESKTOP_BACKEND_PID", "YILING_DESKTOP_BACKEND_BIRTH"]) delete env[key];
-let dataDir, profileDir = "", prepared, supervisor, windowProcess;
+let dataDir, profileDir = "", prepared, supervisor, windowProcess, backendIdentity;
 let stopping = false;
 let electronPath;
 try { electronPath = require("electron"); }
@@ -61,9 +62,10 @@ function startSupervisor() {
     const child = spawn(process.execPath, [path.join(ROOT, "scripts", "desktop-supervisor.mjs"), "--port", "0", "--parent-stdin"], {
       cwd: ROOT, env: { ...env, YILING_DATA_DIR: dataDir,
         ...(prepared?.packaged && process.platform === "win32" ? { YILING_DESKTOP_PARENT_PID: String(process.pid), YILING_DESKTOP_PARENT_BIRTH: windowsProcessBirth(process.pid) } : {}) },
-      stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: Boolean(prepared?.packaged && process.platform === "win32"),
+      stdio: prepared?.packaged ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"], windowsHide: true, detached: Boolean(prepared?.packaged && process.platform === "win32"),
     });
     supervisor = child; // Keep ownership before ready, including migration/startup failure.
+    if (prepared?.packaged) backendIdentity = createDesktopAuthPeer(child, { role: "parent", timeoutMs: 30_000 });
     let settled = false, buffer = "";
     const finish = (error, url) => {
       if (settled) return;
@@ -104,8 +106,12 @@ function runElectron(url, noSandbox) {
       detached: Boolean(prepared?.packaged && process.platform === "win32"),
     });
     windowProcess = child;
-    child.once("error", error => { console.error(error.message); resolve(1); });
-    child.once("exit", code => { if (windowProcess === child) windowProcess = null; resolve(code ?? 1); });
+    const identity = prepared?.packaged && url && backendIdentity ? createDesktopAuthPeer(child, { role: "parent", handle: async (method, value) => {
+      if (!["status", "bind", "issue", "unbind"].includes(method)) throw new Error("desktop_identity_method_refused");
+      return backendIdentity.request(method, value);
+    } }) : null;
+    child.once("error", error => { identity?.dispose(); console.error(error.message); resolve(1); });
+    child.once("exit", code => { identity?.dispose(); if (windowProcess === child) windowProcess = null; resolve(code ?? 1); });
   });
 }
 async function runWindow(url) {
@@ -132,6 +138,7 @@ async function close(code) {
     try { await prepared.recoverDatabaseAfterExit(); }
     catch { console.error("[desktop] backend cleanup could not be confirmed; bound data and diagnostics are retained."); }
   }
+  backendIdentity?.dispose();
   await prepared?.release();
   process.exit(code || stopped || 0);
 }

@@ -21,6 +21,17 @@ const LOG_DIR = path.join(DATA_DIR, "logs");
 const LOG_FILE = path.join(LOG_DIR, "desktop.log");
 const SUPERVISOR = path.join(ROOT, "scripts", "desktop-supervisor.mjs");
 const EXTERNAL_URL = process.env.YILING_DESKTOP_URL?.trim() || "";
+const INSTALLED_IDENTITY = process.env.YILING_DESKTOP_PACKAGED === "1" && Boolean(EXTERNAL_URL);
+let applicationSession = null;
+let identityController = null;
+let identityPeer = null;
+function registeredIdentityOrigin() {
+  const url = new URL(EXTERNAL_URL);
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("desktop_identity_origin_refused");
+  }
+  return url.origin;
+}
 
 function ensureWritableDir(dir) {
   try {
@@ -150,6 +161,21 @@ function createApplicationMenu() {
         { label: "打开忆灵空间", click: showMainWindow },
         { label: "打开数据目录", click: () => void shell.openPath(DATA_DIR) },
         { label: "打开日志目录", click: () => void shell.openPath(LOG_DIR) },
+        ...(INSTALLED_IDENTITY ? [
+          { label: "重新连接绑定的本机身份", click: async () => {
+            try {
+              if (!identityController || !mainWindow) return;
+              await identityController.reconnect({ sender: mainWindow.webContents, senderFrame: mainWindow.webContents.mainFrame });
+              await mainWindow.loadURL(registeredIdentityOrigin() + "/");
+            } catch { showError("本机身份暂时无法重新连接。", "账号可能已停用、绑定已撤销或私有通道已关闭。请正常登录或检查本机绑定，不会改用其它账号。"); }
+          } },
+          { label: "取消本机免登录", click: async () => {
+            try {
+              const result = await identityController?.unbindFromMenu();
+              if (result?.ok && mainWindow) await mainWindow.loadURL(registeredIdentityOrigin() + "/login");
+            } catch { showError("本机绑定取消失败。", "请检查日志和绑定状态；原有数据未删除。"); }
+          } },
+        ] : []),
         { type: "separator" },
         {
           label: "关闭窗口时保留在托盘",
@@ -211,7 +237,7 @@ function createTray() {
  * 让用户自己选一个可写目录（桌面/文档）。
  */
 function setupDownloads() {
-  session.defaultSession.on("will-download", (_event, item) => {
+  (applicationSession || session.defaultSession).on("will-download", (_event, item) => {
     const filename = item.getFilename() || "yiling-export.json";
     const extension = path.extname(filename).replace(/^\./, "");
     const options = {
@@ -257,7 +283,7 @@ const APP_CSP = [
 ].join("; ");
 
 function setupContentSecurityPolicy() {
-  session.defaultSession.webRequest.onHeadersReceived(
+  (applicationSession || session.defaultSession).webRequest.onHeadersReceived(
     { urls: ["http://127.0.0.1/*", "http://localhost/*"] },
     (details, callback) => {
       const headers = { ...(details.responseHeaders || {}) };
@@ -313,6 +339,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      session: applicationSession || session.defaultSession,
       devTools: true,
       spellcheck: false,
     },
@@ -581,6 +608,16 @@ if (yieldToOther) {
   app.whenReady().then(async () => {
     appReady = true;
     if (backendWatch && !await backendWatch.ready) throw new Error("桌面后端进程监测未能建立，请退出后重新启动。");
+    applicationSession = INSTALLED_IDENTITY ? session.fromPartition("persist:yiling-desktop-identity") : session.defaultSession;
+    if (INSTALLED_IDENTITY) {
+      if (typeof process.send !== "function") throw new Error("desktop_identity_private_handle_required");
+      const { createDesktopAuthPeer } = require(path.join(ROOT, "scripts", "desktop-auth-ipc.cjs"));
+      const { createDesktopIdentityController } = require("./identity.cjs");
+      identityPeer = createDesktopAuthPeer(process, { role: "child" });
+      identityController = createDesktopIdentityController({ peer: identityPeer, session: applicationSession, dialog,
+        getWindow: () => mainWindow, getOrigin: registeredIdentityOrigin });
+      await identityController.initialize(); // Cookie injection must finish before any application URL loads.
+    }
     setupContentSecurityPolicy();
     createTray();
     createApplicationMenu();
@@ -600,6 +637,7 @@ if (yieldToOther) {
   app.on("before-quit", (event) => {
     isQuitting = true;
     void backendWatch?.stop();
+    identityController?.dispose(); identityPeer?.dispose();
     clearInstanceMarker();
     saveWindowState();
     if (!supervisor) return;
@@ -611,3 +649,20 @@ if (yieldToOther) {
 ipcMain.handle("desktop:open-data-dir", () => shell.openPath(DATA_DIR));
 ipcMain.handle("desktop:open-logs", () => shell.openPath(LOG_DIR));
 ipcMain.handle("desktop:version", () => app.getVersion());
+ipcMain.handle("desktop:identity-status", event => identityController ? identityController.status(event) : { enabled: false, state: "unbound" });
+ipcMain.handle("desktop:identity-bind", event => {
+  if (!identityController) throw new Error("desktop_identity_not_enabled");
+  return identityController.bindCurrentAccount(event);
+});
+ipcMain.handle("desktop:identity-reconnect", event => {
+  if (!identityController) throw new Error("desktop_identity_not_enabled");
+  return identityController.reconnect(event);
+});
+ipcMain.handle("desktop:quit", event => {
+  const contents = mainWindow?.webContents;
+  const frame = event.senderFrame;
+  let trusted = false;
+  try { trusted = Boolean(contents && event.sender === contents && frame === contents.mainFrame && currentUrl && new URL(frame.url).origin === new URL(currentUrl).origin); } catch { /* refuse */ }
+  if (!trusted) throw new Error("desktop_identity_sender_refused");
+  isQuitting = true; app.quit();
+});

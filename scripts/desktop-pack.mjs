@@ -73,7 +73,7 @@ fs.mkdirSync(path.join(app, "node_modules", "@prisma", "engines"), { recursive: 
 fs.copyFileSync(engine, path.join(app, "node_modules", "@prisma", "engines", "schema-engine-windows.exe"));
 const required = ["runtime/node.exe", "runtime/NODE-LICENSE.txt", "app/.output/server/index.mjs", "app/desktop/launch.cjs",
   "app/desktop/node_modules/electron/dist/electron.exe", "app/desktop/node_modules/electron/dist/LICENSE", "app/desktop/node_modules/electron/dist/LICENSES.chromium.html",
-  "app/scripts/desktop-install.mjs", "app/scripts/desktop-vc-check.mjs", "app/scripts/desktop-vc-runtime.mjs", "app/node_modules/tsx/dist/cli.mjs", "app/node_modules/prisma/build/index.js",
+  "app/scripts/desktop-install.mjs", "app/scripts/desktop-auth-ipc.cjs", "app/desktop/identity.cjs", "app/scripts/desktop-vc-check.mjs", "app/scripts/desktop-vc-runtime.mjs", "app/node_modules/tsx/dist/cli.mjs", "app/node_modules/prisma/build/index.js",
   "app/node_modules/@prisma/engines/schema-engine-windows.exe", "app/src/generated/prisma/client.ts"];
 for (const file of required) if (!fs.existsSync(path.join(staging, file))) throw new Error(`desktop_pack_required_file_missing:${file}`);
 for (const file of [".env", ".data", ".tmp", ".nuxt"]) if (fs.existsSync(path.join(app, file))) throw new Error("desktop_pack_private_or_development_material_found");
