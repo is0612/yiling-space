@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import net from "node:net";
 import { superviseMemoryWorker } from "./memory-worker-supervisor.mjs";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "yiling-worker-test-"));
@@ -30,7 +31,13 @@ try {
   const second = await superviseMemoryWorker(options); instances.push(second);
   assert.equal(second.owned(), false);
   assert.equal(logs.filter((row) => row.event === "worker-started").length, 1, "second launcher must reuse owner");
-  await first.stop();
+  const halfOpen = net.connect({ host: "127.0.0.1", port: first.lockPort(), allowHalfOpen: true });
+  halfOpen.on("error", () => {});
+  await new Promise(resolve => halfOpen.once("data", resolve));
+  const stoppingFirst = first.stop();
+  assert.equal(first.stop(), stoppingFirst, "concurrent stop calls must share one cleanup operation");
+  await stoppingFirst;
+  halfOpen.destroy();
   await waitFor(() => second.owned());
   await waitFor(() => !alive(firstPid));
   const secondPid = logs.filter((row) => row.event === "worker-started").at(-1).pid;

@@ -1,127 +1,58 @@
-# 忆灵空间桌面壳（Electron 原型）
+# 忆灵空间桌面端（Electron）
 
-这是阶段二的桌面壳。它只负责窗口；数据库、Nitro、Worker、QQ 栈由启动器（普通 Node）拉起的
-`scripts/desktop-supervisor.mjs` 管理，不塞进 Electron 主进程。
+桌面窗口由 Electron 提供；普通 Node 启动器管理数据库、Nitro、Scheduler 和 Worker。当前区分**源码启动**与**新安装包**，不会把既有 Docker 数据库自动换成新空库。
 
-## 运行前提
-
-- Windows + Docker Desktop（数据库仍用现有 `yiling-hub-db` 容器）
-- 项目根目录已有 `.env`
-- 已执行过 `yarn build`（`desktop` 加载的是 `.output` 的生产服务）
-
-## 安装与启动
+## 源码开发启动
 
 ```powershell
-# 第一次：只装桌面壳自己的 Electron（不影响根目录依赖）
 yarn desktop:install
-
-# 启动
+yarn build
 yarn desktop
 ```
 
-也可以直接双击项目根目录的 `启动忆灵空间-桌面版.bat`；它会检查 Node/yarn、缺 Electron 时自动安装，然后启动桌面壳。
+源码仍使用原 `.env` / 默认 Docker 路径，或前阶段显式创建的 embedded 绑定。也可使用项目根目录的桌面启动批处理。缺少 Node/Yarn/Docker 等开发前置时按安装文档处理，不由 AI 静默安装。
 
-`yarn desktop` 实际执行 `desktop/launch.cjs`：先由普通 Node 起 supervisor，拿到 ready URL 后再开
-Electron 窗口；窗口退出时由启动器停 supervisor。顺序为：
+开发时先退出桌面端再重新构建：`yarn build` 会替换 `.output` 带哈希模块，不能把旧进程仍在引用的目录当热更新。F12 或 Ctrl+Shift+I 打开开发者工具。
 
-```text
-Docker 数据库 → prisma migrate deploy → Nitro → Scheduler → Worker → QQ 栈（可选）→ 窗口
-```
+源码启动的 Electron profile 默认优先 `.tmp/electron`，再尝试数据目录和临时目录；这是开发兼容行为。安装版使用绑定数据目录下的私有 profile，不允许外部 `--user-data-dir` 覆盖或公共缓存回落。
 
-为什么不让 Electron 主进程起 supervisor：Electron 的子进程在部分 Windows 安全策略下拿不到正常
-文件权限，SnowLuma 会在 `mkdir <SnowLuma>\tmp` 处 EPERM；普通 Node 起 supervisor 才和手动
-`yarn onebot:stack` 一样可靠。
-
-QQ 栈由 supervisor 以 `scripts/start-qq-stack.ts --managed` 启动，优先用系统 Node（不是 Electron 的
-run-as-node，后者在部分机器上带不起 SnowLuma），并同时检查面板 `5099` 与 `3001/3002`；
-退出时通过 stdin 让它依次停 adapter / watchdog / SnowLuma。如果这三者都在监听（例如你手动跑过
-`yarn onebot:stack`），不会重复启动。桌面模式下 Nitro 的 `onebot-autostart` 插件会被关掉，
-避免两套进程抢同一组端口。
-
-启动器会清掉继承来的 `ELECTRON_RUN_AS_NODE`（否则 Electron 会退化成 Node），
-并在少数机器上 Chromium 沙箱直接崩溃时自动重试一次 `--no-sandbox`。
-
-窗口里按 **F12** 或 **Ctrl+Shift+I** 打开 / 关闭开发者工具；这是窗口内快捷键，不影响其它应用。
-
-关闭窗口默认退出桌面端。确认系统托盘能看到图标后，可从「文件 → 关闭窗口时保留在托盘」开启本次驻留。
-Windows 窗口顶部可通过「文件 → 退出忆灵空间」（`Ctrl+Shift+Q`）彻底退出。托盘图标是否常驻由 Windows 的「任务栏设置 → 其他系统托盘图标」控制。
-开发时先退出桌面端，再执行 `yarn build`，构建完成后重新启动。构建会替换 `.output` 内带哈希的模块，
-旧进程可能仍引用被替换的模块，访问页面时就会报 `Cannot find module`；刷新页面不会重启服务。
-窗口大小/位置/最大化状态会记在 Electron userData 的 `window-state.json`，下次按原来的位置打开。
-托盘菜单还可以直接打开数据目录和日志目录。
-
-角色卡 / 对话 Markdown 导出会弹出系统「保存」对话框，由你选择可写目录；不再依赖默认下载目录，
-避免 Windows 在受保护目录上报「需要管理员权限」。
-
-桌面版会话 Cookie 使用 `yiling_session_desktop`（开发版仍是 `yiling_session`），两者同时登录不会互相顶掉。
-
-## 数据目录
-
-默认仍是项目根目录的 `.data/`。桌面端可设置：
+## 新安装包
 
 ```powershell
-$env:YILING_DATA_DIR = "$env:LOCALAPPDATA\YilingSpace\data"
-yarn desktop
+node scripts/desktop-pack.mjs --pg-archive '<固定官方PG归档>' --node-license '<匹配Node版本的完整LICENSE>'
+node scripts/desktop-installer.mjs --source 'dist/YilingSpace-Payload-<version>'
 ```
 
-## 首次启动
+构建机按仓库要求使用 Yarn Classic；生成的 payload 随带 Node、Electron、PG、生产依赖和后台 Worker 所需源码。默认不带 `.env`、`.data` 或开发 Nuxt 路径；`--with-env` / `--with-data` 已被拒绝。私有数据迁移使用备份/恢复，不把配置好的开发目录发给别人。
 
-- 数据库迁移后如果 `users` 表为空，supervisor 会自动建一个管理员：
-  - `.env` 里有可用的 `DEV_OWNER_USERNAME` / `DEV_OWNER_PASSWORD` 就用它；
-  - 没有就随机生成密码，写到 `<data>/first-run-admin.txt`，登录后请立刻改密码。
-- 已有用户的数据库不会被动；想关掉自动初始化，设 `YILING_FIRST_ADMIN=0`。
-- Docker 没装 / 没启动 / 登录卡住 / 端口被占用时，窗口会显示错误页和「打开日志目录」按钮，
-  不再只弹一句 `spawn` 错误。
+`YilingSpace-Payload-*` 是安装源，不是可直接初始化数据的便携目录；安装版必须从安装器创建的入口启动。安装器产物为 `YilingSpace-Installer-*`，双击其中的安装批处理。目标无需单独安装 Docker、Node、Yarn，也无需先手写 `.env`，但目前必须已有 PG 所需的 VC x64 系统运行库；缺失时会明确中止，不自动安装或提升。
 
-日志在 `<data>/logs/desktop.log` 与 `<data>/logs/desktop-supervisor.log`。
+完整目录策略、固定 PG 哈希/许可证、实际验收和限制见 [Windows 安装包记录](../docs/desktop-installer.md)。当前是本机验证阶段，尚未完成干净系统、第二系统用户、杀软、签名和公开发布验收。
 
-## 便携包
+## 程序与数据
 
-```bash
-node scripts/desktop-pack.mjs                 # 构建 .output 并打包（不带 .env）
-node scripts/desktop-pack.mjs --skip-build    # 复用已有 .output
-node scripts/desktop-pack.mjs --with-env      # 连同 .env 一起打（只适合自己迁移）
-node scripts/desktop-pack.mjs --with-env --with-data  # 连 .env + .data（密钥/表情/SnowLuma 配置）一起打
-```
+- 程序选用支持的 ASCII 路径；中文 profile 会选择 OS Public 中仅当前 SID/SYSTEM 可访问的私有程序目录，不能用未知预占目录。
+- 数据与安装状态位于当前用户 LocalAppData 的独立目录，不随程序更新/卸载删除；中文数据路径已在隔离测试中验证。
+- 安装状态将 installationId 与数据库 binding 关联。已有数据丢失或身份不符时拒绝补建空库；安装 metadata 损坏也不回退源码 Docker 路径。
+- 初始化空库后仍创建管理员，随机密码保存在私有数据目录的 first-run-admin.txt；通过窗口菜单可打开数据目录。免登录尚未实施，已有用户密码不改。
 
-产出在 `dist/桌面便携版-<version>/`：`runtime/node.exe` + `app/`（含 `.output`、生产依赖、
-Electron）+ 启动 bat。目标机器只需要 Docker Desktop，不需要 Node/yarn；`.env` 默认不打包，
-首次使用先把 `app/.env.example` 复制成 `app/.env` 并填写数据库/模型配置。
-便携目录请放在可写位置（如 `D:\YilingSpace`），不要放 `Program Files`；当前包约 1 GB。
-自己迁移时用 `--with-env --with-data`，包内会带数据库密钥和 SnowLuma 配置；这种包不要转发。
+关闭窗口默认退出；可在文件菜单选择本次驻留托盘。文件菜单的退出项（Ctrl+Shift+Q）彻底退出。窗口几何信息保存在 profile 的 window-state.json。桌面 Cookie 与开发 Cookie 名称分开，安装版 profile 也相互隔离。
 
-备份：
-```powershell
-yarn desktop:backup                 # 仓库内
-node scripts/desktop-backup.mjs backup
-```
-便携包里双击 `备份数据.bat`。备份在 `<data>/backups/desktop-<时间>/`，含 `database.dump`
-和 `credentials-encryption.key`；恢复前必须先停应用。
+Windows 安装版启动器显式持有安装锁，后端/窗口有受控的独立进程组和原父进程句柄监测；源码入口保留原有 IO/进程组策略，不强制启用安装态监测。Electron 显式使用普通 Node 已准备的 profile。源码兼容回归可用 `yarn desktop:source:smoke`，其中后端为明确隔离的 Mock，不连接业务库。正常退出先等待消费者及自有 PG 收尾；已有 Docker/external 实例不主动停止。异常父进程退出不能因 stdout/stderr 断管而跳过清理，详细故障对照见 [工程教训第 7 节](../docs/engineering-lessons.md)。
 
-## 安装包
+## 备份、升级和卸载
 
-```powershell
-node scripts/desktop-installer.mjs --source "D:\YilingSpace-Portable"
-```
+安装后退出应用，再使用程序目录的 backup.bat。它读取同一安装/数据库绑定，不误用默认 Docker 容器。备份包含数据库及已登记密钥、图片/贴图等持久材料，仍须作为敏感文件保护。备份/新目录恢复入口见 [数据库接入记录](../docs/desktop-database-integration.md)。
 
-产出 `dist/安装包-<version>-本机/`：双击 `安装忆灵空间.bat` 安装到
-`%LOCALAPPDATA%\YilingSpace`，创建桌面/开始菜单快捷方式和 HKCU 卸载项，不需要管理员权限。
-卸载时 `app\.data` 会移到「文档」下的 `YilingSpace-data-<时间>`，不会直接删用户数据。
-这是无管理员脚本安装器，不是 NSIS；要发布给别人的安装包等代码签名后再做。
+升级和卸载时应用必须已退出，运行中返回 busy，不按进程名杀用户程序。升级保留 previous 程序快照，卸载保留 uninstalled 程序快照和全部应用数据；复装能复用原安装绑定及数据库。快照暂不自动修剪，会占磁盘。未知旧安装、旧数据或无法确认停止的实例不覆盖。
 
-Electron 的 Chromium profile（缓存，不是用户数据）默认放 `.tmp/electron`；如果那里不可写，
-会依次回退 `<data>/electron` 和系统临时目录。
+legacy Docker 源码分支保留 QQ 栈原有管理方式；embedded 尚未验证协议栈实例归属，暂不自动复用全局端口上的旧 QQ 适配器。这个阶段没有改渠道 API、消息协议或角色行为。
 
-> ⚠️ 如果改了 `YILING_DATA_DIR` 却继续用旧数据库，supervisor 会自动把旧 `.data` 里的
-> `credentials-encryption.key` 和 `snowluma-home.json` 复制过去（不搬表情包/语音临时文件）；
-> 否则数据库里的 OneBot/SnowLuma 凭据解不开，页面会提示解密失败。
+## 本阶段尚未做
 
-## 当前边界
+- 自动登录/桌面身份恢复。
+- 旧 Docker 数据库自动迁移或切换。
+- 合法的 app-local VC 运行库或官方运行库安装流程集成、干净 Windows 验收。
+- 自动更新、代码签名、完整跨用户/杀软/系统重启发布验证。
 
-- 还没有安装包、签名、自动更新；这是可运行原型。
-- Docker 自动启动目前只覆盖 `docker desktop start` 与 `docker compose up -d db`；
-  未装 Docker、登录卡住等分支还需要按 `docs/桌面化架构评估.md` 第 7 节补齐。
-- QQ/SnowLuma 仍由服务端插件自动补起，桌面退出时不会接管它们；后续要改成
-  supervisor 管理或提供开关。
-- Worker 复用 `scripts/memory-worker-supervisor.mjs` 的跨进程锁；已有开发实例在跑时，
-  桌面实例会显示 `worker-already-supervised`，不会重复消费。
+不能把受限 PATH 的本机成功当成“所有全新 Windows 无前置条件即可运行”。

@@ -13,6 +13,7 @@ function validate(config, ready = false) {
     || !["initializing", "restoring", "ready"].includes(config.phase)) throw new Error("desktop_database_invalid_binding");
   if (ready && (config.phase !== "ready" || config.majorVersion !== 16 || !/^[a-f0-9-]{36}$/iu.test(config.instanceId ?? "")
     || !/^\d+$/u.test(config.systemIdentifier ?? ""))) throw new Error("desktop_database_incomplete_binding");
+  if (config.installationId !== undefined && !/^[a-f0-9-]{36}$/iu.test(config.installationId)) throw new Error("desktop_database_invalid_installation_binding");
   return config;
 }
 export function desktopPgBin(applicationRoot, env = process.env) {
@@ -37,12 +38,15 @@ export function commitDesktopDatabaseBinding(dataDir, runtime) {
   const descriptor = runtime.descriptor();
   const expectedRoot = fs.realpathSync(path.join(dataDir, "database"));
   if (fs.realpathSync(descriptor.rootDir) !== expectedRoot) throw new Error("desktop_database_root_mismatch");
+  const existing = validate(readPgJson(path.join(dataDir, DESKTOP_DATABASE_FILE)));
   const config = { format: FORMAT, version: 1, runtime: "embedded", root: "database", phase: "ready",
+    ...(existing.installationId ? { installationId: existing.installationId } : {}),
     instanceId: descriptor.instanceId, systemIdentifier: descriptor.systemIdentifier, majorVersion: 16 };
   writePgJsonAtomic(path.join(dataDir, DESKTOP_DATABASE_FILE), config);
   return config;
 }
-export async function initializeDesktopDatabase({ dataDir, binDir, restoring = false }) {
+export async function initializeDesktopDatabase({ dataDir, binDir, restoring = false, installationId }) {
+  if (installationId !== undefined && !/^[a-f0-9-]{36}$/iu.test(installationId)) throw new Error("desktop_database_invalid_installation_binding");
   if (process.platform !== "win32") throw new Error("desktop_pg_windows_required");
   binDir = fs.realpathSync(binDir);
   if (/[^\x00-\x7F]/u.test(binDir)) throw new Error("desktop_pg_non_ascii_binary_path_unsupported");
@@ -57,6 +61,7 @@ export async function initializeDesktopDatabase({ dataDir, binDir, restoring = f
     applicationLock.assertHeld();
     writePgJsonAtomic(path.join(dataDir, DESKTOP_DATABASE_FILE), {
       format: FORMAT, version: 1, runtime: "embedded", root: "database", phase: restoring ? "restoring" : "initializing",
+      ...(installationId ? { installationId } : {}),
     });
     runtime = await openDesktopPostgres({ binDir, rootDir: path.join(dataDir, "database"), initialize: true });
     if (!restoring) commitDesktopDatabaseBinding(dataDir, runtime);

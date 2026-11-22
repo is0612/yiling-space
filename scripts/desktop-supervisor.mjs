@@ -33,8 +33,10 @@ import { superviseMemoryWorker } from "./memory-worker-supervisor.mjs";
 import { resolveDesktopDatabaseMode, openBoundDesktopDatabase, desktopPgBin } from "./desktop-database-config.mjs";
 import { createDesktopPgBackup } from "./desktop-pg-backup.mjs";
 import { applyDesktopPgMigrations } from "./desktop-pg-migrations.mjs";
+import parentWatchApi from "./desktop-parent-watch.cjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const CHILD_PARENT_GUARD = new URL("./memory-worker-parent.mjs", import.meta.url).href;
 const args = new Set(process.argv.slice(2));
 const argValue = (name, fallback = "") => {
   const index = process.argv.indexOf(name);
@@ -48,6 +50,7 @@ const NO_QQ = args.has("--no-qq");
 let databaseRuntime = null;
 let databaseEnvironment = process.env;
 let workerHandle = null;
+let launcherWatch = null;
 const PARENT_STDIN = args.has("--parent-stdin");
 const REQUESTED_PORT = Number(argValue("--port", "0"));
 const DATA_DIR = path.resolve(process.env.YILING_DATA_DIR?.trim() || path.join(ROOT, ".data"));
@@ -57,6 +60,9 @@ const DB_WAIT_MS = Number(process.env.YILING_DB_WAIT_MS || 120_000);
 const WEB_WAIT_MS = Number(process.env.YILING_WEB_WAIT_MS || 60_000);
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
+let stdoutAvailable = true;
+process.stdout.on("error", () => { stdoutAvailable = false; });
+process.stderr.on("error", () => {});
 
 /**
  * 换到新的 YILING_DATA_DIR 时，至少把「解旧库凭据」需要的文件带过去：
@@ -94,11 +100,9 @@ function log(event, detail = {}) {
       }
     } catch { /* malformed configuration is reported separately, never echoed here */ }
   }
-  process.stdout.write(line + "\n");
-  try {
-    fs.appendFileSync(LOG_FILE, line + "\n", "utf8");
-  } catch {
-    // 日志写不进去不影响启动，stderr 仍然能看到
+  try { fs.appendFileSync(LOG_FILE, line + "\n", "utf8"); } catch { /* keep lifecycle independent of log I/O */ }
+  if (stdoutAvailable) {
+    try { process.stdout.write(line + "\n"); } catch { stdoutAvailable = false; }
   }
 }
 
@@ -423,12 +427,13 @@ function startScheduler() {
     log("scheduler-disabled");
     return null;
   }
-  const child = track(spawn(process.execPath, tsxArgs("scripts/run-memory-scheduler.ts").concat("--watch"), {
+  const child = track(spawn(process.execPath, ["--import", CHILD_PARENT_GUARD, ...tsxArgs("scripts/run-memory-scheduler.ts"), "--watch"], {
     cwd: ROOT,
     env: { ...databaseEnvironment, ...(databaseRuntime ? { PGAPPNAME: "yiling-desktop-scheduler" } : {}) },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,
   }), "scheduler");
+  log("scheduler-started", { pid: child.pid });
   pipeLines(child, "scheduler");
   return child;
 }
@@ -542,6 +547,7 @@ function shutdown(reason, exitCode = 0) {
     log("stopping", { reason });
     try { await stopQqStack(); } catch { log("qq-stack-stop-failed"); exitCode = 1; }
     try { await workerHandle?.stop(); } catch { log("worker-stop-failed"); exitCode = 1; }
+    log("worker-stopped");
     for (const child of [...children]) {
       if (child.exitCode !== null || child.signalCode !== null) continue;
       const wait = new Promise(resolve => { const timer = setTimeout(resolve, 2000); child.once("exit", () => { clearTimeout(timer); resolve(); }); });
@@ -554,7 +560,10 @@ function shutdown(reason, exitCode = 0) {
       }
       if (child.exitCode === null && child.signalCode === null) { log("child-stop-unconfirmed"); exitCode = 1; }
     }
+    log("consumers-stopped");
     try { await databaseRuntime?.close(); } catch { log("db-stop-unconfirmed", { dataDir: DATA_DIR }); exitCode = 1; }
+    log("db-stop-finished");
+    await launcherWatch?.stop();
     log("stopped", { exitCode });
     process.exit(exitCode);
   })();
@@ -571,6 +580,12 @@ process.once("SIGINT", () => requestShutdown("SIGINT"));
 process.once("SIGTERM", () => requestShutdown("SIGTERM"));
 
 async function main() {
+  if (process.platform === "win32" && process.env.YILING_DESKTOP_PARENT_PID) {
+    launcherWatch = parentWatchApi.watchWindowsProcess(Number(process.env.YILING_DESKTOP_PARENT_PID), process.env.YILING_DESKTOP_PARENT_BIRTH,
+      () => requestShutdown("parent-process-exited"));
+    if (!await launcherWatch.ready) throw new Error("desktop_parent_watch_not_attached");
+    log("launcher-watch-attached", { watchedPid: Number(process.env.YILING_DESKTOP_PARENT_PID), parentPid: process.ppid });
+  }
   log("starting", { root: ROOT, dataDir: DATA_DIR });
   checkStartupCancellation();
   const mode = resolveDesktopDatabaseMode(DATA_DIR);
@@ -599,7 +614,7 @@ async function main() {
 
   const port = await pickPort();
   const url = `http://127.0.0.1:${port}`;
-  const nitro = track(spawn(process.execPath, [path.join(ROOT, "scripts", "local-production-entry.mjs")], {
+  const nitro = track(spawn(process.execPath, ["--import", CHILD_PARENT_GUARD, path.join(ROOT, "scripts", "local-production-entry.mjs")], {
     cwd: ROOT,
     env: {
       ...databaseEnvironment,
@@ -613,9 +628,10 @@ async function main() {
       // QQ 栈由这个 supervisor 起，避免 Nitro 插件再起一套。
       YILING_ONEBOT_AUTOSTART: "0",
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,
   }), "nitro");
+  log("web-started", { pid: nitro.pid });
   pipeLines(nitro, "nitro");
   nitro.once("exit", (code, signal) => {
     if (stopping) return;

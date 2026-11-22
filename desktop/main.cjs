@@ -13,6 +13,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, shell, Tray } = require("electron");
 
+process.stdout.on("error", () => {});
+process.stderr.on("error", () => {});
 const ROOT = path.resolve(__dirname, "..");
 const DATA_DIR = path.resolve(process.env.YILING_DATA_DIR?.trim() || path.join(ROOT, ".data"));
 const LOG_DIR = path.join(DATA_DIR, "logs");
@@ -37,7 +39,12 @@ function ensureWritableDir(dir) {
 // 启动器会先用普通 Node 建好目录并通过 --user-data-dir 传进来；直接 `electron desktop`
 // 时这里再兜一次，项目目录写不进去就回退系统临时目录。
 const hasUserDataArg = process.argv.some((arg) => arg.startsWith("--user-data-dir"));
-if (!hasUserDataArg) {
+const explicitProfile = process.env.YILING_ELECTRON_PROFILE?.trim() || app.commandLine.getSwitchValue("user-data-dir");
+if (explicitProfile) {
+  // Chromium's switch alone does not consistently update Electron's app path. The
+  // ordinary Node launcher already created/probed this folder before starting us.
+  app.setPath("userData", path.resolve(explicitProfile));
+} else if (!hasUserDataArg) {
   const candidates = [
     process.env.YILING_ELECTRON_PROFILE,
     path.join(DATA_DIR, "electron"),
@@ -66,6 +73,18 @@ let tray = null;
 let trayReady = false;
 let closeToTray = false;
 let isQuitting = false;
+process.on("message", (message) => {
+  if (message?.command === "desktop-shutdown") { isQuitting = true; app.quit(); }
+});
+if (typeof process.send === "function") {
+  process.once("disconnect", () => { isQuitting = true; app.quit(); });
+}
+let backendWatch = null;
+if (process.platform === "win32" && process.env.YILING_DESKTOP_PACKAGED === "1" && EXTERNAL_URL && process.env.YILING_DESKTOP_BACKEND_PID) {
+  const { watchWindowsProcess } = require(path.join(ROOT, "scripts", "desktop-parent-watch.cjs"));
+  backendWatch = watchWindowsProcess(Number(process.env.YILING_DESKTOP_BACKEND_PID), process.env.YILING_DESKTOP_BACKEND_BIRTH,
+    () => { isQuitting = true; if (appReady) app.quit(); else app.exit(1); });
+}
 let saveStateTimer = null;
 const WINDOW_STATE_FILE = () => path.join(app.getPath("userData"), "window-state.json");
 const ICON_PATH = path.join(__dirname, "assets", "icon.png");
@@ -417,6 +436,10 @@ function startSupervisor() {
     return;
   }
   if (supervisor) return;
+  if (fs.existsSync(path.join(ROOT, "..", "desktop-package.json"))) {
+    showError("请从安装器创建的快捷方式启动。", "安装版必须由普通 Node 启动器持有安装锁，不能直接运行 Electron 入口。");
+    return;
+  }
   log("supervisor-starting", { root: ROOT, dataDir: DATA_DIR });
   supervisor = spawn(process.execPath, [SUPERVISOR, "--port", "0", "--parent-stdin"], {
     cwd: ROOT,
@@ -517,7 +540,6 @@ function markedInstanceAlive() {
   try {
     const info = JSON.parse(fs.readFileSync(instanceMarkerPath(), "utf8"));
     if (!info || !Number.isInteger(info.pid) || !Number.isFinite(info.at)) return false;
-    if (Date.now() - info.at > 6 * 60 * 60 * 1000) return false;
     process.kill(info.pid, 0);
     return true;
   } catch {
@@ -556,8 +578,9 @@ if (yieldToOther) {
     mainWindow.focus();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     appReady = true;
+    if (backendWatch && !await backendWatch.ready) throw new Error("桌面后端进程监测未能建立，请退出后重新启动。");
     setupContentSecurityPolicy();
     createTray();
     createApplicationMenu();
@@ -576,6 +599,7 @@ if (yieldToOther) {
 
   app.on("before-quit", (event) => {
     isQuitting = true;
+    void backendWatch?.stop();
     clearInstanceMarker();
     saveWindowState();
     if (!supervisor) return;

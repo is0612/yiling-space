@@ -56,6 +56,8 @@
     - 镜像必须带 `server/`、`scripts/`、`src/generated/prisma` 和完整 `node_modules`（含 `tsx`、`prisma`）；只发 `.output` 会「网页能开、记忆不更新」。
 25. **改了 `server/utils/channel-adapter/` 下的代码，必须重启 QQ 适配器才生效**（`yarn onebot:run` 是 `tsx` 长驻进程，不热重载；Nuxt dev 的热更新管不到它）。判断是否生效看 `.data/onebot-adapter.log` 里最新一条 `onebot-connected` 的时间，早于改代码时间就是还在跑旧代码。
 
+26. **桌面退出不能被诊断通道打断。** stdout/stderr 断管不许跳过数据库收尾；Windows 受控子进程需区分默认 Job 终止与显式退出，原进程身份验证、正常停止等待和唯一消费者管理权不能省略。故障记录见 `docs/engineering-lessons.md` 第 7 节。
+
 ## 领域状态与硬规则
 
 ### 4.1 记忆与检索

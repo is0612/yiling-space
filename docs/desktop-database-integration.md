@@ -1,5 +1,7 @@
 # 桌面数据库：显式接入、迁移与备份恢复
 
+> 本文记录显式接入阶段；后续已增加安装包默认接线，当前构建、目录策略、VC 运行库前置和验收限制见 [Windows 安装包记录](desktop-installer.md)。
+
 ## 本阶段边界
 
 本阶段在已有 Windows 内嵌 PG 基础上增加显式数据目录绑定、Prisma 迁移闸门、数据库与已登记持久文件的备份包、新目录恢复，以及 supervisor 的 embedded 分支。现有安装没有自动换库；默认无绑定时仍走旧 Docker 路径，Docker 故障不回落新空库。
@@ -43,7 +45,7 @@ yarn desktop
 
 - `credentials-encryption.key`（存在时必须是 32 字节）；
 - `snowluma-home.json`、`local-exec-audit.jsonl`；
-- `stickers/` 和 `sticker-originals/` 全部普通文件。
+- `stickers/`、`sticker-originals/` 和持久生成图片 `images/` 的全部普通文件。
 
 不带源实例 pgdata、DPAPI 密文、桌面 Session/bootstrap 文件、日志/cache、任意个人文件或外部协议程序的安装/登录文件。SnowLuma 路径配置只是指针，不能冒充已备份其程序和登录状态。数据库也可能含明文凭据，因此整个备份包必须按敏感数据保护。
 

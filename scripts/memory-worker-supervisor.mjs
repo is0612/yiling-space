@@ -35,6 +35,8 @@ export async function superviseMemoryWorker({
   let timer = null;
   let delay = retryMs;
   let lastState = "";
+  let stopPromise = null;
+  const ownerSockets = new Set();
   const report = (event, detail = {}) => {
     if (event !== lastState || event === "worker-restarting") log({ event, ...detail });
     lastState = event;
@@ -80,7 +82,12 @@ export async function superviseMemoryWorker({
   const acquire = async () => {
     if (stopped) return;
     for (const port of ports) {
-      const candidate = net.createServer((socket) => { socket.on("error", () => {}); socket.end(`${signature}\n`); });
+      const candidate = net.createServer((socket) => {
+        ownerSockets.add(socket);
+        socket.on("error", () => {});
+        socket.once("close", () => ownerSockets.delete(socket));
+        socket.end(`${signature}\n`);
+      });
       const error = await new Promise((resolve) => {
         candidate.once("error", resolve);
         candidate.listen(port, "127.0.0.1", () => resolve(null));
@@ -114,19 +121,41 @@ export async function superviseMemoryWorker({
   return {
     disabled: false,
     owned: () => server !== null,
-    async stop() {
-      stopped = true;
-      clearTimeout(timer);
-      const current = child;
-      if (current) {
-        await new Promise((resolve) => {
-          const timeout = setTimeout(() => { current.kill("SIGKILL"); }, stopMs);
-          current.once("exit", () => { clearTimeout(timeout); resolve(); });
-          current.kill("SIGTERM");
-        });
-      }
-      if (server) await new Promise((resolve) => server.close(resolve));
-      server = null;
+    lockPort: () => server?.address()?.port ?? null,
+    stop() {
+      if (stopPromise) return stopPromise;
+      stopPromise = (async () => {
+        stopped = true;
+        clearTimeout(timer);
+        const current = child;
+        let exitUnconfirmed = false;
+        if (current && current.exitCode === null && current.signalCode === null) {
+          await new Promise((resolve) => {
+            let finalTimer;
+            const timeout = setTimeout(() => {
+              try { current.kill("SIGKILL"); } catch { /* already gone */ }
+              finalTimer = setTimeout(() => { exitUnconfirmed = current.exitCode === null && current.signalCode === null; resolve(); }, 2000);
+            }, stopMs);
+            current.once("exit", () => { clearTimeout(timeout); clearTimeout(finalTimer); resolve(); });
+            try { current.kill("SIGTERM"); } catch { /* bounded fallback */ }
+          });
+        }
+        // An unconfirmed child must not hand its ownership to a second launcher.
+        if (exitUnconfirmed) throw new Error("记忆 Worker 退出状态未确认；保留管理锁和诊断。");
+        for (const socket of ownerSockets) socket.destroy();
+        if (server) {
+          const closing = server;
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("记忆 Worker 管理锁关闭未确认。")), 2000);
+            closing.close(error => {
+              clearTimeout(timeout);
+              if (error) reject(error);
+              else { if (server === closing) server = null; resolve(); }
+            });
+          });
+        }
+      })();
+      return stopPromise;
     },
   };
 }

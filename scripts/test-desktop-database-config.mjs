@@ -37,6 +37,13 @@ try {
   const write = value => fs.writeFileSync(path.join(archive, "manifest.json"), JSON.stringify(value));
   write(manifest);
   assert.equal((await validateDesktopPgBackup(archive)).manifest.files.length, 1);
+  const imageRelative = "data/images/" + randomUUID() + "/" + randomUUID() + ".png";
+  const imageBytes = Buffer.from("synthetic generated image payload");
+  fs.mkdirSync(path.dirname(path.join(archive, imageRelative)), { recursive: true });
+  fs.writeFileSync(path.join(archive, imageRelative), imageBytes);
+  write({ ...manifest, files: [entry, { path: imageRelative, bytes: imageBytes.length, sha256: createHash("sha256").update(imageBytes).digest("hex") }] });
+  assert.equal((await validateDesktopPgBackup(archive)).manifest.files.length, 2, "persistent generated images must be registered backup assets");
+  fs.rmSync(path.join(archive, "data"), { recursive: true });
   for (const malicious of ["../outside", "data/stickers/../../outside", "C:/outside", "data\\stickers\\outside", "/absolute"]) {
     write({ ...manifest, files: [{ ...entry, path: malicious }] });
     await assert.rejects(() => validateDesktopPgBackup(archive), /invalid_path/u);

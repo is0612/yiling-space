@@ -1,245 +1,92 @@
 #!/usr/bin/env node
-/**
- * 打 Windows「桌面便携版」：把运行时、Electron、生产依赖和已构建的 .output 收进一个文件夹。
- *
- * 目标：目标机器只要有 Docker Desktop，不需要 Node / yarn / 源码，双击文件夹里的 bat 就能起。
- * 仍然复用现有 PostgreSQL 容器方案；不把数据库塞进安装包。
- *
- * 产出（默认 dist/桌面便携版-<version>/）：
- *   启动忆灵空间-桌面版.bat
- *   runtime/node.exe
- *   app/                       .output + server/scripts/prisma + 生产 node_modules
- *   app/desktop/               Electron 壳 + electron 运行时
- *   README.txt
- *
- * 用法：
- *   node scripts/desktop-pack.mjs                 # 构建并打包（不带 .env）
- *   node scripts/desktop-pack.mjs --skip-build    # 复用已有 .output
- *   node scripts/desktop-pack.mjs --with-env      # 连同 .env 一起打（仅限自己迁移，别发给别人）
- *   node scripts/desktop-pack.mjs --with-data     # 连 .data（密钥/表情/SnowLuma 配置）一起打
- *   node scripts/desktop-pack.mjs --force         # 覆盖已有输出目录
- */
-
+/** Clean Windows installer payload; never includes development .env, .data or a live database. */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stageDesktopPgDistribution } from "./desktop-pg-distribution.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const args = new Set(process.argv.slice(2));
-const skipBuild = args.has("--skip-build");
-const withEnv = args.has("--with-env");
-const withData = args.has("--with-data");
-const force = args.has("--force");
-const outArg = (() => {
-  const index = process.argv.indexOf("--out");
-  return index >= 0 ? process.argv[index + 1] : "";
-})();
-
-const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
-const version = String(pkg.version ?? "0.0.0");
-const outDir = path.resolve(ROOT, outArg || path.join("dist", `桌面便携版-${version}`));
-const appDir = path.join(outDir, "app");
-
-function step(text) {
-  console.log(`\n▶ ${text}`);
-}
-function ok(text) {
-  console.log(`  ✓ ${text}`);
-}
-function fail(text, hint) {
-  console.error(`\n✗ ${text}`);
-  if (hint) console.error(`  ${hint}`);
-  process.exit(1);
+const args = process.argv.slice(2);
+const flag = name => args.includes(name);
+const value = (name, fallback) => { const i = args.indexOf(name); return i < 0 ? fallback : args[i + 1]; };
+if (process.platform !== "win32" || process.arch !== "x64") throw new Error("desktop_pack_windows_x64_required");
+if (flag("--with-env") || flag("--with-data")) throw new Error("desktop_pack_private_data_refused: use the explicit backup/restore workflow");
+const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+const version = String(pkg.version);
+const output = path.resolve(value("--out", path.join(ROOT, "dist", `YilingSpace-Payload-${version}`)));
+const archive = path.resolve(value("--pg-archive", path.join(ROOT, ".data", "vendor", "postgresql-a0", "postgresql-16.16-2-windows-x64-binaries.zip")));
+const adjacentNodeLicense = path.join(path.dirname(process.execPath), "LICENSE");
+const nodeLicense = path.resolve(value("--node-license", fs.existsSync(adjacentNodeLicense) ? adjacentNodeLicense : path.join(ROOT, ".data", "vendor", "node-" + process.version, "LICENSE")));
+if (!fs.existsSync(nodeLicense) || !fs.readFileSync(nodeLicense, "utf8").includes("Node.js is licensed")) throw new Error("desktop_pack_matching_node_license_required");
+if (output === ROOT || ROOT.toLowerCase().startsWith(output.toLowerCase() + path.sep) || path.dirname(output) === output) throw new Error("desktop_pack_unsafe_output");
+if (fs.existsSync(output)) {
+  if (!flag("--force")) throw new Error("desktop_pack_output_exists");
+  const metadata = JSON.parse(fs.readFileSync(path.join(output, "desktop-package.json"), "utf8"));
+  if (metadata.format !== "yiling-desktop-package" || fs.existsSync(path.join(output, "desktop-install.json"))
+    || ["data", "state", "app/.data", "app/.env"].some(file => fs.existsSync(path.join(output, file)))) throw new Error("desktop_pack_existing_private_or_unknown_output");
 }
 function run(command, commandArgs, options = {}) {
-  const result = spawnSync(command, commandArgs, {
-    cwd: ROOT,
-    stdio: "inherit",
-    shell: process.platform === "win32",
-    ...options,
-  });
-  if (result.error) fail(`${command} 执行失败：${result.error.message}`);
-  if (result.status !== 0) fail(`${command} ${commandArgs.join(" ")} 退出码 ${result.status}`);
-}
-function sizeOf(dir) {
-  let total = 0;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) total += sizeOf(full);
-    else if (entry.isFile()) total += statSync(full).size;
+  let executable = command, actualArgs = commandArgs;
+  if (command === "yarn") {
+    const candidates = [process.env.npm_execpath, process.env.APPDATA && path.join(process.env.APPDATA, "npm", "node_modules", "yarn", "bin", "yarn.js")];
+    const located = spawnSync("where.exe", ["yarn.cmd"], { encoding: "utf8" });
+    for (const item of String(located.stdout || "").split(/\r?\n/u).filter(Boolean)) candidates.push(path.join(path.dirname(item), "node_modules", "yarn", "bin", "yarn.js"));
+    const yarn = candidates.find(file => file && /yarn\.(?:js|cjs)$/u.test(file) && fs.existsSync(file));
+    if (!yarn) throw new Error("desktop_pack_yarn_classic_entry_missing");
+    executable = process.execPath; actualArgs = [yarn, ...commandArgs];
   }
-  return total;
+  const result = spawnSync(executable, actualArgs, { cwd: ROOT, stdio: "inherit", shell: false, ...options });
+  if (result.error || result.status !== 0) throw new Error(`desktop_pack_command_failed:${command}`);
 }
-
-if (existsSync(outDir) && !force) {
-  fail(`输出目录已存在：${outDir}`, "确认要覆盖就加 --force；不要把别人的数据目录一起删掉。");
-}
-if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
-
-step("检查构建产物");
-if (!existsSync(path.join(ROOT, ".output", "server", "index.mjs"))) {
-  if (skipBuild) fail("没有 .output/server/index.mjs；去掉 --skip-build 先构建。");
-  step("构建 .output");
-  run("yarn", ["build"]);
-} else {
-  ok(".output 已存在");
-}
-
-step("准备目录");
-mkdirSync(appDir, { recursive: true });
-mkdirSync(path.join(outDir, "runtime"), { recursive: true });
-
-const appItems = [
-  ".output",
-  "server",
-  "scripts",
-  "shared",
-  ".nuxt",
-  "prisma",
-  "src/generated",
-  "package.json",
-  "yarn.lock",
-  "nuxt.config.ts",
-  "prisma.config.ts",
-  "tsconfig.json",
-  "tsconfig.server.json",
-  ".env.example",
-  "README.md",
-];
-for (const item of appItems) {
+if (!flag("--skip-build")) run("yarn", ["build"]);
+if (!fs.existsSync(path.join(ROOT, ".output", "server", "index.mjs"))) throw new Error("desktop_pack_build_missing");
+fs.mkdirSync(path.dirname(output), { recursive: true });
+const staging = output + ".building-" + randomUUID();
+fs.mkdirSync(staging);
+const app = path.join(staging, "app"); fs.mkdirSync(app);
+fs.mkdirSync(path.join(staging, "runtime"));
+console.log("Preparing verified PostgreSQL distribution...");
+await stageDesktopPgDistribution({ archive, targetDir: path.join(staging, "runtime", "pgsql") });
+const items = [".output", "server", "scripts", "shared", "prisma", "src/generated", "package.json", "yarn.lock", "prisma.config.ts", "LICENSE", "README.md"];
+for (const item of items) {
   const source = path.join(ROOT, item);
-  if (!existsSync(source)) {
-    console.log(`  - 跳过不存在的 ${item}`);
-    continue;
-  }
-  cpSync(source, path.join(appDir, item), { recursive: true });
+  if (!fs.existsSync(source)) throw new Error(`desktop_pack_source_missing:${item}`);
+  fs.cpSync(source, path.join(app, item), { recursive: true });
 }
-ok("应用文件已复制");
-
-step("复制 Electron 壳");
-cpSync(path.join(ROOT, "desktop"), path.join(appDir, "desktop"), {
-  recursive: true,
-  filter: (source) => !source.includes(`${path.sep}node_modules`),
-});
-cpSync(
-  path.join(ROOT, "desktop", "node_modules", "electron"),
-  path.join(appDir, "desktop", "node_modules", "electron"),
-  { recursive: true },
-);
-ok("Electron 壳已复制");
-
-step("安装生产依赖（不跑 postinstall）");
-run("yarn", ["install", "--production", "--frozen-lockfile", "--ignore-scripts"], {
-  cwd: appDir,
-  env: { ...process.env, NODE_ENV: "production" },
-});
-ok("生产依赖已安装");
-
-step("复制 Node 运行时");
-const nodeExe = process.execPath;
-cpSync(nodeExe, path.join(outDir, "runtime", path.basename(nodeExe)));
-ok(`Node 运行时：${nodeExe}`);
-
-step("补齐 Prisma 引擎");
-const prismaEngine = path.join(ROOT, "node_modules", "@prisma", "engines", "schema-engine-windows.exe");
-if (!existsSync(prismaEngine)) fail("找不到 schema-engine-windows.exe；先在仓库跑一次 prisma migrate 或 yarn install。");
-cpSync(prismaEngine, path.join(appDir, "node_modules", "@prisma", "engines", "schema-engine-windows.exe"));
-ok("schema-engine-windows.exe");
-
-if (withEnv) {
-  step("复制 .env（会含数据库密码与模型 Key）");
-  if (!existsSync(path.join(ROOT, ".env"))) fail("没有 .env，无法 --with-env。");
-  cpSync(path.join(ROOT, ".env"), path.join(appDir, ".env"));
-  console.warn("  ⚠ 这个包只适合自己迁移；不要把它发给别人或上传。");
-}
-
-if (withData) {
-  step("复制 .data（凭据密钥、SnowLuma 配置、表情包等）");
-  if (!existsSync(path.join(ROOT, ".data"))) fail("没有 .data，无法 --with-data。");
-  cpSync(path.join(ROOT, ".data"), path.join(appDir, ".data"), { recursive: true });
-  console.warn("  ⚠ .data 里含凭据密钥和聊天相关文件；不要把这个包发给别人。");
-}
-
-const required = [
-  ["app/.output/server/index.mjs", "Nitro 构建"],
-  ["app/node_modules/tsx/dist/cli.mjs", "tsx"],
-  ["app/node_modules/prisma/build/index.js", "Prisma CLI"],
-  ["app/node_modules/@prisma/engines/schema-engine-windows.exe", "Prisma schema engine"],
-  ["app/node_modules/pg/package.json", "pg"],
-  ["app/node_modules/sharp/package.json", "sharp"],
-  ["app/src/generated/prisma/client.ts", "Prisma client"],
-  ["app/desktop/node_modules/electron/dist/electron.exe", "Electron"],
-];
-step("自检");
-for (const [relative, label] of required) {
-  if (!existsSync(path.join(outDir, relative))) fail(`缺少 ${relative}（${label}）`);
-  ok(label);
-}
-
-const bat = `@echo off
-setlocal
-cd /d "%~dp0"
-
-if not exist "runtime\\node.exe" (
-  echo Missing runtime\\node.exe. The package is incomplete.
-  pause
-  exit /b 1
-)
-if not exist "app\\.env" (
-  echo.
-  echo No app\\.env found.
-  echo Copy app\\.env.example to app\\.env, then fill DATABASE_URL and model keys.
-  echo For personal migration, rebuild with: --with-env --with-data
-  echo.
-  pause
-  exit /b 1
-)
-
-"runtime\\node.exe" "app\\desktop\\launch.cjs"
-if errorlevel 1 (
-  echo.
-  echo Startup failed. See app\\.data\\logs\\desktop.log.
-  pause
-)
-`;
-writeFileSync(path.join(outDir, "启动忆灵空间-桌面版.bat"), bat.replace(/\n/g, "\r\n"), "ascii");
-
-const backupBat = `@echo off
-setlocal
-cd /d "%~dp0"
-if not exist "app\\.env" (
-  echo No app\\.env found.
-  pause
-  exit /b 1
-)
-"runtime\\node.exe" "app\\scripts\\desktop-backup.mjs" backup
-pause
-`;
-writeFileSync(path.join(outDir, "备份数据.bat"), backupBat.replace(/\n/g, "\r\n"), "ascii");
-
-const readme = `忆灵空间 · Windows 桌面便携版 ${version}
-
-前提
-  1. Windows 10/11
-  2. Docker Desktop 已安装并启动（数据库仍用 PostgreSQL 容器）
-  3. app\\.env 已配置（DATABASE_URL、模型 Key 等）
-
-启动
-  双击「启动忆灵空间-桌面版.bat」。
-  首次启动会检查数据库、跑迁移、起 Worker/Scheduler；QQ 栈是可选链路。
-  日志在 app\\.data\\logs\\。
-
-说明
-  - 这个包不需要目标机器安装 Node / yarn；runtime\\node.exe 已带。
-  - Electron 和 Chromium 的缓存放在 app\\.tmp\\electron（写不了会回退）。
-  - 数据目录默认 app\\.data；也可以设置 YILING_DATA_DIR 指到别处。
-  - 如果打包时加了 --with-env，app\\.env 里含数据库密码和模型 Key，不要转发这个包。
-  - 首次空库会自动建管理员；没有可用 DEV_OWNER_PASSWORD 时密码写在 app\\.data\\first-run-admin.txt。
-  - 备份：双击「备份数据.bat」，文件在 app\\.data\\backups\\；恢复前必须先停应用。
-`;
-writeFileSync(path.join(outDir, "README.txt"), readme.replace(/\n/g, "\r\n"), "utf8");
-
-console.log(`\n✓ 便携版已生成：${outDir}`);
-console.log(`  大小：${(sizeOf(outDir) / 1024 / 1024).toFixed(0)} MB`);
-console.log("  下一步：把 app/.env 配好（或重新用 --with-env 打包），双击启动 bat 验证。");
+// Runtime TSX must resolve bundled files, not an absolute development .nuxt/tsconfig path.
+fs.writeFileSync(path.join(app, "tsconfig.json"), JSON.stringify({ compilerOptions: {
+  target: "ES2022", module: "ESNext", moduleResolution: "Bundler", baseUrl: ".", paths: { "#shared/*": ["shared/*"], "~~/*": ["*"], "@@/*": ["*"] },
+} }, null, 2));
+fs.cpSync(path.join(ROOT, "desktop"), path.join(app, "desktop"), { recursive: true,
+  filter: source => !source.split(path.sep).includes("node_modules") });
+fs.mkdirSync(path.join(app, "desktop", "node_modules"), { recursive: true });
+fs.cpSync(path.join(ROOT, "desktop", "node_modules", "electron"), path.join(app, "desktop", "node_modules", "electron"), { recursive: true });
+console.log("Installing locked production dependencies (build machine only)...");
+run("yarn", ["install", "--production", "--frozen-lockfile", "--ignore-scripts"], { cwd: app, env: { ...process.env, NODE_ENV: "production" } });
+fs.copyFileSync(process.execPath, path.join(staging, "runtime", "node.exe"));
+fs.copyFileSync(nodeLicense, path.join(staging, "runtime", "NODE-LICENSE.txt"));
+const engine = path.join(ROOT, "node_modules", "@prisma", "engines", "schema-engine-windows.exe");
+if (!fs.existsSync(engine)) throw new Error("desktop_pack_schema_engine_missing");
+fs.mkdirSync(path.join(app, "node_modules", "@prisma", "engines"), { recursive: true });
+fs.copyFileSync(engine, path.join(app, "node_modules", "@prisma", "engines", "schema-engine-windows.exe"));
+const required = ["runtime/node.exe", "runtime/NODE-LICENSE.txt", "app/.output/server/index.mjs", "app/desktop/launch.cjs",
+  "app/desktop/node_modules/electron/dist/electron.exe", "app/desktop/node_modules/electron/dist/LICENSE", "app/desktop/node_modules/electron/dist/LICENSES.chromium.html",
+  "app/scripts/desktop-install.mjs", "app/node_modules/tsx/dist/cli.mjs", "app/node_modules/prisma/build/index.js",
+  "app/node_modules/@prisma/engines/schema-engine-windows.exe", "app/src/generated/prisma/client.ts"];
+for (const file of required) if (!fs.existsSync(path.join(staging, file))) throw new Error(`desktop_pack_required_file_missing:${file}`);
+for (const file of [".env", ".data", ".tmp", ".nuxt"]) if (fs.existsSync(path.join(app, file))) throw new Error("desktop_pack_private_or_development_material_found");
+const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
+const status = spawnSync("git", ["status", "--porcelain"], { cwd: ROOT, encoding: "utf8" });
+const metadata = { format: "yiling-desktop-package", version: 1, packageId: randomUUID(), appVersion: version,
+  runtime: "embedded", pgRelease: "16.16-2", nodeVersion: process.version, platform: "win32-x64",
+  sourceRevision: revision.status === 0 ? revision.stdout.trim() : "unknown", sourceDirty: status.status !== 0 || Boolean(status.stdout.trim()) };
+fs.writeFileSync(path.join(staging, "desktop-package.json"), JSON.stringify(metadata, null, 2));
+fs.writeFileSync(path.join(staging, "README.txt"), `Yiling Space ${version} Windows installer payload\r\n\r\nThis clean payload includes Node, Electron and PostgreSQL. No Docker, Node or Yarn is required on the target.\r\nUse desktop-installer.mjs to create install.ps1 and the installer wrapper. This payload is not an initialized portable installation.\r\nNo development .env, .data or credentials are included. Licensing notices are preserved in runtime/ and Electron/production dependencies.\r\nDatabase data and install state are created outside program files by the installer.\r\nSource dirty: ${metadata.sourceDirty}; local verification payloads are not a clean-machine release certification.\r\n`, "utf8");
+let previous;
+if (fs.existsSync(output)) { previous = output + ".previous-" + randomUUID(); fs.renameSync(output, previous); }
+try { fs.renameSync(staging, output); }
+catch (error) { if (previous && !fs.existsSync(output)) fs.renameSync(previous, output); throw error; }
+console.log(`Desktop payload prepared: ${output}`);
+if (previous) console.log(`Previous payload retained: ${previous}`);

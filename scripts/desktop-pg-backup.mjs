@@ -5,7 +5,7 @@ import { protectPgDirectory } from "./desktop-pg-tools.mjs";
 import { initializeDesktopDatabase, commitDesktopDatabaseBinding, DESKTOP_DATABASE_FILE } from "./desktop-database-config.mjs";
 
 const DURABLE_FILES = ["credentials-encryption.key", "snowluma-home.json", "local-exec-audit.jsonl"];
-const DURABLE_DIRS = ["stickers", "sticker-originals"];
+const DURABLE_DIRS = ["stickers", "sticker-originals", "images"];
 const FORMAT = "yiling-desktop-backup";
 const quoted = value => '"' + value.replaceAll('"', '""') + '"';
 async function hashFile(file) {
