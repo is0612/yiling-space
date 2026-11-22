@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { Response, fetch as undiciFetch } from "undici";
 import { setMediaFetchForTest } from "../server/utils/safe-media-download";
-import { authorizeBrowserUrl, observePublicBrowser } from "../server/utils/browser-observe";
+import { authorizeBrowserUrl, buildHostResolverRules, observePublicBrowser } from "../server/utils/browser-observe";
+
+// The confirmed form POST bypasses the pinned downloader, so Chromium itself must be pinned.
+// A rebinding DNS answer cannot win if the only mapping is the address validated at launch.
+assert.equal(
+  buildHostResolverRules("example.com", "93.184.216.34", 4),
+  "MAP example.com 93.184.216.34, MAP * ~NOTFOUND",
+);
+assert.equal(
+  buildHostResolverRules("example.com", "2606:2800:220:1:248:1893:25c8:1946", 6),
+  "MAP example.com [2606:2800:220:1:248:1893:25c8:1946], MAP * ~NOTFOUND",
+  "IPv6 pins must be bracketed for Chromium",
+);
 
 for (const url of ["http://localhost", "http://127.0.0.1", "http://10.0.0.1", "file:///secret", "https://user:pass@8.8.8.8", "https://8.8.8.8:8443"]) {
   assert.throws(() => authorizeBrowserUrl(url, "https://8.8.8.8"));

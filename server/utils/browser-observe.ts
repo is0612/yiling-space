@@ -1,7 +1,8 @@
 import fs from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import { assertPublicMediaHost, downloadSafeMedia } from "./safe-media-download";
+import { assertPublicMediaHost, downloadSafeMedia, resolvePublicMediaHost } from "./safe-media-download";
 import { validatePublicWebpageUrl } from "./read-public-webpage";
 
 export type BrowserObservation = { url: string; title: string; text: string; truncated: boolean; links: string[];
@@ -17,6 +18,20 @@ export function authorizeBrowserUrl(raw: string, origin: string) {
   const url = validatePublicWebpageUrl(raw);
   if (url.origin !== origin) throw new Error("BROWSER_ORIGIN_NOT_AUTHORIZED");
   return url;
+}
+
+/**
+ * 确认提交时浏览器会自己发起真实 POST，而这一步不经过服务端的固定 DNS 下载器。
+ * 如果只在提交前再查一次 DNS，攻击者可以让第一次解析返回公网地址、第二次（浏览器那次）
+ * 返回 127.0.0.1 —— 表单就被发到本机服务上了（DNS 重绑定）。
+ *
+ * 启动 Chromium 时把已验证的公网地址写进 resolver rules，并让所有其他域名解析失败：
+ * 页面自己的子资源本来就被 route 拦截后由服务端代取，不需要浏览器解析别的域名。
+ */
+export function buildHostResolverRules(hostname: string, address: string, family: number): string {
+  const host = hostname.replace(/^\[/u, "").replace(/\]$/u, "");
+  const target = family === 6 ? `[${address}]` : address;
+  return `MAP ${host} ${target}, MAP * ~NOTFOUND`;
 }
 
 function browserExecutable() {
@@ -72,9 +87,18 @@ export async function openIsolatedPage(raw: string, options: { timeoutMs?: numbe
     const first = await downloadSafeMedia(requested.toString(), { prefix: "WEB", timeoutMs: 8000, maxBytes: 512 * 1024,
       allowedMimeTypes: rootMime, authorizeUrl: authorizeTarget });
     const initial = validatePublicWebpageUrl(first.finalUrl);
+    // Pin the origin's DNS answer for the whole browser session. Without this the confirmed
+    // submit is resolved a second time by Chromium and can be rebound to a loopback address.
+    let resolverRule = "";
+    if (!isIP(requested.hostname.replace(/^\[/u, "").replace(/\]$/u, ""))) {
+      const pinned = (await resolvePublicMediaHost(requested.hostname))[0];
+      if (!pinned) throw new Error("WEB_BLOCKED_HOST");
+      resolverRule = buildHostResolverRules(requested.hostname, pinned.address, pinned.family);
+    }
     browser = await chromium.launch({ executablePath: browserExecutable(), headless: true, chromiumSandbox: true, timeout: 8000,
       env: Object.fromEntries(["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG"].flatMap(key => process.env[key] ? [[key, process.env[key]!]] : [])),
-      args: ["--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-breakpad", "--no-first-run"] });
+      args: ["--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-breakpad", "--no-first-run",
+        ...(resolverRule ? [`--host-resolver-rules=${resolverRule}`] : [])] });
     context = await browser.newContext({ acceptDownloads: false, serviceWorkers: "block", permissions: [],
       viewport: { width: 1280, height: 800 }, storageState: { cookies: [], origins: [] } });
     await context.routeWebSocket("**/*", socket => socket.close());
@@ -134,7 +158,9 @@ export async function openIsolatedPage(raw: string, options: { timeoutMs?: numbe
   } catch (error) {
     await close();
     const rawMessage = error instanceof Error ? error.message : "";
-    const message = rawMessage === "WEB_ORIGIN_NOT_AUTHORIZED" ? "BROWSER_ORIGIN_NOT_AUTHORIZED" : rawMessage;
+    const message = rawMessage === "WEB_ORIGIN_NOT_AUTHORIZED"
+      ? "BROWSER_ORIGIN_NOT_AUTHORIZED"
+      : rawMessage === "IMAGE_BLOCKED_HOST" ? "WEB_BLOCKED_HOST" : rawMessage;
     throw new Error(["BROWSER_NOT_INSTALLED", "BROWSER_BUSY", "BROWSER_TIMEOUT", "BROWSER_ORIGIN_NOT_AUTHORIZED", "WEB_INVALID_URL", "WEB_BLOCKED_HOST"].includes(message) ? message : "BROWSER_OBSERVE_FAILED");
   }
 }

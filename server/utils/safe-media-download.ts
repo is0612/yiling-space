@@ -52,7 +52,7 @@ function describeFetchError(error: unknown): string {
   return parts.join(" <- ").slice(0, 200);
 }
 
-type IpRecord = { address: string; family: number };
+export type IpRecord = { address: string; family: number };
 
 function unbracket(hostname: string): string {
   return hostname.replace(/^\[/, "").replace(/\]$/, "");
@@ -203,11 +203,22 @@ export function assertFetchableMediaUrl(raw: string): URL {
 }
 
 export async function assertPublicMediaHost(hostname: string): Promise<void> {
+  await resolvePublicMediaHost(hostname);
+}
+
+/**
+ * Resolves a hostname once and returns only validated public addresses.
+ *
+ * Callers that cannot pin DNS at connect time (the isolated browser's confirmed form POST)
+ * use the returned address as their resolver pin, so a second DNS answer cannot point the
+ * connection at a private address.
+ */
+export async function resolvePublicMediaHost(hostname: string): Promise<IpRecord[]> {
   const host = unbracket(hostname).toLowerCase();
   const version = isIP(host);
   if (version === 4 || version === 6) {
     if (!isPublicAddress(host, version)) throw new Error("IMAGE_BLOCKED_HOST");
-    return;
+    return [{ address: host, family: version }];
   }
 
   let addresses: IpRecord[];
@@ -220,6 +231,7 @@ export async function assertPublicMediaHost(hostname: string): Promise<void> {
   if (addresses.some((entry) => !isPublicAddress(entry.address, entry.family))) {
     throw new Error("IMAGE_BLOCKED_HOST");
   }
+  return addresses;
 }
 
 type ResolveMediaHost = (hostname: string) => Promise<IpRecord[]>;
