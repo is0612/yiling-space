@@ -25,7 +25,7 @@ node scripts/desktop-installer.mjs --source 'dist/YilingSpace-Payload-<version>'
 
 构建机按仓库要求使用 Yarn Classic；生成的 payload 随带 Node、Electron、PG、生产依赖和后台 Worker 所需源码。默认不带 `.env`、`.data` 或开发 Nuxt 路径；`--with-env` / `--with-data` 已被拒绝。私有数据迁移使用备份/恢复，不把配置好的开发目录发给别人。
 
-`YilingSpace-Payload-*` 是安装源，不是可直接初始化数据的便携目录；安装版必须从安装器创建的入口启动。安装器产物为 `YilingSpace-Installer-*`，双击其中的安装批处理。目标无需单独安装 Docker、Node、Yarn，也无需先手写 `.env`，但目前必须已有 PG 所需的 VC x64 系统运行库；缺失时会明确中止，不自动安装或提升。
+`YilingSpace-Payload-*` 是安装源，不是可直接初始化数据的便携目录；安装版必须从安装器创建的入口启动。安装器产物为 `YilingSpace-Installer-*`，双击其中的安装批处理。目标无需单独安装 Docker、Node、Yarn，也无需先手写 `.env`，但目前必须已有 PG 所需的 VC x64 系统运行库；安装源与程序目录都提供「检查运行库.bat」和官方准备说明；缺失、错误位数、加载失败或无法验证时明确中止，用户自行从微软下载并交互安装后重试。当前未确认维护者再分发资格，不携带微软安装程序或 DLL，也不自动安装或提升，详见 [VC 运行库记录](../docs/desktop-vc-runtime.md)。
 
 完整目录策略、固定 PG 哈希/许可证、实际验收和限制见 [Windows 安装包记录](../docs/desktop-installer.md)。当前是本机验证阶段，尚未完成干净系统、第二系统用户、杀软、签名和公开发布验收。
 

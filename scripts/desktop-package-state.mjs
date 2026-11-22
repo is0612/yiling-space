@@ -5,6 +5,7 @@ import { initializeDesktopDatabase, openBoundDesktopDatabase, DESKTOP_DATABASE_F
 import { readPgJson, writePgJsonAtomic } from "./desktop-pg-store.mjs";
 import { isolatedPgEnv, protectPgDirectory } from "./desktop-pg-tools.mjs";
 import { verifyDesktopPgDistribution } from "./desktop-pg-distribution.mjs";
+import { requireDesktopVcRuntime } from "./desktop-vc-check.mjs";
 
 const uuid = value => typeof value === "string" && /^[a-f0-9-]{36}$/iu.test(value);
 function directory(file) {
@@ -67,6 +68,7 @@ export async function preparePackagedDesktop({ applicationRoot, env = process.en
       || (state.databaseInstanceId !== null && !uuid(state.databaseInstanceId))) throw new Error("desktop_package_installation_mismatch");
     const binDir = path.join(programRoot, "runtime", "pgsql", "bin");
     await verifyDesktopPgDistribution(path.join(programRoot, "runtime", "pgsql"));
+    await requireDesktopVcRuntime({ pgRoot: path.join(programRoot, "runtime", "pgsql") });
     if (!fs.existsSync(state.dataDir)) {
       if (state.databaseInstanceId !== null) throw new Error("desktop_package_bound_data_missing");
       const runtime = await initializeDesktopDatabase({ dataDir: state.dataDir, binDir, installationId: state.installationId });

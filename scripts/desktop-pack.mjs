@@ -73,7 +73,7 @@ fs.mkdirSync(path.join(app, "node_modules", "@prisma", "engines"), { recursive: 
 fs.copyFileSync(engine, path.join(app, "node_modules", "@prisma", "engines", "schema-engine-windows.exe"));
 const required = ["runtime/node.exe", "runtime/NODE-LICENSE.txt", "app/.output/server/index.mjs", "app/desktop/launch.cjs",
   "app/desktop/node_modules/electron/dist/electron.exe", "app/desktop/node_modules/electron/dist/LICENSE", "app/desktop/node_modules/electron/dist/LICENSES.chromium.html",
-  "app/scripts/desktop-install.mjs", "app/node_modules/tsx/dist/cli.mjs", "app/node_modules/prisma/build/index.js",
+  "app/scripts/desktop-install.mjs", "app/scripts/desktop-vc-check.mjs", "app/scripts/desktop-vc-runtime.mjs", "app/node_modules/tsx/dist/cli.mjs", "app/node_modules/prisma/build/index.js",
   "app/node_modules/@prisma/engines/schema-engine-windows.exe", "app/src/generated/prisma/client.ts"];
 for (const file of required) if (!fs.existsSync(path.join(staging, file))) throw new Error(`desktop_pack_required_file_missing:${file}`);
 for (const file of [".env", ".data", ".tmp", ".nuxt"]) if (fs.existsSync(path.join(app, file))) throw new Error("desktop_pack_private_or_development_material_found");
@@ -81,9 +81,10 @@ const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: 
 const status = spawnSync("git", ["status", "--porcelain"], { cwd: ROOT, encoding: "utf8" });
 const metadata = { format: "yiling-desktop-package", version: 1, packageId: randomUUID(), appVersion: version,
   runtime: "embedded", pgRelease: "16.16-2", nodeVersion: process.version, platform: "win32-x64",
+  vcRuntime: { strategy: "microsoft-user-download", included: false, automaticInstall: false },
   sourceRevision: revision.status === 0 ? revision.stdout.trim() : "unknown", sourceDirty: status.status !== 0 || Boolean(status.stdout.trim()) };
 fs.writeFileSync(path.join(staging, "desktop-package.json"), JSON.stringify(metadata, null, 2));
-fs.writeFileSync(path.join(staging, "README.txt"), `Yiling Space ${version} Windows installer payload\r\n\r\nThis clean payload includes Node, Electron and PostgreSQL. No Docker, Node or Yarn is required on the target.\r\nUse desktop-installer.mjs to create install.ps1 and the installer wrapper. This payload is not an initialized portable installation.\r\nNo development .env, .data or credentials are included. Licensing notices are preserved in runtime/ and Electron/production dependencies.\r\nDatabase data and install state are created outside program files by the installer.\r\nSource dirty: ${metadata.sourceDirty}; local verification payloads are not a clean-machine release certification.\r\n`, "utf8");
+fs.writeFileSync(path.join(staging, "README.txt"), `Yiling Space ${version} Windows installer payload\r\n\r\nThis clean payload includes Node, Electron and PostgreSQL. No Docker, Node or Yarn is required on the target. Microsoft VC x64 runtime is not redistributed; the installer checks it and provides Microsoft's official preparation guide.\r\nUse desktop-installer.mjs to create install.ps1 and the installer wrapper. This payload is not an initialized portable installation.\r\nNo development .env, .data or credentials are included. Licensing notices are preserved in runtime/ and Electron/production dependencies.\r\nDatabase data and install state are created outside program files by the installer.\r\nSource dirty: ${metadata.sourceDirty}; local verification payloads are not a clean-machine release certification.\r\n`, "utf8");
 let previous;
 if (fs.existsSync(output)) { previous = output + ".previous-" + randomUUID(); fs.renameSync(output, previous); }
 try { fs.renameSync(staging, output); }

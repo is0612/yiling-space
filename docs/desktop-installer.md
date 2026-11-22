@@ -30,9 +30,9 @@ node scripts/desktop-installer.mjs --source 'dist/YilingSpace-Payload-<version>'
 
 ## 系统运行库前置条件
 
-PE 导入检查确认本轮 PG 的 postgres/initdb 依赖 `VCRUNTIME140.dll`，官方 binaries 归档未携带这份 MSVC 系统运行库。安装命令会在创建任何程序/数据目录前检查此项，缺失时明确报错，不自动请求提升或安装系统软件。
+安装器现在先验证 PG 发行物，再从实际 PE 导入表识别 VC 依赖；固定发行物需要 msvcp140.dll、vcruntime140.dll、vcruntime140_1.dll。检查包括真实 System32 的可读性、x64 架构和原生加载结果，不再只看一个文件是否存在。未就绪时在复制/初始化前停止。
 
-因此当前准确表述是“不要求目标机另装 Docker、Node、Yarn，但仍要求 PG 所需的微软 VC x64 运行库已具备”；尚未把合法的 app-local CRT 或官方运行库安装流程集成进包。不能声称完全干净 Windows 零前置一键可用。此项与干净 VM 验收都是公开发布前的剩余事项。
+安装源和程序目录均附带「检查运行库.bat」、check-runtime.ps1 和 VC-runtime-guide.html，用户可从微软自行下载并交互安装后重试；不会自动提权、接受许可或重启。微软再分发条件尚未在本项目维护者侧确认，因此本包不加入微软 EXE/DLL，应用本体无需 Docker/Node/Yarn 但系统前置仍可能需要管理员处理。许可依据、命令及验证边界见 [VC 运行库记录](desktop-vc-runtime.md)。不能声称完全干净 Windows 零前置一键可用，干净 VM 验收仍待完成。
 
 ## 程序、数据、状态分开
 

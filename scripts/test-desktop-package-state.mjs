@@ -13,9 +13,9 @@ try {
   assert.equal(legacy.packaged, false); assert.equal(legacy.env.DATABASE_URL, "synthetic-legacy-value"); await legacy.release();
   if (process.platform === "win32") {
     const fakeSystem = path.join(root, "synthetic-system"); fs.mkdirSync(path.join(fakeSystem, "System32"), { recursive: true });
-    assert.throws(() => verifyDesktopSystemRuntime(fakeSystem), /msvc_runtime_required/u);
+    await assert.rejects(() => verifyDesktopSystemRuntime(fakeSystem), /msvc_runtime_required/u);
     fs.writeFileSync(path.join(fakeSystem, "System32", "vcruntime140.dll"), "synthetic presence marker; never executed");
-    verifyDesktopSystemRuntime(fakeSystem);
+    await assert.rejects(() => verifyDesktopSystemRuntime(fakeSystem), /msvc_runtime_required/u, "a file existing is not proof that a runtime can load");
     const installedMarker = path.join(root, "program", "desktop-install.json");
     fs.writeFileSync(installedMarker, "{}");
     await assert.rejects(() => preparePackagedDesktop({ applicationRoot, env: {} }), /metadata_missing/u, "an installed marker cannot fall back to a legacy database if package metadata is lost");
