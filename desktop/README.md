@@ -2,6 +2,8 @@
 
 桌面窗口由 Electron 提供；普通 Node 启动器管理数据库、Nitro、Scheduler 和 Worker。当前区分**源码启动**与**新安装包**，不会把既有 Docker 数据库自动换成新空库。
 
+主人绑定/免登录的当前进度和下一次跨机升级步骤见[阶段交接](../docs/desktop-identity-handoff.md)。
+
 ## 源码开发启动
 
 ```powershell

@@ -1,5 +1,7 @@
 # 安装版主人绑定与桌面免登录
 
+快速交接与下一次升级验收步骤见[阶段交接](desktop-identity-handoff.md)。
+
 ## 当前切片
 
 安装版建立了普通 Node 启动器 → supervisor → Nitro 与 Electron 主进程的私有认证通道。桌面窗口仍使用原 HTTP API 和 User/Session/ownerId 权限模型；没有新增匿名 local-enter 或兑换 Token 的 HTTP 路由，没有修改业务 schema、角色归属或 QQ 主人设置。
