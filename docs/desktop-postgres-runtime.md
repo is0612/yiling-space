@@ -66,10 +66,12 @@ DPAPI 不是跨电脑备份格式，也不替代数据库迁移。搬到另一�
 ```powershell
 $env:YILING_TEST_PG_BIN = (Resolve-Path '.data/vendor/postgresql-a0/release-16.16-2/pgsql/bin').Path
 yarn test:desktop-pg-lock
+yarn test:desktop-pg-init-recovery
 yarn desktop:pg:smoke
 yarn desktop:pg:runtime-smoke
-yarn desktop:pg:init-recovery
 ```
+
+`test:` 前缀的入口都进了 `test:all` 计划；`desktop:pg:smoke`、`desktop:pg:runtime-smoke` 仍只做手动冒烟（要真的起集群跑满一轮，不进总跑批）。初始化失败恢复测试在没有 Windows 或缺 `YILING_TEST_PG_BIN` 时打印跳过并成功退出，不会让 CI 假红。
 
 不导入 dotenv；所有数据库与记录均在新建隔离目录中，未连接用户真实业务库。成功清理测试实例；失败时尝试关闭已确认实例，不能确认时保留目录并报错，不继续删除。
 

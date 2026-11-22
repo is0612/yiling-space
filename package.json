@@ -35,6 +35,7 @@
     "desktop:pg:init-recovery": "node scripts/test-desktop-pg-init-recovery.mjs",
     "test:desktop-pg-lock": "node scripts/test-desktop-pg-lock.mjs",
     "test:desktop-pg-migrations": "node scripts/test-desktop-pg-migrations.mjs",
+    "test:desktop-pg-init-recovery": "node scripts/test-desktop-pg-init-recovery.mjs",
     "test:desktop-database-config": "node scripts/test-desktop-database-config.mjs",
     "desktop:pg:application-smoke": "tsx scripts/desktop-pg-application-smoke.ts",
     "desktop:db:init": "node scripts/desktop-database.mjs init",

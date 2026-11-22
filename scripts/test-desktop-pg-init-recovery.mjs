@@ -109,6 +109,10 @@ try {
   if (runtime) await runtime.close();
   if (fs.existsSync(path.join(fakePgData, "postmaster.pid"))) throw new Error(`Cleanup refused: inspect ${temporary}`);
   if (path.dirname(temporary) !== parent || !path.basename(temporary).startsWith("init-recovery-")) throw new Error("Unexpected test cleanup root");
-  if (succeeded) fs.rmSync(temporary, { recursive: true, force: true });
-  else console.error(`Retained isolated initialization diagnostics: ${temporary}`);
+  if (succeeded) {
+    // A cluster is thousands of files. Sandboxes that intercept bulk deletes can refuse this,
+    // and a refused cleanup must not turn a passing recovery check into a failure.
+    try { fs.rmSync(temporary, { recursive: true, force: true }); }
+    catch (error) { console.error(`Cleanup deferred (${error.code ?? error.message}): ${temporary}`); }
+  } else console.error(`Retained isolated initialization diagnostics: ${temporary}`);
 }
