@@ -445,6 +445,7 @@ export async function fillOnebotImageUrls(
   }
   // 段数对不上就不猜：错位补出来的直链会把 A 图的描述安到 B 图上，比不补更糟。
   if (refetched.length !== images.length) return images;
+  // Refetch only repairs transport URLs. Observation fields retain the original event's provenance.
   return images.map((image, index) =>
     image.url ? image : { ...image, url: refetched[index]?.url ?? "" });
 }
@@ -638,7 +639,7 @@ export async function sendOnebotPrivateMessage(
       // 两条都失败时把两边的理由都带上：只有「请先添加对方为好友」能解释为什么发不出去，
       // 只有「no such temp session」能解释为什么带了群号也没用。
       const plainReason = plainError instanceof Error ? plainError.message : String(plainError);
-      throw new Error(`ONEBOT_SEND_PRIVATE_FAILED: 临时会话失败（${tempReason}）；普通私聊失败（${plainReason}）。`);
+      throw new AggregateError([tempError, plainError], `ONEBOT_SEND_PRIVATE_FAILED: 临时会话失败（${tempReason}）；普通私聊失败（${plainReason}）。`);
     }
   }
 }
@@ -765,6 +766,8 @@ const ONEBOT_ACTION_TIMEOUT_MS = 15_000;
 
 /** Only an explicit protocol rejection proves that retrying cannot duplicate a message. */
 export function isOnebotSendRejected(error: unknown): boolean {
+  if (error instanceof AggregateError) return error.errors.length === 2 && error.errors.every(item =>
+    item instanceof Error && /^ONEBOT_SEND_\d+:/.test(item.message));
   return error instanceof Error && /^ONEBOT_SEND_\d+:/.test(error.message);
 }
 

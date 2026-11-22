@@ -70,6 +70,16 @@ const props = defineProps<{
   voiceChance: number;
   /** 两条语音之间至少隔多少分钟；0 = 不冷却。服务端会补默认值，这里留兜底。 */
   voiceCooldownMinutes?: number;
+  /** 她的回复能不能配一张自己画的图；角色级开关，默认关。 */
+  imageEnabled: boolean;
+  /** 自主配图的概率（0-100）；被明确要求时不看它。 */
+  imageChance: number;
+  /** 两张自主配图之间至少隔多少分钟；0 = 不冷却。 */
+  imageCooldownMinutes?: number;
+  /** 每天最多画几张（0 = 不限）。 */
+  imageDailyLimit?: number;
+  /** 画图模型名，只用来提示「模型没配」时该去哪配。 */
+  imageModel?: string;
   /** 服务端总会带默认值；这里仍留兜底，避免老数据没有这段时表单是空的 */
   proactive?: ProactiveSettings;
   /** 群聊找话题；同样是服务端补默认值，这里只做兜底。 */
@@ -143,12 +153,20 @@ const voice = reactive({
   cooldown: props.voiceCooldownMinutes ?? 20,
 });
 const draft = ref<ProactiveSettings>({ ...FALLBACK, ...(props.proactive ?? {}) });
+// 画图的行为参数留在这里；模型、地址、Key 在「模型设置 → 画图模型」。
+const image = reactive({
+  enabled: props.imageEnabled,
+  chance: props.imageChance,
+  cooldown: props.imageCooldownMinutes ?? 30,
+  dailyLimit: props.imageDailyLimit ?? 8,
+});
 const groupDraft = ref<GroupInitiativeSettings>({ ...GROUP_FALLBACK, ...(props.groupInitiative ?? {}) });
 const snapshot = ref<ProactiveSnapshot | null>(null);
 const savingEmoji = ref(false);
 const savingImageUnderstanding = ref(false);
 const savingStickerAutoCollect = ref(false);
 const savingVoice = ref(false);
+const savingImage = ref(false);
 const savingProactive = ref(false);
 const savingGroupInitiative = ref(false);
 const trying = ref(false);
@@ -304,6 +322,15 @@ watch(
     voice.transcribe = props.voiceTranscribe;
     voice.chance = props.voiceChance;
     voice.cooldown = props.voiceCooldownMinutes ?? 20;
+  },
+);
+watch(
+  () => [props.imageEnabled, props.imageChance, props.imageCooldownMinutes, props.imageDailyLimit],
+  () => {
+    image.enabled = props.imageEnabled;
+    image.chance = props.imageChance;
+    image.cooldown = props.imageCooldownMinutes ?? 30;
+    image.dailyLimit = props.imageDailyLimit ?? 8;
   },
 );
 // 保存成功后父级会重拉列表，额度跟着库里的值（服务端会把默认值补齐）
@@ -566,8 +593,38 @@ async function saveVoice() {
   }
 }
 
-/** silent：试跑前要先落库，那一步不该再弹一次「已保存」 */
-async function saveProactive(silent = false): Promise<boolean> {
+/**
+ * 画图的行为参数一起提交。模型、地址、Key 在「模型设置 → 画图模型」，
+ * 这里只留「她画不画、多久画一张、一天最多几张」。
+ *
+ * 和语音分开保存：画图是另一个服务商、另一份计费，混在一个按钮里
+ * 会出现「只想关画图却把语音也提交了」这种连带修改。
+ */
+async function saveImage() {
+  if (savingImage.value) return;
+  savingImage.value = true;
+  try {
+    await settingsApi.updateCharacter(props.characterId, {
+      imageEnabled: image.enabled,
+      imageChance: image.chance,
+      imageCooldownMinutes: image.cooldown,
+      imageDailyLimit: image.dailyLimit,
+    });
+    ElMessage.success(image.enabled ? "画图设置已保存。" : "已关闭画图：她只会用文字描述，不再出图。");
+    emit("saved");
+  } catch (error) {
+    // 失败就回滚成服务端的值：界面不能停在「已开启」。
+    image.enabled = props.imageEnabled;
+    image.chance = props.imageChance;
+    image.cooldown = props.imageCooldownMinutes ?? 30;
+    image.dailyLimit = props.imageDailyLimit ?? 8;
+    ElMessage.error(readError(error, "保存失败，请稍后重试。"));
+  } finally {
+    savingImage.value = false;
+  }
+}
+
+/** silent：试跑前要先落库，那一步不该再弹一次「已保存」 */async function saveProactive(silent = false): Promise<boolean> {
   if (savingProactive.value) return false;
   savingProactive.value = true;
   try {
@@ -1067,6 +1124,113 @@ async function tryGroupOnce() {
               @click="saveVoice"
             >
               {{ savingVoice ? "保存中…" : "保存语音设置" }}
+            </button>
+          </div>
+        </div>
+      </details>
+
+      <!-- 画图：和语音同一类「行为」，但模型配置在「模型设置 → 画图模型」 -->
+      <details class="more is-toggle">
+        <summary>
+          <span class="more-sum">画图</span>
+          <span class="grp-tag">她画一张图发出来（文生图）</span>
+          <span class="grow" />
+          <span
+            class="pill"
+            :class="image.enabled ? 'pill-green' : 'pill-gray'"
+          >{{ image.enabled ? "已开启" : "默认关闭" }}</span>
+          <el-icon class="more-caret">
+            <ArrowRight />
+          </el-icon>
+        </summary>
+
+        <div class="more-body">
+          <p class="beh-lead">
+            有人让她「画一张…」时，她先回一句话，再单独发一张图。画图要花另一家的钱：
+            模型、地址、Key 在
+            <b>「模型设置 → 画图模型」</b>里配，这里只管「画不画、多频繁」。
+          </p>
+
+          <p
+            v-if="!imageModel"
+            class="beh-lead"
+          >
+            <b>注意：</b>还没填画图模型 —— 现在打开开关也画不出来，只会照常发文字。
+            去「模型设置 → 画图模型」填上模型与 Key 再回来。
+          </p>
+
+          <div class="beh-field">
+            <div class="beh-inline">
+              <span class="beh-label">允许她画图</span>
+              <el-switch v-model="image.enabled" />
+            </div>
+            <em>
+              打开后，有人明确让她画时必画（不受下面的概率与冷却限制，每天上限仍然算）。
+              画图一张要等十几到几十秒，那一轮的文字也会跟着晚一点发。
+            </em>
+          </div>
+
+          <div class="beh-field">
+            <div class="beh-inline">
+              <span class="beh-label">她自己想画</span>
+              <span class="beh-value">{{ image.chance }}%</span>
+            </div>
+            <el-slider
+              v-model="image.chance"
+              :min="0"
+              :max="100"
+              :step="5"
+              :disabled="!image.enabled"
+            />
+            <em>
+              默认 5%：闲聊里偶尔配一张图。调到 0 = 只有被明确要求时才画。
+              注意它是「每轮都掷一次骰子」，调高会明显变贵，也会让回复变慢。
+            </em>
+          </div>
+
+          <div class="beh-field">
+            <span class="beh-label">两张自主配图至少隔</span>
+            <div class="beh-limit">
+              <el-input-number
+                v-model="image.cooldown"
+                :min="0"
+                :max="1440"
+                :step="5"
+                :disabled="!image.enabled"
+              />
+              <span>分钟</span>
+            </div>
+            <em>默认 30 分钟，只挡「她自己想画」那部分；被明确要求时冷却不生效。填 0 = 不冷却。</em>
+          </div>
+
+          <div class="beh-field">
+            <span class="beh-label">每天最多画</span>
+            <div class="beh-limit">
+              <el-input-number
+                v-model="image.dailyLimit"
+                :min="0"
+                :max="200"
+                :step="1"
+                :disabled="!image.enabled"
+              />
+              <span>张</span>
+            </div>
+            <em>
+              默认 8 张，按东八区日界算、这个角色所有会话合起来算。
+              填 0 = 不限 —— 建议留个上限，画图是按张计费的。
+            </em>
+          </div>
+
+          <div class="beh-state">
+            <span class="beh-meta">画图按张计费，不进 token 额度报表。</span>
+            <span class="grow" />
+            <button
+              type="button"
+              class="beh-btn is-lead"
+              :disabled="savingImage"
+              @click="saveImage"
+            >
+              {{ savingImage ? "保存中…" : "保存画图设置" }}
             </button>
           </div>
         </div>

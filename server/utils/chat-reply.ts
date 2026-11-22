@@ -56,6 +56,13 @@ export type ConversationContextMessage = {
    * 标记带出去，她才认得「刚才那条是我在说话」。
    */
   hadVoice?: boolean;
+  /**
+   * 这一条 ASSISTANT 回复里带了一张**她自己画的图**（生图，不是表情包）。
+   *
+   * 和上面两个同一个病：图只在 `metadata.image` 里，`content` 只有文字。
+   * 不带出去她就不记得自己画过，被追问时会说「我没画过图」。
+   */
+  hadImage?: boolean;
 };
 /**
  * scope "character" is shared character-global knowledge; "private" belongs to the current user
@@ -266,7 +273,7 @@ export type ConversationReplyInput = {
     kind?: "AI" | "HUMAN" | "UNKNOWN"; readOnly?: true; excludeFromGrowth?: true;
     mentions?: ConversationMessageMention[];
     quoted?: { id: string; member?: string; speaker?: string; content?: string; isSelf?: boolean } & ConversationSourcePolicy;
-    role?: "USER" | "ASSISTANT"; isOwner?: boolean; hadSticker?: boolean; hadVoice?: boolean;
+    role?: "USER" | "ASSISTANT"; isOwner?: boolean; hadSticker?: boolean; hadVoice?: boolean; hadImage?: boolean;
   }>;
   /** 她参与过、还没过期的话题锚点，模型只能从里面选。 */
   groupAnchors?: Array<{ id: string; label: string }>;
@@ -405,6 +412,15 @@ export type ConversationReplyInput = {
   /** 当前对话/渠道是否已启用且具备发送语音消息的完整能力。 */
   voiceEnabled?: boolean;
   voiceReply?: boolean;
+  /** 当前角色是否具备画图能力（开关开着 + 生图配置完整）。只影响她会不会否认。 */
+  imageEnabled?: boolean;
+  /** Server execution evidence, scoped to the latest assistant turn rather than every past proposal. */
+  imageExecution?: { plannedThisTurn: boolean; latestAssistant: "none" | "not_requested" | "offered" | "generated" | "sent" | "failed" | "unknown" };
+  /**
+   * 渠道批准本轮在回复之后调用生图，不代表生成或发送已经成功。
+   * 模型据此写 imagePrompt，正文只写简短承接语；送达事实必须另看历史 hadImage。
+   */
+  imageReply?: boolean;
   /**
    * 这个渠道会把 `reply` 里的换行拆成**几条消息**依次发出去（QQ 那样一句一句弹）。
    *
@@ -450,6 +466,15 @@ export type ConversationReplyResult = {
   faceIds: string[];
   /** 选中的表情包 id；没传 emojiStickers 或模型没挑时为空。渠道把它当图片发。 */
   stickerId: string | null;
+  /**
+   * 这一轮那张图的画面描述。只有 `imageReply` 为 true 时才可能有值。
+   *
+   * 调用方拿它去调生图接口。空 = 模型没写，由调用方用本轮原话兜底
+   * （`promptFromRequest`）—— 「让她画」这件事不能因为模型忘了填字段就不发生。
+   */
+  imagePrompt?: string | null;
+  /** This reply's concrete drawing proposal, not permission or proof of execution. */
+  imageOffer?: string | null;
   /**
    * 这一轮用掉的梗 id。调用方据此记账（`useCount` / `lastUsedAt`）——
    * 不记的话冷却永远算不出来，同一句会被反复说。
@@ -576,8 +601,15 @@ export type ConversationReplyResult = {
 // v72: prefer current capability evidence over dated failure reports; attribute feedback without inventing intent.
 // v77：只向原群注入经主人采纳的互动经验，私聊经验仍走独立分区。
 // v82：日记是历史自述而非当前状态证明；纠错时不补写未经证实的原因或结果。
-// v85：引用与提醒分开；实际提醒写入历史，普通接话不构成提醒理由。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v85";
+// v83：把「引用」和「@」彻底分开写：引用只管接哪句，@ 是一次提醒，只在单独对某人说、
+//      要他看见时才用；同一段对话不重复叫人（发送侧另有十分钟冷却兜底）。
+// v84：她可以画图（`imageEnabled` / `imageReply`）。这一轮真要画时，模型必须把画面描述
+//      写进 `imagePrompt`、正文按「递过去时说的那句话」写，且不许说「我画不了」；
+//      历史里带 `hadImage` 的回复要认得是自己画的（同 hadSticker / hadVoice 的道理）。
+// v85：历史 ASSISTANT 的 mentions 只代表实际发出的提醒；直接回答本身不构成 @ 理由。
+// v86：表情包接语气而不主动点评画面；没有图像描述时按当前问题如实回应。
+// v87：画图能力、提议、获准执行与实际送达分开；短确认由代码续接具体提议。
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v87";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -732,7 +764,9 @@ function systemPrompt(flags: {
   mustReply?: boolean;
   repair?: boolean;
   voiceEnabled?: boolean;
+  imageEnabled?: boolean;
   withVoiceReply?: boolean;
+  withImageReply?: boolean;
   withSegmentedReply?: boolean;
   withAcquaintances?: boolean;
   withFriendRoster?: boolean;
@@ -749,6 +783,8 @@ function systemPrompt(flags: {
   withRawMessages?: boolean;
   withHadSticker?: boolean;
   withHadVoice?: boolean;
+  withHadImage?: boolean;
+  withImageExecution?: boolean;
   withMediaTokens?: boolean;
   withMemoryAssistant?: boolean;
   withMemoryAssistantEvidence?: boolean;
@@ -760,9 +796,9 @@ function systemPrompt(flags: {
 } = {}): string {
   const {
     withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat,
-    mustReply, repair, voiceEnabled, withVoiceReply, withSegmentedReply, withAcquaintances, withFriendRoster, withFriendAliases,
+    mustReply, repair, voiceEnabled, imageEnabled, withVoiceReply, withImageReply, withSegmentedReply, withAcquaintances, withFriendRoster, withFriendAliases,
     withGroupMembers, withGroupActivity, withJournal, withJournalRecent, withJournalFacts, withCrossChannel, withEvents, withRecentEvents, withRawMessages,
-    withHadSticker, withHadVoice, withMediaTokens, withMemoryAssistant, withMemoryAssistantEvidence, withKnowledge, withPreferences, withExpressionHabits, withGoals, withSelfUnderstanding,
+    withHadSticker, withHadVoice, withHadImage, withImageExecution, withMediaTokens, withMemoryAssistant, withMemoryAssistantEvidence, withKnowledge, withPreferences, withExpressionHabits, withGoals, withSelfUnderstanding,
   } = flags;
 
   const lines: string[] = [
@@ -971,8 +1007,8 @@ function systemPrompt(flags: {
   // ⑤ How to speak
   if (withMediaTokens) {
     lines.push(
-      "A bracketed token like [害羞] or [图片] is that sticker or image attached: read it as mood, not typed text.",
-      "When it reads [图片：…], the text after the colon is the supplied image description. Respond using that description without inventing unseen details. If it does not answer the question, state the specific missing information or ask for clarification; do not invent blurry lettering or claim direct visual access beyond the supplied material.",
+      "Bracketed media tokens are attachments, not words the person typed. [害羞] is a named built-in face. [表情包] or [表情包：…] is a sticker: respond to the surrounding conversation and its supported tone, without unsolicited narration, aesthetic judgments, or questions about the picture. A bare sticker token does not reveal a specific emotion; never invent one. Only describe or explain its visible content when the person explicitly asks about that attachment. A description or label does not establish the sender's intention or a meme's origin.",
+      "[图片：…] supplies an image description you may use when relevant to the person's question; it is not a request to narrate every picture. [图片] supplies no visual content. In ordinary conversation, continue naturally without announcing a media failure or asking for a resend. If the person explicitly asks about an image or sticker and the supplied information is absent or insufficient, briefly state the specific missing information and ask only for what is needed; never pretend to have read it. Legacy [图片：无法读取] also means no visual content, not a scene description. Do not invent unseen details or claim direct visual access beyond the supplied material.",
       "When it reads [语音：…], that is what the voice said; [语音（没转成文字）] means it did not come through — ask once, never guess.",
     );
   }
@@ -991,6 +1027,25 @@ function systemPrompt(flags: {
       "catchphrases are your verbal habits. When the moment matches, say the phrase verbatim — not paraphrased or explained. justSaid means it is cooling down, so do not use it this turn. At most one per reply; add its id to usedCatchphraseIds only when you actually say it.",
     );
   }
+  if (withHadImage) {
+    lines.push("An earlier line's hadImage: true confirms that specific historical reply actually sent its picture. Own that picture, but an old sent picture does not prove a later drawing proposal or request was executed. For a status question such as '画了吗' or '好了吗', check the corresponding sent evidence; without it, say the current result is unconfirmed rather than claiming completion. A status question alone is not a new request to generate a picture.");
+  }
+
+  if (withImageExecution) {
+    lines.push("imageExecution is server-supplied execution evidence and takes precedence over conversational claims such as '画好了'. plannedThisTurn means an attempt is approved, not completed. latestAssistant describes only the latest assistant turn: none/not_requested/offered are not execution; generated is not delivery; failed/unknown do not establish success; sent confirms only that turn's picture. Do not use it or an older hadImage to prove another proposal was executed. For status questions, report missing or unconfirmed results honestly; the question itself does not authorize a new generation.");
+  }
+  if (imageEnabled) {
+    /**
+     * 只说「会」，不说「不会」。
+     *
+     * 语音那段会显式告诉她「你现在不能发语音」，因为发不出语音是个**功能性事实**，
+     * 不交代她会顺着用户的话编。画图不一样：开关默认关时她只是没有这个能力，
+     * 而每轮都提一句「你不能画图」既浪费提示词，又会让一个本该自然的人设
+     * 变成「我的功能列表里没有这一项」。所以只在开着的时候提。
+     */
+    lines.push("imageEnabled is true: drawing is available, not evidence that this turn has executed anything. Do not offer a picture every turn. When this reply naturally proposes drawing a concrete subject and permission is still pending, you may return imageOffer with that proposal's concrete visual content (max 1200 characters), and ask or offer naturally without claiming it is drawn. Return imageOffer only for a proposal you actually make in this reply, never for an old proposal, a vague offer, a status question, or a picture already being made this turn. A short confirmation can be linked to a recent verified offer only by the channel; never treat your own claim as execution. A status question alone is not a new drawing request: without corresponding sent evidence, state that completion is not confirmed. Only imageReply authorizes generation for this turn, and even it is not proof of completion or delivery.");
+  }
+
   if (withVoiceReply) {
     lines.push(
       "This reply reaches the other person as spoken voice, not text. Write exactly what you would say out loud: short sentences, natural rhythm, one or two breaths.",
@@ -1002,6 +1057,19 @@ function systemPrompt(flags: {
         "A voice message carries no quote and no @ — they are dropped before sending. Leave replyToMessageId and atMessageId out; say the person's name in the sentence if you need to make clear who you are answering.",
       );
     }
+  }
+
+  /**
+   * 本轮获准尝试生成，但模型写回复时尚无生成或发送结果。
+   * 正文只承接请求，不先报完成；图片成功后才由渠道另发。
+   * 能力可用不等于已经执行，避免自然对话承诺伪装成发送事实。
+   */
+  if (withImageReply) {
+    lines.push(
+      "imageReply means the channel approved an image-generation attempt after this reply is prepared; generation and delivery have not yet been confirmed. Fill imagePrompt with a concrete visual description: subject, action or scene, composition, lighting, colour, style. Describe only what should appear in the image — never the request itself, the tool, the app or the act of drawing. Do not return imageOffer in this turn.",
+      "Write a short acknowledgement of the drawing request, not a claim of success. Do not say '画好了', '已发送', 'here it is', or otherwise imply the image is finished or delivered. Do not deny the available drawing capability or narrate the image element by element. If generation succeeds, the channel will send a separate image after your text; that future step is not current evidence.",
+      "The image is its own message: it carries no quote and no @. Keep replyToMessageId and atMessageId on your text only.",
+    );
   }
 
   /**
@@ -1028,6 +1096,8 @@ function systemPrompt(flags: {
     ...(withFaces ? ["faces (array, at most one available face id)"] : []),
     ...(withStickers ? ["sticker (one available sticker id or null)"] : []),
     ...(withCatchphrases ? ["usedCatchphraseIds"] : []),
+    ...(withImageReply ? ["imagePrompt (visual description for the approved generation attempt)"] : []),
+    ...(imageEnabled && !withImageReply ? ["optional imageOffer (this reply's concrete drawing proposal, max 1200 characters, or null)"] : []),
     ...(withMemoryAssistant ? ["optional memoryAssistantQuery (specific historical search query, max 240 characters)"] : []),
     ...(withGroupChat ? ["optional groupDecision"] : []),
     "optional responseExplanation (string, max 400 characters)",
@@ -1217,6 +1287,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
   // 她自己带过图/发过语音的那条在历史里；没有这样的行就不解释这两个标记。
   const withHadSticker = input.recentMessages.some((entry) => entry.role === "ASSISTANT" && entry.hadSticker === true);
   const withHadVoice = input.recentMessages.some((entry) => entry.role === "ASSISTANT" && entry.hadVoice === true);
+  const withHadImage = input.recentMessages.some((entry) => entry.role === "ASSISTANT" && entry.hadImage === true)
+    || (input.groupBackground ?? []).some((entry) => entry.role === "ASSISTANT" && entry.hadImage === true);
 
   /**
    * 段标记的解释也只在这一轮真的出现标记时才写。
@@ -1227,8 +1299,9 @@ export async function generateConversationReply(input: ConversationReplyInput, o
    */
   const roundText = [
     input.currentMessage,
-    ...(input.transcript ?? []).map((entry) => entry.content),
-    ...(input.groupBackground ?? []).map((entry) => entry.content),
+    ...(!withGroupChat && input.quotedMessage?.content ? [input.quotedMessage.content] : []),
+    ...(input.transcript ?? []).flatMap((entry) => [entry.content, entry.quoted?.content ?? ""]),
+    ...(input.groupBackground ?? []).flatMap((entry) => [entry.content, entry.quoted?.content ?? ""]),
     ...input.recentMessages.map((entry) => entry.content),
   ].join("\n");
   const withMediaTokens = /\[[^\]\n]+\]/u.test(roundText);
@@ -1313,6 +1386,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
     },
     ...(userAddress ? { userAddress } : {}),
     ...(speaker ? { speaker } : {}),
+    ...(input.imageExecution && ["none", "not_requested", "offered", "generated", "sent", "failed", "unknown"].includes(input.imageExecution.latestAssistant)
+      ? { imageExecution: { plannedThisTurn: input.imageExecution.plannedThisTurn === true, latestAssistant: input.imageExecution.latestAssistant } } : {}),
     ...(!transcript.length ? { currentMessage: input.currentMessage } : {}),
     ...(!withGroupChat && input.quotedMessage ? {
       quotedMessage: {
@@ -1357,6 +1432,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
             ...(entry.role !== "ASSISTANT" && entry.isOwner !== undefined ? { isOwner: entry.isOwner } : {}),
             ...(entry.role === "ASSISTANT" && entry.hadSticker ? { hadSticker: true } : {}),
             ...(entry.role === "ASSISTANT" && entry.hadVoice ? { hadVoice: true } : {}),
+            ...(entry.role === "ASSISTANT" && entry.hadImage ? { hadImage: true } : {}),
             ...(entry.mentions?.length
               ? {
                   mentions: entry.mentions.slice(0, 8).map((mention) => ({
@@ -1495,6 +1571,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       ...(entry.role === "ASSISTANT" && entry.hadSticker ? { hadSticker: true } : {}),
       // 她发过语音的那句：同上，标记带过去，否则她会否认自己会说话。
       ...(entry.role === "ASSISTANT" && entry.hadVoice ? { hadVoice: true } : {}),
+      // 她画过图的那句：图只在 metadata 里，不标出来她会说「我没画过」。
+      ...(entry.role === "ASSISTANT" && entry.hadImage ? { hadImage: true } : {}),
     })),
     memories: contextMemories.map((memory) => ({
       id: memory.id,
@@ -1683,6 +1761,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
                 mustReply: input.allowSilent !== true,
                 voiceEnabled: input.voiceEnabled ?? (input.voiceReply === true),
         withVoiceReply: input.voiceReply === true,
+                imageEnabled: input.imageEnabled === true,
+                withImageReply: input.imageReply === true,
                 withSegmentedReply: input.segmentedReply === true,
                 withAcquaintances: Boolean(input.groupAcquaintances?.length),
                 withFriendRoster: Boolean(acquaintancePayload),
@@ -1699,6 +1779,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
                 withRawMessages,
                 withHadSticker,
                 withHadVoice,
+                withHadImage,
+                withImageExecution: Boolean(promptInput.imageExecution),
                 withMediaTokens,
                 withMemoryAssistant: input.memoryAssistantAvailable === true,
                 withMemoryAssistantEvidence: input.memoryAssistantEvidenceProvided === true,
@@ -1866,6 +1948,20 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       : "";
     const responseExplanation = typeof parsed.responseExplanation === "string"
       ? parsed.responseExplanation.trim().slice(0, 400) : "";
+    /**
+     * 画面描述：只在「这一轮真的要画」时收。
+     *
+     * 换行压成逗号，是因为模型爱写「主体：…\n风格：…」；生图接口把它当一段自然语言读，
+     * 压成一行反而更像一句完整描述。长度与 `image-generation.ts` 的
+     * `IMAGE_PROMPT_MAX_CHARS` 对齐，但这里不 import 那个模块 —— 提示词层不该
+     * 为了一个常数把 sharp / 文件系统拖进每次对话。
+     */
+    const imagePrompt = input.imageReply === true && typeof parsed.imagePrompt === "string"
+      ? parsed.imagePrompt.replace(/\s*\n+\s*/gu, "，").replace(/\s{2,}/gu, " ").trim().slice(0, 1200).trim() || null
+      : null;
+    const imageOffer = input.imageEnabled === true && input.imageReply !== true && typeof parsed.imageOffer === "string"
+      ? parsed.imageOffer.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s{2,}/gu, " ").trim().slice(0, 1200).trim() || null
+      : null;
     const base = {
       ...(responseExplanation ? { responseExplanation } : {}),
       usedGoalIds: readIdList(parsed.usedGoalIds, new Set((input.goals ?? []).map(item => item.id)), 4),
@@ -1897,7 +1993,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
     if (withGroupChat && input.allowSilent === true && parsed.action === "silent") {
       // 沉默轮不记账：这一轮她什么都没说，模型却可能在 JSON 里留一个梗 id（从上一轮串味过来的）。
       // 记了就等于「没开口也算用过」，冷却白白吃掉一次。
-      return { action: "silent", reply: "", faceIds: [], stickerId: null, ...base, usedCatchphraseIds: [], usedPreferenceIds: [], usedExpressionHabitIds: [], usedGoalIds: [] };
+      return { action: "silent", reply: "", faceIds: [], stickerId: null, imagePrompt: null, ...base, usedCatchphraseIds: [], usedPreferenceIds: [], usedExpressionHabitIds: [], usedGoalIds: [] };
     }
     if (!reply) {
       // 只给检索请求、不写正文时，允许内部 wrapper 继续执行记忆检索。
@@ -1908,6 +2004,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
           reply: "",
           faceIds: withStickers ? [] : readIdList(parsed.faces, validFaceIds, 1),
           stickerId: withStickers ? readStickerId(parsed.sticker, validStickerIds) : null,
+          // 内部检索轮还没有正文，画图要等最终那一轮再说；这一轮先不带。
+          imagePrompt: null,
           ...base,
           memoryAssistantQuery,
         };
@@ -1922,7 +2020,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
        * 那种情况确实得逼它给出一句话。
        */
       if (withGroupChat && input.allowSilent === true) {
-        return { action: "silent", reply: "", faceIds: [], stickerId: null, ...base, usedCatchphraseIds: [] };
+        return { action: "silent", reply: "", faceIds: [], stickerId: null, imagePrompt: null, ...base, usedCatchphraseIds: [] };
       }
       throw new Error("LLM_INVALID_RESPONSE: 模型没有返回有效的 reply 文本。");
     }
@@ -1932,6 +2030,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       faceIds: withStickers ? [] : readIdList(parsed.faces, validFaceIds, 1),
       // 模型偶尔会写个不在清单里的 id（甚至把名字写进来）—— 只认清单内的。
       stickerId: withStickers ? readStickerId(parsed.sticker, validStickerIds) : null,
+      imagePrompt,
+      imageOffer,
       ...base,
       ...(memoryAssistantQuery.length >= 3 ? { memoryAssistantQuery } : {}),
     };

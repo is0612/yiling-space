@@ -1,3 +1,6 @@
+import { resolveImageOfferConfirmation, isImageStatusQuestion } from "../image-offer";
+import type { ImageTextPart } from "../media-text";
+import { mergeStoredMediaMetadata, storedMediaObservations, type ChannelMediaObservation, type MediaVision } from "./media-observation";
 import { loadPromptEventCandidates } from "../prompt-event-candidates";
 import { selectPromptMemoryContext } from "../prompt-memory-selection";
 import { fillContextPlanUsage, planContextTurn } from "../context-plan";
@@ -62,12 +65,12 @@ import {
   shouldUseOnlyTargetGroupRawRows,
 } from "../owner-timeline-retrieval";
 import { isEmojiEnabled, resolveChatModelSettings } from "../chat-model-config";
-import { resolveCharacterApiKey, resolveCharacterAsrApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
+import { resolveCharacterApiKey, resolveCharacterAsrApiKey, resolveCharacterImageApiKey, resolveCharacterVoiceApiKey } from "../credential-encryption";
 import {
   extractMemoryAssistantSearchTerms,
   resolveMemoryItemLimit, resolveMemoryTokenBudget, resolveRecentMessageLimit, resolveSnapshotTokenBudget,
 } from "../memory-retrieval";
-import { recordModelUsage, readDailyQuota, toUsageTokens } from "../model-usage";
+import { recordModelUsage, readDailyQuota, toUsageTokens, usageDayKey } from "../model-usage";
 import {
   applyImageDescriptions,
   describeImages,
@@ -107,6 +110,20 @@ import {
   type ChannelVoiceRef,
   type VoiceTtsSettings,
 } from "../voice";
+import {
+  generateImage,
+  isImageRequested,
+  isImageGenerationEnabled,
+  isImageGenerationDeclined,
+  readImageExecutionState,
+  planImageReply,
+  promptFromRequest,
+  readStoredImageFlag,
+  readSentImageFlag,
+  resolveImageGenerationSettings,
+  type GeneratedImage,
+  type ImageGenerationSettings,
+} from "../image-generation";
 
 export type ChannelReplyOptions = {
   /** 表情 id。渠道自己保证 id 合法；不支持表情的渠道忽略即可。 */
@@ -119,9 +136,16 @@ export type ChannelReplyOptions = {
    * 拿不到或发失败再退回图片段 —— 具体取舍在渠道里，流水线只负责把 id 带下去。
    */
   sticker?: { id: string; filePath: string; qqEmojiId?: string | null };
-  /** 引用回复的消息 id（本平台原始 id）。群聊里让她锚定「接的是哪一句」。 */
-  replyToMessageId?: string;
   /**
+   * 这一轮她自己画的一张图（文生图，不是表情包）。
+   *
+   * 渠道把它**单独发一条**：图和文字拼在一条里在 QQ 能显示，但引用块会跟图挤在一起，
+   * 而图单独一条和表情包的行为一致（已经跑了几千轮）。发不出来只记日志 ——
+   * 文字已经发出去了，不能因为一张图把整轮判成失败。
+   */
+  image?: GeneratedImage;
+  /** 引用回复的消息 id（本平台原始 id）。群聊里让她锚定「接的是哪一句」。 */
+  replyToMessageId?: string;  /**
    * 要点名的人 —— 填他说过的那条消息 id，渠道 @ 这条消息的作者。
    *
    * 与 `replyToMessageId` 分开传，因为两件事的目的不同：引用说明「接哪一句」，
@@ -156,6 +180,7 @@ export type ChannelReplyOptions = {
 
 /** Internal delivery facts; platform identifiers must never be copied into prompt payloads. */
 export type ChannelReplyDelivery = {
+  image?: { status: "sent" | "failed" | "unknown"; sentAt?: string; reason?: "read_failed" | "send_failed" | "unconfirmed" };
   at?: {
     requestedMessageId: string;
     targetQq?: string;
@@ -216,6 +241,10 @@ export type ChannelTurnMessage = {
   occurredAt?: Date;
   /** 这条消息里带的图。只有接了「看图」旁路才会被读，没配视觉模型时完全忽略。 */
   images?: ChannelImageRef[];
+  imageTextParts?: ImageTextPart[];
+  promptImageTextParts?: ImageTextPart[];
+  /** Safe per-segment observations, excluded from model payloads. */
+  observedMedia?: ChannelMediaObservation[];
   /** 这条消息里带的语音。只有接了「听懂语音」旁路才会被读，没配 ASR 时完全忽略。 */
   voices?: ChannelVoiceRef[];
   /** 当前说话人是不是主人；只用于提示词，不参与鉴权。 */
@@ -260,6 +289,9 @@ export type ChannelMessageInput = {
   mentionTargets?: string[];
   /** 这条消息带的图。渠道不传就等于「这个渠道没有图」，不影响其他行为。 */
   images?: ChannelImageRef[];
+  imageTextParts?: ImageTextPart[];
+  promptImageTextParts?: ImageTextPart[];
+  observedMedia?: ChannelMediaObservation[];
   /** 这条消息带的语音。渠道不传就等于「这个渠道没有语音」。 */
   voices?: ChannelVoiceRef[];
   /**
@@ -277,6 +309,13 @@ export type ChannelMessageInput = {
    * 与 faceCatalog 同理：流水线不认平台名，只认这份能力声明在不在。
    */
   voiceCapable?: boolean;
+  /**
+   * 这个渠道能不能把一张图发出去（文生图的结果）。
+   *
+   * 与 `voiceCapable` 同一个道理：传了就等于声明「本渠道能发图」。
+   * 不声明就永远不画 —— 画出来发不出去，等于花一笔钱换一张谁也看不见的图。
+   */
+  imageCapable?: boolean;
   /**
    * 这个渠道能不能把一条回复拆成几条消息依次发（QQ 一句一句弹）。
    *
@@ -313,6 +352,7 @@ export function buildStoredMessageMetadata(input: {
     mentions?: ConversationMessageMention[];
     speaker?: { isOwner?: boolean };
     voices?: unknown[];
+    observedMedia?: ChannelMediaObservation[];
     quotedMessage?: ConversationQuotedMessage;
     kind?: "AI" | "HUMAN" | "UNKNOWN";
     excludeFromGrowth?: true;
@@ -326,6 +366,9 @@ export function buildStoredMessageMetadata(input: {
     platform: input.platform,
     storedReason: input.storedReason,
     ...conversationSourcePolicy(message),
+    ...(message.observedMedia?.length ? { media: storedMediaObservations(message.observedMedia) as Prisma.InputJsonArray,
+      ...(message.observedMedia.length > 100 ? { mediaOmitted: message.observedMedia.length - 100 } : {}),
+    } : {}),
     // 谁被 @ 了：提炼忆泡时用来判断「这句话是不是冲她说的」。
     ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
     // 被 @ 的具体是谁：代号 / 显示名 / 身份。昵称会改，认人仍以 qq 为准。
@@ -565,6 +608,8 @@ export type ChannelBatchInput = {
   allowSilent?: boolean;
   /** 见 `ChannelMessageInput.voiceCapable`。 */
   voiceCapable?: boolean;
+  /** 见 `ChannelMessageInput.imageCapable`。 */
+  imageCapable?: boolean;
   /** 见 `ChannelMessageInput.segmentCapable`。 */
   segmentCapable?: boolean;
   /** 群聊上下文；私聊不传。 */
@@ -722,7 +767,7 @@ function patchMessageText(
  * 放在额度检查之后：额度已经超了就别再为看图多花一次调用。
  * 失败一律吞掉：少一句描述不该让整轮回复变成错误事件。
  */
-async function attachImageDescriptions(
+export async function attachImageDescriptions(
   messages: ChannelTurnMessage[],
   context: {
     modelConfig: unknown;
@@ -732,20 +777,29 @@ async function attachImageDescriptions(
     characterId: string;
     bindingId: string;
   },
+  services: { resolveSettings: typeof resolveVisionSettingsForCharacter; describe: typeof describeImages } = { resolveSettings: resolveVisionSettingsForCharacter, describe: describeImages },
 ): Promise<ChannelTurnMessage[]> {
   if (!messages.some((message) => (message.images?.length ?? 0) > 0)) return messages;
   // 视觉 Key 可能是这个角色单独配的另一家（智谱 / 通义），所以走会解密的那层入口。
-  const settings = await resolveVisionSettingsForCharacter({
+  const settings = await services.resolveSettings({
     modelConfig: context.modelConfig,
     chatModel: context.chatModel,
     chatApiBaseUrl: context.apiBaseUrl,
     chatApiKey: context.apiKey,
   });
-  if (!settings) return messages;
+  const observed = messages.map(message => ({ ...message,
+    ...(message.observedMedia?.length ? { observedMedia: message.observedMedia.map(media => media.source === "image"
+      ? { ...media, vision: { status: "skipped", reason: !settings ? "not_enabled"
+        : media.imageIndex !== undefined && !message.images?.[media.imageIndex]?.url ? "no_url" : "limit" } as MediaVision } : media) } : {}),
+  }));
+  if (!settings) return observed;
+  const setVision = (message: ChannelTurnMessage, imageIndex: number, vision: MediaVision) => {
+    for (const media of message.observedMedia ?? []) if (media.source === "image" && media.imageIndex === imageIndex) media.vision = vision;
+  };
 
   let remaining = MAX_IMAGES_PER_TURN;
   const descriptionsByMessage = new Map<string, Array<string | null | undefined>>();
-  for (const message of messages) {
+  for (const message of observed) {
     if (remaining <= 0) break;
     const refs = message.images ?? [];
     if (!refs.length) continue;
@@ -760,16 +814,18 @@ async function attachImageDescriptions(
       // 这一条消息里的图片都没有可下载直链：不发起模型请求，但逐个标成无法读取。
       descriptionsByMessage.set(
         message.externalMessageId,
-        refs.map(() => null),
+        refs.map((_, index) => { setVision(message, index, { status: "skipped", reason: "no_url" }); return null; }),
       );
       continue;
     }
 
-    const batch = targetIndexes.map((index) => refs[index]!);
+    const batch = targetIndexes.map((index) => ({ ...refs[index]!,
+      mediaKind: message.observedMedia?.find(media => media.source === "image" && media.imageIndex === index)?.kind ?? refs[index]!.mediaKind,
+    }));
     remaining -= batch.length;
     let batchDescriptions: Array<string | null>;
     try {
-      batchDescriptions = await describeImages(batch, settings, {
+      batchDescriptions = await services.describe(batch, settings, {
         characterId: context.characterId,
         channelBindingId: context.bindingId,
       });
@@ -778,19 +834,25 @@ async function attachImageDescriptions(
       batchDescriptions = batch.map(() => null);
     }
 
+    targetIndexes.forEach((imageIndex, index) => setVision(message, imageIndex, batchDescriptions[index]?.trim()
+      ? { status: "ok" } : { status: "failed", reason: "description_unavailable" }));
     const aligned = alignMediaResults(refs.length, targetIndexes, batchDescriptions, undefined);
     // 没有直链的图片是明确的读取失败；有直链但本轮额度未覆盖的图片保持原占位符。
     refs.forEach((image, index) => {
-      if (!image.url) aligned[index] = null;
+      if (!image.url) { aligned[index] = null; setVision(message, index, { status: "skipped", reason: "no_url" }); }
     });
     descriptionsByMessage.set(message.externalMessageId, aligned);
   }
-  if (!descriptionsByMessage.size) return messages;
+  if (!descriptionsByMessage.size) return observed;
 
-  return messages.map((message) => {
+  return observed.map((message) => {
     const descriptions = descriptionsByMessage.get(message.externalMessageId);
     if (!descriptions?.length) return message;
-    return patchMessageText(message, (text) => applyImageDescriptions(text, descriptions));
+    if (!message.imageTextParts) return patchMessageText(message, text => applyImageDescriptions(text, descriptions));
+    return { ...message, content: applyImageDescriptions(message.content, descriptions, message.imageTextParts),
+      ...(message.promptContent !== undefined ? { promptContent: applyImageDescriptions(message.promptContent, descriptions,
+        message.promptImageTextParts ?? message.imageTextParts) } : {}),
+    };
   });
 }
 
@@ -1133,6 +1195,10 @@ async function persistChannelTurnResult(input: {
   replyFaces: string[];
   replySticker: StickerCatalogEntry | null;
   replyVoice: boolean;
+  /** 这一轮她自己画的那张图；没画就是 null。只落相对路径，不存图片字节。 */
+  replyImage: GeneratedImage | null;
+  imageOffer?: { prompt: string; authorOpenId: string };
+  imageAttempt?: { status: "generated" | "generation_failed" | "missing_prompt" };
   replySegments: string[];
   goals: ChannelTurnGrowthPreparation["goals"];
   expressionHabits: ChannelTurnGrowthPreparation["expressionHabits"];
@@ -1142,7 +1208,7 @@ async function persistChannelTurnResult(input: {
     prisma, existingConversation, isGroup, globalScope, ownerPrivateScopeId, isOwnerTurn, turn,
     conversationScopeId, groupId, title, messages, privateMessagesRecorded, now, assistantAt, generated,
     observedReadOnlyAiEvidence, privateHistorySelection, selfUnderstanding, replyFaces, replySticker,
-    replyVoice, replySegments, goals, expressionHabits, preferences,
+    replyVoice, replyImage, replySegments, goals, expressionHabits, preferences, imageOffer, imageAttempt,
   } = input;
   return await prisma.$transaction(async (tx) => {
     let conversation = existingConversation;
@@ -1275,6 +1341,8 @@ async function persistChannelTurnResult(input: {
             model: generated.model,
             provider: generated.provider,
             promptTemplateVersion: generated.promptTemplateVersion,
+            ...(imageOffer ? { imageOffer } : {}),
+            ...(imageAttempt ? { imageAttempt } : {}),
             usedMemoryIds: generated.usedMemoryIds,
             usedSnapshotIds: generated.usedSnapshotIds,
             usedPreferenceIds: generated.usedPreferenceIds ?? [],
@@ -1293,6 +1361,17 @@ async function persistChannelTurnResult(input: {
             ...(replySticker ? { stickerId: replySticker.id } : {}),
             // 只记「这一条是语音」，不存音频：音频发完就没了，存下来也没法重放给模型。
             ...(replyVoice ? { voice: true } : {}),
+            // 她画的那张图：只存相对路径与尺寸，不存字节，也不记聊天模型 ——
+            // 只证明生成；下一轮 hadImage 还要核对 replyDelivery.image 的发送回执。
+            ...(replyImage
+              ? {
+                  image: {
+                    path: replyImage.relativePath,
+                    ...(replyImage.width ? { width: replyImage.width } : {}),
+                    ...(replyImage.height ? { height: replyImage.height } : {}),
+                  },
+                }
+              : {}),
             // 这一轮在 QQ 上弹了几条。content 里保留着换行，这里只留个数方便排查
             // 「她怎么一下发了三条」—— 单条时不记，免得 metadata 里多一个恒为 1 的字段。
             ...(replySegments.length > 1 ? { replySegments: replySegments.length } : {}),
@@ -1367,12 +1446,14 @@ async function deliverChannelTurnReply(input: {
   replyFaces: string[];
   replySticker: StickerCatalogEntry | null;
   replyVoice: boolean;
+  /** 这一轮她自己画的那张图；没画就是 null。只落相对路径，不存图片字节。 */
+  replyImage: GeneratedImage | null;
   replySegments: string[];
   voiceSettings: VoiceTtsSettings | null;
   recordDelivery: (delivery: ChannelReplyDelivery) => Promise<void>;
 }): Promise<void> {
   const { prisma, character, platform, characterId, sendReply, isGroup, messages, generated,
-    replyFaces, replySticker, replyVoice, replySegments, voiceSettings } = input;
+    replyFaces, replySticker, replyVoice, replyImage, replySegments, voiceSettings } = input;
   if (generated.action !== "reply") return;
   /**
    * 语音条只发一个 record 段 —— 引用和 @ 都不带。
@@ -1397,9 +1478,10 @@ async function deliverChannelTurnReply(input: {
   const atTarget = platform === "qq-onebot" && isGroup
     ? await filterPassiveGroupAt(prisma, characterId, requestedAtTarget)
     : requestedAtTarget;
-  const replyOptions = replyFaces.length || replySticker || replyVoice || quoteTarget || atTarget || replySegments.length > 1
+  const replyOptions = replyFaces.length || replySticker || replyVoice || replyImage || quoteTarget || atTarget || replySegments.length > 1
     ? {
         ...(replyFaces.length ? { faces: replyFaces } : {}),
+        ...(replyImage ? { image: replyImage } : {}),
         ...(replySticker
           ? {
               sticker: {
@@ -1429,7 +1511,7 @@ async function deliverChannelTurnReply(input: {
     ...replyOptions,
     onDelivery: reportDelivery,
   });
-  if (delivery?.at) await reportDelivery(delivery);
+  if (delivery?.at || delivery?.image) await reportDelivery(delivery);
   else if (!reported && requestedAt && !atTarget) await reportDelivery({ at: {
     requestedMessageId: requestedAt,
     status: "suppressed",
@@ -1581,6 +1663,9 @@ type ChannelTurnChatInputContext = {
   privateKnowledgeItems: ChannelTurnGrowthPreparation["privateKnowledgeItems"];
   voiceSettings: ChannelTurnReplyToggles["voiceSettings"];
   voicePlanned: boolean;
+  imageSettings: ChannelTurnReplyToggles["imageSettings"];
+  imageCapable?: boolean;
+  imagePlanned: boolean;
   allowSilent: boolean;
   useTranscript: boolean;
   isGroup: boolean;
@@ -1616,7 +1701,8 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
     preferences, expressionHabits, goals, memories, snapshots, events, recentEvents, rawMessages,
     selfUnderstanding, journalLine, journalRecent, journalFacts, groupActivity, catchphrasePrompt,
     emojiFaces, stickerCatalog, interactionGuidance, interactionExperiences, conversationSummary,
-    groupAcquaintances, acquaintances, privateKnowledgeItems, voiceSettings, voicePlanned, allowSilent,
+    groupAcquaintances, acquaintances, privateKnowledgeItems, voiceSettings, voicePlanned,
+    imageSettings, imagePlanned, allowSilent,
     useTranscript, isGroup, character, chatSettings, apiKey, currentMessage, chatTimeZone, messages,
     backgroundLines, recentMessages, recentStoredMessages, crossChannel, readOnlyTools, ownerHistoryHold, turn,
   } = ctx;
@@ -1737,6 +1823,14 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
         ...(stickerCatalog?.length ? { emojiStickers: stickerCatalog } : {}),
         // 告诉她「这一条会被念出来」：语气、长度、不要表情符号都靠这一段。
         ...(voicePlanned ? { voiceReply: true } : {}),
+        // 画图能力：开关开着她就知道自己会画（被问「你会画图吗」不会否认）。
+        // 真画的那一轮另传 imageReply，要求她把画面描述写进 imagePrompt。
+        ...(imageSettings ? { imageEnabled: true } : {}),
+        ...(ctx.imageCapable ? { imageExecution: { plannedThisTurn: imagePlanned,
+          latestAssistant: recentStoredMessages.find(row => row.role === "ASSISTANT")
+            ? readImageExecutionState(recentStoredMessages.find(row => row.role === "ASSISTANT")!.metadata) : "none" as const,
+        } } : {}),
+        ...(imagePlanned ? { imageReply: true } : {}),
         ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
   };
 }
@@ -2047,6 +2141,13 @@ type ChannelTurnReplyToggles = {
   voiceSettings: VoiceTtsSettings | null;
   /** 生成**之前**定下的「这一轮说不说」，要进提示词。 */
   voicePlanned: boolean;
+  /** 仅当渠道能发图、角色开关打开且生图配置完整时非空。 */
+  imageSettings: ImageGenerationSettings | null;
+  /** 生成**之前**定下的「这一轮画不画」，要进提示词。 */
+  imagePlanned: boolean;
+  /** 有人明确让她画（不是概率抽中的）。空画面描述时只有这一种情况才兜底。 */
+  imageForced: boolean;
+  confirmedImagePrompt: string | null;
   stickerCatalog: ReturnType<typeof pickStickerCatalog> | undefined;
   emojiFaces: ReadonlyArray<{ id: string; name: string }> | undefined;
   catchphrasePrompt: ReturnType<typeof toCatchphrasePromptEntries>;
@@ -2055,12 +2156,38 @@ type ChannelTurnReplyToggles = {
 };
 
 /**
- * 这一轮的表达开关：表情/贴图额度、语音、梗语录、手账。
+ * 今天（东八区日界）她画了几张。
  *
- * 语音必须在**生成之前**决定 —— 关键是模型得知道自己在说话。生成后再判定的话，
- * 提示词里压根没提语音，她会回「我只有打字和嘴硬」：内容解释得通，
- * 但暴露了她根本不知道这条要被念出来。所以这里先定「这一轮说不说」，
- * 生成后只用 `canSpeakReply` 复核长度。
+ * 为什么要回表数而不是看 `recentStoredMessages`：那只是最近 40 条窗口，
+ * 热聊时半小时就能刷过去 —— 用它数会把已经画了 8 张算成 3 张，额度形同虚设。
+ *
+ * 计数判据是 `metadata.image.path` 以 `images/` 开头：那是 `generateImage` 落盘时
+ * 写进去的相对路径，比「有这个键」更硬（不会把别的附带图片的 metadata 算进来）。
+ * 查询失败按 0 处理 —— 额度是为了省钱，不该因为数不出来就让整轮聊天失败。
+ */
+async function countImagesToday(prisma: PrismaClient, characterId: string, now: Date = new Date()): Promise<number> {
+  const start = new Date(`${usageDayKey(now)}T00:00:00+08:00`);
+  try {
+    return await prisma.message.count({
+      where: {
+        role: "ASSISTANT",
+        occurredAt: { gte: start },
+        conversation: { characterId },
+        metadata: { path: ["image", "path"], string_starts_with: "images/" },
+      },
+    });
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 这一轮的表达开关：表情/贴图额度、语音、画图、梗语录、手账。
+ *
+ * 语音和画图都必须在**生成之前**决定 —— 关键是模型得知道自己在说话 / 在画图。
+ * 生成后再判定的话，提示词里压根没提这件事，她会回「我只有打字和嘴硬」
+ * 或者「我画不了图」：内容解释得通，但暴露了她根本不知道这一轮发生了什么。
+ * 所以这里先定「这一轮说不说、画不画」，生成后只做复核（长度 / 画面描述）。
  *
  * 手账只在「她自己的对话」里注入：网页对话与主人私聊。群聊不传（手账是写给她自己的，
  * 群里复述就是泄露），对普通人的私聊也不传。
@@ -2077,6 +2204,8 @@ async function decideChannelTurnReplyToggles(input: {
   apiKey: string;
   voiceApiKey: string;
   voiceCapable: boolean | undefined;
+  imageApiKey: string;
+  imageCapable: boolean | undefined;
   stickerCatalog: ReadonlyArray<StickerCatalogEntry> | undefined;
   faceCatalog: ReadonlyArray<{ id: string; name: string }> | undefined;
 }): Promise<ChannelTurnReplyToggles> {
@@ -2112,6 +2241,41 @@ async function decideChannelTurnReplyToggles(input: {
   });
 
   /**
+   * 画图：和语音同构，也必须在**生成之前**定。
+   *
+   * 与语音互斥：一条语音再配一张图 = 同一句话用两种方式说。语音优先，
+   * 因为「引用 + 语音」那条限制已经证明：多种表达叠在一条消息里，客户端只渲染一个。
+   *
+   * `force` 只认「有人真的让她画」（`isImageRequested`）；询问「你会画图吗」不算，
+   * 那种情况她会答「会」，下一句才是下单。
+   */
+  const lastImageAt = input.recentStoredMessages.find(
+    (item) => item.role === "ASSISTANT" && readStoredImageFlag(item.metadata),
+  )?.occurredAt ?? null;
+  const confirmation = input.imageCapable === true
+    ? resolveImageOfferConfirmation(input.messages, input.recentStoredMessages) : null;
+  const imageRequested = input.imageCapable === true
+    && (Boolean(confirmation) || input.messages.some(message => isImageRequested(message.promptContent ?? message.content)));
+  const imageSuppressed = input.messages.some(message => isImageStatusQuestion(message.content) || isImageGenerationDeclined(message.content));
+  const imageSettings = input.imageCapable === true && isImageGenerationEnabled(character.modelConfig)
+    ? resolveImageGenerationSettings({
+        modelConfig: character.modelConfig,
+        chatApiBaseUrl: input.chatSettings.apiBaseUrl,
+        imageApiKey: input.imageApiKey,
+      })
+    : null;
+  const imagePlanned = Boolean(imageSettings)
+    && !imageSuppressed
+    && !voicePlanned
+    && planImageReply({
+        modelConfig: character.modelConfig,
+        lastImageAt,
+        // 只在真的要考虑画的时候才查一次库：这段代码每轮群聊都会走。
+        todayCount: imageSettings ? await countImagesToday(input.prisma, character.id) : 0,
+        force: imageRequested,
+      });
+
+  /**
    * 额度：「每 N 分钟最多 N 张」，按**这个会话**算（A 群贴过三张不该让 B 群闭嘴）。
    *
    * 只取窗口内的助手消息，不看全部：`recentStoredMessages` 只是最近对话窗口（默认 40 条），
@@ -2119,11 +2283,13 @@ async function decideChannelTurnReplyToggles(input: {
    */
   const emojiBudgetSpent = isEmojiBudgetSpent(input.emojiHistory, new Date(), input.emojiFrequency);
   // 表情包优先于内置表情：有素材库就只给素材库（并剔除上一张，避免她一直贴同一张）。
-  // 这一条要走语音时一律不给：语音条后面再挂一张图，等于把两种表达叠在一起说同一件事。
+  // 这一条要走语音或要配一张生图时一律不给：同一句话用两种「图/声」表达等于说了两遍，
+  // 而且一条消息里两个图片段在手机上会挤成一坨。
   const stickerCatalog = input.stickerCatalog?.length
     && isEmojiEnabled(character.modelConfig)
     && !emojiBudgetSpent
     && !voicePlanned
+    && !imagePlanned
     ? pickStickerCatalog(input.stickerCatalog, lastStickerId)
     : undefined;
   const emojiFaces = !stickerCatalog?.length
@@ -2131,6 +2297,7 @@ async function decideChannelTurnReplyToggles(input: {
     && isEmojiEnabled(character.modelConfig)
     && !emojiBudgetSpent
     && !voicePlanned
+    && !imagePlanned
     ? input.faceCatalog
     : undefined;
 
@@ -2168,6 +2335,10 @@ async function decideChannelTurnReplyToggles(input: {
   return {
     voiceSettings,
     voicePlanned,
+    imageSettings,
+    imagePlanned,
+    imageForced: imageRequested,
+    confirmedImagePrompt: confirmation?.prompt ?? null,
     stickerCatalog,
     emojiFaces,
     catchphrasePrompt,
@@ -2891,6 +3062,8 @@ async function loadChannelTurnWindow(input: {
         ...(item.role === "ASSISTANT" && readStoredStickerFlag(item.metadata) ? { hadSticker: true } : {}),
         // 她自己发过语音的那条：同理，不带出去她就不知道自己刚才在「说话」。
         ...(item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata) ? { hadVoice: true } : {}),
+        // 她自己画过图的那条：图只在 metadata 里，不标出来被问起会说「我没画过」。
+        ...(item.role === "ASSISTANT" && readSentImageFlag(item.metadata) ? { hadImage: true } : {}),
       };
     });
 
@@ -2911,6 +3084,8 @@ type ChannelTurnModelPreparation =
       apiKey: string;
       voiceApiKey: string;
       asrApiKey: string;
+      /** 画图专用 Key：与看图分开，可能指向另一家服务商。 */
+      imageApiKey: string;
       /** 图/语音已转成文字、可以直接进提示词的消息。 */
       messages: ChannelTurnMessage[];
     }
@@ -2953,6 +3128,8 @@ async function prepareChannelTurnModel(input: {
   const voiceApiKey = await resolveCharacterVoiceApiKey(character.modelConfig).catch(() => "");
   /** 识别专用 Key：合成与识别不是一家时（Breeze + MiniMax）必须分开，否则识别侧 401。 */
   const asrApiKey = await resolveCharacterAsrApiKey(character.modelConfig).catch(() => "");
+  /** 画图专用 Key：看图那把可能在智谱，画图在 MiniMax，混用只会 401。 */
+  const imageApiKey = await resolveCharacterImageApiKey(character.modelConfig).catch(() => "");
 
   // 额度用完就静默不回：渠道里抛错会把一条普通聊天变成失败事件，还会触发重试。
   const quota = await readDailyQuota(input.characterId, character.modelConfig);
@@ -2984,6 +3161,18 @@ async function prepareChannelTurnModel(input: {
         where: { conversationId: input.existingConversation.id, externalMessageId: message.externalMessageId },
         data: { content: message.content },
       }).catch(() => undefined);
+      if (message.observedMedia?.length) {
+        try {
+          const stored = await prisma.message.findFirst({
+            where: { conversationId: input.existingConversation.id, externalMessageId: message.externalMessageId },
+            select: { id: true, metadata: true },
+          });
+          if (stored) await prisma.message.updateMany({ where: { id: stored.id, conversationId: input.existingConversation.id },
+            data: { metadata: mergeStoredMediaMetadata(stored.metadata, message.observedMedia) as Prisma.InputJsonObject } });
+        } catch {
+          console.warn("[channel] media observation metadata could not be updated");
+        }
+      }
     }
   }
 
@@ -3008,7 +3197,7 @@ async function prepareChannelTurnModel(input: {
     }
   }
 
-  return { ok: true, chatSettings, apiKey, voiceApiKey, asrApiKey, messages };
+  return { ok: true, chatSettings, apiKey, voiceApiKey, asrApiKey, imageApiKey, messages };
 }
 
 type ChannelTurnPrivateContext = {
@@ -3144,6 +3333,8 @@ async function runChannelTurn(input: {
   /** 群聊上下文；私聊不传。 */
   group?: ChannelGroupTurnContext;
   voiceCapable?: boolean;
+  /** 见 `ChannelMessageInput.imageCapable`。 */
+  imageCapable?: boolean;
   /** 见 `ChannelMessageInput.segmentCapable`。 */
   segmentCapable?: boolean;
   sendReply: ChannelReplySender;
@@ -3192,6 +3383,7 @@ async function runChannelTurn(input: {
   const apiKey = modelPrep.apiKey;
   const voiceApiKey = modelPrep.voiceApiKey;
   const asrApiKey = modelPrep.asrApiKey;
+  const imageApiKey = modelPrep.imageApiKey;
   messages = modelPrep.messages;
 
   // 最近对话窗口与表情额度历史都依赖同一个会话，一起查（P3）。emojiFrequency 提前到这里。
@@ -3226,11 +3418,17 @@ async function runChannelTurn(input: {
     apiKey,
     voiceApiKey,
     voiceCapable: input.voiceCapable,
+    imageApiKey,
+    imageCapable: input.imageCapable,
     stickerCatalog: input.stickerCatalog,
     faceCatalog: input.faceCatalog,
   });
   const voiceSettings = toggles.voiceSettings;
   const voicePlanned = toggles.voicePlanned;
+  const imageSettings = toggles.imageSettings;
+  const imagePlanned = toggles.imagePlanned;
+  const imageForced = toggles.imageForced;
+  const confirmedImagePrompt = toggles.confirmedImagePrompt;
   const stickerCatalog = toggles.stickerCatalog;
   const emojiFaces = toggles.emojiFaces;
   const catchphrasePrompt = toggles.catchphrasePrompt;
@@ -3652,6 +3850,9 @@ async function runChannelTurn(input: {
         privateKnowledgeItems,
         voiceSettings,
         voicePlanned,
+        imageSettings,
+        imageCapable: input.imageCapable,
+        imagePlanned,
         allowSilent,
         useTranscript,
         isGroup,
@@ -3764,6 +3965,43 @@ async function runChannelTurn(input: {
     }));
   }
   /**
+   * 这一轮到底画不画，以及画出来的那张图。
+   *
+   * 必须放在**落库之前**：图的路径要写进这条 ASSISTANT 的 `metadata.image`，
+   * 下一轮 `recentMessages` 才能带 `hadImage`（不然她会说「我没画过图」）。
+   *
+   * 代价是这一轮要等生图：十几到几十秒。所以自主画图的概率默认只有 5，
+   * 有人明确让她画时才无条件画 —— 那种时候等人本来就在等。
+   *
+   * 模型没给画面描述时：
+   *   - 被明确要求 → 用她那句原话兜底（去掉「画一张」这类指令词），保证「要了就一定有」；
+   *   - 自主抽中的 → 放弃。凭空拿一句「哈哈哈」去画，既浪费钱又不像她。
+   */
+  let replyImage: GeneratedImage | null = null;
+  let imageAttempt: { status: "generated" | "generation_failed" | "missing_prompt" } | undefined;
+  if (generated.action === "reply" && imagePlanned && imageSettings) {
+    const prompt = confirmedImagePrompt || generated.imagePrompt
+      || (imageForced ? promptFromRequest(currentMessage) : "");
+    if (!prompt) {
+      imageAttempt = { status: "missing_prompt" };
+      console.log("[image] 跳过画图 " + JSON.stringify({ reason: "no_prompt", planned: "auto" }));
+    } else {
+      const result = await generateImage({
+        settings: imageSettings,
+        prompt,
+        characterId: input.characterId,
+      });
+      if (result.ok) {
+        replyImage = result.image;
+        imageAttempt = { status: "generated" };
+      } else {
+        imageAttempt = { status: "generation_failed" };
+        // 只记一行：文字照常发，图没有就没有。用户不需要知道服务商为什么拒绝。
+        console.warn("[image] 画图失败，这一轮只发文字：" + result.reason);
+      }
+    }
+  }
+  /**
    * 分条发送：只有渠道声明了能拆、且这一轮不走语音时才拆。
    *
    * 语音轮次不拆是硬限制（见上面 `quoteTarget` 那段）：一条语音就是一条消息，
@@ -3795,6 +4033,11 @@ async function runChannelTurn(input: {
     replyFaces,
     replySticker,
     replyVoice,
+    replyImage,
+    imageAttempt,
+    ...(!imagePlanned && !imageForced && imageSettings && messages.length === 1 && generated.imageOffer
+      && !isImageStatusQuestion(messages[0]!.content) && !isImageGenerationDeclined(messages[0]!.content)
+      ? { imageOffer: { prompt: generated.imageOffer, authorOpenId: messages[0]!.authorOpenId } } : {}),
     replySegments,
     goals,
     expressionHabits,
@@ -3816,7 +4059,7 @@ async function runChannelTurn(input: {
 
   let recordedDelivery = "";
   const recordDelivery = async (delivery: ChannelReplyDelivery) => {
-    if (!assistantMessageId || !delivery.at) return;
+    if (!assistantMessageId || (!delivery.at && !delivery.image)) return;
     const encoded = JSON.stringify(delivery);
     if (encoded === recordedDelivery) return;
     try {
@@ -3845,6 +4088,7 @@ async function runChannelTurn(input: {
     replyFaces,
     replySticker,
     replyVoice,
+    replyImage,
     replySegments,
     voiceSettings,
     recordDelivery,
@@ -3888,12 +4132,16 @@ export async function handleChannelMessage(input: ChannelMessageInput): Promise<
       ...(input.quotedMessage ? { quotedMessage: input.quotedMessage } : {}),
       ...conversationSourcePolicy(input),
       ...(input.images?.length ? { images: input.images } : {}),
+      ...(input.imageTextParts ? { imageTextParts: input.imageTextParts } : {}),
+      ...(input.promptImageTextParts ? { promptImageTextParts: input.promptImageTextParts } : {}),
+      ...(input.observedMedia?.length ? { observedMedia: input.observedMedia } : {}),
       ...(input.voices?.length ? { voices: input.voices } : {}),
       ...(input.speaker ? { speaker: input.speaker } : {}),
     }],
     ...(input.faceCatalog ? { faceCatalog: input.faceCatalog } : {}),
     ...(input.stickerCatalog?.length ? { stickerCatalog: input.stickerCatalog } : {}),
     ...(input.voiceCapable ? { voiceCapable: true } : {}),
+    ...(input.imageCapable ? { imageCapable: true } : {}),
     ...(input.segmentCapable ? { segmentCapable: true } : {}),
     sendReply: input.sendReply,
   });
@@ -3915,6 +4163,7 @@ export async function handleChannelBatch(input: ChannelBatchInput): Promise<Chan
     ...(input.stickerCatalog?.length ? { stickerCatalog: input.stickerCatalog } : {}),
     ...(input.group ? { group: input.group } : {}),
     ...(input.voiceCapable ? { voiceCapable: true } : {}),
+    ...(input.imageCapable ? { imageCapable: true } : {}),
     ...(input.segmentCapable ? { segmentCapable: true } : {}),
     allowSilent: input.allowSilent !== false,
     sendReply: input.sendReply,

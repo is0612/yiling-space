@@ -10,6 +10,8 @@
  */
 
 import { onebotFaceName } from "./faces";
+import { classifyOnebotImage, readMediaSignal, sanitizeMediaSummary, type OnebotMediaSignal, type SubTypeState } from "./media-kind";
+import { renderImageTextParts, type ImageTextPart } from "../../media-text";
 
 export const ONEBOT_PLATFORM = "qq-onebot";
 
@@ -100,60 +102,49 @@ export function readOnebotDisplayName(data: unknown): string {
  * Flattens an OneBot `message` into a single plain-text string. Text segments are joined;
  * `at` becomes "@<qq>"; other media segments become a placeholder.
  */
-export function readOnebotMessageText(data: unknown): string {
+export function readOnebotMessageParts(data: unknown): ImageTextPart[] {
   const record = data as { message?: unknown; raw_message?: unknown } | null;
   const message = record?.message;
-
-  if (typeof message === "string") return message;
-
-  if (Array.isArray(message)) {
-    const parts: string[] = [];
-    for (const segment of message) {
-      if (!segment || typeof segment !== "object") continue;
-      const seg = segment as OnebotSegment;
-      const segData = seg.data ?? {};
-      switch (seg.type) {
-        case "text":
-          if (typeof segData.text === "string" && segData.text) parts.push(segData.text);
-          break;
-        case "at": {
-          const qq = segData.qq;
-          if (qq !== undefined && qq !== null) parts.push(`@${qq}`);
-          break;
-        }
-        case "image":
-          parts.push("[图片]");
-          break;
-        case "face": {
-          // 转成中文名而不是一律「[表情]」：对方发的是害羞还是白眼，语气完全不同。
-          const name = onebotFaceName(segData.id);
-          parts.push(name ? `[${name}]` : "[表情]");
-          break;
-        }
-        case "mface":
-        case "marketface":
-          // 商城表情包只能拿到一句 summary，图片本身取不到。
-          parts.push(typeof segData.summary === "string" && segData.summary.trim() ? segData.summary.trim() : "[表情包]");
-          break;
-        case "record":
-        case "voice":
-          parts.push("[语音]");
-          break;
-        case "video":
-          parts.push("[视频]");
-          break;
-        default:
-          // Unknown segments are dropped rather than surfacing raw CQ codes.
-          break;
+  if (typeof message === "string") return [{ type: "text", text: message }];
+  if (!Array.isArray(message)) return typeof record?.raw_message === "string" ? [{ type: "text", text: record.raw_message }] : [];
+  const parts: ImageTextPart[] = [];
+  let imageIndex = 0;
+  for (const [segmentIndex, segment] of message.entries()) {
+    if (!segment || typeof segment !== "object") continue;
+    const seg = segment as OnebotSegment;
+    const fields = seg.data && typeof seg.data === "object" && !Array.isArray(seg.data) ? seg.data : {};
+    let text = "";
+    switch (seg.type) {
+      case "text": text = typeof fields.text === "string" ? fields.text : ""; break;
+      case "at": if (fields.qq !== undefined && fields.qq !== null) text = "@" + fields.qq; break;
+      case "image": {
+        const signal = readMediaSignal("image", fields, segmentIndex, imageIndex);
+        parts.push({ type: "image", imageIndex: imageIndex++, mediaKind: classifyOnebotImage(signal).kind });
+        continue;
       }
+      case "face": { const name = onebotFaceName(fields.id); text = name ? "[" + name + "]" : "[表情]"; break; }
+      case "mface":
+      case "marketface": {
+        const summary = sanitizeMediaSummary(fields.summary)?.replace(/\[/gu, "（").replace(/\]/gu, "）");
+        // Generic protocol labels carry no extra visible content.
+        const generic = /^(?:动画表情|表情|表情包|贴图|（(?:动画表情|表情|表情包|贴图)）)$/u.test(summary ?? "");
+        text = summary && !generic ? "[表情包：" + summary + "]" : "[表情包]";
+        break;
+      }
+      case "record":
+      case "voice": text = "[语音]"; break;
+      case "video": text = "[视频]"; break;
     }
-    const text = parts.join("").trim();
-    if (text) return text;
+    if (text) parts.push({ type: "text", text });
   }
+  if (!parts.some(part => part.type === "image" || part.text.trim()) && typeof record?.raw_message === "string") return [{ type: "text", text: record.raw_message }];
+  return parts;
+}
 
-  // Fall back to raw_message when the message array didn't yield text.
-  if (typeof record?.raw_message === "string") return record.raw_message;
-  return "";
+export function readOnebotMessageText(data: unknown): string {
+  const message = (data as { message?: unknown } | null)?.message;
+  if (typeof message === "string") return message;
+  return renderImageTextParts(readOnebotMessageParts(data));
 }
 
 /** Roleplay uses real mention segments for addressing but never sends platform IDs to the model. */
@@ -268,8 +259,13 @@ export type OnebotImageRef = {
   file: string;
   /** 表情包常见的一句文字说明。 */
   summary: string;
-  /** QQ 的图片子类型（0 普通图 / 1 表情 / …）；只用于排查，不参与判定。 */
-  subType: number;
+  /** Missing and malformed values remain distinguishable from explicit zero. */
+  subType?: number;
+  subTypeState?: SubTypeState;
+  segmentIndex?: number;
+  emojiIdPresent?: boolean;
+  emojiPackageIdPresent?: boolean;
+  mediaKind?: "sticker" | "image" | "unknown";
 };
 
 /**
@@ -283,19 +279,41 @@ export function readOnebotImages(data: unknown): OnebotImageRef[] {
   const message = (data as { message?: unknown } | null)?.message;
   if (!Array.isArray(message)) return [];
   const images: OnebotImageRef[] = [];
-  for (const segment of message) {
+  for (const [segmentIndex, segment] of message.entries()) {
     if (!segment || typeof segment !== "object") continue;
     const seg = segment as OnebotSegment;
     if (seg.type !== "image") continue;
-    const segData = seg.data ?? {};
+    const segData = seg.data && typeof seg.data === "object" && !Array.isArray(seg.data) ? seg.data : {};
+    const signal = readMediaSignal("image", segData, segmentIndex, images.length);
     images.push({
       url: typeof segData.url === "string" ? segData.url.trim() : "",
       file: typeof segData.file === "string" ? segData.file : "",
+      // Runtime summary remains unchanged; only observation refs are sanitized.
       summary: typeof segData.summary === "string" ? segData.summary : "",
-      subType: typeof segData.sub_type === "number" ? segData.sub_type : 0,
+      ...(signal.subType === undefined ? {} : { subType: signal.subType }),
+      subTypeState: signal.subTypeState, segmentIndex,
+      mediaKind: classifyOnebotImage(signal).kind,
+      ...(signal.emojiIdPresent ? { emojiIdPresent: true } : {}),
+      ...(signal.emojiPackageIdPresent ? { emojiPackageIdPresent: true } : {}),
     });
   }
   return images;
+}
+
+/** Ordered, bounded-field observation refs; no URL, filename or raw emoji identifiers. */
+export function readOnebotMedia(data: unknown): OnebotMediaSignal[] {
+  const message = (data as { message?: unknown } | null)?.message;
+  if (!Array.isArray(message)) return [];
+  const media: OnebotMediaSignal[] = [];
+  let imageIndex = 0;
+  for (const [segmentIndex, segment] of message.entries()) {
+    if (!segment || typeof segment !== "object") continue;
+    const seg = segment as OnebotSegment;
+    if (seg.type !== "image" && seg.type !== "mface" && seg.type !== "marketface") continue;
+    const fields = seg.data && typeof seg.data === "object" && !Array.isArray(seg.data) ? seg.data : {};
+    media.push(readMediaSignal(seg.type, fields, segmentIndex, seg.type === "image" ? imageIndex++ : undefined));
+  }
+  return media;
 }
 
 /**

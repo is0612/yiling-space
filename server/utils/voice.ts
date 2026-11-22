@@ -34,6 +34,7 @@ import {
 
 import { validateChatApiBaseUrl } from "./chat-model-config";
 import { downloadSafeMedia } from "./safe-media-download";
+import { stripMediaTokens } from "./media-token-cleanup";
 
 /** 这条回复最多合成多少字。再长就该用文字说：没人愿意听 40 秒的语音条。 */
 export const VOICE_TEXT_MAX_CHARS = 60;
@@ -1004,7 +1005,7 @@ async function safeText(response: Response): Promise<string> {
  * 所以先把方括号内容、@、以及控制字符去掉。
  */
 function cleanSpeakable(raw: string): string {
-  return raw
+  return stripMediaTokens(raw)
     .replace(/\[[^\]]{0,200}\]/g, " ")
     .replace(/@\S+/g, " ")
     .replace(/[\u0000-\u001f]/g, " ")

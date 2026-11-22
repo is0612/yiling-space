@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   applyImageDescriptions,
+  imageVisionPrompt,
   assertFetchableImageUrl,
   resolveImageUnderstandingSettings,
   sanitizeDescription,
@@ -16,7 +17,8 @@ import {
   VISION_MAX_EDGE,
   MAX_IMAGES_PER_TURN,
 } from "../server/utils/image-understanding";
-import { readOnebotImages } from "../server/utils/channel-adapter/onebot/types";
+import { readOnebotImages, readOnebotMessageParts, readOnebotMessageText } from "../server/utils/channel-adapter/onebot/types";
+import { renderImageTextParts } from "../server/utils/media-text";
 import { toCharacterDto } from "../server/utils/character-dto";
 import {
   describeImageGenerationModel,
@@ -47,18 +49,49 @@ assert.equal(
   applyImageDescriptions("看图[图片]好不好", ["只橘猫趴在键盘上"]),
   "看图[图片：只橘猫趴在键盘上]好不好",
 );
-// 多张图按顺序填；失败的位置明确标记为无法读取。
+// 多张图按顺序填；失败的位置保留裸图片标记。
 assert.equal(
   applyImageDescriptions("[图片][图片]", ["第一张：猫", null]),
-  "[图片：第一张：猫][图片：无法读取]",
+  "[图片：第一张：猫][图片]",
 );
 // 描述里本身带 [图片] 时不能重复替换（游标的作用）。
 assert.equal(
   applyImageDescriptions("[图片] 和 [图片]", ["图里写着[图片]两个字", "第二张"]),
-  "[图片：图里写着[图片]两个字] 和 [图片：第二张]",
+  "[图片：图里写着（图片）两个字] 和 [图片：第二张]",
 );
 // 没有占位符就不动它。
 assert.equal(applyImageDescriptions("纯文字", ["描述"]), "纯文字");
+
+// Structured slots preserve literal tokens and mface summaries without image-index drift.
+const mixedMedia = { message: [
+  { type: "text", data: { text: "字面[图片] [表情包] " } },
+  { type: "mface", data: { summary: "笑[图片] https://media.invalid/a?rkey=secret" } },
+  { type: "image", data: { sub_type: 1, url: "https://media.invalid/sticker" } },
+  { type: "at", data: { qq: "123456789" } },
+  { type: "image", data: { sub_type: 0, url: "https://media.invalid/photo" } },
+  { type: "marketface", data: { summary: "[动画表情]" } },
+  { type: "image", data: { sub_type: 8 } },
+] };
+const mixedParts = readOnebotMessageParts(mixedMedia);
+assert.equal(readOnebotMessageText(mixedMedia), "字面[图片] [表情包] [表情包：笑（图片）][表情包]@123456789[图片][表情包][图片]");
+assert.equal(readOnebotImages(mixedMedia)[0]?.mediaKind, "sticker");
+assert.equal(readOnebotImages(mixedMedia)[1]?.mediaKind, "image");
+assert.equal(readOnebotImages(mixedMedia)[2]?.mediaKind, "unknown");
+const mixedDescriptions = ["咧嘴[笑]\n挥手", "桌上有猫", undefined];
+assert.equal(applyImageDescriptions("ignored old text", mixedDescriptions, mixedParts), "字面[图片] [表情包] [表情包：笑（图片）][表情包：咧嘴（笑） 挥手]@123456789[图片：桌上有猫][表情包][图片]");
+assert.equal(renderImageTextParts(mixedParts, [null, "照片", null]), "字面[图片] [表情包] [表情包：笑（图片）][表情包]@123456789[图片：照片][表情包][图片]");
+const promptParts = mixedParts.map(part => part.type === "text" ? { ...part, text: part.text.replace("@123456789", "@member_1") } : part);
+assert.equal(applyImageDescriptions("", mixedDescriptions, promptParts), "字面[图片] [表情包] [表情包：笑（图片）][表情包：咧嘴（笑） 挥手]@member_1[图片：桌上有猫][表情包][图片]");
+assert.equal(applyImageDescriptions("", [], mixedParts), readOnebotMessageText(mixedMedia), "disabled/limit/no-url keeps native token identity");
+assert.match(imageVisionPrompt("sticker"), /可见的表情、动作/);
+assert.match(imageVisionPrompt("sticker"), /不要猜测梗/);
+assert(!imageVisionPrompt("sticker").includes("想表达什么情绪"));
+assert.equal(imageVisionPrompt("unknown"), imageVisionPrompt("image"));
+assert(!readOnebotMessageText(mixedMedia).includes("media.invalid"));
+assert.equal(readOnebotMessageText({ message: [{ type: "mface", data: { summary: "file:///private/x" } }] }), "[表情包]");
+assert.equal(readOnebotMessageText({ message: "literal [图片]" }), "literal [图片]");
+assert.equal(readOnebotMessageText({ message: "  literal [图片]  " }), "  literal [图片]  ");
+assert.equal(readOnebotMessageText({ message: [{ type: "text", data: { text: "  " } }], raw_message: "fallback" }), "fallback");
 
 // ── 3. 描述清洗 ────────────────────────────────────────
 assert.equal(sanitizeDescription("  一只猫\n\n在键盘上  "), "一只猫 在键盘上");
@@ -268,17 +301,8 @@ for (const blocked of [
 // 带上账号密码的 URL 也拒绝：那是把凭据塞进日志的常见姿势。
 assert.throws(() => assertFetchableImageUrl("https://user:pass@example.com/a.png"), /IMAGE_/);
 
-// ── 7. 失败项必须吃掉占位符（第二轮复现：描述错位）──────────
-/**
- * 契约（本轮新增，生产实现尚未满足）：一张图识别失败时，它那个坑要填成
- * `[图片：无法读取]`，**不能**让后面那张的描述往前顶。
- *
- * 当前 `applyImageDescriptions` 里 null 走的是 `continue`，没消费占位符：
- * `[图片][图片]` + `[null, "第二张"]` 会得到 `[图片：第二张][图片]` ——
- * 第二张的描述被安到了第一张头上。语音那边（`applyVoiceTranscripts`）是消费的、
- * 填 `[语音（没转成文字）]`，两边行为不一致，说明这是漏了而不是设计取舍。
- */
-const IMAGE_UNREADABLE = "[图片：无法读取]";
+// ── 7. 失败项保留自己的位置，不能把后续描述前移 ──────────
+const IMAGE_UNREADABLE = "[图片]";
 const placeholderFailures: string[] = [];
 
 function expectText(name: string, actual: string, expected: string) {
@@ -308,7 +332,7 @@ expectText(
   applyImageDescriptions("[图片][图片][图片]", ["第一张", null, "第三张"]),
   `[图片：第一张]${IMAGE_UNREADABLE}[图片：第三张]`,
 );
-// 7.4 连续失败：两个坑都要占住，不能退化成裸的 [图片]。
+// 7.4 连续失败：两个坑都要占住，分别保留裸 [图片]。
 expectText(
   "连续识别失败逐个占位",
   applyImageDescriptions("[图片][图片]", [null, null]),

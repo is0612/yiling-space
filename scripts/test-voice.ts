@@ -67,6 +67,15 @@ assert.deepEqual(readOnebotVoices({}), []);
 assert.equal(normalizeSpeakableText("今天好累啊"), "今天好累啊");
 assert.equal(normalizeSpeakableText("嗯[图片：一只猫]就这样"), "嗯 就这样", "段标记读出来是噪音。");
 assert.equal(normalizeSpeakableText("@12345 在吗"), "在吗");
+for (const label of ["图片", "表情包"]) {
+  const longDescription = "这是可见画面描述".repeat(55);
+  assert.equal(normalizeSpeakableText(`开头[${label}：${longDescription}]结尾`), "开头 结尾", "长媒体描述不能被TTS念出。");
+  assert.equal(normalizeSpeakableText(`开头[${label}：画面[小字]${longDescription}\n下一行]结尾`), "开头 结尾", "嵌套括号和换行不能泄漏媒体描述或吞后续正文。");
+  assert.equal(normalizeSpeakableText(`[${label}：${longDescription}]`), "", "纯媒体描述没有可读内容。");
+}
+const ordinaryBracket = `[${"普通括号文本".repeat(45)}]`;
+assert.equal(normalizeSpeakableText(ordinaryBracket), ordinaryBracket.slice(0, VOICE_TEXT_MAX_CHARS), "普通长方括号仍按原规则处理。");
+assert.equal(normalizeSpeakableText("前[备注]后"), "前 后", "普通短方括号清洗规则不变。");
 assert.equal(normalizeSpeakableText("……"), "", "只剩标点就不读了。");
 assert.equal(normalizeSpeakableText("😀😀"), "", "纯表情没有可读内容。");
 assert.equal(normalizeSpeakableText("啊".repeat(200)).length, VOICE_TEXT_MAX_CHARS, "超长截断。");

@@ -74,6 +74,9 @@ export default defineEventHandler(async (event) => {
   /** 图片（看图）模型的 Key：与语音同理，几乎必然是另一家服务商，单独一把。 */
   let visionApiKeyPlain = "";
   let clearVisionApiKey = false;
+  /** 画图（文生图）的 Key：与看图分开 —— 看图可能在智谱，画图可能在 MiniMax。 */
+  let imageApiKeyPlain = "";
+  let clearImageApiKey = false;
   /** 记忆助手的 Key 与主聊天模型独立保存，不能互相回落。 */
   let memoryAssistantApiKeyPlain = "";
   let clearMemoryAssistantApiKey = false;
@@ -473,6 +476,106 @@ export default defineEventHandler(async (event) => {
     clearVisionApiKey = body.clearVisionApiKey;
   }
 
+  // ── 画图（文生图）────────────────────────────────────────────
+  // 和「看图」是两个方向：看图是把群里的图读成文字，画图是把文字变成图。
+  // 开关、额度、尺寸都放在这里，凭据单独一把。
+  if (body.imageEnabled !== undefined) {
+    if (typeof body.imageEnabled !== "boolean") {
+      throw createError({ statusCode: 400, statusMessage: "画图开关必须是布尔值。" });
+    }
+    modelConfigPatch.imageEnabled = body.imageEnabled;
+  }
+
+  // 自主配图的概率：0 = 只在她被明确要求时画。被要求时这个概率不参与判定。
+  if (body.imageChance !== undefined) {
+    const value = typeof body.imageChance === "number" ? body.imageChance : Number(body.imageChance);
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
+      throw createError({ statusCode: 400, statusMessage: "自主画图概率必须是 0 到 100 之间的数字。" });
+    }
+    modelConfigPatch.imageChance = Math.round(value);
+  }
+
+  // 两张自主配图之间至少隔多少分钟：0 = 不冷却。上限一天。
+  if (body.imageCooldownMinutes !== undefined) {
+    const value = typeof body.imageCooldownMinutes === "number"
+      ? body.imageCooldownMinutes
+      : Number(body.imageCooldownMinutes);
+    if (!Number.isFinite(value) || value < 0 || value > 1440) {
+      throw createError({ statusCode: 400, statusMessage: "画图冷却必须是 0 到 1440 分钟之间的数字。" });
+    }
+    modelConfigPatch.imageCooldownMinutes = Math.round(value);
+  }
+
+  // 每天最多画几张：0 = 不限。上限 200 张 —— 再高就不是「额度」了。
+  if (body.imageDailyLimit !== undefined) {
+    const value = typeof body.imageDailyLimit === "number" ? body.imageDailyLimit : Number(body.imageDailyLimit);
+    if (!Number.isFinite(value) || value < 0 || value > 200) {
+      throw createError({ statusCode: 400, statusMessage: "每日画图上限必须是 0 到 200 之间的数字。" });
+    }
+    modelConfigPatch.imageDailyLimit = Math.round(value);
+  }
+
+  // 画面尺寸只认三个预设：方 / 竖 / 横。像素值由服务端换算，
+  // 不让人手填宽高 —— 填小了会低于服务商的面积下限，直接 400。
+  if (body.imageSize !== undefined) {
+    const value = typeof body.imageSize === "string" ? body.imageSize.trim() : "";
+    if (value && value !== "square" && value !== "portrait" && value !== "landscape") {
+      throw createError({ statusCode: 400, statusMessage: "画面尺寸只支持 square、portrait 或 landscape。" });
+    }
+    modelConfigPatch.imageSize = value || "square";
+  }
+
+  if (body.imageProvider !== undefined) {
+    if (typeof body.imageProvider !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "画图服务商必须是文本。" });
+    }
+    const value = body.imageProvider.trim();
+    if (value && value !== "minimax" && value !== "openai") {
+      throw createError({ statusCode: 400, statusMessage: "画图服务商只支持 minimax 或 openai（含兼容接口）。" });
+    }
+    modelConfigPatch.imageProvider = value;
+  }
+
+  if (body.imageModel !== undefined) {
+    if (typeof body.imageModel !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "画图模型名称必须是文本。" });
+    }
+    // 空字符串是有效值：表示回落到环境变量或默认模型。
+    modelConfigPatch.imageModel = body.imageModel.trim().slice(0, 120);
+  }
+
+  if (body.imageApiBaseUrl !== undefined) {
+    if (typeof body.imageApiBaseUrl !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "画图服务地址必须是文本。" });
+    }
+    try {
+      modelConfigPatch.imageApiBaseUrl = body.imageApiBaseUrl.trim()
+        ? validateChatApiBaseUrl(body.imageApiBaseUrl)
+        : "";
+    } catch (error) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: error instanceof Error ? error.message : "画图服务地址无效。",
+      });
+    }
+  }
+
+  if (body.imageApiKey !== undefined) {
+    if (typeof body.imageApiKey !== "string") {
+      throw createError({ statusCode: 400, statusMessage: "画图服务的 API Key 必须是文本。" });
+    }
+    const key = body.imageApiKey.trim();
+    if (key.length > 8192) throw createError({ statusCode: 400, statusMessage: "画图 API Key 不能超过 8192 个字符。" });
+    if (key) imageApiKeyPlain = key;
+  }
+
+  if (body.clearImageApiKey !== undefined) {
+    if (typeof body.clearImageApiKey !== "boolean") {
+      throw createError({ statusCode: 400, statusMessage: "清除画图 API Key 的参数无效。" });
+    }
+    clearImageApiKey = body.clearImageApiKey;
+  }
+
   // 主动找话的设置也挂在 modelConfig 上，但走独立的校验：写入侧宁可报错也不夹取。
   if (body.proactive !== undefined) {
     const current = config.proactive && typeof config.proactive === "object" && !Array.isArray(config.proactive)
@@ -509,7 +612,7 @@ export default defineEventHandler(async (event) => {
   const { chatApiKey, clearApiKey, ...safeSettingsPatch } = settingsPatch;
   Object.assign(modelConfigPatch, safeSettingsPatch);
 
-  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey || knowledgeAssistantPatch.apiKey || knowledgeAssistantPatch.clearApiKey || socialRelationshipAssessmentAssistantApiKeyPlain || clearSocialRelationshipAssessmentAssistantApiKey) {
+  if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || imageApiKeyPlain || clearImageApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey || knowledgeAssistantPatch.apiKey || knowledgeAssistantPatch.clearApiKey || socialRelationshipAssessmentAssistantApiKeyPlain || clearSocialRelationshipAssessmentAssistantApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
 
     /**
@@ -525,6 +628,7 @@ export default defineEventHandler(async (event) => {
       { fields: API_KEY_FIELDS.chat, value: chatApiKey, clear: clearApiKey },
       { fields: API_KEY_FIELDS.voice, value: voiceApiKeyPlain, clear: clearVoiceApiKey },
       { fields: API_KEY_FIELDS.vision, value: visionApiKeyPlain, clear: clearVisionApiKey },
+      { fields: API_KEY_FIELDS.image, value: imageApiKeyPlain, clear: clearImageApiKey },
       { fields: API_KEY_FIELDS.memoryAssistant, value: memoryAssistantApiKeyPlain, clear: clearMemoryAssistantApiKey },
       { fields: API_KEY_FIELDS.contextAssistant, value: contextAssistantPatch.apiKey, clear: contextAssistantPatch.clearApiKey },
       { fields: API_KEY_FIELDS.knowledgeAssistant, value: knowledgeAssistantPatch.apiKey, clear: knowledgeAssistantPatch.clearApiKey },

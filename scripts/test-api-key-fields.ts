@@ -57,7 +57,7 @@ const chat = API_KEY_FIELDS.chat;
   assert.equal(config.chatApiKeyEncrypted, bogus, "换过机器解不开时，密文要留着，不能替用户抹掉。");
 }
 
-// ⑥ 八把 Key 一起处理，互不串台。
+// ⑥ 九把 Key 一起处理，互不串台。
 {
   const config: Record<string, unknown> = { voiceApiKeyEncrypted: await encryptApiKey("sk-voice") };
   await applyApiKeyWrites(config, [
@@ -68,4 +68,30 @@ const chat = API_KEY_FIELDS.chat;
   assert.equal(config.voiceApiKey, "sk-voice", "语音那把不能因为保存对话模型被删。");
 }
 
-console.log("API Key 字段写入测试通过：新值覆盖、显式清除、旧密文自动迁明文、明文优先、解不开保留、多把互不影响。");
+// ⑦ 画图与看图是两把：迁移其中一把不能碰另一把。
+// 现实中看图在智谱、画图在 MiniMax，两把 Key 一起存着，谁被顺手删掉都是 401。
+{
+  const config: Record<string, unknown> = {
+    visionApiKey: "sk-vision",
+    imageApiKeyEncrypted: await encryptApiKey("sk-image"),
+  };
+  await applyApiKeyWrites(config, [{ fields: API_KEY_FIELDS.image }]);
+  assert.equal(config.visionApiKey, "sk-vision", "迁移画图 Key 不能动看图那把。");
+  assert.equal(config.imageApiKey, "sk-image", "画图的旧密文要迁成明文。");
+  assert.equal("imageApiKeyEncrypted" in config, false, "迁移完密文退场。");
+}
+
+// ⑧ 字段名本身也要钉住：写错一个字母的表现是「明明填了却说没配」，最难查。
+assert.deepEqual(
+  API_KEY_FIELDS.image,
+  { plain: "imageApiKey", legacy: "imageApiKeyEncrypted" },
+  "画图 Key 的字段名不能改，前端与 DTO 都按这两个名字读写。",
+);
+{
+  const plains = Object.values(API_KEY_FIELDS).map((fields) => fields.plain);
+  const legacies = Object.values(API_KEY_FIELDS).map((fields) => fields.legacy);
+  assert.equal(new Set(plains).size, plains.length, "各把 Key 的明文字段不能重名（重名就是互相覆盖）。");
+  assert.equal(new Set(legacies).size, legacies.length, "各把 Key 的密文字段不能重名。");
+}
+
+console.log("API Key 字段写入测试通过：新值覆盖、显式清除、旧密文自动迁明文、明文优先、解不开保留、多把互不影响、画图与看图分家、字段名不重名。");

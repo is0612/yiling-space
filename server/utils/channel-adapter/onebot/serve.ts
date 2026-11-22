@@ -1,3 +1,5 @@
+import { observeOnebotMedia } from "../media-observation";
+import { readOnebotMedia, readOnebotMessageParts } from "./types";
 /**
  * QQ 小号（OneBot v11）渠道的消息处理 —— 对应官方 QQ 的 serve.ts。
  *
@@ -868,6 +870,19 @@ export function toOnebotStickerSegments(base64: string): OnebotSegment[] {
 
 /** 读回表情包文件并转成段。文件没了（换电脑只搬了库）返回空数组，静默跳过。 */
 export async function loadStickerSegments(filePath: string): Promise<OnebotSegment[]> {
+  return loadImageSegments(filePath);
+}
+
+/**
+ * 读一张本地图片并转成 `image` 段。
+ *
+ * 表情包和她自己画的图走的是同一条路：都是「本地文件 → base64 → image 段」，
+ * 区别只在谁生成的。所以只留一份实现 —— 表情那条已经在线上跑了很久，
+ * 画图这条跟着它走，就少一处「表情能发、图发不出去」的可能。
+ *
+ * 超过上限返回空数组而不是截断：截断出来的图是坏的，宁可不发。
+ */
+export async function loadImageSegments(filePath: string): Promise<OnebotSegment[]> {
   try {
     const stat = await fs.stat(filePath);
     if (stat.size > MAX_STICKER_BYTES) return [];
@@ -1097,6 +1112,44 @@ export function createReplySender(
      *
      * 贴了图就不再发内置表情：一句话后面挂两种表情，像自动回复机器人。
      */
+    /**
+     * 她自己画的图：单独一条消息，紧跟在文字后面。
+     *
+     * 为什么单独一条而不是和文字拼一起：引用块、文字、图挤在一条里，手机端显示出来
+     * 是一坨；单独一条和表情包的行为一致（那条路已经跑了很久）。图不带引用也不带 @ ——
+     * 引用已经挂在文字上了，图属于同一段话的延续。
+     *
+     * 走 base64 而不是 `file://`：图可能有几百 KB，但网关不一定和适配器同机，
+     * 而 `file://` 一旦跨机就是一张发不出去的图。表情包用同一个理由。
+     *
+     * 发失败只记日志：文字已经发出去了，不能因为一张图把整轮判成失败。
+     */
+    const image = options?.image;
+    if (image) {
+      const segments = await loadImageSegments(image.filePath);
+      if (!segments.length) {
+        console.error("[onebot] 图片读不出来（文件没了或超过上限），这一条不发：", image.filePath);
+        delivery.image = { status: "failed", reason: "read_failed" };
+        await options?.onDelivery?.(delivery);
+        return delivery;
+      }
+      try {
+        await send(segments);
+        delivery.image = { status: "sent", sentAt: new Date().toISOString() };
+        console.log("[onebot] 图片已发送 " + JSON.stringify({
+          bytes: image.bytes,
+          width: image.width,
+          height: image.height,
+        }));
+      } catch (error) {
+        delivery.image = isOnebotSendRejected(error)
+          ? { status: "failed", reason: "send_failed" } : { status: "unknown", reason: "unconfirmed" };
+        console.error("[onebot] 图片发送失败：", error instanceof Error ? error.message : String(error));
+      }
+      await options?.onDelivery?.(delivery);
+      return delivery;
+    }
+
     const sticker = options?.sticker;
     if (sticker) {
       if (sticker.qqEmojiId) {
@@ -1304,6 +1357,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
                 // 主人说的那句：提炼忆泡时靠它把「主人」和群友分开，别在私聊里读成别人说的。
                 ...(item.isOwner ? { speaker: { isOwner: true } } : {}),
                 content: item.event.content,
+                observedMedia: observeOnebotMedia(readOnebotMedia(item.event.data)),
               },
             }),
             ...(item.event.poke !== undefined ? { poke: true } : {}),
@@ -1669,6 +1723,10 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         // 主人发的消息带上 isOwner：群聊里也认得出主人，落库与提炼时标「主人」。
         ...(item.isOwner ? { speaker: { isOwner: true } } : {}),
         ...(item.event.images.length ? { images: item.event.images } : {}),
+        observedMedia: observeOnebotMedia(readOnebotMedia(item.event.data)),
+        imageTextParts: readOnebotMessageParts(item.event.data),
+        promptImageTextParts: readOnebotMessageParts(item.event.data).map(part => part.type === "text"
+          ? { ...part, text: groupContext.formatText(contextKey, part.text) } : part),
         ...(item.event.voices.length ? { voices: item.event.voices } : {}),
         occurredAt: new Date(item.at),
       })),
@@ -1686,6 +1744,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       stickerCatalog: await loadStickerCatalog(binding.characterId),
       // 声明「本渠道能发语音条」：能不能真发由角色开关和判定决定。
       voiceCapable: true,
+      // 声明「本渠道能把图发出去」：她画的图走 image 段，与表情包同一条路。
+      imageCapable: true,
       // QQ 的说话习惯就是一句一句弹：声明之后，她可以靠换行把回复拆成几条。
       segmentCapable: true,
       // 只有真实 @ 与 all 档不允许「想了想还是不说」。
@@ -1760,8 +1820,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     event: OnebotResolvedEvent,
     binding: OnebotBindingRecord,
   ): Promise<OnebotHandleOutcome> => {
-    const sender = createReplySender(record.config, event);
-    const sendReply = async (text: string): Promise<void> => { await sender(text); };
+    const sendReply = createReplySender(record.config, event);
 
     // Isolate roleplay before daily storage, growth and Qzone approval commands.
     if (event.messageType === "private") {
@@ -1999,12 +2058,16 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       authorDisplayName: event.displayName || undefined,
       content: event.content,
       ...(event.images.length ? { images: event.images } : {}),
+      observedMedia: observeOnebotMedia(readOnebotMedia(event.data)),
+      imageTextParts: readOnebotMessageParts(event.data),
       ...(event.voices.length ? { voices: event.voices } : {}),
       // QQ 是唯一能发表情的渠道；清单非空即声明能力，是否真发还要过角色开关和冷却。
       faceCatalog: ONEBOT_FACES,
       stickerCatalog: await loadStickerCatalog(binding.characterId),
       // 私聊同样能发语音条：语音在私聊里比在群里更合适（一对一，不用怕刷屏）。
       voiceCapable: true,
+      // 私聊也能发图：她画的东西更适合一对一发。
+      imageCapable: true,
       // 私聊更是「一句一句弹」的地方，模板里那些短回复就是这么来的。
       segmentCapable: true,
       sendReply,

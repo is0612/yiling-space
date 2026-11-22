@@ -43,7 +43,7 @@ try {
     transcript: [{ id: "current", member: "member_2", speaker: "群友", content: "继续", isOwner: false }],
     recentMessages: [{ id: "previous", role: "ASSISTANT", content: "上句话", occurredAt: "2026-01-01T00:00:00Z", mentions }],
     memories: [], snapshots: [] });
-  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v85");
+  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v87");
   const system = request!.messages.find(line => line.role === "system")!.content;
   const payload = request!.messages.find(line => line.role === "user")!.content;
   assert(system.includes("mentions records notifications actually sent"));

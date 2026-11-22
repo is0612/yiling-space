@@ -7,10 +7,11 @@ import { resolveEventRecentDays } from "./memory-event-retrieval";
 import { resolveProactiveSettings } from "./proactive-settings";
 import type { GroupInitiativeSettings, ProactiveSettings } from "../../shared/types/character";
 import { resolveGroupInitiativeSettings } from "./group-initiative-settings";
-import { API_KEY_FIELDS, isAsrApiKeySaved, isContextAssistantApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isSocialRelationshipAssessmentAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved, readApiKeyFieldPlain } from "./credential-encryption";
+import { API_KEY_FIELDS, isAsrApiKeySaved, isContextAssistantApiKeySaved, isImageApiKeySaved, isKnowledgeAssistantApiKeySaved, isMemoryAssistantApiKeySaved, isSocialRelationshipAssessmentAssistantApiKeySaved, isVisionApiKeySaved, isVoiceApiKeySaved, readApiKeyFieldPlain } from "./credential-encryption";
 import { ASSISTANT_FIELDS, summarizeAssistantConnection } from "./assistant-inheritance";
 import { readKnowledgeCollectScope } from "./knowledge-collect-policy";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
+import { resolveImageChance, resolveImageCooldownMinutes, resolveImageDailyLimit, resolveImageSizePreset } from "./image-generation";
 
 function positiveNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
@@ -262,6 +263,16 @@ export function toCharacterDto(input: unknown): CharacterDto {
     visionApiBaseUrl: typeof config.visionApiBaseUrl === "string" ? config.visionApiBaseUrl : "",
     visionApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.vision),
     visionApiKeyConfigured: isVisionApiKeySaved(config),
+    imageEnabled: config.imageEnabled === true,
+    imageChance: resolveImageChance(config),
+    imageCooldownMinutes: resolveImageCooldownMinutes(config),
+    imageDailyLimit: resolveImageDailyLimit(config),
+    imageModel: typeof config.imageModel === "string" ? config.imageModel : "",
+    imageApiBaseUrl: typeof config.imageApiBaseUrl === "string" ? config.imageApiBaseUrl : "",
+    imageApiKey: readApiKeyFieldPlain(config, API_KEY_FIELDS.image),
+    imageApiKeyConfigured: isImageApiKeySaved(config),
+    imageProvider: typeof config.imageProvider === "string" ? config.imageProvider : "",
+    imageSize: resolveImageSizePreset(config),
     proactive: resolveProactiveSettings(config),
     groupInitiative: resolveGroupInitiativeSettings(config),
   };

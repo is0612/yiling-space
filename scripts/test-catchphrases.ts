@@ -17,6 +17,7 @@ import {
   normalizePhraseKey,
 } from "../server/utils/catchphrase-mine";
 import { looksLikeSystemMessage } from "../server/utils/system-message";
+import { stripMediaTokens } from "../server/utils/media-token-cleanup";
 
 /**
  * 梗语录回归测试。
@@ -256,6 +257,20 @@ const entry = (
     "段标记是渠道拼进去的，不清掉的话「[图片]」会成为群里最高频的「梗」。",
   );
   assert.equal(cleanMessageForMining("@self xxx 不烧心吗"), "xxx 不烧心吗", "@self 不是人打的字。");
+  for (const label of ["图片", "表情包"]) {
+    const longDescription = "画面里有一行说明".repeat(55);
+    assert.equal(cleanMessageForMining(`[${label}：${longDescription}]`), "", "长媒体描述不能成为梗。");
+    assert.equal(cleanMessageForMining(`前句[${label}：${longDescription}[嵌套说明]\n下一行]后句`), "前句 后句", "只移除完整媒体标记，不吞前后正文。");
+    assert.deepEqual(extractPhraseCandidates(["a", "b", "c"].map(speaker => ({ speaker, content: `[${label}：${longDescription}]` }))), [], "重复媒体描述也不捡为梗。");
+  }
+  assert.equal(stripMediaTokens("前[图片：画面]中[表情包]后"), "前 中 后", "多个媒体标记分别移除。");
+  assert.equal(stripMediaTokens("前[图片：未闭合后句"), "前[图片：未闭合后句", "未闭合标记不靠猜测吞正文。");
+  const oversizedMedia = `[图片：${"长".repeat(4096)}]后句`;
+  assert.equal(stripMediaTokens(oversizedMedia), oversizedMedia, "超出生成标记上限的文本不扩大清洗范围。");
+  assert.equal(stripMediaTokens("[图片说明]普通文本"), "[图片说明]普通文本", "媒体名称必须完整匹配。");
+  const ordinaryBracket = `[${"普通括号文本".repeat(15)}]`;
+  assert.equal(cleanMessageForMining(ordinaryBracket), ordinaryBracket, "普通长方括号原有60字规则不变。");
+  assert.equal(cleanMessageForMining("前[备注]后"), "前 后", "普通短方括号规则不变。");
   assert.equal(cleanMessageForMining("@小明 xxx不烧心吗"), "xxx不烧心吗", "行首 @昵称要摘掉。");
   assert.equal(
     cleanMessageForMining("看这个 https://example.com/a 笑死"),

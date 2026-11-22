@@ -128,6 +128,21 @@ const draftVisionModel = ref("");
 const draftVisionApiBaseUrl = ref("");
 const draftVisionApiKey = ref("");
 
+// ── 画图（文生图）：和「看图」是两个方向和两把 Key ──
+// 看图把群里的图读成文字（智谱这类便宜视觉模型就够），画图是把文字变成一张图
+// （MiniMax / OpenAI）。混成一套配置的结果是：换画图服务商时把看图也弄坏了。
+const draftImageProvider = ref("auto");
+const draftImageApiBaseUrl = ref("");
+const draftImageApiKey = ref("");
+const draftImageModel = ref("");
+/** 画面尺寸只给三个预设：像素宽高由服务端换算，手填容易低于服务商的面积下限。 */
+const draftImageSize = ref<"square" | "portrait" | "landscape">("square");
+/** 画图服务商的默认地址与模型；点服务商时一键带过去 */
+const IMAGE_PROVIDER_PRESETS: Record<string, { baseUrl: string; model: string }> = {
+  minimax: { baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-H3-Image" },
+  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-image-1" },
+};
+
 // ── 四个后台助手：默认跟随对话模型 ──
 // 2026-11-12 从「四个独立页签 + 四套连接字段」改成「对话模型页里的四个分节」。
 // 每个助手仍然可以单独覆写服务商 / 地址 / Key / 模型名，留空就沿用上面的对话模型。
@@ -180,6 +195,7 @@ const keyDrafts = {
   voice: draftVoiceApiKey,
   asr: draftAsrApiKey,
   vision: draftVisionApiKey,
+  image: draftImageApiKey,
   memory: draftMemoryAssistantApiKey,
   context: draftContextAssistantApiKey,
   knowledge: draftKnowledgeAssistantApiKey,
@@ -269,6 +285,12 @@ function buildDraftSignature() { return JSON.stringify([
   // 图片模型连接信息
   draftVisionModel.value.trim(),
   draftVisionApiBaseUrl.value.trim(),
+  // 画图模型：服务商、地址、模型、尺寸、Key（Key 只参与当前组件内的草稿比较）
+  draftImageApiKey.value.trim(),
+  draftImageProvider.value,
+  draftImageApiBaseUrl.value.trim(),
+  draftImageModel.value.trim(),
+  draftImageSize.value,
   // 记忆助手：留空沿用已存 Key，草稿变化仍参与未保存检测。
   draftMemoryAssistantModel.value.trim(),
   draftMemoryAssistantTemperature.value,
@@ -448,6 +470,45 @@ watch(draftVisionApiBaseUrl, () => {
   fetchedVisionModels.value = [];
 });
 const visionProviderKey = computed(() => providerByBaseUrl(draftVisionApiBaseUrl.value)?.key ?? "custom");
+
+// ── 画图模型的计算属性 ──
+const imageKeyConfigured = computed(() => character.value?.imageApiKeyConfigured === true);
+/** "auto" 同样是前端哨兵：保存时映射回空串，交给服务端按地址判断协议。 */
+const imageProviderKey = computed(() => {
+  if (draftImageProvider.value === "minimax" || draftImageProvider.value === "openai") return draftImageProvider.value;
+  return /minimax/i.test(draftImageApiBaseUrl.value) ? "minimax" : "custom";
+});
+/** 画图模型候选：两家的主力模型，允许手填（换高速版只改一个词）。 */
+const imageModelOptions = computed(() => {
+  const preset = IMAGE_PROVIDER_PRESETS[imageProviderKey.value];
+  const base = preset
+    ? (imageProviderKey.value === "minimax"
+      ? ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"]
+      : ["gpt-image-1", "dall-e-3"])
+    : ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed", "gpt-image-1"];
+  const current = draftImageModel.value.trim();
+  return current && !base.includes(current) ? [current, ...base] : base;
+});
+const imageKeyPlaceholder = computed(() => {
+  if (imageKeyConfigured.value) return API_KEY_SAVED_PLACEHOLDER;
+  return imageProviderKey.value === "minimax"
+    ? "sk-...（MiniMax 接口密钥；和语音同一把也行）"
+    : "sk-...（服务商后台复制）";
+});
+/** 选服务商只带地址与默认模型：自己填过的地址/模型名不该被冲掉。 */
+function applyImageProvider(key: string) {
+  const preset = IMAGE_PROVIDER_PRESETS[key];
+  if (!preset) return;
+  draftImageApiBaseUrl.value = preset.baseUrl;
+  const model = draftImageModel.value.trim();
+  const isOtherDefault = Object.entries(IMAGE_PROVIDER_PRESETS).some(([other, entry]) => other !== key && entry.model === model);
+  if (!model || isOtherDefault) draftImageModel.value = preset.model;
+}
+const IMAGE_SIZE_OPTIONS = [
+  { value: "square", label: "方图 1:1（1024 × 1024）" },
+  { value: "portrait", label: "竖图 3:4（864 × 1152）" },
+  { value: "landscape", label: "横图 4:3（1152 × 864）" },
+] as const;
 
 /**
  * 语音的开放平台入口：和对话模型那块对齐 —— 用户卡住的点不是「填什么」，而是「去哪拿 Key」。
@@ -701,6 +762,12 @@ async function loadCharacter() {
     draftVisionModel.value = data.visionModel ?? "";
     draftVisionApiBaseUrl.value = data.visionApiBaseUrl ?? "";
     draftVisionApiKey.value = data.visionApiKey ?? "";
+    // 画图模型
+    draftImageProvider.value = data.imageProvider || "auto";
+    draftImageApiBaseUrl.value = data.imageApiBaseUrl ?? "";
+    draftImageApiKey.value = data.imageApiKey ?? "";
+    draftImageModel.value = data.imageModel ?? "";
+    draftImageSize.value = (data.imageSize === "portrait" || data.imageSize === "landscape") ? data.imageSize : "square";
 
     // 四个助手：空字符串 = 跟随对话模型，所以原样读进来即可，不做 fallback。
     draftMemoryAssistantEnabled.value = data.memoryAssistantEnabled !== false;
@@ -764,6 +831,7 @@ function syncKeysFromCharacter(data: Character) {
   draftVoiceApiKey.value = data.voiceApiKey ?? "";
   draftAsrApiKey.value = data.asrApiKey ?? "";
   draftVisionApiKey.value = data.visionApiKey ?? "";
+  draftImageApiKey.value = data.imageApiKey ?? "";
   draftMemoryAssistantApiKey.value = data.memoryAssistantApiKey ?? "";
   draftContextAssistantApiKey.value = data.contextAssistantApiKey ?? "";
   draftKnowledgeAssistantApiKey.value = data.knowledgeAssistantApiKey ?? "";
@@ -781,7 +849,7 @@ async function save(silent = false): Promise<boolean> {
   // 回来时要能判断「哪些框是用户自己新敲的」，不能拿服务端回显把它们冲掉。
   const submittedSignature = buildDraftSignature();
   const submittedKeys = [
-    draftChatApiKey, draftVoiceApiKey, draftAsrApiKey, draftVisionApiKey,
+    draftChatApiKey, draftVoiceApiKey, draftAsrApiKey, draftVisionApiKey, draftImageApiKey,
     draftMemoryAssistantApiKey, draftContextAssistantApiKey, draftKnowledgeAssistantApiKey, draftSocialAssistantApiKey,
   ].map((field) => ({ field, value: field.value }));
   const generation = requestGeneration();
@@ -822,6 +890,13 @@ async function save(silent = false): Promise<boolean> {
         visionApiBaseUrl: draftVisionApiBaseUrl.value.trim(),
         ...(draftVisionApiKey.value.trim() ? { visionApiKey: draftVisionApiKey.value.trim() } : {}),
         ...(sendsKeyClear("vision") ? { clearVisionApiKey: true } : {}),
+        // 画图模型
+        imageModel: draftImageModel.value.trim(),
+        imageApiBaseUrl: draftImageApiBaseUrl.value.trim(),
+        imageProvider: draftImageProvider.value === "auto" ? "" : draftImageProvider.value,
+        imageSize: draftImageSize.value,
+        ...(draftImageApiKey.value.trim() ? { imageApiKey: draftImageApiKey.value.trim() } : {}),
+        ...(sendsKeyClear("image") ? { clearImageApiKey: true } : {}),
         // 四个助手：空字符串就是「跟随对话模型」，所以原样发过去，不做 fallback。
         memoryAssistantEnabled: draftMemoryAssistantEnabled.value,
         memoryAssistantModel: draftMemoryAssistantModel.value.trim(),
@@ -1737,6 +1812,137 @@ watch(id, () => void loadCharacter());
                     <el-icon><Promotion /></el-icon>{{ testingVision ? "测试中…" : "测试" }}
                   </el-button>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="brick">
+            <div class="brick-head">
+              <div class="brick-head-txt">
+                <div class="brick-heading">
+                  <h2 class="brick-title">
+                    画图模型
+                  </h2>
+                  <el-tooltip
+                    content="把文字变成一张图。和上面的「图片模型」是两个方向：那个是看懂别人发的图，这个是她自己画。"
+                    placement="top"
+                    :show-after="150"
+                  >
+                    <button
+                      type="button"
+                      class="help-trigger"
+                      aria-label="查看说明"
+                    >
+                      <el-icon><QuestionFilled /></el-icon>
+                    </button>
+                  </el-tooltip>
+                </div>
+                <p class="brick-desc">
+                  这组只负责「她画图」。开关和频率在「QQ 渠道 → 角色行为 → 画图」，这里留空不会启用任何东西。
+                </p>
+              </div>
+            </div>
+
+            <div class="fields">
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">服务商</span>
+                </div>
+                <el-select
+                  :model-value="imageProviderKey"
+                  class="field-ctl"
+                  aria-label="画图服务商"
+                  @change="applyImageProvider"
+                >
+                  <el-option
+                    label="MiniMax"
+                    value="minimax"
+                  />
+                  <el-option
+                    label="OpenAI 兼容"
+                    value="openai"
+                  />
+                  <el-option
+                    label="自定义（按地址判断）"
+                    value="custom"
+                  />
+                </el-select>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API 地址</span>
+                  <span class="field-help">留空 = 用环境变量或 MiniMax 默认地址</span>
+                </div>
+                <el-input
+                  v-model="draftImageApiBaseUrl"
+                  maxlength="500"
+                  aria-label="画图 API 地址"
+                  placeholder="https://api.minimaxi.com/v1"
+                />
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">API Key</span>
+                  <span
+                    class="pill"
+                    :class="imageKeyConfigured ? 'pill-green' : 'pill-rose'"
+                  >{{ imageKeyConfigured ? "已保存" : "未填写" }}</span>
+                </div>
+                <ApiKeyInput
+                  v-model="draftImageApiKey"
+                  aria-label="画图 API Key"
+                  :placeholder="imageKeyPlaceholder"
+                  clearable
+                  @clear="markKeyForClear('image')"
+                />
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">画图模型</span>
+                </div>
+                <el-select
+                  v-model="draftImageModel"
+                  class="field-ctl"
+                  filterable
+                  allow-create
+                  default-first-option
+                  aria-label="画图模型"
+                  placeholder="选择或输入生图模型名称"
+                >
+                  <el-option
+                    v-for="model in imageModelOptions"
+                    :key="model"
+                    :label="model"
+                    :value="model"
+                  />
+                </el-select>
+                <p class="field-help">
+                  高速版是 MiniMax-H3-Image-Highspeed，参数完全一样，只改这一个词。
+                </p>
+              </div>
+
+              <div class="field">
+                <div class="field-head">
+                  <span class="field-label">画面尺寸</span>
+                </div>
+                <el-select
+                  v-model="draftImageSize"
+                  class="field-ctl"
+                  aria-label="画面尺寸"
+                >
+                  <el-option
+                    v-for="option in IMAGE_SIZE_OPTIONS"
+                    :key="option.value"
+                    :label="option.label"
+                    :value="option.value"
+                  />
+                </el-select>
+                <p class="field-help">
+                  只给三档是有意的：宽高手填容易低于服务商的面积下限，接口会直接 400。
+                </p>
               </div>
             </div>
           </section>

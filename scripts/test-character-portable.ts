@@ -49,6 +49,15 @@ const rawConfig = {
   asrModel: "asr-1.0",
   visionModel: "gpt-5.6-luna",
   imageUnderstanding: true,
+  // 画图：设置跟卡走，Key 不跟
+  imageEnabled: true,
+  imageChance: 6,
+  imageCooldownMinutes: 45,
+  imageDailyLimit: 5,
+  imageModel: "MiniMax-H3-Image",
+  imageApiBaseUrl: "https://api.minimaxi.com/v1",
+  imageProvider: "minimax",
+  imageSize: "portrait",
   stickerAutoCollect: false,
   catchphraseAutoMine: true,
   dailyTokenLimit: 200000,
@@ -60,11 +69,13 @@ const rawConfig = {
   // 下面这些都是不该进包的
   chatApiKeyEncrypted: "v1.aaa.bbb.ccc",
   voiceApiKeyEncrypted: "v1.ddd.eee.fff",
+  imageApiKeyEncrypted: "v1.imagelegacy.key",
   memoryAssistantApiKeyEncrypted: "v1.ggg.hhh.iii",
   knowledgeAssistantApiKeyEncrypted: "v1.knowledge.key.secret",
   voiceApiKey: "sk-voice",
   asrApiKey: "sk-asr",
   visionApiKey: "sk-vision",
+  imageApiKey: "sk-image",
   chatApiKey: "sk-plain",
   someToken: "abc",
   // 后台流水线的开关：会自己花钱，不跟卡走
@@ -84,6 +95,8 @@ assert.equal(Reflect.get(stripped, "knowledgeAssistantApiKeyEncrypted"), undefin
 assert.equal(Reflect.get(stripped, "voiceApiKey"), undefined, "语音 Key 明文也不能进包");
 assert.equal(Reflect.get(stripped, "asrApiKey"), undefined, "转写 Key 明文也不能进包");
 assert.equal(Reflect.get(stripped, "visionApiKey"), undefined, "看图 Key 明文也不能进包");
+assert.equal(Reflect.get(stripped, "imageApiKey"), undefined, "画图 Key 明文也不能进包");
+assert.equal(Reflect.get(stripped, "imageApiKeyEncrypted"), undefined, "画图 Key 的旧密文也不能进包");
 assert.equal("chatApiKey" in stripped, false, "明文 Key 字段不能进包");
 assert.equal("someToken" in stripped, false, "白名单之外的字段一律不带走");
 
@@ -96,6 +109,15 @@ assert.equal(stripped.voiceEnabled, true, "语音开关跟卡走");
 assert.equal(stripped.ttsVoice, "female-shaonv", "音色跟卡走（换机器不能换声）");
 assert.equal(stripped.ttsInstructions, "声音软软的、轻轻的", "语气指令跟卡走");
 assert.equal(stripped.visionModel, "gpt-5.6-luna", "看图模型跟卡走");
+// 画图同理：换台机器她还是同一种画风，但画图 Key 得自己重填
+assert.equal(stripped.imageEnabled, true, "画图开关跟卡走");
+assert.equal(stripped.imageChance, 6, "画图概率跟卡走");
+assert.equal(stripped.imageCooldownMinutes, 45, "画图冷却跟卡走");
+assert.equal(stripped.imageDailyLimit, 5, "每日张数跟卡走");
+assert.equal(stripped.imageModel, "MiniMax-H3-Image", "画图模型跟卡走");
+assert.equal(stripped.imageSize, "portrait", "画面尺寸跟卡走");
+assert.equal(stripped.imageProvider, "minimax", "画图服务商跟卡走");
+assert.equal(stripped.imageApiBaseUrl, "https://api.minimaxi.com/v1", "画图地址跟卡走");
 assert.equal(stripped.dailyTokenLimit, 200000, "日额度是设置，不是密钥");
 assert.equal(stripped.knowledgeAssistantModel, "private-knowledge-model", "助手用的模型选择跟卡走");
 
@@ -325,6 +347,8 @@ assert.ok(
 assert.equal(built.memories.filter((item) => item.scope === "private").length, 1, "私人记忆带 scope 标记");
 assert.equal(built.memories[0]?.scope, "character", "全局记忆默认 scope=character");
 assert.equal(Reflect.get(built.modelConfig, "chatApiKeyEncrypted"), undefined, "构建出的包不含密钥字段");
+assert.equal(built.modelConfig.imageModel, "MiniMax-H3-Image", "构建出的包要带画图设置");
+assert.equal(Reflect.get(built.modelConfig, "imageApiKey"), undefined, "构建出的包不含画图 Key");
 
 // ── 3. 回环：导出 → JSON → 导入解析 ──────────────────────────
 const roundTrip = parseCharacterBundle(JSON.parse(JSON.stringify(built)));
@@ -665,11 +689,12 @@ assert.equal(aliasTooLong.friends[0]?.aliases[0]?.length, 12, "超长备注截�
 
 // 密钥字段即使塞在包里也会被剥掉
 const withSecrets = parseCharacterBundle(minimal({
-  modelConfig: { chatModel: "m", chatApiKeyEncrypted: "v1.x.y.z", chatApiKey: "sk-x" },
+  modelConfig: { chatModel: "m", chatApiKeyEncrypted: "v1.x.y.z", chatApiKey: "sk-x", imageApiKey: "sk-image" },
 }));
 assert.equal(withSecrets.modelConfig.chatModel, "m");
 assert.equal("chatApiKeyEncrypted" in withSecrets.modelConfig, false, "导入时也要剥一次密钥");
 assert.equal("chatApiKey" in withSecrets.modelConfig, false);
+assert.equal("imageApiKey" in withSecrets.modelConfig, false, "别人塞进包的画图 Key 也不读");
 
 // 每天最多日记 40 + 手账 40；必须通过真实 build → parse 回环，而非只测手写 JSON。
 function buildJournalBoundary(diaryCount: number, handbookCount: number) {

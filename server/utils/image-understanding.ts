@@ -21,6 +21,9 @@ import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-mod
 import { resolveCharacterVisionApiKey } from "./credential-encryption";
 import { readModelUsage, recordModelUsage } from "./model-usage";
 import { downloadSafeMedia } from "./safe-media-download";
+import type { MediaKind } from "./channel-adapter/onebot/media-kind";
+
+import { renderImageTextParts, sanitizeMediaDescription, type ImageTextPart } from "./media-text";
 
 export {
   assertFetchableMediaUrl as assertFetchableImageUrl,
@@ -44,6 +47,11 @@ export type ChannelImageRef = {
   file?: string;
   /** 表情包/商城表情常常只有一句文字说明，没有 url。 */
   summary?: string;
+  /** Gateway observations only; these do not change vision eligibility or prompt text. */
+  subType?: number;
+  subTypeState?: "missing" | "valid" | "invalid";
+  segmentIndex?: number;
+  mediaKind?: MediaKind;
 };
 
 export type ImageUnderstandingSettings = {
@@ -215,8 +223,14 @@ const VISION_PROMPT = [
   "用中文写 2-4 句，只说画面里确实存在的东西：主体、动作或场景、图里出现的文字、整体氛围。",
   "图里的文字看得清就原样抄出来；字太小、糊了、被挡住或只看到一半，就写「图中文字没看清」，不要猜，也不要把猜的字凑成通顺的句子。",
   "图里本来没有文字时，不用提文字这件事。",
-  "不要开场白，不要评价好不好看，不要推测没看见的内容。表情包就说明是什么梗、想表达什么情绪。",
+  "不要开场白，不要评价好不好看，不要推测没看见的内容，不要猜测发送者意图或梗的来源。",
 ].join("\n");
+
+export function imageVisionPrompt(mediaKind?: MediaKind): string {
+  return mediaKind === "sticker"
+    ? "这是一张表情包。只用中文简短描述可见的表情、动作和确实看得清的文字。不要猜测梗的名称、出处、含义或发送者的意图；看不清的文字不要猜；不要评价画面，不要开场白。"
+    : VISION_PROMPT;
+}
 
 /**
  * 描述一张图。失败返回 null —— 调用方把 `[图片]` 原样留着就行。
@@ -260,7 +274,7 @@ async function describeOne(
     temperature: 0.2,
     max_tokens: 400,
     messages: [
-      { role: "system", content: VISION_PROMPT },
+      { role: "system", content: imageVisionPrompt(ref.mediaKind) },
       {
         role: "user",
         content: [
@@ -326,13 +340,7 @@ async function describeOne(
 
 /** 描述会原样进提示词，所以先压成一行、限长：换行会把一轮群聊的排版搅乱。 */
 export function sanitizeDescription(raw: string): string | null {
-  const text = raw
-    .replace(/\s*\n+\s*/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim()
-    .slice(0, DESCRIPTION_MAX_CHARS)
-    .trim();
-  return text || null;
+  return sanitizeMediaDescription(raw, DESCRIPTION_MAX_CHARS);
 }
 
 /**
@@ -353,18 +361,17 @@ export async function describeImages(
 }
 
 /**
- * 把描述填回正文里的 `[图片]` 占位符。
- *
- * 用游标而不是从头 indexOf：描述文本里本身可能包含 `[图片]` 这几个字，
- * 从头找会把后一段又替换一遍，最后得到嵌套的括号。
+ * OneBot uses structural parts, so literal user tokens and marketplace summaries cannot consume image slots.
+ * The string-only path is retained for older channels without protocol parts; it only fills image tokens.
+ * Failed/unprocessed slots keep their bare media identity rather than emitting a repeated error message.
  */
-export function applyImageDescriptions(content: string, descriptions: Array<string | null | undefined>): string {
+export function applyImageDescriptions(content: string, descriptions: Array<string | null | undefined>, parts?: readonly ImageTextPart[]): string {
+  if (parts) return renderImageTextParts(parts, descriptions);
   if (!descriptions.length || !content.includes("[图片]")) return content;
   let text = content;
   let cursor = 0;
   for (const description of descriptions) {
-    // 每个结果都消费一个原始图片占位符。undefined 表示因本轮识别上限未处理，
-    // 保留裸 [图片]；null 表示尝试过但无法读取，必须明确标记。
+    // Every result consumes one legacy slot; unavailable/over-budget slots retain the bare token.
     const index = text.indexOf("[图片]", cursor);
     if (index < 0) break;
     if (description === undefined) {
@@ -372,8 +379,8 @@ export function applyImageDescriptions(content: string, descriptions: Array<stri
       continue;
     }
 
-    const value = description?.trim();
-    const replacement = value ? `[图片：${value}]` : "[图片：无法读取]";
+    const value = description ? sanitizeDescription(description) : null;
+    const replacement = value ? `[图片：${value}]` : "[图片]";
     text = text.slice(0, index) + replacement + text.slice(index + "[图片]".length);
     cursor = index + replacement.length;
   }

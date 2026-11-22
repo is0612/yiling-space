@@ -5,6 +5,7 @@ import { CATCHPHRASE_STATUS, invalidateCatchphraseCache } from "./catchphrases";
 import { getPrisma } from "./prisma";
 import { looksLikeSystemMessage } from "./system-message";
 import { filterAutomaticSources } from "./automatic-source-policy";
+import { stripMediaTokens } from "./media-token-cleanup";
 
 /**
  * 从群聊里「捡梗」：她注意到群里反复在用的某句话，候选交给用户点头后才算她的口头禅。
@@ -73,7 +74,7 @@ export function normalizePhraseKey(text: string): string {
  * 带着它们数频次，`[图片]` 会立刻成为群里「最高频的梗」。
  */
 export function cleanMessageForMining(raw: string): string {
-  return (raw ?? "")
+  return stripMediaTokens(raw ?? "")
     .replace(/\[[^\]]{0,60}\]/g, " ")
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/@(?:self|member_\d+)/g, " ")

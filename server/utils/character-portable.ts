@@ -229,6 +229,15 @@ export type CharacterBundleModelConfig = {
   imageUnderstanding?: boolean;
   visionModel?: string;
   visionApiBaseUrl?: string;
+  /** 画图（文生图）：开关、额度、模型与地址；Key 不随包走。 */
+  imageEnabled?: boolean;
+  imageChance?: number;
+  imageCooldownMinutes?: number;
+  imageDailyLimit?: number;
+  imageModel?: string;
+  imageApiBaseUrl?: string;
+  imageProvider?: string;
+  imageSize?: string;
   /** 收集类开关：表情、梗。 */
   stickerAutoCollect?: boolean;
   catchphraseAutoMine?: boolean;
@@ -601,6 +610,15 @@ export const PORTABLE_MODEL_CONFIG_KEYS = [
   "imageUnderstanding",
   "visionModel",
   "visionApiBaseUrl",
+  // 画图（文生图）：设置随包走，Key 不随包走
+  "imageEnabled",
+  "imageChance",
+  "imageCooldownMinutes",
+  "imageDailyLimit",
+  "imageModel",
+  "imageApiBaseUrl",
+  "imageProvider",
+  "imageSize",
   // 收集类开关：收表情、捡梗（都要人看得见的结果，不额外花钱）
   "stickerAutoCollect",
   "catchphraseAutoMine",

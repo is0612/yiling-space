@@ -138,7 +138,7 @@ export async function applyApiKeyWrites(
 }
 
 /**
- * 八把 Key 的字段名。新增服务商时在这里补一行，别在各处再手写一遍字符串 ——
+ * 各把 Key 的字段名。新增服务商时在这里补一行，别在各处再手写一遍字符串 ——
  * 名字写错的表现是「明明填了却说没配」，最难查。
  */
 export const API_KEY_FIELDS = {
@@ -146,6 +146,7 @@ export const API_KEY_FIELDS = {
   voice: { plain: "voiceApiKey", legacy: "voiceApiKeyEncrypted" },
   asr: { plain: "asrApiKey", legacy: "asrApiKeyEncrypted" },
   vision: { plain: "visionApiKey", legacy: "visionApiKeyEncrypted" },
+  image: { plain: "imageApiKey", legacy: "imageApiKeyEncrypted" },
   memoryAssistant: { plain: "memoryAssistantApiKey", legacy: "memoryAssistantApiKeyEncrypted" },
   contextAssistant: { plain: "contextAssistantApiKey", legacy: "contextAssistantApiKeyEncrypted" },
   knowledgeAssistant: { plain: "knowledgeAssistantApiKey", legacy: "knowledgeAssistantApiKeyEncrypted" },
@@ -271,6 +272,21 @@ export async function resolveCharacterVisionApiKey(configValue: unknown): Promis
 
 export function isVisionApiKeySaved(configValue: unknown): boolean {
   return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.vision);
+}
+
+/**
+ * 画图（文生图）的 Key。
+ *
+ * 和看图分开存，理由和「识别 vs 合成」那条一样：看图常常在智谱 / 通义，
+ * 画图可能是 MiniMax 或 OpenAI，两家共用一把 Key 只会拿到 401。
+ * 留空 = 没配（生图整条链路不启用），调用方自己去回落环境变量。
+ */
+export async function resolveCharacterImageApiKey(configValue: unknown): Promise<string> {
+  return readApiKeyField(configValue, API_KEY_FIELDS.image);
+}
+
+export function isImageApiKeySaved(configValue: unknown): boolean {
+  return isApiKeyFieldSaved(configValue, API_KEY_FIELDS.image);
 }
 
 /*

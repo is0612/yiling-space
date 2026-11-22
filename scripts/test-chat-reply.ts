@@ -430,7 +430,7 @@ try {
   // 纯文字轮次里那三行（约 120 tokens）全是废的，还会让她以为自己看见了图。
   // 判据在代码里（扫 currentMessage / transcript / 背景 / 历史），不交给模型猜。
   assert(
-    !systemMessage.content.includes("When it reads [图片"),
+    !systemMessage.content.includes("[图片：…] supplies an image description"),
     "纯文字轮次不该带「怎么看图」的说明。",
   );
   capturedBody = "";
@@ -447,9 +447,10 @@ try {
   });
   const mediaSystem = (JSON.parse(capturedBody) as { messages: Array<{ role: string; content: string }> })
     .messages.find((item) => item.role === "system")!.content;
-  assert(mediaSystem.includes("When it reads [图片"), "带了图片描述就要说明怎么读这张图。");
+  assert(mediaSystem.includes("[图片：…] supplies an image description"), "带了图片描述就要说明怎么读这张图。");
+  assert(mediaSystem.includes("without unsolicited narration"), "表情包不应被主动点评画面。");
   assert(mediaSystem.includes("When it reads [语音"), "语音转写的读法在同一段里，一起给。");
-  assert.match(mediaSystem, /specific missing information or ask for clarification/);
+  assert.match(mediaSystem, /briefly state the specific missing information and ask only for what is needed/);
   assert(!mediaSystem.includes("say the lettering was blurry"), "不能把所有图片资料缺口编成字迹模糊");
   assert(!mediaSystem.includes("never say you cannot see images"), "不能强制否认图片不可见");
   await generateConversationReply({

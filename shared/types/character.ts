@@ -207,6 +207,27 @@ export type Character = {
   visionApiKey: string;
   visionApiKeyConfigured: boolean;
 
+  // ── 画图 ──────────────────────────────────────────────────
+  /** 她的回复能不能配一张自己画的图；默认关。 */
+  imageEnabled: boolean;
+  /** 自主配图的概率（0-100），默认 5；被明确要求时不看它。 */
+  imageChance: number;
+  /** 两张自主配图之间至少隔多少分钟（0 = 不冷却），默认 30。 */
+  imageCooldownMinutes: number;
+  /** 每天最多画几张（0 = 不限），默认 8。 */
+  imageDailyLimit: number;
+  /** 画图模型：空 = 用环境变量或默认 MiniMax-H3-Image。 */
+  imageModel: string;
+  /** 画图服务地址；空 = 用环境变量或 MiniMax 默认地址。 */
+  imageApiBaseUrl: string;
+  /** 明文画图 Key；空 = 没配（整条链路不启用）。 */
+  imageApiKey: string;
+  imageApiKeyConfigured: boolean;
+  /** 画图服务商：minimax / openai；空 = 按地址自动判断。 */
+  imageProvider: string;
+  /** 画面尺寸：square（默认）/ portrait / landscape。 */
+  imageSize: "square" | "portrait" | "landscape";
+
   // ── 主动行为 ──────────────────────────────────────────────
   /** 主动找话设置；未配置过时是默认值（enabled=false）。 */
   proactive: ProactiveSettings;
