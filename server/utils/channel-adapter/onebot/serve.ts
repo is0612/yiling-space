@@ -1,5 +1,6 @@
+import { findGeneratedImageAsset } from "../../image-assets";
 import { observeOnebotMedia } from "../media-observation";
-import { readOnebotMedia, readOnebotMessageParts } from "./types";
+import { readOnebotMedia, readOnebotMessageParts, readOnebotAddressedCommandText } from "./types";
 /**
  * QQ 小号（OneBot v11）渠道的消息处理 —— 对应官方 QQ 的 serve.ts。
  *
@@ -969,7 +970,7 @@ export function createReplySender(
   quote?: { resolveAtQq?: (messageId: string) => string | null; selfQq?: string },
 ): ChannelReplySender {
   return async (reply, options) => {
-    const send = (message: OnebotOutgoingMessage): Promise<void> => {
+    const send = (message: OnebotOutgoingMessage): Promise<import("./client").OnebotSendReceipt> => {
       if (target.messageType === "group" && target.groupId) {
         return sendOnebotGroupMessage(config, target.groupId, message);
       }
@@ -977,7 +978,7 @@ export function createReplySender(
         // 临时会话要带来源群，否则协议端拒绝 —— 回复会「生成成功但发不出去」。
         return sendOnebotPrivateMessage(config, target.userId, message, target.tempGroupId || undefined);
       }
-      return Promise.resolve();
+      return Promise.resolve({ messageId: null });
     };
 
     const delivery: ChannelReplyDelivery = {};
@@ -1134,8 +1135,8 @@ export function createReplySender(
         return delivery;
       }
       try {
-        await send(segments);
-        delivery.image = { status: "sent", sentAt: new Date().toISOString() };
+        const receipt = await send(segments);
+        delivery.image = { status: "sent", sentAt: new Date().toISOString(), ...(receipt.messageId ? { externalMessageId: receipt.messageId } : {}) };
         console.log("[onebot] 图片已发送 " + JSON.stringify({
           bytes: image.bytes,
           width: image.width,
@@ -1679,6 +1680,9 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         const value = groupContext.quoteOf(contextKey, id);
         return value ? { messageId: value.id, authorQq: value.authorQq, speaker: value.speaker, content: value.text, isSelf: value.isSelf } : undefined;
       },
+      resolveGeneratedImage: async messageId => (await findGeneratedImageAsset(prisma, {
+        characterId: binding.characterId, bindingId: binding.id, externalConversationId: groupEvent.conversationKey,
+      }, messageId))?.facts ?? null,
       canReadAuthor: async uid => { const policy = await quotePolicyFor(uid); return !shouldHideFriendContent(policy.kind, policy.policy); },
       authorPolicy: quotePolicyFor,
       formatText: text => groupContext.formatText(contextKey, text),
@@ -1707,6 +1711,9 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         ...(kindFor(item) === "AI" ? { excludeFromGrowth: true as const } : {}),
         ...(item.event.displayName ? { authorDisplayName: item.event.displayName } : {}),
         content: item.event.content,
+        commandText: readOnebotAddressedCommandText(item.event.data, [binding.characterName, ...binding.groupChat.aliases]).commandText,
+        addressedToSelf: item.direct || readOnebotAddressedCommandText(item.event.data, [binding.characterName, ...binding.groupChat.aliases]).namedAddressed,
+        quotedToSelf: quotedByMessageId.get(item.event.messageId)?.isSelf === true,
         // 谁被 @ 了：落库给提炼用 —— 「@ 的是别的 bot」这类事不能再记成她的事。
         ...(facts[index]?.mentionTargets.length ? { mentionTargets: facts[index]!.mentionTargets } : {}),
         // 被 @ 的是谁：代号 + 显示名 + 身份，语境助手、最终回复与长期记忆共用这一份。
@@ -2043,7 +2050,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         }
       : undefined;
 
-    const quotedMessage = await resolveOnebotPrivateQuote(record.config, event);
+    const quotedMessage = await resolveOnebotPrivateQuote(record.config, event, {
+      resolveGeneratedImage: async messageId => (await findGeneratedImageAsset(getPrisma(), {
+        characterId: binding.characterId, bindingId: binding.id, externalConversationId: event.conversationKey,
+      }, messageId))?.facts ?? null,
+    });
     return handleChannelMessage({
       ...(quotedMessage ? { quotedMessage } : {}),
       platform: ONEBOT_PLATFORM,
@@ -2057,6 +2068,9 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       authorPlatformUid: event.userId,
       authorDisplayName: event.displayName || undefined,
       content: event.content,
+      commandText: readOnebotAddressedCommandText(event.data, [binding.characterName, ...binding.groupChat.aliases]).commandText,
+      addressedToSelf: true,
+      quotedToSelf: quotedMessage?.isSelf === true,
       ...(event.images.length ? { images: event.images } : {}),
       observedMedia: observeOnebotMedia(readOnebotMedia(event.data)),
       imageTextParts: readOnebotMessageParts(event.data),

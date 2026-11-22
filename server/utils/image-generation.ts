@@ -231,115 +231,86 @@ export function buildImageGenerationEndpoint(baseUrl: string): URL {
  * 「画重点」「画圈」「画饼」是口语里最常见的三个假阳性，
  * 而「漫画 / 动画 / 画风」是在聊作品，不是让她动笔。
  */
-const IMAGE_NEGATIVE = /(漫画|动画|计划|规划|策划|画重点|划重点|画圈|画线|画饼|画风|笔画|画质|画师|画画课|比划|刻画|描画|画外音)/;
-
-/**
- * 明确**不要**画。和上面那张表分开：那些是「说的不是这件事」，这是「说的就是这件事，
- * 但方向相反」。
- *
- * 否定词必须紧贴动词，中间不隔词：「别画了」「不用再画」「不必画」都算，
- * 而「别管我，你画一个」不算 —— 放宽成「否定词后 N 个字以内出现画」会把这类句子误杀，
- * 那比漏判更糟：她该画的时候不画，用户完全看不出原因。
- */
-const IMAGE_DECLINED = /(别|不要|不用|不必|甭|停止)(再)?(画|绘制|生成|出图|生图)/;
-
-export function isImageGenerationDeclined(text: string): boolean {
-  return IMAGE_DECLINED.test(text.replace(/\s+/gu, ""));
-}
-
-/**
- * 这句话是不是在让她画一张图。
- *
- * 判定要窄。宽判的代价和语音那次一样：用户随口一提，她就真的去花几十秒和一张图的钱。
- * 只认三种结构：
- *   ① 画/绘制 + 量词（张/幅/只/个…）—— 「画只猫」「画一张下雨的街」
- *   ② 画/绘制 + 图像类名词 —— 「画个头像」「画一张海报」
- *   ③ 生成/来/出/整/搞 + 量词 + 图/画 —— 「来张图」「出张图」「生成一张图」
- *
- * 询问能力（「你会画图吗」）不算：她要先答「会」，下一句才是真的让她画。
- */
-export function isImageRequested(text: string): boolean {
-  const compact = text.replace(/\s+/g, "");
-  if (!compact) return false;
-  if (IMAGE_NEGATIVE.test(compact)) return false;
-  if (IMAGE_DECLINED.test(compact)) return false;
-
-  // 「你会画图吗」「能画吗」是问能力，不是下单。
-  if (/(会|能|可以|可不可以|能不能)(画|绘制|生成|出图|生图)/.test(compact)
-    && /[吗么嘛呢？?]\s*$/.test(compact)) {
-    return false;
+/** Only anchored commands in genuine text segments are considered. */
+export type ExplicitImageRequest = { subject?: string; retry: boolean };
+export function parseExplicitImageRequest(commandText: string): ExplicitImageRequest | null {
+  if (!commandText || commandText.length > 4000) return null;
+  const clauses = commandText.split(/[，,。；;！!？?\n]+/u).map(text => text.trim()).filter(Boolean);
+  let found: ExplicitImageRequest | null = null;
+  for (const clause of clauses) {
+    let text = clause.replace(/\s+/gu, "");
+    text = text.replace(/^(?:嗯嗯|嗯|好啊|好的|好|行|那|那么|这次|现在)+/u, "");
+    if (/^(?:别|不要|不用|不必|甭|停止)(?:再)?(?:画|绘制|生成|出图|生图)/u.test(text)) { found = null; continue; }
+    if (/^(?:我|他|她|它|我们|他们|她们|别人|群友)/u.test(text)) continue;
+    if (/(?:提示词|怎么画|为什么|如何|画得|画的|画了吗|画好了吗|画好了没|画画的|画画功能)/u.test(text)) continue;
+    text = text.replace(/^(?:请|麻烦你|麻烦|你|帮我|给我|替我)+/u, "");
+    text = text.replace(/^(?:能不能|可不可以|可以|能|会)(?:帮我|给我|替我)?/u, "");
+    const retry = /^(?:再|又|继续)/u.test(text);
+    text = text.replace(/^(?:再|又|继续)+/u, "");
+    const match = /^(画|绘制|绘|生成|来|出|整|搞|做)(.*)$/u.exec(text);
+    if (!match) continue;
+    const verb = match[1]!; let tail = match[2]!;
+    if (/^(?:重点|圈|线|饼|风|质|师|画课|外音|画的|画功能)/u.test(tail)) continue;
+    if (/^(?:一次|几次|一遍|几遍|几回|一回)(?:试试|看看)?(?:吧|呀|啊|呢|吗|么|嘛)?$/u.test(tail)) { found = { retry: true }; continue; }
+    if (/^(?:一下|试试|看看)?(?:吧|呀|啊)?$/u.test(tail) && /^(?:画|绘制)$/u.test(verb)) { found = { retry }; continue; }
+    // Generic ability questions never authorize a paid call.
+    if (/^(?:图|画|画画|生图|出图)(?:吗|么|嘛|呢)?$/u.test(tail)) continue;
+    const amount = /^(?:一|两|几|二|三)?(?:张|幅|只|个|条|朵|片|座|间|副)/u.exec(tail);
+    if (amount) tail = /^(?:一|两|几|二|三)(?:只|条|朵|片|座|间)$/u.test(amount[0])
+      ? tail : tail.slice(amount[0].length);
+    else if (!/^(?:照片|插画|头像|壁纸|海报|表情包|贴纸|立绘|场景|风景|画面)/u.test(tail)) continue;
+    tail = tail.replace(/(?:试试|看看|呗|吧|呀|啊|呢|吗|么|嘛)+$/u, "");
+    // A count-only command may reuse an approved visual prompt, never raw dialogue.
+    if (!tail || /^(?:图|画|图片)$/u.test(tail)) { found = { retry }; continue; }
+    if (/^(?:来|出|整|搞|做|生成)$/u.test(verb) && !/^(?:图|画|图片|照片|插画|头像|壁纸|海报|表情包|贴纸|立绘|场景|风景|画面)/u.test(tail)) continue;
+    found = { subject: tail, retry };
   }
-
-  const imageNoun = "(图|画|照片|插画|头像|壁纸|海报|表情包|贴纸|立绘|场景|风景|画面)";
-  const amount = "(?:一|两|几)?(?:张|幅|只|个|条|朵|片|座|间|副)";
-
-  // ① 画 + 量词（对象随便）：画只猫 / 画一幅画
-  if (new RegExp(`(画|绘制|绘)(?:一|两|几)?(?:张|幅|只|个|条|朵|片|座|间)`).test(compact)) return true;
-  /**
-   * ①' 画 + **动作**量词：「再画一次试试」「画一遍」「画几回」。
-   *
-   * 「次 / 回 / 遍」数的是次数，不是画里的东西，语法上和「张 / 只」不是一类；
-   * 但语义上它是最强的下单信号 —— 说「画一次」的人不会是在聊别人画的画。
-   *
-   * 2026-11-22 的事故就是这条漏了：用户连发两句「再画一次试试」，一句都没算下单，
-   * 她于是只顾着答「画好了」，图一次都没生成。**别把这一行合进上面那条**。
-   */
-  if (/(画|绘制|绘)(?:一|两|几)?(?:次|回|遍)/.test(compact)) return true;
-  // ② 画 + 图像名词：画个头像 / 帮我画一张海报
-  if (new RegExp(`(画|绘制|绘)[^，。！？]{0,6}${imageNoun}`).test(compact)) return true;
-  // ③ 生成/来/出/整/搞 + 量词 + 图/画：来张图 / 生成一张图片 / 整幅画
-  if (new RegExp(`(生成|来|出|整|搞|做)${amount}${imageNoun}`).test(compact)) return true;
-  // ④ 直接点名要图：来张图 / 出图 / 生图
-  if (/(来|出|整|搞)(一)?(张|幅)(图|画)/.test(compact)) return true;
-  if (/(生图|出图|画图)$/.test(compact)) return true;
-  /**
-   * ⑤ 整句就是一个裸命令：「再画」「画一下」「画吧」。
-   *
-   * 必须是**整句**才算 —— 不定长度的命令词出现在句子中间时，多半是在说别的
-   * （「这画挂在墙上」）。用户催第二次时常把话说短到这个程度，不认就哑火。
-   */
-  if (/^(再|又|继续|给我|帮我)*(画|绘制)(一下|一会儿|试试|看看)?(吧|啊|呀|嘛)?[!！。.~～]*$/.test(compact)) return true;
-
-  return false;
+  return found;
+}
+export function isImageRequested(text: string): boolean { return parseExplicitImageRequest(text) !== null; }
+export function isImageGenerationDeclined(text: string): boolean {
+  return text.split(/[，,。；;！!？?\n]+/u).some(clause => /^(?:那|现在|你|请)*(?:别|不要|不用|不必|甭|停止)(?:再)?(?:画|绘制|生成|出图|生图)/u.test(clause.replace(/\s+/gu, "")));
 }
 
-/**
- * 这一轮打不打算画一张 —— **在生成回复之前调用**。
- *
- * 顺序和语音一样关键：先决定「这轮有图」，模型才知道要把画面描述写进 `imagePrompt`、
- * 正文按「递给你一张图」的语气写。反过来先生成再决定，她会写出「我画不了图」
- * 或者「（假装画了一张）」，而图其实马上就要发出去。
- *
- * 这里不看回复内容，只看开关、额度、冷却与概率；画面描述在生成后再校验。
- * 冷却与概率**只管自主画图**：用户明确要（`force`）时直接放行。
- */
-export function planImageReply(input: {
-  modelConfig: unknown;
-  lastImageAt?: Date | null;
-  todayCount?: number;
-  now?: Date;
-  random?: () => number;
-  /** 用户明确让她画：跳过概率与冷却（但不跳过开关和每日上限）。 */
-  force?: boolean;
-}): boolean {
-  if (!isImageGenerationEnabled(input.modelConfig)) return false;
-
-  // 每日上限对「被要求」也生效：一天画到上限还画，说明上限设错了，
-  // 而不是「这一次也该例外」—— 否则额度形同虚设。
-  const limit = resolveImageDailyLimit(input.modelConfig);
-  if (limit > 0 && (input.todayCount ?? 0) >= limit) return false;
-
-  if (input.force === true) return true;
-
+export type ImageReplyDecisionInput = {
+  modelConfig: unknown; channelSupported?: boolean; configured?: boolean;
+  request?: { kind: "direct" | "confirmation" | "none" | "declined" | "status"; reason?: string };
+  todayCount?: number | null; lastImageAt?: Date | null; now?: Date; random?: () => number;
+  voicePlanned?: boolean; allowAutonomous?: boolean; promptValidation?: { ok: boolean; reason?: "missing_prompt" | "unsafe_prompt" };
+};
+export type ImageReplyDecision = {
+  status: "approved" | "blocked" | "not_requested";
+  trigger: "direct" | "confirmed_offer" | "autonomous" | "none";
+  requested: boolean; blockedReason?: import("./image-request-policy").ImageBlockedReason;
+  todayCount: number | null; limit: number;
+};
+export function planImageReplyDecision(input: ImageReplyDecisionInput): ImageReplyDecision {
+  const kind = input.request?.kind ?? "none";
+  const requested = kind === "direct" || kind === "confirmation" || ["confirmation_required", "offer_expired", "ambiguous_request"].includes(input.request?.reason ?? "");
+  const base: ImageReplyDecision = { status: "approved", trigger: kind === "direct" ? "direct" : kind === "confirmation" ? "confirmed_offer" : "autonomous", requested,
+    todayCount: input.todayCount === null ? null : input.todayCount ?? 0, limit: resolveImageDailyLimit(input.modelConfig) };
+  const block = (reason: NonNullable<ImageReplyDecision["blockedReason"]>): ImageReplyDecision => ({ ...base, status: requested ? "blocked" : "not_requested", blockedReason: reason, ...(!requested ? { trigger: "none" as const } : {}) });
+  if (input.channelSupported === false) return block("channel_unsupported");
+  if (!isImageGenerationEnabled(input.modelConfig)) return block("disabled");
+  if (input.configured === false) return block("missing_config");
+  if (kind === "declined") return block("declined");
+  if (kind === "status") return block("status_query");
+  if (input.request?.reason) return block(input.request.reason as NonNullable<ImageReplyDecision["blockedReason"]>);
+  if (base.todayCount === null || !Number.isFinite(base.todayCount) || base.todayCount < 0) return block("quota_unavailable");
+  if (base.limit > 0 && base.todayCount >= base.limit) return block("daily_limit");
+  if (input.voicePlanned) return block("voice_conflict");
+  if (input.promptValidation?.ok === false) return block(input.promptValidation.reason ?? "unsafe_prompt");
+  if (requested) return base;
+  if (input.allowAutonomous === false) return { ...base, status: "not_requested", trigger: "none" };
   const now = input.now ?? new Date();
-  const lastImageAt = input.lastImageAt ?? null;
-  const cooldownMs = resolveImageCooldownMs(input.modelConfig);
-  if (cooldownMs > 0 && lastImageAt && now.getTime() - lastImageAt.getTime() < cooldownMs) return false;
-
+  if (input.lastImageAt && resolveImageCooldownMs(input.modelConfig) > 0 && now.getTime() - input.lastImageAt.getTime() < resolveImageCooldownMs(input.modelConfig)) return block("cooldown");
   const chance = resolveImageChance(input.modelConfig);
-  if (chance <= 0) return false;
-  const random = input.random ?? Math.random;
-  return random() * 100 < chance;
+  if (chance <= 0 || (input.random ?? Math.random)() * 100 >= chance) return block("chance");
+  return base;
+}
+/** Legacy boolean API delegates to the exact same planning decision. */
+export function planImageReply(input: { modelConfig: unknown; lastImageAt?: Date | null; todayCount?: number | null; now?: Date; random?: () => number; force?: boolean }): boolean {
+  return planImageReplyDecision({ ...input, request: { kind: input.force ? "direct" : "none" } }).status === "approved";
 }
 
 /**
@@ -365,25 +336,7 @@ export function sanitizeImagePrompt(raw: string): string {
  * 一张写着「画只橘猫趴在窗台上」的图 —— 而是真的橘猫。
  */
 export function promptFromRequest(text: string): string {
-  /**
-   * 逐层剥掉「请求的语法」，留下「画面」：
-   *   帮我 / 给我 … → 画 / 绘制 / 生成 … → 一张 / 一幅（连同「图」） → 个 / 只 / 条 …
-   *
-   * 「一**只**橘猫」不删「一只」：「只」是宾语自己的量词，属于画面内容
-   * （画两只猫和画一只猫是两张不同的图）。只有「一张 / 一幅」才是请求的单位。
-   */
-  const cleaned = text
-    .replace(/^[\s，,。]*(帮我|给我|替我|麻烦|请|你)\s*/u, "")
-    // 「再画个苹果」「又画一次」：催办词在前，宾语在后，不剥就整句都被当成画面内容。
-    .replace(/^(再|又|继续)\s*/u, "")
-    .replace(/^(画|绘制|生成|来|出|整|搞)\s*/u, "")
-    // 只删「一张 / 一幅」这种**请求的单位**，而且只有它后面接的是「图/画」或直接收尾时才算。
-    // 「画两张猫」里的「两张猫」是画面内容（数量），删了就成了另一张图。
-    .replace(/^(一|两|几)?(张|幅)(?=图|画|照片|插画|海报|头像|壁纸|$)/u, "")
-    .replace(/^(图|画|照片|插画|海报|头像|壁纸)$/u, "")
-    .replace(/^(个|只|条|朵|片|座|间)/u, "")
-    .trim();
-  return sanitizeImagePrompt(cleaned || text);
+  return sanitizeImagePrompt(parseExplicitImageRequest(text)?.subject ?? "");
 }
 
 /* ────────────────────────────── 调接口 ────────────────────────────── */

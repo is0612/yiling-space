@@ -1,5 +1,11 @@
 import { shouldBlockFriendSpeaker, type FriendIdentityKind, type FriendChatPolicy } from "../friend-chat-policy";
 import type { ConversationMessageMention } from "../conversation-message";
+import type { ChannelReplyDelivery } from "./pipeline";
+
+/** A suppressed reminder must never discard an image or any other confirmed delivery facts. */
+export function mergeSuppressedAtDelivery(delivery: ChannelReplyDelivery, requestedMessageId: string, reason: "voice" | "passive_policy"): ChannelReplyDelivery {
+  return { ...delivery, at: { requestedMessageId, status: "suppressed", reason } };
+}
 
 /** Stored platform identity is resolved against this round, never a previously stored member_n. */
 export function readDeliveredAtTarget(metadata: unknown): string | null {

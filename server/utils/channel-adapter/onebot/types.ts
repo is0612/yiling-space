@@ -141,6 +141,30 @@ export function readOnebotMessageParts(data: unknown): ImageTextPart[] {
   return parts;
 }
 
+/** User-authored text only. Attachments, quotes, mentions and provider summaries cannot authorize a paid action. */
+export function readOnebotCommandText(data: unknown): string {
+  const record = data as { message?: unknown; raw_message?: unknown } | null;
+  const message = record?.message;
+  if (Array.isArray(message)) return message.flatMap(segment => {
+    if (!segment || typeof segment !== "object") return [];
+    const item = segment as OnebotSegment;
+    return item.type === "text" && typeof item.data?.text === "string" ? [item.data.text] : [];
+  }).join("").trim().slice(0, 4000);
+  const raw = typeof record?.message === "string" ? record.message : typeof record?.raw_message === "string" ? record.raw_message : "";
+  return raw.replace(/\[CQ:[^\]]*\]/gu, "").trim().slice(0, 4000);
+}
+
+/** Only an explicit leading name plus separator counts as a named addressee for paid actions. */
+export function readOnebotAddressedCommandText(data: unknown, selfNames: readonly string[] = []): { commandText: string; namedAddressed: boolean } {
+  const text = readOnebotCommandText(data);
+  for (const name of [...selfNames].filter(Boolean).sort((a, b) => b.length - a.length)) {
+    if (!text.startsWith(name)) continue;
+    const tail = text.slice(name.length);
+    if (/^[，,:：\s]+/u.test(tail)) return { commandText: tail.replace(/^[，,:：\s]+/u, "").trim(), namedAddressed: true };
+  }
+  return { commandText: text, namedAddressed: false };
+}
+
 export function readOnebotMessageText(data: unknown): string {
   const message = (data as { message?: unknown } | null)?.message;
   if (typeof message === "string") return message;

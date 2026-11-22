@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { generateConversationReply } from "../server/utils/chat-reply";
 import { attachImageDescriptions, buildStoredMessageMetadata, type ChannelTurnMessage } from "../server/utils/channel-adapter/pipeline";
 import { observeOnebotMedia } from "../server/utils/channel-adapter/media-observation";
-import { readOnebotImages, readOnebotMedia, readOnebotMessageParts, readOnebotMessageText } from "../server/utils/channel-adapter/onebot/types";
+import { readOnebotImages, readOnebotMedia, readOnebotMessageParts, readOnebotMessageText, readOnebotCommandText } from "../server/utils/channel-adapter/onebot/types";
 
 const originalFetch = globalThis.fetch;
 let request: { messages: Array<{ role: string; content: string }> };
@@ -13,13 +13,13 @@ globalThis.fetch = async (_url, init) => {
 const settings = { model: "mock", apiBaseUrl: "https://mock.invalid/v1", apiKey: "test" };
 const context = { modelConfig: {}, chatModel: settings.model, apiBaseUrl: settings.apiBaseUrl, apiKey: settings.apiKey, characterId: "fixture-character", bindingId: "fixture-binding" };
 const event = { message: [
-  { type: "text", data: { text: "@123456789 字面[图片] " } },
+  { type: "text", data: { text: "@123456789 这个表情包什么意思？字面[图片] " } },
   { type: "image", data: { sub_type: 1, url: "https://media.invalid/sticker?rkey=secret" } },
   { type: "mface", data: { summary: "[图片]是表情名" } },
   { type: "image", data: { sub_type: 0, url: "https://media.invalid/photo" } },
 ] };
 const parts = readOnebotMessageParts(event);
-const message: ChannelTurnMessage = { externalMessageId: "fixture-message", authorOpenId: "123456789", content: readOnebotMessageText(event),
+const message: ChannelTurnMessage = { externalMessageId: "fixture-message", authorOpenId: "123456789", content: readOnebotMessageText(event), commandText: readOnebotCommandText(event),
   promptContent: readOnebotMessageText(event).replace("@123456789", "@member_1"), images: readOnebotImages(event), observedMedia: observeOnebotMedia(readOnebotMedia(event)),
   imageTextParts: parts, promptImageTextParts: parts.map(part => part.type === "text" ? { ...part, text: part.text.replace("@123456789", "@member_1") } : part),
 };
@@ -37,7 +37,7 @@ try {
   const base = { characterName: "测试角色", characterPrompt: "自然聊天", model: "mock", apiKey: "test", apiBaseUrl: settings.apiBaseUrl,
     currentMessage: processed.promptContent!, recentMessages: [], memories: [], snapshots: [] };
   const reply = await generateConversationReply({ ...base, groupChat: true, transcript: [{ id: "fixture", speaker: "群友", member: "member_1", content: processed.promptContent!, isOwner: false }] });
-  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v87");
+  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v88");
   const system = request!.messages.find(m => m.role === "system")!.content;
   const payload = request!.messages.find(m => m.role === "user")!.content;
   assert(system.includes("without unsolicited narration, aesthetic judgments"));
@@ -46,7 +46,9 @@ try {
   assert(system.includes("In ordinary conversation, continue naturally without announcing a media failure"));
   assert(system.includes("If the person explicitly asks about an image or sticker"));
   assert(!system.includes("Respond using that description"));
-  assert(payload.includes("[表情包："));
+  assert(payload.includes("[表情包]"));
+  assert(!payload.includes("[表情包："), "default prompt does not expose sticker scene details");
+  assert(payload.includes("[图片：一张纸上写着三点]"), "ordinary image descriptions remain available");
   assert(!JSON.stringify(request!).includes("media.invalid"));
   assert(!JSON.stringify(request!).includes("123456789"));
   const [failed] = await attachImageDescriptions([message], context, { resolveSettings: async () => settings, describe: async () => [null, null] });

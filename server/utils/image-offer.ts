@@ -7,6 +7,7 @@ export type ImageOfferCurrentMessage = {
   externalMessageId?: string;
   authorOpenId: string;
   content: string;
+  confirmationText?: string;
   occurredAt?: Date | string;
 };
 export type ImageOfferHistoryMessage = {
@@ -30,7 +31,7 @@ function timestamp(value: Date | string): number {
 export function isImageOfferConfirmationText(content: string): boolean {
   if (content.length > 32 || /[?？]/u.test(content)) return false;
   const compact = content.trim().replace(/[\s，,。.!！~～]+/gu, "");
-  return /^(?:嗯|嗯嗯|好|好啊|好呀|好的|可以|行|行啊|试试|试试看|那试试|那就试试|那你试试|那你试试看|画吧|那画吧|嗯嗯那你试试|嗯那你试试|好那你试试|好啊那你试试)$/u.test(compact);
+  return /^(?:(?:嗯嗯|嗯|好啊|好呀|好的|好|可以|行啊|行)(?:那|那就)?(?:你)?(?:试试|试试看|画吧|出吧|出一张|画一张看看)?|(?:那|那就)?(?:你)?(?:试试|试试看|画吧|出吧|出一张|画一张看看))$/u.test(compact);
 }
 
 /** Status questions must not turn into a fresh drawing through the random-image branch. */
@@ -58,7 +59,7 @@ export function resolveImageOfferConfirmation(
   const nowMs = now instanceof Date ? now.getTime() : now;
   const currentAt = current.occurredAt === undefined ? nowMs : timestamp(current.occurredAt);
   if (!Number.isFinite(nowMs) || !Number.isFinite(currentAt) || currentAt > nowMs
-    || !current.authorOpenId || !isImageOfferConfirmationText(current.content)) return null;
+    || !current.authorOpenId || !isImageOfferConfirmationText(current.confirmationText ?? current.content)) return null;
 
   const rows = recentMessages.filter(row => {
     if (row.role !== "USER") return true;
@@ -70,9 +71,25 @@ export function resolveImageOfferConfirmation(
     return !(meta.authorOpenId === current.authorOpenId && row.content === current.content
       && (current.occurredAt === undefined || timestamp(row.occurredAt) === currentAt));
   }).filter(row => row.role === "USER" || row.role === "ASSISTANT");
-  if (!rows.length || rows.some(row => !Number.isFinite(timestamp(row.occurredAt)))) return null;
+  if (!rows.length || rows.some(row => !Number.isFinite(timestamp(row.occurredAt))
+    || timestamp(row.occurredAt) > nowMs || timestamp(row.occurredAt) > currentAt)) return null;
   const ordered = [...rows].sort((a, b) => timestamp(b.occurredAt) - timestamp(a.occurredAt));
-  const offer = ordered[0]!;
+  let offer = ordered[0]!;
+  // Permit exactly one question/answer about the already offered image. No unrelated turn,
+  // other participant, denial or execution may be crossed to recover an old proposal.
+  if (ordered.length >= 3 && offer.role === "ASSISTANT" && !record(record(offer.metadata).imageOffer).prompt) {
+    const answerMeta = record(offer.metadata);
+    const question = ordered[1]!;
+    const candidate = ordered[2]!;
+    const compact = question.content.replace(/\s+/gu, "");
+    const clarification = compact.length <= 80 && /(?:图|画|参考|形象|三视图)/u.test(compact)
+      && /(?:吗|呢|什么|哪|需要|还有|是指|能否|可不可以|是不是|是否|看得见)/u.test(compact)
+      && !/(?:别画|不要|不用|不必|停止|取消)/u.test(compact);
+    if (question.role === "USER" && record(question.metadata).authorOpenId === current.authorOpenId
+      && clarification && candidate.role === "ASSISTANT"
+      && !["image", "imageAttempt"].some(key => Object.prototype.hasOwnProperty.call(answerMeta, key))
+      && !Object.prototype.hasOwnProperty.call(record(answerMeta.replyDelivery), "image")) offer = candidate;
+  }
   const offerAt = timestamp(offer.occurredAt);
   if (offer.role !== "ASSISTANT" || !offer.id || offerAt > nowMs || currentAt < offerAt
     || nowMs - offerAt > IMAGE_OFFER_TTL_MS || currentAt - offerAt > IMAGE_OFFER_TTL_MS) return null;

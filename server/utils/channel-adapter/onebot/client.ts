@@ -18,6 +18,7 @@ import {
   readOnebotImages,
   readOnebotMessageId,
   readOnebotMessageText,
+  readOnebotMessageParts,
   readOnebotReplyToId,
   readOnebotUserId,
   readOnebotVoices,
@@ -241,12 +242,13 @@ export function resolveOnebotEvent(data: unknown): OnebotResolvedEvent | null {
   };
 }
 
-export type OnebotPrivateQuote = { messageId: string; content?: string; isSelf?: boolean };
+export type OnebotPrivateQuote = { messageId: string; content?: string; isSelf?: boolean; image?: import("../../image-facts").GeneratedImageFacts; images?: import("../../image-understanding").ChannelImageRef[]; imageTextParts?: import("../../media-text").ImageTextPart[] };
 
 /** 回查单条引用；发送者和收件人必须能证明属于当前私聊，缺证据只保留引用 id。 */
 export async function resolveOnebotPrivateQuote(
   config: OnebotConnectionConfig,
   event: OnebotResolvedEvent,
+  options?: { resolveGeneratedImage?: (messageId: string) => Promise<import("../../image-facts").GeneratedImageFacts | null> },
 ): Promise<OnebotPrivateQuote | undefined> {
   if (event.messageType !== "private") return undefined;
   const messageId = readOnebotReplyToId(event.data);
@@ -280,7 +282,9 @@ export async function resolveOnebotPrivateQuote(
     const text = readOnebotMessageText(data).trim();
     if (!text) return unresolved;
     const content = text.length > 2000 ? `${text.slice(0, 1989)}\n[引用原文已截断]` : text;
-    return { messageId, content, isSelf: sender === self };
+    const images = readOnebotImages(data);
+    const image = sender === self && images.length ? await options?.resolveGeneratedImage?.(messageId).catch(() => null) : null;
+    return { messageId, content, isSelf: sender === self, ...(image ? { image } : {}), ...(images.length ? { images, imageTextParts: readOnebotMessageParts(data) } : {}) };
   } catch {
     return unresolved;
   }
@@ -289,6 +293,9 @@ export async function resolveOnebotPrivateQuote(
 export type OnebotGroupQuote = {
   messageId: string; authorQq?: string; speaker?: string; content?: string; isSelf?: boolean;
   kind?: FriendIdentityKind; readOnly?: true; excludeFromGrowth?: true;
+  image?: import("../../image-facts").GeneratedImageFacts;
+  images?: import("../../image-understanding").ChannelImageRef[];
+  imageTextParts?: import("../../media-text").ImageTextPart[];
 };
 export type OnebotGroupQuoteForTurn = Omit<OnebotGroupQuote, "authorQq"> & { member?: string };
 
@@ -331,7 +338,8 @@ async function readOnebotGroupQuote(
     const content = readOnebotMessageText(data).trim();
     if (!content) return { messageId, failure: "empty" };
     return { quote: { messageId, authorQq, speaker: readOnebotDisplayName(data).slice(0, 80),
-      content: content.slice(0, 2000), isSelf: authorQq === event.selfId } };
+      content: content.slice(0, 2000), isSelf: authorQq === event.selfId,
+      ...(readOnebotImages(data).length ? { images: readOnebotImages(data), imageTextParts: readOnebotMessageParts(data) } : {}) } };
   } catch (error) {
     return { messageId, failure: "fetch", detail: error instanceof Error ? error.message : String(error) };
   }
@@ -360,6 +368,7 @@ export async function resolveOnebotGroupQuotes(
     memberCode: (authorQq: string) => string;
     remember?: (messageId: string, quote: OnebotGroupQuoteForTurn & { authorQq?: string }) => void;
     timeoutMs?: number;
+    resolveGeneratedImage?: (messageId: string) => Promise<import("../../image-facts").GeneratedImageFacts | null>;
   },
 ): Promise<Map<string, OnebotGroupQuoteForTurn>> {
   const targets = new Map<string, OnebotResolvedEvent>();
@@ -377,7 +386,9 @@ export async function resolveOnebotGroupQuotes(
   const resolved = new Map(await Promise.all([...targets].map(async ([id, event]) => {
     const cached = options.cached(id);
     let read: OnebotGroupQuoteRead;
-    if (cached?.messageId === id && cached.content && cached.authorQq) {
+    const needsMediaRefs = Boolean(cached?.content && /\[(?:图片|表情包)\]/u.test(cached.content) && !cached.images?.length && !cached.isSelf);
+    if (cached?.authorQq && !await options.canReadAuthor(cached.authorQq)) return [id, { messageId: id }] as const;
+    if (cached?.messageId === id && cached.content && cached.authorQq && !needsMediaRefs) {
       read = { quote: cached };
     } else {
       read = await readOnebotGroupQuote(config, event, { timeoutMs: options.timeoutMs });
@@ -400,7 +411,8 @@ export async function resolveOnebotGroupQuotes(
     const policy = await options.authorPolicy?.(quote.authorQq);
     if (policy && shouldHideFriendContent(policy.kind, policy.policy)) return [id, { messageId: id }] as const;
     authors.set(id, quote.authorQq);
-    return [id, { messageId: id, content: options.formatText(quote.content).slice(0, 2000),
+    const image = quote.isSelf ? await options.resolveGeneratedImage?.(id).catch(() => null) ?? quote.image : quote.image;
+    return [id, { ...(image ? { image } : {}), ...(quote.images?.length ? { images: quote.images, imageTextParts: quote.imageTextParts?.map(part => part.type === "text" ? { ...part, text: options.formatText(part.text) } : part) } : {}), messageId: id, content: options.formatText(quote.content).slice(0, 2000),
       ...(policy ? { kind: policy.kind } : {}),
       ...(policy?.kind === "AI" ? { excludeFromGrowth: true as const } : {}),
       ...(policy && isReadOnlyFriendContent(policy.kind, policy.policy) ? { readOnly: true as const } : {}),
@@ -596,6 +608,13 @@ export function connectOnebot(
   });
 }
 
+export type OnebotSendReceipt = { messageId: string | null };
+export function readOnebotSendReceipt(data: unknown): OnebotSendReceipt {
+  const value = data && typeof data === "object" ? (data as { message_id?: unknown }).message_id : undefined;
+  return { messageId: typeof value === "string" && /^-?\d+$/u.test(value) ? value
+    : typeof value === "number" && Number.isSafeInteger(value) ? String(value) : null };
+}
+
 /**
  * 发一条私聊。`message` 是纯文本或段数组（face / image / at），也就是 v11 的 CQ 消息。
  *
@@ -613,17 +632,16 @@ export async function sendOnebotPrivateMessage(
   userId: string,
   message: OnebotOutgoingMessage,
   tempGroupId?: string,
-): Promise<void> {
+): Promise<OnebotSendReceipt> {
   if (!tempGroupId) {
-    await callOnebotAction(config, "send_private_msg", { user_id: Number(userId), message });
-    return;
+    return readOnebotSendReceipt(await callOnebotAction(config, "send_private_msg", { user_id: Number(userId), message }));
   }
   try {
-    await callOnebotAction(config, "send_private_msg", {
+    return readOnebotSendReceipt(await callOnebotAction(config, "send_private_msg", {
       user_id: Number(userId),
       group_id: Number(tempGroupId),
       message,
-    });
+    }));
   } catch (tempError) {
     const tempReason = tempError instanceof Error ? tempError.message : String(tempError);
     // An unknown outcome may already have delivered; never duplicate it via the fallback.
@@ -634,7 +652,7 @@ export async function sendOnebotPrivateMessage(
       JSON.stringify({ userId, tempGroupId }),
     );
     try {
-      await callOnebotAction(config, "send_private_msg", { user_id: Number(userId), message });
+      return readOnebotSendReceipt(await callOnebotAction(config, "send_private_msg", { user_id: Number(userId), message }));
     } catch (plainError) {
       // 两条都失败时把两边的理由都带上：只有「请先添加对方为好友」能解释为什么发不出去，
       // 只有「no such temp session」能解释为什么带了群号也没用。
@@ -664,8 +682,8 @@ export async function sendOnebotGroupMessage(
   config: OnebotConnectionConfig,
   groupId: string,
   message: OnebotOutgoingMessage,
-): Promise<void> {
-  await callOnebotAction(config, "send_group_msg", { group_id: Number(groupId), message });
+): Promise<OnebotSendReceipt> {
+  return readOnebotSendReceipt(await callOnebotAction(config, "send_group_msg", { group_id: Number(groupId), message }));
 }
 
 /**

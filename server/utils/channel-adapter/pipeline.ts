@@ -1,4 +1,9 @@
-import { resolveImageOfferConfirmation, isImageStatusQuestion } from "../image-offer";
+import { resolveImageRequest, isAutonomousImageEligible, validateImageScenePrompt, type ImageRequestResolution } from "../image-request-policy";
+import { imageDecisionReply, imageStatusReply, blockedImageReply, type ImageAttemptRecord, type ImageGenerationRecord } from "../image-execution";
+import { readGeneratedImageFacts } from "../image-assets";
+import { sanitizeGeneratedImageFacts, type GeneratedImageFacts } from "../image-facts";
+import { createMediaVisionBudget, isExplicitMediaQuestion, type MediaVisionBudget } from "../media-questions";
+import { attachQuotedImageDescriptions, inspectLatestGeneratedImageForQuestion } from "./quoted-image-observation";
 import type { ImageTextPart } from "../media-text";
 import { mergeStoredMediaMetadata, storedMediaObservations, type ChannelMediaObservation, type MediaVision } from "./media-observation";
 import { loadPromptEventCandidates } from "../prompt-event-candidates";
@@ -8,7 +13,7 @@ import { estimateTokens as estimateContextTokens } from "../memory-retrieval";
 import { loadPromptMemoryCandidates } from "../prompt-memory-candidates";
 import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
-import { readDeliveredAtMention, readDeliveredAtTarget, blockedDeliveredAtTargets } from "./reply-delivery";
+import { readDeliveredAtMention, readDeliveredAtTarget, blockedDeliveredAtTargets, mergeSuppressedAtDelivery } from "./reply-delivery";
 import { readInteractionGuidance } from "../interaction-guidance";
 import { asksSelfUnderstandingHistory, wantsSelfUnderstanding, selfUnderstandingReferences } from "../self-understanding";
 import { loadSelfUnderstanding } from "../self-understanding-reader";
@@ -112,18 +117,21 @@ import {
 } from "../voice";
 import {
   generateImage,
-  isImageRequested,
   isImageGenerationEnabled,
-  isImageGenerationDeclined,
   readImageExecutionState,
-  planImageReply,
-  promptFromRequest,
+  planImageReplyDecision,
+  type ImageReplyDecision,
+  sanitizeImagePrompt,
   readStoredImageFlag,
   readSentImageFlag,
   resolveImageGenerationSettings,
   type GeneratedImage,
   type ImageGenerationSettings,
 } from "../image-generation";
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
 
 export type ChannelReplyOptions = {
   /** 表情 id。渠道自己保证 id 合法；不支持表情的渠道忽略即可。 */
@@ -180,7 +188,7 @@ export type ChannelReplyOptions = {
 
 /** Internal delivery facts; platform identifiers must never be copied into prompt payloads. */
 export type ChannelReplyDelivery = {
-  image?: { status: "sent" | "failed" | "unknown"; sentAt?: string; reason?: "read_failed" | "send_failed" | "unconfirmed" };
+  image?: { status: "sent" | "failed" | "unknown"; sentAt?: string; externalMessageId?: string; reason?: "read_failed" | "send_failed" | "unconfirmed" };
   at?: {
     requestedMessageId: string;
     targetQq?: string;
@@ -241,6 +249,10 @@ export type ChannelTurnMessage = {
   occurredAt?: Date;
   /** 这条消息里带的图。只有接了「看图」旁路才会被读，没配视觉模型时完全忽略。 */
   images?: ChannelImageRef[];
+  commandText?: string;
+  addressedToSelf?: boolean;
+  quotedToSelf?: boolean;
+  readOnly?: boolean;
   imageTextParts?: ImageTextPart[];
   promptImageTextParts?: ImageTextPart[];
   /** Safe per-segment observations, excluded from model payloads. */
@@ -256,6 +268,10 @@ export type ChannelTurnMessage = {
 };
 
 export type ChannelMessageInput = {
+  commandText?: string;
+  addressedToSelf?: boolean;
+  quotedToSelf?: boolean;
+  readOnly?: boolean;
   platform: string;
   characterId: string;
   bindingId: string;
@@ -381,7 +397,14 @@ export function buildStoredMessageMetadata(input: {
     ...(message.speaker?.isOwner ? { isOwner: true } : {}),
     // 这条原本是语音条；落库的 content 是转写后的文字（没配 ASR 就还是 `[语音]`）。
     ...(message.voices?.length ? { hasVoice: true } : {}),
-    ...(message.quotedMessage ? { quotedMessage: { ...message.quotedMessage } } : {}),
+    ...(message.quotedMessage ? { quotedMessage: {
+      ...conversationSourcePolicy(message.quotedMessage), messageId: message.quotedMessage.messageId,
+      ...(message.quotedMessage.content !== undefined ? { content: message.quotedMessage.content } : {}),
+      ...(message.quotedMessage.isSelf !== undefined ? { isSelf: message.quotedMessage.isSelf } : {}),
+      ...(message.quotedMessage.speaker ? { speaker: message.quotedMessage.speaker } : {}),
+      ...(message.quotedMessage.member ? { member: message.quotedMessage.member } : {}),
+      ...(sanitizeGeneratedImageFacts(message.quotedMessage.image) ? { image: sanitizeGeneratedImageFacts(message.quotedMessage.image) as Prisma.InputJsonObject } : {}),
+    } } : {}),
     ...(isSystemBroadcast(message.content) ? { systemBroadcast: true } : {}),
   };
 }
@@ -778,6 +801,7 @@ export async function attachImageDescriptions(
     bindingId: string;
   },
   services: { resolveSettings: typeof resolveVisionSettingsForCharacter; describe: typeof describeImages } = { resolveSettings: resolveVisionSettingsForCharacter, describe: describeImages },
+  budget?: MediaVisionBudget,
 ): Promise<ChannelTurnMessage[]> {
   if (!messages.some((message) => (message.images?.length ?? 0) > 0)) return messages;
   // 视觉 Key 可能是这个角色单独配的另一家（智谱 / 通义），所以走会解密的那层入口。
@@ -790,6 +814,7 @@ export async function attachImageDescriptions(
   const observed = messages.map(message => ({ ...message,
     ...(message.observedMedia?.length ? { observedMedia: message.observedMedia.map(media => media.source === "image"
       ? { ...media, vision: { status: "skipped", reason: !settings ? "not_enabled"
+        : media.kind === "sticker" && !isExplicitMediaQuestion(message.commandText ?? "", Boolean(message.images?.length || message.quotedMessage?.images?.length || message.quotedMessage?.image)) ? "sticker_policy"
         : media.imageIndex !== undefined && !message.images?.[media.imageIndex]?.url ? "no_url" : "limit" } as MediaVision } : media) } : {}),
   }));
   if (!settings) return observed;
@@ -797,7 +822,7 @@ export async function attachImageDescriptions(
     for (const media of message.observedMedia ?? []) if (media.source === "image" && media.imageIndex === imageIndex) media.vision = vision;
   };
 
-  let remaining = MAX_IMAGES_PER_TURN;
+  let remaining = budget?.remaining ?? MAX_IMAGES_PER_TURN;
   const descriptionsByMessage = new Map<string, Array<string | null | undefined>>();
   for (const message of observed) {
     if (remaining <= 0) break;
@@ -808,9 +833,11 @@ export async function attachImageDescriptions(
     // 不能先 filter 再按结果顺序回填，否则前面的无 URL 图片会让后续描述错位。
     const targetIndexes: number[] = [];
     for (let index = 0; index < refs.length && targetIndexes.length < remaining; index += 1) {
-      if (refs[index]?.url) targetIndexes.push(index);
+      const kind = message.observedMedia?.find(media => media.source === "image" && media.imageIndex === index)?.kind ?? refs[index]?.mediaKind;
+      if (refs[index]?.url && (kind !== "sticker" || isExplicitMediaQuestion(message.commandText ?? "", Boolean(message.images?.length || message.quotedMessage?.images?.length || message.quotedMessage?.image)))) targetIndexes.push(index);
     }
     if (!targetIndexes.length) {
+      if (refs.some(ref => ref.url)) continue;
       // 这一条消息里的图片都没有可下载直链：不发起模型请求，但逐个标成无法读取。
       descriptionsByMessage.set(
         message.externalMessageId,
@@ -822,6 +849,7 @@ export async function attachImageDescriptions(
     const batch = targetIndexes.map((index) => ({ ...refs[index]!,
       mediaKind: message.observedMedia?.find(media => media.source === "image" && media.imageIndex === index)?.kind ?? refs[index]!.mediaKind,
     }));
+    if (budget && !budget.consume(batch.length)) break;
     remaining -= batch.length;
     let batchDescriptions: Array<string | null>;
     try {
@@ -839,7 +867,8 @@ export async function attachImageDescriptions(
     const aligned = alignMediaResults(refs.length, targetIndexes, batchDescriptions, undefined);
     // 没有直链的图片是明确的读取失败；有直链但本轮额度未覆盖的图片保持原占位符。
     refs.forEach((image, index) => {
-      if (!image.url) { aligned[index] = null; setVision(message, index, { status: "skipped", reason: "no_url" }); }
+      if (!image.url) { aligned[index] = null; const kind = message.observedMedia?.find(media => media.imageIndex === index && media.source === "image")?.kind ?? image.mediaKind;
+        if (kind !== "sticker" || isExplicitMediaQuestion(message.commandText ?? "", Boolean(message.images?.length || message.quotedMessage?.images?.length || message.quotedMessage?.image))) setVision(message, index, { status: "skipped", reason: "no_url" }); }
     });
     descriptionsByMessage.set(message.externalMessageId, aligned);
   }
@@ -1198,7 +1227,9 @@ async function persistChannelTurnResult(input: {
   /** 这一轮她自己画的那张图；没画就是 null。只落相对路径，不存图片字节。 */
   replyImage: GeneratedImage | null;
   imageOffer?: { prompt: string; authorOpenId: string };
-  imageAttempt?: { status: "generated" | "generation_failed" | "missing_prompt" };
+  imageAttempt?: ImageAttemptRecord;
+  imageGeneration?: ImageGenerationRecord;
+  imageStatusOverride?: boolean;
   replySegments: string[];
   goals: ChannelTurnGrowthPreparation["goals"];
   expressionHabits: ChannelTurnGrowthPreparation["expressionHabits"];
@@ -1208,7 +1239,7 @@ async function persistChannelTurnResult(input: {
     prisma, existingConversation, isGroup, globalScope, ownerPrivateScopeId, isOwnerTurn, turn,
     conversationScopeId, groupId, title, messages, privateMessagesRecorded, now, assistantAt, generated,
     observedReadOnlyAiEvidence, privateHistorySelection, selfUnderstanding, replyFaces, replySticker,
-    replyVoice, replyImage, replySegments, goals, expressionHabits, preferences, imageOffer, imageAttempt,
+    replyVoice, replyImage, replySegments, goals, expressionHabits, preferences, imageOffer, imageAttempt, imageGeneration, imageStatusOverride,
   } = input;
   return await prisma.$transaction(async (tx) => {
     let conversation = existingConversation;
@@ -1336,7 +1367,7 @@ async function persistChannelTurnResult(input: {
           metadata: {
             source: "channel",
             platform: turn.platform,
-            generatedBy: generated.localHistoryReceipt ? "local-history-receipt" : "llm",
+            generatedBy: imageStatusOverride ? "image-execution-status" : generated.localHistoryReceipt ? "local-history-receipt" : "llm",
             ...(observedReadOnlyAiEvidence ? { excludeFromGrowth: true, growthExclusionReason: "read_only_ai_context" } : {}),
             model: generated.model,
             provider: generated.provider,
@@ -1367,6 +1398,8 @@ async function persistChannelTurnResult(input: {
               ? {
                   image: {
                     path: replyImage.relativePath,
+                    ...(imageGeneration ? { generation: imageGeneration } : {}),
+                    vision: { status: "not_requested" },
                     ...(replyImage.width ? { width: replyImage.width } : {}),
                     ...(replyImage.height ? { height: replyImage.height } : {}),
                   },
@@ -1503,9 +1536,8 @@ async function deliverChannelTurnReply(input: {
   let reported = false;
   const reportDelivery = async (delivery: ChannelReplyDelivery) => {
     reported = true;
-    await input.recordDelivery(delivery.at || !requestedAt || atTarget ? delivery : { at: {
-      requestedMessageId: requestedAt, status: "suppressed", reason: replyVoice ? "voice" : "passive_policy",
-    } });
+    await input.recordDelivery(delivery.at || !requestedAt || atTarget ? delivery
+      : mergeSuppressedAtDelivery(delivery, requestedAt, replyVoice ? "voice" : "passive_policy"));
   };
   const delivery = await sendReply(generated.reply, {
     ...replyOptions,
@@ -1665,6 +1697,9 @@ type ChannelTurnChatInputContext = {
   voicePlanned: boolean;
   imageSettings: ChannelTurnReplyToggles["imageSettings"];
   imageCapable?: boolean;
+  imageDecision: ImageReplyDecision;
+  generatedImageContext?: GeneratedImageFacts;
+  visionAvailable: boolean;
   imagePlanned: boolean;
   allowSilent: boolean;
   useTranscript: boolean;
@@ -1751,6 +1786,7 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
                     ...(message.quotedMessage.speaker ? { speaker: message.quotedMessage.speaker } : {}),
                     ...(message.quotedMessage.content ? { content: message.quotedMessage.content } : {}),
                     ...(message.quotedMessage.isSelf ? { isSelf: true } : {}),
+                    ...(sanitizeGeneratedImageFacts(message.quotedMessage.image) ? { image: sanitizeGeneratedImageFacts(message.quotedMessage.image)! } : {}),
                     ...conversationSourcePolicy(message.quotedMessage),
                   },
                 } : {}),
@@ -1827,9 +1863,18 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
         // 真画的那一轮另传 imageReply，要求她把画面描述写进 imagePrompt。
         ...(imageSettings ? { imageEnabled: true } : {}),
         ...(ctx.imageCapable ? { imageExecution: { plannedThisTurn: imagePlanned,
+          status: ctx.imageDecision.status, trigger: ctx.imageDecision.trigger, requested: ctx.imageDecision.requested,
+          ...(ctx.imageDecision.blockedReason ? { blockedReason: ctx.imageDecision.blockedReason } : {}),
+          ...(ctx.imageDecision.todayCount !== null ? { todayCount: ctx.imageDecision.todayCount } : {}), dailyLimit: ctx.imageDecision.limit,
           latestAssistant: recentStoredMessages.find(row => row.role === "ASSISTANT")
             ? readImageExecutionState(recentStoredMessages.find(row => row.role === "ASSISTANT")!.metadata) : "none" as const,
         } } : {}),
+        ...(ctx.imageCapable ? { imageCapabilities: { generation: "text_to_image" as const, referenceInput: false as const, edit: false as const,
+          selfInspection: ctx.visionAvailable ? "on_demand" as const : "disabled" as const,
+          quotedImageInspection: ctx.visionAvailable,
+        } } : {}),
+        ...(ctx.generatedImageContext ? { generatedImageContext: ctx.generatedImageContext } : {}),
+        allowStickerDescription: messages.some(message => isExplicitMediaQuestion(message.commandText ?? "", Boolean(message.images?.length || message.quotedMessage?.image || message.quotedMessage?.images?.length))),
         ...(imagePlanned ? { imageReply: true } : {}),
         ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
   };
@@ -2148,6 +2193,8 @@ type ChannelTurnReplyToggles = {
   /** 有人明确让她画（不是概率抽中的）。空画面描述时只有这一种情况才兜底。 */
   imageForced: boolean;
   confirmedImagePrompt: string | null;
+  imageRequest: ImageRequestResolution;
+  imageDecision: ImageReplyDecision;
   stickerCatalog: ReturnType<typeof pickStickerCatalog> | undefined;
   emojiFaces: ReadonlyArray<{ id: string; name: string }> | undefined;
   catchphrasePrompt: ReturnType<typeof toCatchphrasePromptEntries>;
@@ -2165,7 +2212,7 @@ type ChannelTurnReplyToggles = {
  * 写进去的相对路径，比「有这个键」更硬（不会把别的附带图片的 metadata 算进来）。
  * 查询失败按 0 处理 —— 额度是为了省钱，不该因为数不出来就让整轮聊天失败。
  */
-async function countImagesToday(prisma: PrismaClient, characterId: string, now: Date = new Date()): Promise<number> {
+async function countImagesToday(prisma: PrismaClient, characterId: string, now: Date = new Date()): Promise<number | null> {
   const start = new Date(`${usageDayKey(now)}T00:00:00+08:00`);
   try {
     return await prisma.message.count({
@@ -2177,7 +2224,7 @@ async function countImagesToday(prisma: PrismaClient, characterId: string, now: 
       },
     });
   } catch {
-    return 0;
+    return null;
   }
 }
 
@@ -2234,7 +2281,7 @@ async function decideChannelTurnReplyToggles(input: {
         voiceApiKey: input.voiceApiKey,
       })
     : null;
-  const voicePlanned = Boolean(voiceSettings) && planVoiceReply({
+  let voicePlanned = Boolean(voiceSettings) && planVoiceReply({
     modelConfig: character.modelConfig,
     lastVoiceAt,
     force: voiceRequested,
@@ -2252,28 +2299,20 @@ async function decideChannelTurnReplyToggles(input: {
   const lastImageAt = input.recentStoredMessages.find(
     (item) => item.role === "ASSISTANT" && readStoredImageFlag(item.metadata),
   )?.occurredAt ?? null;
-  const confirmation = input.imageCapable === true
-    ? resolveImageOfferConfirmation(input.messages, input.recentStoredMessages) : null;
-  const imageRequested = input.imageCapable === true
-    && (Boolean(confirmation) || input.messages.some(message => isImageRequested(message.promptContent ?? message.content)));
-  const imageSuppressed = input.messages.some(message => isImageStatusQuestion(message.content) || isImageGenerationDeclined(message.content));
+  const imageMessages = input.messages.map(message => ({ ...message, source: "current" as const,
+    commandText: message.commandText ?? (message.images?.length || message.voices?.length ? "" : message.content),
+    addressedToSelf: message.addressedToSelf === true, quotedToSelf: message.quotedToSelf === true || message.quotedMessage?.isSelf === true,
+  }));
+  const imageRequest = resolveImageRequest({ channel: isGroup ? "group" : "private", history: input.recentStoredMessages, current: imageMessages });
+  if ((imageRequest.kind === "direct" || imageRequest.kind === "confirmation") && !voiceRequested) voicePlanned = false;
   const imageSettings = input.imageCapable === true && isImageGenerationEnabled(character.modelConfig)
-    ? resolveImageGenerationSettings({
-        modelConfig: character.modelConfig,
-        chatApiBaseUrl: input.chatSettings.apiBaseUrl,
-        imageApiKey: input.imageApiKey,
-      })
-    : null;
-  const imagePlanned = Boolean(imageSettings)
-    && !imageSuppressed
-    && !voicePlanned
-    && planImageReply({
-        modelConfig: character.modelConfig,
-        lastImageAt,
-        // 只在真的要考虑画的时候才查一次库：这段代码每轮群聊都会走。
-        todayCount: imageSettings ? await countImagesToday(input.prisma, character.id) : 0,
-        force: imageRequested,
-      });
+    ? resolveImageGenerationSettings({ modelConfig: character.modelConfig, chatApiBaseUrl: input.chatSettings.apiBaseUrl, imageApiKey: input.imageApiKey }) : null;
+  const imageDecision = planImageReplyDecision({ modelConfig: character.modelConfig,
+    channelSupported: input.imageCapable === true, configured: Boolean(imageSettings), request: imageRequest,
+    lastImageAt, todayCount: imageSettings ? await countImagesToday(prisma, character.id) : null, voicePlanned,
+    allowAutonomous: isAutonomousImageEligible(imageMessages, isGroup ? "group" : "private"),
+  });
+  const imagePlanned = imageDecision.status === "approved";
 
   /**
    * 额度：「每 N 分钟最多 N 张」，按**这个会话**算（A 群贴过三张不该让 B 群闭嘴）。
@@ -2337,8 +2376,9 @@ async function decideChannelTurnReplyToggles(input: {
     voicePlanned,
     imageSettings,
     imagePlanned,
-    imageForced: imageRequested,
-    confirmedImagePrompt: confirmation?.prompt ?? null,
+    imageForced: imageDecision.requested,
+    confirmedImagePrompt: imageRequest.kind === "confirmation" ? imageRequest.subject ?? null : null,
+    imageRequest, imageDecision,
     stickerCatalog,
     emojiFaces,
     catchphrasePrompt,
@@ -3064,6 +3104,7 @@ async function loadChannelTurnWindow(input: {
         ...(item.role === "ASSISTANT" && readStoredVoiceFlag(item.metadata) ? { hadVoice: true } : {}),
         // 她自己画过图的那条：图只在 metadata 里，不标出来被问起会说「我没画过」。
         ...(item.role === "ASSISTANT" && readSentImageFlag(item.metadata) ? { hadImage: true } : {}),
+        ...(item.role === "ASSISTANT" && readGeneratedImageFacts(item.metadata) ? { generatedImage: readGeneratedImageFacts(item.metadata)! } : {}),
       };
     });
 
@@ -3086,6 +3127,8 @@ type ChannelTurnModelPreparation =
       asrApiKey: string;
       /** 画图专用 Key：与看图分开，可能指向另一家服务商。 */
       imageApiKey: string;
+      visionAvailable: boolean;
+      generatedImageContext?: GeneratedImageFacts;
       /** 图/语音已转成文字、可以直接进提示词的消息。 */
       messages: ChannelTurnMessage[];
     }
@@ -3108,6 +3151,7 @@ async function prepareChannelTurnModel(input: {
   messages: ChannelTurnMessage[];
   privateMessagesRecorded: boolean;
   existingConversation: ChannelTurnConversation | null;
+  externalConversationId: string;
 }): Promise<ChannelTurnModelPreparation> {
   const { prisma, character } = input;
   let messages = input.messages;
@@ -3135,15 +3179,21 @@ async function prepareChannelTurnModel(input: {
   const quota = await readDailyQuota(input.characterId, character.modelConfig);
   if (quota.exceeded) return { ok: false, result: { status: "ignored", reason: "daily_quota_exceeded" } };
 
-  // 图先变成文字再进提示词；角色没开看图开关时这一步什么都不做。
+  const visionSettings = await resolveVisionSettingsForCharacter({ modelConfig: character.modelConfig,
+    chatModel: chatSettings.model, chatApiBaseUrl: chatSettings.apiBaseUrl, chatApiKey: apiKey });
+  const mediaBudget = createMediaVisionBudget(MAX_IMAGES_PER_TURN);
   messages = await attachImageDescriptions(messages, {
-    modelConfig: character.modelConfig,
-    chatModel: chatSettings.model,
-    apiBaseUrl: chatSettings.apiBaseUrl,
-    apiKey,
-    characterId: input.characterId,
-    bindingId: input.bindingId,
-  });
+    modelConfig: character.modelConfig, chatModel: chatSettings.model, apiBaseUrl: chatSettings.apiBaseUrl,
+    apiKey, characterId: input.characterId, bindingId: input.bindingId,
+  }, { resolveSettings: async () => visionSettings, describe: describeImages }, mediaBudget);
+  const imageScope = { characterId: input.characterId, bindingId: input.bindingId, externalConversationId: input.externalConversationId };
+  messages = await attachQuotedImageDescriptions(messages, { prisma, scope: imageScope, settings: visionSettings, budget: mediaBudget });
+  const latestQuestion = messages.length === 1 && messages[0]!.kind !== "AI" && !messages[0]!.readOnly
+    && !messages[0]!.images?.length && !messages[0]!.quotedMessage
+    && (!input.isGroup || messages[0]!.addressedToSelf || messages[0]!.quotedToSelf)
+    ? messages[0]!.commandText ?? "" : "";
+  const generatedImageContext = await inspectLatestGeneratedImageForQuestion(latestQuestion,
+    { prisma, scope: imageScope, settings: visionSettings, budget: mediaBudget });
 
   // 语音同理：先转写成文字再进提示词，没开「听懂语音」时原样保留 `[语音]`。
   messages = await attachVoiceTranscripts(messages, {
@@ -3161,14 +3211,18 @@ async function prepareChannelTurnModel(input: {
         where: { conversationId: input.existingConversation.id, externalMessageId: message.externalMessageId },
         data: { content: message.content },
       }).catch(() => undefined);
-      if (message.observedMedia?.length) {
+      if (message.observedMedia?.length || message.quotedMessage) {
         try {
           const stored = await prisma.message.findFirst({
             where: { conversationId: input.existingConversation.id, externalMessageId: message.externalMessageId },
             select: { id: true, metadata: true },
           });
-          if (stored) await prisma.message.updateMany({ where: { id: stored.id, conversationId: input.existingConversation.id },
-            data: { metadata: mergeStoredMediaMetadata(stored.metadata, message.observedMedia) as Prisma.InputJsonObject } });
+          if (stored) {
+            const metadata = message.observedMedia?.length ? mergeStoredMediaMetadata(stored.metadata, message.observedMedia) : asRecord(stored.metadata);
+            const quotedMessage = message.quotedMessage ? buildStoredMessageMetadata({ platform: input.platform, storedReason: "recorded", message }).quotedMessage : undefined;
+            await prisma.message.updateMany({ where: { id: stored.id, conversationId: input.existingConversation.id },
+              data: { metadata: { ...metadata, ...(quotedMessage ? { quotedMessage } : {}) } as Prisma.InputJsonObject } });
+          }
         } catch {
           console.warn("[channel] media observation metadata could not be updated");
         }
@@ -3197,7 +3251,8 @@ async function prepareChannelTurnModel(input: {
     }
   }
 
-  return { ok: true, chatSettings, apiKey, voiceApiKey, asrApiKey, imageApiKey, messages };
+  return { ok: true, chatSettings, apiKey, voiceApiKey, asrApiKey, imageApiKey, messages, visionAvailable: Boolean(visionSettings),
+    ...(generatedImageContext ? { generatedImageContext } : {}) };
 }
 
 type ChannelTurnPrivateContext = {
@@ -3377,6 +3432,7 @@ async function runChannelTurn(input: {
     messages,
     privateMessagesRecorded,
     existingConversation,
+    externalConversationId: input.externalConversationId,
   });
   if (!modelPrep.ok) return modelPrep.result;
   const chatSettings = modelPrep.chatSettings;
@@ -3384,6 +3440,8 @@ async function runChannelTurn(input: {
   const voiceApiKey = modelPrep.voiceApiKey;
   const asrApiKey = modelPrep.asrApiKey;
   const imageApiKey = modelPrep.imageApiKey;
+  const generatedImageContext = modelPrep.generatedImageContext;
+  const visionAvailable = modelPrep.visionAvailable;
   messages = modelPrep.messages;
 
   // 最近对话窗口与表情额度历史都依赖同一个会话，一起查（P3）。emojiFrequency 提前到这里。
@@ -3429,6 +3487,8 @@ async function runChannelTurn(input: {
   const imagePlanned = toggles.imagePlanned;
   const imageForced = toggles.imageForced;
   const confirmedImagePrompt = toggles.confirmedImagePrompt;
+  const imageRequest = toggles.imageRequest;
+  const imageDecision = toggles.imageDecision;
   const stickerCatalog = toggles.stickerCatalog;
   const emojiFaces = toggles.emojiFaces;
   const catchphrasePrompt = toggles.catchphrasePrompt;
@@ -3744,7 +3804,7 @@ async function runChannelTurn(input: {
       return toolKnowledgeCache.get(key)!;
     },
   };
-  let generated;
+  let generated: Awaited<ReturnType<typeof generateGroupContextReply>>;
   const observedReadOnlyAiEvidence = isGroup && (
     messages.some(row => Boolean(row.quotedMessage?.content) && conversationSourcePolicy(row.quotedMessage).excludeFromGrowth === true)
     || [...backgroundLines, ...(input.group?.analysisBackground ?? [])].some(row =>
@@ -3852,6 +3912,9 @@ async function runChannelTurn(input: {
         voicePlanned,
         imageSettings,
         imageCapable: input.imageCapable,
+        imageDecision,
+        generatedImageContext,
+        visionAvailable,
         imagePlanned,
         allowSilent,
         useTranscript,
@@ -3872,7 +3935,7 @@ async function runChannelTurn(input: {
       }),
     });
   } catch (error) {
-    if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: [...growthReads.values()] });
+      if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: [...growthReads.values()] });
     await recordModelUsage({
       kind: "channel", model: chatSettings.model, characterId: input.characterId,
       channelBindingId: input.bindingId,
@@ -3880,6 +3943,19 @@ async function runChannelTurn(input: {
     });
     return { status: "ignored", reason: (error instanceof Error ? error.message : "model_error").slice(0, 200) };
   }
+
+  let imageStatusOverride = false;
+  const useImageStatusReply = (reply: string) => {
+    generated.reply = reply;
+    generated.responseExplanation = "按服务端画图执行记录反馈当前状态。";
+    generated.faceIds = []; generated.stickerId = null;
+    generated.imagePrompt = null; generated.imageOffer = null;
+    generated.usedMemoryIds = []; generated.usedSnapshotIds = []; generated.usedEventIds = []; generated.usedRawMessageIds = [];
+    generated.usedCatchphraseIds = []; generated.usedPreferenceIds = []; generated.usedExpressionHabitIds = []; generated.usedGoalIds = [];
+    imageStatusOverride = true;
+  };
+  const enforcedImageReply = imageRequest.kind === "status" ? imageStatusReply(recentStoredMessages) : imageDecisionReply(imageDecision);
+  if (enforcedImageReply && generated.action === "reply") useImageStatusReply(enforcedImageReply);
 
   if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: reconcileGrowthReadUsage([...growthReads.values()], {
     preferences: generated.usedPreferenceIds, language: generated.usedExpressionHabitIds, goals: generated.usedGoalIds,
@@ -3978,29 +4054,41 @@ async function runChannelTurn(input: {
    *   - 自主抽中的 → 放弃。凭空拿一句「哈哈哈」去画，既浪费钱又不像她。
    */
   let replyImage: GeneratedImage | null = null;
-  let imageAttempt: { status: "generated" | "generation_failed" | "missing_prompt" } | undefined;
+  let imageGeneration: ImageGenerationRecord | undefined;
+  let imageAttempt: ImageAttemptRecord | undefined = (imageDecision.status === "blocked" && imageDecision.requested) || imageRequest.kind === "declined"
+    ? { status: "blocked", reason: imageDecision.blockedReason, trigger: imageDecision.trigger,
+        sourceMessageId: imageRequest.sourceMessageId, authorOpenId: imageRequest.authorOpenId, todayCount: imageDecision.todayCount, limit: imageDecision.limit } : undefined;
   if (generated.action === "reply" && imagePlanned && imageSettings) {
-    const prompt = confirmedImagePrompt || generated.imagePrompt
-      || (imageForced ? promptFromRequest(currentMessage) : "");
-    if (!prompt) {
-      imageAttempt = { status: "missing_prompt" };
-      console.log("[image] 跳过画图 " + JSON.stringify({ reason: "no_prompt", planned: "auto" }));
+    const source = confirmedImagePrompt ? "confirmed_offer" as const : generated.imagePrompt ? "model" as const : "request_subject" as const;
+    const candidate = confirmedImagePrompt || generated.imagePrompt || imageRequest.subject || "";
+    const validation = validateImageScenePrompt(candidate, { requestSubject: imageRequest.subject,
+      participantNames: [...new Set([
+        ...messages.map(message => message.authorDisplayName ?? ""),
+        ...recentStoredMessages.map(row => { const name = asRecord(row.metadata).authorDisplayName; return typeof name === "string" ? name : ""; }),
+        ...backgroundLines.map(line => line.speaker ?? ""),
+      ].filter(Boolean))],
+    });
+    const trace = { trigger: imageDecision.trigger, sourceMessageId: imageRequest.sourceMessageId, authorOpenId: imageRequest.authorOpenId,
+      promptSource: source, todayCount: imageDecision.todayCount, limit: imageDecision.limit };
+    if (!validation.ok) {
+      imageAttempt = { status: "blocked", reason: validation.reason, ...trace };
+      if (imageDecision.requested) useImageStatusReply(blockedImageReply(validation.reason));
+      console.warn("[image] generation blocked", { reason: validation.reason, trigger: imageDecision.trigger });
     } else {
-      const result = await generateImage({
-        settings: imageSettings,
-        prompt,
-        characterId: input.characterId,
-      });
+      const prompt = sanitizeImagePrompt(validation.prompt);
+      const result = await generateImage({ settings: imageSettings, prompt, characterId: input.characterId });
       if (result.ok) {
         replyImage = result.image;
-        imageAttempt = { status: "generated" };
+        imageAttempt = { status: "generated", ...trace };
+        imageGeneration = { prompt, model: imageSettings.model, provider: imageSettings.provider, generatedAt: new Date().toISOString(), mode: "text_to_image" };
       } else {
-        imageAttempt = { status: "generation_failed" };
-        // 只记一行：文字照常发，图没有就没有。用户不需要知道服务商为什么拒绝。
-        console.warn("[image] 画图失败，这一轮只发文字：" + result.reason);
+        imageAttempt = { status: "generation_failed", reason: "generation_failed", ...trace };
+        if (imageDecision.requested) useImageStatusReply(blockedImageReply("generation_failed"));
+        console.warn("[image] generation failed", { reason: "generation_failed", trigger: imageDecision.trigger });
       }
     }
   }
+
   /**
    * 分条发送：只有渠道声明了能拆、且这一轮不走语音时才拆。
    *
@@ -4011,6 +4099,7 @@ async function runChannelTurn(input: {
   const replySegments = replyVoice || !input.segmentCapable
     ? []
     : splitReplySegments(generated.reply);
+  turnDetail.update({ response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation } });
   const { conversationId, assistantMessageId } = await persistChannelTurnResult({
     prisma,
     existingConversation,
@@ -4035,8 +4124,10 @@ async function runChannelTurn(input: {
     replyVoice,
     replyImage,
     imageAttempt,
+    imageGeneration,
+    imageStatusOverride,
     ...(!imagePlanned && !imageForced && imageSettings && messages.length === 1 && generated.imageOffer
-      && !isImageStatusQuestion(messages[0]!.content) && !isImageGenerationDeclined(messages[0]!.content)
+      && imageRequest.kind !== "status" && imageRequest.kind !== "declined"
       ? { imageOffer: { prompt: generated.imageOffer, authorOpenId: messages[0]!.authorOpenId } } : {}),
     replySegments,
     goals,
@@ -4076,6 +4167,18 @@ async function runChannelTurn(input: {
     }
   };
 
+  try {
+    const rows = await prisma.modelUsage.findMany({ where: { characterId: input.characterId, kind: "channel",
+      metadata: { path: ["turnId"], equals: turnId } }, select: { id: true, metadata: true }, take: 2 });
+    for (const row of rows) await prisma.modelUsage.updateMany({ where: { id: row.id, characterId: input.characterId },
+      data: { metadata: { ...asRecord(row.metadata), turnDetail: turnDetail.serialize(), imageDecision: {
+        status: imageDecision.status, trigger: imageDecision.trigger, requested: imageDecision.requested,
+        ...(imageDecision.blockedReason ? { blockedReason: imageDecision.blockedReason } : {}),
+        ...(imageDecision.todayCount !== null ? { todayCount: imageDecision.todayCount } : {}), dailyLimit: imageDecision.limit,
+      }, ...(imageAttempt ? { imageOutcome: { status: imageAttempt.status, ...(imageAttempt.reason ? { reason: imageAttempt.reason } : {}),
+        ...(imageAttempt.promptSource ? { promptSource: imageAttempt.promptSource } : {}) } } : {}) } as Prisma.InputJsonObject } });
+  } catch { console.warn("[channel] final delivery diagnostics could not be updated"); }
+
   await deliverChannelTurnReply({
     prisma,
     character,
@@ -4093,6 +4196,7 @@ async function runChannelTurn(input: {
     voiceSettings,
     recordDelivery,
   });
+
 
   await recordChannelTurnTailUsage({
     prisma,
@@ -4132,6 +4236,10 @@ export async function handleChannelMessage(input: ChannelMessageInput): Promise<
       ...(input.quotedMessage ? { quotedMessage: input.quotedMessage } : {}),
       ...conversationSourcePolicy(input),
       ...(input.images?.length ? { images: input.images } : {}),
+      ...(input.commandText !== undefined ? { commandText: input.commandText } : {}),
+      ...(input.addressedToSelf !== undefined ? { addressedToSelf: input.addressedToSelf } : {}),
+      ...(input.quotedToSelf !== undefined ? { quotedToSelf: input.quotedToSelf } : {}),
+      ...(input.readOnly !== undefined ? { readOnly: input.readOnly } : {}),
       ...(input.imageTextParts ? { imageTextParts: input.imageTextParts } : {}),
       ...(input.promptImageTextParts ? { promptImageTextParts: input.promptImageTextParts } : {}),
       ...(input.observedMedia?.length ? { observedMedia: input.observedMedia } : {}),

@@ -1,3 +1,7 @@
+import { sanitizeGeneratedImageFacts, type GeneratedImageFacts } from "./image-facts";
+import type { ChannelImageRef } from "./image-understanding";
+import type { ImageTextPart } from "./media-text";
+import { shouldRepairRepeatedReply, normalizeStickerContext } from "./repeated-reply";
 import { createReadOnlyChatTools, type ReadOnlyChatTools } from "./readonly-chat-tools";
 import { decodeDeepSeekWriteMarkup } from "./deepseek-write-tool-markup";
 import { readExperienceLearning, type ExperienceLearning } from "./interaction-experience-domain";
@@ -63,6 +67,7 @@ export type ConversationContextMessage = {
    * 不带出去她就不记得自己画过，被追问时会说「我没画过图」。
    */
   hadImage?: boolean;
+  generatedImage?: GeneratedImageFacts;
 };
 /**
  * scope "character" is shared character-global knowledge; "private" belongs to the current user
@@ -185,6 +190,10 @@ export type ConversationKnowledgeItem = {
 
 export type ConversationQuotedMessage = ConversationSourcePolicy & {
   messageId: string;
+  image?: GeneratedImageFacts;
+  /** Internal media refs, excluded from prompt serialization. */
+  images?: ChannelImageRef[];
+  imageTextParts?: ImageTextPart[];
   content?: string;
   isSelf?: boolean;
   /** 群聊里被引用那条的作者（私聊不需要，那里只有对话双方）。 */
@@ -261,7 +270,7 @@ export type ConversationReplyInput = {
      */
     mentions?: ConversationMessageMention[];
     /** 这一行引用的是哪一句。只有 id 表示原文没取到，不能补猜。 */
-    quoted?: { id: string; member?: string; speaker?: string; content?: string; isSelf?: boolean } & ConversationSourcePolicy;
+    quoted?: { id: string; member?: string; speaker?: string; content?: string; isSelf?: boolean; image?: GeneratedImageFacts; images?: ChannelImageRef[]; imageTextParts?: ImageTextPart[] } & ConversationSourcePolicy;
   }>;
   /** 明确标记这是群聊：即使 allowSilent=false（被 @）也要用群聊语境。 */
   groupChat?: boolean;
@@ -272,8 +281,8 @@ export type ConversationReplyInput = {
     id?: string; member?: string; speaker?: string; content: string; occurredAt?: string;
     kind?: "AI" | "HUMAN" | "UNKNOWN"; readOnly?: true; excludeFromGrowth?: true;
     mentions?: ConversationMessageMention[];
-    quoted?: { id: string; member?: string; speaker?: string; content?: string; isSelf?: boolean } & ConversationSourcePolicy;
-    role?: "USER" | "ASSISTANT"; isOwner?: boolean; hadSticker?: boolean; hadVoice?: boolean; hadImage?: boolean;
+    quoted?: { id: string; member?: string; speaker?: string; content?: string; isSelf?: boolean; image?: GeneratedImageFacts; images?: ChannelImageRef[]; imageTextParts?: ImageTextPart[] } & ConversationSourcePolicy;
+    role?: "USER" | "ASSISTANT"; isOwner?: boolean; hadSticker?: boolean; hadVoice?: boolean; hadImage?: boolean; generatedImage?: GeneratedImageFacts;
   }>;
   /** 她参与过、还没过期的话题锚点，模型只能从里面选。 */
   groupAnchors?: Array<{ id: string; label: string }>;
@@ -415,7 +424,13 @@ export type ConversationReplyInput = {
   /** 当前角色是否具备画图能力（开关开着 + 生图配置完整）。只影响她会不会否认。 */
   imageEnabled?: boolean;
   /** Server execution evidence, scoped to the latest assistant turn rather than every past proposal. */
-  imageExecution?: { plannedThisTurn: boolean; latestAssistant: "none" | "not_requested" | "offered" | "generated" | "sent" | "failed" | "unknown" };
+  imageExecution?: { plannedThisTurn: boolean; latestAssistant: "none" | "not_requested" | "offered" | "generated" | "sent" | "failed" | "unknown";
+    status?: "approved" | "blocked" | "not_requested"; trigger?: "direct" | "confirmed_offer" | "autonomous" | "none";
+    requested?: boolean; blockedReason?: string; todayCount?: number; dailyLimit?: number };
+  imageCapabilities?: { generation: "text_to_image"; referenceInput: false; edit: false; selfInspection: "disabled" | "on_demand"; quotedImageInspection: boolean };
+  /** Safe evidence for the same-scope generated image explicitly referred to this turn. */
+  generatedImageContext?: GeneratedImageFacts;
+  allowStickerDescription?: boolean;
   /**
    * 渠道批准本轮在回复之后调用生图，不代表生成或发送已经成功。
    * 模型据此写 imagePrompt，正文只写简短承接语；送达事实必须另看历史 hadImage。
@@ -609,7 +624,7 @@ export type ConversationReplyResult = {
 // v85：历史 ASSISTANT 的 mentions 只代表实际发出的提醒；直接回答本身不构成 @ 理由。
 // v86：表情包接语气而不主动点评画面；没有图像描述时按当前问题如实回应。
 // v87：画图能力、提议、获准执行与实际送达分开；短确认由代码续接具体提议。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v87";
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v88";
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -785,6 +800,9 @@ function systemPrompt(flags: {
   withHadVoice?: boolean;
   withHadImage?: boolean;
   withImageExecution?: boolean;
+  withImageCapabilities?: boolean;
+  withGeneratedImageContext?: boolean;
+  repeatRepair?: boolean;
   withMediaTokens?: boolean;
   withMemoryAssistant?: boolean;
   withMemoryAssistantEvidence?: boolean;
@@ -821,6 +839,7 @@ function systemPrompt(flags: {
     "Let preferences and opinions show when they arise, but do not add a take, tease or punchline just to sound lively. Ordinary, quiet or brief is fine.",
     "Use history and unfinished threads only when they genuinely help. Do not force continuity, revisit old topics, or invent things you supposedly did, saw or promised.",
     "Memories record what was true when written, not permanent labels. A newer explicit correction or change from this person overrides an older preference. If the change is unclear, ask naturally.",
+    "A retrieved ASSISTANT statement establishes only what you said, proposed, promised or apologized for, not that an external action actually occurred or that a claimed implementation exists. Do not turn repeated self-descriptions into independent corroboration. Execution receipts and current capability/observation facts take precedence; another member's advice about software permissions is not proof those permissions or capabilities are implemented.",
     "When history mentions a failure or inability, treat it as a dated report, not a permanent capability: current server-supplied capabilities and fresh retrieved original evidence take precedence over past self-descriptions in memories, summaries or learned reminders. A past failed or partial lookup does not prove current access is unavailable; preserve what happened then without repeating it as today's limitation.",
     "When responding to correction, distinguish a supported factual correction, the speaker's interpretation of someone else, and a preference about how you respond. Accept the reminder without inventing new evidence or treating their interpretation as proof of another person's hidden intent. If a bare disagreement leaves the mistake unclear, locate it in context or briefly ask what they mean; do not replace one confident guess with another merely to agree. Apply a wording correction in the present reply; when the conversation moves on or ends, respond to that turn without repeating an apology or promise to remember.",
     "When this person wraps a word or phrase in quotation marks — often to say 少说 / 别说 / 不要用, or to quote your own earlier words — they are mentioning that wording, not using it as a statement of their own. Never treat a quoted word as their claim, promise or admission, and never throw it back at them as a counter-argument. If it is unclear whether they mean 「stop saying this」 or 「you said this」, ask which instead of guessing.",
@@ -1031,8 +1050,11 @@ function systemPrompt(flags: {
     lines.push("An earlier line's hadImage: true confirms that specific historical reply actually sent its picture. Own that picture, but an old sent picture does not prove a later drawing proposal or request was executed. For a status question such as '画了吗' or '好了吗', check the corresponding sent evidence; without it, say the current result is unconfirmed rather than claiming completion. A status question alone is not a new request to generate a picture.");
   }
 
+  if (flags.repeatRepair) lines.push("Your previous candidate repeated a recent long assistant reply verbatim. Re-read the CURRENT user message, including corrections and who said what; answer it afresh in concise words. Do not repeat that candidate, invent an execution result, or apologize for an error the user says was theirs.");
+  if (flags.withGeneratedImageContext) lines.push("generatedImageContext is server-verified evidence for the same-conversation generated picture explicitly referred to in this turn, not a new drawing request. requestedDescription records the generation request, not what the picture actually depicts. Only visual.status ok with visual.description supplies an observation of that picture; any other status means its appearance is not currently observed, so do not claim to have seen it or invent its details.");
+  if (flags.withImageCapabilities) lines.push("imageCapabilities describes actual implementation, not conversational wishes. text_to_image means generation receives text only: referenceInput false and edit false mean no reference image or old picture is passed to an editing engine. Do not claim you edited a three-view sheet, retained its image pixels, or used it as an image base. A folder permission suggestion cannot automatically make an image visible. requestedDescription is what was requested for generation; observedDescription, or visual.description when visual.status is ok, alone reports supplied visual observations. Without a successful visual observation do not assert what the generated picture actually depicts; absence from a description is not proof a feature is absent.");
   if (withImageExecution) {
-    lines.push("imageExecution is server-supplied execution evidence and takes precedence over conversational claims such as '画好了'. plannedThisTurn means an attempt is approved, not completed. latestAssistant describes only the latest assistant turn: none/not_requested/offered are not execution; generated is not delivery; failed/unknown do not establish success; sent confirms only that turn's picture. Do not use it or an older hadImage to prove another proposal was executed. For status questions, report missing or unconfirmed results honestly; the question itself does not authorize a new generation.");
+    lines.push("imageExecution status blocked or not_requested means NO task is queued or running: state the supplied blockedReason honestly when relevant; never say it is queued, stuck, still generating, will arrive later, or will be resent automatically. Counts and limits are factual, not guesses. imageExecution is server-supplied execution evidence and takes precedence over conversational claims such as '画好了'. plannedThisTurn means an attempt is approved, not completed. latestAssistant describes only the latest assistant turn: none/not_requested/offered are not execution; generated is not delivery; failed/unknown do not establish success; sent confirms only that turn's picture. Do not use it or an older hadImage to prove another proposal was executed. For status questions, report missing or unconfirmed results honestly; the question itself does not authorize a new generation.");
   }
   if (imageEnabled) {
     /**
@@ -1068,6 +1090,7 @@ function systemPrompt(flags: {
     lines.push(
       "imageReply means the channel approved an image-generation attempt after this reply is prepared; generation and delivery have not yet been confirmed. Fill imagePrompt with a concrete visual description: subject, action or scene, composition, lighting, colour, style. Describe only what should appear in the image — never the request itself, the tool, the app or the act of drawing. Do not return imageOffer in this turn.",
       "Write a short acknowledgement of the drawing request, not a claim of success. Do not say '画好了', '已发送', 'here it is', or otherwise imply the image is finished or delivered. Do not deny the available drawing capability or narrate the image element by element. If generation succeeds, the channel will send a separate image after your text; that future step is not current evidence.",
+      "Never turn current or historical conversation, real nicknames, @member placeholders, transcript lines or chat UI into image content. Only an independently requested visual subject is eligible. This does not prohibit ordinary requested lettering on a poster or sign.",
       "The image is its own message: it carries no quote and no @. Keep replyToMessageId and atMessageId on your text only.",
     );
   }
@@ -1363,18 +1386,21 @@ export async function generateConversationReply(input: ConversationReplyInput, o
 
   // 引用只给「谁引用了谁」这件事实：原文没取到就明确 available: false，
   // 让模型说看不见，而不是替对方补一句听起来合理的原文。
-  const quotePayload = (quoted?: { id: string; member?: string; speaker?: string; content?: string; isSelf?: boolean } & ConversationSourcePolicy) => quoted
+  const quotePayload = (quoted?: { id: string; member?: string; speaker?: string; content?: string; isSelf?: boolean; image?: GeneratedImageFacts; images?: ChannelImageRef[]; imageTextParts?: ImageTextPart[] } & ConversationSourcePolicy) => quoted
     ? {
         id: quoted.id,
         ...conversationSourcePolicy(quoted),
         ...(quoted.member ? { member: quoted.member } : {}),
         ...(quoted.speaker ? { speaker: quoted.speaker.slice(0, 80) } : {}),
         ...(quoted.isSelf ? { isSelf: true } : {}),
+        ...(sanitizeGeneratedImageFacts(quoted.image) ? { image: sanitizeGeneratedImageFacts(quoted.image) } : {}),
         content: quoted.content?.slice(0, 600) ?? null,
         available: Boolean(quoted.content),
       }
     : undefined;
 
+  const execution = input.imageExecution;
+  const boundedCount = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   const promptInput = {
     characterName: input.characterName,
     characterPrompt: composeCharacterPrompt(input.characterPrompt, input.styleExamples),
@@ -1387,10 +1413,22 @@ export async function generateConversationReply(input: ConversationReplyInput, o
     ...(userAddress ? { userAddress } : {}),
     ...(speaker ? { speaker } : {}),
     ...(input.imageExecution && ["none", "not_requested", "offered", "generated", "sent", "failed", "unknown"].includes(input.imageExecution.latestAssistant)
-      ? { imageExecution: { plannedThisTurn: input.imageExecution.plannedThisTurn === true, latestAssistant: input.imageExecution.latestAssistant } } : {}),
+      ? { imageExecution: { plannedThisTurn: input.imageExecution.plannedThisTurn === true, latestAssistant: input.imageExecution.latestAssistant,
+        ...(["approved", "blocked", "not_requested"].includes(execution?.status ?? "") ? { status: execution!.status } : {}),
+        ...(["direct", "confirmed_offer", "autonomous", "none"].includes(execution?.trigger ?? "") ? { trigger: execution!.trigger } : {}),
+        ...(typeof execution?.requested === "boolean" ? { requested: execution.requested } : {}),
+        ...(["channel_unsupported", "disabled", "missing_config", "quota_unavailable", "daily_limit", "voice_conflict", "declined", "status_query", "confirmation_required", "offer_expired", "not_addressed", "cooldown", "chance", "ambiguous_request", "unsafe_prompt", "missing_prompt", "generation_failed"].includes(execution?.blockedReason ?? "") ? { blockedReason: execution!.blockedReason } : {}),
+        ...(boundedCount(execution?.todayCount) !== undefined ? { todayCount: execution!.todayCount } : {}),
+        ...(boundedCount(execution?.dailyLimit) !== undefined ? { dailyLimit: execution!.dailyLimit } : {}),
+      } } : {}),
+    ...(sanitizeGeneratedImageFacts(input.generatedImageContext) ? { generatedImageContext: sanitizeGeneratedImageFacts(input.generatedImageContext) } : {}),
+    ...(input.imageCapabilities?.generation === "text_to_image" && input.imageCapabilities.referenceInput === false && input.imageCapabilities.edit === false
+      && ["disabled", "on_demand"].includes(input.imageCapabilities.selfInspection) ? { imageCapabilities: { generation: "text_to_image", referenceInput: false, edit: false,
+        selfInspection: input.imageCapabilities.selfInspection, quotedImageInspection: input.imageCapabilities.quotedImageInspection === true } } : {}),
     ...(!transcript.length ? { currentMessage: input.currentMessage } : {}),
     ...(!withGroupChat && input.quotedMessage ? {
       quotedMessage: {
+        ...(sanitizeGeneratedImageFacts(input.quotedMessage.image) ? { image: sanitizeGeneratedImageFacts(input.quotedMessage.image) } : {}),
         content: input.quotedMessage.content?.slice(0, 2100) || null,
         author: input.quotedMessage.isSelf === true ? "self" : input.quotedMessage.isSelf === false ? "user" : "unknown",
         available: Boolean(input.quotedMessage.content),
@@ -1433,6 +1471,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
             ...(entry.role === "ASSISTANT" && entry.hadSticker ? { hadSticker: true } : {}),
             ...(entry.role === "ASSISTANT" && entry.hadVoice ? { hadVoice: true } : {}),
             ...(entry.role === "ASSISTANT" && entry.hadImage ? { hadImage: true } : {}),
+      ...(sanitizeGeneratedImageFacts(entry.generatedImage) ? { generatedImage: sanitizeGeneratedImageFacts(entry.generatedImage) } : {}),
             ...(entry.mentions?.length
               ? {
                   mentions: entry.mentions.slice(0, 8).map((mention) => ({
@@ -1573,6 +1612,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       ...(entry.role === "ASSISTANT" && entry.hadVoice ? { hadVoice: true } : {}),
       // 她画过图的那句：图只在 metadata 里，不标出来她会说「我没画过」。
       ...(entry.role === "ASSISTANT" && entry.hadImage ? { hadImage: true } : {}),
+      ...(sanitizeGeneratedImageFacts(entry.generatedImage) ? { generatedImage: sanitizeGeneratedImageFacts(entry.generatedImage) } : {}),
     })),
     memories: contextMemories.map((memory) => ({
       id: memory.id,
@@ -1707,6 +1747,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
   let hasPendingBrowser = false;
   const toolUsage: ModelUsageTokens[] = [];
 
+  let repeatRepair = false;
   const requestReply = async (
     useTemperature: number,
     repair = false,
@@ -1781,6 +1822,9 @@ export async function generateConversationReply(input: ConversationReplyInput, o
                 withHadVoice,
                 withHadImage,
                 withImageExecution: Boolean(promptInput.imageExecution),
+                 withImageCapabilities: Boolean(promptInput.imageCapabilities),
+                 withGeneratedImageContext: Boolean(promptInput.generatedImageContext),
+                 repeatRepair,
                 withMediaTokens,
                 withMemoryAssistant: input.memoryAssistantAvailable === true,
                 withMemoryAssistantEvidence: input.memoryAssistantEvidenceProvided === true,
@@ -1844,6 +1888,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
     }
     diagnosticPayload = responsePayload;
     const payload = asRecord(responsePayload);
+    const responseUsage = readUsage(payload?.usage);
+    if (responseUsage) toolUsage.push(responseUsage);
     const choices = payload && Array.isArray(payload.choices) ? payload.choices : [];
     const firstChoice = asRecord(choices[0]);
     const assistantMessage = asRecord(firstChoice?.message);
@@ -1862,8 +1908,6 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       if (new Set(calls.map(call => call.id)).size !== calls.length || toolHistory.some(row => Array.isArray(row.tool_calls) && row.tool_calls.some(value => calls.some(call => call.id === (value as { id?: string }).id)))) throw new Error("LLM_INVALID_RESPONSE: 工具调用ID重复。");
       toolRounds += 1;
       toolCallCount += calls.length;
-      const usage = readUsage(payload?.usage);
-      if (usage) toolUsage.push(usage);
       toolHistory.push({ role: "assistant", content: recoveredCalls ? null : responseText || null,
         ...(typeof assistantMessage?.reasoning_content === "string" ? { reasoning_content: assistantMessage.reasoning_content } : {}), tool_calls: calls });
       for (const call of calls) {
@@ -1979,9 +2023,8 @@ export async function generateConversationReply(input: ConversationReplyInput, o
       provider: endpoint.hostname,
       promptTemplateVersion: PROMPT_TEMPLATE_VERSION,
       usage: (() => {
-        const last = readUsage(payload?.usage);
-        if (!toolUsage.length) return last;
-        const usages = [...toolUsage, ...(last ? [last] : [])];
+        if (!toolUsage.length) return undefined;
+        const usages = toolUsage;
         const sum = (key: keyof ModelUsageTokens) => usages.reduce((total, item) => total + (item[key] ?? 0), 0);
         return { promptTokens: sum("promptTokens"), completionTokens: sum("completionTokens"), totalTokens: sum("totalTokens"),
           ...(usages.some(item => item.reasoningTokens !== undefined) ? { reasoningTokens: sum("reasoningTokens") } : {}),
@@ -2048,7 +2091,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
 
   /**
    * 模型偶尔会吐一段不是 JSON 的东西（实测 deepseek-flash 约 9 条里 2 条）—— 再来一次就够了。
-   * 失败那次的用量不记账（只返回成功那次的 usage），省得为了几 token 把接口改复杂。
+   * 所有有 usage 的实际响应统一累计，包含格式修复和重复回复修复前的候选。
    *
    * 网络错误以前是「不重试，让它暴露出来」。这条规矩错在它假设失败是可见的 ——
    * 实际上没人看得见：一轮回复直接消失，用户只看到「她不理我」，日志里一行 ignored。
@@ -2057,6 +2100,13 @@ export async function generateConversationReply(input: ConversationReplyInput, o
    *
    * HTTP 错误、超时仍然不重试：400/401/429 重试不会变好，超时重试只会让用户多等一倍。
    */
+  // Normalize only the final request payload, never persisted message bodies.
+  if (input.allowStickerDescription !== true) {
+    const normalize = (value: unknown): unknown => typeof value === "string" ? normalizeStickerContext(value)
+      : Array.isArray(value) ? value.map(normalize)
+      : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, normalize(entry)])) : value;
+    Object.assign(promptInput, normalize(promptInput));
+  }
   const RETRY_TEMPERATURE = 0.3;
   const NETWORK_RETRY_DELAYS = [400, 1_200];
   let parseRetried = false;
@@ -2067,12 +2117,23 @@ export async function generateConversationReply(input: ConversationReplyInput, o
        * 重试那一次顺手关掉思考：空正文是思考模式下的退化，原样再问一遍复现率极高
        * （实测开着 50% 空、关掉 0% 空），所以光降温不够。
        */
-      return await requestReply(
+      const candidate = await requestReply(
         parseRetried ? RETRY_TEMPERATURE : temperature,
         parseRetried,
         true,
         parseRetried,
       );
+      if (candidate.action === "reply" && shouldRepairRepeatedReply(candidate.reply, input.recentMessages, input.currentMessage)) {
+        if (!parseRetried) {
+          parseRetried = true;
+          repeatRepair = true;
+          continue;
+        }
+        return { ...candidate, action: withGroupChat && input.allowSilent === true ? "silent" : "reply",
+          reply: withGroupChat && input.allowSilent === true ? "" : "我刚才重复了。你这句我需要重新确认一下，免得又接错。",
+          imagePrompt: null, imageOffer: null, faceIds: [], stickerId: null, usedMemoryIds: [], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [], usedCatchphraseIds: [], usedPreferenceIds: [], usedExpressionHabitIds: [], usedGoalIds: [], groupDecision: undefined };
+      }
+      return candidate;
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (message.startsWith("LLM_INVALID_RESPONSE")) {

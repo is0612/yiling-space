@@ -251,13 +251,6 @@ async function describeOne(
   };
   if (!ref.url) return fail("这条消息没有图片直链（表情包/合并转发常见）");
 
-  let endpoint: URL;
-  try {
-    endpoint = buildChatCompletionsEndpoint(settings.apiBaseUrl);
-  } catch {
-    return fail("看图地址无效");
-  }
-
   let image: { buffer: Buffer; mime: string };
   try {
     image = await downloadImage(ref.url);
@@ -265,8 +258,20 @@ async function describeOne(
     return fail(`图片下载失败：${describeDownloadError(error)}`);
   }
 
+  return describeImageBuffer(image, settings, context, ref.mediaKind);
+}
+
+/** Trusted decoded bytes only; local paths are validated by the asset loader, never by this helper. */
+export async function describeImageBuffer(
+  source: { buffer: Buffer; mime: string }, settings: ImageUnderstandingSettings,
+  context: ImageUnderstandingContext, mediaKind?: MediaKind,
+): Promise<string | null> {
+  const fail = (reason: string): null => { console.warn(`[vision] 看图失败：${reason}（model=${settings.model}）`); return null; };
+  if (!source.mime.startsWith("image/") || !source.buffer.length || source.buffer.length > MAX_IMAGE_BYTES) return fail("图片字节超限或格式无效");
+  let endpoint: URL;
+  try { endpoint = buildChatCompletionsEndpoint(settings.apiBaseUrl); } catch { return fail("看图地址无效"); }
   // 缩到 1024 边长再送：原图 base64 常常 2~4MB，视觉接口会直接 400。
-  image = await shrinkForVision(image);
+  const image = await shrinkForVision(source);
 
   const dataUrl = `data:${image.mime};base64,${image.buffer.toString("base64")}`;
   const body = {
@@ -274,7 +279,7 @@ async function describeOne(
     temperature: 0.2,
     max_tokens: 400,
     messages: [
-      { role: "system", content: imageVisionPrompt(ref.mediaKind) },
+      { role: "system", content: imageVisionPrompt(mediaKind) },
       {
         role: "user",
         content: [

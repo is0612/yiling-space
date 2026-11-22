@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { attachImageDescriptions, buildStoredMessageMetadata, type ChannelTurnMessage } from "../server/utils/channel-adapter/pipeline";
 import { mergeStoredMediaMetadata, observeOnebotMedia, storedMediaObservations } from "../server/utils/channel-adapter/media-observation";
-import { readOnebotImages, readOnebotMedia, readOnebotMessageText, readOnebotMessageParts } from "../server/utils/channel-adapter/onebot/types";
+import { readOnebotImages, readOnebotMedia, readOnebotMessageText, readOnebotMessageParts, readOnebotCommandText } from "../server/utils/channel-adapter/onebot/types";
 
 const context = { modelConfig: {}, chatModel: "mock", apiBaseUrl: "https://model.invalid/v1", apiKey: "mock", characterId: "test-character", bindingId: "test-binding" };
 const settings = { model: "mock", apiBaseUrl: context.apiBaseUrl, apiKey: "mock" };
 function message(id: string, segments: Array<{ type: string; data: Record<string, unknown> }>): ChannelTurnMessage {
   const event = { message: segments };
-  return { externalMessageId: id, authorOpenId: "synthetic-member", content: readOnebotMessageText(event),
+  return { externalMessageId: id, authorOpenId: "synthetic-member", content: readOnebotMessageText(event), commandText: readOnebotCommandText(event),
     promptContent: readOnebotMessageText(event), images: readOnebotImages(event), observedMedia: observeOnebotMedia(readOnebotMedia(event)),
     imageTextParts: readOnebotMessageParts(event), promptImageTextParts: readOnebotMessageParts(event) };
 }
@@ -55,8 +55,9 @@ const stickerWithUrl = message("sticker-url", [{ type: "image", data: { sub_type
 let stickerCalls = 0;
 await attachImageDescriptions([stickerWithUrl], context, { resolveSettings: async () => settings,
   describe: async () => { stickerCalls++; return ["原有描述行为"]; } });
-assert.equal(stickerCalls, 1, "observational sticker classification must not switch to strategy A");
-const failed = await attachImageDescriptions([stickerWithUrl], context, { resolveSettings: async () => settings,
+assert.equal(stickerCalls, 0, "a sticker alone must not consume vision or expose unsolicited visual details");
+const requestedSticker = { ...stickerWithUrl, commandText: "这个表情包是什么意思" };
+const failed = await attachImageDescriptions([requestedSticker], context, { resolveSettings: async () => settings,
   describe: async () => { throw new Error("mock vision failure"); } });
 assert.equal(failed[0]?.content, "[表情包]");
 assert.deepEqual(failed[0]?.observedMedia?.[0]?.vision, { status: "failed", reason: "description_unavailable" });

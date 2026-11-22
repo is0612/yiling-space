@@ -3,7 +3,7 @@ import { classifyOnebotImage, sanitizeMediaSummary, type OnebotMediaSignal, type
 export type MediaVision =
   | { status: "ok" }
   | { status: "failed"; reason: "description_unavailable" }
-  | { status: "skipped"; reason: "not_processed" | "not_enabled" | "limit" | "no_url" | "unsupported_segment" };
+  | { status: "skipped"; reason: "not_processed" | "not_enabled" | "limit" | "no_url" | "unsupported_segment" | "sticker_policy" };
 
 export type ChannelMediaObservation = OnebotMediaSignal & MediaClassification & { vision: MediaVision };
 

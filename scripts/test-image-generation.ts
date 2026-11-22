@@ -68,6 +68,7 @@ const positive = [
   "生成一张海报",
   "整张画，越怪越好",
   "能不能画个柴犬",
+  "你能画一只猫吗？",
   // 2026-11-22：用户连发两句「再画一次试试」，一句都没算下单，她只顾着答「画好了」。
   // 「次 / 回 / 遍」是动作量词，和「张 / 只」不是一类，但语义一样强，必须单列一条判据。
   "再画一次试试",
@@ -90,7 +91,13 @@ const negative = [
   "这也太漫画了吧",
   "我们一起规划一下周末",
   "你会画图吗",
-  "你能画一只猫吗？",
+  "讨论画画",
+  "画画的尽头是猎奇",
+  "只是给她加个画画功能",
+  "她看不到自己画的图",
+  "我给你画个头像",
+  "他让她画猫",
+  "你画这个的提示词是啥",
   "这个画风我不喜欢",
   "别画了，聊点别的",
   "别再画了",
@@ -185,10 +192,10 @@ assert.equal(sanitizeImagePrompt("   \n  "), "");
 assert.ok(sanitizeImagePrompt("猫".repeat(5000)).length <= 1200, "长度有上限。");
 
 assert.equal(promptFromRequest("帮我画一只橘猫"), "一只橘猫", "只去掉请求的语法，保留宾语的量词。");
-assert.equal(promptFromRequest("画一张下雨的街道"), "一张下雨的街道");
+assert.equal(promptFromRequest("画一张下雨的街道"), "下雨的街道");
 assert.equal(promptFromRequest("画个猫"), "猫");
 assert.equal(promptFromRequest("再画个苹果"), "苹果", "「再」是催办词，不是画面内容。");
-assert.equal(promptFromRequest("来张图"), "来张图", "没有宾语时原样返回，不硬删成空。");
+assert.equal(promptFromRequest("来张图"), "", "没有画面宾语时不可用整句聊天兜底。");
 
 // ── 4. 配置解析：页面 > 环境变量 > 默认 ─────────────────
 // Key 走第二个参数（和语音同一个约定：由解密层读出来再传进来，

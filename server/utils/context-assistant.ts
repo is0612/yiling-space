@@ -1,3 +1,4 @@
+import { sanitizeGeneratedImageFacts, type GeneratedImageFacts } from "./image-facts";
 import { MODEL_PURPOSE_DEFAULTS } from "../../shared/utils/model-purpose-defaults";
 import { startAssistantRequest, type AssistantRequestObserver } from "./assistant-request-diagnostics";
 import { buildChatCompletionsEndpoint, validateChatApiBaseUrl } from "./chat-model-config";
@@ -23,7 +24,7 @@ export type ContextAnalysis = {
 /** Temporary continuity carried into the next analysis: summary + the original lines it rests on. */
 export type PreviousWorkingContext = {
   summary: string;
-  evidence: Array<{ id: string; role: "USER" | "ASSISTANT"; content: string; speaker?: string; isOwner?: boolean; occurredAt: string; mentions?: PublicMention[] }>;
+  evidence: Array<{ id: string; role: "USER" | "ASSISTANT"; content: string; speaker?: string; isOwner?: boolean; occurredAt: string; mentions?: PublicMention[]; generatedImage?: GeneratedImageFacts }>;
 };
 
 /**
@@ -129,8 +130,8 @@ const SYSTEM_RESERVE = 256;
 type PublicMention = { target: "self" | "other" | "all"; member?: string; speaker?: string; kind?: MessageMentionKind };
 type PublicMessage = ConversationSourcePolicy & {
   content: string; id?: string; member?: string; speaker?: string; occurredAt?: string;
-  isOwner?: boolean; role?: string; hadSticker?: boolean; hadVoice?: boolean; mentions?: PublicMention[];
-  quoted?: { id: string; member?: string; speaker?: string; content: string | null; available: boolean; isSelf?: boolean } & ConversationSourcePolicy;
+  isOwner?: boolean; role?: string; hadSticker?: boolean; hadVoice?: boolean; mentions?: PublicMention[]; generatedImage?: GeneratedImageFacts;
+  quoted?: { id: string; member?: string; speaker?: string; content: string | null; available: boolean; isSelf?: boolean; image?: GeneratedImageFacts } & ConversationSourcePolicy;
 };
 type PublicPayload = {
   characterName: string; currentTime: string; currentMessage?: string; contextClipped: boolean;
@@ -179,7 +180,7 @@ function message(value: unknown, _recent = false): PublicMessage {
     const id = text(quoted.id, 192);
     if (id) {
       const content = text(quoted.content, 600);
-      result.quoted = { id, content: content || null, available: Boolean(content), ...conversationSourcePolicy(quoted),
+      result.quoted = { id, ...(sanitizeGeneratedImageFacts(quoted.image) ? { image: sanitizeGeneratedImageFacts(quoted.image)! } : {}), content: content || null, available: Boolean(content), ...conversationSourcePolicy(quoted),
         ...(text(quoted.member, 120) ? { member: text(quoted.member, 120) } : {}),
         ...(text(quoted.speaker, 120) ? { speaker: text(quoted.speaker, 120) } : {}),
         ...(typeof quoted.isSelf === "boolean" ? { isSelf: quoted.isSelf } : {}),
@@ -191,6 +192,8 @@ function message(value: unknown, _recent = false): PublicMessage {
     if (typeof row.hadSticker === "boolean") result.hadSticker = row.hadSticker;
     if (typeof row.hadVoice === "boolean") result.hadVoice = row.hadVoice;
   }
+  const generatedImage = sanitizeGeneratedImageFacts(row.generatedImage);
+  if (generatedImage) result.generatedImage = generatedImage;
   return result;
 }
 function publicInput(input: ConversationReplyInput, maxInputTokens: number, previous?: PreviousWorkingContext): PublicPayload {
@@ -277,7 +280,7 @@ function publicInput(input: ConversationReplyInput, maxInputTokens: number, prev
     for (const source of previous.evidence.slice(-12).reverse()) {
       const row = message(source, true);
       if (!row.id || !row.content || (row.role !== "USER" && row.role !== "ASSISTANT")) continue;
-      const candidate: PreviousWorkingContext["evidence"][number] = { id: row.id, role: row.role, content: row.content.slice(0, 600), occurredAt: row.occurredAt ?? "", ...(row.speaker ? { speaker: row.speaker } : {}), ...(row.isOwner !== undefined ? { isOwner: row.isOwner } : {}), ...(row.mentions?.length ? { mentions: row.mentions } : {}) };
+      const candidate: PreviousWorkingContext["evidence"][number] = { id: row.id, role: row.role, content: row.content.slice(0, 600), occurredAt: row.occurredAt ?? "", ...(row.speaker ? { speaker: row.speaker } : {}), ...(row.isOwner !== undefined ? { isOwner: row.isOwner } : {}), ...(row.mentions?.length ? { mentions: row.mentions } : {}), ...(row.generatedImage ? { generatedImage: row.generatedImage } : {}) };
       saved.evidence.unshift(candidate);
       if (cost() > maxInputTokens) saved.evidence.shift();
     }

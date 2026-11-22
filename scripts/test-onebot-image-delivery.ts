@@ -52,6 +52,7 @@ try {
     assert.equal(results[1]?.image?.status, "sent");
     assert.equal(delivered?.image?.status, "sent");
     assert.ok(delivered?.image?.sentAt);
+    assert.equal(delivered?.image?.externalMessageId, "2", "asset receipt must be the image, never the preceding text");
     assert.equal(readSentImageFlag({ image: { path: image.relativePath }, replyDelivery: delivered }), true);
     for (const call of calls) {
       assert.equal(call.user_id, 10000001);
@@ -66,7 +67,8 @@ try {
   }
   calls.length = 0;
   const segmented = createReplySender(config, { messageType: "private", userId: "10000001", groupId: "", tempGroupId: "123456789" });
-  await segmented("first\nsecond", { image, segments: ["first", "second"], replyToMessageId: "103" });
+  const segmentedDelivery = await segmented("first\nsecond", { image, segments: ["first", "second"], replyToMessageId: "103" });
+  assert.equal(segmentedDelivery?.image?.externalMessageId, "3", "segmented text ids must not replace the image id");
   assert.equal(calls.length, 3);
   assert(Array.isArray(calls[0]!.message));
   assert.deepEqual(calls[0]!.message.map(segment => segment.type), ["reply", "text"]);
