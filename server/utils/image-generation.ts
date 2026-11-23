@@ -54,6 +54,14 @@ const DOWNLOAD_TIMEOUT_MS = 15_000;
  * 给 90 秒是因为「等到一半放弃」会把已经计费的那张图直接扔掉。
  */
 const GENERATE_TIMEOUT_MS = 90_000;
+
+/**
+ * 试过、两种参考图形状都不认的地址。
+ *
+ * 只记路由级 404/405 —— 超时、审核、参数错下次还该试，不能因为一次抖动就把人钉死。
+ * 进程内有效，重启就清空：多花一两次探测请求，好过因为一条陈旧判断挡住一个能用的服务商。
+ */
+const noReferenceRoute = new Set<string>();
 const MODEL_MAX_CHARS = 120;
 
 /** 发到 QQ 前缩到的最长边。1280 在手机上清晰、base64 也只有几百 KB。 */
@@ -252,6 +260,16 @@ export function buildImageEditEndpoint(baseUrl: string): URL {
 }
 
 /**
+ * MiniMax 原生图生图：和文生图同一个接口，靠 `subject_reference` 带参考图。
+ *
+ * 注意路径是单数 `/image_generation`，跟 OpenAI 的 `/images/generations` 不是一回事。
+ */
+export function buildMinimaxImageEndpoint(baseUrl: string): URL {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return new URL(`${normalized}/image_generation`);
+}
+
+/**
  * 401/403 里「不是 Key 的事」那一类，单独认出来。
  *
  * 2026-11-23 实测：一台中转对画图请求回 403
@@ -394,6 +412,19 @@ export function withoutReferenceNotes(prompt: string): string {
 }
 
 /**
+ * 只留下前 N 张参考图的说明。
+ *
+ * 提示词是按最多 4 张拼的，而有些形状（MiniMax 的 subject_reference）一次只吃一张；
+ * 不裁掉后面的，模型会以为还有几张图是它没收到、但应该照着画的。
+ */
+export function limitReferenceNotes(prompt: string, keep: number): string {
+  return prompt.replace(/【参考图】([^—]*)——/u, (_match, list: string) => {
+    const items = String(list).split("、").map(item => item.trim()).filter(Boolean).slice(0, keep);
+    return items.length ? `【参考图】${items.join("、")}——` : "";
+  });
+}
+
+/**
  * 模型没给画面描述时的兜底：拿这句原话去画。
  *
  * 只去掉「画一张」这类指令词，保留宾语。这样「画只橘猫趴在窗台上」不会变成
@@ -437,7 +468,20 @@ export function parseImageResponse(payload: unknown): { url?: string; b64?: stri
     const b64 = typeof entry.b64_json === "string" ? entry.b64_json.trim() : "";
     if (b64) return { b64 };
   }
-  return { error: firstError || "服务商没有返回图片" };
+  if (firstError) return { error: firstError };
+
+  /**
+   * MiniMax 原生形状：`data` 是个对象而不是数组，图片在
+   * `data.image_base64` / `data.image_urls` 里。
+   */
+  const native = asRecord(record.data);
+  for (const item of Array.isArray(native.image_base64) ? native.image_base64 : []) {
+    if (typeof item === "string" && item.trim()) return { b64: item.trim() };
+  }
+  for (const item of Array.isArray(native.image_urls) ? native.image_urls : []) {
+    if (typeof item === "string" && item.trim()) return { url: item.trim() };
+  }
+  return { error: "服务商没有返回图片" };
 }
 
 export type AsyncImageTask = { taskId: string; statusCode: number | null };
@@ -678,6 +722,66 @@ export async function generateImage(input: {
   };
 
   /**
+   * MiniMax 原生图生图：同一个 `image_generation` 接口，靠 `subject_reference` 带图。
+   *
+   * 官方文档写明这份参考「一张人脸」最好用，也只接受一张；我们这边把标准形象排在
+   * 第一位，取第一张就够。参数名也完全不同（`aspect_ratio` / `response_format: base64`），
+   * 所以它和 edits 是两条独立的路，不能互相拼。
+   */
+  const requestMinimaxReference = async (): Promise<
+    { ok: true; payload: unknown } | { ok: false; reason: string; status?: number }
+  > => {
+    const references = input.references ?? [];
+    if (!references.length) return { ok: false, reason: "没有参考图" };
+    const reference = references[0]!;
+    let endpoint: URL;
+    try {
+      endpoint = buildMinimaxImageEndpoint(input.settings.apiBaseUrl);
+    } catch {
+      return { ok: false, reason: "画图地址无效" };
+    }
+    const aspect = ({ "1024x1024": "1:1", "864x1152": "3:4", "1152x864": "4:3" } as Record<string, string>)[input.settings.size] ?? "1:1";
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          authorization: "Bearer " + input.settings.apiKey,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: input.settings.model,
+          // 这份接口只吃一张，说明段也只提这一张，别让模型惦记没给它的图。
+          prompt: limitReferenceNotes(prompt, 1),
+          aspect_ratio: aspect,
+          n: count,
+          response_format: "base64",
+          subject_reference: [{
+            type: "character",
+            image_file: `data:${reference.mime};base64,${reference.buffer.toString("base64")}`,
+          }],
+        }),
+        signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        const detail = await safeText(response);
+        return {
+          ok: false,
+          status: response.status,
+          reason: `参考图生成返回 HTTP ${response.status}${detail ? `：${detail}` : ""}`,
+        };
+      }
+      return { ok: true, payload: await response.json() };
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "Error";
+      return {
+        ok: false,
+        reason: name === "TimeoutError" || name === "AbortError" ? "参考图生成超时" : "参考图接口连不上",
+      };
+    }
+  };
+
+  /**
    * 优先要 inline base64，其次才要链接 —— 这是 2026-11-22 线上踩出来的。
    *
    * MiniMax 的 `url` 指向乌兰察布的一台 OSS（`hailuo-image-*.oss-cn-wulanchabu`）。
@@ -694,20 +798,49 @@ export async function generateImage(input: {
    * 也就是说：b64 不只是「少一次下载」，在部分中转上它还是**唯一能拿到图**的方式。
    * 所以这条永远是首选，别为了省 300KB 改成 url 优先。
    */
-  let result: { ok: true; payload: unknown } | { ok: false; reason: string; status?: number };
-  // 只有 openai 兼容的服务商有 edits 接口；MiniMax 那条直接跳过，连一次失败请求都不花。
-  const editWanted = (input.references?.length ?? 0) > 0 && input.settings.provider === "openai";
-  const editOutcome = editWanted ? await requestEdit() : null;
-  if (editOutcome?.ok) {
-    result = editOutcome;
-    usedReferences = true;
-  } else {
-    if (editOutcome) {
-      // 回退不是异常：只比原路径多花一次失败请求，画出来的图和以前一模一样。
+  /**
+   * 参考图不按服务商名字判断，按「这个地址究竟认哪种形状」判断。
+   *
+   * 两种形状轮流试：先 OpenAI 的 edits（multipart），再 MiniMax 的
+   * image_generation + subject_reference（JSON）。哪条通就用哪条 ——
+   * 中转、官方、自建，谁支持谁上，不需要用户先选对服务商。
+   *
+   * 只有 404/405 才算「这条路不存在」、值得换下一条。其它失败（参数被拒、审核、
+   * 超时）说明路由是通的，换形状也没用，直接落到纯文字。
+   */
+  const wantsReferences = (input.references?.length ?? 0) > 0;
+  let result: { ok: true; payload: unknown } | { ok: false; reason: string; status?: number } | null = null;
+  let referenceFailure = "";
+  if (wantsReferences && !noReferenceRoute.has(input.settings.apiBaseUrl)) {
+    const shapes = [
+      { name: "edits", run: requestEdit },
+      { name: "minimax", run: requestMinimaxReference },
+    ];
+    let routeMissing = 0;
+    for (const shape of shapes) {
+      const outcome = await shape.run();
+      if (outcome.ok) {
+        result = outcome;
+        usedReferences = true;
+        break;
+      }
+      referenceFailure = outcome.reason;
+      if (outcome.status === 404 || outcome.status === 405) {
+        routeMissing += 1;
+        continue;
+      }
+      break;
+    }
+    if (routeMissing === shapes.length) noReferenceRoute.add(input.settings.apiBaseUrl);
+  }
+
+  if (!result) {
+    if (wantsReferences) {
+      // 回退不是异常：只比原路径多花一两次失败请求，画出来的图和以前一模一样。
       console.warn("[image] 参考图生成不可用，退回纯文字", {
         characterId: input.characterId,
         references: input.references?.length ?? 0,
-        reason: editOutcome.reason,
+        reason: referenceFailure || "这家没有参考图接口",
       });
       // 图没发出去，提示词里那段「图1 ⋯」就成了空指代，得一起去掉。
       prompt = withoutReferenceNotes(prompt);

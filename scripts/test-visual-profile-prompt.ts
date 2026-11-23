@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { withoutReferenceNotes } from "../server/utils/image-generation";
+import { limitReferenceNotes, withoutReferenceNotes } from "../server/utils/image-generation";
 import { canAttachReferences, composeReferenceSection, composePublishedVisualPrompt } from "../server/utils/visual-profile-prompt";
 import { isVisualAssetPathSafe } from "../server/utils/visual-profile-references";
 
@@ -102,5 +102,14 @@ assert(stripped.includes("【画面】"));
 assert(stripped.length < withRefs.length);
 // 本来就没有这一段时原样返回
 assert.equal(withoutReferenceNotes("【画面】一只鲸鱼跃出海面"), "【画面】一只鲸鱼跃出海面");
+
+// 14. 只吃一张图的形状：说明段也收成一张，别让模型惦记没给它的图
+const limited = limitReferenceNotes(withRefs, 1);
+assert(limited.includes("【参考图】图1 标准形象——"));
+assert(!limited.includes("图2"));
+assert(limited.includes("【画面】"));
+assert(limited.includes("【避免】"));
+// 只有一张时不动它
+assert.equal(limitReferenceNotes(limited, 4), limited);
 
 console.log("visual-profile-prompt: ok");
