@@ -351,6 +351,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
           <el-card shadow="never" class="visual-profile-card">
             <h3>三视图与参考素材</h3>
             <p>正面、侧面、背面、表情和服装素材会按用途归档。图片会压缩后保存在当前角色的数据目录中，只有该角色的拥有者可以预览和删除。</p>
+            <p class="form-hint">说明：这些图片当前用于存档和人工查看；生图模型只读取已发布的文字提示词，不会把图片像素作为参考图输入。</p>
             <div class="upload-row">
               <el-select v-model="uploadKind" aria-label="参考图片用途" style="width: 150px">
                 <el-option label="标准形象" value="STANDARD" />
