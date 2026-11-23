@@ -310,6 +310,7 @@ model Character {
   expressionHabits CharacterExpressionHabit[]
   goals CharacterGoal[]
   growthImportIdentities CharacterGrowthImportIdentity[]
+  visualProfile       CharacterVisualProfile?
 
   @@index([ownerId, status])
   @@index([originCharacterId])
@@ -2345,4 +2346,92 @@ model RoleplayChannelReceipt {
   @@unique([bindingId, externalMessageId])
   @@index([ownerId, createdAt])
   @@map("roleplay_channel_receipts")
+}
+
+
+/// Role-owned visual identity. This is intentionally separate from memory and knowledge.
+enum CharacterVisualAssetKind {
+  STANDARD
+  FRONT_VIEW
+  SIDE_VIEW
+  BACK_VIEW
+  EXPRESSION
+  OUTFIT
+  ACCESSORY
+  SUPPLEMENT
+}
+
+enum CharacterVisualVersionStatus {
+  DRAFT
+  PUBLISHED
+}
+
+/// One profile per character; core identity is kept separate from outfits and references.
+model CharacterVisualProfile {
+  id                       String                       @id @default(uuid()) @db.Uuid
+  characterId              String                       @unique @db.Uuid
+  coreAppearance           String                       @default("") @db.Text
+  corePrompt               String                       @default("") @db.Text
+  negativePrompt           String                       @default("") @db.Text
+  currentPublishedRevision Int                          @default(0)
+  createdAt                DateTime                     @default(now()) @db.Timestamptz(6)
+  updatedAt                DateTime                     @updatedAt @db.Timestamptz(6)
+  character                Character                    @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  assets                   CharacterVisualAsset[]
+  outfits                  CharacterVisualOutfit[]
+  versions                 CharacterVisualVersion[]
+
+  @@map("character_visual_profiles")
+}
+
+/// Uploaded image metadata only. Actual bytes stay in the character-owned data directory.
+model CharacterVisualAsset {
+  id          String                    @id @default(uuid()) @db.Uuid
+  profileId   String                    @db.Uuid
+  kind        CharacterVisualAssetKind
+  label       String                    @db.VarChar(120)
+  relativePath String                   @db.VarChar(500)
+  mime        String                    @db.VarChar(80)
+  sizeBytes   Int
+  width       Int?
+  height      Int?
+  sortOrder   Int                       @default(0)
+  createdAt   DateTime                  @default(now()) @db.Timestamptz(6)
+  profile     CharacterVisualProfile    @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, kind, sortOrder])
+  @@map("character_visual_assets")
+}
+
+/// Outfit prompts are composable and never mutate the core appearance.
+model CharacterVisualOutfit {
+  id        String                 @id @default(uuid()) @db.Uuid
+  profileId String                 @db.Uuid
+  name      String                 @db.VarChar(100)
+  prompt    String                 @db.Text
+  sortOrder Int                    @default(0)
+  createdAt DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime               @updatedAt @db.Timestamptz(6)
+  profile   CharacterVisualProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, name])
+  @@index([profileId, sortOrder])
+  @@map("character_visual_outfits")
+}
+
+/// Immutable snapshots. Saving creates a draft; only explicit publish advances the official revision.
+model CharacterVisualVersion {
+  id          String                        @id @default(uuid()) @db.Uuid
+  profileId   String                        @db.Uuid
+  revision    Int
+  status      CharacterVisualVersionStatus  @default(DRAFT)
+  snapshot    Json                          @db.JsonB
+  note        String                        @default("") @db.VarChar(300)
+  createdAt   DateTime                      @default(now()) @db.Timestamptz(6)
+  publishedAt DateTime?                     @db.Timestamptz(6)
+  profile     CharacterVisualProfile        @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, revision])
+  @@index([profileId, status, revision])
+  @@map("character_visual_versions")
 }
