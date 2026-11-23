@@ -4086,7 +4086,7 @@ async function runChannelTurn(input: {
         });
         if (visualProfile && visualProfile.currentPublishedRevision > 0) {
           const published = await prisma.characterVisualVersion.findFirst({
-            where: { profile: { characterId: input.characterId }, revision: visualProfile.currentPublishedRevision, status: "PUBLISHED" },
+            where: { profile: { is: { characterId: input.characterId } }, revision: visualProfile.currentPublishedRevision, status: "PUBLISHED" },
             select: { snapshot: true },
           });
           const snapshot = published?.snapshot && typeof published.snapshot === "object" && !Array.isArray(published.snapshot)
