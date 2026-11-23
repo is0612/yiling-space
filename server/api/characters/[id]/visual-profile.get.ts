@@ -26,7 +26,6 @@ export default defineEventHandler(async (event) => {
     prisma.characterVisualVersion.findMany({
       where: { profileId: profile.id },
       orderBy: { revision: "desc" },
-      take: 50,
     }),
     profile.currentPublishedRevision > 0
       ? prisma.characterVisualVersion.findFirst({
