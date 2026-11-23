@@ -59,9 +59,9 @@ export default defineEventHandler(async (event) => {
     select: { id: true },
   });
   const fileName = `${randomUUID()}.jpg`;
-  const directory = dataPath("images", characterId);
+  const directory = dataPath("visual-profile", characterId);
   const absolutePath = path.join(directory, fileName);
-  const relativePath = `images/${characterId}/${fileName}`;
+  const relativePath = `visual-profile/${characterId}/${fileName}`;
   await mkdir(directory, { recursive: true });
   await writeFile(absolutePath, normalized.data, { flag: "wx", mode: 0o600 });
   try {
