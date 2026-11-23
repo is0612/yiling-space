@@ -1949,10 +1949,6 @@ watch(id, () => void loadCharacter());
                   aria-label="画图 API 地址"
                   placeholder="https://api.minimaxi.com/v1"
                 />
-                <p class="field-help">
-                  这里要填<b>作图接口</b>的地址。不少服务商的作图地址和聊天地址不是同一个
-                  （甚至不同域名），从「对话模型」那栏直接抄过来会 404 或 401。
-                </p>
               </div>
 
               <div class="field">
