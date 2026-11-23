@@ -43,6 +43,10 @@ const coreAppearance = ref("");
 const corePrompt = ref("");
 const negativePrompt = ref("");
 const versionNote = ref("");
+const uploadFile = ref<File | null>(null);
+const uploadLabel = ref("");
+const uploadKind = ref("STANDARD");
+const uploading = ref(false);
 const loading = ref(false);
 const saving = ref(false);
 const publishing = ref(false);
@@ -78,6 +82,51 @@ async function loadProfile() {
     if (current()) loadError.value = "读取形象档案失败，请检查网络后重试。";
   } finally {
     if (current()) loading.value = false;
+  }
+}
+
+const assetUrl = (assetId: string) =>
+  `/api/characters/${encodeURIComponent(characterId.value)}/visual-profile/assets/${encodeURIComponent(assetId)}`;
+
+function onReferenceFileChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  uploadFile.value = file;
+  if (file && !uploadLabel.value.trim()) uploadLabel.value = file.name.replace(/\\.[^.]+$/u, "").slice(0, 120);
+}
+
+async function uploadReference() {
+  const target = characterId.value;
+  if (!target || !uploadFile.value || !uploadLabel.value.trim() || uploading.value) return;
+  uploading.value = true;
+  try {
+    const form = new FormData();
+    form.append("file", uploadFile.value, uploadFile.value.name);
+    form.append("kind", uploadKind.value);
+    form.append("label", uploadLabel.value.trim().slice(0, 120));
+    await api({ url: `/characters/${encodeURIComponent(target)}/visual-profile/assets`, method: "post", data: form });
+    if (characterId.value !== target) return;
+    uploadFile.value = null;
+    uploadLabel.value = "";
+    ElMessage.success("参考图片已保存。");
+    await loadProfile();
+  } catch (error) {
+    ElMessage.error((error as { statusMessage?: string })?.statusMessage || "参考图片上传失败。");
+  } finally {
+    uploading.value = false;
+  }
+}
+
+async function deleteReference(assetId: string) {
+  const target = characterId.value;
+  if (!target) return;
+  try {
+    await api({ url: `/characters/${encodeURIComponent(target)}/visual-profile/assets/${encodeURIComponent(assetId)}`, method: "delete" });
+    if (characterId.value !== target) return;
+    ElMessage.success("参考图片已删除。");
+    await loadProfile();
+  } catch {
+    ElMessage.error("删除失败，参考图片仍保留在档案中。");
   }
 }
 
@@ -199,10 +248,29 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
           <el-card shadow="never" class="visual-profile-card">
             <h3>三视图与参考素材</h3>
             <p>正面、侧面、背面、表情和服装素材会按用途归档。当前已建立资料结构，图片上传与预览还在下一阶段。</p>
+            <div class="upload-row">
+              <el-select v-model="uploadKind" aria-label="参考图片用途" style="width: 150px">
+                <el-option label="标准形象" value="STANDARD" />
+                <el-option label="正面三视图" value="FRONT_VIEW" />
+                <el-option label="侧面三视图" value="SIDE_VIEW" />
+                <el-option label="背面三视图" value="BACK_VIEW" />
+                <el-option label="表情参考" value="EXPRESSION" />
+                <el-option label="服装参考" value="OUTFIT" />
+                <el-option label="配饰参考" value="ACCESSORY" />
+                <el-option label="补充素材" value="SUPPLEMENT" />
+              </el-select>
+              <input type="file" accept="image/png,image/jpeg,image/webp" @change="onReferenceFileChange">
+            </div>
+            <el-input v-model="uploadLabel" maxlength="120" placeholder="给这张参考图起个名字" />
+            <el-button type="primary" :disabled="!uploadFile || !uploadLabel.trim()" :loading="uploading" @click="uploadReference">上传参考图片</el-button>
             <el-empty v-if="!profile?.assets.length" description="还没有参考图片" :image-size="64" />
-            <ul v-else class="asset-list">
-              <li v-for="asset in profile.assets" :key="asset.id">{{ asset.label }} · {{ asset.kind }}</li>
-            </ul>
+            <div v-else class="reference-grid">
+              <article v-for="asset in profile.assets" :key="asset.id" class="reference-item">
+                <img :src="assetUrl(asset.id)" :alt="asset.label">
+                <div class="reference-meta"><strong>{{ asset.label }}</strong><span>{{ asset.kind }}</span></div>
+                <el-button link type="danger" @click="deleteReference(asset.id)">删除</el-button>
+              </article>
+            </div>
           </el-card>
           <el-card shadow="never" class="visual-profile-card">
             <h3>服装造型</h3>
@@ -251,5 +319,12 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 .visual-profile-card h3 { margin: 0 0 10px; font-size: 16px; }
 .visual-profile-card p { color: var(--el-text-color-secondary); line-height: 1.7; }
 .asset-list { padding-left: 20px; color: var(--el-text-color-secondary); line-height: 1.9; }
+.upload-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
+.reference-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin-top: 14px; }
+.reference-item { min-width: 0; padding: 8px; border: 1px solid var(--el-border-color); border-radius: 8px; }
+.reference-item img { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: var(--el-fill-color-lighter); border-radius: 5px; }
+.reference-meta { display: grid; gap: 3px; margin: 7px 0; }
+.reference-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.reference-meta span { color: var(--el-text-color-secondary); font-size: 11px; }
 @media (max-width: 720px) { .visual-profile-grid { grid-template-columns: 1fr; } .profile-status { align-items: flex-start; } .status-version { text-align: right; } }
 </style>
