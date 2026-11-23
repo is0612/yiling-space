@@ -2409,6 +2409,7 @@ model CharacterVisualOutfit {
   profileId String                 @db.Uuid
   name      String                 @db.VarChar(100)
   prompt    String                 @db.Text
+  isDefault Boolean                @default(false)
   sortOrder Int                    @default(0)
   createdAt DateTime               @default(now()) @db.Timestamptz(6)
   updatedAt DateTime               @updatedAt @db.Timestamptz(6)
