@@ -14,6 +14,9 @@ export default defineNuxtConfig({
      */
     esbuild: { options: { target: "node20" } },
     externals: {
+      // Keep the local IPC implementation inside Nitro: dev externalization can
+      // rewrite this relative CJS import outside the checkout on Windows.
+      inline: [/desktop-auth-ipc\.cjs$/],
       /**
        * silk-wasm 的 wasm 是运行时 `readFileSync` 读的，静态分析看不见 ——
        * 不显式带上时，生产构建只复制了 index.cjs，语音一调用就 ENOENT（dev 下正常，很难察觉）。

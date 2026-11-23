@@ -9,7 +9,10 @@ process.stderr.on("error", () => {});
 const ROOT = path.resolve(__dirname, "..");
 const { windowsProcessBirth } = require(path.join(ROOT, "scripts", "desktop-parent-watch.cjs"));
 const { createDesktopAuthPeer } = require(path.join(ROOT, "scripts", "desktop-auth-ipc.cjs"));
-const passthrough = process.argv.slice(2).filter(arg => arg !== "--no-sandbox");
+const { resolveDesktopWebMode } = require(path.join(ROOT, "scripts", "desktop-web-runtime.cjs"));
+const production = process.argv.includes("--production");
+const dev = process.argv.includes("--dev");
+const passthrough = process.argv.slice(2).filter(arg => !["--no-sandbox", "--production", "--dev"].includes(arg));
 const forceNoSandbox = process.argv.includes("--no-sandbox");
 let env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
 for (const key of ["YILING_DESKTOP_PARENT_PID", "YILING_DESKTOP_PARENT_BIRTH", "YILING_DESKTOP_BACKEND_PID", "YILING_DESKTOP_BACKEND_BIRTH"]) delete env[key];
@@ -59,7 +62,9 @@ function stopSupervisor(child) {
 }
 function startSupervisor() {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(ROOT, "scripts", "desktop-supervisor.mjs"), "--port", "0", "--parent-stdin"], {
+    const mode = resolveDesktopWebMode({ packaged: prepared?.packaged, production, dev });
+    console.log(`[desktop] web mode: ${mode}${mode === "development" ? " (Nuxt dev, hot reload enabled)" : ""}`);
+    const child = spawn(process.execPath, [path.join(ROOT, "scripts", "desktop-supervisor.mjs"), "--port", "0", "--parent-stdin", ...(mode === "development" ? ["--dev"] : [])], {
       cwd: ROOT, env: { ...env, YILING_DATA_DIR: dataDir,
         ...(prepared?.packaged && process.platform === "win32" ? { YILING_DESKTOP_PARENT_PID: String(process.pid), YILING_DESKTOP_PARENT_BIRTH: windowsProcessBirth(process.pid) } : {}) },
       stdio: prepared?.packaged ? ["pipe", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"], windowsHide: true, detached: Boolean(prepared?.packaged && process.platform === "win32"),

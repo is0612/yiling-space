@@ -27,6 +27,8 @@ call yarn desktop:install
 if errorlevel 1 goto :installfail
 
 :start
+echo Starting source desktop with Nuxt dev and hot reload.
+echo No production build is required. Close other development instances first.
 call yarn desktop
 set "EXITCODE=%ERRORLEVEL%"
 if not "%EXITCODE%"=="0" echo [ERROR] Desktop exited with code %EXITCODE%.

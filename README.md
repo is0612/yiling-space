@@ -85,6 +85,8 @@ yarn dev
 
 Windows 用户也可以双击仓库根目录的 **`启动忆灵空间.bat`**，按提示完成自检、启动数据库和开发服务。
 
+在桌面窗口中开发可双击 **`启动忆灵空间-桌面版.bat`** 或运行 `yarn desktop`：源码入口默认启动 Nuxt dev，页面和服务端支持 Nuxt 热更新，拉取源码后不必先 `yarn build`。首次仍需 `yarn install`，Electron 缺失时批处理会安装桌面运行时。这个入口自己管理 Web、Scheduler、Worker 和 QQ 栈；先退出其它开发/生产实例，避免同库重复消费。开发首屏编译可能较慢，日志见 `.data/logs/desktop-supervisor.log`。Worker、QQ 适配器和 Electron 主进程代码改动仍需退出重开。需要验证源码的生产构建时执行 `yarn build` 后 `yarn desktop:production`；分发安装版保持生产启动和原本机身份生命周期，不启用开发服务。
+
 已有账号和数据，想在这台电脑日常使用时，先停止开发版及其后台进程，再双击源码根目录的 **`启动忆灵空间-使用版.bat`**。它用生产模式运行，默认网页端口为 **8801**，沿用原 `.env`、数据库、账号密码及 `.data` 中的密钥和素材；首次缺少构建时自动构建，不需要另装 Docker 使用版镜像。对应命令为：
 
 ```bash

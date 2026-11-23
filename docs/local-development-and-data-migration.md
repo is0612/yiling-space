@@ -78,6 +78,18 @@
 - **`LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` 是可选的兜底配置**，供「没有单独配置模型」的角色使用；正常应该在页面的「模型设置 → 模型参数」里按角色填。这两处都不写也能跑起来，只是 AI 不会回话。
 - **周期任务不在 Web 进程里**：`yarn scheduler:run` 负责排期入队，`yarn worker:run` 负责消费，调试时用各自的 `watch` 版本。命令与间隔变量见 `docs/deployment.md` §9。
 
+### 桌面窗口开发
+
+源码仓库双击 `启动忆灵空间-桌面版.bat` 或运行 `yarn desktop`，默认由原桌面 supervisor 启动 Nuxt dev（仅监听回环地址、随机端口），不读取旧 `.output`，无需每次更新源码后构建。首次切换前完全退出旧桌面窗口；已有窗口会被单实例逻辑激活，不会在后台替换其 Web 模式。
+
+桌面 supervisor 继续负责数据库检查/迁移前备份、Scheduler、Worker 和 QQ 栈。不要同时运行另一套 `yarn dev` 启动器或本地生产实例消费同一个数据库。Nuxt 页面与服务端由开发服务更新；Electron 主进程、Worker 和 QQ 适配器的源码修改仍需退出重开。日志在 `.data/logs/desktop-supervisor.log`，首次编译需要等待。
+
+如需验证生产行为，先 `yarn build`，再执行 `yarn desktop:production`。分发安装版始终启动生产构建，保留私有身份通道与退出收尾，拒绝 `--dev`；源码入口不启用安装版免登录。
+
+回归入口：`yarn test:desktop-web-runtime` 验证模式选择和身份隔离；`yarn desktop:dev:smoke` 用独立最小 Nuxt fixture 与真实 Electron 验证模板 HMR（保持同一 document）和退出后端口关闭，不访问业务数据库或启动消费者。它验证实际 Nuxt/Vite 与桌面 CSP，不替代业务页面验收；运行机若遇 Chromium sandbox 初始化失败，可显式使用 `node scripts/desktop-dev-smoke.mjs --no-sandbox` 做兼容性验证。原 `desktop:source:smoke` 仍是明确的 Mock 后端，负责源码 launcher 开窗/退出接线。另用 `yarn desktop:project-dev:smoke` 验证真实项目的 Nuxt 配置、全局插件和 `/api/health`；它只请求纯健康接口，使用不可连接的合成数据库，不执行迁移、消费者或 QQ/模型调用。该测试与最小 fixture 都会写开发构建目录，不能与其它 Nuxt dev/build 并行运行。
+
+若 Nuxt 已显示 Ready 但桌面仍等待，查看 `web-health` 的 HTTP 状态与 `child-output` 的服务端错误；Ready 只表示编译完成，不保证全局插件成功加载。健康检查不会记录响应正文中的凭据或堆栈。已知本地 IPC 模块错误外部化导致的 500 与修复见 `docs/engineering-lessons.md` §7.4。
+
 ## 2.1 本地全量校验
 
 日常开发完成后，一条命令跑完主要静态检查、自动化测试和生产构建：

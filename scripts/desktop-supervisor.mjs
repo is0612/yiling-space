@@ -35,6 +35,8 @@ import { createDesktopPgBackup } from "./desktop-pg-backup.mjs";
 import { applyDesktopPgMigrations } from "./desktop-pg-migrations.mjs";
 import parentWatchApi from "./desktop-parent-watch.cjs";
 import privateAuth from "./desktop-auth-ipc.cjs";
+import webRuntime from "./desktop-web-runtime.cjs";
+import { waitDesktopWeb, desktopWebFailure } from "./desktop-web-readiness.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHILD_PARENT_GUARD = new URL("./memory-worker-parent.mjs", import.meta.url).href;
@@ -65,7 +67,7 @@ const DATA_DIR = path.resolve(process.env.YILING_DATA_DIR?.trim() || path.join(R
 const LOG_DIR = path.join(DATA_DIR, "logs");
 const LOG_FILE = path.join(LOG_DIR, "desktop-supervisor.log");
 const DB_WAIT_MS = Number(process.env.YILING_DB_WAIT_MS || 120_000);
-const WEB_WAIT_MS = Number(process.env.YILING_WEB_WAIT_MS || 60_000);
+const WEB_WAIT_MS = Number(process.env.YILING_WEB_WAIT_MS || (args.has("--dev") ? 180_000 : 60_000));
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 let stdoutAvailable = true;
@@ -353,21 +355,6 @@ async function pickPort() {
   });
 }
 
-async function waitHttp(url, totalMs) {
-  const deadline = Date.now() + totalMs;
-  while (Date.now() < deadline) {
-    if (shutdownRequested) return false;
-    try {
-      const response = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(1500) });
-      if (response.ok) return true;
-    } catch {
-      // 还没起来
-    }
-    await sleep(500);
-  }
-  return false;
-}
-
 function pipeLines(child, label) {
   for (const stream of [child.stdout, child.stderr]) {
     if (!stream) continue;
@@ -599,6 +586,7 @@ async function main() {
     if (!await launcherWatch.ready) throw new Error("desktop_parent_watch_not_attached");
     log("launcher-watch-attached", { watchedPid: Number(process.env.YILING_DESKTOP_PARENT_PID), parentPid: process.ppid });
   }
+  if (args.has("--dev") && process.env.YILING_DESKTOP_PACKAGED === "1") throw new Error("desktop_installed_dev_refused");
   log("starting", { root: ROOT, dataDir: DATA_DIR });
   checkStartupCancellation();
   const mode = resolveDesktopDatabaseMode(DATA_DIR);
@@ -628,21 +616,12 @@ async function main() {
 
   const port = await pickPort();
   const url = `http://127.0.0.1:${port}`;
-  const nitro = track(spawn(process.execPath, ["--import", CHILD_PARENT_GUARD, path.join(ROOT, "scripts", "local-production-entry.mjs")], {
+  const web = webRuntime.desktopWebPlan({ root: ROOT, port, dataDir: DATA_DIR,
+    env: { ...databaseEnvironment, ...(databaseRuntime ? { PGAPPNAME: "yiling-desktop-web" } : {}) },
+    mode: args.has("--dev") ? "development" : "production", identityControl: IDENTITY_CONTROL });
+  const nitro = track(spawn(process.execPath, ["--import", CHILD_PARENT_GUARD, ...web.args], {
     cwd: ROOT,
-    env: {
-      ...databaseEnvironment,
-      ...(databaseRuntime ? { PGAPPNAME: "yiling-desktop-web" } : {}),
-      NODE_ENV: "production",
-      NITRO_HOST: "127.0.0.1",
-      PORT: String(port),
-      YILING_DATA_DIR: DATA_DIR,
-      YILING_DESKTOP_IDENTITY_CONTROL: IDENTITY_CONTROL ? "1" : "0",
-      // 桌面版用独立 Cookie 名，避免和开发版（同一 Cookie 域、不同端口）互相顶登录。
-      YILING_SESSION_COOKIE: process.env.YILING_SESSION_COOKIE || "yiling_session_desktop",
-      // QQ 栈由这个 supervisor 起，避免 Nitro 插件再起一套。
-      YILING_ONEBOT_AUTOSTART: "0",
-    },
+    env: web.env,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
     windowsHide: true,
   }), "nitro");
@@ -655,8 +634,9 @@ async function main() {
     if (!startupInProgress) void shutdown("web-exited", 1);
   });
 
-  const ready = await waitHttp(url, WEB_WAIT_MS);
-  if (!ready) throw new Error(`网页服务没有在 ${Math.round(WEB_WAIT_MS / 1000)} 秒内就绪。`);
+  const ready = await waitDesktopWeb(url, { totalMs: WEB_WAIT_MS, cancelled: () => shutdownRequested,
+    onProbe: result => log("web-health", { status: result.status, reason: result.reason }) });
+  if (!ready.ready) throw new Error(desktopWebFailure(ready, WEB_WAIT_MS));
   log("web-ready", { url });
   if (IDENTITY_CONTROL) {
     identityDownstream = privateAuth.createDesktopAuthPeer(nitro, { role: "parent" });
