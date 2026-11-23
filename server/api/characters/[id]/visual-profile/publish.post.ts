@@ -24,6 +24,10 @@ export default defineEventHandler(async (event) => {
     });
     if (!version) throw createError({ statusCode: 404, statusMessage: "找不到可发布的草稿版本。" });
     const publishedAt = new Date();
+    await tx.characterVisualVersion.updateMany({
+      where: { profileId: profile.id, status: "DRAFT", revision: { not: revision } },
+      data: { status: "ARCHIVED" },
+    });
     const updatedVersion = await tx.characterVisualVersion.update({
       where: { id: version.id },
       data: { status: "PUBLISHED", publishedAt },
