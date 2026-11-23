@@ -254,6 +254,7 @@ async function restoreVersion(versionId: string) {
       data: {},
     });
     if (characterId.value !== target) return;
+    resetOutfitForm();
     await loadProfile();
     draftRevision.value = result.draftVersion.revision;
     ElMessage.success(`历史版本已恢复为新草稿 v${result.draftVersion.revision}，不会覆盖当前正式版本。`);
