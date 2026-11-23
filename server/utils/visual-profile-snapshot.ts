@@ -11,6 +11,8 @@ export type SnapshotAsset = {
   label: string;
   relativePath: string;
   sortOrder: number;
+  /** 上传时间用于同一用途的素材替换：最新上传者优先。旧快照可缺省。 */
+  createdAt?: string;
 };
 
 /** 写快照和查快照必须用同一套字段，否则两边形状会漂。 */
@@ -20,10 +22,11 @@ export const snapshotAssetSelect = {
   label: true,
   relativePath: true,
   sortOrder: true,
+  createdAt: true,
 } as const;
 
 export function toSnapshotAssets(
-  rows: ReadonlyArray<{ id: string; kind: string; label: string; relativePath: string; sortOrder: number }>,
+  rows: ReadonlyArray<{ id: string; kind: string; label: string; relativePath: string; sortOrder: number; createdAt: Date }>,
 ): SnapshotAsset[] {
   return rows.map(row => ({
     id: row.id,
@@ -31,5 +34,6 @@ export function toSnapshotAssets(
     label: row.label.slice(0, 120),
     relativePath: row.relativePath.slice(0, 500),
     sortOrder: row.sortOrder,
+    createdAt: row.createdAt.toISOString(),
   }));
 }
