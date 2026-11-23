@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>形象档案 · 改版静态稿</title>
+<style>
+html{scrollbar-width:none}
+::-webkit-scrollbar{width:0;height:0}
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f4f6f9; --surface:#fff; --surface-2:#f8f9fb; --surface-3:#f1f3f7;
+  --line:#e6e9ef; --line-strong:#dbe0e9;
+  --text:#101620; --text-2:#454f5e; --dim:#68717f; --faint:#9aa3b1;
+  --brand:#d94a76; --brand-btn:#c9416b; --brand-btn-h:#b8375f; --brand-strong:#bf3a63;
+  --brand-soft:#fdf0f4; --brand-line:#f6d3df;
+  --green:#0b7a54; --green-soft:#e8f6f0; --amber:#8f5c05; --amber-soft:#fdf6e7; --amber-line:#ecd9b4;
+  --red:#c92b41; --red-soft:#fdecee; --blue:#4c5fd5; --blue-soft:#eef0fd;
+  --radius:10px; --radius-sm:8px; --radius-xs:6px;
+  --sh-1:0 1px 2px rgba(16,24,40,.05);
+  --side-w:260px; --topbar-h:56px;
+}
+body{background:#8f98a6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text);font-size:14px;line-height:1.6}
+.frame{position:relative;width:1440px;height:900px;overflow:hidden;display:grid;grid-template-columns:var(--side-w) minmax(0,1fr);background:var(--bg)}
+
+/* ───────── 侧栏 ───────── */
+.sidebar{display:flex;flex-direction:column;background:var(--surface);padding:12px 10px 10px;overflow:hidden}
+.sb-top{padding:2px 4px 10px}
+.brand{display:flex;align-items:center;gap:9px}
+.brand-mark{display:grid;width:30px;height:30px;place-items:center;border-radius:8px;background:linear-gradient(135deg,#ff8fae,#ef5f8b);color:#fff;font-size:15px;font-weight:700}
+.brand-title{color:var(--text);font-size:15px;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+.brand-title span{color:var(--faint);font-size:12px;font-weight:600;letter-spacing:0}
+.brand-sub{margin-top:1px;color:var(--faint);font-size:9px;font-weight:600;letter-spacing:.13em}
+.sb-nav{display:flex;flex-direction:column;gap:1px;flex:1;min-height:0}
+.sb-sec{display:flex;align-items:center;justify-content:space-between;padding:9px 10px 5px;color:var(--dim);font-size:12px;font-weight:600;letter-spacing:.02em}
+.sb-sec svg{width:12px;height:12px;transform:rotate(90deg)}
+.sb-link{display:flex;align-items:center;gap:9px;height:34px;border-radius:8px;padding:0 10px;color:var(--text-2);font-size:13.5px;font-weight:500}
+.sb-link svg{flex:none;color:var(--faint);width:16px;height:16px}
+.sb-link.active{background:var(--brand-soft);color:var(--brand-strong);font-weight:600}
+.sb-link.active svg{color:var(--brand)}
+.sb-bottom{flex:none;margin-top:8px;border-radius:10px;background:var(--surface-2);padding:7px 8px 4px}
+.switcher{display:flex;align-items:center;gap:9px;padding:3px 2px}
+.sw-ava{display:grid;width:30px;height:30px;flex:none;place-items:center;border-radius:999px;background:var(--brand-soft);color:var(--brand-strong);font-size:13px;font-weight:700}
+.sw-name{color:var(--text);font-size:13px;font-weight:600;line-height:1.35}
+.sw-note{color:var(--dim);font-size:12px;line-height:1.3}
+.sw-arrow{margin-left:auto;color:var(--faint)}
+.sb-ver{display:flex;justify-content:space-between;padding:8px 6px 2px;color:var(--faint);font-size:12px}
+
+/* ───────── 顶栏 ───────── */
+.main{display:flex;min-width:0;flex-direction:column;overflow:hidden}
+.topbar{display:flex;min-height:var(--topbar-h);flex:none;align-items:center;gap:16px;background:var(--surface);padding:0 18px}
+.tb-head{display:flex;min-width:0;flex:1;align-items:center;gap:8px}
+.tb-crumb{color:var(--dim);font-size:14px}
+.tb-sep{color:var(--faint);font-size:14px}
+.tb-title{color:var(--text);font-size:18px;font-weight:700;letter-spacing:-.01em;line-height:1.2}
+.tb-right{display:flex;align-items:center;gap:10px;margin-left:auto}
+.tb-refresh{display:inline-flex;height:28px;align-items:center;gap:4px;border-radius:6px;background:var(--surface-2);padding:0 10px;color:var(--text-2);font-size:12px;font-weight:600}
+.tb-refresh svg{width:13px;height:13px}
+.env{display:inline-flex;align-items:center;gap:6px;border-radius:999px;background:var(--surface-2);padding:5px 9px;color:var(--dim);font-size:12px;white-space:nowrap}
+.env i{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.pill{display:flex;height:32px;align-items:center;gap:8px;border-radius:999px;background:var(--surface-2);padding:0 10px 0 2px;color:var(--text-2);font-size:12px;font-weight:600}
+.pill span.av{display:grid;width:28px;height:28px;place-items:center;border-radius:50%;background:var(--brand-soft);color:var(--brand-strong);font-size:12px;font-weight:700}
+.tb-exit{display:inline-flex;align-items:center;gap:5px;color:var(--text-2);font-size:12px;font-weight:600}
+.tb-exit svg{width:13px;height:13px}
+
+/* ───────── 页面 ───────── */
+.page{display:flex;flex:1;min-height:0;flex-direction:column;padding:20px 28px 24px;overflow:hidden}
+.page-header{display:flex;flex:none;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}
+.hd-id{display:flex;align-items:center;gap:11px;min-width:0}
+.hd-ava{display:grid;width:40px;height:40px;flex:none;place-items:center;border-radius:10px;background:linear-gradient(135deg,#eef0fd,#f6ecff);color:var(--brand-strong);font-size:17px;font-weight:700;border:1px solid var(--line)}
+.hd-name{display:flex;align-items:center;gap:8px;color:var(--text);font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1.3}
+.hd-sub{color:var(--dim);font-size:12px;line-height:1.4}
+.hd-actions{display:flex;flex:none;align-items:center;gap:8px}
+.draft-pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;background:var(--amber-soft);border:1px solid var(--amber-line);padding:4px 10px;color:var(--amber);font-size:12px;font-weight:600;white-space:nowrap}
+.draft-pill i{width:6px;height:6px;border-radius:50%;background:var(--amber)}
+
+.btn{display:inline-flex;height:32px;align-items:center;justify-content:center;gap:6px;border:1px solid transparent;border-radius:8px;background:transparent;padding:0 12px;color:var(--text-2);font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer}
+.btn svg{width:14px;height:14px}
+.btn.primary{background:var(--brand-btn);color:#fff}
+.btn.line{border-color:var(--line-strong);color:var(--text-2)}
+.btn.sm{height:28px;padding:0 10px;font-size:12px;border-radius:7px}
+.btn.sm svg{width:13px;height:13px}
+
+/* 分区导航 */
+.vp-nav{display:flex;flex:none;align-items:center;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:7px}
+.vp-tab{display:inline-flex;align-items:center;gap:7px;height:34px;border-radius:8px;padding:0 13px;color:var(--dim);font-size:13.5px;font-weight:500;white-space:nowrap}
+.vp-tab svg{width:15px;height:15px}
+.vp-tab.active{background:var(--brand-soft);color:var(--brand-strong);font-weight:600}
+.vp-tab .n{margin-left:1px;color:var(--faint);font-size:12px;font-weight:600}
+.vp-tab.active .n{color:var(--brand)}
+
+.vp-body{display:flex;flex:1;min-height:0;gap:14px;overflow:hidden}
+.col{display:flex;min-width:0;flex-direction:column;gap:14px}
+.col.grow{flex:1}
+.col.side{flex:none;width:320px}
+
+/* 卡片 */
+.card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--sh-1)}
+.card-hd{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px 0}
+.card-hd h3{color:var(--text);font-size:14px;font-weight:700;letter-spacing:-.01em}
+.card-hd .hint{color:var(--dim);font-size:12px}
+.card-bd{padding:12px 16px 16px}
+.card-tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:9px}
+.card-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding:10px 16px}
+.card.fill{display:flex;flex-direction:column}
+.card.fill .card-bd{flex:1;display:flex;flex-direction:column;justify-content:space-between}
+
+/* 文本层级 */
+.ev-t{color:var(--text)}
+.meta{color:var(--dim);font-size:12px;line-height:1.55}
+.b-note{color:var(--dim);font-size:12px;line-height:1.7}
+
+/* 文本域 */
+.ta{border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);padding:9px 11px;color:var(--text);font-size:13px;line-height:1.85;white-space:pre-wrap;overflow:hidden}
+.ta.read{background:var(--surface-2);color:var(--text-2);border-color:var(--line)}
+.ta.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.9}
+.ta .ph{color:var(--faint)}
+
+/* chips */
+.chip{display:inline-flex;height:26px;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;background:var(--surface);padding:0 10px;color:var(--text-2);font-size:12px;font-weight:500;white-space:nowrap}
+.chip svg{width:12px;height:12px;color:var(--faint)}
+
+/* 概览 */
+.hero{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:18px;padding:16px 18px}
+.hero-fig{width:88px;height:88px;flex:none;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:linear-gradient(135deg,#eef0fd,#f9f2ff)}
+.hero-fig svg{display:block;width:100%;height:100%}
+.hero-name{display:flex;align-items:center;gap:9px}
+.hero-name strong{color:var(--text);font-size:18px;font-weight:700;letter-spacing:-.015em}
+.tag{display:inline-flex;align-items:center;gap:4px;border-radius:5px;padding:2px 7px;font-size:11px;font-weight:600;line-height:1.5}
+.tag.ok{background:var(--green-soft);color:var(--green)}
+.tag.draft{background:var(--amber-soft);color:var(--amber)}
+.tag.plain{background:var(--surface-3);color:var(--dim)}
+.hero-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:7px;color:var(--dim);font-size:12px}
+.hero-meta b{color:var(--text-2);font-weight:600;font-variant-numeric:tabular-nums}
+.hero-kpis{display:flex;gap:0;flex:none}
+.hero-kpi{padding:0 18px;border-left:1px solid var(--line);text-align:left}
+.hero-kpi .k{color:var(--dim);font-size:12px}
+.hero-kpi .v{margin-top:3px;color:var(--text);font-size:22px;font-weight:700;letter-spacing:-.02em;line-height:1.15;font-variant-numeric:tabular-nums}
+.hero-kpi .v small{margin-left:3px;color:var(--dim);font-size:12px;font-weight:500;letter-spacing:0}
+
+.check{display:flex;align-items:flex-start;gap:9px;padding:8px 0;border-bottom:1px dashed var(--line)}
+.check:last-child{border-bottom:0;padding-bottom:0}
+.check.first{padding-top:0}
+.ck{display:grid;width:17px;height:17px;flex:none;margin-top:2px;place-items:center;border-radius:50%}
+.ck svg{width:11px;height:11px}
+.ck.on{background:var(--green-soft);color:var(--green)}
+.ck.off{background:var(--surface-3);color:var(--faint)}
+.check-t{color:var(--text);font-size:13px;font-weight:600;line-height:1.5}
+.check-d{color:var(--dim);font-size:12px;line-height:1.5}
+.check-a{margin-left:auto;flex:none;color:var(--brand-strong);font-size:12px;font-weight:600}
+
+.pv{border-radius:8px;background:var(--surface-2);border:1px solid var(--line);padding:10px 12px;color:var(--text-2);font-size:12px;line-height:1.8}
+.pv .k{display:block;margin-bottom:3px;color:var(--dim);font-size:12px;font-weight:600}
+.pv + .pv{margin-top:9px}
+
+/* 时间线 */
+.tl{display:flex;align-items:flex-start;gap:0;overflow:hidden}
+.tl-item{position:relative;flex:1;min-width:0;padding:0 14px 0 0}
+.tl-dot{display:flex;align-items:center;gap:7px}
+.tl-dot i{width:8px;height:8px;flex:none;border-radius:50%;background:var(--line-strong);box-shadow:0 0 0 3px #fff}
+.tl-dot i.now{background:var(--green)}
+.tl-dot i.draft{background:var(--amber)}
+.tl-dot strong{color:var(--text);font-size:13px;font-weight:700}
+.tl-line{position:absolute;top:4px;left:14px;right:4px;height:1px;background:var(--line)}
+.tl-note{margin-top:7px;color:var(--text-2);font-size:12px;line-height:1.55}
+.tl-time{margin-top:4px;color:var(--dim);font-size:12px}
+
+/* 造型卡 */
+.outfit{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--sh-1);padding:13px 15px 12px}
+.outfit.is-on{border-color:var(--brand-line);background:#fffbfc}
+.outfit-hd{display:flex;align-items:center;gap:8px}
+.outfit-hd strong{color:var(--text);font-size:14px;font-weight:700}
+.outfit-p{margin-top:7px;color:var(--text-2);font-size:12.5px;line-height:1.7;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.outfit-f{display:flex;align-items:center;gap:4px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+.outfit-f .sp{margin-left:auto}
+.add-slot{display:grid;flex:1;min-height:0;place-content:center;justify-items:center;gap:5px;border:1px dashed var(--line-strong);border-radius:var(--radius);background:var(--surface-2);padding:22px 14px;color:var(--dim)}
+.add-slot svg{width:18px;height:18px;color:var(--faint)}
+.add-slot strong{color:var(--text-2);font-size:13.5px;font-weight:600}
+.add-ico{display:grid;width:36px;height:36px;flex:none;place-items:center;border-radius:999px;background:#fff;border:1px solid var(--brand-line);color:var(--brand-strong);box-shadow:0 1px 3px rgba(217,74,118,.14)}
+.add-ico svg{width:16px;height:16px;color:var(--brand-strong)}
+.add-tips{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:5px;text-align:left}
+.add-tips li{position:relative;padding-left:12px;color:var(--dim);font-size:12px;line-height:1.6}
+.add-tips li::before{content:"";position:absolute;left:2px;top:8px;width:3px;height:3px;border-radius:50%;background:var(--faint)}
+.add-slot span{color:var(--dim);font-size:12px}
+
+/* 表单 */
+.field + .field{margin-top:12px}
+.field-l{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.field-l span{color:var(--text-2);font-size:12.5px;font-weight:600}
+.field-l em{color:var(--dim);font-size:12px;font-style:normal;font-variant-numeric:tabular-nums}
+.inp{display:flex;height:32px;align-items:center;border:1px solid var(--line-strong);border-radius:8px;background:var(--surface);padding:0 11px;color:var(--text);font-size:13px}
+.inp .ph{color:var(--faint)}
+
+/* 上传区 */
+.dz{display:flex;flex:none;align-items:center;gap:14px;border:1.5px dashed var(--line-strong);border-radius:var(--radius);background:var(--surface);padding:16px 18px}
+.dz-ico{display:grid;width:42px;height:42px;flex:none;place-items:center;border-radius:10px;background:var(--brand-soft);color:var(--brand-strong)}
+.dz-ico svg{width:20px;height:20px}
+.dz-t{color:var(--text);font-size:13.5px;font-weight:600}
+.dz-t b{color:var(--brand-strong);font-weight:600}
+.dz-d{margin-top:3px;color:var(--dim);font-size:12px}
+.dz-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+
+/* 素材组 */
+.asset-group{margin-top:14px}
+.ag-hd{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.ag-hd strong{color:var(--text);font-size:13px;font-weight:700}
+.ag-hd .cnt{color:var(--dim);font-size:12px;font-weight:600}
+.ag-hd .rule{flex:1;height:1px;background:var(--line)}
+.ag-hd .more{color:var(--brand-strong);font-size:12px;font-weight:600}
+.ag-row{display:flex;flex-wrap:wrap;gap:10px}
+.asset{width:150px;border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}
+.asset-img{position:relative;width:148px;height:104px;background:linear-gradient(135deg,#eef0fd,#f9f2ff)}
+.asset-img svg{display:block;width:100%;height:100%}
+.asset-img .del{position:absolute;top:5px;right:5px;display:grid;width:21px;height:21px;place-items:center;border-radius:5px;background:rgba(255,255,255,.92);color:var(--red);box-shadow:var(--sh-1)}
+.asset-img .del svg{width:12px;height:12px}
+.asset-m{padding:6px 8px 7px}
+.asset-m strong{display:block;overflow:hidden;color:var(--text);font-size:12px;font-weight:600;text-overflow:ellipsis;white-space:nowrap;line-height:1.45}
+.asset-m span{display:block;margin-top:1px;color:var(--dim);font-size:11px;line-height:1.4}
+.asset.plus{border-style:dashed;background:var(--surface-2)}
+.asset.plus .asset-img{display:grid;place-items:center;background:transparent;height:104px;color:var(--faint)}
+.asset.plus .asset-img svg{width:18px;height:18px}
+
+/* 右栏 sticky 卡 */
+.side-card{position:sticky;top:0}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
+.step{border:1px solid var(--line);border-radius:6px;background:var(--surface-2);padding:5px 9px;color:var(--text-2);font-size:12px;font-weight:600;white-space:nowrap}
+.arr{color:var(--faint);font-size:12px}
+.form-bar{display:flex;align-items:center;gap:10px;margin-top:auto;border-top:1px solid var(--line);padding-top:14px}
+
+/* 版本历史 */
+.ver{display:flex;align-items:flex-start;gap:12px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--sh-1);padding:12px 15px}
+.ver.now{border-color:var(--green);background:#fbfefc}
+.ver.draft{border-color:var(--amber-line);background:#fffdf8}
+.ver-no{display:grid;width:30px;height:30px;flex:none;place-items:center;border-radius:8px;background:var(--surface-3);color:var(--text-2);font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+.ver.now .ver-no{background:var(--green-soft);color:var(--green)}
+.ver.draft .ver-no{background:var(--amber-soft);color:var(--amber)}
+.ver-b{flex:1;min-width:0}
+.ver-t{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ver-t strong{color:var(--text);font-size:13.5px;font-weight:700}
+.ver-n{margin-top:4px;color:var(--text-2);font-size:12.5px;line-height:1.6}
+.ver-m{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin-top:6px;color:var(--dim);font-size:12px}
+.ver-a{display:flex;flex:none;flex-direction:column;gap:4px;align-items:flex-end}
+.filter{display:flex;align-items:center;gap:6px;margin-bottom:12px}
+.fchip{display:inline-flex;height:28px;align-items:center;border:1px solid var(--line);border-radius:999px;background:var(--surface);padding:0 12px;color:var(--text-2);font-size:12px;font-weight:600}
+.fchip.on{border-color:var(--text);background:var(--text);color:#fff}
+.diff{border:1px solid var(--line);border-radius:8px;overflow:hidden;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:1.75}
+.diff div{padding:3px 10px;white-space:pre-wrap;overflow-wrap:anywhere}
+.diff .add{background:#f2fbf6;color:#0b6b4a}
+.diff .del{background:#fdf1f3;color:#9c2334}
+.diff .same{color:var(--dim)}
+.diff-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px dashed var(--line)}
+.diff-row:last-child{border-bottom:0}
+.diff-row .n{display:grid;width:16px;height:16px;flex:none;margin-top:2px;place-items:center;border-radius:4px;background:var(--brand-soft);color:var(--brand-strong);font-size:10px;font-weight:700}
+.diff-row .t{color:var(--text);font-size:12.5px;font-weight:600;line-height:1.5}
+.diff-row .d{color:var(--dim);font-size:12px;line-height:1.5}
+.ghost-lbl{color:var(--dim);font-size:12px;font-weight:600}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const P = {
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>',
+  chat:'<path d="M21 11.6a8.3 8.3 0 0 1-9 8.2 9.4 9.4 0 0 1-3.1-.7L4 21l1.9-4.1A8.2 8.2 0 0 1 3 11.6 8.3 8.3 0 0 1 12 3.4a8.3 8.3 0 0 1 9 8.2Z"/>',
+  user:'<circle cx="12" cy="7.9" r="3.5"/><path d="M5 20.4c.8-3.5 3.6-5.5 7-5.5s6.2 2 7 5.5"/>',
+  image:'<rect x="3" y="4" width="18" height="16" rx="2.4"/><circle cx="8.4" cy="9.4" r="1.5"/><path d="M4 17.6 9.5 13l3.9 3.3 3-2.4 3.6 3.3"/>',
+  book:'<path d="M4 5.2c2.6-.9 5-1 7.5.4v14c-2.5-1.4-4.9-1.3-7.5-.4Z"/><path d="M20 5.2c-2.6-.9-5-1-7.5.4v14c2.5-1.4 4.9-1.3 7.5-.4Z"/>',
+  wand:'<path d="M4 20 14.5 9.5"/><path d="M16.5 4.2v3M15 5.7h3"/><path d="M19.6 9.4v2M18.6 10.4h2"/>',
+  trend:'<path d="M4 16.6 9 11l3.4 3.2L20 6.6"/><path d="M15.6 6.6H20v4.4"/>',
+  layers:'<path d="m12 3.2 8.4 4.4L12 12 3.6 7.6Z"/><path d="m3.6 12.5 8.4 4.4 8.4-4.4"/>',
+  users:'<circle cx="9.2" cy="8.4" r="3.1"/><path d="M2.9 19.5c.7-3 3-4.7 6.3-4.7s5.6 1.7 6.3 4.7"/><path d="M16.2 5.6a2.9 2.9 0 0 1 0 5.7"/><path d="M17.8 14.8c2 .5 3.3 2 3.8 4.3"/>',
+  lang:'<path d="M4 5.4h16v11H9l-4 3.2Z"/><path d="M8.4 9.4h7.2M8.4 12.4h4.6"/>',
+  spark:'<path d="m12 3.4 2.2 5.4 5.4 2.2-5.4 2.2L12 18.6l-2.2-5.4L4.4 11l5.4-2.2Z"/>',
+  memo:'<path d="M5 4.4h10.6L19.6 9v10.6H5Z"/><path d="M15.2 4.4V9h4.4"/><path d="M8.4 12.8h7.2M8.4 15.8h4.6"/>',
+  eye:'<path d="M2.6 12S6.1 6.6 12 6.6 21.4 12 21.4 12 17.9 17.4 12 17.4 2.6 12 2.6 12Z"/><circle cx="12" cy="12" r="2.5"/>',
+  qq:'<path d="M12 3.6c3.5 0 5.9 2.5 5.9 5.9 0 4.1-2.6 7.9-5.9 7.9s-5.9-3.8-5.9-7.9c0-3.4 2.4-5.9 5.9-5.9Z"/><circle cx="9.8" cy="9.4" r=".85" fill="currentColor" stroke="none"/><circle cx="14.2" cy="9.4" r=".85" fill="currentColor" stroke="none"/><path d="M10.1 13.4c1.2.9 2.7.9 3.9 0"/>',
+  chart:'<path d="M4 20V4"/><path d="M4 20h16"/><rect x="7.6" y="12" width="3" height="5" rx="1"/><rect x="13.2" y="8.4" width="3" height="8.6" rx="1"/>',
+  search:'<circle cx="10.8" cy="10.8" r="6.2"/><path d="m15.5 15.5 4.6 4.6"/>',
+  team:'<circle cx="12" cy="7.4" r="2.9"/><path d="M6.6 19.9c.6-3.1 2.8-4.9 5.4-4.9s4.8 1.8 5.4 4.9"/><path d="M4 9.6a2.3 2.3 0 1 0 0 4.6"/><path d="M20 9.6a2.3 2.3 0 1 1 0 4.6"/>',
+  gear:'<circle cx="12" cy="12" r="3"/><path d="M12 3.6v2.2M12 18.2v2.2M4.9 8l1.9 1.1M17.2 14.9l1.9 1.1M4.9 16l1.9-1.1M17.2 9.1l1.9-1.1"/>',
+  down:'<path d="m7 10 5 5 5-5"/>',
+  refresh:'<path d="M19.6 12a7.6 7.6 0 1 1-2.3-5.4"/><path d="M20 4.2v4.2h-4.2"/>',
+  exit:'<path d="M15 4.5h3.6A1.9 1.9 0 0 1 20.5 6.4v11.2a1.9 1.9 0 0 1-1.9 1.9H15"/><path d="M10.5 15.5 14.5 12l-4-3.5"/><path d="M4 12h10"/>',
+  check:'<path d="m3 7.4 3.4 3.4L14.4 3"/>',
+  minus:'<path d="M3 7h12"/>',
+  plus:'<path d="M8 3v10M3 8h10"/>',
+  trash:'<path d="M4.5 6.5h11"/><path d="M8 6.5V4.8h4v1.7"/><path d="M6.2 6.5l.7 9.2h6.2l.7-9.2"/>',
+  edit:'<path d="m11.5 4.5 3.5 3.5"/><path d="M4.5 14.5 13.6 5.4a1.8 1.8 0 0 1 2.5 2.5L7 17H4.5Z"/>',
+  upload:'<path d="M12 15.5V4.5"/><path d="m7.6 8.9 4.4-4.4 4.4 4.4"/><path d="M4.5 15v3.2A1.8 1.8 0 0 0 6.3 20h11.4a1.8 1.8 0 0 0 1.8-1.8V15"/>',
+  gear2:'<circle cx="8" cy="8" r="2.6"/><path d="M8 2.4v1.6M8 12v1.6M2.4 8h1.6M12 8h1.6M4.1 4.1l1.1 1.1M10.8 10.8l1.1 1.1M11.9 4.1l-1.1 1.1M5.2 10.8l-1.1 1.1"/>',
+};
+const svg = (d, w=16) => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+
+const NAV = [
+  {sec:'工作空间', items:[['总览','grid'],['聊天','chat'],['角色管理','user'],['形象档案','image',1],['日记手账','book'],['角色扮演','wand']]},
+  {sec:'成长系统', items:[['总览','trend'],['记忆系统','layers'],['社交系统','users'],['语言系统','lang'],['反思系统','spark'],['知识系统','memo'],['自我认知','eye']], arrow:1},
+  {sec:'系统管理', items:[['QQ 渠道','qq'],['任务监控','chart'],['本地观察','search'],['用户管理','team'],['系统设置','gear']]},
+];
+
+function sidebar(){
+  const nav = NAV.map(g => `
+    <div class="sb-sec">${g.sec}${g.arrow ? svg(P.down,12) : ''}</div>
+    ${g.items.map(([label,ico,on]) => `<div class="sb-link${on?' active':''}">${svg(P[ico])}<span>${label}</span></div>`).join('')}
+  `).join('');
+  return `<aside class="sidebar">
+    <div class="sb-top">
+      <div class="brand">
+        <div class="brand-mark">忆</div>
+        <div>
+          <div class="brand-title">忆灵空间 <span>Yiling</span></div>
+          <div class="brand-sub">AI CHARACTER HUB</div>
+        </div>
+      </div>
+    </div>
+    <nav class="sb-nav">${nav}</nav>
+    <div class="sb-bottom">
+      <div class="switcher">
+        <span class="sw-ava">忆</span>
+        <div>
+          <div class="sw-name">忆灵</div>
+          <div class="sw-note">当前角色 · 共 3 个</div>
+        </div>
+        <span class="sw-arrow">${svg(P.down,14)}</span>
+      </div>
+      <div class="sb-ver"><span>Yiling Space · 预览版</span><span>v0.1</span></div>
+    </div>
+  </aside>`;
+}
+
+function topbar(){
+  return `<header class="topbar">
+    <div class="tb-head">
+      <span class="tb-crumb">工作空间</span><span class="tb-sep">/</span>
+      <span class="tb-title">形象档案</span>
+    </div>
+    <div class="tb-right">
+      <span class="tb-refresh">${svg(P.refresh,13)}刷新</span>
+      <span class="env"><i></i>本地开发</span>
+      <div class="pill"><span class="av">管</span>管理员</div>
+      <span class="tb-exit">${svg(P.exit,13)}退出</span>
+    </div>
+  </header>`;
+}
+
+/* 角色剪影：统一 100x100 内部坐标，宽高交给容器，任何比例都不会被撑破 */
+let figSeq = 0;
+function fig(variant='front'){
+  const uid = `f${figSeq++}`;
+  const backHair = `<ellipse cx="50" cy="47" rx="20.5" ry="23" fill="url(#h-${uid})"/>`;
+  const face = variant === 'back'
+    ? ''
+    : `<ellipse cx="50" cy="48" rx="15.5" ry="18" fill="#f7dcc8"/>`;
+  const sideHair = variant === 'back' ? '' : `
+    <path d="M34.5 40c-4.5 14-3.5 29 1 38-6-9-7-27-1-38Z" fill="url(#h-${uid})"/>
+    <path d="M65.5 40c4.5 14 3.5 29-1 38 6-9 7-27 1-38Z" fill="url(#h-${uid})"/>`;
+  const bang = variant === 'back' ? '' : `
+    <path d="M34 43C34 27 41 22 50 22c9 0 16 5 16 21 0-11-6-15-16-15s-16 4-16 15Z" fill="url(#h-${uid})"/>`;
+  const seam = variant === 'back' ? `<path d="M50 26v38" stroke="#4a4ea8" stroke-width="1.2" opacity=".45"/>` : '';
+  const eyes = variant === 'smile'
+    ? `<path d="M41.5 46q2.6-3 5.2 0" stroke="#3f51c4" stroke-width="1.9" fill="none" stroke-linecap="round"/>
+       <path d="M53.3 46q2.6-3 5.2 0" stroke="#3f51c4" stroke-width="1.9" fill="none" stroke-linecap="round"/>
+       <path d="M46 55.5q4 3 8 0" stroke="#c05a72" stroke-width="1.5" fill="none" stroke-linecap="round"/>`
+    : variant === 'side'
+      ? `<ellipse cx="57" cy="47" rx="2.9" ry="3.5" fill="#3f51c4"/>
+         <path d="M61 55q2.6 1.6 4.4-.4" stroke="#c05a72" stroke-width="1.4" fill="none" stroke-linecap="round"/>`
+      : `<ellipse cx="44" cy="47" rx="2.9" ry="3.5" fill="#3f51c4"/>
+         <ellipse cx="56" cy="47" rx="2.9" ry="3.5" fill="#3f51c4"/>
+         <path d="M46.6 55.5h6.8" stroke="#c05a72" stroke-width="1.4" fill="none" stroke-linecap="round"/>`;
+  const body = variant === 'back'
+    ? `<path d="M30 100c1.6-16 9.4-22 20-22s18.4 6 20 22Z" fill="#3b4a8f"/>`
+    : `<path d="M30 100c1.6-16 9.4-22 20-22s18.4 6 20 22Z" fill="#3b4a8f"/>
+       <path d="M44 78h12l-6 13Z" fill="#e7ecfb"/>`;
+  const tail = `<path d="M69.5 84q13 3.4 12 13.6-9 1.6-14.4-5.2Z" fill="#9fc6f0" opacity=".82"/>`;
+  return `<svg viewBox="12 16 76 85" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <linearGradient id="h-${uid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7074c9"/><stop offset="1" stop-color="#4c5fd5"/></linearGradient>
+    </defs>
+    <ellipse cx="50" cy="96" rx="23" ry="3.4" fill="#c5cce4" opacity=".55"/>
+    ${tail}
+    ${body}
+    <rect x="46.5" y="62" width="7" height="10" rx="3" fill="#f0d3be"/>
+    ${backHair}
+    <path d="M33 33q-5.5-4-3-10.5 5 2.2 5.4 8.6Z" fill="#8fa6e6" opacity=".9"/>
+    <path d="M67 33q5.5-4 3-10.5-5 2.2-5.4 8.6Z" fill="#8fa6e6" opacity=".9"/>
+    ${face}${sideHair}${bang}${seam}${eyes}
+  </svg>`;
+}
+
+const header = (draft = true) => `
+  <div class="page-header">
+    <div class="hd-id">
+      <span class="hd-ava">忆</span>
+      <div>
+        <div class="hd-name">忆灵 <span class="tag ok">正式 v3</span></div>
+        <div class="hd-sub">蓝紫长发 · 少女形态 · 鲸鱼元素</div>
+      </div>
+    </div>
+    <div class="hd-actions">
+      ${draft ? `<span class="draft-pill"><i></i>草稿 v4 待发布</span>
+      <button class="btn line sm">对照改动</button>
+      <button class="btn primary sm">发布 v4</button>` : `<span class="meta">已是最新，无待发布草稿</span>`}
+    </div>
+  </div>`;
+
+const tabs = (active, counts={}) => {
+  const list = [['overview','概览','grid'],['core','核心形象','eye'],['outfit','服装造型','layers'],['assets','参考素材','image'],['versions','版本历史','memo']];
+  return `<nav class="vp-nav">${list.map(([k,label,ico]) =>
+    `<span class="vp-tab${k===active?' active':''}">${svg(P[ico],15)}${label}${counts[k]!==undefined?`<span class="n">${counts[k]}</span>`:''}</span>`).join('')}</nav>`;
+};
+
+const page = (content) => `<div class="page">${header()}${content}</div>`;
+
+/* ══════════ 01 概览 ══════════ */
+const bodyOverview = `
+${tabs('overview',{outfit:2,assets:5,versions:4})}
+<div class="vp-body">
+  <div class="col grow">
+    <div class="card">
+      <div class="hero">
+        <div class="hero-fig">${fig('front',true)}</div>
+        <div>
+          <div class="hero-name"><strong>忆灵</strong><span class="tag ok">已发布 v3</span><span class="tag plain">3 天前更新</span></div>
+          <div class="b-note" style="margin-top:6px">蓝紫及腰长发，蓝色瞳孔，鲸鱼耳与半透明尾鳍；少女形态，气质清冷。</div>
+          <div class="hero-meta">
+            <span>核心提示词 <b>182</b> 字</span>
+            <span>默认造型 <b>日常蓝裙</b></span>
+            <span>负面词 <b>11</b> 条</span>
+          </div>
+        </div>
+        <div class="hero-kpis">
+          <div class="hero-kpi"><div class="k">造型</div><div class="v">2<small>套</small></div></div>
+          <div class="hero-kpi"><div class="k">参考素材</div><div class="v">5<small>张</small></div></div>
+          <div class="hero-kpi"><div class="k">版本</div><div class="v">4<small>次</small></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>档案完成度</h3><span class="hint">4 / 5 项就绪，绘图会用到已发布部分</span></div>
+      <div class="card-bd" style="padding-top:8px">
+        <div class="check first">
+          <span class="ck on">${svg(P.check,11)}</span>
+          <div><div class="check-t">核心外貌</div><div class="check-d">发色、瞳色、体型与鲸鱼元素已确定</div></div>
+        </div>
+        <div class="check">
+          <span class="ck on">${svg(P.check,11)}</span>
+          <div><div class="check-t">核心绘图提示词</div><div class="check-d">182 字，已随 v3 发布</div></div>
+        </div>
+        <div class="check">
+          <span class="ck on">${svg(P.check,11)}</span>
+          <div><div class="check-t">默认造型</div><div class="check-d">「日常蓝裙」，未指定服装时自动拼入</div></div>
+        </div>
+        <div class="check">
+          <span class="ck on">${svg(P.check,11)}</span>
+          <div><div class="check-t">标准形象图</div><div class="check-d">1 张，仅供查看，暂不作为模型参考图输入</div></div>
+        </div>
+        <div class="check">
+          <span class="ck off">${svg(P.minus,11)}</span>
+          <div><div class="check-t">三视图完整</div><div class="check-d">已有正面与侧面，缺背面</div></div>
+          <span class="check-a">去补齐</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="flex:1">
+      <div class="card-hd"><h3>绘图时怎么拼</h3><span class="hint">只读取已发布的正式版本</span></div>
+      <div class="card-bd" style="padding-top:10px">
+        <div class="flow">
+          <span class="step">核心形象 · 182 字</span><span class="arr">→</span>
+          <span class="step">默认造型 · 日常蓝裙</span><span class="arr">→</span>
+          <span class="step">本轮场景与动作</span>
+        </div>
+        <p class="b-note" style="margin-top:9px">负面词以「避免……」自然语言追加在末尾；参考图片目前只用于存档和查看，不会作为图片输入传给模型。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="col side">
+    <div class="card">
+      <div class="card-hd"><h3>本次草稿改了什么</h3><span class="meta">v4</span></div>
+      <div class="card-bd" style="padding-top:10px">
+        <div class="diff-row"><span class="n">1</span><div><div class="t">核心提示词</div><div class="d">补充「浅蓝渐变发尾」与体型比例</div></div></div>
+        <div class="diff-row"><span class="n">2</span><div><div class="t">负面提示词</div><div class="d">新增 missing whale tail</div></div></div>
+        <div class="diff-row"><span class="n">3</span><div><div class="t">未改动</div><div class="d">外貌设定、造型、参考素材</div></div></div>
+      </div>
+      <div class="card-foot">
+        <span class="b-note">发布后才会进入绘图</span>
+        <button class="btn primary sm">发布 v4</button>
+      </div>
+    </div>
+    <div class="card fill" style="flex:1">
+      <div class="card-hd"><h3>最近版本</h3><span class="meta">共 4 个</span></div>
+      <div class="card-bd" style="padding-top:10px">
+        <div class="diff-row"><span class="n" style="background:var(--amber-soft);color:var(--amber)">4</span><div><div class="t">草稿 · 待发布</div><div class="d">确定发尾渐变与体型比例</div><div class="d" style="color:var(--dim)">今天 14:22</div></div></div>
+        <div class="diff-row"><span class="n" style="background:var(--green-soft);color:var(--green)">3</span><div><div class="t">正式版本 · 当前</div><div class="d">补齐鲸鱼尾描述</div><div class="d" style="color:var(--dim)">11 月 20 日</div></div></div>
+        <div class="diff-row"><span class="n">2</span><div><div class="t">历史正式版本</div><div class="d">补齐发色与体型比例</div><div class="d" style="color:var(--dim)">11 月 18 日</div></div></div>
+        <div class="diff-row"><span class="n">1</span><div><div class="t">历史正式版本</div><div class="d">初版核心形象</div><div class="d" style="color:var(--dim)">11 月 15 日</div></div></div>
+      </div>
+      <div class="card-foot"><span class="b-note">恢复历史版本只会生成新草稿</span><span class="ag-hd" style="margin:0"><span class="more" style="color:var(--brand-strong);font-size:12px;font-weight:600">查看全部</span></span></div>
+    </div>
+  </div>
+</div>`;
+
+/* ══════════ 02 核心形象 ══════════ */
+const bodyCore = `
+${tabs('core',{outfit:2,assets:5,versions:4})}
+<div class="vp-body">
+  <div class="col grow">
+    <div class="card">
+      <div class="card-hd"><h3>外貌设定</h3><span class="hint">稳定外貌，不包含服装</span></div>
+      <div class="card-bd">
+        <div class="ta" style="height:104px">蓝紫色及腰长发，发尾浅蓝渐变，微卷；蓝色瞳孔，眼形偏圆。鲸鱼耳与鲸鱼尾巴，尾鳍半透明浅蓝。少女形态，中间体型比例，身高约 158cm。肤色偏白，整体气质清冷柔和，带一点海水的潮湿感。</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>核心绘图提示词</h3><span class="hint">英文，每次绘图都会前置</span></div>
+      <div class="card-bd">
+        <div class="ta mono" style="height:110px">masterpiece, best quality, 1girl, solo, long purple-blue hair, wavy hair, light blue gradient tips, blue eyes, round eyes, whale ears, translucent whale tail, slender middle build, pale skin, soft cool expression, ocean ambience</div>
+        <div class="card-tools">
+          <span class="meta" style="margin-right:2px">常用片段</span>
+          <span class="chip">${svg(P.plus,12)}发色</span>
+          <span class="chip">${svg(P.plus,12)}瞳色</span>
+          <span class="chip">${svg(P.plus,12)}体型</span>
+          <span class="chip">${svg(P.plus,12)}质量词</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>负面提示词</h3><span class="hint">11 条</span></div>
+      <div class="card-bd">
+        <div class="ta mono" style="height:66px">worst quality, low quality, extra fingers, mutated hands, bad anatomy, blurry, watermark, text, alternate hairstyle, wrong eye color, missing whale tail</div>
+      </div>
+    </div>
+
+    <div class="form-bar">
+      <div class="inp" style="flex:1;max-width:380px"><span class="ph">本次修改说明，例如：确定发尾渐变</span></div>
+      <span class="b-note" style="margin-left:auto">保存只形成草稿，发布才生效</span>
+      <button class="btn">保存为草稿</button>
+      <button class="btn primary">发布 v4</button>
+    </div>
+  </div>
+
+  <div class="col side">
+    <div class="card side-card">
+      <div class="card-hd"><h3>与正式版 v3 的差异</h3><span class="meta">草稿</span></div>
+      <div class="card-bd" style="padding-top:8px">
+        <div class="diff-row"><span class="n">+</span><div><div class="t">核心提示词</div><div class="d">新增 light blue gradient tips</div></div></div>
+        <div class="diff-row"><span class="n">+</span><div><div class="t">负面提示词</div><div class="d">新增 missing whale tail</div></div></div>
+        <div class="diff-row"><span class="n">·</span><div><div class="t">外貌设定</div><div class="d">未改动</div></div></div>
+      </div>
+      <div class="card-foot"><span class="b-note">尚未生效，绘图仍用 v3</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>正式版 v3</h3><span class="meta">11 月 20 日发布</span></div>
+      <div class="card-bd" style="padding-top:10px">
+        <div class="pv"><span class="k">核心提示词</span>masterpiece, best quality, 1girl, solo, long purple-blue hair, wavy hair, blue eyes, whale ears, translucent whale tail…</div>
+        <div class="pv"><span class="k">负面提示词</span>worst quality, low quality, extra fingers, bad anatomy…</div>
+        <div class="pv"><span class="k">版本说明</span>补齐鲸鱼尾描述，修正瞳色偏差</div>
+      </div>
+      <div class="card-foot">
+        <span class="b-note">只读，供对照</span>
+        <button class="btn sm">恢复为草稿</button>
+      </div>
+    </div>
+  </div>
+</div>`;
+
+/* ══════════ 03 服装造型 ══════════ */
+const bodyOutfit = `
+${tabs('outfit',{outfit:2,assets:5,versions:4})}
+<div class="vp-body">
+  <div class="col grow">
+    <div class="outfit is-on">
+      <div class="outfit-hd"><strong>日常蓝裙</strong><span class="tag ok">默认</span><span class="meta" style="margin-left:auto">未指定服装时使用</span></div>
+      <div class="outfit-p">白色水手领上衣，深蓝色及膝百褶裙，白色过膝袜与深蓝乐福鞋；腰间系一条细白丝带，头上别一枚鲸鱼造型发夹。</div>
+      <div class="outfit-f">
+        <button class="btn sm">${svg(P.edit,13)}编辑</button>
+        <button class="btn sm" style="color:var(--red)">${svg(P.trash,13)}删除</button>
+        <span class="sp meta">已发布</span>
+      </div>
+    </div>
+
+    <div class="outfit">
+      <div class="outfit-hd"><strong>深蓝女仆装</strong><span class="meta" style="margin-left:auto">草稿中新增</span></div>
+      <div class="outfit-p">深海军蓝长袖女仆裙，白色荷叶边围裙与头饰，黑色连裤袜；袖口与裙摆有浅蓝蕾丝滚边，胸前一枚鲸鱼胸针。</div>
+      <div class="outfit-f">
+        <button class="btn sm">${svg(P.edit,13)}编辑</button>
+        <button class="btn sm" style="color:var(--red)">${svg(P.trash,13)}删除</button>
+        <span class="sp meta">待发布</span>
+      </div>
+    </div>
+
+    <div class="add-slot">
+      <span class="add-ico">${svg(P.plus,18)}</span>
+      <strong>新增一套造型</strong>
+      <span>只描述服装与配饰，不要重复核心外貌</span>
+      <ul class="add-tips">
+        <li>同一角色可以有多套造型，换装不会覆盖核心形象</li>
+        <li>设为默认后，没有指定服装的生图会自动拼上它</li>
+        <li>本轮场景里明确写了别的衣服时，以场景为准</li>
+      </ul>
+      <button class="btn primary sm" style="margin-top:4px">开始填写</button>
+    </div>
+  </div>
+
+  <div class="col side">
+    <div class="card side-card">
+      <div class="card-hd"><h3>编辑造型</h3><span class="meta">日常蓝裙</span></div>
+      <div class="card-bd">
+        <div class="field">
+          <div class="field-l"><span>造型名称</span><em>4 / 100</em></div>
+          <div class="inp">日常蓝裙</div>
+        </div>
+        <div class="field">
+          <div class="field-l"><span>造型提示词</span><em>82 / 6000</em></div>
+          <div class="ta" style="height:132px">white sailor collar blouse, navy blue pleated knee-length skirt, white over-knee socks, navy loafers, thin white ribbon at waist, whale-shaped hair clip</div>
+        </div>
+        <div class="field" style="display:flex;align-items:center;gap:8px">
+          <span class="ck on" style="margin-top:0">${svg(P.check,11)}</span>
+          <span class="ev-t" style="font-size:12.5px;font-weight:600">设为默认造型</span>
+          <span class="meta" style="margin-left:auto">同时只会有一套</span>
+        </div>
+      </div>
+      <div class="card-foot">
+        <button class="btn">取消</button>
+        <button class="btn primary">保存修改</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-bd" style="padding-top:14px">
+        <p class="b-note">造型变更会形成新草稿。发布后，未指定服装的生图会拼入默认造型；本轮场景里明确写了别的衣服时，以场景为准。</p>
+      </div>
+    </div>
+  </div>
+</div>`;
+
+/* ══════════ 04 参考素材 ══════════ */
+const assetCard = (name, label, variant, del=false) => `
+  <div class="asset">
+    <div class="asset-img">${fig(variant)}${del?`<span class="del">${svg(P.trash,12)}</span>`:''}</div>
+    <div class="asset-m"><strong>${name}</strong><span>${label}</span></div>
+  </div>`;
+
+const bodyAssets = `
+${tabs('assets',{outfit:2,assets:5,versions:4})}
+<div class="vp-body" style="flex-direction:column;gap:0">
+  <div class="dz">
+    <div class="dz-ico">${svg(P.upload,20)}</div>
+    <div>
+      <div class="dz-t">把图片拖到这里，或 <b>点击选择文件</b></div>
+      <div class="dz-d">PNG / JPG / WebP，单张不超过 12MB；自动压到最长边 1600，存在当前角色自己的目录里</div>
+    </div>
+    <div class="dz-right">
+      <span class="ghost-lbl">用途</span>
+      <div class="inp" style="width:132px;justify-content:space-between">标准形象 ${svg(P.down,12)}</div>
+    </div>
+  </div>
+
+  <div class="asset-group">
+    <div class="ag-hd"><strong>标准形象</strong><span class="cnt">1 张</span><span class="rule"></span></div>
+    <div class="ag-row">${assetCard('默认形象','标准形象 · 1024×1536','front',true)}</div>
+  </div>
+
+  <div class="asset-group">
+    <div class="ag-hd"><strong>三视图</strong><span class="cnt">2 / 4 张</span><span class="rule"></span></div>
+    <div class="ag-row">
+      ${assetCard('正面','正面视图 · 生成图','front',true)}
+      ${assetCard('侧面','侧面视图 · 生成图','side',true)}
+      <div class="asset plus"><div class="asset-img">${svg(P.plus,18)}</div><div class="asset-m"><strong>添加</strong><span>背面视图</span></div></div>
+      <div class="asset plus"><div class="asset-img">${svg(P.plus,18)}</div><div class="asset-m"><strong>添加</strong><span>四分之三侧</span></div></div>
+    </div>
+  </div>
+
+  <div class="asset-group">
+    <div class="ag-hd"><strong>表情参考</strong><span class="cnt">2 张</span><span class="rule"></span></div>
+    <div class="ag-row">
+      ${assetCard('微笑','表情参考 · smile','smile',true)}
+      ${assetCard('平静','表情参考 · calm','front',true)}
+      <div class="asset plus"><div class="asset-img">${svg(P.plus,18)}</div><div class="asset-m"><strong>添加</strong><span>表情参考</span></div></div>
+    </div>
+  </div>
+</div>`;
+
+
+/* ══════════ 05 版本历史 ══════════ */
+const bodyVersions = `
+${tabs('versions',{outfit:2,assets:5,versions:4})}
+<div class="vp-body">
+  <div class="col grow">
+    <div class="filter">
+      <span class="fchip on">全部 4</span>
+      <span class="fchip">正式版本 3</span>
+      <span class="fchip">草稿 1</span>
+      <span class="b-note" style="margin-left:auto">恢复历史版本不会删除任何记录，只会生成一份新草稿</span>
+    </div>
+
+    <div class="ver draft">
+      <span class="ver-no">v4</span>
+      <div class="ver-b">
+        <div class="ver-t"><strong>草稿</strong><span class="tag draft">待发布</span></div>
+        <div class="ver-n">确定发尾渐变与体型比例</div>
+        <div class="ver-m"><span>今天 14:22</span><span>核心提示词 +18 字</span><span>负面词 +1 条</span></div>
+      </div>
+      <div class="ver-a">
+        <button class="btn primary sm">发布</button>
+        <button class="btn sm">对照 v3</button>
+      </div>
+    </div>
+
+    <div class="ver now">
+      <span class="ver-no">v3</span>
+      <div class="ver-b">
+        <div class="ver-t"><strong>正式版本</strong><span class="tag ok">当前生效</span></div>
+        <div class="ver-n">补齐鲸鱼尾描述，修正瞳色偏差</div>
+        <div class="ver-m"><span>11 月 20 日 21:06</span><span>核心提示词 182 字</span><span>曾被绘图引用 37 次</span></div>
+      </div>
+      <div class="ver-a"><span class="meta">不可恢复自身</span></div>
+    </div>
+
+    <div class="ver">
+      <span class="ver-no">v2</span>
+      <div class="ver-b">
+        <div class="ver-t"><strong>历史正式版本</strong><span class="tag plain">已被取代</span></div>
+        <div class="ver-n">补齐发色与体型比例</div>
+        <div class="ver-m"><span>11 月 18 日 16:40</span><span>核心提示词 164 字</span></div>
+      </div>
+      <div class="ver-a"><button class="btn sm">恢复为草稿</button></div>
+    </div>
+
+    <div class="ver">
+      <span class="ver-no">v1</span>
+      <div class="ver-b">
+        <div class="ver-t"><strong>历史正式版本</strong><span class="tag plain">已被取代</span></div>
+        <div class="ver-n">初版核心形象</div>
+        <div class="ver-m"><span>11 月 15 日 10:12</span><span>核心提示词 121 字</span></div>
+      </div>
+      <div class="ver-a"><button class="btn sm">恢复为草稿</button></div>
+    </div>
+
+    <div class="card" style="margin-top:auto">
+      <div class="card-hd"><h3>版本是怎么产生的</h3></div>
+      <div class="card-bd" style="padding-top:8px;display:grid;gap:7px">
+        <div class="diff-row"><span class="n">·</span><div><div class="d">保存核心提示词、增删改造型、恢复历史版本，都会生成一份<strong style="color:var(--text)">新草稿</strong></div></div></div>
+        <div class="diff-row"><span class="n">·</span><div><div class="d">只有点「发布」才推进正式版本；发布后其他未发布草稿自动归档</div></div></div>
+        <div class="diff-row" style="border-bottom:0"><span class="n">·</span><div><div class="d">绘图永远读当前正式版本，草稿不参与任何一次生成</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col side">
+    <div class="card side-card">
+      <div class="card-hd"><h3>v4 与 v3 的差异</h3><span class="meta">提示词</span></div>
+      <div class="card-bd" style="padding-top:10px">
+        <div class="diff">
+          <div class="same">masterpiece, best quality, 1girl, solo,</div>
+          <div class="same">long purple-blue hair, wavy hair,</div>
+          <div class="add">+ light blue gradient tips,</div>
+          <div class="same">blue eyes, round eyes, whale ears,</div>
+          <div class="same">translucent whale tail,</div>
+          <div class="add">+ slender middle build,</div>
+          <div class="same">pale skin, soft cool expression</div>
+        </div>
+        <div class="ghost-lbl" style="margin-top:12px">负面提示词</div>
+        <div class="diff" style="margin-top:6px">
+          <div class="same">worst quality, low quality, …</div>
+          <div class="add">+ missing whale tail</div>
+        </div>
+      </div>
+      <div class="card-foot"><span class="b-note">仅比较文字，不含参考素材</span></div>
+    </div>
+    <div class="card">
+      <div class="card-bd" style="padding-top:14px">
+        <p class="b-note">绘图只会读取当前正式版本（v3）。草稿 v4 在你点发布之前不会进入任何一次生成。</p>
+      </div>
+    </div>
+  </div>
+</div>`;
+
+/* ══════════ 组装 ══════════ */
+const frames = [
+  ['01-概览', bodyOverview],
+  ['02-核心形象', bodyCore],
+  ['03-服装造型', bodyOutfit],
+  ['04-参考素材', bodyAssets],
+  ['05-版本历史', bodyVersions],
+];
+
+document.getElementById('root').innerHTML = frames.map(([name, body]) => `
+  <div class="frame" data-shot="${name}" data-dir="-">
+    ${sidebar()}
+    <div class="main">${topbar()}${page(body)}</div>
+  </div>`).join('');
+</script>
+</body>
+</html>
