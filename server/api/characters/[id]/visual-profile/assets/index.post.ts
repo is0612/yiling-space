@@ -34,14 +34,20 @@ export default defineEventHandler(async (event) => {
 
   let normalized: { data: Buffer; width: number; height: number };
   try {
-    const result = await sharp(file.data, { limitInputPixels: 40_000_000 })
+    const source = sharp(file.data, { limitInputPixels: 40_000_000 });
+    const metadata = await source.metadata();
+    if (!metadata.format || !["jpeg", "png", "webp"].includes(metadata.format)) {
+      throw createError({ statusCode: 415, statusMessage: "只支持 PNG、JPG 或 WebP 图片。" });
+    }
+    const result = await source
       .rotate()
       .resize({ width: MAX_EDGE, height: MAX_EDGE, fit: "inside", withoutEnlargement: true })
       .jpeg({ quality: 88, mozjpeg: true })
       .toBuffer({ resolveWithObject: true });
     if (!result.info.width || !result.info.height) throw new Error("missing dimensions");
     normalized = { data: result.data, width: result.info.width, height: result.info.height };
-  } catch {
+  } catch (error) {
+    if (error && typeof error === "object" && "statusCode" in error) throw error;
     throw createError({ statusCode: 415, statusMessage: "无法识别图片。请上传有效的 PNG、JPG 或 WebP 文件。" });
   }
 
