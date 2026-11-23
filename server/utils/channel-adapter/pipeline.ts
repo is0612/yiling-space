@@ -89,6 +89,7 @@ import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
+import { composePublishedVisualPrompt } from "../visual-profile-prompt";
 import { shouldBlockFriendSpeaker } from "../friend-chat-policy";
 import { pickStickerCatalog, type StickerCatalogEntry } from "../stickers";
 import {
@@ -4090,27 +4091,13 @@ async function runChannelTurn(input: {
           });
           const snapshot = published?.snapshot && typeof published.snapshot === "object" && !Array.isArray(published.snapshot)
             ? published.snapshot as Record<string, unknown> : null;
-          if (snapshot) {
-            const parts = [
-              typeof snapshot.coreAppearance === "string" ? snapshot.coreAppearance.trim() : "",
-              typeof snapshot.corePrompt === "string" ? snapshot.corePrompt.trim() : "",
-            ];
-            if (Array.isArray(snapshot.outfits)) {
-              const defaultOutfit = snapshot.outfits.find((item) => item && typeof item === "object" && !Array.isArray(item)
-                && (item as Record<string, unknown>).isDefault === true) as Record<string, unknown> | undefined;
-              if (typeof defaultOutfit?.prompt === "string" && defaultOutfit.prompt.trim()) parts.push(defaultOutfit.prompt.trim());
-            }
-            if (typeof snapshot.negativePrompt === "string" && snapshot.negativePrompt.trim()) {
-              parts.push(`避免：${snapshot.negativePrompt.trim()}`);
-            }
-            officialVisualPrompt = parts.filter(Boolean).join("；");
-          }
+          if (snapshot) officialVisualPrompt = composePublishedVisualPrompt(snapshot, "");
         }
       } catch (error) {
         // Profile lookup is optional and must never break an otherwise valid image request.
         console.warn("[image] published visual profile unavailable", error instanceof Error ? error.message : String(error));
       }
-      const prompt = sanitizeImagePrompt([officialVisualPrompt, validation.prompt].filter(Boolean).join("；"));
+      const prompt = sanitizeImagePrompt(composePublishedVisualPrompt({ corePrompt: officialVisualPrompt }, validation.prompt));
       const result = await generateImage({ settings: imageSettings, prompt, characterId: input.characterId });
       if (result.ok) {
         replyImage = result.image;
