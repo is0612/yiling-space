@@ -16,11 +16,11 @@ export default defineEventHandler(async (event) => {
   if (!asset || asset.profile.characterId !== characterId) throw createError({ statusCode: 404, statusMessage: "参考图片不存在。" });
 
   const relative = asset.relativePath.replace(/\\/gu, "/");
-  if (!relative.startsWith(`images/${characterId}/`) || path.isAbsolute(relative) || relative.split("/").includes("..")) {
+  if (!relative.startsWith(`visual-profile/${characterId}/`) || path.isAbsolute(relative) || relative.split("/").includes("..")) {
     throw createError({ statusCode: 404, statusMessage: "参考图片不存在。" });
   }
   try {
-    const root = await realpath(dataPath("images", characterId));
+    const root = await realpath(dataPath("visual-profile", characterId));
     const absolute = await realpath(dataPath(relative));
     if (!absolute.startsWith(root + path.sep)) throw new Error("path escaped");
     const buffer = await readFile(absolute);
