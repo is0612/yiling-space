@@ -101,6 +101,55 @@ async function explainGatewayRefusal(settings: ImageGenerationSettings, fallback
 }
 
 /**
+ * 真·鉴权失败要说清三件事，否则用户只能反复贴同一把 Key：
+ *
+ *   ① 打到了哪 —— 地址换了但 Key 没换，是这类错误最常见的原因；
+ *   ② 用的哪把 —— 画图 Key 和对话、看图的 Key 分开存，账号里同时躺着三把；
+ *   ③ 长得对不对 —— MiniMax 官方 Key 是 `eyJ` 开头的长 JWT，`sk-` 开头的是
+ *      OpenAI / 中转的令牌。官方地址配 `sk-` Key 必然 401，而这从界面上
+ *      完全看不出来（两边都是「一串字符」）。
+ *
+ * Key 只显示前 4 位和总长度：足够认出「是不是我刚填的那把」，又不至于泄露。
+ */
+function describeImageAuthFailure(input: {
+  status: number;
+  endpointLabel: string;
+  settings: ImageGenerationSettings;
+  keyOrigin: string;
+  maskedKey: string;
+}): Promise<string> | string {
+  let host = input.settings.apiBaseUrl;
+  try { host = new URL(input.settings.apiBaseUrl).host; } catch { /* 地址解析不了时原样展示 */ }
+
+  const head = input.status === 401
+    ? `画图服务不认这把 Key（HTTP 401，发往 ${input.endpointLabel}）。`
+    : `画图服务认得 Key，但没放开这个模型（HTTP 403，发往 ${input.endpointLabel}）。`;
+  const who = `Key 取自「${input.keyOrigin}」：${input.maskedKey}。`;
+  const key = input.settings.apiKey;
+
+  // 官方域名 + 另一家的 Key 前缀 = 「换了地址没换 Key」，不用再探一次
+  if (/(^|\.)minimaxi?\.(com|cn)$/i.test(host) && /^sk-/.test(key) && !key.startsWith("eyJ")) {
+    return `${head}${who}地址是 MiniMax 官方，但这把 Key 是 sk- 开头 —— MiniMax 官方的 Key 是 eyJ 开头的一长串 JWT，sk- 这种通常是 OpenAI 或中转的令牌，两家不通用。`;
+  }
+  if (/(^|\.)openai\.com$/i.test(host) && !/^sk-/.test(key)) {
+    return `${head}${who}地址是 OpenAI 官方，但这把 Key 不是 sk- 开头，八成填了别家的 Key。`;
+  }
+
+  /**
+   * 最后一种、也是最容易把人绕晕的一种：**同一把 Key，拉清单通、画图不通**。
+   * 那说明 Key 本身没填错，是网关把图片接口路由到了另一个上游 ——
+   * 这类中转的图片通道经常单独配 Key，或者干脆没配。探一次清单就能分清。
+   */
+  return (async () => {
+    const catalog = await probeImageCatalog(input.settings);
+    if (catalog.ok) {
+      return `${head}${who}但同一把 Key 拉 GET /models 是通的 —— 说明 Key 没填错，是这个网关对图片接口有单独的上游/鉴权配置（很常见：图片走另一条通道，那条通道没配 Key 或没开通）。要么在中转后台给图片通道单独配 Key，要么换成服务商官方地址。`;
+    }
+    return `${head}${who}地址和 Key 可能不是同一家，或者这把 Key 已失效、被停用。画图 Key 跟对话、看图的 Key 是分开存的，换服务商时两样要一起换。`;
+  })();
+}
+
+/**
  * 「测试画图」：真的让服务商画一张，看它能不能交回一张图。
  *
  * 为什么不能只测连通性：`GET /models` 里躺着模型名、`/images/generations`
@@ -148,6 +197,9 @@ export default defineEventHandler(async (event): Promise<ProbeResult> => {
 
   const endpointLabel = "POST " + endpoint.host + endpoint.pathname;
   const startedAt = Date.now();
+  /** 鉴权失败时要报「用的是哪把 Key」：画图 / 对话 / 看图三把分开存，只报状态码永远查不出来 */
+  const keyOrigin = imageApiKey.trim() ? "角色设置里保存的画图 Key" : "环境变量 IMAGE_API_KEY";
+  const maskedKey = settings.apiKey.slice(0, 4) + "…（共 " + settings.apiKey.length + " 位）";
 
   const request = async (responseFormat: "b64_json" | "url"):
     Promise<{ ok: true; payload: unknown } | { ok: false; status: number; detail: string }> => {
@@ -215,7 +267,7 @@ export default defineEventHandler(async (event): Promise<ProbeResult> => {
     const message = gatewayRefusal
       ? await explainGatewayRefusal(settings, gatewayRefusal)
       : result.status === 401 || result.status === 403
-        ? "画图 Key 无效或没有该模型的权限（注意：它和对话、看图的 Key 是分开存的）。"
+        ? await describeImageAuthFailure({ status: result.status, endpointLabel, settings, keyOrigin, maskedKey })
         : result.status === 402
           ? "画图服务余额不足，去控制台充值后再测。"
           : result.status === 404

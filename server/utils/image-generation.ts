@@ -206,7 +206,15 @@ export function resolveImageGenerationSettings(input: {
   }
   if (!apiBaseUrl) return null;
 
-  const apiKey = (input.imageApiKey?.trim() || readString(process.env.IMAGE_API_KEY));
+  /**
+   * Key 里去掉所有空白。
+   *
+   * `trim()` 只管两头，而从控制台复制 JWT 时正文很容易带上换行或被折行 ——
+   * MiniMax 那把 Key 有近两百个字符，中间夹一个 `\n` 就是服务商眼里的
+   * `invalid_api_key`，界面上却看不出任何异常。API Key 永远不含空白字符，
+   * 删干净不会有副作用。
+   */
+  const apiKey = (input.imageApiKey?.trim() || readString(process.env.IMAGE_API_KEY)).replace(/\s+/gu, "");
   if (!apiKey) return null;
 
   return {
