@@ -10,6 +10,7 @@ import { getPrisma } from "../../../../../utils/prisma";
 
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 const MAX_EDGE = 1600;
+const ALLOWED_FORMATS = new Set<string>(["jpeg", "png", "webp"]);
 const kinds = new Set(["STANDARD", "FRONT_VIEW", "SIDE_VIEW", "BACK_VIEW", "EXPRESSION", "OUTFIT", "ACCESSORY", "SUPPLEMENT"]);
 
 export default defineEventHandler(async (event) => {
@@ -36,7 +37,7 @@ export default defineEventHandler(async (event) => {
   try {
     const source = sharp(file.data, { limitInputPixels: 40_000_000 });
     const metadata = await source.metadata();
-    if (!metadata.format || !["jpeg", "png", "webp"].includes(metadata.format)) {
+    if (!metadata.format || !ALLOWED_FORMATS.has(metadata.format)) {
       throw createError({ statusCode: 415, statusMessage: "只支持 PNG、JPG 或 WebP 图片。" });
     }
     const result = await source
