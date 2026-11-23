@@ -5,6 +5,7 @@ import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { dataPath } from "../../../../../utils/data-dir";
 import { getPrisma } from "../../../../../utils/prisma";
+import { selectSnapshotReferenceAssets } from "../../../../../utils/visual-profile-references";
 
 export default defineEventHandler(async (event) => {
   const ownerId = await requireActorUserId(event);
@@ -30,9 +31,8 @@ export default defineEventHandler(async (event) => {
       });
       const snapshot = published?.snapshot && typeof published.snapshot === "object" && !Array.isArray(published.snapshot)
         ? published.snapshot as Record<string, unknown> : null;
-      const assets = Array.isArray(snapshot?.assets) ? snapshot.assets : [];
-      const isReferenced = assets.some((item) => item && typeof item === "object"
-        && !Array.isArray(item) && (item as Record<string, unknown>).id === assetId);
+      const selectedAssets = selectSnapshotReferenceAssets(snapshot?.assets);
+      const isReferenced = selectedAssets.some((item) => item.id === assetId);
       if (isReferenced) {
         throw createError({
           statusCode: 409,
