@@ -4075,7 +4075,42 @@ async function runChannelTurn(input: {
       if (imageDecision.requested) useImageStatusReply(blockedImageReply(validation.reason));
       console.warn("[image] generation blocked", { reason: validation.reason, trigger: imageDecision.trigger });
     } else {
-      const prompt = sanitizeImagePrompt(validation.prompt);
+      // Only the explicitly published snapshot may influence drawing. Never read editable profile
+      // fields or drafts here: a half-finished edit must not silently change her official appearance.
+      let officialVisualPrompt = "";
+      try {
+        const visualProfile = await prisma.characterVisualProfile.findUnique({
+          where: { characterId: input.characterId },
+          select: { currentPublishedRevision: true },
+        });
+        if (visualProfile && visualProfile.currentPublishedRevision > 0) {
+          const published = await prisma.characterVisualVersion.findFirst({
+            where: { profile: { characterId: input.characterId }, revision: visualProfile.currentPublishedRevision, status: "PUBLISHED" },
+            select: { snapshot: true },
+          });
+          const snapshot = published?.snapshot && typeof published.snapshot === "object" && !Array.isArray(published.snapshot)
+            ? published.snapshot as Record<string, unknown> : null;
+          if (snapshot) {
+            const parts = [
+              typeof snapshot.coreAppearance === "string" ? snapshot.coreAppearance.trim() : "",
+              typeof snapshot.corePrompt === "string" ? snapshot.corePrompt.trim() : "",
+            ];
+            if (Array.isArray(snapshot.outfits)) {
+              const defaultOutfit = snapshot.outfits.find((item) => item && typeof item === "object" && !Array.isArray(item)
+                && (item as Record<string, unknown>).isDefault === true) as Record<string, unknown> | undefined;
+              if (typeof defaultOutfit?.prompt === "string" && defaultOutfit.prompt.trim()) parts.push(defaultOutfit.prompt.trim());
+            }
+            if (typeof snapshot.negativePrompt === "string" && snapshot.negativePrompt.trim()) {
+              parts.push(`避免：${snapshot.negativePrompt.trim()}`);
+            }
+            officialVisualPrompt = parts.filter(Boolean).join("；");
+          }
+        }
+      } catch (error) {
+        // Profile lookup is optional and must never break an otherwise valid image request.
+        console.warn("[image] published visual profile unavailable", error instanceof Error ? error.message : String(error));
+      }
+      const prompt = sanitizeImagePrompt([officialVisualPrompt, validation.prompt].filter(Boolean).join("；"));
       const result = await generateImage({ settings: imageSettings, prompt, characterId: input.characterId });
       if (result.ok) {
         replyImage = result.image;
