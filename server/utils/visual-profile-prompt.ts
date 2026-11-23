@@ -23,6 +23,11 @@ export function composePublishedVisualPrompt(snapshot: PublishedVisualSnapshot, 
   if (typeof snapshot.negativePrompt === "string" && snapshot.negativePrompt.trim()) {
     parts.push(`避免：${snapshot.negativePrompt.trim()}`);
   }
-  if (scenePrompt.trim()) parts.push(scenePrompt.trim());
-  return parts.join("；").slice(0, 1200).trim();
+  const identity = parts.join("；");
+  const scene = scenePrompt.trim();
+  if (!scene) return identity.slice(0, 1200).trim();
+  if (scene.length >= 1200) return scene.slice(0, 1200).trim();
+  const identityBudget = Math.max(0, 1199 - scene.length);
+  const boundedIdentity = identity.slice(0, identityBudget).trim();
+  return [boundedIdentity, scene].filter(Boolean).join("；").trim();
 }
