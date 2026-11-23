@@ -30,7 +30,7 @@ export default defineEventHandler(async (event) => {
       const item = value as Record<string, unknown>;
       if (typeof item.name !== "string" || typeof item.prompt !== "string") return [];
       return [{ name: item.name.slice(0, 100), prompt: item.prompt.slice(0, 6000), isDefault: item.isDefault === true,
-        sortOrder: Number.isSafeInteger(item.sortOrder) ? Number(item.sortOrder) : 0 }];
+        sortOrder: typeof item.sortOrder === "number" && Number.isSafeInteger(item.sortOrder) ? item.sortOrder : 0 }];
     }) : [];
 
     const updated = await tx.characterVisualProfile.update({ where: { id: profile.id }, data: { coreAppearance, corePrompt, negativePrompt } });
