@@ -309,6 +309,49 @@ const built = buildCharacterBundle({
       ],
     },
   ],
+  /**
+   * 形象档案（v8）：文字、装扮、版本、参考图清单。
+   * 素材行故意带 `id` / `relativePath` —— 导出必须把它们剥掉，否则新机器会以为图还在。
+   */
+  visualProfile: {
+    coreAppearance: "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾",
+    corePrompt: "1girl, purple long hair, blue eyes, whale ears, whale tail",
+    negativePrompt: "lowres, bad anatomy",
+    currentPublishedRevision: 2,
+    outfits: [
+      { name: "白裙", prompt: "white dress", isDefault: true, sortOrder: 0 },
+      { name: "雨衣", prompt: "yellow raincoat", isDefault: false, sortOrder: 1 },
+    ],
+    versions: [
+      {
+        revision: 1,
+        status: "ARCHIVED",
+        note: "第一版",
+        snapshot: { coreAppearance: "紫发", outfits: [{ name: "白裙", prompt: "white dress", isDefault: true, sortOrder: 0, id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa" }] },
+        createdAt: new Date("2026-10-20T10:00:00Z"),
+        publishedAt: new Date("2026-10-20T11:00:00Z"),
+      },
+      {
+        revision: 2,
+        status: "PUBLISHED",
+        note: "加了鲸鱼尾",
+        snapshot: {
+          coreAppearance: "紫发，鲸鱼尾",
+          assets: [{ id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", kind: "STANDARD", label: "正面", relativePath: "visual-profile/x/a.png", sortOrder: 0 }],
+        },
+        createdAt: new Date("2026-10-22T10:00:00Z"),
+        publishedAt: new Date("2026-10-22T11:00:00Z"),
+      },
+    ],
+    assets: [
+      { kind: "STANDARD", label: "正面", width: 1024, height: 1024, sortOrder: 0 },
+      { kind: "EXPRESSION", label: "笑", width: 512, height: 512, sortOrder: 1 },
+    ],
+  },
+  stickers: [
+    { name: "无语", usage: "被怼的时候", enabled: true, source: "collected" },
+    { name: "点赞", usage: "夸主人的时候", enabled: false, source: "manual" },
+  ],
   now: new Date("2026-10-31T13:00:00Z"),
 });
 
@@ -319,12 +362,39 @@ assert.equal(
   "血缘 id 必须跟着卡片走，否则没法认人合并",
 );
 assert.equal(built.formatVersion, CHARACTER_BUNDLE_VERSION, "导出用当前格式版本");
-assert.equal(CHARACTER_BUNDLE_VERSION, 7, "v7 补上语音/表情等设置、表达习惯、目标与偏好");
+assert.equal(CHARACTER_BUNDLE_VERSION, 8, "v8 补上形象档案与表情包清单");
 assert.equal(built.counts.interactionGuidance, 1, "互动经验单独成段并计数");
 assert.equal(built.counts.channelPolicies, 1, "渠道行为策略单独成段并计数");
 assert.equal(built.counts.expressionHabits, 2, "表达习惯单独成段并计数（含被关掉的那条）");
 assert.equal(built.counts.goals, 2, "目标单独成段并计数（含已完成的）");
 assert.equal(built.counts.preferences, 1, "偏好单独成段并计数");
+// v8：形象档案与表情包清单
+assert.equal(built.counts.hasVisualProfile, true, "形象档案整段带走");
+assert.equal(built.counts.visualOutfits, 2, "装扮计数");
+assert.equal(built.counts.visualVersions, 2, "版本历史计数");
+assert.equal(built.counts.visualAssets, 2, "参考图清单计数（只有清单，没有图）");
+assert.equal(built.counts.stickers, 2, "表情包清单计数");
+assert.equal(built.visualProfile?.coreAppearance, "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾", "形象描述要带走");
+assert.equal(built.visualProfile?.negativePrompt, "lowres, bad anatomy", "负面提示也要带走");
+assert.equal(built.visualProfile?.currentPublishedRevision, 2, "当前正式版本号跟着走");
+assert.equal(built.visualProfile?.outfits[0]?.isDefault, true, "默认装扮标记保留");
+assert.equal(built.stickers[0]?.usage, "被怼的时候", "表情包的用途要带走");
+assert.equal(built.stickers[1]?.enabled, false, "关闭状态也照实带走（导入端会先停用）");
+{
+  const snapshot = built.visualProfile?.versions[1]?.snapshot as Record<string, unknown>;
+  const assets = (snapshot.assets as Array<Record<string, unknown>>) ?? [];
+  assert.equal(assets.length, 1);
+  assert.equal(Reflect.get(assets[0] ?? {}, "id"), undefined, "版本快照里的素材 id 必须剥掉（旧机器的主键）");
+  assert.equal(Reflect.get(assets[0] ?? {}, "relativePath"), undefined, "版本快照里的磁盘路径必须剥掉");
+  assert.equal(assets[0]?.label, "正面", "快照里该留的是清单信息");
+  const outfitSnapshot = (built.visualProfile?.versions[0]?.snapshot.outfits as Array<Record<string, unknown>>) ?? [];
+  assert.equal(Reflect.get(outfitSnapshot[0] ?? {}, "id"), undefined, "快照里的装扮 id 同样要剥掉");
+}
+assert.equal(
+  JSON.stringify(built).includes("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"),
+  false,
+  "整份包里不该出现任何素材主键",
+);
 assert.equal(built.exportedAt, "2026-10-31T13:00:00.000Z", "导出时间用注入的 now，便于测试");
 assert.equal(built.character.name, "小鱼");
 assert.equal(built.counts.memories, 2, "两条记忆（全局 + 私人）");
@@ -400,6 +470,15 @@ assert.equal(
   false,
   "原文/忆泡的 id 指针一律不进包",
 );
+// v8 的两段也要能原样回来
+assert.equal(roundTrip.counts.hasVisualProfile, true, "回环后形象档案还在");
+assert.equal(roundTrip.visualProfile?.corePrompt, built.visualProfile?.corePrompt, "形象提示词回环不变");
+assert.equal(roundTrip.visualProfile?.outfits.length, 2, "装扮回环不变");
+assert.equal(roundTrip.visualProfile?.versions[1]?.status, "PUBLISHED", "版本状态回环不变");
+assert.equal(roundTrip.visualProfile?.versions[1]?.publishedAt, "2026-10-22T11:00:00.000Z", "发布时间回环不变");
+assert.equal(roundTrip.visualProfile?.assets[1]?.kind, "EXPRESSION", "参考图清单的用途回环不变");
+assert.equal(roundTrip.visualProfile?.assets[0]?.width, 1024, "清单里的尺寸要保住（补图时知道找多大的）");
+assert.deepEqual(roundTrip.stickers, built.stickers, "表情包清单回环不变");
 
 // 老卡（v1）没有这两段：解析出来必须是空数组，而不是报错或 undefined
 const legacy = parseCharacterBundle(minimal());
@@ -591,6 +670,86 @@ assert.equal(okV7.goals[0]?.status, "ABANDONED", "放弃过的目标也是她经
 assert.equal(okV7.counts.expressionHabits, 1);
 assert.equal(okV7.counts.goals, 1);
 assert.equal(okV7.counts.preferences, 1);
+
+/**
+ * 形象档案 / 表情包清单（v8）。
+ *
+ * 门禁与 v6 / v7 同一套：新卡必须声明这两段（`null` 是合法值，表示她没建过形象档案），
+ * 旧卡夹带一律拒绝。另有两条自己的规矩：
+ *   - 装扮重名要拒绝（库里是唯一键，包里带两份就得猜哪份算数）
+ *   - `currentPublishedRevision` 指向包里没有的版本时收口成 0，不能留一个指空的版本号
+ */
+function v8(overrides: Record<string, unknown> = {}) {
+  return v7({ formatVersion: 8, visualProfile: null, stickers: [], ...overrides });
+}
+
+assert.throws(
+  () => parseCharacterBundle(v8({ visualProfile: undefined })),
+  /缺少形象档案或表情包段/,
+  "v8 卡必须声明这两段，缺了会让人以为「她本来就没有形象档案」",
+);
+assert.throws(
+  () => parseCharacterBundle(v8({ stickers: undefined })),
+  /缺少形象档案或表情包段/,
+  "表情包清单同样必须声明（空数组也是声明）",
+);
+assert.throws(
+  () => parseCharacterBundle(v7({ visualProfile: null })),
+  /需要v8角色卡/,
+  "旧版本卡不许夹带形象档案，否则会被静默丢掉",
+);
+assert.throws(
+  () => parseCharacterBundle(v8({
+    visualProfile: {
+      coreAppearance: "紫发",
+      outfits: [
+        { name: "白裙", prompt: "white dress" },
+        { name: "白裙", prompt: "another" },
+      ],
+    },
+  })),
+  /重名/,
+  "装扮重名要拒绝：库里是唯一键，不能猜哪一套算数",
+);
+assert.throws(
+  () => parseCharacterBundle(v8({
+    visualProfile: {
+      coreAppearance: "紫发",
+      outfits: [
+        { name: "白裙", prompt: "a", isDefault: true },
+        { name: "雨衣", prompt: "b", isDefault: true },
+      ],
+    },
+  })),
+  /不止一套默认装扮/,
+  "两套默认装扮要拒绝：进提示词时不知道该穿哪套",
+);
+assert.throws(
+  () => parseCharacterBundle(v8({ stickers: [{ name: "" }] })),
+  /不能为空/,
+  "没有名字的表情包条目要拒绝（名字是她挑图时唯一的线索）",
+);
+
+const okV8 = parseCharacterBundle(v8({
+  visualProfile: {
+    coreAppearance: "浅紫长发，鲸鱼耳",
+    corePrompt: "1girl, purple hair",
+    negativePrompt: "lowres",
+    // 指向不存在的版本号 → 必须收口成 0
+    currentPublishedRevision: 9,
+    outfits: [{ name: "白裙", prompt: "white dress", isDefault: true }],
+    versions: [{ revision: 1, status: "PUBLISHED", note: "首版", snapshot: { coreAppearance: "紫发" } }],
+    assets: [{ kind: "STANDARD", label: "正面" }, { kind: "MADE_UP", label: "怪图" }],
+  },
+  stickers: [{ name: "无语", usage: "被怼时", enabled: true, source: "collected" }],
+}));
+assert.equal(okV8.visualProfile?.currentPublishedRevision, 0, "版本号指向包里没有的版本时收口成 0");
+assert.equal(okV8.visualProfile?.assets[1]?.kind, "STANDARD", "认不出的素材用途退回默认，不整卡失败");
+assert.equal(okV8.counts.visualOutfits, 1);
+assert.equal(okV8.counts.visualVersions, 1);
+assert.equal(okV8.counts.visualAssets, 2);
+assert.equal(okV8.counts.stickers, 1);
+assert.equal(okV8.visualProfile?.versions[0]?.createdAt, null, "没写创建时间就是 null，不编一个");
 
 // 原文保留策略：老卡（没有这一格）按 30 天兜；显式 null 才是「永久」
 assert.equal(parseCharacterBundle(minimal()).memorySetting.rawMessageRetentionDays, 30, "老卡沿用导入端默认值");

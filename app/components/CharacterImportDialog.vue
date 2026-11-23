@@ -38,6 +38,14 @@ type BundleCounts = {
   expressionHabits?: number;
   goals?: number;
   preferences?: number;
+  /** 形象档案（v8）：装扮几套 / 版本几版 / 参考图清单几张（图片本身不随卡走）。 */
+  visualOutfits?: number;
+  visualVersions?: number;
+  visualAssets?: number;
+  /** 包里到底有没有形象档案这一段。文字也算——只有装扮和版本为 0 不代表没有。 */
+  hasVisualProfile?: boolean;
+  /** 表情包清单条数（v8）：都只有名字与用途，导入后是缺图条目。 */
+  stickers?: number;
   growth?: GrowthCounts;
 };
 
@@ -67,6 +75,9 @@ type BundleAdded = {
   expressionHabits?: number;
   goals?: number;
   preferences?: number;
+  visualOutfits?: number;
+  visualVersions?: number;
+  stickers?: number;
   growth?: GrowthCounts;
 };
 
@@ -154,6 +165,8 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
   const journalRevisions = typeof declared.journalRevisions === "number"
     ? declared.journalRevisions
     : journalList.reduce<number>((total, journal) => total + asArray(asRecord(journal).revisions).length, 0);
+  // 形象档案整段可能是 null（这个角色没建过），也可能根本不存在（v7 及更早的卡）。
+  const visual = asRecord(source).visualProfile;
   return {
     memories: typeof declared.memories === "number" ? declared.memories : memories.length,
     privateMemories: typeof declared.privateMemories === "number" ? declared.privateMemories : privateMemories,
@@ -181,6 +194,20 @@ function readCounts(source: unknown, memories: unknown[], events: unknown[], sna
     preferences: typeof declared.preferences === "number"
       ? declared.preferences
       : asArray(asRecord(source).preferences).length,
+    // v8：形象档案与表情包清单。老卡（v7 及更早）这两段根本不存在，按「没有」显示。
+    visualOutfits: typeof declared.visualOutfits === "number"
+      ? declared.visualOutfits
+      : asArray(asRecord(visual).outfits).length,
+    visualVersions: typeof declared.visualVersions === "number"
+      ? declared.visualVersions
+      : asArray(asRecord(visual).versions).length,
+    visualAssets: typeof declared.visualAssets === "number"
+      ? declared.visualAssets
+      : asArray(asRecord(visual).assets).length,
+    hasVisualProfile: typeof declared.hasVisualProfile === "boolean"
+      ? declared.hasVisualProfile
+      : visual !== undefined && visual !== null,
+    stickers: typeof declared.stickers === "number" ? declared.stickers : asArray(asRecord(source).stickers).length,
     growth: Object.fromEntries(Object.entries(asRecord(asRecord(asRecord(source).growth).tables)).map(([key, rows]) => [key, asArray(rows).length])),
   };
 }
@@ -237,6 +264,7 @@ function describeGrowth(counts: GrowthCounts = {}): string {
   const groups: Array<[string, string[]]> = [
     ["条知识及候选", ["knowledgeCandidates", "knowledgeItems"]],
     ["条知识历史与关联", ["knowledgeRevisions", "knowledgeRelations"]],
+    ["个知识主题", ["knowledgeTopics", "knowledgeTopicMembers", "knowledgeTopicRevisions"]],
     ["条社交关系与历史", ["socialRelationships", "socialExperiences", "socialAssessments", "socialReviews", "socialChanges", "socialChangeEvidence", "socialAssessmentEvidence"]],
     ["条反思与建议", ["reflectionRuns", "reflectionSuggestions"]],
     ["条成长事件与投递历史", ["growthEvents", "growthDeliveries"]],
@@ -244,6 +272,33 @@ function describeGrowth(counts: GrowthCounts = {}): string {
   return groups.map(([label, keys]) => { const count = keys.reduce((sum, key) => sum + (counts[key] ?? 0), 0); return count ? `${count} ${label}` : ""; }).filter(Boolean).join("、");
 }
 const growthNote = computed(() => describeGrowth(preview.value?.counts.growth));
+
+/**
+ * 形象档案那一格。
+ *
+ * 只写「几套装扮 / 几版 / 几张参考图」：参考图**只是清单**，图片本身不随卡走，
+ * 所以这里必须带一句「需重传」，否则人会以为搬家已经把图一起搬过来了。
+ */
+const visualSummary = computed(() => {
+  const counts = preview.value?.counts;
+  if (!counts?.hasVisualProfile) return "没有";
+  const parts: string[] = [];
+  if (counts.visualOutfits) parts.push(`${counts.visualOutfits} 套装扮`);
+  if (counts.visualVersions) parts.push(`${counts.visualVersions} 版历史`);
+  if (counts.visualAssets) parts.push(`${counts.visualAssets} 张参考图清单`);
+  return parts.length ? parts.join("、") : "有";
+});
+
+/** 图片没随卡走这件事，导入前就得说，不能等导入完才在警告里看到。 */
+const imageCaveat = computed(() => {
+  const counts = preview.value?.counts;
+  if (!counts) return "";
+  const parts: string[] = [];
+  if (counts.visualAssets) parts.push(`${counts.visualAssets} 张形象参考图`);
+  if (counts.stickers) parts.push(`${counts.stickers} 个表情包图片`);
+  if (!parts.length) return "";
+  return `这张卡带着 ${parts.join("和")}的名字，但图片本身不随卡走：导入后要重新上传，表情包会先停用。`;
+});
 
 function describeAdded(added: BundleAdded): string {
   const parts: string[] = [];
@@ -260,6 +315,9 @@ function describeAdded(added: BundleAdded): string {
   if (added.expressionHabits) parts.push(`${added.expressionHabits} 条表达习惯`);
   if (added.goals) parts.push(`${added.goals} 个目标`);
   if (added.preferences) parts.push(`${added.preferences} 条偏好`);
+  if (added.visualOutfits) parts.push(`${added.visualOutfits} 套装扮`);
+  if (added.visualVersions) parts.push(`${added.visualVersions} 版形象历史`);
+  if (added.stickers) parts.push(`${added.stickers} 个表情包名字`);
   const growth = describeGrowth(added.growth);
   if (growth) parts.push(growth);
   return parts.length ? `新增 ${parts.join("、")}` : "没有新内容（本机已经全有了）";
@@ -499,6 +557,14 @@ function formatExportedAt(value: string | null): string {
           <dt>偏好</dt>
           <dd>{{ preview.counts.preferences ?? 0 }} 条</dd>
         </div>
+        <div>
+          <dt>形象档案</dt>
+          <dd>{{ visualSummary }}</dd>
+        </div>
+        <div>
+          <dt>表情包</dt>
+          <dd>{{ preview.counts.stickers ?? 0 }} 个（缺图）</dd>
+        </div>
       </dl>
 
       <!-- 同一同步根可能有多个本地副本；多目标时必须明确选择，绝不自动取第一个。 -->
@@ -586,6 +652,13 @@ function formatExportedAt(value: string | null): string {
       >
         日记 / 手账共 {{ preview.counts.journalRevisions }} 个版本，历史版本一并带过来；
         「今日一句」的出处会重新指向本机新建的那一版日记。
+      </p>
+
+      <p
+        v-if="imageCaveat"
+        class="friend-note"
+      >
+        {{ imageCaveat }}
       </p>
     </div>
 

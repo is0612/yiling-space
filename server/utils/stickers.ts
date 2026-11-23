@@ -287,6 +287,14 @@ export type StickerDto = {
   qqEmojiId: string | null;
   /** 进回收站的时间。非空 = 已删（列表接口不会返回，只有回收站接口会）。 */
   deletedAt: string | null;
+  /**
+   * 这张图在本机到底有没有。
+   *
+   * 有一种真实的「有行没图」：从角色卡导入的表情包只带过来名字与用途，图片留在旧机器上。
+   * 页面拿它决定显示真图还是占位块 —— 直接给一个 404 的地址，用户看到的是破图，
+   * 既不解释也没法处理。
+   */
+  hasImage: boolean;
 };
 
 /** 给页面的表情包条目。图片本体走 `/image` 接口单独取，不塞进 JSON。 */
@@ -303,6 +311,8 @@ export function toStickerDto(row: {
   source?: string | null;
   qqEmojiId?: string | null;
   deletedAt?: Date | null;
+  /** 磁盘文件名；空串 = 这一行没有图（角色卡导入的缺图条目）。 */
+  fileName?: string | null;
 }): StickerDto {
   return {
     id: row.id,
@@ -317,6 +327,7 @@ export function toStickerDto(row: {
     source: row.source || "manual",
     qqEmojiId: row.qqEmojiId ?? null,
     deletedAt: row.deletedAt ? row.deletedAt.toISOString() : null,
+    hasImage: Boolean(row.fileName),
   };
 }
 

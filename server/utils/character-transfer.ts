@@ -27,6 +27,8 @@ import {
   type CharacterBundleMemoryBody,
   type CharacterBundlePreference,
   type CharacterBundleSnapshotBody,
+  type CharacterBundleSticker,
+  type CharacterBundleVisualProfile,
   type ParsedCharacterBundle,
 } from "./character-portable";
 import { buildExternalIdentityScopeKey } from "./identity-scope";
@@ -204,6 +206,40 @@ export async function loadCharacterExportBundle(input: {
         take: CHARACTER_BUNDLE_LIMITS.preferences,
         select: { kind: true, topic: true, reason: true, status: true },
       },
+      /**
+       * 形象档案（v8）。文字、装扮、版本、参考图清单都带走；图片本体留在 .data 里 ——
+       * 包里是纯 JSON，把图 base64 塞进来只会让一张卡几十兆。
+       */
+      visualProfile: {
+        select: {
+          coreAppearance: true,
+          corePrompt: true,
+          negativePrompt: true,
+          currentPublishedRevision: true,
+          outfits: {
+            orderBy: { sortOrder: "asc" },
+            take: CHARACTER_BUNDLE_LIMITS.visualOutfits,
+            select: { name: true, prompt: true, isDefault: true, sortOrder: true },
+          },
+          versions: {
+            orderBy: { revision: "asc" },
+            take: CHARACTER_BUNDLE_LIMITS.visualVersions,
+            select: { revision: true, status: true, note: true, snapshot: true, createdAt: true, publishedAt: true },
+          },
+          assets: {
+            orderBy: [{ kind: "asc" }, { sortOrder: "asc" }],
+            take: CHARACTER_BUNDLE_LIMITS.visualAssets,
+            select: { kind: true, label: true, width: true, height: true, sortOrder: true },
+          },
+        },
+      },
+      /** 表情包清单（v8）：回收站里的不带，图片不带。 */
+      stickers: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: "asc" },
+        take: CHARACTER_BUNDLE_LIMITS.stickers,
+        select: { name: true, usage: true, enabled: true, source: true },
+      },
     },
   });
 
@@ -259,6 +295,8 @@ export async function loadCharacterExportBundle(input: {
       reason: item.reason,
       status: item.status as CharacterBundlePreference["status"],
     })),
+    visualProfile: character.visualProfile,
+    stickers: character.stickers,
     now,
   });
 
@@ -294,6 +332,10 @@ export async function loadCharacterExportBundle(input: {
         expressionHabits: bundle.counts.expressionHabits,
         goals: bundle.counts.goals,
         preferences: bundle.counts.preferences,
+        visualOutfits: bundle.counts.visualOutfits,
+        visualVersions: bundle.counts.visualVersions,
+        visualAssets: bundle.counts.visualAssets,
+        stickers: bundle.counts.stickers,
       },
     },
   }).catch(() => undefined);
@@ -510,6 +552,11 @@ export type CharacterImportAdded = {
   goals: number;
   /** 新增的偏好条数（v7）。 */
   preferences: number;
+  /** 导入的形象档案：写了几套装扮 / 几版历史（v8）。文字本身不算条数。 */
+  visualOutfits: number;
+  visualVersions: number;
+  /** 建成的「缺图」表情包条目数（v8）。 */
+  stickers: number;
   growth?: ReturnType<typeof growthCounts>;
 };
 
@@ -547,6 +594,9 @@ function emptyAdded(): CharacterImportAdded {
     expressionHabits: 0,
     goals: 0,
     preferences: 0,
+    visualOutfits: 0,
+    visualVersions: 0,
+    stickers: 0,
     growth: growthCounts(emptyCharacterGrowthBundle()),
   };
 }
@@ -1271,6 +1321,143 @@ async function insertPreferences(
   return added;
 }
 
+/**
+ * 写形象档案（v8）。
+ *
+ * 只写「文字 + 装扮 + 版本记录」：参考图清单里的图**没有跟着卡走**，所以一张素材行都不建。
+ * 建一行 `relativePath` 为空的素材，页面上就是一张永远加载失败的图 —— 那比一句
+ * 「照清单重新上传」更让人困惑。
+ *
+ * 版本快照在包里已经剥掉素材 id 与磁盘路径，这里原样写入即可；它只用于「回看当时长什么样」，
+ * 不会被当作参考图去读。
+ */
+async function insertVisualProfile(
+  tx: Tx,
+  characterId: string,
+  profile: CharacterBundleVisualProfile | null,
+  added: CharacterImportAdded,
+): Promise<void> {
+  if (!profile) return;
+  const created = await tx.characterVisualProfile.create({
+    data: {
+      characterId,
+      coreAppearance: profile.coreAppearance,
+      corePrompt: profile.corePrompt,
+      negativePrompt: profile.negativePrompt,
+      // 只有包里真的有那一版，才把它标成「当前正式版本」（parse 已经收口过）。
+      currentPublishedRevision: profile.currentPublishedRevision,
+    },
+    select: { id: true },
+  });
+  if (profile.outfits.length) {
+    await tx.characterVisualOutfit.createMany({
+      data: profile.outfits.map(outfit => ({
+        profileId: created.id,
+        name: outfit.name,
+        prompt: outfit.prompt,
+        isDefault: outfit.isDefault,
+        sortOrder: outfit.sortOrder,
+      })),
+    });
+    added.visualOutfits += profile.outfits.length;
+  }
+  if (profile.versions.length) {
+    await tx.characterVisualVersion.createMany({
+      data: profile.versions.map(version => ({
+        profileId: created.id,
+        revision: version.revision,
+        status: version.status,
+        note: version.note,
+        snapshot: version.snapshot as Prisma.InputJsonValue,
+        createdAt: version.createdAt ? new Date(version.createdAt) : new Date(),
+        publishedAt: version.publishedAt ? new Date(version.publishedAt) : null,
+      })),
+    });
+    added.visualVersions += profile.versions.length;
+  }
+}
+
+/**
+ * 把形象档案并进已有角色。
+ *
+ * 和设置同一个口径：**本地保留，导入的只补空缺**。
+ *   - 文字（形象描述 / 提示词 / 负面提示）：本地已有就一个字都不动 —— 那是刚调好的东西
+ *   - 装扮：按名字补缺，同名的保留本地那套
+ *   - 版本历史：不合并。它是「这台机器上发布过哪几版」的账，两边的修订号会撞，
+ *     混在一起就再也说不清哪一版是哪一版；导入的版本只在「新建角色」那条路上落库
+ */
+async function mergeVisualProfile(
+  tx: Tx,
+  characterId: string,
+  profile: CharacterBundleVisualProfile | null,
+  added: CharacterImportAdded,
+  warnings: string[],
+): Promise<void> {
+  if (!profile) return;
+  const local = await tx.characterVisualProfile.findUnique({
+    where: { characterId },
+    select: { id: true, outfits: { select: { name: true } } },
+  });
+  if (!local) {
+    await insertVisualProfile(tx, characterId, profile, added);
+    return;
+  }
+  if (profile.versions.length) {
+    warnings.push("本机已有形象档案，导入的版本历史没有合并（两边的版本号会撞）；形象文字与装扮按本地保留、缺的补上。");
+  }
+  const existing = new Set(local.outfits.map(outfit => outfit.name));
+  const missing = profile.outfits.filter(outfit => !existing.has(outfit.name));
+  if (!missing.length) return;
+  await tx.characterVisualOutfit.createMany({
+    data: missing.map(outfit => ({
+      profileId: local.id,
+      name: outfit.name,
+      prompt: outfit.prompt,
+      // 一个角色只能有一套默认装扮，本地已经有一套了就别再抢这个位置。
+      isDefault: false,
+      sortOrder: outfit.sortOrder,
+    })),
+  });
+  added.visualOutfits += missing.length;
+}
+
+/**
+ * 写表情包清单（v8）。
+ *
+ * 一律建成「缺图」条目：`fileName` 空、`sizeBytes` 0、**默认停用**。
+ * 停用不是小气 —— 缺图的条目一旦进入选图，她发出去就是一条发送失败，
+ * 主人还看不出为什么。名字和用途留下，补上图之后自己打开就行。
+ */
+async function insertStickerPlaceholders(
+  tx: Tx,
+  characterId: string,
+  stickers: CharacterBundleSticker[],
+  added: CharacterImportAdded,
+): Promise<void> {
+  if (!stickers.length) return;
+  const existing = await tx.characterSticker.findMany({
+    where: { characterId, deletedAt: null },
+    select: { name: true },
+  });
+  // 库里名字没有唯一约束，但同一份卡导两次不该多出一批一模一样的空条目。
+  const taken = new Set(existing.map(item => item.name));
+  const rows = stickers
+    .filter(item => !taken.has(item.name))
+    .map(item => ({
+      characterId,
+      name: item.name,
+      usage: item.usage,
+      fileName: "",
+      mimeType: "",
+      sizeBytes: 0,
+      enabled: false,
+      source: item.source,
+    }));
+  if (!rows.length) return;
+  await tx.characterSticker.createMany({ data: rows });
+  added.stickers += rows.length;
+}
+
 /** 合并用：读某个范围已有的记忆正文，用来判断「这句话本机已经有了」。 */async function loadMemoryContents(tx: Tx, memoryScopeId: string): Promise<Set<string>> {
   const rows = await tx.memoryItem.findMany({
     where: { memoryScopeId },
@@ -1436,6 +1623,20 @@ async function createCharacterFromBundle(input: {
     added.expressionHabits += await insertExpressionHabits(tx, characterId, bundle.expressionHabits, ownerId);
     added.goals += await insertGoals(tx, characterId, bundle.goals, ownerId);
     added.preferences += await insertPreferences(tx, characterId, bundle.preferences, ownerId);
+    await insertVisualProfile(tx, characterId, bundle.visualProfile, added);
+    await insertStickerPlaceholders(tx, characterId, bundle.stickers, added);
+    /**
+     * 这两句提示必须给：形象档案看起来「导进来了」（文字和装扮都在），
+     * 但参考图其实还在旧机器上；表情包则是一批缺图的空壳。
+     * 不说清楚，主人会以为搬家完成，直到她画不出图、发不出表情才发现。
+     */
+    const assetCount = bundle.visualProfile?.assets.length ?? 0;
+    if (assetCount > 0) {
+      warnings.push(`形象档案按清单带了 ${assetCount} 张参考图的名称与用途，图片本身不随卡走，到「形象档案」重新上传后才会生效。`);
+    }
+    if (added.stickers > 0) {
+      warnings.push(`表情包带了 ${added.stickers} 个名字与用途，图片不随卡走，已先停用；补图后再打开。`);
+    }
 
     // 她的朋友：身份按 (platform, platformUid) 全局唯一，所以是 upsert 而不是新建 ——
     // 这台机器上同一个人可能已经跟另一个角色聊过，不能给他开出第二个身份。
@@ -1508,6 +1709,10 @@ async function createCharacterFromBundle(input: {
           expressionHabits: bundle.counts.expressionHabits,
           goals: bundle.counts.goals,
           preferences: bundle.counts.preferences,
+          visualOutfits: bundle.counts.visualOutfits,
+          visualVersions: bundle.counts.visualVersions,
+          visualAssets: bundle.counts.visualAssets,
+          stickers: bundle.counts.stickers,
         },
       },
     });
@@ -1724,6 +1929,15 @@ async function mergeCharacterCard(input: {
       ownerId,
       existingPreferences,
     );
+    await mergeVisualProfile(tx, target.id, bundle.visualProfile, added, warnings);
+    await insertStickerPlaceholders(tx, target.id, bundle.stickers, added);
+    const mergedAssets = bundle.visualProfile?.assets.length ?? 0;
+    if (mergedAssets > 0) {
+      warnings.push(`形象档案按清单带了 ${mergedAssets} 张参考图的名称与用途，图片本身不随卡走，需要重新上传。`);
+    }
+    if (added.stickers > 0) {
+      warnings.push(`表情包带了 ${added.stickers} 个名字与用途，图片不随卡走，已先停用；补图后再打开。`);
+    }
 
     for (const friend of bundle.friends) {
       const identity = await tx.externalIdentity.upsert({

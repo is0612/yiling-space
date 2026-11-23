@@ -61,8 +61,16 @@ export const CHARACTER_BUNDLE_FORMAT = "yiling-hub.character";
  *   - `memorySetting` 带上原文保留天数与自动清理开关
  * 音色、语气指令这类东西属于「她是谁」，不再是可选的展示字段；凭据（`*ApiKey`）仍然一律不带，
  * 新机器上缺 Key 时的表现和别的模型一样是「未配置」。
+ * v8（2026-11-24）补两处：
+ *   - 形象档案（`visualProfile`）：形象描述、负面提示、装扮、发布版本快照、参考图清单。
+ *     之前整张 `character_visual_profiles` 都漏在包外，换台机器她的长相设定全归零。
+ *     **参考图文件本身不随包走**：那是磁盘上的图，包是纯 JSON；只带「有几张、叫什么、哪一类」，
+ *     导入后照着清单重新上传即可。
+ *   - 表情包清单（`stickers`）：名字、什么时候用、开关、来源。图片同样不随包走，
+ *     导入端会先把它们建成「缺图」条目并停用 —— 缺图的条目让她发出去只会是发送失败。
+ * 知识主题（自动整理出的主题、成员、修订）走成长包，见 `character-growth-portable.ts` 的 v2。
  */
-export const CHARACTER_BUNDLE_VERSION = 7;
+export const CHARACTER_BUNDLE_VERSION = 8;
 /** 导入包最大字节数：够 4000 条记忆 + 600 篇总结 + 1500 篇手账，再大基本是塞了别的东西。 */
 export const CHARACTER_BUNDLE_MAX_BYTES = 32 * 1024 * 1024;
 
@@ -120,6 +128,28 @@ export const CHARACTER_BUNDLE_LIMITS = {
   goalTitle: 100,
   goalDescription: 1000,
   preferenceTopic: 100,
+  /**
+   * 形象档案（v8）。
+   *
+   * 装扮按角色算，正常只有几套；版本是「发布过一次一条」，两百条已经远超正常使用量。
+   * 参考图清单同理：它的用途是告诉新机器「你得补几张图」，不是备份图库。
+   */
+  visualOutfits: 60,
+  visualVersions: 200,
+  visualAssets: 60,
+  /** 表情包清单：库里有 200 多张不稀奇，这里留到 800。 */
+  stickers: 800,
+  visualAppearance: 8000,
+  visualPrompt: 8000,
+  negativePrompt: 8000,
+  outfitName: 100,
+  outfitPrompt: 2000,
+  versionNote: 300,
+  assetLabel: 120,
+  stickerName: 60,
+  stickerUsage: 2000,
+  /** 版本快照是模型/页面产出的 JSON，只当历史文本带走，不触发任何行为。 */
+  visualSnapshotBytes: 16384,
   reason: 1000,
   name: 100,
   alias: 100,
@@ -455,6 +485,14 @@ export type CharacterBundleCounts = {
   goals: number;
   /** 口味偏好。 */
   preferences: number;
+  /** 形象档案：带了装扮几套 / 版本几版 / 参考图清单几张。全为 0 也可能是带了文字，见 `hasVisualProfile`。 */
+  visualOutfits: number;
+  visualVersions: number;
+  visualAssets: number;
+  /** 包里是否带了一段形象档案（文字也算）。false 时预览不该说「带着她的长相设定」。 */
+  hasVisualProfile: boolean;
+  /** 表情包清单条数（都是缺图条目，图片不随包走）。 */
+  stickers: number;
   growth?: ReturnType<typeof growthCounts>;
 };
 
@@ -519,6 +557,94 @@ export type CharacterBundlePreference = {
   status: "ACTIVE" | "DISABLED";
 };
 
+export const VISUAL_ASSET_KINDS = [
+  "STANDARD",
+  "FRONT_VIEW",
+  "SIDE_VIEW",
+  "BACK_VIEW",
+  "EXPRESSION",
+  "OUTFIT",
+  "ACCESSORY",
+  "SUPPLEMENT",
+] as const;
+export type BundleVisualAssetKind = typeof VISUAL_ASSET_KINDS[number];
+
+export const VISUAL_VERSION_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
+export type BundleVisualVersionStatus = typeof VISUAL_VERSION_STATUSES[number];
+
+/**
+ * 参考图清单（v8）：只有「有哪几张」，没有图片本体。
+ *
+ * 不带 `relativePath` / `id`：前者是旧机器磁盘上的路径，后者是本机主键，
+ * 搬过去都是死指针；带上只会让新机器以为「图在」，实际打不开。
+ * 导入端因此**不写素材行**，而是提示导出者照这张清单重新上传 ——
+ * 一张标着「正面图」却读不出来的行，比一行提示更糟。
+ */
+export type CharacterBundleVisualAsset = {
+  kind: BundleVisualAssetKind;
+  label: string;
+  /** 原图尺寸，只用于清单展示（新机器补图时知道要找多大的图）。 */
+  width: number | null;
+  height: number | null;
+  sortOrder: number;
+};
+
+/** 装扮：默认那套会进提示词，其余的等她挑。 */
+export type CharacterBundleVisualOutfit = {
+  name: string;
+  prompt: string;
+  isDefault: boolean;
+  sortOrder: number;
+};
+
+/**
+ * 已发布/草稿的一版形象。
+ *
+ * `snapshot` 是发布那一刻的形象快照（含当时的装扮与素材引用），**导出前逐层剥掉
+ * 素材 id 与磁盘路径**，只留 kind / label / sortOrder —— 同理，旧机器的 id 搬过来无意义。
+ */
+export type CharacterBundleVisualVersion = {
+  revision: number;
+  status: BundleVisualVersionStatus;
+  note: string;
+  snapshot: Record<string, unknown>;
+  createdAt: string | null;
+  publishedAt: string | null;
+};
+
+/**
+ * 形象档案（v8）：她长什么样。
+ *
+ * 这是「她是谁」里最容易被忽略的一块 —— 人设文字带走了，形象设定没带走，
+ * 换台机器她就画不出自己。所以 v8 起整段随卡走，只有图片本体留在原地。
+ */
+export type CharacterBundleVisualProfile = {
+  coreAppearance: string;
+  corePrompt: string;
+  negativePrompt: string;
+  /** 当前正式版本号；0 = 还没发布过任何一版。 */
+  currentPublishedRevision: number;
+  outfits: CharacterBundleVisualOutfit[];
+  versions: CharacterBundleVisualVersion[];
+  assets: CharacterBundleVisualAsset[];
+};
+
+/**
+ * 表情包清单（v8）：名字与用途，不带图片。
+ *
+ * 为什么不带图：一台机器上两百多张、三十多兆，塞进纯 JSON 的包里要 base64 膨胀三分之一，
+ * 直接把 32MB 上限撑爆，而且换来的只是「导进来就能发」这一件事。
+ * 名字和场景才是人重新补图时需要的东西，所以只带这两样。
+ */
+export type CharacterBundleSticker = {
+  name: string;
+  usage: string;
+  /** 导出时是开着还是关着。导入端会先按「缺图」停用，补图后再自己打开。 */
+  enabled: boolean;
+  /** manual / collected / qq。 */
+  source: string;
+};
+
 export type GuidanceKindName = "UNDERSTANDING" | "REFERENCE" | "SITUATION" | "STRATEGY";
 const GUIDANCE_KIND_NAMES: readonly GuidanceKindName[] = ["UNDERSTANDING", "REFERENCE", "SITUATION", "STRATEGY"];
 const GUIDANCE_CHAT_SCOPES = ["ALL", "GROUP", "PRIVATE"] as const;
@@ -563,6 +689,13 @@ export type CharacterBundle = {
   goals: CharacterBundleGoal[];
   /** 口味偏好：ACTIVE + DISABLED（v7）。 */
   preferences: CharacterBundlePreference[];
+  /**
+   * 形象档案（v8）：null = 这个角色没建过形象档案（不是「建了但是空的」）。
+   * 两种情况导入后端表现一样（不建行），但包里区分开，预览才能说清「她把长相设定留在了原地」。
+   */
+  visualProfile: CharacterBundleVisualProfile | null;
+  /** 表情包清单（v8）：只有名字与用途，图片不随包走。 */
+  stickers: CharacterBundleSticker[];
   growth: CharacterGrowthBundle;
   counts: CharacterBundleCounts;
 };
@@ -891,6 +1024,11 @@ function buildCounts(bundle: Omit<CharacterBundle, "counts">): CharacterBundleCo
     expressionHabits: bundle.expressionHabits.length,
     goals: bundle.goals.length,
     preferences: bundle.preferences.length,
+    visualOutfits: bundle.visualProfile?.outfits.length ?? 0,
+    visualVersions: bundle.visualProfile?.versions.length ?? 0,
+    visualAssets: bundle.visualProfile?.assets.length ?? 0,
+    hasVisualProfile: bundle.visualProfile !== null,
+    stickers: bundle.stickers.length,
     growth: growthCounts(bundle.growth),
   };
 }
@@ -1071,8 +1209,87 @@ export type BundleBuildInput = {
   expressionHabits?: CharacterBundleExpressionHabit[];
   goals?: CharacterBundleGoal[];
   preferences?: CharacterBundlePreference[];
+  /** 形象档案（v8）：没建过就传 null 或不传。 */
+  visualProfile?: BundleVisualProfileSource | null;
+  /** 表情包清单（v8）：调用方只传未删除的，这里只收名字与用途。 */
+  stickers?: Array<{ name: string; usage: string; enabled: boolean; source: string | null }>;
   now?: Date;
 };
+
+/** 库里读出来的形象档案，`Date` 尚未转成 ISO，转在 build 这一层统一做。 */
+export type BundleVisualProfileSource = {
+  coreAppearance: string;
+  corePrompt: string;
+  negativePrompt: string;
+  currentPublishedRevision: number;
+  outfits: Array<{ name: string; prompt: string; isDefault: boolean; sortOrder: number }>;
+  versions: Array<{
+    revision: number;
+    status: string;
+    note: string;
+    snapshot: unknown;
+    createdAt: Date;
+    publishedAt: Date | null;
+  }>;
+  assets: Array<{ kind: string; label: string; width: number | null; height: number | null; sortOrder: number }>;
+};
+
+function visualAssetKind(value: unknown): BundleVisualAssetKind {
+  return (VISUAL_ASSET_KINDS as readonly string[]).includes(String(value))
+    ? value as BundleVisualAssetKind
+    : "STANDARD";
+}
+
+function visualVersionStatus(value: unknown): BundleVisualVersionStatus {
+  return (VISUAL_VERSION_STATUSES as readonly string[]).includes(String(value))
+    ? value as BundleVisualVersionStatus
+    : "DRAFT";
+}
+
+/**
+ * 版本快照的白名单化。
+ *
+ * 快照原本是「这一版引用了哪几张素材」的记录，素材行带 `id` 与 `relativePath` ——
+ * 两样都是旧机器上的东西，搬过去只会让新机器以为图还在。所以这里只留
+ * 描述文字与「第几张、什么用途、叫什么」，不认识/不该带的键一律丢掉（不 spread 库里的行）。
+ *
+ * 超出字节上限时退回「只留文字」：一个把包撑爆的快照，不如一段描述诚实。
+ */
+function toBundleVisualSnapshot(value: unknown): Record<string, unknown> {
+  const raw = asRecord(value);
+  const text = (key: string, max: number) => typeof raw[key] === "string" ? (raw[key] as string).slice(0, max) : "";
+  const outfits = Array.isArray(raw.outfits)
+    ? raw.outfits.slice(0, CHARACTER_BUNDLE_LIMITS.visualOutfits).map((item) => {
+      const row = asRecord(item);
+      return {
+        name: typeof row.name === "string" ? row.name.slice(0, CHARACTER_BUNDLE_LIMITS.outfitName) : "",
+        prompt: typeof row.prompt === "string" ? row.prompt.slice(0, CHARACTER_BUNDLE_LIMITS.outfitPrompt) : "",
+        isDefault: row.isDefault === true,
+        sortOrder: Number.isSafeInteger(row.sortOrder) ? row.sortOrder as number : 0,
+      };
+    })
+    : [];
+  const assets = Array.isArray(raw.assets)
+    ? raw.assets.slice(0, CHARACTER_BUNDLE_LIMITS.visualAssets).map((item) => {
+      const row = asRecord(item);
+      return {
+        kind: visualAssetKind(row.kind),
+        label: typeof row.label === "string" ? row.label.slice(0, CHARACTER_BUNDLE_LIMITS.assetLabel) : "",
+        sortOrder: Number.isSafeInteger(row.sortOrder) ? row.sortOrder as number : 0,
+      };
+    })
+    : [];
+  const snapshot = {
+    coreAppearance: text("coreAppearance", CHARACTER_BUNDLE_LIMITS.visualAppearance),
+    corePrompt: text("corePrompt", CHARACTER_BUNDLE_LIMITS.visualPrompt),
+    negativePrompt: text("negativePrompt", CHARACTER_BUNDLE_LIMITS.negativePrompt),
+    outfits,
+    assets,
+  };
+  return Buffer.byteLength(JSON.stringify(snapshot), "utf8") <= CHARACTER_BUNDLE_LIMITS.visualSnapshotBytes
+    ? snapshot
+    : { coreAppearance: snapshot.coreAppearance, corePrompt: snapshot.corePrompt, negativePrompt: snapshot.negativePrompt, outfits: [], assets: [] };
+}
 
 /**
  * 把库里的角色读成导出包。`scopes` 只应包含角色全局范围与导出者自己的私人范围，
@@ -1224,6 +1441,49 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
     expressionHabits: input.expressionHabits ?? [],
     goals: input.goals ?? [],
     preferences: input.preferences ?? [],
+    visualProfile: input.visualProfile
+      ? {
+        coreAppearance: (input.visualProfile.coreAppearance ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.visualAppearance),
+        corePrompt: (input.visualProfile.corePrompt ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.visualPrompt),
+        negativePrompt: (input.visualProfile.negativePrompt ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.negativePrompt),
+        currentPublishedRevision: Math.max(0, Math.trunc(input.visualProfile.currentPublishedRevision)),
+        outfits: input.visualProfile.outfits
+          .slice(0, CHARACTER_BUNDLE_LIMITS.visualOutfits)
+          .map(outfit => ({
+            name: (outfit.name ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.outfitName),
+            prompt: (outfit.prompt ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.outfitPrompt),
+            isDefault: outfit.isDefault === true,
+            sortOrder: Number.isSafeInteger(outfit.sortOrder) ? outfit.sortOrder : 0,
+          })),
+        versions: input.visualProfile.versions
+          .slice(0, CHARACTER_BUNDLE_LIMITS.visualVersions)
+          .map(version => ({
+            revision: Math.max(1, Math.trunc(version.revision)),
+            status: visualVersionStatus(version.status),
+            note: (version.note ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.versionNote),
+            snapshot: toBundleVisualSnapshot(version.snapshot),
+            createdAt: version.createdAt ? version.createdAt.toISOString() : null,
+            publishedAt: version.publishedAt ? version.publishedAt.toISOString() : null,
+          })),
+        assets: input.visualProfile.assets
+          .slice(0, CHARACTER_BUNDLE_LIMITS.visualAssets)
+          .map(asset => ({
+            kind: visualAssetKind(asset.kind),
+            label: (asset.label ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.assetLabel),
+            width: Number.isSafeInteger(asset.width) ? asset.width : null,
+            height: Number.isSafeInteger(asset.height) ? asset.height : null,
+            sortOrder: Number.isSafeInteger(asset.sortOrder) ? asset.sortOrder : 0,
+          })),
+      }
+      : null,
+    stickers: (input.stickers ?? [])
+      .slice(0, CHARACTER_BUNDLE_LIMITS.stickers)
+      .map(item => ({
+        name: (item.name ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.stickerName),
+        usage: (item.usage ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.stickerUsage),
+        enabled: item.enabled === true,
+        source: item.source || "manual",
+      })),
     growth: input.growth ?? emptyCharacterGrowthBundle(),
   };
 
@@ -1249,6 +1509,10 @@ export type ParsedCharacterBundle = {
   expressionHabits: CharacterBundleExpressionHabit[];
   goals: CharacterBundleGoal[];
   preferences: CharacterBundlePreference[];
+  /** 形象档案（v8）：null = 没建过。 */
+  visualProfile: CharacterBundleVisualProfile | null;
+  /** 表情包清单（v8）：只有名字与用途。 */
+  stickers: CharacterBundleSticker[];
   growth: CharacterGrowthBundle;
   counts: CharacterBundleCounts;
   exportedAt: string | null;
@@ -1685,6 +1949,92 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     };
   });
 
+  /**
+   * 形象档案（v8）。允许 `null`（这个角色没建过），也允许整段缺省（v7 及更早的卡）。
+   * 缺省与 null 在库里表现一样：不写 profile 行。区别只在语义上——
+   * 「老卡没有这一段」和「导出时她没有形象档案」都是「新机器上没有」，不必分。
+   */
+  const visualRaw = body.visualProfile;
+  const visualProfile: CharacterBundleVisualProfile | null = visualRaw === undefined || visualRaw === null
+    ? null
+    : (() => {
+      const item = asRecord(visualRaw);
+      const outfits = readArray(item.outfits, "形象装扮", CHARACTER_BUNDLE_LIMITS.visualOutfits).map((entry, index) => {
+        const outfit = asRecord(entry);
+        return {
+          name: readText(outfit.name, `第 ${index + 1} 套装扮的名称`, CHARACTER_BUNDLE_LIMITS.outfitName, true),
+          prompt: readText(outfit.prompt, `第 ${index + 1} 套装扮的描述`, CHARACTER_BUNDLE_LIMITS.outfitPrompt, true),
+          isDefault: outfit.isDefault === true,
+          sortOrder: Number.isSafeInteger(outfit.sortOrder) ? outfit.sortOrder as number : index,
+        } satisfies CharacterBundleVisualOutfit;
+      });
+      // 同名装扮在库里是唯一键，包里出现两份就直接拒绝：让导出者知道这份卡有问题，
+      // 而不是导入时悄悄只留一套、事后发现少了一套衣服。
+      const outfitNames = new Set<string>();
+      for (const outfit of outfits) {
+        if (outfitNames.has(outfit.name)) bad(`形象装扮里有重名的「${outfit.name}」。`);
+        outfitNames.add(outfit.name);
+      }
+      if (outfits.filter(outfit => outfit.isDefault).length > 1) bad("形象装扮里有不止一套默认装扮。");
+
+      const versions = readArray(item.versions, "形象版本", CHARACTER_BUNDLE_LIMITS.visualVersions).map((entry, index) => {
+        const version = asRecord(entry);
+        const label = `第 ${index + 1} 个形象版本`;
+        return {
+          revision: Math.round(readNumber(version.revision, `${label}的版本号`, 1, 100_000, 1)),
+          status: visualVersionStatus(version.status),
+          note: readText(version.note, `${label}的备注`, CHARACTER_BUNDLE_LIMITS.versionNote),
+          snapshot: toBundleVisualSnapshot(version.snapshot),
+          createdAt: readOptionalDate(version.createdAt, `${label}的创建时间`)?.toISOString() ?? null,
+          publishedAt: readOptionalDate(version.publishedAt, `${label}的发布时间`)?.toISOString() ?? null,
+        } satisfies CharacterBundleVisualVersion;
+      });
+      const revisions = new Set<number>();
+      for (const version of versions) {
+        if (revisions.has(version.revision)) bad(`形象版本 ${version.revision} 出现了两次。`);
+        revisions.add(version.revision);
+      }
+
+      const assets = readArray(item.assets, "形象参考图清单", CHARACTER_BUNDLE_LIMITS.visualAssets).map((entry, index) => {
+        const asset = asRecord(entry);
+        return {
+          kind: visualAssetKind(asset.kind),
+          label: readText(asset.label, `第 ${index + 1} 张参考图的名称`, CHARACTER_BUNDLE_LIMITS.assetLabel),
+          width: readOptionalNumber(asset.width, `第 ${index + 1} 张参考图的宽度`, 1, 100_000),
+          height: readOptionalNumber(asset.height, `第 ${index + 1} 张参考图的高度`, 1, 100_000),
+          sortOrder: Number.isSafeInteger(asset.sortOrder) ? asset.sortOrder as number : index,
+        } satisfies CharacterBundleVisualAsset;
+      });
+
+      return {
+        coreAppearance: readText(item.coreAppearance, "形象描述", CHARACTER_BUNDLE_LIMITS.visualAppearance),
+        corePrompt: readText(item.corePrompt, "形象提示词", CHARACTER_BUNDLE_LIMITS.visualPrompt),
+        negativePrompt: readText(item.negativePrompt, "形象负面提示词", CHARACTER_BUNDLE_LIMITS.negativePrompt),
+        // 指向一个包里没有的版本号时收口成 0：导入后「当前正式版本」不该指着一版不存在的形象。
+        currentPublishedRevision: revisions.has(Number(item.currentPublishedRevision))
+          ? Number(item.currentPublishedRevision)
+          : 0,
+        outfits,
+        versions,
+        assets,
+      } satisfies CharacterBundleVisualProfile;
+    })();
+
+  // 表情包清单（v8）：只有名字与用途，图片不随包走。
+  const stickers: CharacterBundleSticker[] = readArray(
+    body.stickers,
+    "表情包",
+    CHARACTER_BUNDLE_LIMITS.stickers,
+  ).map((candidate, index) => {
+    const item = asRecord(candidate);
+    return {
+      name: readText(item.name, `第 ${index + 1} 个表情包的名字`, CHARACTER_BUNDLE_LIMITS.stickerName, true),
+      usage: readText(item.usage, `第 ${index + 1} 个表情包的用途`, CHARACTER_BUNDLE_LIMITS.stickerUsage),
+      enabled: item.enabled === true,
+      source: typeof item.source === "string" && item.source.trim() ? item.source.trim().slice(0, 20) : "manual",
+    } satisfies CharacterBundleSticker;
+  });
+
   // 朋友是可选段：老角色卡没有这一段，分享型导出也会把它清空，所以缺省就是空数组。
   let friendMemoriesTotal = 0;
   const friends: CharacterBundleFriend[] = readArray(
@@ -1791,6 +2141,12 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
    * 同时缺好几段时报最新的那个：它最能说明「这张卡是哪一版导出来的」，
    * 报一个老段反而会让人以为是更早的格式问题。
    */
+  if (version >= 8 && (body.visualProfile === undefined || body.stickers === undefined)) {
+    bad("v8角色卡缺少形象档案或表情包段。");
+  }
+  if (version < 8 && (body.visualProfile !== undefined || body.stickers !== undefined)) {
+    bad("形象档案与表情包清单需要v8角色卡，不能以旧版本静默导入。");
+  }
   if (version >= 7 && (
     body.expressionHabits === undefined
     || body.goals === undefined
@@ -1842,6 +2198,8 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     expressionHabits,
     goals,
     preferences,
+    visualProfile,
+    stickers,
     growth,
   };
 
@@ -1863,6 +2221,8 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
     expressionHabits,
     goals,
     preferences,
+    visualProfile,
+    stickers,
     growth,
     counts: buildCounts(payload),
     exportedAt: payload.exportedAt || null,

@@ -36,6 +36,13 @@ type StickerItem = {
   /** 对应的 QQ 收藏 id。有值 = 这张在 QQ 收藏夹里也有一份。 */
   qqEmojiId: string | null;
   deletedAt: string | null;
+  /**
+   * 本机有没有这张图。
+   *
+   * false 只出现在一种情况：从角色卡导入的表情包只带过来名字与用途，图片还在旧机器上。
+   * 这种条目不能去请求 /image（会 404，页面就是破图），改为画一个占位块并提示补图。
+   */
+  hasImage?: boolean;
 };
 
 /** QQ 那边的附带结果：推上去 / 改备注 / 删掉，都可能「本地成功、QQ 没连上」。 */
@@ -152,6 +159,9 @@ const MAX_BYTES = 2 * 1024 * 1024;
 
 const imageUrl = (stickerId: string) =>
   `/api/characters/${encodeURIComponent(id.value)}/stickers/${encodeURIComponent(stickerId)}/image`;
+
+/** 缺图条目点上去时的一句话：说明为什么没有图、以及能做什么。 */
+const MISSING_IMAGE_HINT = "这张图没跟着角色卡过来：导出的卡只带名字和用途，图片还在旧机器上。删掉重新上传即可。";
 
 const sizeLabel = (bytes: number) =>
   bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -871,14 +881,26 @@ onMounted(() => {
           :class="{ 'is-off': !sticker.enabled }"
         >
           <img
+            v-if="sticker.hasImage !== false"
             class="sticker-thumb"
             :src="imageUrl(sticker.id)"
             :alt="sticker.name"
           >
+          <div
+            v-else
+            class="sticker-thumb is-missing"
+            :title="MISSING_IMAGE_HINT"
+          >
+            缺图
+          </div>
           <div class="sticker-body">
             <div class="sticker-name">
               {{ sticker.name }}
               <span class="sticker-count">用过 {{ sticker.useCount }} 次</span>
+              <span
+                v-if="sticker.hasImage === false"
+                class="sticker-source sticker-source-missing"
+              >待补图</span>
               <span
                 v-if="sticker.source === 'collected'"
                 class="sticker-source"
@@ -965,10 +987,18 @@ onMounted(() => {
         class="edit-body"
       >
         <img
+          v-if="editing.hasImage !== false"
           class="edit-thumb"
           :src="imageUrl(editing.id)"
           :alt="editing.name"
         >
+        <div
+          v-else
+          class="edit-thumb is-missing"
+          :title="MISSING_IMAGE_HINT"
+        >
+          缺图
+        </div>
         <label class="sticker-field">
           <span class="sticker-label">名字</span>
           <el-input
@@ -1116,10 +1146,18 @@ onMounted(() => {
           class="trash-item"
         >
           <img
+            v-if="item.hasImage !== false"
             class="trash-thumb"
             :src="imageUrl(item.id)"
             :alt="item.name"
           >
+          <div
+            v-else
+            class="trash-thumb is-missing"
+            :title="MISSING_IMAGE_HINT"
+          >
+            缺图
+          </div>
           <div class="trash-info">
             <div class="trash-name">
               {{ item.name }}
@@ -1468,6 +1506,30 @@ onMounted(() => {
 .sticker-source-qq {
   color: var(--green);
   background: var(--green-soft);
+}
+
+/* 「待补图」标记：从角色卡导入的条目，只有名字没有图。 */
+.sticker-source-missing {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+/* 缺图占位：和缩略图同尺寸，免得列表里高矮不一。琥珀色是「还欠着」的意思，不用红色报警。 */
+.sticker-thumb.is-missing,
+.edit-thumb.is-missing,
+.trash-thumb.is-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px dashed var(--amber-line);
+  font-size: 12px;
+  cursor: help;
+}
+
+.trash-thumb.is-missing {
+  font-size: 11px;
 }
 
 /* ── 同步弹窗 ── */

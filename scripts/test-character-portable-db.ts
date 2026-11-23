@@ -342,6 +342,64 @@ async function main() {
     ],
   });
 
+  /**
+   * v8 夹具：形象档案 + 参考图（真的写文件，验证「导出只带清单」） + 表情包（含一个回收站里的）。
+   * 参考图的 `relativePath` 故意像真的，导出后包里不该出现它。
+   */
+  const profileId = randomUUID();
+  await prisma.characterVisualProfile.create({
+    data: {
+      id: profileId,
+      characterId,
+      coreAppearance: "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾",
+      corePrompt: "1girl, purple long hair, blue eyes, whale ears, whale tail",
+      negativePrompt: "lowres, bad anatomy",
+      currentPublishedRevision: 2,
+      outfits: {
+        create: [
+          { name: "白裙", prompt: "white dress", isDefault: true, sortOrder: 0 },
+          { name: "雨衣", prompt: "yellow raincoat", isDefault: false, sortOrder: 1 },
+        ],
+      },
+      versions: {
+        create: [
+          { revision: 1, status: "ARCHIVED", note: "首版", snapshot: { coreAppearance: "紫发" }, publishedAt: new Date("2026-10-20T11:00:00Z") },
+          { revision: 2, status: "PUBLISHED", note: "加了鲸鱼尾", snapshot: { coreAppearance: "紫发，鲸鱼尾" }, publishedAt: new Date("2026-10-22T11:00:00Z") },
+        ],
+      },
+      assets: {
+        create: [
+          { kind: "STANDARD", label: "正面", relativePath: "visual-profile/x/front.png", mime: "image/png", sizeBytes: 1024, width: 1024, height: 1024, sortOrder: 0 },
+          { kind: "EXPRESSION", label: "笑", relativePath: "visual-profile/x/smile.png", mime: "image/png", sizeBytes: 512, width: 512, height: 512, sortOrder: 1 },
+        ],
+      },
+    },
+  });
+  await prisma.characterSticker.createMany({
+    data: [
+      { characterId, name: "无语", usage: "被怼的时候", fileName: "a.png", mimeType: "image/png", sizeBytes: 100, enabled: true, source: "collected" },
+      { characterId, name: "点赞", usage: "夸主人的时候", fileName: "b.png", mimeType: "image/png", sizeBytes: 100, enabled: false, source: "manual" },
+      // 回收站里的不该进包
+      { characterId, name: "删掉的", usage: "x", fileName: "c.png", mimeType: "image/png", sizeBytes: 100, enabled: true, source: "manual", deletedAt: new Date() },
+    ],
+  });
+
+  // 知识主题（成长包 v2）：一条知识条目 + 一个主题 + 一个成员 + 一条修订
+  const knowledgeItemId = randomUUID();
+  const topicId = randomUUID();
+  await prisma.knowledgeItem.create({
+    data: { id: knowledgeItemId, characterId, title: "深海", content: "鲸鱼住在深海里", category: "GENERAL", sourceType: "MANUAL", status: "ACTIVE" },
+  });
+  await prisma.knowledgeTopic.create({
+    data: { id: topicId, characterId, name: "海洋", description: "关于海的一切", status: "ACTIVE", revision: 1 },
+  });
+  await prisma.knowledgeTopicMember.create({
+    data: { topicId, itemId: knowledgeItemId, itemRevision: 1 },
+  });
+  await prisma.knowledgeTopicRevision.create({
+    data: { topicId, revision: 1, name: "海洋", description: "关于海的一切", status: "ACTIVE", action: "CREATE", members: [] },
+  });
+
   // ── 1. 导出 ───────────────────────────────────────────────
   const exported = await loadCharacterExportBundle({ characterId, ownerId: ownerA });
   assert.ok(exported, "本人导出应该拿得到包");
@@ -377,6 +435,26 @@ async function main() {
     "DISABLED",
     "她自己关掉过的说法，带过去仍然是关着的",
   );
+
+  // v8：形象档案与表情包清单
+  assert.equal(bundle.counts.hasVisualProfile, true, "形象档案整段进包");
+  assert.equal(bundle.counts.visualOutfits, 2, "装扮进包");
+  assert.equal(bundle.counts.visualVersions, 2, "版本历史进包");
+  assert.equal(bundle.counts.visualAssets, 2, "参考图清单进包");
+  assert.equal(bundle.counts.stickers, 2, "回收站里的表情包不进包");
+  assert.equal(bundle.visualProfile?.currentPublishedRevision, 2, "当前正式版本号跟着走");
+  assert.equal(bundle.visualProfile?.outfits[0]?.isDefault, true, "默认装扮标记保留");
+  assert.equal(
+    JSON.stringify(bundle).includes("visual-profile/x/front.png"),
+    false,
+    "参考图的磁盘路径不能进包：换台机器那个路径根本不存在",
+  );
+  assert.equal(bundle.stickers.find((item) => item.name === "无语")?.usage, "被怼的时候");
+  // 成长包 v2：知识主题带成员与修订
+  assert.equal(bundle.growth.version, 2, "导出写成长包 v2");
+  assert.equal(bundle.growth.tables.knowledgeTopics.length, 1, "知识主题进包");
+  assert.equal(bundle.growth.tables.knowledgeTopicMembers.length, 1, "主题成员进包");
+  assert.equal(bundle.growth.tables.knowledgeTopicRevisions.length, 1, "主题修订进包");
   assert.ok(
     !bundle.expressionHabits.some((item) => item.content.includes("待确认")),
     "待确认的候选属于本机决策现场，不跟着卡走",
@@ -535,6 +613,55 @@ async function main() {
   assert.ok(importedPreferences.some((row) => row.status === "DISABLED"), "关掉的偏好不该回滚成生效");
   assert.equal(importedPreferences[0]?.revisions.length, 1);
 
+  /**
+   * v8：形象档案与表情包。
+   *
+   * 关键断言是「写了什么」和「没写什么」：
+   *   - 文字/装扮/版本要落库，版本状态与发布时间照原样
+   *   - **素材行一行都不建**：图片没跟过来，建了就是一堆打不开的图
+   *   - 表情包建成缺图条目并停用：缺图的条目一旦进入选图，她发出去就是发送失败
+   */
+  const importedProfile = await prisma.characterVisualProfile.findUnique({
+    where: { characterId: first.characterId },
+    include: { outfits: { orderBy: { sortOrder: "asc" } }, versions: { orderBy: { revision: "asc" } }, assets: true },
+  });
+  assert.ok(importedProfile, "形象档案要落库");
+  assert.equal(importedProfile?.coreAppearance, "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾");
+  assert.equal(importedProfile?.negativePrompt, "lowres, bad anatomy");
+  assert.equal(importedProfile?.currentPublishedRevision, 2);
+  assert.equal(importedProfile?.outfits.length, 2, "两套装扮都要落库");
+  assert.equal(importedProfile?.outfits[0]?.isDefault, true, "默认装扮标记保留");
+  assert.equal(importedProfile?.versions.length, 2, "版本历史落库");
+  assert.equal(importedProfile?.versions[1]?.status, "PUBLISHED");
+  assert.equal(importedProfile?.assets.length, 0, "参考图一行都不建：图片没跟过来，建了就是打不开的图");
+
+  const importedStickers = await prisma.characterSticker.findMany({
+    where: { characterId: first.characterId },
+    orderBy: { name: "asc" },
+  });
+  assert.equal(importedStickers.length, 2, "回收站里的那张不搬");
+  assert.equal(importedStickers.every((row) => row.fileName === ""), true, "缺图条目：没有文件名");
+  assert.equal(importedStickers.every((row) => row.enabled === false), true, "缺图条目一律先停用");
+  assert.equal(importedStickers.find((row) => row.name === "无语")?.usage, "被怼的时候", "用途要带走（补图时靠它）");
+  assert.ok(
+    first.warnings.some((warning) => warning.includes("参考图")),
+    "要明确告诉人：参考图只是清单，得重新上传",
+  );
+  assert.ok(first.warnings.some((warning) => warning.includes("表情包")), "表情包缺图也要说明");
+
+  // 成长包 v2：知识主题、成员（重新连到新导入的知识条目）、修订
+  const importedTopics = await prisma.knowledgeTopic.findMany({
+    where: { characterId: first.characterId },
+    include: { members: true, revisions: true },
+  });
+  assert.equal(importedTopics.length, 1, "知识主题要落库");
+  assert.equal(importedTopics[0]?.name, "海洋");
+  assert.equal(importedTopics[0]?.members.length, 1, "主题成员要挂上");
+  assert.equal(importedTopics[0]?.revisions.length, 1, "修订历史要落库");
+  const memberItem = await prisma.knowledgeItem.findUnique({ where: { id: importedTopics[0]!.members[0]!.itemId } });
+  assert.equal(memberItem?.title, "深海", "成员要指向本机新导入的那条知识，而不是旧机器的 id");
+  assert.equal(memberItem?.characterId, first.characterId, "成员指向的知识必须是本角色的");
+
   // 同一张卡再导一次：内容相同就是同一条，不该长出第二份。
   const reimported = await importCharacterCard({
     raw: JSON.parse(serialized),
@@ -546,6 +673,43 @@ async function main() {
   assert.equal(reimported.added.expressionHabits, 0, "表达习惯按内容去重");
   assert.equal(reimported.added.goals, 0, "目标按 kind + 标题去重");
   assert.equal(reimported.added.preferences, 0, "偏好按 kind + 主题去重");
+  assert.equal(reimported.added.stickers, 0, "表情包按名字去重，重复导入不该多出一批空条目");
+  assert.equal(reimported.added.visualOutfits, 0, "同名装扮不再重复添加");
+  assert.equal(reimported.added.visualVersions, 0, "本机已有形象档案时，版本历史不合并（版本号会撞）");
+  assert.equal(
+    (await prisma.characterVisualProfile.findUnique({ where: { characterId: first.characterId }, select: { coreAppearance: true } }))?.coreAppearance,
+    "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾",
+    "合并时形象文字本地保留，不被导入的覆盖",
+  );
+
+  /**
+   * 合并的「本地保留、缺的补上」：
+   * 把本机那套形象描述改成人手调过的版本、删掉一套装扮，再合一次这张卡 ——
+   * 文字必须还是本地那句，被删掉的那套装扮要补回来。
+   */
+  await prisma.characterVisualProfile.update({
+    where: { characterId: first.characterId },
+    data: { coreAppearance: "本机调过的描述：紫发+鲸鱼尾" },
+  });
+  await prisma.characterVisualOutfit.deleteMany({
+    where: { profile: { characterId: first.characterId }, name: "雨衣" },
+  });
+  const remixed = await importCharacterCard({
+    raw: JSON.parse(serialized),
+    ownerId: ownerA,
+    targetCharacterId: first.characterId,
+  });
+  assert.equal(remixed.added.visualOutfits, 1, "本地缺的那套装扮要补回来");
+  assert.equal(
+    (await prisma.characterVisualProfile.findUnique({ where: { characterId: first.characterId }, select: { coreAppearance: true } }))?.coreAppearance,
+    "本机调过的描述：紫发+鲸鱼尾",
+    "合并绝不覆盖本地刚调好的形象描述",
+  );
+  assert.equal(
+    (await prisma.characterVisualOutfit.count({ where: { profile: { characterId: first.characterId } } })),
+    2,
+    "补完之后还是两套装扮（同名的没有重复）",
+  );
 
   const importedGlobal = imported.memoryScopes.find((scope) => scope.scopeType === "CHARACTER_GLOBAL");
   const importedPrivate = imported.memoryScopes.find((scope) => scope.scopeType === "USER_PRIVATE");

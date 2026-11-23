@@ -4,7 +4,7 @@ import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
 import { getPrisma } from "./prisma";
 import { emptyCharacterGrowthBundle, parseCharacterGrowthBundle, parseGrowthMetadata, growthCounts, type CharacterGrowthBundle, type CharacterGrowthTable } from "./character-growth-portable";
 
-const domains: Record<CharacterGrowthTable, string> = { knowledgeCandidates: "knowledgeCandidate", knowledgeItems: "knowledgeItem", knowledgeRevisions: "knowledgeItemRevision", knowledgeRelations: "knowledgeItemRelation", socialRelationships: "socialRelationship", socialExperiences: "socialExperience", socialAssessments: "socialRelationshipAssessment", socialReviews: "socialRelationshipAssessmentReview", socialChanges: "socialRelationChange", socialChangeEvidence: "socialRelationChangeEvidence", socialAssessmentEvidence: "socialRelationshipAssessmentEvidence", reflectionRuns: "reflectionRun", reflectionSuggestions: "reflectionSuggestion", growthEvents: "growthEvent", growthDeliveries: "growthEventDelivery" };
+const domains: Record<CharacterGrowthTable, string> = { knowledgeCandidates: "knowledgeCandidate", knowledgeItems: "knowledgeItem", knowledgeRevisions: "knowledgeItemRevision", knowledgeRelations: "knowledgeItemRelation", knowledgeTopics: "knowledgeTopic", knowledgeTopicMembers: "knowledgeTopicMember", knowledgeTopicRevisions: "knowledgeTopicRevision", socialRelationships: "socialRelationship", socialExperiences: "socialExperience", socialAssessments: "socialRelationshipAssessment", socialReviews: "socialRelationshipAssessmentReview", socialChanges: "socialRelationChange", socialChangeEvidence: "socialRelationChangeEvidence", socialAssessmentEvidence: "socialRelationshipAssessmentEvidence", reflectionRuns: "reflectionRun", reflectionSuggestions: "reflectionSuggestion", growthEvents: "growthEvent", growthDeliveries: "growthEventDelivery" };
 // Dynamic delegate access is confined to this fixed table whitelist.
 type Delegate = { findMany(args: unknown): Promise<any[]>; createMany(args: unknown): Promise<{ count: number }> };
 function delegate(db: DB, table: CharacterGrowthTable): Delegate { return (db as unknown as Record<string, Delegate>)[domains[table]]!; }
@@ -25,6 +25,7 @@ const candidateFields = ["id", "sourceType", "sourceRef", "rawContent", "status"
 const itemFields = ["id", "candidateId", "title", "content", "category", "tags", "confidence", "status", "sourceType", "sourceRef", "revision", "createdAt", "updatedAt"];
 const revisionFields = ["id", "itemId", "revision", "title", "content", "category", "tags", "confidence", "status", "sourceType", "sourceRef", "action", "createdAt"];
 const relationFields = ["id", "sourceItemId", "targetItemId", "relationType", "status", "resolution", "createdAt", "updatedAt", "resolvedAt"];
+const topicFields = ["id", "name", "description", "status", "revision", "createdAt", "updatedAt"];
 const assessmentFields = ["id", "scopeId", "generation", "triggerReasons", "evaluatedStage", "evaluatedStatus", "relationshipVersion", "outcome", "suggestedStage", "suggestedStatus", "reason", "observations", "confidence", "modelProvider", "modelName", "promptVersion", "inputCutoffAt", "status", "reviewStatus", "reviewedAt", "startedAt", "completedAt", "createdAt"];
 const runFields = ["id", "requestKey", "periodStart", "periodEnd", "status", "attemptCount", "maxAttempts", "runAt", "model", "promptVersion", "completedAt", "createdAt", "updatedAt"];
 const suggestionFields = ["id", "runId", "title", "observation", "inference", "recommendation", "sourceRefs", "status", "reviewNote", "reviewedAt", "acceptedAt", "createdAt", "updatedAt"];
@@ -79,6 +80,20 @@ export async function loadCharacterGrowth(input: { prisma?: DB; characterId: str
   for (const row of revisions) { const sourceRef = provenance(row.sourceType, row.sourceRef); if (sourceRef !== undefined) t.knowledgeRevisions.push(portable({ ...row, id: origin("knowledgeRevisions", row.id), itemId: origin("knowledgeItems", row.itemId), sourceRef }) as never); }
   const relations = await delegate(db, "knowledgeRelations").findMany({ where: { characterId, sourceItemId: { in: itemIds }, targetItemId: { in: itemIds } }, select: fields(relationFields) });
   for (const row of relations) t.knowledgeRelations.push(portable({ ...row, id: origin("knowledgeRelations", row.id), sourceItemId: origin("knowledgeItems", row.sourceItemId), targetItemId: origin("knowledgeItems", row.targetItemId), metadata: null }) as never);
+  /**
+   * 知识主题（成长包 v2）。只带 ACTIVE / ARCHIVED —— MERGED 指向别的主题，那条指针换台机器就断了。
+   * 成员只留「条目还在包里」的那些：主题里挂一条没导进来的知识，导入后就是一条点不开的引用。
+   */
+  const topics = await delegate(db, "knowledgeTopics").findMany({ where: { characterId, status: { in: ["ACTIVE", "ARCHIVED"] } }, select: fields(topicFields), orderBy: { createdAt: "asc" } });
+  const exportedTopics = new Set(topics.map(row => row.id));
+  for (const row of topics) t.knowledgeTopics.push(portable({ ...row, id: origin("knowledgeTopics", row.id) }) as never);
+  if (exportedTopics.size) {
+    const members = await db.knowledgeTopicMember.findMany({ where: { topicId: { in: [...exportedTopics] }, itemId: { in: itemIds } }, select: { id: true, topicId: true, itemId: true, itemRevision: true, createdAt: true }, orderBy: { createdAt: "asc" } });
+    for (const row of members) t.knowledgeTopicMembers.push(portable({ ...row, id: origin("knowledgeTopicMembers", row.id), topicId: origin("knowledgeTopics", row.topicId), itemId: origin("knowledgeItems", row.itemId) }) as never);
+    const topicRevisions = await db.knowledgeTopicRevision.findMany({ where: { topicId: { in: [...exportedTopics] } }, select: { id: true, topicId: true, revision: true, name: true, description: true, status: true, action: true, createdAt: true }, orderBy: { createdAt: "asc" } });
+    // `members` 那段 JSON 里全是旧机器的条目 id，不带；这一版导入后只作为「改过什么」的历史。
+    for (const row of topicRevisions) t.knowledgeTopicRevisions.push(portable({ ...row, id: origin("knowledgeTopicRevisions", row.id), topicId: origin("knowledgeTopics", row.topicId) }) as never);
+  }
   if (input.includeFriends) {
     const scopes = await db.memoryScope.findMany({ where: { characterId, scopeType: "EXTERNAL_IDENTITY", interactionCount: { gt: 0 }, externalIdentityId: { not: null } }, take: 500, orderBy: [{ lastInteractedAt: "desc" }, { createdAt: "desc" }], select: { id: true, relationshipStage: true, relationshipStatus: true, relationshipVersion: true, relationshipUpdatedAt: true, externalIdentity: { select: { platform: true, platformUid: true } } } });
     const eligibleScopes = scopes.filter(row => row.externalIdentity && (!input.friends || input.friends.some(friend => friend.platform === row.externalIdentity!.platform && friend.platformUid === row.externalIdentity!.platformUid)));
@@ -153,7 +168,7 @@ export async function importCharacterGrowth(tx: Prisma.TransactionClient, input:
       const global = await delegate(tx, table).findMany({ where: { id: old.localId, ...globalWhere }, select: { id: true }, take: 1 });
       if (existing.length && !global.length) throw createError({ statusCode: 409, statusMessage: "角色卡反思映射已失效或指向私人范围，不能作为全局内容导入。" });
     }
-    const nativeWhere: Record<string, unknown> = table === "reflectionRuns" ? { characterId: input.characterId, conversationId: null, memoryScopeId: null } : table === "reflectionSuggestions" ? { run: { characterId: input.characterId, conversationId: null, memoryScopeId: null } } : table.startsWith("knowledge") && !["knowledgeRevisions"].includes(table) || table === "growthEvents" ? { characterId: input.characterId } : table === "knowledgeRevisions" ? { item: { characterId: input.characterId } } : table === "growthDeliveries" ? { event: { characterId: input.characterId } } : ["socialExperiences", "socialAssessments", "socialChanges"].includes(table) ? { scope: { characterId: input.characterId } } : table === "socialReviews" || table === "socialAssessmentEvidence" ? { assessment: { scope: { characterId: input.characterId } } } : table === "socialChangeEvidence" ? { change: { scope: { characterId: input.characterId } } } : {};
+    const nativeWhere: Record<string, unknown> = table === "reflectionRuns" ? { characterId: input.characterId, conversationId: null, memoryScopeId: null } : table === "reflectionSuggestions" ? { run: { characterId: input.characterId, conversationId: null, memoryScopeId: null } } : table === "knowledgeTopicMembers" || table === "knowledgeTopicRevisions" ? { topic: { characterId: input.characterId } } : table.startsWith("knowledge") && !["knowledgeRevisions"].includes(table) || table === "growthEvents" ? { characterId: input.characterId } : table === "knowledgeRevisions" ? { item: { characterId: input.characterId } } : table === "growthDeliveries" ? { event: { characterId: input.characterId } } : ["socialExperiences", "socialAssessments", "socialChanges"].includes(table) ? { scope: { characterId: input.characterId } } : table === "socialReviews" || table === "socialAssessmentEvidence" ? { assessment: { scope: { characterId: input.characterId } } } : table === "socialChangeEvidence" ? { change: { scope: { characterId: input.characterId } } } : {};
     const native = !old && table !== "socialRelationships" ? (await delegate(tx, table).findMany({ where: { id: originId, ...nativeWhere }, select: { id: true }, take: 1 }))[0] : undefined;
     const id = old?.localId ?? localId ?? native?.id ?? randomUUID();
     if (!old) await tx.characterGrowthImportIdentity.create({ data: { ...key, localId: id } });
@@ -207,6 +222,21 @@ export async function importCharacterGrowth(tx: Prisma.TransactionClient, input:
     if (!sourceItemId || !targetItemId) continue;
     if (row.relationType !== "MERGED_INTO" && sourceItemId > targetItemId) [sourceItemId, targetItemId] = [targetItemId, sourceItemId];
     await insert("knowledgeRelations", row, { characterId: input.characterId, sourceItemId, targetItemId, metadata: null });
+  }
+  /**
+   * 知识主题（成长包 v2）。顺序必须是「主题 → 成员 → 修订」：后两者都挂着 topicId 外键。
+   * 成员引用的条目如果没导进来（来源失效被跳过），这一条成员也跟着跳过 ——
+   * 留一条指向不存在知识的成员，主题页打开就是空的。
+   */
+  for (const row of t.knowledgeTopics) await insert("knowledgeTopics", row, { characterId: input.characterId, mergedIntoId: null, mergedAt: null });
+  for (const row of t.knowledgeTopicMembers) {
+    const topicId = mapped("knowledgeTopics", row.topicId); const itemId = mapped("knowledgeItems", row.itemId);
+    if (topicId && itemId) await insert("knowledgeTopicMembers", row, { topicId, itemId });
+  }
+  for (const row of t.knowledgeTopicRevisions) {
+    const topicId = mapped("knowledgeTopics", row.topicId);
+    // 快照里的成员全是旧机器的条目 id，导入后不能再拿去撤销，所以只保留「改过什么」的文字。
+    if (topicId) await insert("knowledgeTopicRevisions", row, { topicId, members: [] });
   }
   if (input.includeFriends !== false) {
     for (const row of t.socialExperiences) {

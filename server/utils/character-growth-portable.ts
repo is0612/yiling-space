@@ -67,6 +67,20 @@ const schemas = {
   knowledgeItems: object({ id: uuid, candidateId: nullable(uuid), ...knowledgeBody, revision: integer, ...timestamps }),
   knowledgeRevisions: object({ id: uuid, itemId: uuid, revision: integer, ...knowledgeBody, action: enumeration(["CONTENT_EDIT", "MERGE", "ARCHIVE", "UNARCHIVE", "TRASH", "RESTORE"]), createdAt: date }),
   knowledgeRelations: object({ id: uuid, sourceItemId: uuid, targetItemId: uuid, relationType: enumeration(["DUPLICATE", "CONFLICT", "MERGED_INTO"]), status: enumeration(["OPEN", "RESOLVED", "DISMISSED"]), resolution: nullable(enumeration(["DISMISS", "KEEP_BOTH", "KEEP_SEPARATE", "CONFIRM_CONFLICT", "NEEDS_VERIFICATION", "MERGED", "SOURCE_MERGED", "RESOLVE"])), metadata: parseGrowthMetadata, resolvedAt: nullable(date), ...timestamps }),
+  /**
+   * 知识主题（成长包 v2）。
+   *
+   * 只带 ACTIVE / ARCHIVED：MERGED 是「这一条已经并到别的主题里去了」的指针，
+   * 指的还是旧机器上的 id；带过来就是一条指不到任何地方的空主题。
+   * 成员与修订各自一张表，成员用 `itemId` 指向知识条目（导入时按 origin 映射重连）。
+   */
+  knowledgeTopics: object({ id: uuid, name: text(200), description: text(), status: enumeration(["ACTIVE", "ARCHIVED"]), revision: integer, ...timestamps }),
+  knowledgeTopicMembers: object({ id: uuid, topicId: uuid, itemId: uuid, itemRevision: integer, createdAt: date }),
+  /**
+   * 主题修订。`members` 那一段是 JSON 快照（撤销时用），里面全是旧机器的条目 id，
+   * 所以不带：导入后这一版只作为「改过什么」的历史，不能再当撤销目标。
+   */
+  knowledgeTopicRevisions: object({ id: uuid, topicId: uuid, revision: integer, name: text(200), description: text(), status: enumeration(["ACTIVE", "ARCHIVED", "MERGED"]), action: text(20), createdAt: date }),
   socialRelationships: object({ id: uuid, platform: text(40), platformUid: text(255), relationshipStage: nullable(stage), relationshipStatus: nullable(socialStatus), relationshipVersion: integer, relationshipUpdatedAt: nullable(date) }),
   socialExperiences: object({ id: uuid, scopeId: uuid, memoryEventId: uuid, sourceKey: text(64), createdAt: date }),
   socialAssessments: object({ id: uuid, scopeId: uuid, generation: integer, triggerReasons: list(text(80)), evaluatedStage: stage, evaluatedStatus: socialStatus, relationshipVersion: integer, outcome: nullable(enumeration(["CHANGE", "MAINTAIN", "INSUFFICIENT", "REVIEW"])), suggestedStage: nullable(stage), suggestedStatus: nullable(socialStatus), reason: nullable(text()), observations: parseGrowthMetadata, confidence: nullable(probability), modelProvider: nullable(text(80)), modelName: nullable(text(160)), promptVersion: nullable(text(80)), inputCutoffAt: nullable(date), status: enumeration(["QUEUED", "RUNNING", "SUCCEEDED", "FAILED"]), reviewStatus, reviewedAt: nullable(date), error: nullable(text(2000)), startedAt: date, completedAt: nullable(date), createdAt: date }),
@@ -79,10 +93,20 @@ const schemas = {
   growthEvents: object({ id: uuid, sourceDomain: enumeration(["memory", "social", "knowledge", "preference", "corpus", "state", "reflection", "goal"]), eventType: text(120), schemaVersion: integer, aggregateType: text(120), aggregateId: uuid, occurredAt: date, payload: parseGrowthMetadata, createdAt: date }),
   growthDeliveries: object({ id: uuid, eventId: uuid, consumerKey: text(120), status: enumeration(["QUEUED", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED", "SKIPPED", "CANCELLED"]), attemptCount: integer, maxAttempts: integer, lastError: nullable(text(2000)), processedAt: nullable(date), ...timestamps }),
 };
-export type CharacterGrowthBundle = { version: 1; warnings?: string[]; tables: { [K in keyof typeof schemas]: Array<ReturnType<(typeof schemas)[K]>> } };
+/**
+ * 成长包的版本。
+ *
+ * 1 = v5 角色卡起的那份（知识、社交、反思、成长事件）。
+ * 2 = 加入知识主题三张表。v1 卡读进来时主题段按空数组补齐 ——
+ *     不补就会在「缺字段」那里整卡失败，而老卡本身没有任何问题。
+ */
+export const CHARACTER_GROWTH_BUNDLE_VERSION = 2;
+export type CharacterGrowthBundle = { version: 1 | 2; warnings?: string[]; tables: { [K in keyof typeof schemas]: Array<ReturnType<(typeof schemas)[K]>> } };
 export type CharacterGrowthTable = keyof CharacterGrowthBundle["tables"];
+/** v2 才有的表：老卡缺这几段时按空数组补齐，新卡缺了则报错。 */
+const GROWTH_V2_TABLES = ["knowledgeTopics", "knowledgeTopicMembers", "knowledgeTopicRevisions"] as const;
 export function emptyCharacterGrowthBundle(): CharacterGrowthBundle {
-  return { version: 1, warnings: [], tables: Object.fromEntries(Object.keys(schemas).map(key => [key, []])) as unknown as CharacterGrowthBundle["tables"] };
+  return { version: CHARACTER_GROWTH_BUNDLE_VERSION, warnings: [], tables: Object.fromEntries(Object.keys(schemas).map(key => [key, []])) as unknown as CharacterGrowthBundle["tables"] };
 }
 export function growthCounts(bundle: CharacterGrowthBundle): { [K in CharacterGrowthTable]: number } {
   return Object.fromEntries(Object.entries(bundle.tables).map(([key, rows]) => [key, rows.length])) as { [K in CharacterGrowthTable]: number };
@@ -91,10 +115,18 @@ export function growthCounts(bundle: CharacterGrowthBundle): { [K in CharacterGr
 export type CharacterGrowthContext = { eventIds: ReadonlySet<string>; snapshotIds: ReadonlySet<string>; friends: ReadonlySet<string>; includeFriends: boolean };
 export function parseCharacterGrowthBundle(value: unknown, context?: CharacterGrowthContext): CharacterGrowthBundle {
   // v5 intentionally has no private conversation mapping. Never strip scope fields on import.
-  const rawTables = value && typeof value === "object" ? (value as { tables?: Record<string, unknown> }).tables : undefined;
+  const rawEnvelope = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const rawTables = rawEnvelope.tables && typeof rawEnvelope.tables === "object" ? rawEnvelope.tables as Record<string, unknown> : undefined;
   if (Array.isArray(rawTables?.reflectionRuns) && rawTables.reflectionRuns.some(row => row && typeof row === "object" &&
     ((row as Record<string, unknown>).conversationId != null || (row as Record<string, unknown>).memoryScopeId != null))) fail("私人反思不能导入为全局内容");
-  const envelope = object({ warnings: optional(list(text(500), 100)), version: (v: unknown, p: string) => v === 1 ? 1 as const : fail(p), tables: object(Object.fromEntries(Object.entries(schemas).map(([key, schema]) => [key, list(schema as Reader<unknown>, CHARACTER_GROWTH_LIMITS.rowsPerTable)]))) })(value, "growth");
+  /**
+   * v1 的成长包没有主题段，v2 才补齐这三张表。这里先补空数组再交给下面统一校验 ——
+   * 否则 `object()` 那套「字段必须齐全」会把一张完全正常的 v1 老卡判成坏卡。
+   */
+  const normalized = rawEnvelope.version === 1 && rawTables
+    ? { ...rawEnvelope, tables: { ...rawTables, ...Object.fromEntries(GROWTH_V2_TABLES.map(key => [key, rawTables[key] ?? []])) } }
+    : value;
+  const envelope = object({ warnings: optional(list(text(500), 100)), version: (v: unknown, p: string) => v === 1 || v === 2 ? v as 1 | 2 : fail(p), tables: object(Object.fromEntries(Object.entries(schemas).map(([key, schema]) => [key, list(schema as Reader<unknown>, CHARACTER_GROWTH_LIMITS.rowsPerTable)]))) })(normalized, "growth");
   const bundle = envelope as CharacterGrowthBundle;
   if (Object.values(growthCounts(bundle)).reduce((a, b) => a + b, 0) > CHARACTER_GROWTH_LIMITS.totalRows) fail("总条数超限");
   const t = bundle.tables;
@@ -108,6 +140,8 @@ export function parseCharacterGrowthBundle(value: unknown, context?: CharacterGr
   unique(t.knowledgeItems.filter(row => row.candidateId), row => row.candidateId);
   unique(t.knowledgeRevisions, row => `${row.itemId}:${row.revision}`);
   unique(t.knowledgeRelations, row => `${row.relationType}:${row.relationType === "MERGED_INTO" ? [row.sourceItemId, row.targetItemId].join(":") : [row.sourceItemId, row.targetItemId].sort().join(":")}`);
+  unique(t.knowledgeTopicMembers, row => `${row.topicId}:${row.itemId}`);
+  unique(t.knowledgeTopicRevisions, row => `${row.topicId}:${row.revision}`);
   unique(t.socialRelationships, row => `${row.platform}:${row.platformUid}`);
   unique(t.socialExperiences, row => `${row.scopeId}:${row.sourceKey}`);
   unique(t.socialChangeEvidence, row => `${row.changeId}:${row.experienceId}`);
@@ -116,6 +150,9 @@ export function parseCharacterGrowthBundle(value: unknown, context?: CharacterGr
   for (const row of t.knowledgeItems) { link("knowledgeCandidates", row.candidateId); if (row.revision < 1) fail("知识版本"); }
   for (const row of t.knowledgeRevisions) { link("knowledgeItems", row.itemId); if (row.revision < 1) fail("知识版本"); }
   for (const row of t.knowledgeRelations) { link("knowledgeItems", row.sourceItemId); link("knowledgeItems", row.targetItemId); if (row.sourceItemId === row.targetItemId) fail("自关联"); }
+  for (const row of t.knowledgeTopics) if (row.revision < 1) fail("主题版本");
+  for (const row of t.knowledgeTopicMembers) { link("knowledgeTopics", row.topicId); link("knowledgeItems", row.itemId); if (row.itemRevision < 1) fail("主题成员版本"); }
+  for (const row of t.knowledgeTopicRevisions) { link("knowledgeTopics", row.topicId); if (row.revision < 1) fail("主题版本"); }
   for (const row of [...t.socialExperiences, ...t.socialAssessments, ...t.socialChanges]) link("socialRelationships", row.scopeId);
   for (const row of t.socialReviews) link("socialAssessments", row.assessmentId);
   for (const row of t.socialChanges) { link("socialAssessments", row.assessmentId); if (row.assessmentId && t.socialAssessments.find(a => a.id === row.assessmentId)?.scopeId !== row.scopeId) fail("关系变更跨朋友"); }
