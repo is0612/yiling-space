@@ -89,7 +89,8 @@ import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
-import { composePublishedVisualPrompt } from "../visual-profile-prompt";
+import { composePublishedVisualPrompt, canAttachReferences } from "../visual-profile-prompt";
+import { readVisualProfileReferences, type VisualReference } from "../visual-profile-references";
 import { shouldBlockFriendSpeaker } from "../friend-chat-policy";
 import { pickStickerCatalog, type StickerCatalogEntry } from "../stickers";
 import {
@@ -1870,7 +1871,7 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
           latestAssistant: recentStoredMessages.find(row => row.role === "ASSISTANT")
             ? readImageExecutionState(recentStoredMessages.find(row => row.role === "ASSISTANT")!.metadata) : "none" as const,
         } } : {}),
-        ...(ctx.imageCapable ? { imageCapabilities: { generation: "text_to_image" as const, referenceInput: false as const, edit: false as const,
+        ...(ctx.imageCapable ? { imageCapabilities: { generation: "text_to_image" as const, referenceInput: true as const, edit: false as const,
           selfInspection: ctx.visionAvailable ? "on_demand" as const : "disabled" as const,
           quotedImageInspection: ctx.visionAvailable,
         } } : {}),
@@ -4100,12 +4101,42 @@ async function runChannelTurn(input: {
         // Profile lookup is optional and must never break an otherwise valid image request.
         console.warn("[image] published visual profile unavailable", error instanceof Error ? error.message : String(error));
       }
-      const prompt = sanitizeImagePrompt(composePublishedVisualPrompt(publishedVisualSnapshot ?? {}, validation.prompt));
-      const result = await generateImage({ settings: imageSettings, prompt, characterId: input.characterId });
+      /**
+       * 参考图只在「已经发布过正式版本」时用。
+       *
+       * 参考素材目前不在版本快照里（设计文档里记着这条），所以草稿发布与否管不到它们；
+       * 用「有没有正式版本」当闸门，至少保证「没发布就完全不碰档案」这条不变。
+       */
+      let visualReferences: VisualReference[] = [];
+      if (publishedVisualSnapshot) {
+        try {
+          visualReferences = await readVisualProfileReferences(prisma, input.characterId);
+        } catch (error) {
+          console.warn("[image] 读取参考图失败", error instanceof Error ? error.message : String(error));
+          visualReferences = [];
+        }
+      }
+      const referenceLabels = visualReferences.map(reference => reference.label);
+      // 放不下就不带：一张没有【参考图】约束的图，会让模型把姿势和取景一起抄下来。
+      const attachReferences = referenceLabels.length > 0 && canAttachReferences(validation.prompt, referenceLabels);
+      if (referenceLabels.length > 0 && !attachReferences) {
+        console.warn("[image] 参考图说明放不进提示词预算，这次不带参考图", { characterId: input.characterId });
+      }
+      const prompt = sanitizeImagePrompt(composePublishedVisualPrompt(
+        publishedVisualSnapshot ?? {},
+        validation.prompt,
+        attachReferences ? { referenceLabels } : {},
+      ));
+      const result = await generateImage({
+        settings: imageSettings,
+        prompt,
+        characterId: input.characterId,
+        references: attachReferences ? visualReferences : undefined,
+      });
       if (result.ok) {
         replyImage = result.image;
         imageAttempt = { status: "generated", ...trace };
-        imageGeneration = { prompt, model: imageSettings.model, provider: imageSettings.provider, generatedAt: new Date().toISOString(), mode: "text_to_image" };
+        imageGeneration = { prompt, model: imageSettings.model, provider: imageSettings.provider, generatedAt: new Date().toISOString(), mode: result.mode };
       } else {
         imageAttempt = { status: "generation_failed", reason: "generation_failed", ...trace };
         if (imageDecision.requested) useImageStatusReply(blockedImageReply("generation_failed"));

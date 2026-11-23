@@ -12,7 +12,7 @@ export type ImageAttemptRecord = {
   limit?: number;
 };
 export type ImageGenerationRecord = {
-  prompt: string; model: string; provider: string; generatedAt: string; mode: "text_to_image";
+  prompt: string; model: string; provider: string; generatedAt: string; mode: "text_to_image" | "image_to_image";
 };
 const record = (v: unknown): Record<string, unknown> => v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 

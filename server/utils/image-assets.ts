@@ -16,7 +16,8 @@ export function readGeneratedImageFacts(metadata: unknown): GeneratedImageFacts 
   const description = typeof vision.description === "string" ? vision.description.trim().slice(0, 400) : "";
   const status = ["not_requested", "disabled", "ok", "failed", "budget_exhausted", "missing_file"].includes(String(vision.status))
     ? vision.status as GeneratedImageFacts["visual"]["status"] : "not_requested";
-  return sanitizeGeneratedImageFacts({ origin: "self_generated", mode: "text_to_image",
+  const mode = generation.mode === "image_to_image" ? "image_to_image" as const : "text_to_image" as const;
+  return sanitizeGeneratedImageFacts({ origin: "self_generated", mode,
     ...(typeof generation.generatedAt === "string" && Number.isFinite(Date.parse(generation.generatedAt)) ? { generatedAt: generation.generatedAt } : {}),
     ...(typeof generation.prompt === "string" ? { requestedDescription: generation.prompt.slice(0, 1200) } : {}),
     visual: status === "ok" && description ? { status: "ok", description } : { status: status === "ok" ? "failed" : status },

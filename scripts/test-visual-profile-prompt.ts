@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { composePublishedVisualPrompt } from "../server/utils/visual-profile-prompt";
+import { withoutReferenceNotes } from "../server/utils/image-generation";
+import { canAttachReferences, composeReferenceSection, composePublishedVisualPrompt } from "../server/utils/visual-profile-prompt";
+import { isVisualAssetPathSafe } from "../server/utils/visual-profile-references";
 
 const snapshot = {
   coreAppearance: "蓝紫色长发、蓝色眼睛、鲸鱼耳与尾巴",
@@ -61,5 +63,44 @@ const hugeScene = "画".repeat(1500);
 const onlyScene = composePublishedVisualPrompt(snapshot, hugeScene);
 assert.equal(onlyScene.length, 1200);
 assert(!onlyScene.includes("【人物】"));
+
+// 9. 带参考图：说明段就位，且排在造型之后、画面之前
+const withRefs = composePublishedVisualPrompt(snapshot, "窝在床上玩手机，午后暖阳", {
+  referenceLabels: ["标准形象", "正面视图"],
+});
+assert(withRefs.includes("【参考图】图1 标准形象、图2 正面视图"));
+assert(withRefs.includes("只用来确定长相"));
+assert(withRefs.includes("服装、姿势、表情、视角和背景都不要照搬"));
+assert(
+  withRefs.indexOf("【造型·") < withRefs.indexOf("【参考图】") &&
+  withRefs.indexOf("【参考图】") < withRefs.indexOf("【画面】"),
+  "参考图说明要夹在造型与画面之间",
+);
+assert(withRefs.length <= 1200);
+
+// 10. 不带参考图时不该凭空出现这一段
+assert(!prompt.includes("【参考图】"));
+assert.equal(composeReferenceSection([]), "");
+
+// 11. 画面太长时判定为「放不下」，调用方据此不传图
+assert(canAttachReferences("窝在床上玩手机", ["标准形象"]));
+assert(!canAttachReferences("画".repeat(1100), ["标准形象", "正面视图", "侧面视图"]));
+
+// 12. 素材路径只认当前角色的档案目录
+assert(isVisualAssetPathSafe("char-1", "visual-profile/char-1/abc.jpg"));
+assert(!isVisualAssetPathSafe("char-1", "visual-profile/char-2/abc.jpg"));
+assert(!isVisualAssetPathSafe("char-1", "visual-profile/char-1/../char-2/abc.jpg"));
+assert(!isVisualAssetPathSafe("char-1", "images/char-1/abc.jpg"));
+assert(!isVisualAssetPathSafe("", "visual-profile//abc.jpg"));
+
+// 13. edits 回退时去掉【参考图】段：图都没发，不能留「图1」这种空指代
+const stripped = withoutReferenceNotes(withRefs);
+assert(!stripped.includes("【参考图】"));
+assert(!stripped.includes("图1 "));
+assert(stripped.includes("【人物】"));
+assert(stripped.includes("【画面】"));
+assert(stripped.length < withRefs.length);
+// 本来就没有这一段时原样返回
+assert.equal(withoutReferenceNotes("【画面】一只鲸鱼跃出海面"), "【画面】一只鲸鱼跃出海面");
 
 console.log("visual-profile-prompt: ok");

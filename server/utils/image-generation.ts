@@ -95,8 +95,22 @@ export type GeneratedImage = {
   bytes: number;
 };
 
+/**
+ * 一张随请求发出去的参考图。
+ *
+ * 只接受已经在服务端校验过路径的字节 —— 这里的 buffer 会直接进 multipart，
+ * 不做任何来源判断，判断在 `visual-profile-references` 那一层做完了。
+ */
+export type ImageReferenceInput = {
+  /** 对应【参考图】段里的中文名，只用于日志。 */
+  label: string;
+  mime: string;
+  buffer: Buffer;
+};
+
 export type ImageGenerationResult =
-  | { ok: true; image: GeneratedImage }
+  /** mode 记录的是**实际**用了哪条路径：edits 失败回退后仍然是 text_to_image。 */
+  | { ok: true; image: GeneratedImage; mode: "text_to_image" | "image_to_image" }
   | { ok: false; reason: string };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -231,6 +245,12 @@ export function buildImageGenerationEndpoint(baseUrl: string): URL {
   return new URL(`${normalized}/images/generations`);
 }
 
+/** 带参考图走的是 OpenAI 的 edits 语义（multipart）。不是每家都实现，失败会回退。 */
+export function buildImageEditEndpoint(baseUrl: string): URL {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return new URL(`${normalized}/images/edits`);
+}
+
 /**
  * 401/403 里「不是 Key 的事」那一类，单独认出来。
  *
@@ -356,6 +376,21 @@ export function sanitizeImagePrompt(raw: string): string {
     .trim()
     .slice(0, IMAGE_PROMPT_MAX_CHARS)
     .trim();
+}
+
+/**
+ * 去掉提示词里的【参考图】段。
+ *
+ * 参考图没发出去时留着这段，模型会把它当成「有一张叫图1 的参考图」去想象。
+ * 那一段内部只用「、」和「，」，不会出现「；」，所以按分号切就够。
+ */
+export function withoutReferenceNotes(prompt: string): string {
+  const stripped = prompt
+    .replace(/【参考图】[^；]*(?:；|$)/u, "")
+    .replace(/；{2,}/gu, "；")
+    .replace(/^；+|；+$/gu, "")
+    .trim();
+  return stripped || prompt;
 }
 
 /**
@@ -517,9 +552,12 @@ export async function generateImage(input: {
   prompt: string;
   characterId: string;
   n?: number;
+  /** 形象档案的参考图；给了就先试 edits 接口，不行再退回纯文字。 */
+  references?: ImageReferenceInput[];
 }): Promise<ImageGenerationResult> {
-  const prompt = sanitizeImagePrompt(input.prompt);
+  let prompt = sanitizeImagePrompt(input.prompt);
   if (!prompt) return { ok: false, reason: "画面描述为空" };
+  let usedReferences = false;
 
   let endpoint: URL;
   try {
@@ -578,6 +616,68 @@ export async function generateImage(input: {
   };
 
   /**
+   * 带参考图：走 OpenAI 的 edits 语义（multipart）。只有 openai 兼容的服务商才试，
+   * MiniMax 那条原生接口没有这个形状。
+   *
+   * 这里的失败**不当作整次生成失败** —— 调用方拿到的是回退后的纯文字结果。
+   * 理由和文件头那条一致：图是锦上添花，参考图更是锦上添花里的锦上添花。
+   */
+  const requestEdit = async (): Promise<
+    { ok: true; payload: unknown } | { ok: false; reason: string; status?: number }
+  > => {
+    const references = input.references ?? [];
+    if (!references.length) return { ok: false, reason: "没有参考图" };
+    let editEndpoint: URL;
+    try {
+      editEndpoint = buildImageEditEndpoint(input.settings.apiBaseUrl);
+    } catch {
+      return { ok: false, reason: "画图地址无效" };
+    }
+    try {
+      const form = new FormData();
+      form.append("model", input.settings.model);
+      form.append("prompt", prompt);
+      form.append("size", input.settings.size);
+      form.append("n", String(count));
+      form.append("response_format", "b64_json");
+      // 单张写 image、多张写 image[]：两套写法在不同服务商/版本里都出现过。
+      const field = references.length > 1 ? "image[]" : "image";
+      references.forEach((reference, index) => {
+        const blob = new Blob([new Uint8Array(reference.buffer)], { type: reference.mime });
+        form.append(field, blob, `reference-${index + 1}.${extensionFor(reference.mime)}`);
+      });
+      const response = await fetch(editEndpoint, {
+        method: "POST",
+        redirect: "error",
+        // 不要手写 content-type：multipart 的 boundary 必须由运行时生成。
+        headers: { authorization: "Bearer " + input.settings.apiKey },
+        body: form,
+        signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        const detail = await safeText(response);
+        const hint = response.status === 404 || response.status === 405
+          ? "（这家可能没有参考图接口）"
+          : response.status === 400
+            ? "（参数或图片不被接受）"
+            : "";
+        return {
+          ok: false,
+          status: response.status,
+          reason: `参考图生成返回 HTTP ${response.status}${hint}${detail ? `：${detail}` : ""}`,
+        };
+      }
+      return { ok: true, payload: await response.json() };
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "Error";
+      return {
+        ok: false,
+        reason: name === "TimeoutError" || name === "AbortError" ? "参考图生成超时" : "参考图接口连不上",
+      };
+    }
+  };
+
+  /**
    * 优先要 inline base64，其次才要链接 —— 这是 2026-11-22 线上踩出来的。
    *
    * MiniMax 的 `url` 指向乌兰察布的一台 OSS（`hailuo-image-*.oss-cn-wulanchabu`）。
@@ -594,11 +694,30 @@ export async function generateImage(input: {
    * 也就是说：b64 不只是「少一次下载」，在部分中转上它还是**唯一能拿到图**的方式。
    * 所以这条永远是首选，别为了省 300KB 改成 url 优先。
    */
-  let result = await request("b64_json");
-  // 少数服务商不认 `response_format: b64_json`（400 参数错误）：退回 url 再要一次。
-  // 只对 400 重试：422 是内容审核、402 是余额、401 是鉴权，重发一遍也是同样的结果。
-  if (!result.ok && result.status === 400) {
-    result = await request("url");
+  let result: { ok: true; payload: unknown } | { ok: false; reason: string; status?: number };
+  // 只有 openai 兼容的服务商有 edits 接口；MiniMax 那条直接跳过，连一次失败请求都不花。
+  const editWanted = (input.references?.length ?? 0) > 0 && input.settings.provider === "openai";
+  const editOutcome = editWanted ? await requestEdit() : null;
+  if (editOutcome?.ok) {
+    result = editOutcome;
+    usedReferences = true;
+  } else {
+    if (editOutcome) {
+      // 回退不是异常：只比原路径多花一次失败请求，画出来的图和以前一模一样。
+      console.warn("[image] 参考图生成不可用，退回纯文字", {
+        characterId: input.characterId,
+        references: input.references?.length ?? 0,
+        reason: editOutcome.reason,
+      });
+      // 图没发出去，提示词里那段「图1 ⋯」就成了空指代，得一起去掉。
+      prompt = withoutReferenceNotes(prompt);
+    }
+    result = await request("b64_json");
+    // 少数服务商不认 `response_format: b64_json`（400 参数错误）：退回 url 再要一次。
+    // 只对 400 重试：422 是内容审核、402 是余额、401 是鉴权，重发一遍也是同样的结果。
+    if (!result.ok && result.status === 400) {
+      result = await request("url");
+    }
   }
   if (!result.ok) return { ok: false, reason: result.reason };
   const payload = result.payload;
@@ -672,6 +791,7 @@ export async function generateImage(input: {
 
   return {
     ok: true,
+    mode: usedReferences ? "image_to_image" : "text_to_image",
     image: {
       filePath,
       relativePath,

@@ -115,6 +115,9 @@ const publishedVersion = computed(() => versions.value.find(
 const draftVersion = computed(() => versions.value.find(item => item.status === "DRAFT") ?? null);
 const defaultOutfit = computed(() => outfits.value.find(item => item.isDefault) ?? null);
 const standardAsset = computed(() => assets.value.find(asset => asset.kind === "STANDARD") ?? null);
+/** 会作为参考图发出去的素材：标准形象 + 三视图，与后端 REFERENCE_KINDS 对齐。 */
+const REFERENCE_KINDS = ["STANDARD", "FRONT_VIEW", "SIDE_VIEW", "BACK_VIEW"];
+const referenceAssetCount = computed(() => assets.value.filter(asset => REFERENCE_KINDS.includes(asset.kind)).length);
 
 const personLength = computed(() => coreAppearance.value.trim().length);
 const promptLength = computed(() => corePrompt.value.trim().length);
@@ -197,7 +200,7 @@ const readiness = computed(() => {
     { key: "appearance", title: "核心外貌", done: hasCore, detail: hasCore ? "发色、瞳色、体型与标志性特征已确定" : "还没写外貌设定", action: hasCore ? "" : "去填写" },
     { key: "prompt", title: "核心绘图提示词", done: hasPrompt, detail: hasPrompt ? `当前 ${promptLength.value} 字` : "没有提示词时只会按本轮画面画", action: hasPrompt ? "" : "去填写" },
     { key: "outfit", title: "默认造型", done: hasDefault, detail: hasDefault ? `「${defaultOutfit.value?.name}」` : "没有默认造型，未指定服装时不会加着装描述", action: hasDefault ? "" : "去新建" },
-    { key: "standard", title: "标准形象图", done: hasStandard, detail: hasStandard ? "已上传，仅用于查看，暂不作为模型输入" : "建议补一张", action: hasStandard ? "" : "去上传" },
+    { key: "standard", title: "标准形象图", done: hasStandard, detail: hasStandard ? "已上传，会作为参考图随生成一起发出" : "建议补一张", action: hasStandard ? "" : "去上传" },
     { key: "views", title: "三视图完整", done: viewsComplete, detail: viewsComplete ? "正面、侧面、背面齐全" : `缺 ${viewGaps.value.map(item => item.label).join("、")}`, action: viewsComplete ? "" : "去补齐" },
   ];
 });
@@ -699,12 +702,14 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                 <span class="vp-arrow">→</span>
                 <span class="vp-step">造型 · {{ defaultOutfit?.name || "未设置" }}</span>
                 <span class="vp-arrow">→</span>
+                <span class="vp-step">参考图 · {{ referenceAssetCount }} 张</span>
+                <span class="vp-arrow">→</span>
                 <span class="vp-step">本轮画面</span>
                 <span class="vp-arrow">→</span>
                 <span class="vp-step is-quiet">避免</span>
               </div>
               <p class="muted vp-flow-note">
-                画面里已经写了服装时，整段造型不会被拼进去；负面词以「避免」追加在最后。参考图片目前只存档和查看，不会作为图片输入传给模型。
+                画面里已经写了服装时，整段造型不会被拼进去；负面词以「避免」追加在最后。标准形象和三视图会作为参考图一起发出，只用来定长相，姿势和表情仍按画面重新安排。
               </p>
             </section>
           </div>
@@ -1202,7 +1207,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
           >
             <span class="halo"><el-icon :size="22"><Upload /></el-icon></span>
             <h4>还没有参考图片</h4>
-            <p>先上传一张标准形象图，再补正面、侧面、背面三视图。这些图片目前只用于存档和人工查看。</p>
+            <p>先上传一张标准形象图，再补正面、侧面、背面三视图。标准形象和三视图会作为参考图随生成一起发出，只用来定长相。</p>
           </section>
         </div>
 
