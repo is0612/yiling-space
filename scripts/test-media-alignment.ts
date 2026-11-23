@@ -13,11 +13,15 @@ import { applyImageDescriptions } from "../server/utils/image-understanding";
 import { applyVoiceTranscripts, VOICE_UNTRANSCRIBED } from "../server/utils/voice";
 import { readOnebotMessageText, readOnebotVoices } from "../server/utils/channel-adapter/onebot/types";
 
+// 占位符约定（与 test-image-understanding.ts 的 IMAGE_UNREADABLE 同一套）：识别结果为空时
+// 保留裸 `[图片]`。chat-reply.ts 的媒体段说明写明「[图片] supplies no visual content」，
+// 并把 `[图片：无法读取]` 标成 Legacy（只为读旧数据兼容）；media-text.ts 的
+// renderImageTextParts 也是空描述出裸占位符。所以失败槽位不该再在正文里重复报错。
 const imageDescriptions = alignMediaResults(2, [1], ["第二张图片"]);
 assert.deepEqual(imageDescriptions, [null, "第二张图片"]);
 assert.equal(
   applyImageDescriptions("[图片][图片]", imageDescriptions),
-  "[图片：无法读取][图片：第二张图片]",
+  "[图片][图片：第二张图片]",
   "第一张图片没有 URL 时，第二张描述不能错填到第一张。",
 );
 
@@ -25,8 +29,12 @@ const noImageUrls = alignMediaResults(2, [], [], null);
 assert.deepEqual(noImageUrls, [null, null]);
 assert.equal(
   applyImageDescriptions("[图片][图片]", noImageUrls),
-  "[图片：无法读取][图片：无法读取]",
-  "一条消息全部图片都没有直链时，每个槽位都应明确标为无法读取。",
+  "[图片][图片]",
+  "一条消息全部图片都没有直链时，每个槽位都保留裸占位符，不在正文里逐张报错。",
+);
+assert(
+  !applyImageDescriptions("[图片][图片]", noImageUrls).includes("无法读取"),
+  "识别失败不再产出 legacy 的 [图片：无法读取]。",
 );
 
 const voiceTranscripts = alignMediaResults(2, [1], ["第二条语音"]);

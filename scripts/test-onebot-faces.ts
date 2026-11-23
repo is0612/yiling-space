@@ -37,10 +37,19 @@ assert.equal(
   "你干嘛[白眼]",
   "文字与表情要按原顺序拼起来。",
 );
+// 商城表情包：平台给的 summary 要保留，但必须带上「表情包」前缀、方括号压成全角，
+// 否则模型会把平台文案当成用户亲手打的字。协议自带的泛化标签（动画表情/表情包/贴图）
+// 不携带可见内容，一律退回通用占位符 —— 这是 chat-reply.ts 媒体段说明里的正式约定
+// （`[表情包]` 或 `[表情包：…]` 是贴纸，不是用户输入）。
 assert.equal(
   segmentMessage([{ type: "mface", data: { summary: "[赚到了]" } }]),
-  "[赚到了]",
-  "商城表情包用 summary。",
+  "[表情包：（赚到了）]",
+  "商城表情包用 summary，且要标明它是表情包。",
+);
+assert.equal(
+  segmentMessage([{ type: "mface", data: { summary: "动画表情" } }]),
+  "[表情包]",
+  "协议泛化标签没有可见内容，不给它编一个名字。",
 );
 assert.equal(segmentMessage([{ type: "mface", data: {} }]), "[表情包]", "没有 summary 时给通用占位。");
 assert.equal(
