@@ -1,7 +1,7 @@
 import { createError, getRouterParam } from "h3";
 import { resolveChatModelSettings } from "../../../../utils/chat-model-config";
 import { resolveCharacterImageApiKey } from "../../../../utils/credential-encryption";
-import { buildImageGenerationEndpoint, parseImageResponse, resolveImageGenerationSettings } from "../../../../utils/image-generation";
+import { buildImageGenerationEndpoint, describeImageGatewayRefusal, parseImageResponse, resolveImageGenerationSettings } from "../../../../utils/image-generation";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
@@ -140,17 +140,27 @@ export default defineEventHandler(async (event): Promise<ProbeResult> => {
     if (result.status === 0) {
       return { ok: false, message: result.detail, model: settings.model, elapsedMs };
     }
-    const message = result.status === 401 || result.status === 403
-      ? "画图 Key 无效或没有该模型的权限（注意：它和对话、看图的 Key 是分开存的）。"
-      : result.status === 402
-        ? "画图服务余额不足，去控制台充值后再测。"
-        : result.status === 404
-          ? `画图地址或模型名不存在（${endpointLabel}，模型 ${settings.model}）。先确认 Base URL 有没有少 /v1，再确认模型名在这家的清单里。`
-          : result.status === 422
-            ? "内容审核没通过。测试词是固定的（橘猫打盹），这通常意味着账号被风控，而不是提示词的问题。"
-            : result.status === 429
-              ? describeThrottled(result.detail)
-              : `画图服务返回 HTTP ${result.status}。`;
+    /**
+     * 401/403 先看服务商原话：中转常把「分组没有这个模型的渠道」包装成 403
+     * （`this group is not served by this gateway`），那不是 Key 的事。
+     * 只有认不出网关话术时，才按状态码说鉴权 / 权限。
+     */
+    const gatewayRefusal = result.status === 401 || result.status === 403
+      ? describeImageGatewayRefusal(result.detail)
+      : null;
+    const message = gatewayRefusal
+      ? gatewayRefusal
+      : result.status === 401 || result.status === 403
+        ? "画图 Key 无效或没有该模型的权限（注意：它和对话、看图的 Key 是分开存的）。"
+        : result.status === 402
+          ? "画图服务余额不足，去控制台充值后再测。"
+          : result.status === 404
+            ? `画图地址或模型名不存在（${endpointLabel}，模型 ${settings.model}）。先确认 Base URL 有没有少 /v1，再确认模型名在这家的清单里。`
+            : result.status === 422
+              ? "内容审核没通过。测试词是固定的（橘猫打盹），这通常意味着账号被风控，而不是提示词的问题。"
+              : result.status === 429
+                ? describeThrottled(result.detail)
+                : `画图服务返回 HTTP ${result.status}。`;
     return { ok: false, message, detail: result.detail, model: settings.model, elapsedMs };
   }
 

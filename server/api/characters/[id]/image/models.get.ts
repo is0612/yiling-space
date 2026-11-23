@@ -1,7 +1,7 @@
 import { createError, getRouterParam } from "h3";
 import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../utils/chat-model-config";
 import { resolveCharacterImageApiKey } from "../../../../utils/credential-encryption";
-import { DEFAULT_IMAGE_MODEL, resolveImageGenerationSettings } from "../../../../utils/image-generation";
+import { DEFAULT_IMAGE_MODEL, describeImageGatewayRefusal, resolveImageGenerationSettings } from "../../../../utils/image-generation";
 import { isImageGenerationModel } from "../../../../../shared/utils/vision-models";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
@@ -89,13 +89,21 @@ export default defineEventHandler(async (event): Promise<ModelsResult> => {
     });
 
     if (!response.ok) {
-      // 只认 404/405/501 是「这家没有列表接口」；401/403 是 Key 的问题。
+      // 服务商原文要读：401/403 里有一类是「网关的分组没有这个模型」，不是 Key 的事
+      const raw = await response.text().catch(() => "");
+      const detail = /^\s*<(!doctype|html)/i.test(raw) ? "" : raw.replace(/\s+/g, " ").slice(0, 300);
+      // 只认 404/405/501 是「这家没有列表接口」
       const unsupported = response.status === 404 || response.status === 405 || response.status === 501;
-      const message = response.status === 401 || response.status === 403
-        ? "画图 Key 无效或没有查看模型的权限（注意：它和对话、看图的 Key 是分开存的）。"
-        : unsupported
-          ? "该服务商没有提供模型列表接口（HTTP " + response.status + "），请直接手填模型名。"
-          : "服务商返回 HTTP " + response.status + "，无法获取模型列表。请检查 API 地址与 Key。";
+      const gatewayRefusal = response.status === 401 || response.status === 403
+        ? describeImageGatewayRefusal(detail)
+        : null;
+      const message = gatewayRefusal
+        ? gatewayRefusal
+        : response.status === 401 || response.status === 403
+          ? "画图 Key 无效或没有查看模型的权限（注意：它和对话、看图的 Key 是分开存的）。"
+          : unsupported
+            ? "该服务商没有提供模型列表接口（HTTP " + response.status + "），请直接手填模型名。"
+            : "服务商返回 HTTP " + response.status + "，无法获取模型列表。请检查 API 地址与 Key。";
       return { ok: false, models: [], message, unsupported, provider: endpoint.hostname };
     }
 

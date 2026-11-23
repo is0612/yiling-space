@@ -223,6 +223,27 @@ export function buildImageGenerationEndpoint(baseUrl: string): URL {
   return new URL(`${normalized}/images/generations`);
 }
 
+/**
+ * 401/403 里「不是 Key 的事」那一类，单独认出来。
+ *
+ * 2026-11-23 实测：一台中转对画图请求回 403
+ * `{"error":{"message":"this group is not served by this gateway","type":"Forbidden"}}`
+ * —— 意思是**当前令牌所在的令牌分组里没有能服务这个模型的渠道**。
+ * 早先这里按状态码一律说「Key 无效或没有该模型的权限」，人于是去重贴 Key、
+ * 去控制台翻权限，全白费；真正该做的是换模型，或者在中转后台把模型加进分组。
+ *
+ * 同一件事各家措辞不同（new-api / one-api 类网关尤其爱换说法），所以认几组关键词；
+ * 认不出就返回 null，让调用方按状态码给通用话术 —— 不猜比猜错强。
+ */
+export function describeImageGatewayRefusal(detail: string): string | null {
+  if (!detail) return null;
+  const groupRefused = /this group is not served|not served by this gateway|group\s+is\s+not\s+served/i.test(detail);
+  const noChannel = /no available channel|无可用渠道|没有可用渠道|渠道.*(不可用|未配置|不存在)/i.test(detail);
+  const groupModelRefused = /(分组|group)[^。；]{0,40}(不可用|未开通|无权|不支持|not\s+support|not\s+available)/i.test(detail);
+  if (!groupRefused && !noChannel && !groupModelRefused) return null;
+  return "网关拒绝了这次请求：当前令牌所在的分组没有能服务这个模型的渠道（原话类似 this group is not served by this gateway），不是 Key 填错了。先去「获取模型」看这家到底有哪些画图模型，或者在中转后台把这个模型加进当前令牌的分组。";
+}
+
 /* ────────────────────────────── 什么时候画 ────────────────────────────── */
 
 /**
