@@ -288,6 +288,9 @@ async function publishDraft() {
 }
 
 watch(characterId, () => {
+  coreAppearance.value = "";
+  corePrompt.value = "";
+  negativePrompt.value = "";
   uploadFile.value = null;
   if (referenceFileInput.value) referenceFileInput.value.value = "";
   uploadLabel.value = "";
