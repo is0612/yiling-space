@@ -224,6 +224,13 @@ const formatBytes = (bytes: number) => (bytes >= 1048576
   : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 const formatTime = (value: string | null | undefined) => (value ? new Date(value).toLocaleString() : "");
 const kindLabel = (kind: string) => ASSET_KINDS.find(item => item.value === kind)?.label ?? "补充素材";
+/** 快照里的素材引用；旧版本没有这个字段，返回 null 表示「当时没记录」。 */
+const versionAssetCount = (item: VisualVersion) => {
+  const snapshot = item.snapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+  const assets = (snapshot as Record<string, unknown>).assets;
+  return Array.isArray(assets) ? assets.length : null;
+};
 const assetUrl = (assetId: string) =>
   `/api/characters/${encodeURIComponent(characterId.value)}/visual-profile/assets/${encodeURIComponent(assetId)}`;
 
@@ -1275,6 +1282,8 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                 <div class="vp-version-meta">
                   <span>{{ formatTime(item.createdAt) }}</span>
                   <span v-if="item.publishedAt">发布于 {{ formatTime(item.publishedAt) }}</span>
+                  <span v-if="versionAssetCount(item) !== null">引用 {{ versionAssetCount(item) }} 张素材</span>
+                  <span v-else>素材数未记录</span>
                 </div>
               </div>
               <div class="vp-version-actions">
@@ -1319,6 +1328,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                 <p>保存核心提示词、增删改造型、恢复历史版本，都会生成一份新草稿。</p>
                 <p>只有点「发布」才推进正式版本；发布后其他未发布草稿自动归档。</p>
                 <p>绘图永远读当前正式版本，草稿不参与任何一次生成。</p>
+                <p>恢复历史版本只还原文字和造型；参考素材不随版本回滚，换过的图保持当前状态。</p>
               </div>
             </section>
           </div>

@@ -2,6 +2,7 @@ import { createError } from "h3";
 import { requireActorUserId } from "../../../utils/auth";
 import { requireUuid } from "../../../utils/local-api";
 import { getPrisma } from "../../../utils/prisma";
+import { snapshotAssetSelect, toSnapshotAssets } from "../../../utils/visual-profile-snapshot";
 
 function readText(value: unknown, field: string, max: number): string {
   if (value === undefined) return "";
@@ -34,6 +35,7 @@ export default defineEventHandler(async (event) => {
       update: { coreAppearance, corePrompt, negativePrompt },
     });
     const outfits = await tx.characterVisualOutfit.findMany({ where: { profileId: profile.id }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] });
+    const assets = await tx.characterVisualAsset.findMany({ where: { profileId: profile.id }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], select: snapshotAssetSelect });
     const latest = await tx.characterVisualVersion.aggregate({
       where: { profileId: profile.id },
       _max: { revision: true },
@@ -45,7 +47,7 @@ export default defineEventHandler(async (event) => {
         revision,
         status: "DRAFT",
         note,
-        snapshot: { coreAppearance, corePrompt, negativePrompt, outfits: outfits.map(item => ({ name: item.name, prompt: item.prompt, isDefault: item.isDefault, sortOrder: item.sortOrder })) },
+        snapshot: { coreAppearance, corePrompt, negativePrompt, outfits: outfits.map(item => ({ name: item.name, prompt: item.prompt, isDefault: item.isDefault, sortOrder: item.sortOrder })), assets: toSnapshotAssets(assets) },
       },
     });
     return { profile, draftVersion: version };

@@ -2,6 +2,7 @@ import { createError } from "h3";
 import { requireActorUserId } from "../../../../../../utils/auth";
 import { requireUuid, readTrimmedString } from "../../../../../../utils/local-api";
 import { getPrisma } from "../../../../../../utils/prisma";
+import { snapshotAssetSelect, toSnapshotAssets } from "../../../../../../utils/visual-profile-snapshot";
 
 type Snapshot = { coreAppearance?: unknown; corePrompt?: unknown; negativePrompt?: unknown; outfits?: unknown };
 
@@ -44,11 +45,13 @@ export default defineEventHandler(async (event) => {
     const latest = await tx.characterVisualVersion.aggregate({ where: { profileId: profile.id }, _max: { revision: true } });
     const revision = (latest._max.revision ?? 0) + 1;
     const restoredOutfits = await tx.characterVisualOutfit.findMany({ where: { profileId: profile.id }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] });
+    // 恢复只还原文字与造型；素材文件可能已经删了，还原不回来，所以快照里记当前的。
+    const restoredAssets = await tx.characterVisualAsset.findMany({ where: { profileId: profile.id }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], select: snapshotAssetSelect });
     const draft = await tx.characterVisualVersion.create({
       data: { profileId: profile.id, revision, status: "DRAFT", note,
         snapshot: { coreAppearance, corePrompt, negativePrompt, outfits: restoredOutfits.map(item => ({
           name: item.name, prompt: item.prompt, isDefault: item.isDefault, sortOrder: item.sortOrder,
-        })) } },
+        })), assets: toSnapshotAssets(restoredAssets) } },
     });
     return { profile: updated, draftVersion: draft, restoredFromRevision: source.revision };
   }, { isolationLevel: "Serializable" });
