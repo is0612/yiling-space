@@ -31,7 +31,9 @@ export async function attachQuotedImageDescriptions(
   const cache = new Map<string, Promise<ChannelTurnMessage["quotedMessage"]>>();
   return Promise.all(messages.map(async message => {
     const quoted = message.quotedMessage;
-    if (!quoted || !(quoted.images?.length || quoted.image)) return message;
+    // A verified self quote may contain only its platform id; resolve the stored asset
+    // before requiring image segments from get_msg (gateways may omit those).
+    if (!quoted || !(quoted.isSelf || quoted.images?.length || quoted.image)) return message;
     const observe = message.kind !== "AI" && !message.readOnly && isExplicitMediaQuestion(message.commandText ?? "", true);
     const key = `${quoted.messageId}:${quoted.isSelf === true}:${observe}`;
     if (!cache.has(key)) cache.set(key, (async () => {

@@ -1,6 +1,6 @@
 import { resolveImageRequest, isAutonomousImageEligible, validateImageScenePrompt, type ImageRequestResolution } from "../image-request-policy";
 import { imageDecisionReply, imageStatusReply, blockedImageReply, type ImageAttemptRecord, type ImageGenerationRecord } from "../image-execution";
-import { readGeneratedImageFacts } from "../image-assets";
+import { inspectGeneratedImageAsset, readGeneratedImageFacts } from "../image-assets";
 import { sanitizeGeneratedImageFacts, type GeneratedImageFacts } from "../image-facts";
 import { createMediaVisionBudget, isExplicitMediaQuestion, type MediaVisionBudget } from "../media-questions";
 import { attachQuotedImageDescriptions, inspectLatestGeneratedImageForQuestion } from "./quoted-image-observation";
@@ -4134,6 +4134,24 @@ async function runChannelTurn(input: {
     expressionHabits,
     preferences,
   });
+
+  // Observe the actual generated file once, without waiting for a later user question.
+  // Persist first so inspection/cache and subsequent delivery updates share one asset row.
+  // This output has its own single observation, independent of the inbound-image budget.
+  if (replyImage && assistantMessageId) {
+    try {
+      const settings = await resolveVisionSettingsForCharacter({ modelConfig: character.modelConfig,
+        chatModel: modelPrep.chatSettings.model, chatApiBaseUrl: modelPrep.chatSettings.apiBaseUrl, chatApiKey: modelPrep.apiKey });
+      const facts = readGeneratedImageFacts({ image: { path: replyImage.relativePath, generation: imageGeneration } });
+      if (facts) await inspectGeneratedImageAsset(prisma, {
+        messageId: assistantMessageId,
+        scope: { characterId: input.characterId, bindingId: input.bindingId, externalConversationId: input.externalConversationId },
+        path: replyImage.relativePath, facts,
+      }, settings, () => true);
+    } catch {
+      console.warn("[image] automatic observation failed");
+    }
+  }
 
   await saveChannelTurnWorkingContext({
     prisma,

@@ -85,6 +85,24 @@ try {
   assert.equal((await inspectGeneratedImageAsset(prisma, { ...asset, facts: cached }, settings, () => { throw new Error("cached image must not consume budget"); })).visual.status, "ok");
   assert.equal(visionCalls, 1);
 
+  // New output is inspected before delivery: no sent receipt or follow-up question
+  // exists yet. Its observation must already be available to the next chat turn.
+  const deliveredMetadata = metadata;
+  metadata = { image: { path: relative, generation: { prompt: "blue whale" }, vision: { status: "not_requested" } } };
+  const created = await inspectGeneratedImageAsset(prisma, { ...asset, facts: readGeneratedImageFacts(metadata)! }, settings, () => true);
+  assert.equal(created.visual.status, "ok");
+  assert.equal(visionCalls, 2, "one additional call observes the new output");
+  assert.equal(readGeneratedImageFacts(metadata)?.visual.description, "一条蓝鲸。");
+  assert.equal(metadata.replyDelivery, undefined, "observing a generated image must not claim delivery");
+  await inspectGeneratedImageAsset(prisma, { ...asset, facts: readGeneratedImageFacts(metadata)! }, settings, () => { throw new Error("automatic observation must be reused"); });
+  assert.equal(visionCalls, 2, "subsequent inspection reuses the automatic observation");
+  metadata = { image: { path: relative, vision: { status: "not_requested" } } };
+  globalThis.fetch = async () => { throw new Error("fixture vision unavailable"); };
+  const failedObservation = await inspectGeneratedImageAsset(prisma, { ...asset, facts: readGeneratedImageFacts(metadata)! }, settings, () => true);
+  assert.equal(failedObservation.visual.status, "failed", "vision failure returns normally so output delivery can continue");
+  assert.equal((metadata.image as { path: string }).path, relative);
+  metadata = deliveredMetadata;
+
   const event = { messageType: "private", messageId: "current", userId: "10000001", selfId: "10000002", groupId: "", data: { message: [{ type: "reply", data: { id: "-42" } }] } } as OnebotResolvedEvent;
   let raw: Record<string, unknown> = { message_id: -42, message_type: "private", user_id: 10000001, target_id: 10000001,
     sender: { user_id: 10000002 }, message: [{ type: "image", data: { url: "https://media.invalid/image" } }] };

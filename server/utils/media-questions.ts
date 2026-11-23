@@ -10,8 +10,16 @@ export function isExplicitMediaQuestion(text: string, hasQuotedImage = false): b
 /** A request to inspect the latest generated result, not a general capability question. */
 export function isLatestGeneratedImageQuestion(text: string): boolean {
   if (/(第一次|最早|以前|原来|上次|之前那)/u.test(text)) return false;
-  return /(?:你(?:自己|刚才|刚刚|这次)?(?:画|出|生成)(?:的|出来的)?(?:这|那)?(?:张)?(?:图|图片)|自己画的图)/u.test(text)
-    && /(什么样|啥样|有什么|内容|画面|描述|看一下|看看|看一眼)/u.test(text);
+  const compact = text.trim().replace(/\s+/gu, "");
+  const resultReference = /(?:你(?:自己|刚才|刚刚|刚|这次)?(?:画|出|生成)(?:的|出来的)?(?:这|那)?(?:张)?(?:图|图片)|自己画的图)/u.test(compact);
+  const recentResultReference = /(?:你(?:刚才|刚刚|刚|这次)(?:画|出|生成)(?:的|出来的)|(?:刚才|刚刚|这次)(?:画|生成)的(?:这|那)?张图)/u.test(compact);
+  const inspection = /(?:什么样|啥样|有什么|内容|画面|描述|看一下|看看|看一眼|看得见|看得到|看清|看见|看到)/u.test(compact);
+  // General ability questions have no particular result to inspect. An explicit
+  // recent-result reference or an imperative asks to inspect a concrete asset.
+  const capabilityOnly = /(?:能|会|可以)(?:不能|不会|不可以)?看/u.test(compact)
+    && /(?:吗|么|不)[，。.!！?？]*$/u.test(compact)
+    && !recentResultReference && !/(?:看看|看一下|看一眼)/u.test(compact);
+  return !capabilityOnly && (resultReference || recentResultReference) && inspection;
 }
 
 /** Reading the actual prompt needs asset evidence but never an extra vision call. */

@@ -39,6 +39,12 @@ assert.equal(isExplicitMediaQuestion("这表情真雷霆", true), false);
 assert.equal(isLatestGeneratedImageQuestion("你刚才画的图什么样"), true);
 assert.equal(isLatestGeneratedImageQuestion("你能看自己画的图吗"), false, "capability question does not consume vision");
 assert.equal(isLatestGeneratedImageQuestion("你第一次画的图什么样"), false, "older ambiguous assets must not bind to latest");
+for (const text of ["看看你刚画的", "你看看你自己画的图", "你看得见自己画的图吗", "看看刚才画的这张图", "你能看到你刚画的图吗"]) {
+  assert.equal(isLatestGeneratedImageQuestion(text), true, text);
+}
+for (const text of ["你会看自己画的图吗", "你可以看自己画的图吗", "看看你以前画的图", "帮我画张图", "你看见别人画的图了吗"]) {
+  assert.equal(isLatestGeneratedImageQuestion(text), false, text);
+}
 assert.equal(isLatestGeneratedPromptQuestion("你画这个的提示词是啥"), true);
 assert.equal(isLatestGeneratedImageQuestion("你画这个的提示词是啥"), false, "prompt inspection must not incur a vision request");
 assert.equal(isLatestGeneratedPromptQuestion("你第一次画的图提示词是什么"), false);
@@ -80,6 +86,13 @@ const own = { ...message, quotedMessage: { ...message.quotedMessage!, isSelf: tr
 const deduped = await attachQuotedImageDescriptions([own, { ...own, externalMessageId: "second" }], { prisma, scope, settings, budget: createMediaVisionBudget() }, generatedServices);
 assert.equal(finds, 1); assert.equal(inspections, 1);
 assert.equal(deduped[0]?.quotedMessage?.image?.visual.status, "ok");
+const idOnly = { ...message, commandText: "看看", quotedMessage: { messageId: "101", isSelf: true, content: "" } };
+const [resolvedIdOnly] = await attachQuotedImageDescriptions([idOnly], { prisma, scope, settings, budget: createMediaVisionBudget() }, generatedServices);
+assert.equal(resolvedIdOnly?.quotedMessage?.image?.visual.status, "ok", "self quote without gateway image segments still resolves the stored asset");
+assert.equal(finds, 2);
+assert.equal(inspections, 2);
+await attachQuotedImageDescriptions([{ ...idOnly, kind: "AI", readOnly: true }], { prisma, scope, settings, budget: createMediaVisionBudget() }, generatedServices);
+assert.equal(inspections, 2, "id-only AI quote must not trigger paid inspection");
 const metadata = buildStoredMessageMetadata({ platform: "qq-onebot", storedReason: "recorded", message: { ...own, quotedMessage: { ...own.quotedMessage!, image: facts } } });
 const storedQuote = metadata.quotedMessage as Record<string, unknown>;
 assert.equal(storedQuote.images, undefined);
