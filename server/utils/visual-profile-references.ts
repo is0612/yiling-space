@@ -48,7 +48,14 @@ export function selectSnapshotReferenceAssets(snapshotAssets: unknown): Snapshot
       && typeof item.sortOrder === "number" && Number.isFinite(item.sortOrder);
   });
   const rank = (kind: string) => REFERENCE_KINDS.indexOf(kind as typeof REFERENCE_KINDS[number]);
-  candidates.sort((a, b) => rank(a.kind) - rank(b.kind) || a.sortOrder - b.sortOrder);
+  candidates.sort((a, b) => {
+    const kindOrder = rank(a.kind) - rank(b.kind);
+    if (kindOrder) return kindOrder;
+    const aTime = typeof a.createdAt === "string" ? Date.parse(a.createdAt) : Number.NaN;
+    const bTime = typeof b.createdAt === "string" ? Date.parse(b.createdAt) : Number.NaN;
+    if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return bTime - aTime;
+    return a.sortOrder - b.sortOrder;
+  });
   const selected: SnapshotAsset[] = [];
   const selectedIds = new Set<string>();
   // 第一轮每种类型最多取一张，避免 STANDARD 素材挤掉三视图。
