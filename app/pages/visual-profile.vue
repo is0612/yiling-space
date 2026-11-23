@@ -11,7 +11,7 @@ definePageMeta({
 type VisualVersion = {
   id: string;
   revision: number;
-  status: "DRAFT" | "PUBLISHED";
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   note: string;
   createdAt: string;
   publishedAt: string | null;
@@ -81,6 +81,7 @@ async function loadProfile() {
     if (!current()) return;
     if (result.characterId !== target) throw new Error("角色数据不匹配");
     profile.value = result.profile;
+    draftRevision.value = result.profile?.versions.find(item => item.status === "DRAFT")?.revision ?? null;
     coreAppearance.value = result.profile?.coreAppearance ?? "";
     corePrompt.value = result.profile?.corePrompt ?? "";
     negativePrompt.value = result.profile?.negativePrompt ?? "";
@@ -386,7 +387,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
             <el-timeline-item v-for="item in profile.versions" :key="item.id" :timestamp="new Date(item.createdAt).toLocaleString()">
               <strong>版本 v{{ item.revision }}</strong>
               <el-tag size="small" :type="item.revision === profile.currentPublishedRevision ? 'success' : item.status === 'DRAFT' ? 'warning' : 'info'">
-                {{ item.revision === profile.currentPublishedRevision ? "当前正式版本" : item.status === "DRAFT" ? "草稿" : "历史正式版本" }}
+                {{ item.revision === profile.currentPublishedRevision ? "当前正式版本" : item.status === "DRAFT" ? "待发布草稿" : item.status === "ARCHIVED" ? "已归档草稿" : "历史正式版本" }}
               </el-tag>
               <p>{{ item.note || "未填写版本说明" }}</p>
               <el-button v-if="item.revision !== profile.currentPublishedRevision" size="small" link type="primary" :loading="restoringVersionId === item.id" @click="restoreVersion(item.id)">恢复为草稿</el-button>
