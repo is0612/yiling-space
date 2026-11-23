@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { limitReferenceNotes, withoutReferenceNotes } from "../server/utils/image-generation";
 import { canAttachReferences, composeReferenceSection, composePublishedVisualPrompt } from "../server/utils/visual-profile-prompt";
-import { isVisualAssetPathSafe, selectSnapshotReferenceAssets } from "../server/utils/visual-profile-references";
+import { isVisualAssetPathSafe, readVisualProfileReferences, selectSnapshotReferenceAssets } from "../server/utils/visual-profile-references";
 
 const snapshot = {
   coreAppearance: "蓝紫色长发、蓝色眼睛、鲸鱼耳与尾巴",
@@ -143,5 +143,25 @@ assert.equal(selectedSnapshotAssets[0]!.id, "standard-7", "同用途优先最新
 assert.deepEqual(selectSnapshotReferenceAssets(undefined), [], "旧快照没有 assets 时不能偷读实时素材库");
 assert.deepEqual(selectSnapshotReferenceAssets([{ id: "bad", kind: "EXPRESSION", label: "表情", relativePath: "x", sortOrder: 0 }]), []);
 assert.equal(selectSnapshotReferenceAssets(snapshotAssets).length, 4, "参考图总数不能超过 4 张");
+
+// 17. 生图查询只能按正式快照的 ID 取素材；旧快照缺少 assets 时不查询实时素材库。
+{
+  const queries: unknown[] = [];
+  const mockPrisma = {
+    characterVisualAsset: {
+      findMany: async (args: unknown) => {
+        queries.push(args);
+        return [];
+      },
+    },
+  } as never;
+  await readVisualProfileReferences(mockPrisma, "char-1", snapshotAssets);
+  const query = queries[0] as { where: { id: { in: string[] }; profile: { characterId: string } } };
+  assert.deepEqual(query.where.id.in, selectedSnapshotAssets.map(asset => asset.id));
+  assert.equal(query.where.profile.characterId, "char-1");
+  queries.length = 0;
+  await readVisualProfileReferences(mockPrisma, "char-1", undefined);
+  assert.equal(queries.length, 0, "旧快照不能退回查询角色当前素材");
+}
 
 console.log("visual-profile-prompt: ok");
