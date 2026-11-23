@@ -2364,6 +2364,7 @@ enum CharacterVisualAssetKind {
 enum CharacterVisualVersionStatus {
   DRAFT
   PUBLISHED
+  ARCHIVED
 }
 
 /// One profile per character; core identity is kept separate from outfits and references.
