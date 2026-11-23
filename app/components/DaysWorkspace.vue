@@ -507,25 +507,6 @@ await loadDays();
     <MemorySectionNavigation
       active="events"
     />
-    <!-- 页头只留动作。原来这里有两层纯复述的说明：
-         「沿着日期回看经历……」是把标题换个说法；
-         「鲸宁宁的经历档案 / 日期与时间按 Asia/Shanghai 显示」——角色在左栏已经选中了，
-         时区是一年看一次的信息，常驻在正文顶上只是噪音。时区降级成统计行的 title。 -->
-    <PageHeader>
-      <template #actions>
-        <MemoryEventDuplicates
-          :character-id="id || ''"
-          :day-key="selected"
-          @changed="loadDetail(selected)"
-        />
-        <NuxtLink
-          :to="{ path: '/growth/memory', query: { c: id } }"
-          class="btn"
-        >
-          前往整理忆泡 <span aria-hidden="true">↗</span>
-        </NuxtLink>
-      </template>
-    </PageHeader>
 
     <div
       v-if="!currentCharacter"
@@ -540,13 +521,6 @@ await loadDays();
       v-else
       class="day-layout"
     >
-      <MemoryCalendar
-        v-if="id"
-        :character-id="id"
-        :selected="selected"
-        :today="today"
-        @select="selectDay"
-      />
       <aside class="card day-list">
         <div class="day-list-head">
           <h2>有记录的日子</h2>
@@ -632,23 +606,30 @@ await loadDays();
           <header class="day-detail-head">
             <div class="day-title-row">
               <div><span class="day-detail-kicker">{{ selected }} · {{ weekdayOf(selected) }}</span><h2>{{ dayLabel(detail.day?.dayKey ?? selected) }}的经历</h2></div>
-              <div
-                class="day-stepper"
-                aria-label="切换当前页日期"
-              >
-                <el-button
-                  :icon="ArrowLeft"
-                  :disabled="selectedDayIndex < 0 || selectedDayIndex >= days.length - 1"
-                  aria-label="当前页更早一天"
-                  title="当前页更早一天"
-                  @click="adjacentDay(1)"
-                />
-                <el-button
-                  :icon="ArrowRight"
-                  :disabled="selectedDayIndex <= 0"
-                  aria-label="当前页更新一天"
-                  title="当前页更新一天"
-                  @click="adjacentDay(-1)"
+              <div class="day-title-tools">
+                <div
+                  class="day-stepper"
+                  aria-label="切换当前页日期"
+                >
+                  <el-button
+                    :icon="ArrowLeft"
+                    :disabled="selectedDayIndex < 0 || selectedDayIndex >= days.length - 1"
+                    aria-label="当前页更早一天"
+                    title="当前页更早一天"
+                    @click="adjacentDay(1)"
+                  />
+                  <el-button
+                    :icon="ArrowRight"
+                    :disabled="selectedDayIndex <= 0"
+                    aria-label="当前页更新一天"
+                    title="当前页更新一天"
+                    @click="adjacentDay(-1)"
+                  />
+                </div>
+                <MemoryEventDuplicates
+                  :character-id="id || ''"
+                  :day-key="selected"
+                  @changed="loadDetail(selected)"
                 />
               </div>
             </div>
@@ -983,7 +964,7 @@ await loadDays();
   .day-layout { grid-template-columns: 1fr; }
 }
 .card { border: 0; border-radius: 12px; box-shadow: none; }
-.day-layout { grid-template-columns: 290px minmax(0, 1fr); align-items: start; margin-top: 0; }
+.day-layout { grid-template-columns: 290px minmax(0, 1fr); align-items: start; }
 .day-list { position: sticky; top: 20px; padding: 18px 14px; max-height: calc(100dvh - 130px); overflow-y: auto; }
 .day-list-head { padding: 0 4px; }
 .day-list-head h2 { margin: 0; }
@@ -1000,7 +981,9 @@ await loadDays();
 .day-item-meta { flex-direction: column; align-items: flex-end; color: var(--dim); }
 .day-detail { padding: 24px 28px; min-height: 440px; }
 .day-detail-head { display: block; border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 18px; }
-.day-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.day-title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+/* 日期翻页与「检查当天重复候选」同一行：都只作用于当前这一天 */
+.day-title-tools { display: flex; flex: none; align-items: center; gap: 10px; }
 .day-detail-kicker { color: var(--dim); font-size: 12px; }
 .day-detail-head h2 { margin: 8px 0 0; font-size: 23px; }
 /* 统计与原文开关同一行：左侧数据、右侧动作，不再是一条灰底状态条 */

@@ -3905,7 +3905,7 @@ paths:
           schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
         - name: from
           in: query
-          description: 区间起（YYYY-MM-DD，含）。与 `to` 同时给出时改走区间模式：不分页，返回区间内每一天（含没有记录的日子），供忆泡月历取整月。
+          description: 区间起（YYYY-MM-DD，含）。与 `to` 同时给出时改走区间模式：不分页，返回区间内每一天（含没有记录的日子），适合按整月一次性取数。
           schema: { type: string, example: "2026-11-01" }
         - name: to
           in: query
