@@ -335,7 +335,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
         <div class="visual-profile-grid">
           <el-card shadow="never" class="visual-profile-card">
             <h3>三视图与参考素材</h3>
-            <p>正面、侧面、背面、表情和服装素材会按用途归档。当前已建立资料结构，图片上传与预览还在下一阶段。</p>
+            <p>正面、侧面、背面、表情和服装素材会按用途归档。图片会压缩后保存在当前角色的数据目录中，只有该角色的拥有者可以预览和删除。</p>
             <div class="upload-row">
               <el-select v-model="uploadKind" aria-label="参考图片用途" style="width: 150px">
                 <el-option label="标准形象" value="STANDARD" />
