@@ -65,6 +65,12 @@ let disposed = false;
 const publishedVersion = computed(() => profile.value?.versions.find(
   item => item.revision === profile.value?.currentPublishedRevision,
 ) ?? null);
+const hasUncommittedEdits = computed(() => {
+  const coreChanged = coreAppearance.value !== (profile.value?.coreAppearance ?? "")
+    || corePrompt.value !== (profile.value?.corePrompt ?? "")
+    || negativePrompt.value !== (profile.value?.negativePrompt ?? "");
+  return coreChanged || Boolean(outfitName.value.trim() || outfitPrompt.value.trim());
+});
 
 async function loadProfile(options: { preserveEditor?: boolean } = {}) {
   const preservedEditor = options.preserveEditor ? {
@@ -345,11 +351,12 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
           </el-form>
           <div class="form-actions">
             <el-button type="primary" :loading="saving" @click="saveDraft">保存为草稿</el-button>
-            <el-button type="success" :disabled="!draftRevision || saving" :loading="publishing" @click="publishDraft">
+            <el-button type="success" :disabled="!draftRevision || saving || hasUncommittedEdits" :loading="publishing" @click="publishDraft">
               发布草稿 v{{ draftRevision ?? "—" }}
             </el-button>
           </div>
           <p class="form-hint">保存草稿不会改变正式形象。发布操作会明确推进当前正式版本；历史版本仍会保留。</p>
+          <p v-if="hasUncommittedEdits" class="form-hint">还有未保存的核心形象或造型编辑，请先保存，避免发布旧草稿。</p>
         </el-card>
 
         <div class="visual-profile-grid">
