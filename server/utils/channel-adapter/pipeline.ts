@@ -4092,6 +4092,9 @@ async function runChannelTurn(input: {
           const snapshot = published?.snapshot && typeof published.snapshot === "object" && !Array.isArray(published.snapshot)
             ? published.snapshot as Record<string, unknown> : null;
           if (snapshot) publishedVisualSnapshot = snapshot;
+          else console.warn("[image] published visual profile revision missing", { characterId: input.characterId, revision: visualProfile.currentPublishedRevision });
+        } else {
+          console.info("[image] no published visual profile; using scene prompt only", { characterId: input.characterId });
         }
       } catch (error) {
         // Profile lookup is optional and must never break an otherwise valid image request.
