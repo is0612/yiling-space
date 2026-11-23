@@ -487,5 +487,145 @@ assert.equal(dtoDefault.imageSize, "square");
   globalThis.fetch = originalFetch;
 }
 
+
+/**
+ * 参考图请求回归：用本地 mock fetch 验证 multipart / MiniMax 原生 JSON / 文生图回退。
+ * 不联网、不使用真实 Key、不产生服务商费用。
+ */
+{
+  const sharp = (await import("sharp")).default;
+  const pixel = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: { r: 20, g: 120, b: 210 } },
+  }).png().toBuffer();
+  const pixelBase64 = pixel.toString("base64");
+  const originalFetch = globalThis.fetch;
+  const characterId = "22222222-2222-4222-8222-222222222222";
+  const references = [
+    { assetId: "asset-standard", label: "标准形象", mime: "image/jpeg", buffer: pixel },
+    { assetId: "asset-front", label: "正面视图", mime: "image/jpeg", buffer: pixel },
+  ];
+  const prompt = "【人物】蓝紫色头发；【参考图】图1 标准形象、图2 正面视图——只用来确定长相；【画面】窗边回眸";
+
+  const cleanup = async (result: Awaited<ReturnType<typeof generateImage>>) => {
+    if (!result.ok) return;
+    await rm(result.image.filePath, { force: true });
+    await rm(dirname(result.image.filePath), { recursive: true, force: true });
+  };
+  const response = () => new Response(JSON.stringify({ data: [{ b64_json: pixelBase64 }] }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+
+  try {
+    // ① OpenAI edits：multipart 必须真的包含图像 Blob，不能只在 prompt 里提图。
+    {
+      const calls: Array<{ url: string; body: unknown }> = [];
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        calls.push({ url: String(url), body: init?.body });
+        return response();
+      }) as typeof fetch;
+      const result = await generateImage({
+        settings: { provider: "openai", model: "gpt-image-1", apiBaseUrl: "https://edits-test.example/v1", apiKey: "sk-test", size: "1024x1024" },
+        prompt,
+        characterId,
+        references,
+      });
+      assert.equal(result.ok, true, "edits multipart 请求应成功");
+      assert.equal(result.ok ? result.mode : "", "image_to_image");
+      assert.equal(calls.length, 1);
+      assert.ok(calls[0]!.url.endsWith("/images/edits"));
+      assert.ok(calls[0]!.body instanceof FormData, "edits 请求体必须是 FormData");
+      const form = calls[0]!.body as FormData;
+      assert.equal(form.get("model"), "gpt-image-1");
+      assert.equal(form.get("prompt"), prompt);
+      assert.ok(form.get("image[]") instanceof Blob, "多张参考图必须作为 image[] Blob 发送");
+      assert.ok(form.getAll("image[]").length === 2);
+      await cleanup(result);
+    }
+
+    // ② edits 路由不存在时尝试 MiniMax 原生 subject_reference，且提示词同步只保留图 1。
+    {
+      const calls: Array<{ url: string; body: unknown }> = [];
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        const urlText = String(url);
+        calls.push({ url: urlText, body: init?.body });
+        if (urlText.endsWith("/images/edits")) return new Response("not found", { status: 404 });
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          prompt: string;
+          subject_reference: Array<{ image_file: string }>;
+        };
+        assert.ok(body.prompt.includes("图1 标准形象"));
+        assert.ok(!body.prompt.includes("图2"), "单图形状不能保留未发送图片的说明");
+        assert.equal(body.subject_reference.length, 1);
+        assert.ok(body.subject_reference[0]!.image_file.startsWith("data:image/jpeg;base64,"));
+        assert.ok(body.subject_reference[0]!.image_file.endsWith(pixelBase64));
+        return new Response(JSON.stringify({ data: { image_base64: [pixelBase64] } }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      const result = await generateImage({
+        settings: { provider: "minimax", model: DEFAULT_IMAGE_MODEL, apiBaseUrl: "https://minimax-native-test.example/v1", apiKey: "sk-test", size: IMAGE_SIZE_PRESETS.square },
+        prompt,
+        characterId,
+        references,
+      });
+      assert.equal(result.ok, true, "MiniMax 原生参考图请求应成功");
+      assert.equal(result.ok ? result.mode : "", "image_to_image");
+      assert.equal(calls.length, 2);
+      assert.ok(calls[1]!.url.endsWith("/image_generation"));
+      await cleanup(result);
+    }
+
+    // ③ 两种参考图路由都不存在时回退文生图，且必须移除空的参考图说明。
+    {
+      const calls: Array<{ url: string; body: unknown }> = [];
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        const urlText = String(url);
+        calls.push({ url: urlText, body: init?.body });
+        if (urlText.endsWith("/images/edits")) return new Response("not found", { status: 404 });
+        if (urlText.endsWith("/image_generation")) return new Response("method not allowed", { status: 405 });
+        const body = JSON.parse(String(init?.body ?? "{}")) as { prompt: string };
+        assert.ok(!body.prompt.includes("【参考图】"), "回退文生图时必须去掉参考图空指代");
+        return response();
+      }) as typeof fetch;
+      const result = await generateImage({
+        settings: { provider: "minimax", model: DEFAULT_IMAGE_MODEL, apiBaseUrl: "https://no-reference-route-test.example/v1", apiKey: "sk-test", size: IMAGE_SIZE_PRESETS.square },
+        prompt,
+        characterId,
+        references,
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.ok ? result.mode : "", "text_to_image");
+      assert.equal(calls.length, 3, "两种参考图路由后应只调用一次文生图");
+      assert.ok(calls[2]!.url.endsWith("/images/generations"));
+      await cleanup(result);
+    }
+
+    // ④ 参数错误不是路由缺失：不再尝试另一种参考图形状，直接回退文生图。
+    {
+      const calls: string[] = [];
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        const urlText = String(url);
+        calls.push(urlText);
+        if (urlText.endsWith("/images/edits")) return new Response("invalid image", { status: 400 });
+        return response();
+      }) as typeof fetch;
+      const result = await generateImage({
+        settings: { provider: "minimax", model: DEFAULT_IMAGE_MODEL, apiBaseUrl: "https://reference-400-test.example/v1", apiKey: "sk-test", size: IMAGE_SIZE_PRESETS.square },
+        prompt,
+        characterId,
+        references,
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.ok ? result.mode : "", "text_to_image");
+      assert.equal(calls.length, 2, "400 不应再尝试 MiniMax 形状");
+      await cleanup(result);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+
 restoreEnv();
 console.log("test:image-generation —— 全部通过");
