@@ -33,6 +33,7 @@ export default defineEventHandler(async (event) => {
       create: { characterId, coreAppearance, corePrompt, negativePrompt },
       update: { coreAppearance, corePrompt, negativePrompt },
     });
+    const outfits = await tx.characterVisualOutfit.findMany({ where: { profileId: profile.id }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] });
     const latest = await tx.characterVisualVersion.aggregate({
       where: { profileId: profile.id },
       _max: { revision: true },
@@ -44,7 +45,7 @@ export default defineEventHandler(async (event) => {
         revision,
         status: "DRAFT",
         note,
-        snapshot: { coreAppearance, corePrompt, negativePrompt },
+        snapshot: { coreAppearance, corePrompt, negativePrompt, outfits: outfits.map(item => ({ name: item.name, prompt: item.prompt, isDefault: item.isDefault, sortOrder: item.sortOrder })) },
       },
     });
     return { profile, draftVersion: version };
