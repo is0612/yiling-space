@@ -2,6 +2,7 @@
 import { MODEL_PURPOSE_DEFAULTS } from "#shared/utils/model-purpose-defaults";
 import { CopyDocument, Promotion, QuestionFilled, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
+import { imageSizeOptions } from "#shared/utils/image-size";
 import { isImageGenerationModel } from "#shared/utils/vision-models";
 import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
@@ -146,7 +147,7 @@ const testingImage = ref(false);
 /** 画图服务商的默认地址与模型；点服务商时一键带过去 */
 const IMAGE_PROVIDER_PRESETS: Record<string, { baseUrl: string; model: string }> = {
   minimax: { baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-H3-Image" },
-  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-image-1" },
+  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-image-2.5-flare" },
 };
 
 // ── 四个后台助手：默认跟随对话模型 ──
@@ -490,8 +491,8 @@ const imageModelOptions = computed(() => {
   const base = preset
     ? (imageProviderKey.value === "minimax"
       ? ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"]
-      : ["gpt-image-1", "dall-e-3"])
-    : ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed", "gpt-image-1"];
+      : ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-1", "dall-e-3"])
+    : ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-1"];
   // 拉回来的排前面：用户点那一下就是为了从这里挑，压在三条内置下面等于没拉
   const fetched = fetchedImageModels.value.filter((model) => !base.includes(model));
   const merged = [...fetched, ...base];
@@ -515,11 +516,15 @@ function applyImageProvider(key: string) {
   // 上一家「获取模型」拉回来的清单跟着作废
   fetchedImageModels.value = [];
 }
-const IMAGE_SIZE_OPTIONS = [
-  { value: "square", label: "方图 1:1（1024 × 1024）" },
-  { value: "portrait", label: "竖图 3:4（864 × 1152）" },
-  { value: "landscape", label: "横图 4:3（1152 × 864）" },
-] as const;
+/**
+ * 档位跟着服务商和模型走：OpenAI 那几家不认 864×1152，dall-e-2 更是只有方图。
+ * 不可用的档位直接不出现在选项里，也就不存在「选了却 400」。
+ */
+const IMAGE_SIZE_OPTIONS = computed(() => imageSizeOptions(imageProviderKey.value, draftImageModel.value));
+watch(IMAGE_SIZE_OPTIONS, (options) => {
+  // 换模型后原来那档没了：回退方图，别让下拉框停在空值上。
+  if (!options.some(option => option.value === draftImageSize.value)) draftImageSize.value = "square";
+});
 
 /**
  * 语音的开放平台入口：和对话模型那块对齐 —— 用户卡住的点不是「填什么」，而是「去哪拿 Key」。
@@ -2027,7 +2032,7 @@ watch(id, () => void loadCharacter());
                   />
                 </el-select>
                 <p class="field-help">
-                  只给三档是有意的：宽高手填容易低于服务商的面积下限，接口会直接 400。
+                  档位随服务商与模型变化，不支持的那一档不会出现。宽高手填容易低于面积下限，接口只会回一句「参数不合法」。
                 </p>
               </div>
             </div>

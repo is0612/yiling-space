@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { IMAGE_SIZE_SETS, resolveImagePixels, type ImageSizePreset } from "../../shared/utils/image-size";
 import { validateChatApiBaseUrl } from "./chat-model-config";
 import { dataPath } from "./data-dir";
 import { downloadSafeMedia } from "./safe-media-download";
@@ -70,16 +71,10 @@ export const IMAGE_MAX_EDGE = 1280;
 /**
  * 尺寸档位。给的是「方 / 竖 / 横」而不是像素，因为用户想的是构图不是分辨率。
  *
- * 三个值都满足 MiniMax 的面积下限（655,360 px）：864×1152 = 995,328。
- * 别随手改小，低于下限会直接 400，而且报错里只写「参数不合法」。
+ * 这里保留的是 **MiniMax** 那一套（864×1152 等三个值都满足它 655,360 px 的面积下限）。
+ * 实际发请求时按服务商重新解析，见 `resolveImagePixels` —— OpenAI 那几家不认 864×1152。
  */
-export const IMAGE_SIZE_PRESETS = {
-  square: "1024x1024",
-  portrait: "864x1152",
-  landscape: "1152x864",
-} as const;
-
-export type ImageSizePreset = keyof typeof IMAGE_SIZE_PRESETS;
+export const IMAGE_SIZE_PRESETS: Record<ImageSizePreset, string> = IMAGE_SIZE_SETS.minimax;
 
 export type ImageGenerationProvider = "minimax" | "openai";
 
@@ -244,7 +239,7 @@ export function resolveImageGenerationSettings(input: {
     model,
     apiBaseUrl,
     apiKey,
-    size: IMAGE_SIZE_PRESETS[resolveImageSizePreset(config)],
+    size: resolveImagePixels(provider, model, resolveImageSizePreset(config)),
   };
 }
 
@@ -627,7 +622,9 @@ export async function generateImage(input: {
           prompt,
           size: input.settings.size,
           n: count,
-          response_format: responseFormat,
+          // gpt-image 系列（1 / 2 / 2.5）不接受这个字段、固定返回 base64，
+          // 传过去会被当成未知参数直接 400；MiniMax 那边则必须靠它才拿得到图数据。
+          ...(input.settings.provider === "minimax" ? { response_format: responseFormat } : {}),
         }),
         signal: AbortSignal.timeout(GENERATE_TIMEOUT_MS),
       });
@@ -683,7 +680,6 @@ export async function generateImage(input: {
       form.append("prompt", prompt);
       form.append("size", input.settings.size);
       form.append("n", String(count));
-      form.append("response_format", "b64_json");
       // 单张写 image、多张写 image[]：两套写法在不同服务商/版本里都出现过。
       const field = references.length > 1 ? "image[]" : "image";
       references.forEach((reference, index) => {
@@ -846,9 +842,10 @@ export async function generateImage(input: {
       prompt = withoutReferenceNotes(prompt);
     }
     result = await request("b64_json");
-    // 少数服务商不认 `response_format: b64_json`（400 参数错误）：退回 url 再要一次。
+    // 少数 MiniMax 兼容服务商不认 `response_format: b64_json`（400 参数错误）：退回 url 再要一次。
     // 只对 400 重试：422 是内容审核、402 是余额、401 是鉴权，重发一遍也是同样的结果。
-    if (!result.ok && result.status === 400) {
+    // OpenAI 那边根本没有这个参数，回退没有意义。
+    if (!result.ok && result.status === 400 && input.settings.provider === "minimax") {
       result = await request("url");
     }
   }

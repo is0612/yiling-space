@@ -7,6 +7,7 @@
 
 import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
+import { imageSizeOptions, resolveImagePixels } from "../shared/utils/image-size";
 import { dirname } from "node:path";
 
 import {
@@ -224,6 +225,29 @@ const overridden = resolveImageGenerationSettings({
 assert.equal(overridden!.model, "MiniMax-H3-Image-Highspeed");
 assert.equal(overridden!.apiBaseUrl, "https://api.minimax.cn/v1");
 assert.equal(overridden!.size, IMAGE_SIZE_PRESETS.portrait);
+
+// ---- 尺寸档位随服务商与模型变化 -------------------------------------------------
+assert.equal(resolveImagePixels("minimax", "MiniMax-H3-Image", "portrait"), "864x1152");
+assert.equal(resolveImagePixels("openai", "gpt-image-1", "portrait"), "1024x1536", "gpt-image-1 不认 864×1152");
+assert.equal(resolveImagePixels("openai", "dall-e-3", "landscape"), "1792x1024");
+assert.equal(resolveImagePixels("openai", "dall-e-2", "portrait"), "1024x1024", "dall-e-2 只有方图，降级而不是报错");
+assert.equal(resolveImagePixels("custom", "some-model", "square"), "1024x1024");
+assert.equal(resolveImagePixels("openai", "gpt-image-2.5-sunburst", "portrait"), "1024x1536", "2.5 两个变体与 1 同尺寸");
+assert.equal(resolveImagePixels("openai", "gpt-image-2.5-flare", "landscape"), "1536x1024");
+assert.equal(imageSizeOptions("minimax", "").length, 3);
+assert.equal(imageSizeOptions("openai", "dall-e-2").length, 1, "不可用的档位不该出现在选项里");
+assert.ok(imageSizeOptions("openai", "gpt-image-1").every(option => /（\d+ × \d+）$/u.test(option.label)), "选项要带实际像素");
+
+const openAiPortrait = resolveImageGenerationSettings({
+  modelConfig: {
+    imageModel: "gpt-image-1",
+    imageApiBaseUrl: "https://api.openai.com/v1",
+    imageSize: "portrait",
+    imageProvider: "openai",
+  },
+  imageApiKey: "sk-openai",
+});
+assert.equal(openAiPortrait!.size, "1024x1536", "同一档位换个服务商就是另一组像素");
 
 const envKey = (() => {
   process.env.IMAGE_API_KEY = "sk-env";
