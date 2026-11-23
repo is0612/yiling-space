@@ -1,5 +1,6 @@
 import { createError, getRouterParam } from "h3";
 import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../utils/chat-model-config";
+import { listComfyCheckpoints } from "../../../../utils/comfyui-image";
 import { resolveCharacterImageApiKey } from "../../../../utils/credential-encryption";
 import { DEFAULT_IMAGE_MODEL, describeImageGatewayRefusal, resolveImageGenerationSettings } from "../../../../utils/image-generation";
 import { isImageGenerationModel } from "../../../../../shared/utils/vision-models";
@@ -50,16 +51,47 @@ export default defineEventHandler(async (event): Promise<ModelsResult> => {
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
   const imageApiKey = await resolveCharacterImageApiKey(character.modelConfig).catch(() => "");
-  if (!imageApiKey && !process.env.IMAGE_API_KEY?.trim()) {
-    return { ok: false, models: [], message: "尚未填写画图 API Key。先填写并保存，再获取模型列表。" };
-  }
-
   const chatSettings = resolveChatModelSettings(character.modelConfig);
   const settings = resolveImageGenerationSettings({
     modelConfig: character.modelConfig,
     chatApiBaseUrl: chatSettings.apiBaseUrl,
     imageApiKey,
   });
+  /**
+   * 本机引擎不需要 Key，所以「没填 Key」那条检查必须排在它后面。
+   * 清单也不再走 `GET /models`（ComfyUI 没有这个接口），而是读 UNETLoader 的可选值 ——
+   * 那就是工作流里真正要填的字段，比扫目录准。
+   */
+  if (settings?.provider === "comfyui") {
+    const listed = await listComfyCheckpoints(settings.apiBaseUrl);
+    if (!listed.ok) {
+      return {
+        ok: false,
+        models: [],
+        provider: "comfyui",
+        message: `连不上本地引擎（${settings.apiBaseUrl}）：${listed.reason}。先双击 D:\\AI\\Anima\\启动Anima.bat 把引擎开起来，再点一次。`,
+      };
+    }
+    if (!listed.models.length) {
+      return {
+        ok: false,
+        models: [],
+        provider: "comfyui",
+        message: `引擎连上了，但没有找到主模型文件。确认 ${settings.apiBaseUrl} 对应的 ComfyUI 里挂了 models\\diffusion_models 目录。`,
+      };
+    }
+    return {
+      ok: true,
+      models: listed.models,
+      provider: "comfyui",
+      message: `引擎里装了 ${listed.models.length} 个主模型。`,
+    };
+  }
+
+  if (!imageApiKey && !process.env.IMAGE_API_KEY?.trim()) {
+    return { ok: false, models: [], message: "尚未填写画图 API Key。先填写并保存，再获取模型列表。" };
+  }
+
   if (!settings) {
     // Key 在上面已经确认过，能走到这里只剩「地址写坏了」
     return { ok: false, models: [], message: "画图 API 地址无效，请填写完整地址，例如 https://api.minimaxi.com/v1。" };

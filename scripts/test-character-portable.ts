@@ -58,6 +58,7 @@ const rawConfig = {
   imageApiBaseUrl: "https://api.minimaxi.com/v1",
   imageProvider: "minimax",
   imageSize: "portrait",
+  imageQuality: "quality",
   stickerAutoCollect: false,
   catchphraseAutoMine: true,
   dailyTokenLimit: 200000,
@@ -117,6 +118,7 @@ assert.equal(stripped.imageDailyLimit, 5, "每日张数跟卡走");
 assert.equal(stripped.imageModel, "MiniMax-H3-Image", "画图模型跟卡走");
 assert.equal(stripped.imageSize, "portrait", "画面尺寸跟卡走");
 assert.equal(stripped.imageProvider, "minimax", "画图服务商跟卡走");
+assert.equal(stripped.imageQuality, "quality", "出图档位跟卡走（本地引擎靠它选模型）");
 assert.equal(stripped.imageApiBaseUrl, "https://api.minimaxi.com/v1", "画图地址跟卡走");
 assert.equal(stripped.dailyTokenLimit, 200000, "日额度是设置，不是密钥");
 assert.equal(stripped.knowledgeAssistantModel, "private-knowledge-model", "助手用的模型选择跟卡走");

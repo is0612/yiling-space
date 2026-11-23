@@ -28,6 +28,8 @@ import { createAssistantTurnContext } from "../assistant-turn-context";
 import { runAssistantTurnStage, skipAssistantTurnStage } from "../assistant-turn-execution";
 import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
+import { LOCAL_IMAGE_PROVIDER } from "../../../shared/utils/local-image-engine";
+import { translateImagePromptToTags } from "../image-prompt-translation";
 import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem, type ConversationQuotedMessage } from "../chat-reply";
 import {
   formatMentionContent,
@@ -1878,6 +1880,8 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
         ...(ctx.generatedImageContext ? { generatedImageContext: ctx.generatedImageContext } : {}),
         allowStickerDescription: messages.some(message => isExplicitMediaQuestion(message.commandText ?? "", Boolean(message.images?.length || message.quotedMessage?.image || message.quotedMessage?.images?.length))),
         ...(imagePlanned ? { imageReply: true } : {}),
+        // 本机 Anima 只认英文标签：这一轮得让她用标签写 imagePrompt，中文写多少都白费。
+        ...(imagePlanned && imageSettings?.provider === LOCAL_IMAGE_PROVIDER ? { imageReplyTags: true } : {}),
         ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
   };
 }
@@ -4130,6 +4134,22 @@ async function runChannelTurn(input: {
         prompt,
         characterId: input.characterId,
         references: attachReferences ? visualReferences : undefined,
+        /**
+         * 本地引擎只认英文标签，而形象档案那段中文是服务端拼进去的（聊天模型看不到）。
+         * 所以用她自己的聊天模型翻一遍 —— 这个作用域里才有模型和 Key。
+         * 云端不注入：那些服务商读得懂中文，多翻一次只会偏离原描述。
+         */
+        ...(imageSettings.provider === LOCAL_IMAGE_PROVIDER
+          ? {
+            translatePrompt: (parts: { positive: string; negative: string }) => translateImagePromptToTags({
+              positive: parts.positive,
+              negative: parts.negative,
+              model: chatSettings.model,
+              apiKey,
+              apiBaseUrl: chatSettings.apiBaseUrl,
+            }),
+          }
+          : {}),
       });
       if (result.ok) {
         replyImage = result.image;

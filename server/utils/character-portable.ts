@@ -238,6 +238,7 @@ export type CharacterBundleModelConfig = {
   imageApiBaseUrl?: string;
   imageProvider?: string;
   imageSize?: string;
+  imageQuality?: string;
   /** 收集类开关：表情、梗。 */
   stickerAutoCollect?: boolean;
   catchphraseAutoMine?: boolean;
@@ -619,6 +620,7 @@ export const PORTABLE_MODEL_CONFIG_KEYS = [
   "imageApiBaseUrl",
   "imageProvider",
   "imageSize",
+  "imageQuality",
   // 收集类开关：收表情、捡梗（都要人看得见的结果，不额外花钱）
   "stickerAutoCollect",
   "catchphraseAutoMine",

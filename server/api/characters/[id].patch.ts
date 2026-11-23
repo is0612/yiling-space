@@ -3,6 +3,7 @@ import type { Prisma } from "../../../src/generated/prisma/client";
 import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { readCharacterBody, readCharacterProfilePatch } from "../../utils/character-profile-input";
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
+import { normalizeComfyBaseUrl } from "../../utils/comfyui-image";
 import { API_KEY_FIELDS, applyApiKeyWrites, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
 import { ASSISTANT_FIELDS, resolveAssistantConnection } from "../../utils/assistant-inheritance";
 import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
@@ -530,10 +531,20 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: "画图服务商必须是文本。" });
     }
     const value = body.imageProvider.trim();
-    if (value && value !== "minimax" && value !== "openai") {
-      throw createError({ statusCode: 400, statusMessage: "画图服务商只支持 minimax 或 openai（含兼容接口）。" });
+    if (value && value !== "minimax" && value !== "openai" && value !== "comfyui") {
+      throw createError({ statusCode: 400, statusMessage: "画图服务商只支持 minimax、openai 或 comfyui（本机引擎）。" });
     }
     modelConfigPatch.imageProvider = value;
+  }
+
+  // 出图档位：只有本机引擎（ComfyUI）用得上 —— Turbo 快、Aesthetic 细。
+  // 云端服务商按模型名分快慢，存着不影响它们。
+  if (body.imageQuality !== undefined) {
+    const value = typeof body.imageQuality === "string" ? body.imageQuality.trim() : "";
+    if (value && value !== "fast" && value !== "quality") {
+      throw createError({ statusCode: 400, statusMessage: "出图档位只支持 fast 或 quality。" });
+    }
+    modelConfigPatch.imageQuality = value || "fast";
   }
 
   if (body.imageModel !== undefined) {
@@ -548,9 +559,17 @@ export default defineEventHandler(async (event) => {
     if (typeof body.imageApiBaseUrl !== "string") {
       throw createError({ statusCode: 400, statusMessage: "画图服务地址必须是文本。" });
     }
+    /**
+     * 本机引擎用另一套校验：`validateChatApiBaseUrl` 为了不让 API Key 流进内网，
+     * 生产环境一律拒绝本机和私有地址 —— 而本地引擎恰好就是本机地址，而且没有 Key。
+     * 两套规则混用，结果是「打包版里填了 127.0.0.1 就保存不了」。
+     */
+    const imageProviderForBase = String(modelConfigPatch.imageProvider ?? "").trim();
     try {
       modelConfigPatch.imageApiBaseUrl = body.imageApiBaseUrl.trim()
-        ? validateChatApiBaseUrl(body.imageApiBaseUrl)
+        ? (imageProviderForBase === "comfyui"
+          ? normalizeComfyBaseUrl(body.imageApiBaseUrl)
+          : validateChatApiBaseUrl(body.imageApiBaseUrl))
         : "";
     } catch (error) {
       throw createError({

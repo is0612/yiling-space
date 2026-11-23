@@ -3,6 +3,7 @@ import { MODEL_PURPOSE_DEFAULTS } from "#shared/utils/model-purpose-defaults";
 import { CopyDocument, Promotion, QuestionFilled, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { imageSizeOptions } from "#shared/utils/image-size";
+import { LOCAL_IMAGE_DEFAULT_BASE_URL, LOCAL_IMAGE_MODELS, LOCAL_IMAGE_PROVIDER, LOCAL_IMAGE_QUALITY_LABELS, type LocalImageQuality } from "#shared/utils/local-image-engine";
 import { isImageGenerationModel } from "#shared/utils/vision-models";
 import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
@@ -140,6 +141,11 @@ const draftImageApiKey = ref("");
 const draftImageModel = ref("");
 /** 画面尺寸只给三个预设：像素宽高由服务端换算，手填容易低于服务商的面积下限。 */
 const draftImageSize = ref<"square" | "portrait" | "landscape">("square");
+/**
+ * 出图档位（只有本地引擎看它）：fast = Turbo 快，quality = Aesthetic 细。
+ * 云端服务商按模型名分快慢，这个值对它们没有意义，但照样保存 —— 换回本地时不用重设。
+ */
+const draftImageQuality = ref<LocalImageQuality>("fast");
 /** 画图页「获取模型」拉回来的清单；换服务商/地址就作废（两家清单不通用） */
 const fetchedImageModels = ref<string[]>([]);
 const fetchingImageModels = ref(false);
@@ -148,6 +154,8 @@ const testingImage = ref(false);
 const IMAGE_PROVIDER_PRESETS: Record<string, { baseUrl: string; model: string }> = {
   minimax: { baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-H3-Image" },
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-image-2.5-flare" },
+  // 本地引擎：地址就是 ComfyUI 那个端口；模型留空 = 按档位自动挑（见 LOCAL_IMAGE_MODELS）。
+  [LOCAL_IMAGE_PROVIDER]: { baseUrl: LOCAL_IMAGE_DEFAULT_BASE_URL, model: "" },
 };
 
 // ── 四个后台助手：默认跟随对话模型 ──
@@ -298,6 +306,7 @@ function buildDraftSignature() { return JSON.stringify([
   draftImageApiBaseUrl.value.trim(),
   draftImageModel.value.trim(),
   draftImageSize.value,
+  draftImageQuality.value,
   // 记忆助手：留空沿用已存 Key，草稿变化仍参与未保存检测。
   draftMemoryAssistantModel.value.trim(),
   draftMemoryAssistantTemperature.value,
@@ -482,17 +491,27 @@ const visionProviderKey = computed(() => providerByBaseUrl(draftVisionApiBaseUrl
 const imageKeyConfigured = computed(() => character.value?.imageApiKeyConfigured === true);
 /** "auto" 同样是前端哨兵：保存时映射回空串，交给服务端按地址判断协议。 */
 const imageProviderKey = computed(() => {
-  if (draftImageProvider.value === "minimax" || draftImageProvider.value === "openai") return draftImageProvider.value;
-  return /minimax/i.test(draftImageApiBaseUrl.value) ? "minimax" : "custom";
+  if (draftImageProvider.value === "minimax"
+    || draftImageProvider.value === "openai"
+    || draftImageProvider.value === LOCAL_IMAGE_PROVIDER) return draftImageProvider.value;
+  if (/minimax/i.test(draftImageApiBaseUrl.value)) return "minimax";
+  // 8188 是 ComfyUI 的默认端口；没显式选服务商时靠它认出来
+  if (/:8188\b|comfy/i.test(draftImageApiBaseUrl.value)) return LOCAL_IMAGE_PROVIDER;
+  return "custom";
 });
+/** 本地引擎：不要 Key、模型清单来自引擎、多一个档位。模板里三处按它切换。 */
+const isLocalImageProvider = computed(() => imageProviderKey.value === LOCAL_IMAGE_PROVIDER);
 /** 画图模型候选：内置清单 + 「获取模型」拉回来的那家清单，允许手填。 */
 const imageModelOptions = computed(() => {
   const preset = IMAGE_PROVIDER_PRESETS[imageProviderKey.value];
-  const base = preset
-    ? (imageProviderKey.value === "minimax"
-      ? ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"]
-      : ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-1", "dall-e-3"])
-    : ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-1"];
+  const base = imageProviderKey.value === LOCAL_IMAGE_PROVIDER
+    // 两个默认文件名摆出来，是为了让「留空」看起来不像漏填
+    ? [LOCAL_IMAGE_MODELS.fast, LOCAL_IMAGE_MODELS.quality]
+    : preset
+      ? (imageProviderKey.value === "minimax"
+        ? ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"]
+        : ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-1", "dall-e-3"])
+      : ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-1"];
   // 拉回来的排前面：用户点那一下就是为了从这里挑，压在三条内置下面等于没拉
   const fetched = fetchedImageModels.value.filter((model) => !base.includes(model));
   const merged = [...fetched, ...base];
@@ -507,12 +526,19 @@ const imageKeyPlaceholder = computed(() => {
 });
 /** 选服务商只带地址与默认模型：自己填过的地址/模型名不该被冲掉。 */
 function applyImageProvider(key: string) {
+  /**
+   * 先记下选择本身。以前这里只改地址、不改这个草稿，于是下拉框的选中项跟着地址跑
+   * （选 OpenAI 会跳回「自定义」），保存下来的 provider 也一直是空 —— 全靠服务端猜。
+   */
+  draftImageProvider.value = key === "custom" ? "auto" : key;
   const preset = IMAGE_PROVIDER_PRESETS[key];
   if (!preset) return;
   draftImageApiBaseUrl.value = preset.baseUrl;
   const model = draftImageModel.value.trim();
   const isOtherDefault = Object.entries(IMAGE_PROVIDER_PRESETS).some(([other, entry]) => other !== key && entry.model === model);
-  if (!model || isOtherDefault) draftImageModel.value = preset.model;
+  // 本地引擎的「默认模型」是空串 = 按档位自动选，所以这里要能把它清掉
+  if (key === LOCAL_IMAGE_PROVIDER) draftImageModel.value = "";
+  else if (!model || isOtherDefault) draftImageModel.value = preset.model;
   // 上一家「获取模型」拉回来的清单跟着作废
   fetchedImageModels.value = [];
 }
@@ -784,6 +810,7 @@ async function loadCharacter() {
     draftImageApiKey.value = data.imageApiKey ?? "";
     draftImageModel.value = data.imageModel ?? "";
     draftImageSize.value = (data.imageSize === "portrait" || data.imageSize === "landscape") ? data.imageSize : "square";
+    draftImageQuality.value = data.imageQuality === "quality" ? "quality" : "fast";
 
     // 四个助手：空字符串 = 跟随对话模型，所以原样读进来即可，不做 fallback。
     draftMemoryAssistantEnabled.value = data.memoryAssistantEnabled !== false;
@@ -911,6 +938,7 @@ async function save(silent = false): Promise<boolean> {
         imageApiBaseUrl: draftImageApiBaseUrl.value.trim(),
         imageProvider: draftImageProvider.value === "auto" ? "" : draftImageProvider.value,
         imageSize: draftImageSize.value,
+        imageQuality: draftImageQuality.value,
         ...(draftImageApiKey.value.trim() ? { imageApiKey: draftImageApiKey.value.trim() } : {}),
         ...(sendsKeyClear("image") ? { clearImageApiKey: true } : {}),
         // 四个助手：空字符串就是「跟随对话模型」，所以原样发过去，不做 fallback。
@@ -1913,6 +1941,7 @@ watch(id, () => void loadCharacter());
                 </div>
                 <p class="brick-desc">
                   这组只负责「她画图」。开关和频率在「QQ 渠道 → 角色行为 → 画图」，这里留空不会启用任何东西。
+                  服务商选「本地 Anima」就走本机显卡，不花钱、不出网。
                 </p>
               </div>
             </div>
@@ -1937,6 +1966,10 @@ watch(id, () => void loadCharacter());
                     value="openai"
                   />
                   <el-option
+                    label="本地 Anima（ComfyUI，不花钱）"
+                    value="comfyui"
+                  />
+                  <el-option
                     label="自定义（按地址判断）"
                     value="custom"
                   />
@@ -1945,18 +1978,28 @@ watch(id, () => void loadCharacter());
 
               <div class="field">
                 <div class="field-head">
-                  <span class="field-label">API 地址</span>
-                  <span class="field-help">留空 = 用环境变量或 MiniMax 默认地址</span>
+                  <span class="field-label">{{ isLocalImageProvider ? "引擎地址" : "API 地址" }}</span>
+                  <span class="field-help">{{ isLocalImageProvider ? "ComfyUI 的端口，一般不用改" : "留空 = 用环境变量或 MiniMax 默认地址" }}</span>
                 </div>
                 <el-input
                   v-model="draftImageApiBaseUrl"
                   maxlength="500"
                   aria-label="画图 API 地址"
-                  placeholder="https://api.minimaxi.com/v1"
+                  :placeholder="isLocalImageProvider ? LOCAL_IMAGE_DEFAULT_BASE_URL : 'https://api.minimaxi.com/v1'"
                 />
+                <p
+                  v-if="isLocalImageProvider"
+                  class="field-help"
+                >
+                  本地引擎得先开着：双击 D:\AI\Anima\启动Anima.bat，窗口里出现 http://127.0.0.1:8188 才算就绪。
+                  不联网、不按张计费，代价是慢 —— 一张十几秒到一分钟。
+                </p>
               </div>
 
-              <div class="field">
+              <div
+                v-if="!isLocalImageProvider"
+                class="field"
+              >
                 <div class="field-head">
                   <span class="field-label">API Key</span>
                   <span
@@ -1973,9 +2016,35 @@ watch(id, () => void loadCharacter());
                 />
               </div>
 
+              <!-- 本地引擎这一栏云端没有：一个下拉换模型 + 步数，比让人填模型文件名好懂 -->
+              <div
+                v-if="isLocalImageProvider"
+                class="field"
+              >
+                <div class="field-head">
+                  <span class="field-label">出图档位</span>
+                  <span class="field-help">决定用哪个模型、跑多少步</span>
+                </div>
+                <el-select
+                  v-model="draftImageQuality"
+                  class="field-ctl"
+                  aria-label="出图档位"
+                >
+                  <el-option
+                    v-for="(label, value) in LOCAL_IMAGE_QUALITY_LABELS"
+                    :key="value"
+                    :label="label"
+                    :value="value"
+                  />
+                </el-select>
+                <p class="field-help">
+                  快速是 Turbo 蒸馏版（12 步），用来刷提示词；精修是 Aesthetic 版（30 步），细节和光影更好但慢四倍。
+                </p>
+              </div>
+
               <div class="field">
                 <div class="field-head">
-                  <span class="field-label">画图模型</span>
+                  <span class="field-label">{{ isLocalImageProvider ? "模型文件（选填）" : "画图模型" }}</span>
                 </div>
                 <div class="model-row">
                   <el-select
@@ -1985,7 +2054,7 @@ watch(id, () => void loadCharacter());
                     allow-create
                     default-first-option
                     aria-label="画图模型"
-                    placeholder="选择或输入生图模型名称"
+                    :placeholder="isLocalImageProvider ? '留空 = 按档位自动选' : '选择或输入生图模型名称'"
                   >
                     <el-option
                       v-for="model in imageModelOptions"
@@ -2009,7 +2078,17 @@ watch(id, () => void loadCharacter());
                     <el-icon><Promotion /></el-icon>{{ testingImage ? "测试中…" : "测试" }}
                   </el-button>
                 </div>
-                <p class="field-help">
+                <p
+                  v-if="isLocalImageProvider"
+                  class="field-help"
+                >
+                  留空就按档位自动挑（快速 anima-turbo-v1.1，精修 anima-aesthetic-v1.1）。引擎里另装了模型才需要在这里选。
+                  点「测试」会真画一张 768×768 的图，本地不花钱，但引擎没开或者显存不够会原样报出来。
+                </p>
+                <p
+                  v-else
+                  class="field-help"
+                >
                   高速版是 MiniMax-H3-Image-Highspeed，参数完全一样，只改这一个词。
                   测试会真的画一张（按张计费，图不落盘）。
                 </p>

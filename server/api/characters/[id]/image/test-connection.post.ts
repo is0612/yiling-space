@@ -1,5 +1,6 @@
 import { createError, getRouterParam } from "h3";
 import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../utils/chat-model-config";
+import { generateImageWithComfy, listComfyCheckpoints, readComfyEngineStatus } from "../../../../utils/comfyui-image";
 import { resolveCharacterImageApiKey } from "../../../../utils/credential-encryption";
 import type { ImageGenerationSettings } from "../../../../utils/image-generation";
 import { buildImageGenerationEndpoint, describeImageGatewayRefusal, detectAsyncImageTask, parseImageResponse, resolveImageGenerationSettings } from "../../../../utils/image-generation";
@@ -16,6 +17,12 @@ import { getPrisma } from "../../../../utils/prisma";
  * 任何一家审核都不会拦的画面。
  */
 const TEST_PROMPT = "一只橘猫趴在窗台上打盹，简笔插画，暖色调";
+
+/**
+ * 本机引擎（Anima）的测试画面。**必须英文标签**：它读不懂中文，
+ * 拿上面那句去测会画出一张无关的图，测试却照样报「成功」—— 那是最坏的一种测试。
+ */
+const LOCAL_TEST_PROMPT = "a orange cat sleeping on a windowsill, simple illustration, warm colors, no text";
 
 /** 和 generateImage 一样：画图比聊天慢一个量级，先要 b64 再要 url。 */
 const TEST_TIMEOUT_MS = 90_000;
@@ -150,6 +157,61 @@ function describeImageAuthFailure(input: {
 }
 
 /**
+ * 本机引擎的测试：连通 → 模型在不在 → 真画一张。
+ *
+ * 和云端那个测试同一个道理（只测连通证明不了能出图），但三个细节不同：
+ *   - 不花钱，所以可以放心真画；画坏了大不了重来；
+ *   - 提示词必须用英文 —— Anima 读不懂中文，拿中文测出来的「成功」是一张无关的图；
+ *   - 失败原因要具体到「双击哪个 bat」，因为本地引擎最常见的问题就是没开。
+ */
+async function testLocalEngine(settings: ImageGenerationSettings): Promise<ProbeResult> {
+  const startedAt = Date.now();
+  const status = await readComfyEngineStatus(settings.apiBaseUrl);
+  if (!status.running) {
+    return {
+      ok: false,
+      model: settings.model,
+      message: `连不上本地引擎（${settings.apiBaseUrl}）。先双击 D:\\AI\\Anima\\启动Anima.bat，等窗口里出现 http://127.0.0.1:8188 再回来测。`,
+    };
+  }
+
+  const listed = await listComfyCheckpoints(settings.apiBaseUrl);
+  if (!listed.ok) {
+    return { ok: false, model: settings.model, message: `引擎开着，但读不到模型清单：${listed.reason}` };
+  }
+  if (listed.models.length && !listed.models.includes(settings.model)) {
+    return {
+      ok: false,
+      model: settings.model,
+      message: `引擎里没有「${settings.model}」这个模型文件。现在装了：${listed.models.slice(0, 6).join("、")}。在设置里挑一个，或者确认 models\\diffusion_models 目录挂对了。`,
+    };
+  }
+
+  // 768 见方是「够确认整条链路通、又不至于等太久」的尺寸；质量版首次还要加载权重。
+  const drawn = await generateImageWithComfy({
+    baseUrl: settings.apiBaseUrl,
+    model: settings.model,
+    quality: settings.quality === "quality",
+    prompt: LOCAL_TEST_PROMPT,
+    width: 768,
+    height: 768,
+  });
+  if (!drawn.ok) {
+    return { ok: false, model: settings.model, message: `引擎连上了，但出图失败：${drawn.reason}`, elapsedMs: Date.now() - startedAt };
+  }
+
+  const gpu = status.devices[0];
+  return {
+    ok: true,
+    model: settings.model,
+    elapsedMs: Date.now() - startedAt,
+    message: `本地引擎可用：${settings.model} 画出了一张 ${drawn.width}×${drawn.height} 的图`
+      + (gpu ? `（${gpu.name}，显存 ${gpu.vramTotalMb} MB，空闲 ${gpu.vramFreeMb} MB）` : "")
+      + "。本地出图不花钱，这张留在 ComfyUI 的 output 目录里。",
+  };
+}
+
+/**
  * 「测试画图」：真的让服务商画一张，看它能不能交回一张图。
  *
  * 为什么不能只测连通性：`GET /models` 里躺着模型名、`/images/generations`
@@ -187,6 +249,9 @@ export default defineEventHandler(async (event): Promise<ProbeResult> => {
         : "还没有可用的画图配置：请先填写画图 API Key 并保存。",
     };
   }
+
+  // 本机引擎是另一套协议，也不花钱，走自己的测试（连通 → 模型 → 真画一张）。
+  if (settings.provider === "comfyui") return testLocalEngine(settings);
 
   let endpoint: URL;
   try {

@@ -23,7 +23,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { IMAGE_SIZE_SETS, resolveImagePixels, type ImageSizePreset } from "../../shared/utils/image-size";
+import { LOCAL_IMAGE_PROVIDER, resolveLocalImageModel, resolveLocalImageQuality, type LocalImageQuality } from "../../shared/utils/local-image-engine";
 import { validateChatApiBaseUrl } from "./chat-model-config";
+import { generateImageWithComfy, normalizeComfyBaseUrl } from "./comfyui-image";
+import { needsTagTranslation } from "./image-prompt-translation";
 import { dataPath } from "./data-dir";
 import { downloadSafeMedia } from "./safe-media-download";
 
@@ -76,7 +79,7 @@ export const IMAGE_MAX_EDGE = 1280;
  */
 export const IMAGE_SIZE_PRESETS: Record<ImageSizePreset, string> = IMAGE_SIZE_SETS.minimax;
 
-export type ImageGenerationProvider = "minimax" | "openai";
+export type ImageGenerationProvider = "minimax" | "openai" | "comfyui";
 
 export type ImageGenerationSettings = {
   provider: ImageGenerationProvider;
@@ -85,6 +88,11 @@ export type ImageGenerationSettings = {
   apiKey: string;
   /** 已经换算成 `宽x高` 的像素值。 */
   size: string;
+  /**
+   * 出图档位，只有本地引擎（ComfyUI）看它：fast = Turbo，quality = Aesthetic。
+   * 云端服务商按模型名区分快慢，没有这个概念，所以恒为 `fast`。
+   */
+  quality: LocalImageQuality;
 };
 
 export type GeneratedImage = {
@@ -173,7 +181,17 @@ export function resolveImageSizePreset(configValue: unknown): ImageSizePreset {
 }
 
 function isKnownProvider(value: string): value is ImageGenerationProvider {
-  return value === "minimax" || value === "openai";
+  return value === "minimax" || value === "openai" || value === LOCAL_IMAGE_PROVIDER;
+}
+
+/**
+ * 地址看起来是不是本机 ComfyUI。
+ *
+ * 只在没有显式选服务商时兜底：8188 是 ComfyUI 的默认端口，而本地 LLM 常用 11434 / 1234，
+ * 不会撞；地址里带 comfy 的（自建反向代理）也一并认。
+ */
+function looksLikeLocalEngine(value: string): boolean {
+  return Boolean(value) && (/:(?:8188)\b/u.test(value) || /comfy/iu.test(value));
 }
 
 /**
@@ -201,12 +219,39 @@ export function resolveImageGenerationSettings(input: {
    * 服务商：显式配了就用，没配看地址里有没有 minimax。
    * 两个地址都没有时按 minimax 算 —— 默认模型就是 MiniMax 的，
    * 只填一把 Key 的人想要的显然是「直接能用」，而不是「猜成 OpenAI 再 401」。
+   * 本机引擎（ComfyUI）同理：地址是 8188 / 带 comfy 时按它算。
    */
   const provider: ImageGenerationProvider = isKnownProvider(explicitProvider)
     ? explicitProvider
-    : (/minimax/i.test(explicitBase || chatBase)
-      ? "minimax"
-      : (explicitBase || chatBase ? "openai" : "minimax"));
+    : (looksLikeLocalEngine(explicitBase || chatBase)
+      ? LOCAL_IMAGE_PROVIDER
+      : (/minimax/i.test(explicitBase || chatBase)
+        ? "minimax"
+        : (explicitBase || chatBase ? "openai" : "minimax")));
+
+  /**
+   * 本机引擎单独一条：**不需要 Key**（ComfyUI 没有鉴权），地址允许本机/局域网，
+   * 尺寸也按 Anima 那一套换算。这里不碰 apiKey，少一条「没填 Key 所以画不了」。
+   */
+  if (provider === LOCAL_IMAGE_PROVIDER) {
+    let localBase: string;
+    try {
+      localBase = normalizeComfyBaseUrl(explicitBase);
+    } catch {
+      // 地址写错当没开：一个坏 URL 不该让整轮聊天变成错误。
+      return null;
+    }
+    const quality = resolveLocalImageQuality(config.imageQuality);
+    const localModel = (readString(config.imageModel) || resolveLocalImageModel(quality)).slice(0, MODEL_MAX_CHARS);
+    return {
+      provider,
+      model: localModel,
+      apiBaseUrl: localBase,
+      apiKey: "",
+      quality,
+      size: resolveImagePixels(provider, localModel, resolveImageSizePreset(config)),
+    };
+  }
 
   const model = (readString(config.imageModel)
     || readString(process.env.IMAGE_MODEL)
@@ -239,6 +284,8 @@ export function resolveImageGenerationSettings(input: {
     model,
     apiBaseUrl,
     apiKey,
+    // 云端服务商按模型名分快慢，没有档位这个概念。
+    quality: "fast",
     size: resolveImagePixels(provider, model, resolveImageSizePreset(config)),
   };
 }
@@ -420,6 +467,67 @@ export function limitReferenceNotes(prompt: string, keep: number): string {
 }
 
 /**
+ * 分段提示词 → Anima 能读懂的两半（正 / 负）。
+ *
+ * `composePublishedVisualPrompt` 拼出来的是给「能读中文的云端模型」看的：
+ * `【人物】…；【造型】…；【参考图】图1 标准形象——只用来确定长相…；【画面】…；【避免】…`。
+ * 那套中文标签 Anima 一个都不认识，整段塞进去只会得到一张无关的图 ——
+ * 它认识的是逗号分隔的英文 Danbooru 标签。
+ *
+ * 所以这里做三件事：
+ *   1. 丢掉【参考图】整段（那是一句中文指令，不是画面）；
+ *   2. 【避免】单独拎出来当负面提示词，而不是留在正向里当内容；
+ *   3. 其余段（人物 / 造型 / 画面）只去掉标签本身，内容按逗号接起来。
+ *
+ * **这里不翻译**：它只负责把结构拆对。中文内容交给 `translatePrompt`（用角色自己的
+ * 聊天模型翻成英文标签，见 `image-prompt-translation.ts`）—— 代码里做字符串替换或
+ * 查表翻译没有意义，标签要看懂语义才写得对（「雨天」是 `rain` 还是 `rainy street`，
+ * 「回眸」是 `looking back` 还是 `from behind`）。
+ * 真正该改的是数据侧：形象档案的核心提示词写成英文标签，这一段就几乎不用翻了。
+ */
+export function toAnimaPromptParts(prompt: string): { positive: string; negative: string } {
+  const text = String(prompt ?? "").trim();
+  if (!text) return { positive: "", negative: "" };
+  /**
+   * 只认**行首或分号之后**的那几个段落标签。
+   *
+   * 两个坑都在同一段文字里：
+   *   1. 参考图说明自己带分号（「脸型五官…；参考图里的服装、姿势…都不要照搬…」），
+   *      按分号切会把后半句当成无标签段落，又混进正向；
+   *   2. 那句说明里还提到「按【画面】重新安排」—— 只要见到【】就切，同样会被切断。
+   * 所以用手写扫描：标签必须紧跟在开头或「；」后面，正文一直取到下一个这样的标签。
+   */
+  const marker = /(?:^|[；;])(【(?:人物|造型[^】]*|画面|参考图|避免)】)/gu;
+  const marks: { label: string; start: number; bodyStart: number }[] = [];
+  for (let found = marker.exec(text); found; found = marker.exec(text)) {
+    marks.push({ label: found[1]!, start: found.index, bodyStart: found.index + found[0].length });
+  }
+  if (!marks.length) return { positive: text, negative: "" };
+
+  const positive: string[] = [];
+  const negative: string[] = [];
+  const head = text.slice(0, marks[0]!.start).replace(/[；;]+$/u, "").trim();
+  if (head) positive.push(head);
+  marks.forEach((current, index) => {
+    const end = index + 1 < marks.length ? marks[index + 1]!.start : text.length;
+    const body = text.slice(current.bodyStart, end).replace(/[；;]+$/u, "").trim();
+    if (!body) return;
+    if (/^【参考图】$/u.test(current.label)) return;
+    if (/^【避免】$/u.test(current.label)) {
+      negative.push(body);
+      return;
+    }
+    // 标签本身（【人物】/【造型·xxx】/【画面】）是给人看的，模型只要后面的内容。
+    positive.push(body);
+  });
+  return {
+    positive: positive.join(", ").trim(),
+    negative: negative.join(", "),
+  };
+}
+
+
+/**
  * 模型没给画面描述时的兜底：拿这句原话去画。
  *
  * 只去掉「画一张」这类指令词，保留宾语。这样「画只橘猫趴在窗台上」不会变成
@@ -593,10 +701,24 @@ export async function generateImage(input: {
   n?: number;
   /** 形象档案的参考图；给了就先试 edits 接口，不行再退回纯文字。 */
   references?: ImageReferenceInput[];
+  /**
+   * 中文提示词 → 英文标签。**只有本地引擎用得上**：Anima 读不懂中文，
+   * 而形象档案那段中文是服务端拼进去的，聊天模型看不到、也就没法自己翻。
+   * 由调用方注入（它才拿得到聊天模型与 Key）；返回 null 表示翻不了，按原文发。
+   */
+  translatePrompt?: (parts: { positive: string; negative: string }) => Promise<{ positive: string; negative: string } | null>;
 }): Promise<ImageGenerationResult> {
   let prompt = sanitizeImagePrompt(input.prompt);
   if (!prompt) return { ok: false, reason: "画面描述为空" };
   let usedReferences = false;
+
+  /**
+   * 本机引擎走完全不同的协议（ComfyUI 是提交工作流再轮询），
+   * 在进入 OpenAI 那套 `/images/generations` 之前就分出去。
+   */
+  if (input.settings.provider === LOCAL_IMAGE_PROVIDER) {
+    return generateWithLocalEngine({ ...input, prompt });
+  }
 
   let endpoint: URL;
   try {
@@ -898,9 +1020,29 @@ export async function generateImage(input: {
     raw = downloaded;
   }
 
+  const persisted = await persistGeneratedImage(raw, input.characterId, input.settings);
+  if (!persisted.ok) return persisted;
+  return {
+    ok: true,
+    mode: usedReferences ? "image_to_image" : "text_to_image",
+    image: persisted.image,
+  };
+}
+
+/**
+ * 一张已经拿到手的图 → 缩到最长边 1280 的 jpeg → 落到 `.data/images/<角色>`。
+ *
+ * 云端和本机引擎共用这一段：落盘规则只有一处，两边的图在同一张表里查得到，
+ * `metadata.image.path` 也不会因为换服务商而变成另一种形状。
+ */
+async function persistGeneratedImage(
+  raw: { buffer: Buffer; mime: string },
+  characterId: string,
+  settings: ImageGenerationSettings,
+): Promise<{ ok: true; image: GeneratedImage } | { ok: false; reason: string }> {
   const normalized = await normalizeForSend(raw);
   const fileName = `${randomUUID()}.${extensionFor(normalized.mime)}`;
-  const dir = imageDir(input.characterId);
+  const dir = imageDir(characterId);
   const filePath = path.join(dir, fileName);
   try {
     await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -909,11 +1051,11 @@ export async function generateImage(input: {
     return { ok: false, reason: `图片落盘失败：${error instanceof Error ? error.message : String(error)}` };
   }
 
-  const relativePath = path.posix.join("images", input.characterId, fileName);
+  const relativePath = path.posix.join("images", characterId, fileName);
   console.log("[image] generated " + JSON.stringify({
-    model: input.settings.model,
-    provider: input.settings.provider,
-    size: input.settings.size,
+    model: settings.model,
+    provider: settings.provider,
+    size: settings.size,
     bytes: normalized.buffer.length,
     width: normalized.width,
     height: normalized.height,
@@ -921,7 +1063,6 @@ export async function generateImage(input: {
 
   return {
     ok: true,
-    mode: usedReferences ? "image_to_image" : "text_to_image",
     image: {
       filePath,
       relativePath,
@@ -931,6 +1072,82 @@ export async function generateImage(input: {
       bytes: normalized.buffer.length,
     },
   };
+}
+
+/**
+ * 本机 Anima 出图。
+ *
+ * 与云端那套的差别只在「怎么拿到一张图」，之后的缩放、落盘、记账完全相同。
+ *
+ * 三件事在这里定死：
+ *   1. **不用参考图**。ComfyUI 的图生图是 VAE 编码原图再降噪，改动幅度 0.5~0.6 时
+ *      构图、姿势、取景都会跟着立绘走 —— 出来还是那张站姿，只是背景换了。
+ *      宁可按文字画，也不要每张图都是同一个立绘的翻版。角色一致性应该靠 LoRA
+ *      （Anima 官方支持），那是另一件事。
+ *   2. **中文要翻**：她自己写的那段（场景）会按英文标签写，但形象档案里的中文外貌
+ *      是服务端拼进来的，她看不见、翻不了。所以由调用方注入 `translatePrompt`，
+ *      在送进引擎之前用这个角色自己的聊天模型翻一遍；翻不动再退回原文。
+ *   3. **不花钱但很慢**：一张十几秒到一分钟，超时给到 4 分钟（首次要加载 3.9G 权重）。
+ */
+async function generateWithLocalEngine(input: {
+  settings: ImageGenerationSettings;
+  prompt: string;
+  characterId: string;
+  references?: ImageReferenceInput[];
+  translatePrompt?: (parts: { positive: string; negative: string }) => Promise<{ positive: string; negative: string } | null>;
+}): Promise<ImageGenerationResult> {
+  let { positive, negative } = toAnimaPromptParts(input.prompt);
+  const [width, height] = (input.settings.size.split("x").map(Number) as [number, number]);
+
+  if (input.references?.length) {
+    console.warn("[image] 本机引擎这次不用参考图（图生图会把立绘的姿势一起搬过来）", {
+      characterId: input.characterId,
+      references: input.references.length,
+    });
+  }
+
+  /**
+   * 中文 → 英文标签。
+   *
+   * 只有真的出现中文才翻：模型已经按标签写好的那段不用再动，改一次反而会丢细节。
+   * 翻不动就按原文发 —— 中文那半会被 CLIP 当噪声，但图还是出得来，不该整轮哑火。
+   */
+  if (input.translatePrompt && (needsTagTranslation(positive) || needsTagTranslation(negative))) {
+    const translated = await input.translatePrompt({ positive, negative });
+    if (translated) {
+      positive = translated.positive;
+      negative = translated.negative;
+      console.log("[image] 提示词已翻成英文标签 " + JSON.stringify({ chars: positive.length }));
+    }
+  }
+
+  // 翻完还有中文：说明调用方没注入翻译、或者翻译被拒了。不翻译，但要留一条能查的日志。
+  if (needsTagTranslation(positive)) {
+    console.warn("[image] 本机引擎收到的提示词里仍有中文，Anima 只认英文标签，这部分基本不起作用", {
+      characterId: input.characterId,
+    });
+  }
+
+  const startedAt = Date.now();
+  const result = await generateImageWithComfy({
+    baseUrl: input.settings.apiBaseUrl,
+    model: input.settings.model,
+    quality: input.settings.quality === "quality",
+    prompt: positive,
+    negative,
+    width,
+    height,
+  });
+  if (!result.ok) {
+    // 引擎没开是最常见的一种，原话已经带了「确认 启动Anima.bat 跑着」，直接交给调用方。
+    console.warn("[image] 本机引擎出图失败", { reason: result.reason, elapsedMs: Date.now() - startedAt });
+    return { ok: false, reason: result.reason };
+  }
+
+  const persisted = await persistGeneratedImage({ buffer: result.buffer, mime: result.mime }, input.characterId, input.settings);
+  if (!persisted.ok) return persisted;
+  console.log("[image] local engine " + JSON.stringify({ elapsedMs: result.elapsedMs, seed: result.seed, mode: result.mode }));
+  return { ok: true, mode: "text_to_image", image: persisted.image };
 }
 
 /* ────────────────────────────── 落库痕迹 ────────────────────────────── */

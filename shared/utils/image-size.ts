@@ -19,7 +19,7 @@ export type ImageSizeOption = {
 type SizeSet = Record<ImageSizePreset, string>;
 
 /**
- * 三家画图服务的合法尺寸。
+ * 四家画图服务的合法尺寸。
  *
  * - MiniMax：三个值都 ≥ 655,360 px 的面积下限，低于下限直接 400。
  * - gpt-image 系列（1 / 2 / 2.5 flare / 2.5 sunburst）：推荐尺寸一致，
@@ -27,12 +27,15 @@ type SizeSet = Record<ImageSizePreset, string>;
  *   1:3~3:1、面积 655,360~8,294,400），但推荐值仍是这三个。
  * - dall-e-3：横竖都是 1792，比 gpt-image 更方。
  * - dall-e-2：只支持方图，竖横一律降成 1024x1024（宁可画成方图，也不要报错）。
+ * - 本机 Anima：官方给的范围是 512²~1536²，但 8G 显存实际天花板在 1MP 附近，
+ *   所以竖横都用 896×1152 这一组（约 1.03MP），别给 1536 那种会 OOM 的值。
  */
 export const IMAGE_SIZE_SETS = {
   minimax: { square: "1024x1024", portrait: "864x1152", landscape: "1152x864" },
   gptImage: { square: "1024x1024", portrait: "1024x1536", landscape: "1536x1024" },
   dalle3: { square: "1024x1024", portrait: "1024x1792", landscape: "1792x1024" },
   squareOnly: { square: "1024x1024", portrait: "1024x1024", landscape: "1024x1024" },
+  localAnima: { square: "1024x1024", portrait: "896x1152", landscape: "1152x896" },
 } as const satisfies Record<string, SizeSet>;
 
 const SIZE_NAME: Record<ImageSizePreset, string> = { square: "方图", portrait: "竖图", landscape: "横图" };
@@ -51,6 +54,7 @@ function ratioLabel(pixels: string): string {
 /** 服务商 + 模型名 → 用哪一套尺寸。模型名是手填的，认不出就按主流 OpenAI 那套。 */
 export function imageSizeSetFor(provider: string, model: string): SizeSet {
   if (provider === "minimax") return IMAGE_SIZE_SETS.minimax;
+  if (provider === "comfyui") return IMAGE_SIZE_SETS.localAnima;
   if (/dall-?e-?3/i.test(model)) return IMAGE_SIZE_SETS.dalle3;
   if (/dall-?e-?2/i.test(model)) return IMAGE_SIZE_SETS.squareOnly;
   // gpt-image-1 / 2 / 2.5-flare / 2.5-sunburst 与未知模型都走这一套。

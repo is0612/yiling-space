@@ -437,6 +437,13 @@ export type ConversationReplyInput = {
    */
   imageReply?: boolean;
   /**
+   * 本轮交给的是**只认英文标签**的本地引擎（Anima）。
+   *
+   * 它不认识中文：`雨夜撑伞的少女` 出来是一张粉色背景的大头贴，而代码侧无法翻译
+   * （机翻出来的中文语序它照样读不懂）。所以只能在写 prompt 这一步就要求英文标签。
+   */
+  imageReplyTags?: boolean;
+  /**
    * 这个渠道会把 `reply` 里的换行拆成**几条消息**依次发出去（QQ 那样一句一句弹）。
    *
    * 由渠道声明（`segmentCapable`），像 `voiceCapable` 一样不认平台名。网页对话永远不传：
@@ -782,6 +789,7 @@ function systemPrompt(flags: {
   imageEnabled?: boolean;
   withVoiceReply?: boolean;
   withImageReply?: boolean;
+  withImagePromptTags?: boolean;
   withSegmentedReply?: boolean;
   withAcquaintances?: boolean;
   withFriendRoster?: boolean;
@@ -814,7 +822,7 @@ function systemPrompt(flags: {
 } = {}): string {
   const {
     withFaces, withStickers, withCatchphrases, withUserAddress, withSpeaker, withGroupChat,
-    mustReply, repair, voiceEnabled, imageEnabled, withVoiceReply, withImageReply, withSegmentedReply, withAcquaintances, withFriendRoster, withFriendAliases,
+    mustReply, repair, voiceEnabled, imageEnabled, withVoiceReply, withImageReply, withImagePromptTags, withSegmentedReply, withAcquaintances, withFriendRoster, withFriendAliases,
     withGroupMembers, withGroupActivity, withJournal, withJournalRecent, withJournalFacts, withCrossChannel, withEvents, withRecentEvents, withRawMessages,
     withHadSticker, withHadVoice, withHadImage, withImageExecution, withMediaTokens, withMemoryAssistant, withMemoryAssistantEvidence, withKnowledge, withPreferences, withExpressionHabits, withGoals, withSelfUnderstanding,
   } = flags;
@@ -1093,6 +1101,16 @@ function systemPrompt(flags: {
       "Never turn current or historical conversation, real nicknames, @member placeholders, transcript lines or chat UI into image content. Only an independently requested visual subject is eligible. This does not prohibit ordinary requested lettering on a poster or sign.",
       "The image is its own message: it carries no quote and no @. Keep replyToMessageId and atMessageId on your text only.",
     );
+    if (withImagePromptTags) {
+      /**
+       * 本地引擎这一条不能省：Anima 训练在英文 Danbooru 标签上，中文提示词会被完全忽略，
+       * 出来的是和描述无关的画面。代码侧不做机翻（翻了也还是中文语序），
+       * 只能在这里要求她用标签写 —— 而且**只写标签，不要中文注解**，否则又混回去了。
+       */
+      lines.push(
+        "The drawing engine for this turn only understands English Danbooru-style tags. Write imagePrompt as lowercase comma-separated English tags, using spaces instead of underscores: quality tags first (masterpiece, best quality, safe), then 1girl/1boy, character name, series, artist (prefixed with @), then appearance, clothing, action, scene, composition (`upper body`, `cowboy shot`, `full body`), lighting and style. Do not write Chinese anywhere in imagePrompt — not as a translation, not in brackets, not after a dash. No sentences, no explanations, no field labels: tags only.",
+      );
+    }
   }
 
   /**
@@ -1804,6 +1822,7 @@ export async function generateConversationReply(input: ConversationReplyInput, o
         withVoiceReply: input.voiceReply === true,
                 imageEnabled: input.imageEnabled === true,
                 withImageReply: input.imageReply === true,
+                withImagePromptTags: input.imageReply === true && input.imageReplyTags === true,
                 withSegmentedReply: input.segmentedReply === true,
                 withAcquaintances: Boolean(input.groupAcquaintances?.length),
                 withFriendRoster: Boolean(acquaintancePayload),

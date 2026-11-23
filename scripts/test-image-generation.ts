@@ -8,6 +8,8 @@
 import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
 import { imageSizeOptions, resolveImagePixels } from "../shared/utils/image-size";
+import { LOCAL_IMAGE_MODELS } from "../shared/utils/local-image-engine";
+import { cleanTagLine, needsTagTranslation, parseTagTranslation } from "../server/utils/image-prompt-translation";
 import { dirname } from "node:path";
 
 import {
@@ -32,6 +34,7 @@ import {
   resolveImageGenerationSettings,
   resolveImageSizePreset,
   sanitizeImagePrompt,
+  toAnimaPromptParts,
 } from "../server/utils/image-generation";
 import { toCharacterDto } from "../server/utils/character-dto";
 import {
@@ -44,7 +47,7 @@ import {
  * 本机的 `.env` 可能已经配了 IMAGE_*，那些值会让「没配就没有」这类断言假失败。
  * 先把它们摘掉，结束时原样放回。
  */
-const ENV_KEYS = ["IMAGE_MODEL", "IMAGE_BASE_URL", "IMAGE_API_KEY", "IMAGE_PROVIDER"] as const;
+const ENV_KEYS = ["IMAGE_MODEL", "IMAGE_BASE_URL", "IMAGE_API_KEY", "IMAGE_PROVIDER", "COMFYUI_BASE_URL"] as const;
 const savedEnv = new Map<string, string | undefined>();
 for (const key of ENV_KEYS) {
   savedEnv.set(key, process.env[key]);
@@ -248,6 +251,73 @@ const openAiPortrait = resolveImageGenerationSettings({
   imageApiKey: "sk-openai",
 });
 assert.equal(openAiPortrait!.size, "1024x1536", "同一档位换个服务商就是另一组像素");
+
+// ---- 本机引擎（ComfyUI + Anima）--------------------------------------------
+// 和云端最大的差别：**不需要 Key**。ComfyUI 根本没有鉴权，要求填 Key 等于永远画不了。
+const localDefault = resolveImageGenerationSettings({ modelConfig: { imageProvider: "comfyui" } });
+assert.ok(localDefault, "本地引擎不需要 Key。");
+assert.equal(localDefault!.apiBaseUrl, "http://127.0.0.1:8188", "默认就是 ComfyUI 的端口。");
+assert.equal(localDefault!.apiKey, "");
+assert.equal(localDefault!.model, "anima-turbo-v1.1.safetensors", "默认快速档 = Turbo。");
+assert.equal(localDefault!.quality, "fast");
+assert.equal(localDefault!.size, "1024x1024");
+
+const localQuality = resolveImageGenerationSettings({
+  modelConfig: { imageProvider: "comfyui", imageQuality: "quality", imageSize: "portrait" },
+});
+assert.equal(localQuality!.model, "anima-aesthetic-v1.1.safetensors", "精修档自动换成 Aesthetic。");
+assert.equal(localQuality!.quality, "quality");
+assert.equal(localQuality!.size, "896x1152", "8G 显存别给 1536 那一档。");
+
+// 只填了 8188 地址、没选服务商：也该认成本地引擎，而不是猜成 OpenAI 再 401。
+const localByUrl = resolveImageGenerationSettings({ modelConfig: { imageApiBaseUrl: "http://127.0.0.1:8188" } });
+assert.equal(localByUrl!.provider, "comfyui", "8188 是 ComfyUI，不该让用户先去选服务商。");
+
+// 显式选了本地：局域网里另一台机器上的 ComfyUI 也要能填（云端那套校验会拒绝私有地址）。
+const localLan = resolveImageGenerationSettings({
+  modelConfig: { imageProvider: "comfyui", imageApiBaseUrl: "http://192.168.1.20:8188" },
+});
+assert.equal(localLan!.apiBaseUrl, "http://192.168.1.20:8188");
+assert.equal(
+  resolveImageGenerationSettings({ modelConfig: { imageProvider: "comfyui", imageApiBaseUrl: "ftp://127.0.0.1:8188" } }),
+  null,
+  "协议不对当没开，不抛。",
+);
+
+// ---- 分段提示词 → Anima 的正/负两半 ------------------------------------------
+// 云端模型读得懂【人物】【画面】这些中文标签，Anima 一个都不认识。
+// 不拆开会把整段中文说明当成画面内容，出来就是一张无关的图。
+{
+  const parts = toAnimaPromptParts(
+    "【人物】blue hair, red eyes；【造型·女仆装】maid outfit；"
+    + "【参考图】图1 标准形象——只用来确定长相：脸型五官、发型发色；参考图里的服装、姿势、表情都不要照搬，构图按【画面】重新安排；"
+    + "【画面】1girl, standing in snow, upper body；【避免】extra fingers, bad anatomy",
+  );
+  assert.equal(parts.positive, "blue hair, red eyes, maid outfit, 1girl, standing in snow, upper body");
+  assert.equal(parts.negative, "extra fingers, bad anatomy", "【避免】要变成负面提示词，不能留在正向里当内容。");
+  assert.ok(!/参考图|只用来确定长相|重新安排/u.test(parts.positive), "中文指令段（含它内部的分号和【画面】）必须整段丢掉。");
+}
+assert.deepEqual(
+  toAnimaPromptParts("1girl, solo, rainy street at night"),
+  { positive: "1girl, solo, rainy street at night", negative: "" },
+  "没有分段标签时原样使用。",
+);
+
+// ---- 中文 → 英文标签：拆出来的两半先交给它翻 -----------------------------------
+// 这一段守的是「她会自己转英文」：翻的是**角色自己的聊天模型**，不是查表。
+assert.equal(needsTagTranslation("1girl, solo, blue hair"), false);
+assert.equal(needsTagTranslation("蓝紫色长发，蓝色眼睛"), true);
+
+assert.equal(cleanTagLine("POSITIVE: 1girl, blue hair"), "1girl, blue hair", "标签前缀要摘掉。");
+assert.equal(cleanTagLine("```\n1girl, solo\n```"), "1girl, solo", "代码围栏要摘掉。");
+assert.equal(cleanTagLine("1girl，蓝发"), null, "带中文就整行作废 —— 塞进 CLIP 只是噪声。");
+assert.equal(cleanTagLine('"1girl"'), "1girl", "模型爱加引号。");
+assert.equal(cleanTagLine("   "), null);
+
+const translation = parseTagTranslation("POSITIVE: 1girl, long blue hair, white dress\nNEGATIVE: extra fingers");
+assert.deepEqual(translation, { positive: "1girl, long blue hair, white dress", negative: "extra fingers" });
+assert.deepEqual(parseTagTranslation("1girl, solo, snow"), { positive: "1girl, solo, snow", negative: "" }, "没前缀也认，正向照用。");
+assert.equal(parseTagTranslation("NEGATIVE: bad anatomy"), null, "没有正向就不算成功。");
 
 const envKey = (() => {
   process.env.IMAGE_API_KEY = "sk-env";
@@ -483,6 +553,129 @@ assert.equal(dtoDefault.imageSize, "square");
   assert.equal(rejected.ok, false);
   assert.deepEqual(seen, ["b64_json"], "422 是审核问题，重发一遍还是 422。");
   assert.match((rejected as { reason: string }).reason, /422/);
+
+  globalThis.fetch = originalFetch;
+}
+
+
+/**
+ * 本机引擎（ComfyUI）的整条链路：提交工作流 → 轮询历史 → 取图 → 落盘。
+ *
+ * 用桩替换 fetch，不联网、也不依赖这台机器上到底有没有装 Anima。
+ * 守四件事：走的是 `/prompt` 而不是 OpenAI 那套接口、提示词被拆成了英文正向、
+ * 步数与模型跟着档位走、拿到的图仍然进 `.data/images`。
+ */
+{
+  const sharp = (await import("sharp")).default;
+  const pixel = await sharp({
+    create: { width: 32, height: 32, channels: 3, background: { r: 10, g: 200, b: 120 } },
+  }).png().toBuffer();
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  let submitted: Record<string, { inputs?: Record<string, unknown> }> | null = null;
+
+  globalThis.fetch = (async (url: unknown, init?: { body?: unknown }) => {
+    const target = String(url);
+    calls.push(new URL(target).pathname);
+    if (target.endsWith("/prompt")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { prompt?: Record<string, { inputs?: Record<string, unknown> }> };
+      submitted = body.prompt ?? null;
+      return new Response(JSON.stringify({ prompt_id: "task-1" }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (target.includes("/history/")) {
+      return new Response(JSON.stringify({
+        "task-1": {
+          status: { completed: true, status_str: "success" },
+          outputs: { "10": { images: [{ filename: "anima_0001.png", subfolder: "YilingSpace", type: "output" }] } },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (target.includes("/view?")) {
+      return new Response(pixel, { status: 200, headers: { "content-type": "image/png" } });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  const localSettings = {
+    provider: "comfyui" as const,
+    model: LOCAL_IMAGE_MODELS.fast,
+    apiBaseUrl: "http://127.0.0.1:8188",
+    apiKey: "",
+    quality: "fast" as const,
+    size: "1024x1024",
+  };
+  const characterId = "33333333-3333-4333-8333-333333333333";
+  const localOk = await generateImage({
+    settings: localSettings,
+    prompt: "【画面】1girl, standing in snow, upper body；【避免】bad anatomy",
+    characterId,
+  });
+  assert.equal(localOk.ok, true, "本地引擎出图也要能拿到文件。");
+  assert.equal(localOk.ok && localOk.mode, "text_to_image");
+  assert.ok(calls.includes("/prompt"), "走 ComfyUI 的 /prompt，而不是 /images/generations。");
+  assert.ok(!calls.some(call => call.includes("/images/")), "本地引擎不该碰云端那条接口。");
+  if (localOk.ok) {
+    assert.ok(localOk.image.relativePath.startsWith("images/"), "落库痕迹和云端那张同形。");
+    const bytes = await readFile(localOk.image.filePath);
+    assert.ok(bytes.length > 0, "落盘的文件不能是空的。");
+    await rm(localOk.image.filePath, { force: true });
+    await rm(dirname(localOk.image.filePath), { recursive: true, force: true });
+  }
+
+  const graph = submitted as Record<string, { inputs?: Record<string, unknown> }> | null;
+  const positiveText = String(graph?.["4"]?.inputs?.text ?? "");
+  assert.match(positiveText, /1girl, standing in snow, upper body/, "画面描述要进正向提示词。");
+  assert.ok(!positiveText.includes("【画面】") && !positiveText.includes("【避免】"), "中文段落标签不能进提示词。");
+  assert.match(positiveText, /masterpiece, best quality/, "要自己补质量词 —— 聊天模型不会照 Anima 的格式写。");
+  assert.equal(String(graph?.["1"]?.inputs?.unet_name ?? ""), LOCAL_IMAGE_MODELS.fast, "快速档用 Turbo。");
+  assert.equal(graph?.["8"]?.inputs?.steps, 12);
+  assert.equal(graph?.["8"]?.inputs?.cfg, 1, "Turbo 必须 CFG 1。");
+  assert.match(String(graph?.["5"]?.inputs?.text ?? ""), /bad anatomy/, "【避免】进负面提示词。");
+
+  // 中文提示词：先交给调用方注入的翻译（角色自己的聊天模型），再进引擎。
+  let translateInput: { positive: string; negative: string } | null = null;
+  const translated = await generateImage({
+    settings: localSettings,
+    prompt: "【人物】蓝紫色长发、蓝色眼睛；【画面】雪中回头",
+    characterId,
+    translatePrompt: async (parts) => {
+      translateInput = parts;
+      return { positive: "1girl, purple hair, blue eyes, looking back, snow", negative: "bad anatomy" };
+    },
+  });
+  assert.equal(translated.ok, true);
+  assert.ok(translateInput, "有中文就必须走一次翻译。");
+  assert.equal(translateInput!.positive, "蓝紫色长发、蓝色眼睛, 雪中回头", "翻译拿到的已经是拆好的两半，没有【】标签。");
+  const translatedGraph = submitted as Record<string, { inputs?: Record<string, unknown> }> | null;
+  const translatedText = String(translatedGraph?.["4"]?.inputs?.text ?? "");
+  assert.match(translatedText, /purple hair, blue eyes, looking back, snow/, "送进引擎的必须是翻好的英文。");
+  assert.ok(!/[\u4e00-\u9fff]/u.test(translatedText), "翻完还留中文就等于没翻。");
+  if (translated.ok) {
+    await rm(translated.image.filePath, { force: true });
+    await rm(dirname(translated.image.filePath), { recursive: true, force: true });
+  }
+
+  // 翻译失败（返回 null）：退回原文继续出图 —— 图差一点，也胜过整轮哑火。
+  const fallback = await generateImage({
+    settings: localSettings,
+    prompt: "【画面】雪中回头",
+    characterId,
+    translatePrompt: async () => null,
+  });
+  assert.equal(fallback.ok, true, "翻译失败不能连累出图。");
+  assert.match(String((submitted as Record<string, { inputs?: Record<string, unknown> }> | null)?.["4"]?.inputs?.text ?? ""), /雪中回头/u);
+  if (fallback.ok) {
+    await rm(fallback.image.filePath, { force: true });
+    await rm(dirname(fallback.image.filePath), { recursive: true, force: true });
+  }
+
+  // 引擎没开：不能抛，只能给一句能照着做的原因。
+  globalThis.fetch = (async () => {
+    throw new Error("ECONNREFUSED 127.0.0.1:8188");
+  }) as typeof fetch;
+  const offline = await generateImage({ settings: localSettings, prompt: "1girl", characterId });
+  assert.equal(offline.ok, false, "引擎没开时这轮只发文字。");
+  assert.match((offline as { reason: string }).reason, /ComfyUI|连不上/u, "原因里要能看出是引擎没开。");
 
   globalThis.fetch = originalFetch;
 }
