@@ -42,6 +42,8 @@ watch(id, () => {
   fetchingModels.value = false;
   fetchingVoiceModels.value = false;
   fetchingVisionModels.value = false;
+  fetchingImageModels.value = false;
+  testingImage.value = false;
   loadingUsage.value = false;
 }, { flush: "sync" });
 onBeforeUnmount(() => { disposed = true; roleVersion++; });
@@ -137,6 +139,10 @@ const draftImageApiKey = ref("");
 const draftImageModel = ref("");
 /** 画面尺寸只给三个预设：像素宽高由服务端换算，手填容易低于服务商的面积下限。 */
 const draftImageSize = ref<"square" | "portrait" | "landscape">("square");
+/** 画图页「获取模型」拉回来的清单；换服务商/地址就作废（两家清单不通用） */
+const fetchedImageModels = ref<string[]>([]);
+const fetchingImageModels = ref(false);
+const testingImage = ref(false);
 /** 画图服务商的默认地址与模型；点服务商时一键带过去 */
 const IMAGE_PROVIDER_PRESETS: Record<string, { baseUrl: string; model: string }> = {
   minimax: { baseUrl: "https://api.minimaxi.com/v1", model: "MiniMax-H3-Image" },
@@ -228,7 +234,7 @@ const fetchedVisionModels = ref<string[]>([]);
 const fetchingVisionModels = ref(false);
 /** 模型设置页签：对话 / 语音 / 图片。用 v-show 切换，切换不丢已填表单 */
 const operationBusy = computed(() => saving.value || testing.value || fetchingModels.value || fetchingVoiceModels.value || testingVoice.value
-  || testingVision.value || assistantsBusy.value || fetchingVisionModels.value);
+  || testingVision.value || assistantsBusy.value || fetchingVisionModels.value || fetchingImageModels.value || testingImage.value);
 /** 当前页签由父级模型工作台决定 */
 const activeTab = computed<ModelSection>(() => props.section ?? "chat");
 
@@ -478,7 +484,7 @@ const imageProviderKey = computed(() => {
   if (draftImageProvider.value === "minimax" || draftImageProvider.value === "openai") return draftImageProvider.value;
   return /minimax/i.test(draftImageApiBaseUrl.value) ? "minimax" : "custom";
 });
-/** 画图模型候选：两家的主力模型，允许手填（换高速版只改一个词）。 */
+/** 画图模型候选：内置清单 + 「获取模型」拉回来的那家清单，允许手填。 */
 const imageModelOptions = computed(() => {
   const preset = IMAGE_PROVIDER_PRESETS[imageProviderKey.value];
   const base = preset
@@ -486,8 +492,11 @@ const imageModelOptions = computed(() => {
       ? ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"]
       : ["gpt-image-1", "dall-e-3"])
     : ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed", "gpt-image-1"];
+  // 拉回来的排前面：用户点那一下就是为了从这里挑，压在三条内置下面等于没拉
+  const fetched = fetchedImageModels.value.filter((model) => !base.includes(model));
+  const merged = [...fetched, ...base];
   const current = draftImageModel.value.trim();
-  return current && !base.includes(current) ? [current, ...base] : base;
+  return current && !merged.includes(current) ? [current, ...merged] : merged;
 });
 const imageKeyPlaceholder = computed(() => {
   if (imageKeyConfigured.value) return API_KEY_SAVED_PLACEHOLDER;
@@ -503,6 +512,8 @@ function applyImageProvider(key: string) {
   const model = draftImageModel.value.trim();
   const isOtherDefault = Object.entries(IMAGE_PROVIDER_PRESETS).some(([other, entry]) => other !== key && entry.model === model);
   if (!model || isOtherDefault) draftImageModel.value = preset.model;
+  // 上一家「获取模型」拉回来的清单跟着作废
+  fetchedImageModels.value = [];
 }
 const IMAGE_SIZE_OPTIONS = [
   { value: "square", label: "方图 1:1（1024 × 1024）" },
@@ -1051,6 +1062,64 @@ async function fetchVisionModels() {
     modelMessage.error(readError(error, "获取模型列表失败，请稍后重试。"));
   } finally {
     if (!isStaleResponse(generation)) fetchingVisionModels.value = false;
+  }
+}
+
+/**
+ * 画图页的「获取模型」：拉的是**画图那一家**（`/image/models`）。
+ *
+ * 和看图那条同一个取舍：不自动选中第一个 —— 服务商的清单里混着聊天模型，
+ * 手滑选中那个，测试会回一句「这不是生图模型」，白等一轮。
+ */
+async function fetchImageModels() {
+  if (fetchingImageModels.value || saving.value || testing.value || testingImage.value || !character.value) return;
+  const generation = requestGeneration();
+  fetchingImageModels.value = true;
+  try {
+    const saved = await save(true);
+    if (!saved) return;
+    const result = await modelRequest(() => api.getImageModels(id.value));
+    if (!result.ok) {
+      if (result.unsupported) modelMessage.warning(result.message);
+      else modelMessage.error(result.message);
+      return;
+    }
+    fetchedImageModels.value = result.models;
+    // 内置清单 / 全量兜底都不算失败，别用报错色吓人
+    if (result.unsupported) modelMessage.info(`${result.message}从里面挑一个；挑好点「测试」确认它真能画。`);
+    else modelMessage.success(`${result.message}从里面挑一个。`);
+  } catch (error) {
+    if (isStaleResponse(generation)) return;
+    modelMessage.error(readError(error, "获取模型列表失败，请稍后重试。"));
+  } finally {
+    if (!isStaleResponse(generation)) fetchingImageModels.value = false;
+  }
+}
+
+/**
+ * 测试画图：服务端会真的让服务商画一张小图 —— **这一下按张计费**，
+ * 图不落盘。只测「请求发得出去」不够：MiniMax 一张失败也回 200，
+ * `data: []` 只有真画一次才看得见。
+ */
+async function testImage() {
+  if (testingImage.value || saving.value || !character.value) return;
+  const generation = requestGeneration();
+  testingImage.value = true;
+  try {
+    const saved = await save(true);
+    if (!saved) return;
+    const result = await modelRequest(() => api.testImageConnection(id.value));
+    if (result.ok) {
+      modelMessage.success(result.message + (result.elapsedMs !== undefined ? `（${result.elapsedMs} ms）` : ""));
+    } else {
+      // 服务商原文跟着一起显示：402 / 422 / 429 单看状态码猜不出修法
+      modelMessage.error({ message: result.message + (result.detail ? `｜${result.detail.slice(0, 120)}` : ""), duration: 8000 });
+    }
+  } catch (error) {
+    if (isStaleResponse(generation)) return;
+    modelMessage.error(readError(error, "画图测试失败，请检查地址、Key 与模型名。"));
+  } finally {
+    if (!isStaleResponse(generation)) testingImage.value = false;
   }
 }
 
@@ -1903,24 +1972,41 @@ watch(id, () => void loadCharacter());
                 <div class="field-head">
                   <span class="field-label">画图模型</span>
                 </div>
-                <el-select
-                  v-model="draftImageModel"
-                  class="field-ctl"
-                  filterable
-                  allow-create
-                  default-first-option
-                  aria-label="画图模型"
-                  placeholder="选择或输入生图模型名称"
-                >
-                  <el-option
-                    v-for="model in imageModelOptions"
-                    :key="model"
-                    :label="model"
-                    :value="model"
-                  />
-                </el-select>
+                <div class="model-row">
+                  <el-select
+                    v-model="draftImageModel"
+                    class="model-select"
+                    filterable
+                    allow-create
+                    default-first-option
+                    aria-label="画图模型"
+                    placeholder="选择或输入生图模型名称"
+                  >
+                    <el-option
+                      v-for="model in imageModelOptions"
+                      :key="model"
+                      :label="model"
+                      :value="model"
+                    />
+                  </el-select>
+                  <el-button
+                    :loading="fetchingImageModels"
+                    :disabled="saving || testing || testingImage"
+                    @click="fetchImageModels"
+                  >
+                    <el-icon><Refresh /></el-icon>{{ fetchingImageModels ? "获取中…" : "获取模型" }}
+                  </el-button>
+                  <el-button
+                    :loading="testingImage"
+                    :disabled="saving || fetchingImageModels"
+                    @click="testImage"
+                  >
+                    <el-icon><Promotion /></el-icon>{{ testingImage ? "测试中…" : "测试" }}
+                  </el-button>
+                </div>
                 <p class="field-help">
                   高速版是 MiniMax-H3-Image-Highspeed，参数完全一样，只改这一个词。
+                  测试会真的画一张（按张计费，图不落盘）。
                 </p>
               </div>
 

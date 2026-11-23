@@ -261,6 +261,18 @@ export function createCharacterSettingsApi(request: ApiRequest) {
     });
   }
 
+  /** 画图那一家（文生图）的清单：和看图那条是两个地址、两把 Key，接口也不共享 */
+  function getImageModels(characterId: string): Promise<ModelCatalogResult> {
+    return request<ModelCatalogResult>({ url: `${characterBase(characterId)}/image/models`, method: "get" });
+  }
+
+  function testImageConnection(characterId: string): Promise<ConnectionProbeResult> {
+    return request<ConnectionProbeResult>({
+      url: `${characterBase(characterId)}/image/test-connection`,
+      method: "post",
+    });
+  }
+
   function getAssistantModels(characterId: string, kind: AssistantKind): Promise<ModelCatalogResult> {
     return request<ModelCatalogResult>({
       url: `${characterBase(characterId)}${assistantModelPaths[kind]}`,
@@ -333,6 +345,8 @@ export function createCharacterSettingsApi(request: ApiRequest) {
     testVoiceConnection,
     getVisionModels,
     testVisionConnection,
+    getImageModels,
+    testImageConnection,
     getAssistantModels,
     testAssistantConnection,
     getProactiveSnapshot,
