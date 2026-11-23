@@ -1,7 +1,9 @@
 import { createError, getRouterParam } from "h3";
-import { resolveChatModelSettings } from "../../../../utils/chat-model-config";
+import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../utils/chat-model-config";
 import { resolveCharacterImageApiKey } from "../../../../utils/credential-encryption";
+import type { ImageGenerationSettings } from "../../../../utils/image-generation";
 import { buildImageGenerationEndpoint, describeImageGatewayRefusal, parseImageResponse, resolveImageGenerationSettings } from "../../../../utils/image-generation";
+import { isImageGenerationModel } from "../../../../../shared/utils/vision-models";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
@@ -35,6 +37,67 @@ function describeThrottled(detail: string): string {
     return "画图账号还没实名或没开通这个模型。到服务商控制台办完，再回来测。";
   }
   return "画图服务返回 429：被限流，或账号还没开通这个模型。稍等再试，或换一个模型。";
+}
+
+type CatalogProbe = { ok: true; models: string[] } | { ok: false };
+
+/**
+ * 失败时顺手拉一次 `GET /models`，用来分清两种完全不同的病因：
+ *
+ *   - **模型名不对**：清单里根本没有它 —— 给出清单里的画图模型，照抄一个就行；
+ *   - **模型对、路由没开**：清单里有它，但 `/images/generations` 被分组拦下。
+ *     `GET /models` 返回的是这家的全局清单，能看到不等于这个令牌分组调得动 ——
+ *     这正是「能获取模型、一测就 403」的成因，光看状态码分不出来。
+ *
+ * 只在失败路径调用：不花钱、几百毫秒。拉不到就 `ok:false`，保留原来那句话 ——
+ * 诊断本身不该变成新的失败点。
+ */
+async function probeImageCatalog(settings: ImageGenerationSettings): Promise<CatalogProbe> {
+  try {
+    const endpoint = buildModelsEndpoint(settings.apiBaseUrl);
+    const response = await fetch(endpoint, {
+      headers: { authorization: "Bearer " + settings.apiKey, accept: "application/json" },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return { ok: false };
+    const payload = await response.json() as unknown;
+    const root = payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {};
+    const rawList = Array.isArray(payload) ? payload : Array.isArray(root.data) ? root.data : [];
+    const models: string[] = [];
+    for (const item of rawList) {
+      const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : null;
+      const id = record && typeof record.id === "string"
+        ? record.id
+        : record && typeof record.name === "string"
+          ? record.name
+          : typeof item === "string" ? item : "";
+      const model = id.trim();
+      if (model) models.push(model);
+    }
+    return { ok: true, models };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** 网关拒绝时把话说到能动手的程度：要么换模型名，要么换路（分组 / 官方地址）。 */
+async function explainGatewayRefusal(settings: ImageGenerationSettings, fallback: string): Promise<string> {
+  const catalog = await probeImageCatalog(settings);
+  if (!catalog.ok) return fallback;
+
+  const target = settings.model.trim().toLowerCase();
+  const knownHere = catalog.models.some((model) => model.trim().toLowerCase() === target);
+  if (knownHere) {
+    return `「${settings.model}」确实在这家的模型清单里，但 /images/generations 这条路由你的令牌分组没开通 —— 清单是全局的，看得到不等于调得动（这类中转的画图接口要单独的 image 类型渠道，光有 chat 渠道不够）。两条路：在中转后台把这个模型加进当前分组，或者把地址换成服务商官方地址（MiniMax 是 https://api.minimaxi.com/v1，OpenAI 是 https://api.openai.com/v1）。`;
+  }
+
+  const imageModels = catalog.models.filter(isImageGenerationModel).slice(0, 6);
+  const sample = imageModels.length
+    ? `清单里的画图模型有：${imageModels.join("、")}。`
+    : "清单里一个画图模型都没有，这家大概不提供画图。";
+  return `「${settings.model}」不在这家的模型清单里，模型名八成不对。${sample}照抄一个再测；如果确实没有对得上的，就换一家支持生图的服务。`;
 }
 
 /**
@@ -143,13 +206,14 @@ export default defineEventHandler(async (event): Promise<ProbeResult> => {
     /**
      * 401/403 先看服务商原话：中转常把「分组没有这个模型的渠道」包装成 403
      * （`this group is not served by this gateway`），那不是 Key 的事。
-     * 只有认不出网关话术时，才按状态码说鉴权 / 权限。
+     * 认出来之后再去清单里对一次模型名 —— 「能获取模型、一测就 403」这种组合，
+     * 只有比过清单才知道该改模型名还是该换路。
      */
     const gatewayRefusal = result.status === 401 || result.status === 403
       ? describeImageGatewayRefusal(result.detail)
       : null;
     const message = gatewayRefusal
-      ? gatewayRefusal
+      ? await explainGatewayRefusal(settings, gatewayRefusal)
       : result.status === 401 || result.status === 403
         ? "画图 Key 无效或没有该模型的权限（注意：它和对话、看图的 Key 是分开存的）。"
         : result.status === 402
