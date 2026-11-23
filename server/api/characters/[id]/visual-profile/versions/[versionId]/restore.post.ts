@@ -1,7 +1,7 @@
 import { createError } from "h3";
-import { requireActorUserId } from "../../../../../utils/auth";
-import { requireUuid, readTrimmedString } from "../../../../../utils/local-api";
-import { getPrisma } from "../../../../../utils/prisma";
+import { requireActorUserId } from "../../../../../../utils/auth";
+import { requireUuid, readTrimmedString } from "../../../../../../utils/local-api";
+import { getPrisma } from "../../../../../../utils/prisma";
 
 type Snapshot = { coreAppearance?: unknown; corePrompt?: unknown; negativePrompt?: unknown; outfits?: unknown };
 
