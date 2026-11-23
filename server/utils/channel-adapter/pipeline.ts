@@ -4102,17 +4102,15 @@ async function runChannelTurn(input: {
         console.warn("[image] published visual profile unavailable", error instanceof Error ? error.message : String(error));
       }
       /**
-       * 参考图只在「已经发布过正式版本」时用。
-       *
-       * 参考素材目前不在版本快照里（设计文档里记着这条），所以草稿发布与否管不到它们；
-       * 用「有没有正式版本」当闸门，至少保证「没发布就完全不碰档案」这条不变。
+       * 参考图只读取当前正式版本快照中记录的素材 ID。
+       * 新上传的草稿素材不会提前影响正式形象；旧版本没有 assets 字段时也不回退到实时素材库。
        */
       let visualReferences: VisualReference[] = [];
       if (publishedVisualSnapshot) {
         try {
-          visualReferences = await readVisualProfileReferences(prisma, input.characterId);
+          visualReferences = await readVisualProfileReferences(prisma, input.characterId, publishedVisualSnapshot.assets);
         } catch (error) {
-          console.warn("[image] 读取参考图失败", error instanceof Error ? error.message : String(error));
+          console.warn("[image] 读取正式版本参考图失败", error instanceof Error ? error.message : String(error));
           visualReferences = [];
         }
       }
