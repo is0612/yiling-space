@@ -1,5 +1,5 @@
 import { resolveImageRequest, isAutonomousImageEligible, validateImageScenePrompt, type ImageRequestResolution } from "../image-request-policy";
-import { imageDecisionReply, imageStatusReply, blockedImageReply, type ImageAttemptRecord, type ImageGenerationRecord } from "../image-execution";
+import { imageDecisionReply, imageStatusReply, blockedImageReply, imageExecutionLimitForPrompt, type ImageAttemptRecord, type ImageGenerationRecord } from "../image-execution";
 import { inspectGeneratedImageAsset, readGeneratedImageFacts } from "../image-assets";
 import { sanitizeGeneratedImageFacts, type GeneratedImageFacts } from "../image-facts";
 import { createMediaVisionBudget, isExplicitMediaQuestion, type MediaVisionBudget } from "../media-questions";
@@ -30,7 +30,7 @@ import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
 import { LOCAL_IMAGE_PROVIDER } from "../../../shared/utils/local-image-engine";
 import { translateImagePromptToTags } from "../image-prompt-translation";
-import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem, type ConversationQuotedMessage } from "../chat-reply";
+import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem, type ConversationQuotedMessage, buildModelFailureReply, MODEL_FAILURE_FALLBACK_REPLY } from "../chat-reply";
 import {
   formatMentionContent,
   conversationSourcePolicy,
@@ -1234,6 +1234,8 @@ async function persistChannelTurnResult(input: {
   imageAttempt?: ImageAttemptRecord;
   imageGeneration?: ImageGenerationRecord;
   imageStatusOverride?: boolean;
+  /** 模型整轮失败、这条是她替你发的兜底话时，记下失败原因（脱敏后只留前 120 字）。 */
+  modelFailure?: string | null;
   replySegments: string[];
   goals: ChannelTurnGrowthPreparation["goals"];
   expressionHabits: ChannelTurnGrowthPreparation["expressionHabits"];
@@ -1243,7 +1245,7 @@ async function persistChannelTurnResult(input: {
     prisma, existingConversation, isGroup, globalScope, ownerPrivateScopeId, isOwnerTurn, turn,
     conversationScopeId, groupId, title, messages, privateMessagesRecorded, now, assistantAt, generated,
     observedReadOnlyAiEvidence, privateHistorySelection, selfUnderstanding, replyFaces, replySticker,
-    replyVoice, replyImage, replySegments, goals, expressionHabits, preferences, imageOffer, imageAttempt, imageGeneration, imageStatusOverride,
+    replyVoice, replyImage, replySegments, goals, expressionHabits, preferences, imageOffer, imageAttempt, imageGeneration, imageStatusOverride, modelFailure,
   } = input;
   return await prisma.$transaction(async (tx) => {
     let conversation = existingConversation;
@@ -1371,7 +1373,15 @@ async function persistChannelTurnResult(input: {
           metadata: {
             source: "channel",
             platform: turn.platform,
-            generatedBy: imageStatusOverride ? "image-execution-status" : generated.localHistoryReceipt ? "local-history-receipt" : "llm",
+            generatedBy: imageStatusOverride ? "image-execution-status"
+              : modelFailure ? "model-failure-fallback"
+                : generated.localHistoryReceipt ? "local-history-receipt" : "llm",
+            /**
+             * 这条正文不是模型写的，是服务端替她发的兜底话。
+             * 必须留痕：下一轮 `recentMessages` 会把这条当成她的原话读，事后也得能看出
+             * 「她那句话说不出来」而不是「她真的这么说话」。
+             */
+            ...(modelFailure ? { modelFailure: { reason: modelFailure.slice(0, 120) } } : {}),
             ...(observedReadOnlyAiEvidence ? { excludeFromGrowth: true, growthExclusionReason: "read_only_ai_context" } : {}),
             model: generated.model,
             provider: generated.provider,
@@ -1869,7 +1879,9 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
         ...(ctx.imageCapable ? { imageExecution: { plannedThisTurn: imagePlanned,
           status: ctx.imageDecision.status, trigger: ctx.imageDecision.trigger, requested: ctx.imageDecision.requested,
           ...(ctx.imageDecision.blockedReason ? { blockedReason: ctx.imageDecision.blockedReason } : {}),
-          ...(ctx.imageDecision.todayCount !== null ? { todayCount: ctx.imageDecision.todayCount } : {}), dailyLimit: ctx.imageDecision.limit,
+          ...(ctx.imageDecision.todayCount !== null ? { todayCount: ctx.imageDecision.todayCount } : {}),
+          // limit 0 = 不限张数，不给模型这个数字（见 imageExecutionLimitForPrompt）。
+          ...imageExecutionLimitForPrompt(ctx.imageDecision.limit),
           latestAssistant: recentStoredMessages.find(row => row.role === "ASSISTANT")
             ? readImageExecutionState(recentStoredMessages.find(row => row.role === "ASSISTANT")!.metadata) : "none" as const,
         } } : {}),
@@ -3443,6 +3455,13 @@ async function runChannelTurn(input: {
   if (!modelPrep.ok) return modelPrep.result;
   const chatSettings = modelPrep.chatSettings;
   const apiKey = modelPrep.apiKey;
+  /**
+   * 兜底话落库时要写 `provider`，但那时没有模型响应可读。
+   * 与 `chat-reply` 的口径一致：取地址里的主机名，取不到就留空，不猜服务商名字。
+   */
+  const modelProviderHost = (() => {
+    try { return new URL(chatSettings.apiBaseUrl).hostname; } catch { return ""; }
+  })();
   const voiceApiKey = modelPrep.voiceApiKey;
   const asrApiKey = modelPrep.asrApiKey;
   const imageApiKey = modelPrep.imageApiKey;
@@ -3811,6 +3830,13 @@ async function runChannelTurn(input: {
     },
   };
   let generated: Awaited<ReturnType<typeof generateGroupContextReply>>;
+  /**
+   * 这一轮是不是「模型彻底失败、改发了兜底话」。
+   *
+   * 一旦非空，说明 `generated` 里除 reply 以外全是空的，下游必须让路：不能再按
+   * 「她本来想发语音/想画图」去执行 —— 那些意图根本没生成出来。
+   */
+  let modelFailure: string | null = null;
   const observedReadOnlyAiEvidence = isGroup && (
     messages.some(row => Boolean(row.quotedMessage?.content) && conversationSourcePolicy(row.quotedMessage).excludeFromGrowth === true)
     || [...backgroundLines, ...(input.group?.analysisBackground ?? [])].some(row =>
@@ -3942,12 +3968,33 @@ async function runChannelTurn(input: {
     });
   } catch (error) {
       if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: [...growthReads.values()] });
+    const reason = (error instanceof Error ? error.message : "model_error").slice(0, 200);
     await recordModelUsage({
       kind: "channel", model: chatSettings.model, characterId: input.characterId,
       channelBindingId: input.bindingId,
-      metadata: { status: "failed", reason: "model_generation_failed", durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
+      metadata: { status: "failed", reason: "model_generation_failed", error: reason.slice(0, 120), durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
     });
-    return { status: "ignored", reason: (error instanceof Error ? error.message : "model_error").slice(0, 200) };
+    /**
+     * 模型整轮没给出可用回复 —— 什么时候可以就此沉默？
+     *
+     * 只有「这轮本来就可以不说」的群聊可以：没人点名、只是搭话，模型挂了就当这轮没听见，
+     * 用户看不出区别，也不会有人在等一句回答。
+     *
+     * 私聊和群里被 @ 的轮次**必须**留一句：2026-11-24 深夜两次「她没回复」就是模型返回空
+     * content、重试仍空，整轮被丢掉，私聊里一个字都没有。用户看到的不是「模型故障」，
+     * 而是「她不理我」。这里改发一句兜底话，把「没声音」变成「她说她卡了一下」。
+     *
+     * 兜底只影响这一轮的文字：不画图、不发语音、不带表情与梗（见下方 `modelFailure` 各处让路），
+     * 因为那些意图本来该由模型给出，现在没有。
+     */
+    if (allowSilent) return { status: "ignored", reason };
+    modelFailure = reason;
+    generated = buildModelFailureReply({ reply: MODEL_FAILURE_FALLBACK_REPLY, model: chatSettings.model, provider: modelProviderHost });
+    console.warn("[channel] 模型没给出回复，改发兜底话 " + JSON.stringify({
+      characterId: input.characterId,
+      isGroup,
+      reason: reason.slice(0, 80),
+    }));
   }
 
   let imageStatusOverride = false;
@@ -3961,7 +4008,8 @@ async function runChannelTurn(input: {
     imageStatusOverride = true;
   };
   const enforcedImageReply = imageRequest.kind === "status" ? imageStatusReply(recentStoredMessages) : imageDecisionReply(imageDecision);
-  if (enforcedImageReply && generated.action === "reply") useImageStatusReply(enforcedImageReply);
+  // 兜底话已经在路上了：画图执行状态是另一件事，别把「模型挂了」改写成「图已经发你了」。
+  if (enforcedImageReply && generated.action === "reply" && !modelFailure) useImageStatusReply(enforcedImageReply);
 
   if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: reconcileGrowthReadUsage([...growthReads.values()], {
     preferences: generated.usedPreferenceIds, language: generated.usedExpressionHabitIds, goals: generated.usedGoalIds,
@@ -3988,7 +4036,8 @@ async function runChannelTurn(input: {
   });
   const generationDurationMs = Date.now() - generationStartedAt;
   // 在落消息/发送前保存模型阶段结果，渠道发送失败也能从助手日志打开本轮详情。
-  await recordModelUsage({
+  // 兜底话这一轮已经由 catch 记过一条 failed，不能再补一条「success」把失败盖掉。
+  if (!modelFailure) await recordModelUsage({
     kind: "channel", model: generated.localHistoryReceipt ? "local-history-lookup" : chatSettings.model, usage: toUsageTokens(generated.usage),
     characterId: input.characterId, channelBindingId: input.bindingId,
     ...(existingConversation ? { conversationId: existingConversation.id } : {}),
@@ -4030,6 +4079,7 @@ async function runChannelTurn(input: {
    * 发不出去怎么办由渠道兜底（合成失败退回发文字，见 serve.ts）。
    */
   const replyVoice = generated.action === "reply"
+    && !modelFailure
     && voicePlanned
     && canSpeakReply(generated.reply);
   /**
@@ -4064,7 +4114,19 @@ async function runChannelTurn(input: {
   let imageAttempt: ImageAttemptRecord | undefined = (imageDecision.status === "blocked" && imageDecision.requested) || imageRequest.kind === "declined"
     ? { status: "blocked", reason: imageDecision.blockedReason, trigger: imageDecision.trigger,
         sourceMessageId: imageRequest.sourceMessageId, authorOpenId: imageRequest.authorOpenId, todayCount: imageDecision.todayCount, limit: imageDecision.limit } : undefined;
-  if (generated.action === "reply" && imagePlanned && imageSettings) {
+  if (generated.action === "reply" && imagePlanned && imageSettings && modelFailure) {
+    /**
+     * 模型这轮没接住，画图也一起放弃。
+     *
+     * 「被明确要求就一定画」说的是模型**忘了填画面描述**那种情况（下面用原话兜底）。
+     * 整轮失败时连承接语都没有，再凭一句原话去画，最可能的结果是「她说她卡了一下，
+     * 然后发来一张说不清来历的图」—— 比不画更难解释。下一句她要画，照样会画。
+     */
+    imageAttempt = { status: "blocked", reason: "model_failure", trigger: imageDecision.trigger,
+      sourceMessageId: imageRequest.sourceMessageId, authorOpenId: imageRequest.authorOpenId,
+      todayCount: imageDecision.todayCount, limit: imageDecision.limit };
+    console.warn("[image] 模型本轮失败，画图一并跳过", { trigger: imageDecision.trigger });
+  } else if (generated.action === "reply" && imagePlanned && imageSettings) {
     const source = confirmedImagePrompt ? "confirmed_offer" as const : generated.imagePrompt ? "model" as const : "request_subject" as const;
     const candidate = confirmedImagePrompt || generated.imagePrompt || imageRequest.subject || "";
     const validation = validateImageScenePrompt(candidate, { requestSubject: imageRequest.subject,
@@ -4200,6 +4262,7 @@ async function runChannelTurn(input: {
     imageAttempt,
     imageGeneration,
     imageStatusOverride,
+    ...(modelFailure ? { modelFailure } : {}),
     ...(!imagePlanned && !imageForced && imageSettings && messages.length === 1 && generated.imageOffer
       && imageRequest.kind !== "status" && imageRequest.kind !== "declined"
       ? { imageOffer: { prompt: generated.imageOffer, authorOpenId: messages[0]!.authorOpenId } } : {}),

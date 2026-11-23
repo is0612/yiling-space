@@ -1080,15 +1080,40 @@ async function persistGeneratedImage(
  * 与云端那套的差别只在「怎么拿到一张图」，之后的缩放、落盘、记账完全相同。
  *
  * 三件事在这里定死：
- *   1. **不用参考图**。ComfyUI 的图生图是 VAE 编码原图再降噪，改动幅度 0.5~0.6 时
- *      构图、姿势、取景都会跟着立绘走 —— 出来还是那张站姿，只是背景换了。
- *      宁可按文字画，也不要每张图都是同一个立绘的翻版。角色一致性应该靠 LoRA
- *      （Anima 官方支持），那是另一件事。
+ *   1. **有形象档案就走图生图**。ComfyUI 的图生图是 VAE 编码参考图再降噪：
+ *      改动幅度小会连构图、姿势一起搬过来，改动大又保不住长相。所以只拿**一张**
+ *      （优先正面视图，其次标准形象），denoise 默认 0.6，可用
+ *      `COMFYUI_REFERENCE_DENOISE` 调。没有档案时照旧纯文生图。
  *   2. **中文要翻**：她自己写的那段（场景）会按英文标签写，但形象档案里的中文外貌
  *      是服务端拼进来的，她看不见、翻不了。所以由调用方注入 `translatePrompt`，
  *      在送进引擎之前用这个角色自己的聊天模型翻一遍；翻不动再退回原文。
  *   3. **不花钱但很慢**：一张十几秒到一分钟，超时给到 4 分钟（首次要加载 3.9G 权重）。
  */
+const REFERENCE_DENOISE_DEFAULT = 0.6;
+function readReferenceDenoise(): number {
+  const raw = Number(process.env.COMFYUI_REFERENCE_DENOISE);
+  return Number.isFinite(raw) ? Math.min(0.85, Math.max(0.3, raw)) : REFERENCE_DENOISE_DEFAULT;
+}
+
+/**
+ * 挑一张参考图。
+ *
+ * 只用一张：ComfyUI 的图生图是一条 latent，塞四张会变成四个视角各出一张。
+ * 正面视图最接近「站立/半身」的常见构图；只有标准像时退而用它。
+ */
+function pickLocalReference(references?: ImageReferenceInput[]): ImageReferenceInput | null {
+  if (!references?.length) return null;
+  return references.find(reference => reference.label.includes("正面"))
+    ?? references.find(reference => reference.label.includes("标准"))
+    ?? references[0] ?? null;
+}
+
+function referenceFilename(mime: string): string {
+  if (mime === "image/jpeg" || mime === "image/jpg") return "reference.jpg";
+  if (mime === "image/webp") return "reference.webp";
+  return "reference.png";
+}
+
 async function generateWithLocalEngine(input: {
   settings: ImageGenerationSettings;
   prompt: string;
@@ -1099,12 +1124,7 @@ async function generateWithLocalEngine(input: {
   let { positive, negative } = toAnimaPromptParts(input.prompt);
   const [width, height] = (input.settings.size.split("x").map(Number) as [number, number]);
 
-  if (input.references?.length) {
-    console.warn("[image] 本机引擎这次不用参考图（图生图会把立绘的姿势一起搬过来）", {
-      characterId: input.characterId,
-      references: input.references.length,
-    });
-  }
+  const reference = pickLocalReference(input.references);
 
   /**
    * 中文 → 英文标签。
@@ -1129,6 +1149,14 @@ async function generateWithLocalEngine(input: {
   }
 
   const startedAt = Date.now();
+  const denoise = reference ? readReferenceDenoise() : undefined;
+  if (reference) {
+    console.log("[image] 本机引擎启用形象档案参考图（图生图）", {
+      characterId: input.characterId,
+      label: reference.label,
+      denoise,
+    });
+  }
   const result = await generateImageWithComfy({
     baseUrl: input.settings.apiBaseUrl,
     model: input.settings.model,
@@ -1137,6 +1165,10 @@ async function generateWithLocalEngine(input: {
     negative,
     width,
     height,
+    ...(reference ? {
+      referenceBuffer: { buffer: reference.buffer, filename: referenceFilename(reference.mime) },
+      denoise,
+    } : {}),
   });
   if (!result.ok) {
     // 引擎没开是最常见的一种，原话已经带了「确认 启动Anima.bat 跑着」，直接交给调用方。
@@ -1146,8 +1178,8 @@ async function generateWithLocalEngine(input: {
 
   const persisted = await persistGeneratedImage({ buffer: result.buffer, mime: result.mime }, input.characterId, input.settings);
   if (!persisted.ok) return persisted;
-  console.log("[image] local engine " + JSON.stringify({ elapsedMs: result.elapsedMs, seed: result.seed, mode: result.mode }));
-  return { ok: true, mode: "text_to_image", image: persisted.image };
+  console.log("[image] local engine " + JSON.stringify({ elapsedMs: result.elapsedMs, seed: result.seed, mode: result.mode, denoise: denoise ?? 1 }));
+  return { ok: true, mode: result.mode, image: persisted.image };
 }
 
 /* ────────────────────────────── 落库痕迹 ────────────────────────────── */

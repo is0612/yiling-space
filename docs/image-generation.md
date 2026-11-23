@@ -139,7 +139,17 @@ IMAGE_PROVIDER=        # 留空按地址里有没有 minimax 自动判断
 （`composePublishedVisualPrompt`），她看不到、也就翻不了。所以 `generateImage` 还接受一个
 `translatePrompt` 回调：本地引擎发现有中文，就用**她自己的聊天模型**把正/负两段翻成英文标签
 再送进 ComfyUI（`image-prompt-translation.ts`，进程内按原文缓存）。云端不注入这个回调 ——
-那些服务商读得懂中文，多翻一次只会偏离原描述。翻失败按原文发，不阻断出图。
+那些服务商读得懂中文，多翻一次只会偏离原描述。
+
+翻译这一环有两层保险（2026-11-24）：**解析宽容**（两行协议、JSON 对象、代码围栏、中文标签名、
+前面夹一句解释都认）、**失败重问一次**（把第一次的坏输出贴回去，只要求重写成两行；请求本身抛错
+也重问）。日志会把「第一次没拿到可用结果」和「重试后仍不可用」分开记，事后能看出是模型跑偏还是
+接口挂了。缓存只存成功结果 —— 模型抖一下不该让接下来几十张图都用中文硬送。两次都失败时仍按
+原文发，不阻断出图：这是原有约定，代价是那张图可能和描述无关（中文被 CLIP 当噪声），取舍是
+「有一张不太对的图」胜过「整轮哑火」。
+
+回归：`yarn test:image-prompt-translation` 覆盖答对不重问、答坏救回来、请求抛错重问、两次都坏退回原文、
+失败不进缓存；`yarn test:image-generation` 覆盖各种坏输出形状。
 
 ### 她记得自己画过（`hadImage`）
 
@@ -151,7 +161,7 @@ IMAGE_PROVIDER=        # 留空按地址里有没有 minimax 自动判断
 
 ### 图片资产、引用和按需回看
 
-新生成记录在 `metadata.image.generation` 保存实际清洗后提交的 prompt、model、provider、generatedAt 与固定模式 `text_to_image`；`imageAttempt` 另记触发来源、请求消息和提示词来源。独立图片的真实平台消息 ID 存在 `replyDelivery.image.externalMessageId`，不写到整轮助手消息的 `externalMessageId`，避免与入站幂等键混淆。提醒被抑制时合并回执，不能丢掉图片送达事实。
+新生成记录在 `metadata.image.generation` 保存实际清洗后提交的 prompt、model、provider、generatedAt 与**实际走的** `mode`（`text_to_image` / `image_to_image`，见下文本机引擎）；`imageAttempt` 另记触发来源、请求消息和提示词来源。独立图片的真实平台消息 ID 存在 `replyDelivery.image.externalMessageId`，不写到整轮助手消息的 `externalMessageId`，避免与入站幂等键混淆。提醒被抑制时合并回执，不能丢掉图片送达事实。
 
 引用先通过网关验证作者与会话，再按角色、绑定、外部会话和实际 sent 图片 ID 查询资产。同 ID 多条命中或跨范围即拒绝，不按昵称猜图；旧图没有 ID 关联也不推测回填。模型只收到安全图片事实，不收到文件路径、传输 URL、QQ 或平台 ID。实际 prompt 是意图，不证明画面；只有成功视觉描述才是观察证据。
 
@@ -164,6 +174,16 @@ IMAGE_PROVIDER=        # 留空按地址里有没有 minimax 自动判断
 如果当前角色已经发布形象档案，群聊与私聊共用的 `channel-adapter/pipeline.ts` 会在本轮场景提示词通过校验后，读取该角色 `currentPublishedRevision` 对应的不可变快照，并由 `visual-profile-prompt.ts` 统一组合：核心外貌、核心提示词、默认造型、负面提示词和本轮场景。只读正式快照，不读正在编辑的 profile 字段或草稿；没有正式版本时只用本轮场景。读取异常会记服务端警告并回退，不会借用其他角色的档案。
 
 默认造型只在用户没有明确指定服装时追加；当场景明确要求换装或指定服饰时，以本轮要求为准，不把默认服装硬塞进去。标准形象与三视图会作为参考图一并发出，但提示词里写死了「只用来确定长相，服装、姿势、表情、视角和背景都不要照搬」，避免模型照抄某张参考图的站姿。
+
+### 本机引擎也吃参考图（2026-11-24）
+
+4 张参考图一路算到 `generateImage`，`generateWithLocalEngine` 却只把 prompt 送进 ComfyUI，日志写的是 `本机引擎这次不用参考图 { references: 4 }`。结果：云端出图长着一张脸，换本机引擎就换一个人，而 `imageGeneration.mode` 还硬编码成 `text_to_image` —— 记录上是「没用参考图」，可她已经在说「这就是我」。
+
+现在本地这条路会挑一张做图生图。**只挑一张**：ComfyUI 的图生图是一条 latent，塞四张会变成四个视角各出一张；优先标签里带「正面」的，其次「标准」，再退到第一张。流程是 `/upload/image` → `LoadImage` → `ImageScaleToTotalPixels` → `VAEEncode` → `KSampler(denoise<1)`。
+
+`denoise` 由 `COMFYUI_REFERENCE_DENOISE` 控制，夹在 0.3~0.85，默认 0.6。太低只是把参考图糊一遍、场景不生效；太高等于没给参考图，脸又飘了。`mode` 现在记真实值，所以她下次说「用了我的形象图」时，这句话能被 `metadata.image` 核对。
+
+回归：`yarn test:image-generation` 断言 `/upload/image` 被调用、图里出现 `LoadImage` 与 `VAEEncode`、`denoise` 落在区间内、`mode === "image_to_image"`。
 
 ## 存哪、什么时候清
 
@@ -215,6 +235,7 @@ OSS（`hailuo-image-*.oss-cn-wulanchabu.aliyuncs.com`）。出现过一次
 
 ## 回归测试
 
-`yarn test:image-generation`（已进 `unit-suite`）：判定、概率/冷却/每日上限、参考图 edits multipart、MiniMax `subject_reference`、路由缺失与参数错误回退、实际 mode 和空参考图说明清理，
+`yarn test:image-generation`（已进 `unit-suite`）：判定、概率/冷却/每日上限、参考图 edits multipart、MiniMax `subject_reference`、路由缺失与参数错误回退、实际 mode 和空参考图说明清理、
+本机引擎图生图的 `/upload/image` + `LoadImage`/`VAEEncode` 与 `denoise` 区间、
 画面描述清洗、配置优先级、响应解析（含部分失败与 `base_resp`）、落库痕迹、DTO 透传。
 不联网 —— 真调接口要凭据而且要花钱。

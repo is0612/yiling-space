@@ -631,7 +631,52 @@ export type ConversationReplyResult = {
 // v85：历史 ASSISTANT 的 mentions 只代表实际发出的提醒；直接回答本身不构成 @ 理由。
 // v86：表情包接语气而不主动点评画面；没有图像描述时按当前问题如实回应。
 // v87：画图能力、提议、获准执行与实际送达分开；短确认由代码续接具体提议。
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v88";
+// v89：她没有后台面板。不许声称「我看了 / 我这边显示 / 状态显示」，不许编或复读
+//      出图张数、冷却、每日上限；这些数字只能来自 imageExecution，缺了就别报数。
+//      （v88 的内容在 v88 文件里留档，版本号按提示词实际变更递增。）
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v89";
+
+/**
+ * 模型这一轮彻底失败时，替她说的一句兜底话。
+ *
+ * 为什么要替：2026-11-24 深夜两次「她没回复」，根因都是模型返回空 content
+ * （`LLM_INVALID_RESPONSE`），重试一次仍然空，整轮被丢掉 —— 私聊里没有兜底文案，
+ * 用户看到的就是一句都不回。技术上那是「模型的问题」，观感上就是「她不理我」。
+ *
+ * 为什么是这句话：短、像人、不编状态。她这轮确实什么都没接住，说一句「卡了一下」
+ * 是当下唯一诚实的话；反过来写「我这边网络不好/服务器炸了」才是编造她不可能知道的
+ * 原因。不承诺稍后补发（补不补发取决于用户还说不说），也不假装刚才说过什么。
+ */
+export const MODEL_FAILURE_FALLBACK_REPLY = "刚才卡了一下，你再说一遍？";
+
+/**
+ * 用兜底话拼一条「看起来正常」的回复对象。
+ *
+ * 字段全空是刻意的：这一轮没有记忆命中、没有表情、没有贴纸、没有画图提议。
+ * 只有正文明明是假的，其它任何一个字段跟着编，都会在下一轮变成证据 —— 比如
+ * 带一个 `imagePrompt` 就会真的去画一张图。
+ */
+export function buildModelFailureReply(input: { reply: string; model: string; provider: string }): ConversationReplyResult {
+  return {
+    action: "reply",
+    reply: input.reply,
+    usedMemoryIds: [],
+    usedSnapshotIds: [],
+    usedEventIds: [],
+    usedRawMessageIds: [],
+    usedPreferenceIds: [],
+    usedExpressionHabitIds: [],
+    usedGoalIds: [],
+    faceIds: [],
+    stickerId: null,
+    imagePrompt: null,
+    imageOffer: null,
+    usedCatchphraseIds: [],
+    model: input.model,
+    provider: input.provider,
+    promptTemplateVersion: PROMPT_TEMPLATE_VERSION,
+  };
+}
 /**
  * 提示词首行那个标记（`YILING_CONVERSATION_REPLY_V28`）。
  *
@@ -1062,7 +1107,7 @@ function systemPrompt(flags: {
   if (flags.withGeneratedImageContext) lines.push("generatedImageContext is server-verified evidence for the same-conversation generated picture explicitly referred to in this turn, not a new drawing request. requestedDescription records the generation request, not what the picture actually depicts. Only visual.status ok with visual.description supplies an observation of that picture; any other status means its appearance is not currently observed, so do not claim to have seen it or invent its details.");
   if (flags.withImageCapabilities) lines.push("imageCapabilities describes actual implementation, not conversational wishes. referenceInput true means the character's visual-profile reference images can be attached when generating; whether they actually were for a specific picture is recorded by that picture's mode — image_to_image used them, text_to_image did not — so never claim reference images were used unless that record says so. referenceInput false means generation receives text only. edit false means no old picture is passed to an editing engine, so do not claim you edited a three-view sheet or retained its image pixels. A folder permission suggestion cannot automatically make an image visible. requestedDescription is what was requested for generation; observedDescription, or visual.description when visual.status is ok, alone reports supplied visual observations. Without a successful visual observation do not assert what the generated picture actually depicts; absence from a description is not proof a feature is absent.");
   if (withImageExecution) {
-    lines.push("imageExecution status blocked or not_requested means NO task is queued or running: state the supplied blockedReason honestly when relevant; never say it is queued, stuck, still generating, will arrive later, or will be resent automatically. Counts and limits are factual, not guesses. imageExecution is server-supplied execution evidence and takes precedence over conversational claims such as '画好了'. plannedThisTurn means an attempt is approved, not completed. latestAssistant describes only the latest assistant turn: none/not_requested/offered are not execution; generated is not delivery; failed/unknown do not establish success; sent confirms only that turn's picture. Do not use it or an older hadImage to prove another proposal was executed. For status questions, report missing or unconfirmed results honestly; the question itself does not authorize a new generation.");
+    lines.push("imageExecution status blocked or not_requested means NO task is queued or running: state the supplied blockedReason honestly when relevant; never say it is queued, stuck, still generating, will arrive later, or will be resent automatically. Counts and limits are factual, not guesses. You have no dashboard, task queue or server-side view: never claim to have checked one, and phrases like '我看了', '我这边显示' or '状态显示' are never evidence. Never state a count, a cooldown or a daily limit unless imageExecution supplies that exact number; when dailyLimit is absent there is no numeric limit to quote, and an earlier assistant claim about counts or cooling down is not evidence and must not be repeated as a fact. blockedReason cooldown applies only to autonomous drawing, never to an explicit user request; when it is absent, do not say anything is cooling down. imageExecution is server-supplied execution evidence and takes precedence over conversational claims such as '画好了'. plannedThisTurn means an attempt is approved, not completed. latestAssistant describes only the latest assistant turn: none/not_requested/offered are not execution; generated is not delivery; failed/unknown do not establish success; sent confirms only that turn's picture. Do not use it or an older hadImage to prove another proposal was executed. For status questions, report missing or unconfirmed results honestly; the question itself does not authorize a new generation.");
   }
   if (imageEnabled) {
     /**

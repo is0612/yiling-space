@@ -137,6 +137,22 @@ const publishedSnapshot = computed<Record<string, unknown>>(() => {
 });
 const textOf = (value: unknown) => (typeof value === "string" ? value : "");
 
+/**
+ * 当前正式版本正在引用的素材。
+ *
+ * 服务端对这类素材直接 409：删了会让版本快照指向已失效的文件。既然按钮点不出结果，
+ * 就别让人点完才知道 —— 悬停有说明，点了也直接说清要先发布新版本。
+ */
+const lockedAssetIds = computed(() => {
+  const assets = publishedSnapshot.value.assets;
+  if (!Array.isArray(assets)) return new Set<string>();
+  return new Set(assets
+    .map(item => (item && typeof item === "object" ? (item as Record<string, unknown>).id : null))
+    .filter((id): id is string => typeof id === "string"));
+});
+const isLockedAsset = (assetId: string) => lockedAssetIds.value.has(assetId);
+const LOCKED_ASSET_HINT = "这张图正被当前正式版本使用。先上传替代图、保存并发布新版本，它才能删。";
+
 /** 与正式版本逐项比较，概览和核心形象右栏都用这份结果。 */
 const draftChanges = computed(() => {
   if (!profile.value?.currentPublishedRevision) {
@@ -349,13 +365,19 @@ async function uploadReference() {
 async function deleteReference(assetId: string) {
   const target = characterId.value;
   if (!target) return;
+  if (isLockedAsset(assetId)) {
+    ElMessage.warning(LOCKED_ASSET_HINT);
+    return;
+  }
   try {
     await api({ url: `/characters/${encodeURIComponent(target)}/visual-profile/assets/${encodeURIComponent(assetId)}`, method: "delete" });
     if (characterId.value !== target) return;
     ElMessage.success("参考图片已删除。");
     await loadProfile({ preserveEditor: true });
-  } catch {
-    ElMessage.error("删除失败，参考图片仍保留在档案中。");
+  } catch (error) {
+    // 409 的原文是「仍被当前正式版本引用，请先发布一个不再引用它的新版本」——
+    // 这才是用户需要知道的那句。吞掉它只留「删除失败」，等于把人卡在原地看着图删不掉。
+    ElMessage.error((error as { statusMessage?: string })?.statusMessage || "删除失败，参考图片仍保留在档案中。");
   }
 }
 
@@ -1179,8 +1201,10 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                   >
                   <button
                     class="vp-asset-delete"
+                    :class="{ 'is-locked': isLockedAsset(asset.id) }"
                     type="button"
-                    :aria-label="`删除 ${asset.label}`"
+                    :aria-label="isLockedAsset(asset.id) ? `删除 ${asset.label}（当前正式版本正在使用）` : `删除 ${asset.label}`"
+                    :title="isLockedAsset(asset.id) ? LOCKED_ASSET_HINT : `删除 ${asset.label}`"
                     @click="deleteReference(asset.id)"
                   >
                     <el-icon :size="12">
@@ -1587,6 +1611,9 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
   background: rgba(255, 255, 255, .94); color: var(--red); box-shadow: var(--sh-1); cursor: pointer;
 }
 .vp-asset-delete:hover { background: var(--red-soft); }
+/* 正式版本在用的图点不掉，降权比藏起来诚实：还在那儿，但一眼能看出不是现在能删的。 */
+.vp-asset-delete.is-locked { color: var(--dim); cursor: help; }
+.vp-asset-delete.is-locked:hover { background: rgba(255, 255, 255, .94); }
 .vp-asset-meta { display: block; padding: 6px 8px 7px; }
 .vp-asset-meta strong { display: block; overflow: hidden; color: var(--text); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .vp-asset-meta span { display: block; margin-top: 1px; color: var(--dim); font-size: 12px; line-height: 1.45; }

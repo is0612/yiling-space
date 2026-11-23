@@ -15,7 +15,7 @@ const payload = () => JSON.parse(request!.messages.find(row => row.role === "use
 try {
   output = { reply: "想试试画一只鲸鱼，你看呢？", imageOffer: " 蓝色鲸鱼\n跃出海面\u0000，日落光线 ", imagePrompt: "unapproved image" };
   const offered = await generateConversationReply(base);
-  assert.equal(offered.promptTemplateVersion, "conversation-retrieval-v88");
+  assert.equal(offered.promptTemplateVersion, "conversation-retrieval-v89");
   assert.equal(offered.imageOffer, "蓝色鲸鱼 跃出海面 ，日落光线");
   assert.equal(offered.imagePrompt, null, "proposal cannot become an unapproved image prompt");
   assert(system().includes("imageOffer only for a proposal you actually make in this reply"));

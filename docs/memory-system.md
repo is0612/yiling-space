@@ -285,6 +285,19 @@ Prisma 的 JSON 过滤器没有 `in`，上面两档写成 `OR` 两个 `equals`�
 - 恢复时回到移入回收站前的状态；普通状态编辑不能绕过回收站。
 - 永久删除仅能对回收站条目执行：删除当前 `MemoryItem`，但不改写已有快照。快照中已保存的内容副本和来源记录继续保留；来源外键置空后，来源标识仍保留以便解释历史版本。因此，永久删除当前条目不等于抹除所有历史快照中的相关文字。
 
+## 4.1 失效体检：让模型只提名，落库仍归人工（2026-11-24）
+
+过期记忆的伤害不像丢记忆那样明显：它照常被检索、被念出来，只是内容是错的。`memory_items` 里曾留着「她暂时看不到自己生成的图」「画图走 MiniMax 直连」两条 11-22 的临时状态，两天后仍在 ACTIVE，于是她在 11-24 23:35 连着三轮说「我看不到成品」。所以加了体检，但它**不自动改数据**。
+
+- 入口：`/growth/memory/long-term` 与 `/growth/memory/events` 各一个按钮，共用 `StaleMemoryAudit.vue`。`POST /characters/:id/memory-audit` 只读扫描，`POST /characters/:id/memory-audit/apply` 才落库。
+- 取哪些条目：可见性范围与 `memory-event-duplicates.ts` 的 `duplicateScope` 同一条规则（角色全局 / 主人私人 / 已 `VERIFIED` 且绑定本人的外埠身份），避免把别人的记忆摆到台面上。记忆按 `updatedAt desc` 取最多 200 条 `ACTIVE`；忆泡按 `dayKey` 区间，默认最近 7 天，最多 30 天。
+- 短 id 白名单：交给模型的是 `M1…M200` / `E1…E200`，返回后按白名单映射回 UUID。白名单外的 id、未知判决、空理由一律丢弃 —— 模型抄错一个字符就会删掉另一条记忆，这个代价不能赌。
+- 判决只有两种：`CONTRADICTED`（被后续事实推翻）与 `OBSOLETE`（当时成立、现在已经过去的临时状态）。不做 DUPLICATE —— 去重有独立的忆泡重复检查，混在一起会让体检变成第二个去重器。
+- 两条硬规则写在解析层，不只写进提示词：`confidence < 0.65` 丢弃；`RELATIONSHIP` / `PREFERENCE` 不接受 `OBSOLETE`。偏好和关系不会「因为时间过去」失效，只能被具体事实推翻。
+- 默认**不勾选任何一条**。apply 只动仍是 `ACTIVE` 的行：记忆 `INVALIDATED` + `validTo`，忆泡 `ARCHIVED`，两条路径都能恢复，并各写一条 `auditLog`（`memory.invalidated` / `memory.event_archived`）。
+
+判断标准是「宁可漏判，不要误删」：多留一条过期记忆，她会多说一句旧话；误删一条，她会真的忘掉。
+
 ## 5. 版本规则
 
 同一逻辑快照可以有多个版本。重新生成时创建下一个版本，旧版本标记为 superseded/已被替代并保留以便追溯。人工修正应保留修订审计；不得无痕覆盖历史版本。

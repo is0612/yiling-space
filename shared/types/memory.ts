@@ -303,6 +303,39 @@ export type MemoryEventDuplicatePayload = {
   pairsLimited: boolean;
 };
 
+// ── 失效体检 ───────────────────────────────────────────────────
+
+export type StaleMemoryKind = "MEMORY" | "EVENT";
+export type StaleMemoryVerdict = "CONTRADICTED" | "OBSOLETE";
+
+/** 一条被模型提名「可能已经失效」的记忆 / 忆泡。是否真清理由人决定。 */
+export type StaleMemoryItem = {
+  kind: StaleMemoryKind;
+  id: string;
+  /** 记忆分类或忆泡标题。 */
+  title: string;
+  content: string;
+  /** 时间 / 重要度这类辅助判断信息。 */
+  meta: string;
+  verdict: StaleMemoryVerdict;
+  reason: string;
+  confidence: number;
+};
+
+export type StaleMemoryAuditResult = {
+  scannedAt: string;
+  counts: {
+    memory: { active: number; scanned: number };
+    event: { active: number; scanned: number };
+  };
+  items: StaleMemoryItem[];
+};
+
+export type StaleMemoryApplyResult = {
+  memory: number;
+  event: number;
+};
+
 export type SnapshotGenerateResult = {
   queued: string[];
   skipped: string[];

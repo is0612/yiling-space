@@ -1102,6 +1102,11 @@ watch(id, () => {
                   value="INVALIDATED"
                 />
               </el-select>
+              <StaleMemoryAudit
+                :character-id="id || ''"
+                scope="memory"
+                @applied="refreshMemoryPage"
+              />
               <button
                 type="button"
                 class="tool-link"

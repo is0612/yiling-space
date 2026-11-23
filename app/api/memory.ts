@@ -7,6 +7,7 @@ import type {
   MemoryDayPage, MemoryDetail, MemoryEvent, MemoryEventDuplicatePayload, MemoryEventKnowledgeResult,
   MemoryExtractResult, MemoryExtractionPreview, MemoryItem, MemoryPage, MemoryStats,
   PrivateChatCursor, PrivateChatPayload, RecycleBinPage, SnapshotGenerateResult,
+  StaleMemoryApplyResult, StaleMemoryAuditResult, StaleMemoryKind,
 } from "#shared/types/memory";
 import type { SnapshotPage } from "#shared/types/snapshot";
 export type {
@@ -15,7 +16,7 @@ export type {
   MemoryCategory, MemoryEvent, MemoryEventScope, MemoryEventState, MemoryEventStatus,
   GroupChatGroup, GroupChatMessage, GroupChatPayload, PrivateChatChat, PrivateChatMessage, PrivateChatPayload, PrivateChatCursor,
   MemoryDayDetail, MemoryDayMessage, MemoryDayMessageGroup, MemoryDayMessages, MemoryDayPage, MemoryDayRow,
-  MemoryItem, MemoryPage,
+  MemoryItem, MemoryPage, StaleMemoryAuditResult, StaleMemoryItem,
 } from "#shared/types/memory";
 export type MemoryRow = MemoryItem;
 
@@ -462,6 +463,40 @@ export function createMemoryApi(request: ApiRequest) {
     });
   }
 
+  /**
+   * 记忆体检：让模型提名已经失效的长期记忆 / 忆泡。只读，不写任何状态。
+   * 结果必须由人勾选后再走 `applyStaleMemories`。
+   */
+  function auditStaleMemories(payload: {
+    characterId: string;
+    scopes?: StaleMemoryKind[];
+    /** 忆泡：只查这一天。 */
+    dayKey?: string;
+    /** 忆泡：最近 N 天（不给 dayKey 时生效，默认 7）。 */
+    rangeDays?: number;
+  }): Promise<StaleMemoryAuditResult> {
+    return request<StaleMemoryAuditResult>({
+      url: `${characterBase(payload.characterId)}/memory-audit`,
+      method: "post",
+      data: {
+        ...(payload.scopes ? { scopes: payload.scopes } : {}),
+        ...(payload.dayKey ? { dayKey: payload.dayKey } : {}),
+        ...(payload.rangeDays ? { rangeDays: payload.rangeDays } : {}),
+      },
+    });
+  }
+
+  function applyStaleMemories(payload: {
+    characterId: string;
+    items: Array<{ kind: StaleMemoryKind; id: string; reason?: string }>;
+  }): Promise<StaleMemoryApplyResult> {
+    return request<StaleMemoryApplyResult>({
+      url: `${characterBase(payload.characterId)}/memory-audit/apply`,
+      method: "post",
+      data: { items: payload.items },
+    });
+  }
+
   return {
     getCharacter,
     listMemories,
@@ -489,6 +524,8 @@ export function createMemoryApi(request: ApiRequest) {
     listMemoryProgress,
     listMemoryEventDuplicates,
     archiveMemoryEventDuplicate,
+    auditStaleMemories,
+    applyStaleMemories,
     listSnapshots,
     getSnapshot,
     listSnapshotSources,

@@ -5,6 +5,7 @@ export const isolatedSuites = {
   "test-assistant-collaboration-isolated.ts": [
     "test-assistant-collaboration-db.ts", "test-growth-consumers-db.ts", "test-self-understanding-db.ts",
     "test-self-understanding-http-db.ts", "test-self-understanding-page.ts", "test-private-channel-history-db.ts",
+    "test-channel-model-failure-db.ts",
   ],
   "test-backfill-social-experiences-isolated.ts": ["test-backfill-social-experiences-db.ts"],
   "test-character-isolated.ts": ["test-character-portable-db.ts", "test-character-sync-root-db.ts", "test-character-delete-db.ts"],

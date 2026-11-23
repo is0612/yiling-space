@@ -318,6 +318,24 @@ const translation = parseTagTranslation("POSITIVE: 1girl, long blue hair, white 
 assert.deepEqual(translation, { positive: "1girl, long blue hair, white dress", negative: "extra fingers" });
 assert.deepEqual(parseTagTranslation("1girl, solo, snow"), { positive: "1girl, solo, snow", negative: "" }, "没前缀也认，正向照用。");
 assert.equal(parseTagTranslation("NEGATIVE: bad anatomy"), null, "没有正向就不算成功。");
+// 模型不肯按两行协议写时的三种常见形状：以前一律判废，中文直接进 CLIP。
+assert.deepEqual(
+  parseTagTranslation('好的，这是结果：\n```json\n{"positive": "1girl, blue hair", "negative": "bad anatomy"}\n```'),
+  { positive: "1girl, blue hair", negative: "bad anatomy" },
+  "JSON 对象带围栏和废话也要认。",
+);
+assert.deepEqual(
+  parseTagTranslation("翻译结果：\n- 正向提示词：1girl, whale girl, white shirt\n- 负面：extra fingers"),
+  { positive: "1girl, whale girl, white shirt", negative: "extra fingers" },
+  "中文标签名和列表符号也要认。",
+);
+assert.deepEqual(
+  parseTagTranslation("翻译结果：\n```\n1girl, looking back, snow\n```"),
+  { positive: "1girl, looking back, snow", negative: "" },
+  "前面先来一句解释时，要跳过它取真正的标签行。",
+);
+assert.equal(parseTagTranslation("抱歉，我无法完成这个翻译"), null, "整段中文没有标签，仍然判失败。");
+assert.equal(parseTagTranslation('{"positive": "蓝发", "negative": ""}'), null, "翻完还带中文不能放行。");
 
 const envKey = (() => {
   process.env.IMAGE_API_KEY = "sk-env";
@@ -667,6 +685,62 @@ assert.equal(dtoDefault.imageSize, "square");
   if (fallback.ok) {
     await rm(fallback.image.filePath, { force: true });
     await rm(dirname(fallback.image.filePath), { recursive: true, force: true });
+  }
+
+  /**
+   * 形象档案参考图：本机引擎以前把 references 丢掉，日志写着「这次不用参考图」。
+   * 现在必须真的走图生图：上传参考图 → LoadImage → VAEEncode → denoise < 1。
+   */
+  {
+    const calls: string[] = [];
+    let graphWithReference: Record<string, { class_type?: string; inputs?: Record<string, unknown> }> | null = null;
+    globalThis.fetch = (async (url: unknown, init?: { body?: unknown }) => {
+      const target = String(url);
+      calls.push(new URL(target).pathname);
+      if (target.endsWith("/upload/image")) {
+        assert.ok(init?.body instanceof FormData, "参考图必须走 ComfyUI 的 multipart 上传。");
+        return new Response(JSON.stringify({ name: "reference.png" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (target.endsWith("/prompt")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { prompt?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }> };
+        graphWithReference = body.prompt ?? null;
+        return new Response(JSON.stringify({ prompt_id: "task-ref" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (target.includes("/history/")) {
+        return new Response(JSON.stringify({
+          "task-ref": {
+            status: { completed: true, status_str: "success" },
+            outputs: { "10": { images: [{ filename: "anima_ref.png", subfolder: "YilingSpace", type: "output" }] } },
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (target.includes("/view?")) {
+        return new Response(pixel, { status: 200, headers: { "content-type": "image/png" } });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const withReference = await generateImage({
+      settings: localSettings,
+      prompt: "【画面】1girl, standing by the window",
+      characterId,
+      references: [
+        { label: "标准形象", mime: "image/png", buffer: pixel },
+        { label: "正面视图", mime: "image/png", buffer: pixel },
+      ],
+    });
+    assert.equal(withReference.ok, true, "带形象档案时也要能出图。");
+    assert.equal(withReference.ok ? withReference.mode : "", "image_to_image", "有参考图就必须走图生图。");
+    assert.ok(calls.includes("/upload/image"), "参考图要先上传给引擎。");
+    const refGraph = graphWithReference as Record<string, { class_type?: string; inputs?: Record<string, unknown> }> | null;
+    assert.equal(refGraph?.["6"]?.class_type, "LoadImage", "参考图必须真的进工作流。");
+    assert.equal(refGraph?.["7"]?.class_type, "VAEEncode");
+    const denoise = Number(refGraph?.["8"]?.inputs?.denoise);
+    assert.ok(denoise > 0.3 && denoise < 1, "带参考图时 denoise 必须在 0.3~0.85 之间，不能是 1（那等于没用参考图）。");
+    if (withReference.ok) {
+      await rm(withReference.image.filePath, { force: true });
+      await rm(dirname(withReference.image.filePath), { recursive: true, force: true });
+    }
   }
 
   // 引擎没开：不能抛，只能给一句能照着做的原因。

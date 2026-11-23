@@ -29,6 +29,8 @@ try {
   const body = bodies[0]!; const payload = JSON.parse(body.messages[1]!.content); const system=body.messages[0]!.content;
   assert.equal(payload.imageExecution.blockedReason,"daily_limit"); assert.equal(payload.imageExecution.todayCount,8); assert.equal(payload.imageExecution.path,undefined);
   assert(system.includes("A retrieved ASSISTANT statement establishes only what you said"));
+  assert(system.includes("You have no dashboard, task queue or server-side view"), "不许声称查过后台状态。");
+  assert(system.includes("an earlier assistant claim about counts or cooling down is not evidence"), "不许把自己上一轮的编造当事实复读。");
    assert.equal(payload.imageCapabilities.edit,false); assert(system.includes("NO task is queued or running")); assert(system.includes("folder permission suggestion cannot automatically"));
   assert.equal(payload.quotedMessage.image.requestedDescription,"一只苹果"); assert.equal(payload.quotedMessage.image.path,undefined); assert.equal(payload.recentMessages[0].generatedImage.url,undefined);
   assert(!JSON.stringify(payload).includes("123456789")); assert(!JSON.stringify(payload).includes("private-platform-id")); assert(!JSON.stringify(payload).includes("secret.invalid"));
@@ -53,5 +55,5 @@ try {
   assert.equal(contextPayload.transcript[0].quoted.image.requestedDescription,"一只苹果");
   assert.equal(contextPayload.recentMessages[0].generatedImage.visual.status,"not_requested");
   assert(!JSON.stringify(contextPayload).includes("secret.invalid"));
-  console.log("v88 chat: bounded repetition repair, total usage, execution/capability facts, safe image evidence and sticker normalization passed (mocked).");
+  console.log("v88 chat: bounded repetition repair, total usage, execution/capability facts, safe image evidence, sticker normalization and anti-fabricated-status rules passed (mocked; filename is historical).");
 } finally { globalThis.fetch = old; }

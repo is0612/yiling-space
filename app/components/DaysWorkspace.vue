@@ -631,6 +631,12 @@ await loadDays();
                   :day-key="selected"
                   @changed="loadDetail(selected)"
                 />
+                <StaleMemoryAudit
+                  :character-id="id || ''"
+                  scope="events"
+                  :day-key="selected"
+                  @applied="loadDetail(selected)"
+                />
               </div>
             </div>
             <!-- 一行 meta：条数 / 上次整理 / 用量 / 原文开关。

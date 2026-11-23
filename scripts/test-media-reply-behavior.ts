@@ -37,7 +37,7 @@ try {
   const base = { characterName: "测试角色", characterPrompt: "自然聊天", model: "mock", apiKey: "test", apiBaseUrl: settings.apiBaseUrl,
     currentMessage: processed.promptContent!, recentMessages: [], memories: [], snapshots: [] };
   const reply = await generateConversationReply({ ...base, groupChat: true, transcript: [{ id: "fixture", speaker: "群友", member: "member_1", content: processed.promptContent!, isOwner: false }] });
-  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v88");
+  assert.equal(reply.promptTemplateVersion, "conversation-retrieval-v89");
   const system = request!.messages.find(m => m.role === "system")!.content;
   const payload = request!.messages.find(m => m.role === "user")!.content;
   assert(system.includes("without unsolicited narration, aesthetic judgments"));

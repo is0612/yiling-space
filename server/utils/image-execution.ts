@@ -55,6 +55,17 @@ export function blockedImageReply(reason: string, count?: number | null, limit?:
   }
 }
 
+/**
+ * 给聊天提示词的「每日上限」字段。
+ *
+ * `limit = 0` 在配置里表示**不限张数**，不是「上限 0 张」。以前把这个 0 原样塞给
+ * 模型，它读成「额度用完了」，再顺着自己上几轮的错话编出「今天两张已经出完，还在冷却」。
+ * 不限时干脆不给这个字段：没有数字可引用，就不该报数。
+ */
+export function imageExecutionLimitForPrompt(limit: number): { dailyLimit: number } | Record<string, never> {
+  return Number.isFinite(limit) && limit > 0 ? { dailyLimit: limit } : {};
+}
+
 /** Only an actual directed request receives a deterministic blocked response; ordinary chat stays ordinary. */
 export function imageDecisionReply(decision: ImageReplyDecision): string | null {
   return decision.status === "blocked" && decision.requested
