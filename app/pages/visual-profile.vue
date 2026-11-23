@@ -31,7 +31,7 @@ type VisualProfile = {
   negativePrompt: string;
   currentPublishedRevision: number;
   assets: VisualAsset[];
-  outfits: Array<{ id: string; name: string; prompt: string }>;
+  outfits: Array<{ id: string; name: string; prompt: string; isDefault: boolean }>;
   versions: VisualVersion[];
 };
 const route = useRoute();
@@ -50,6 +50,12 @@ const uploading = ref(false);
 const loading = ref(false);
 const saving = ref(false);
 const publishing = ref(false);
+const restoringVersionId = ref<string | null>(null);
+const outfitName = ref("");
+const outfitPrompt = ref("");
+const outfitIsDefault = ref(false);
+const editingOutfitId = ref<string | null>(null);
+const outfitSaving = ref(false);
 const loadError = ref("");
 const draftRevision = ref<number | null>(null);
 let requestVersion = 0;
@@ -154,6 +160,87 @@ async function saveDraft() {
     ElMessage.error("保存失败，内容没有被确认写入。");
   } finally {
     saving.value = false;
+  }
+}
+
+function editOutfit(outfit: VisualProfile["outfits"][number]) {
+  editingOutfitId.value = outfit.id;
+  outfitName.value = outfit.name;
+  outfitPrompt.value = outfit.prompt;
+  outfitIsDefault.value = outfit.isDefault;
+}
+
+function resetOutfitForm() {
+  editingOutfitId.value = null;
+  outfitName.value = "";
+  outfitPrompt.value = "";
+  outfitIsDefault.value = false;
+}
+
+async function saveOutfit() {
+  const target = characterId.value;
+  if (!target || !outfitName.value.trim() || !outfitPrompt.value.trim() || outfitSaving.value) return;
+  outfitSaving.value = true;
+  try {
+    const editingId = editingOutfitId.value;
+    const result = await api<{ draftRevision: number }>({
+      url: editingId
+        ? `/characters/${encodeURIComponent(target)}/visual-profile/outfits/${encodeURIComponent(editingId)}`
+        : `/characters/${encodeURIComponent(target)}/visual-profile/outfits`,
+      method: editingId ? "put" : "post",
+      data: { name: outfitName.value, prompt: outfitPrompt.value, isDefault: outfitIsDefault.value },
+    });
+    if (characterId.value !== target) return;
+    resetOutfitForm();
+    await loadProfile();
+    draftRevision.value = result.draftRevision;
+    ElMessage.success("服装造型已保存为草稿变更。");
+  } catch (error) {
+    ElMessage.error((error as { statusMessage?: string })?.statusMessage || "服装造型保存失败。");
+  } finally {
+    outfitSaving.value = false;
+  }
+}
+
+async function deleteOutfit(outfitId: string) {
+  const target = characterId.value;
+  if (!target || outfitSaving.value) return;
+  outfitSaving.value = true;
+  try {
+    const result = await api<{ draftRevision: number }>({
+      url: `/characters/${encodeURIComponent(target)}/visual-profile/outfits/${encodeURIComponent(outfitId)}`,
+      method: "delete",
+    });
+    if (characterId.value !== target) return;
+    if (editingOutfitId.value === outfitId) resetOutfitForm();
+    await loadProfile();
+    draftRevision.value = result.draftRevision;
+    ElMessage.success("造型已删除，变更保存在草稿中。");
+  } catch {
+    ElMessage.error("删除失败，造型仍然保留。");
+  } finally {
+    outfitSaving.value = false;
+  }
+}
+
+async function restoreVersion(versionId: string) {
+  const target = characterId.value;
+  if (!target || restoringVersionId.value) return;
+  restoringVersionId.value = versionId;
+  try {
+    const result = await api<{ draftVersion: VisualVersion }>({
+      url: `/characters/${encodeURIComponent(target)}/visual-profile/versions/${encodeURIComponent(versionId)}/restore`,
+      method: "post",
+      data: {},
+    });
+    if (characterId.value !== target) return;
+    await loadProfile();
+    draftRevision.value = result.draftVersion.revision;
+    ElMessage.success(`历史版本已恢复为新草稿 v${result.draftVersion.revision}，不会覆盖当前正式版本。`);
+  } catch {
+    ElMessage.error("历史版本恢复失败。");
+  } finally {
+    restoringVersionId.value = null;
   }
 }
 
@@ -274,11 +361,21 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
           </el-card>
           <el-card shadow="never" class="visual-profile-card">
             <h3>服装造型</h3>
-            <p>服装与配饰独立于核心外貌，换装不会覆盖角色本身。造型编辑将在下一阶段接入。</p>
-            <el-empty v-if="!profile?.outfits.length" description="还没有单独的造型" :image-size="64" />
-            <ul v-else class="asset-list">
-              <li v-for="outfit in profile.outfits" :key="outfit.id">{{ outfit.name }}</li>
-            </ul>
+            <p>服装与配饰独立于核心外貌。设置一个默认造型后，绘图会优先使用它；其他造型不会混合进同一张图。</p>
+            <div v-for="outfit in profile?.outfits || []" :key="outfit.id" class="outfit-row">
+              <div><strong>{{ outfit.name }}</strong><el-tag v-if="outfit.isDefault" size="small" type="success">默认</el-tag><p>{{ outfit.prompt }}</p></div>
+              <div class="outfit-actions"><el-button link @click="editOutfit(outfit)">编辑</el-button><el-button link type="danger" @click="deleteOutfit(outfit.id)">删除</el-button></div>
+            </div>
+            <el-divider />
+            <el-form label-position="top">
+              <el-form-item label="造型名称"><el-input v-model="outfitName" maxlength="100" placeholder="例如：日常服、深蓝女仆装" /></el-form-item>
+              <el-form-item label="造型提示词"><el-input v-model="outfitPrompt" type="textarea" :rows="3" maxlength="6000" placeholder="只描述服装、配饰和造型，不要重复核心外貌。" /></el-form-item>
+              <el-checkbox v-model="outfitIsDefault">设为默认造型</el-checkbox>
+            </el-form>
+            <div class="form-actions">
+              <el-button type="primary" :loading="outfitSaving" :disabled="!outfitName.trim() || !outfitPrompt.trim()" @click="saveOutfit">{{ editingOutfitId ? "保存修改" : "新增造型" }}</el-button>
+              <el-button v-if="editingOutfitId" @click="resetOutfitForm">取消编辑</el-button>
+            </div>
           </el-card>
         </div>
 
@@ -292,6 +389,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                 {{ item.revision === profile.currentPublishedRevision ? "当前正式版本" : item.status === "DRAFT" ? "草稿" : "历史正式版本" }}
               </el-tag>
               <p>{{ item.note || "未填写版本说明" }}</p>
+              <el-button v-if="item.revision !== profile.currentPublishedRevision" size="small" link type="primary" :loading="restoringVersionId === item.id" @click="restoreVersion(item.id)">恢复为草稿</el-button>
             </el-timeline-item>
           </el-timeline>
         </el-card>
@@ -326,5 +424,10 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 .reference-meta { display: grid; gap: 3px; margin: 7px 0; }
 .reference-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .reference-meta span { color: var(--el-text-color-secondary); font-size: 11px; }
+.outfit-row { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+.outfit-row > div:first-child { min-width: 0; }
+.outfit-row strong { margin-right: 8px; }
+.outfit-row p { margin: 5px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.outfit-actions { flex: 0 0 auto; display: flex; align-items: flex-start; }
 @media (max-width: 720px) { .visual-profile-grid { grid-template-columns: 1fr; } .profile-status { align-items: flex-start; } .status-version { text-align: right; } }
 </style>
