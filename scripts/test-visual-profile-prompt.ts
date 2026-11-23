@@ -21,6 +21,10 @@ assert(prompt.includes("芦苇荡边回眸"));
 assert(!prompt.includes("浅色针织外套"));
 assert(!prompt.includes("红色礼服"));
 
+const explicitOutfit = composePublishedVisualPrompt(snapshot, "她换上红色礼服，在海边回眸");
+assert(explicitOutfit.includes("红色礼服"));
+assert(!explicitOutfit.includes("深蓝女仆装"), "explicit outfit requests must override the default outfit");
+
 const noProfile = composePublishedVisualPrompt({}, "一只鲸鱼跃出海面");
 assert.equal(noProfile, "一只鲸鱼跃出海面");
 
