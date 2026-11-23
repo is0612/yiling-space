@@ -106,7 +106,7 @@ function onReferenceFileChange(event: Event) {
     return;
   }
   uploadFile.value = file;
-  if (file && !uploadLabel.value.trim()) uploadLabel.value = file.name.replace(/\\.[^.]+$/u, "").slice(0, 120);
+  if (file && !uploadLabel.value.trim()) uploadLabel.value = file.name.replace(/\.[^.]+$/u, "").slice(0, 120);
 }
 
 async function uploadReference() {
