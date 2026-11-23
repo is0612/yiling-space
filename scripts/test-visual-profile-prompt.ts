@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { limitReferenceNotes, withoutReferenceNotes } from "../server/utils/image-generation";
 import { canAttachReferences, composeReferenceSection, composePublishedVisualPrompt } from "../server/utils/visual-profile-prompt";
-import { isVisualAssetPathSafe } from "../server/utils/visual-profile-references";
+import { isVisualAssetPathSafe, selectSnapshotReferenceAssets } from "../server/utils/visual-profile-references";
 
 const snapshot = {
   coreAppearance: "蓝紫色长发、蓝色眼睛、鲸鱼耳与尾巴",
@@ -120,5 +120,28 @@ const pieces = personPart.split(",").map(piece => piece.trim()).filter(Boolean);
 assert(pieces.length > 0);
 assert(pieces.every(piece => /^tag\d+$/u.test(piece)), "截断不能切出半个 tag");
 assert(truncated.length <= 1200);
+
+
+// 16. 正式快照的参考图选择：每种用途先取最新一张，不让大量标准图挤掉三视图。
+const snapshotAssets = [
+  ...Array.from({ length: 8 }, (_, index) => ({
+    id: "standard-" + index, kind: "STANDARD", label: "标准图 " + index,
+    relativePath: "visual-profile/char-1/standard-" + index + ".jpg", sortOrder: index,
+    createdAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+  })),
+  ...["FRONT_VIEW", "SIDE_VIEW", "BACK_VIEW"].map((kind, index) => ({
+    id: kind, kind, label: kind,
+    relativePath: "visual-profile/char-1/" + kind + ".jpg", sortOrder: 0,
+    createdAt: new Date(Date.UTC(2026, 0, 20 + index)).toISOString(),
+  })),
+];
+const selectedSnapshotAssets = selectSnapshotReferenceAssets(snapshotAssets);
+assert.deepEqual(selectedSnapshotAssets.map(asset => asset.kind), [
+  "STANDARD", "FRONT_VIEW", "SIDE_VIEW", "BACK_VIEW",
+]);
+assert.equal(selectedSnapshotAssets[0]!.id, "standard-7", "同用途优先最新上传的素材");
+assert.deepEqual(selectSnapshotReferenceAssets(undefined), [], "旧快照没有 assets 时不能偷读实时素材库");
+assert.deepEqual(selectSnapshotReferenceAssets([{ id: "bad", kind: "EXPRESSION", label: "表情", relativePath: "x", sortOrder: 0 }]), []);
+assert.equal(selectSnapshotReferenceAssets(snapshotAssets).length, 4, "参考图总数不能超过 4 张");
 
 console.log("visual-profile-prompt: ok");
