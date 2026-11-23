@@ -44,6 +44,7 @@ const corePrompt = ref("");
 const negativePrompt = ref("");
 const versionNote = ref("");
 const uploadFile = ref<File | null>(null);
+const referenceFileInput = ref<HTMLInputElement | null>(null);
 const uploadLabel = ref("");
 const uploadKind = ref("STANDARD");
 const uploading = ref(false);
@@ -98,6 +99,12 @@ const assetUrl = (assetId: string) =>
 function onReferenceFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0] ?? null;
+  if (file && file.size > 12 * 1024 * 1024) {
+    ElMessage.error("参考图片不能超过 12MB。");
+    input.value = "";
+    uploadFile.value = null;
+    return;
+  }
   uploadFile.value = file;
   if (file && !uploadLabel.value.trim()) uploadLabel.value = file.name.replace(/\\.[^.]+$/u, "").slice(0, 120);
 }
@@ -114,6 +121,7 @@ async function uploadReference() {
     await api({ url: `/characters/${encodeURIComponent(target)}/visual-profile/assets`, method: "post", data: form });
     if (characterId.value !== target) return;
     uploadFile.value = null;
+    if (referenceFileInput.value) referenceFileInput.value.value = "";
     uploadLabel.value = "";
     ElMessage.success("参考图片已保存。");
     await loadProfile();
@@ -347,7 +355,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                 <el-option label="配饰参考" value="ACCESSORY" />
                 <el-option label="补充素材" value="SUPPLEMENT" />
               </el-select>
-              <input type="file" accept="image/png,image/jpeg,image/webp" @change="onReferenceFileChange">
+              <input ref="referenceFileInput" type="file" accept="image/png,image/jpeg,image/webp" @change="onReferenceFileChange">
             </div>
             <el-input v-model="uploadLabel" maxlength="120" placeholder="给这张参考图起个名字" />
             <el-button type="primary" :disabled="!uploadFile || !uploadLabel.trim()" :loading="uploading" @click="uploadReference">上传参考图片</el-button>
