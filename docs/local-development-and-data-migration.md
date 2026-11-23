@@ -126,6 +126,8 @@ PostgreSQL 的运行数据存放在 Docker named volume `yiling_postgres_data`�
 
 如果上传图片或其他文件存放在本地目录，还必须单独备份这些文件。仅备份 PostgreSQL 不会自动包含文件系统中的图片或附件。角色的表情包就属于这一类：清单在 `character_stickers` 表，图片本体在 `.data/stickers/<角色 id>/`，迁移时两边都要搬；只搬库的话页面会显示“图片文件不在本机”。
 
+形象档案同样是「两边」，而且是两块：文字（外貌设定、核心提示词、负面词、造型、版本快照）在数据库的 `character_visual_*` 四张表里，参考图本体在 `.data/visual-profile/<角色 id>/`。只 dump 数据库的话，素材条目还在、缩略图全部 404；只拷目录的话，库里没有索引，界面一片空白。参考图现在还会作为模型输入随生成发出（`/images/edits` 或 MiniMax 的 `subject_reference`），丢了等于角色失去视觉锚点，之后每张图都会慢慢飘走。
+
 另外有两类凭据要知道分别在哪。**角色 / 助手的 API Key 2026-11-12 起明文保存在数据库里**（`characters.model_config`），所以只备份数据库就够，搬到新机后在网页「模型设置」里能直接看到；登录管理员可以查看、修改、清除，未登录读不到。**渠道凭据**（OneBot WS/HTTP Token、SnowLuma 面板密码）仍用本机密钥 `.data/credentials-encryption.key` 加密，备份/迁移时必须把这个文件一并恢复到新电脑项目根目录的 `.data/` 下，否则渠道凭据解不开、要在渠道页重新登录。该文件已被 Git 忽略，不能提交到仓库。
 
 ## 3.1 只搬角色：角色卡
@@ -146,6 +148,7 @@ PostgreSQL 的运行数据存放在 Docker named volume `yiling_postgres_data`�
 | --- | --- |
 | API Key、渠道 Token | 导出时就从 JSON 里剥掉了。换个环境本来就要重填；带出去等于把凭据交给任何拿到这个文件的人。导入后到「模型设置」重新填。 |
 | 表情包图片 | 图在 `.data/stickers/<角色 id>/`，库里只有清单。换机器后在「表情包」里从 QQ 收藏夹重新同步即可。 |
+| 形象档案（参考图、造型、版本历史） | 在数据库的 `character_visual_*` 表与 `.data/visual-profile/` 里，角色卡不带。换机器要么整库 dump 加拷目录，要么到「形象档案」重新填一遍；重新填意味着参考图那条生图链路要重新建立锚点。 |
 | 会话原文 | 体积大且属于具体账号的聊天记录；记忆和忆泡是它的提炼结果，已经带走了。 |
 | 阶段总结的来源记录 | 来源消息没跟过来，指针会指向不存在的消息。所以导入只保留总结正文，记作第 1 版。 |
 | 日记/手账的来源消息与忆泡 id | 同上，换台机器就是死指针。正文、版本号、今日一句的出处（按版本号）都保留。 |
@@ -219,7 +222,16 @@ C:\Users\<用户名>\AppData\Local\Docker\wsl\disk\docker_data.vhdx
 .\scripts\backup-db.ps1
 ```
 
-脚本会启动数据库容器（如果尚未运行），并在 `backups/` 生成带时间戳的 `.dump` 文件。
+脚本会启动数据库容器（如果尚未运行），并在 `backups/` 生成带时间戳的 `.dump` 文件。 它**只备份数据库**：参考图、表情包这类文件在 `.data/` 下，不在 dump 里。迁移前把 `.data/visual-profile/` 和 `.data/stickers/` 一并拷走，否则恢复回来的只是清单。
+
+需要连文件一起搬时，把下面几样拷到同一个备份目录：
+
+```bash
+mkdir -p /d/backup/20261123
+cp -r .data/visual-profile .data/stickers .data/credentials-encryption.key /d/backup/20261123/
+```
+
+两个不能漏的：`.data/visual-profile/`（形象档案的参考图，漏了缩略图全 404、生图的视觉锚点也没了），以及 `.data/credentials-encryption.key`（渠道凭据的解密密钥，漏了要重新登录所有渠道）。
 
 > 注意：脚本会自动定位 `docker.exe`（先查 PATH，再回退到 Docker Desktop 的默认安装路径），因此即使 `docker` 不在 PATH 中也能运行。2026-10-25 已在本机完成一次真实演练：备份生成、恢复到临时库、并逐表核对 18 张表的行数与源库完全一致后清理。
 
