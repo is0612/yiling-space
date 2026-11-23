@@ -275,7 +275,14 @@ async function publishDraft() {
   }
 }
 
-watch(characterId, () => { void loadProfile(); }, { immediate: true });
+watch(characterId, () => {
+  uploadFile.value = null;
+  if (referenceFileInput.value) referenceFileInput.value.value = "";
+  uploadLabel.value = "";
+  versionNote.value = "";
+  resetOutfitForm();
+  void loadProfile();
+}, { immediate: true });
 onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 </script>
 
@@ -370,7 +377,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
           </el-card>
           <el-card shadow="never" class="visual-profile-card">
             <h3>服装造型</h3>
-            <p>服装与配饰独立于核心外貌。设置一个默认造型后，绘图会优先使用它；其他造型不会混合进同一张图。</p>
+            <p>服装与配饰独立于核心外貌。发布默认造型变更后，绘图会优先使用它；其他造型不会混合进同一张图。</p>
             <div v-for="outfit in profile?.outfits || []" :key="outfit.id" class="outfit-row">
               <div><strong>{{ outfit.name }}</strong><el-tag v-if="outfit.isDefault" size="small" type="success">默认</el-tag><p>{{ outfit.prompt }}</p></div>
               <div class="outfit-actions"><el-button link @click="editOutfit(outfit)">编辑</el-button><el-button link type="danger" @click="deleteOutfit(outfit.id)">删除</el-button></div>
