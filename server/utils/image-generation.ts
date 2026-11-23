@@ -405,6 +405,30 @@ export function parseImageResponse(payload: unknown): { url?: string; b64?: stri
   return { error: firstError || "服务商没有返回图片" };
 }
 
+export type AsyncImageTask = { taskId: string; statusCode: number | null };
+
+/**
+ * 认出「异步任务式」的响应：服务商收下请求，但只回一个 task_id，图片要再查一次。
+ *
+ * 2026-11-23 从中转那边确认的说法：作图久的时候会拿到 `65535` 这类业务码，
+ * 换成 `response_format: b64_json` 后图片跟着同步响应一起回来。我们的请求
+ * 本来就是 b64_json 优先（见 generateImage 里那段注释），正常路径走不到这里；
+ * 但**换一台只支持异步的中转**时，返回的就是任务号而不是图。
+ *
+ * 这种情况必须和「这个模型不是生图模型」分开说：后者要换模型，前者要换接口形态，
+ * 混成一句会把人的排查方向带偏（尤其是连图片地址都没填对的时候）。
+ */
+export function detectAsyncImageTask(payload: unknown): AsyncImageTask | null {
+  const record = asRecord(payload);
+  const data = asRecord(record.data);
+  const task = asRecord(record.task);
+  const taskId = readString(record.task_id) || readString(data.task_id) || readString(task.id);
+  if (!taskId) return null;
+  const baseResp = asRecord(record.base_resp);
+  const statusCode = typeof baseResp.status_code === "number" ? baseResp.status_code : null;
+  return { taskId, statusCode };
+}
+
 async function safeText(response: Response): Promise<string> {
   try {
     return (await response.text()).replace(/\s+/gu, " ").slice(0, 240);
@@ -563,6 +587,12 @@ export async function generateImage(input: {
    *
    * base64 内联在接口响应里，少一次跨域往返，也就少一个会失败的环节。
    * 代价是响应体约 300KB —— 本地应用可以忽略。
+   *
+   * 2026-11-23 中转那边给了同一个结论的另一种说法：作图慢的时候会出现
+   * `65535` 这类业务码，提交时带上 `response_format: b64_json`，图片数据就
+   * 直接放在查询结果里、跟着大陆线路一起回来，不必再走境外那条链接。
+   * 也就是说：b64 不只是「少一次下载」，在部分中转上它还是**唯一能拿到图**的方式。
+   * 所以这条永远是首选，别为了省 300KB 改成 url 优先。
    */
   let result = await request("b64_json");
   // 少数服务商不认 `response_format: b64_json`（400 参数错误）：退回 url 再要一次。
@@ -575,6 +605,14 @@ export async function generateImage(input: {
 
   const parsed = parseImageResponse(payload);
   if (parsed.error || (!parsed.url && !parsed.b64)) {
+    // 异步接口要单独说：任务号拿到了，不代表这里能取图（见 detectAsyncImageTask）
+    const asyncTask = detectAsyncImageTask(payload);
+    if (asyncTask) {
+      return {
+        ok: false,
+        reason: `作图接口是异步的：只回了任务号 ${asyncTask.taskId}${asyncTask.statusCode === null ? "" : `（业务码 ${asyncTask.statusCode}）`}，图片要再查一次才能拿到；当前链路不支持轮询取图。`,
+      };
+    }
     return { ok: false, reason: parsed.error || "服务商没有返回图片" };
   }
 

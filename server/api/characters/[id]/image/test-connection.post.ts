@@ -2,7 +2,7 @@ import { createError, getRouterParam } from "h3";
 import { buildModelsEndpoint, resolveChatModelSettings } from "../../../../utils/chat-model-config";
 import { resolveCharacterImageApiKey } from "../../../../utils/credential-encryption";
 import type { ImageGenerationSettings } from "../../../../utils/image-generation";
-import { buildImageGenerationEndpoint, describeImageGatewayRefusal, parseImageResponse, resolveImageGenerationSettings } from "../../../../utils/image-generation";
+import { buildImageGenerationEndpoint, describeImageGatewayRefusal, detectAsyncImageTask, parseImageResponse, resolveImageGenerationSettings } from "../../../../utils/image-generation";
 import { isImageGenerationModel } from "../../../../../shared/utils/vision-models";
 import { requireActorUserId } from "../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
@@ -282,6 +282,16 @@ export default defineEventHandler(async (event): Promise<ProbeResult> => {
 
   const parsed = parseImageResponse(result.payload);
   if (parsed.error || (!parsed.url && !parsed.b64)) {
+    // 异步接口（只回任务号）和「模型根本不出图」是两回事，修法也不同
+    const asyncTask = detectAsyncImageTask(result.payload);
+    if (asyncTask) {
+      return {
+        ok: false,
+        message: `服务商收下任务了，但回的是任务号（${asyncTask.taskId}${asyncTask.statusCode === null ? "" : `，业务码 ${asyncTask.statusCode}`}）而不是图片 —— 这台是异步作图接口，图片要再查一次才拿到。本应用只支持「提交就同步返回图片」的接口（提交时带 response_format: b64_json，图直接跟着响应回来，也省掉跨境下载）。换一个同步返回的作图地址，或问服务商要同步接口。`,
+        model: settings.model,
+        elapsedMs,
+      };
+    }
     return {
       ok: false,
       message: `服务商回了成功，但没有交出图片：${parsed.error || "响应里既没有 url 也没有 b64_json"}。这个模型可能不是生图模型，或不在 /images/generations 这个接口上。`,
