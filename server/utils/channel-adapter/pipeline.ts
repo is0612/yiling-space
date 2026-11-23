@@ -4078,7 +4078,7 @@ async function runChannelTurn(input: {
     } else {
       // Only the explicitly published snapshot may influence drawing. Never read editable profile
       // fields or drafts here: a half-finished edit must not silently change her official appearance.
-      let officialVisualPrompt = "";
+      let publishedVisualSnapshot: Record<string, unknown> | null = null;
       try {
         const visualProfile = await prisma.characterVisualProfile.findUnique({
           where: { characterId: input.characterId },
@@ -4091,13 +4091,13 @@ async function runChannelTurn(input: {
           });
           const snapshot = published?.snapshot && typeof published.snapshot === "object" && !Array.isArray(published.snapshot)
             ? published.snapshot as Record<string, unknown> : null;
-          if (snapshot) officialVisualPrompt = composePublishedVisualPrompt(snapshot, "");
+          if (snapshot) publishedVisualSnapshot = snapshot;
         }
       } catch (error) {
         // Profile lookup is optional and must never break an otherwise valid image request.
         console.warn("[image] published visual profile unavailable", error instanceof Error ? error.message : String(error));
       }
-      const prompt = sanitizeImagePrompt(composePublishedVisualPrompt({ corePrompt: officialVisualPrompt }, validation.prompt));
+      const prompt = sanitizeImagePrompt(composePublishedVisualPrompt(publishedVisualSnapshot ?? {}, validation.prompt));
       const result = await generateImage({ settings: imageSettings, prompt, characterId: input.characterId });
       if (result.ok) {
         replyImage = result.image;
