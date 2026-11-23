@@ -66,7 +66,12 @@ const publishedVersion = computed(() => profile.value?.versions.find(
   item => item.revision === profile.value?.currentPublishedRevision,
 ) ?? null);
 
-async function loadProfile() {
+async function loadProfile(options: { preserveEditor?: boolean } = {}) {
+  const preservedEditor = options.preserveEditor ? {
+    coreAppearance: coreAppearance.value,
+    corePrompt: corePrompt.value,
+    negativePrompt: negativePrompt.value,
+  } : null;
   const target = characterId.value;
   const version = ++requestVersion;
   profile.value = null;
@@ -83,9 +88,9 @@ async function loadProfile() {
     if (result.characterId !== target) throw new Error("角色数据不匹配");
     profile.value = result.profile;
     draftRevision.value = result.profile?.versions.find(item => item.status === "DRAFT")?.revision ?? null;
-    coreAppearance.value = result.profile?.coreAppearance ?? "";
-    corePrompt.value = result.profile?.corePrompt ?? "";
-    negativePrompt.value = result.profile?.negativePrompt ?? "";
+    coreAppearance.value = preservedEditor?.coreAppearance ?? result.profile?.coreAppearance ?? "";
+    corePrompt.value = preservedEditor?.corePrompt ?? result.profile?.corePrompt ?? "";
+    negativePrompt.value = preservedEditor?.negativePrompt ?? result.profile?.negativePrompt ?? "";
   } catch {
     if (current()) loadError.value = "读取形象档案失败，请检查网络后重试。";
   } finally {
@@ -124,7 +129,7 @@ async function uploadReference() {
     if (referenceFileInput.value) referenceFileInput.value.value = "";
     uploadLabel.value = "";
     ElMessage.success("参考图片已保存。");
-    await loadProfile();
+    await loadProfile({ preserveEditor: true });
   } catch (error) {
     ElMessage.error((error as { statusMessage?: string })?.statusMessage || "参考图片上传失败。");
   } finally {
@@ -139,7 +144,7 @@ async function deleteReference(assetId: string) {
     await api({ url: `/characters/${encodeURIComponent(target)}/visual-profile/assets/${encodeURIComponent(assetId)}`, method: "delete" });
     if (characterId.value !== target) return;
     ElMessage.success("参考图片已删除。");
-    await loadProfile();
+    await loadProfile({ preserveEditor: true });
   } catch {
     ElMessage.error("删除失败，参考图片仍保留在档案中。");
   }
@@ -201,7 +206,7 @@ async function saveOutfit() {
     });
     if (characterId.value !== target) return;
     resetOutfitForm();
-    await loadProfile();
+    await loadProfile({ preserveEditor: true });
     draftRevision.value = result.draftRevision;
     ElMessage.success("服装造型已保存为草稿变更。");
   } catch (error) {
@@ -222,7 +227,7 @@ async function deleteOutfit(outfitId: string) {
     });
     if (characterId.value !== target) return;
     if (editingOutfitId.value === outfitId) resetOutfitForm();
-    await loadProfile();
+    await loadProfile({ preserveEditor: true });
     draftRevision.value = result.draftRevision;
     ElMessage.success("造型已删除，变更保存在草稿中。");
   } catch {
