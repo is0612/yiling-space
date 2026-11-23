@@ -112,4 +112,13 @@ assert(limited.includes("【避免】"));
 // 只有一张时不动它
 assert.equal(limitReferenceNotes(limited, 4), limited);
 
+// 15. 截断要落在分隔符上：不能切出 `tag1` 这种半个 tag
+const manyTags = Array.from({ length: 300 }, (_, index) => `tag${index}`).join(", ");
+const truncated = composePublishedVisualPrompt({ corePrompt: manyTags }, "短场景");
+const personPart = truncated.slice(truncated.indexOf("【人物】") + 4, truncated.indexOf("；【画面】"));
+const pieces = personPart.split(",").map(piece => piece.trim()).filter(Boolean);
+assert(pieces.length > 0);
+assert(pieces.every(piece => /^tag\d+$/u.test(piece)), "截断不能切出半个 tag");
+assert(truncated.length <= 1200);
+
 console.log("visual-profile-prompt: ok");

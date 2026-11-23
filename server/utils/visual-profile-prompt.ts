@@ -27,6 +27,26 @@ const REFERENCE_RULE =
 const readText = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
 /**
+ * 按分隔符边界截断。
+ *
+ * 提示词大半是逗号分隔的英文 tag，按字符切会把最后一个词切成 `hu` 这种半截，
+ * 模型读到的是一个不存在的词。宁可少一个 tag，也不要留半个。
+ */
+function cutAtBoundary(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const head = text.slice(0, limit);
+  const boundary = Math.max(
+    head.lastIndexOf(","),
+    head.lastIndexOf("，"),
+    head.lastIndexOf(";"),
+    head.lastIndexOf("；"),
+    head.lastIndexOf("、"),
+  );
+  // 边界太靠前（前 60% 都没）说明这段本来就没有分隔符，只能按字符切。
+  return (boundary > limit * 0.6 ? head.slice(0, boundary) : head).trim();
+}
+
+/**
  * 画面里是否已经写明了服装。命中就不拼默认造型 —— 否则会变成
  * 「默认造型一套 + 画面里另一套」的混搭。
  *
@@ -148,7 +168,7 @@ export function composePublishedVisualPrompt(
     const separator = head.length ? 1 : 0;
     const available = room - separator - label.length;
     if (available <= 0) return;
-    const text = body.length <= available ? body : body.slice(0, available).trim();
+    const text = cutAtBoundary(body, available);
     if (!text) return;
     head.push(`${label}${text}`);
     room -= label.length + text.length + separator;
@@ -163,7 +183,7 @@ export function composePublishedVisualPrompt(
     const available = room - 1 - "【避免】".length;
     const text = available >= negative.length
       ? negative
-      : available >= negative.length * 0.6 ? negative.slice(0, available).trim() : "";
+      : available >= negative.length * 0.6 ? cutAtBoundary(negative, available) : "";
     if (text) tail = `【避免】${text}`;
   }
 
