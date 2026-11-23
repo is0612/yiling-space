@@ -73,6 +73,7 @@
     "test:runner": "node scripts/test-test-plan.mjs",
     "check:tokens": "node scripts/check-tokens.mjs --budget=0",
     "test:api-request": "tsx scripts/test-api-request.ts",
+    "test:visual-profile-prompt": "tsx scripts/test-visual-profile-prompt.ts",
     "check:sfc": "node scripts/check-sfc.mjs",
     "check:privacy": "node scripts/check-privacy.mjs",
     "check:hooks": "node scripts/install-git-hooks.mjs",

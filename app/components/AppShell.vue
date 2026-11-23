@@ -20,6 +20,7 @@ import {
   UserFilled,
   Reading,
   View,
+  Picture,
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { readTopbarHeading, type TopbarHeading } from "~/utils/topbar";
@@ -163,6 +164,7 @@ const workspaceNavigation: NavigationItem[] = [
   { key: "home", label: "总览", href: "/", icon: DataBoard },
   { key: "chat", label: "聊天", href: "/chat", icon: ChatDotRound },
   { key: "characters", label: "角色管理", href: "/characters", icon: User },
+  { key: "visual-profile", label: "形象档案", href: "/visual-profile", icon: Picture },
   {
     key: "journal",
     label: "日记手账",

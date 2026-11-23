@@ -89,6 +89,7 @@ import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
+import { composePublishedVisualPrompt } from "../visual-profile-prompt";
 import { shouldBlockFriendSpeaker } from "../friend-chat-policy";
 import { pickStickerCatalog, type StickerCatalogEntry } from "../stickers";
 import {
@@ -4075,7 +4076,31 @@ async function runChannelTurn(input: {
       if (imageDecision.requested) useImageStatusReply(blockedImageReply(validation.reason));
       console.warn("[image] generation blocked", { reason: validation.reason, trigger: imageDecision.trigger });
     } else {
-      const prompt = sanitizeImagePrompt(validation.prompt);
+      // Only the explicitly published snapshot may influence drawing. Never read editable profile
+      // fields or drafts here: a half-finished edit must not silently change her official appearance.
+      let publishedVisualSnapshot: Record<string, unknown> | null = null;
+      try {
+        const visualProfile = await prisma.characterVisualProfile.findUnique({
+          where: { characterId: input.characterId },
+          select: { currentPublishedRevision: true },
+        });
+        if (visualProfile && visualProfile.currentPublishedRevision > 0) {
+          const published = await prisma.characterVisualVersion.findFirst({
+            where: { profile: { is: { characterId: input.characterId } }, revision: visualProfile.currentPublishedRevision, status: "PUBLISHED" },
+            select: { snapshot: true },
+          });
+          const snapshot = published?.snapshot && typeof published.snapshot === "object" && !Array.isArray(published.snapshot)
+            ? published.snapshot as Record<string, unknown> : null;
+          if (snapshot) publishedVisualSnapshot = snapshot;
+          else console.warn("[image] published visual profile revision missing", { characterId: input.characterId, revision: visualProfile.currentPublishedRevision });
+        } else {
+          console.info("[image] no published visual profile; using scene prompt only", { characterId: input.characterId });
+        }
+      } catch (error) {
+        // Profile lookup is optional and must never break an otherwise valid image request.
+        console.warn("[image] published visual profile unavailable", error instanceof Error ? error.message : String(error));
+      }
+      const prompt = sanitizeImagePrompt(composePublishedVisualPrompt(publishedVisualSnapshot ?? {}, validation.prompt));
       const result = await generateImage({ settings: imageSettings, prompt, characterId: input.characterId });
       if (result.ok) {
         replyImage = result.image;
