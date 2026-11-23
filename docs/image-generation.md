@@ -140,7 +140,7 @@ IMAGE_PROVIDER=        # 留空按地址里有没有 minimax 自动判断
 
 每次成功生成新图并保存助手记录后，自动使用既有视觉配置观察一次实际成图，将描述写入 `metadata.image.vision`；无需用户追问。自动观察独立于入站图片的三张预算，一张新作品最多观察一次，关闭看图或缺少视觉配置时记录为 disabled，不调用模型。视觉失败不阻断发图、不重新生成；自动观察会增加最多一次视觉请求及其等待时间。下一轮 `recentMessages[].generatedImage.visual` 自动带入实际观察，不把生成提示词冒充画面。后续引用图或询问最近生成结果优先复用缓存，未成功观察的图仍可在既有看图开关及一轮三张共享预算下按需观察。最近作品回看支持“看看你刚画的”“你看得见自己画的图吗”等明确检查结果的说法；泛泛询问“你能看自己画的图吗”仍不触发视觉。已核验的自身引用即使网关没有回传图片段，也先按平台消息 ID 查同会话资产，不能因缺少图片段直接跳过。可信本地文件还需校验角色目录、realpath、文件类型与大小，不能绕过媒体白名单读取任意路径。非自己的已核验引用图仍走现有安全下载链路。没有可用描述时如实说明，而不是声称已经看过。
 
-参考图走 OpenAI 兼容的 `/images/edits`（multipart），最多 4 张标准形象/三视图。`imageCapabilities.referenceInput` 为 true 只表示**通道存在**；这一张到底用没用，由该图自己的 `imageGeneration.mode` 决定（`image_to_image` 用了、`text_to_image` 没用），mode 为 `text_to_image` 时不得声称用了参考图。MiniMax 走另一套形状（`/image_generation` + `subject_reference`，JSON，只吃一张参考图，响应在 `data.image_base64`）。两种形状会**轮流试**，不按服务商名字预先排除：先 edits，404/405 再试原生形状；只有路由不存在才换形状，其它失败（参数被拒、审核、超时）直接回退纯文字。试过两条都不认的地址会在进程内记住，避免每次生图都白花两次请求。`edit` 仍为 false —— 不做「编辑已有图片」，只是把参考图作为输入附上。文件夹权限本身也不会让聊天模型自动得到视觉输入。
+参考图只从当前正式形象版本快照的 `assets` 中选择，不再实时扫描素材库；旧快照缺少 `assets` 时不带参考图。快照记录素材 ID、用途、名称、相对路径、排序和上传时间（不保存图片字节）。每种用途先选最新的一张，再补足最多 4 张标准形象/三视图，避免大量标准图挤掉三视图。当前正式版本正在使用的参考图不能直接删除；先上传替代图、保存并发布新版本，再删除旧图。历史版本不保存图片字节，删除后的历史素材不能恢复。`imageCapabilities.referenceInput` 为 true 只表示**通道存在**；这一张到底用没用，由该图自己的 `imageGeneration.mode` 决定（`image_to_image` 用了、`text_to_image` 没用），mode 为 `text_to_image` 时不得声称用了参考图。MiniMax 走另一套形状（`/image_generation` + `subject_reference`，JSON，只吃一张参考图，响应在 `data.image_base64`）。两种形状会**轮流试**，不按服务商名字预先排除：先 edits，404/405 再试原生形状；只有路由不存在才换形状，其它失败（参数被拒、审核、超时）直接回退纯文字。试过两条都不认的地址会在进程内记住，避免每次生图都白花两次请求。`edit` 仍为 false —— 不做「编辑已有图片」，只是把参考图作为输入附上。文件夹权限本身也不会让聊天模型自动得到视觉输入。
 
 ### 形象档案提示词
 
@@ -197,6 +197,6 @@ OSS（`hailuo-image-*.oss-cn-wulanchabu.aliyuncs.com`）。出现过一次
 
 ## 回归测试
 
-`yarn test:image-generation`（已进 `unit-suite`）：判定、概率/冷却/每日上限、
+`yarn test:image-generation`（已进 `unit-suite`）：判定、概率/冷却/每日上限、参考图 edits multipart、MiniMax `subject_reference`、路由缺失与参数错误回退、实际 mode 和空参考图说明清理，
 画面描述清洗、配置优先级、响应解析（含部分失败与 `base_resp`）、落库痕迹、DTO 透传。
 不联网 —— 真调接口要凭据而且要花钱。
