@@ -501,8 +501,8 @@ assert.equal(dtoDefault.imageSize, "square");
   const originalFetch = globalThis.fetch;
   const characterId = "22222222-2222-4222-8222-222222222222";
   const references = [
-    { assetId: "asset-standard", label: "标准形象", mime: "image/jpeg", buffer: pixel },
-    { assetId: "asset-front", label: "正面视图", mime: "image/jpeg", buffer: pixel },
+    { assetId: "asset-standard", label: "标准形象", mime: "image/png", buffer: pixel },
+    { assetId: "asset-front", label: "正面视图", mime: "image/png", buffer: pixel },
   ];
   const prompt = "【人物】蓝紫色头发；【参考图】图1 标准形象、图2 正面视图——只用来确定长相；【画面】窗边回眸";
 
@@ -557,7 +557,7 @@ assert.equal(dtoDefault.imageSize, "square");
         assert.ok(body.prompt.includes("图1 标准形象"));
         assert.ok(!body.prompt.includes("图2"), "单图形状不能保留未发送图片的说明");
         assert.equal(body.subject_reference.length, 1);
-        assert.ok(body.subject_reference[0]!.image_file.startsWith("data:image/jpeg;base64,"));
+        assert.ok(body.subject_reference[0]!.image_file.startsWith("data:image/png;base64,"));
         assert.ok(body.subject_reference[0]!.image_file.endsWith(pixelBase64));
         return new Response(JSON.stringify({ data: { image_base64: [pixelBase64] } }), {
           status: 200, headers: { "content-type": "application/json" },
