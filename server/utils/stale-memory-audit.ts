@@ -69,6 +69,18 @@ const SYSTEM_PROMPT = [
   "没有失效项就输出 {\"items\":[]}。",
 ].join("\n");
 
+/**
+ * 每次模型调用前都查一次额度。
+ *
+ * 一次请求可以同时扫长期记忆和忆泡，两轮各自记一次用量。只在开头查一次的话，
+ * 第一轮把额度用完，第二轮照样会发出去 —— 页面目前一次只扫一种，但接口允许两种。
+ */
+async function assertQuotaLeft(characterId: string, modelConfig: unknown): Promise<void> {
+  if ((await readDailyQuota(characterId, modelConfig)).exceeded) {
+    throw createError({ statusCode: 429, statusMessage: "当前角色今日模型额度已用完。" });
+  }
+}
+
 /** 一次体检：先取候选，再按范围各调一次模型。任何一步失败都不写库。 */
 export async function scanStaleMemories(prisma: PrismaClient, input: {
   ownerId: string;
@@ -85,9 +97,7 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
   const settings = resolveChatModelSettings(character.modelConfig);
   const apiKey = await resolveCharacterApiKey(character.modelConfig, settings.apiBaseUrl);
   if (!settings.model || !apiKey) throw createError({ statusCode: 503, statusMessage: "请先配置当前角色的聊天模型。" });
-  if ((await readDailyQuota(input.characterId, character.modelConfig)).exceeded) {
-    throw createError({ statusCode: 429, statusMessage: "当前角色今日模型额度已用完。" });
-  }
+  await assertQuotaLeft(input.characterId, character.modelConfig);
 
   const scope = scopeFor(input.ownerId, input.characterId);
   const result: StaleAuditResult = {
@@ -110,6 +120,7 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
     result.counts.memory = { active, scanned: rows.length };
     if (rows.length) {
       const candidates = rows.map(memoryCandidate);
+      await assertQuotaLeft(input.characterId, character.modelConfig);
       const verdicts = await judge(input.characterId, settings, apiKey, "长期记忆", candidates);
       const byId = new Map(candidates.map(candidate => [candidate.id, candidate]));
       for (const verdict of verdicts) {
@@ -140,6 +151,7 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
     result.counts.event = { active, scanned: rows.length };
     if (rows.length) {
       const candidates = rows.map(eventCandidate);
+      await assertQuotaLeft(input.characterId, character.modelConfig);
       const verdicts = await judge(input.characterId, settings, apiKey, "忆泡", candidates);
       const byId = new Map(candidates.map(candidate => [candidate.id, candidate]));
       for (const verdict of verdicts) {
