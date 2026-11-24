@@ -11,7 +11,7 @@ export async function queueManualMemoryEvents(
     hourly: boolean; now: Date;
   },
 ): Promise<string | null> {
-  const where = eventMessageWhere({ ...input, progress: null });
+  const where = await notAmbientMessageWhere(prisma, eventMessageWhere({ ...input, progress: null }));
   if (!await prisma.message.findFirst({ where, select: { id: true } })) return null;
   const created = await prisma.memoryJob.createMany({
     data: [{
@@ -59,7 +59,7 @@ export async function queueManualMemoryEvents(
       select: { extractedAt: true, extractedMessageId: true },
     });
     if (!await prisma.message.findFirst({
-      where: eventMessageWhere({ ...input, progress }), select: { id: true },
+      where: await notAmbientMessageWhere(prisma, eventMessageWhere({ ...input, progress })), select: { id: true },
     })) return null;
   }
   // 重新开跑的那几种状态都要把上一次的痕迹清干净，否则 attemptCount 会接着上次往下扣。
