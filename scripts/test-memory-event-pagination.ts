@@ -193,7 +193,8 @@ try {
   // message stops the window instead of skipping to unrelated older context.
   const contextRows = [{ id: "latest", content: "最近" }, { id: "older", content: "前文" }];
   const contextInput = { conversationId: "conversation", periodStart: start, periodEnd: end, first: { occurredAt: end, id: "first" } };
-  const contextPrisma = (rows: typeof contextRows) => ({ message: { findMany: async () => rows } }) as unknown as Pick<PrismaClient, "message">;
+  const contextPrisma = (rows: typeof contextRows) => ({ message: { findMany: async (query: { where: unknown }) =>
+    JSON.stringify(query.where).includes('"storedReason"') ? [] : rows } }) as unknown as Pick<PrismaClient, "message">;
   assert.deepEqual(await loadEventContextMessages(contextPrisma(contextRows), contextInput), [...contextRows].reverse());
   assert.deepEqual(await loadEventContextMessages(contextPrisma([{ id: "huge", content: "中".repeat(4_000) }, ...contextRows]), contextInput), [],
     "a nearest row above the context cap stops the window instead of skipping to older rows");
