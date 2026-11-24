@@ -30,6 +30,9 @@ const saving = ref(false);
 const actingId = ref("");
 const requestSeq = ref(0);
 const planDialog = ref(false);
+const unplannedDialog = ref(false);
+const unplannedTitle = ref("");
+const unplannedSaving = ref(false);
 const planForm = reactive({
   lifeType: "FREE",
   summary: "",
@@ -112,15 +115,25 @@ async function startPlanned(item: DailyLifePlanItem) {
   finally { actingId.value = ""; }
 }
 
-async function startUnplanned() {
-  if (!id.value) return;
+// 桌面版跑在 Electron 里，window.prompt 不受支持（调用会直接抛错），
+// 原本用 prompt 收集标题会一路落到「操作失败，请稍后重试」。改成页面内对话框。
+function openUnplanned() {
+  unplannedTitle.value = "";
+  unplannedDialog.value = true;
+}
+
+async function recordUnplanned() {
+  if (!id.value || unplannedSaving.value) return;
+  const title = unplannedTitle.value.trim();
+  if (!title) { ElMessage.warning("写一句想做的事。"); return; }
+  unplannedSaving.value = true;
   try {
-    const title = window.prompt("现在想做什么？");
-    if (!title?.trim()) return;
-    await api.startActivity(id.value, { title: title.trim(), source: "USER_CONFIRMED" });
-    ElMessage.success("已记录这项临时活动。");
+    await api.startActivity(id.value, { title, source: "USER_CONFIRMED" });
+    ElMessage.success("已记录这段临时活动。");
+    unplannedDialog.value = false;
     await load();
   } catch (error) { ElMessage.error(readApiErrorMessage(error)); }
+  finally { unplannedSaving.value = false; }
 }
 
 async function completeCurrent() {
@@ -226,7 +239,7 @@ watch([id, dayKey], () => { void load(); }, { immediate: true });
           v-if="!overview?.currentActivity"
           plain
           :icon="Plus"
-          @click="startUnplanned"
+          @click="openUnplanned"
         >
           记录一件临时想做的事
         </el-button>
@@ -398,6 +411,32 @@ watch([id, dayKey], () => { void load(); }, { immediate: true });
         </div>
       </section>
     </template>
+
+    <el-dialog
+      v-model="unplannedDialog"
+      title="现在想做什么？"
+      width="min(420px, 92vw)"
+    >
+      <el-input
+        v-model="unplannedTitle"
+        maxlength="160"
+        show-word-limit
+        autofocus
+        placeholder="例如：去阳台吹吹风"
+        @keyup.enter="recordUnplanned"
+      />
+      <template #footer>
+        <el-button @click="unplannedDialog = false">
+          先不记
+        </el-button><el-button
+          type="primary"
+          :loading="unplannedSaving"
+          @click="recordUnplanned"
+        >
+          记下来
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog
       v-model="planDialog"
