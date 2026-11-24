@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
-import { Check, Delete, Edit, Minus, Plus, Upload } from "@element-plus/icons-vue";
+import { Brush, Check, Clock, Delete, Edit, Grid, Minus, Picture, Plus, Upload, User } from "@element-plus/icons-vue";
+import type { Component } from "vue";
 
 definePageMeta({
   topbar: {
@@ -61,12 +62,12 @@ const VIEW_KINDS = [
   { kind: "SIDE_VIEW", label: "侧面视图" },
   { kind: "BACK_VIEW", label: "背面视图" },
 ];
-const SECTIONS: Array<{ key: SectionKey; label: string }> = [
-  { key: "overview", label: "概览" },
-  { key: "core", label: "核心形象" },
-  { key: "outfit", label: "服装造型" },
-  { key: "assets", label: "参考素材" },
-  { key: "versions", label: "版本历史" },
+const SECTIONS: Array<{ key: SectionKey; label: string; icon: Component }> = [
+  { key: "overview", label: "概览", icon: Grid },
+  { key: "core", label: "核心形象", icon: User },
+  { key: "outfit", label: "服装造型", icon: Brush },
+  { key: "assets", label: "参考素材", icon: Picture },
+  { key: "versions", label: "版本历史", icon: Clock },
 ];
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 
@@ -118,6 +119,10 @@ const standardAsset = computed(() => assets.value.find(asset => asset.kind === "
 /** 会作为参考图发出去的素材：标准形象 + 三视图，与后端 REFERENCE_KINDS 对齐。 */
 const REFERENCE_KINDS = ["STANDARD", "FRONT_VIEW", "SIDE_VIEW", "BACK_VIEW"];
 const referenceAssetCount = computed(() => assets.value.filter(asset => REFERENCE_KINDS.includes(asset.kind)).length);
+/** 概览右栏的参考图预览：按标准形象 → 正 → 侧 → 背排序，一眼看清手上有什么图。 */
+const referenceAssets = computed(() => REFERENCE_KINDS
+  .map(kind => assets.value.find(asset => asset.kind === kind))
+  .filter((asset): asset is VisualAsset => Boolean(asset)));
 
 const personLength = computed(() => coreAppearance.value.trim().length);
 const promptLength = computed(() => corePrompt.value.trim().length);
@@ -252,6 +257,13 @@ const assetUrl = (assetId: string) =>
 
 function goToSection(section: SectionKey) {
   activeSection.value = section;
+}
+/** 分区导航上的计数：和记忆系统的分区导航同一套读法，没有内容就不显示角标。 */
+function sectionCount(section: SectionKey) {
+  if (section === "outfit") return outfits.value.length;
+  if (section === "assets") return assets.value.length;
+  if (section === "versions") return versions.value.length;
+  return 0;
 }
 function goFix(action: string) {
   if (action === "去补齐") {
@@ -529,48 +541,46 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 </script>
 
 <template>
-  <div class="page-wrap visual-profile-page">
+  <div class="page-wrap">
     <el-empty
       v-if="!activeCharacter"
       description="请先从左下角选择一个角色。"
     />
     <template v-else>
-      <header class="vp-head">
-        <div class="vp-identity">
-          <span class="vp-avatar">{{ activeCharacter.avatar || activeCharacter.name.slice(0, 1) }}</span>
-          <div class="vp-identity-copy">
-            <div class="vp-name">
-              {{ activeCharacter.name }}
-              <span
-                v-if="profile?.currentPublishedRevision"
-                class="vp-tag is-ok"
-              >正式 v{{ profile.currentPublishedRevision }}</span>
-              <span
-                v-else
-                class="vp-tag"
-              >尚无正式版本</span>
-            </div>
-            <div class="vp-sub">
-              <template v-if="publishedVersion">
-                发布于 {{ formatTime(publishedVersion.publishedAt || publishedVersion.createdAt) }}
-              </template>
-              <template v-else>
-                保存草稿并发布后，绘图才会用上这套形象
-              </template>
-            </div>
-          </div>
-        </div>
-        <div class="vp-actions">
+      <nav
+        class="section-nav"
+        aria-label="形象档案分区"
+      >
+        <button
+          v-for="section in SECTIONS"
+          :key="section.key"
+          type="button"
+          class="section-link"
+          :class="{ active: activeSection === section.key }"
+          :aria-current="activeSection === section.key ? 'page' : undefined"
+          @click="goToSection(section.key)"
+        >
+          <el-icon><component :is="section.icon" /></el-icon>
+          {{ section.label }}
+          <span
+            v-if="sectionCount(section.key)"
+            class="n"
+          >{{ sectionCount(section.key) }}</span>
+        </button>
+      </nav>
+
+      <PageHeader :description="`管理「${activeCharacter.name}」的标准形象与参考素材。保存只形成草稿，发布之后绘图才会用上这套形象。`">
+        <template #actions>
           <span
             v-if="draftVersion"
-            class="vp-draft"
-          ><i />草稿 v{{ draftVersion.revision }} 待发布</span>
+            class="pill pill-amber"
+          >草稿 v{{ draftVersion.revision }} 待发布</span>
           <span
             v-else
-            class="vp-sub"
-          >没有待发布草稿</span>
+            class="pill pill-gray"
+          >无待发布草稿</span>
           <button
-            class="btn sm"
+            class="btn"
             type="button"
             :disabled="!draftVersion"
             @click="goToSection('versions')"
@@ -578,47 +588,45 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
             对照改动
           </button>
           <button
-            class="btn primary sm"
+            class="btn primary"
             type="button"
             :disabled="!draftRevision || saving || hasUncommittedEdits || publishing"
             @click="publishDraft"
           >
             {{ publishing ? "发布中…" : `发布 v${draftVersion?.revision ?? "—"}` }}
           </button>
-        </div>
-      </header>
+        </template>
+      </PageHeader>
 
-      <nav
-        class="vp-nav"
-        aria-label="形象档案分区"
+      <div
+        v-if="!loading"
+        class="card stat-band"
       >
-        <button
-          v-for="section in SECTIONS"
-          :key="section.key"
-          type="button"
-          class="vp-tab"
-          :class="{ 'is-on': activeSection === section.key }"
-          :aria-current="activeSection === section.key ? 'page' : undefined"
-          @click="goToSection(section.key)"
-        >
-          {{ section.label }}
-          <span
-            v-if="section.key === 'outfit' && outfits.length"
-            class="vp-count"
-          >{{ outfits.length }}</span>
-          <span
-            v-else-if="section.key === 'assets' && assets.length"
-            class="vp-count"
-          >{{ assets.length }}</span>
-          <span
-            v-else-if="section.key === 'versions' && versions.length"
-            class="vp-count"
-          >{{ versions.length }}</span>
-        </button>
-      </nav>
+        <div class="sb-cell">
+          <span class="sb-k">标准形象</span>
+          <span class="sb-v">{{ standardAsset ? "已就绪" : "缺图" }}</span>
+          <span class="sb-f">{{ standardAsset ? `${standardAsset.width}×${standardAsset.height} · 随生成一起发出` : "上传一张正面全身立绘" }}</span>
+        </div>
+        <div class="sb-cell">
+          <span class="sb-k">参考素材</span>
+          <span class="sb-v">{{ assets.length }}<small>张</small></span>
+          <span class="sb-f">{{ viewGaps.length ? `三视图缺 ${viewGaps.map(item => item.label).join("、")}` : "标准形象与三视图齐全" }}</span>
+        </div>
+        <div class="sb-cell">
+          <span class="sb-k">服装造型</span>
+          <span class="sb-v">{{ outfits.length }}<small>套</small></span>
+          <span class="sb-f">{{ defaultOutfit ? `默认「${defaultOutfit.name}」` : "未设默认造型" }}</span>
+        </div>
+        <div class="sb-cell">
+          <span class="sb-k">当前正式版本</span>
+          <span class="sb-v">{{ profile?.currentPublishedRevision ? `v${profile.currentPublishedRevision}` : "—" }}</span>
+          <span class="sb-f">{{ publishedVersion ? `发布于 ${formatTime(publishedVersion.publishedAt || publishedVersion.createdAt)}` : "尚未发布，绘图用不到这套形象" }}</span>
+        </div>
+      </div>
 
       <el-alert
         v-if="loadError"
+        class="vp-load-error"
         :title="loadError"
         type="error"
         :closable="false"
@@ -643,181 +651,233 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
         <!-- 概览 -->
         <div
           v-if="activeSection === 'overview'"
-          class="vp-grid"
+          class="panel-grid"
         >
-          <div class="vp-col">
-            <section class="card vp-hero">
-              <div class="vp-hero-figure">
-                <img
-                  v-if="standardAsset"
-                  :src="assetUrl(standardAsset.id)"
-                  alt="标准形象"
+          <div class="vp-stack">
+            <section>
+              <div class="sec-h">
+                <h2>标准形象</h2>
+                <span class="sub">{{ referenceAssetCount }} 张参考图</span>
+                <button
+                  class="more"
+                  type="button"
+                  @click="goToSection('assets')"
                 >
-                <span
-                  v-else
-                  class="vp-hero-empty"
-                >无标准图</span>
+                  管理素材
+                </button>
               </div>
-              <div class="vp-hero-copy">
-                <div class="vp-name">
-                  {{ activeCharacter.name }}
+              <div class="card vp-hero">
+                <div class="vp-hero-figure">
+                  <img
+                    v-if="standardAsset"
+                    :src="assetUrl(standardAsset.id)"
+                    alt="标准形象"
+                  >
                   <span
-                    v-if="profile?.currentPublishedRevision"
-                    class="vp-tag is-ok"
-                  >已发布 v{{ profile.currentPublishedRevision }}</span>
+                    v-else
+                    class="vp-hero-empty"
+                  >无标准图</span>
                 </div>
-                <p class="vp-hero-text">
-                  {{ coreAppearance.trim() || "还没有写外貌设定。核心形象决定她长得像谁，造型只决定这一次穿什么。" }}
-                </p>
-                <div class="vp-facts">
-                  <span>核心提示词 <b>{{ promptLength }}</b> 字</span>
-                  <span>默认造型 <b>{{ defaultOutfit?.name || "未设置" }}</b></span>
-                  <span>负面词 <b>{{ negativeCount }}</b> 条</span>
-                </div>
-              </div>
-              <div class="vp-hero-stats">
-                <div class="vp-stat">
-                  <span>造型</span><b>{{ outfits.length }}<small>套</small></b>
-                </div>
-                <div class="vp-stat">
-                  <span>参考素材</span><b>{{ assets.length }}<small>张</small></b>
-                </div>
-                <div class="vp-stat">
-                  <span>版本</span><b>{{ versions.length }}<small>次</small></b>
+                <div class="vp-hero-copy">
+                  <div class="vp-hero-head">
+                    <strong>核心外貌</strong>
+                    <span
+                      v-if="profile?.currentPublishedRevision"
+                      class="pill pill-green"
+                    >已发布 v{{ profile.currentPublishedRevision }}</span>
+                    <span
+                      v-else
+                      class="pill pill-gray"
+                    >尚无正式版本</span>
+                  </div>
+                  <p class="vp-hero-text">
+                    {{ coreAppearance.trim() || "还没有写外貌设定。核心形象决定她长得像谁，造型只决定这一次穿什么。" }}
+                  </p>
+                  <div class="vp-facts">
+                    <span>核心提示词 <b>{{ promptLength }}</b> 字</span>
+                    <span>默认造型 <b>{{ defaultOutfit?.name || "未设置" }}</b></span>
+                    <span>负面词 <b>{{ negativeCount }}</b> 条</span>
+                  </div>
                 </div>
               </div>
             </section>
 
-            <section class="card vp-fill">
-              <div class="card-head">
-                <h3>档案完成度</h3>
-                <span class="muted">{{ readyCount }} / {{ readiness.length }} 项就绪</span>
+            <section>
+              <div class="sec-h">
+                <h2>档案完成度</h2>
+                <span class="sub">{{ readyCount }} / {{ readiness.length }} 项就绪</span>
               </div>
-              <div class="vp-checks">
-                <div
-                  v-for="item in readiness"
-                  :key="item.key"
-                  class="vp-check"
-                >
-                  <span
-                    class="vp-check-mark"
-                    :class="item.done ? 'is-on' : 'is-off'"
+              <div class="card">
+                <div class="vp-checks">
+                  <div
+                    v-for="item in readiness"
+                    :key="item.key"
+                    class="vp-check"
                   >
-                    <el-icon :size="11"><Check v-if="item.done" /><Minus v-else /></el-icon>
-                  </span>
-                  <div class="vp-check-copy">
-                    <strong>{{ item.title }}</strong>
-                    <span>{{ item.detail }}</span>
+                    <span
+                      class="vp-check-mark"
+                      :class="item.done ? 'is-on' : 'is-off'"
+                    >
+                      <el-icon :size="11"><Check v-if="item.done" /><Minus v-else /></el-icon>
+                    </span>
+                    <div class="vp-check-copy">
+                      <strong>{{ item.title }}</strong>
+                      <span>{{ item.detail }}</span>
+                    </div>
+                    <button
+                      v-if="item.action"
+                      class="btn-link"
+                      type="button"
+                      @click="goFix(item.action)"
+                    >
+                      {{ item.action }}
+                    </button>
                   </div>
-                  <button
-                    v-if="item.action"
-                    class="btn-link"
-                    type="button"
-                    @click="goFix(item.action)"
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <div class="sec-h">
+                <h2>绘图时怎么拼</h2>
+                <span class="sub">只读取已发布的正式版本</span>
+              </div>
+              <div class="card">
+                <div class="vp-flow">
+                  <span class="vp-step">人物 · {{ promptLength }} 字</span>
+                  <span class="vp-arrow">→</span>
+                  <span class="vp-step">造型 · {{ defaultOutfit?.name || "未设置" }}</span>
+                  <span class="vp-arrow">→</span>
+                  <span class="vp-step">参考图 · {{ referenceAssetCount }} 张</span>
+                  <span class="vp-arrow">→</span>
+                  <span class="vp-step">本轮画面</span>
+                  <span class="vp-arrow">→</span>
+                  <span class="vp-step is-quiet">避免</span>
+                </div>
+                <p class="muted vp-flow-note">
+                  画面里已经写了服装时，整段造型不会被拼进去；负面词以「避免」追加在最后。标准形象和三视图会作为参考图一起发出，只用来定长相，姿势和表情仍按画面重新安排。
+                </p>
+              </div>
+            </section>
+          </div>
+
+          <div class="vp-stack vp-side">
+            <section>
+              <div class="sec-h">
+                <h2>本次草稿改了什么</h2>
+                <span class="sub">{{ draftVersion ? `v${draftVersion.revision}` : "无草稿" }}</span>
+              </div>
+              <div class="card">
+                <div
+                  v-if="draftChanges.length"
+                  class="vp-diffs"
+                >
+                  <div
+                    v-for="row in draftChanges"
+                    :key="row.title"
+                    class="vp-diff"
                   >
-                    {{ item.action }}
+                    <span class="vp-diff-dot" />
+                    <div><strong>{{ row.title }}</strong><span>{{ row.detail }}</span></div>
+                  </div>
+                </div>
+                <p
+                  v-else
+                  class="muted vp-pad"
+                >
+                  草稿内容和正式版一致。
+                </p>
+                <div class="card-foot">
+                  <span class="muted">发布后才会进入绘图</span>
+                  <button
+                    class="btn primary sm"
+                    type="button"
+                    :disabled="!draftRevision || publishing"
+                    @click="publishDraft"
+                  >
+                    发布
                   </button>
                 </div>
               </div>
             </section>
 
-            <section class="card">
-              <div class="card-head">
-                <h3>绘图时怎么拼</h3>
-                <span class="muted">只读取已发布的正式版本</span>
-              </div>
-              <div class="vp-flow">
-                <span class="vp-step">人物 · {{ promptLength }} 字</span>
-                <span class="vp-arrow">→</span>
-                <span class="vp-step">造型 · {{ defaultOutfit?.name || "未设置" }}</span>
-                <span class="vp-arrow">→</span>
-                <span class="vp-step">参考图 · {{ referenceAssetCount }} 张</span>
-                <span class="vp-arrow">→</span>
-                <span class="vp-step">本轮画面</span>
-                <span class="vp-arrow">→</span>
-                <span class="vp-step is-quiet">避免</span>
-              </div>
-              <p class="muted vp-flow-note">
-                画面里已经写了服装时，整段造型不会被拼进去；负面词以「避免」追加在最后。标准形象和三视图会作为参考图一起发出，只用来定长相，姿势和表情仍按画面重新安排。
-              </p>
-            </section>
-          </div>
-
-          <div class="vp-col vp-side">
-            <section class="card">
-              <div class="card-head">
-                <h3>本次草稿改了什么</h3>
-                <span class="muted">{{ draftVersion ? `v${draftVersion.revision}` : "无草稿" }}</span>
-              </div>
-              <div
-                v-if="draftChanges.length"
-                class="vp-diffs"
-              >
-                <div
-                  v-for="row in draftChanges"
-                  :key="row.title"
-                  class="vp-diff"
-                >
-                  <span class="vp-diff-dot" />
-                  <div><strong>{{ row.title }}</strong><span>{{ row.detail }}</span></div>
-                </div>
-              </div>
-              <p
-                v-else
-                class="muted vp-pad"
-              >
-                草稿内容和正式版一致。
-              </p>
-              <div class="card-foot">
-                <span class="muted">发布后才会进入绘图</span>
+            <section>
+              <div class="sec-h">
+                <h2>最近版本</h2>
                 <button
-                  class="btn primary sm"
-                  type="button"
-                  :disabled="!draftRevision || publishing"
-                  @click="publishDraft"
-                >
-                  发布
-                </button>
-              </div>
-            </section>
-
-            <section class="card vp-fill">
-              <div class="card-head">
-                <h3>最近版本</h3>
-                <button
-                  class="btn-link"
+                  class="more"
                   type="button"
                   @click="goToSection('versions')"
                 >
                   全部
                 </button>
               </div>
-              <div
-                v-if="versions.length"
-                class="vp-diffs"
-              >
+              <div class="card">
                 <div
-                  v-for="item in versions.slice(0, 4)"
-                  :key="item.id"
-                  class="vp-diff"
+                  v-if="versions.length"
+                  class="vp-diffs"
                 >
-                  <span
-                    class="vp-rev"
-                    :class="item.revision === profile?.currentPublishedRevision ? 'is-ok' : item.status === 'DRAFT' ? 'is-draft' : ''"
-                  >v{{ item.revision }}</span>
-                  <div>
-                    <strong>{{ item.revision === profile?.currentPublishedRevision ? "正式版本 · 当前" : item.status === "DRAFT" ? "草稿 · 待发布" : item.status === "ARCHIVED" ? "已归档草稿" : "历史正式版本" }}</strong>
-                    <span>{{ item.note || "未填写版本说明" }}</span>
-                    <span class="vp-time">{{ formatTime(item.createdAt) }}</span>
+                  <div
+                    v-for="item in versions.slice(0, 4)"
+                    :key="item.id"
+                    class="vp-diff"
+                  >
+                    <span
+                      class="vp-rev"
+                      :class="item.revision === profile?.currentPublishedRevision ? 'is-ok' : item.status === 'DRAFT' ? 'is-draft' : ''"
+                    >v{{ item.revision }}</span>
+                    <div>
+                      <strong>{{ item.revision === profile?.currentPublishedRevision ? "正式版本 · 当前" : item.status === "DRAFT" ? "草稿 · 待发布" : item.status === "ARCHIVED" ? "已归档草稿" : "历史正式版本" }}</strong>
+                      <span>{{ item.note || "未填写版本说明" }}</span>
+                      <span class="vp-time">{{ formatTime(item.createdAt) }}</span>
+                    </div>
                   </div>
                 </div>
+                <div
+                  v-else
+                  class="card-empty"
+                >
+                  <span>保存第一份草稿后</span>
+                  <span>版本记录会显示在这里</span>
+                </div>
               </div>
-              <div
-                v-else
-                class="card-empty"
-              >
-                <span>保存第一份草稿后</span>
-                <span>版本记录会显示在这里</span>
+            </section>
+
+            <section>
+              <div class="sec-h">
+                <h2>参考图预览</h2>
+                <span class="sub">{{ referenceAssets.length }} / 4 张</span>
+                <button
+                  class="more"
+                  type="button"
+                  @click="goToSection('assets')"
+                >
+                  管理
+                </button>
+              </div>
+              <div class="card">
+                <div
+                  v-if="referenceAssets.length"
+                  class="vp-preview"
+                >
+                  <figure
+                    v-for="asset in referenceAssets"
+                    :key="asset.id"
+                    class="vp-preview-item"
+                  >
+                    <img
+                      :src="assetUrl(asset.id)"
+                      :alt="asset.label"
+                    >
+                    <figcaption>{{ kindLabel(asset.kind) }}</figcaption>
+                  </figure>
+                </div>
+                <p
+                  v-else
+                  class="muted vp-pad"
+                >
+                  还没有参考图。先上传标准形象，再补正、侧、背三视图。
+                </p>
               </div>
             </section>
           </div>
@@ -826,57 +886,63 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
         <!-- 核心形象 -->
         <div
           v-else-if="activeSection === 'core'"
-          class="vp-grid"
+          class="panel-grid"
         >
-          <div class="vp-col">
-            <section class="card">
-              <div class="card-head">
-                <h3>外貌设定</h3>
-                <span class="muted">稳定外貌，不包含服装</span>
+          <div class="vp-stack">
+            <section>
+              <div class="sec-h">
+                <h2>外貌设定</h2>
+                <span class="sub">稳定外貌，不包含服装</span>
               </div>
-              <div class="vp-pad">
-                <el-input
-                  v-model="coreAppearance"
-                  type="textarea"
-                  :rows="4"
-                  maxlength="12000"
-                  show-word-limit
-                  placeholder="例如：蓝紫色长发、蓝色眼睛、鲸鱼耳与尾巴；少女形态，中间体型比例……"
-                />
-              </div>
-            </section>
-
-            <section class="card">
-              <div class="card-head">
-                <h3>核心绘图提示词</h3>
-                <span class="muted">每次绘图都会前置</span>
-              </div>
-              <div class="vp-pad">
-                <el-input
-                  v-model="corePrompt"
-                  type="textarea"
-                  :rows="5"
-                  maxlength="12000"
-                  show-word-limit
-                  placeholder="写下每次绘图都应保持的角色视觉特征。"
-                />
+              <div class="card">
+                <div class="vp-pad">
+                  <el-input
+                    v-model="coreAppearance"
+                    type="textarea"
+                    :rows="4"
+                    maxlength="12000"
+                    show-word-limit
+                    placeholder="例如：蓝紫色长发、蓝色眼睛、鲸鱼耳与尾巴；少女形态，中间体型比例……"
+                  />
+                </div>
               </div>
             </section>
 
-            <section class="card">
-              <div class="card-head">
-                <h3>负面提示词</h3>
-                <span class="muted">以「避免」追加在末尾</span>
+            <section>
+              <div class="sec-h">
+                <h2>核心绘图提示词</h2>
+                <span class="sub">每次绘图都会前置</span>
               </div>
-              <div class="vp-pad">
-                <el-input
-                  v-model="negativePrompt"
-                  type="textarea"
-                  :rows="3"
-                  maxlength="6000"
-                  show-word-limit
-                  placeholder="写下希望避免的外观偏差或画面问题。"
-                />
+              <div class="card">
+                <div class="vp-pad">
+                  <el-input
+                    v-model="corePrompt"
+                    type="textarea"
+                    :rows="5"
+                    maxlength="12000"
+                    show-word-limit
+                    placeholder="写下每次绘图都应保持的角色视觉特征。"
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <div class="sec-h">
+                <h2>负面提示词</h2>
+                <span class="sub">以「避免」追加在末尾</span>
+              </div>
+              <div class="card">
+                <div class="vp-pad">
+                  <el-input
+                    v-model="negativePrompt"
+                    type="textarea"
+                    :rows="3"
+                    maxlength="6000"
+                    show-word-limit
+                    placeholder="写下希望避免的外观偏差或画面问题。"
+                  />
+                </div>
               </div>
             </section>
 
@@ -913,71 +979,72 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
             </p>
           </div>
 
-          <div class="vp-col vp-side">
-            <section class="card">
-              <div class="card-head">
-                <h3>{{ diffTitle }}</h3>
-                <span class="muted">草稿</span>
+          <div class="vp-stack vp-side">
+            <section>
+              <div class="sec-h">
+                <h2>{{ diffTitle }}</h2>
+                <span class="sub">草稿</span>
               </div>
-              <div
-                v-if="draftChanges.length"
-                class="vp-diffs vp-pad"
-              >
+              <div class="card">
                 <div
-                  v-for="row in draftChanges"
-                  :key="row.title"
-                  class="vp-diff"
+                  v-if="draftChanges.length"
+                  class="vp-diffs vp-pad"
                 >
-                  <span class="vp-diff-dot" />
-                  <div><strong>{{ row.title }}</strong><span>{{ row.detail }}</span></div>
+                  <div
+                    v-for="row in draftChanges"
+                    :key="row.title"
+                    class="vp-diff"
+                  >
+                    <span class="vp-diff-dot" />
+                    <div><strong>{{ row.title }}</strong><span>{{ row.detail }}</span></div>
+                  </div>
                 </div>
-              </div>
-              <p
-                v-else
-                class="muted vp-pad"
-              >
-                和正式版一致，没有待生效的改动。
-              </p>
-              <div class="card-foot">
-                <span class="muted">尚未生效，绘图仍用正式版</span>
+                <p
+                  v-else
+                  class="muted vp-pad"
+                >
+                  和正式版一致，没有待生效的改动。
+                </p>
+                <div class="card-foot">
+                  <span class="muted">尚未生效，绘图仍用正式版</span>
+                </div>
               </div>
             </section>
 
-            <section
-              v-if="publishedVersion"
-              class="card"
-            >
-              <div class="card-head">
-                <h3>正式版 v{{ publishedVersion.revision }}</h3>
-                <span class="muted">{{ formatTime(publishedVersion.publishedAt || publishedVersion.createdAt) }}</span>
+            <section v-if="publishedVersion">
+              <div class="sec-h">
+                <h2>正式版 v{{ publishedVersion.revision }}</h2>
+                <span class="sub">{{ formatTime(publishedVersion.publishedAt || publishedVersion.createdAt) }}</span>
               </div>
-              <div class="vp-pad vp-pv-stack">
-                <div class="vp-pv">
-                  <span>核心提示词</span>
-                  <p>{{ textOf(publishedSnapshot.corePrompt) || "（空）" }}</p>
+              <div class="card">
+                <div class="vp-pad vp-pv-stack">
+                  <div class="vp-pv">
+                    <span>核心提示词</span>
+                    <p>{{ textOf(publishedSnapshot.corePrompt) || "（空）" }}</p>
+                  </div>
+                  <div class="vp-pv">
+                    <span>负面提示词</span>
+                    <p>{{ textOf(publishedSnapshot.negativePrompt) || "（空）" }}</p>
+                  </div>
+                  <div
+                    v-if="publishedVersion.note"
+                    class="vp-pv"
+                  >
+                    <span>版本说明</span>
+                    <p>{{ publishedVersion.note }}</p>
+                  </div>
                 </div>
-                <div class="vp-pv">
-                  <span>负面提示词</span>
-                  <p>{{ textOf(publishedSnapshot.negativePrompt) || "（空）" }}</p>
+                <div class="card-foot">
+                  <span class="muted">只读，供对照</span>
+                  <button
+                    class="btn sm"
+                    type="button"
+                    :disabled="restoringVersionId === publishedVersion.id"
+                    @click="restoreVersion(publishedVersion.id)"
+                  >
+                    恢复为草稿
+                  </button>
                 </div>
-                <div
-                  v-if="publishedVersion.note"
-                  class="vp-pv"
-                >
-                  <span>版本说明</span>
-                  <p>{{ publishedVersion.note }}</p>
-                </div>
-              </div>
-              <div class="card-foot">
-                <span class="muted">只读，供对照</span>
-                <button
-                  class="btn sm"
-                  type="button"
-                  :disabled="restoringVersionId === publishedVersion.id"
-                  @click="restoreVersion(publishedVersion.id)"
-                >
-                  恢复为草稿
-                </button>
               </div>
             </section>
           </div>
@@ -986,47 +1053,55 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
         <!-- 服装造型 -->
         <div
           v-else-if="activeSection === 'outfit'"
-          class="vp-grid"
+          class="panel-grid"
         >
-          <div class="vp-col">
-            <article
-              v-for="outfit in outfits"
-              :key="outfit.id"
-              class="card vp-outfit"
-              :class="{ 'is-default': outfit.isDefault, 'is-editing': editingOutfitId === outfit.id }"
-            >
-              <div class="vp-outfit-head">
-                <h3>{{ outfit.name }}</h3>
-                <span
-                  v-if="outfit.isDefault"
-                  class="vp-tag is-ok"
-                >默认</span>
-                <span
-                  v-else
-                  class="muted"
-                >不是默认造型</span>
+          <div class="vp-stack">
+            <section>
+              <div class="sec-h">
+                <h2>造型列表</h2>
+                <span class="sub">{{ outfits.length }} 套</span>
               </div>
-              <p class="vp-outfit-prompt">
-                {{ outfit.prompt }}
-              </p>
-              <div class="vp-outfit-foot">
-                <button
-                  class="btn sm"
-                  type="button"
-                  @click="editOutfit(outfit)"
+              <div class="vp-stack">
+                <article
+                  v-for="outfit in outfits"
+                  :key="outfit.id"
+                  class="card vp-outfit"
+                  :class="{ 'is-default': outfit.isDefault, 'is-editing': editingOutfitId === outfit.id }"
                 >
-                  <el-icon><Edit /></el-icon>编辑
-                </button>
-                <button
-                  class="btn sm quiet is-danger"
-                  type="button"
-                  :disabled="outfitSaving"
-                  @click="deleteOutfit(outfit.id)"
-                >
-                  <el-icon><Delete /></el-icon>删除
-                </button>
+                  <div class="vp-outfit-head">
+                    <h3>{{ outfit.name }}</h3>
+                    <span
+                      v-if="outfit.isDefault"
+                      class="pill pill-green"
+                    >默认</span>
+                    <span
+                      v-else
+                      class="muted"
+                    >不是默认造型</span>
+                  </div>
+                  <p class="vp-outfit-prompt">
+                    {{ outfit.prompt }}
+                  </p>
+                  <div class="vp-outfit-foot">
+                    <button
+                      class="btn sm"
+                      type="button"
+                      @click="editOutfit(outfit)"
+                    >
+                      <el-icon><Edit /></el-icon>编辑
+                    </button>
+                    <button
+                      class="btn sm quiet is-danger"
+                      type="button"
+                      :disabled="outfitSaving"
+                      @click="deleteOutfit(outfit.id)"
+                    >
+                      <el-icon><Delete /></el-icon>删除
+                    </button>
+                  </div>
+                </article>
               </div>
-            </article>
+            </section>
 
             <section class="vp-outfit-empty">
               <span class="vp-outfit-plus"><el-icon :size="16"><Plus /></el-icon></span>
@@ -1040,53 +1115,55 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
             </section>
           </div>
 
-          <div class="vp-col vp-side">
-            <section class="card">
-              <div class="card-head">
-                <h3>{{ editingOutfitId ? "编辑造型" : "新增造型" }}</h3>
-                <span class="muted">{{ editingOutfitId ? outfitName : "未保存" }}</span>
+          <div class="vp-stack vp-side">
+            <section>
+              <div class="sec-h">
+                <h2>{{ editingOutfitId ? "编辑造型" : "新增造型" }}</h2>
+                <span class="sub">{{ editingOutfitId ? outfitName : "未保存" }}</span>
               </div>
-              <div class="vp-pad vp-form">
-                <label class="vp-field">
-                  <span>造型名称</span>
-                  <el-input
-                    v-model="outfitName"
-                    maxlength="100"
-                    placeholder="例如：日常服、深蓝女仆装"
-                  />
-                </label>
-                <label class="vp-field">
-                  <span>造型提示词</span>
-                  <el-input
-                    v-model="outfitPrompt"
-                    type="textarea"
-                    :rows="5"
-                    maxlength="6000"
-                    show-word-limit
-                    placeholder="只描述服装、配饰和造型，不要重复核心外貌。"
-                  />
-                </label>
-                <el-checkbox v-model="outfitIsDefault">
-                  设为默认造型
-                </el-checkbox>
-              </div>
-              <div class="card-foot">
-                <button
-                  class="btn"
-                  type="button"
-                  :disabled="!editingOutfitId"
-                  @click="resetOutfitForm"
-                >
-                  取消
-                </button>
-                <button
-                  class="btn primary"
-                  type="button"
-                  :disabled="!outfitName.trim() || !outfitPrompt.trim() || outfitSaving"
-                  @click="saveOutfit"
-                >
-                  {{ outfitSaving ? "保存中…" : editingOutfitId ? "保存修改" : "新增造型" }}
-                </button>
+              <div class="card">
+                <div class="vp-pad vp-form">
+                  <label class="vp-field">
+                    <span>造型名称</span>
+                    <el-input
+                      v-model="outfitName"
+                      maxlength="100"
+                      placeholder="例如：日常服、深蓝女仆装"
+                    />
+                  </label>
+                  <label class="vp-field">
+                    <span>造型提示词</span>
+                    <el-input
+                      v-model="outfitPrompt"
+                      type="textarea"
+                      :rows="5"
+                      maxlength="6000"
+                      show-word-limit
+                      placeholder="只描述服装、配饰和造型，不要重复核心外貌。"
+                    />
+                  </label>
+                  <el-checkbox v-model="outfitIsDefault">
+                    设为默认造型
+                  </el-checkbox>
+                </div>
+                <div class="card-foot">
+                  <button
+                    class="btn"
+                    type="button"
+                    :disabled="!editingOutfitId"
+                    @click="resetOutfitForm"
+                  >
+                    取消
+                  </button>
+                  <button
+                    class="btn primary"
+                    type="button"
+                    :disabled="!outfitName.trim() || !outfitPrompt.trim() || outfitSaving"
+                    @click="saveOutfit"
+                  >
+                    {{ outfitSaving ? "保存中…" : editingOutfitId ? "保存修改" : "新增造型" }}
+                  </button>
+                </div>
               </div>
             </section>
 
@@ -1103,7 +1180,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
         <!-- 参考素材 -->
         <div
           v-else-if="activeSection === 'assets'"
-          class="vp-col"
+          class="vp-stack"
         >
           <section
             class="vp-dropzone"
@@ -1183,10 +1260,9 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
             :key="group.group"
             class="vp-asset-group"
           >
-            <div class="vp-group-head">
-              <h3>{{ group.group }}</h3>
-              <span class="muted">{{ group.items.length }} 张</span>
-              <span class="vp-group-rule" />
+            <div class="sec-h">
+              <h2>{{ group.group }}</h2>
+              <span class="sub">{{ group.items.length }} 张</span>
             </div>
             <div class="vp-asset-row">
               <article
@@ -1245,9 +1321,9 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
         <!-- 版本历史 -->
         <div
           v-else-if="activeSection === 'versions'"
-          class="vp-grid"
+          class="panel-grid"
         >
-          <div class="vp-col">
+          <div class="vp-stack">
             <div class="filters">
               <button
                 class="chip"
@@ -1276,6 +1352,11 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
               <span class="muted vp-filter-note">恢复历史版本不会删除记录，只会生成新草稿</span>
             </div>
 
+            <div class="sec-h">
+              <h2>版本记录</h2>
+              <span class="sub">{{ filteredVersions.length }} 个</span>
+            </div>
+
             <article
               v-for="item in filteredVersions"
               :key="item.id"
@@ -1291,15 +1372,15 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                   <strong>{{ item.revision === profile?.currentPublishedRevision ? "正式版本" : item.status === "DRAFT" ? "草稿" : item.status === "ARCHIVED" ? "已归档草稿" : "历史正式版本" }}</strong>
                   <span
                     v-if="item.revision === profile?.currentPublishedRevision"
-                    class="vp-tag is-ok"
+                    class="pill pill-green"
                   >当前生效</span>
                   <span
                     v-else-if="item.status === 'DRAFT'"
-                    class="vp-tag is-draft"
+                    class="pill pill-amber"
                   >待发布</span>
                   <span
                     v-else
-                    class="vp-tag"
+                    class="pill pill-gray"
                   >已被取代</span>
                 </div>
                 <p>{{ item.note || "未填写版本说明" }}</p>
@@ -1344,61 +1425,65 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
               <p>换个筛选条件看看，或者先保存一份草稿。</p>
             </section>
 
-            <section class="card">
-              <div class="card-head">
-                <h3>版本是怎么产生的</h3>
+            <section>
+              <div class="sec-h">
+                <h2>版本是怎么产生的</h2>
               </div>
-              <div class="vp-pad vp-rules">
-                <p>保存核心提示词、增删改造型、恢复历史版本，都会生成一份新草稿。</p>
-                <p>只有点「发布」才推进正式版本；发布后其他未发布草稿自动归档。</p>
-                <p>绘图永远读当前正式版本，草稿不参与任何一次生成。</p>
-                <p>恢复历史版本只还原文字和造型；参考素材不随版本回滚，换过的图保持当前状态。</p>
+              <div class="card">
+                <div class="vp-pad vp-rules">
+                  <p>保存核心提示词、增删改造型、恢复历史版本，都会生成一份新草稿。</p>
+                  <p>只有点「发布」才推进正式版本；发布后其他未发布草稿自动归档。</p>
+                  <p>绘图永远读当前正式版本，草稿不参与任何一次生成。</p>
+                  <p>恢复历史版本只还原文字和造型；参考素材不随版本回滚，换过的图保持当前状态。</p>
+                </div>
               </div>
             </section>
           </div>
 
-          <div class="vp-col vp-side">
-            <section class="card">
-              <div class="card-head">
-                <h3>提示词差异</h3>
-                <span class="muted">草稿 vs 正式版</span>
+          <div class="vp-stack vp-side">
+            <section>
+              <div class="sec-h">
+                <h2>提示词差异</h2>
+                <span class="sub">草稿 vs 正式版</span>
               </div>
-              <div class="vp-pad vp-pv-stack">
-                <div
-                  v-if="publishedPromptDiff.added.length"
-                  class="vp-diff-lines"
-                >
-                  <span class="vp-diff-label">新增</span>
-                  <p
-                    v-for="token in publishedPromptDiff.added"
-                    :key="`add-${token}`"
-                    class="is-add"
+              <div class="card">
+                <div class="vp-pad vp-pv-stack">
+                  <div
+                    v-if="publishedPromptDiff.added.length"
+                    class="vp-diff-lines"
                   >
-                    + {{ token }}
+                    <span class="vp-diff-label">新增</span>
+                    <p
+                      v-for="token in publishedPromptDiff.added"
+                      :key="`add-${token}`"
+                      class="is-add"
+                    >
+                      + {{ token }}
+                    </p>
+                  </div>
+                  <div
+                    v-if="publishedPromptDiff.removed.length"
+                    class="vp-diff-lines"
+                  >
+                    <span class="vp-diff-label">移除</span>
+                    <p
+                      v-for="token in publishedPromptDiff.removed"
+                      :key="`del-${token}`"
+                      class="is-del"
+                    >
+                      − {{ token }}
+                    </p>
+                  </div>
+                  <p
+                    v-if="!publishedPromptDiff.added.length && !publishedPromptDiff.removed.length"
+                    class="muted"
+                  >
+                    核心提示词和正式版一致。
                   </p>
                 </div>
-                <div
-                  v-if="publishedPromptDiff.removed.length"
-                  class="vp-diff-lines"
-                >
-                  <span class="vp-diff-label">移除</span>
-                  <p
-                    v-for="token in publishedPromptDiff.removed"
-                    :key="`del-${token}`"
-                    class="is-del"
-                  >
-                    − {{ token }}
-                  </p>
+                <div class="card-foot">
+                  <span class="muted">仅比较文字，不含参考素材</span>
                 </div>
-                <p
-                  v-if="!publishedPromptDiff.added.length && !publishedPromptDiff.removed.length"
-                  class="muted"
-                >
-                  核心提示词和正式版一致。
-                </p>
-              </div>
-              <div class="card-foot">
-                <span class="muted">仅比较文字，不含参考素材</span>
               </div>
             </section>
             <section class="card">
@@ -1416,87 +1501,58 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 </template>
 
 <style scoped>
-.visual-profile-page { display: flex; flex-direction: column; gap: 16px; }
-
-/* 页头：角色 + 状态 + 操作 */
-.vp-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
-.vp-identity { display: flex; min-width: 0; align-items: center; gap: 11px; }
-.vp-avatar {
-  display: grid; width: 40px; height: 40px; flex: none; place-items: center;
-  border: 1px solid var(--line); border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--blue-soft), var(--brand-soft));
-  color: var(--brand-strong); font-size: 16px; font-weight: 700;
-}
-.vp-identity-copy { min-width: 0; }
-.vp-name { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text); font-size: 16px; font-weight: 700; line-height: 1.35; }
-.vp-sub { color: var(--dim); font-size: 12px; line-height: 1.5; }
-.vp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.vp-draft {
-  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--amber-line);
-  border-radius: 999px; background: var(--amber-soft); padding: 4px 10px;
-  color: var(--amber); font-size: 12px; font-weight: 600;
-}
-.vp-draft i { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
-
-/* 标签 */
-.vp-tag {
-  display: inline-flex; align-items: center; border-radius: var(--radius-xs);
-  background: var(--surface-3); padding: 2px 7px; color: var(--dim);
-  font-size: 12px; font-weight: 600; line-height: 1.5;
-}
-.vp-tag.is-ok { background: var(--green-soft); color: var(--green); }
-.vp-tag.is-draft { background: var(--amber-soft); color: var(--amber); }
-
-/* 分区导航 */
-.vp-nav { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--line); padding-bottom: 7px; overflow-x: auto; }
-.vp-tab {
-  display: inline-flex; flex: none; height: 34px; align-items: center; gap: 6px;
-  border: 0; border-radius: var(--radius-sm); background: none; padding: 0 13px;
-  color: var(--dim); font-size: 14px; font-weight: 500; cursor: pointer;
+/* 分区导航：与记忆系统的分区导航同一套外观（36px 行高、选中用品牌浅底） */
+.section-nav { display: flex; align-items: center; gap: 6px; margin-bottom: 20px; border-bottom: 1px solid var(--line); padding-bottom: 8px; overflow-x: auto; }
+.section-link {
+  display: inline-flex; flex: none; min-height: 36px; align-items: center; justify-content: center; gap: 7px;
+  border: 0; border-radius: var(--radius-sm); background: none; padding: 0 14px;
+  color: var(--dim); font-size: 14px; white-space: nowrap; cursor: pointer;
   transition: background .15s var(--ease), color .15s var(--ease);
 }
-.vp-tab:hover { background: var(--surface-2); color: var(--text-2); }
-.vp-tab.is-on { background: var(--brand-soft); color: var(--brand-strong); font-weight: 600; }
-.vp-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
-.vp-count { color: var(--faint); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.vp-tab.is-on .vp-count { color: var(--brand); }
+.section-link .el-icon { font-size: 16px; }
+.section-link:hover { background: var(--surface-2); color: var(--text-2); }
+.section-link.active { background: var(--brand-soft); color: var(--brand-strong); font-weight: 600; }
+.section-link:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.section-link .n { color: var(--faint); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.section-link.active .n { color: var(--brand); }
 
-/* 两栏 */
-.vp-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; align-items: start; }
-.vp-col { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
-.vp-fill { display: flex; flex-direction: column; }
-.vp-fill .vp-checks { flex: 1; }
-.vp-pad { padding: 0 16px 16px; }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px 10px; }
-.card-head h3 { color: var(--text); font-size: 14px; font-weight: 700; }
-.card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 10px 16px; }
+/* 两栏沿用记忆系统的 panel-grid，每列是一个纵向堆叠的卡片组 */
+.vp-stack { display: flex; min-width: 0; flex-direction: column; gap: 18px; }
+/* 区块标题只保留与卡片之间的 11px，组与组之间的间距交给 flex gap，避免 18 + 22 叠加 */
+.vp-stack .sec-h { margin-top: 0; }
+/* 本页卡片不描边：靠白底 + 极轻投影和页面底色区分；边框保留为透明，选中态仍然能改色 */
+.card { border-color: transparent; }
+/* 造型列表内部的卡片比区块之间贴紧一点 */
+.vp-outfit-list { gap: 12px; }
+/* stat-band 自带 18px 下边距，网格不再叠一层 */
+.panel-grid { margin-top: 0; }
+.vp-load-error { margin-bottom: 18px; }
+.vp-pad { padding: 0 18px 18px; }
+.card > .vp-pad { padding-top: 16px; }
+.card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 12px 18px; }
 
-/* 概览 hero */
-.vp-hero { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 16px 18px; }
+/* 概览 hero：标准形象按 2:3 竖版预览，右侧只放摘要 */
+.vp-hero { display: flex; align-items: center; gap: 18px; padding: 18px; }
 .vp-hero-figure {
-  display: grid; width: 88px; height: 88px; flex: none; place-items: center;
+  display: grid; width: 120px; aspect-ratio: 2 / 3; flex: none; place-items: center;
   overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm);
   background: linear-gradient(135deg, var(--blue-soft), var(--brand-soft));
 }
-.vp-hero-figure img { width: 100%; height: 100%; object-fit: cover; }
-.vp-hero-empty { color: var(--faint); font-size: 12px; }
+.vp-hero-figure img { width: 100%; height: 100%; object-fit: cover; object-position: center top; }
+.vp-hero-empty { color: var(--faint); font-size: 12px; text-align: center; }
 .vp-hero-copy { min-width: 0; }
+.vp-hero-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.vp-hero-head strong { color: var(--text); font-size: 14px; font-weight: 700; }
 .vp-hero-text {
-  display: -webkit-box; margin-top: 6px; overflow: hidden;
-  color: var(--text-2); font-size: 12px; line-height: 1.7;
-  -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  display: -webkit-box; margin-top: 7px; overflow: hidden;
+  color: var(--text-2); font-size: 14px; line-height: 1.7;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 3;
 }
 .vp-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--dim); font-size: 12px; }
 .vp-facts b { color: var(--text-2); font-weight: 600; }
-.vp-hero-stats { display: flex; flex: none; }
-.vp-stat { padding: 0 16px; border-left: 1px solid var(--line); text-align: left; }
-.vp-stat:first-child { border-left: 0; padding-left: 0; }
-.vp-stat span { color: var(--dim); font-size: 12px; }
-.vp-stat b { display: block; margin-top: 2px; color: var(--text); font-size: 22px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
-.vp-stat small { margin-left: 3px; color: var(--dim); font-size: 12px; font-weight: 500; letter-spacing: 0; }
 
 /* 完成度清单 */
-.vp-checks { display: flex; flex-direction: column; padding: 0 16px 16px; }
+.vp-checks { display: flex; flex-direction: column; padding: 16px 18px 18px; }
 .vp-check { display: flex; align-items: flex-start; gap: 9px; border-bottom: 1px dashed var(--line); padding: 10px 0; }
 .vp-check:last-child { border-bottom: 0; padding-bottom: 0; }
 .vp-check-mark { display: grid; width: 17px; height: 17px; flex: none; place-items: center; margin-top: 2px; border-radius: 50%; }
@@ -1508,16 +1564,16 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 .vp-check .btn-link { flex: none; font-size: 12px; }
 
 /* 拼装流程 */
-.vp-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 0 16px; }
+.vp-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 16px 18px 0; }
 .vp-step { border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface-2); padding: 5px 9px; color: var(--text-2); font-size: 12px; font-weight: 600; }
 .vp-step.is-quiet { color: var(--dim); }
 .vp-arrow { color: var(--faint); font-size: 12px; }
-.vp-flow-note { padding: 9px 16px 16px; }
+.vp-flow-note { padding: 9px 18px 18px; }
 
 /* 差异列表 */
-.vp-diffs { display: flex; flex-direction: column; padding: 0 16px 4px; }
+.vp-diffs { display: flex; flex-direction: column; padding: 16px 18px 4px; }
 .vp-diff { display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px dashed var(--line); padding: 9px 0; }
-.vp-diff:first-child { padding-top: 4px; }
+.vp-diff:first-child { padding-top: 0; }
 .vp-diff:last-child { border-bottom: 0; }
 .vp-diff-dot { width: 5px; height: 5px; flex: none; margin-top: 7px; border-radius: 50%; background: var(--brand); }
 .vp-diff strong { display: block; color: var(--text); font-size: 12px; font-weight: 600; line-height: 1.5; }
@@ -1568,6 +1624,16 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 .vp-field { display: flex; flex-direction: column; gap: 6px; }
 .vp-field > span { color: var(--text-2); font-size: 12px; font-weight: 600; }
 
+/* 概览：参考图预览（标准形象 + 三视图，一屏看全） */
+.vp-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 16px 18px 18px; }
+.vp-preview-item { display: flex; flex-direction: column; gap: 5px; }
+.vp-preview-item img:hover { background: var(--brand-soft); }
+.vp-preview-item img {
+  width: 100%; aspect-ratio: 3 / 4; object-fit: contain;
+  border-radius: var(--radius-xs); background: var(--surface-2);
+}
+.vp-preview-item figcaption { color: var(--dim); font-size: 12px; text-align: center; }
+
 /* 参考素材 */
 .vp-dropzone {
   display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
@@ -1592,19 +1658,18 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 .vp-pending-label { max-width: 280px; }
 
 .vp-asset-group { display: flex; flex-direction: column; gap: 8px; }
-.vp-group-head { display: flex; align-items: center; gap: 8px; }
-.vp-group-head h3 { color: var(--text); font-size: 14px; font-weight: 700; }
-.vp-group-rule { flex: 1; height: 1px; background: var(--line); }
 .vp-asset-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .vp-asset {
   display: block; width: 150px; overflow: hidden; padding: 0; text-align: left;
-  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+  border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--surface);
+  box-shadow: var(--sh-1);
 }
 .vp-asset-img {
-  position: relative; display: grid; width: 100%; height: 104px; place-items: center;
+  position: relative; display: block; width: 100%; height: 150px;
   overflow: hidden; background: linear-gradient(135deg, var(--blue-soft), var(--brand-soft));
 }
-.vp-asset-img img { width: 100%; height: 100%; object-fit: cover; }
+/* 参考图多为竖版全身立绘/三视图：cover 会把人物裁成只剩脸，改为等比装进 150px 高的框里 */
+.vp-asset-img img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .vp-asset-delete {
   position: absolute; top: 5px; right: 5px; display: grid; width: 22px; height: 22px;
   place-items: center; border: 0; border-radius: var(--radius-xs);
@@ -1619,7 +1684,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 .vp-asset-meta span { display: block; margin-top: 1px; color: var(--dim); font-size: 12px; line-height: 1.45; }
 .vp-asset-add { display: grid; place-items: center; border-style: dashed; background: var(--surface-2); color: var(--dim); cursor: pointer; }
 .vp-asset-add:hover { border-color: var(--brand-line); color: var(--brand-strong); }
-.vp-asset-add .vp-asset-img { background: none; color: var(--faint); }
+.vp-asset-add .vp-asset-img { display: grid; place-items: center; background: none; color: var(--faint); }
 .vp-asset-add .vp-asset-meta { text-align: center; }
 
 /* 版本历史 */
@@ -1646,11 +1711,13 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 .vp-rules p { color: var(--dim); font-size: 12px; line-height: 1.7; }
 
 @media (max-width: 1080px) {
-  .vp-grid { grid-template-columns: minmax(0, 1fr); }
+  .panel-grid { grid-template-columns: minmax(0, 1fr); }
   .vp-side { order: 2; }
-  .vp-hero { grid-template-columns: auto minmax(0, 1fr); }
-  .vp-hero-stats { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 10px; }
-  .vp-stat:first-child { padding-left: 16px; border-left: 1px solid var(--line); }
   .vp-filter-note { margin-left: 0; }
+}
+@media (max-width: 640px) {
+  .vp-hero { align-items: flex-start; gap: 14px; padding: 16px; }
+  .vp-hero-figure { width: 84px; }
+  .section-link { gap: 5px; padding: 0 10px; }
 }
 </style>
