@@ -634,7 +634,7 @@ export type ConversationReplyResult = {
 // v89：她没有后台面板。不许声称「我看了 / 我这边显示 / 状态显示」，不许编或复读
 //      出图张数、冷却、每日上限；这些数字只能来自 imageExecution，缺了就别报数。
 //      （v88 的内容在 v88 文件里留档，版本号按提示词实际变更递增。）
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v89";
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v90";
 
 /**
  * 模型这一轮彻底失败时，替她说的一句兜底话。
@@ -1121,6 +1121,10 @@ function systemPrompt(flags: {
     lines.push("imageEnabled is true: drawing is available, not evidence that this turn has executed anything. Do not offer a picture every turn. When this reply naturally proposes drawing a concrete subject and permission is still pending, you may return imageOffer with that proposal's concrete visual content (max 1200 characters), and ask or offer naturally without claiming it is drawn. Return imageOffer only for a proposal you actually make in this reply, never for an old proposal, a vague offer, a status question, or a picture already being made this turn. A short confirmation can be linked to a recent verified offer only by the channel; never treat your own claim as execution. A status question alone is not a new drawing request: without corresponding sent evidence, state that completion is not confirmed. Only imageReply authorizes generation for this turn, and even it is not proof of completion or delivery.");
   }
 
+  if (imageEnabled || withImageReply) {
+    lines.push("For pictures depicting yourself, imagePrompt and imageOffer describe only the scene, action, expression, clothing, composition, lighting and artistic style. Refer to the subject simply as the same character; do not invent or restate fixed physical identity: hair length or colour, eye colour, species, ears, tail, body proportions or permanent markings. The server supplies the published visual identity and reference images when available. Do not guess missing identity or override it with conversational descriptions. Clothing and hairstyle arrangement may change, but do not change hair length or colour. This restriction concerns your own identity only; independently requested animals, objects and other subjects still need their concrete appearance described.");
+  }
+
   if (withVoiceReply) {
     lines.push(
       "This reply reaches the other person as spoken voice, not text. Write exactly what you would say out loud: short sentences, natural rhythm, one or two breaths.",
@@ -1153,7 +1157,7 @@ function systemPrompt(flags: {
        * 只能在这里要求她用标签写 —— 而且**只写标签，不要中文注解**，否则又混回去了。
        */
       lines.push(
-        "The drawing engine for this turn only understands English Danbooru-style tags. Write imagePrompt as lowercase comma-separated English tags, using spaces instead of underscores: quality tags first (masterpiece, best quality, safe), then 1girl/1boy, character name, series, artist (prefixed with @), then appearance, clothing, action, scene, composition (`upper body`, `cowboy shot`, `full body`), lighting and style. Do not write Chinese anywhere in imagePrompt — not as a translation, not in brackets, not after a dash. No sentences, no explanations, no field labels: tags only.",
+        "The drawing engine for this turn only understands English Danbooru-style tags. Write imagePrompt as lowercase comma-separated English tags, using spaces instead of underscores: quality tags first (masterpiece, best quality, safe), then 1girl/1boy, character name, series, artist (prefixed with @), then clothing, action, scene, composition (fixed appearance tags for yourself are supplied by the server; describe appearance only for other requested subjects), (`upper body`, `cowboy shot`, `full body`), lighting and style. Do not write Chinese anywhere in imagePrompt — not as a translation, not in brackets, not after a dash. No sentences, no explanations, no field labels: tags only.",
       );
     }
   }

@@ -15,13 +15,15 @@ const payload = () => JSON.parse(request!.messages.find(row => row.role === "use
 try {
   output = { reply: "想试试画一只鲸鱼，你看呢？", imageOffer: " 蓝色鲸鱼\n跃出海面\u0000，日落光线 ", imagePrompt: "unapproved image" };
   const offered = await generateConversationReply(base);
-  assert.equal(offered.promptTemplateVersion, "conversation-retrieval-v89");
+  assert.equal(offered.promptTemplateVersion, "conversation-retrieval-v90");
   assert.equal(offered.imageOffer, "蓝色鲸鱼 跃出海面 ，日落光线");
   assert.equal(offered.imagePrompt, null, "proposal cannot become an unapproved image prompt");
   assert(system().includes("imageOffer only for a proposal you actually make in this reply"));
   assert(system().includes("not for an old proposal") || system().includes("never for an old proposal"));
   assert(system().includes("Do not offer a picture every turn"));
   assert(system().includes("optional imageOffer"));
+  assert(system().includes("imagePrompt and imageOffer describe only the scene"));
+  assert(system().includes("do not invent or restate fixed physical identity"));
   for (const value of [null, {}, [], 123, true, " \n\u0000 "]) {
     output = { reply: "想画鲸鱼", imageOffer: value };
     assert.equal((await generateConversationReply(base)).imageOffer, null);
@@ -39,6 +41,11 @@ try {
   assert(!system().includes("A picture is being generated for this reply and will be sent"));
   assert(system().includes("generation and delivery have not yet been confirmed"));
   assert(system().includes("Do not say '画好了', '已发送'"));
+  assert(system().includes("do not invent or restate fixed physical identity"));
+  await generateConversationReply({ ...base, imageReply: true, imageReplyTags: true });
+  assert(system().includes("fixed appearance tags for yourself are supplied by the server"));
+  assert(system().includes("other subjects still need their concrete appearance described"));
+  await generateConversationReply({ ...base, imageReply: true, imageExecution: { plannedThisTurn: true, latestAssistant: "offered" } });
   assert.deepEqual(payload().imageExecution, { plannedThisTurn: true, latestAssistant: "offered" });
   output = { action: "silent", reply: "", imageOffer: "鲸鱼" };
   const silent = await generateConversationReply({ ...base, groupChat: true, allowSilent: true, transcript: [{ id: "fixture", content: "好安静" }] });

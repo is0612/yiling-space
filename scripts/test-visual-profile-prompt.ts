@@ -70,6 +70,8 @@ const withRefs = composePublishedVisualPrompt(snapshot, "窝在床上玩手机�
 });
 assert(withRefs.includes("【参考图】图1 标准形象、图2 正面视图"));
 assert(withRefs.includes("只用来确定长相"));
+assert(withRefs.includes("固定外貌以【人物】和参考图为准"));
+assert(withRefs.includes("不得改写发长发色、瞳色、耳尾或体型"));
 assert(withRefs.includes("服装、姿势、表情、视角和背景都不要照搬"));
 assert(
   withRefs.indexOf("【造型·") < withRefs.indexOf("【参考图】") &&

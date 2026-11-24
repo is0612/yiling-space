@@ -70,7 +70,7 @@ try {
     } },
   });
   assert.equal(result.ownerHistoryCoverage?.count, 843);
-  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v89");
+  assert.equal(result.promptTemplateVersion, "conversation-retrieval-v90");
   for (const chatInput of [{ ...base, speaker: { isOwner: false } }, { ...base, groupChat: true }]) {
     await generateConversationReply({ ...chatInput, ownerHistoryCoverage: coverage });
   }
