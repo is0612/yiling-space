@@ -47,7 +47,8 @@ function optionalDate(value: unknown, label: string): Date | null {
 export function parseDailyLifePlanInput(value: unknown): DailyLifePlanInput {
   const body = record(value);
   const dayKey = text(body.dayKey, 10, "日期", true);
-  if (!/^\d{4}-\d{2}-\d{2}$/u.test(dayKey) || Number.isNaN(Date.parse(dayKey + "T00:00:00Z"))) {
+  const parsedDay = new Date(dayKey + "T00:00:00.000Z");
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(dayKey) || !Number.isFinite(parsedDay.getTime()) || parsedDay.toISOString().slice(0, 10) !== dayKey) {
     throw createError({ statusCode: 400, statusMessage: "日期必须是 YYYY-MM-DD。" });
   }
   const timeZone = text(body.timeZone ?? "Asia/Shanghai", 80, "时区", true);
