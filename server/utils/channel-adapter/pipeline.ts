@@ -4346,6 +4346,18 @@ async function runChannelTurn(input: {
       await prisma.message.update({ where: { id: assistantMessageId }, data: { metadata: {
         ...metadata, replyDelivery: JSON.parse(encoded) as Prisma.InputJsonValue,
       } } });
+      if (replyImage && delivery.image) {
+        await prisma.dailyPhoto.updateMany({
+          where: { characterId: input.characterId, relativePath: replyImage.relativePath },
+          data: {
+            status: delivery.image.status === "sent" ? "DELIVERED"
+              : delivery.image.status === "failed" ? "DELIVERY_FAILED" : "DELIVERY_PENDING",
+            deliveredAt: delivery.image.status === "sent"
+              ? new Date(delivery.image.sentAt ?? Date.now()) : null,
+            deliveryError: delivery.image.status === "failed" ? delivery.image.reason ?? "send_failed" : null,
+          },
+        });
+      }
       recordedDelivery = encoded;
     } catch {
       // Delivery has already happened; persistence failure must never trigger a resend.
