@@ -443,8 +443,8 @@ model DailyPhoto {
   provider         String             @db.VarChar(40)
   model            String             @db.VarChar(120)
   generationMode   String             @db.VarChar(40)
-  relativePath     String             @db.VarChar(500)
-  mime             String             @db.VarChar(80)
+  relativePath     String?            @db.VarChar(500)
+  mime             String?            @db.VarChar(80)
   width            Int?
   height           Int?
   caption          String             @default("") @db.VarChar(500)
