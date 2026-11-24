@@ -4,7 +4,8 @@
 
 在修改代码前，先阅读：
 - `README.md`
-- `docs/product-and-technical-plan.md`
+- `docs/INDEX.md`（文档地图：哪份是现行规范、哪份只是历史存档，别照着归档文档施工）
+- `docs/忆灵空间 · 功能总表.md`（每个功能到底做到哪了，唯一状态入口）
 - 与当前任务相关的 `docs/` 文档
 - `docs/openapi.yaml`（涉及 API 时）
 - `docs/local-development-and-data-migration.md`（涉及本地环境、数据库或部署时）

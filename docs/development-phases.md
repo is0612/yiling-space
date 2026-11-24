@@ -1,5 +1,7 @@
 # 开发阶段与验收标准
 
+> **状态：历史验收标准。** Phase 0–5 已完成，本文记录各阶段当时的交付与验收口径；当前进度与未验边界见 [PROJECT_PROGRESS](development/PROJECT_PROGRESS.md)，功能状态见 [功能总表](<忆灵空间 · 功能总表.md>)。
+
 ## Phase 0：规格与数据契约
 **交付：** 产品方案、记忆规则、逻辑数据模型、Prisma Schema 草案、OpenAPI 3.0 YAML、安全规则、迁移说明。
 
