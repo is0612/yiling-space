@@ -21,6 +21,9 @@ export default defineEventHandler(async (event) => {
       data: { status: "COMPLETED", completedAt },
     });
     if (updated.count !== 1) throw createError({ statusCode: 409, statusMessage: "活动状态刚刚发生变化，请刷新后重试。" });
+    if (current.planItemId) {
+      await tx.dailyLifePlanItem.updateMany({ where: { id: current.planItemId, characterId, status: "PLANNED" }, data: { status: "COMPLETED" } });
+    }
     await publishGrowthEvent(tx, {
       characterId, sourceDomain: "life", eventType: "life.activity.completed",
       aggregateType: "DailyLifeActivity", aggregateId: activityId, occurredAt: completedAt,
