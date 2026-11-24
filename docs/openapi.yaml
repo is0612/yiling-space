@@ -142,6 +142,29 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { description: 活动不存在或已经结束 }
         '409': { description: 活动状态发生并发变化 }
+  /characters/{id}/daily-life/photos/{photoId}:
+    get:
+      operationId: getDailyPhotoAsset
+      tags: [DailyLife]
+      summary: 读取当前用户角色的一张日常照片原图
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: photoId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: 图片二进制
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 照片不存在或不属于当前角色 }
   /characters/{id}/daily-life/photos/{photoId}/associate:
     post:
       operationId: associateDailyPhoto
