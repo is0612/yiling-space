@@ -212,6 +212,7 @@ export async function loadCharacterExportBundle(input: {
        */
       visualProfile: {
         select: {
+          id: true,
           coreAppearance: true,
           corePrompt: true,
           negativePrompt: true,
@@ -221,8 +222,10 @@ export async function loadCharacterExportBundle(input: {
             take: CHARACTER_BUNDLE_LIMITS.visualOutfits,
             select: { name: true, prompt: true, isDefault: true, sortOrder: true },
           },
+          // 取「最新」的 200 版。原先按 revision 升序取，超过 200 版时被截掉的
+          // 恰恰是刚发布的几版，导入端找不到 currentPublishedRevision，正式形象就归零了。
           versions: {
-            orderBy: { revision: "asc" },
+            orderBy: { revision: "desc" },
             take: CHARACTER_BUNDLE_LIMITS.visualVersions,
             select: { revision: true, status: true, note: true, snapshot: true, createdAt: true, publishedAt: true },
           },
@@ -244,6 +247,33 @@ export async function loadCharacterExportBundle(input: {
   });
 
   if (!character) return null;
+
+  /**
+   * 形象版本补齐。
+   *
+   * 查询按 revision 倒序取最新 200 版，但回滚过的角色「当前正式版本」可能不在这 200 里
+   * （它 revision 小，却仍被标为 currentPublishedRevision）。少了这一版，导入端用
+   * revisions 收口时会把正式版本号归零 —— 换机器后角色就没有正式形象了。
+   *
+   * 补齐后可能变成 201 条：从最旧的一端删到上限，但绝不删当前正式版本。
+   * 最后按 revision 升序交给打包，和以前的包格式保持一致。
+   */
+  if (character.visualProfile) {
+    const profile = character.visualProfile;
+    const publishedRevision = profile.currentPublishedRevision;
+    if (publishedRevision > 0 && !profile.versions.some(version => version.revision === publishedRevision)) {
+      const published = await prisma.characterVisualVersion.findFirst({
+        where: { profileId: profile.id, revision: publishedRevision },
+        select: { revision: true, status: true, note: true, snapshot: true, createdAt: true, publishedAt: true },
+      });
+      if (published) profile.versions.push(published);
+    }
+    // 此刻 versions 是倒序，越靠后越旧。
+    for (let index = profile.versions.length - 1; index >= 0 && profile.versions.length > CHARACTER_BUNDLE_LIMITS.visualVersions; index -= 1) {
+      if (profile.versions[index]?.revision !== publishedRevision) profile.versions.splice(index, 1);
+    }
+    profile.versions.sort((left, right) => left.revision - right.revision);
+  }
 
   const includeFriends = input.includeFriends !== false;
   const now = input.now ?? new Date();
@@ -560,14 +590,52 @@ export type CharacterImportAdded = {
   growth?: ReturnType<typeof growthCounts>;
 };
 
+/**
+ * 导入方式。
+ *
+ *   - `new`：新建一个角色，等价于「另起一份」。
+ *   - `merge`：并进已有角色。本地一律保留，导入的按内容去重后追加。
+ *   - `replace`：以卡为准。先清空本机这个角色随卡走的内容，再整包写入。
+ */
+export type CharacterImportMode = "new" | "merge" | "replace";
+
+/**
+ * 替换时清掉的本机内容。
+ *
+ * 范围只到「随卡走的那一层」：记忆 / 忆泡 / 忆泡日历 / 阶段总结 / 日记手账 / 梗 /
+ * 互动经验 / 渠道策略 / 表达习惯 / 目标 / 偏好 / 形象档案 / 成长数据。
+ * 故意不动的东西写在 `purgeCharacterCardContent` 的注释里 —— 那些要么搬不回来
+ * （表情包图片、会话原文），要么不是卡的内容（渠道绑定、其他用户的私人范围）。
+ */
+export type CharacterImportRemoved = {
+  memories: number;
+  events: number;
+  eventDays: number;
+  snapshots: number;
+  journals: number;
+  journalRevisions: number;
+  catchphrases: number;
+  interactionGuidance: number;
+  channelPolicies: number;
+  expressionHabits: number;
+  goals: number;
+  preferences: number;
+  visualOutfits: number;
+  visualVersions: number;
+  visualAssets: number;
+  /** 成长数据（知识 / 社交 / 反思 / 成长事件）清掉的行数合计。 */
+  growthRows: number;
+};
+
 export type CharacterImportResult = {
   characterId: string;
   name: string;
-  /** new = 新建了一个角色；merge = 并进了已有角色。 */
-  mode: "new" | "merge";
+  mode: CharacterImportMode;
   counts: CharacterBundleCounts;
   /** 实际写进库的条数。新建时等于 counts；合并时是新增量，0 表示「这份卡里没有新东西」。 */
   added: CharacterImportAdded;
+  /** 只有替换才带：清掉了本机多少内容。 */
+  removed?: CharacterImportRemoved;
   warnings: string[];
 };
 
@@ -1375,6 +1443,8 @@ async function insertVisualProfile(
     });
     added.visualVersions += profile.versions.length;
   }
+  // 参考图清单不落库：图片本体没跟过来，建了就是一堆打不开的图。
+  // 清单只在导入警告里说明，需要补哪几张图要回到「形象档案」重传。
 }
 
 /**
@@ -1479,7 +1549,8 @@ async function loadEventSignatures(tx: Tx, memoryScopeId: string): Promise<Set<s
  * 导入一张角色卡。
  *
  * 不带 `targetCharacterId` 时**总是新建角色**：不合并、不覆盖、不动已有角色的任何一条数据。
- * 带 `targetCharacterId` 时把它并进那个角色（见 `mergeCharacterCard`），本地内容一律保留。
+ * 带 `targetCharacterId` 时把它并进那个角色（见 `writeCardIntoExistingCharacter`），
+ * `mode = "replace"` 时改为以卡为准重灌（先清后写，清空范围见 `purgeCharacterCardContent`）。
  *
  * 原文不随包走，所以记忆与忆泡的来源字段一律置空，阶段总结也只留正文 ——
  * 宁可显示「来源不在本机」，也不指到一个别的角色的消息上。
@@ -1490,13 +1561,21 @@ export async function importCharacterCard(input: {
   raw: unknown;
   ownerId: string;
   now?: Date;
-  /** 合并目标角色。必须与卡片的稳定同步根 ID 一致。 */
+  /** 合并 / 替换的目标角色。必须与卡片的稳定同步根 ID 一致。 */
   targetCharacterId?: string | null;
+  /** 带目标时的写入方式，缺省 merge。不带目标时只能是 new。 */
+  mode?: "merge" | "replace";
 }): Promise<CharacterImportResult> {
   const bundle = parseCharacterBundle(input.raw);
   const now = input.now ?? new Date();
   if (input.targetCharacterId) {
-    return mergeCharacterCard({ bundle, ownerId: input.ownerId, targetCharacterId: input.targetCharacterId, now });
+    return writeCardIntoExistingCharacter({
+      bundle,
+      ownerId: input.ownerId,
+      targetCharacterId: input.targetCharacterId,
+      now,
+      mode: input.mode === "replace" ? "replace" : "merge",
+    });
   }
   return createCharacterFromBundle({ bundle, ownerId: input.ownerId, now });
 }
@@ -1721,36 +1800,162 @@ async function createCharacterFromBundle(input: {
   return { characterId, name, mode: "new", counts: bundle.counts, added, warnings };
 }
 
+function emptyRemoved(): CharacterImportRemoved {
+  return {
+    memories: 0,
+    events: 0,
+    eventDays: 0,
+    snapshots: 0,
+    journals: 0,
+    journalRevisions: 0,
+    catchphrases: 0,
+    interactionGuidance: 0,
+    channelPolicies: 0,
+    expressionHabits: 0,
+    goals: 0,
+    preferences: 0,
+    visualOutfits: 0,
+    visualVersions: 0,
+    visualAssets: 0,
+    growthRows: 0,
+  };
+}
+
 /**
- * 把一张卡并进已有角色。
+ * 「以卡为准」清空本机这个角色的内容，给替换导入腾出干净的地基。
+ *
+ * 清掉的（都是卡片会带走的那一层）：
+ *   - 记忆 / 忆泡 / 忆泡日历 / 阶段总结：角色全局、**导入者自己的**私人范围、以及她的朋友范围
+ *   - 日记 / 手账（含所有历史版本，只有角色全局范围有）
+ *   - 梗语录、互动经验、渠道策略、表达习惯、目标、偏好（连同各自的修订历史）
+ *   - 形象档案（装扮、版本历史、参考图清单 —— 磁盘上的图不在这里删，见下）
+ *   - 成长数据：知识（含候选 / 关联 / 主题）、社交关系与经历、反思、成长事件与投递、导入身份映射
+ *
+ * 故意不动的：
+ *   - 会话与消息、聊天请求：原文不随卡走，删了就真没了
+ *   - 人设之外的设置、模型参数、API Key、渠道绑定：替换换的是「她记得什么」，不是「怎么连模型」
+ *   - 表情包条目与图片：卡里只有名字，图搬不回来，删掉等于永久丢图
+ *   - 其他用户的 USER_PRIVATE 范围：那是别人的私人记忆，不属于这张卡，也不该被卡清掉
+ *   - 日常生活计划与互动经验的原始行：卡片不带，属于本机的账
+ *
+ * 待办的记忆任务（`memory_jobs`）一并清掉：它们会拿着旧的原文把刚删掉的记忆重新抽回来。
+ * 形象档案的参考图文件留在 `.data` 目录里 —— 数据库行没了就再也引用不到，但这比在事务里
+ * 删磁盘安全：事务回滚时图还在，不会出现「回滚了但文件已经没了」。
+ */
+async function purgeCharacterCardContent(
+  tx: Tx,
+  input: { characterId: string; ownerId: string },
+): Promise<CharacterImportRemoved> {
+  const removed = emptyRemoved();
+  const scopes = await tx.memoryScope.findMany({
+    where: {
+      characterId: input.characterId,
+      OR: [
+        { scopeType: "CHARACTER_GLOBAL" },
+        { scopeType: "USER_PRIVATE", userId: input.ownerId },
+        { scopeType: "EXTERNAL_IDENTITY" },
+      ],
+    },
+    select: { id: true },
+  });
+  const scopeIds = scopes.map((scope) => scope.id);
+  if (scopeIds.length) {
+    const inScopes = { memoryScopeId: { in: scopeIds } };
+    // 先停任务，再删数据：反过来的话，排队中的任务可能已经把旧原文读进内存。
+    await tx.memoryJob.deleteMany({ where: inScopes });
+    removed.memories = (await tx.memoryItem.deleteMany({ where: inScopes })).count;
+    // 忆泡还会带走挂在它上面的社交经历（外键级联），这正是「按卡重建」想要的。
+    removed.events = (await tx.memoryEvent.deleteMany({ where: inScopes })).count;
+    removed.eventDays = (await tx.memoryEventDay.deleteMany({ where: inScopes })).count;
+    removed.snapshots = (await tx.memorySnapshot.deleteMany({ where: inScopes })).count;
+    removed.journalRevisions = await tx.journalRevision.count({ where: { journal: { memoryScopeId: { in: scopeIds } } } });
+    removed.journals = (await tx.characterJournal.deleteMany({ where: inScopes })).count;
+  }
+
+  removed.catchphrases = (await tx.characterCatchphrase.deleteMany({ where: { characterId: input.characterId } })).count;
+  removed.interactionGuidance = (await tx.characterInteractionGuidance.deleteMany({ where: { characterId: input.characterId } })).count;
+  removed.channelPolicies = (await tx.channelBehaviorPolicy.deleteMany({ where: { characterId: input.characterId } })).count;
+  removed.expressionHabits = (await tx.characterExpressionHabit.deleteMany({ where: { characterId: input.characterId } })).count;
+  removed.goals = (await tx.characterGoal.deleteMany({ where: { characterId: input.characterId } })).count;
+  removed.preferences = (await tx.characterPreference.deleteMany({ where: { characterId: input.characterId } })).count;
+
+  const profile = await tx.characterVisualProfile.findUnique({
+    where: { characterId: input.characterId },
+    select: { id: true },
+  });
+  if (profile) {
+    removed.visualOutfits = await tx.characterVisualOutfit.count({ where: { profileId: profile.id } });
+    removed.visualVersions = await tx.characterVisualVersion.count({ where: { profileId: profile.id } });
+    removed.visualAssets = await tx.characterVisualAsset.count({ where: { profileId: profile.id } });
+    // 装扮 / 版本 / 素材都挂在这个档案上，外键级联一起走。
+    await tx.characterVisualProfile.delete({ where: { id: profile.id } });
+  }
+
+  const byCharacter = { characterId: input.characterId };
+  // 知识：先主题（成员与修订跟着走），再条目（修订与关联跟着走），最后候选。
+  removed.growthRows += (await tx.knowledgeTopic.deleteMany({ where: byCharacter })).count;
+  removed.growthRows += (await tx.knowledgeItemRelation.deleteMany({ where: byCharacter })).count;
+  removed.growthRows += (await tx.knowledgeItem.deleteMany({ where: byCharacter })).count;
+  removed.growthRows += (await tx.knowledgeCandidate.deleteMany({ where: byCharacter })).count;
+  removed.growthRows += (await tx.knowledgeTopicRun.deleteMany({ where: byCharacter })).count;
+  removed.growthRows += (await tx.memoryKnowledgeCandidateRequest.deleteMany({ where: byCharacter })).count;
+  // 社交：评估 / 变化都挂在关系范围上，经历挂在忆泡上（忆泡已经删了，这里清剩下的）。
+  const inCharacterScope = { scope: { characterId: input.characterId } };
+  removed.growthRows += (await tx.socialExperience.deleteMany({ where: inCharacterScope })).count;
+  removed.growthRows += (await tx.socialRelationChange.deleteMany({ where: inCharacterScope })).count;
+  removed.growthRows += (await tx.socialRelationshipAssessment.deleteMany({ where: inCharacterScope })).count;
+  removed.growthRows += (await tx.socialRelationshipAssessmentTask.deleteMany({ where: inCharacterScope })).count;
+  // 反思、成长事件（投递历史跟着事件走）。
+  removed.growthRows += (await tx.reflectionRun.deleteMany({ where: byCharacter })).count;
+  removed.growthRows += (await tx.growthEvent.deleteMany({ where: byCharacter })).count;
+  // 身份映射指向的是已经删掉的行，留着只会让下次导入认领到空 id。
+  await tx.characterGrowthImportIdentity.deleteMany({ where: byCharacter });
+
+  return removed;
+}
+
+/**
+ * 把一张卡写进已有角色：`merge` 追加，`replace` 以卡为准重灌。
  *
  * 前置条件：卡片带 `origin.characterId`，且目标角色的同步根与之相同——
  * 目标自己的 id 就是根（根实例），或目标的 `originCharacterId` 就是该根（导入副本）。
  * 同一个根可以对应多个本地实例，因此调用方必须明确指定目标。**不按名字猜**：两张都叫「一只鱼」的卡
- * 是两个不同的人，名字撞上了也不该合并。
+ * 是两个不同的人，名字撞上了也不该合并或替换。
  *
- * 冲突口径（用户选定）：**本地保留，导入的追加**。
- *   - 人设、模型参数、记忆设置：完全不动（合并是补数据，不是覆盖设置）
- *   - 记忆 / 忆泡 / 阶段总结 / 梗：按内容去重后追加
- *   - 忆泡日历：本地那天的状态不动，条数取大、整理时间取晚
- *   - 日记 / 手账：本地版本一版都不删，导入的接在最大版本号后面成为新版本
- *   - 朋友：沿用已有关系，只把记忆、总结、互动次数并进去
+ * 冲突口径（用户选定）：
+ *
+ *   `merge`：**本地保留，导入的追加**
+ *     - 人设、模型参数、记忆设置：完全不动（合并是补数据，不是覆盖设置）
+ *     - 记忆 / 忆泡 / 阶段总结 / 梗：按内容去重后追加
+ *     - 忆泡日历：本地那天的状态不动，条数取大、整理时间取晚
+ *     - 日记 / 手账：本地版本一版都不删，导入的接在最大版本号后面成为新版本
+ *     - 朋友：沿用已有关系，只把记忆、总结、互动次数并进去
+ *
+ *   `replace`：**以卡为准**
+ *     - 先 `purgeCharacterCardContent` 清空随卡走的那一层，再原样落库
+ *     - 人设（人设 / 对话示例 / 称呼 / 别名简介 / 头像配色）按卡覆盖
+ *     - 模型参数、API Key、渠道绑定、会话原文、表情包图片与条目保留本机
  */
-async function mergeCharacterCard(input: {
+async function writeCardIntoExistingCharacter(input: {
   bundle: ParsedCharacterBundle;
   ownerId: string;
   targetCharacterId: string;
   now: Date;
+  mode: "merge" | "replace";
 }): Promise<CharacterImportResult> {
-  const { bundle, ownerId, targetCharacterId, now } = input;
+  const { bundle, ownerId, targetCharacterId, now, mode } = input;
+  const merge = mode === "merge";
   const prisma = getPrisma();
 
   const target = await prisma.character.findFirst({
     where: { id: targetCharacterId, ownerId },
-    select: { id: true, name: true, originCharacterId: true },
+    select: { id: true, name: true, originCharacterId: true, modelConfig: true },
   });
   if (!target) {
-    throw createError({ statusCode: 404, statusMessage: "要合并进去的角色不存在。" });
+    throw createError({
+      statusCode: 404,
+      statusMessage: merge ? "要合并进去的角色不存在。" : "要替换的角色不存在。",
+    });
   }
   if (!bundle.originId) {
     throw createError({
@@ -1761,7 +1966,9 @@ async function mergeCharacterCard(input: {
   if (target.id !== bundle.originId && target.originCharacterId !== bundle.originId) {
     throw createError({
       statusCode: 400,
-      statusMessage: "这张角色卡和本机这个角色不是同一份数据来的，不能合并。要保留两边就选「新建副本」。",
+      statusMessage: merge
+        ? "这张角色卡和本机这个角色不是同一份数据来的，不能合并。要保留两边就选「新建副本」。"
+        : "这张角色卡和本机这个角色不是同一份数据来的，不能替换。要保留两边就选「新建副本」。",
     });
   }
 
@@ -1775,6 +1982,7 @@ async function mergeCharacterCard(input: {
   const privateSnapshots = bundle.snapshots.filter((item) => item.scope === "private");
   const added = emptyAdded();
   const warnings: string[] = [];
+  let removed: CharacterImportRemoved | undefined;
 
   await prisma.$transaction(async (tx) => {
     // 兼容迁移前创建的原生角色：若它本身就是同步根，补齐为自己的实例 ID。
@@ -1784,6 +1992,33 @@ async function mergeCharacterCard(input: {
         where: { id: target.id },
         data: { originCharacterId: bundle.originId as string },
       });
+    }
+
+    if (!merge) {
+      /**
+       * 人设按卡覆盖，但只动「她是谁」这几格：
+       * `modelConfig` 整体写回本机那份再覆盖别名 / 简介 / 头像配色 —— 卡里没有密钥，
+       * 整份替换会把本机已填的 API Key 和模型参数一起洗掉。
+       * 别名空着就保留本机那句：卡里没写名字时，把「小鱼」改成「导入角色」只会让人困惑。
+       */
+      const localConfig = (target.modelConfig ?? {}) as Record<string, unknown>;
+      await tx.character.update({
+        where: { id: target.id },
+        data: {
+          basePrompt: bundle.character.basePrompt || "请补充角色的人设与行为规则。",
+          styleExamples: bundle.character.styleExamples,
+          userAddress: bundle.character.userAddress || "主人",
+          modelConfig: {
+            ...localConfig,
+            alias: bundle.character.alias
+              || (typeof localConfig.alias === "string" ? localConfig.alias : "")
+              || "导入角色",
+            description: bundle.character.description,
+            avatarTone: bundle.character.avatarTone,
+          } as Prisma.InputJsonValue,
+        },
+      });
+      removed = await purgeCharacterCardContent(tx, { characterId: target.id, ownerId });
     }
 
     const globalScope = await tx.memoryScope.findFirst({
@@ -1806,19 +2041,20 @@ async function mergeCharacterCard(input: {
       tx,
       globalScopeId,
       globalMemories,
-      await loadMemoryContents(tx, globalScopeId),
+      merge ? await loadMemoryContents(tx, globalScopeId) : undefined,
     );
     added.events += await insertEvents(
       tx,
       globalScopeId,
       globalEvents,
-      await loadEventSignatures(tx, globalScopeId),
+      merge ? await loadEventSignatures(tx, globalScopeId) : undefined,
     );
-    added.snapshots += await insertSnapshots(tx, globalScopeId, globalSnapshots, true);
-    added.eventDays += await insertEventDays(tx, globalScopeId, globalEventDays, globalEvents, true);
-    const globalJournalStats = await insertJournals(tx, globalScopeId, bundle.journals, true);
+    added.snapshots += await insertSnapshots(tx, globalScopeId, globalSnapshots, merge);
+    added.eventDays += await insertEventDays(tx, globalScopeId, globalEventDays, globalEvents, merge);
+    const globalJournalStats = await insertJournals(tx, globalScopeId, bundle.journals, merge);
     added.journals += globalJournalStats.journals;
     added.journalRevisions += globalJournalStats.revisions;
+
 
     if (privateMemories.length || privateEvents.length || privateEventDays.length || privateSnapshots.length) {
       const scopeKey = buildUserPrivateScopeKey(target.id, ownerId);
@@ -1838,36 +2074,40 @@ async function mergeCharacterCard(input: {
         tx,
         privateScope.id,
         privateMemories,
-        await loadMemoryContents(tx, privateScope.id),
+        merge ? await loadMemoryContents(tx, privateScope.id) : undefined,
       );
       added.events += await insertEvents(
         tx,
         privateScope.id,
         privateEvents,
-        await loadEventSignatures(tx, privateScope.id),
+        merge ? await loadEventSignatures(tx, privateScope.id) : undefined,
       );
-      added.snapshots += await insertSnapshots(tx, privateScope.id, privateSnapshots, true);
-      added.eventDays += await insertEventDays(tx, privateScope.id, privateEventDays, privateEvents, true);
+      added.snapshots += await insertSnapshots(tx, privateScope.id, privateSnapshots, merge);
+      added.eventDays += await insertEventDays(tx, privateScope.id, privateEventDays, privateEvents, merge);
     }
 
-    const existingPhrases = new Set(
-      (await tx.characterCatchphrase.findMany({
-        where: { characterId: target.id },
-        select: { phrase: true },
-      })).map((row) => row.phrase.trim()),
-    );
+    const existingPhrases = merge
+      ? new Set(
+        (await tx.characterCatchphrase.findMany({
+          where: { characterId: target.id },
+          select: { phrase: true },
+        })).map((row) => row.phrase.trim()),
+      )
+      : undefined;
     added.catchphrases += await insertCatchphrases(tx, target.id, bundle.catchphrases, existingPhrases);
 
     /**
      * 互动经验 / 渠道策略的合并去重按「内容」而不是按 id：
      * 同一个角色在两台机器上各自被教过，内容相同就是同一条，不必出现两份。
      */
-    const existingGuidance = new Set(
-      (await tx.characterInteractionGuidance.findMany({
-        where: { characterId: target.id },
-        select: { kind: true, chatScope: true, content: true },
-      })).map((row) => `${row.kind}|${row.chatScope}|${row.content}`),
-    );
+    const existingGuidance = merge
+      ? new Set(
+        (await tx.characterInteractionGuidance.findMany({
+          where: { characterId: target.id },
+          select: { kind: true, chatScope: true, content: true },
+        })).map((row) => `${row.kind}|${row.chatScope}|${row.content}`),
+      )
+      : undefined;
     added.interactionGuidance += await insertInteractionGuidance(
       tx,
       target.id,
@@ -1876,12 +2116,14 @@ async function mergeCharacterCard(input: {
       existingGuidance,
     );
 
-    const existingPolicyKinds = new Set(
-      (await tx.channelBehaviorPolicy.findMany({
-        where: { characterId: target.id },
-        select: { kind: true },
-      })).map((row) => row.kind),
-    );
+    const existingPolicyKinds = merge
+      ? new Set(
+        (await tx.channelBehaviorPolicy.findMany({
+          where: { characterId: target.id },
+          select: { kind: true },
+        })).map((row) => row.kind),
+      )
+      : undefined;
     added.channelPolicies += await insertChannelPolicies(
       tx,
       target.id,
@@ -1894,12 +2136,14 @@ async function mergeCharacterCard(input: {
      * 表达习惯 / 目标 / 偏好的合并去重同样按「内容」：同一台机器上她自己已经有一条
      * 「说话带点气声」，再导一次不该变成两条。目标按 kind+标题、偏好按 kind+主题。
      */
-    const existingHabits = new Set(
-      (await tx.characterExpressionHabit.findMany({
-        where: { characterId: target.id },
-        select: { kind: true, content: true },
-      })).map((row) => `${row.kind}|${row.content}`),
-    );
+    const existingHabits = merge
+      ? new Set(
+        (await tx.characterExpressionHabit.findMany({
+          where: { characterId: target.id },
+          select: { kind: true, content: true },
+        })).map((row) => `${row.kind}|${row.content}`),
+      )
+      : undefined;
     added.expressionHabits += await insertExpressionHabits(
       tx,
       target.id,
@@ -1908,20 +2152,24 @@ async function mergeCharacterCard(input: {
       existingHabits,
     );
 
-    const existingGoals = new Set(
-      (await tx.characterGoal.findMany({
-        where: { characterId: target.id },
-        select: { kind: true, title: true },
-      })).map((row) => `${row.kind}|${row.title}`),
-    );
+    const existingGoals = merge
+      ? new Set(
+        (await tx.characterGoal.findMany({
+          where: { characterId: target.id },
+          select: { kind: true, title: true },
+        })).map((row) => `${row.kind}|${row.title}`),
+      )
+      : undefined;
     added.goals += await insertGoals(tx, target.id, bundle.goals, ownerId, existingGoals);
 
-    const existingPreferences = new Set(
-      (await tx.characterPreference.findMany({
-        where: { characterId: target.id },
-        select: { kind: true, topic: true },
-      })).map((row) => `${row.kind}|${row.topic}`),
-    );
+    const existingPreferences = merge
+      ? new Set(
+        (await tx.characterPreference.findMany({
+          where: { characterId: target.id },
+          select: { kind: true, topic: true },
+        })).map((row) => `${row.kind}|${row.topic}`),
+      )
+      : undefined;
     added.preferences += await insertPreferences(
       tx,
       target.id,
@@ -1929,7 +2177,9 @@ async function mergeCharacterCard(input: {
       ownerId,
       existingPreferences,
     );
-    await mergeVisualProfile(tx, target.id, bundle.visualProfile, added, warnings);
+    // 替换时本机档案已经清空，整段按卡重建；合并时只补空缺。
+    if (merge) await mergeVisualProfile(tx, target.id, bundle.visualProfile, added, warnings);
+    else await insertVisualProfile(tx, target.id, bundle.visualProfile, added);
     await insertStickerPlaceholders(tx, target.id, bundle.stickers, added);
     const mergedAssets = bundle.visualProfile?.assets.length ?? 0;
     if (mergedAssets > 0) {
@@ -1965,30 +2215,47 @@ async function mergeCharacterCard(input: {
 
       const friendScopeId = existingFriendScope?.id ?? randomUUID();
       if (existingFriendScope) {
-        // 关系本身按「更熟的那一边」对齐：次数取大、最后互动取晚，从哪认识保留本地说法。
-        const lastInteractedAt = friend.lastInteractedAt && (
-          !existingFriendScope.lastInteractedAt
-          || new Date(friend.lastInteractedAt) > existingFriendScope.lastInteractedAt
-        )
-          ? new Date(friend.lastInteractedAt)
-          : existingFriendScope.lastInteractedAt;
-        /**
-         * 备注取并集，本地在前 —— 她在这台机器上亲手起的叫法最该留住，
-         * 导入的叫法只补那些本机没有的。上限（8 个）由 `normalizeFriendAliases` 统一卡。
-         */
-        const mergedAliases = normalizeFriendAliases([
-          ...(existingFriendScope.aliases ?? []),
-          ...friend.aliases,
-        ]).aliases;
-        await tx.memoryScope.update({
-          where: { id: existingFriendScope.id },
-          data: {
-            interactionCount: Math.max(existingFriendScope.interactionCount, friend.interactionCount),
-            lastInteractedAt,
-            firstSource: existingFriendScope.firstSource ?? friend.firstSource,
-            aliases: mergedAliases,
-          },
-        });
+        if (merge) {
+          // 关系本身按「更熟的那一边」对齐：次数取大、最后互动取晚，从哪认识保留本地说法。
+          const lastInteractedAt = friend.lastInteractedAt && (
+            !existingFriendScope.lastInteractedAt
+            || new Date(friend.lastInteractedAt) > existingFriendScope.lastInteractedAt
+          )
+            ? new Date(friend.lastInteractedAt)
+            : existingFriendScope.lastInteractedAt;
+          /**
+           * 备注取并集，本地在前 —— 她在这台机器上亲手起的叫法最该留住，
+           * 导入的叫法只补那些本机没有的。上限（8 个）由 `normalizeFriendAliases` 统一卡。
+           */
+          const mergedAliases = normalizeFriendAliases([
+            ...(existingFriendScope.aliases ?? []),
+            ...friend.aliases,
+          ]).aliases;
+          await tx.memoryScope.update({
+            where: { id: existingFriendScope.id },
+            data: {
+              interactionCount: Math.max(existingFriendScope.interactionCount, friend.interactionCount),
+              lastInteractedAt,
+              firstSource: existingFriendScope.firstSource ?? friend.firstSource,
+              aliases: mergedAliases,
+            },
+          });
+        } else {
+          /**
+           * 替换：关系本身也以卡为准。范围和身份不删（会话挂着它，而且删了会连
+           * 本机跟这个人的聊天记录一起失去归属），但次数、最后互动、从哪认识、备注
+           * 全部写回卡里的值 —— 否则「手滑多聊了几次」这类本机进度会盖过卡片。
+           */
+          await tx.memoryScope.update({
+            where: { id: existingFriendScope.id },
+            data: {
+              interactionCount: friend.interactionCount,
+              lastInteractedAt: friend.lastInteractedAt ? new Date(friend.lastInteractedAt) : null,
+              firstSource: friend.firstSource,
+              aliases: friend.aliases,
+            },
+          });
+        }
       } else {
         await tx.memoryScope.create({
           data: {
@@ -2010,21 +2277,31 @@ async function mergeCharacterCard(input: {
         tx,
         friendScopeId,
         friend.memories,
-        await loadMemoryContents(tx, friendScopeId),
+        merge ? await loadMemoryContents(tx, friendScopeId) : undefined,
       );
-      added.snapshots += await insertSnapshots(tx, friendScopeId, friend.snapshots, true);
+      added.snapshots += await insertSnapshots(tx, friendScopeId, friend.snapshots, merge);
     }
 
-    const growthResult = await importCharacterGrowth(tx, { characterId: target.id, ownerId, bundle: bundle.growth, mode: "merge", friends: bundle.friends });
+    const growthResult = await importCharacterGrowth(tx, {
+      characterId: target.id,
+      ownerId,
+      bundle: bundle.growth,
+      mode,
+      friends: bundle.friends,
+    });
     added.growth = growthResult.added;
     warnings.push(...growthResult.warnings);
+
+    if (!merge) {
+      warnings.push("已按卡重灌：本机多出来的记忆、忆泡、日记与成长数据已删除，无法恢复。表情包条目与图片、会话原文、渠道绑定、模型设置保留本机。");
+    }
 
     await tx.auditLog.create({
       data: {
         actorType: "USER",
         actorId: ownerId,
         characterId: target.id,
-        action: "character.merged",
+        action: merge ? "character.merged" : "character.replaced",
         entityType: "Character",
         entityId: target.id,
         details: {
@@ -2033,10 +2310,19 @@ async function mergeCharacterCard(input: {
           bundleVersion: bundle.formatVersion,
           exportedAt: bundle.exportedAt,
           added,
+          ...(removed ? { removed } : {}),
         },
       },
     });
   }, { timeout: 180_000, maxWait: 15_000 });
 
-  return { characterId: target.id, name: target.name, mode: "merge", counts: bundle.counts, added, warnings };
+  return {
+    characterId: target.id,
+    name: target.name,
+    mode,
+    counts: bundle.counts,
+    added,
+    ...(removed ? { removed } : {}),
+    warnings,
+  };
 }

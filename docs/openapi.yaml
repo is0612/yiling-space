@@ -3274,13 +3274,18 @@ paths:
       tags: [Characters]
       operationId: importCharacterCard
       summary: 导入角色卡
-      description: "默认新建角色：同名只在名称后加「副本」后缀，不覆盖已有角色。带 `target` 时改为把卡并进该角色（合并），前提是卡片同步根 ID（`origin.characterId`）与目标角色的同步根一致，否则 400。合并口径：本地内容一律保留，导入的按内容去重后追加，日记/手账接在本地最大版本号后面成为新版本。包被当作不可信输入逐字段校验（数量、长度、枚举），模型参数只接受白名单字段，任何密钥字段都不会写入数据库。记忆与忆泡的来源消息指针一律置空 —— 会话原文不随包走。导入后角色的 API Key 需要重新填写，表情包需要重新同步。新建写 `character.imported` 审计，合并写 `character.merged`。"
+      description: "默认新建角色：同名只在名称后加「副本」后缀，不覆盖已有角色。带 `target` 时写入该角色（默认 `mode=merge` 合并），前提是卡片同步根 ID（`origin.characterId`）与目标角色的同步根一致，否则 400。合并口径：本地内容一律保留，导入的按内容去重后追加，日记/手账接在本地最大版本号后面成为新版本。`mode=replace` 时改为以卡为准：先清空该角色随卡走的内容（记忆、忆泡、日历、阶段总结、日记手账、梗、互动经验、渠道策略、表达习惯、目标、偏好、形象档案、成长数据），再整包写入；人设按卡覆盖，模型参数 / API Key / 渠道绑定 / 会话原文 / 表情包图片与条目 / 其他用户的私人范围保留。包被当作不可信输入逐字段校验（数量、长度、枚举），模型参数只接受白名单字段，任何密钥字段都不会写入数据库。记忆与忆泡的来源消息指针一律置空 —— 会话原文不随包走。导入后角色的 API Key 需要重新填写，表情包需要重新同步。新建写 `character.imported` 审计，合并写 `character.merged`，替换写 `character.replaced`。"
       parameters:
         - name: target
           in: query
           required: false
-          description: 合并目标角色的 id。只接受同步根 ID 一致的角色；不传则新建。
+          description: 合并 / 替换目标角色的 id。只接受同步根 ID 一致的角色；不传则新建。
           schema: { type: string, format: uuid }
+        - name: mode
+          in: query
+          required: false
+          description: 写入方式。merge = 并进 target（缺省）；replace = 以卡为准先清后写，必须同时带 target。
+          schema: { type: string, enum: [merge, replace] }
       requestBody:
         required: true
         content:
@@ -3296,12 +3301,12 @@ paths:
                 required: [character, counts]
                 properties:
                   character: { $ref: '#/components/schemas/Character' }
-                  mode: { type: string, enum: [new, merge], description: new = 新建角色；merge = 并进 target }
+                  mode: { type: string, enum: [new, merge, replace], description: new = 新建角色；merge = 并进 target；replace = 以卡为准重灌 target }
                   counts: { $ref: '#/components/schemas/CharacterCardCounts' }
                   added: { $ref: '#/components/schemas/CharacterImportAdded' }
                   warnings: { type: array, items: { type: string }, description: 成长任务归档、隐私过滤与失效来源提示 }
         '200':
-          description: 合并成功（并进已有角色），返回该角色与本次实际新增的条数
+          description: 合并或替换成功（写进已有角色），返回该角色与本次实际新增的条数
           content:
             application/json:
               schema:
@@ -3309,12 +3314,16 @@ paths:
                 required: [character, mode, counts, added]
                 properties:
                   character: { $ref: '#/components/schemas/Character' }
-                  mode: { type: string, enum: [new, merge] }
+                  mode: { type: string, enum: [new, merge, replace] }
                   counts: { $ref: '#/components/schemas/CharacterCardCounts' }
                   added: { $ref: '#/components/schemas/CharacterImportAdded' }
+                  removed:
+                    type: object
+                    description: 只有 replace 才返回：清掉的本机内容条数
+                    additionalProperties: { type: integer }
                   warnings: { type: array, items: { type: string }, description: 成长任务归档、隐私过滤与失效来源提示 }
         '400':
-          description: 不是角色卡、格式版本过高或字段非法（`statusMessage` 给出具体是哪一条）
+          description: 不是角色卡、格式版本过高、字段非法，或 `mode=replace` 缺少 `target` / `mode` 取值不认识（`statusMessage` 给出具体是哪一条）
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

@@ -4,7 +4,7 @@ import type { ApiRequest } from "../utils/request";
 import type { Character, GroupInitiativeSettings, ProactiveSettings } from "#shared/types/character";
 export type { GroupInitiativeSettings, ProactiveSettings } from "#shared/types/character";
 import type {
-  AssistantKind, AssistantWithProbe, CatchphraseEvidence, CatchphraseItem, CatchphraseScanResult, ConnectionProbeResult, DailyUsage, GroupInitiativeSnapshot, GroupProactiveTryResult, ImportedCharacterResult, MemoryCleanupSummary, MemorySettings, MemorySettingsPatch, ModelCatalogResult, ProactiveSnapshot, ProactiveTryResult, QqSideEffect, StickerItem, StickerList, StickerRelabelResult, StickerSortKey, StickerStats, StickerSyncReport, StickerTrashPayload, StickerUsageSuggestion,
+  AssistantKind, AssistantWithProbe, CatchphraseEvidence, CatchphraseItem, CatchphraseScanResult, ConnectionProbeResult, DailyUsage, GroupInitiativeSnapshot, GroupProactiveTryResult, ImportedCharacterRemoved, ImportedCharacterResult, MemoryCleanupSummary, MemorySettings, MemorySettingsPatch, ModelCatalogResult, ProactiveSnapshot, ProactiveTryResult, QqSideEffect, StickerItem, StickerList, StickerRelabelResult, StickerSortKey, StickerStats, StickerSyncReport, StickerTrashPayload, StickerUsageSuggestion,
 } from "#shared/types/character-settings";
 export type * from "#shared/types/character-settings";
 
@@ -305,15 +305,20 @@ export function createCharacterSettingsApi(request: ApiRequest) {
   function importCharacter<
     TAdded = Record<string, unknown>,
     TCounts = Record<string, unknown>,
+    TRemoved = ImportedCharacterRemoved,
   >(payload: {
     bundle: Record<string, unknown>;
     targetCharacterId?: string;
-  }): Promise<ImportedCharacterResult<TAdded, TCounts>> {
-    return request<ImportedCharacterResult<TAdded, TCounts>>({
+    /** merge = 并进目标（本地保留）；replace = 以卡为准（先清空）。缺省 merge。 */
+    mode?: "merge" | "replace";
+  }): Promise<ImportedCharacterResult<TAdded, TCounts, TRemoved>> {
+    return request<ImportedCharacterResult<TAdded, TCounts, TRemoved>>({
       url: "/characters/import",
       method: "post",
       data: payload.bundle,
-      ...(payload.targetCharacterId ? { params: { target: payload.targetCharacterId } } : {}),
+      ...(payload.targetCharacterId
+        ? { params: { target: payload.targetCharacterId, ...(payload.mode ? { mode: payload.mode } : {}) } }
+        : {}),
     });
   }
 

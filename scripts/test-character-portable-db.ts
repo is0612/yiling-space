@@ -1012,7 +1012,107 @@ async function main() {
   assert.equal(collisionRows.find((row) => row.id === localCollision.id)?.dedupeKey, "shared-key", "本地 key 不动");
   assert.ok(collisionRows.filter((row) => row.id !== localCollision.id).every((row) => row.dedupeKey === null));
 
-  console.log("角色卡数据库测试通过：他人私人记忆不出包、朋友段只收互动过的关系、分享型导出清空朋友、身份复用且不改绑定、导入只新增、来源置空、双人导入归属正确、重复合并不长数据、合并追加手账版本并重指向今日一句、同名不同源拒绝合并。");
+  // ── 4. 替换：以卡为准，本机多出来的内容必须消失 ─────────────
+  const replaceGlobal = await prisma.memoryScope.findFirstOrThrow({ where: { characterId: first.characterId, scopeType: "CHARACTER_GLOBAL" } });
+  const replacePrivateA = await prisma.memoryScope.findFirstOrThrow({ where: { characterId: first.characterId, scopeType: "USER_PRIVATE", userId: ownerA } });
+  const otherUserScope = await prisma.memoryScope.create({
+    data: {
+      characterId: first.characterId,
+      scopeType: "USER_PRIVATE",
+      scopeKey: buildUserPrivateScopeKey(first.characterId, userB),
+      userId: userB,
+    },
+  });
+  await prisma.memoryItem.create({ data: { memoryScopeId: replaceGlobal.id, category: "FACT", content: "本机独有的旧记忆" } });
+  await prisma.memoryItem.create({ data: { memoryScopeId: otherUserScope.id, category: "FACT", content: "别人的私人记忆" } });
+  await prisma.memoryEvent.create({
+    data: {
+      memoryScopeId: replaceGlobal.id,
+      dayKey: "2026-11-01",
+      state: "FINAL",
+      occurredAt: new Date("2026-11-01T10:00:00Z"),
+      title: "本机独有的旧忆泡",
+      detail: "早该失效的那件事",
+      dedupeKey: "local-only-event",
+    },
+  });
+  const localKnowledge = await prisma.knowledgeItem.create({
+    data: { characterId: first.characterId, title: "本机独有的旧知识", content: "早该失效的知识" },
+  });
+  // 人设与配置也改成「本机版本」，替换后应当只剩卡片那份（密钥按约定保留）。
+  await prisma.character.update({
+    where: { id: first.characterId },
+    data: {
+      basePrompt: "本机改过的人设",
+      modelConfig: { alias: "本机别名", chatModel: "deepseek-chat", chatApiKeyEncrypted: "v1.local.key" },
+    },
+  });
+
+  const replaced = await importCharacterCard({
+    raw: JSON.parse(serialized),
+    ownerId: ownerA,
+    targetCharacterId: first.characterId,
+    mode: "replace",
+  });
+  assert.equal(replaced.mode, "replace", "带 mode=replace 时走替换");
+  assert.equal(replaced.characterId, first.characterId, "替换写回同一个角色，不新建");
+  assert.ok((replaced.removed?.memories ?? 0) >= 1, "要如实报出清掉了几条记忆");
+  assert.ok((replaced.removed?.growthRows ?? 0) >= 1, "成长数据也要计入清理量");
+  assert.equal(
+    await prisma.memoryItem.count({ where: { memoryScopeId: replaceGlobal.id, content: "本机独有的旧记忆" } }),
+    0,
+    "本机多出来的记忆必须消失 —— 这正是合并做不到的那件事",
+  );
+  assert.equal(
+    await prisma.memoryEvent.count({ where: { memoryScopeId: replaceGlobal.id, title: "本机独有的旧忆泡" } }),
+    0,
+    "本机多出来的忆泡同样要清掉",
+  );
+  assert.equal(await prisma.knowledgeItem.findUnique({ where: { id: localKnowledge.id } }), null, "本机多出来的知识按卡清掉");
+  assert.equal(
+    await prisma.memoryItem.count({ where: { memoryScopeId: otherUserScope.id } }),
+    1,
+    "其他用户的私人范围不归这张卡管，替换不能顺手清掉",
+  );
+  assert.equal(
+    await prisma.memoryItem.count({ where: { memoryScopeId: replaceGlobal.id } }),
+    bundle.memories.filter((item) => item.scope === "character").length,
+    "替换后全局记忆就是卡里那些，不多不少",
+  );
+  assert.equal(
+    await prisma.memoryItem.count({ where: { memoryScopeId: replacePrivateA.id } }),
+    bundle.memories.filter((item) => item.scope === "private").length,
+    "导入者自己的私人记忆同样以卡为准",
+  );
+  const replacedJournal = await prisma.characterJournal.findFirstOrThrow({
+    where: { memoryScopeId: replaceGlobal.id, dayKey: "2026-10-30" },
+    include: { revisions: true },
+  });
+  assert.equal(
+    replacedJournal.revisions.filter((revision) => revision.kind === "DIARY").length,
+    1,
+    "合并堆出来的第 2 版日记不该留到替换后",
+  );
+  const replacedCharacter = await prisma.character.findUniqueOrThrow({
+    where: { id: first.characterId },
+    select: { basePrompt: true, modelConfig: true },
+  });
+  assert.equal(replacedCharacter.basePrompt, "你是小鱼，说话很短。", "人设按卡覆盖");
+  const replacedConfig = replacedCharacter.modelConfig as Record<string, unknown>;
+  assert.equal(replacedConfig.chatApiKeyEncrypted, "v1.local.key", "替换不清 API Key：换的是记忆，不是连接配置");
+  assert.equal(replacedConfig.chatModel, "deepseek-chat", "模型参数保留本机");
+  assert.equal(replacedConfig.alias, "小鱼", "别名按卡覆盖");
+  assert.equal(
+    (await prisma.characterVisualProfile.findUniqueOrThrow({ where: { characterId: first.characterId }, select: { coreAppearance: true } })).coreAppearance,
+    "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾",
+    "形象档案整段按卡重建，本机调过的那句不再保留",
+  );
+  assert.ok(
+    replaced.warnings.some((warning) => warning.includes("已按卡重灌")),
+    "替换成功提示里要说清楚「清掉的不存在了」",
+  );
+
+  console.log("角色卡数据库测试通过：他人私人记忆不出包、朋友段只收互动过的关系、分享型导出清空朋友、身份复用且不改绑定、导入只新增、来源置空、双人导入归属正确、重复合并不长数据、合并追加手账版本并重指向今日一句、同名不同源拒绝合并、替换按卡重灌且保留别人范围与密钥。");
 }
 
 main()

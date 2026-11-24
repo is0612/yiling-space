@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
 import { createCharacterSettingsApi } from "~/api/character-settings";
@@ -84,6 +84,25 @@ type BundleAdded = {
 /** 与服务端 `CHARACTER_BUNDLE_MAX_BYTES` 保持一致：日记/手账的历史版本让它变大了。 */
 const MAX_BYTES = 32 * 1024 * 1024;
 
+/** 替换时本机被清掉的条数（服务端返回，只统计随卡走的那一层）。 */
+type RemovedCounts = {
+  memories?: number;
+  events?: number;
+  eventDays?: number;
+  snapshots?: number;
+  journals?: number;
+  journalRevisions?: number;
+  catchphrases?: number;
+  interactionGuidance?: number;
+  channelPolicies?: number;
+  expressionHabits?: number;
+  goals?: number;
+  preferences?: number;
+  visualVersions?: number;
+  visualAssets?: number;
+  growthRows?: number;
+};
+
 const props = defineProps<{
   modelValue: boolean;
   /** 本机已有角色：用来判断这张卡是不是「同一个她」，从而提供合并。 */
@@ -110,8 +129,12 @@ const preview = ref<BundlePreview | null>(null);
 const mergeTargets = ref<Character[]>([]);
 const mergeTargetId = ref("");
 const mergeTarget = computed(() => mergeTargets.value.find((item) => item.id === mergeTargetId.value) ?? null);
-/** merge = 并进 mergeTarget；copy = 新建副本（并排养两个）。 */
-const mergeMode = ref<"merge" | "copy">("copy");
+/**
+ * merge = 并进 mergeTarget（本地保留、接成新版本）；
+ * replace = 以卡为准（先清空本机随卡走的内容，再按卡写入）；
+ * copy = 新建副本（并排养两个）。
+ */
+const mergeMode = ref<"merge" | "replace" | "copy">("copy");
 /** 原样保留解析结果，提交时不再二次序列化字符串，避免编码/BOM 相关问题 */
 const payload = ref<Record<string, unknown> | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -382,21 +405,60 @@ function pickFile() {
 const readError = readApiErrorMessage;
 
 const merging = computed(() => mergeMode.value === "merge" && Boolean(mergeTarget.value));
+const replacing = computed(() => mergeMode.value === "replace" && Boolean(mergeTarget.value));
+
+/** 替换成功后要说清「清掉了多少」：只说成功会让人以为本机的东西还在。 */
+function describeRemoved(removed: RemovedCounts | undefined): string {
+  if (!removed) return "";
+  const parts: string[] = [];
+  if (removed.memories) parts.push(`${removed.memories} 条记忆`);
+  if (removed.events) parts.push(`${removed.events} 条忆泡`);
+  if (removed.eventDays) parts.push(`${removed.eventDays} 天日历`);
+  if (removed.snapshots) parts.push(`${removed.snapshots} 篇阶段总结`);
+  if (removed.journalRevisions) parts.push(`${removed.journalRevisions} 版日记手账`);
+  else if (removed.journals) parts.push(`${removed.journals} 天日记手账`);
+  if (removed.catchphrases) parts.push(`${removed.catchphrases} 条梗`);
+  if (removed.interactionGuidance) parts.push(`${removed.interactionGuidance} 条互动经验`);
+  if (removed.channelPolicies) parts.push(`${removed.channelPolicies} 条渠道策略`);
+  if (removed.expressionHabits) parts.push(`${removed.expressionHabits} 条表达习惯`);
+  if (removed.goals) parts.push(`${removed.goals} 个目标`);
+  if (removed.preferences) parts.push(`${removed.preferences} 条偏好`);
+  if (removed.visualVersions) parts.push(`${removed.visualVersions} 版形象历史`);
+  if (removed.growthRows) parts.push(`${removed.growthRows} 行成长数据`);
+  return parts.length ? `清掉 ${parts.join("、")}` : "本机没有需要清掉的内容";
+}
+
+async function confirmReplace(): Promise<boolean> {
+  const target = mergeTarget.value;
+  if (!target) return false;
+  return ElMessageBox.confirm(
+    `会用这张卡重写「${target.name}」：先清空本机的记忆、忆泡、忆泡日历、阶段总结、日记手账（含历史版本）、梗、互动经验、渠道策略、表达习惯、目标、偏好、形象档案与成长数据，再按卡写入。清掉的内容无法恢复；人设会被卡覆盖，模型设置、API Key、会话原文与表情包图片保留。`,
+    "以卡为准替换",
+    { confirmButtonText: "确认替换", cancelButtonText: "取消", type: "warning" },
+  ).then(() => true).catch(() => false);
+}
 
 async function submit() {
   if (!payload.value || importing.value) return;
+  if (replacing.value && !(await confirmReplace())) return;
   importing.value = true;
   try {
-    // 合并走 ?target=：包本身不动，服务端按同步根再次校验目标确实同源。
-    const result = await api.importCharacter<BundleAdded, BundleCounts>({
+    // 写进已有角色走 ?target=：包本身不动，服务端按同步根再次校验目标确实同源。
+    const result = await api.importCharacter<BundleAdded, BundleCounts, RemovedCounts>({
       bundle: payload.value,
-      ...(merging.value && mergeTarget.value ? { targetCharacterId: mergeTarget.value.id } : {}),
+      ...(mergeTarget.value && (merging.value || replacing.value)
+        ? { targetCharacterId: mergeTarget.value.id, mode: replacing.value ? "replace" as const : "merge" as const }
+        : {}),
     });
     emit("imported", result.character);
     emit("update:modelValue", false);
-    ElMessage.success(result.mode === "merge"
-      ? `已并进「${result.character.name}」：${describeAdded(result.added)}。`
-      : `已导入「${result.character.name}」。到「模型设置」填 API Key 就能开始对话。`);
+    if (result.mode === "replace") {
+      ElMessage.success(`已用卡替换「${result.character.name}」：${describeRemoved(result.removed)}，${describeAdded(result.added)}。`);
+    } else if (result.mode === "merge") {
+      ElMessage.success(`已并进「${result.character.name}」：${describeAdded(result.added)}。`);
+    } else {
+      ElMessage.success(`已导入「${result.character.name}」。到「模型设置」填 API Key 就能开始对话。`);
+    }
     if (result.warnings?.length) ElMessage.warning({ message: [...new Set(result.warnings)].join("；"), duration: 10_000, showClose: true });
   } catch (error) {
     errorMessage.value = readError(error, "导入失败，请稍后重试。");
@@ -611,10 +673,22 @@ function formatExportedAt(value: string | null): string {
           >
             合并进去（本地内容不动，导入的接成新版本）
           </el-radio>
+          <el-radio
+            value="replace"
+            :disabled="!mergeTarget"
+          >
+            替换本机内容（以卡为准，先清空再按卡写入）
+          </el-radio>
           <el-radio value="copy">
             新建副本（两个并排养）
           </el-radio>
         </el-radio-group>
+        <p
+          v-if="replacing"
+          class="replace-note"
+        >
+          会先清空本机的记忆、忆泡、日历、阶段总结、日记手账（含历史版本）、梗、互动经验、表达习惯、目标、偏好、形象档案与成长数据，再按卡写入；清掉的内容无法恢复。人设会被卡覆盖，模型设置、API Key、会话原文与表情包图片保留。
+        </p>
       </div>
 
       <p
@@ -667,9 +741,11 @@ function formatExportedAt(value: string | null): string {
         <span class="foot-note">
           {{
             preview
-              ? (merging
-                ? "合并只补数据：人设与设置不动，本地的记忆和日记一版都不会被覆盖。"
-                : "导入后到「模型设置」填 API Key，再到「记忆设置」确认归档周期。")
+              ? (replacing
+                ? "替换只作用于「她记得什么」这一层：先清后写，本机多出来的内容会消失且无法恢复。"
+                : merging
+                  ? "合并只补数据：人设与设置不动，本地的记忆和日记一版都不会被覆盖。"
+                  : "导入后到「模型设置」填 API Key，再到「记忆设置」确认归档周期。")
               : "还没选文件。"
           }}
         </span>
@@ -681,12 +757,12 @@ function formatExportedAt(value: string | null): string {
             取消
           </el-button>
           <el-button
-            type="primary"
+            :type="replacing ? 'danger' : 'primary'"
             :loading="importing"
             :disabled="!preview"
             @click="submit"
           >
-            {{ merging ? "合并进去" : "导入角色" }}
+            {{ replacing ? "替换本机内容" : merging ? "合并进去" : "导入角色" }}
           </el-button>
         </span>
       </div>
@@ -832,6 +908,16 @@ function formatExportedAt(value: string | null): string {
 }
 
 .merge-options :deep(.el-radio__label) { padding-left: 8px; }
+
+.replace-note {
+  margin: 8px 0 0;
+  border-radius: 8px;
+  background: var(--red-soft);
+  padding: 8px 10px;
+  color: var(--rose);
+  font-size: 12px;
+  line-height: 1.6;
+}
 
 .friend-note {
   margin: var(--sp-2) 0 0;

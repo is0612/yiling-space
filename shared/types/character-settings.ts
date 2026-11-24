@@ -224,14 +224,42 @@ export type ProactiveTryResult = {
 
 export type GroupProactiveTryResult = ProactiveTryResult & { groupId: string | null };
 
+/**
+ * 替换导入时清掉的本机内容，只统计随卡走的那一层。
+ * 会话原文、渠道绑定、表情包图片与条目、其他用户的私人范围都不在内。
+ */
+export type ImportedCharacterRemoved = {
+  memories: number;
+  events: number;
+  eventDays: number;
+  snapshots: number;
+  journals: number;
+  journalRevisions: number;
+  catchphrases: number;
+  interactionGuidance: number;
+  channelPolicies: number;
+  expressionHabits: number;
+  goals: number;
+  preferences: number;
+  visualOutfits: number;
+  visualVersions: number;
+  visualAssets: number;
+  /** 成长数据（知识 / 社交 / 反思 / 成长事件）清掉的行数合计。 */
+  growthRows: number;
+};
+
 /** 导入角色的结果：成功时带回整份角色 + 本次新增/计数的泛型载荷。 */
 export type ImportedCharacterResult<
   TAdded = Record<string, unknown>,
   TCounts = Record<string, unknown>,
+  TRemoved = ImportedCharacterRemoved,
 > = {
   character: Character;
-  mode: "new" | "merge";
+  /** new = 新建；merge = 并进已有角色；replace = 以卡为准重灌。 */
+  mode: "new" | "merge" | "replace";
   counts: TCounts;
   added: TAdded;
+  /** 只有 replace 才带：清掉了本机多少内容。 */
+  removed?: TRemoved;
   warnings?: string[];
 };

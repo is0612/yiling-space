@@ -149,7 +149,7 @@ export async function loadCharacterGrowth(input: { prisma?: DB; characterId: str
   return parseCharacterGrowthBundle(bundle);
 }
 
-export async function importCharacterGrowth(tx: Prisma.TransactionClient, input: { characterId: string; ownerId: string; bundle: CharacterGrowthBundle; includeFriends?: boolean; mode?: "new" | "merge"; friends?: Array<{ platform: string; platformUid: string }>; importedFriends?: Array<{ platform: string; platformUid: string }>; [key: string]: unknown }) {
+export async function importCharacterGrowth(tx: Prisma.TransactionClient, input: { characterId: string; ownerId: string; bundle: CharacterGrowthBundle; includeFriends?: boolean; mode?: "new" | "merge" | "replace"; friends?: Array<{ platform: string; platformUid: string }>; importedFriends?: Array<{ platform: string; platformUid: string }>; [key: string]: unknown }) {
   await own(tx, input.characterId, input.ownerId);
   const bundle = parseCharacterGrowthBundle(input.bundle); const t = bundle.tables;
   const added = growthCounts(emptyCharacterGrowthBundle()); const warnings: string[] = [...(bundle.warnings ?? [])];
