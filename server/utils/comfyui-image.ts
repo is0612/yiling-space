@@ -12,8 +12,10 @@
  * 注意：Anima 只认英文与 Danbooru 标签，中文提示词基本无效。调用方负责把中文转成标签，
  * 本文件不替你做翻译（`image-generation.ts` 那边会把中文分段标签剥掉并留一条警告）。
  */
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, extname } from "node:path";
+import sharp from "sharp";
 
 import {
   LOCAL_IMAGE_DEFAULT_BASE_URL,
@@ -170,14 +172,30 @@ function buildGraph(input: {
   return graph;
 }
 
+/**
+ * 每次上传都用一个全新的文件名。
+ *
+ * 这里曾经固定写 `reference.png` 再配 `overwrite=true`，并发下会串图：
+ * 两个角色同时图生图，后一次上传直接盖掉前一次的文件；而 ComfyUI 的任务是排队执行的，
+ * 排在前面的那项真正走到 LoadImage 时，读到的可能已经是另一个角色的参考图。
+ *
+ * 名字带固定前缀是为了引擎侧的 input 目录将来好清 —— ComfyUI 没有公开的删除接口，
+ * 这些临时图只能靠人工或脚本按前缀回收。
+ */
+function uploadName(filename?: string): string {
+  const extension = extname(filename ?? "").toLowerCase();
+  const safeExtension = extension === ".jpg" || extension === ".jpeg" || extension === ".webp" ? extension : ".png";
+  return `yiling-reference-${randomUUID()}${safeExtension}`;
+}
+
 async function uploadImage(base: string, reference: {
   buffer: Buffer;
   filename?: string;
 }): Promise<{ name?: string; reason?: string }> {
   const form = new FormData();
   const blob = new Blob([new Uint8Array(reference.buffer)], { type: "image/png" });
-  form.append("image", blob, reference.filename || "reference.png");
-  form.append("overwrite", "true");
+  form.append("image", blob, uploadName(reference.filename));
+  // 不再给 overwrite：文件名已经唯一，留着它只会把「覆盖别人文件」这条路径保留下来。
   form.append("type", "input");
   try {
     const response = await fetch(`${base}/upload/image`, {
@@ -325,12 +343,15 @@ export async function generateImageWithComfy(input: ComfyImageInput): Promise<Co
     if (!response.ok) return { ok: false, reason: `取图失败：HTTP ${response.status}` };
     const buffer = Buffer.from(await response.arrayBuffer());
     if (!buffer.length) return { ok: false, reason: "取到的图是空的" };
+    // 图生图时请求里的 width/height 会被工作流丢掉（ImageScaleToTotalPixels 按约 1MP
+    // 重算尺寸），所以返回真实像素，而不是把请求值当成结果告诉调用方。
+    const metadata = await sharp(buffer).metadata().catch(() => null);
     return {
       ok: true,
       buffer,
       mime: "image/png",
-      width,
-      height,
+      width: metadata?.width ?? width,
+      height: metadata?.height ?? height,
       seed,
       elapsedMs: finished.elapsedMs ?? 0,
       mode: imageName ? "image_to_image" : "text_to_image",

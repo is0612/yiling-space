@@ -1,10 +1,14 @@
 import { createError, readBody, setHeader } from "h3";
-import { isAbsolute, normalize, resolve } from "node:path";
+import { isAbsolute, normalize, relative, resolve } from "node:path";
+import { realpath, stat } from "node:fs/promises";
 import { requireAdminActor } from "../../utils/auth";
 import { generateImageWithComfy } from "../../utils/comfyui-image";
 
 /** 提示词上限，跟 image-generation.ts 保持一致。 */
 const PROMPT_MAX_CHARS = 1200;
+
+/** 参考图上限：图生图只用一张立绘，16MB 留足了高分辨率余量。 */
+const MAX_REFERENCE_BYTES = 16 * 1024 * 1024;
 
 /**
  * 允许读取参考图的根目录。
@@ -13,25 +17,68 @@ const PROMPT_MAX_CHARS = 1200;
  * 默认只有项目自己这一层（`.data`、`public` 都在里面），够本机自测用；
  * 想读别处的图（比如模型目录里的示例图）就设 DRAW_ALLOWED_ROOTS（逗号分隔）。
  * 不写死任何绝对路径：这个仓库是公开的，别人机器上的目录结构和这里不一样。
+ *
+ * 这里不做大小写归一：Windows 的 `path.relative` 本身就不区分大小写，
+ * 而 Linux 上的路径区分大小写，提前转小写反而会把合法路径认成另一个。
  */
 const ALLOWED_ROOTS = (process.env.DRAW_ALLOWED_ROOTS || process.cwd())
   .split(",")
   .map(item => item.trim())
   .filter(Boolean)
-  .map(item => normalize(resolve(item)).toLowerCase());
+  .map(item => normalize(resolve(item)));
 
-function assertAllowedPath(input: string): string {
+/**
+ * 根目录本身也可能是指向别处的符号链接（macOS 的 `/tmp` → `/private/tmp`），
+ * 所以比较时用真实路径。只在第一次用到时解析，失败就退回配置值。
+ */
+let realRoots: string[] | null = null;
+async function resolvedRoots(): Promise<string[]> {
+  if (!realRoots) {
+    realRoots = await Promise.all(ALLOWED_ROOTS.map(async root => {
+      try { return await realpath(root); } catch { return root; }
+    }));
+  }
+  return realRoots;
+}
+
+/**
+ * target 是否落在 root 之内。
+ *
+ * 用 `relative` 判断，而不是拼 `${root}\\` 再 startsWith：分隔符写死反斜杠时，
+ * Linux/macOS 上 `/home/x/a.png` 永远不以 `/home/x\` 开头，合法子路径会被全部拒绝。
+ */
+function isInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * 校验参考图并返回可读的真实路径。
+ *
+ * 只看规范化后的字符串是不够的：允许目录里如果有指向外部的符号链接，
+ * 字符串还是「在目录内」，真正打开却读到了目录外。所以先 realpath 再判断。
+ */
+async function assertAllowedPath(input: string): Promise<string> {
   if (!isAbsolute(input)) throw createError({ statusCode: 400, message: "参考图请给绝对路径。" });
-  const normalized = normalize(resolve(input));
-  const lowered = normalized.toLowerCase();
-  const allowed = ALLOWED_ROOTS.some(root => lowered === root || lowered.startsWith(root.endsWith("\\") ? root : `${root}\\`));
-  if (!allowed) {
+  let real: string;
+  try {
+    real = await realpath(normalize(resolve(input)));
+  } catch {
+    throw createError({ statusCode: 404, message: "参考图不存在或无法读取。" });
+  }
+  const roots = await resolvedRoots();
+  if (!roots.some(root => isInside(root, real))) {
     throw createError({
       statusCode: 403,
       message: `参考图只允许读这些目录下的文件：${ALLOWED_ROOTS.join("、")}。需要更多目录请设置 DRAW_ALLOWED_ROOTS。`,
     });
   }
-  return normalized;
+  const info = await stat(real).catch(() => null);
+  if (!info?.isFile()) throw createError({ statusCode: 400, message: "参考图必须是一个文件。" });
+  if (info.size > MAX_REFERENCE_BYTES) {
+    throw createError({ statusCode: 400, message: `参考图不能超过 ${MAX_REFERENCE_BYTES / 1024 / 1024}MB。` });
+  }
+  return real;
 }
 
 /**
@@ -60,9 +107,8 @@ export default defineEventHandler(async event => {
     throw createError({ statusCode: 400, message: `画面描述最多 ${PROMPT_MAX_CHARS} 个字符。` });
   }
 
-  const referencePath = typeof body?.referencePath === "string" && body.referencePath.trim()
-    ? assertAllowedPath(body.referencePath.trim())
-    : undefined;
+  const requestedReference = typeof body?.referencePath === "string" ? body.referencePath.trim() : "";
+  const referencePath = requestedReference ? await assertAllowedPath(requestedReference) : undefined;
 
   const result = await generateImageWithComfy({
     prompt,

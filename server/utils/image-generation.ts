@@ -1108,6 +1108,10 @@ function pickLocalReference(references?: ImageReferenceInput[]): ImageReferenceI
     ?? references[0] ?? null;
 }
 
+/**
+ * 只用来告诉引擎临时文件该带什么扩展名。
+ * 真正的文件名由 `comfyui-image.ts` 每次随机生成 —— 固定名在并发时会串图。
+ */
 function referenceFilename(mime: string): string {
   if (mime === "image/jpeg" || mime === "image/jpg") return "reference.jpg";
   if (mime === "image/webp") return "reference.webp";
