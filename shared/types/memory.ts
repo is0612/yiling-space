@@ -330,6 +330,8 @@ export type StaleMemoryAuditResult = {
     event: { active: number; scanned: number };
   };
   items: StaleMemoryItem[];
+  /** 高置信（≥90%）过期忆泡已在服务端自动归档的明细，可恢复，不再进人工列表。 */
+  autoApplied: { count: number; items: StaleMemoryItem[] };
 };
 
 export type StaleMemoryApplyResult = {

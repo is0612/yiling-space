@@ -9,6 +9,8 @@ export async function applyStaleMemories(prisma: PrismaClient, input: {
   ownerId: string;
   characterId: string;
   items: Array<{ kind: StaleKind; id: string; fingerprint: string; reason?: string }>;
+  /** 审计来源：人工确认为 stale-memory-audit（默认），高置信自动归档为 stale-memory-audit-auto。 */
+  source?: string;
 }): Promise<{ memory: number; event: number }> {
   const scope = {
     characterId: input.characterId,
@@ -72,7 +74,7 @@ export async function applyStaleMemories(prisma: PrismaClient, input: {
         details: {
           before: memory ? { category: memory.category, status: "ACTIVE" } : { title: event!.title, status: "ACTIVE" },
           after: memory ? { status: "INVALIDATED", validTo: now.toISOString() } : { status: "ARCHIVED" },
-          changed: memory ? ["status", "validTo"] : ["status"], reason: item.reason ?? "", source: "stale-memory-audit",
+          changed: memory ? ["status", "validTo"] : ["status"], reason: item.reason ?? "", source: input.source ?? "stale-memory-audit",
         },
       } });
     }

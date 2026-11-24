@@ -26,6 +26,8 @@ const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
 const items = ref<StaleMemoryItem[]>([]);
+/** 本次体检里已自动归档的高置信过期忆泡：只展示，不可勾选，可在当天「已隐藏」恢复。 */
+const autoApplied = ref<StaleMemoryItem[]>([]);
 const selected = ref<string[]>([]);
 const counts = ref<{ memory: { active: number; scanned: number }; event: { active: number; scanned: number } }>({
   memory: { active: 0, scanned: 0 },
@@ -35,6 +37,10 @@ const counts = ref<{ memory: { active: number; scanned: number }; event: { activ
 const range = ref<"day" | "7" | "30">("7");
 
 const isEvents = computed(() => props.scope === "events");
+const auditIntro = computed(() => {
+  const base = "模型只负责提名，清不清理由你决定。它会看时间、分类和条目之间的矛盾，主观偏好、性格和关系类记忆不会被判失效。";
+  return isEvents.value ? `${base}把握 ≥90% 的过期忆泡会直接归档（可恢复），不再等你勾选。` : base;
+});
 const rangeOptions = computed(() => [
   ...(props.dayKey ? [{ value: "day" as const, label: `只看 ${props.dayKey}` }] : []),
   { value: "7" as const, label: "最近 7 天" },
@@ -65,6 +71,7 @@ function itemTitle(item: StaleMemoryItem) {
 let sequence = 0;
 function reset() {
   items.value = [];
+  autoApplied.value = [];
   selected.value = [];
   error.value = "";
   counts.value = { memory: { active: 0, scanned: 0 }, event: { active: 0, scanned: 0 } };
@@ -100,8 +107,11 @@ async function scan() {
     if (seq !== sequence) return;
     counts.value = result.counts;
     items.value = result.items;
+    autoApplied.value = result.autoApplied?.items ?? [];
     // 默认一条都不勾：模型只是提名，误判的代价是她的记忆被误清，宁可让人多点几下。
     selected.value = [];
+    // 服务端已自动归档的忆泡要从日历/当天列表里消失，让父页面刷新。
+    if (autoApplied.value.length) emit("applied");
   } catch (cause) {
     if (seq !== sequence) return;
     const message = cause && typeof cause === "object" && "statusMessage" in cause
@@ -176,8 +186,7 @@ async function apply() {
     :show-close="!saving"
   >
     <p class="audit-intro">
-      模型只负责提名，清不清理由你决定。它会看时间、分类和条目之间的矛盾，
-      主观偏好、性格和关系类记忆不会被判失效。
+      {{ auditIntro }}
     </p>
     <div
       v-if="isEvents"
@@ -226,8 +235,44 @@ async function apply() {
         只检查了最近 {{ (isEvents ? counts.event : counts.memory).scanned }} 条；缩小范围可以查得更全。
       </p>
 
+      <el-alert
+        v-if="autoApplied.length"
+        class="audit-auto-alert"
+        type="info"
+        :closable="false"
+        :title="`${autoApplied.length} 条过期忆泡（模型把握 ≥90%）已自动归档，可在对应日期的「已隐藏」里恢复。`"
+      />
+      <div
+        v-if="autoApplied.length"
+        class="audit-list"
+      >
+        <div
+          v-for="item in autoApplied"
+          :key="`auto:${item.kind}:${item.id}`"
+          class="audit-item auto"
+        >
+          <div class="audit-body">
+            <div class="audit-head">
+              <span class="audit-kind">{{ item.kind === "MEMORY" ? "长期记忆" : "忆泡" }}</span>
+              <strong class="audit-title">{{ itemTitle(item) }}</strong>
+              <span class="audit-verdict tone-gray">已自动归档</span>
+              <span class="audit-confidence">把握 {{ Math.round(item.confidence * 100) }}%</span>
+            </div>
+            <p class="audit-content">
+              {{ item.content }}
+            </p>
+            <p class="audit-reason">
+              {{ item.reason }}
+            </p>
+            <p class="audit-meta">
+              {{ item.meta }}
+            </p>
+          </div>
+        </div>
+      </div>
+
       <el-empty
-        v-if="!items.length"
+        v-if="!items.length && !autoApplied.length"
         description="这次没有发现明显失效的条目。"
       />
       <template v-else>
@@ -315,6 +360,8 @@ async function apply() {
 .audit-list { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow: auto; padding-top: 10px; }
 .audit-item { display: flex; align-items: flex-start; gap: 10px; border: 1px solid transparent; border-radius: 10px; background: var(--surface-2); padding: 12px 14px; cursor: pointer; }
 .audit-item.on { border-color: var(--brand-line); background: var(--brand-soft); }
+.audit-item.auto { cursor: default; }
+.audit-auto-alert { margin-bottom: 10px; }
 .audit-item :deep(.el-checkbox) { margin-top: 1px; }
 .audit-body { min-width: 0; flex: 1; }
 .audit-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
