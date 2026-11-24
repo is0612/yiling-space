@@ -36,7 +36,7 @@ function text(value: unknown, max: number, label: string, required = false): str
 
 function optionalDate(value: unknown, label: string): Date | null {
   if (value === undefined || value === null || value === "") return null;
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/u.test(value)) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/u.test(value) || !/(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) {
     throw createError({ statusCode: 400, statusMessage: label + "必须是带时区的 ISO 日期时间。" });
   }
   const date = new Date(value);
