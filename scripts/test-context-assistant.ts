@@ -144,6 +144,8 @@ try {
     "最近对话里的 USER 行也要带 @ 对象；否则历史里的 @ 仍会被读成在说她。",
   );
   assert.match(requests[0]!.messages[0]!.content, /target other is another member or bot/u, "系统提示词必须说明 @other 不是她。");
+  assert.match(requests[0]!.messages[0]!.content, /shortest complete reasoning path/u, "优化应鼓励聚焦分析，但必须保留完整证据与不确定性判断。");
+  assert.match(requests[0]!.messages[0]!.content, /Never skip relevant evidence/u);
   assert.match(requests[0]!.messages[0]!.content, /teaching/);
   assert.match(requests[0]!.messages[0]!.content, /退下/);
   // This only proves mocked output passes through validation and the instruction is present.
