@@ -181,7 +181,7 @@ watch([id, dayKey], () => { void load(); }, { immediate: true });
           <p>{{ overview.currentActivity.detail || "这段时间正在做这件事。" }}</p>
           <div class="meta-line">
             <span v-if="overview.currentActivity.place">{{ overview.currentActivity.place }}</span>
-            <span>{{ new Date(overview.currentActivity.startedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) }} 开始</span>
+            <span>{{ new Date(overview.currentActivity.startedAt).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }) }} 开始</span>
           </div>
           <el-button type="primary" :icon="Check" :loading="actingId === overview.currentActivity.id" @click="completeCurrent">结束这段活动</el-button>
         </template>
@@ -205,7 +205,7 @@ watch([id, dayKey], () => { void load(); }, { immediate: true });
           <div v-if="overview.plan.items.length" class="timeline">
             <article v-for="item in overview.plan.items" :key="item.id" class="timeline-item">
               <div class="timeline-time">
-                {{ item.plannedStartAt ? new Date(item.plannedStartAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "随时" }}
+                {{ item.plannedStartAt ? new Date(item.plannedStartAt).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }) : "随时" }}
               </div>
               <div class="timeline-content">
                 <div class="timeline-title">{{ item.title }} <el-tag size="small" :type="item.status === 'COMPLETED' ? 'success' : 'info'">{{ statusLabel(item.status) }}</el-tag></div>
