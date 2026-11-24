@@ -94,16 +94,16 @@ export async function loadEventContextMessages(
     ? input.newMessageTokens!
     : EVENT_AI_INPUT_TOKENS;
   const contextBudget = Math.min(EVENT_AI_CONTEXT_TOKENS, Math.max(1_000, EVENT_AI_TOTAL_TOKENS - newMessageTokens));
-  const rows = await prisma.message.findMany({
-    where: {
+  const baseWhere: Prisma.MessageWhereInput = {
       conversationId: input.conversationId,
       occurredAt: { gte: input.periodStart, lt: input.periodEnd },
-      ...notAmbientMessageWhere(),
       OR: [
         { occurredAt: { lt: input.first.occurredAt } },
         { occurredAt: input.first.occurredAt, id: { lt: input.first.id } },
       ],
-    },
+    };
+  const rows = await prisma.message.findMany({
+    where: await notAmbientMessageWhere(prisma, baseWhere),
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
     take: EVENT_AI_CONTEXT_MESSAGES,
     select: {
@@ -162,8 +162,9 @@ export async function loadEventMessageBatch(
   prisma: Pick<PrismaClient, "message">,
   input: Parameters<typeof eventMessageWhere>[0],
 ) {
+  const baseWhere = eventMessageWhere(input);
   const rows = await prisma.message.findMany({
-    where: eventMessageWhere(input),
+    where: await notAmbientMessageWhere(prisma, baseWhere),
     orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
     take: EVENT_MESSAGE_BATCH_SIZE + 1,
     select: {
