@@ -366,7 +366,7 @@
 - **根因**：Windows 下普通 Node 子进程的 Job 关联会随父进程终止，后端及其守卫被一起结束。最初只补 stdin/IPC 通知或进程句柄等待，无法让已经被一并终止的守卫工作。
 - **对照**：同一个无库实验，非 detached 后端没有 lost 回调；只改为 detached、仍持有 stdio 和进程句柄后，即可收到 lost 并自行退出。不是通过全局杀进程或忽略父身份解决。
 - **修复边界**：Windows 桌面后端/窗口显式分离进程组，但不 unref、不放弃正常控制通道；核对原进程创建时间、等待原句柄退出；正常关闭仍由原启动器等待自己拥有的消费者和数据库收尾。
-- 回归：`test:desktop-parent-watch`、`desktop:package:smoke`。具体完整 GUI 结果与干净系统限制见 `docs/desktop-installer.md`。
+- 回归：`test:desktop-parent-watch`、`desktop:package:smoke`。具体完整 GUI 结果与干净系统限制见 `docs/desktop-app.md`。
 
 ### 7.2 收尾日志自己触发 EPIPE，PG 关闭被截断（2026-11-22）
 - **症状**：隔离故障日志停在 stopping，下一条阶段日志和 PG close 都没执行；正常退出却成功。

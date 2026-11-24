@@ -41,6 +41,7 @@
 | 文档 | 功能 |
 |---|---|
 | [character-card](character-card.md) | 角色卡导出、导入、替换 |
+| [desktop-app](desktop-app.md) | 桌面端全部：内嵌 PG、迁移备份、安装包、VC 前置、免登录 |
 | [形象档案设计](<形象档案设计.md>) | 视觉身份资料库、参考图与版本 |
 | [image-generation](image-generation.md) | 聊天生图链路 |
 | [本机生图接口](<本机生图接口.md>) | Anima / ComfyUI 调用方式 |
@@ -86,7 +87,7 @@
 | [忆灵空间 · 功能介绍](<忆灵空间 · 功能介绍.md>) | 2026-11-01 的能力快照，已落后（见文件头横幅） |
 | [桌面化架构评估](<桌面化架构评估.md>) | 阶段一预检，结论已采纳并实施 |
 | [桌面端改造方案-内嵌数据库与免登录](<桌面端改造方案-内嵌数据库与免登录.md>) | 方案已基本落地 |
-| [desktop-postgres-a0](desktop-postgres-a0.md) → [runtime](desktop-postgres-runtime.md) → [database-integration](desktop-database-integration.md) → [installer](desktop-installer.md) → [identity](desktop-identity.md) → [identity-handoff](desktop-identity-handoff.md) → [vc-runtime](desktop-vc-runtime.md) | 桌面端一条实施链的分阶段记录；未验边界（另一台机器升级、代码签名）见 PROGRESS |
+| ~~desktop-postgres-a0 / runtime / database-integration / installer / identity / identity-handoff / vc-runtime~~ | 七份分阶段记录已合并为 [desktop-app](desktop-app.md)，不再单独存在 |
 | [assistant-collaboration-plan](assistant-collaboration-plan.md) | 2026-11-11 的调用链盘点与第二批设计，已实现 |
 
 ## 四、一次性验收报告（当时证据，不是现状）
