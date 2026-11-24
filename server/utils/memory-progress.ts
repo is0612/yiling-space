@@ -1,5 +1,6 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import { eventMessageWhere } from "./memory-event-source";
+import { notAmbientMessageWhere } from "./group-ambient-memory";
 import { isMemoryJobLeaseExpired } from "./memory-job-lease";
 
 /**
@@ -144,25 +145,25 @@ export async function listMemoryProgress(
           where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
           select: { extractedAt: true, extractedMessageId: true, eventCount: true },
         });
-        const [all, remaining] = await Promise.all([
-          prisma.message.count({
-            where: eventMessageWhere({
+        const [allWhere, remainingWhere] = await Promise.all([
+          notAmbientMessageWhere(prisma, eventMessageWhere({
               memoryScopeId: job.memoryScopeId,
               privateOnly: scopeType === "EXTERNAL_IDENTITY",
               periodStart,
               periodEnd,
               progress: null,
-            }),
-          }),
-          prisma.message.count({
-            where: eventMessageWhere({
+            })),
+          notAmbientMessageWhere(prisma, eventMessageWhere({
               memoryScopeId: job.memoryScopeId,
               privateOnly: scopeType === "EXTERNAL_IDENTITY",
               periodStart,
               periodEnd,
               progress: day,
-            }),
-          }),
+            })),
+        ]);
+        const [all, remaining] = await Promise.all([
+          prisma.message.count({ where: allWhere }),
+          prisma.message.count({ where: remainingWhere }),
         ]);
         total = all;
         done = Math.max(0, all - remaining);
