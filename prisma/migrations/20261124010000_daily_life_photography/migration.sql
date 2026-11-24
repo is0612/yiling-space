@@ -1,6 +1,6 @@
 -- Daily life plans, confirmed activities, and generated photo records.
 CREATE TYPE "DailyLifePlanStatus" AS ENUM ('ACTIVE', 'ARCHIVED');
-CREATE TYPE "DailyLifePlanItemStatus" AS ENUM ('PLANNED', 'CANCELLED', 'SKIPPED', 'CHANGED');
+CREATE TYPE "DailyLifePlanItemStatus" AS ENUM ('PLANNED', 'COMPLETED', 'CANCELLED', 'SKIPPED', 'CHANGED');
 CREATE TYPE "DailyLifeActivityStatus" AS ENUM ('IN_PROGRESS', 'COMPLETED');
 CREATE TYPE "DailyLifeActivitySource" AS ENUM ('PLAN', 'USER_CONFIRMED', 'CHARACTER_INITIATED');
 CREATE TYPE "DailyPhotoTrigger" AS ENUM ('USER_REQUESTED', 'CHARACTER_INITIATED', 'LIFE_CONTEXT', 'MEMORY_REVISIT');
