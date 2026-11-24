@@ -15,9 +15,9 @@ export default defineEventHandler(async (event) => {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(dayKey)) throw createError({ statusCode: 400, statusMessage: "日期必须是 YYYY-MM-DD。" });
   const [plan, currentActivity, recentActivities, photos] = await Promise.all([
     prisma.dailyLifePlan.findUnique({ where: { characterId_dayKey: { characterId, dayKey } }, include: { items: { orderBy: [{ plannedStartAt: "asc" }, { sortOrder: "asc" }] } } }),
-    prisma.dailyLifeActivity.findFirst({ where: { characterId, status: "IN_PROGRESS" }, orderBy: { startedAt: "desc" } }),
-    prisma.dailyLifeActivity.findMany({ where: { characterId, startedAt: { gte: new Date(Date.now() - 14 * 86400000) } }, orderBy: { startedAt: "desc" }, take: 30 }),
-    prisma.dailyPhoto.findMany({ where: { characterId, generatedAt: { gte: new Date(Date.now() - 30 * 86400000) } }, orderBy: { generatedAt: "desc" }, take: 30 }),
+    prisma.dailyLifeActivity.findFirst({ where: { characterId, status: "IN_PROGRESS" }, orderBy: { startedAt: "desc" }, select: { id: true, title: true, detail: true, place: true, source: true, status: true, startedAt: true, completedAt: true, planItemId: true } }),
+    prisma.dailyLifeActivity.findMany({ where: { characterId, startedAt: { gte: new Date(Date.now() - 14 * 86400000) } }, orderBy: { startedAt: "desc" }, take: 30, select: { id: true, title: true, detail: true, place: true, source: true, status: true, startedAt: true, completedAt: true, planItemId: true } }),
+    prisma.dailyPhoto.findMany({ where: { characterId, generatedAt: { gte: new Date(Date.now() - 30 * 86400000) } }, orderBy: { generatedAt: "desc" }, take: 30, select: { id: true, activityId: true, trigger: true, status: true, prompt: true, provider: true, model: true, generationMode: true, mime: true, width: true, height: true, caption: true, generatedAt: true, deliveredAt: true } }),
   ]);
   return { dayKey, plan, currentActivity, recentActivities, photos };
 });
