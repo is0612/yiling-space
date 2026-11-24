@@ -25,8 +25,19 @@ assert.equal(shouldStoreAmbientGroupMessage(false, "389834620"), false);
 assert.equal(shouldStoreAmbientGroupMessage(true, undefined), false);
 
 // 快照/忆泡来源必须排除 ambient，原文检索不受影响。
-assert.deepEqual(notAmbientMessageWhere(), {
-  NOT: { metadata: { path: ["storedReason"], equals: AMBIENT_GROUP_MESSAGE_REASON } },
+const ambientLookup: unknown[] = [];
+const ambientFilter = await notAmbientMessageWhere({
+  message: { findMany: async (query: unknown) => { ambientLookup.push(query); return [{ id: "ambient-id" }]; } },
+} as never, { conversationId: "conversation-id" });
+assert.deepEqual(ambientLookup, [{
+  where: { AND: [
+    { conversationId: "conversation-id" },
+    { metadata: { path: ["storedReason"], equals: AMBIENT_GROUP_MESSAGE_REASON } },
+  ] },
+  select: { id: true },
+}], "ambient lookup must use a positive JSON equality filter so missing legacy keys never become SQL NULL negations");
+assert.deepEqual(ambientFilter, {
+  AND: [{ conversationId: "conversation-id" }, { id: { notIn: ["ambient-id"] } }],
 });
 
 // 清理只删 48 小时之前的 ambient。
