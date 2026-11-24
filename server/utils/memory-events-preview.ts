@@ -1,6 +1,7 @@
 import { createError } from "h3";
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import { eventMessageWhere } from "./memory-event-source";
+import { notAmbientMessageWhere } from "./group-ambient-memory";
 import { localDayHour, resolveDailyEventWindow, resolveDayWindow } from "./memory-event-time";
 import { MEMORY_JOB_LEASE_MS } from "./memory-job-lease";
 import { collectOwnerQqs, isOwnerPrivateScopeKey } from "./memory-scheduler";
@@ -83,8 +84,10 @@ export async function previewMemoryEvents(
         running = true;
         continue;
       }
-      const where = eventMessageWhere({ memoryScopeId: scope.id, privateOnly: scope.privateOnly,
-        periodStart: window.start, periodEnd: window.end, progress: day ?? null });
+      const where = await notAmbientMessageWhere(prisma, eventMessageWhere({
+        memoryScopeId: scope.id, privateOnly: scope.privateOnly,
+        periodStart: window.start, periodEnd: window.end, progress: day ?? null,
+      }));
       const count = await prisma.message.count({ where });
       totalMessages += count;
       if (!count) continue;
