@@ -352,6 +352,9 @@ async function main() {
       id: profileId,
       characterId,
       coreAppearance: "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾",
+      loraName: "seafin_anima_v1.safetensors",
+      loraStrength: 1.2,
+      loraTrigger: "seafin, fin ears, whale tail",
       corePrompt: "1girl, purple long hair, blue eyes, whale ears, whale tail",
       negativePrompt: "lowres, bad anatomy",
       currentPublishedRevision: 2,
@@ -628,6 +631,9 @@ async function main() {
   assert.ok(importedProfile, "形象档案要落库");
   assert.equal(importedProfile?.coreAppearance, "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾");
   assert.equal(importedProfile?.negativePrompt, "lowres, bad anatomy");
+  assert.equal(importedProfile?.loraName, "seafin_anima_v1.safetensors", "LoRA 文件名要落库（文件本身不随包走）");
+  assert.equal(importedProfile?.loraStrength, 1.2, "强度原样保留");
+  assert.equal(importedProfile?.loraTrigger, "seafin, fin ears, whale tail", "触发词原样保留");
   assert.equal(importedProfile?.currentPublishedRevision, 2);
   assert.equal(importedProfile?.outfits.length, 2, "两套装扮都要落库");
   assert.equal(importedProfile?.outfits[0]?.isDefault, true, "默认装扮标记保留");

@@ -12,6 +12,7 @@ import type { ChannelReplyDelivery } from "../server/utils/channel-adapter/pipel
 
 // Synthetic image and ephemeral loopback gateway; no model, database or real QQ calls.
 const calls: Array<{ action: string; user_id: number; group_id?: number; message: OnebotOutgoingMessage }> = [];
+let textResponse: "ok" | "failed" | "unknown" = "ok";
 let imageResponse: "ok" | "failed" | "unknown" = "ok";
 const server = createServer(async (request, response) => {
   let body = "";
@@ -21,7 +22,9 @@ const server = createServer(async (request, response) => {
   response.setHeader("content-type", "application/json");
   const current = calls.at(-1)!.message;
   const isImage = Array.isArray(current) && current.some(segment => segment.type === "image");
-  if (isImage && imageResponse === "unknown") response.end("{}");
+  if (current === "second" && textResponse === "unknown") response.end("{}");
+  else if (current === "second" && textResponse === "failed") response.end(JSON.stringify({ status: "failed", retcode: 1400 }));
+  else if (isImage && imageResponse === "unknown") response.end("{}");
   else if (isImage && imageResponse === "failed") response.end(JSON.stringify({ status: "failed", retcode: 1400 }));
   else response.end(JSON.stringify({ status: "ok", retcode: 0, data: { message_id: calls.length } }));
 });
@@ -78,6 +81,24 @@ try {
   assert(calls.every(call => call.group_id === 123456789));
 
   const outcomeSender = createReplySender(config, { messageType: "private", userId: "10000001", groupId: "", tempGroupId: "" });
+  for (const outcome of ["failed", "unknown"] as const) {
+    calls.length = 0;
+    textResponse = outcome;
+    const reported: ChannelReplyDelivery[] = [];
+    const delivered = await outcomeSender("first\nsecond\nthird", {
+      image, segments: ["first", "second", "third"],
+      onDelivery: async result => { reported.push(structuredClone(result)); },
+    });
+    assert.equal(calls.length, 3, "stop remaining text after failure, but still send the already generated image once");
+    assert.equal(calls[1]!.message, "second");
+    const picture = calls[2]!.message;
+    assert(Array.isArray(picture));
+    assert.deepEqual(picture.map(segment => segment.type), ["image"]);
+    assert.equal(delivered?.image?.status, "sent");
+    assert.equal(delivered?.image?.externalMessageId, "3");
+    assert.equal(reported.at(-1)?.image?.status, "sent", "persist image receipt even when later text failed");
+  }
+  textResponse = "ok";
   for (const outcome of ["failed", "unknown"] as const) {
     calls.length = 0;
     imageResponse = outcome;

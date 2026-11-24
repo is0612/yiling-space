@@ -17,9 +17,14 @@ export type ImageGenerationRecord = {
 const record = (v: unknown): Record<string, unknown> => v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 
 /** A synchronous generation adapter has no unseen queue to tell a user to wait for. */
-export function imageStatusReply(history: readonly { role: string; metadata: unknown; occurredAt?: Date | string }[]): string {
+export function imageStatusReply(history: readonly { role: string; metadata: unknown; occurredAt?: Date | string }[], scope?: { channel: "private" | "group"; authorOpenId?: string }): string {
   const latest = history.find(row => row.role === "ASSISTANT" && (() => {
-    const m = record(row.metadata); return m.imageAttempt || m.imageOffer || m.image || record(m.replyDelivery).image;
+    const m = record(row.metadata);
+    // A group conversation contains several people's requests. Legacy unowned assets
+    // cannot establish which person's task a status question refers to.
+    if (scope?.channel === "group" && (!scope.authorOpenId
+      || (record(m.imageAttempt).authorOpenId ?? record(m.imageOffer).authorOpenId) !== scope.authorOpenId)) return false;
+    return m.imageAttempt || m.imageOffer || m.image || record(m.replyDelivery).image;
   })());
   const metadata = record(latest?.metadata);
   const delivery = record(record(metadata.replyDelivery).image);

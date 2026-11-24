@@ -37,6 +37,11 @@ type VisualProfile = {
   coreAppearance: string;
   corePrompt: string;
   negativePrompt: string;
+  /** 本机引擎的角色 LoRA；空 = 不用。只有本机 Anima 认它。 */
+  loraName: string;
+  loraStrength: number;
+  /** 触发词，出图时自动前置到提示词最前面。 */
+  loraTrigger: string;
   currentPublishedRevision: number;
   assets: VisualAsset[];
   outfits: VisualOutfit[];
@@ -80,6 +85,13 @@ const profile = ref<VisualProfile | null>(null);
 const coreAppearance = ref("");
 const corePrompt = ref("");
 const negativePrompt = ref("");
+/** LoRA 三项：只影响本机引擎。默认不启用，避免老档案被动接上一个没见过的模型。 */
+const loraName = ref("");
+const loraStrength = ref(1);
+const loraTrigger = ref("");
+const loraOptions = ref<string[]>([]);
+const loraLoading = ref(false);
+const loraHint = ref("");
 const versionNote = ref("");
 const activeSection = ref<SectionKey>("overview");
 const versionFilter = ref<"all" | "published" | "draft">("all");
@@ -130,7 +142,11 @@ const promptLength = computed(() => corePrompt.value.trim().length);
 const hasUncommittedEdits = computed(() => {
   const coreChanged = coreAppearance.value !== (profile.value?.coreAppearance ?? "")
     || corePrompt.value !== (profile.value?.corePrompt ?? "")
-    || negativePrompt.value !== (profile.value?.negativePrompt ?? "");
+    || negativePrompt.value !== (profile.value?.negativePrompt ?? "")
+    // LoRA 也进草稿：换了 LoRA 却不保存，发布出来的还是旧的那一版。
+    || loraName.value !== (profile.value?.loraName ?? "")
+    || loraStrength.value !== (profile.value?.loraStrength ?? 1)
+    || loraTrigger.value !== (profile.value?.loraTrigger ?? "");
   return coreChanged || Boolean(outfitName.value.trim() || outfitPrompt.value.trim());
 });
 
@@ -288,6 +304,9 @@ async function loadProfile(options: { preserveEditor?: boolean } = {}) {
     coreAppearance: coreAppearance.value,
     corePrompt: corePrompt.value,
     negativePrompt: negativePrompt.value,
+    loraName: loraName.value,
+    loraStrength: loraStrength.value,
+    loraTrigger: loraTrigger.value,
   } : null;
   const target = characterId.value;
   const version = ++requestVersion;
@@ -308,6 +327,9 @@ async function loadProfile(options: { preserveEditor?: boolean } = {}) {
     coreAppearance.value = preservedEditor?.coreAppearance ?? result.profile?.coreAppearance ?? "";
     corePrompt.value = preservedEditor?.corePrompt ?? result.profile?.corePrompt ?? "";
     negativePrompt.value = preservedEditor?.negativePrompt ?? result.profile?.negativePrompt ?? "";
+    loraName.value = preservedEditor?.loraName ?? result.profile?.loraName ?? "";
+    loraStrength.value = preservedEditor?.loraStrength ?? result.profile?.loraStrength ?? 1;
+    loraTrigger.value = preservedEditor?.loraTrigger ?? result.profile?.loraTrigger ?? "";
   } catch {
     if (current()) loadError.value = "读取形象档案失败，请检查网络后重试。";
   } finally {
@@ -393,8 +415,38 @@ async function deleteReference(assetId: string) {
   }
 }
 
-async function saveDraft() {
+/**
+ * 从引擎读 LoRA 列表。
+ *
+ * 不做成「进页面就自动拉」：那会在引擎没开时每次都弹一次错，而大多数人根本没打算用 LoRA。
+ * 点一下才问，问不到就说清是引擎没开还是地址不对。
+ */
+async function loadLoras() {
   const target = characterId.value;
+  if (!target || loraLoading.value) return;
+  loraLoading.value = true;
+  loraHint.value = "";
+  try {
+    const result = await api<{ ok: boolean; models: string[]; reason?: string }>({
+      url: `/characters/${encodeURIComponent(target)}/visual-profile/loras`,
+    });
+    if (characterId.value !== target) return;
+    loraOptions.value = result.models;
+    if (!result.ok) {
+      loraHint.value = result.reason ?? "读不到 LoRA 列表。";
+      return;
+    }
+    loraHint.value = result.models.length
+      ? `引擎里有 ${result.models.length} 个 LoRA。`
+      : "引擎里还没有 LoRA 文件，训练好的放到 Anima 的 models/loras 下再刷新。";
+  } catch {
+    if (characterId.value === target) loraHint.value = "读不到 LoRA 列表，检查引擎是否在运行。";
+  } finally {
+    if (characterId.value === target) loraLoading.value = false;
+  }
+}
+
+async function saveDraft() {  const target = characterId.value;
   if (!target || saving.value) return;
   saving.value = true;
   try {
@@ -405,6 +457,9 @@ async function saveDraft() {
         coreAppearance: coreAppearance.value,
         corePrompt: corePrompt.value,
         negativePrompt: negativePrompt.value,
+        loraName: loraName.value,
+        loraStrength: loraStrength.value,
+        loraTrigger: loraTrigger.value,
         note: versionNote.value,
       },
     });
@@ -530,6 +585,11 @@ watch(characterId, () => {
   coreAppearance.value = "";
   corePrompt.value = "";
   negativePrompt.value = "";
+  loraName.value = "";
+  loraStrength.value = 1;
+  loraTrigger.value = "";
+  loraOptions.value = [];
+  loraHint.value = "";
   versionNote.value = "";
   activeSection.value = "overview";
   versionFilter.value = "all";
@@ -942,6 +1002,76 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                     show-word-limit
                     placeholder="写下希望避免的外观偏差或画面问题。"
                   />
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <div class="sec-h">
+                <h2>本机 LoRA</h2>
+                <span class="sub">只对本机 Anima 生效</span>
+              </div>
+              <div class="card">
+                <div class="vp-pad vp-lora">
+                  <div class="vp-lora-row">
+                    <span class="vp-lora-label">模型文件</span>
+                    <el-select
+                      v-model="loraName"
+                      class="vp-lora-select"
+                      clearable
+                      filterable
+                      allow-create
+                      default-first-option
+                      placeholder="不选 = 不用 LoRA"
+                      no-data-text="点右边「从引擎读取」"
+                    >
+                      <el-option
+                        v-for="item in loraOptions"
+                        :key="item"
+                        :label="item"
+                        :value="item"
+                      />
+                    </el-select>
+                    <button
+                      class="btn"
+                      type="button"
+                      :disabled="loraLoading"
+                      @click="loadLoras"
+                    >
+                      {{ loraLoading ? "读取中…" : "从引擎读取" }}
+                    </button>
+                  </div>
+                  <div class="vp-lora-row">
+                    <span class="vp-lora-label">强度</span>
+                    <el-input-number
+                      v-model="loraStrength"
+                      :min="0"
+                      :max="2"
+                      :step="0.1"
+                      :precision="2"
+                      controls-position="right"
+                    />
+                    <span class="muted vp-hint">1.0 中性；角色 LoRA 常从 1.2 起试，太高会糊</span>
+                  </div>
+                  <div class="vp-lora-row">
+                    <span class="vp-lora-label">触发词</span>
+                    <el-input
+                      v-model="loraTrigger"
+                      maxlength="200"
+                      placeholder="例如 seafin；多个用逗号分隔"
+                      class="vp-lora-select"
+                    />
+                  </div>
+                  <p class="muted vp-hint">
+                    只有「画图 → 本机 Anima」会用这两项：出图时自动接上这个 LoRA，并把触发词补到提示词最前面。
+                    云端服务商不受影响。触发词只是保底，尾巴、鳍耳这类特征最好也写进上面的外貌设定。
+                  </p>
+                  <p
+                    v-if="loraHint"
+                    class="muted vp-hint"
+                  >
+                    {{ loraHint }}
+                  </p>
                 </div>
               </div>
             </section>
@@ -1591,6 +1721,12 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
 .vp-actionbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .vp-note { max-width: 360px; }
 .vp-hint { font-size: 12px; }
+
+/* LoRA 三行：标签定宽，控件左对齐，说明文字跟在控件后面。 */
+.vp-lora { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; }
+.vp-lora-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.vp-lora-label { width: 64px; flex: none; color: var(--text-2); font-size: 12px; font-weight: 600; }
+.vp-lora-select { flex: 1; min-width: 200px; }
 .vp-pv-stack { display: flex; flex-direction: column; gap: 9px; }
 .vp-pv { border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface-2); padding: 9px 11px; }
 .vp-pv > span { display: block; margin-bottom: 3px; color: var(--dim); font-size: 12px; font-weight: 600; }

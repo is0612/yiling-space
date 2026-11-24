@@ -38,6 +38,21 @@ assert.match(imageStatusReply([{ role: "ASSISTANT", metadata: { imageAttempt: { 
 assert(!imageStatusReply([]).includes("等等"));
 assert(!imageStatusReply([{ role: "ASSISTANT", metadata: { imageOffer: { prompt: "an apple" } } }]).includes("排队"));
 assert.match(imageStatusReply([{ role: "ASSISTANT", metadata: { replyDelivery: { image: { status: "sent" } } } }]), /确认发出/);
+// Same group, distinct requests: the newest task belongs to Bob, not Alice.
+const statusHistory = [
+  { role: "ASSISTANT", metadata: { imageAttempt: { status: "generation_failed", authorOpenId: "bob" } } },
+  { role: "ASSISTANT", metadata: { imageAttempt: { status: "generated", authorOpenId: "alice" }, replyDelivery: { image: { status: "sent" } } } },
+];
+const statusRequest = resolveImageRequest({ channel: "group", current: [{ ...current, authorOpenId: "alice", commandText: "图呢", content: "图呢" }], history: [] });
+assert.equal(statusRequest.kind, "status");
+assert.match(imageStatusReply(statusHistory, { channel: "group", authorOpenId: statusRequest.authorOpenId }), /确认发出/);
+assert.match(imageStatusReply(statusHistory, { channel: "group", authorOpenId: "bob" }), /生成失败/);
+for (const authorOpenId of ["unrelated", undefined]) {
+  assert.match(imageStatusReply(statusHistory, { channel: "group", authorOpenId }), /还没有启动/);
+}
+assert.match(imageStatusReply([{ role: "ASSISTANT", metadata: { image: { path: "images/legacy.jpg" }, replyDelivery: { image: { status: "sent" } } } }], { channel: "group", authorOpenId: "alice" }), /还没有启动/, "unowned legacy group image is not proof for this request");
+assert.match(imageStatusReply([{ role: "ASSISTANT", metadata: { imageOffer: { prompt: "an apple", authorOpenId: "alice" } } }], { channel: "group", authorOpenId: "alice" }), /待确认/);
+assert.match(imageStatusReply(statusHistory, { channel: "private", authorOpenId: "alice" }), /生成失败/, "private status keeps its conversation-wide behavior");
 assert.equal(isExplicitMediaQuestion("这个什么意思", true), true);
 assert.equal(isExplicitMediaQuestion("这表情真雷霆", true), false);
 assert.equal(isLatestGeneratedImageQuestion("你刚才画的图什么样"), true);

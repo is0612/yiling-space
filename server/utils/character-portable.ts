@@ -142,6 +142,9 @@ export const CHARACTER_BUNDLE_LIMITS = {
   visualAppearance: 8000,
   visualPrompt: 8000,
   negativePrompt: 8000,
+  /** LoRA 文件名与触发词，对齐数据库列宽。 */
+  loraName: 200,
+  loraTrigger: 200,
   outfitName: 100,
   outfitPrompt: 2000,
   versionNote: 300,
@@ -622,6 +625,16 @@ export type CharacterBundleVisualProfile = {
   coreAppearance: string;
   corePrompt: string;
   negativePrompt: string;
+  /**
+   * 本机引擎的角色 LoRA（可选段）。
+   *
+   * 跟着形象档案走是必须的：她长相的一半在这个 LoRA 里，只带文字的话新机器画出来是另一个人。
+   * 但**文件本身不随包走** —— `.safetensors` 动辄几十兆，包是纯 JSON。
+   * 缺这个文件时表现成「装了但引擎里没有」：导入端保留配置并提示，出图会明确报错，不会静默换人。
+   */
+  loraName?: string;
+  loraStrength?: number;
+  loraTrigger?: string;
   /** 当前正式版本号；0 = 还没发布过任何一版。 */
   currentPublishedRevision: number;
   outfits: CharacterBundleVisualOutfit[];
@@ -1221,6 +1234,10 @@ export type BundleVisualProfileSource = {
   coreAppearance: string;
   corePrompt: string;
   negativePrompt: string;
+  /** 库里可能没有这三列（老版本迁移前的读取路径），所以是可选的。 */
+  loraName?: string;
+  loraStrength?: number;
+  loraTrigger?: string;
   currentPublishedRevision: number;
   outfits: Array<{ name: string; prompt: string; isDefault: boolean; sortOrder: number }>;
   versions: Array<{
@@ -1283,12 +1300,18 @@ function toBundleVisualSnapshot(value: unknown): Record<string, unknown> {
     coreAppearance: text("coreAppearance", CHARACTER_BUNDLE_LIMITS.visualAppearance),
     corePrompt: text("corePrompt", CHARACTER_BUNDLE_LIMITS.visualPrompt),
     negativePrompt: text("negativePrompt", CHARACTER_BUNDLE_LIMITS.negativePrompt),
+    // LoRA 是「这一版长什么样」的一部分，必须跟着快照走；只留文件名，路径一律不要。
+    loraName: (text("loraName", CHARACTER_BUNDLE_LIMITS.loraName).split(/[/\\]/u).pop() ?? ""),
+    loraStrength: typeof raw.loraStrength === "number" && Number.isFinite(raw.loraStrength)
+      ? Math.min(2, Math.max(0, raw.loraStrength as number))
+      : 1,
+    loraTrigger: text("loraTrigger", CHARACTER_BUNDLE_LIMITS.loraTrigger),
     outfits,
     assets,
   };
   return Buffer.byteLength(JSON.stringify(snapshot), "utf8") <= CHARACTER_BUNDLE_LIMITS.visualSnapshotBytes
     ? snapshot
-    : { coreAppearance: snapshot.coreAppearance, corePrompt: snapshot.corePrompt, negativePrompt: snapshot.negativePrompt, outfits: [], assets: [] };
+    : { ...snapshot, outfits: [], assets: [] };
 }
 
 /**
@@ -1446,6 +1469,12 @@ export function buildCharacterBundle(input: BundleBuildInput): CharacterBundle {
         coreAppearance: (input.visualProfile.coreAppearance ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.visualAppearance),
         corePrompt: (input.visualProfile.corePrompt ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.visualPrompt),
         negativePrompt: (input.visualProfile.negativePrompt ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.negativePrompt),
+        // 只留文件名：引擎认的是 models/loras 下的名字，绝对路径换台机器就是无效配置。
+        loraName: (input.visualProfile.loraName ?? "").split(/[/\\]/u).pop()?.slice(0, CHARACTER_BUNDLE_LIMITS.loraName) ?? "",
+        loraStrength: Number.isFinite(input.visualProfile.loraStrength)
+          ? Math.min(2, Math.max(0, input.visualProfile.loraStrength as number))
+          : 1,
+        loraTrigger: (input.visualProfile.loraTrigger ?? "").slice(0, CHARACTER_BUNDLE_LIMITS.loraTrigger),
         currentPublishedRevision: Math.max(0, Math.trunc(input.visualProfile.currentPublishedRevision)),
         outfits: input.visualProfile.outfits
           .slice(0, CHARACTER_BUNDLE_LIMITS.visualOutfits)
@@ -2010,6 +2039,10 @@ export function parseCharacterBundle(raw: unknown): ParsedCharacterBundle {
         coreAppearance: readText(item.coreAppearance, "形象描述", CHARACTER_BUNDLE_LIMITS.visualAppearance),
         corePrompt: readText(item.corePrompt, "形象提示词", CHARACTER_BUNDLE_LIMITS.visualPrompt),
         negativePrompt: readText(item.negativePrompt, "形象负面提示词", CHARACTER_BUNDLE_LIMITS.negativePrompt),
+        // LoRA 段在 v8 里是可选的：老 v8 卡没有它，读成「不用 LoRA」。
+        loraName: readText(item.loraName, "LoRA 文件名", CHARACTER_BUNDLE_LIMITS.loraName).split(/[/\\]/u).pop() ?? "",
+        loraStrength: readOptionalNumber(item.loraStrength, "LoRA 强度", 0, 2) ?? 1,
+        loraTrigger: readText(item.loraTrigger, "LoRA 触发词", CHARACTER_BUNDLE_LIMITS.loraTrigger),
         // 指向一个包里没有的版本号时收口成 0：导入后「当前正式版本」不该指着一版不存在的形象。
         currentPublishedRevision: revisions.has(Number(item.currentPublishedRevision))
           ? Number(item.currentPublishedRevision)

@@ -526,6 +526,25 @@ export function toAnimaPromptParts(prompt: string): { positive: string; negative
   };
 }
 
+/**
+ * 把 LoRA 触发词补到正向提示词最前面。
+ *
+ * 两个细节：
+ *   - **按标签去重**：她自己写场景时可能已经带了 `seafin`（实测她就这么干过），
+ *     原样再前置一次会变成 `seafin, seafin, ...`，稀释权重。
+ *   - **顺序保留**：触发词里写了多个标签（`seafin, fin ears, whale tail`）时按写的顺序补，
+ *     只补正向里还没有的那些。
+ */
+export function prependTriggerTags(positive: string, trigger: string): string {
+  const head = String(positive ?? "").replace(/^[,，\s]+/u, "");
+  const tags = trigger.split(/[,，]/u).map(item => item.trim()).filter(Boolean);
+  if (!tags.length) return head;
+  const existing = new Set(head.split(/[,，]/u).map(item => item.trim().toLowerCase()).filter(Boolean));
+  const missing = tags.filter(tag => !existing.has(tag.toLowerCase()));
+  if (!missing.length) return head;
+  return head ? `${missing.join(", ")}, ${head}` : missing.join(", ");
+}
+
 
 /**
  * 模型没给画面描述时的兜底：拿这句原话去画。
@@ -707,6 +726,12 @@ export async function generateImage(input: {
    * 由调用方注入（它才拿得到聊天模型与 Key）；返回 null 表示翻不了，按原文发。
    */
   translatePrompt?: (parts: { positive: string; negative: string }) => Promise<{ positive: string; negative: string } | null>;
+  /**
+   * 本机角色 LoRA（形象档案里配的那个）。**只对本地引擎生效**：
+   * 云端服务商没有「装一个 LoRA」这回事，传过去只会被忽略。
+   * `trigger` 在翻译之后前置到正向提示词最前面（英文，所以不受翻译影响）。
+   */
+  lora?: { name: string; strength: number; trigger?: string };
 }): Promise<ImageGenerationResult> {
   let prompt = sanitizeImagePrompt(input.prompt);
   if (!prompt) return { ok: false, reason: "画面描述为空" };
@@ -1124,11 +1149,14 @@ async function generateWithLocalEngine(input: {
   characterId: string;
   references?: ImageReferenceInput[];
   translatePrompt?: (parts: { positive: string; negative: string }) => Promise<{ positive: string; negative: string } | null>;
+  lora?: { name: string; strength: number; trigger?: string };
 }): Promise<ImageGenerationResult> {
   let { positive, negative } = toAnimaPromptParts(input.prompt);
   const [width, height] = (input.settings.size.split("x").map(Number) as [number, number]);
 
-  const reference = pickLocalReference(input.references);
+  // 角色 LoRA 已负责身份约束；再编码整张立绘会把旧衣服、姿势和背景
+  // 带进 latent，抵消本轮场景。此时从空白 latent 生成，保留请求画幅。
+  const reference = input.lora?.name?.trim() ? null : pickLocalReference(input.references);
 
   /**
    * 中文 → 英文标签。
@@ -1152,6 +1180,23 @@ async function generateWithLocalEngine(input: {
     });
   }
 
+  /**
+   * 触发词补在最前面。
+   *
+   * 放在翻译**之后**：触发词是英文，翻译那一步只会把它当普通词处理，甚至可能删掉；
+   * 而 LoRA 对位置敏感 —— 官方用法就是「触发词打头」。
+   * 按标签去重：她自己写场景时可能已经带了 `seafin`，那就不要再写一遍。
+   */
+  const trigger = input.lora?.trigger?.trim() ?? "";
+  if (input.lora?.name && trigger) {
+    positive = prependTriggerTags(positive, trigger);
+    console.log("[image] 本机角色 LoRA " + JSON.stringify({
+      name: input.lora.name,
+      strength: input.lora.strength,
+      trigger,
+    }));
+  }
+
   const startedAt = Date.now();
   const denoise = reference ? readReferenceDenoise() : undefined;
   if (reference) {
@@ -1173,6 +1218,7 @@ async function generateWithLocalEngine(input: {
       referenceBuffer: { buffer: reference.buffer, filename: referenceFilename(reference.mime) },
       denoise,
     } : {}),
+    ...(input.lora?.name ? { lora: { name: input.lora.name, strength: input.lora.strength } } : {}),
   });
   if (!result.ok) {
     // 引擎没开是最常见的一种，原话已经带了「确认 启动Anima.bat 跑着」，直接交给调用方。

@@ -94,6 +94,7 @@ import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
 import { composePublishedVisualPrompt, canAttachReferences } from "../visual-profile-prompt";
 import { readVisualProfileReferences, type VisualReference } from "../visual-profile-references";
+import { readSnapshotLora } from "../visual-profile-snapshot";
 import { shouldBlockFriendSpeaker } from "../friend-chat-policy";
 import { pickStickerCatalog, type StickerCatalogEntry } from "../stickers";
 import {
@@ -4021,7 +4022,7 @@ async function runChannelTurn(input: {
     generated.usedCatchphraseIds = []; generated.usedPreferenceIds = []; generated.usedExpressionHabitIds = []; generated.usedGoalIds = [];
     imageStatusOverride = true;
   };
-  const enforcedImageReply = imageRequest.kind === "status" ? imageStatusReply(recentStoredMessages) : imageDecisionReply(imageDecision);
+  const enforcedImageReply = imageRequest.kind === "status" ? imageStatusReply(recentStoredMessages, { channel: isGroup ? "group" : "private", authorOpenId: imageRequest.authorOpenId }) : imageDecisionReply(imageDecision);
   // 兜底话已经在路上了：画图执行状态是另一件事，别把「模型挂了」改写成「图已经发你了」。
   if (enforcedImageReply && generated.action === "reply" && !modelFailure) useImageStatusReply(enforcedImageReply);
 
@@ -4205,11 +4206,19 @@ async function runChannelTurn(input: {
         validation.prompt,
         attachReferences ? { referenceLabels } : {},
       ));
+      /**
+       * 角色 LoRA 同样只认正式版本快照里那一份：草稿里刚改的强度不该影响她的官方形象。
+       * 只带本地引擎用得上（云端没有 LoRA 这回事），所以顺手判一下 provider。
+       */
+      const snapshotLora = imageSettings.provider === LOCAL_IMAGE_PROVIDER
+        ? readSnapshotLora(publishedVisualSnapshot)
+        : null;
       const result = await generateImage({
         settings: imageSettings,
         prompt,
         characterId: input.characterId,
         references: attachReferences ? visualReferences : undefined,
+        ...(snapshotLora ? { lora: snapshotLora } : {}),
         /**
          * 本地引擎只认英文标签，而形象档案那段中文是服务端拼进去的（聊天模型看不到）。
          * 所以用她自己的聊天模型翻一遍 —— 这个作用域里才有模型和 Key。

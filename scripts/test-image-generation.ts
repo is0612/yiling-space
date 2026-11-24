@@ -35,6 +35,7 @@ import {
   resolveImageSizePreset,
   sanitizeImagePrompt,
   toAnimaPromptParts,
+  prependTriggerTags,
 } from "../server/utils/image-generation";
 import { toCharacterDto } from "../server/utils/character-dto";
 import {
@@ -302,6 +303,21 @@ assert.deepEqual(
   { positive: "1girl, solo, rainy street at night", negative: "" },
   "没有分段标签时原样使用。",
 );
+
+// ---- LoRA 触发词：补在最前面，但不许重复 --------------------------------------
+{
+  assert.equal(prependTriggerTags("cafe, sitting", "seafin"), "seafin, cafe, sitting", "触发词补到最前面。");
+  assert.equal(prependTriggerTags("seafin, cafe", "seafin"), "seafin, cafe", "已经带了就不重复加。");
+  assert.equal(prependTriggerTags("cafe, seafin", "seafin"), "cafe, seafin", "出现在中间也算带了（按标签比较，不按位置）。");
+  assert.equal(prependTriggerTags("cafe, sitting", "Seafin"), "Seafin, cafe, sitting", "大小写不同按不同标签处理，交给模型自己权衡。");
+  assert.equal(
+    prependTriggerTags("cafe, fin ears", "seafin, fin ears, whale tail"),
+    "seafin, whale tail, cafe, fin ears",
+    "多个触发词只补缺的那些，顺序按写的来。",
+  );
+  assert.equal(prependTriggerTags("cafe", "  "), "cafe", "空触发词不动提示词。");
+  assert.equal(prependTriggerTags(", cafe", "seafin"), "seafin, cafe", "前面多余的分号要清掉。");
+}
 
 // ---- 中文 → 英文标签：拆出来的两半先交给它翻 -----------------------------------
 // 这一段守的是「她会自己转英文」：翻的是**角色自己的聊天模型**，不是查表。
@@ -740,6 +756,76 @@ assert.equal(dtoDefault.imageSize, "square");
     if (withReference.ok) {
       await rm(withReference.image.filePath, { force: true });
       await rm(dirname(withReference.image.filePath), { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * 角色 LoRA：形象档案里配了 LoRA 时，工作流必须真的接上 LoraLoaderModelOnly，
+   * 触发词必须补在正向最前面，并且**不能重复**（她自己写场景时可能已经带了）。
+   */
+  {
+    let loraGraph: Record<string, { class_type?: string; inputs?: Record<string, unknown> }> | null = null;
+    globalThis.fetch = (async (url: unknown, init?: { body?: unknown }) => {
+      const target = String(url);
+      if (target.endsWith("/prompt")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { prompt?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }> };
+        loraGraph = body.prompt ?? null;
+        return new Response(JSON.stringify({ prompt_id: "task-lora" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (target.includes("/history/")) {
+        return new Response(JSON.stringify({
+          "task-lora": {
+            status: { completed: true, status_str: "success" },
+            outputs: { "10": { images: [{ filename: "anima_lora.png", subfolder: "YilingSpace", type: "output" }] } },
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (target.includes("/view?")) {
+        return new Response(pixel, { status: 200, headers: { "content-type": "image/png" } });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const withLora = await generateImage({
+      settings: localSettings,
+      prompt: "【画面】standing by the window, afternoon sunlight, holding a blue whale plush, white cardigan, light blue camisole dress",
+      characterId,
+      references: [{ label: "正面视图", mime: "image/png", buffer: pixel }],
+      lora: { name: "seafin_anima_v1.safetensors", strength: 1.2, trigger: "seafin, fin ears" },
+    });
+    assert.equal(withLora.ok, true, "接了 LoRA 也要能出图。");
+    const graph = loraGraph as Record<string, { class_type?: string; inputs?: Record<string, unknown> }> | null;
+    assert.equal(withLora.ok ? withLora.mode : "", "text_to_image", "LoRA identity must not also copy the reference pose and clothes");
+    assert.equal(graph?.["6"]?.class_type, "EmptyLatentImage");
+    assert.equal(graph?.["6"]?.inputs?.width, 1024, "retain the requested canvas instead of the standing reference aspect ratio");
+    assert.equal(graph?.["7"], undefined);
+    assert.equal(graph?.["8"]?.inputs?.denoise, 1);
+    assert.equal(graph?.["12"]?.class_type, "LoraLoaderModelOnly", "LoRA 必须作为节点进工作流。");
+    assert.equal(graph?.["12"]?.inputs?.lora_name, "seafin_anima_v1.safetensors");
+    assert.equal(graph?.["12"]?.inputs?.strength_model, 1.2, "强度要原样传下去。");
+    assert.deepEqual(graph?.["12"]?.inputs?.model, ["1", 0], "LoRA 接在 UNETLoader 后面。");
+    assert.deepEqual(graph?.["8"]?.inputs?.model, ["12", 0], "采样器必须改接 LoRA 的输出，否则等于没接。");
+    const text = String(graph?.["4"]?.inputs?.text ?? "");
+    // 质量词是固定前缀（`... safe. `），触发词紧跟其后 —— 引擎里「打头」就是这个位置。
+    assert.ok(text.includes("seafin, fin ears,"), "触发词要补进正向提示词。");
+    assert.ok(text.indexOf("seafin") < text.indexOf("standing by the window"), "触发词必须排在场景前面（LoRA 对位置敏感）。");
+    for (const detail of ["afternoon sunlight", "holding a blue whale plush", "white cardigan", "light blue camisole dress"]) {
+      assert.ok(text.includes(detail), `scene detail must survive workflow construction: ${detail}`);
+    }
+    assert.equal(text.match(/seafin/gu)?.length, 1, "触发词不能重复出现。");
+    if (withLora.ok) {
+      await rm(withLora.image.filePath, { force: true });
+      await rm(dirname(withLora.image.filePath), { recursive: true, force: true });
+    }
+
+    // 不需要 LoRA 时不插节点：采样器仍然直连 UNETLoader。
+    const withoutLora = await generateImage({ settings: localSettings, prompt: "【画面】1girl", characterId });
+    assert.equal(withoutLora.ok, true);
+    assert.equal(loraGraph?.["12"], undefined, "没配 LoRA 就不该出现 LoRA 节点。");
+    assert.deepEqual(loraGraph?.["8"]?.inputs?.model, ["1", 0], "没配 LoRA 时采样器直连模型。");
+    if (withoutLora.ok) {
+      await rm(withoutLora.image.filePath, { force: true });
+      await rm(dirname(withoutLora.image.filePath), { recursive: true, force: true });
     }
   }
 

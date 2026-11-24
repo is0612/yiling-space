@@ -16,7 +16,7 @@ export default defineEventHandler(async (event) => {
   const prompt = readTrimmedString(body?.prompt, "造型提示词", 6000, { required: true });
   const isDefault = body?.isDefault === true;
   return prisma.$transaction(async (tx) => {
-    const profile = await tx.characterVisualProfile.findUnique({ where: { characterId }, select: { id: true, coreAppearance: true, corePrompt: true, negativePrompt: true } });
+    const profile = await tx.characterVisualProfile.findUnique({ where: { characterId }, select: { id: true, coreAppearance: true, corePrompt: true, negativePrompt: true, loraName: true, loraStrength: true, loraTrigger: true } });
     if (!profile) throw createError({ statusCode: 404, statusMessage: "形象档案不存在。" });
     const existing = await tx.characterVisualOutfit.findFirst({ where: { id: outfitId, profileId: profile.id }, select: { id: true } });
     if (!existing) throw createError({ statusCode: 404, statusMessage: "造型不存在。" });
@@ -28,6 +28,7 @@ export default defineEventHandler(async (event) => {
     const revision = (latest._max.revision ?? 0) + 1;
     await tx.characterVisualVersion.create({ data: { profileId: profile.id, revision, status: "DRAFT", note: "编辑服装造型", snapshot: {
       coreAppearance: profile.coreAppearance, corePrompt: profile.corePrompt, negativePrompt: profile.negativePrompt,
+      loraName: profile.loraName, loraStrength: profile.loraStrength, loraTrigger: profile.loraTrigger,
       outfits: outfits.map(item => ({ name: item.name, prompt: item.prompt, isDefault: item.isDefault, sortOrder: item.sortOrder })),
       assets: toSnapshotAssets(assets),
     } } });

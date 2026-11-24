@@ -25,6 +25,7 @@ export default defineEventHandler(async (event) => {
     const revision = (latest._max.revision ?? 0) + 1;
     await tx.characterVisualVersion.create({ data: { profileId: profile.id, revision, status: "DRAFT", note: "更新服装造型", snapshot: {
       coreAppearance: profile.coreAppearance, corePrompt: profile.corePrompt, negativePrompt: profile.negativePrompt,
+      loraName: profile.loraName, loraStrength: profile.loraStrength, loraTrigger: profile.loraTrigger,
       outfits: outfits.map(item => ({ name: item.name, prompt: item.prompt, isDefault: item.isDefault, sortOrder: item.sortOrder })),
       assets: toSnapshotAssets(assets),
     } } });

@@ -1060,7 +1060,10 @@ export function createReplySender(
           await send(segment);
         } catch (error) {
           console.error("[onebot] 分条发送中断：", error instanceof Error ? error.message : String(error));
-          return delivery;
+          // 停止剩余文字；已经生成的图片仍需独立投递并记录回执。
+          // 没有图片时保留原先停止整轮的行为，避免接着发送表情。
+          if (!options?.image) return delivery;
+          break;
         }
       }
     }

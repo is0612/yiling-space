@@ -37,3 +37,29 @@ export function toSnapshotAssets(
     createdAt: row.createdAt.toISOString(),
   }));
 }
+
+/**
+ * 版本快照里的 LoRA 配置。
+ *
+ * LoRA 写进**快照**而不是只放在 profile 上，是为了让「发布」这件事有意义：
+ * 发布 v2 时用的是哪个 LoRA、多强、触发词是什么，都该跟着那一版定下来。
+ * 只读 profile 的话，改一次强度会让所有历史版本一起变 —— 那就不叫版本了。
+ *
+ * 返回 null = 这一版没用 LoRA（老快照没有这三个键，也走这条路）。
+ */
+export type SnapshotLora = { name: string; strength: number; trigger: string };
+
+export function readSnapshotLora(snapshot: unknown): SnapshotLora | null {
+  const raw = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+    ? snapshot as Record<string, unknown>
+    : {};
+  const rawName = typeof raw.loraName === "string" ? raw.loraName.trim() : "";
+  // 只留文件名：`../` 或绝对路径既不是引擎能认的名字，也不该出现在工作流里。
+  const name = rawName.split(/[/\\]/u).pop() ?? "";
+  if (!name) return null;
+  const strength = typeof raw.loraStrength === "number" && Number.isFinite(raw.loraStrength)
+    ? Math.min(2, Math.max(0, raw.loraStrength))
+    : 1;
+  const trigger = typeof raw.loraTrigger === "string" ? raw.loraTrigger.trim().slice(0, 200) : "";
+  return { name, strength, trigger };
+}

@@ -2517,6 +2517,13 @@ model CharacterVisualProfile {
   coreAppearance           String                       @default("") @db.Text
   corePrompt               String                       @default("") @db.Text
   negativePrompt           String                       @default("") @db.Text
+  /// 本机引擎（ComfyUI）用的角色 LoRA 文件名；空 = 不用 LoRA。
+  /// 只有本机引擎认它，云端服务商忽略——那边没有「装一个 LoRA」这回事。
+  loraName                 String                       @default("") @db.VarChar(200)
+  /// LoRA 强度。1.0 是中性值，角色 LoRA 常见 0.8–1.3；0 = 不用但保留配置。
+  loraStrength             Float                        @default(1.0)
+  /// 触发词，出图时自动放到提示词最前面（可写多个，逗号分隔）。空 = 不前置。
+  loraTrigger              String                       @default("") @db.VarChar(200)
   currentPublishedRevision Int                          @default(0)
   createdAt                DateTime                     @default(now()) @db.Timestamptz(6)
   updatedAt                DateTime                     @updatedAt @db.Timestamptz(6)

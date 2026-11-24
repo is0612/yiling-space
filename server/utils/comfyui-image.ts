@@ -62,6 +62,13 @@ export type ComfyImageInput = {
   /** 改动幅度：0.3 只重绘细节，0.75 重新构图。仅在带参考图时生效。 */
   denoise?: number;
   seed?: number;
+  /**
+   * 本机 LoRA（比如给她自己训的角色模型）。
+   *
+   * `name` 是引擎 `models/loras` 下的文件名；空 = 不用。`strength` 省略按 1。
+   * 触发词不在这里处理 —— 那是提示词的事，由调用方决定放哪、放几个。
+   */
+  lora?: { name: string; strength?: number };
 };
 
 export type ComfyImageOk = {
@@ -122,7 +129,15 @@ function buildGraph(input: {
   cfg: number;
   imageName?: string;
   denoise?: number;
+  /** 给了就插一个 LoraLoaderModelOnly；采样器的 model 改接它。 */
+  lora?: { name: string; strength: number };
 }): Record<string, PromptBlock> {
+  /**
+   * LoRA 接在 UNETLoader 和采样器之间：1 → 12 → KSampler。
+   * 用 `LoraLoaderModelOnly` 而不是 `LoraLoader` —— 它只改 UNet，不碰 CLIP，
+   * 所以不用去猜这个 LoRA 训练时用的是哪套文本编码器。
+   */
+  const modelRef: [string, number] = input.lora ? ["12", 0] : ["1", 0];
   const graph: Record<string, PromptBlock> = {
     "1": { class_type: "UNETLoader", inputs: { unet_name: input.model, weight_dtype: "default" } },
     "2": {
@@ -141,7 +156,7 @@ function buildGraph(input: {
         sampler_name: "er_sde",
         scheduler: "simple",
         denoise: input.denoise ?? 1,
-        model: ["1", 0],
+        model: modelRef,
         positive: ["4", 0],
         negative: ["5", 0],
         latent_image: [input.imageName ? "7" : "6", 0],
@@ -153,6 +168,13 @@ function buildGraph(input: {
       inputs: { images: ["9", 0], filename_prefix: "YilingSpace/anima" },
     },
   };
+
+  if (input.lora) {
+    graph["12"] = {
+      class_type: "LoraLoaderModelOnly",
+      inputs: { model: ["1", 0], lora_name: input.lora.name, strength_model: input.lora.strength },
+    };
+  }
 
   if (input.imageName) {
     graph["6"] = { class_type: "LoadImage", inputs: { image: input.imageName, upload: "image" } };
@@ -314,6 +336,11 @@ export async function generateImageWithComfy(input: ComfyImageInput): Promise<Co
   const negative = [DEFAULT_NEGATIVE, input.negative?.trim()].filter(Boolean).join(", ");
 
   const seed = Number.isFinite(input.seed) ? Math.floor(input.seed as number) : Math.floor(Math.random() * 1e15);
+  // LoRA 文件名只认末段，挡掉 `../` 这类穿越；强度收口到 0–2（超过 2 基本只会糊）。
+  const loraName = input.lora?.name?.trim().split(/[/\\]/u).pop() ?? "";
+  const lora = loraName
+    ? { name: loraName, strength: Math.min(2, Math.max(0, Number.isFinite(input.lora?.strength) ? input.lora!.strength as number : 1)) }
+    : undefined;
   const graph = buildGraph({
     prompt: `${quality ? QUALITY_PREFIX_BASE : QUALITY_PREFIX_SCORE} ${prompt}`,
     negative,
@@ -326,10 +353,19 @@ export async function generateImageWithComfy(input: ComfyImageInput): Promise<Co
     imageName,
     // 不带参考图时 denoise 必须是 1，否则等于只画一半。
     denoise: imageName ? Math.min(0.9, Math.max(0.2, input.denoise ?? 0.6)) : 1,
+    lora,
   });
 
   const submitted = await submit(base, graph);
-  if (!submitted.promptId) return { ok: false, reason: submitted.reason ?? "任务提交失败" };
+  if (!submitted.promptId) {
+    const reason = submitted.reason ?? "任务提交失败";
+    return {
+      ok: false,
+      reason: lora && /lora|value not in list|invalid/i.test(reason)
+        ? `${reason}（LoRA「${lora.name}」可能不在引擎的 models/loras 目录里）`
+        : reason,
+    };
+  }
 
   const finished = await waitForResult(base, submitted.promptId);
   if (!finished.image) return { ok: false, reason: finished.reason ?? "没有拿到结果图" };
@@ -447,4 +483,36 @@ export async function listComfyCheckpoints(baseUrl?: string): Promise<{ ok: true
 /** 设置页/接口里那句「默认模型是什么」，避免各写一遍。 */
 export function defaultComfyModelName(quality: boolean): string {
   return LOCAL_IMAGE_MODELS[quality ? "quality" : "fast"];
+}
+
+/**
+ * 引擎里装了哪些 LoRA。
+ *
+ * 和主模型同一个理由：读 `LoraLoaderModelOnly` 的可选值，而不是扫目录 ——
+ * `extra_model_paths.yaml` 挂进来的目录也会被列出来。
+ * 引擎没开时返回 `ok: false`，页面据此提示「先启动 Anima」，而不是给一个空列表让人以为一个都没有。
+ */
+export async function listComfyLoras(baseUrl?: string): Promise<{ ok: true; models: string[] } | { ok: false; reason: string }> {
+  let base: string;
+  try {
+    base = normalizeComfyBaseUrl(baseUrl);
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : "引擎地址无效" };
+  }
+  try {
+    const response = await fetch(`${base}/object_info/LoraLoaderModelOnly`, { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) return { ok: false, reason: `HTTP ${response.status}` };
+    const payload = await response.json() as Record<string, unknown>;
+    const node = payload.LoraLoaderModelOnly && typeof payload.LoraLoaderModelOnly === "object"
+      ? payload.LoraLoaderModelOnly as Record<string, unknown>
+      : {};
+    const input = node.input && typeof node.input === "object" ? node.input as Record<string, unknown> : {};
+    const required = input.required && typeof input.required === "object" ? input.required as Record<string, unknown> : {};
+    const loraName = required.lora_name;
+    const list = Array.isArray(loraName) && Array.isArray(loraName[0]) ? loraName[0] : [];
+    const models = list.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map(item => item.trim());
+    return { ok: true, models };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
 }

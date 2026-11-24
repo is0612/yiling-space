@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { limitReferenceNotes, withoutReferenceNotes } from "../server/utils/image-generation";
 import { canAttachReferences, composeReferenceSection, composePublishedVisualPrompt } from "../server/utils/visual-profile-prompt";
 import { isVisualAssetPathSafe, readVisualProfileReferences, selectSnapshotReferenceAssets } from "../server/utils/visual-profile-references";
+import { readSnapshotLora } from "../server/utils/visual-profile-snapshot";
 
 const snapshot = {
   coreAppearance: "蓝紫色长发、蓝色眼睛、鲸鱼耳与尾巴",
@@ -164,6 +165,29 @@ assert.equal(selectSnapshotReferenceAssets(snapshotAssets).length, 4, "参考图
   queries.length = 0;
   await readVisualProfileReferences(mockPrisma, "char-1", undefined);
   assert.equal(queries.length, 0, "旧快照不能退回查询角色当前素材");
+}
+
+/**
+ * 版本快照里的 LoRA：只认正式版本里那一份，且文件名必须是引擎能认的「纯文件名」。
+ * 老快照（v8 之前 / 没配 LoRA）返回 null —— 这就是「不用 LoRA」。
+ */
+{
+  assert.equal(readSnapshotLora(undefined), null, "没有快照 = 不用 LoRA");
+  assert.equal(readSnapshotLora({ coreAppearance: "x" }), null, "老快照没有 LoRA 段");
+  assert.equal(readSnapshotLora({ loraName: "   " }), null, "空名字等于没配");
+  assert.deepEqual(
+    readSnapshotLora({ loraName: "seafin_anima_v1.safetensors", loraStrength: 1.2, loraTrigger: "seafin" }),
+    { name: "seafin_anima_v1.safetensors", strength: 1.2, trigger: "seafin" },
+  );
+  assert.equal(
+    readSnapshotLora({ loraName: "D:\\AI\\Anima\\models\\loras\\seafin_anima_v1.safetensors" })?.name,
+    "seafin_anima_v1.safetensors",
+    "绝对路径只留文件名：引擎不认路径",
+  );
+  assert.equal(readSnapshotLora({ loraName: "x.safetensors", loraStrength: 9 })?.strength, 2, "强度收口到 2");
+  assert.equal(readSnapshotLora({ loraName: "x.safetensors", loraStrength: -1 })?.strength, 0, "负强度收口到 0");
+  assert.equal(readSnapshotLora({ loraName: "x.safetensors", loraStrength: Number.NaN })?.strength, 1, "坏数值按 1");
+  assert.equal(readSnapshotLora({ loraName: "x.safetensors", loraTrigger: "  seafin  " })?.trigger, "seafin", "触发词去空白");
 }
 
 console.log("visual-profile-prompt: ok");

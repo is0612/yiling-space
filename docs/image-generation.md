@@ -115,7 +115,7 @@ IMAGE_PROVIDER=        # 留空按地址里有没有 minimax 自动判断
 图和文字**分开两条发**（图不带引用、不带 @）。理由和表情包一样：拼在一条里，
 引用块、文字、图挤在一起，手机上看是一坨；而单独发图片段这条路已经跑了很久。
 
-顺序是文字 → 图。文字只承接本轮计划，不逐项复述画面，也不提前宣称图已经发出；图片送达由独立回执确认。
+顺序是文字 → 图。文字只承接本轮计划，不逐项复述画面，也不提前宣称图已经发出；图片送达由独立回执确认。分条文字的后续条发送失败时停止剩余文字，但仍单独投递已经生成的图片，并保存成功、失败或未确认回执；不重发失败文字。群内查询图片状态按当前请求发起人选择记录，不借用其他成员的任务；无法确认归属的旧记录不猜测。
 
 ### 她画图那一轮的提示词
 
@@ -181,7 +181,7 @@ IMAGE_PROVIDER=        # 留空按地址里有没有 minimax 自动判断
 
 4 张参考图一路算到 `generateImage`，`generateWithLocalEngine` 却只把 prompt 送进 ComfyUI，日志写的是 `本机引擎这次不用参考图 { references: 4 }`。结果：云端出图长着一张脸，换本机引擎就换一个人，而 `imageGeneration.mode` 还硬编码成 `text_to_image` —— 记录上是「没用参考图」，可她已经在说「这就是我」。
 
-现在本地这条路会挑一张做图生图。**只挑一张**：ComfyUI 的图生图是一条 latent，塞四张会变成四个视角各出一张；优先标签里带「正面」的，其次「标准」，再退到第一张。流程是 `/upload/image` → `LoadImage` → `ImageScaleToTotalPixels` → `VAEEncode` → `KSampler(denoise<1)`。
+现在本地这条路在没有角色 LoRA 时会挑一张做图生图。配置正式版本角色 LoRA 后，由 LoRA 约束身份，改从空白 latent 文生图，不再同时编码整张立绘；否则立绘的旧服装、站姿、白底和长宽比会压过本轮场景。此时实际 `mode` 为 `text_to_image`，画幅沿用请求设置。**只挑一张**：ComfyUI 的图生图是一条 latent，塞四张会变成四个视角各出一张；优先标签里带「正面」的，其次「标准」，再退到第一张。流程是 `/upload/image` → `LoadImage` → `ImageScaleToTotalPixels` → `VAEEncode` → `KSampler(denoise<1)`。
 
 `denoise` 由 `COMFYUI_REFERENCE_DENOISE` 控制，夹在 0.3~0.85，默认 0.6。太低只是把参考图糊一遍、场景不生效；太高等于没给参考图，脸又飘了。`mode` 现在记真实值，所以她下次说「用了我的形象图」时，这句话能被 `metadata.image` 核对。
 

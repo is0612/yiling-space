@@ -317,6 +317,10 @@ const built = buildCharacterBundle({
     coreAppearance: "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾",
     corePrompt: "1girl, purple long hair, blue eyes, whale ears, whale tail",
     negativePrompt: "lowres, bad anatomy",
+    // 只留文件名：绝对路径换台机器就是无效配置，导出时会被剥成 `xxx.safetensors`。
+    loraName: "D:\\AI\\Anima\\models\\loras\\seafin_anima_v1.safetensors",
+    loraStrength: 1.2,
+    loraTrigger: "seafin, fin ears, whale tail",
     currentPublishedRevision: 2,
     outfits: [
       { name: "白裙", prompt: "white dress", isDefault: true, sortOrder: 0 },
@@ -376,6 +380,9 @@ assert.equal(built.counts.visualAssets, 2, "参考图清单计数（只有清单
 assert.equal(built.counts.stickers, 2, "表情包清单计数");
 assert.equal(built.visualProfile?.coreAppearance, "浅紫长发，蓝眼睛，鲸鱼耳与鲸鱼尾", "形象描述要带走");
 assert.equal(built.visualProfile?.negativePrompt, "lowres, bad anatomy", "负面提示也要带走");
+assert.equal(built.visualProfile?.loraName, "seafin_anima_v1.safetensors", "LoRA 只留文件名：绝对路径换台机器无效");
+assert.equal(built.visualProfile?.loraStrength, 1.2, "LoRA 强度跟着卡走");
+assert.equal(built.visualProfile?.loraTrigger, "seafin, fin ears, whale tail", "触发词跟着卡走");
 assert.equal(built.visualProfile?.currentPublishedRevision, 2, "当前正式版本号跟着走");
 assert.equal(built.visualProfile?.outfits[0]?.isDefault, true, "默认装扮标记保留");
 assert.equal(built.stickers[0]?.usage, "被怼的时候", "表情包的用途要带走");
@@ -477,6 +484,9 @@ assert.equal(roundTrip.visualProfile?.outfits.length, 2, "装扮回环不变");
 assert.equal(roundTrip.visualProfile?.versions[1]?.status, "PUBLISHED", "版本状态回环不变");
 assert.equal(roundTrip.visualProfile?.versions[1]?.publishedAt, "2026-10-22T11:00:00.000Z", "发布时间回环不变");
 assert.equal(roundTrip.visualProfile?.assets[1]?.kind, "EXPRESSION", "参考图清单的用途回环不变");
+assert.equal(roundTrip.visualProfile?.loraName, "seafin_anima_v1.safetensors", "LoRA 文件名回环不变");
+assert.equal(roundTrip.visualProfile?.loraStrength, 1.2);
+assert.equal(roundTrip.visualProfile?.loraTrigger, "seafin, fin ears, whale tail");
 assert.equal(roundTrip.visualProfile?.assets[0]?.width, 1024, "清单里的尺寸要保住（补图时知道找多大的）");
 assert.deepEqual(roundTrip.stickers, built.stickers, "表情包清单回环不变");
 

@@ -218,6 +218,10 @@ export async function loadCharacterExportBundle(input: {
           coreAppearance: true,
           corePrompt: true,
           negativePrompt: true,
+          // LoRA 文件不随包走，但「用的是哪个、多强、触发词」必须带走，否则新机器画出来是另一个人。
+          loraName: true,
+          loraStrength: true,
+          loraTrigger: true,
           currentPublishedRevision: true,
           outfits: {
             orderBy: { sortOrder: "asc" },
@@ -1416,6 +1420,14 @@ async function insertVisualProfile(
       coreAppearance: profile.coreAppearance,
       corePrompt: profile.corePrompt,
       negativePrompt: profile.negativePrompt,
+      /**
+       * LoRA 配置照抄，但**文件没跟过来**：`.safetensors` 不随卡走。
+       * 保留配置而不是清空，是因为「她用的是哪个 LoRA」本身是她的设定；
+       * 新机器上把同一个文件放进 models/loras 就恢复了。缺文件时出图会明确报错，不会静默换成别的脸。
+       */
+      loraName: profile.loraName ?? "",
+      loraStrength: profile.loraStrength ?? 1,
+      loraTrigger: profile.loraTrigger ?? "",
       // 只有包里真的有那一版，才把它标成「当前正式版本」（parse 已经收口过）。
       currentPublishedRevision: profile.currentPublishedRevision,
     },
@@ -1470,7 +1482,7 @@ async function mergeVisualProfile(
   if (!profile) return;
   const local = await tx.characterVisualProfile.findUnique({
     where: { characterId },
-    select: { id: true, outfits: { select: { name: true } } },
+    select: { id: true, loraName: true, outfits: { select: { name: true } } },
   });
   if (!local) {
     await insertVisualProfile(tx, characterId, profile, added);
@@ -1478,6 +1490,20 @@ async function mergeVisualProfile(
   }
   if (profile.versions.length) {
     warnings.push("本机已有形象档案，导入的版本历史没有合并（两边的版本号会撞）；形象文字与装扮按本地保留、缺的补上。");
+  }
+  /**
+   * LoRA：本地没配才采纳导入的（「缺的补上」），本地配了就一个字不动 ——
+   * 那多半是刚在本机训好、调过强度的，被一张卡覆盖掉最难受。
+   */
+  if (!local.loraName && profile.loraName) {
+    await tx.characterVisualProfile.update({
+      where: { id: local.id },
+      data: {
+        loraName: profile.loraName,
+        loraStrength: profile.loraStrength ?? 1,
+        loraTrigger: profile.loraTrigger ?? "",
+      },
+    });
   }
   const existing = new Set(local.outfits.map(outfit => outfit.name));
   const missing = profile.outfits.filter(outfit => !existing.has(outfit.name));
