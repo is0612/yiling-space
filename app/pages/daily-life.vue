@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
-import { Calendar, Camera, Check, Clock, Plus, Refresh, VideoPlay } from "@element-plus/icons-vue";
+import { Camera, Check, Plus, Refresh, VideoPlay } from "@element-plus/icons-vue";
 import { createDailyLifeApi, type DailyLifeOverview, type DailyLifePlanItem, type DailyPhoto } from "~/api/daily-life";
 import { readApiErrorMessage } from "~/utils/api-error";
 
