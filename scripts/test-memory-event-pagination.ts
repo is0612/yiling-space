@@ -62,10 +62,10 @@ function fixture(count: number, sameTime = false, withContext = false) {
       queries.push(query);
       assert.deepEqual(query.orderBy, [{ occurredAt: "asc" }, { id: "asc" }]);
       assert.equal(query.take, EVENT_MESSAGE_BATCH_SIZE + 1);
-      assert.deepEqual(query.where.conversation, { is: { memoryScopeId: "scope", externalConversationId: { startsWith: "c:" } } });
+      assert.deepEqual(baseWhere.conversation, { is: { memoryScopeId: "scope", externalConversationId: { startsWith: "c:" } } });
       // Apply the actual generated keyset predicate to fake rows, including same-time boundaries.
-      const range = query.where.occurredAt as { gte: Date; lt: Date };
-      const or = query.where.OR as Array<{ occurredAt: Date | { gt: Date }; id?: { gt: string } }> | undefined;
+      const range = baseWhere.occurredAt as { gte: Date; lt: Date };
+      const or = baseWhere.OR as Array<{ occurredAt: Date | { gt: Date }; id?: { gt: string } }> | undefined;
       return rows.filter((row) => row.occurredAt >= range.gte && row.occurredAt < range.lt && (!or || or.some((part) =>
         part.occurredAt instanceof Date
           ? row.occurredAt.getTime() === part.occurredAt.getTime() && row.id > part.id!.gt
