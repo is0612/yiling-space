@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
 
   const query = getQuery(event);
-  const dayKey = typeof query.date === "string" ? query.date : new Date().toISOString().slice(0, 10);
+  const dayKey = typeof query.date === "string" ? query.date : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(dayKey)) throw createError({ statusCode: 400, statusMessage: "日期必须是 YYYY-MM-DD。" });
   const [plan, currentActivity, recentActivities, photos] = await Promise.all([
     prisma.dailyLifePlan.findUnique({ where: { characterId_dayKey: { characterId, dayKey } }, include: { items: { orderBy: [{ plannedStartAt: "asc" }, { sortOrder: "asc" }] } } }),
