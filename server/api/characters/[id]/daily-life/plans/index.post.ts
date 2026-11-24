@@ -1,5 +1,5 @@
 import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
-import { requireActorUserId } from "../../../../utils/auth";
+import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
 import { publishGrowthEvent } from "../../../../utils/growth-event-center";
@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
       const plan = await tx.dailyLifePlan.create({
         data: {
           characterId, dayKey: input.dayKey, timeZone: input.timeZone, lifeType: input.lifeType,
-          summary: input.summary, generatedAt: new Date(),
+          summary: input.summary, 
           items: { create: input.items.map(item => ({ ...item, characterId })) },
         },
         include: { items: { orderBy: [{ plannedStartAt: "asc" }, { sortOrder: "asc" }] } },
