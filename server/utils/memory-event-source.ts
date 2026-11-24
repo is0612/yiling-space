@@ -145,7 +145,6 @@ export function eventMessageWhere(input: {
       ...(input.privateOnly ? { externalConversationId: { startsWith: "c:" } } : {}),
     } },
     occurredAt: { gte: periodStart, lt: periodEnd },
-    ...notAmbientMessageWhere(),
     ...(hasCursor ? {
       OR: [
         { occurredAt: { gt: progress.extractedAt! } },
