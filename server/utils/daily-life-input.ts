@@ -84,6 +84,10 @@ export function parseDailyLifeActivityInput(value: unknown) {
   const planItemId = typeof body.planItemId === "string" && body.planItemId.trim() ? body.planItemId.trim() : null;
   const source = body.source === "CHARACTER_INITIATED" ? "CHARACTER_INITIATED"
     : body.source === "PLAN" ? "PLAN" : "USER_CONFIRMED";
+  if (planItemId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(planItemId)) {
+    throw createError({ statusCode: 400, statusMessage: "计划活动 ID 无效。" });
+  }
+  if (source === "PLAN" && !planItemId) throw createError({ statusCode: 400, statusMessage: "来自计划的活动必须关联一项计划活动。" });
   const title = text(body.title, 160, "活动标题", !planItemId);
   const detail = text(body.detail, 4000, "活动详情");
   const place = text(body.place, 200, "地点") || null;
