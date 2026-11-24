@@ -2,6 +2,7 @@ import { createError } from "h3";
 import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
 import { previewMemoryEvents } from "./memory-events-preview";
 import { eventMessageWhere } from "./memory-event-source";
+import { notAmbientMessageWhere } from "./group-ambient-memory";
 import { resolveDayWindow } from "./memory-event-time";
 
 export function parsePendingMemoryDelete(value: unknown) {
@@ -41,7 +42,8 @@ export async function deletePendingMemoryEvents(prisma: PrismaClient, input: { o
       if (active) throw createError({ statusCode: 409, statusMessage: "该范围有等待或执行中的记忆任务，请先取消或等待完成后刷新。" });
       const day = await tx.memoryEventDay.findUnique({ where: { memoryScopeId_dayKey: { memoryScopeId: scopeId, dayKey } } });
       const base = eventMessageWhere({ memoryScopeId: scopeId, privateOnly: false, periodStart: window.start, periodEnd: window.end, progress: day });
-      const where: Prisma.MessageWhereInput = { AND: [base, { conversationId, ingestedAt: { lte: request.checkedAt }, occurredAt: { lte: request.checkedAt } }] };
+      const scopedWhere: Prisma.MessageWhereInput = { AND: [base, { conversationId, ingestedAt: { lte: request.checkedAt }, occurredAt: { lte: request.checkedAt } }] };
+      const where = await notAmbientMessageWhere(tx, scopedWhere);
       const count = await tx.message.count({ where });
       if (count !== request.expectedCount) throw createError({ statusCode: 409, statusMessage: "待整理消息数量已变化，请刷新预览后确认。" });
       const deleted = await tx.message.deleteMany({ where });
