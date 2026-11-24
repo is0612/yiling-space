@@ -34,6 +34,7 @@ import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
 import { estimateTokens } from "./memory-retrieval";
 import { EVENT_AI_CONTEXT_TOKENS, EVENT_AI_INPUT_TOKENS, EVENT_AI_TOTAL_TOKENS, splitEventMessagesByBudget, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
 import { rawMessageCleanupDependencyCutoff } from "./memory-event-cleanup";
+import { AMBIENT_GROUP_MESSAGE_RETENTION_HOURS, ambientCleanupWhere, notAmbientMessageWhere } from "./group-ambient-memory";
 
 /** 会被租约回收的任务类型（`UPDATE_LONG_TERM_MEMORY` 已不再产生）。 */
 const LEASE_RECOVERABLE_JOB_TYPES = ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT", "CLEAN_EXPIRED_MESSAGES", "EXTRACT_EVENTS", "GENERATE_JOURNAL"] as const;
@@ -83,7 +84,7 @@ async function loadPeriodSourceMessages(
   const perConversationWindow = PER_CONVERSATION_SOURCE_WINDOW;
   const batches = await Promise.all(conversations.map(async (conversation) => {
     const rows = await prisma.message.findMany({
-      where: { conversationId: conversation.id, occurredAt: { gte: periodStart, lt: periodEnd } },
+      where: { conversationId: conversation.id, occurredAt: { gte: periodStart, lt: periodEnd }, ...notAmbientMessageWhere() },
       orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       take: perConversationWindow,
       select: { id: true, role: true, eventType: true, content: true, occurredAt: true, metadata: true },
@@ -879,6 +880,20 @@ export async function processNextMemoryJob(
             ],
           },
         });
+        /**
+         * 群聊原文留存单独一档：48 小时，不进快照/忆泡。
+         *
+         * 它和 `context` 的 7 天不同 —— 这类行是群友闲聊，只服务「刚才谁说了什么」
+         * 的原文检索，留久了既占空间也扩大隐私面。`preservePrivate` 仍要带上：
+         * 私聊会话没有 ambient，但清理范围必须和主清理保持同一套排除规则。
+         */
+        const removedAmbient = await tx.message.deleteMany({
+          where: {
+            conversation: { is: { memoryScopeId: candidate.memoryScopeId } },
+            ...preservePrivate,
+            ...ambientCleanupWhere(now),
+          },
+        });
 
         const deleted = await tx.message.deleteMany({
           where: {
@@ -899,7 +914,7 @@ export async function processNextMemoryJob(
             action: "message.retention_cleanup",
             entityType: "MemoryScope",
             entityId: candidate.memoryScopeId,
-            details: { cutoff: candidate.periodEnd!.toISOString(), deletedMessages: deleted.count, contextMessages: removedContext.count, contextCutoff: contextCutoff.toISOString(), jobId: candidate.id },
+            details: { cutoff: candidate.periodEnd!.toISOString(), deletedMessages: deleted.count, contextMessages: removedContext.count, contextCutoff: contextCutoff.toISOString(), ambientMessages: removedAmbient.count, ambientRetentionHours: AMBIENT_GROUP_MESSAGE_RETENTION_HOURS, jobId: candidate.id },
           },
         });
         return deleted.count;

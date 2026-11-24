@@ -16,6 +16,7 @@
  */
 
 import { filterAutomaticSources } from "./automatic-source-policy";
+import { notAmbientMessageWhere } from "./group-ambient-memory";
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { resolveChatModelSettings } from "./chat-model-config";
 import { lockMemoryJobLease, type MemoryJobLease } from "./memory-job-lease";
@@ -291,7 +292,7 @@ export async function collectJournalSources(
 
   const batches = await Promise.all(conversations.map(async (conversation) => {
     const rows = await prisma.message.findMany({
-      where: { conversationId: conversation.id, occurredAt: { gte: start, lt: end } },
+      where: { conversationId: conversation.id, occurredAt: { gte: start, lt: end }, ...notAmbientMessageWhere() },
       orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       take: JOURNAL_PER_CONVERSATION,
       select: { id: true, role: true, content: true, occurredAt: true, metadata: true },

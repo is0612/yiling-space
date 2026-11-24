@@ -177,7 +177,7 @@ async function testRoleplayGroupAdapter(db: PrismaClient, ownerId: string, chara
   if (!await db.memoryScope.findFirst({ where: { characterId, scopeType: "CHARACTER_GLOBAL" } })) await db.memoryScope.create({ data: { characterId, scopeType: "CHARACTER_GLOBAL", scopeKey: `adapter-group:${randomUUID()}` } });
   const bindingRecord = { id: binding.id, characterId, characterName: character.name, routingKey: groupId,
     replyWindowMinutes: 10, replyLimitPerWindow: 0, replyOnlyWhenMentioned: true,
-    groupChat: { ...GROUP_CHAT_DEFAULTS, mode: "all" as const, mentionWindowSeconds: 0.3, batchWindowSeconds: 0.3, minGapSeconds: 0, quietStart: "", quietEnd: "" }, groupChatModes: {} };
+    groupChat: { ...GROUP_CHAT_DEFAULTS, mode: "all" as const, mentionWindowSeconds: 0.3, batchWindowSeconds: 0.3, minGapSeconds: 0, quietStart: "", quietEnd: "" }, groupChatModes: {}, storeAmbientGroupMessages: false };
   const record: OnebotConnectionRecord = { id: connection.id, platform: "qq-onebot", accountQq: selfQq,
     config: { wsUrl: "ws://127.0.0.1:4999", httpUrl: "http://127.0.0.1:4998" }, replyOnlyWhenMentioned: true,
     groupAnnouncementEnabled: false, qzoneEnabled: false, qzoneLimits: { dailyPosts: 0, dailyComments: 0, commentCooldownMinutes: 10 },

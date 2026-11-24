@@ -17,6 +17,7 @@ import {
 import type { GroupChatSettings } from "../../../../shared/types/qq";
 import { ONEBOT_PLATFORM } from "./types";
 import { QZONE_DEFAULT_LIMITS } from "./qzone";
+import { resolveStoreAmbientGroupMessages, type StoreAmbientGroupMessages } from "../../group-ambient-memory";
 
 export type OnebotBindingRecord = {
   id: string;
@@ -33,6 +34,11 @@ export type OnebotBindingRecord = {
   groupChatModes: GroupChatModeOverrides;
   /** 群聊是否仅当被 @ 时才回复（已回退到连接默认值，私聊总是回复）。 */
   replyOnlyWhenMentioned: boolean;
+  /**
+   * 群聊原文留存：`true` 存所有群，字符串数组只存列出的群，`false` 不存。
+   * 只影响 `storedReason = "ambient"` 的行；它们 48 小时清理，不进快照/忆泡。
+   */
+  storeAmbientGroupMessages: StoreAmbientGroupMessages;
 };
 
 /**
@@ -451,6 +457,7 @@ export async function loadOnebotConnections(
           groupChat: resolveGroupChatSettings(config, connectionMentionOnly),
           groupChatModes: readGroupChatModeOverrides(config.groupChatModes),
           replyOnlyWhenMentioned,
+          storeAmbientGroupMessages: resolveStoreAmbientGroupMessages(config.storeAmbientGroupMessages),
         };
       }),
     });

@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
 import { estimateTokens } from "./memory-retrieval";
+import { notAmbientMessageWhere } from "./group-ambient-memory";
 
 /** 每次请求的新消息预算；系统提示词、已知事件另计，前文与新消息共享消息总预算。 */
 export const EVENT_AI_INPUT_TOKENS = 4_000;
@@ -97,6 +98,7 @@ export async function loadEventContextMessages(
     where: {
       conversationId: input.conversationId,
       occurredAt: { gte: input.periodStart, lt: input.periodEnd },
+      ...notAmbientMessageWhere(),
       OR: [
         { occurredAt: { lt: input.first.occurredAt } },
         { occurredAt: input.first.occurredAt, id: { lt: input.first.id } },
@@ -143,6 +145,7 @@ export function eventMessageWhere(input: {
       ...(input.privateOnly ? { externalConversationId: { startsWith: "c:" } } : {}),
     } },
     occurredAt: { gte: periodStart, lt: periodEnd },
+    ...notAmbientMessageWhere(),
     ...(hasCursor ? {
       OR: [
         { occurredAt: { gt: progress.extractedAt! } },

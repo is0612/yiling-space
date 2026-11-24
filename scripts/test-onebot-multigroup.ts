@@ -37,6 +37,7 @@ function binding(id: string, routingKey: string | null): OnebotBindingRecord {
     },
     groupChatModes: {},
     replyOnlyWhenMentioned: false,
+    storeAmbientGroupMessages: false,
   };
 }
 

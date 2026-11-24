@@ -43,6 +43,7 @@ import {
   shouldPauseAiOnlyRound,
 } from "../../friend-chat-policy";
 import { createGroupContext, type GroupMessageFacts } from "./group-context";
+import { shouldStoreAmbientGroupMessage } from "../../group-ambient-memory";
 import { GROUP_MUTE_MS, createGroupMuteStore, isQuietRequest, isResumeRequest } from "./group-mute";
 import { createGroupActivityRecorder } from "../../group-activity";
 import { ONEBOT_PLATFORM, readOnebotMentions, readOnebotReplyToId, readOnebotRoleplayText } from "./types";
@@ -1282,7 +1283,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
    */
   const persistMentionedRound = async (
     items: PendingGroupMessage[],
-    storedReason: "mentioned" | "context" = "mentioned",
+    storedReason: "mentioned" | "context" | "ambient" = "mentioned",
     mentionInfoByMessageId: ReadonlyMap<string, ConversationMessageMention[]> = new Map(),
   ): Promise<void> => {
     const binding = items[0]!.binding;
@@ -1361,6 +1362,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     const groupEvent = items[0]!.event;
     const contextKey = `${binding.id}:${groupEvent.conversationKey}`;
     const prisma = getPrisma();
+    const storeAmbient = shouldStoreAmbientGroupMessage(binding.storeAmbientGroupMessages, groupEvent.groupId);
     // A batch buffered before the explicit mode switch must not speak as the daily persona afterward.
     if (await prisma.roleplayRoute.findUnique({ where: { bindingId_externalConversationId: { bindingId: binding.id, externalConversationId: groupEvent.conversationKey } }, select: { id: true } })) return;
     const originalIds = originalItems.map((item) => item.event.messageId);
@@ -1628,6 +1630,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
         await persistMentionedRound(items, direct || named ? "mentioned" : "context", mentionInfoByMessageId).catch((error) => {
           console.error("[onebot] 记录被挡下的轮次失败：", error instanceof Error ? error.message : String(error));
         });
+      } else if (storeAmbient) {
+        // 普通群聊批次没触发回复：按群开关留下原文，48 小时后清理，不进快照/忆泡。
+        await persistMentionedRound(items, "ambient", mentionInfoByMessageId).catch((error) => {
+          console.warn("[onebot] 群聊原文留存失败：", error instanceof Error ? error.message : String(error));
+        });
       }
       return;
     }
@@ -1638,6 +1645,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       // 限流挡下的同样是「冲她来的」轮次，一样落库；主人说的那句也别丢。
       if (direct || named || ownerSpoke) {
         await persistMentionedRound(items, direct || named ? "mentioned" : "context", mentionInfoByMessageId).catch(() => undefined);
+      } else if (storeAmbient) {
+        await persistMentionedRound(items, "ambient", mentionInfoByMessageId).catch(() => undefined);
       }
       return;
     }
@@ -1950,6 +1959,26 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
     if (isGroupMessage && event.content && facts) {
       groupContext.remember(contextKey, { ...facts, kind: speakerKind,
         ...(speakerKind === "AI" ? { excludeFromGrowth: true as const } : {}) });
+    }
+
+    /**
+     * 仅 @ 档里，非 @ 她的群消息不会进攒批（下面 `requiresMention` 直接早退），
+     * 也就永远没机会在 `flushGroupRound` 里补存。想让「她刚才听到了什么」可检索，
+     * 只能在这里落一条 `ambient`。
+     *
+     * 只在 mention 档、且这一条既不是 @ 她也不是主人说的时写：这种消息按档位定义
+     * 不会触发回复，不会和 `replied` 抢同一行；ambient 档/all 档的拒绝批次由
+     * `flushGroupRound` 统一补存，避免重复插入后把证据行降级成 48 小时上下文。
+     */
+    if (isGroupMessage && groupChatMode === "mention" && !direct && !isOwnerEvent
+      && event.content && facts
+      && shouldStoreAmbientGroupMessage(binding.storeAmbientGroupMessages, event.groupId)) {
+      void persistMentionedRound(
+        [{ event, binding, at: receivedAt, direct: false, named: false, isOwner: false, facts }],
+        "ambient",
+      ).catch((error) => {
+        console.warn("[onebot] 群聊原文留存失败：", error instanceof Error ? error.message : String(error));
+      });
     }
 
     // 仅 @ 模式下，名字与活跃话题只作为背景，不能触发普通回复或发起指令。

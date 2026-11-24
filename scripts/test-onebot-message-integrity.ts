@@ -148,6 +148,7 @@ const binding = {
   groupChat: resolveGroupChatSettings({ groupChatMode: "mention" }, true),
   groupChatModes: {},
   replyOnlyWhenMentioned: true,
+  storeAmbientGroupMessages: false,
 };
 
 const record = {

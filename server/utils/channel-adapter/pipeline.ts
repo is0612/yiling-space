@@ -363,9 +363,10 @@ export function buildStoredMessageMetadata(input: {
    * - `replied` / `mentioned`：证据类，按角色保留天数走；
    * - `silent` / `context`：纯上下文行，7 天清理（`context` = 主人在群里说的话，
    *   这一轮没接她，但私聊里要能接上，见 `cross-channel-context.ts`）；
+   * - `ambient`：群聊原文留存，48 小时清理，不进快照/忆泡（见 `group-ambient-memory.ts`）；
    * - `recorded`：私聊预落库，私聊不进清理。
    */
-  storedReason: "replied" | "silent" | "mentioned" | "recorded" | "context";
+  storedReason: "replied" | "silent" | "mentioned" | "recorded" | "context" | "ambient";
   message: {
     authorOpenId: string;
     authorDisplayName?: string;
