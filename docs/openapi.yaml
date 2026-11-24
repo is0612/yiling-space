@@ -28,9 +28,146 @@ tags:
     description: 渠道连接与角色绑定
   - name: Stickers
     description: 表情包库与 QQ 收藏夹同步
+  - name: DailyLife
+    description: 角色日常计划、已确认活动与照片记录
 security:
   - sessionCookie: []
 paths:
+  /characters/{id}/daily-life:
+    get:
+      operationId: getDailyLife
+      tags: [DailyLife]
+      summary: 读取角色某一天的计划、当前活动、近期活动与照片
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: date
+          required: false
+          schema: { type: string, format: date }
+      responses:
+        '200': { description: 日常生活概览 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 角色不存在 }
+  /characters/{id}/daily-life/plans:
+    post:
+      operationId: createDailyLifePlan
+      tags: [DailyLife]
+      summary: 创建角色某一天的计划；同一角色同一天只允许一份，不覆盖已有计划
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dayKey, items]
+              properties:
+                dayKey: { type: string, format: date }
+                timeZone: { type: string, maxLength: 80, default: Asia/Shanghai }
+                lifeType: { type: string, maxLength: 40 }
+                summary: { type: string, maxLength: 1000 }
+                items:
+                  type: array
+                  maxItems: 24
+                  items:
+                    type: object
+                    required: [title]
+                    properties:
+                      title: { type: string, maxLength: 160 }
+                      detail: { type: string, maxLength: 4000 }
+                      plannedStartAt: { type: string, format: date-time }
+                      plannedEndAt: { type: string, format: date-time }
+                      place: { type: string, maxLength: 200 }
+                      scene: { type: string, maxLength: 500 }
+                      outfitDescription: { type: string, maxLength: 1000 }
+                      propsDescription: { type: string, maxLength: 1000 }
+      responses:
+        '200': { description: 创建后的生活计划 }
+        '400': { description: 输入无效 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 角色不存在 }
+        '409': { description: 当天计划已存在 }
+  /characters/{id}/daily-life/activities:
+    post:
+      operationId: startDailyLifeActivity
+      tags: [DailyLife]
+      summary: 开始一项已确认的实际活动；角色同一时刻最多一项进行中活动
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                planItemId: { type: string, format: uuid }
+                title: { type: string, maxLength: 160 }
+                detail: { type: string, maxLength: 4000 }
+                place: { type: string, maxLength: 200 }
+                source: { type: string, enum: [PLAN, USER_CONFIRMED, CHARACTER_INITIATED] }
+                sourceRef: { type: string, maxLength: 255 }
+      responses:
+        '200': { description: 已开始的实际活动 }
+        '400': { description: 输入无效 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 角色或计划活动不存在 }
+        '409': { description: 已有进行中的活动 }
+  /characters/{id}/daily-life/activities/{activityId}/complete:
+    post:
+      operationId: completeDailyLifeActivity
+      tags: [DailyLife]
+      summary: 完成一项进行中的实际活动
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: activityId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: 已完成的实际活动 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 活动不存在或已经结束 }
+        '409': { description: 活动状态发生并发变化 }
+  /characters/{id}/daily-life/photos/{photoId}/associate:
+    post:
+      operationId: associateDailyPhoto
+      tags: [DailyLife]
+      summary: 将一张照片关联到同一角色的一项实际活动；activityId 为空时解除关联
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: photoId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                activityId: { type: string, format: uuid, nullable: true }
+      responses:
+        '200': { description: 照片关联结果 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 照片或活动不存在或不属于当前角色 }
   /roleplay/settings:
     get:
       operationId: getRoleplaySettings
