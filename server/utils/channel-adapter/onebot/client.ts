@@ -809,7 +809,7 @@ export async function callOnebotAction(
   }
   // ⚠️ OneBot v11 发送失败时 HTTP 仍是 200，错误藏在 retcode 里（被风控、小号下线、群已解散）。
   // 只看 response.ok 会把「没发出去」当成「发成功」，还要等用户来问「她怎么不回我」。
-  const requiresSendConfirmation = action === "send_group_msg" || action === "send_private_msg";
+  const requiresSendConfirmation = action === "send_group_msg" || action === "send_private_msg" || action === "send_custom_face";
   let payload: unknown;
   try {
     payload = await response.json();

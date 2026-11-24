@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { selectPeriodSourceMessages } from "../server/utils/memory-source-selection";
+import { selectPeriodSourceInput, selectPeriodSourceMessages, type PeriodSourceMessage } from "../server/utils/memory-source-selection";
 
 const BASE = Date.parse("2026-10-20T00:00:00+08:00");
 
@@ -87,5 +87,49 @@ assert.deepEqual(selectPeriodSourceMessages([]), [], "没有消息时返回空�
   assert(origins.includes("本地对话"), "本地对话的最新一条必须留下。");
   assert.equal(selected.length, 3, "预算为 3 时只放 3 条。");
 }
+
+// ── Worker 共用入口：中段唯一私聊锚点不能被第二次首尾截断丢掉 ──
+{
+  const rows: PeriodSourceMessage[] = [
+    ...fill("early-group", 80),
+    ...fill("middle-group", 80, 100),
+    ...fill("late-group", 80, 300),
+    ...fill("latest-group", 80, 500),
+  ].map((row) => ({
+    ...row, role: "USER", eventType: "message", content: "合成群聊测试消息",
+    origin: "QQ群 12345678", isOwner: false,
+  }));
+  const privateAnchor: PeriodSourceMessage = {
+    ...message("private", 250, "私聊"),
+    role: "USER", eventType: "message", content: "合成私聊锚点",
+    isOwner: true, speaker: "测试主人", member: "member_1",
+    mentionTargets: ["self"], mentions: [{ target: "self" }],
+    authorOpenId: "synthetic-owner", platform: "qq-onebot",
+  };
+  rows.push(privateAnchor);
+  const originalIds = rows.map((row) => row.id);
+  const { sourceMessages, aiMessages } = selectPeriodSourceInput([...rows, privateAnchor]);
+  assert.equal(sourceMessages.length, 250, "统一入口必须沿用 250 条总预算。");
+  const anchorIndex = sourceMessages.findIndex((row) => row.id === privateAnchor.id);
+  assert(anchorIndex >= 60 && anchorIndex < sourceMessages.length - 60,
+    "夹具必须把唯一私聊锚点放在旧首尾 120 条之外。");
+  assert.deepEqual(aiMessages.map((row) => row.id), sourceMessages.map((row) => row.id),
+    "来源记录、证据白名单与入模 ID/顺序必须完全相同，不能再二次抽样。");
+  assert.equal(new Set(aiMessages.map((row) => row.id)).size, aiMessages.length);
+  for (const conversationId of new Set(sourceMessages.map((row) => row.conversationId))) {
+    assert(sourceMessages.filter((row) => row.conversationId === conversationId).length <= 80);
+  }
+  assert.deepEqual(aiMessages[anchorIndex], {
+    id: privateAnchor.id, role: "USER", eventType: "message", content: privateAnchor.content,
+    occurredAt: privateAnchor.occurredAt.toISOString(), origin: "私聊", isOwner: true,
+    mentionTargets: ["self"], mentions: [{ target: "self" }],
+    speaker: "测试主人", member: "member_1",
+  }, "Worker 实际使用的纯转换应保留归属字段，同时不透传作者账号。");
+  assert.deepEqual(rows.map((row) => row.id), originalIds, "选择与映射不得重排调用方数组。");
+  assert.deepEqual(selectPeriodSourceInput([...rows].reverse()), { sourceMessages, aiMessages },
+    "查询返回顺序不应改变最终来源与入模顺序。");
+}
+
+assert.deepEqual(selectPeriodSourceInput([]), { sourceMessages: [], aiMessages: [] });
 
 console.log("memory source selection: 全部通过");

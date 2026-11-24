@@ -8,13 +8,14 @@ import {
   analyzeMemoryPeriod,
   MEMORY_EVENTS_TEMPLATE_VERSION,
   shouldRejectMemoryAttributedToAnotherTarget,
-  type MemoryAiMessage,
   type MemoryChange,
 } from "./memory-ai";
 import { applyMemoryChange, applyMemoryEvents, normalizeMemoryText } from "./memory-change-apply";
 import {
   PER_CONVERSATION_SOURCE_WINDOW,
-  selectPeriodSourceMessages,
+  selectPeriodSourceInput,
+  toAiMessage,
+  type PeriodSourceMessage,
 } from "./memory-source-selection";
 import { localDayKey } from "./memory-event-time";
 import {
@@ -24,7 +25,6 @@ import {
   readMessageMentionTargets,
   readMessageSpeaker,
   readSourceMessageIsOwner,
-  type ConversationMessageMention,
 } from "./conversation-message";
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
 import { normalizeFriendAliases } from "./friend-aliases";
@@ -39,7 +39,6 @@ const LEASE_RECOVERABLE_JOB_TYPES = ["GENERATE_SNAPSHOT", "REGENERATE_SNAPSHOT",
 /** 一个周期最多看几个会话：会话再多，也只给最近活跃的这几个分配来源配额。 */
 const MAX_SCOPE_CONVERSATIONS = 12;
 const MAX_SOURCE_MEMORIES = 250;
-const MAX_AI_MESSAGES = 120;
 /**
  * 纯上下文行（`storedReason = "silent"`）的保留天数。
  *
@@ -48,7 +47,7 @@ const MAX_AI_MESSAGES = 120;
  * 用户的数字更小时以用户为准。
  */
 const CONTEXT_RETENTION_DAYS = 7;
-/** 忆泡每次正序消费至多 960 条，积压通过持久化游标续跑，不取样跳过证据。 */
+/** 周期快照交给模型的现有长期记忆条数上限。 */
 const MAX_AI_MEMORIES = 80;
 const MIN_MEMORY_CONFIDENCE = 0.65;
 
@@ -67,36 +66,10 @@ function ownerFilter(ownerId?: string) {
   return ownerId ? { memoryScope: { is: { character: { is: { ownerId } } } } } : {};
 }
 
-type PeriodSourceMessage = {
-  id: string;
-  role: string;
-  eventType: string;
-  content: string;
-  occurredAt: Date;
-  conversationId: string;
-  /** 这条消息来自哪种对话：群聊带群号，私聊/本地对话各有一个固定标签。 */
-  origin: string;
-  /** 这条是主人发的。群聊里主人和群友混在一起，要靠它让提炼时认得出主人。 */
-  isOwner: boolean;
-  /** 这条消息 @ 了谁（self / other / all）。用来判断「这句话是不是冲她说的」。 */
-  mentionTargets?: string[];
-  /** 这条消息 @ 到的具体对象：代号 / 显示名 / 身份。只靠方向分类会认错人。 */
-  mentions?: ConversationMessageMention[];
-  /** 发言人账号与平台：忆泡的参与者引用靠它推导，不靠模型写名字。 */
-  authorOpenId?: string;
-  platform?: string;
-  /** 发言人显示名：忆泡的 `participants` 靠它写对，否则模型只能写「群友」。 */
-  speaker?: string;
-  /** 群内稳定代号（`member_2`）：昵称会改，代号不会。 */
-  member?: string;
-};
-
-/** 会话来源标签（实现在 `conversation-message.ts`，手账链路共用同一套判据）。 */
-
 /**
  * 按会话取本周期来源消息。
  *
- * 每个会话单独查最近的一批，再交给 selectPeriodSourceMessages 做配额分配 ——
+ * 每个会话单独查最近的一批，再交给 selectPeriodSourceInput 做配额分配 ——
  * 一条 SQL 取不出「每个会话各 N 条」，而按全局时间取正是私聊被水群挤掉的原因。
  */
 async function loadPeriodSourceMessages(
@@ -104,9 +77,9 @@ async function loadPeriodSourceMessages(
   conversations: Array<{ id: string; externalConversationId: string | null }>,
   periodStart: Date,
   periodEnd: Date,
-  options: { perConversation?: number; budget?: number; characterId: string },
-): Promise<PeriodSourceMessage[]> {
-  const perConversationWindow = Math.max(1, Math.trunc(options.perConversation ?? PER_CONVERSATION_SOURCE_WINDOW));
+  options: { characterId: string },
+): Promise<ReturnType<typeof selectPeriodSourceInput>> {
+  const perConversationWindow = PER_CONVERSATION_SOURCE_WINDOW;
   const batches = await Promise.all(conversations.map(async (conversation) => {
     const rows = await prisma.message.findMany({
       where: { conversationId: conversation.id, occurredAt: { gte: periodStart, lt: periodEnd } },
@@ -132,37 +105,7 @@ async function loadPeriodSourceMessages(
       ...readMessageSpeaker(row.metadata),
     }));
   }));
-  return selectPeriodSourceMessages(batches.flat(), {
-    ...(options.perConversation ? { perConversation: options.perConversation } : {}),
-    ...(options.budget ? { budget: options.budget } : {}),
-  });
-}
-
-function selectAiMessages(messages: PeriodSourceMessage[]): MemoryAiMessage[] {
-  let selected = messages;
-  if (messages.length > MAX_AI_MESSAGES) {
-    const edge = Math.floor(MAX_AI_MESSAGES / 2);
-    selected = [...messages.slice(0, edge), ...messages.slice(-edge)];
-  }
-  return selected.map(toAiMessage);
-}
-
-/** 单条消息转成模型输入。分块抽取也用它，保证两条路径的字段完全一致。 */
-function toAiMessage(message: PeriodSourceMessage): MemoryAiMessage {
-  return {
-    id: message.id,
-    role: message.role,
-    eventType: message.eventType,
-    occurredAt: message.occurredAt.toISOString(),
-    content: message.content,
-    origin: message.origin,
-    isOwner: message.isOwner,
-    ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
-    ...(message.mentions?.length ? { mentions: message.mentions } : {}),
-    // 谁说的：不传的话模型只能从正文猜，猜不出就写「群友」，那个人当场丢掉。
-    ...(message.speaker ? { speaker: message.speaker } : {}),
-    ...(message.member ? { member: message.member } : {}),
-  };
+  return selectPeriodSourceInput(batches.flat());
 }
 
 function validConfidence(change: MemoryChange): boolean {
@@ -1298,10 +1241,9 @@ export async function processNextMemoryJob(
     }
 
     // 按会话配额取来源：每个会话先保住自己最新的一条，再在总预算内按时间填满。
-    const sourceMessages = await loadPeriodSourceMessages(
+    const { sourceMessages, aiMessages } = await loadPeriodSourceMessages(
       prisma, periodConversations, job.periodStart, job.periodEnd, { characterId: scope.characterId },
     );
-    const aiMessages = selectAiMessages(sourceMessages);
     // activeItems is newest-first, so the model sees the latest memory state.
     const aiMemoryContext = activeItems.slice(0, MAX_AI_MEMORIES).map((item) => ({
       id: item.id,

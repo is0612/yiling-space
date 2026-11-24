@@ -87,7 +87,7 @@ import {
   type ChannelImageRef,
 } from "../image-understanding";
 import { CLOSE_FRIEND_LIMIT, listAcquaintances, recordFriendInteraction } from "../friends";
-import { isEmojiBudgetSpent, resolveEmojiFrequency } from "../emoji-frequency";
+import { hasEmojiMark, isEmojiBudgetSpent, resolveEmojiFrequency } from "../emoji-frequency";
 import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
@@ -193,6 +193,7 @@ export type ChannelReplyOptions = {
 
 /** Internal delivery facts; platform identifiers must never be copied into prompt payloads. */
 export type ChannelReplyDelivery = {
+  emoji?: { status: "sent" | "failed" | "unknown"; reason?: "read_failed" | "send_failed" | "unconfirmed" };
   image?: { status: "sent" | "failed" | "unknown"; sentAt?: string; externalMessageId?: string; reason?: "read_failed" | "send_failed" | "unconfirmed" };
   at?: {
     requestedMessageId: string;
@@ -656,7 +657,7 @@ function readStoredStickerId(metadata: unknown): string | null {
   const record = metadata && typeof metadata === "object" && !Array.isArray(metadata)
     ? metadata as Record<string, unknown>
     : {};
-  return typeof record.stickerId === "string" && record.stickerId ? record.stickerId : null;
+  return hasEmojiMark(record) && typeof record.stickerId === "string" && record.stickerId ? record.stickerId : null;
 }
 
 /**
@@ -685,9 +686,7 @@ function readStoredStickerFlag(metadata: unknown): boolean {
   const record = metadata && typeof metadata === "object" && !Array.isArray(metadata)
     ? metadata as Record<string, unknown>
     : {};
-  if (typeof record.stickerId === "string" && record.stickerId) return true;
-  if (Array.isArray(record.faceIds) && record.faceIds.length) return true;
-  return false;
+  return hasEmojiMark(record);
 }
 
 /**
@@ -1406,6 +1405,7 @@ async function persistChannelTurnResult(input: {
             // 表情段不进 content：正文要能原样重放给下一轮模型，混进 [face] 会被当成用户打的字。
             ...(replyFaces.length ? { faceIds: replyFaces } : {}),
             ...(replySticker ? { stickerId: replySticker.id } : {}),
+            ...(replySticker || replyFaces.length ? { replyDelivery: { emoji: { status: "unknown", reason: "unconfirmed" } } } : {}),
             // 只记「这一条是语音」，不存音频：音频发完就没了，存下来也没法重放给模型。
             ...(replyVoice ? { voice: true } : {}),
             // 她画的那张图：只存相对路径与尺寸，不存字节，也不记聊天模型 ——
@@ -1578,8 +1578,10 @@ async function deliverChannelTurnReply(input: {
   // Preserve the model's request even when this layer suppresses it before the sender sees it.
   const requestedAt = generated.groupDecision?.atMessageId;
   let reported = false;
+  let emojiSent = false;
   const reportDelivery = async (delivery: ChannelReplyDelivery) => {
     reported = true;
+    if (delivery.emoji?.status === "sent") emojiSent = true;
     await input.recordDelivery(delivery.at || !requestedAt || atTarget ? delivery
       : mergeSuppressedAtDelivery(delivery, requestedAt, replyVoice ? "voice" : "passive_policy"));
   };
@@ -1587,7 +1589,7 @@ async function deliverChannelTurnReply(input: {
     ...replyOptions,
     onDelivery: reportDelivery,
   });
-  if (delivery?.at || delivery?.image) await reportDelivery(delivery);
+  if (delivery?.at || delivery?.image || delivery?.emoji) await reportDelivery(delivery);
   else if (!reported && requestedAt && !atTarget) await reportDelivery({ at: {
     requestedMessageId: requestedAt,
     status: "suppressed",
@@ -1627,7 +1629,7 @@ async function deliverChannelTurnReply(input: {
     }
   }
   // 记一次使用：页面要能看出「哪几张她根本没用过」。写失败不影响已经发出去的回复。
-  if (replySticker) {
+  if (replySticker && emojiSent) {
     await prisma.characterSticker.update({
       where: { id: replySticker.id },
       data: { useCount: { increment: 1 }, lastUsedAt: new Date() },
@@ -4336,7 +4338,7 @@ async function runChannelTurn(input: {
 
   let recordedDelivery = "";
   const recordDelivery = async (delivery: ChannelReplyDelivery) => {
-    if (!assistantMessageId || (!delivery.at && !delivery.image)) return;
+    if (!assistantMessageId || (!delivery.at && !delivery.image && !delivery.emoji)) return;
     const encoded = JSON.stringify(delivery);
     if (encoded === recordedDelivery) return;
     try {
@@ -4344,7 +4346,7 @@ async function runChannelTurn(input: {
       if (!row) return;
       const metadata = row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata) ? row.metadata : {};
       await prisma.message.update({ where: { id: assistantMessageId }, data: { metadata: {
-        ...metadata, replyDelivery: JSON.parse(encoded) as Prisma.InputJsonValue,
+        ...metadata, replyDelivery: { ...asRecord(metadata.replyDelivery), ...JSON.parse(encoded) } as Prisma.InputJsonValue,
       } } });
       if (replyImage && delivery.image) {
         await prisma.dailyPhoto.updateMany({

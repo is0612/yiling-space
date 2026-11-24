@@ -46,6 +46,9 @@ export function resolveEmojiFrequency(modelConfig: unknown): EmojiFrequency {
 /** 这条消息贴过表情吗（内置表情或表情包都算）。metadata 是落库时写的那份。 */
 export function hasEmojiMark(metadata: unknown): boolean {
   const record = asRecord(metadata);
+  const emoji = asRecord(asRecord(record.replyDelivery).emoji);
+  // New messages require a confirmed receipt; legacy messages keep their existing interpretation.
+  if (Object.keys(emoji).length && emoji.status !== "sent") return false;
   if (typeof record.stickerId === "string" && record.stickerId) return true;
   return Array.isArray(record.faceIds) && record.faceIds.length > 0;
 }

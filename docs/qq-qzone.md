@@ -166,6 +166,7 @@ PENDING → EXPIRED（10 分钟）/ CANCELLED（同连接来了新草稿）
 - 同一连接同一 `kind` 只留一条 PENDING：连着说两次「发说说」，旧草稿会被 `CANCELLED`。
 - 认领是原子的（`UPDATE … WHERE status='PENDING'`），重复投递的确认事件不会发两次。
 - **没有 tid 也记 `PUBLISHED`**：记成 FAILED 会让人以为没发，然后重发一条。
+- 远端成功后只重试本地状态写入一次，不再次发布或评论。两次写入均失败时保留 `PUBLISHING`，回复明确提醒先核对空间、不要重发；该连接存在其他 `PUBLISHING` 动作时暂不发送新动作，防止成功记录未落库导致额度漏算。当前没有自动对账或专用对账界面，需核对远端结果后处理本地状态。
 - 审计写 `audit_logs`：`channel.qzone_published` / `channel.qzone_failed`，不含 cookie。
 
 列表**不落库**，只在进程内缓存 10 分钟。落库会让下次读到一个早已翻页的 tid，

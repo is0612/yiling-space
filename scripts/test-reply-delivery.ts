@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { readDeliveredAtMention, readDeliveredAtTarget, blockedDeliveredAtTargets } from "../server/utils/channel-adapter/reply-delivery";
 import { GroupContext } from "../server/utils/channel-adapter/onebot/group-context";
 import { generateConversationReply } from "../server/utils/chat-reply";
@@ -59,4 +60,84 @@ try {
   const blockedPayload = JSON.parse(request!.messages.find(line => line.role === "user")!.content);
   assert.equal(blockedPayload.recentMessages[0].mentions, undefined, "blocked old target cannot appear in model history");
 } finally { globalThis.fetch = originalFetch; }
-console.log("reply delivery identity remapping and mocked prompt tests passed");
+// Mock transport only: no QQ gateway, model, or database connections.
+const { createReplySender } = await import("../server/utils/channel-adapter/onebot/serve");
+const { hasEmojiMark, isEmojiBudgetSpent } = await import("../server/utils/emoji-frequency");
+const { finishQzoneSuccess } = await import("../server/utils/channel-adapter/onebot/qzone");
+const config = { httpUrl: "https://onebot.invalid", wsUrl: "wss://onebot.invalid" };
+const sender = createReplySender(config, { messageType: "private", userId: qq, groupId: "" });
+let mediaMode: "sent" | "failed" | "unknown" = "sent";
+let customRejected = false;
+let customResponse: "ok" | "non_json" | "empty" | "object" | "failed_without_code" = "ok";
+const outbound: unknown[] = [];
+globalThis.fetch = async (url, init) => {
+  const body = JSON.parse(String(init?.body));
+  outbound.push(body);
+  const media = String(url).includes("send_custom_face") || Array.isArray(body.message);
+  if (media && mediaMode === "unknown") throw new Error("mock connection lost");
+  if (String(url).includes("send_custom_face")) {
+    if (customResponse === "non_json") return new Response("not JSON");
+    if (customResponse === "empty") return new Response("");
+    if (customResponse === "object") return Response.json({});
+    if (customResponse === "failed_without_code") return Response.json({ status: "failed" });
+  }
+  if (media && (mediaMode === "failed" || (customRejected && String(url).includes("send_custom_face")))) {
+    return Response.json({ status: "failed", retcode: 100, wording: "mock rejected" });
+  }
+  return Response.json({ status: "ok", retcode: 0, data: { message_id: "mock-id" } });
+};
+try {
+  for (const mode of ["sent", "failed", "unknown"] as const) {
+    mediaMode = mode;
+    for (const options of [{ faces: ["14"] }, { sticker: { id: "sticker", filePath: fileURLToPath(import.meta.url) } }]) {
+      const before = outbound.length;
+      const delivery = await sender("正文照常", options);
+      assert.equal(delivery?.emoji?.status, mode);
+      assert.equal(outbound.length - before, 2, "text remains a separate successful delivery");
+      const metadata = { ...("sticker" in options ? { stickerId: "sticker" } : { faceIds: ["14"] }), replyDelivery: delivery };
+      assert.equal(hasEmojiMark(metadata), mode === "sent");
+      assert.equal(isEmojiBudgetSpent([{ occurredAt: new Date(), metadata }], new Date(), { windowMinutes: 10, perWindow: 1 }), mode === "sent");
+    }
+  }
+  mediaMode = "sent";
+  const missing = await sender("正文", { sticker: { id: "missing", filePath: "missing-mock-sticker.png" } });
+  assert.deepEqual(missing?.emoji, { status: "failed", reason: "read_failed" });
+  const custom = { id: "custom", filePath: fileURLToPath(import.meta.url), qqEmojiId: "123456789_0_0_0_abcdef_0_0" };
+  assert.equal((await sender("正文", { sticker: custom }))?.emoji?.status, "sent");
+  const beforeCallbackFailure = outbound.length;
+  await assert.rejects(sender("正文", { sticker: custom, onDelivery: async delivery => {
+    if (delivery.emoji?.status === "sent") throw new Error("mock receipt persistence failed");
+  } }), /mock receipt persistence failed/);
+  assert.equal(outbound.length - beforeCallbackFailure, 2, "receipt callback failure must not send an image fallback after custom face success");
+  mediaMode = "unknown";
+  const beforeUnknown = outbound.length;
+  assert.equal((await sender("正文", { sticker: custom }))?.emoji?.status, "unknown");
+  assert.equal(outbound.length - beforeUnknown, 2, "unknown custom face outcome must not fall back");
+  mediaMode = "sent";
+  for (const response of ["non_json", "empty", "object", "failed_without_code"] as const) {
+    customResponse = response;
+    const beforeInvalid = outbound.length;
+    const delivery = await sender("正文", { sticker: custom });
+    assert.deepEqual(delivery?.emoji, { status: "unknown", reason: "unconfirmed" }, response);
+    assert.equal(outbound.length - beforeInvalid, 2, "invalid success response must not fall back");
+    assert.equal(hasEmojiMark({ stickerId: custom.id, replyDelivery: delivery }), false);
+  }
+  customResponse = "ok";
+  customRejected = true;
+  const beforeFallback = outbound.length;
+  assert.equal((await sender("正文", { sticker: custom }))?.emoji?.status, "sent", "rejected custom face falls back to image");
+  assert.equal(outbound.length - beforeFallback, 3, "explicit rejection sends exactly one image fallback");
+  assert.equal(hasEmojiMark({ stickerId: "legacy" }), true);
+  assert.equal(hasEmojiMark({ faceIds: ["14"], replyDelivery: { emoji: { status: "unknown" } } }), false);
+  let writes = 0;
+  assert.equal(await finishQzoneSuccess("mock-action", "tid", async (_id, result) => {
+    writes += 1; assert.equal(result.ok, true); throw new Error("mock database unavailable");
+  }), false);
+  assert.equal(writes, 2, "only local success persistence is retried");
+  writes = 0;
+  assert.equal(await finishQzoneSuccess("mock-action", null, async (_id, result) => {
+    writes += 1; assert.equal(result.ok, true); if (writes === 1) throw new Error("transient mock failure");
+  }), true);
+  assert.equal(writes, 2);
+} finally { globalThis.fetch = originalFetch; }
+console.log("reply delivery identity, mocked emoji receipts, budget and Qzone persistence tests passed");

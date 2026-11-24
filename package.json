@@ -71,6 +71,8 @@
     "test:all": "node scripts/test-all.mjs",
     "check:tests": "node scripts/test-all.mjs --check",
     "test:runner": "node scripts/test-test-plan.mjs",
+    "test:page-harness": "tsx scripts/test-page-harness.ts",
+    "test:users-page-races": "tsx scripts/test-users-page-races.ts",
     "check:tokens": "node scripts/check-tokens.mjs --budget=0",
     "test:api-request": "tsx scripts/test-api-request.ts",
     "test:visual-profile-prompt": "tsx scripts/test-visual-profile-prompt.ts",

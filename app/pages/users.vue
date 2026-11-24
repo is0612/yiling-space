@@ -71,19 +71,26 @@ function initialOf(user: AdminUser) {
   return Array.from(labelOf(user))[0] ?? "?";
 }
 
+let usersRequestVersion = 0;
+let auditRequestVersion = 0;
+onBeforeUnmount(() => { usersRequestVersion++; auditRequestVersion++; });
+
 async function loadUsers(target = userPage.value) {
+  const version = ++usersRequestVersion;
   loading.value = true;
   try {
     const response = await api.listAdminUsers({ page: target, pageSize: USER_PAGE_SIZE });
+    if (version !== usersRequestVersion) return;
     users.value = response.items;
     userPage.value = response.page;
     userTotal.value = response.total;
     userTotalPages.value = response.totalPages;
     stats.value = response.stats;
   } catch (error) {
+    if (version !== usersRequestVersion) return;
     ElMessage.error(readErrorMessage(error, "无法读取用户列表。"));
   } finally {
-    loading.value = false;
+    if (version === usersRequestVersion) loading.value = false;
   }
 }
 
@@ -104,8 +111,10 @@ const actionLabels: Record<string, string> = {
 };
 
 async function loadAudit(target = auditPage.value) {
+  const version = ++auditRequestVersion;
   try {
     const response = await api.listAuditLogs({ page: target, pageSize: AUDIT_PAGE_SIZE });
+    if (version !== auditRequestVersion) return;
     auditItems.value = response.items;
     auditPage.value = response.page;
     auditTotal.value = response.total;

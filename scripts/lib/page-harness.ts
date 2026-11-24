@@ -29,7 +29,7 @@ export function buildPageHarness(
     /**
      * 角色来源的绑定名。合并后的模型设置组件用 `watch(id, ...)` 跟着 `props.characterId` 走，
      * 而 `id` 是个 computed —— 默认的「找 characterId 观察者」匹配不到。
-     * 传 `["id"]` 就按这些绑定逐个触发；不传则保持旧行为（只触发 characterId 或第一个观察者）。
+     * 传 `["id"]` 就按这些绑定逐个触发；不传则只触发 characterId 绑定上的观察者。
      */
     roleSources?: string[];
   } = {},
@@ -67,6 +67,18 @@ return { ${names.join(", ")} };
   const role = { value: { id: "char-a", name: "角色 A" } };
   const watchers: Array<{ source: { value: unknown }; callback: (next: unknown, previous: unknown) => void }> = [];
   const requests: PendingRequest[] = [];
+  const unsettled = new Set<PendingRequest>();
+  function recordRequest(url: string, options?: PendingRequest["options"]): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const request: PendingRequest = {
+        url, options,
+        resolve: (value) => { unsettled.delete(request); resolve(value); },
+        reject: (error) => { unsettled.delete(request); reject(error); },
+      };
+      requests.push(request);
+      unsettled.add(request);
+    });
+  }
   const errors: string[] = [];
   const warnings: string[] = [];
   const successes: string[] = [];
@@ -74,17 +86,10 @@ return { ${names.join(", ")} };
   const mountedCallbacks: Array<() => void> = [];
   // 领域 API 通过 useApiRequest() 取传输层；这里复用真实 createRequestClient，
   // 让页面测试同时覆盖「路径不带 /api、查询进 params、正文进 data」的约定。
-  const recordingFetch: RawFetch = (url, fetchOptions) => new Promise((resolve, reject) => {
-    requests.push({
-      url,
-      options: {
-        method: fetchOptions?.method as string | undefined,
-        body: fetchOptions?.body,
-        query: fetchOptions?.query as Record<string, unknown> | undefined,
-      },
-      resolve,
-      reject,
-    });
+  const recordingFetch: RawFetch = (url, fetchOptions) => recordRequest(url, {
+    method: fetchOptions?.method as string | undefined,
+    body: fetchOptions?.body,
+    query: fetchOptions?.query as Record<string, unknown> | undefined,
   });
   const context = createContext({
     MODEL_PURPOSE_DEFAULTS,
@@ -117,9 +122,7 @@ return { ${names.join(", ")} };
       success: (message: string) => successes.push(message),
       info: (message: string) => successes.push(message),
     },
-    $fetch: (url: string, options?: PendingRequest["options"]) => new Promise((resolve, reject) => {
-      requests.push({ url, options, resolve, reject });
-    }),
+    $fetch: recordRequest,
     // 页面里显式 import 的领域工具在沙箱中也要可见（import 声明会被剥掉）。
     readApiErrorMessage,
     createKnowledgeApi,
@@ -164,20 +167,26 @@ return { ${names.join(", ")} };
     return requests.splice(index, 1)[0]!;
   }
   function switchRole(id: string) {
-    const previous = role.value.id;
-    role.value = { id, name: `角色 ${id}` };
-    // 显式指定了角色来源：把这些绑定上的观察者全部触发（`watch(id, ...)` + `watch(id, 版本++)` 都要跑）。
-    if (options.roleSources?.length) {
-      const sources = options.roleSources.map((name) => bindings[name]).filter((value) => value !== undefined);
-      const matched = watchers.filter((entry) => sources.includes(entry.source));
-      assert.ok(matched.length > 0, `role watchers must be registered on: ${options.roleSources.join(", ")}`);
-      for (const watcher of matched) watcher.callback(id, previous);
-      return;
+    const sourceNames = options.roleSources ?? ["characterId"];
+    assert.ok(sourceNames.length > 0, "roleSources must name at least one role binding");
+    const matched = new Set<(typeof watchers)[number]>();
+    for (const name of sourceNames) {
+      assert.ok(name in bindings, `missing role source binding: ${name}`);
+      const source = bindings[name];
+      assert.ok(source !== undefined && source !== null, `invalid role source binding: ${name}`);
+      const entries = watchers.filter((entry) => entry.source === source);
+      assert.ok(entries.length > 0, `role watcher must be registered on: ${name}`);
+      for (const entry of entries) matched.add(entry);
     }
-    const roleWatcher = watchers.find(entry => entry.source === bindings.characterId) ?? watchers[0];
-    assert.ok(roleWatcher, "role watcher must be registered");
-    roleWatcher.callback(id, previous);
+    const previous = role.value.id;
+    for (const watcher of matched) assert.equal(watcher.source.value, previous, "role source must reflect the current role");
+    role.value = { id, name: `角色 ${id}` };
+    for (const watcher of matched) {
+      assert.equal(watcher.source.value, id, "role source must follow the selected role");
+      if (id !== previous) watcher.callback(id, previous);
+    }
   }
+
   function triggerKeyword() {
     const keyword = bindings.keyword;
     const watcher = watchers.find((entry) => entry.source === keyword);
@@ -188,7 +197,8 @@ return { ${names.join(", ")} };
     for (const callback of unmountCallbacks) callback();
   }
   function finish(options: { allowErrors?: boolean } = {}) {
-    assert.equal(requests.length, 0, `unsettled requests: ${requests.map((request) => request.url).join(", ")}`);
+    assert.equal(unsettled.size, 0, `unsettled requests: ${Array.from(unsettled, (request) => `${request.options?.method ?? "GET"} ${request.url}`).join(", ")}`);
+    assert.equal(requests.length, 0, `untaken requests: ${requests.map((request) => request.url).join(", ")}`);
     // 只断言「不该出现的错误」：需要验证错误反馈的用例自己断言 errors 后传 allowErrors。
     if (!options.allowErrors) {
       assert.deepEqual(errors, [], `unexpected error notifications: ${errors.join(", ")}`);

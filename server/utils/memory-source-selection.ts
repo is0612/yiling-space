@@ -9,6 +9,9 @@
  * 这样水群再吵也不会让私聊整段消失，同时总量仍有上限（快照来源行数不能无限涨）。
  */
 
+import type { MemoryAiMessage } from "./memory-ai";
+import type { ConversationMessageMention } from "./conversation-message";
+
 export type PeriodSourceMessageRef = {
   id: string;
   conversationId: string;
@@ -84,4 +87,52 @@ export function selectPeriodSourceMessages<T extends PeriodSourceMessageRef>(
   }
 
   return [...kept.values()].sort(compareMessages);
+}
+
+export type PeriodSourceMessage = {
+  id: string;
+  role: string;
+  eventType: string;
+  content: string;
+  occurredAt: Date;
+  conversationId: string;
+  /** 这条消息来自哪种对话：群聊带群号，私聊/本地对话各有一个固定标签。 */
+  origin: string;
+  /** 这条是主人发的。群聊里主人和群友混在一起，要靠它让提炼时认得出主人。 */
+  isOwner: boolean;
+  /** 这条消息 @ 了谁（self / other / all）。用来判断「这句话是不是冲她说的」。 */
+  mentionTargets?: string[];
+  /** 这条消息 @ 到的具体对象：代号 / 显示名 / 身份。只靠方向分类会认错人。 */
+  mentions?: ConversationMessageMention[];
+  /** 发言人账号与平台：忆泡的参与者引用靠它推导，不靠模型写名字。 */
+  authorOpenId?: string;
+  platform?: string;
+  /** 发言人显示名：忆泡的 `participants` 靠它写对，否则模型只能写「群友」。 */
+  speaker?: string;
+  /** 群内稳定代号（`member_2`）：昵称会改，代号不会。 */
+  member?: string;
+};
+
+/** 单条消息转成模型输入。分块抽取也用它，保证两条路径的字段完全一致。 */
+export function toAiMessage(message: PeriodSourceMessage): MemoryAiMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    eventType: message.eventType,
+    occurredAt: message.occurredAt.toISOString(),
+    content: message.content,
+    origin: message.origin,
+    isOwner: message.isOwner,
+    ...(message.mentionTargets?.length ? { mentionTargets: message.mentionTargets } : {}),
+    ...(message.mentions?.length ? { mentions: message.mentions } : {}),
+    // 谁说的：不传的话模型只能从正文猜，猜不出就写「群友」，那个人当场丢掉。
+    ...(message.speaker ? { speaker: message.speaker } : {}),
+    ...(message.member ? { member: message.member } : {}),
+  };
+}
+
+/** 来源记录、证据白名单和模型输入共用一次选择，不再按首尾二次截断。 */
+export function selectPeriodSourceInput(messages: readonly PeriodSourceMessage[]) {
+  const sourceMessages = selectPeriodSourceMessages(messages);
+  return { sourceMessages, aiMessages: sourceMessages.map(toAiMessage) };
 }

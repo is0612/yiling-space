@@ -75,6 +75,7 @@ import {
   draftQzoneText,
   findPendingQzoneAction,
   finishQzoneAction,
+  finishQzoneSuccess,
   isQzoneApprove,
   isQzoneConfirm,
   isQzoneReject,
@@ -638,7 +639,7 @@ async function handleQzoneConfirm(
     return replyQzoneToOutcome(binding, event, sendReply, "这条正在发或已经处理过，不会重复发。");
   }
 
-  const quota = await checkQzoneQuota(record.id, kind, record.qzoneLimits);
+  const quota = await checkQzoneQuota(record.id, kind, record.qzoneLimits, pending.id);
   if (!quota.allowed) {
     await finishQzoneAction(pending.id, { ok: false, error: quota.reason });
     await writeQzoneAudit({
@@ -654,86 +655,44 @@ async function handleQzoneConfirm(
   }
 
   let reply: string;
-  if (kind === "POST") {
-    try {
-      const result = await publishQzonePost(record.config, {
-        content: pending.content,
-        visible: pending.visible,
-      });
-      await finishQzoneAction(pending.id, { ok: true, tid: result.tid });
-      await writeQzoneAudit({
-        connectionId: record.id,
-        characterId: pending.characterId ?? binding.characterId,
-        actionId: pending.id,
-        kind,
-        requestedBy: pending.requestedBy,
-        ok: true,
-      });
-      // 她发过的说说也是一段经历：写进消息链路，周期快照/忆泡/检索才看得见。
-      // 失败只记日志，绝不因为「没记住」把已经发出去的说说说成失败。
-      await recordQzonePostMemory(getPrisma(), {
-        characterId: pending.characterId ?? binding.characterId,
-        accountQq: record.accountQq,
-        actionId: pending.id,
-        content: pending.content,
-        visible: pending.visible,
-      }).catch((error) => {
-        console.warn("[qzone] 说说没能写进记忆：", error instanceof Error ? error.message : error);
-      });
-      // 没有 tid 也是成功：协议端发出了但没说 tid 的情况很常见。让人去确认，
-      // 千万不要「那就再发一次」。
-      reply = result.tid
-        ? `说说发出去了（${result.via === "action" ? "协议端" : "网页接口"}）。`
-        : "说说应该发出去了，但协议端没返回 tid —— 去空间确认一下，先别让我重发。";
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await finishQzoneAction(pending.id, { ok: false, error: message });
-      await writeQzoneAudit({
-        connectionId: record.id,
-        characterId: pending.characterId ?? binding.characterId,
-        actionId: pending.id,
-        kind,
-        requestedBy: pending.requestedBy,
-        ok: false,
-        error: message,
-      });
-      reply = qzoneErrorMessage(error);
-    }
-  } else if (!pending.targetUin || !pending.targetTid) {
+  const audit = (ok: boolean, error?: string) => writeQzoneAudit({
+    connectionId: record.id, characterId: pending.characterId ?? binding.characterId,
+    actionId: pending.id, kind, requestedBy: pending.requestedBy, ok, error,
+  });
+  if (kind === "COMMENT" && (!pending.targetUin || !pending.targetTid)) {
     await finishQzoneAction(pending.id, { ok: false, error: "MISSING_TARGET" });
-    reply = "这条评论草稿没记住目标（可能是旧数据），重新说「看看空间」再挑一条。";
-  } else {
-    try {
-      await commentQzoneFeed(record.config, {
-        targetUin: pending.targetUin,
-        tid: pending.targetTid,
-        content: pending.content,
-      });
-      await finishQzoneAction(pending.id, { ok: true });
-      await writeQzoneAudit({
-        connectionId: record.id,
-        characterId: pending.characterId ?? binding.characterId,
-        actionId: pending.id,
-        kind,
-        requestedBy: pending.requestedBy,
-        ok: true,
-      });
-      reply = "评论发出去了。";
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await finishQzoneAction(pending.id, { ok: false, error: message });
-      await writeQzoneAudit({
-        connectionId: record.id,
-        characterId: pending.characterId ?? binding.characterId,
-        actionId: pending.id,
-        kind,
-        requestedBy: pending.requestedBy,
-        ok: false,
-        error: message,
-      });
-      reply = qzoneErrorMessage(error);
-    }
+    return replyQzoneToOutcome(binding, event, sendReply, "这条评论草稿没记住目标（可能是旧数据），重新说「看看空间」再挑一条。");
   }
+  let result: Awaited<ReturnType<typeof publishQzonePost>> | undefined;
+  // Only the external operation belongs in this failure boundary.
+  try {
+    if (kind === "POST") {
+      result = await publishQzonePost(record.config, { content: pending.content, visible: pending.visible });
+    } else {
+      await commentQzoneFeed(record.config, { targetUin: pending.targetUin!, tid: pending.targetTid!, content: pending.content });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await finishQzoneAction(pending.id, { ok: false, error: message });
+    await audit(false, message);
+    return replyQzoneToOutcome(binding, event, sendReply, qzoneErrorMessage(error));
+  }
+  const saved = await finishQzoneSuccess(pending.id, result?.tid);
+  await audit(true);
+  if (kind === "POST") {
+    await recordQzonePostMemory(getPrisma(), {
+      characterId: pending.characterId ?? binding.characterId, accountQq: record.accountQq,
+      actionId: pending.id, content: pending.content, visible: pending.visible,
+    }).catch((error) => {
+      console.warn("[qzone] 说说没能写进记忆：", error instanceof Error ? error.message : error);
+    });
+    reply = result?.tid
+      ? `说说发出去了（${result.via === "action" ? "协议端" : "网页接口"}）。`
+      : "说说应该发出去了，但协议端没返回 tid —— 去空间确认一下，先别让我重发。";
+  } else {
+    reply = "评论发出去了。";
+  }
+  if (!saved) reply += " 本地状态暂未保存，请先去空间核对，别重复发送。";
   return replyQzoneToOutcome(binding, event, sendReply, reply);
 }
 
@@ -981,7 +940,9 @@ export function createReplySender(
       return Promise.resolve({ messageId: null });
     };
 
-    const delivery: ChannelReplyDelivery = {};
+    const delivery: ChannelReplyDelivery = {
+      ...(options?.sticker || options?.faces?.length ? { emoji: { status: "unknown", reason: "unconfirmed" } as const } : {}),
+    };
     let atTarget: string | null = null;
     let reservation: ReturnType<typeof claimGroupAt> | undefined;
     const requested = options?.atMessageId;
@@ -1157,28 +1118,52 @@ export function createReplySender(
         try {
           await sendOnebotCustomFace(config, target, sticker.qqEmojiId);
           console.log("[onebot] 收藏表情已发送 " + JSON.stringify({ emojiId: sticker.qqEmojiId, stickerId: sticker.id }));
-          return delivery;
+          delivery.emoji = { status: "sent" };
         } catch (error) {
-          // 收藏里那张可能已经被删了（QQ 侧改动还没同步回来），退回图片段，这一条不丢。
+          if (!isOnebotSendRejected(error)) {
+            // Unknown remote outcome: another send could duplicate a delivered sticker.
+            delivery.emoji = { status: "unknown", reason: "unconfirmed" };
+            console.error("[onebot] 收藏表情发送结果未确认，停止发送，不退回图片段。");
+            await options?.onDelivery?.(delivery);
+            return delivery;
+          }
+          // Only explicit rejection permits an image fallback.
           console.error(
             "[onebot] 收藏表情发送失败，退回图片段：",
             error instanceof Error ? error.message : String(error),
           );
         }
       }
+      if (delivery.emoji?.status === "sent") {
+        await options?.onDelivery?.(delivery);
+        return delivery;
+      }
       const segments = await loadStickerSegments(sticker.filePath);
-      if (!segments.length) return delivery;
-      await send(segments).catch((error) => {
-        console.error("[onebot] 表情发送失败：", error instanceof Error ? error.message : String(error));
-      });
+      if (!segments.length) {
+        delivery.emoji = { status: "failed", reason: "read_failed" };
+      } else {
+        try {
+          await send(segments);
+          delivery.emoji = { status: "sent" };
+        } catch (error) {
+          delivery.emoji = isOnebotSendRejected(error) ? { status: "failed", reason: "send_failed" } : { status: "unknown", reason: "unconfirmed" };
+          console.error("[onebot] 表情发送失败：", error instanceof Error ? error.message : String(error));
+        }
+      }
+      await options?.onDelivery?.(delivery);
       return delivery;
     }
 
     const faceSegments = toOnebotFaceSegments(options?.faces ?? []);
     if (!faceSegments.length) return delivery;
-    await send(faceSegments).catch((error) => {
+    try {
+      await send(faceSegments);
+      delivery.emoji = { status: "sent" };
+    } catch (error) {
+      delivery.emoji = isOnebotSendRejected(error) ? { status: "failed", reason: "send_failed" } : { status: "unknown", reason: "unconfirmed" };
       console.error("[onebot] 内置表情发送失败：", error instanceof Error ? error.message : String(error));
-    });
+    }
+    await options?.onDelivery?.(delivery);
     return delivery;
   };
 }

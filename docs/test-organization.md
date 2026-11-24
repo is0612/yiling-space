@@ -39,6 +39,12 @@
 
 数据库服务器的会话时区必须是 UTC。Prisma 驱动适配器读原始 SQL 的 `timestamptz` 时按「本地墙上时间」处理，服务器时区跟着 Windows 走（东八区）会让 `$queryRaw` 的时间整体偏移 8 小时：日志状态回填取错版本、成长事件租约领取直接判空、群表达观察算不到候选。桌面内嵌集群已固定 `-c timezone=UTC`；自建开发库（Docker 或本机安装）跑全量前请先 `ALTER DATABASE ... SET timezone='UTC'` 或等价配置。另外，若测试库角色没有 `pg_signal_backend`，隔离测试清理阶段的 `pg_terminate_backend` 会以 `insufficient_privilege` 失败——那是权限问题，不是断言失败。
 
+## 页面脚本测试的边界
+
+共享 `scripts/lib/page-harness.ts` 只驱动抽取后的页面脚本，使用可控的 ref/computed/watch 替身，不验证真实 Vue 响应式调度或 DOM。角色切换必须匹配明确的角色来源与监听器，来源值必须跟随所选角色变化，不再兜底触发任意监听器。请求由独立集合跟踪，`take`/`takeMatching` 仅领取请求，必须 resolve/reject 后才算完成；`finish` 拒绝尚未完成的请求。工具自身回归入口为 `yarn test:page-harness`。
+
+用户管理分页的倒序响应、旧请求错误与 loading 保护由 `yarn test:users-page-races` 验证。这些模拟脚本不替代浏览器与真实登录环境验收。
+
 ## CI 与本地全校验
 
 CI 只保留一处 `yarn run test:all`，移除此前先逐项、再大套件、最后全部测试的重复执行。全新 clone 安装检查、Prisma 迁移一致性、PowerShell 数据恢复回归、API 冒烟、类型检查、隐私及样式门禁、lint、生产构建和 OpenAPI 校验仍独立保留。

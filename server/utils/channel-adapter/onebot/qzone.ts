@@ -717,7 +717,13 @@ export async function checkQzoneQuota(
   connectionId: string,
   kind: "POST" | "COMMENT",
   limits: { dailyPosts: number; dailyComments: number; commentCooldownMinutes: number },
+  currentActionId?: string,
 ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+  const unresolved = await getPrisma().onebotQzoneAction.findFirst({
+    where: { connectionId, status: "PUBLISHING", ...(currentActionId ? { id: { not: currentActionId } } : {}) },
+    select: { id: true },
+  });
+  if (unresolved) return { allowed: false, reason: "还有空间动作正在发送或等待核对本地状态，请先去空间确认，暂不发送新动作。" };
   const usage = await readQzoneUsage(connectionId);
   if (kind === "POST") {
     if (limits.dailyPosts > 0 && usage.posts >= limits.dailyPosts) {
@@ -844,6 +850,24 @@ export async function finishQzoneAction(
       publishedAt: result.ok ? new Date() : null,
     },
   });
+}
+
+/** Remote success is final: local persistence failure must leave PUBLISHING for reconciliation. */
+export async function finishQzoneSuccess(
+  id: string,
+  tid?: string | null,
+  persist: typeof finishQzoneAction = finishQzoneAction,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await persist(id, { ok: true, tid });
+      return true;
+    } catch {
+      // Retry only the local write, never the remote publication.
+    }
+  }
+  console.warn("[qzone] 远端已成功，本地状态未保存；保留 PUBLISHING 待对账，禁止重发", { actionId: id });
+  return false;
 }
 
 export async function writeQzoneAudit(input: {
