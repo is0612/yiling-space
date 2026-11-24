@@ -187,7 +187,7 @@ yarn onebot:stack
 - [功能总表](<docs/忆灵空间 · 功能总表.md>) — 按模块查看已实现能力与状态。
 - [记忆系统与周期快照规则](docs/memory-system.md) — 四层记忆的职责、来源和运行规则。
 - [记忆与成长：现状、改动与方案](docs/memory-and-growth.md) — 2026-11 的复盘：记忆为什么断、改了什么、成长怎么做。
-- [日记与手账](docs/journal.md) · [主动消息](docs/proactive-messaging.md) · [语音](docs/voice.md)。
+- [日记与手账](docs/journal.md) · [日常生活与拍照](docs/daily-life-and-photography-design.md) · [主动消息](docs/proactive-messaging.md) · [语音](docs/voice.md)。
 - [互动经验](docs/interaction-experiences.md) · [表达习惯](docs/expression-habits.md) · [社交系统](docs/social-relationship-system.md) — 私聊教育如何经审核变成跨场景可用的抽象规则。
 - [教育跨场景迁移验收](docs/education-transfer-acceptance.md) — 2026-11-15 的工程回归：迁移、测试、八条安全边界与遗留项。
 - [QQ 空间](docs/qq-qzone.md) — 发说说、看好友动态、评论别人的说说（草稿 + 确认）。

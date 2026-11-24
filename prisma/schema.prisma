@@ -182,6 +182,45 @@ enum MemoryReviewDecision {
   IGNORED
 }
 
+enum DailyLifePlanStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum DailyLifePlanItemStatus {
+  PLANNED
+  COMPLETED
+  CANCELLED
+  SKIPPED
+  CHANGED
+}
+
+enum DailyLifeActivityStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum DailyLifeActivitySource {
+  PLAN
+  USER_CONFIRMED
+  CHARACTER_INITIATED
+}
+
+enum DailyPhotoTrigger {
+  USER_REQUESTED
+  CHARACTER_INITIATED
+  LIFE_CONTEXT
+  MEMORY_REVISIT
+}
+
+enum DailyPhotoStatus {
+  GENERATED
+  GENERATION_FAILED
+  DELIVERY_PENDING
+  DELIVERED
+  DELIVERY_FAILED
+}
+
 enum SnapshotKind {
   AUTOMATIC
   MANUAL
@@ -311,11 +350,115 @@ model Character {
   goals CharacterGoal[]
   growthImportIdentities CharacterGrowthImportIdentity[]
   visualProfile       CharacterVisualProfile?
+  dailyLifePlans      DailyLifePlan[]
+  dailyLifePlanItems  DailyLifePlanItem[]
+  dailyLifeActivities DailyLifeActivity[]
+  dailyPhotos         DailyPhoto[]
 
   @@index([ownerId, status])
   @@index([originCharacterId])
   @@index([updatedAt])
   @@map("characters")
+}
+
+/// One character-owned plan per local calendar day. Plans are intentions, never evidence of events.
+model DailyLifePlan {
+  id          String                @id @default(uuid()) @db.Uuid
+  characterId String                @db.Uuid
+  dayKey      String                @db.VarChar(10)
+  timeZone    String                @default("Asia/Shanghai") @db.VarChar(80)
+  lifeType    String                @default("FREE") @db.VarChar(40)
+  status      DailyLifePlanStatus   @default(ACTIVE)
+  summary     String                @default("") @db.VarChar(1000)
+  generatedAt DateTime?             @db.Timestamptz(6)
+  createdAt   DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime              @updatedAt @db.Timestamptz(6)
+  character   Character             @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  items       DailyLifePlanItem[]
+
+  @@unique([characterId, dayKey])
+  @@index([characterId, dayKey, status])
+  @@map("daily_life_plans")
+}
+
+/// Planned schedule entries. Their status never implies that the activity happened.
+model DailyLifePlanItem {
+  id                String                   @id @default(uuid()) @db.Uuid
+  characterId       String                   @db.Uuid
+  planId            String                   @db.Uuid
+  title             String                   @db.VarChar(160)
+  detail            String                   @default("") @db.Text
+  plannedStartAt    DateTime?                 @db.Timestamptz(6)
+  plannedEndAt      DateTime?                 @db.Timestamptz(6)
+  place             String?                  @db.VarChar(200)
+  scene              String                   @default("") @db.VarChar(500)
+  outfitDescription String                   @default("") @db.VarChar(1000)
+  propsDescription  String                   @default("") @db.VarChar(1000)
+  sortOrder         Int                      @default(0)
+  status            DailyLifePlanItemStatus  @default(PLANNED)
+  changeNote        String                   @default("") @db.VarChar(500)
+  createdAt         DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                 @updatedAt @db.Timestamptz(6)
+  character         Character                @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  plan              DailyLifePlan            @relation(fields: [planId], references: [id], onDelete: Cascade)
+  activities        DailyLifeActivity[]
+
+  @@index([characterId, plannedStartAt])
+  @@index([planId, sortOrder])
+  @@map("daily_life_plan_items")
+}
+
+/// Confirmed real-world-in-the-character's-life activity, kept separate from a plan item.
+model DailyLifeActivity {
+  id           String                  @id @default(uuid()) @db.Uuid
+  characterId  String                  @db.Uuid
+  planItemId   String?                 @db.Uuid
+  title        String                  @db.VarChar(160)
+  detail       String                  @default("") @db.Text
+  place        String?                 @db.VarChar(200)
+  source       DailyLifeActivitySource
+  sourceRef    String?                 @db.VarChar(255)
+  status       DailyLifeActivityStatus @default(IN_PROGRESS)
+  startedAt    DateTime                @default(now()) @db.Timestamptz(6)
+  completedAt  DateTime?               @db.Timestamptz(6)
+  createdAt    DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime                @updatedAt @db.Timestamptz(6)
+  character    Character               @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  planItem     DailyLifePlanItem?      @relation(fields: [planItemId], references: [id], onDelete: SetNull)
+  photos       DailyPhoto[]
+
+  @@index([characterId, startedAt])
+  @@index([characterId, status])
+  @@index([planItemId])
+  @@map("daily_life_activities")
+}
+
+/// A generated photograph record. The image bytes live in the existing .data asset store.
+model DailyPhoto {
+  id               String             @id @default(uuid()) @db.Uuid
+  characterId      String             @db.Uuid
+  activityId       String?            @db.Uuid
+  trigger          DailyPhotoTrigger
+  status           DailyPhotoStatus   @default(GENERATED)
+  prompt           String             @db.Text
+  provider         String             @db.VarChar(40)
+  model            String             @db.VarChar(120)
+  generationMode   String             @db.VarChar(40)
+  relativePath     String?            @db.VarChar(500)
+  mime             String?            @db.VarChar(80)
+  width            Int?
+  height           Int?
+  caption          String             @default("") @db.VarChar(500)
+  generatedAt      DateTime           @default(now()) @db.Timestamptz(6)
+  deliveredAt      DateTime?          @db.Timestamptz(6)
+  deliveryError    String?            @db.VarChar(500)
+  createdAt        DateTime           @default(now()) @db.Timestamptz(6)
+  character        Character          @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  activity         DailyLifeActivity? @relation(fields: [activityId], references: [id], onDelete: SetNull)
+
+  @@index([characterId, generatedAt])
+  @@index([activityId, generatedAt])
+  @@map("daily_photos")
 }
 
 model PlatformConnection {

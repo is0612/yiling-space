@@ -5,7 +5,7 @@ import { Prisma, type PrismaClient } from "../../src/generated/prisma/client";
  * 统一成长事件的稳定协议。事件只表达「发生了什么」和来源引用，
  * 不复制 MemoryEvent / SocialExperience / KnowledgeItem 的正文。
  */
-export type GrowthEventDomain = "memory" | "social" | "knowledge" | "preference" | "corpus" | "state" | "reflection" | "goal";
+export type GrowthEventDomain = "memory" | "social" | "knowledge" | "preference" | "corpus" | "state" | "reflection" | "goal" | "life";
 
 export type GrowthEventInput = {
   characterId: string;
@@ -56,7 +56,7 @@ export const GROWTH_EVENT_SUBSCRIPTIONS: Readonly<Record<string, readonly string
 const EVENT_TYPE_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 const CHARACTER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DOMAIN_SET = new Set<GrowthEventDomain>([
-  "memory", "social", "knowledge", "preference", "corpus", "state", "reflection", "goal",
+  "memory", "social", "knowledge", "preference", "corpus", "state", "reflection", "goal", "life",
 ]);
 
 export function normalizeGrowthEventInput(input: GrowthEventInput): GrowthEventInput {
