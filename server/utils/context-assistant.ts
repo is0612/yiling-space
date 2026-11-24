@@ -117,6 +117,7 @@ export async function resolveContextAssistantRuntime(
 }
 
 const SYSTEM = `You analyze public group conversation for a character. Return one JSON object only:
+Use the shortest complete reasoning path: inspect the current-round lines and explicit mention/owner flags first, then consult background only as needed to resolve references or continuity. Do not enumerate speculative alternatives unless ambiguity changes participation; do not repeat the whole transcript in the summary. Never skip relevant evidence, infer identity from display names, or guess when evidence is insufficient — use uncertain and state what is missing.
 {"summary":"brief factual context, max 1600 characters","evidenceMessageIds":["actual included message id"],"memoryQuery":"optional personal-history lookup, max 240 characters","knowledgeQuery":"optional lookup of relevant learned concepts or facts from the character knowledge base, max 240 characters","participation":"invited|observing|uncertain","uncertainty":"optional missing context, max 400 characters","knowledgeCandidate":{"evidenceMessageIds":["1-4 actual message ids containing reusable knowledge"],"reason":"brief reason, max 240 characters"}.
 Omit knowledgeCandidate when no reusable knowledge is present.
 Optional workingSummary (max 1600 chars) and workingEvidenceMessageIds (max 12 included source ids) carry ongoing topics/corrections forward. Use names, not member_n. Verify previousWorkingContext against its sources; prefer corrections, discard unsupported claims. Jokes are not promises. No long-term writes.
