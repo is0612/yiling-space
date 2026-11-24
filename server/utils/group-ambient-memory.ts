@@ -1,3 +1,5 @@
+import type { Prisma, PrismaClient } from "../../src/generated/prisma/client";
+
 /**
  * 群聊原文留存：只服务「她刚才在群里听到了什么」。
  *
@@ -42,10 +44,20 @@ export function shouldStoreAmbientGroupMessage(
  * 它们是「当时听到的原文」，不是「值得长期记住的事」；混进提炼会让群友闲聊
  * 占满来源配额，把私聊和真正冲她来的话挤掉。原文检索仍然可以查到它们。
  */
-export function notAmbientMessageWhere(): {
-  NOT: { metadata: { path: string[]; equals: string } };
-} {
-  return { NOT: { metadata: { path: ["storedReason"], equals: AMBIENT_GROUP_MESSAGE_REASON } } };
+/**
+ * Prisma 的 JSON path NOT 在 PostgreSQL 上无法匹配缺失 key：缺失路径比较结果为 SQL
+ * NULL，NOT NULL 仍是 NULL。先用正向等值查询找出 ambient ID，再用普通 UUID notIn
+ * 排除；旧桌面对话、历史消息以及 metadata 缺少 storedReason 的记录都会被保留。
+ */
+export async function notAmbientMessageWhere(
+  prisma: Pick<PrismaClient, "message">,
+  where: Prisma.MessageWhereInput,
+): Promise<Prisma.MessageWhereInput> {
+  const ambientRows = await prisma.message.findMany({
+    where: { AND: [where, { metadata: { path: ["storedReason"], equals: AMBIENT_GROUP_MESSAGE_REASON } }] },
+    select: { id: true },
+  });
+  return { AND: [where, { id: { notIn: ambientRows.map(row => row.id) } }] };
 }
 
 /** 清理用：只删过期的 ambient，不碰证据类与主人上下文。 */
