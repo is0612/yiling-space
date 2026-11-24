@@ -41,7 +41,6 @@ export type DailyPhoto = {
   provider: string;
   model: string;
   generationMode: string;
-  relativePath: string | null;
   mime: string | null;
   caption: string;
   generatedAt: string;
