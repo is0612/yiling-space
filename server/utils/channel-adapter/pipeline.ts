@@ -55,7 +55,7 @@ import { analyzeOwnerHistoryIntent, isOwnerJournalTurn, privateContextPurpose } 
 import { loadOwnerHistoryContext, saveOwnerHistoryContext, planOwnerHistory, applyOwnerHistoryIntent, isOwnerHistoryDateRetry, planRestartedHistoryRetry, loadOwnerHistoryPage, type OwnerHistoryAuthorization, type OwnerHistoryCoverage } from "../owner-private-history";
 import { parseEventTimeRange } from "../memory-event-time";
 import {
-  CROSS_CHANNEL_WINDOW_MINUTES,
+  loadCrossChannelMessages,
   selectCrossChannelContext,
   type CrossChannelCandidate,
   type CrossChannelLine,
@@ -2858,36 +2858,17 @@ async function retrieveChannelTurnContext(input: {
    * 1. **只在主人私聊时查**（`isOwnerTurn`）。群友不进这条路：他在群里说的话，
    *    别的群友的私聊里不该出现；主人自己本来就在那个群里，把他自己说过的话
    *    接回私聊不涉及第三人。
-   * 2. 只查 `g:` 群会话，且只认 `authorOpenId` 等于他本人的那些行 —— 群里第三人
-   *    说的话一个字都不带（这不是「群聊转播」，是「我刚才说的那句你听见没」）。
+   * 2. 只查 `g:` 群会话；候选保留所有 USER 作为回应归属的阻断行，选择器只输出
+   *    `authorOpenId` 等于主人本人的发言，群里第三人的正文不会进入私聊提示词。
    * 3. 她的回应由纯函数按「紧跟在他后面」二次筛（`selectCrossChannelContext`），
    *    这里先把候选放宽拿全，别在 SQL 里写一半逻辑。
    */
   const ownerPlatformUid = input.isOwnerTurn
     ? (input.messages[0]!.authorPlatformUid || input.messages[0]!.authorOpenId || "").trim()
     : "";
-  const crossChannelLookup = ownerPlatformUid
-    ? prisma.message.findMany({
-        where: {
-          occurredAt: { gte: new Date(Date.now() - CROSS_CHANNEL_WINDOW_MINUTES * 60_000) },
-          conversation: {
-            characterId: input.characterId,
-            externalConversationId: { startsWith: "g:" },
-          },
-          OR: [
-            { metadata: { path: ["authorOpenId"], equals: ownerPlatformUid } },
-            { role: "ASSISTANT" },
-          ],
-        },
-        // 倒序取最近 200 条：热群两小时能滚过上千条，正序取会把「刚才」整段挤掉。
-        orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
-        take: 200,
-        select: {
-          id: true, role: true, content: true, occurredAt: true, metadata: true,
-          conversation: { select: { id: true, externalConversationId: true } },
-        },
-      })
-    : Promise.resolve([]);
+  const crossChannelLookup = loadCrossChannelMessages(prisma, {
+    characterId: input.characterId, ownerUid: ownerPlatformUid, now: new Date(),
+  });
 
   // 熟人卡要用的说话人 id 也算在这里，好和记忆检索一起并行（P3）。
   const speakerUids = isGroup

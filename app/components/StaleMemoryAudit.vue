@@ -139,7 +139,7 @@ async function apply() {
   try {
     const result = await api.applyStaleMemories({
       characterId: props.characterId,
-      items: picked.map(item => ({ kind: item.kind, id: item.id, reason: item.reason })),
+      items: picked.map(item => ({ kind: item.kind, id: item.id, fingerprint: item.fingerprint, reason: item.reason })),
     });
     if (seq !== sequence) return;
     const cleared = new Set(picked.map(item => `${item.kind}:${item.id}`));

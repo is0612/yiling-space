@@ -33,6 +33,116 @@ tags:
 security:
   - sessionCookie: []
 paths:
+  /characters/{id}/memory-audit:
+    post:
+      operationId: auditStaleMemories
+      tags: [Memories]
+      summary: 提名可能失效的记忆与忆泡，等待人工确认
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scopes:
+                  type: array
+                  items: { type: string, enum: [MEMORY, EVENT] }
+                dayKey: { type: string, format: date }
+                rangeDays: { type: integer, minimum: 1, maximum: 90 }
+      responses:
+        '200':
+          description: 候选含服务端计算的完整内容指纹，提交时必须原样携带
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scannedAt, counts, items]
+                properties:
+                  scannedAt: { type: string, format: date-time }
+                  counts:
+                    type: object
+                    properties:
+                      memory:
+                        type: object
+                        properties:
+                          active: { type: integer }
+                          scanned: { type: integer }
+                      event:
+                        type: object
+                        properties:
+                          active: { type: integer }
+                          scanned: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [kind, id, fingerprint, title, content, meta, verdict, reason, confidence]
+                      properties:
+                        kind: { type: string, enum: [MEMORY, EVENT] }
+                        id: { type: string, format: uuid }
+                        fingerprint: { type: string, pattern: '^[a-f0-9]{64}$' }
+                        title: { type: string }
+                        content: { type: string }
+                        meta: { type: string }
+                        verdict: { type: string, enum: [CONTRADICTED, OBSOLETE] }
+                        reason: { type: string }
+                        confidence: { type: number }
+        '400': { description: 检查范围或日期格式无效 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { description: 角色不存在 }
+        '429': { description: 角色今日模型额度已用完 }
+        '502': { description: 模型体检未返回可用结果 }
+        '503': { description: 当前角色尚未配置可用的聊天模型 }
+  /characters/{id}/memory-audit/apply:
+    post:
+      operationId: applyStaleMemories
+      tags: [Memories]
+      summary: 人工确认失效条目；锁定并复核扫描内容后原子提交与审计
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    type: object
+                    required: [kind, id, fingerprint]
+                    properties:
+                      kind: { type: string, enum: [MEMORY, EVENT] }
+                      id: { type: string, format: uuid }
+                      fingerprint: { type: string, pattern: '^[a-f0-9]{64}$' }
+                      reason: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: 整批提交成功；不修改扫描后已经变化的条目
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [memory, event]
+                properties:
+                  memory: { type: integer }
+                  event: { type: integer }
+        '400': { description: 条目无效或缺少扫描指纹，旧客户端须重新体检 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { description: 条目内容、状态或可见范围已变化，整批未提交，须重新体检 }
   /characters/{id}/daily-life:
     get:
       operationId: getDailyLife
@@ -2211,7 +2321,7 @@ paths:
       operationId: postAuthPassword
       tags: [Auth]
       summary: 修改管理员密码
-      description: "校验当前密码后写入新的 scrypt 哈希。成功后撤销其他所有会话，发起修改的会话保持有效。新密码要求 10 至 128 个字符，且同时包含字母和数字，不能与当前密码相同。"
+      description: "校验当前密码后写入新的 scrypt 哈希。事务内条件更新会复验账号仍启用且密码哈希未变化；并发重置、停用或其他改密已先提交时拒绝旧请求。成功后撤销其他所有会话，发起修改的会话保持有效。新密码要求 10 至 128 个字符，且同时包含字母和数字，不能与当前密码相同。"
       requestBody:
         required: true
         content:
@@ -2237,7 +2347,7 @@ paths:
                     minimum: 0
                     description: 本次因改密而注销的其他会话数量
         '400':
-          description: 当前密码不正确，或新密码不符合策略（过短、过长、缺少字母或数字、与当前密码相同）
+          description: 当前密码不正确、校验后凭据或账号状态已变化，或新密码不符合策略（过短、过长、缺少字母或数字、与当前密码相同）
         '401':
           $ref: '#/components/responses/Unauthorized'
   /auth/sessions:
@@ -2353,7 +2463,7 @@ paths:
       operationId: patchAdminUsersByUserId
       tags: [Auth]
       summary: 维护账号（仅管理员）
-      description: 修改显示名、启用/停用账号、或强制重置密码。不能停用自己的账号，也不能停用最后一个可用管理员。
+      description: 修改显示名、启用/停用账号、或强制重置密码。不能停用自己的账号，也不能停用最后一个可用管理员；管理员停用在事务内按固定顺序锁定管理员账号并复验数量，并发交叉停用仍至少保留一名可用管理员。
       parameters:
         - name: userId
           in: path

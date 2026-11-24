@@ -29,6 +29,7 @@ import {
 import { generateJournalForDay, readJournalJobParams } from "./journal-service";
 import { normalizeFriendAliases } from "./friend-aliases";
 import { MEMORY_JOB_LEASE_MS, lockMemoryJobLease, memoryJobLeaseWhere, MemoryJobLeaseLostError, renewMemoryJobLease, type MemoryJobLease } from "./memory-job-lease";
+import { lockExpectedEventDayProgress, type EventDayProgress } from "./memory-event-progress-lock";
 import { readConfiguredMemoryJobCandidates } from "./memory-worker-candidates";
 import { estimateTokens } from "./memory-retrieval";
 import { EVENT_AI_CONTEXT_TOKENS, EVENT_AI_INPUT_TOKENS, EVENT_AI_TOTAL_TOKENS, splitEventMessagesByBudget, groupEventMessagesByConversation, loadEventContextMessages, loadEventMessageBatch } from "./memory-event-source";
@@ -189,7 +190,8 @@ export async function runDailyEventJob(
     where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
     select: { state: true, extractedAt: true, extractedMessageId: true },
   });
-  if (day?.state === "FINAL" && !finalize) {
+  let expectedProgress: EventDayProgress = day;
+  if (day?.state === "FINAL") {
     return finish("SKIPPED", `${dayKey} 的忆泡已经收口。`);
   }
   // 按范围全局正序读取，不能复用快照的「最新消息取样」。时间戳相同用 id 续读。
@@ -219,6 +221,7 @@ export async function runDailyEventJob(
     if (finalize) {
       await prisma.$transaction(async (tx) => {
         await lockMemoryJobLease(tx, lease);
+        await lockExpectedEventDayProgress(tx, job.memoryScopeId, dayKey, expectedProgress);
         const eventCount = await tx.memoryEvent.count({ where: { memoryScopeId: job.memoryScopeId, dayKey } });
         await tx.memoryEventDay.upsert({
           where: { memoryScopeId_dayKey: { memoryScopeId: job.memoryScopeId, dayKey } },
@@ -360,6 +363,7 @@ export async function runDailyEventJob(
       const saveStartedAt = Date.now();
       const result = await prisma.$transaction(async (tx) => {
         await lockMemoryJobLease(tx, lease);
+        await lockExpectedEventDayProgress(tx, job.memoryScopeId, dayKey, expectedProgress);
         const applied = { applied: [] as Array<{ id: string; title: string; occurredAt: string; conversationId: string }>, skipped: 0 };
         for (const group of results) {
           const saved = await applyMemoryEvents(tx, {
@@ -387,6 +391,7 @@ export async function runDailyEventJob(
         });
         return applied;
       });
+      expectedProgress = { state: "DRAFT", extractedAt: chunkEnd.occurredAt, extractedMessageId: chunkEnd.id };
       appliedCount += result.applied.length;
       skippedCount += result.skipped;
       // 仅把事务实际写入的事件作为已知事实；被校验/去重丢掉的草稿不可污染后块。
@@ -429,6 +434,7 @@ export async function runDailyEventJob(
   const complete = finalize && !batch.hasMore;
   await prisma.$transaction(async (tx) => {
     await lockMemoryJobLease(tx, lease);
+    await lockExpectedEventDayProgress(tx, job.memoryScopeId, dayKey, expectedProgress);
     const totalEvents = await tx.memoryEvent.count({ where: { memoryScopeId: job.memoryScopeId, dayKey } });
     await tx.memoryEventDay.updateMany({
       where: { memoryScopeId: job.memoryScopeId, dayKey },

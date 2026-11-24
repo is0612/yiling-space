@@ -23,16 +23,27 @@ export default defineEventHandler(async (event) => {
         id: memoryId,
         memoryScope: { is: { character: { is: { ownerId } }, ...readableMemoryScopeWhere(ownerId) } },
       },
-      select: { id: true, status: true },
+      select: { id: true, status: true, deletedAt: true, statusBeforeTrash: true, memoryScope: { select: { characterId: true } } },
     });
 
     if (!existing) throw createError({ statusCode: 404, statusMessage: "长期记忆不存在。" });
     if (existing.status === "TRASHED") throw createError({ statusCode: 409, statusMessage: "该记忆已经在回收站。" });
 
-    return tx.memoryItem.update({
+    const updated = await tx.memoryItem.update({
       where: { id: memoryId },
       data: { statusBeforeTrash: existing.status, status: "TRASHED", deletedAt: new Date() },
       select: { id: true, status: true, statusBeforeTrash: true, deletedAt: true, updatedAt: true },
     });
+    await tx.auditLog.create({
+      data: {
+        actorType: "USER", actorId: ownerId, characterId: existing.memoryScope.characterId,
+        action: "memory.trashed", entityType: "MemoryItem", entityId: memoryId,
+        details: {
+          before: { status: existing.status, deletedAt: existing.deletedAt?.toISOString() ?? null, statusBeforeTrash: existing.statusBeforeTrash },
+          after: { status: updated.status, deletedAt: updated.deletedAt?.toISOString() ?? null, statusBeforeTrash: updated.statusBeforeTrash },
+        },
+      },
+    });
+    return updated;
   });
 });

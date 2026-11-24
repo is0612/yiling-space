@@ -23,7 +23,7 @@ export default defineEventHandler(async (event) => {
         id: memoryId,
         memoryScope: { is: { character: { is: { ownerId } }, ...readableMemoryScopeWhere(ownerId) } },
       },
-      select: { id: true, status: true, statusBeforeTrash: true },
+      select: { id: true, status: true, deletedAt: true, statusBeforeTrash: true, memoryScope: { select: { characterId: true } } },
     });
 
     if (!existing) throw createError({ statusCode: 404, statusMessage: "长期记忆不存在。" });
@@ -32,10 +32,21 @@ export default defineEventHandler(async (event) => {
     const restoreStatus = existing.statusBeforeTrash && existing.statusBeforeTrash !== "TRASHED"
       ? existing.statusBeforeTrash
       : "ACTIVE";
-    return tx.memoryItem.update({
+    const updated = await tx.memoryItem.update({
       where: { id: memoryId },
       data: { status: restoreStatus, statusBeforeTrash: null, deletedAt: null },
       select: { id: true, category: true, content: true, status: true, statusBeforeTrash: true, deletedAt: true, updatedAt: true },
     });
+    await tx.auditLog.create({
+      data: {
+        actorType: "USER", actorId: ownerId, characterId: existing.memoryScope.characterId,
+        action: "memory.restored", entityType: "MemoryItem", entityId: memoryId,
+        details: {
+          before: { status: existing.status, deletedAt: existing.deletedAt?.toISOString() ?? null, statusBeforeTrash: existing.statusBeforeTrash },
+          after: { status: updated.status, deletedAt: updated.deletedAt?.toISOString() ?? null, statusBeforeTrash: updated.statusBeforeTrash },
+        },
+      },
+    });
+    return updated;
   });
 });

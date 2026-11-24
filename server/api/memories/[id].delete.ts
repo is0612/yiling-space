@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getRouterParam } from "h3";
 import { requireActorUserId } from "../../utils/auth";
 import { requireUuid } from "../../utils/local-api";
 import { getPrisma } from "../../utils/prisma";
+import { memoryAuditContentSummary } from "../../utils/memory-audit-summary";
 import { readableMemoryScopeSql, readableMemoryScopeWhere } from "../../utils/memory-scope-access";
 
 export default defineEventHandler(async (event) => {
@@ -24,7 +25,7 @@ export default defineEventHandler(async (event) => {
         id: memoryId,
         memoryScope: { is: { character: { is: { ownerId } }, ...readableMemoryScopeWhere(ownerId) } },
       },
-      select: { id: true, status: true },
+      select: { id: true, content: true, category: true, status: true, memoryScope: { select: { characterId: true } } },
     });
     if (!existing) throw createError({ statusCode: 404, statusMessage: "长期记忆不存在。" });
     if (existing.status !== "TRASHED") {
@@ -33,6 +34,17 @@ export default defineEventHandler(async (event) => {
     const preservedSnapshotReferences = await tx.memorySnapshotSource.count({ where: { memoryItemId: memoryId } });
     // On delete, the FK becomes null while sourceRef and immutable snapshot copies are kept.
     await tx.memoryItem.delete({ where: { id: memoryId } });
+    await tx.auditLog.create({
+      data: {
+        actorType: "USER", actorId: ownerId, characterId: existing.memoryScope.characterId,
+        action: "memory.deleted", entityType: "MemoryItem", entityId: memoryId,
+        details: {
+          before: { ...memoryAuditContentSummary(existing.content), category: existing.category, status: existing.status },
+          after: null,
+          preservedSnapshotReferences,
+        },
+      },
+    });
     return { preservedSnapshotReferences };
   });
 

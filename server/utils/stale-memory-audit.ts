@@ -15,6 +15,8 @@
  * 序号既省 token，也能在解析时按白名单精确对上原来的行。
  */
 import { createError } from "h3";
+import { readableMemoryScopeWhere } from "./memory-scope-access";
+import { staleMemoryFingerprint, staleEventFingerprint } from "./stale-memory-version";
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import { resolveChatModelSettings } from "./chat-model-config";
 import { resolveCharacterApiKey } from "./credential-encryption";
@@ -43,11 +45,7 @@ function scopeFor(ownerId: string, characterId: string) {
   return {
     characterId,
     character: { is: { ownerId } },
-    OR: [
-      { scopeType: "CHARACTER_GLOBAL" as const },
-      { scopeType: "USER_PRIVATE" as const, userId: ownerId, externalIdentityId: null },
-      { scopeType: "EXTERNAL_IDENTITY" as const, externalIdentity: { is: { status: "VERIFIED" as const, linkedUserId: ownerId } } },
-    ],
+    ...readableMemoryScopeWhere(ownerId),
   };
 }
 
@@ -113,7 +111,7 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
     const active = await prisma.memoryItem.count({ where: { status: "ACTIVE", memoryScope: { is: scope } } });
     const rows = await prisma.memoryItem.findMany({
       where: { status: "ACTIVE", memoryScope: { is: scope } },
-      select: { id: true, category: true, content: true, importance: true, updatedAt: true },
+      select: { id: true, memoryScopeId: true, category: true, content: true, importance: true, updatedAt: true },
       orderBy: { updatedAt: "desc" },
       take: MAX_MEMORIES,
     });
@@ -125,7 +123,7 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
       const byId = new Map(candidates.map(candidate => [candidate.id, candidate]));
       for (const verdict of verdicts) {
         const candidate = byId.get(verdict.id);
-        if (candidate) result.items.push({ ...verdict, title: candidate.title, content: candidate.content, meta: candidate.meta });
+        if (candidate) result.items.push({ ...verdict, fingerprint: staleMemoryFingerprint(rows.find(row => row.id === verdict.id)!), title: candidate.title, content: candidate.content, meta: candidate.meta });
       }
     }
   }
@@ -144,7 +142,7 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
     const active = await prisma.memoryEvent.count({ where });
     const rows = await prisma.memoryEvent.findMany({
       where,
-      select: { id: true, dayKey: true, title: true, detail: true, participants: true },
+      select: { id: true, memoryScopeId: true, dayKey: true, title: true, detail: true, participants: true },
       orderBy: [{ occurredAt: "desc" }],
       take: MAX_EVENTS,
     });
@@ -156,7 +154,7 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
       const byId = new Map(candidates.map(candidate => [candidate.id, candidate]));
       for (const verdict of verdicts) {
         const candidate = byId.get(verdict.id);
-        if (candidate) result.items.push({ ...verdict, title: candidate.title, content: candidate.content, meta: candidate.meta });
+        if (candidate) result.items.push({ ...verdict, fingerprint: staleEventFingerprint(rows.find(row => row.id === verdict.id)!), title: candidate.title, content: candidate.content, meta: candidate.meta });
       }
     }
   }
@@ -171,7 +169,7 @@ async function judge(
   apiKey: string,
   label: string,
   candidates: StaleCandidate[],
-): Promise<Array<Omit<StaleAuditItem, "title" | "content" | "meta">>> {
+): Promise<Array<Omit<StaleAuditItem, "title" | "content" | "meta" | "fingerprint">>> {
   let usage: Parameters<typeof recordModelUsage>[0]["usage"] = null;
   let success = false;
   try {
@@ -199,74 +197,4 @@ async function judge(
       metadata: { source: "stale-memory-audit", label, status: success ? "success" : "failed", candidates: candidates.length },
     }).catch(() => undefined);
   }
-}
-
-/**
- * 落库。只动仍然 ACTIVE 的行：扫完之后又被别处改过的条目不覆盖。
- * 记忆标 INVALIDATED 并补 validTo；忆泡归档 —— 两者都能在各自页面恢复。
- */
-export async function applyStaleMemories(prisma: PrismaClient, input: {
-  ownerId: string;
-  characterId: string;
-  items: Array<{ kind: StaleKind; id: string; reason?: string }>;
-}): Promise<{ memory: number; event: number }> {
-  const scope = scopeFor(input.ownerId, input.characterId);
-  const memoryIds = input.items.filter(item => item.kind === "MEMORY").map(item => item.id);
-  const eventIds = input.items.filter(item => item.kind === "EVENT").map(item => item.id);
-  const now = new Date();
-  const reasonById = new Map(input.items.map(item => [item.id, item.reason ?? ""]));
-
-  return prisma.$transaction(async tx => {
-    let memory = 0;
-    let event = 0;
-    if (memoryIds.length) {
-      const rows = await tx.memoryItem.findMany({
-        where: { id: { in: memoryIds }, status: "ACTIVE", memoryScope: { is: scope } },
-        select: { id: true, category: true },
-      });
-      if (rows.length) {
-        await tx.memoryItem.updateMany({
-          where: { id: { in: rows.map(row => row.id) } },
-          data: { status: "INVALIDATED", validTo: now },
-        });
-        await tx.auditLog.createMany({
-          data: rows.map(row => ({
-            actorType: "USER" as const,
-            actorId: input.ownerId,
-            characterId: input.characterId,
-            action: "memory.invalidated",
-            entityType: "MemoryItem",
-            entityId: row.id,
-            details: { before: { category: row.category, status: "ACTIVE" }, changed: ["status", "validTo"], reason: reasonById.get(row.id) ?? "", source: "stale-memory-audit" },
-          })),
-        });
-        memory = rows.length;
-      }
-    }
-    if (eventIds.length) {
-      const rows = await tx.memoryEvent.findMany({
-        where: { id: { in: eventIds }, status: "ACTIVE", memoryScope: { is: scope } },
-        select: { id: true, title: true },
-      });
-      if (rows.length) {
-        await tx.memoryEvent.updateMany({
-          where: { id: { in: rows.map(row => row.id) } },
-          data: { status: "ARCHIVED" },
-        });
-        await tx.auditLog.createMany({
-          data: rows.map(row => ({
-            actorType: "USER" as const,
-            actorId: input.ownerId,
-            characterId: input.characterId,
-            action: "memory.event_archived",
-            entityType: "MemoryEvent",
-            entityId: row.id,
-            details: { before: { title: row.title, status: "ACTIVE" }, changed: ["status"], reason: reasonById.get(row.id) ?? "", source: "stale-memory-audit" },
-          })),
-        });
-        event = rows.length;
-      }
-    }
-    return { memory, event };
-  });
 }

@@ -4,6 +4,7 @@ import {
   CROSS_CHANNEL_TOKEN_BUDGET,
   CROSS_CHANNEL_WINDOW_MINUTES,
   selectCrossChannelContext,
+  loadCrossChannelMessages,
   type CrossChannelCandidate,
   type SelectCrossChannelOptions,
 } from "../server/utils/cross-channel-context";
@@ -159,6 +160,43 @@ const select = (candidates: CrossChannelCandidate[], overrides: Partial<SelectCr
   const assistant = result.lines.find((line) => line.id === "l2");
   assert.equal(assistant?.speaker, undefined, "她的回应不能带 speaker。");
   assert.equal(assistant?.role, "ASSISTANT", "角色要是 ASSISTANT，模型才知道那是她自己说的。");
+}
+
+// Exercise the real query builder before selection: pruning a stranger USER would misattribute
+// the following ASSISTANT to the owner. The mock applies every predicate used by this query.
+{
+  const stored = [
+    msg("query-owner", "USER", 9), msg("query-owner-reply", "ASSISTANT", 8),
+    msg("query-stranger", "USER", 7, { authorOpenId: STRANGER, content: "private stranger sentinel" }),
+    msg("query-stranger-reply", "ASSISTANT", 6, { content: "reply to stranger sentinel" }),
+    msg("query-other-role", "USER", 5, { conversationId: "other-character" }),
+    msg("query-private", "USER", 4, { conversationId: "private-room" }),
+    msg("query-old", "USER", 121),
+  ].map(row => ({ ...row, metadata: { authorOpenId: row.authorOpenId }, conversation: {
+    id: row.conversationId, characterId: row.conversationId === "other-character" ? "other" : "role",
+    externalConversationId: row.conversationId === "private-room" ? "c:123456789" : "g:123456789",
+  } }));
+  let calls = 0;
+  const db = { message: { findMany: async (args: any) => {
+    calls++;
+    const w = args.where;
+    return stored.filter(row => row.occurredAt >= w.occurredAt.gte
+      && row.conversation.characterId === w.conversation.characterId
+      && row.conversation.externalConversationId.startsWith(w.conversation.externalConversationId.startsWith)
+      && (!w.role || w.role.in.includes(row.role))
+      && (!w.OR || w.OR.some((branch: any) => branch.role === row.role
+        || branch.metadata?.equals === row.metadata.authorOpenId)))
+      .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
+      .slice(0, args.take);
+  } } } as unknown as Parameters<typeof loadCrossChannelMessages>[0];
+  const rows = await loadCrossChannelMessages(db, { characterId: "role", ownerUid: OWNER, now });
+  assert(rows.some(row => row.id === "query-stranger"), "query must preserve the third-party USER barrier");
+  const result = select(rows.map(row => ({ ...row, conversationId: row.conversation.id,
+    groupLabel: "group", authorOpenId: (row.metadata as { authorOpenId?: string }).authorOpenId })));
+  assert.deepEqual(result.lines.map(row => row.id), ["query-owner", "query-owner-reply"]);
+  assert(!JSON.stringify(result.lines).includes("sentinel"), "third-party evidence must not reach the prompt");
+  await loadCrossChannelMessages(db, { characterId: "role", ownerUid: "", now });
+  assert.equal(calls, 1, "non-owner turns must not query cross-channel messages");
 }
 
 console.log("跨窗口上下文测试通过：只认本人 / 忽略他人 / 只带紧随其后的回应 / 跨群不串 / 时间窗 / 条数 / 预算 / 首条放行 / 空输入。");

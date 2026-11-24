@@ -19,6 +19,7 @@ export type StaleAuditItem = {
   title: string;
   content: string;
   meta: string;
+  fingerprint: string;
   verdict: StaleVerdict;
   reason: string;
   confidence: number;
@@ -78,12 +79,12 @@ export function eventCandidate(
 export function parseStaleAudit(
   text: string,
   candidates: StaleCandidate[],
-): Array<Omit<StaleAuditItem, "title" | "content" | "meta">> {
+): Array<Omit<StaleAuditItem, "title" | "content" | "meta" | "fingerprint">> {
   const parsed = parseJsonLoose(text, { expect: "object" }) as Record<string, unknown> | null;
   const rows = parsed && Array.isArray(parsed.items) ? parsed.items : [];
   const byShortId = new Map(candidates.map(candidate => [candidate.shortId, candidate]));
   const seen = new Set<string>();
-  const out: Array<Omit<StaleAuditItem, "title" | "content" | "meta">> = [];
+  const out: Array<Omit<StaleAuditItem, "title" | "content" | "meta" | "fingerprint">> = [];
   for (const value of rows) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const row = value as Record<string, unknown>;

@@ -1,4 +1,26 @@
+import type { PrismaClient } from "../../src/generated/prisma/client";
 import { estimateTokens } from "./memory-retrieval";
+
+/** Keep every USER as an attribution barrier; only the selector may discard third-party rows. */
+export async function loadCrossChannelMessages(
+  prisma: Pick<PrismaClient, "message">,
+  input: { characterId: string; ownerUid: string; now: Date },
+) {
+  if (!input.ownerUid.trim()) return [];
+  return prisma.message.findMany({
+    where: {
+      occurredAt: { gte: new Date(input.now.getTime() - CROSS_CHANNEL_WINDOW_MINUTES * 60_000) },
+      conversation: { characterId: input.characterId, externalConversationId: { startsWith: "g:" } },
+      role: { in: ["USER", "ASSISTANT"] },
+    },
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    take: 200,
+    select: {
+      id: true, role: true, content: true, occurredAt: true, metadata: true,
+      conversation: { select: { id: true, externalConversationId: true } },
+    },
+  });
+}
 
 /**
  * 把「同一个人在 QQ 群里说过的话」带进他的一对一对话。

@@ -59,7 +59,13 @@ function fixture(timezone = "Asia/Shanghai") {
       return { count };
     } },
     $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback({
-      characterMemorySetting: { findUnique: async () => ({ ...setting, autoSnapshotEnabled: false }) },
+      $queryRaw: async (strings: TemplateStringsArray) => {
+        assert.match(strings.join("?"), /character_memory_settings.*FOR UPDATE/);
+        return [{ characterId }];
+      },
+      memoryJob: fake.memoryJob,
+      characterMemorySetting: { findUnique: async (args: { select: Record<string, unknown> }) =>
+        "anchorAt" in args.select ? { ...setting, autoSnapshotEnabled: false } : setting },
     }),
     $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = strings.join("?");

@@ -184,10 +184,12 @@ export async function loadCharacterExportBundle(input: {
        * 关掉也是选择，带过去不该又变回开着；PENDING / REJECTED 是本机的决策现场，不带。
        */
       expressionHabits: {
-        where: { status: { in: ["ACTIVE", "DISABLED"] } },
+        // 私聊派生的表达只属于原会话，分享与搬家都不能抹掉其范围边界。
+        where: { status: { in: ["ACTIVE", "DISABLED"] }, conversationId: null, memoryScopeId: null },
         orderBy: { createdAt: "asc" },
         take: CHARACTER_BUNDLE_LIMITS.expressionHabits,
-        select: { kind: true, content: true, context: true, chatScope: true, status: true, reason: true },
+        select: { kind: true, content: true, context: true, chatScope: true, status: true, reason: true,
+          conversationId: true, memoryScopeId: true },
       },
       /**
        * 目标（v7）：只排除待确认与否决过的。PAUSED / COMPLETED / ABANDONED 都要带 ——
@@ -304,14 +306,16 @@ export async function loadCharacterExportBundle(input: {
       content: item.content,
       chatScope: "GROUP" as const,
     })),
-    expressionHabits: character.expressionHabits.map((item) => ({
-      kind: item.kind as CharacterBundleExpressionHabit["kind"],
-      content: item.content,
-      context: item.context,
-      chatScope: asChatScope(item.chatScope),
-      status: item.status as CharacterBundleExpressionHabit["status"],
-      reason: item.reason,
-    })),
+    expressionHabits: character.expressionHabits
+      .filter((item) => item.conversationId === null && item.memoryScopeId === null)
+      .map((item) => ({
+        kind: item.kind as CharacterBundleExpressionHabit["kind"],
+        content: item.content,
+        context: item.context,
+        chatScope: asChatScope(item.chatScope),
+        status: item.status as CharacterBundleExpressionHabit["status"],
+        reason: item.reason,
+      })),
     goals: character.goals.map((item) => ({
       kind: item.kind as CharacterBundleGoal["kind"],
       title: item.title,

@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getRouterParam, readBody } from "h3";
 import { requireActorUserId } from "../../utils/auth";
 import { requireUuid, readTrimmedString } from "../../utils/local-api";
 import { getPrisma } from "../../utils/prisma";
+import { memoryAuditContentSummary } from "../../utils/memory-audit-summary";
 import { readableMemoryScopeSql, readableMemoryScopeWhere } from "../../utils/memory-scope-access";
 
 const memoryCategories = [
@@ -63,7 +64,7 @@ export default defineEventHandler(async (event) => {
         id: memoryId,
         memoryScope: { is: { character: { is: { ownerId } }, ...readableMemoryScopeWhere(ownerId) } },
       },
-      select: { id: true, status: true },
+      select: { id: true, memoryScope: { select: { characterId: true } }, content: true, category: true, status: true },
     });
     if (!existing) {
       throw createError({ statusCode: 404, statusMessage: "长期记忆不存在。" });
@@ -72,7 +73,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 409, statusMessage: "该记忆已在回收站，请先恢复后再编辑。" });
     }
 
-    return tx.memoryItem.update({
+    const updated = await tx.memoryItem.update({
       where: { id: memoryId },
       data,
       select: {
@@ -85,5 +86,17 @@ export default defineEventHandler(async (event) => {
         updatedAt: true,
       },
     });
+    await tx.auditLog.create({
+      data: {
+        actorType: "USER", actorId: ownerId, characterId: existing.memoryScope.characterId,
+        action: "memory.updated", entityType: "MemoryItem", entityId: memoryId,
+        details: {
+          before: { ...memoryAuditContentSummary(existing.content), category: existing.category, status: existing.status },
+          after: { ...memoryAuditContentSummary(updated.content), category: updated.category, status: updated.status },
+          changed: Object.keys(data),
+        },
+      },
+    });
+    return updated;
   });
 });

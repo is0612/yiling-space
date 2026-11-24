@@ -488,7 +488,7 @@ export function createMemoryApi(request: ApiRequest) {
 
   function applyStaleMemories(payload: {
     characterId: string;
-    items: Array<{ kind: StaleMemoryKind; id: string; reason?: string }>;
+    items: Array<{ kind: StaleMemoryKind; id: string; fingerprint: string; reason?: string }>;
   }): Promise<StaleMemoryApplyResult> {
     return request<StaleMemoryApplyResult>({
       url: `${characterBase(payload.characterId)}/memory-audit/apply`,

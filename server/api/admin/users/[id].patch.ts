@@ -38,25 +38,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const prisma = getPrisma();
-  const target = await prisma.user.findUnique({
-    where: { id: targetId },
-    select: { id: true, status: true, role: true },
-  });
-  if (!target) {
-    throw createError({ statusCode: 404, statusMessage: "用户不存在。" });
-  }
-
   const disabling = rawStatus === "DISABLED";
-  if (disabling && target.id === admin.user.id) {
-    throw createError({ statusCode: 400, statusMessage: "不能停用自己的账号。" });
-  }
-  if (disabling && target.role === "ADMIN") {
-    // Never leave the system without a working administrator.
-    const otherAdmins = await prisma.user.count({ where: { role: "ADMIN", status: "ACTIVE", id: { not: target.id } } });
-    if (otherAdmins === 0) {
-      throw createError({ statusCode: 400, statusMessage: "至少需要保留一个可用的管理员账号。" });
-    }
-  }
 
   const data: { displayName?: string | null; status?: "ACTIVE" | "DISABLED"; passwordHash?: string } = {};
   if (displayName) data.displayName = displayName;
@@ -67,6 +49,35 @@ export default defineEventHandler(async (event) => {
   // 与用户资料变更放在同一事务，避免密码已更新但会话撤销失败的半完成状态。
   const revokeSessions = disabling || Boolean(password);
   await prisma.$transaction(async (tx) => {
+    let target = await tx.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, status: true, role: true },
+    });
+    if (!target) {
+      throw createError({ statusCode: 404, statusMessage: "用户不存在。" });
+    }
+    if (disabling && target.id === admin.user.id) {
+      throw createError({ statusCode: 400, statusMessage: "不能停用自己的账号。" });
+    }
+    if (disabling && target.role === "ADMIN") {
+      // Serialize administrator disables on the same rows, in the same order. Lock inactive
+      // administrators too: filtering by ACTIVE would let the lock set change while waiting.
+      await tx.$queryRaw`
+        SELECT "id" FROM "users" WHERE "role" = 'ADMIN' ORDER BY "id" FOR UPDATE
+      `;
+      // Reads after the lock see a preceding disable's committed state (READ COMMITTED).
+      target = await tx.user.findUnique({
+        where: { id: targetId },
+        select: { id: true, status: true, role: true },
+      });
+      if (!target) {
+        throw createError({ statusCode: 404, statusMessage: "用户不存在。" });
+      }
+      const otherAdmins = await tx.user.count({ where: { role: "ADMIN", status: "ACTIVE", id: { not: target.id } } });
+      if (otherAdmins === 0) {
+        throw createError({ statusCode: 400, statusMessage: "至少需要保留一个可用的管理员账号。" });
+      }
+    }
     await tx.user.update({ where: { id: targetId }, data });
     if (revokeSessions) {
       await tx.session.updateMany({

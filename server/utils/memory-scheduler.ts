@@ -1,6 +1,7 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import { localDayHour, resolveDayWindow } from "./memory-event-time";
 import { listFriendScopesWithActivity } from "./friends";
+import { enqueueAutomaticEventJobs } from "./memory-auto-queue";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_PERIODS_PER_SETTING = 24;
@@ -288,8 +289,7 @@ export async function enqueueDueMemorySnapshots(
           select: { id: true },
         });
         if (recent) {
-          const created = await prisma.memoryJob.createMany({
-            data: [{
+          const created = await enqueueAutomaticEventJobs(prisma, setting.characterId, [{
               memoryScopeId: scope.id,
               type: "EXTRACT_EVENTS" as const,
               idempotencyKey: `events-hour:${scope.id}:${todayKey}:${hour}`,
@@ -297,9 +297,7 @@ export async function enqueueDueMemorySnapshots(
               periodEnd: todayWindow.end,
               status: "QUEUED" as const,
               runAt: now,
-            }],
-            skipDuplicates: true,
-          });
+            }]);
           report.jobsQueued += created.count;
         }
 
@@ -335,8 +333,8 @@ export async function enqueueDueMemorySnapshots(
           LIMIT ${MAX_EVENT_BACKFILL_DAYS_PER_SCOPE}
         `;
         if (missingDays.length === 0) continue;
-        const finalized = await prisma.memoryJob.createMany({
-          data: missingDays.map(({ dayKey }) => {
+        const finalized = await enqueueAutomaticEventJobs(prisma, setting.characterId,
+          missingDays.map(({ dayKey }) => {
             const window = resolveDayWindow(dayKey, timeZone);
             return {
               memoryScopeId: scope.id,
@@ -348,9 +346,7 @@ export async function enqueueDueMemorySnapshots(
               runAt: now,
             };
           }),
-          // Unique idempotencyKey also protects concurrent scheduler rounds.
-          skipDuplicates: true,
-        });
+        );
         report.jobsQueued += finalized.count;
       }
 

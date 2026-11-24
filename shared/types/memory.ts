@@ -317,6 +317,7 @@ export type StaleMemoryItem = {
   content: string;
   /** 时间 / 重要度这类辅助判断信息。 */
   meta: string;
+  fingerprint: string;
   verdict: StaleMemoryVerdict;
   reason: string;
   confidence: number;

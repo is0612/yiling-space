@@ -666,7 +666,16 @@ export async function changePassword(input: {
   // 密码更新与其他设备会话撤销必须原子完成，避免密码已修改但会话仍有效。
   // 当前请求使用的会话保留，避免用户修改密码后立即被当前页面登出。
   const revokedSessions = await prisma.$transaction(async (tx) => {
-    await tx.user.update({ where: { id: account.id }, data: { passwordHash } });
+    // Verification and hashing run outside the transaction. A reset, disable, or another
+    // password change may have committed meanwhile; the conditional write serializes
+    // against those account updates and must succeed before touching any sessions.
+    const changed = await tx.user.updateMany({
+      where: { id: account.id, status: "ACTIVE", passwordHash: account.passwordHash },
+      data: { passwordHash },
+    });
+    if (changed.count !== 1) {
+      throw createError({ statusCode: 400, message: "账号凭据已变化或账号已停用，请重新登录后再试。" });
+    }
     const result = await tx.session.updateMany({
       where: {
         userId: account.id,
