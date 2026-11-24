@@ -79,10 +79,19 @@ export function parseDailyLifePlanInput(value: unknown): DailyLifePlanInput {
   return { dayKey, timeZone, lifeType, summary: text(body.summary, 1000, "计划摘要"), items };
 }
 
-export function parseDailyLifeActivityInput(value: unknown) {
+export type DailyLifeActivityInput = {
+  planItemId: string | null;
+  source: "PLAN" | "USER_CONFIRMED" | "CHARACTER_INITIATED";
+  title: string;
+  detail: string;
+  place: string | null;
+  sourceRef: string | null;
+};
+
+export function parseDailyLifeActivityInput(value: unknown): DailyLifeActivityInput {
   const body = record(value);
   const planItemId = typeof body.planItemId === "string" && body.planItemId.trim() ? body.planItemId.trim() : null;
-  const source = body.source === "CHARACTER_INITIATED" ? "CHARACTER_INITIATED"
+  const source: DailyLifeActivityInput["source"] = body.source === "CHARACTER_INITIATED" ? "CHARACTER_INITIATED"
     : body.source === "PLAN" ? "PLAN" : "USER_CONFIRMED";
   if (planItemId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(planItemId)) {
     throw createError({ statusCode: 400, statusMessage: "计划活动 ID 无效。" });

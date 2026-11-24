@@ -27,7 +27,7 @@ export default defineEventHandler(async (event) => {
     await publishGrowthEvent(tx, {
       characterId, sourceDomain: "life", eventType: "life.photo.associated",
       aggregateType: "DailyPhoto", aggregateId: photoId, occurredAt: new Date(),
-      idempotencyKey: "photo-associated:" + photoId + ":" + (activityId ?? "none") + ":" + updated.updatedAt.toISOString(),
+      idempotencyKey: "photo-associated:" + photoId + ":" + (activityId ?? "none"),
       payload: { activityId },
     });
     return { photo: updated, unchanged: false };

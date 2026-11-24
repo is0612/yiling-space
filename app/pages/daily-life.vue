@@ -156,126 +156,355 @@ watch([id, dayKey], () => { void load(); }, { immediate: true });
   <div class="daily-life-page">
     <div class="page-heading">
       <div>
-        <div class="eyebrow">HER EVERYDAY</div>
+        <div class="eyebrow">
+          HER EVERYDAY
+        </div>
         <h1>{{ currentCharacter?.name ?? "她" }}的日常</h1>
         <p>计划只是参考，真正发生的事才会成为经历。没有安排、没有拍照，也可以是完整的一天。</p>
       </div>
       <div class="heading-actions">
-        <el-date-picker v-model="dayKey" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" />
-        <el-button :icon="Refresh" circle :loading="loading" aria-label="刷新" @click="load" />
+        <el-date-picker
+          v-model="dayKey"
+          type="date"
+          value-format="YYYY-MM-DD"
+          placeholder="选择日期"
+        />
+        <el-button
+          :icon="Refresh"
+          circle
+          :loading="loading"
+          aria-label="刷新"
+          @click="load"
+        />
       </div>
     </div>
 
-    <el-empty v-if="!currentCharacter" description="先在左下角选择一个角色。" />
+    <el-empty
+      v-if="!currentCharacter"
+      description="先在左下角选择一个角色。"
+    />
     <template v-else>
       <section class="current-card">
         <div class="section-top">
           <div>
-            <div class="eyebrow">RIGHT NOW</div>
+            <div class="eyebrow">
+              RIGHT NOW
+            </div>
             <h2>此刻</h2>
           </div>
-          <el-tag v-if="overview?.currentActivity" type="success">正在进行</el-tag>
+          <el-tag
+            v-if="overview?.currentActivity"
+            type="success"
+          >
+            正在进行
+          </el-tag>
         </div>
         <template v-if="overview?.currentActivity">
-          <div class="current-title">{{ overview.currentActivity.title }}</div>
+          <div class="current-title">
+            {{ overview.currentActivity.title }}
+          </div>
           <p>{{ overview.currentActivity.detail || "这段时间正在做这件事。" }}</p>
           <div class="meta-line">
             <span v-if="overview.currentActivity.place">{{ overview.currentActivity.place }}</span>
             <span>{{ new Date(overview.currentActivity.startedAt).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }) }} 开始</span>
           </div>
-          <el-button type="primary" :icon="Check" :loading="actingId === overview.currentActivity.id" @click="completeCurrent">结束这段活动</el-button>
+          <el-button
+            type="primary"
+            :icon="Check"
+            :loading="actingId === overview.currentActivity.id"
+            @click="completeCurrent"
+          >
+            结束这段活动
+          </el-button>
         </template>
-        <el-empty v-else :image-size="64" description="暂时没有正在进行的活动。" />
-        <el-button v-if="!overview?.currentActivity" plain :icon="Plus" @click="startUnplanned">记录一件临时想做的事</el-button>
+        <el-empty
+          v-else
+          :image-size="64"
+          description="暂时没有正在进行的活动。"
+        />
+        <el-button
+          v-if="!overview?.currentActivity"
+          plain
+          :icon="Plus"
+          @click="startUnplanned"
+        >
+          记录一件临时想做的事
+        </el-button>
       </section>
 
       <section class="plan-card">
         <div class="section-top">
           <div>
-            <div class="eyebrow">TODAY'S PLAN</div>
+            <div class="eyebrow">
+              TODAY'S PLAN
+            </div>
             <h2>今天的安排</h2>
           </div>
-          <el-button v-if="!overview?.plan" type="primary" :icon="Plus" @click="planDialog = true">安排一天</el-button>
+          <el-button
+            v-if="!overview?.plan"
+            type="primary"
+            :icon="Plus"
+            @click="planDialog = true"
+          >
+            安排一天
+          </el-button>
         </div>
         <template v-if="overview?.plan">
           <div class="plan-summary">
             <el-tag>{{ lifeTypes.find(item => item.value === overview?.plan?.lifeType)?.label ?? overview.plan.lifeType }}</el-tag>
             <span>{{ overview.plan.summary || "给今天留一点空间。" }}</span>
           </div>
-          <div v-if="overview.plan.items.length" class="timeline">
-            <article v-for="item in overview.plan.items" :key="item.id" class="timeline-item">
+          <div
+            v-if="overview.plan.items.length"
+            class="timeline"
+          >
+            <article
+              v-for="item in overview.plan.items"
+              :key="item.id"
+              class="timeline-item"
+            >
               <div class="timeline-time">
                 {{ item.plannedStartAt ? new Date(item.plannedStartAt).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }) : "随时" }}
               </div>
               <div class="timeline-content">
-                <div class="timeline-title">{{ item.title }} <el-tag size="small" :type="item.status === 'COMPLETED' ? 'success' : 'info'">{{ statusLabel(item.status) }}</el-tag></div>
-                <p v-if="item.detail">{{ item.detail }}</p>
+                <div class="timeline-title">
+                  {{ item.title }} <el-tag
+                    size="small"
+                    :type="item.status === 'COMPLETED' ? 'success' : 'info'"
+                  >
+                    {{ statusLabel(item.status) }}
+                  </el-tag>
+                </div>
+                <p v-if="item.detail">
+                  {{ item.detail }}
+                </p>
                 <div class="meta-line">
                   <span v-if="item.place">{{ item.place }}</span>
                   <span v-if="item.outfitDescription">穿着：{{ item.outfitDescription }}</span>
                   <span v-if="item.scene">场景：{{ item.scene }}</span>
                 </div>
-                <el-button v-if="item.status === 'PLANNED' && !overview.currentActivity" size="small" plain :icon="VideoPlay" :loading="actingId === item.id" @click="startPlanned(item)">开始这项活动</el-button>
+                <el-button
+                  v-if="item.status === 'PLANNED' && !overview.currentActivity"
+                  size="small"
+                  plain
+                  :icon="VideoPlay"
+                  :loading="actingId === item.id"
+                  @click="startPlanned(item)"
+                >
+                  开始这项活动
+                </el-button>
               </div>
             </article>
           </div>
-          <el-empty v-else :image-size="64" description="今天没有安排活动，也没关系。" />
+          <el-empty
+            v-else
+            :image-size="64"
+            description="今天没有安排活动，也没关系。"
+          />
         </template>
-        <el-empty v-else :image-size="64" description="这一天还没有计划。可以安排，也可以随心而动。" />
+        <el-empty
+          v-else
+          :image-size="64"
+          description="这一天还没有计划。可以安排，也可以随心而动。"
+        />
       </section>
 
       <section class="lower-grid">
         <div class="list-card">
-          <div class="section-top"><div><div class="eyebrow">LIFE TRACE</div><h2>最近的经历</h2></div></div>
-          <div v-if="overview?.recentActivities.length" class="activity-list">
-            <article v-for="activity in overview.recentActivities" :key="activity.id" class="activity-row">
+          <div class="section-top">
+            <div>
+              <div class="eyebrow">
+                LIFE TRACE
+              </div><h2>最近的经历</h2>
+            </div>
+          </div>
+          <div
+            v-if="overview?.recentActivities.length"
+            class="activity-list"
+          >
+            <article
+              v-for="activity in overview.recentActivities"
+              :key="activity.id"
+              class="activity-row"
+            >
               <div><strong>{{ activity.title }}</strong><p>{{ activity.detail || activity.place || "留下一段生活记录" }}</p></div>
-              <el-tag size="small" :type="activity.status === 'COMPLETED' ? 'success' : 'info'">{{ statusLabel(activity.status) }}</el-tag>
+              <el-tag
+                size="small"
+                :type="activity.status === 'COMPLETED' ? 'success' : 'info'"
+              >
+                {{ statusLabel(activity.status) }}
+              </el-tag>
             </article>
           </div>
-          <el-empty v-else :image-size="56" description="还没有确认过的活动。" />
+          <el-empty
+            v-else
+            :image-size="56"
+            description="还没有确认过的活动。"
+          />
         </div>
         <div class="list-card">
-          <div class="section-top"><div><div class="eyebrow">PHOTOGRAPHY</div><h2>最近的照片</h2></div><el-icon :size="20"><Camera /></el-icon></div>
-          <div v-if="photos.length" class="photo-list">
-            <article v-for="photo in photos" :key="photo.id" class="photo-row">
-              <img class="photo-preview" :src="photoUrl(photo.id)" :alt="photo.caption || '日常照片'" loading="lazy">
+          <div class="section-top">
+            <div>
+              <div class="eyebrow">
+                PHOTOGRAPHY
+              </div><h2>最近的照片</h2>
+            </div><el-icon :size="20">
+              <Camera />
+            </el-icon>
+          </div>
+          <div
+            v-if="photos.length"
+            class="photo-list"
+          >
+            <article
+              v-for="photo in photos"
+              :key="photo.id"
+              class="photo-row"
+            >
+              <img
+                class="photo-preview"
+                :src="photoUrl(photo.id)"
+                :alt="photo.caption || '日常照片'"
+                loading="lazy"
+              >
               <div class="photo-copy">
                 <strong>{{ photo.caption || "日常照片" }}</strong>
                 <p>{{ photo.prompt }}</p>
-                <div class="meta-line">{{ photo.provider }} · {{ photo.model }} · {{ photo.generationMode }} · {{ statusLabel(photo.status) }}</div>
-                <el-select :model-value="photo.activityId ?? ''" size="small" clearable placeholder="关联一段经历" @change="value => associate(photo, String(value ?? ''))">
-                  <el-option v-for="activity in overview?.recentActivities ?? []" :key="activity.id" :label="activity.title" :value="activity.id" />
+                <div class="meta-line">
+                  {{ photo.provider }} · {{ photo.model }} · {{ photo.generationMode }} · {{ statusLabel(photo.status) }}
+                </div>
+                <el-select
+                  :model-value="photo.activityId ?? ''"
+                  size="small"
+                  clearable
+                  placeholder="关联一段经历"
+                  @change="value => associate(photo, String(value ?? ''))"
+                >
+                  <el-option
+                    v-for="activity in overview?.recentActivities ?? []"
+                    :key="activity.id"
+                    :label="activity.title"
+                    :value="activity.id"
+                  />
                 </el-select>
               </div>
             </article>
           </div>
-          <el-empty v-else :image-size="56" description="还没有留下照片。拍照不是每天必须完成的事。" />
+          <el-empty
+            v-else
+            :image-size="56"
+            description="还没有留下照片。拍照不是每天必须完成的事。"
+          />
         </div>
       </section>
     </template>
 
-    <el-dialog v-model="planDialog" title="给这一天留一点安排" width="min(760px, 94vw)">
+    <el-dialog
+      v-model="planDialog"
+      title="给这一天留一点安排"
+      width="min(760px, 94vw)"
+    >
       <el-form label-position="top">
         <el-form-item label="今天是什么类型">
-          <el-select v-model="planForm.lifeType" class="full-width">
-            <el-option v-for="item in lifeTypes" :key="item.value" :label="item.label" :value="item.value" />
+          <el-select
+            v-model="planForm.lifeType"
+            class="full-width"
+          >
+            <el-option
+              v-for="item in lifeTypes"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="今天大概想做什么">
-          <el-input v-model="planForm.summary" maxlength="1000" placeholder="不用把时间排满，留点自由。" />
+          <el-input
+            v-model="planForm.summary"
+            maxlength="1000"
+            placeholder="不用把时间排满，留点自由。"
+          />
         </el-form-item>
-        <div v-for="(item, index) in planForm.items" :key="index" class="plan-editor-item">
-          <div class="editor-title"><strong>活动 {{ index + 1 }}</strong><el-button v-if="planForm.items.length > 1" text type="danger" @click="removePlanItem(index)">移除</el-button></div>
-          <el-form-item label="活动名称"><el-input v-model="item.title" maxlength="160" placeholder="例如：去公园散步" /></el-form-item>
-          <el-form-item label="简单描述"><el-input v-model="item.detail" type="textarea" :rows="2" maxlength="4000" /></el-form-item>
-          <div class="time-row"><el-form-item label="开始"><el-time-picker v-model="item.startTime" format="HH:mm" value-format="HH:mm" /></el-form-item><el-form-item label="结束"><el-time-picker v-model="item.endTime" format="HH:mm" value-format="HH:mm" /></el-form-item></div>
-          <el-form-item label="地点"><el-input v-model="item.place" maxlength="200" /></el-form-item>
-          <el-form-item label="场景 / 穿着"><el-input v-model="item.scene" placeholder="场景" /><el-input v-model="item.outfitDescription" placeholder="穿着" /></el-form-item>
+        <div
+          v-for="(item, index) in planForm.items"
+          :key="index"
+          class="plan-editor-item"
+        >
+          <div class="editor-title">
+            <strong>活动 {{ index + 1 }}</strong><el-button
+              v-if="planForm.items.length > 1"
+              text
+              type="danger"
+              @click="removePlanItem(index)"
+            >
+              移除
+            </el-button>
+          </div>
+          <el-form-item label="活动名称">
+            <el-input
+              v-model="item.title"
+              maxlength="160"
+              placeholder="例如：去公园散步"
+            />
+          </el-form-item>
+          <el-form-item label="简单描述">
+            <el-input
+              v-model="item.detail"
+              type="textarea"
+              :rows="2"
+              maxlength="4000"
+            />
+          </el-form-item>
+          <div class="time-row">
+            <el-form-item label="开始">
+              <el-time-picker
+                v-model="item.startTime"
+                format="HH:mm"
+                value-format="HH:mm"
+              />
+            </el-form-item><el-form-item label="结束">
+              <el-time-picker
+                v-model="item.endTime"
+                format="HH:mm"
+                value-format="HH:mm"
+              />
+            </el-form-item>
+          </div>
+          <el-form-item label="地点">
+            <el-input
+              v-model="item.place"
+              maxlength="200"
+            />
+          </el-form-item>
+          <el-form-item label="场景 / 穿着">
+            <el-input
+              v-model="item.scene"
+              placeholder="场景"
+            /><el-input
+              v-model="item.outfitDescription"
+              placeholder="穿着"
+            />
+          </el-form-item>
         </div>
-        <el-button text :icon="Plus" @click="addPlanItem">再加一项</el-button>
+        <el-button
+          text
+          :icon="Plus"
+          @click="addPlanItem"
+        >
+          再加一项
+        </el-button>
       </el-form>
-      <template #footer><el-button @click="planDialog = false">先不安排</el-button><el-button type="primary" :loading="saving" @click="savePlan">保存安排</el-button></template>
+      <template #footer>
+        <el-button @click="planDialog = false">
+          先不安排
+        </el-button><el-button
+          type="primary"
+          :loading="saving"
+          @click="savePlan"
+        >
+          保存安排
+        </el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -292,7 +521,7 @@ h2 { margin: 4px 0 0; font-size: 19px; }
 .current-card { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
 .current-card .section-top { width: 100%; }
 .current-title { font-size: 22px; font-weight: 650; }
-.meta-line { justify-content: flex-start; flex-wrap: wrap; color: var(--el-text-color-secondary); font-size: 13px; }
+.meta-line { justify-content: flex-start; flex-wrap: wrap; color: var(--el-text-color-secondary); font-size: 12px; }
 .plan-summary { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
 .timeline { display: flex; flex-direction: column; }
 .timeline-item { display: grid; grid-template-columns: 72px 1fr; gap: 14px; padding: 16px 0; border-top: 1px solid var(--el-border-color-lighter); }
