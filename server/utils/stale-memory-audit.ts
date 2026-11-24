@@ -16,6 +16,7 @@
  */
 import { createError } from "h3";
 import { readableMemoryScopeWhere } from "./memory-scope-access";
+import { localDayKey } from "./memory-event-time";
 import { staleMemoryFingerprint, staleEventFingerprint } from "./stale-memory-version";
 import type { PrismaClient } from "../../src/generated/prisma/client";
 import { resolveChatModelSettings } from "./chat-model-config";
@@ -89,7 +90,8 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
 }): Promise<StaleAuditResult> {
   const character = await prisma.character.findFirst({
     where: { id: input.characterId, ownerId: input.ownerId },
-    select: { modelConfig: true },
+    // 时区在 character_memory_settings 上（与 memory-worker 的 dayKey 口径同源），不在 Character 本体。
+    select: { modelConfig: true, memorySetting: { select: { timezone: true } } },
   });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
   const settings = resolveChatModelSettings(character.modelConfig);
@@ -129,14 +131,19 @@ export async function scanStaleMemories(prisma: PrismaClient, input: {
   }
 
   if (input.scopes.includes("EVENT")) {
+    /**
+     * dayKey 的写入口径是角色时区（memory-change-apply 用 localDayKey 落库），
+     * 这里必须用同一套：用 UTC 的 toISOString 算的话，东八区凌晨 0~8 点会把「今天」
+     * 整体漏掉，还多扫一天 8 天前的。
+     */
     const dayFilter = input.dayKey
       ? { dayKey: input.dayKey }
       : (() => {
         const days = Math.min(365, Math.max(1, Math.round(input.rangeDays ?? 7)));
-        const end = new Date();
-        const start = new Date(end.getTime() - (days - 1) * 86_400_000);
-        const key = (value: Date) => value.toISOString().slice(0, 10);
-        return { dayKey: { gte: key(start), lte: key(end) } };
+        const end = localDayKey(new Date(), character.memorySetting?.timezone ?? "Asia/Shanghai");
+        // 起点在 end 这个日历日上做纯日期回推，不经过时区换算，避免跨零点/夏令时偏一天。
+        const start = new Date(Date.UTC(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, Number(end.slice(8, 10)) - (days - 1)));
+        return { dayKey: { gte: start.toISOString().slice(0, 10), lte: end } };
       })();
     const where = { status: "ACTIVE" as const, memoryScope: { is: scope }, ...dayFilter };
     const active = await prisma.memoryEvent.count({ where });
@@ -175,7 +182,9 @@ async function judge(
   try {
     const text = await callRawModel({
       systemPrompt: SYSTEM_PROMPT,
-      userPrompt: JSON.stringify({ 类型: label, 条目: candidates.map(candidate => ({ id: candidate.shortId, 内容: candidate.content, 备注: candidate.meta })) }),
+      // 标题不能省：忆泡的标题是事件摘要（判断「是否已过期」最浓缩的信号），
+      // 长期记忆的标题是分类枚举，模型需要它来执行「关系/偏好不判失效」这条硬规则。
+      userPrompt: JSON.stringify({ 类型: label, 条目: candidates.map(candidate => ({ id: candidate.shortId, 标题: candidate.title, 内容: candidate.content, 备注: candidate.meta })) }),
       model: settings.model,
       apiKey,
       apiBaseUrl: settings.apiBaseUrl,

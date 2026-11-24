@@ -160,8 +160,9 @@ async function apply() {
 </script>
 
 <template>
+  <!-- loading 也要禁用：sequence 只能丢弃过期结果，挡不住连点发出的重复模型调用（每次都会烧当日额度）。 -->
   <el-button
-    :disabled="!characterId || saving"
+    :disabled="!characterId || loading || saving"
     @click="scan"
   >
     {{ isEvents ? "检查失效忆泡" : "检查失效记忆" }}
