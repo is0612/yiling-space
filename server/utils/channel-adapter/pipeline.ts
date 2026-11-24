@@ -20,6 +20,7 @@ import { loadSelfUnderstanding } from "../self-understanding-reader";
 import { readInteractionExperiences } from "../interaction-experiences";
 import { prepareConversationSummary } from "../conversation-summary";
 import { createGrowthReadDiagnostic, reconcileGrowthReadUsage, type GrowthReadDiagnostic } from "../growth-read-diagnostics";
+import { publishGrowthEvent } from "../growth-event-center";
 import { loadGoalsForPrompt, usedGoalSnapshots } from "../goal-retrieval";
 import { loadExpressionHabitsForPrompt, usedExpressionHabitSnapshots } from "../expression-habit-retrieval";
 import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../preference-retrieval";
@@ -1233,6 +1234,7 @@ async function persistChannelTurnResult(input: {
   imageOffer?: { prompt: string; authorOpenId: string };
   imageAttempt?: ImageAttemptRecord;
   imageGeneration?: ImageGenerationRecord;
+  imageRequested: boolean;
   imageStatusOverride?: boolean;
   /** 模型整轮失败、这条是她替你发的兜底话时，记下失败原因（脱敏后只留前 120 字）。 */
   modelFailure?: string | null;
@@ -1245,7 +1247,7 @@ async function persistChannelTurnResult(input: {
     prisma, existingConversation, isGroup, globalScope, ownerPrivateScopeId, isOwnerTurn, turn,
     conversationScopeId, groupId, title, messages, privateMessagesRecorded, now, assistantAt, generated,
     observedReadOnlyAiEvidence, privateHistorySelection, selfUnderstanding, replyFaces, replySticker,
-    replyVoice, replyImage, replySegments, goals, expressionHabits, preferences, imageOffer, imageAttempt, imageGeneration, imageStatusOverride, modelFailure,
+    replyVoice, replyImage, replySegments, goals, expressionHabits, preferences, imageOffer, imageAttempt, imageGeneration, imageRequested, imageStatusOverride, modelFailure,
   } = input;
   return await prisma.$transaction(async (tx) => {
     let conversation = existingConversation;
@@ -1427,6 +1429,34 @@ async function persistChannelTurnResult(input: {
         select: { id: true },
       });
       assistantMessageId = assistantMessage.id;
+      if (replyImage && imageGeneration) {
+        const photo = await tx.dailyPhoto.create({
+          data: {
+            characterId: turn.characterId,
+            trigger: imageRequested ? "USER_REQUESTED" : "CHARACTER_INITIATED",
+            status: "GENERATED",
+            prompt: imageGeneration.prompt,
+            provider: imageGeneration.provider,
+            model: imageGeneration.model,
+            generationMode: imageGeneration.mode,
+            relativePath: replyImage.relativePath,
+            mime: replyImage.mime,
+            width: replyImage.width,
+            height: replyImage.height,
+            generatedAt: new Date(imageGeneration.generatedAt),
+          },
+        });
+        await publishGrowthEvent(tx, {
+          characterId: turn.characterId,
+          sourceDomain: "life",
+          eventType: "life.photo.generated",
+          aggregateType: "DailyPhoto",
+          aggregateId: photo.id,
+          occurredAt: photo.generatedAt,
+          idempotencyKey: "photo-generated:" + photo.id,
+          payload: { trigger: photo.trigger, generationMode: photo.generationMode },
+        });
+      }
       await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: assistantAt } });
     } else {
       await tx.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: messages[messages.length - 1]!.occurredAt ?? now } });
@@ -4261,6 +4291,7 @@ async function runChannelTurn(input: {
     replyImage,
     imageAttempt,
     imageGeneration,
+    imageRequested: imageDecision.requested,
     imageStatusOverride,
     ...(modelFailure ? { modelFailure } : {}),
     ...(!imagePlanned && !imageForced && imageSettings && messages.length === 1 && generated.imageOffer
