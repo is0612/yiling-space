@@ -46,7 +46,7 @@ function fixture(count: number, sameTime = false, withContext = false) {
       if (JSON.stringify(query.orderBy).includes("desc")) {
         contextQueries.push(query);
         if (!withContext) return [];
-        const where = query.where as unknown as {
+        const where = baseWhere as {
           conversationId: string; occurredAt: { gte: Date; lt: Date };
           OR: [{ occurredAt: { lt: Date } }, { occurredAt: Date; id: { lt: string } }];
         };
