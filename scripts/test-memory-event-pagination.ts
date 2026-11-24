@@ -231,11 +231,11 @@ try {
   assert.deepEqual(isolated.map(row => row.id), isolation.rows.slice(7, 19).map(row => row.id),
     "same-time context uses smaller ids and returns the nearest twelve in chronological order");
   const contextQuery = isolation.contextQueries[0]!;
-  assert.deepEqual(contextQuery.where, {
+  assert.deepEqual(contextQuery.where, { AND: [{
     conversationId: "conversation", occurredAt: { gte: start, lt: end },
     OR: [{ occurredAt: { lt: isolation.rows[19]!.occurredAt } },
       { occurredAt: isolation.rows[19]!.occurredAt, id: { lt: isolation.rows[19]!.id } }],
-  }, "context must stay in the conversation, period and strict timestamp/id predecessor window");
+  }, { id: { notIn: [] } }] }, "context must stay in the conversation, period and strict timestamp/id predecessor window while excluding only positive ambient matches");
 
   // Exactly 960: no phantom continuation; 961: oldest 960 first, one row remains.
   for (const count of [0, 960, 961]) {
