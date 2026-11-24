@@ -46,6 +46,7 @@ const lifeTypes = [
 ];
 
 const photos = computed<DailyPhoto[]>(() => overview.value?.photos ?? []);
+const photoUrl = (photoId: string) => `/api/characters/${encodeURIComponent(id.value)}/daily-life/photos/${encodeURIComponent(photoId)}`;
 
 async function load() {
   const characterId = id.value;
@@ -238,7 +239,7 @@ watch([id, dayKey], () => { void load(); }, { immediate: true });
           <div class="section-top"><div><div class="eyebrow">PHOTOGRAPHY</div><h2>最近的照片</h2></div><el-icon :size="20"><Camera /></el-icon></div>
           <div v-if="photos.length" class="photo-list">
             <article v-for="photo in photos" :key="photo.id" class="photo-row">
-              <div class="photo-mark"><el-icon><Camera /></el-icon></div>
+              <img class="photo-preview" :src="photoUrl(photo.id)" :alt="photo.caption || '日常照片'" loading="lazy">
               <div class="photo-copy">
                 <strong>{{ photo.caption || "日常照片" }}</strong>
                 <p>{{ photo.prompt }}</p>
@@ -303,7 +304,7 @@ h2 { margin: 4px 0 0; font-size: 19px; }
 .activity-row, .photo-row { display: flex; gap: 12px; padding: 14px 0; border-top: 1px solid var(--el-border-color-lighter); }
 .activity-row { justify-content: space-between; }
 .activity-row strong, .photo-copy strong { font-weight: 650; }
-.photo-mark { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 10px; background: var(--el-fill-color-light); display: grid; place-items: center; }
+.photo-preview { width: 112px; height: 112px; flex: 0 0 112px; object-fit: cover; border-radius: 10px; background: var(--el-fill-color-light); }
 .photo-copy { min-width: 0; display: flex; flex-direction: column; gap: 8px; flex: 1; }
 .photo-copy p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .photo-copy .el-select { max-width: 240px; }
