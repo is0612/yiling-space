@@ -29,4 +29,7 @@ assert.equal(activity.source, "USER_CONFIRMED");
 assert.equal(activity.title, "散步");
 const planned = parseDailyLifeActivityInput({ planItemId: "11111111-1111-4111-8111-111111111111" });
 assert.equal(planned.planItemId, "11111111-1111-4111-8111-111111111111");
+assert.throws(() => parseDailyLifePlanInput({ dayKey: "2026-11-25", items: [{ title: "无时区", plannedStartAt: "2026-11-25T09:00:00" }] }), /带时区/u);
+assert.throws(() => parseDailyLifeActivityInput({ source: "PLAN", title: "缺少计划关联" }), /必须关联/u);
+assert.throws(() => parseDailyLifeActivityInput({ planItemId: "not-a-uuid" }), /ID 无效/u);
 console.log("daily-life input tests passed");
