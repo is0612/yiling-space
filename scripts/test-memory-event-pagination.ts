@@ -40,7 +40,9 @@ function fixture(count: number, sameTime = false, withContext = false) {
     memoryScope: { findUnique: async () => ({ characterId: "character", scopeType: "EXTERNAL_IDENTITY", character: {
       name: "Test", modelConfig: {}, memorySetting: { timezone: "UTC" },
     } }) },
-    message: { findMany: async (query: { where: ReturnType<typeof eventMessageWhere>; take: number; orderBy: unknown }) => {
+    message: { findMany: async (query: { where: any; take?: number; orderBy?: unknown }) => {
+      if (JSON.stringify(query.where).includes('"storedReason"')) return [];
+      const baseWhere = Array.isArray(query.where.AND) ? query.where.AND[0] : query.where;
       if (JSON.stringify(query.orderBy).includes("desc")) {
         contextQueries.push(query);
         if (!withContext) return [];
