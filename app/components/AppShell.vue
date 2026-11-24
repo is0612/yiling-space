@@ -4,6 +4,7 @@ import {
   ArrowRight,
   ArrowDown,
   Avatar,
+  Calendar,
   ChatDotRound,
   Collection,
   DataAnalysis,
@@ -165,6 +166,7 @@ const workspaceNavigation: NavigationItem[] = [
   { key: "chat", label: "聊天", href: "/chat", icon: ChatDotRound },
   { key: "characters", label: "角色管理", href: "/characters", icon: User },
   { key: "visual-profile", label: "形象档案", href: "/visual-profile", icon: Picture },
+  { key: "daily-life", label: "日常生活", href: "/daily-life", icon: Calendar },
   {
     key: "journal",
     label: "日记手账",
