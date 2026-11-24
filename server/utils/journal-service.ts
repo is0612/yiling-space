@@ -291,8 +291,9 @@ export async function collectJournalSources(
   const conversations = [...directConversations, ...groupConversations];
 
   const batches = await Promise.all(conversations.map(async (conversation) => {
+    const baseWhere = { conversationId: conversation.id, occurredAt: { gte: start, lt: end } };
     const rows = await prisma.message.findMany({
-      where: { conversationId: conversation.id, occurredAt: { gte: start, lt: end }, ...notAmbientMessageWhere() },
+      where: await notAmbientMessageWhere(prisma, baseWhere),
       orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
       take: JOURNAL_PER_CONVERSATION,
       select: { id: true, role: true, content: true, occurredAt: true, metadata: true },
