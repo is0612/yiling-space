@@ -34,6 +34,10 @@ design/
 # 本地临时文件（群聊导出、临时 SQL、转录稿等），只在本地用，不入库
 .tmp/
 
+# 本机一次性脚本（排查、回填、试验）：跑完就丢，里面常带真实 ID / 聊天片段，别入库
+scripts/tmp-*.ts
+scripts/tmp-*.mjs
+
 # 生图工具（ImageGen / Hunyuan）的默认落盘点：立绘、验证截图都在这，本地留档即可
 generated-images/
 
