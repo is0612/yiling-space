@@ -67,6 +67,13 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   Object.assign(context, { id: { value: "role-a" }, saving: { value: false }, character: { value: {} }, savedSignature: { value: "" }, lastSavedAt: { value: null }, syncAsrFromVoice: { value: false }, modelMessage: { success: () => {}, error: () => {}, warning: () => {} }, readError: () => "error", loadUsage: async () => {}, disposed: false, roleVersion: 0 });
   // 「清除 Key」记账本和字段映射：save 里的 sendsKeyClear 会读它们，缺了就是未定义标识符。
   context.pendingKeyClears = { value: new Set<string>() };
+  // 画图预设那段不在这条用例的关注面上：草稿合并是 `rememberImageProfile`（组件内声明、没进沙箱），
+  // 校验用的 `readImageProfiles` 又是 shared 的导入函数，两个都得在沙箱里补一份，
+  // 否则 save 在 PATCH 之前就抛 ReferenceError，表现成「resolveSave 没赋过值」。
+  context.imageProfiles = { value: [] };
+  context.imageActiveProfileId = { value: "" };
+  context.rememberImageProfile = () => {};
+  context.readImageProfiles = (value: unknown) => value;
   context.keyDrafts = Object.fromEntries(Object.entries({
     chat: "draftChatApiKey", voice: "draftVoiceApiKey", asr: "draftAsrApiKey", vision: "draftVisionApiKey",
     memory: "draftMemoryAssistantApiKey", context: "draftContextAssistantApiKey", knowledge: "draftKnowledgeAssistantApiKey", social: "draftSocialAssistantApiKey",
@@ -99,6 +106,13 @@ for (const path of ["app/pages/models.vue", "app/pages/growth/knowledge/settings
   const context: Record<string, unknown> = Object.fromEntries(draftNames.map(name => [name, { value: "" }]));
   Object.assign(context, { id: { value: "role-a" }, saving: { value: false }, character: { value: {} }, savedSignature: { value: "" }, lastSavedAt: { value: null }, syncAsrFromVoice: { value: false }, modelMessage: { success: () => {}, error: () => {}, warning: () => {} }, readError: () => "error", loadUsage: async () => {}, disposed: false, roleVersion: 0 });
   context.pendingKeyClears = { value: new Set<string>() };
+  // 画图预设那段不在这条用例的关注面上：草稿合并是 `rememberImageProfile`（组件内声明、没进沙箱），
+  // 校验用的 `readImageProfiles` 又是 shared 的导入函数，两个都得在沙箱里补一份，
+  // 否则 save 在 PATCH 之前就抛 ReferenceError，表现成「resolveSave 没赋过值」。
+  context.imageProfiles = { value: [] };
+  context.imageActiveProfileId = { value: "" };
+  context.rememberImageProfile = () => {};
+  context.readImageProfiles = (value: unknown) => value;
   context.keyDrafts = Object.fromEntries(Object.entries({
     chat: "draftChatApiKey", voice: "draftVoiceApiKey", asr: "draftAsrApiKey", vision: "draftVisionApiKey",
     memory: "draftMemoryAssistantApiKey", context: "draftContextAssistantApiKey", knowledge: "draftKnowledgeAssistantApiKey", social: "draftSocialAssistantApiKey",

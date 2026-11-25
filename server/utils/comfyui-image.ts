@@ -14,7 +14,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { basename, extname, resolve } from "node:path";
+import { basename, extname } from "node:path";
 import sharp from "sharp";
 
 import {
@@ -29,6 +29,7 @@ import {
   type LocalImageQuality,
 } from "../../shared/utils/local-image-engine";
 import { LOCAL_SIZE_MULTIPLE } from "../../shared/utils/image-size";
+import { loadWorkflowTemplate } from "./comfy-workflow-template";
 
 /**
  * CLIP / VAE 按**引擎族**取，不再是一个全局常量。
@@ -281,35 +282,14 @@ function buildGraph(input: {
  * （画风 LoRA 配比、采样器、shift、分辨率选择器）是反复试出来的，代码猜不到。
  * 模板模式把「工序单」交还给用户：项目只注入提示词、负向词和种子，其余原样提交。
  *
- * **文件即开关**：模板存在就走模板，删掉就自动回到现拼 —— 不用改代码。
+ * 模板是**本地数据**，读写都在 `comfy-workflow-template.ts`：路径走数据目录
+ * （`COMFYUI_TEMPLATE_PATH` 可指定别处），接口能取能存，文件删掉就自动回到现拼。
+ * 缓存按 mtime 失效，所以接口保存后下一次出图就生效，不需要重启进程。
  *
  * 为什么不直接读 ComfyUI 的 `user/default/workflows`：那边的 json 是 UI 格式
  * （带坐标、颜色、节点尺寸），引擎的 `/prompt` 不认；而且用户在界面上的临时实验
  * 会立刻改变她出图的结果，风险不可控。所以这里存一份独立的 API 格式快照。
  */
-const TEMPLATE_FILE = process.env.COMFYUI_TEMPLATE_PATH?.trim()
-  || "server/assets/comfyui-templates/moss.json";
-
-let templateCache: Record<string, PromptBlock> | null | undefined;
-
-async function loadWorkflowTemplate(): Promise<Record<string, PromptBlock> | null> {
-  if (templateCache !== undefined) return templateCache;
-  try {
-    const raw = await readFile(resolve(process.cwd(), TEMPLATE_FILE), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    templateCache = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, PromptBlock>
-      : null;
-    if (!templateCache) console.warn("[image] 工作流模板不是对象，回到现拼模式");
-  } catch (error) {
-    // 没有模板是默认状态，不是错误。只有「文件在但读不动」时才值得留一条记录。
-    templateCache = null;
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      console.warn("[image] 工作流模板读取失败，回到现拼模式", error instanceof Error ? error.message : error);
-    }
-  }
-  return templateCache;
-}
 
 /**
  * `ResolutionSelector` 认的八个比例名。必须和节点枚举一字不差，否则 ComfyUI 回
@@ -642,7 +622,7 @@ export async function generateImageWithComfy(input: ComfyImageInput): Promise<Co
    * 项目只负责把提示词、负向词和种子塞进正确的节点。
    * 模板不存在 = 回到原来的现拼逻辑，行为完全不变。
    */
-  const template = family === "moss" ? await loadWorkflowTemplate() : null;
+  const template = family === "moss" ? (await loadWorkflowTemplate())?.template ?? null : null;
   const graph = template
     ? applyWorkflowTemplate(template, {
       prompt: finalPrompt,

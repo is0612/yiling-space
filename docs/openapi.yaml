@@ -30,9 +30,90 @@ tags:
     description: 表情包库与 QQ 收藏夹同步
   - name: DailyLife
     description: 角色日常计划、已确认活动与照片记录
+  - name: Images
+    description: 本机生图引擎与工作流模板
 security:
   - sessionCookie: []
 paths:
+  /image/workflow-template:
+    get:
+      operationId: getImageWorkflowTemplate
+      tags: [Images]
+      summary: 读当前生效的本机 ComfyUI 工作流模板
+      description: |
+        模板是本地数据（数据目录下的 `comfyui-workflow.json`，或 `COMFYUI_TEMPLATE_PATH` 指定的位置），
+        不进仓库。`exists=false` 表示引擎走现拼模式。缓存按文件 mtime 失效，保存后下一次出图即生效。
+      responses:
+        '200':
+          description: 模板内容或「没有模板」
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [exists, fileName, source]
+                properties:
+                  exists: { type: boolean }
+                  fileName: { type: string }
+                  source: { type: string, enum: [env, data] }
+                  path: { type: string, description: 实际读取的绝对路径 }
+                  updatedAt: { type: string, format: date-time, nullable: true }
+                  bytes: { type: integer }
+                  template:
+                    type: object
+                    nullable: true
+                    description: 节点 id → 节点（ComfyUI API 格式）；没有模板时为 null
+                    additionalProperties: true
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    put:
+      operationId: putImageWorkflowTemplate
+      tags: [Images]
+      summary: 保存工作流模板
+      description: |
+        仅管理员。三种入参都接受：`{ template: {…} }`、顶层直接是节点对象、`{ text: "<json>" }`。
+        必须是 ComfyUI 的 API 格式，且提示词注得进去：存在 KSampler / KSamplerAdvanced，
+        它的 `positive` 指向一个带 `text` 输入且已存在的节点。不合格返回 400，不会落盘。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: 已保存
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, fileName, path, updatedAt, bytes]
+                properties:
+                  ok: { type: boolean }
+                  fileName: { type: string }
+                  path: { type: string }
+                  updatedAt: { type: string, format: date-time }
+                  bytes: { type: integer }
+        '400': { description: 没有模板内容，或校验没通过（带具体原因） }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: 非管理员 }
+    delete:
+      operationId: deleteImageWorkflowTemplate
+      tags: [Images]
+      summary: 删除模板，回到现拼模式
+      description: 仅管理员。删的是当前生效的那一份；删完下一次出图即生效。
+      responses:
+        '200':
+          description: 已删除或本来就没有
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, removed]
+                properties:
+                  ok: { type: boolean }
+                  removed: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { description: 非管理员 }
   /characters/{id}/memory-audit:
     post:
       operationId: auditStaleMemories

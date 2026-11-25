@@ -238,6 +238,7 @@
     "test:reply-segments": "tsx scripts/test-reply-segments.ts",
     "test:image-understanding": "tsx scripts/test-image-understanding.ts && tsx scripts/test-onebot-media-kind.ts && tsx scripts/test-media-observation.ts && tsx scripts/test-media-reply-behavior.ts",
     "test:image-prompt-translation": "tsx scripts/test-image-prompt-translation.ts",
+    "test:image-workflow-template": "tsx scripts/test-image-workflow-template.ts",
     "test:image-generation": "tsx scripts/test-image-generation.ts && tsx scripts/test-image-offer.ts && tsx scripts/test-image-offer-prompt.ts && tsx scripts/test-image-request-policy.ts && tsx scripts/test-image-execution.ts",
     "test:voice": "tsx scripts/test-voice.ts",
     "test:voice-provider": "tsx scripts/test-voice-provider.ts",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { MODEL_PURPOSE_DEFAULTS } from "#shared/utils/model-purpose-defaults";
-import { CopyDocument, Promotion, QuestionFilled, Refresh, TopRight } from "@element-plus/icons-vue";
+import { CopyDocument, Promotion, QuestionFilled, Refresh, SetUp, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { DEFAULT_IMAGE_MEGAPIXELS, IMAGE_MEGAPIXEL_OPTIONS, defaultImageSize, imageSizeKind, imageSizeOptions, normalizeImageSize, type ImageSizePreset } from "#shared/utils/image-size";
 import { LOCAL_IMAGE_DEFAULT_BASE_URL, LOCAL_IMAGE_MODELS, LOCAL_IMAGE_PROVIDER, localImageQualityLabels, resolveLocalImagePreset, imageConnectionKey, readImageProfiles, type ImageModelProfile, type LocalImageQuality } from "#shared/utils/local-image-engine";
@@ -333,6 +333,8 @@ type DailyUsage = {
 const dailyUsage = ref<DailyUsage | null>(null);
 const loadingUsage = ref(false);
 const modelCallLogsOpen = ref(false);
+/** 本机工作流模板：和角色无关，是这台机器上 ComfyUI 的设置，但入口放在画图模型这一屏。 */
+const workflowTemplateOpen = ref(false);
 
 /**
  * 表单指纹：只收「能看出改过没改过」的值。
@@ -1287,6 +1289,7 @@ watch(id, () => void loadCharacter());
       v-model="modelCallLogsOpen"
       :character-id="id"
     />
+    <WorkflowTemplateDialog v-model="workflowTemplateOpen" />
 
     <div
       v-if="!loading && !character"
@@ -2303,6 +2306,25 @@ watch(id, () => void loadCharacter());
                   </p>
                 </div>
               </div>
+
+              <div
+                v-if="isLocalImageProvider"
+                class="field"
+              >
+                <div class="field-head">
+                  <span class="field-label">工作流模板</span>
+                  <span class="field-help">调好的 ComfyUI 工序单</span>
+                </div>
+                <div class="template-entry">
+                  <el-button
+                    :disabled="saving"
+                    @click="workflowTemplateOpen = true"
+                  >
+                    <el-icon><SetUp /></el-icon>查看 / 替换模板
+                  </el-button>
+                  <span class="field-help">模板存在数据目录里，不跟着仓库和角色卡走；保存后下一次出图生效。</span>
+                </div>
+              </div>
             </div>
           </section>
         </div>
@@ -2374,6 +2396,9 @@ watch(id, () => void loadCharacter());
 /* 短控件并排：全宽 800px 的下拉装三个字，纵向还多占两行 */
 .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
 .field { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-2); }
+/* 一个按钮 + 一句说明：说明折行时按钮不能被挤窄 */
+.template-entry { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
+.template-entry .el-button { flex: none; }
 /* 标签行：左标签 + 右侧开放平台入口。基线对齐，链接不能比标签高出一截 */
 .field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); }
 .field-label { color: var(--text-2); font-size: 14px; font-weight: 600; line-height: 1.5; }
