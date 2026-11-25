@@ -3,7 +3,7 @@ import { MODEL_PURPOSE_DEFAULTS } from "#shared/utils/model-purpose-defaults";
 import { CopyDocument, Promotion, QuestionFilled, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { imageSizeOptions } from "#shared/utils/image-size";
-import { LOCAL_IMAGE_DEFAULT_BASE_URL, LOCAL_IMAGE_MODELS, LOCAL_IMAGE_PROVIDER, LOCAL_IMAGE_QUALITY_LABELS, type LocalImageQuality } from "#shared/utils/local-image-engine";
+import { LOCAL_IMAGE_DEFAULT_BASE_URL, LOCAL_IMAGE_MODELS, LOCAL_IMAGE_PROVIDER, localImageQualityLabels, resolveLocalImagePreset, imageConnectionKey, readImageProfiles, type ImageModelProfile, type LocalImageQuality } from "#shared/utils/local-image-engine";
 import { isImageGenerationModel } from "#shared/utils/vision-models";
 import type { Character } from "~/utils/mock-data";
 import { readApiErrorMessage } from "~/utils/api-error";
@@ -146,6 +146,68 @@ const draftImageSize = ref<"square" | "portrait" | "landscape">("square");
  * 云端服务商按模型名分快慢，这个值对它们没有意义，但照样保存 —— 换回本地时不用重设。
  */
 const draftImageQuality = ref<LocalImageQuality>("fast");
+type ImageProfileDraft = ImageModelProfile;
+const imageProfiles = ref<ImageProfileDraft[]>([]);
+const imageActiveProfileId = ref("");
+const draftImagePreset = ref<ImageProfileDraft["preset"]>("auto");
+let changingImageProfile = false;
+let imageProfileSequence = 0;
+const imageClearedConnections = new Set<string>();
+const imageDraftConnection = (provider: string, url: string) => `${provider}|${imageConnectionUrl(url)}`;
+const imageConnectionUrl = (url: string) => { try { return imageConnectionKey("", url); } catch { return url.trim(); } };
+const imageProfileProvider = (): ImageProfileDraft["provider"] => ["comfyui", "minimax", "openai"].includes(draftImageProvider.value) ? draftImageProvider.value as ImageProfileDraft["provider"] : "";
+function currentImageProfile(): ImageProfileDraft {
+  return { id: imageActiveProfileId.value, provider: imageProfileProvider(), apiBaseUrl: draftImageApiBaseUrl.value.trim(), apiKey: draftImageApiKey.value, model: draftImageModel.value.trim(), size: draftImageSize.value, quality: draftImageQuality.value, preset: draftImagePreset.value };
+}
+function rememberImageProfile(profile = currentImageProfile()) {
+  if (!profile.id) profile.id = newImageProfile(profile.provider, profile.apiBaseUrl, profile.model).id;
+  if (profile.apiKey.trim()) imageClearedConnections.delete(imageDraftConnection(profile.provider, profile.apiBaseUrl));
+  const index = imageProfiles.value.findIndex(item => item.id === profile.id);
+  if (index < 0) imageProfiles.value.push({ ...profile });
+  else imageProfiles.value[index] = { ...profile };
+  for (const item of imageProfiles.value) if (item.provider === profile.provider && imageConnectionUrl(item.apiBaseUrl) === imageConnectionUrl(profile.apiBaseUrl)) item.apiKey = profile.apiKey;
+  return profile;
+}
+function restoreImageProfile(profile: ImageProfileDraft) {
+  const connectionChanged = imageDraftConnection(imageProfileProvider(), draftImageApiBaseUrl.value) !== imageDraftConnection(profile.provider, profile.apiBaseUrl);
+  changingImageProfile = true;
+  imageActiveProfileId.value = profile.id;
+  draftImageProvider.value = profile.provider || "auto";
+  draftImageApiBaseUrl.value = profile.apiBaseUrl;
+  draftImageApiKey.value = profile.apiKey;
+  draftImageModel.value = profile.model;
+  draftImageSize.value = profile.size;
+  draftImageQuality.value = profile.quality;
+  draftImagePreset.value = profile.preset;
+  pendingKeyClears.value = new Set([...pendingKeyClears.value].filter(key => key !== "image"));
+  if (imageClearedConnections.has(imageDraftConnection(profile.provider, profile.apiBaseUrl))) pendingKeyClears.value = new Set([...pendingKeyClears.value, "image"]);
+  if (connectionChanged) fetchedImageModels.value = [];
+  changingImageProfile = false;
+}
+function newImageProfile(provider: ImageProfileDraft["provider"], apiBaseUrl: string, model = ""): ImageProfileDraft {
+  let profileId: string;
+  do { profileId = `image-profile-${++imageProfileSequence}`; } while (imageProfiles.value.some(item => item.id === profileId));
+  return { id: profileId, provider, apiBaseUrl, model, apiKey: "", size: "square", quality: "fast", preset: "auto" };
+}
+function changeImageTarget() {
+  if (changingImageProfile || loading.value || saving.value || testingImage.value || fetchingImageModels.value || !imageActiveProfileId.value) return;
+  const url = draftImageApiBaseUrl.value, model = draftImageModel.value;
+  const previous = imageProfiles.value.find(item => item.id === imageActiveProfileId.value);
+  if (previous) rememberImageProfile({ ...currentImageProfile(), apiBaseUrl: previous.apiBaseUrl, model: previous.model });
+  const provider = imageProfileProvider();
+  const match = imageProfiles.value.find(item => item.provider === provider && imageConnectionUrl(item.apiBaseUrl) === imageConnectionUrl(url) && item.model === model.trim());
+  const connection = imageProfiles.value.find(item => item.provider === provider && imageConnectionUrl(item.apiBaseUrl) === imageConnectionUrl(url));
+  const next = match ?? { ...newImageProfile(provider, url, model), apiKey: connection?.apiKey ?? "" };
+  restoreImageProfile(next);
+  rememberImageProfile();
+}
+watch(id, () => {
+  changingImageProfile = true;
+  imageProfiles.value = []; imageActiveProfileId.value = ""; imageProfileSequence = 0;
+  imageClearedConnections.clear();
+  draftImageApiKey.value = ""; draftImagePreset.value = "auto";
+  changingImageProfile = false;
+}, { flush: "sync" });
 /** 画图页「获取模型」拉回来的清单；换服务商/地址就作废（两家清单不通用） */
 const fetchedImageModels = ref<string[]>([]);
 const fetchingImageModels = ref(false);
@@ -221,6 +283,10 @@ const pendingKeyClears = ref<ReadonlySet<KeyField>>(new Set());
 /** 点了「清除」：先清空输入框，真正的删除等保存时发 clear 字段。 */
 function markKeyForClear(field: KeyField) {
   keyDrafts[field].value = "";
+  if (field === "image") {
+    imageClearedConnections.add(imageDraftConnection(imageProfileProvider(), draftImageApiBaseUrl.value));
+    for (const profile of imageProfiles.value) if (profile.provider === imageProfileProvider() && imageConnectionUrl(profile.apiBaseUrl) === imageConnectionUrl(draftImageApiBaseUrl.value)) profile.apiKey = "";
+  }
   pendingKeyClears.value = new Set([...pendingKeyClears.value, field]);
 }
 function sendsKeyClear(field: KeyField) {
@@ -307,6 +373,9 @@ function buildDraftSignature() { return JSON.stringify([
   draftImageModel.value.trim(),
   draftImageSize.value,
   draftImageQuality.value,
+  draftImagePreset.value,
+  imageActiveProfileId.value,
+  imageProfiles.value,
   // 记忆助手：留空沿用已存 Key，草稿变化仍参与未保存检测。
   draftMemoryAssistantModel.value.trim(),
   draftMemoryAssistantTemperature.value,
@@ -488,7 +557,7 @@ watch(draftVisionApiBaseUrl, () => {
 const visionProviderKey = computed(() => providerByBaseUrl(draftVisionApiBaseUrl.value)?.key ?? "custom");
 
 // ── 画图模型的计算属性 ──
-const imageKeyConfigured = computed(() => character.value?.imageApiKeyConfigured === true);
+const imageKeyConfigured = computed(() => Boolean(draftImageApiKey.value.trim()));
 /** "auto" 同样是前端哨兵：保存时映射回空串，交给服务端按地址判断协议。 */
 const imageProviderKey = computed(() => {
   if (draftImageProvider.value === "minimax"
@@ -501,9 +570,27 @@ const imageProviderKey = computed(() => {
 });
 /** 本地引擎：不要 Key、模型清单来自引擎、多一个档位。模板里三处按它切换。 */
 const isLocalImageProvider = computed(() => imageProviderKey.value === LOCAL_IMAGE_PROVIDER);
+/**
+ * 档位下拉的文案。步数写在文案里，所以必须跟着已选模型变 ——
+ * 挂 MOSS 时还显示「Turbo 12 步」会让人以为自己选错了模型。
+ */
+const selectedImageFamily = computed(() => resolveLocalImagePreset(draftImageModel.value, draftImagePreset.value));
+const imageQualityLabels = computed(() => selectedImageFamily.value ? localImageQualityLabels(selectedImageFamily.value === "moss" ? "moss_image" : "anima-turbo") : { fast: "默认", quality: "高质量" });
+const imageCapabilitiesHint = computed(() => selectedImageFamily.value === "moss"
+  ? "MOSS 使用自然语言描述；当前接入仅文生图，不使用形象参考图。自定义工作流的实际参数以工作流为准。"
+  : selectedImageFamily.value === "anima"
+    ? "Anima 使用英文标签；可按当前接入使用形象参考图或角色 LoRA。"
+    : "尚未识别此模型的兼容预设。请明确选择兼容类型；不会自动按 Anima 执行。");
+/** 档位说明：和 `LOCAL_IMAGE_FAMILY` 里的 steps/cfg 对不上就等于骗人，所以按族写。 */
+const imageQualityHint = computed(() => (
+  selectedImageFamily.value === "moss"
+    ? "MOSS 只有一套权重，两档是同一模型跑不同步数：快速 15 步日常刷图，精修 25 步（官方基准的一半）细节更足。挂上 8 步 DMD 加速 LoRA 后可以再压到 8 步 / CFG 1。"
+    : selectedImageFamily.value === "anima" ? "快速与精修使用 Anima 对应的默认参数；耗时随硬件和工作流变化。" : "请先选择已支持的兼容预设。"
+));
 /** 画图模型候选：内置清单 + 「获取模型」拉回来的那家清单，允许手填。 */
 const imageModelOptions = computed(() => {
   const preset = IMAGE_PROVIDER_PRESETS[imageProviderKey.value];
+  const retained = imageProfiles.value.filter(profile => profile.provider === imageProfileProvider() && imageConnectionUrl(profile.apiBaseUrl) === imageConnectionUrl(draftImageApiBaseUrl.value)).map(profile => profile.model).filter(Boolean);
   const base = imageProviderKey.value === LOCAL_IMAGE_PROVIDER
     // 两个默认文件名摆出来，是为了让「留空」看起来不像漏填
     ? [LOCAL_IMAGE_MODELS.fast, LOCAL_IMAGE_MODELS.quality]
@@ -514,7 +601,7 @@ const imageModelOptions = computed(() => {
       : ["MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-1"];
   // 拉回来的排前面：用户点那一下就是为了从这里挑，压在三条内置下面等于没拉
   const fetched = fetchedImageModels.value.filter((model) => !base.includes(model));
-  const merged = [...fetched, ...base];
+  const merged = [...new Set([...retained, ...fetched, ...base])];
   const current = draftImageModel.value.trim();
   return current && !merged.includes(current) ? [current, ...merged] : merged;
 });
@@ -526,27 +613,25 @@ const imageKeyPlaceholder = computed(() => {
 });
 /** 选服务商只带地址与默认模型：自己填过的地址/模型名不该被冲掉。 */
 function applyImageProvider(key: string) {
+  if (saving.value || testingImage.value || fetchingImageModels.value) return;
   /**
    * 先记下选择本身。以前这里只改地址、不改这个草稿，于是下拉框的选中项跟着地址跑
    * （选 OpenAI 会跳回「自定义」），保存下来的 provider 也一直是空 —— 全靠服务端猜。
    */
-  draftImageProvider.value = key === "custom" ? "auto" : key;
-  const preset = IMAGE_PROVIDER_PRESETS[key];
-  if (!preset) return;
-  draftImageApiBaseUrl.value = preset.baseUrl;
-  const model = draftImageModel.value.trim();
-  const isOtherDefault = Object.entries(IMAGE_PROVIDER_PRESETS).some(([other, entry]) => other !== key && entry.model === model);
-  // 本地引擎的「默认模型」是空串 = 按档位自动选，所以这里要能把它清掉
-  if (key === LOCAL_IMAGE_PROVIDER) draftImageModel.value = "";
-  else if (!model || isOtherDefault) draftImageModel.value = preset.model;
-  // 上一家「获取模型」拉回来的清单跟着作废
-  fetchedImageModels.value = [];
+  rememberImageProfile();
+  const provider = (key === "custom" ? "" : key) as ImageProfileDraft["provider"];
+  const existing = [...imageProfiles.value].reverse().find(item => item.provider === provider);
+  const defaults = IMAGE_PROVIDER_PRESETS[key];
+  restoreImageProfile(existing ?? newImageProfile(provider, defaults?.baseUrl ?? "", defaults?.model ?? ""));
+  rememberImageProfile();
+
 }
 /**
  * 档位跟着服务商和模型走：OpenAI 那几家不认 864×1152，dall-e-2 更是只有方图。
  * 不可用的档位直接不出现在选项里，也就不存在「选了却 400」。
  */
-const IMAGE_SIZE_OPTIONS = computed(() => imageSizeOptions(imageProviderKey.value, draftImageModel.value));
+const IMAGE_SIZE_OPTIONS = computed(() => imageSizeOptions(imageProviderKey.value,
+  isLocalImageProvider.value && selectedImageFamily.value ? selectedImageFamily.value === "moss" ? "moss_image" : "anima-turbo" : draftImageModel.value));
 watch(IMAGE_SIZE_OPTIONS, (options) => {
   // 换模型后原来那档没了：回退方图，别让下拉框停在空值上。
   if (!options.some(option => option.value === draftImageSize.value)) draftImageSize.value = "square";
@@ -811,6 +896,13 @@ async function loadCharacter() {
     draftImageModel.value = data.imageModel ?? "";
     draftImageSize.value = (data.imageSize === "portrait" || data.imageSize === "landscape") ? data.imageSize : "square";
     draftImageQuality.value = data.imageQuality === "quality" ? "quality" : "fast";
+    draftImagePreset.value = data.imagePreset === "moss" || data.imagePreset === "anima" ? data.imagePreset : "auto";
+    imageProfiles.value = data.imageProfiles?.length ? readImageProfiles(data.imageProfiles) : [];
+    imageClearedConnections.clear();
+    imageProfileSequence = 0;
+    while (imageProfiles.value.some(item => item.id === `image-profile-${imageProfileSequence + 1}`)) imageProfileSequence++;
+    imageActiveProfileId.value = data.imageActiveProfileId || `image-profile-${++imageProfileSequence}`;
+    rememberImageProfile();
 
     // 四个助手：空字符串 = 跟随对话模型，所以原样读进来即可，不做 fallback。
     draftMemoryAssistantEnabled.value = data.memoryAssistantEnabled !== false;
@@ -884,6 +976,14 @@ function syncKeysFromCharacter(data: Character) {
 /** silent：测试连接和拉取模型都要先保存，那两步不该再弹一次「已保存」 */
 async function save(silent = false): Promise<boolean> {
   if (saving.value || !character.value) return false;
+  rememberImageProfile();
+  if (sendsKeyClear("image")) {
+    for (const profile of imageProfiles.value) if (profile.provider === imageProfileProvider() && imageConnectionUrl(profile.apiBaseUrl) === imageConnectionUrl(draftImageApiBaseUrl.value)) profile.apiKey = "";
+  }
+  try { readImageProfiles(imageProfiles.value); } catch (error) {
+    modelMessage.warning(error instanceof Error ? error.message : "请检查画图预设。");
+    return false;
+  }
   if (draftChatModel.value.trim().length > 120) {
     modelMessage.warning("模型名称不能超过 120 个字符。");
     return false;
@@ -939,6 +1039,9 @@ async function save(silent = false): Promise<boolean> {
         imageProvider: draftImageProvider.value === "auto" ? "" : draftImageProvider.value,
         imageSize: draftImageSize.value,
         imageQuality: draftImageQuality.value,
+        imagePreset: draftImagePreset.value,
+        imageProfiles: imageProfiles.value.map(profile => ({ ...profile })),
+        imageActiveProfileId: imageActiveProfileId.value,
         ...(draftImageApiKey.value.trim() ? { imageApiKey: draftImageApiKey.value.trim() } : {}),
         ...(sendsKeyClear("image") ? { clearImageApiKey: true } : {}),
         // 四个助手：空字符串就是「跟随对话模型」，所以原样发过去，不做 fallback。
@@ -981,13 +1084,15 @@ async function save(silent = false): Promise<boolean> {
         ...(sendsKeyClear("social") ? { clearSocialRelationshipAssessmentAssistantApiKey: true } : {}),
     }));
     // 请求期间用户改过的草稿不能被回显吞掉，也不能被算成「已保存」。
-    const editedDuringFlight = submittedKeys.some(({ field, value }) => field.value !== value);
+    const editedDuringFlight = submittedKeys.some(({ field, value }) => field.value !== value) || buildDraftSignature() !== submittedSignature;
     // 回显会覆盖输入框，先把用户此刻敲的内容留一份，等下按字段还回去。
     const liveValues = submittedKeys.map(({ field }) => field.value);
     character.value = updated;
+    const liveImageKey = draftImageApiKey.value;
     // 保存成功后把服务端那份明文 Key 回填：否则输入框会停在用户刚敲的内容上，
     // 和「库里到底是什么」产生偏差。
     syncKeysFromCharacter(updated);
+    draftImageApiKey.value = liveImageKey;
     if (editedDuringFlight) {
       submittedKeys.forEach(({ field, value }, index) => {
         if (liveValues[index] !== value) field.value = liveValues[index]!;
@@ -1941,7 +2046,7 @@ watch(id, () => void loadCharacter());
                 </div>
                 <p class="brick-desc">
                   这组只负责「她画图」。开关和频率在「QQ 渠道 → 角色行为 → 画图」，这里留空不会启用任何东西。
-                  服务商选「本地 Anima」就走本机显卡，不花钱、不出网。
+                  本地模型通过 ComfyUI 出图；聊天、提示词处理与看图仍使用各自配置的服务。切换连接或模型会保留各自草稿，统一保存后持久保留。
                 </p>
               </div>
             </div>
@@ -1953,6 +2058,7 @@ watch(id, () => void loadCharacter());
                 </div>
                 <el-select
                   :model-value="imageProviderKey"
+                  :disabled="saving || testingImage || fetchingImageModels"
                   class="field-ctl"
                   aria-label="画图服务商"
                   @change="applyImageProvider"
@@ -1966,7 +2072,7 @@ watch(id, () => void loadCharacter());
                     value="openai"
                   />
                   <el-option
-                    label="本地 Anima（ComfyUI，不花钱）"
+                    label="本地模型（ComfyUI）"
                     value="comfyui"
                   />
                   <el-option
@@ -1983,6 +2089,8 @@ watch(id, () => void loadCharacter());
                 </div>
                 <el-input
                   v-model="draftImageApiBaseUrl"
+                  :disabled="saving || testingImage || fetchingImageModels"
+                  @change="changeImageTarget"
                   maxlength="500"
                   aria-label="画图 API 地址"
                   :placeholder="isLocalImageProvider ? LOCAL_IMAGE_DEFAULT_BASE_URL : 'https://api.minimaxi.com/v1'"
@@ -1991,8 +2099,7 @@ watch(id, () => void loadCharacter());
                   v-if="isLocalImageProvider"
                   class="field-help"
                 >
-                  本地引擎得先开着：双击 D:\AI\Anima\启动Anima.bat，窗口里出现 http://127.0.0.1:8188 才算就绪。
-                  不联网、不按张计费，代价是慢 —— 一张十几秒到一分钟。
+                  请先启动安装模型的 ComfyUI，并填写实际监听地址。本地生成不按张向云服务计费，耗时取决于模型、工作流与硬件。
                 </p>
               </div>
 
@@ -2016,31 +2123,7 @@ watch(id, () => void loadCharacter());
                 />
               </div>
 
-              <!-- 本地引擎这一栏云端没有：一个下拉换模型 + 步数，比让人填模型文件名好懂 -->
-              <div
-                v-if="isLocalImageProvider"
-                class="field"
-              >
-                <div class="field-head">
-                  <span class="field-label">出图档位</span>
-                  <span class="field-help">决定用哪个模型、跑多少步</span>
-                </div>
-                <el-select
-                  v-model="draftImageQuality"
-                  class="field-ctl"
-                  aria-label="出图档位"
-                >
-                  <el-option
-                    v-for="(label, value) in LOCAL_IMAGE_QUALITY_LABELS"
-                    :key="value"
-                    :label="label"
-                    :value="value"
-                  />
-                </el-select>
-                <p class="field-help">
-                  快速是 Turbo 蒸馏版（12 步），用来刷提示词；精修是 Aesthetic 版（30 步），细节和光影更好但慢四倍。
-                </p>
-              </div>
+
 
               <div class="field">
                 <div class="field-head">
@@ -2049,6 +2132,8 @@ watch(id, () => void loadCharacter());
                 <div class="model-row">
                   <el-select
                     v-model="draftImageModel"
+                    :disabled="saving || testingImage || fetchingImageModels"
+                    @change="changeImageTarget"
                     class="model-select"
                     filterable
                     allow-create
@@ -2082,8 +2167,8 @@ watch(id, () => void loadCharacter());
                   v-if="isLocalImageProvider"
                   class="field-help"
                 >
-                  留空就按档位自动挑（快速 anima-turbo-v1.1，精修 anima-aesthetic-v1.1）。引擎里另装了模型才需要在这里选。
-                  点「测试」会真画一张 768×768 的图，本地不花钱，但引擎没开或者显存不够会原样报出来。
+                  从引擎获取模型，或输入已安装的模型文件名。首次留空沿用 Anima 默认模型。
+                  测试会实际生成图片；自定义工作流的尺寸、步数以工作流实际执行为准。
                 </p>
                 <p
                   v-else
@@ -2094,6 +2179,22 @@ watch(id, () => void loadCharacter());
                 </p>
               </div>
 
+              <div v-if="isLocalImageProvider" class="field">
+                <div class="field-head"><span class="field-label">兼容预设</span></div>
+                <el-select v-model="draftImagePreset" class="field-ctl" aria-label="本地模型兼容预设" :disabled="saving || testingImage || fetchingImageModels">
+                  <el-option label="自动识别（已支持的模型）" value="auto" />
+                  <el-option label="Anima 兼容" value="anima" />
+                  <el-option label="MOSS 兼容" value="moss" />
+                </el-select>
+                <p class="field-help">{{ imageCapabilitiesHint }}</p>
+              </div>
+              <div v-if="isLocalImageProvider" class="field">
+                <div class="field-head"><span class="field-label">出图档位</span></div>
+                <el-select v-model="draftImageQuality" class="field-ctl" aria-label="出图档位" :disabled="saving || testingImage || fetchingImageModels || !selectedImageFamily">
+                  <el-option v-for="(label, value) in imageQualityLabels" :key="value" :label="label" :value="value" />
+                </el-select>
+                <p class="field-help">{{ imageQualityHint }}</p>
+              </div>
               <div class="field">
                 <div class="field-head">
                   <span class="field-label">画面尺寸</span>

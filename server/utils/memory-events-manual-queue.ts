@@ -1,4 +1,5 @@
 import type { PrismaClient } from "../../src/generated/prisma/client";
+import { notAmbientMessageWhere } from "./group-ambient-memory";
 import { MEMORY_JOB_LEASE_MS } from "./memory-job-lease";
 import { eventMessageWhere } from "./memory-event-source";
 

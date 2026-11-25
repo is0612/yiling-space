@@ -18,6 +18,8 @@ import { emptyCharacterGrowthBundle } from "../server/utils/character-growth-por
  * 不连数据库 —— 落库与「别人的私人记忆不进包」在 test-character-portable-db.ts 里测。
  */
 
+assert.deepEqual(stripPortableModelConfig({ imageProfiles: [{ apiKey: "synthetic-secret" }], imageActiveProfileId: "synthetic", imagePreset: "moss" }), { imagePreset: "moss" }, "nested image profile credentials never enter portable cards");
+
 // ── 1. 模型参数脱敏 ─────────────────────────────────────────
 const rawConfig = {
   alias: "小鱼",

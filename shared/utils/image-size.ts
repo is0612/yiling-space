@@ -6,6 +6,8 @@
  * 存储永远存语义名，像素在发请求前才算，换模型时老角色不会存着一个非法尺寸。
  */
 
+import { resolveLocalImagePreset, type ImageModelPreset } from "./local-image-engine";
+
 export type ImageSizePreset = "square" | "portrait" | "landscape";
 
 export type ImageSizeOption = {
@@ -36,6 +38,13 @@ export const IMAGE_SIZE_SETS = {
   dalle3: { square: "1024x1024", portrait: "1024x1792", landscape: "1792x1024" },
   squareOnly: { square: "1024x1024", portrait: "1024x1024", landscape: "1024x1024" },
   localAnima: { square: "1024x1024", portrait: "896x1152", landscape: "1152x896" },
+  /**
+   * 本机 MOSS：竖图用 2:3。
+   *
+   * 不是审美偏好 —— MOSS 的 Flux2 latent 按 16 倍下采样，832 和 1248 都是 16 的倍数；
+   * 而且 2:3 是实测下来全身立绘最舒服的比例（896×1152 的 7:9 太方，人物显得挤）。
+   */
+  localMoss: { square: "1024x1024", portrait: "832x1248", landscape: "1248x832" },
 } as const satisfies Record<string, SizeSet>;
 
 const SIZE_NAME: Record<ImageSizePreset, string> = { square: "方图", portrait: "竖图", landscape: "横图" };
@@ -52,9 +61,12 @@ function ratioLabel(pixels: string): string {
 }
 
 /** 服务商 + 模型名 → 用哪一套尺寸。模型名是手填的，认不出就按主流 OpenAI 那套。 */
-export function imageSizeSetFor(provider: string, model: string): SizeSet {
+export function imageSizeSetFor(provider: string, model: string, modelPreset: ImageModelPreset = "auto"): SizeSet {
   if (provider === "minimax") return IMAGE_SIZE_SETS.minimax;
-  if (provider === "comfyui") return IMAGE_SIZE_SETS.localAnima;
+  if (provider === "comfyui") {
+    // 同是本机引擎，MOSS 和 Anima 的竖幅比例不同（见 localMoss 的注释）。
+    return resolveLocalImagePreset(model, modelPreset) === "moss" ? IMAGE_SIZE_SETS.localMoss : IMAGE_SIZE_SETS.localAnima;
+  }
   if (/dall-?e-?3/i.test(model)) return IMAGE_SIZE_SETS.dalle3;
   if (/dall-?e-?2/i.test(model)) return IMAGE_SIZE_SETS.squareOnly;
   // gpt-image-1 / 2 / 2.5-flare / 2.5-sunburst 与未知模型都走这一套。
@@ -62,16 +74,16 @@ export function imageSizeSetFor(provider: string, model: string): SizeSet {
 }
 
 /** 语义档位 → 实际像素。永远返回合法值，老数据里的 `portrait` 也不会变成 400。 */
-export function resolveImagePixels(provider: string, model: string, preset: ImageSizePreset): string {
-  return imageSizeSetFor(provider, model)[preset] ?? IMAGE_SIZE_SETS.gptImage.square;
+export function resolveImagePixels(provider: string, model: string, preset: ImageSizePreset, modelPreset: ImageModelPreset = "auto"): string {
+  return imageSizeSetFor(provider, model, modelPreset)[preset] ?? IMAGE_SIZE_SETS.gptImage.square;
 }
 
 /**
  * 下拉框选项。像素重复的档位合并掉（dall-e-2 只剩方图一个），
  * 数量因此会随模型变化 —— 这是有意的，别把不可用的档位摆出来让人选。
  */
-export function imageSizeOptions(provider: string, model: string): ImageSizeOption[] {
-  const set = imageSizeSetFor(provider, model);
+export function imageSizeOptions(provider: string, model: string, modelPreset: ImageModelPreset = "auto"): ImageSizeOption[] {
+  const set = imageSizeSetFor(provider, model, modelPreset);
   const ordered: ImageSizePreset[] = ["square", "portrait", "landscape"];
   const seen = new Set<string>();
   const options: ImageSizeOption[] = [];

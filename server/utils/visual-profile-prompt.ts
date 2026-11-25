@@ -15,6 +15,44 @@ const MAX_PROMPT_CHARS = 1200;
 const MAX_OUTFIT_NAME_CHARS = 20;
 
 /**
+ * 这次画的是不是「别人」。
+ *
+ * 项目默认把她的形象档案拼进每一张图 —— 那是「画她自己」的语义。但用户有时会让她
+ * 画第三方角色（「画个千夏」），此时形象档案会把对方的发色瞳色整个覆盖掉，
+ * 出来是「穿着别人衣服的她」。
+ *
+ * 判据两条，都要求足够明确才生效 —— **宁可漏判**（用户还能显式说一句），
+ * **也不要误判**（她画自己时莫名其妙换了个人）：
+ *
+ *   1. Danbooru 的括号作品名：`sunna (zenless zone zero)`。画自己的时候没有人会写
+ *      作品名，这是第三方角色最硬的指纹。要求括号里至少有一个空格，避免把
+ *      `(blush)` 这种单标签误当成作品名。
+ *   2. 中文口语指令：「画别人」「不用你的形象」「别画你自己」。
+ */
+const THIRD_PARTY_COPYRIGHT = /\([a-z][a-z0-9 .'&:+-]*\s+[a-z0-9][a-z0-9 .'&:+-]*\)/iu;
+/**
+ * 「角色名 (作品)」这个 Danbooru 惯例，作品名允许只有一个词（`hatsune miku (vocaloid)`）。
+ *
+ * 要求括号**前面先有角色名**，所以开头就是括号的 `(blush)` 不会被当成作品名 ——
+ * 单看括号内容分不出 `vocaloid` 和 `blush`，位置是唯一可靠的判据。
+ */
+const THIRD_PARTY_LEADING = /^[a-z0-9][a-z0-9 .'&-]{1,40}\([a-z][a-z0-9 .'&:+-]+\)/iu;
+const THIRD_PARTY_SPOKEN = /(?:画|绘制|生成)(?:个|一个|一张)?(?:别人|他人|其他人|其他角色|别的角色|另一个角色)|换个角色|不用(?:你|她自己?)的?(?:形象|人设|外貌)|别画你自己?|不要画你自己?|(?:去掉|跳过)(?:你|她自己?)的?(?:形象|人设)/u;
+
+export function isThirdPartyCharacterPrompt(scenePrompt: string): boolean {
+  const raw = String(scenePrompt ?? "").trim();
+  if (!raw) return false;
+  /**
+   * Danbooru 导出时会把括号转义成 `\(` `\)`，先还原再判断 ——
+   * 否则正则的字符集会被那个反斜杠卡住，`(zenless zone zero)` 永远匹配不上。
+   */
+  const text = raw.replace(/\\([()])/gu, "$1");
+  return THIRD_PARTY_COPYRIGHT.test(text)
+    || THIRD_PARTY_LEADING.test(text)
+    || THIRD_PARTY_SPOKEN.test(text);
+}
+
+/**
  * 参考图说明里「这张图只负责什么」那一段。
  *
  * 这段比参考图本身更关键：不给约束时，模型会把参考图的姿势、取景、背景一起抄下来，

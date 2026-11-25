@@ -29,7 +29,7 @@ import { createAssistantTurnContext } from "../assistant-turn-context";
 import { runAssistantTurnStage, skipAssistantTurnStage } from "../assistant-turn-execution";
 import { createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
-import { LOCAL_IMAGE_PROVIDER } from "../../../shared/utils/local-image-engine";
+import { LOCAL_IMAGE_PROVIDER, resolveLocalImagePreset } from "../../../shared/utils/local-image-engine";
 import { translateImagePromptToTags } from "../image-prompt-translation";
 import { type ConversationContextMessage, type ConversationGroupDecision, type ConversationKnowledgeItem, type ConversationQuotedMessage, buildModelFailureReply, MODEL_FAILURE_FALLBACK_REPLY } from "../chat-reply";
 import {
@@ -92,7 +92,7 @@ import { alignMediaResults } from "../media-result-alignment";
 import { ensureOwnerPrivateScope } from "../memory-scope-access";
 import { isSystemBroadcast, looksLikeSystemMessage } from "../system-message";
 import { getPrisma } from "../prisma";
-import { composePublishedVisualPrompt, canAttachReferences } from "../visual-profile-prompt";
+import { composePublishedVisualPrompt, canAttachReferences, isThirdPartyCharacterPrompt } from "../visual-profile-prompt";
 import { readVisualProfileReferences, type VisualReference } from "../visual-profile-references";
 import { readSnapshotLora } from "../visual-profile-snapshot";
 import { shouldBlockFriendSpeaker } from "../friend-chat-policy";
@@ -1919,7 +1919,7 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
           latestAssistant: recentStoredMessages.find(row => row.role === "ASSISTANT")
             ? readImageExecutionState(recentStoredMessages.find(row => row.role === "ASSISTANT")!.metadata) : "none" as const,
         } } : {}),
-        ...(ctx.imageCapable ? { imageCapabilities: { generation: "text_to_image" as const, referenceInput: true as const, edit: false as const,
+        ...(ctx.imageCapable ? { imageCapabilities: { generation: "text_to_image" as const, referenceInput: Boolean(imageSettings && (imageSettings.provider !== LOCAL_IMAGE_PROVIDER || resolveLocalImagePreset(imageSettings.model, imageSettings.preset) === "anima")), edit: false as const,
           selfInspection: ctx.visionAvailable ? "on_demand" as const : "disabled" as const,
           quotedImageInspection: ctx.visionAvailable,
         } } : {}),
@@ -1927,7 +1927,7 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
         allowStickerDescription: messages.some(message => isExplicitMediaQuestion(message.commandText ?? "", Boolean(message.images?.length || message.quotedMessage?.image || message.quotedMessage?.images?.length))),
         ...(imagePlanned ? { imageReply: true } : {}),
         // 本机 Anima 只认英文标签：这一轮得让她用标签写 imagePrompt，中文写多少都白费。
-        ...(imagePlanned && imageSettings?.provider === LOCAL_IMAGE_PROVIDER ? { imageReplyTags: true } : {}),
+        ...(imagePlanned && imageSettings?.provider === LOCAL_IMAGE_PROVIDER && resolveLocalImagePreset(imageSettings.model, imageSettings.preset) === "anima" ? { imageReplyTags: true } : {}),
         ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
   };
 }
@@ -4022,7 +4022,29 @@ async function runChannelTurn(input: {
     generated.usedCatchphraseIds = []; generated.usedPreferenceIds = []; generated.usedExpressionHabitIds = []; generated.usedGoalIds = [];
     imageStatusOverride = true;
   };
-  const enforcedImageReply = imageRequest.kind === "status" ? imageStatusReply(recentStoredMessages, { channel: isGroup ? "group" : "private", authorOpenId: imageRequest.authorOpenId }) : imageDecisionReply(imageDecision);
+  // A verified confirmation is already permission; do not let model prose ask for it again.
+  if (!modelFailure && generated.action === "reply" && imageRequest.kind === "confirmation" && imagePlanned) {
+    generated.reply = "好，就按刚才确认的画面来画。";
+    generated.imageOffer = null;
+  }
+  // Store the exact proposed scene before asking once; never infer permission from assistant prose.
+  let pendingImageOffer: string | null = null;
+  if (!modelFailure && generated.action === "reply" && imageRequest.kind === "direct"
+    && imageDecision.blockedReason === "confirmation_required" && messages.length === 1) {
+    const proposal = validateImageScenePrompt(generated.imageOffer || generated.imagePrompt || imageRequest.subject || "", {
+      requestSubject: imageRequest.subject,
+      participantNames: messages.map(message => message.authorDisplayName ?? "").filter(Boolean),
+    });
+    if (proposal.ok) {
+      pendingImageOffer = proposal.prompt.slice(0, 1200);
+      generated.imageOffer = pendingImageOffer;
+      generated.imagePrompt = null;
+      generated.reply = "好，我先按这个想法准备，要现在画吗？";
+    } else {
+      useImageStatusReply(blockedImageReply(proposal.reason));
+    }
+  }
+  const enforcedImageReply = pendingImageOffer ? null : imageRequest.kind === "status" ? imageStatusReply(recentStoredMessages, { channel: isGroup ? "group" : "private", authorOpenId: imageRequest.authorOpenId }) : imageDecisionReply(imageDecision);
   // 兜底话已经在路上了：画图执行状态是另一件事，别把「模型挂了」改写成「图已经发你了」。
   if (enforcedImageReply && generated.action === "reply" && !modelFailure) useImageStatusReply(enforcedImageReply);
 
@@ -4126,7 +4148,7 @@ async function runChannelTurn(input: {
    */
   let replyImage: GeneratedImage | null = null;
   let imageGeneration: ImageGenerationRecord | undefined;
-  let imageAttempt: ImageAttemptRecord | undefined = (imageDecision.status === "blocked" && imageDecision.requested) || imageRequest.kind === "declined"
+  let imageAttempt: ImageAttemptRecord | undefined = (!pendingImageOffer && imageDecision.status === "blocked" && imageDecision.requested) || imageRequest.kind === "declined"
     ? { status: "blocked", reason: imageDecision.blockedReason, trigger: imageDecision.trigger,
         sourceMessageId: imageRequest.sourceMessageId, authorOpenId: imageRequest.authorOpenId, todayCount: imageDecision.todayCount, limit: imageDecision.limit } : undefined;
   if (generated.action === "reply" && imagePlanned && imageSettings && modelFailure) {
@@ -4160,9 +4182,31 @@ async function runChannelTurn(input: {
     } else {
       // Only the explicitly published snapshot may influence drawing. Never read editable profile
       // fields or drafts here: a half-finished edit must not silently change her official appearance.
+      /**
+       * 这次画的是别人吗？
+       *
+       * 画第三方角色（「画个千夏」）时**整套形象档案都要退场**：不只是文字会覆盖对方的
+       * 发色瞳色，她的参考图和角色 LoRA 更会直接把身份锁成她自己。所以干脆不读快照 ——
+       * 后面的参考图、LoRA、提示词拼装全都跟着这一处判断走。
+       *
+       * 判断范围包含**用户的原话**，不能只看她写的场景描述：她转述时会把英文标签翻成
+       * 中文概述，`(zenless zone zero)` 这种作品名在翻译里必然丢掉，只认转述就永远漏判。
+       * 用户原文是唯一没被改写过的那一份。
+       */
+      const drawsSomeoneElse = isThirdPartyCharacterPrompt([
+        validation.prompt,
+        generated.imagePrompt ?? "",
+        imageRequest.subject ?? "",
+        ...messages
+          .filter(message => message.kind !== "AI")
+          .map(message => message.commandText ?? message.content ?? ""),
+      ].join("\n"));
+      if (drawsSomeoneElse) {
+        console.log("[image] 这次画的是别人，不套用她的形象档案", { characterId: input.characterId });
+      }
       let publishedVisualSnapshot: Record<string, unknown> | null = null;
       try {
-        const visualProfile = await prisma.characterVisualProfile.findUnique({
+        const visualProfile = drawsSomeoneElse ? null : await prisma.characterVisualProfile.findUnique({
           where: { characterId: input.characterId },
           select: { currentPublishedRevision: true },
         });
@@ -4287,7 +4331,7 @@ async function runChannelTurn(input: {
     imageRequested: imageDecision.requested,
     imageStatusOverride,
     ...(modelFailure ? { modelFailure } : {}),
-    ...(!imagePlanned && !imageForced && imageSettings && messages.length === 1 && generated.imageOffer
+    ...(!imagePlanned && (!imageForced || pendingImageOffer) && imageSettings && messages.length === 1 && generated.imageOffer
       && imageRequest.kind !== "status" && imageRequest.kind !== "declined"
       ? { imageOffer: { prompt: generated.imageOffer, authorOpenId: messages[0]!.authorOpenId } } : {}),
     replySegments,

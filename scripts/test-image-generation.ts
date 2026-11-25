@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
 import { imageSizeOptions, resolveImagePixels } from "../shared/utils/image-size";
-import { LOCAL_IMAGE_MODELS } from "../shared/utils/local-image-engine";
+import { LOCAL_IMAGE_MODELS, readImageProfiles, imageConnectionKey, resolveLocalImagePreset } from "../shared/utils/local-image-engine";
 import { cleanTagLine, needsTagTranslation, parseTagTranslation } from "../server/utils/image-prompt-translation";
 import { dirname } from "node:path";
 
@@ -38,6 +38,20 @@ import {
   prependTriggerTags,
 } from "../server/utils/image-generation";
 import { toCharacterDto } from "../server/utils/character-dto";
+const retainedProfile = { id: "synthetic-moss", provider: "comfyui", apiBaseUrl: "http://localhost:8188/", apiKey: "synthetic-only", model: "moss_image_sft.safetensors", size: "portrait", quality: "fast", preset: "moss" };
+assert.deepEqual(readImageProfiles([retainedProfile])[0], retainedProfile, "model drafts preserve all supported settings");
+assert.equal(imageConnectionKey("comfyui", "http://localhost:8188/"), imageConnectionKey("comfyui", "http://localhost:8188"));
+assert.notEqual(imageConnectionKey("openai", "https://first.invalid/v1"), imageConnectionKey("openai", "https://second.invalid/v1"));
+assert.throws(() => readImageProfiles([retainedProfile, retainedProfile]), /预设/);
+assert.throws(() => readImageProfiles([{ ...retainedProfile, apiBaseUrl: "https://user:pass@example.invalid" }]), /连接/);
+assert.equal(resolveLocalImagePreset("moss_image_sft.safetensors"), "moss");
+assert.equal(resolveLocalImagePreset("anima-turbo-v1.1.safetensors"), "anima");
+assert.equal(resolveLocalImagePreset("other.safetensors"), null, "unknown weights never silently use Anima nodes");
+assert.equal(resolveLocalImagePreset("other.safetensors", "moss"), "moss", "explicit compatible preset overrides filename");
+assert.equal(resolveImagePixels("comfyui", "other.safetensors", "portrait", "moss"), "832x1248");
+assert.equal(resolveImagePixels("comfyui", "moss_image_sft.safetensors", "portrait", "anima"), "896x1152");
+assert.equal(imageSizeOptions("comfyui", "other.safetensors", "moss").find(item => item.value === "portrait")?.pixels, "832x1248");
+assert.equal(resolveImageGenerationSettings({ modelConfig: { imageProvider: "comfyui", imageModel: "other.safetensors", imagePreset: "moss", imageSize: "portrait" } })?.size, "832x1248", "explicit preset determines runtime dimensions too");
 import {
   encryptApiKey,
   isImageApiKeySaved,
@@ -149,7 +163,7 @@ const now = new Date("2026-11-22T12:00:00+08:00");
 
 assert.equal(planImageReply({ modelConfig: on, random: () => 0.99 }), true, "概率 100 时抽中。");
 assert.equal(planImageReply({ modelConfig: { ...on, imageChance: 0 }, random: () => 0 }), false, "概率 0 不自主动画。");
-assert.equal(planImageReply({ modelConfig: { ...on, imageChance: 0 }, force: true }), true, "被明确要求时跳过概率。");
+assert.equal(planImageReply({ modelConfig: { ...on, imageChance: 0 }, force: true }), false, "首次明确要求仍须确认。");
 assert.equal(
   planImageReply({
     modelConfig: on,
@@ -167,8 +181,8 @@ assert.equal(
     now,
     force: true,
   }),
-  true,
-  "被要求时冷却不生效。",
+  false,
+  "首次请求即使跳过冷却也不能跳过确认。", 
 );
 assert.equal(
   planImageReply({ modelConfig: { ...on, imageCooldownMinutes: 0 }, lastImageAt: new Date("2026-11-22T11:59:00+08:00"), now, random: () => 0 }),
@@ -182,8 +196,8 @@ assert.equal(
 );
 assert.equal(
   planImageReply({ modelConfig: { ...on, imageDailyLimit: 0 }, todayCount: 999, now, force: true }),
-  true,
-  "上限 0 = 不限。",
+  false,
+  "上限 0 不限制张数，但首次请求仍等待确认。", 
 );
 assert.equal(planImageReply({ modelConfig: { imageEnabled: false }, force: true }), false, "开关关着时谁要求都不画。");
 

@@ -161,7 +161,7 @@ function describeImageAuthFailure(input: {
  *
  * 和云端那个测试同一个道理（只测连通证明不了能出图），但三个细节不同：
  *   - 不花钱，所以可以放心真画；画坏了大不了重来；
- *   - 提示词必须用英文 —— Anima 读不懂中文，拿中文测出来的「成功」是一张无关的图；
+ *   - 测试沿用兼容的英文画面描述；MOSS 支持自然语言，不因此要求聊天使用标签；
  *   - 失败原因要具体到「双击哪个 bat」，因为本地引擎最常见的问题就是没开。
  */
 async function testLocalEngine(settings: ImageGenerationSettings): Promise<ProbeResult> {
@@ -171,7 +171,7 @@ async function testLocalEngine(settings: ImageGenerationSettings): Promise<Probe
     return {
       ok: false,
       model: settings.model,
-      message: `连不上本地引擎（${settings.apiBaseUrl}）。先双击 D:\\AI\\Anima\\启动Anima.bat，等窗口里出现 http://127.0.0.1:8188 再回来测。`,
+      message: `连不上本地引擎（${settings.apiBaseUrl}）。请先启动此地址对应的 ComfyUI 服务，再回来测试。`,
     };
   }
 
@@ -191,6 +191,7 @@ async function testLocalEngine(settings: ImageGenerationSettings): Promise<Probe
   const drawn = await generateImageWithComfy({
     baseUrl: settings.apiBaseUrl,
     model: settings.model,
+    preset: settings.preset,
     quality: settings.quality === "quality",
     prompt: LOCAL_TEST_PROMPT,
     width: 768,

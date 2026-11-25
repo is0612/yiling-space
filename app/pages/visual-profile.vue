@@ -1009,7 +1009,7 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
             <section>
               <div class="sec-h">
                 <h2>本机 LoRA</h2>
-                <span class="sub">只对本机 Anima 生效</span>
+                <span class="sub">只对本机引擎生效</span>
               </div>
               <div class="card">
                 <div class="vp-pad vp-lora">
@@ -1063,8 +1063,12 @@ onBeforeUnmount(() => { disposed = true; requestVersion += 1; });
                     />
                   </div>
                   <p class="muted vp-hint">
-                    只有「画图 → 本机 Anima」会用这两项：出图时自动接上这个 LoRA，并把触发词补到提示词最前面。
-                    云端服务商不受影响。触发词只是保底，尾巴、鳍耳这类特征最好也写进上面的外貌设定。
+                    只有「画图 → 本机引擎」会用这两项：出图时自动接上这个 LoRA，并把触发词补到提示词最前面。
+                    云端服务商不受影响。
+                  </p>
+                  <p class="muted vp-hint">
+                    <b>Anima 和 MOSS 的 LoRA 不通用</b>：两套底模结构不同，选错会直接加载报错。
+                    列表里 `moss\` 目录下的是 MOSS 用的，根目录和 `anima` 开头的是 Anima 用的 —— 跟着「设置 → 画图模型」里选的那个走。
                   </p>
                   <p
                     v-if="loraHint"

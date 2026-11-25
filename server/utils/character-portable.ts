@@ -767,6 +767,8 @@ export const PORTABLE_MODEL_CONFIG_KEYS = [
   "imageProvider",
   "imageSize",
   "imageQuality",
+  "imagePreset",
+  // imageProfiles deliberately excluded: nested connection credentials are not portable.
   // 收集类开关：收表情、捡梗（都要人看得见的结果，不额外花钱）
   "stickerAutoCollect",
   "catchphraseAutoMine",

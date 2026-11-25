@@ -23,7 +23,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { IMAGE_SIZE_SETS, resolveImagePixels, type ImageSizePreset } from "../../shared/utils/image-size";
-import { LOCAL_IMAGE_PROVIDER, resolveLocalImageModel, resolveLocalImageQuality, type LocalImageQuality } from "../../shared/utils/local-image-engine";
+import { LOCAL_IMAGE_PROVIDER, resolveLocalImagePreset, type ImageModelPreset, resolveLocalImageModel, resolveLocalImageQuality, type LocalImageQuality } from "../../shared/utils/local-image-engine";
 import { validateChatApiBaseUrl } from "./chat-model-config";
 import { generateImageWithComfy, normalizeComfyBaseUrl } from "./comfyui-image";
 import { needsTagTranslation } from "./image-prompt-translation";
@@ -93,6 +93,7 @@ export type ImageGenerationSettings = {
    * 云端服务商按模型名区分快慢，没有这个概念，所以恒为 `fast`。
    */
   quality: LocalImageQuality;
+  preset?: ImageModelPreset;
 };
 
 export type GeneratedImage = {
@@ -243,13 +244,16 @@ export function resolveImageGenerationSettings(input: {
     }
     const quality = resolveLocalImageQuality(config.imageQuality);
     const localModel = (readString(config.imageModel) || resolveLocalImageModel(quality)).slice(0, MODEL_MAX_CHARS);
+    const preset: ImageModelPreset = config.imagePreset === "moss" || config.imagePreset === "anima" ? config.imagePreset : "auto";
+    if (!resolveLocalImagePreset(localModel, preset)) return null;
     return {
+      preset,
       provider,
       model: localModel,
       apiBaseUrl: localBase,
       apiKey: "",
       quality,
-      size: resolveImagePixels(provider, localModel, resolveImageSizePreset(config)),
+      size: resolveImagePixels(provider, localModel, resolveImageSizePreset(config), preset),
     };
   }
 
@@ -356,6 +360,8 @@ export function parseExplicitImageRequest(commandText: string): ExplicitImageReq
     text = text.replace(/^(?:能不能|可不可以|可以|能|会)(?:帮我|给我|替我)?/u, "");
     const retry = /^(?:再|又|继续)/u.test(text);
     text = text.replace(/^(?:再|又|继续)+/u, "");
+    const selfie = /^(?:拍|发|来|给我发|给我拍)(?:一|几)?(?:张)?(?:你的|你自己(?:的)?|自己(?:的)?)?自拍(?:照|照片)?(?:吧|呀|啊)?$/u.test(text);
+    if (selfie) { found = { subject: "同一角色的自拍照", retry }; continue; }
     const match = /^(画|绘制|绘|生成|来|出|整|搞|做)(.*)$/u.exec(text);
     if (!match) continue;
     const verb = match[1]!; let tail = match[2]!;
@@ -409,6 +415,8 @@ export function planImageReplyDecision(input: ImageReplyDecisionInput): ImageRep
   if (base.limit > 0 && base.todayCount >= base.limit) return block("daily_limit");
   if (input.voicePlanned) return block("voice_conflict");
   if (input.promptValidation?.ok === false) return block(input.promptValidation.reason ?? "unsafe_prompt");
+  // A new request creates a proposal; only its later verified confirmation may execute.
+  if (kind === "direct") return block("confirmation_required");
   if (requested) return base;
   if (input.allowAutonomous === false) return { ...base, status: "not_requested", trigger: "none" };
   const now = input.now ?? new Date();
@@ -1156,15 +1164,20 @@ async function generateWithLocalEngine(input: {
 
   // 角色 LoRA 已负责身份约束；再编码整张立绘会把旧衣服、姿势和背景
   // 带进 latent，抵消本轮场景。此时从空白 latent 生成，保留请求画幅。
-  const reference = input.lora?.name?.trim() ? null : pickLocalReference(input.references);
+  const reference = input.lora?.name?.trim() || resolveLocalImagePreset(input.settings.model, input.settings.preset) !== "anima" ? null : pickLocalReference(input.references);
 
   /**
    * 中文 → 英文标签。
    *
    * 只有真的出现中文才翻：模型已经按标签写好的那段不用再动，改一次反而会丢细节。
    * 翻不动就按原文发 —— 中文那半会被 CLIP 当噪声，但图还是出得来，不该整轮哑火。
+   *
+   * **MOSS 不用翻**：它的编码器是 Qwen3.5-9B，中文原生，官方示例本身就是中文提示词，
+   * 图内文字渲染正是它的强项。翻了不但白花一次模型调用（几秒到十几秒），
+   * 还可能把形象档案里那点中文细节翻丢。所以这里按族分开。
    */
-  if (input.translatePrompt && (needsTagTranslation(positive) || needsTagTranslation(negative))) {
+  const wantsTagTranslation = resolveLocalImagePreset(input.settings.model, input.settings.preset) === "anima";
+  if (wantsTagTranslation && input.translatePrompt && (needsTagTranslation(positive) || needsTagTranslation(negative))) {
     const translated = await input.translatePrompt({ positive, negative });
     if (translated) {
       positive = translated.positive;
@@ -1174,7 +1187,7 @@ async function generateWithLocalEngine(input: {
   }
 
   // 翻完还有中文：说明调用方没注入翻译、或者翻译被拒了。不翻译，但要留一条能查的日志。
-  if (needsTagTranslation(positive)) {
+  if (wantsTagTranslation && needsTagTranslation(positive)) {
     console.warn("[image] 本机引擎收到的提示词里仍有中文，Anima 只认英文标签，这部分基本不起作用", {
       characterId: input.characterId,
     });
@@ -1209,6 +1222,7 @@ async function generateWithLocalEngine(input: {
   const result = await generateImageWithComfy({
     baseUrl: input.settings.apiBaseUrl,
     model: input.settings.model,
+    preset: input.settings.preset,
     quality: input.settings.quality === "quality",
     prompt: positive,
     negative,

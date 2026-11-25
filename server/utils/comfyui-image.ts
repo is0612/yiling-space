@@ -14,18 +14,40 @@
  */
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { basename, extname } from "node:path";
+import { basename, extname, resolve } from "node:path";
 import sharp from "sharp";
 
 import {
   LOCAL_IMAGE_DEFAULT_BASE_URL,
+  LOCAL_IMAGE_FAMILY,
   LOCAL_IMAGE_MODELS,
+
+  resolveLocalImagePreset,
+  type ImageModelPreset,
   resolveLocalImageModel,
+  type LocalImageFamily,
   type LocalImageQuality,
 } from "../../shared/utils/local-image-engine";
 
-const CLIP_NAME = () => process.env.COMFYUI_CLIP_NAME || "qwen_3_06b_base.safetensors";
-const VAE_NAME = () => process.env.COMFYUI_VAE_NAME || "qwen_image_vae.safetensors";
+/**
+ * CLIP / VAE 按**引擎族**取，不再是一个全局常量。
+ *
+ * Anima 与 MOSS 的文本编码器和 VAE 完全不同，混用不会「画得差」，而是直接报维度错：
+ * MOSS 的 latent 是 128 通道，给 `qwen_image_vae`（认 64 通道）就是今天早上那个
+ * `expected 64 channels, got 128`。
+ *
+ * 环境变量只覆盖 anima（老部署可能设过 `COMFYUI_CLIP_NAME`）；MOSS 用独立的变量名，
+ * 否则一个变量会把两族同时改错。
+ */
+const clipNameFor = (family: LocalImageFamily): string =>
+  family === "moss"
+    ? process.env.COMFYUI_MOSS_CLIP_NAME?.trim() || LOCAL_IMAGE_FAMILY.moss.clip
+    : process.env.COMFYUI_CLIP_NAME?.trim() || LOCAL_IMAGE_FAMILY.anima.clip;
+
+const vaeNameFor = (family: LocalImageFamily): string =>
+  family === "moss"
+    ? process.env.COMFYUI_MOSS_VAE_NAME?.trim() || LOCAL_IMAGE_FAMILY.moss.vae
+    : process.env.COMFYUI_VAE_NAME?.trim() || LOCAL_IMAGE_FAMILY.anima.vae;
 
 /**
  * 质量词。Turbo 与 Aesthetic 的推荐前缀不同：
@@ -37,8 +59,21 @@ const QUALITY_PREFIX_SCORE = "masterpiece, best quality, score_7, safe.";
 const DEFAULT_NEGATIVE =
   "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts, sepia, text, watermark";
 
-/** 单张图最长等多久。质量版首次要加载 4G 模型，留足余量。 */
-const POLL_TIMEOUT_MS = 240_000;
+/**
+ * MOSS 的默认负向，取自官方 T2I 模板。
+ *
+ * 和 anima 那串的区别是**不带 `score_*`**：那是 Danbooru 评分体系的标签，MOSS 的
+ * Qwen3.5 编码器没见过这套约定，写进去只是噪声。`text` 也不带 —— MOSS 的强项恰恰
+ * 是图里写字，禁掉等于自废武功。
+ */
+const MOSS_DEFAULT_NEGATIVE = "worst quality, bad anatomy, watermark, jpeg artifact";
+
+/**
+ * 单张图最长等多久。
+ * 质量版首次要加载 4G 模型留余量；MOSS 在 8G 卡上跑 832×1216 / 25 步会更久，
+ * 加上首次要把 9.75G 的文本编码器读进内存，240 秒不够。
+ */
+const POLL_TIMEOUT_MS = 360_000;
 const POLL_INTERVAL_MS = 800;
 const MAX_EDGE = 1280;
 const MIN_EDGE = 512;
@@ -53,6 +88,7 @@ export type ComfyImageInput = {
   quality?: boolean;
   /** 指定模型文件；省略按档位取 `LOCAL_IMAGE_MODELS`。 */
   model?: string;
+  preset?: ImageModelPreset;
   width?: number;
   height?: number;
   /** 图生图：本机绝对路径。给了就走 LoadImage + VAEEncode，尺寸由原图决定。 */
@@ -108,12 +144,14 @@ export function normalizeComfyBaseUrl(value?: string): string {
   return url.origin + (pathname === "/" ? "" : pathname);
 }
 
-const clampEdge = (value: number | undefined, fallback: number): number => {
+const clampEdge = (value: number | undefined, fallback: number, step = 8): number => {
   if (!Number.isFinite(value)) return fallback;
   const edge = Math.round(value as number);
   const bounded = Math.min(MAX_EDGE, Math.max(MIN_EDGE, edge));
-  // VAE 要求 8 的倍数，否则编解码直接报错。
-  return Math.floor(bounded / 8) * 8;
+  // VAE 对尺寸有倍数要求，否则编解码直接报错。
+  // anima 是 8（qwen_image_vae），MOSS 是 16（EmptyFlux2LatentImage 按 16 下采样）。
+  const safeStep = step > 0 ? Math.floor(step) : 8;
+  return Math.floor(bounded / safeStep) * safeStep;
 };
 
 type PromptBlock = { class_type: string; inputs: Record<string, unknown> };
@@ -122,6 +160,8 @@ function buildGraph(input: {
   prompt: string;
   negative: string;
   model: string;
+  /** 引擎族：决定 CLIP 类型、VAE 和 latent 节点。由 `resolveImageFamily(model)` 得出。 */
+  family: LocalImageFamily;
   width: number;
   height: number;
   seed: number;
@@ -132,6 +172,7 @@ function buildGraph(input: {
   /** 给了就插一个 LoraLoaderModelOnly；采样器的 model 改接它。 */
   lora?: { name: string; strength: number };
 }): Record<string, PromptBlock> {
+  const profile = LOCAL_IMAGE_FAMILY[input.family];
   /**
    * LoRA 接在 UNETLoader 和采样器之间：1 → 12 → KSampler。
    * 用 `LoraLoaderModelOnly` 而不是 `LoraLoader` —— 它只改 UNet，不碰 CLIP，
@@ -140,11 +181,16 @@ function buildGraph(input: {
   const modelRef: [string, number] = input.lora ? ["12", 0] : ["1", 0];
   const graph: Record<string, PromptBlock> = {
     "1": { class_type: "UNETLoader", inputs: { unet_name: input.model, weight_dtype: "default" } },
+    /**
+     * `type` 是最容易漏的一处：MOSS 必须走 `moss_image`，它会同时决定 tokenizer 和
+     * 聊天模板。填 `stable_diffusion` 能加载、能出图，但文本条件格式是错的 ——
+     * 表现为不服从提示词、图里文字全乱，且**不报错**。
+     */
     "2": {
       class_type: "CLIPLoader",
-      inputs: { clip_name: CLIP_NAME(), type: "stable_diffusion", device: "default" },
+      inputs: { clip_name: clipNameFor(input.family), type: profile.clipType, device: profile.clipDevice },
     },
-    "3": { class_type: "VAELoader", inputs: { vae_name: VAE_NAME() } },
+    "3": { class_type: "VAELoader", inputs: { vae_name: vaeNameFor(input.family) } },
     "4": { class_type: "CLIPTextEncode", inputs: { text: input.prompt, clip: ["2", 0] } },
     "5": { class_type: "CLIPTextEncode", inputs: { text: input.negative, clip: ["2", 0] } },
     "8": {
@@ -163,9 +209,13 @@ function buildGraph(input: {
       },
     },
     "9": { class_type: "VAEDecode", inputs: { samples: ["8", 0], vae: ["3", 0] } },
+    /**
+     * 前缀跟族走，出图落在 `output/YilingSpace/<族>/` 下。
+     * 混在一个目录里就分不清哪张是哪个模型画的 —— 而调参时恰恰要看这个。
+     */
     "10": {
       class_type: "SaveImage",
-      inputs: { images: ["9", 0], filename_prefix: "YilingSpace/anima" },
+      inputs: { images: ["9", 0], filename_prefix: `YilingSpace/${input.family}` },
     },
   };
 
@@ -179,18 +229,181 @@ function buildGraph(input: {
   if (input.imageName) {
     graph["6"] = { class_type: "LoadImage", inputs: { image: input.imageName, upload: "image" } };
     // 参考图原尺寸可能是 1440×1920 这种：直接编码会吃掉大半显存还慢。
-    // 按「总像素」缩到约 1MP，长宽比不变，resolution_steps=8 保证是 8 的倍数。
+    // 按「总像素」缩到约 1MP，长宽比不变，resolution_steps 跟族走（MOSS 要 16）。
     graph["11"] = {
       class_type: "ImageScaleToTotalPixels",
-      inputs: { image: ["6", 0], upscale_method: "lanczos", megapixels: 1.0, resolution_steps: 8 },
+      inputs: {
+        image: ["6", 0],
+        upscale_method: "lanczos",
+        megapixels: 1.0,
+        resolution_steps: profile.edgeStep,
+      },
     };
     graph["7"] = { class_type: "VAEEncode", inputs: { pixels: ["11", 0], vae: ["3", 0] } };
+  } else if (profile.latent === "flux2") {
+    /**
+     * MOSS 的 latent 是 128 通道、16 倍下采样，必须用 Flux2 的空 latent。
+     * 给 `EmptyLatentImage`（4 通道）会在 KSampler 里报形状错。
+     */
+    graph["6"] = {
+      class_type: "EmptyFlux2LatentImage",
+      inputs: { width: input.width, height: input.height, batch_size: 1 },
+    };
   } else {
     graph["6"] = {
       class_type: "EmptyLatentImage",
       inputs: { width: input.width, height: input.height, batch_size: 1 },
     };
   }
+  return graph;
+}
+
+/* ────────────────────────── 工作流模板 ────────────────────────── */
+
+/**
+ * 用户自己调好的 ComfyUI 工作流（API 格式）。
+ *
+ * 默认现拼的图只有 10 个节点、步数和采样器全写在代码里；但调过工作流的人手里那套
+ * （画风 LoRA 配比、采样器、shift、分辨率选择器）是反复试出来的，代码猜不到。
+ * 模板模式把「工序单」交还给用户：项目只注入提示词、负向词和种子，其余原样提交。
+ *
+ * **文件即开关**：模板存在就走模板，删掉就自动回到现拼 —— 不用改代码。
+ *
+ * 为什么不直接读 ComfyUI 的 `user/default/workflows`：那边的 json 是 UI 格式
+ * （带坐标、颜色、节点尺寸），引擎的 `/prompt` 不认；而且用户在界面上的临时实验
+ * 会立刻改变她出图的结果，风险不可控。所以这里存一份独立的 API 格式快照。
+ */
+const TEMPLATE_FILE = process.env.COMFYUI_TEMPLATE_PATH?.trim()
+  || "server/assets/comfyui-templates/moss.json";
+
+let templateCache: Record<string, PromptBlock> | null | undefined;
+
+async function loadWorkflowTemplate(): Promise<Record<string, PromptBlock> | null> {
+  if (templateCache !== undefined) return templateCache;
+  try {
+    const raw = await readFile(resolve(process.cwd(), TEMPLATE_FILE), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    templateCache = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, PromptBlock>
+      : null;
+    if (!templateCache) console.warn("[image] 工作流模板不是对象，回到现拼模式");
+  } catch (error) {
+    // 没有模板是默认状态，不是错误。只有「文件在但读不动」时才值得留一条记录。
+    templateCache = null;
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      console.warn("[image] 工作流模板读取失败，回到现拼模式", error instanceof Error ? error.message : error);
+    }
+  }
+  return templateCache;
+}
+
+/**
+ * 模板注入：只改提示词、负向词、种子、尺寸和存图前缀，其余保持用户工作流原样。
+ *
+ * 定位不写死节点 id —— 重新排过节点、加过中间层都会让 id 变，所以按**引用关系**找：
+ * KSampler 的 positive / negative 各自指向哪个节点。
+ */
+function applyWorkflowTemplate(
+  template: Record<string, PromptBlock>,
+  input: {
+    prompt: string;
+    negative: string;
+    seed: number;
+    width: number;
+    height: number;
+    /** 角色 LoRA。给了就插在 KSampler 之前。 */
+    lora?: { name: string; strength: number };
+  },
+): Record<string, PromptBlock> {
+  const graph = JSON.parse(JSON.stringify(template)) as Record<string, PromptBlock>;
+  const samplerIds: string[] = [];
+  let positiveId = "";
+  let negativeId = "";
+
+  for (const [id, node] of Object.entries(graph)) {
+    if (node.class_type !== "KSampler" && node.class_type !== "KSamplerAdvanced") continue;
+    samplerIds.push(id);
+    const positive = node.inputs.positive;
+    const negative = node.inputs.negative;
+    if (Array.isArray(positive)) positiveId = String(positive[0]);
+    if (Array.isArray(negative)) negativeId = String(negative[0]);
+  }
+
+  if (positiveId && graph[positiveId]) graph[positiveId]!.inputs.text = input.prompt;
+  else console.warn("[image] 模板里找不到正向提示词节点，这次没用上她的描述");
+  if (negativeId && graph[negativeId]) graph[negativeId]!.inputs.text = input.negative;
+
+  // 种子：有 SeedNode 就改它；KSampler 自己写的是字面值也一并改掉
+  for (const node of Object.values(graph)) {
+    if (node.class_type === "SeedNode") node.inputs.seed = input.seed;
+    const sampler = node.class_type === "KSampler" || node.class_type === "KSamplerAdvanced";
+    if (sampler && !Array.isArray(node.inputs.seed)) node.inputs.seed = input.seed;
+  }
+
+  /**
+   * 尺寸：优先改 `ResolutionSelector`（按比例 + 百万像素推算），
+   * 没有就退回 latent 节点的宽高。**连线驱动的跳过** —— 那种要尊重用户的设计。
+   */
+  const ratio = input.height > 0 ? input.width / input.height : 1;
+  const megapixels = Math.max(0.5, Math.round((input.width * input.height) / 100_000) / 10);
+  const ASPECTS: { name: string; value: number }[] = [
+    { name: "1:1 (Square)", value: 1 },
+    { name: "2:3 (Portrait Photo)", value: 2 / 3 },
+    { name: "3:2 (Photo)", value: 3 / 2 },
+    { name: "3:4 (Portrait Standard)", value: 3 / 4 },
+    { name: "4:3 (Standard)", value: 4 / 3 },
+    { name: "9:16 (Portrait Widescreen)", value: 9 / 16 },
+    { name: "16:9 (Widescreen)", value: 16 / 9 },
+  ];
+  const closest = ASPECTS.reduce(
+    (best, item) => (Math.abs(item.value - ratio) < Math.abs(best.value - ratio) ? item : best),
+    ASPECTS[0]!,
+  );
+
+  let sized = false;
+  for (const node of Object.values(graph)) {
+    if (node.class_type === "ResolutionSelector") {
+      node.inputs.aspect_ratio = closest.name;
+      node.inputs.megapixels = megapixels;
+      sized = true;
+    }
+  }
+  if (!sized) {
+    for (const node of Object.values(graph)) {
+      if (!/EmptyLatentImage|EmptyFlux2LatentImage/.test(node.class_type)) continue;
+      if (Array.isArray(node.inputs.width) || Array.isArray(node.inputs.height)) continue;
+      node.inputs.width = input.width;
+      node.inputs.height = input.height;
+    }
+  }
+
+  // 存图前缀跟现拼模式一致，落在 output/YilingSpace/ 下，不跟用户手跑的图混在一起
+  for (const node of Object.values(graph)) {
+    if (node.class_type === "SaveImage" && typeof node.inputs.filename_prefix === "string") {
+      node.inputs.filename_prefix = "YilingSpace/moss";
+    }
+  }
+
+  /**
+   * 角色 LoRA 接在 KSampler 之前。选链尾而不是链头，是为了不打乱用户调好的
+   * 那几层画风 LoRA 之间的相对顺序 —— 他只是想加一层，不是想重排。
+   */
+  if (input.lora?.name && samplerIds.length) {
+    const nextId = String(
+      Math.max(0, ...Object.keys(graph).map(key => Number(key) || 0)) + 1,
+    );
+    for (const id of samplerIds) {
+      const node = graph[id]!;
+      const upstream = node.inputs.model;
+      if (!Array.isArray(upstream)) continue;
+      graph[nextId] = {
+        class_type: "LoraLoaderModelOnly",
+        inputs: { model: upstream, lora_name: input.lora.name, strength_model: input.lora.strength },
+      };
+      node.inputs.model = [nextId, 0];
+    }
+  }
+
   return graph;
 }
 
@@ -315,15 +528,32 @@ export async function generateImageWithComfy(input: ComfyImageInput): Promise<Co
   const quality = input.quality === true;
   const qualityKey: LocalImageQuality = quality ? "quality" : "fast";
   const model = resolveLocalImageModel(qualityKey, input.model);
+  /**
+   * 族由模型名推断 —— 这是整套改动的枢纽：
+   * 用户只管在设置页选模型，CLIP 类型、VAE、latent 节点由这里决定。
+   */
+  const family = resolveLocalImagePreset(model, input.preset);
+  if (!family) return { ok: false, reason: "未识别的本地模型，请选择兼容的 Anima 或 MOSS 预设。" };
+  const profile = LOCAL_IMAGE_FAMILY[family];
   let imageName: string | undefined;
-  const width = clampEdge(input.width, quality ? 832 : 896);
-  const height = clampEdge(input.height, quality ? 1216 : 1152);
+  const fallbackEdges = profile.defaultEdges[qualityKey];
+  const width = clampEdge(input.width, fallbackEdges.width, profile.edgeStep);
+  const height = clampEdge(input.height, fallbackEdges.height, profile.edgeStep);
 
-  // 有参考图就走图生图；尺寸交给原图，这里的 width/height 会被忽略。
-  const reference = input.referenceBuffer
-    ?? (input.referencePath
-      ? { buffer: await readFile(input.referencePath).catch(() => null), filename: basename(input.referencePath) }
-      : null);
+  /**
+   * 参考图对 MOSS 族一律不启用。
+   *
+   * 官方模板写得很明确：`ref_image` 只喂给 LLM 做 prompt 增强，**模型本身没有图像输入通道**。
+   * 这里能"用"参考图，靠的是 VAEEncode 之后按 denoise 重绘（图生图），拿一张旧立绘去重绘
+   * 会把那张图的体型比例、构图和画风原样带回来 —— 换了引擎族之后这等于反向污染：
+   * 用 Q 版三视图做参考，出来必然是 Q 版，提示词写什么都没用。
+   */
+  const reference = family === "moss"
+    ? null
+    : (input.referenceBuffer
+      ?? (input.referencePath
+        ? { buffer: await readFile(input.referencePath).catch(() => null), filename: basename(input.referencePath) }
+        : null));
 
   if (reference) {
     if (!reference.buffer) return { ok: false, reason: "参考图读不出来（路径不对或没权限）" };
@@ -333,27 +563,61 @@ export async function generateImageWithComfy(input: ComfyImageInput): Promise<Co
   }
 
   // 档案里的负面提示词追加在官方那一串后面：中文对它无效，但英文是有效的补充。
-  const negative = [DEFAULT_NEGATIVE, input.negative?.trim()].filter(Boolean).join(", ");
+  const baseNegative = family === "moss" ? MOSS_DEFAULT_NEGATIVE : DEFAULT_NEGATIVE;
+  const negative = [baseNegative, input.negative?.trim()].filter(Boolean).join(", ");
 
   const seed = Number.isFinite(input.seed) ? Math.floor(input.seed as number) : Math.floor(Math.random() * 1e15);
-  // LoRA 文件名只认末段，挡掉 `../` 这类穿越；强度收口到 0–2（超过 2 基本只会糊）。
-  const loraName = input.lora?.name?.trim().split(/[/\\]/u).pop() ?? "";
+  /**
+   * LoRA 的名字要**保留相对路径**（例如 `moss/加速2/xxx.safetensors`）。
+   *
+   * 这里曾经只取末段文件名：引擎里的 LoRA 是按目录组织的，截断之后 ComfyUI 会回
+   * `value not in list`，而且报错信息里看不出是路径被截了。仍然挡 `..`，避免穿出 models/loras。
+   */
+  const rawLoraName = (input.lora?.name ?? "").trim();
+  const loraName = rawLoraName && !rawLoraName.includes("..") ? rawLoraName : "";
   const lora = loraName
     ? { name: loraName, strength: Math.min(2, Math.max(0, Number.isFinite(input.lora?.strength) ? input.lora!.strength as number : 1)) }
     : undefined;
-  const graph = buildGraph({
-    prompt: `${quality ? QUALITY_PREFIX_BASE : QUALITY_PREFIX_SCORE} ${prompt}`,
-    negative,
-    model,
-    width,
-    height,
-    seed,
-    steps: quality ? 30 : 12,
-    cfg: quality ? 4.5 : 1.0,
-    imageName,
-    // 不带参考图时 denoise 必须是 1，否则等于只画一半。
-    denoise: imageName ? Math.min(0.9, Math.max(0.2, input.denoise ?? 0.6)) : 1,
-    lora,
+  /**
+   * 质量前缀只有 anima 加。
+   *
+   * `masterpiece, best quality, score_7, safe` 是 Danbooru 标签体系，MOSS 的编码器吃的是
+   * 自然语言长描述，硬塞评分标签不会提升画质，只会挤占它理解主体描述的注意力。
+   */
+  const qualityPrefix = family === "moss" ? "" : (quality ? QUALITY_PREFIX_BASE : QUALITY_PREFIX_SCORE);
+  const finalPrompt = `${qualityPrefix} ${prompt}`.trim();
+
+  /**
+   * 走模板还是现拼。
+   *
+   * 模板存在 = 用户调好的那套工序单（画风 LoRA、采样器、shift 全在里面），
+   * 项目只负责把提示词、负向词和种子塞进正确的节点。
+   * 模板不存在 = 回到原来的现拼逻辑，行为完全不变。
+   */
+  const template = family === "moss" ? await loadWorkflowTemplate() : null;
+  const graph = template
+    ? applyWorkflowTemplate(template, {
+      prompt: finalPrompt,
+      negative,
+      seed,
+      width,
+      height,
+      ...(lora ? { lora } : {}),
+    })
+    : buildGraph({
+      prompt: finalPrompt,
+      negative,
+      model,
+      family,
+      width,
+      height,
+      seed,
+      steps: profile.steps[qualityKey],
+      cfg: profile.cfg[qualityKey],
+      imageName,
+      // 不带参考图时 denoise 必须是 1，否则等于只画一半。
+      denoise: imageName ? Math.min(0.9, Math.max(0.2, input.denoise ?? 0.6)) : 1,
+      lora,
   });
 
   const submitted = await submit(base, graph);

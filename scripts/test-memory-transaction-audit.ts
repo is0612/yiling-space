@@ -9,6 +9,7 @@ import { staleMemoryFingerprint, staleEventFingerprint, requireStaleFingerprint 
 import { eventCandidate, memoryCandidate, parseStaleAudit } from "../server/utils/stale-memory-parse";
 import { createMemoryApi } from "../app/api/memory";
 import { memoryAuditContentSummary } from "../server/utils/memory-audit-summary";
+import { localDayKey } from "../server/utils/memory-event-time";
 
 // Actual handler bodies run with injected auth/database. No env, database, HTTP or model.
 function load(relative: string, globals: Record<string, unknown>, names = "handler") {
@@ -162,6 +163,8 @@ assert.equal(failed.state().audits.length, 0);
 // Scan executes the actual enrichment code with fake model and repositories.
 const scanGlobals = { readableMemoryScopeWhere: () => ({}),
   createError, staleMemoryFingerprint, staleEventFingerprint, memoryCandidate, eventCandidate, parseStaleAudit,
+  // 角色时区的「今天」既做提示词锚点也算忆泡区间右端；源码里是 import，注入时要在场。
+  localDayKey,
   resolveChatModelSettings: () => ({ model: "mock" }), resolveCharacterApiKey: async () => "fake",
   readDailyQuota: async () => ({ exceeded: false }), recordModelUsage: async () => {},
   callRawModel: async () => '{"items":[{"id":"M1","verdict":"CONTRADICTED","reason":"changed","confidence":0.9},{"id":"E1","verdict":"CONTRADICTED","reason":"changed","confidence":0.9}]}',

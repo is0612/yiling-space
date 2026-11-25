@@ -634,7 +634,8 @@ export type ConversationReplyResult = {
 // v89：她没有后台面板。不许声称「我看了 / 我这边显示 / 状态显示」，不许编或复读
 //      出图张数、冷却、每日上限；这些数字只能来自 imageExecution，缺了就别报数。
 //      （v88 的内容在 v88 文件里留档，版本号按提示词实际变更递增。）
-const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v90";
+// v91: new drawing/selfie requests propose a scene; one verified confirmation executes it.
+const PROMPT_TEMPLATE_VERSION = "conversation-retrieval-v91";
 
 /**
  * 模型这一轮彻底失败时，替她说的一句兜底话。
@@ -1118,7 +1119,7 @@ function systemPrompt(flags: {
      * 而每轮都提一句「你不能画图」既浪费提示词，又会让一个本该自然的人设
      * 变成「我的功能列表里没有这一项」。所以只在开着的时候提。
      */
-    lines.push("imageEnabled is true: drawing is available, not evidence that this turn has executed anything. Do not offer a picture every turn. When this reply naturally proposes drawing a concrete subject and permission is still pending, you may return imageOffer with that proposal's concrete visual content (max 1200 characters), and ask or offer naturally without claiming it is drawn. Return imageOffer only for a proposal you actually make in this reply, never for an old proposal, a vague offer, a status question, or a picture already being made this turn. A short confirmation can be linked to a recent verified offer only by the channel; never treat your own claim as execution. A status question alone is not a new drawing request: without corresponding sent evidence, state that completion is not confirmed. Only imageReply authorizes generation for this turn, and even it is not proof of completion or delivery.");
+    lines.push("imageEnabled is true: drawing is available, not evidence that this turn has executed anything. A first drawing or selfie request always needs one later confirmation. When imageExecution has trigger direct and blockedReason confirmation_required, return a concrete imageOffer now and ask once whether to start; do not claim to draw, photograph, send or queue anything. When imageReply is true with trigger confirmed_offer, that confirmation has already been verified: acknowledge and proceed, never ask permission a second time. Do not offer a picture every turn. When this reply naturally proposes drawing a concrete subject and permission is still pending, you may return imageOffer with that proposal's concrete visual content (max 1200 characters), and ask or offer naturally without claiming it is drawn. Return imageOffer only for a proposal you actually make in this reply, never for an old proposal, a vague offer, a status question, or a picture already being made this turn. A short confirmation can be linked to a recent verified offer only by the channel; never treat your own claim as execution. A status question alone is not a new drawing request: without corresponding sent evidence, state that completion is not confirmed. Only imageReply authorizes generation for this turn, and even it is not proof of completion or delivery.");
   }
 
   if (imageEnabled || withImageReply) {
@@ -1160,6 +1161,19 @@ function systemPrompt(flags: {
         "The drawing engine for this turn only understands English Danbooru-style tags. Write imagePrompt as lowercase comma-separated English tags, using spaces instead of underscores: quality tags first (masterpiece, best quality, safe), then 1girl/1boy, character name, series, artist (prefixed with @), then clothing, action, scene, composition (fixed appearance tags for yourself are supplied by the server; describe appearance only for other requested subjects), (`upper body`, `cowboy shot`, `full body`), lighting and style. Do not write Chinese anywhere in imagePrompt — not as a translation, not in brackets, not after a dash. No sentences, no explanations, no field labels: tags only.",
       );
     }
+    /**
+     * 用户自己贴了提示词/标签时，一字不差地搬过去。
+     *
+     * 这一条跟引擎族无关，因为标签不是「描述」而是「检索键」：`sunna (zenless zone zero)`
+     * 只有原样出现才能调出那个角色，翻译成「绿发动漫少女」再画，出来的是一个长得像的
+     * 陌生人 —— 每个属性都有无数种实现，拼不出「那个人」。
+     *
+     * 而她转述时一定会顺手翻译、顺手省略作品名（中文里没有「作品名」这个概念），
+     * 所以在提示词层面直接禁止，别指望她自己意识到。
+     */
+    lines.push(
+      "If the user pasted a prompt or a tag list (comma-separated English tags, or a `character (series)` form), copy it into imagePrompt verbatim: keep the series name, keep the English, do not translate, summarise, reorder or drop anything. You may append scene, camera angle and lighting tags after it, but never rewrite the part that identifies the subject. Such tags already describe the whole subject, so do not add any description of your own identity to them.",
+    );
   }
 
   /**

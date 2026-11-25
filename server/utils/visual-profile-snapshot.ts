@@ -49,13 +49,33 @@ export function toSnapshotAssets(
  */
 export type SnapshotLora = { name: string; strength: number; trigger: string };
 
+/**
+ * LoRA 名要**保留相对路径**（例如 `moss/鲸鱼娘-DeepSeek Whalegirl/xxx.safetensors`）。
+ *
+ * 这里曾经用 `split(/[/\\]/u).pop()` 只留末段文件名。引擎里的 LoRA 是按目录组织的 ——
+ * 没有子目录时截断恰好等于原名，一旦角色 LoRA 放在 `loras/moss/<角色>/` 下面就出事：
+ * ComfyUI 回 `value not in list`，而报错信息里完全看不出是路径被截掉了。
+ *
+ * 绝对路径和 `..` 仍然挡掉：它们既不是引擎认的名字，也不该出现在工作流里。
+ * 老快照可能把绝对路径存了进来，那种就退回原来的「取末段」行为 —— 至少还能对上
+ * 根目录下放着的 LoRA。
+ */
+function sanitizeLoraName(rawName: string): string {
+  const trimmed = rawName.trim();
+  if (!trimmed || trimmed.includes("..")) return "";
+  // Windows 盘符路径、UNC、POSIX 绝对路径
+  if (/^[a-zA-Z]:[/\\]/u.test(trimmed) || /^[/\\]/u.test(trimmed)) {
+    return trimmed.split(/[/\\]/u).pop() ?? "";
+  }
+  return trimmed;
+}
+
 export function readSnapshotLora(snapshot: unknown): SnapshotLora | null {
   const raw = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
     ? snapshot as Record<string, unknown>
     : {};
   const rawName = typeof raw.loraName === "string" ? raw.loraName.trim() : "";
-  // 只留文件名：`../` 或绝对路径既不是引擎能认的名字，也不该出现在工作流里。
-  const name = rawName.split(/[/\\]/u).pop() ?? "";
+  const name = sanitizeLoraName(rawName);
   if (!name) return null;
   const strength = typeof raw.loraStrength === "number" && Number.isFinite(raw.loraStrength)
     ? Math.min(2, Math.max(0, raw.loraStrength))

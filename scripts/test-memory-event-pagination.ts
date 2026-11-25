@@ -96,6 +96,17 @@ function fixture(count: number, sameTime = false, withContext = false) {
       if (failTransactionAt === transactions) throw new Error("mock transaction failure");
       return fn(mock);
     },
+    /**
+     * 分页落库前会先锁当天进度对应的范围行（`memory-event-progress-lock`，NO KEY UPDATE
+     * 是为了不挡其他参与者范围的 FK 检查）。这里不实现真实锁语义，但要求调用点保持这一形状 ——
+     * 换成别的 raw SQL 应当让本用例失败，而不是被 mock 悄悄吞掉。
+     */
+    $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      assert.match(strings.join("$value"), /SELECT id FROM "memory_scopes" WHERE id = \$value::uuid FOR NO KEY UPDATE/u,
+        "event persistence must lock the day's memory scope row before writing progress");
+      assert.equal(values.length, 1, "the progress lock binds exactly one scope id");
+      return [];
+    },
   };
   return {
     prisma: mock as unknown as PrismaClient, rows, jobs, queries, contextQueries, eventStates,

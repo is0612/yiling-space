@@ -229,6 +229,9 @@ export type Character = {
   imageSize: "square" | "portrait" | "landscape";
   /** 出图档位：fast（Turbo，默认）/ quality（Aesthetic）。只有本机引擎看它。 */
   imageQuality: "fast" | "quality";
+  imagePreset?: "auto" | "anima" | "moss";
+  imageProfiles?: import("../utils/local-image-engine").ImageModelProfile[];
+  imageActiveProfileId?: string;
 
   // ── 主动行为 ──────────────────────────────────────────────
   /** 主动找话设置；未配置过时是默认值（enabled=false）。 */

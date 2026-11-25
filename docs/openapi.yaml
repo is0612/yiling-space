@@ -9428,11 +9428,24 @@ components:
         contextAssistantApiBaseUrl: { type: string, maxLength: 500, description: 留空跟随角色聊天 API 地址 }
         contextAssistantApiKeyConfigured: { type: boolean, readOnly: true }
         contextAssistantConfigured: { type: boolean, readOnly: true, description: 已保存独立模型名称与加密 Key }
+    ImageModelProfile:
+      type: object
+      additionalProperties: false
+      required: [id, provider, apiBaseUrl, apiKey, model, size, quality, preset]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 120 }
+        provider: { type: string, enum: ['', comfyui, minimax, openai] }
+        apiBaseUrl: { type: string, maxLength: 500 }
+        apiKey: { type: string, maxLength: 8192, description: '仅经鉴权的角色设置读写；不导出到角色卡。' }
+        model: { type: string, maxLength: 120 }
+        size: { type: string, enum: [square, portrait, landscape] }
+        quality: { type: string, enum: [fast, quality] }
+        preset: { type: string, enum: [auto, anima, moss] }
     CharacterPatch:
       allOf:
         - $ref: '#/components/schemas/ContextAssistantSettings'
       type: object
-      description: 更新角色时的部分字段；所有字段均为可选。API Key 仅可写入，服务端会加密保存且不会回传。
+      description: 更新角色时的部分字段；所有字段均为可选。模型凭据仅通过鉴权的角色设置接口读写；图片预设不随角色卡导出。
       properties:
         name: { type: string, minLength: 1, maxLength: 100 }
         avatar: { type: string, nullable: true }
@@ -9446,6 +9459,14 @@ components:
         chatApiBaseUrl: { type: string, maxLength: 500 }
         chatApiKey: { type: string, maxLength: 8192, writeOnly: true }
         clearApiKey: { type: boolean }
+        imagePreset: { type: string, enum: [auto, anima, moss], description: '当前生效的本地兼容预设；auto 不识别的权重不得默认为 Anima。' }
+        imageActiveProfileId: { type: string, maxLength: 120 }
+        imageProfiles:
+          type: array
+          maxItems: 40
+          description: '按模型保留的配置，顶层 image 字段仍是当前生效值；省略时保留已有预设。'
+          items: { $ref: '#/components/schemas/ImageModelProfile' }
+        clearImageApiKey: { type: boolean, description: '清除当前生效连接凭据，同时清除 provider 和规范化地址相同的全部图片预设凭据；其他连接保留。' }
         # 语音：合成与识别两套配置，Key 分开两把（Breeze 只做合成）
         ttsProvider: { type: string, enum: ['', openai, minimax, breeze], description: 语音合成服务商；空 = 按地址自动判断 }
         ttsInstructions: { type: string, maxLength: 400, description: Breeze 的语气指令（软糯/气声这类）；其他服务商忽略 }

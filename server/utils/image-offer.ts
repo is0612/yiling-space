@@ -31,7 +31,7 @@ function timestamp(value: Date | string): number {
 export function isImageOfferConfirmationText(content: string): boolean {
   if (content.length > 32 || /[?？]/u.test(content)) return false;
   const compact = content.trim().replace(/[\s，,。.!！~～]+/gu, "");
-  return /^(?:(?:嗯嗯|嗯|好啊|好呀|好的|好|可以|行啊|行)(?:那|那就)?(?:你)?(?:试试|试试看|画吧|出吧|出一张|画一张看看)?|(?:那|那就)?(?:你)?(?:试试|试试看|画吧|出吧|出一张|画一张看看))$/u.test(compact);
+  return /^(?:(?:嗯嗯|嗯|好啊|好呀|好的|好|可以|要的|行啊|行)(?:那|那就)?(?:你)?(?:试试|试试看|画吧|拍吧|发吧|拍一张|发一张|出吧|出一张|画一张看看)?|(?:那|那就)?(?:你)?(?:试试|试试看|画吧|拍吧|发吧|拍一张|发一张|出吧|出一张|画一张看看))$/u.test(compact);
 }
 
 /** Status questions must not turn into a fresh drawing through the random-image branch. */

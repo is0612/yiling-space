@@ -61,7 +61,8 @@ export function resolveImageRequest(input: { channel: "private" | "group"; curre
     const confirmed = confirmationText && input.current.length === 1
       ? resolveImageOfferConfirmation({ ...message, confirmationText: text }, input.history, input.now) : null;
     if (confirmed) { candidates.push({ kind: "confirmation", ...reference, subject: confirmed.prompt, offerId: confirmed.offerMessageId }); continue; }
-    if (direct) { candidates.push({ kind: "direct", ...reference, ...(direct.subject ? { subject: direct.subject } : {}) }); continue; }
+    // Consent never becomes a fresh request after the proposal was consumed or belongs to someone else.
+    if (direct && !confirmationText) { candidates.push({ kind: "direct", ...reference, ...(direct.subject ? { subject: direct.subject } : {}) }); continue; }
     if (declined) { candidates.push({ kind: "declined", ...reference }); continue; }
     if (status) { candidates.push({ kind: "status", ...reference }); continue; }
     const offer = input.current.length === 1 ? resolveImageOfferConfirmation({ ...message, confirmationText: text }, input.history, input.now) : null;

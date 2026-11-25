@@ -21,12 +21,16 @@ for (const changes of [{ kind: "AI" as const }, { readOnly: true }, { source: "b
 assert.equal(resolve({ commandText: "", content: "[图片：画一只猫]" }).kind, "none", "only real text segments count");
 assert.equal(resolveImageRequest({ channel: "group", current: [current, { ...current, id: "other", authorOpenId: "member-b", commandText: "你好", addressedToSelf: true }], history: [], now }).kind, "none", "another message's recipient cannot authorize this one");
 const offer = { id: "offer", role: "ASSISTANT", content: "画一只猫好吗", occurredAt: new Date(+now - 1000), metadata: { imageOffer: { prompt: "一只橘猫坐窗台", authorOpenId: current.authorOpenId } } };
-for (const commandText of ["嗯嗯画吧", "出吧", "那就出吧", "嗯嗯 那你试试"]) {
+for (const commandText of ["嗯嗯画吧", "出吧", "那就出吧", "嗯嗯 那你试试", "要的", "拍吧", "发吧", "拍一张", "发一张"]) {
  const result = resolveImageRequest({ channel: "private", current: [{ ...current, commandText, content: commandText }], history: [offer], now });
  assert.equal(result.kind, "confirmation", commandText);
  assert.equal(result.subject, "一只橘猫坐窗台");
+ const groupMessage = { ...current, commandText, content: commandText, addressedToSelf: true };
+ assert.equal(resolveImageRequest({ channel: "group", current: [groupMessage], history: [offer], now }).kind, "confirmation", "same participant may confirm in an addressed group message");
+ assert.notEqual(resolveImageRequest({ channel: "group", current: [{ ...groupMessage, authorOpenId: "member-b" }], history: [offer], now }).kind, "confirmation", "another participant cannot confirm this offer");
+ assert.equal(resolveImageRequest({ channel: "group", current: [{ ...groupMessage, addressedToSelf: false }], history: [offer], now }).reason, "not_addressed", "consent still requires a verified recipient in groups");
 }
-for (const text of ["嗯嗯", "可以", "行", "那你试试", "出吧"]) {
+for (const text of ["嗯嗯", "可以", "行", "那你试试", "出吧", "要的", "拍吧", "发吧", "拍一张", "发一张"]) {
  const result = resolveImageRequest({ channel: "private", current: [{ ...current, commandText: text, content: text }], history: [], now });
  assert.deepEqual(result, { kind: "none" });
  assert.equal(planImageReplyDecision({ modelConfig: { imageEnabled: true, imageChance: 0 }, todayCount: 0, request: result }).requested, false);
@@ -59,7 +63,19 @@ assert.equal(isAutonomousImageEligible([{ ...current, commandText: "今天的海
 const config = { imageEnabled: true, imageChance: 0, imageDailyLimit: 8, imageCooldownMinutes: 60 };
 const base = { modelConfig: config, todayCount: 0, lastImageAt: now, now, random: () => 0 };
 assert.equal(planImageReplyDecision({ ...base, request: { kind: "none" } }).status, "not_requested");
-assert.equal(planImageReplyDecision({ ...base, request: { kind: "direct" } }).status, "approved");
+assert.equal(planImageReplyDecision({ ...base, request: { kind: "direct" } }).blockedReason, "confirmation_required");
+assert.equal(planImageReplyDecision({ ...base, request: { kind: "confirmation" } }).status, "approved", "one verified confirmation executes immediately");
+for (const commandText of ["画吧", "拍吧", "发吧", "要的"]) {
+ const consumed = { ...offer, metadata: { ...offer.metadata, imageAttempt: { status: "generated" } } };
+ const request = resolveImageRequest({ channel: "private", current: [{ ...current, commandText, content: commandText }], history: [consumed], now });
+ assert.equal(request.kind, "none", "consumed confirmation never becomes another direct request");
+ assert.notEqual(planImageReplyDecision({ ...base, request, allowAutonomous: false }).status, "approved");
+}
+for (const commandText of ["发一张自拍", "拍张自拍照", "画一张花园"]) {
+ const request = resolveImageRequest({ channel: "private", current: [{ ...current, commandText, content: commandText }], history: [], now });
+ assert.equal(request.kind, "direct");
+ assert.equal(planImageReplyDecision({ ...base, request }).blockedReason, "confirmation_required");
+}
 assert.equal(planImageReplyDecision({ ...base, request: { kind: "confirmation" } }).trigger, "confirmed_offer");
 for (const [changes, reason] of [
  [{ channelSupported: false }, "channel_unsupported"], [{ configured: false }, "missing_config"], [{ modelConfig: { ...config, imageEnabled: false } }, "disabled"],
@@ -68,7 +84,7 @@ for (const [changes, reason] of [
  [{ request: { kind: "none", reason: "confirmation_required" } }, "confirmation_required"], [{ promptValidation: { ok: false, reason: "unsafe_prompt" } }, "unsafe_prompt"],
  [{ promptValidation: { ok: false, reason: "missing_prompt" } }, "missing_prompt"],
 ] as const) assert.equal(planImageReplyDecision({ ...base, request: { kind: "direct" }, ...changes }).blockedReason, reason);
-assert.equal(planImageReply({ ...base, force: true }), true, "legacy boolean delegates same decision");
+assert.equal(planImageReply({ ...base, force: true }), false, "legacy force cannot bypass the confirmation stage");
 for (const prompt of ["QQ聊天截图", "微信聊天界面", "chat log with messages", "chat screenshot", "对话记录", "a whale beside @member_6", "@self on a poster"]) assert.equal(validateImageScenePrompt(prompt).ok, false, prompt);
 assert.equal(validateImageScenePrompt("").ok, false);
 assert.equal(validateImageScenePrompt("一张海报写着春日，旁边放一本笔记本").ok, true);

@@ -7,6 +7,13 @@ import { generateImageWithComfy } from "../../utils/comfyui-image";
 /** 提示词上限，跟 image-generation.ts 保持一致。 */
 const PROMPT_MAX_CHARS = 1200;
 
+/**
+ * 模型名上限，跟 image-generation.ts 的 `MODEL_MAX_CHARS` 一致。
+ * 这个名字会原样进 `UNETLoader.unet_name`，引擎那边按白名单校验（不在列表里就报错），
+ * 所以不需要额外做字符过滤，只要卡住长度。
+ */
+const MODEL_MAX_CHARS = 200;
+
 /** 参考图上限：图生图只用一张立绘，16MB 留足了高分辨率余量。 */
 const MAX_REFERENCE_BYTES = 16 * 1024 * 1024;
 
@@ -82,12 +89,13 @@ async function assertAllowedPath(input: string): Promise<string> {
 }
 
 /**
- * 用本机 ComfyUI + Anima 画一张图。
+ * 用本机 ComfyUI 画一张图（Anima 或 MOSS，看 `model`）。
  *
  * POST /api/local/draw
  * {
- *   "prompt": "1girl, solo, rainy neon street at night",   // 英文/标签，中文无效
- *   "quality": false,        // true = 30 步精修（约 50 秒），默认 12 步（约 12 秒）
+ *   "prompt": "1girl, solo, rainy neon street at night",   // anima 要英文/标签；MOSS 中文也行
+ *   "model": "moss_image_sft_int8_convrot.safetensors",    // 选填，留空按档位走 anima
+ *   "quality": false,        // true = 精修档（anima 30 步 / MOSS 25 步）
  *   "width": 896, "height": 1152,
  *   "referencePath": "D:\\\\AI\\\\some.png",  // 可选，给了就是图生图
  *   "denoise": 0.6,          // 可选，仅图生图生效
@@ -102,7 +110,7 @@ export default defineEventHandler(async event => {
 
   const body = await readBody<Record<string, unknown>>(event).catch(() => null);
   const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
-  if (!prompt) throw createError({ statusCode: 400, message: "请填写画面描述（英文或 Danbooru 标签）。" });
+  if (!prompt) throw createError({ statusCode: 400, message: "请填写画面描述（Anima 只认英文标签，MOSS 中文也行）。" });
   if (prompt.length > PROMPT_MAX_CHARS) {
     throw createError({ statusCode: 400, message: `画面描述最多 ${PROMPT_MAX_CHARS} 个字符。` });
   }
@@ -112,6 +120,11 @@ export default defineEventHandler(async event => {
 
   const result = await generateImageWithComfy({
     prompt,
+    /**
+     * 选填模型文件。不给就按档位走 anima 默认值；给了 `moss_image_*` 会自动切到
+     * MOSS 那套节点组合（CLIP type、VAE、latent 全换），见 `resolveImageFamily`。
+     */
+    model: typeof body?.model === "string" ? body.model.trim().slice(0, MODEL_MAX_CHARS) || undefined : undefined,
     quality: body?.quality === true,
     width: typeof body?.width === "number" ? body.width : undefined,
     height: typeof body?.height === "number" ? body.height : undefined,

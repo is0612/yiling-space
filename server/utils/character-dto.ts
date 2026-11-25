@@ -12,7 +12,7 @@ import { ASSISTANT_FIELDS, summarizeAssistantConnection } from "./assistant-inhe
 import { readKnowledgeCollectScope } from "./knowledge-collect-policy";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
 import { resolveImageChance, resolveImageCooldownMinutes, resolveImageDailyLimit, resolveImageSizePreset } from "./image-generation";
-import { resolveLocalImageQuality } from "../../shared/utils/local-image-engine";
+import { resolveLocalImageQuality, readImageProfiles } from "../../shared/utils/local-image-engine";
 
 function positiveNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
@@ -275,6 +275,9 @@ export function toCharacterDto(input: unknown): CharacterDto {
     imageProvider: typeof config.imageProvider === "string" ? config.imageProvider : "",
     imageSize: resolveImageSizePreset(config),
     imageQuality: resolveLocalImageQuality(config.imageQuality),
+    imagePreset: config.imagePreset === "moss" || config.imagePreset === "anima" ? config.imagePreset : "auto",
+    imageProfiles: (() => { try { return readImageProfiles(config.imageProfiles ?? []); } catch { return []; } })(),
+    imageActiveProfileId: typeof config.imageActiveProfileId === "string" ? config.imageActiveProfileId : "",
     proactive: resolveProactiveSettings(config),
     groupInitiative: resolveGroupInitiativeSettings(config),
   };

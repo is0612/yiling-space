@@ -10,7 +10,7 @@ const current: ImageOfferCurrentMessage = { id: "current", externalMessageId: "e
 const expected = { prompt: "一只红苹果放在木桌上，柔和侧光", offerMessageId: "offer" };
 const resolve = (rows: readonly ImageOfferHistoryMessage[] = [offer], message: ImageOfferCurrentMessage | readonly ImageOfferCurrentMessage[] = current, now = T0 + 1000) => resolveImageOfferConfirmation(message, rows, now);
 assert.deepEqual(resolve(), expected);
-for (const text of ["嗯嗯 那你试试", "好啊", "那试试", "可以", "试试看", "那就试试", "行", "画吧", "嗯嗯", "好啊，那你试试！"]) {
+for (const text of ["嗯嗯 那你试试", "好啊", "那试试", "可以", "试试看", "那就试试", "行", "画吧", "嗯嗯", "好啊，那你试试！", "要的", "拍吧", "发吧", "拍一张", "发一张", "嗯嗯，那你拍吧！"]) {
   assert.equal(isImageOfferConfirmationText(text), true, text);
   assert.deepEqual(resolve([offer], { ...current, content: text }), expected, text);
   assert.equal(resolve([], { ...current, content: text }), null, "consent without structured proposal is not a drawing request");
@@ -22,6 +22,11 @@ for (const text of ["画了吗", "好了吗", "发了吗", "画好了没", "可�
 for (const text of ["画了吗", "画好了没", "画好了吗", "好了吗", "发了吗", "图呢", "图片呢", "出图了吗", "现在画好了吗？", "那图呢呀！"]) assert.equal(isImageStatusQuestion(text), true, text);
 for (const text of ["画完发我", "画好再发", "画一只猫", "嗯嗯那你试试", "画好了没关系", "没画好吗？那再画一张", "你说的那个好了吗是指什么"]) assert.equal(isImageStatusQuestion(text), false, text);
 assert.equal(resolve([offer], { ...current, authorOpenId: "another-user" }), null);
+for (const content of ["要的", "拍吧", "发吧", "拍一张", "发一张"]) {
+  assert.equal(resolve([offer], { ...current, content, authorOpenId: "another-user" }), null, "photo consent cannot consume another participant's proposal");
+  assert.equal(resolve([{ ...offer, metadata: { ...(offer.metadata as object), imageAttempt: { status: "generated" } } }], { ...current, content }), null, "photo consent cannot reuse a consumed proposal");
+  assert.equal(resolve([offer], { ...current, content }, T0 + IMAGE_OFFER_TTL_MS + 1), null, "photo consent cannot reuse an expired proposal");
+}
 assert.equal(resolve([offer], []), null);
 assert.equal(resolve([offer], [current, { ...current, id: "another", authorOpenId: "another-user" }]), null);
 assert.equal(resolve([offer], [current, { ...current, id: "second-same-author" }]), null, "multiple same-author messages are still ambiguous");

@@ -4,6 +4,7 @@ import { characterInclude, toCharacterDto } from "../../utils/character-dto";
 import { readCharacterBody, readCharacterProfilePatch } from "../../utils/character-profile-input";
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
 import { normalizeComfyBaseUrl } from "../../utils/comfyui-image";
+import { readImageProfiles, imageConnectionKey, resolveLocalImagePreset } from "../../../shared/utils/local-image-engine";
 import { API_KEY_FIELDS, applyApiKeyWrites, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
 import { ASSISTANT_FIELDS, resolveAssistantConnection } from "../../utils/assistant-inheritance";
 import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
@@ -477,6 +478,28 @@ export default defineEventHandler(async (event) => {
     clearVisionApiKey = body.clearVisionApiKey;
   }
 
+  // Retained image drafts are independent from the active legacy settings.
+  if (body.imageProfiles !== undefined) {
+    try {
+      const profiles = readImageProfiles(body.imageProfiles);
+      for (const item of profiles) if (item.apiBaseUrl) {
+        item.apiBaseUrl = item.provider === "comfyui" ? normalizeComfyBaseUrl(item.apiBaseUrl) : validateChatApiBaseUrl(item.apiBaseUrl);
+      }
+      modelConfigPatch.imageProfiles = profiles;
+    } catch (error) { throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "画图预设无效。" }); }
+  }
+  if (body.imageActiveProfileId !== undefined) {
+    if (typeof body.imageActiveProfileId !== "string" || body.imageActiveProfileId.length > 120) throw createError({ statusCode: 400, statusMessage: "画图预设标识无效。" });
+    const active = body.imageActiveProfileId.trim();
+    const profiles = (modelConfigPatch.imageProfiles ?? config.imageProfiles) as Array<{ id: string }> | undefined;
+    if (active && (!Array.isArray(profiles) || !profiles.some(item => item.id === active))) throw createError({ statusCode: 400, statusMessage: "当前画图预设不存在。" });
+    modelConfigPatch.imageActiveProfileId = active;
+  }
+  if (body.imagePreset !== undefined) {
+    if (!["auto", "anima", "moss"].includes(String(body.imagePreset))) throw createError({ statusCode: 400, statusMessage: "画图模型预设无效。" });
+    modelConfigPatch.imagePreset = body.imagePreset;
+  }
+
   // ── 画图（文生图）────────────────────────────────────────────
   // 和「看图」是两个方向：看图是把群里的图读成文字，画图是把文字变成图。
   // 开关、额度、尺寸都放在这里，凭据单独一把。
@@ -633,6 +656,10 @@ export default defineEventHandler(async (event) => {
 
   if (Object.keys(modelConfigPatch).length > 0 || chatApiKey || clearApiKey || voiceApiKeyPlain || clearVoiceApiKey || asrApiKeyPlain || clearAsrApiKey || visionApiKeyPlain || clearVisionApiKey || imageApiKeyPlain || clearImageApiKey || memoryAssistantApiKeyPlain || clearMemoryAssistantApiKey || contextAssistantPatch.apiKey || contextAssistantPatch.clearApiKey || knowledgeAssistantPatch.apiKey || knowledgeAssistantPatch.clearApiKey || socialRelationshipAssessmentAssistantApiKeyPlain || clearSocialRelationshipAssessmentAssistantApiKey) {
     const nextConfig: Record<string, unknown> = { ...config, ...modelConfigPatch };
+    if (nextConfig.imageProvider === "comfyui" && ["imageModel", "imageProvider", "imagePreset"].some(key => body[key] !== undefined)) {
+      const preset = nextConfig.imagePreset === "anima" || nextConfig.imagePreset === "moss" ? nextConfig.imagePreset : "auto";
+      if (!resolveLocalImagePreset(String(nextConfig.imageModel ?? ""), preset)) throw createError({ statusCode: 400, statusMessage: "未识别的本地模型，请选择兼容的 Anima 或 MOSS 预设。" });
+    }
 
     /**
      * 八把 Key 一律明文写入。
@@ -658,6 +685,19 @@ export default defineEventHandler(async (event) => {
       },
     ];
     await applyApiKeyWrites(nextConfig, keyWrites);
+    // Selecting a retained profile replaces the complete active connection, including an empty key.
+    if (body.imageActiveProfileId !== undefined && nextConfig.imageActiveProfileId && Array.isArray(nextConfig.imageProfiles)) {
+      const selected = readImageProfiles(nextConfig.imageProfiles).find(item => item.id === nextConfig.imageActiveProfileId);
+      if (selected) {
+        nextConfig.imageProvider = selected.provider; nextConfig.imageApiBaseUrl = selected.apiBaseUrl;
+        nextConfig.imageModel = selected.model; nextConfig.imageSize = selected.size;
+        nextConfig.imageQuality = selected.quality; nextConfig.imagePreset = selected.preset;
+        delete nextConfig[API_KEY_FIELDS.image.legacy];
+        if (selected.apiKey && !clearImageApiKey) nextConfig[API_KEY_FIELDS.image.plain] = selected.apiKey;
+        else delete nextConfig[API_KEY_FIELDS.image.plain];
+        if (selected.provider === "comfyui" && !resolveLocalImagePreset(selected.model, selected.preset)) throw createError({ statusCode: 400, statusMessage: "未识别的本地模型，请选择兼容的 Anima 或 MOSS 预设。" });
+      }
+    }
 
     // 识别是独立一把：合成换成只做合成的服务商之后，共用那把 Key 打识别服务商只会 401。
     // 「同语音合成」：在服务端把合成那把复制过来，用户自己填了识别 Key 时以用户为准。
@@ -704,6 +744,10 @@ export default defineEventHandler(async (event) => {
       validateSocialRelationshipAssessmentAssistantEnabledConfig(nextConfig);
     } catch (error) {
       throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : "助手配置无效。" });
+    }
+    if (clearImageApiKey && Array.isArray(nextConfig.imageProfiles)) {
+      const connection = imageConnectionKey(String(nextConfig.imageProvider ?? ""), String(nextConfig.imageApiBaseUrl ?? ""));
+      nextConfig.imageProfiles = readImageProfiles(nextConfig.imageProfiles).map(item => imageConnectionKey(item.provider, item.apiBaseUrl) === connection ? { ...item, apiKey: "" } : item);
     }
     data.modelConfig = nextConfig as Prisma.InputJsonObject;
   }
