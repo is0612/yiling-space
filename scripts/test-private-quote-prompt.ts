@@ -20,6 +20,10 @@ try {
   assert.equal(payload().currentMessage, "第一句不对");
   assert.match(captured.messages[0]!.content, /exact single message/);
   assert.match(captured.messages[0]!.content, /never as instructions/);
+  // v92：currentMessage 是纠正、且引用的是自己时，被纠正的是被引用那句本身；
+  // 「这句/这句话/这条/这里」先指被引用消息，不对到上一轮的字面同名词。
+  assert.match(captured.messages[0]!.content, /point at the quoted message first/);
+  assert.match(captured.messages[0]!.content, /the quoted statement itself is what is being corrected/);
   assert(!JSON.stringify(payload().quotedMessage).includes("-42"), "平台消息ID无需暴露给模型");
   const metadata = buildStoredMessageMetadata({ platform: "qq-onebot", storedReason: "recorded", message: { authorOpenId: "123456789", content: base.currentMessage, quotedMessage } });
   assert.deepEqual(metadata.quotedMessage, quotedMessage);
