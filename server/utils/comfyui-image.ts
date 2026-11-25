@@ -28,6 +28,7 @@ import {
   type LocalImageFamily,
   type LocalImageQuality,
 } from "../../shared/utils/local-image-engine";
+import { LOCAL_SIZE_MULTIPLE } from "../../shared/utils/image-size";
 
 /**
  * CLIP / VAE 按**引擎族**取，不再是一个全局常量。
@@ -75,7 +76,12 @@ const MOSS_DEFAULT_NEGATIVE = "worst quality, bad anatomy, watermark, jpeg artif
  */
 const POLL_TIMEOUT_MS = 360_000;
 const POLL_INTERVAL_MS = 800;
-const MAX_EDGE = 1280;
+/**
+ * 单边像素上限。原来是 1280，只够放 1 MP 的三档；现在设置页按「比例 + 预算」选，
+ * 2 MP 的 21:9 宽边就是 2240，1290 这种旧上限会把宽高裁掉一截，
+ * 页面显示的尺寸就和实际出的图对不上了。2304 刚好盖住 2240，也仍是 64 的倍数。
+ */
+const MAX_EDGE = 2304;
 const MIN_EDGE = 512;
 
 export type ComfyImageInput = {
@@ -91,6 +97,14 @@ export type ComfyImageInput = {
   preset?: ImageModelPreset;
   width?: number;
   height?: number;
+  /**
+   * 工作流 `ResolutionSelector` 的比例枚举名（`9:16 (Portrait Widescreen)`）与百万像素。
+   *
+   * 有这两个就优先用它们：节点的宽高是自己算的，从 `width/height` 反推比例会丢精度
+   * （896×1152 会被归到 3:4、1 MP），页面写的尺寸和实际出的图就对不上了。
+   */
+  aspectRatio?: string;
+  megapixels?: number;
   /** 图生图：本机绝对路径。给了就走 LoadImage + VAEEncode，尺寸由原图决定。 */
   referencePath?: string;
   /** 图生图：也可以直接给内存里的图（比如角色立绘）。 */
@@ -298,6 +312,51 @@ async function loadWorkflowTemplate(): Promise<Record<string, PromptBlock> | nul
 }
 
 /**
+ * `ResolutionSelector` 认的八个比例名。必须和节点枚举一字不差，否则 ComfyUI 回
+ * `value not in list`，报错里还看不出是拼错了哪个字。
+ */
+const RESOLUTION_ASPECTS: { name: string; value: number }[] = [
+  { name: "1:1 (Square)", value: 1 },
+  { name: "2:3 (Portrait Photo)", value: 2 / 3 },
+  { name: "3:2 (Photo)", value: 3 / 2 },
+  { name: "3:4 (Portrait Standard)", value: 3 / 4 },
+  { name: "4:3 (Standard)", value: 4 / 3 },
+  { name: "9:16 (Portrait Widescreen)", value: 9 / 16 },
+  { name: "16:9 (Widescreen)", value: 16 / 9 },
+  { name: "21:9 (Ultrawide)", value: 21 / 9 },
+];
+
+/**
+ * 交给 `ResolutionSelector` 的三个值：比例、百万像素、倍数。
+ *
+ * 比例和预算优先用调用方给的值 —— 设置页的宽高就是按这同一组参数算出来的，
+ * 从这里反推反而会把 896×1152 归到 3:4、把 1.99 MP 抹成 2.0，页面和实际就对不上。
+ * 没给才回退到「按宽高反推」，那是给老调用方留的路。
+ */
+export function resolutionSelectorTargets(input: {
+  aspectRatio?: string;
+  megapixels?: number;
+  width: number;
+  height: number;
+}): { aspectRatio: string; megapixels: number; multiple: number } {
+  const ratio = input.height > 0 ? input.width / input.height : 1;
+  const closest = RESOLUTION_ASPECTS.reduce(
+    (best, item) => (Math.abs(item.value - ratio) < Math.abs(best.value - ratio) ? item : best),
+    RESOLUTION_ASPECTS[0]!,
+  );
+  return {
+    aspectRatio: RESOLUTION_ASPECTS.some(item => item.name === input.aspectRatio) ? input.aspectRatio! : closest.name,
+    megapixels: input.megapixels && Number.isFinite(input.megapixels)
+      ? Math.min(2, Math.max(0.5, input.megapixels))
+      // 节点按 1024×1024 = 1 MP 折算，这里也得用同一个基准（以前除以 100,000，会多算 5%）
+      : Math.max(0.5, Math.round((input.width * input.height) / 1_048_576 * 10) / 10),
+    // 64：Anima 的 VAE 要 8、MOSS 的 Flux2 latent 要 16，64 是公倍数，
+    // 也让页面按同一个公式算出来的宽高就是引擎实际用的宽高。
+    multiple: LOCAL_SIZE_MULTIPLE,
+  };
+}
+
+/**
  * 模板注入：只改提示词、负向词、种子、尺寸和存图前缀，其余保持用户工作流原样。
  *
  * 定位不写死节点 id —— 重新排过节点、加过中间层都会让 id 变，所以按**引用关系**找：
@@ -311,6 +370,9 @@ function applyWorkflowTemplate(
     seed: number;
     width: number;
     height: number;
+    /** 设置页选的比例枚举名与像素预算；给了就以它们为准（见 `ComfyImageInput` 的说明）。 */
+    aspectRatio?: string;
+    megapixels?: number;
     /** 角色 LoRA。给了就插在 KSampler 之前。 */
     lora?: { name: string; strength: number };
   },
@@ -344,27 +406,13 @@ function applyWorkflowTemplate(
    * 尺寸：优先改 `ResolutionSelector`（按比例 + 百万像素推算），
    * 没有就退回 latent 节点的宽高。**连线驱动的跳过** —— 那种要尊重用户的设计。
    */
-  const ratio = input.height > 0 ? input.width / input.height : 1;
-  const megapixels = Math.max(0.5, Math.round((input.width * input.height) / 100_000) / 10);
-  const ASPECTS: { name: string; value: number }[] = [
-    { name: "1:1 (Square)", value: 1 },
-    { name: "2:3 (Portrait Photo)", value: 2 / 3 },
-    { name: "3:2 (Photo)", value: 3 / 2 },
-    { name: "3:4 (Portrait Standard)", value: 3 / 4 },
-    { name: "4:3 (Standard)", value: 4 / 3 },
-    { name: "9:16 (Portrait Widescreen)", value: 9 / 16 },
-    { name: "16:9 (Widescreen)", value: 16 / 9 },
-  ];
-  const closest = ASPECTS.reduce(
-    (best, item) => (Math.abs(item.value - ratio) < Math.abs(best.value - ratio) ? item : best),
-    ASPECTS[0]!,
-  );
-
+  const target = resolutionSelectorTargets(input);
   let sized = false;
   for (const node of Object.values(graph)) {
     if (node.class_type === "ResolutionSelector") {
-      node.inputs.aspect_ratio = closest.name;
-      node.inputs.megapixels = megapixels;
+      node.inputs.aspect_ratio = target.aspectRatio;
+      node.inputs.megapixels = target.megapixels;
+      if (!Array.isArray(node.inputs.multiple)) node.inputs.multiple = target.multiple;
       sized = true;
     }
   }
@@ -602,6 +650,7 @@ export async function generateImageWithComfy(input: ComfyImageInput): Promise<Co
       seed,
       width,
       height,
+      ...(input.aspectRatio ? { aspectRatio: input.aspectRatio, megapixels: input.megapixels } : {}),
       ...(lora ? { lora } : {}),
     })
     : buildGraph({

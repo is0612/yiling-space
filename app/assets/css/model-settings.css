@@ -64,3 +64,6 @@
 @media (max-width: 420px) {
   .model-settings-workspace .model-role-indicator { max-width: calc(100% - 110px); }
 }
+/* 气泡挂在 body 上，带不了工作区前缀。这个类名只有本页「出图档位」的问号用：
+   那段说明一百多字，不给上限会撑成一行横贯屏幕的提示条。 */
+.ms-help-tip { max-width: 320px; line-height: 1.65; }

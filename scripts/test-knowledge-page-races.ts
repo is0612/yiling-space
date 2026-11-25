@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { applyAsrProviderPreset, applyVoiceProviderPreset } from "../app/utils/voice-provider-preset";
 import { MODEL_PROVIDERS, buildModelOptions, buildVisionModelOptions, providerByBaseUrl, providerByKey } from "../app/utils/model-catalog";
 import { isImageGenerationModel } from "../shared/utils/vision-models";
-import { imageSizeOptions } from "../shared/utils/image-size";
-import { LOCAL_IMAGE_DEFAULT_BASE_URL, LOCAL_IMAGE_MODELS, LOCAL_IMAGE_PROVIDER, LOCAL_IMAGE_QUALITY_LABELS } from "../shared/utils/local-image-engine";
+import { DEFAULT_IMAGE_MEGAPIXELS, IMAGE_MEGAPIXEL_OPTIONS, defaultImageSize, imageSizeKind, imageSizeOptions, normalizeImageSize } from "../shared/utils/image-size";
+import { LOCAL_IMAGE_DEFAULT_BASE_URL, LOCAL_IMAGE_MODELS, LOCAL_IMAGE_PROVIDER, LOCAL_IMAGE_QUALITY_LABELS, readImageProfiles } from "../shared/utils/local-image-engine";
 import { readApiErrorMessage } from "../app/utils/api-error";
 import { createCharacterSettingsApi } from "../app/api/character-settings";
 import { buildPageHarness, flushMicrotasks } from "./lib/page-harness";
@@ -16,10 +16,16 @@ import { buildPageHarness, flushMicrotasks } from "./lib/page-harness";
  */
 const modelSettingsGlobals = {
   imageSizeOptions,
+  imageSizeKind,
+  defaultImageSize,
+  normalizeImageSize,
+  DEFAULT_IMAGE_MEGAPIXELS,
+  IMAGE_MEGAPIXEL_OPTIONS,
   LOCAL_IMAGE_DEFAULT_BASE_URL,
   LOCAL_IMAGE_MODELS,
   LOCAL_IMAGE_PROVIDER,
   LOCAL_IMAGE_QUALITY_LABELS,
+  readImageProfiles,
   MODEL_PROVIDERS,
   buildModelOptions,
   buildVisionModelOptions,

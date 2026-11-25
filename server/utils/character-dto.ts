@@ -11,7 +11,7 @@ import { API_KEY_FIELDS, isAsrApiKeySaved, isContextAssistantApiKeySaved, isImag
 import { ASSISTANT_FIELDS, summarizeAssistantConnection } from "./assistant-inheritance";
 import { readKnowledgeCollectScope } from "./knowledge-collect-policy";
 import { resolveVoiceChance, resolveVoiceCooldownMinutes } from "./voice";
-import { resolveImageChance, resolveImageCooldownMinutes, resolveImageDailyLimit, resolveImageSizePreset } from "./image-generation";
+import { resolveImageChance, resolveImageCooldownMinutes, resolveImageDailyLimit, resolveImageMegapixels, resolveImageSizePreset } from "./image-generation";
 import { resolveLocalImageQuality, readImageProfiles } from "../../shared/utils/local-image-engine";
 
 function positiveNumber(value: unknown): number {
@@ -274,6 +274,7 @@ export function toCharacterDto(input: unknown): CharacterDto {
     imageApiKeyConfigured: isImageApiKeySaved(config),
     imageProvider: typeof config.imageProvider === "string" ? config.imageProvider : "",
     imageSize: resolveImageSizePreset(config),
+    imageMegapixels: resolveImageMegapixels(config),
     imageQuality: resolveLocalImageQuality(config.imageQuality),
     imagePreset: config.imagePreset === "moss" || config.imagePreset === "anima" ? config.imagePreset : "auto",
     imageProfiles: (() => { try { return readImageProfiles(config.imageProfiles ?? []); } catch { return []; } })(),

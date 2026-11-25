@@ -7,9 +7,10 @@
 
 import assert from "node:assert/strict";
 import { readFile, rm } from "node:fs/promises";
-import { imageSizeOptions, resolveImagePixels } from "../shared/utils/image-size";
+import { imageSizeOptions, localImagePixels, normalizeImageSize, resolveImagePixels } from "../shared/utils/image-size";
 import { LOCAL_IMAGE_MODELS, readImageProfiles, imageConnectionKey, resolveLocalImagePreset } from "../shared/utils/local-image-engine";
 import { cleanTagLine, needsTagTranslation, parseTagTranslation } from "../server/utils/image-prompt-translation";
+import { resolutionSelectorTargets } from "../server/utils/comfyui-image";
 import { dirname } from "node:path";
 
 import {
@@ -32,6 +33,7 @@ import {
   resolveImageCooldownMinutes,
   resolveImageDailyLimit,
   resolveImageGenerationSettings,
+  resolveImageMegapixels,
   resolveImageSizePreset,
   sanitizeImagePrompt,
   toAnimaPromptParts,
@@ -48,10 +50,12 @@ assert.equal(resolveLocalImagePreset("moss_image_sft.safetensors"), "moss");
 assert.equal(resolveLocalImagePreset("anima-turbo-v1.1.safetensors"), "anima");
 assert.equal(resolveLocalImagePreset("other.safetensors"), null, "unknown weights never silently use Anima nodes");
 assert.equal(resolveLocalImagePreset("other.safetensors", "moss"), "moss", "explicit compatible preset overrides filename");
-assert.equal(resolveImagePixels("comfyui", "other.safetensors", "portrait", "moss"), "832x1248");
-assert.equal(resolveImagePixels("comfyui", "moss_image_sft.safetensors", "portrait", "anima"), "896x1152");
-assert.equal(imageSizeOptions("comfyui", "other.safetensors", "moss").find(item => item.value === "portrait")?.pixels, "832x1248");
-assert.equal(resolveImageGenerationSettings({ modelConfig: { imageProvider: "comfyui", imageModel: "other.safetensors", imagePreset: "moss", imageSize: "portrait" } })?.size, "832x1248", "explicit preset determines runtime dimensions too");
+// 本地的像素不是写死的三组：它按工作流 ResolutionSelector 的公式（比例 + 百万像素 + 倍数）
+// 算出来，所以 `portrait` 会先落成族对应的比例（MOSS 2:3、Anima 3:4），再按预算换算。
+assert.equal(resolveImagePixels("comfyui", "other.safetensors", "portrait", "moss"), "832x1280", "MOSS 的 portrait 是 2:3，1 MP 下 832×1280");
+assert.equal(resolveImagePixels("comfyui", "moss_image_sft.safetensors", "portrait", "anima"), "896x1152", "Anima 的 portrait 是 3:4，和改动前一致");
+assert.equal(imageSizeOptions("comfyui", "other.safetensors", "moss").find(item => item.value === "2:3")?.pixels, "832x1280");
+assert.equal(resolveImageGenerationSettings({ modelConfig: { imageProvider: "comfyui", imageModel: "other.safetensors", imagePreset: "moss", imageSize: "portrait" } })?.size, "832x1280", "explicit preset determines runtime dimensions too");
 import {
   encryptApiKey,
   isImageApiKeySaved,
@@ -284,6 +288,40 @@ assert.equal(localQuality!.model, "anima-aesthetic-v1.1.safetensors", "精修档
 assert.equal(localQuality!.quality, "quality");
 assert.equal(localQuality!.size, "896x1152", "8G 显存别给 1536 那一档。");
 
+// ---- 画面尺寸 = 比例 + 像素预算（和工作流 ResolutionSelector 同一套算法）---------
+// 节点公式：scale = sqrt(mp × 1024² / (w × h))，宽高各自 round 到 64 的倍数。
+// 所以 9:16 + 2 MP 正好是 1088 × 1920 —— 手动在引擎里选那一档看到的数字。
+assert.equal(localImagePixels("9:16", 2), "1088x1920");
+assert.equal(localImagePixels("16:9", 2), "1920x1088");
+assert.equal(localImagePixels("9:16", 1), "768x1344", "同样的比例，1 MP 只有一半像素");
+assert.equal(localImagePixels("1:1", 2), "1472x1472");
+assert.equal(localImagePixels("21:9", 2), "2240x960", "21:9 是节点里真实存在的一档，别漏掉");
+const localSizeOptions = imageSizeOptions("comfyui", "", "auto", 2);
+assert.equal(localSizeOptions.length, 8, "比例档位和工作流节点一一对应。");
+assert.ok(localSizeOptions.every(option => /^\S+ \d+:\d+（\d+ × \d+）$/u.test(option.label)), "选项要带比例和实际像素");
+assert.equal(localSizeOptions.find(option => option.value === "9:16")?.pixels, "1088x1920");
+assert.equal(normalizeImageSize("portrait", "comfyui", "anima-turbo-v1.1.safetensors", "anima"), "3:4");
+assert.equal(normalizeImageSize("portrait", "comfyui", "moss_image_sft.safetensors", "moss"), "2:3");
+assert.equal(normalizeImageSize("9:16", "openai"), "portrait", "云端只有方/竖/横，比例要折回去");
+assert.equal(normalizeImageSize("乱填", "comfyui"), "1:1");
+const sized = resolveImageGenerationSettings({ modelConfig: { imageProvider: "comfyui", imageSize: "9:16", imageMegapixels: 2 } });
+assert.equal(sized?.size, "1088x1920");
+assert.equal(sized?.aspectRatio, "9:16 (Portrait Widescreen)", "注入工作流的是节点自己的枚举名");
+assert.equal(sized?.megapixels, 2);
+assert.equal(resolveImageMegapixels({ imageMegapixels: 9 }), 2, "预算上限 2 MP：再大 21:9 的宽边会被 MAX_EDGE 裁掉");
+assert.equal(resolveImageMegapixels({ imageMegapixels: "2" }), 1, "只认数字，别把字符串悄悄转成 2");
+// 注入给工作流的那三个值：比例名要一字不差，倍数固定 64，否则页面算的宽高不作数。
+assert.deepEqual(
+  resolutionSelectorTargets({ aspectRatio: "9:16 (Portrait Widescreen)", megapixels: 2, width: 1088, height: 1920 }),
+  { aspectRatio: "9:16 (Portrait Widescreen)", megapixels: 2, multiple: 64 },
+);
+assert.equal(resolutionSelectorTargets({ width: 896, height: 1152 }).aspectRatio, "3:4 (Portrait Standard)", "没传比例时按宽高反推");
+assert.equal(
+  resolutionSelectorTargets({ aspectRatio: "乱写的比例", width: 1088, height: 1920 }).aspectRatio,
+  "9:16 (Portrait Widescreen)",
+  "认不出的比例名要落回最接近的一档，不能把非法值塞给节点",
+);
+
 // 只填了 8188 地址、没选服务商：也该认成本地引擎，而不是猜成 OpenAI 再 401。
 const localByUrl = resolveImageGenerationSettings({ modelConfig: { imageApiBaseUrl: "http://127.0.0.1:8188" } });
 assert.equal(localByUrl!.provider, "comfyui", "8188 是 ComfyUI，不该让用户先去选服务商。");
@@ -462,6 +500,7 @@ const dto = toCharacterDto({
     imageApiBaseUrl: "https://api.minimaxi.com/v1",
     imageProvider: "minimax",
     imageSize: "landscape",
+    imageMegapixels: 2,
   },
   updatedAt: new Date(),
   memorySetting: null,
@@ -475,6 +514,7 @@ assert.equal(dto.imageDailyLimit, 3);
 assert.equal(dto.imageModel, "MiniMax-H3-Image-Highspeed");
 assert.equal(dto.imageProvider, "minimax");
 assert.equal(dto.imageSize, "landscape");
+assert.equal(dto.imageMegapixels, 2);
 
 const dtoDefault = toCharacterDto({
   id: "c2",
@@ -495,6 +535,7 @@ assert.equal(dtoDefault.imageChance, 5);
 assert.equal(dtoDefault.imageCooldownMinutes, 30);
 assert.equal(dtoDefault.imageDailyLimit, 8);
 assert.equal(dtoDefault.imageSize, "square");
+assert.equal(dtoDefault.imageMegapixels, 1, "没配过就是 1 MP。");
 
 // ── 8. Key 存取 ────────────────────────────────────────
 // 会读写 `.data/credentials-encryption.key`（本机那把），不碰数据库、不联网。

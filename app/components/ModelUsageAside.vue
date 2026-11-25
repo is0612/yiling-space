@@ -69,6 +69,9 @@ const KIND_LABELS: Record<string, string> = {
         <span>看图模型</span><span class="metric-value">{{ character?.visionModel || "跟随对话模型" }}</span>
       </div>
       <div class="metric-row">
+        <span>画图模型</span><span class="metric-value">{{ character?.imageModel || "未配置" }}</span>
+      </div>
+      <div class="metric-row">
         <span>记忆助手</span><span class="metric-value">{{ character?.memoryAssistantConfigured ? character.memoryAssistantModel : "未配置" }}</span>
       </div>
       <p class="side-note">

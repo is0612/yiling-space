@@ -225,8 +225,10 @@ export type Character = {
   imageApiKeyConfigured: boolean;
   /** 画图服务商：minimax / openai / comfyui（本机 Anima）；空 = 按地址自动判断。 */
   imageProvider: string;
-  /** 画面尺寸：square（默认）/ portrait / landscape。 */
-  imageSize: "square" | "portrait" | "landscape";
+  /** 画面尺寸：本地是比例（1:1 / 2:3 / 9:16 …），云端是 square / portrait / landscape。 */
+  imageSize: import("../utils/image-size").ImageSizePreset;
+  /** 像素预算（百万像素）。只有本地引擎按它算宽高，9:16 + 2 MP = 1088 × 1920。 */
+  imageMegapixels: number;
   /** 出图档位：fast（Turbo，默认）/ quality（Aesthetic）。只有本机引擎看它。 */
   imageQuality: "fast" | "quality";
   imagePreset?: "auto" | "anima" | "moss";

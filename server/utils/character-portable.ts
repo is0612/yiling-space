@@ -271,6 +271,8 @@ export type CharacterBundleModelConfig = {
   imageApiBaseUrl?: string;
   imageProvider?: string;
   imageSize?: string;
+  /** 像素预算（百万像素）：本地按它算宽高，9:16 + 2 MP = 1088 × 1920。 */
+  imageMegapixels?: number;
   imageQuality?: string;
   /** 收集类开关：表情、梗。 */
   stickerAutoCollect?: boolean;
@@ -766,6 +768,7 @@ export const PORTABLE_MODEL_CONFIG_KEYS = [
   "imageApiBaseUrl",
   "imageProvider",
   "imageSize",
+  "imageMegapixels",
   "imageQuality",
   "imagePreset",
   // imageProfiles deliberately excluded: nested connection credentials are not portable.

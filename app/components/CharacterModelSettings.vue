@@ -2,7 +2,7 @@
 import { MODEL_PURPOSE_DEFAULTS } from "#shared/utils/model-purpose-defaults";
 import { CopyDocument, Promotion, QuestionFilled, Refresh, TopRight } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
-import { imageSizeOptions } from "#shared/utils/image-size";
+import { DEFAULT_IMAGE_MEGAPIXELS, IMAGE_MEGAPIXEL_OPTIONS, defaultImageSize, imageSizeKind, imageSizeOptions, normalizeImageSize, type ImageSizePreset } from "#shared/utils/image-size";
 import { LOCAL_IMAGE_DEFAULT_BASE_URL, LOCAL_IMAGE_MODELS, LOCAL_IMAGE_PROVIDER, localImageQualityLabels, resolveLocalImagePreset, imageConnectionKey, readImageProfiles, type ImageModelProfile, type LocalImageQuality } from "#shared/utils/local-image-engine";
 import { isImageGenerationModel } from "#shared/utils/vision-models";
 import type { Character } from "~/utils/mock-data";
@@ -139,8 +139,13 @@ const draftImageProvider = ref("auto");
 const draftImageApiBaseUrl = ref("");
 const draftImageApiKey = ref("");
 const draftImageModel = ref("");
-/** 画面尺寸只给三个预设：像素宽高由服务端换算，手填容易低于服务商的面积下限。 */
-const draftImageSize = ref<"square" | "portrait" | "landscape">("square");
+/** 画面尺寸：本地是比例（和 ComfyUI 的分辨率选择器一致），云端是方/竖/横。不含像素。 */
+const draftImageSize = ref<ImageSizePreset>("1:1");
+/**
+ * 像素预算（百万像素）。本地引擎按它和比例一起算宽高：9:16 + 2 MP = 1088 × 1920。
+ * 云端服务商不认这个值，但照样保存 —— 换回本地时不用重设。
+ */
+const draftImageMegapixels = ref<number>(DEFAULT_IMAGE_MEGAPIXELS);
 /**
  * 出图档位（只有本地引擎看它）：fast = Turbo 快，quality = Aesthetic 细。
  * 云端服务商按模型名分快慢，这个值对它们没有意义，但照样保存 —— 换回本地时不用重设。
@@ -176,7 +181,7 @@ function restoreImageProfile(profile: ImageProfileDraft) {
   draftImageApiBaseUrl.value = profile.apiBaseUrl;
   draftImageApiKey.value = profile.apiKey;
   draftImageModel.value = profile.model;
-  draftImageSize.value = profile.size;
+  draftImageSize.value = normalizeImageSize(profile.size, imageProviderKey.value, profile.model, profile.preset);
   draftImageQuality.value = profile.quality;
   draftImagePreset.value = profile.preset;
   pendingKeyClears.value = new Set([...pendingKeyClears.value].filter(key => key !== "image"));
@@ -187,7 +192,7 @@ function restoreImageProfile(profile: ImageProfileDraft) {
 function newImageProfile(provider: ImageProfileDraft["provider"], apiBaseUrl: string, model = ""): ImageProfileDraft {
   let profileId: string;
   do { profileId = `image-profile-${++imageProfileSequence}`; } while (imageProfiles.value.some(item => item.id === profileId));
-  return { id: profileId, provider, apiBaseUrl, model, apiKey: "", size: "square", quality: "fast", preset: "auto" };
+  return { id: profileId, provider, apiBaseUrl, model, apiKey: "", size: defaultImageSize(provider), quality: "fast", preset: "auto" };
 }
 function changeImageTarget() {
   if (changingImageProfile || loading.value || saving.value || testingImage.value || fetchingImageModels.value || !imageActiveProfileId.value) return;
@@ -372,6 +377,7 @@ function buildDraftSignature() { return JSON.stringify([
   draftImageApiBaseUrl.value.trim(),
   draftImageModel.value.trim(),
   draftImageSize.value,
+  draftImageMegapixels.value,
   draftImageQuality.value,
   draftImagePreset.value,
   imageActiveProfileId.value,
@@ -630,11 +636,19 @@ function applyImageProvider(key: string) {
  * 档位跟着服务商和模型走：OpenAI 那几家不认 864×1152，dall-e-2 更是只有方图。
  * 不可用的档位直接不出现在选项里，也就不存在「选了却 400」。
  */
-const IMAGE_SIZE_OPTIONS = computed(() => imageSizeOptions(imageProviderKey.value,
-  isLocalImageProvider.value && selectedImageFamily.value ? selectedImageFamily.value === "moss" ? "moss_image" : "anima-turbo" : draftImageModel.value));
+const IMAGE_SIZE_OPTIONS = computed(() => imageSizeOptions(
+  imageProviderKey.value,
+  draftImageModel.value,
+  draftImagePreset.value,
+  draftImageMegapixels.value,
+));
 watch(IMAGE_SIZE_OPTIONS, (options) => {
-  // 换模型后原来那档没了：回退方图，别让下拉框停在空值上。
-  if (!options.some(option => option.value === draftImageSize.value)) draftImageSize.value = "square";
+  // 换服务商后原来那档没了：按方/竖/横落到最接近的一档（本地切云端时 9:16 会落成「竖图」）。
+  if (options.some(option => option.value === draftImageSize.value)) return;
+  const kind = imageSizeKind(draftImageSize.value);
+  draftImageSize.value = options.some(option => option.value === kind)
+    ? kind
+    : defaultImageSize(imageProviderKey.value);
 });
 
 /**
@@ -894,9 +908,10 @@ async function loadCharacter() {
     draftImageApiBaseUrl.value = data.imageApiBaseUrl ?? "";
     draftImageApiKey.value = data.imageApiKey ?? "";
     draftImageModel.value = data.imageModel ?? "";
-    draftImageSize.value = (data.imageSize === "portrait" || data.imageSize === "landscape") ? data.imageSize : "square";
     draftImageQuality.value = data.imageQuality === "quality" ? "quality" : "fast";
     draftImagePreset.value = data.imagePreset === "moss" || data.imagePreset === "anima" ? data.imagePreset : "auto";
+    draftImageSize.value = normalizeImageSize(data.imageSize, imageProviderKey.value, data.imageModel ?? "", draftImagePreset.value);
+    draftImageMegapixels.value = data.imageMegapixels && data.imageMegapixels > 0 ? data.imageMegapixels : DEFAULT_IMAGE_MEGAPIXELS;
     imageProfiles.value = data.imageProfiles?.length ? readImageProfiles(data.imageProfiles) : [];
     imageClearedConnections.clear();
     imageProfileSequence = 0;
@@ -1038,6 +1053,7 @@ async function save(silent = false): Promise<boolean> {
         imageApiBaseUrl: draftImageApiBaseUrl.value.trim(),
         imageProvider: draftImageProvider.value === "auto" ? "" : draftImageProvider.value,
         imageSize: draftImageSize.value,
+        imageMegapixels: draftImageMegapixels.value,
         imageQuality: draftImageQuality.value,
         imagePreset: draftImagePreset.value,
         imageProfiles: imageProfiles.value.map(profile => ({ ...profile })),
@@ -1904,10 +1920,10 @@ watch(id, () => void loadCharacter());
               <div class="brick-head-txt">
                 <div class="brick-heading">
                   <h2 class="brick-title">
-                    图片模型
+                    看图模型
                   </h2>
                   <el-tooltip
-                    content="理解收到的图片，请选择支持视觉理解的模型，不要选择图片生成模型。"
+                    content="看懂别人发来的图：请选择支持视觉理解的模型，不要选择生图模型。"
                     placement="top"
                     :show-after="150"
                   >
@@ -2031,7 +2047,7 @@ watch(id, () => void loadCharacter());
                     画图模型
                   </h2>
                   <el-tooltip
-                    content="把文字变成一张图。和上面的「图片模型」是两个方向：那个是看懂别人发的图，这个是她自己画。"
+                    content="把文字变成一张图。和上面的「看图模型」是两个方向：那个是看懂别人发的图，这个是她自己画。"
                     placement="top"
                     :show-after="150"
                   >
@@ -2046,7 +2062,7 @@ watch(id, () => void loadCharacter());
                 </div>
                 <p class="brick-desc">
                   这组只负责「她画图」。开关和频率在「QQ 渠道 → 角色行为 → 画图」，这里留空不会启用任何东西。
-                  本地模型通过 ComfyUI 出图；聊天、提示词处理与看图仍使用各自配置的服务。切换连接或模型会保留各自草稿，统一保存后持久保留。
+                  本地模型经 ComfyUI 出图；切换连接或模型会保留各自草稿，统一保存后生效。
                 </p>
               </div>
             </div>
@@ -2099,7 +2115,7 @@ watch(id, () => void loadCharacter());
                   v-if="isLocalImageProvider"
                   class="field-help"
                 >
-                  请先启动安装模型的 ComfyUI，并填写实际监听地址。本地生成不按张向云服务计费，耗时取决于模型、工作流与硬件。
+                  请先启动装好模型的 ComfyUI，再填它的监听地址。本地出图不按张计费，耗时取决于模型、工作流与硬件。
                 </p>
               </div>
 
@@ -2122,8 +2138,6 @@ watch(id, () => void loadCharacter());
                   @clear="markKeyForClear('image')"
                 />
               </div>
-
-
 
               <div class="field">
                 <div class="field-head">
@@ -2167,53 +2181,127 @@ watch(id, () => void loadCharacter());
                   v-if="isLocalImageProvider"
                   class="field-help"
                 >
-                  从引擎获取模型，或输入已安装的模型文件名。首次留空沿用 Anima 默认模型。
-                  测试会实际生成图片；自定义工作流的尺寸、步数以工作流实际执行为准。
+                  留空 = 按档位自动选；也可以填已安装的模型文件名。测试会真的出一张图，自定义工作流的尺寸与步数以工作流为准。
                 </p>
                 <p
                   v-else
                   class="field-help"
                 >
-                  高速版是 MiniMax-H3-Image-Highspeed，参数完全一样，只改这一个词。
-                  测试会真的画一张（按张计费，图不落盘）。
+                  Highspeed 是同一模型的高速版，参数完全一样，只改这一个词。测试会真的画一张（按张计费，图不落盘）。
                 </p>
               </div>
 
-              <div v-if="isLocalImageProvider" class="field">
-                <div class="field-head"><span class="field-label">兼容预设</span></div>
-                <el-select v-model="draftImagePreset" class="field-ctl" aria-label="本地模型兼容预设" :disabled="saving || testingImage || fetchingImageModels">
-                  <el-option label="自动识别（已支持的模型）" value="auto" />
-                  <el-option label="Anima 兼容" value="anima" />
-                  <el-option label="MOSS 兼容" value="moss" />
-                </el-select>
-                <p class="field-help">{{ imageCapabilitiesHint }}</p>
-              </div>
-              <div v-if="isLocalImageProvider" class="field">
-                <div class="field-head"><span class="field-label">出图档位</span></div>
-                <el-select v-model="draftImageQuality" class="field-ctl" aria-label="出图档位" :disabled="saving || testingImage || fetchingImageModels || !selectedImageFamily">
-                  <el-option v-for="(label, value) in imageQualityLabels" :key="value" :label="label" :value="value" />
-                </el-select>
-                <p class="field-help">{{ imageQualityHint }}</p>
-              </div>
-              <div class="field">
-                <div class="field-head">
-                  <span class="field-label">画面尺寸</span>
+              <div
+                v-if="isLocalImageProvider"
+                class="field-grid"
+              >
+                <div class="field">
+                  <div class="field-head">
+                    <span class="field-label">兼容预设</span>
+                  </div>
+                  <el-select
+                    v-model="draftImagePreset"
+                    class="field-ctl"
+                    aria-label="本地模型兼容预设"
+                    :disabled="saving || testingImage || fetchingImageModels"
+                  >
+                    <el-option
+                      label="自动识别（已支持的模型）"
+                      value="auto"
+                    />
+                    <el-option
+                      label="Anima 兼容"
+                      value="anima"
+                    />
+                    <el-option
+                      label="MOSS 兼容"
+                      value="moss"
+                    />
+                  </el-select>
+                  <p class="field-help">
+                    {{ imageCapabilitiesHint }}
+                  </p>
                 </div>
-                <el-select
-                  v-model="draftImageSize"
-                  class="field-ctl"
-                  aria-label="画面尺寸"
+                <div class="field">
+                  <div class="field-head">
+                    <span class="field-label">出图档位</span>
+                    <el-tooltip
+                      :content="imageQualityHint"
+                      placement="top"
+                      popper-class="ms-help-tip"
+                      :show-after="150"
+                    >
+                      <button
+                        type="button"
+                        class="help-trigger"
+                        aria-label="查看档位说明"
+                      >
+                        <el-icon><QuestionFilled /></el-icon>
+                      </button>
+                    </el-tooltip>
+                  </div>
+                  <el-select
+                    v-model="draftImageQuality"
+                    class="field-ctl"
+                    aria-label="出图档位"
+                    :disabled="saving || testingImage || fetchingImageModels || !selectedImageFamily"
+                  >
+                    <el-option
+                      v-for="(label, value) in imageQualityLabels"
+                      :key="value"
+                      :label="label"
+                      :value="value"
+                    />
+                  </el-select>
+                </div>
+              </div>
+              <div :class="isLocalImageProvider ? 'field-grid' : ''">
+                <div class="field">
+                  <div class="field-head">
+                    <span class="field-label">画面尺寸</span>
+                  </div>
+                  <el-select
+                    v-model="draftImageSize"
+                    class="field-ctl"
+                    aria-label="画面尺寸"
+                  >
+                    <el-option
+                      v-for="option in IMAGE_SIZE_OPTIONS"
+                      :key="option.value"
+                      :label="option.label"
+                      :value="option.value"
+                    />
+                  </el-select>
+                  <p class="field-help">
+                    {{ isLocalImageProvider
+                      ? "比例和 ComfyUI 的「分辨率选择器」一致；括号里的宽高是按右边预算算出来的，就是引擎会用的尺寸。"
+                      : "档位随服务商与模型变化，不支持的那一档不会出现。" }}
+                  </p>
+                </div>
+                <div
+                  v-if="isLocalImageProvider"
+                  class="field"
                 >
-                  <el-option
-                    v-for="option in IMAGE_SIZE_OPTIONS"
-                    :key="option.value"
-                    :label="option.label"
-                    :value="option.value"
-                  />
-                </el-select>
-                <p class="field-help">
-                  档位随服务商与模型变化，不支持的那一档不会出现。宽高手填容易低于面积下限，接口只会回一句「参数不合法」。
-                </p>
+                  <div class="field-head">
+                    <span class="field-label">像素预算</span>
+                  </div>
+                  <el-select
+                    v-model="draftImageMegapixels"
+                    class="field-ctl"
+                    aria-label="像素预算"
+                    :disabled="saving || testingImage || fetchingImageModels"
+                  >
+                    <el-option
+                      v-for="value in IMAGE_MEGAPIXEL_OPTIONS"
+                      :key="value"
+                      :label="`${value} MP`"
+                      :value="value"
+                    />
+                  </el-select>
+                  <p class="field-help">
+                    总像素。2 MP 下 9:16 就是 1088 × 1920，和你手动选的一致；调大更清晰，也更慢更吃显存。
+                  </p>
+                </div>
               </div>
             </div>
           </section>
@@ -2283,6 +2371,8 @@ watch(id, () => void loadCharacter());
 
 /* ── 字段（竖排：标签 → 控件 → 一句解释） ───────────── */
 .fields { display: flex; flex-direction: column; gap: var(--sp-4); margin-top: var(--sp-4); }
+/* 短控件并排：全宽 800px 的下拉装三个字，纵向还多占两行 */
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
 .field { display: flex; min-width: 0; flex-direction: column; gap: var(--sp-2); }
 /* 标签行：左标签 + 右侧开放平台入口。基线对齐，链接不能比标签高出一截 */
 .field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); }
@@ -2402,6 +2492,7 @@ watch(id, () => void loadCharacter());
 }
 @media (max-width: 720px) {
   .ms-a .brick { padding: var(--sp-4); }
+  .field-grid { grid-template-columns: minmax(0, 1fr); }
   .knob {
     grid-template-areas: "label" "ctl" "help";
     grid-template-columns: minmax(0, 1fr);

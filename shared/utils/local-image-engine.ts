@@ -16,7 +16,8 @@ export type ImageModelPreset = "auto" | "anima" | "moss";
 export type ImageModelProfile = {
   id: string; provider: "" | "comfyui" | "minimax" | "openai";
   apiBaseUrl: string; apiKey: string; model: string;
-  size: "square" | "portrait" | "landscape"; quality: "fast" | "quality"; preset: ImageModelPreset;
+  /** 比例（`9:16`）或老的语义名（`portrait`）。真正的归一化在 `image-size.ts` 里按服务商做。 */
+  size: string; quality: "fast" | "quality"; preset: ImageModelPreset;
 };
 /** Credentials never participate in connection identity. */
 export function imageConnectionKey(provider: string, address: string): string {
@@ -38,7 +39,7 @@ export function readImageProfiles(value: unknown): ImageModelProfile[] {
     };
     const id = text("id", 120), provider = text("provider", 20), apiBaseUrl = text("apiBaseUrl", 500), apiKey = text("apiKey", 8192), model = text("model", 120);
     const size = text("size", 20), quality = text("quality", 20), preset = text("preset", 20);
-    if (!id || ids.has(id) || !["", "comfyui", "minimax", "openai"].includes(provider) || !["square", "portrait", "landscape"].includes(size) || !["fast", "quality"].includes(quality) || !["auto", "anima", "moss"].includes(preset)) throw new Error("画图预设包含重复标识或无效选项。");
+    if (!id || ids.has(id) || !["", "comfyui", "minimax", "openai"].includes(provider) || !/^(?:square|portrait|landscape|\d{1,2}:\d{1,2})$/.test(size) || !["fast", "quality"].includes(quality) || !["auto", "anima", "moss"].includes(preset)) throw new Error("画图预设包含重复标识或无效选项。");
     imageConnectionKey(provider, apiBaseUrl); ids.add(id);
     return { id, provider, apiBaseUrl, apiKey, model, size, quality, preset } as ImageModelProfile;
   });

@@ -5,6 +5,7 @@ import { readCharacterBody, readCharacterProfilePatch } from "../../utils/charac
 import { readChatModelSettingsPatch, validateChatApiBaseUrl } from "../../utils/chat-model-config";
 import { normalizeComfyBaseUrl } from "../../utils/comfyui-image";
 import { readImageProfiles, imageConnectionKey, resolveLocalImagePreset } from "../../../shared/utils/local-image-engine";
+import { isImageSizeRatio } from "../../../shared/utils/image-size";
 import { API_KEY_FIELDS, applyApiKeyWrites, resolveCharacterVoiceApiKey } from "../../utils/credential-encryption";
 import { ASSISTANT_FIELDS, resolveAssistantConnection } from "../../utils/assistant-inheritance";
 import { readContextAssistantSettingsPatch, validateContextAssistantEnabledConfig } from "../../utils/context-assistant-config";
@@ -539,14 +540,24 @@ export default defineEventHandler(async (event) => {
     modelConfigPatch.imageDailyLimit = Math.round(value);
   }
 
-  // 画面尺寸只认三个预设：方 / 竖 / 横。像素值由服务端换算，
-  // 不让人手填宽高 —— 填小了会低于服务商的面积下限，直接 400。
+  // 画面尺寸：本地是比例（1:1 / 2:3 / 9:16 …，和 ComfyUI 的分辨率选择器一致），
+  // 云端仍是方 / 竖 / 横。像素由服务端按比例与预算换算，不让人手填宽高。
   if (body.imageSize !== undefined) {
     const value = typeof body.imageSize === "string" ? body.imageSize.trim() : "";
-    if (value && value !== "square" && value !== "portrait" && value !== "landscape") {
-      throw createError({ statusCode: 400, statusMessage: "画面尺寸只支持 square、portrait 或 landscape。" });
+    const semantic = value === "square" || value === "portrait" || value === "landscape";
+    if (value && !semantic && !isImageSizeRatio(value)) {
+      throw createError({ statusCode: 400, statusMessage: "画面尺寸只支持方/竖/横，或 1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9。" });
     }
     modelConfigPatch.imageSize = value || "square";
+  }
+
+  // 像素预算（百万像素），只有本地引擎按它算宽高。0.5–2，半步。
+  if (body.imageMegapixels !== undefined) {
+    const value = typeof body.imageMegapixels === "number" ? body.imageMegapixels : Number(body.imageMegapixels);
+    if (!Number.isFinite(value) || value < 0.5 || value > 2) {
+      throw createError({ statusCode: 400, statusMessage: "像素预算必须是 0.5 到 2 之间的数字（单位：百万像素）。" });
+    }
+    modelConfigPatch.imageMegapixels = Math.round(value * 2) / 2;
   }
 
   if (body.imageProvider !== undefined) {

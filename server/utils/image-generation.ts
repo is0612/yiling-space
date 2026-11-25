@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { IMAGE_SIZE_SETS, resolveImagePixels, type ImageSizePreset } from "../../shared/utils/image-size";
+import { DEFAULT_IMAGE_MEGAPIXELS, IMAGE_SIZE_SETS, imageAspectRatioName, isImageSizeRatio, normalizeImageSize, resolveImagePixels, type ImageSizePreset, type ImageSizeSemantic } from "../../shared/utils/image-size";
 import { LOCAL_IMAGE_PROVIDER, resolveLocalImagePreset, type ImageModelPreset, resolveLocalImageModel, resolveLocalImageQuality, type LocalImageQuality } from "../../shared/utils/local-image-engine";
 import { validateChatApiBaseUrl } from "./chat-model-config";
 import { generateImageWithComfy, normalizeComfyBaseUrl } from "./comfyui-image";
@@ -72,12 +72,11 @@ const MODEL_MAX_CHARS = 120;
 export const IMAGE_MAX_EDGE = 1280;
 
 /**
- * 尺寸档位。给的是「方 / 竖 / 横」而不是像素，因为用户想的是构图不是分辨率。
+ * 云端三档的默认像素（MiniMax 那一套：864×1152 等三个值都满足它 655,360 px 的面积下限）。
  *
- * 这里保留的是 **MiniMax** 那一套（864×1152 等三个值都满足它 655,360 px 的面积下限）。
- * 实际发请求时按服务商重新解析，见 `resolveImagePixels` —— OpenAI 那几家不认 864×1152。
+ * 本地引擎不用它 —— 那边的宽高由比例 + 像素预算现算，见 `resolveImagePixels`。
  */
-export const IMAGE_SIZE_PRESETS: Record<ImageSizePreset, string> = IMAGE_SIZE_SETS.minimax;
+export const IMAGE_SIZE_PRESETS: Record<ImageSizeSemantic, string> = IMAGE_SIZE_SETS.minimax;
 
 export type ImageGenerationProvider = "minimax" | "openai" | "comfyui";
 
@@ -88,6 +87,13 @@ export type ImageGenerationSettings = {
   apiKey: string;
   /** 已经换算成 `宽x高` 的像素值。 */
   size: string;
+  /**
+   * 本地引擎专用：直接喂给工作流 `ResolutionSelector` 的比例枚举名与百万像素。
+   * 存在是因为节点的宽高由它自己算 —— 只给 `size` 的话，896×1152 会被反推成 3:4 / 1 MP，
+   * 和页面上写的那一档对不上。
+   */
+  aspectRatio?: string;
+  megapixels?: number;
   /**
    * 出图档位，只有本地引擎（ComfyUI）看它：fast = Turbo，quality = Aesthetic。
    * 云端服务商按模型名区分快慢，没有这个概念，所以恒为 `fast`。
@@ -175,10 +181,22 @@ export function resolveImageDailyLimit(configValue: unknown): number {
   return Math.min(200, Math.max(0, Math.round(raw)));
 }
 
-/** 尺寸档位：只认三个预设名，写错当方图。 */
+/** 尺寸档位：比例（本地）或三个语义名（云端）。认不出按方图处理，别让老数据变成 400。 */
 export function resolveImageSizePreset(configValue: unknown): ImageSizePreset {
   const raw = asRecord(configValue).imageSize;
+  if (isImageSizeRatio(raw)) return raw;
   return raw === "portrait" || raw === "landscape" ? raw : "square";
+}
+
+/**
+ * 像素预算（百万像素）。只有本地引擎用得上：9:16 + 2 MP 才是 1088 × 1920。
+ * 范围 0.5–2，半步；2 是上限，不然 21:9 的宽边会被 `MAX_EDGE` 裁掉。
+ */
+export function resolveImageMegapixels(configValue: unknown): number {
+  const raw = asRecord(configValue).imageMegapixels;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULT_IMAGE_MEGAPIXELS;
+  const clamped = Math.min(2, Math.max(0.5, raw));
+  return Math.round(clamped * 2) / 2;
 }
 
 function isKnownProvider(value: string): value is ImageGenerationProvider {
@@ -246,6 +264,8 @@ export function resolveImageGenerationSettings(input: {
     const localModel = (readString(config.imageModel) || resolveLocalImageModel(quality)).slice(0, MODEL_MAX_CHARS);
     const preset: ImageModelPreset = config.imagePreset === "moss" || config.imagePreset === "anima" ? config.imagePreset : "auto";
     if (!resolveLocalImagePreset(localModel, preset)) return null;
+    const megapixels = resolveImageMegapixels(config);
+    const sizePreset = normalizeImageSize(resolveImageSizePreset(config), provider, localModel, preset);
     return {
       preset,
       provider,
@@ -253,7 +273,9 @@ export function resolveImageGenerationSettings(input: {
       apiBaseUrl: localBase,
       apiKey: "",
       quality,
-      size: resolveImagePixels(provider, localModel, resolveImageSizePreset(config), preset),
+      size: resolveImagePixels(provider, localModel, sizePreset, preset, megapixels),
+      aspectRatio: imageAspectRatioName(sizePreset, provider, localModel, preset),
+      megapixels,
     };
   }
 
@@ -1228,6 +1250,7 @@ async function generateWithLocalEngine(input: {
     negative,
     width,
     height,
+    ...(input.settings.aspectRatio ? { aspectRatio: input.settings.aspectRatio, megapixels: input.settings.megapixels } : {}),
     ...(reference ? {
       referenceBuffer: { buffer: reference.buffer, filename: referenceFilename(reference.mime) },
       denoise,
