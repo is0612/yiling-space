@@ -36,7 +36,6 @@ type Fixture = {
   conversationId: string;
   groupActivityId: string;
   announcementId: string;
-  qzoneActionId: string;
 };
 
 /** 一个号 + 一个角色绑上去 + 每种「没有外键」的行各造一条。 */
@@ -94,21 +93,7 @@ async function seedConnection(label: string, account: string): Promise<Fixture> 
     },
   });
 
-  const qzoneActionId = randomUUID();
-  await prisma.onebotQzoneAction.create({
-    data: {
-      id: qzoneActionId,
-      connectionId,
-      characterId,
-      kind: "POST",
-      content: "测试说说",
-      topic: "测试",
-      requestedBy: "10001",
-      expiresAt: new Date(Date.now() + 3600_000),
-    },
-  });
-
-  return { connectionId, characterId, scopeId, bindingId, conversationId, groupActivityId, announcementId, qzoneActionId };
+  return { connectionId, characterId, scopeId, bindingId, conversationId, groupActivityId, announcementId };
 }
 
 async function main() {
@@ -140,7 +125,6 @@ async function main() {
   assert.equal(purged.bindings, 2, "两条绑定都该跟着号一起删掉");
   assert.equal(purged.groupActivities, 1, "GroupActivity 没有外键，必须显式删");
   assert.equal(purged.announcements, 1, "公告草稿只带 connectionId，没有外键");
-  assert.equal(purged.qzoneActions, 1, "空间动作只带 connectionId，没有外键");
 
   // ── 该消失的 ─────────────────────────────────────────
   assert.equal(await prisma.platformConnection.count({ where: { id: target.connectionId } }), 0, "号本身应该被删掉");
@@ -151,7 +135,6 @@ async function main() {
   );
   assert.equal(await prisma.groupActivity.count({ where: { id: target.groupActivityId } }), 0, "群活跃度行不能留下");
   assert.equal(await prisma.onebotGroupAnnouncement.count({ where: { id: target.announcementId } }), 0, "公告草稿不能留下");
-  assert.equal(await prisma.onebotQzoneAction.count({ where: { id: target.qzoneActionId } }), 0, "空间动作不能留下");
 
   // ── 该保留的：聊天记录不跟着号一起消失 ────────────────
   const conversation = await prisma.conversation.findUnique({ where: { id: target.conversationId } });
@@ -174,7 +157,7 @@ async function main() {
 
   // ── 空号（没有角色）也要能删 ──────────────────────────
   const emptyPurged = await deleteChannelConnectionCompletely({ connectionId: emptyConnectionId });
-  assert.deepEqual(emptyPurged, { bindings: 0, groupActivities: 0, announcements: 0, qzoneActions: 0 });
+  assert.deepEqual(emptyPurged, { bindings: 0, groupActivities: 0, announcements: 0 });
   assert.equal(await prisma.platformConnection.count({ where: { id: emptyConnectionId } }), 0, "没绑角色的号应该能直接删掉");
 
   console.log("删渠道连接测试通过：有绑定的号能删掉，孤儿行清干净，聊天记录与隔壁号不受影响。");
@@ -187,7 +170,6 @@ try {
   await prisma.memoryScope.deleteMany({ where: { characterId: { in: characterIds } } }).catch(() => undefined);
   await prisma.groupActivity.deleteMany({ where: { characterId: { in: characterIds } } }).catch(() => undefined);
   await prisma.onebotGroupAnnouncement.deleteMany({ where: { characterId: { in: characterIds } } }).catch(() => undefined);
-  await prisma.onebotQzoneAction.deleteMany({ where: { characterId: { in: characterIds } } }).catch(() => undefined);
   await prisma.character.deleteMany({ where: { id: { in: characterIds } } }).catch(() => undefined);
   await prisma.platformConnection.deleteMany({ where: { id: { in: connectionIds } } }).catch(() => undefined);
   await prisma.user.deleteMany({ where: { id: ownerId } }).catch(() => undefined);

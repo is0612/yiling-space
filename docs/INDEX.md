@@ -59,7 +59,6 @@
 | [voice](voice.md) | QQ 语音收发 |
 | [proactive-messaging](proactive-messaging.md) | 主动找话 |
 | [sticker-qq-sync](sticker-qq-sync.md) | 表情包与 QQ 收藏夹同步 |
-| [qq-qzone](qq-qzone.md) | QQ 空间说说与评论 |
 | [unified-model-settings](unified-model-settings.md) / [model-purpose-defaults](model-purpose-defaults.md) | 模型设置页与用途默认值 |
 | [local-observe](local-observe.md) | 本地观察与执行（仅管理员） |
 | [使用版打包与分发](<使用版打包与分发.md>) | 使用版两种运行方式 |

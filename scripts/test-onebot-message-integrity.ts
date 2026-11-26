@@ -158,8 +158,6 @@ const record = {
   config: { accountQq: SELF_QQ, wsUrl: "ws://127.0.0.1:0", httpUrl: "http://127.0.0.1:0", accessToken: "" },
   replyOnlyWhenMentioned: true,
   groupAnnouncementEnabled: false,
-  qzoneEnabled: false,
-  qzoneLimits: { dailyPosts: 0, dailyComments: 0, commentCooldownMinutes: 0 },
   ownerQq: OWNER_QQ,
   bindings: [binding],
 } as unknown as OnebotConnectionRecord;

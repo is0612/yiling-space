@@ -1097,49 +1097,6 @@ model OnebotGroupAnnouncement {
   @@map("onebot_group_announcements")
 }
 
-/// QQ 空间动作（说说 / 评论）的草稿与发布记录。
-///
-/// 和 `OnebotGroupAnnouncement` 是两个东西：公告是「群里的一个动作」，这条是「她自己
-/// 空间上的一举一动」。分开建表是因为查询完全不同 —— 这里要按天统计「今天发了几条」
-/// 来限流，混在公告表里统计会被别的 kind 污染。
-///
-/// `characterId` 没有外键，删角色时由 server/utils/character-delete.ts 显式清理。
-model OnebotQzoneAction {
-  id             String    @id @default(uuid()) @db.Uuid
-  connectionId   String    @db.Uuid
-  characterId    String?   @db.Uuid
-  /// POST = 发说说，COMMENT = 评论别人的说说
-  kind           String    @db.VarChar(16)
-  /// 说说正文，或评论内容
-  content        String    @db.Text
-  /// 触发方式带来的主题/指令原文，排查「这句是谁让它发的」用
-  topic          String    @db.Text
-  /// 评论目标：说说主人的 QQ 号
-  targetUin      String?   @db.VarChar(64)
-  /// 评论目标：那条说说的 tid
-  targetTid      String?   @db.VarChar(128)
-  /// 目标说说摘要，确认时给人看「你要评论的是这条」
-  targetExcerpt  String?   @db.Text
-  /// 可见范围：1 公开 / 4 好友 / 64 仅自己（QQ 空间的 ugc_right 编码）
-  visible        Int       @default(1)
-  /// 触发者 QQ
-  requestedBy    String    @db.VarChar(64)
-  /// 触发所在会话，回执对得上话
-  conversationKey String?  @db.VarChar(128)
-  /// PENDING / PUBLISHING / PUBLISHED / FAILED / EXPIRED / CANCELLED
-  status         String    @default("PENDING") @db.VarChar(20)
-  error          String?   @db.Text
-  /// 发布成功后拿到的说说 tid；评论为空
-  resultTid      String?   @db.VarChar(128)
-  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
-  expiresAt      DateTime  @db.Timestamptz(6)
-  publishedAt    DateTime? @db.Timestamptz(6)
-
-  @@index([connectionId, status, createdAt], map: "onebot_qzone_actions_connection_status_idx")
-  @@index([connectionId, kind, publishedAt], map: "onebot_qzone_actions_connection_kind_published_idx")
-  @@map("onebot_qzone_actions")
-}
-
 model AuditLog {
   id          String         @id @default(uuid()) @db.Uuid
   actorType   AuditActorType

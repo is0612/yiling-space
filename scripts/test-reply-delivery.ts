@@ -63,7 +63,6 @@ try {
 // Mock transport only: no QQ gateway, model, or database connections.
 const { createReplySender } = await import("../server/utils/channel-adapter/onebot/serve");
 const { hasEmojiMark, isEmojiBudgetSpent } = await import("../server/utils/emoji-frequency");
-const { finishQzoneSuccess } = await import("../server/utils/channel-adapter/onebot/qzone");
 const config = { httpUrl: "https://onebot.invalid", wsUrl: "wss://onebot.invalid" };
 const sender = createReplySender(config, { messageType: "private", userId: qq, groupId: "" });
 let mediaMode: "sent" | "failed" | "unknown" = "sent";
@@ -129,15 +128,5 @@ try {
   assert.equal(outbound.length - beforeFallback, 3, "explicit rejection sends exactly one image fallback");
   assert.equal(hasEmojiMark({ stickerId: "legacy" }), true);
   assert.equal(hasEmojiMark({ faceIds: ["14"], replyDelivery: { emoji: { status: "unknown" } } }), false);
-  let writes = 0;
-  assert.equal(await finishQzoneSuccess("mock-action", "tid", async (_id, result) => {
-    writes += 1; assert.equal(result.ok, true); throw new Error("mock database unavailable");
-  }), false);
-  assert.equal(writes, 2, "only local success persistence is retried");
-  writes = 0;
-  assert.equal(await finishQzoneSuccess("mock-action", null, async (_id, result) => {
-    writes += 1; assert.equal(result.ok, true); if (writes === 1) throw new Error("transient mock failure");
-  }), true);
-  assert.equal(writes, 2);
 } finally { globalThis.fetch = originalFetch; }
-console.log("reply delivery identity, mocked emoji receipts, budget and Qzone persistence tests passed");
+console.log("reply delivery identity, mocked emoji receipts and budget tests passed");

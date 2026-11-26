@@ -2630,7 +2630,7 @@ paths:
                 snowlumaPassword: { type: string, maxLength: 200, description: 'qq-onebot SnowLuma 面板登录密码，用于后台自动配节点；留空 = 沿用原值，解不开时当没填' }
                 replyOnlyWhenMentioned: { type: boolean, description: 'qq-onebot 群聊仅被 @ 时回复（连接级默认值；角色绑定未写 groupChatMode 时用它兜底）' }
                 groupAnnouncementEnabled: { type: boolean, description: 'qq-onebot 是否允许群主/管理员让她拟群公告草稿（默认 false；确认后才发布）' }
-                ownerQq: { type: string, maxLength: 20, description: 'qq-onebot 主人 QQ 号；空间动作只认这个号，留空 = 未设置' }
+                ownerQq: { type: string, maxLength: 20, description: 'qq-onebot 主人 QQ 号；留空 = 未设置' }
                 ownerName: { type: string, maxLength: 60, description: 'qq-onebot 主人称呼；写入对话上下文，留空时用外部身份/群名片' }
       responses:
         '200':
@@ -2651,8 +2651,8 @@ paths:
       description: |
         号上挂过角色也能删：服务端先清绑定再删连接
         （`character_channel_bindings.connectionId` 是 Restrict，不先清会被外键挡下）。
-        同时清掉没有外键的从属行（group_activities / onebot_group_announcements /
-        onebot_qzone_actions）。会话与 token 账单按 SetNull 保留 —— 号没了不等于那段历史该消失。
+        同时清掉没有外键的从属行（group_activities / onebot_group_announcements）。
+        会话与 token 账单按 SetNull 保留 —— 号没了不等于那段历史该消失。
       parameters:
         - name: connectionId
           in: path
@@ -2671,12 +2671,11 @@ paths:
                   purged:
                     type: object
                     description: 一并清掉的行数；bindings = 这个号上原来挂了几个角色。
-                    required: [bindings, groupActivities, announcements, qzoneActions]
+                    required: [bindings, groupActivities, announcements]
                     properties:
                       bindings: { type: integer, minimum: 0 }
                       groupActivities: { type: integer, minimum: 0 }
                       announcements: { type: integer, minimum: 0 }
-                      qzoneActions: { type: integer, minimum: 0 }
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

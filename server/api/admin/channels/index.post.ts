@@ -28,28 +28,7 @@ async function createOnebotConnection(body: Record<string, unknown>) {
   const replyOnlyWhenMentioned = typeof body?.replyOnlyWhenMentioned === "boolean" ? body.replyOnlyWhenMentioned : true;
   // 群管理动作默认关闭：只开「群公告」，且只认群主/管理员。踢人/禁言不在本期范围。
   const groupAnnouncementEnabled = body?.groupAnnouncementEnabled === true;
-  // 空间动作默认关闭，且只认主人 QQ。配额的三个数字不放进表单，用默认值
-  // （发多了被封号比少发两条严重），需要时直接改 metadata。
-  const qzoneEnabled = body?.qzoneEnabled === true;
-  // 空间主动：她自己想发 / 想评论时来问主人。默认关，比「听命执行」更激进。
-  const qzoneAutoAskEnabled = body?.qzoneAutoAskEnabled === true;
-  // 主动问的时间点（如 "12:00,18:30"）与每天上限。省略字段 = 不改旧值。
-  const qzoneAutoAskTimes = body?.qzoneAutoAskTimes === undefined
-    ? undefined
-    : readTrimmedString(body?.qzoneAutoAskTimes, "主动问时间点", 100);
-  let qzoneAutoAskDailyMax: number | undefined;
-  if (body?.qzoneAutoAskDailyMax !== undefined) {
-    const n = Number(body.qzoneAutoAskDailyMax);
-    if (!Number.isInteger(n) || n < 0 || n > 12) {
-      throw createError({ statusCode: 400, statusMessage: "主动问每天上限必须是 0 到 12 之间的整数。" });
-    }
-    qzoneAutoAskDailyMax = n;
-  }
-  // 「看看空间」翻谁的说说：留空就用协议端好友列表的前几个。省略字段 = 不改旧值。
-  const qzoneFriendQqs = body?.qzoneFriendQqs === undefined
-    ? undefined
-    : readTrimmedString(body?.qzoneFriendQqs, "空间好友 QQ", 200);
-  // 主人 QQ：空间动作只认这个号，群聊里也用它标出主人。留空 = 未设置；省略字段 = 不改旧值。
+  // 主人 QQ：群聊里用它标出主人。留空 = 未设置；省略字段 = 不改旧值。
   let ownerQq: string | undefined;
   if (body?.ownerQq !== undefined) {
     ownerQq = readTrimmedString(body?.ownerQq, "主人 QQ 号", 20);
@@ -121,11 +100,6 @@ async function createOnebotConnection(body: Record<string, unknown>) {
         qqNumber,
         replyOnlyWhenMentioned,
         groupAnnouncementEnabled,
-        qzoneEnabled,
-        qzoneAutoAskEnabled,
-        ...(qzoneAutoAskTimes !== undefined ? { qzoneAutoAskTimes } : {}),
-        ...(qzoneAutoAskDailyMax !== undefined ? { qzoneAutoAskDailyMax } : {}),
-        ...(qzoneFriendQqs !== undefined ? { qzoneFriendQqs } : {}),
         ...(ownerQq !== undefined ? { ownerQq } : {}),
         ...(ownerName !== undefined ? { ownerName } : {}),
       },
@@ -144,13 +118,6 @@ async function createOnebotConnection(body: Record<string, unknown>) {
           qqNumber,
           replyOnlyWhenMentioned,
           groupAnnouncementEnabled,
-          qzoneEnabled,
-          qzoneAutoAskEnabled,
-          ...(qzoneAutoAskTimes !== undefined ? { qzoneAutoAskTimes } : {}),
-          ...(qzoneAutoAskDailyMax !== undefined ? { qzoneAutoAskDailyMax } : {}),
-        ...(qzoneAutoAskTimes !== undefined ? { qzoneAutoAskTimes } : {}),
-        ...(qzoneAutoAskDailyMax !== undefined ? { qzoneAutoAskDailyMax } : {}),
-          ...(qzoneFriendQqs !== undefined ? { qzoneFriendQqs } : {}),
           ...(ownerQq !== undefined ? { ownerQq } : {}),
           ...(ownerName !== undefined ? { ownerName } : {}),
         })}::jsonb

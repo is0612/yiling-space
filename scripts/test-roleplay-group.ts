@@ -180,8 +180,7 @@ async function testRoleplayGroupAdapter(db: PrismaClient, ownerId: string, chara
     groupChat: { ...GROUP_CHAT_DEFAULTS, mode: "all" as const, mentionWindowSeconds: 0.3, batchWindowSeconds: 0.3, minGapSeconds: 0, quietStart: "", quietEnd: "" }, groupChatModes: {}, storeAmbientGroupMessages: false };
   const record: OnebotConnectionRecord = { id: connection.id, platform: "qq-onebot", accountQq: selfQq,
     config: { wsUrl: "ws://127.0.0.1:4999", httpUrl: "http://127.0.0.1:4998" }, replyOnlyWhenMentioned: true,
-    groupAnnouncementEnabled: false, qzoneEnabled: false, qzoneLimits: { dailyPosts: 0, dailyComments: 0, commentCooldownMinutes: 10 },
-    qzoneFriendQqs: [], qzoneAutoAskEnabled: false, qzoneAutoAskTimes: [], qzoneAutoAskDailyMax: 0,
+    groupAnnouncementEnabled: false,
     ownerQq, ownerName: "测试主人", snowlumaPassword: "", bindings: [bindingRecord] };
   const handler = createOnebotMessageHandler(record);
   const event = (text: string, at = false, uid = memberQq) => {

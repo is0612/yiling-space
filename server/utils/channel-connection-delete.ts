@@ -11,7 +11,7 @@ import { getPrisma } from "./prisma";
  *
  *   A. 没有外键的必须手动删（否则留下查不到也删不掉的孤儿行）
  *      - GroupActivity：按绑定 id 删 —— 绑定没了，这些活跃度行永远读不到
- *      - OnebotGroupAnnouncement / OnebotQzoneAction：只带 connectionId，没有 relation
+ *      - OnebotGroupAnnouncement：只带 connectionId，没有 relation
  *   B. 有外键的交给数据库
  *      - CharacterChannelBinding → 绑定相关的会话与记录级联删
  *      - Conversation / ModelUsage 的 `channelBindingId` 是 SetNull：聊天记录和账单**保留**，
@@ -27,7 +27,6 @@ export type ChannelConnectionDeleteResult = {
   bindings: number;
   groupActivities: number;
   announcements: number;
-  qzoneActions: number;
 };
 
 type DeleteManyArgs = { where: Record<string, unknown> };
@@ -39,7 +38,6 @@ export type ChannelConnectionDeleteTransaction = {
   };
   groupActivity: DeleteMany;
   onebotGroupAnnouncement: DeleteMany;
-  onebotQzoneAction: DeleteMany;
   platformConnection: { delete(args: { where: { id: string } }): Promise<unknown> };
 };
 
@@ -65,7 +63,6 @@ export async function deleteChannelConnectionCompletely(
       ? await tx.groupActivity.deleteMany({ where: { channelBindingId: { in: bindingIds } } })
       : { count: 0 };
     const announcements = await tx.onebotGroupAnnouncement.deleteMany({ where: { connectionId } });
-    const qzoneActions = await tx.onebotQzoneAction.deleteMany({ where: { connectionId } });
     const removedBindings = await tx.characterChannelBinding.deleteMany({ where: { connectionId } });
     await tx.platformConnection.delete({ where: { id: connectionId } });
 
@@ -73,7 +70,6 @@ export async function deleteChannelConnectionCompletely(
       bindings: removedBindings.count,
       groupActivities: groupActivities.count,
       announcements: announcements.count,
-      qzoneActions: qzoneActions.count,
     };
   });
 }

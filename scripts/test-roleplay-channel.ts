@@ -41,7 +41,6 @@ export function testRoleplayChannelLogic() {
   assert(!isRoleplayOwner(input, { ...binding, connection: { ...binding.connection, metadata: {} } }, "c"));
   const serve = readFileSync(new URL("../server/utils/channel-adapter/onebot/serve.ts", import.meta.url), "utf8");
   assert(serve.indexOf("const roleplayResult = await handleRoleplayChannel") < serve.indexOf("return handleChannelMessage({"));
-  assert(serve.indexOf("const roleplayResult = await handleRoleplayChannel") < serve.indexOf("if (canUseQzone && isQzoneConfirm"));
 }
 
 /** Run only inside the isolated temporary database test, never seed personal data. */

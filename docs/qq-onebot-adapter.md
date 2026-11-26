@@ -189,7 +189,7 @@ OneBot v11 的 `message` 字段是**分段数组**（CQ 码），例如：
 - 群聊 → `send_group_msg`（`group_id`, `message`）。
 - `message` 可以是纯文本，也可以是段数组（`face` / `image` / `at`）。
 - 群聊怎么回由绑定配置 `groupChatMode` 决定，连接级 `replyOnlyWhenMentioned` 只作老数据的兜底：
-  - `mention`：普通回复只由 OneBot 的 @ 本人或戳本人触发；叫名字、@ 全体和话题续接只能当背景。显式的公告、空间确认流程仍按各自规则处理；
+  - `mention`：普通回复只由 OneBot 的 @ 本人或戳本人触发；叫名字、@ 全体和话题续接只能当背景。显式的公告确认流程仍按各自规则处理；
   - `ambient`（默认）：被 @ 后跟进 + 自然水群，详见 7.1；
   - `all`：每轮都回，保留老行为（不再有单条快速路径）。
 - 群聊统一走一条攒批管道：@ 也要等 `mentionWindowSeconds`（默认 4 秒），换来的是她能看见前几句。
@@ -324,21 +324,6 @@ QQ 是唯一支持表情段的渠道。链路：
 - 时间窗和上限都可配：`CharacterChannelBinding.config.replyWindowMinutes` / `replyLimitPerWindow`，只对该绑定生效；上限 0 = 不限。旧字段 `replyLimitPer10Min` 仍兼容。
 - 只统计这条鱼自己的回复（`messages` 里该会话的 `ASSISTANT` 消息），无法协调群里其他系统或账号的发言。
 - 群公告的拟稿/确认不受此限制，因为那是管理员显式操作。
-
-### 7.5 QQ 空间（发说说 / 评论）
-
-空间不是聊天渠道，但用的还是同一个登录态，所以挂在适配器里而不是单开一个进程。完整设计见
-[`qq-qzone.md`](./qq-qzone.md)，这里只记「为什么长这样」：
-
-- **发说说走协议端扩展** `send_qzone_msg`，**评论走网页 CGI**（`emotion_cgi_re_feeds`）——
-  协议端的空间能力只覆盖「自己发」，评论没有现成 action。
-- 只认**主人 QQ**、每条都要**人工确认**（`确认发说说` / `确认评论`，与公告的「确认发布」分开）。
-- **没有 tid 不代表没发出去**：只在明确「动作不支持」时降级到 CGI，其余失败一律停手。
-- 动态列表只在进程内缓存 10 分钟，不落库 —— 落库会拿一个早已翻页的 tid 去评论。
-- 默认每天 3 条说说 / 8 条评论 / 30 分钟冷却，开关 `qzoneEnabled` 默认关。
-
-指令入口在 `serve.ts` 的 `canUseQzone` 分支，报文解析是 `qzone.ts` 里的三个纯函数
-（`parseQzonePostRequest` / `parseQzoneBrowseRequest` / `parseQzoneCommentRequest`）。
 
 ## 8. 配置字段（存储于 PlatformConnection）
 

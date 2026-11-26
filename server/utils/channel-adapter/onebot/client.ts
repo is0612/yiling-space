@@ -715,65 +715,6 @@ export async function sendOnebotCustomFace(
 }
 
 /**
- * 在她自己的 QQ 空间发一条说说。
- *
- * 这是**协议端扩展 action**（OneBot v11 标准里没有空间这个概念），SnowLuma / NapCat
- * 一系实现里都叫 `send_qzone_msg`，但参数名和返回结构各家可能有出入 ——
- * 换网关前先跑 `yarn probe:qzone`，别照着这份代码猜。
- *
- * `ugcRight` 用的是 QQ 空间自己的编码：1 公开、4 好友可见、64 仅自己。
- * 传错的话说说会发出去，只是可见范围不对 —— 这种错误在接口返回里看不出来。
- *
- * 注意返回值：**拿不到 tid 不等于没发出去**。协议端可能已经发成功、只是响应里没带，
- * 所以调用方不许在这里重试，先去空间确认。
- */
-export async function sendOnebotQzonePost(
-  config: OnebotConnectionConfig,
-  input: { content: string; images?: string[]; ugcRight?: number },
-): Promise<{ tid: string | null }> {
-  const data = await callOnebotAction(config, "send_qzone_msg", {
-    content: input.content,
-    ugc_right: input.ugcRight ?? 1,
-    ...(input.images?.length ? { images: input.images } : {}),
-  });
-  const record = data as { tid?: unknown; feedid?: unknown; data?: { tid?: unknown } } | null;
-  const raw = record?.tid ?? record?.feedid ?? record?.data?.tid;
-  return { tid: typeof raw === "string" && raw.trim() ? raw.trim() : null };
-}
-
-/**
- * 取协议端手里某个域名的 cookie 串。
- *
- * 空间网页版的接口全靠 `p_skey` 算 `g_tk`，而 `p_skey` 只有协议端（或浏览器）手里有。
- * 这里问它要 `qzone.qq.com` 的那份，免得再让用户去浏览器 DevTools 里复制一遍。
- *
- * 返回值形状各家不一：字符串、`{ cookies: "..." }`、或 `[{ name, value }]` 数组，
- * 三种都得认 —— 认不出来就当没拿到，让上层走降级。
- */
-export async function getOnebotCookies(
-  config: OnebotConnectionConfig,
-  domain: string,
-): Promise<string> {
-  const data = await callOnebotAction(config, "get_cookies", { domain });
-  if (typeof data === "string") return data;
-  const record = data as { cookies?: unknown } | null;
-  if (typeof record?.cookies === "string") return record.cookies;
-  const list = Array.isArray(data) ? data : (record?.cookies as unknown);
-  if (Array.isArray(list)) {
-    return list
-      .map((item) => {
-        const cookie = item as { name?: unknown; value?: unknown } | null;
-        return typeof cookie?.name === "string" && cookie.value !== undefined
-          ? `${cookie.name}=${String(cookie.value)}`
-          : "";
-      })
-      .filter(Boolean)
-      .join("; ");
-  }
-  return "";
-}
-
-/**
  * 调一次网关 HTTP API 的超时。
  *
  * **必须带超时**：网关抖一下（WS 掉线重连期间）这条请求会一直挂着不返回，

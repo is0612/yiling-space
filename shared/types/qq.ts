@@ -166,11 +166,6 @@ export type CreateConnectionReq = {
   httpToken: string;
   snowlumaPassword: string;
   groupAnnouncementEnabled: boolean;
-  qzoneEnabled: boolean;
-  qzoneAutoAskEnabled: boolean;
-  qzoneAutoAskTimes: string;
-  qzoneAutoAskDailyMax: number;
-  qzoneFriendQqs: string;
   ownerQq: string;
   ownerName: string;
 };

@@ -13,13 +13,6 @@ function revision(record: OnebotConnectionRecord): string {
     // 任一变化都要让 runner 重载，否则页面保存了、进程还在用旧值。
     replyOnlyWhenMentioned: record.replyOnlyWhenMentioned,
     groupAnnouncementEnabled: record.groupAnnouncementEnabled,
-    // 空间开关与配额同样算「配置」：改了配额却不重载，进程里还是旧上限。
-    qzoneEnabled: record.qzoneEnabled,
-    qzoneLimits: record.qzoneLimits,
-    qzoneFriendQqs: record.qzoneFriendQqs,
-    qzoneAutoAskEnabled: record.qzoneAutoAskEnabled,
-    qzoneAutoAskTimes: record.qzoneAutoAskTimes,
-    qzoneAutoAskDailyMax: record.qzoneAutoAskDailyMax,
     ownerQq: record.ownerQq,
     ownerName: record.ownerName,
     bindings: [...record.bindings].sort((a, b) => a.id.localeCompare(b.id)),

@@ -66,30 +66,6 @@ import {
   recordAnnouncementExchange,
   writeAnnouncementAudit,
 } from "./announcement";
-import {
-  QZONE_CONFIRM_COMMENT,
-  QZONE_CONFIRM_POST,
-  checkQzoneQuota,
-  claimPendingQzoneAction,
-  commentQzoneFeed,
-  createPendingQzoneAction,
-  draftQzoneText,
-  findPendingQzoneAction,
-  finishQzoneAction,
-  finishQzoneSuccess,
-  isQzoneApprove,
-  isQzoneConfirm,
-  isQzoneReject,
-  listQzoneFriendMoods,
-  listQzoneMoods,
-  parseQzoneBrowseRequest,
-  parseQzoneCommentRequest,
-  parseQzonePostRequest,
-  publishQzonePost,
-  writeQzoneAudit,
-  type QzoneFeed,
-} from "./qzone";
-import { recordQzonePostMemory } from "../../qzone-memory";
 
 export type OnebotHandleOutcome =
   | { status: "replied"; conversationId: string }
@@ -344,425 +320,6 @@ async function handleAnnouncementConfirm(
   return { status: "replied", conversationId: persisted ?? "" };
 }
 
-/* ------------------------------------------------------------------ *
- * QQ 空间指令（发说说 / 看动态 / 评论）
- * ------------------------------------------------------------------ */
-
-/**
- * 最近一次列出来的空间动态：进程内、按连接+会话缓存。
- *
- * 为什么要缓存：评论指令说的是「评论第 2 条」，没有这份列表就不知道第 2 条是谁的
- * 哪条 tid。不落库是故意的 —— 动态十分钟就旧了，存进数据库只会让下次读到一个
- * 指向早已翻页的 tid，然后评论到一条牛头不对马嘴的说说下面。
- */
-const qzoneFeedCache = new Map<string, { feeds: QzoneFeed[]; at: number }>();
-const QZONE_FEED_CACHE_TTL_MS = 10 * 60 * 1000;
-const QZONE_FEED_CACHE_MAX = 50;
-
-function qzoneFeedKey(connectionId: string, conversationKey: string): string {
-  return `${connectionId}:${conversationKey}`;
-}
-
-function rememberQzoneFeeds(connectionId: string, conversationKey: string, feeds: QzoneFeed[]): void {
-  const key = qzoneFeedKey(connectionId, conversationKey);
-  qzoneFeedCache.delete(key);
-  if (qzoneFeedCache.size >= QZONE_FEED_CACHE_MAX) {
-    const oldest = qzoneFeedCache.keys().next().value;
-    if (oldest !== undefined) qzoneFeedCache.delete(oldest);
-  }
-  qzoneFeedCache.set(key, { feeds, at: Date.now() });
-}
-
-function readQzoneFeeds(connectionId: string, conversationKey: string): QzoneFeed[] {
-  const cached = qzoneFeedCache.get(qzoneFeedKey(connectionId, conversationKey));
-  if (!cached) return [];
-  if (Date.now() - cached.at > QZONE_FEED_CACHE_TTL_MS) {
-    qzoneFeedCache.delete(qzoneFeedKey(connectionId, conversationKey));
-    return [];
-  }
-  return cached.feeds;
-}
-
-/**
- * 空间相关失败的翻译。
- *
- * 这些错误码对人没有意义，但每一种对应的「我该干什么」完全不同：
- * 没登录要重扫码、限流要等、参数错要跑 probe。混成一句「操作失败」等于让人去猜。
- */
-export function qzoneErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.startsWith("QZONE_NO_AUTH")) {
-    return "拿不到空间的登录态 —— 协议端没把 qzone.qq.com 的 cookie 给我。"
-      + "可以先跑 yarn probe:qzone 看这条通道通不通，或者把 cookie 填进 QZONE_COOKIE 环境变量。";
-  }
-  if (message.startsWith("QZONE_AUTH_") || message.includes("QZONE_API_-3000")) {
-    return "空间的登录态过期了：重启一下协议端、重新登录 QQ 再试。";
-  }
-  if (message.includes("QZONE_API_-10000") || message.includes("QZONE_API_-2:")) {
-    return "空间说操作太频繁，缓一缓再说（这条通道被限流得很快）。";
-  }
-  if (message.includes("QZONE_API_-10001")) {
-    return "空间拒了这次请求的参数（-10001）。先跑 yarn probe:qzone --comment-test 看是哪一步不对。";
-  }
-  if (message === "MODEL_NOT_CONFIGURED") return "这个角色还没配可用的模型，写不出东西。";
-  if (message === "DAILY_QUOTA_EXCEEDED") return "今天的模型额度用完了，写不了。";
-  if (message === "EMPTY_QZONE_POST" || message === "EMPTY_QZONE_COMMENT") {
-    return "她这次什么都没写出来，再说一次试试。";
-  }
-  if (message === "CHARACTER_INACTIVE") return "这个角色当前不在启用状态。";
-  return `空间操作失败：${message.slice(0, 200)}`;
-}
-
-/** 回执也是这一轮对话的一部分；conversationId 拿不到不算失败。 */
-async function replyQzoneToOutcome(
-  binding: OnebotBindingRecord,
-  event: OnebotResolvedEvent,
-  sendReply: ChannelReplySender,
-  reply: string,
-): Promise<OnebotHandleOutcome> {
-  // 这个查询就是「按绑定 + 会话键找会话」，与公告无关，只是借住在那儿。
-  const conversationId = await findAnnouncementConversationId(binding.id, event.conversationKey)
-    .catch(() => null);
-  await sendReply(reply);
-  return { status: "replied", conversationId: conversationId ?? "" };
-}
-
-/** 「发条说说：…」→ 拟稿 → 落 PENDING，等主人回「确认发说说」。 */
-async function handleQzonePostDraft(
-  record: OnebotConnectionRecord,
-  event: OnebotResolvedEvent,
-  binding: OnebotBindingRecord,
-  topic: string,
-  sendReply: ChannelReplySender,
-): Promise<OnebotHandleOutcome> {
-  let reply: string;
-  try {
-    const conversationId = await findAnnouncementConversationId(binding.id, event.conversationKey)
-      .catch(() => null);
-    const draft = await draftQzoneText({
-      characterId: binding.characterId,
-      bindingId: binding.id,
-      conversationId,
-      kind: "POST",
-      topic,
-    });
-    await createPendingQzoneAction({
-      connectionId: record.id,
-      characterId: binding.characterId,
-      kind: "POST",
-      content: draft.content,
-      topic,
-      requestedBy: event.userId,
-      conversationKey: event.conversationKey,
-    });
-    reply = [
-      `说说草稿（10 分钟内回复「${QZONE_CONFIRM_POST}」才会发出去）：`,
-      "",
-      draft.content,
-    ].join("\n");
-  } catch (error) {
-    reply = qzoneErrorMessage(error);
-  }
-  return replyQzoneToOutcome(binding, event, sendReply, reply);
-}
-
-/**
- * 「看看空间」→ 列出最近几条说说，并把列表记在进程内供「评论第 N 条」使用。
- *
- * 带 QQ 号（「看看 123456 的空间」）就只看那个人；不带就按配置的好友名单逐个拉。
- * 空间没有可靠的「一条聚合动态流」，所以这里是「按人查」而不是「拉一条流」。
- */
-async function handleQzoneBrowse(
-  record: OnebotConnectionRecord,
-  event: OnebotResolvedEvent,
-  binding: OnebotBindingRecord,
-  request: { targetUin: string },
-  sendReply: ChannelReplySender,
-): Promise<OnebotHandleOutcome> {
-  let reply: string;
-  try {
-    const { feeds, errors } = request.targetUin
-      ? { feeds: await listQzoneMoods(record.config, request.targetUin, 5), errors: [] as string[] }
-      : await listQzoneFriendMoods(record.config, {
-          uins: record.qzoneFriendQqs,
-          // 自己的说说不用自己评论：名单和好友列表都要把她自己排除掉。
-          selfUin: record.accountQq,
-          perFriend: 2,
-          maxFriends: 5,
-        });
-
-    if (!feeds.length) {
-      reply = request.targetUin
-        ? `${request.targetUin} 的空间我没看到能评论的说说（可能是私密，或者这个号不对）。`
-        : [
-            "没抓到能评论的说说。",
-            record.qzoneFriendQqs.length
-              ? "名单里的人最近都没发，或者都设了私密。"
-              : "好友名单是空的 —— 可以在连接设置里填「空间好友 QQ」，或者直接说「看看 123456 的空间」。",
-            errors.length ? `（${errors[0]!.slice(0, 80)}）` : "",
-          ].filter(Boolean).join("");
-    } else {
-      rememberQzoneFeeds(record.id, event.conversationKey, feeds);
-      reply = [
-        "最近的说说（想评论就回「评论第 1 条：内容」）：",
-        "",
-        ...feeds.map((feed, index) => {
-          const when = feed.time ? `（${feed.time}）` : "";
-          return `${index + 1}. ${feed.nickname}${when}：${feed.excerpt.slice(0, 60)}`;
-        }),
-      ].join("\n");
-
-      // 顺手挑最新一条（第 1 条）拟一句评论，一并问「行吗」——
-      // 不用等主人再说「评论第 1 条」。拟稿失败（模型没配、额度用完等）只回列表，不算错。
-      const first = feeds[0]!;
-      try {
-        const conversationId = await findAnnouncementConversationId(binding.id, event.conversationKey)
-          .catch(() => null);
-        const draft = await draftQzoneText({
-          characterId: binding.characterId,
-          bindingId: binding.id,
-          conversationId,
-          kind: "COMMENT",
-          topic: first.excerpt,
-          target: { nickname: first.nickname, excerpt: first.excerpt },
-        });
-        await createPendingQzoneAction({
-          connectionId: record.id,
-          characterId: binding.characterId,
-          kind: "COMMENT",
-          content: draft.content,
-          topic: "看看空间后顺手挑的评论",
-          requestedBy: event.userId,
-          conversationKey: event.conversationKey,
-          targetUin: first.uin,
-          targetTid: first.tid,
-          targetExcerpt: `${first.nickname}：${first.excerpt.slice(0, 80)}`,
-        });
-        reply += [
-          "",
-          `顺手想评 ${first.nickname} 的这条：`,
-          `「${draft.content}」`,
-          `回「${QZONE_CONFIRM_COMMENT}」或「行」就发，回「不行」就当我没提。`,
-        ].join("\n");
-      } catch {
-        // 拟不出评论就只回列表，不把「看看空间」整个搞失败。
-      }
-    }
-  } catch (error) {
-    reply = qzoneErrorMessage(error);
-  }
-  return replyQzoneToOutcome(binding, event, sendReply, reply);
-}
-
-/**
- * 「评论第 2 条：好可爱」→ 拼出评论草稿。
- *
- * 没有序号就没有目标：宁可让她说「先让我看看空间」，也不猜一条去评论。
- * 评论发错地方是删不掉的社交事故，比不发严重得多。
- */
-async function handleQzoneCommentDraft(
-  record: OnebotConnectionRecord,
-  event: OnebotResolvedEvent,
-  binding: OnebotBindingRecord,
-  request: { index: number | null; body: string },
-  sendReply: ChannelReplySender,
-): Promise<OnebotHandleOutcome> {
-  const feeds = readQzoneFeeds(record.id, event.conversationKey);
-  if (!feeds.length) {
-    return replyQzoneToOutcome(
-      binding, event, sendReply,
-      "我还不知道要评论哪一条 —— 先说一句「看看空间」，我把最近几条列出来。",
-    );
-  }
-  const index = request.index ?? 1;
-  const target = feeds[index - 1];
-  if (!target) {
-    return replyQzoneToOutcome(
-      binding, event, sendReply,
-      `只有 ${feeds.length} 条动态，第 ${index} 条不存在。`,
-    );
-  }
-
-  let reply: string;
-  try {
-    const content = request.body || (await draftQzoneText({
-      characterId: binding.characterId,
-      bindingId: binding.id,
-      conversationId: await findAnnouncementConversationId(binding.id, event.conversationKey)
-        .catch(() => null),
-      kind: "COMMENT",
-      topic: target.excerpt,
-      target: { nickname: target.nickname, excerpt: target.excerpt },
-    })).content;
-
-    await createPendingQzoneAction({
-      connectionId: record.id,
-      characterId: binding.characterId,
-      kind: "COMMENT",
-      content,
-      topic: event.content,
-      requestedBy: event.userId,
-      conversationKey: event.conversationKey,
-      targetUin: target.uin,
-      targetTid: target.tid,
-      targetExcerpt: `${target.nickname}：${target.excerpt.slice(0, 80)}`,
-    });
-    reply = [
-      `评论草稿（回复「${QZONE_CONFIRM_COMMENT}」才会发出去）：`,
-      "",
-      `评论 ${target.nickname}：${target.excerpt.slice(0, 40)}…`,
-      `内容：${content}`,
-    ].join("\n");
-  } catch (error) {
-    reply = qzoneErrorMessage(error);
-  }
-  return replyQzoneToOutcome(binding, event, sendReply, reply);
-}
-
-/** 确认：认领草稿 → 过配额 → 真发 → 留审计。 */
-async function handleQzoneConfirm(
-  record: OnebotConnectionRecord,
-  event: OnebotResolvedEvent,
-  binding: OnebotBindingRecord,
-  kind: "POST" | "COMMENT",
-  sendReply: ChannelReplySender,
-): Promise<OnebotHandleOutcome> {
-  const pending = await findPendingQzoneAction(record.id, kind);
-  if (!pending) {
-    return replyQzoneToOutcome(
-      binding, event, sendReply,
-      kind === "POST"
-        ? `没有待发的说说，或草稿已过期。先说「发条说说：…」。`
-        : `没有待发的评论，或草稿已过期。先说「看看空间」再挑一条。`,
-    );
-  }
-  if (!(await claimPendingQzoneAction(pending.id))) {
-    return replyQzoneToOutcome(binding, event, sendReply, "这条正在发或已经处理过，不会重复发。");
-  }
-
-  const quota = await checkQzoneQuota(record.id, kind, record.qzoneLimits, pending.id);
-  if (!quota.allowed) {
-    await finishQzoneAction(pending.id, { ok: false, error: quota.reason });
-    await writeQzoneAudit({
-      connectionId: record.id,
-      characterId: pending.characterId ?? binding.characterId,
-      actionId: pending.id,
-      kind,
-      requestedBy: pending.requestedBy,
-      ok: false,
-      error: quota.reason,
-    });
-    return replyQzoneToOutcome(binding, event, sendReply, quota.reason);
-  }
-
-  let reply: string;
-  const audit = (ok: boolean, error?: string) => writeQzoneAudit({
-    connectionId: record.id, characterId: pending.characterId ?? binding.characterId,
-    actionId: pending.id, kind, requestedBy: pending.requestedBy, ok, error,
-  });
-  if (kind === "COMMENT" && (!pending.targetUin || !pending.targetTid)) {
-    await finishQzoneAction(pending.id, { ok: false, error: "MISSING_TARGET" });
-    return replyQzoneToOutcome(binding, event, sendReply, "这条评论草稿没记住目标（可能是旧数据），重新说「看看空间」再挑一条。");
-  }
-  let result: Awaited<ReturnType<typeof publishQzonePost>> | undefined;
-  // Only the external operation belongs in this failure boundary.
-  try {
-    if (kind === "POST") {
-      result = await publishQzonePost(record.config, { content: pending.content, visible: pending.visible });
-    } else {
-      await commentQzoneFeed(record.config, { targetUin: pending.targetUin!, tid: pending.targetTid!, content: pending.content });
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await finishQzoneAction(pending.id, { ok: false, error: message });
-    await audit(false, message);
-    return replyQzoneToOutcome(binding, event, sendReply, qzoneErrorMessage(error));
-  }
-  const saved = await finishQzoneSuccess(pending.id, result?.tid);
-  await audit(true);
-  if (kind === "POST") {
-    await recordQzonePostMemory(getPrisma(), {
-      characterId: pending.characterId ?? binding.characterId, accountQq: record.accountQq,
-      actionId: pending.id, content: pending.content, visible: pending.visible,
-    }).catch((error) => {
-      console.warn("[qzone] 说说没能写进记忆：", error instanceof Error ? error.message : error);
-    });
-    reply = result?.tid
-      ? `说说发出去了（${result.via === "action" ? "协议端" : "网页接口"}）。`
-      : "说说应该发出去了，但协议端没返回 tid —— 去空间确认一下，先别让我重发。";
-  } else {
-    reply = "评论发出去了。";
-  }
-  if (!saved) reply += " 本地状态暂未保存，请先去空间核对，别重复发送。";
-  return replyQzoneToOutcome(binding, event, sendReply, reply);
-}
-
-/**
- * 主人对「我想发/评论，行吗」的口语审批。
- *
- * 为什么要有这条旁路：`handleQzoneConfirm` 认的是精确词「确认发说说 / 确认评论」，
- * 那是主人主动下指令时的回执；而空间主动问的是「行吗」，主人会顺手回「行」或「不行」。
- * 这种短词没带 kind，所以这里先看**现在有哪条 PENDING**，再决定发哪个、拒绝哪个。
- *
- * 有两条同时 PENDING（POST + COMMENT）时拒绝话不处理 —— 分不清「不行」是拒哪条，
- * 让人说清楚比瞎猜一条取消掉强。
- */
-async function handleQzoneApproval(
-  record: OnebotConnectionRecord,
-  event: OnebotResolvedEvent,
-  binding: OnebotBindingRecord,
-  approve: boolean,
-  sendReply: ChannelReplySender,
-): Promise<OnebotHandleOutcome> {
-  const [pendingPost, pendingComment] = await Promise.all([
-    findPendingQzoneAction(record.id, "POST"),
-    findPendingQzoneAction(record.id, "COMMENT"),
-  ]);
-  const pendings = [pendingPost, pendingComment].filter((p): p is NonNullable<typeof p> => Boolean(p));
-
-  if (!pendings.length) {
-    return replyQzoneToOutcome(
-      binding, event, sendReply,
-      "没有待你确认的空间内容了（可能已经过期）。",
-    );
-  }
-
-  // 只有一条时，同意/拒绝都落到它头上；两条并存且是「同意」，让人说清楚发哪个。
-  if (pendings.length > 1) {
-    if (!approve) {
-      return replyQzoneToOutcome(
-        binding, event, sendReply,
-        "有两条在等你（一条说说、一条评论），你说「不行」我不知道指哪条。"
-        + "回「确认发说说」或「确认评论」再定。",
-      );
-    }
-    return replyQzoneToOutcome(
-      binding, event, sendReply,
-      "有两条在等你，回「确认发说说」或「确认评论」指明发哪个。",
-    );
-  }
-
-  const pending = pendings[0]!;
-  const kind = pending.kind === "COMMENT" ? "COMMENT" : "POST";
-
-  if (!approve) {
-    // 拒绝 = 取消草稿。取消不是失败，审计里单独记一个动作。
-    await finishQzoneAction(pending.id, { ok: false, error: "REJECTED_BY_OWNER" });
-    await writeQzoneAudit({
-      connectionId: record.id,
-      characterId: pending.characterId ?? binding.characterId,
-      actionId: pending.id,
-      kind,
-      requestedBy: pending.requestedBy,
-      ok: false,
-      error: "REJECTED_BY_OWNER",
-    });
-    return replyQzoneToOutcome(binding, event, sendReply, "好，那不发了。");
-  }
-
-  // 同意 → 走现有确认逻辑（它会重新 findPending 并 claim，天然幂等）。
-  return handleQzoneConfirm(record, event, binding, kind, sendReply);
-}
 
 /** 主人的显示名：优先当前消息里的群名片，其次外部身份表里记过的昵称。 */
 async function resolveOwnerDisplayName(record: OnebotConnectionRecord, event: OnebotResolvedEvent): Promise<string> {
@@ -1213,26 +770,18 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
   };
 
   /**
-   * 这条群消息是不是「指令」（公告确认/拟稿、空间动作）—— 需要排队的那种。
+   * 这条群消息是不是「指令」（公告确认/拟稿）—— 需要排队的那种。
    *
    * 普通群消息不需要排队：`remember` + `buffer.push` 都是同步的，真正要串行的是
-   * flush（查库、调模型），它在 `onFlush` 里已经自己排队。指令要改公告草稿、
-   * 调空间接口，得和私聊/其他指令保持串行，所以走外层队列。
+   * flush（查库、调模型），它在 `onFlush` 里已经自己排队。指令要改公告草稿，
+   * 得和私聊/其他指令保持串行，所以走外层队列。
    */
-  const isGroupCommandMessage = (event: OnebotResolvedEvent, binding: OnebotBindingRecord): boolean => {
+  const isGroupCommandMessage = (event: OnebotResolvedEvent, _binding: OnebotBindingRecord): boolean => {
     if (event.messageType !== "group" || !event.groupId) return false;
     const canManageAnnouncement = record.groupAnnouncementEnabled && event.senderRole !== "member";
     if (canManageAnnouncement) {
       if (isAnnouncementConfirm(event.content)) return true;
       if (parseAnnouncementRequest(event.content)) return true;
-    }
-    // 空间指令要排队：它要改草稿、调空间接口，得和私聊、其他指令保持串行。
-    if (record.qzoneEnabled && record.ownerQq && event.userId === record.ownerQq) {
-      if (isQzoneConfirm(event.content, "POST") || isQzoneConfirm(event.content, "COMMENT")) return true;
-      if (isQzoneApprove(event.content) || isQzoneReject(event.content)) return true;
-      if (parseQzonePostRequest(event.content)) return true;
-      if (parseQzoneBrowseRequest(event.content)) return true;
-      if (parseQzoneCommentRequest(event.content)) return true;
     }
     return false;
   };
@@ -1826,7 +1375,7 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
   ): Promise<OnebotHandleOutcome> => {
     const sendReply = createReplySender(record.config, event);
 
-    // Isolate roleplay before daily storage, growth and Qzone approval commands.
+    // Isolate roleplay before daily storage and growth.
     if (event.messageType === "private") {
       const roleplayResult = await handleRoleplayChannel({
         platform: ONEBOT_PLATFORM,
@@ -1847,36 +1396,11 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       && Boolean(event.groupId)
       && event.senderRole !== "member";
 
-    /**
-     * 空间只认主人。
-     *
-     * 群公告能让群主/管理员用，是因为公告本来就属于那个群；空间是她自己账号上的
-     * 一举一动，群里谁说「发条说说」都算数的话，等于把她的号交给了整个群。
-     */
     const isOwnerEvent = Boolean(record.ownerQq) && event.userId === record.ownerQq;
-    const canUseQzone = record.qzoneEnabled && isOwnerEvent;
 
     // 确认发布允许不带 @：管理员刚看完草稿，回一句「确认发布」就够了。
     if (canManageAnnouncement && isAnnouncementConfirm(event.content)) {
       return handleAnnouncementConfirm(record, event, binding, sendReply);
-    }
-
-    // 空间确认词和公告分开（「确认发说说」/「确认评论」）：共用一句「确认发布」的话，
-    // 一条回执到底该发公告还是发说说，代码无从判断。
-    if (canUseQzone && isQzoneConfirm(event.content, "POST")) {
-      return handleQzoneConfirm(record, event, binding, "POST", sendReply);
-    }
-    if (canUseQzone && isQzoneConfirm(event.content, "COMMENT")) {
-      return handleQzoneConfirm(record, event, binding, "COMMENT", sendReply);
-    }
-
-    // 口语审批（「行 / 不行 / 发 / 算了」）是对她主动来问的那句的回应，也要在普通聊天前接住。
-    // 顺序上必须排在精确确认词之后：精确词更明确，先匹配到就不会被「行」这类短词误吃。
-    if (canUseQzone && isQzoneApprove(event.content)) {
-      return handleQzoneApproval(record, event, binding, true, sendReply);
-    }
-    if (canUseQzone && isQzoneReject(event.content)) {
-      return handleQzoneApproval(record, event, binding, false, sendReply);
     }
 
     const isGroupMessage = event.messageType === "group" && Boolean(event.groupId);
@@ -2030,22 +1554,8 @@ export function createOnebotMessageHandler(record: OnebotConnectionRecord) {
       if (request) return handleAnnouncementDraft(record, event, binding, request.topic, sendReply);
     }
 
-    // 空间指令放在闸门之后、攒批之前：它们是「一件事」，不该被当成一轮群聊去接话。
-    if (!ownerContextOnly && canUseQzone) {
-      const postRequest = parseQzonePostRequest(event.content);
-      if (postRequest) return handleQzonePostDraft(record, event, binding, postRequest.topic, sendReply);
-      const browseRequest = parseQzoneBrowseRequest(event.content);
-      if (browseRequest) {
-        return handleQzoneBrowse(record, event, binding, browseRequest, sendReply);
-      }
-      const commentRequest = parseQzoneCommentRequest(event.content);
-      if (commentRequest) {
-        return handleQzoneCommentDraft(record, event, binding, commentRequest, sendReply);
-      }
-    }
-
     // 群聊统一走一条攒批管道：三档只决定「放不放进来」，不再有单条快速路径。
-    // 指令类（公告、空间）已经在上面的分支里返回，不会走到这里。
+    // 指令类（公告）已经在上面的分支里返回，不会走到这里。
     if (isGroupMessage) {
       groupChatBuffer.push(
         contextKey,
