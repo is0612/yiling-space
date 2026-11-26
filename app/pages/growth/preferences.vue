@@ -36,7 +36,6 @@ const status = ref<Status | "ALL">("ACTIVE");
 const items = ref<Preference[]>([]);
 const page = ref(1);
 const total = ref(0);
-const pageCount = ref(1);
 const loading = ref(false);
 const loadError = ref("");
 const editorOpen = ref(false);
@@ -105,7 +104,7 @@ async function loadList() {
     const result = await growthApi.listPreferences({ characterId: target.role, status: status.value, keyword: query.value, page: page.value });
     if (!current(target) || target.sequence !== listSequence) return;
     items.value = result.items.filter(item => item.characterId === target.role && (status.value === "ALL" || item.status === status.value));
-    total.value = result.pagination.total; page.value = result.pagination.page; pageCount.value = result.pagination.pageCount;
+    total.value = result.pagination.total; page.value = result.pagination.page;
   } catch (error) {
     if (current(target) && target.sequence === listSequence) loadError.value = errorText(error, "读取偏好失败，请重试。");
   } finally { if (current(target) && target.sequence === listSequence) loading.value = false; }
@@ -249,7 +248,7 @@ async function loadHistory() {
 function changeHistoryPage(value: number) { historyPage.value = value; void loadHistory(); }
 watch(characterId, () => {
   generation += 1; listSequence += 1; closeEditor(); closeAction(); closeHistory();
-  keyword.value = ""; query.value = ""; status.value = "ACTIVE"; page.value = 1; pageCount.value = 1;
+  keyword.value = ""; query.value = ""; status.value = "ACTIVE"; page.value = 1;
   items.value = []; total.value = 0; loading.value = false; loadError.value = "";
   if (characterId.value) void loadList();
 }, { immediate: true });

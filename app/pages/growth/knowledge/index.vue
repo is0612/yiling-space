@@ -524,7 +524,9 @@ async function toggleCandidateRelation(candidate: Candidate, target: KnowledgeRe
 async function dismissCandidate(candidate: Candidate) {
   const targetCharacterId = characterId.value;
   const expectedRoleVersion = roleVersion;
-  if (!targetCharacterId || pageDisposed) return;
+  if (!targetCharacterId || pageDisposed || busyIds.value.includes(candidate.id)) return;
+  // 与其他候选操作一致加行级锁：模板的「忽略」按钮也依赖 busyIds 禁用，否则连点会重复提交。
+  busyIds.value = [...busyIds.value, candidate.id];
   try {
     await knowledgeApi.dismissCandidate({ characterId: targetCharacterId, candidateId: candidate.id });
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
@@ -533,6 +535,8 @@ async function dismissCandidate(candidate: Candidate) {
   } catch (error) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.error(readApiErrorMessage(error, "操作失败。"));
+  } finally {
+    busyIds.value = busyIds.value.filter(id => id !== candidate.id);
   }
 }
 /**

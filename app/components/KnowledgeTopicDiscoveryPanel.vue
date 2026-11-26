@@ -23,6 +23,8 @@ const runDetail = ref<KnowledgeTopicRunDetail | null>(null);
 const activeTopics = ref<KnowledgeTopicSummary[]>([]);
 const selectedMembers = ref<Record<string, string[]>>({});
 const applyTopicIds = ref<Record<string, string>>({});
+// 切角色后仍在途的批次/主题请求不得覆盖新角色的数据。
+let roleGeneration = 0;
 
 const activeItems = computed(() => props.items.filter(item => item.status === "ACTIVE"));
 const pendingCount = computed(() => runDetail.value?.suggestions.filter(item => item.status === "PENDING").length ?? 0);
@@ -31,9 +33,13 @@ const statusLabels: Record<string, string> = {
 };
 
 watch(() => props.characterId, () => {
+  roleGeneration += 1;
   runs.value = [];
   selectedRunId.value = "";
   runDetail.value = null;
+  activeTopics.value = [];
+  selectedMembers.value = {};
+  applyTopicIds.value = {};
   selectedInputIds.value = [];
   if (open.value) void loadRuns();
 });
@@ -44,18 +50,25 @@ async function openDiscovery() {
 }
 async function loadActiveTopics() {
   if (!props.characterId) return;
+  const characterId = props.characterId;
+  const generation = roleGeneration;
+  const current = () => characterId === props.characterId && generation === roleGeneration;
   try {
-    const result = await api.list({ characterId: props.characterId, status: "ACTIVE" });
-    activeTopics.value = result.topics;
+    const result = await api.list({ characterId, status: "ACTIVE" });
+    if (current()) activeTopics.value = result.topics;
   } catch (error) {
-    ElMessage.error(readApiErrorMessage(error, "读取可应用的主题失败。"));
+    if (current()) ElMessage.error(readApiErrorMessage(error, "读取可应用的主题失败。"));
   }
 }
 async function loadRuns() {
   if (!props.characterId) return;
+  const characterId = props.characterId;
+  const generation = roleGeneration;
+  const current = () => characterId === props.characterId && generation === roleGeneration;
   loading.value = true;
   try {
-    const result = await api.listRuns({ characterId: props.characterId });
+    const result = await api.listRuns({ characterId });
+    if (!current()) return;
     runs.value = result.runs;
     if (selectedRunId.value && !result.runs.some(run => run.id === selectedRunId.value)) {
       selectedRunId.value = "";
@@ -66,16 +79,19 @@ async function loadRuns() {
     }
     if (selectedRunId.value) await loadRun(selectedRunId.value);
   } catch (error) {
-    ElMessage.error(readApiErrorMessage(error, "读取主题发现批次失败。"));
+    if (current()) ElMessage.error(readApiErrorMessage(error, "读取主题发现批次失败。"));
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 async function loadRun(runId: string) {
   if (!runId) return;
+  const characterId = props.characterId;
+  const generation = roleGeneration;
+  const current = () => characterId === props.characterId && generation === roleGeneration && selectedRunId.value === runId;
   try {
-    const result = await api.getRun({ characterId: props.characterId, runId });
-    if (selectedRunId.value !== runId) return;
+    const result = await api.getRun({ characterId, runId });
+    if (!current()) return;
     runDetail.value = result.run;
     for (const suggestion of result.run.suggestions) {
       if (!selectedMembers.value[suggestion.id]) {
@@ -83,7 +99,7 @@ async function loadRun(runId: string) {
       }
     }
   } catch (error) {
-    ElMessage.error(readApiErrorMessage(error, "读取主题发现结果失败。"));
+    if (current()) ElMessage.error(readApiErrorMessage(error, "读取主题发现结果失败。"));
   }
 }
 async function refresh() {
@@ -91,15 +107,19 @@ async function refresh() {
 }
 async function startRun() {
   if (!selectedInputIds.value.length || starting.value) return;
+  const characterId = props.characterId;
+  const generation = roleGeneration;
+  const current = () => characterId === props.characterId && generation === roleGeneration;
   starting.value = true;
   try {
-    const result = await api.createRun({ characterId: props.characterId, itemIds: selectedInputIds.value });
+    const result = await api.createRun({ characterId, itemIds: selectedInputIds.value });
+    if (!current()) return;
     selectedInputIds.value = [];
     selectedRunId.value = result.run.id;
     ElMessage.success("主题发现任务已提交，后台正在处理。");
     await loadRuns();
   } catch (error) {
-    ElMessage.error(readApiErrorMessage(error, "创建主题发现任务失败。"));
+    if (current()) ElMessage.error(readApiErrorMessage(error, "创建主题发现任务失败。"));
   } finally {
     starting.value = false;
   }
@@ -115,40 +135,50 @@ async function acceptSuggestion(suggestionId: string, mode: "CREATE" | "APPLY") 
     ElMessage.warning("请先选择要应用到的活动主题。");
     return;
   }
+  const characterId = props.characterId;
+  const generation = roleGeneration;
+  const current = () => characterId === props.characterId && generation === roleGeneration;
   reviewingId.value = suggestionId;
   try {
     const result = await api.acceptSuggestion({
-      characterId: props.characterId, suggestionId, mode,
+      characterId, suggestionId, mode,
       ...(mode === "APPLY" ? { topicId } : {}),
       memberItemIds: members,
     });
+    if (!current()) return;
     ElMessage.success(mode === "CREATE" ? `已创建主题「${result.topic.name}」。` : `已将建议成员加入「${result.topic.name}」。`);
     await loadRun(selectedRunId.value);
     await loadRunsListOnly();
     await loadActiveTopics();
     emit("changed");
   } catch (error) {
-    ElMessage.error(readApiErrorMessage(error, "采纳主题建议失败；如果知识已变化，请重新发现。"));
+    if (current()) ElMessage.error(readApiErrorMessage(error, "采纳主题建议失败；如果知识已变化，请重新发现。"));
   } finally {
     reviewingId.value = "";
   }
 }
 async function dismissSuggestion(suggestionId: string) {
+  const characterId = props.characterId;
+  const generation = roleGeneration;
+  const current = () => characterId === props.characterId && generation === roleGeneration;
   reviewingId.value = suggestionId;
   try {
-    await api.dismissSuggestion({ characterId: props.characterId, suggestionId });
+    await api.dismissSuggestion({ characterId, suggestionId });
+    if (!current()) return;
     ElMessage.success("已忽略这条主题建议。");
     await loadRun(selectedRunId.value);
     await loadRunsListOnly();
   } catch (error) {
-    ElMessage.error(readApiErrorMessage(error, "忽略主题建议失败。"));
+    if (current()) ElMessage.error(readApiErrorMessage(error, "忽略主题建议失败。"));
   } finally {
     reviewingId.value = "";
   }
 }
 async function loadRunsListOnly() {
-  const result = await api.listRuns({ characterId: props.characterId });
-  runs.value = result.runs;
+  const characterId = props.characterId;
+  const generation = roleGeneration;
+  const result = await api.listRuns({ characterId });
+  if (characterId === props.characterId && generation === roleGeneration) runs.value = result.runs;
 }
 </script>
 

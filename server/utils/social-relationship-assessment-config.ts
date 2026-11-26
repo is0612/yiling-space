@@ -65,8 +65,9 @@ export function readSocialRelationshipAssessmentAssistantSettingsPatch(
 }
 
 /**
- * 评估助手必须完整使用自己的模型、地址和 Key。
- * 不回落到聊天模型、记忆助手、语境助手、知识助手或全局环境变量。
+ * 校验评估助手的自定义地址。与其他助手一样：留空即跟随对话模型地址
+ * （resolveAssistantConnection 对 socialAssessment 也走 configuredBaseUrl || chat.apiBaseUrl），
+ * Key 只在地址一致时继承。这里不能要求必须填独立地址，否则会拒绝合法的继承配置。
  */
 export function validateSocialRelationshipAssessmentAssistantEnabledConfig(
   config: Record<string, unknown>,
