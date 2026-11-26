@@ -164,6 +164,8 @@ async function saveSettings() {
     }
   }
 
+  // 确认框可能停留很久：期间切了角色就不能再拿新角色的表单发旧角色的清理配置。
+  if (id.value !== requestedId) return;
   saving.value = true;
   try {
     const anchorAt = zonedInputToIso(anchor.value, timezone.value);

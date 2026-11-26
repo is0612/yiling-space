@@ -17,7 +17,11 @@ const date: Reader<string> = (v, p) => {
   const year = Number(v.slice(0, 4));
   const month = Number(v.slice(5, 7));
   const day = Number(v.slice(8, 10));
-  const calendar = new Date(Date.UTC(year, month - 1, day));
+  // 不用 Date.UTC：它把 0–99 年当成 1900–1999，合法的低年份日期会被误判为非法。
+  // setUTCFullYear 不会触发这个映射，闰年与月份溢出仍由回读比对兜住。
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(0, 0, 0, 0);
   if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() + 1 !== month || calendar.getUTCDate() !== day) return fail(p);
   return new Date(v).toISOString();
 };

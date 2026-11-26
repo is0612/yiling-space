@@ -34,6 +34,12 @@ const statusLabels: Record<string, string> = {
 
 watch(() => props.characterId, () => {
   roleGeneration += 1;
+  // 旧请求的 finally 有 current() 守卫，切角色后不会再替新角色清状态；
+  // 这几个锁必须在这里主动复位，否则旧角色遗留的 loading/starting/reviewingId
+  // 会让新角色的按钮永久处于禁用或「处理中」。
+  loading.value = false;
+  starting.value = false;
+  reviewingId.value = "";
   runs.value = [];
   selectedRunId.value = "";
   runDetail.value = null;

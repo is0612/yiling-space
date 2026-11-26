@@ -15,6 +15,15 @@ const bundle = emptyCharacterGrowthBundle(); bundle.tables.reflectionRuns.push(r
 assert.equal(parseCharacterGrowthBundle(bundle).tables.reflectionRuns.length, 1);
 assert.throws(() => parseCharacterGrowthBundle({ ...bundle, tables: { ...bundle.tables, reflectionRuns: [run, run] } }));
 for (const changed of [{ ...run, leaseToken: id }, { ...run, id: "bad" }, { ...run, periodStart: "2026-02-30T00:00:00Z" }, { ...run, periodEnd: run.periodStart }, { ...run, sourcesHash: "bad" }]) assert.throws(() => parseCharacterGrowthBundle({ ...bundle, tables: { ...bundle.tables, reflectionRuns: [changed] } }));
+// 0–99 年：Date.UTC 会把它映射到 1900–1999，合法低年份不能被误拒。
+for (const periodStart of ["0099-01-01T00:00:00Z", "0000-01-01T00:00:00Z", "0099-01-01T00:00:00+08:00"]) {
+  const lowYear = { ...run, periodStart, periodEnd: "0100-01-01T00:00:00Z" };
+  assert.equal(parseCharacterGrowthBundle({ ...bundle, tables: { ...bundle.tables, reflectionRuns: [lowYear] } }).tables.reflectionRuns.length, 1, periodStart);
+}
+// 低年份里的非法日历日仍然要拒绝。
+for (const periodStart of ["0099-02-30T00:00:00Z", "0099-13-01T00:00:00Z"]) {
+  assert.throws(() => parseCharacterGrowthBundle({ ...bundle, tables: { ...bundle.tables, reflectionRuns: [{ ...run, periodStart }] } }), periodStart);
+}
 const suggestion = { id: "22345678-1234-4234-8234-123456789012", runId: id, title: "结论", observation: "观察", inference: "推断", recommendation: "建议", sourceRefs: [{ key: `memory:${id}`, type: "memory", id, hash: "a".repeat(64), title: "来源", excerpt: "摘录" }], status: "PENDING", reviewNote: null, reviewedAt: null, acceptedAt: null, createdAt: timestamp, updatedAt: timestamp };
 const linked = { ...bundle, tables: { ...bundle.tables, reflectionSuggestions: [suggestion] } };
 const context = { eventIds: new Set([id]), snapshotIds: new Set<string>(), friends: new Set<string>(), includeFriends: false };
