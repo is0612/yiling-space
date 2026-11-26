@@ -367,7 +367,7 @@
 - `yarn typecheck`：通过（`nuxt typecheck` + server `tsc`）。首次因本地 Prisma Client 与 schema 不同步失败，重新生成后通过；有一处既有的重复 import warning。
 - `yarn build`：通过（1m30s）。环境删除保护拦截了 Nuxt 清理自身构建缓存，仅在该次构建命令中临时关闭后完成。
 - `yarn check:tests`：通过，249 个入口展开为 286 个唯一顶层脚本。
-- `yarn test:all`：230 / 286 通过。56 个失败全部是测试数据库端口 5434 `ECONNREFUSED`（本机 Docker 未运行）。抽查 `test-model-usage`：业务断言已打印通过，仅在 `finally` 清理数据库时连接失败。未发现本次改动引起的失败。
+- `yarn test:all`：数据库未启动时 230 / 286（56 个失败均为端口 5434 `ECONNREFUSED`）；用户启动 Docker 后重跑为 **282 / 286**（21m17s），前述 56 个数据库测试全部通过。剩余 4 个失败与本次改动无关：`test-desktop-pg-lock.mjs`、`test-desktop-install-engine.mjs`、`test-desktop-identity.ts` 都是 Git Bash 下 `whoami /user` 不被 Unix 版 whoami 接受；`test-memory-worker-supervisor.mjs` 在全量序列中失败、单独运行通过（测试间干扰）。本任务相关测试全部通过。
 
 #### 仍待真实运行验证
 
