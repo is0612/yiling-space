@@ -1,6 +1,7 @@
 import { loadPromptEventCandidates } from "../../../utils/prompt-event-candidates";
 import { loadPromptMemoryCandidates } from "../../../utils/prompt-memory-candidates";
 import { readInteractionExperiences } from "../../../utils/interaction-experiences";
+import { readCapabilityCommand } from "../../../utils/capability-command";
 import { asksSelfUnderstandingHistory, wantsSelfUnderstanding, selfUnderstandingReferences } from "../../../utils/self-understanding";
 import { loadSelfUnderstanding } from "../../../utils/self-understanding-reader";
 import { readInteractionGuidance } from "../../../utils/interaction-guidance";
@@ -625,6 +626,9 @@ export default defineEventHandler(async (event) => {
     } : {}),
   } : undefined;
   try {
+    // 网页对话没有引用和附件，请求体里的正文就是用户本人写的。只解析不执行，旧触发照常工作。
+    const capabilityCommand = readCapabilityCommand({ content: message, addressedToSelf: true });
+    const capabilityCommands = capabilityCommand ? [capabilityCommand] : [];
     generated = await generateConversationReplyWithMemoryAssistant({
       assistant: memoryAssistant,
       turnContext,
@@ -813,6 +817,7 @@ export default defineEventHandler(async (event) => {
         thinking: chatSettings.thinking,
         currentMessage: message,
         ...(localReadOnlyTools ? { readOnlyTools: localReadOnlyTools } : {}),
+        ...(capabilityCommands.length ? { capabilityCommands } : {}),
         ...(interactionGuidance.length ? { interactionGuidance } : {}),
         ...(selfUnderstanding ? { selfUnderstanding } : {}),
         ...(interactionExperiences.length ? { interactionExperiences } : {}),

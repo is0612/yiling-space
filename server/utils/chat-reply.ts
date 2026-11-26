@@ -14,6 +14,7 @@ import { conversationSourcePolicy, type ConversationSourcePolicy, type Conversat
 import type { CrossChannelLine } from "./cross-channel-context";
 import type { OwnerHistoryCoverage } from "./owner-private-history";
 import type { SelfUnderstandingView } from "./self-understanding";
+import type { CapabilityCommandRequest } from "./capability-command";
 // 备注的清洗与截断：库里的数据不一定干净（旧版本、手工 SQL、迁移），
 // 而这里是最不该赌的地方 —— 备注会原样进系统提示词。
 import { aliasesForPrompt } from "./friend-aliases";
@@ -323,6 +324,11 @@ export type ConversationReplyInput = {
   interactionExperiences?: Array<{ id: string; content: string; context: string; weight: number; learning?: ExperienceLearning | null }>;
   groupInteractionExperiences?: ConversationReplyInput["interactionExperiences"];
   readOnlyTools?: ReadOnlyChatTools;
+  /**
+   * 当前用户消息开头的显式能力命令（`&出图：` 等）的解析结果。
+   * ⚠️ 解析不等于执行：不进模型请求，也不触发任何能力；执行前各自还要过开关、额度与收件人校验。
+   */
+  capabilityCommands?: CapabilityCommandRequest[];
   conversationSummary?: { summary: string; through: { id: string; occurredAt: string }; coverage: "partial" };
   recentMessages: ConversationContextMessage[];
   memories: ConversationContextMemory[];

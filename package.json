@@ -103,6 +103,7 @@
     "test:stale-memory-audit": "tsx scripts/test-stale-memory-audit.ts",
     "test:memory-transaction-audit": "tsx scripts/test-memory-transaction-audit.ts",
     "test:model-failure-fallback": "tsx scripts/test-model-failure-fallback.ts",
+    "test:capability-command": "tsx scripts/test-capability-command.ts",
     "test:memory-page-races": "tsx scripts/test-memory-page-races.ts && tsx scripts/test-role-switch-lock-reset.ts && tsx scripts/test-async-minimal-fixes.ts",
     "test:role-switch-lock-reset": "tsx scripts/test-role-switch-lock-reset.ts",
     "test:async-minimal-fixes": "tsx scripts/test-async-minimal-fixes.ts",

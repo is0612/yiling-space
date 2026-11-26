@@ -12,6 +12,7 @@ import { fillContextPlanUsage, planContextTurn } from "../context-plan";
 import { estimateTokens as estimateContextTokens } from "../memory-retrieval";
 import { loadPromptMemoryCandidates } from "../prompt-memory-candidates";
 import { projectToolMemories, projectToolKnowledge, qqReadOnlyTaskRequested } from "../qq-read-only-tools";
+import { readCapabilityCommands, type CapabilityCommandRequest } from "../capability-command";
 import { filterPassiveGroupAt } from "../channel-behavior-policy";
 import { readDeliveredAtMention, readDeliveredAtTarget, blockedDeliveredAtTargets, mergeSuppressedAtDelivery } from "./reply-delivery";
 import { readInteractionGuidance } from "../interaction-guidance";
@@ -1763,6 +1764,7 @@ type ChannelTurnChatInputContext = {
   recentStoredMessages: ChannelTurnStoredMessage[];
   crossChannel: CrossChannelLine[];
   readOnlyTools: Record<string, unknown> | undefined;
+  capabilityCommands: CapabilityCommandRequest[];
   ownerHistoryHold: boolean;
   turn: {
     platform: string;
@@ -1787,7 +1789,7 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
     groupAcquaintances, acquaintances, privateKnowledgeItems, voiceSettings, voicePlanned,
     imageSettings, imagePlanned, allowSilent,
     useTranscript, isGroup, character, chatSettings, apiKey, currentMessage, chatTimeZone, messages,
-    backgroundLines, recentMessages, recentStoredMessages, crossChannel, readOnlyTools, ownerHistoryHold, turn,
+    backgroundLines, recentMessages, recentStoredMessages, crossChannel, readOnlyTools, capabilityCommands, ownerHistoryHold, turn,
   } = ctx;
   return {
         ...(turn.platform === "qq-onebot" && !(ownerHistoryHold) && qqReadOnlyTaskRequested(currentMessage) ? { readOnlyTools } : {}),
@@ -1929,6 +1931,7 @@ function buildChannelTurnChatInput(ctx: ChannelTurnChatInputContext): Parameters
         // 本机 Anima 只认英文标签：这一轮得让她用标签写 imagePrompt，中文写多少都白费。
         ...(imagePlanned && imageSettings?.provider === LOCAL_IMAGE_PROVIDER && resolveLocalImagePreset(imageSettings.model, imageSettings.preset) === "anima" ? { imageReplyTags: true } : {}),
         ...(catchphrasePrompt.length ? { catchphrases: catchphrasePrompt } : {}),
+        ...(capabilityCommands.length ? { capabilityCommands } : {}),
   };
 }
 
@@ -3548,6 +3551,19 @@ async function runChannelTurn(input: {
   const currentMessage = messages.length === 1
     ? modelText(messages[0]!)
     : messages.map((message) => `${message.authorDisplayName || "群友"}：${modelText(message)}`).join("\n");
+  /**
+   * ⚠️ 不能拿 `currentMessage` 去找命令：群聊里它是多人拼接后的文本，别人说的话也会被算进来。
+   * 只解析不执行，旧的自然语言触发照常工作。
+   */
+  const capabilityCommands = readCapabilityCommands(messages.map(message => ({
+    externalMessageId: message.externalMessageId,
+    ...(message.kind ? { kind: message.kind } : {}),
+    ...(message.readOnly !== undefined ? { readOnly: message.readOnly } : {}),
+    content: message.content,
+    ...(message.commandText !== undefined ? { commandText: message.commandText } : {}),
+    hasAttachments: Boolean(message.images?.length || message.voices?.length),
+    ...(message.addressedToSelf !== undefined ? { addressedToSelf: message.addressedToSelf } : {}),
+  })));
 
   const retrieval = await retrieveChannelTurnContext({
     prisma,
@@ -4016,6 +4032,7 @@ async function runChannelTurn(input: {
         recentStoredMessages,
         crossChannel,
         readOnlyTools,
+        capabilityCommands,
         ownerHistoryHold,
         turn: input,
       }),
