@@ -12,10 +12,14 @@ const integer: Reader<number> = (v, p) => typeof v === "number" && Number.isSafe
 const probability: Reader<number> = (v, p) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1 ? v : fail(p);
 const date: Reader<string> = (v, p) => {
   if (typeof v !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)$/.test(v) || !Number.isFinite(Date.parse(v))) return fail(p);
-  const canonical = new Date(v).toISOString();
-  // Reject normalized invalid calendar dates such as February 30.
-  if (v.endsWith("Z") && canonical.slice(0, 10) !== v.slice(0, 10)) return fail(p);
-  return canonical;
+  // 校验输入日期本身是真实日历日（如 2 月 30 不合法）。不能用 UTC 结果反推：
+  // 带 +08:00 偏移时 UTC 日期本来就可能差一天，那样非法日期会被静默规范化成另一天导入。
+  const year = Number(v.slice(0, 4));
+  const month = Number(v.slice(5, 7));
+  const day = Number(v.slice(8, 10));
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() + 1 !== month || calendar.getUTCDate() !== day) return fail(p);
+  return new Date(v).toISOString();
 };
 const optional = <T>(read: Reader<T>): Reader<T | undefined> => (v, p) => v === undefined ? undefined : read(v, p);
 const boolean: Reader<boolean> = (v, p) => typeof v === "boolean" ? v : fail(p);

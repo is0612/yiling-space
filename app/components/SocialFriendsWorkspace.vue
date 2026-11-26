@@ -606,15 +606,20 @@ function askBatchDelete() {
 
 async function confirmDelete() {
   const targets = deleteTargets.value;
-  if (!targets.length || deleteSubmitting.value) return;
+  const characterId = activeCharacterId.value;
+  if (!characterId || !targets.length || deleteSubmitting.value) return;
+  // 删除不可撤销：确认框停留期间切角色时，旧 scopeId 绝不能继续执行。
+  const current = () => characterId === activeCharacterId.value;
   deleteSubmitting.value = true;
   try {
     if (targets.length === 1) {
       const only = targets[0]!;
       await identitiesApi.deleteFriend(only.scopeId);
+      if (!current()) return;
       ElMessage.success(`已删掉和「${only.displayName || only.platformUid}」的关系。`);
     } else {
       const response = await identitiesApi.batchDeleteFriends(targets.map((friend) => friend.scopeId));
+      if (!current()) return;
       if (response.failed > 0) {
         ElMessage.warning(`删掉 ${response.deleted} 个，还有 ${response.failed} 个没删掉，刷新后重试。`);
       } else {
@@ -628,6 +633,7 @@ async function confirmDelete() {
     const remaining = friends.value.length - targets.length;
     await load(remaining > 0 ? page.value : Math.max(1, page.value - 1));
   } catch (error) {
+    if (!current()) return;
     ElMessage.error(readErrorMessage(error, "没删掉，稍后重试。"));
   } finally {
     deleteSubmitting.value = false;
@@ -742,6 +748,10 @@ watch(id, (nextId, previousId) => {
   suggestionResolveSequence += 1;
   resolvingSuggestionId.value = "";
   suggestionDialogOpen.value = false;
+  // 删除确认框也必须随角色切换关闭：否则确认期间切角色，旧角色的 scopeId 会被删掉。
+  deleteDialogOpen.value = false;
+  deleteTargets.value = [];
+  deleteSubmitting.value = false;
   suggestions.value = [];
   suggestionsLoading.value = false;
   editingScopeId.value = "";
