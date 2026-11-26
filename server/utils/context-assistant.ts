@@ -391,7 +391,12 @@ export async function analyzeGroupContext(
         }),
       });
       if (!response.ok) { diagnostic.complete("http_error"); throw new ContextAssistantError(); }
-      try { body = await response.json(); } catch (error) {
+      try {
+        body = await response.json();
+        // 非流式请求：body 成功解析的那一刻才是「首个有效响应数据到达」的最近可测点。
+        // 它 ≥ 真实 TTFB；拿不到（解析抛错）就不标记，诊断层会记录 unavailable。
+        diagnostic.markFirstByte();
+      } catch (error) {
         diagnostic.complete(error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "timeout" : "invalid_response");
         throw error;
       }

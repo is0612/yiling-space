@@ -336,3 +336,64 @@ try {
 } finally {
   globalThis.fetch = originalFetch;
 }
+
+// 首字节（首 Token 代理）计时：语境助手成功时派生 ttfb/tail，超时/异常时计时完整且不伪造。
+{
+  const realNow = Date.now;
+  let clock = 1_700_000_000_000;
+  Date.now = () => clock;
+  const realFetch = globalThis.fetch;
+  try {
+    type Attempt = { status: string; startedAt?: number; firstByteAt?: number; endedAt?: number; ttfbMs?: number; tailMs?: number; durationMs: number };
+    // 成功：body 解析后 markFirstByte，派生 ttfb/tail。
+    {
+      const attempts: Attempt[] = [];
+      globalThis.fetch = async () => { clock += 300; return modelResponse(); };
+      await analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, startedAt: entry.startedAt, firstByteAt: entry.firstByteAt, endedAt: entry.endedAt, ttfbMs: entry.ttfbMs, tailMs: entry.tailMs, durationMs: entry.durationMs }));
+      assert.equal(attempts.length, 1);
+      assert.equal(attempts[0]!.status, "success");
+      assert.equal(attempts[0]!.ttfbMs, 300, "语境助手成功时应记录首字节等待");
+      assert.equal(attempts[0]!.tailMs, 0, "非流式：body 到达后立即解析完成，剩余响应为 0");
+      assert.equal(attempts[0]!.durationMs, 300);
+      assert.equal(attempts[0]!.startedAt, 1_700_000_000_000);
+      assert.equal(attempts[0]!.endedAt, 1_700_000_000_300);
+    }
+    // http_error（401）：无 body，不伪造 firstByte。
+    {
+      const attempts: Attempt[] = [];
+      globalThis.fetch = async () => { clock += 100; return new Response("secret", { status: 401 }); };
+      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, startedAt: entry.startedAt, firstByteAt: entry.firstByteAt, endedAt: entry.endedAt, ttfbMs: entry.ttfbMs, tailMs: entry.tailMs, durationMs: entry.durationMs })));
+      assert.equal(attempts[0]!.status, "http_error");
+      assert.equal(attempts[0]!.firstByteAt, undefined);
+      assert.equal(attempts[0]!.ttfbMs, undefined);
+      assert.equal(attempts[0]!.durationMs, 100);
+      assert.equal(attempts[0]!.endedAt, 1_700_000_000_400);
+    }
+    // 非 JSON body（200）：response.json 抛错，未 markFirstByte，记 invalid_response。
+    {
+      const attempts: Attempt[] = [];
+      globalThis.fetch = async () => { clock += 100; return new Response("not json", { status: 200 }); };
+      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, firstByteAt: entry.firstByteAt, ttfbMs: entry.ttfbMs, tailMs: entry.tailMs, durationMs: entry.durationMs })));
+      assert.equal(attempts[0]!.status, "invalid_response");
+      assert.equal(attempts[0]!.ttfbMs, undefined, "解析失败拿不到首字节，不能伪造");
+    }
+    // 网络超时（fetch 抛 TimeoutError）：记 timeout，计时完整。
+    {
+      const attempts: Attempt[] = [];
+      globalThis.fetch = async () => { clock += 100; const error = new Error("timeout"); error.name = "TimeoutError"; throw error; };
+      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, ttfbMs: entry.ttfbMs, durationMs: entry.durationMs })));
+      assert.equal(attempts[0]!.status, "timeout");
+      assert.equal(attempts[0]!.ttfbMs, undefined);
+      assert.equal(attempts[0]!.durationMs, 100);
+    }
+    // 诊断字段不得泄露提示词/原始响应。
+    {
+      let captured: unknown;
+      globalThis.fetch = async () => modelResponse(valid);
+      await analyzeGroupContext(runtime, input, undefined, entry => { captured = entry; });
+      assert(!JSON.stringify(captured).includes("SECRET_"));
+      assert(!JSON.stringify(captured).includes("summary"));
+    }
+  } finally { Date.now = realNow; globalThis.fetch = realFetch; }
+}
+console.log("Context assistant first-byte timing: success derives ttfb/tail, error/timeout keep timing complete without fabricating (mocked).");

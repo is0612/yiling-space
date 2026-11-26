@@ -403,3 +403,15 @@
 - `yarn typecheck`：通过（含 server `tsc`），仅一处既有重复 import warning。
 - `yarn build`：通过（2m00s）；仍需仅在该命令临时关闭环境删除保护以清理 Nuxt 自身构建缓存。
 - 本轮未重跑 `test:all`；上一轮数据库就绪后的结果为 282 / 286，4 个失败均为环境/测试间干扰且与本轮改动无关。
+
+
+### 2026-11-26 · 语境助手首字节（首 Token 代理）计时诊断
+
+- 状态：诊断增强完成，专项与工程校验通过；未做任何性能优化，未改模型/提示词/thinking/超时/重试/业务逻辑。
+- 测量口径：本系统请求为非流式（一次性 `response.json()`），没有真正流式首 token；新增 `firstByteAt` 记录「首个有效响应 body 到达」时刻，它 ≥ 真实 TTFB，是在非流式协议下能诚实测得的最佳代理。拿不到时不写派生字段，明确按 unavailable 处理，不伪造。
+- 字段（全部可选、经白名单清洗与上界夹取）：`startedAt` / `firstByteAt` / `endedAt`（epoch ms），`ttfbMs`（首字节等待 = firstByteAt - startedAt）、`tailMs`（剩余响应 = endedAt - firstByteAt）；`durationMs` 仍是总耗时 = ttfb + tail。
+- 覆盖范围：`startAssistantRequest` 新增 `markFirstByte()`，语境助手在 `response.json()` 成功后标记；异常（http_error / 非 JSON / 网络超时 / 时钟回跳）保持计时完整且不伪造 firstByte。
+- 兼容：新字段均为可选，旧记录缺失不回填，旧客户端读取不变；`sanitizeAssistantTurnDiagnostics` 白名单同步接受新字段。
+- 测试：`test-assistant-request-diagnostics` 新增首字节计时单测（成功派生 / 未测量 unavailable / 时钟回跳 / 重复 mark 只记第一次）；`test-context-assistant` 新增语境助手首字节集成测试（成功 / 401 / 非 JSON / 超时 / 不泄密）。
+- 校验：`test:assistant-turn-context`、`test:model-turn-detail`、`test:context-assistant` 通过；`lint` 0 errors / 9 warnings；`typecheck` 通过；`build` 通过（1m25s）。
+- 文档：`docs/assistant-collaboration-plan.md` 补充 12a 首字节计时小节。

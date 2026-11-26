@@ -14,6 +14,16 @@ export type AssistantAttempt = {
   model?: string;
   /** 供应商回传的 token 计数；缺失留空。 */
   usage?: ModelUsageTokens;
+  /** 请求发出时刻（epoch ms）。 */
+  startedAt?: number;
+  /** 首个有效响应 body 到达时刻（epoch ms）；无法测量时不写。 */
+  firstByteAt?: number;
+  /** 请求结束时刻（epoch ms）。 */
+  endedAt?: number;
+  /** 首字节等待时间 = firstByteAt - startedAt；无法测量时不写。 */
+  ttfbMs?: number;
+  /** 首字节之后的剩余响应时间 = endedAt - firstByteAt；无法测量时不写。 */
+  tailMs?: number;
 };
 export type AssistantOperationKey = { query: string; sourceVersion: string };
 export type AssistantOperationResult<T> = { value: T; state: "success" | "no_sources" };
@@ -170,7 +180,12 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
         const usage = safeUsage(data.usage);
         operation.attempts.set(data.attemptId, { attemptId: data.attemptId, status: data.status, durationMs: data.durationMs, usageReported: data.usageReported,
           ...(data.finishReason !== undefined ? { finishReason: data.finishReason } : {}),
-          ...(model ? { model } : {}), ...(usage ? { usage } : {}) });
+          ...(model ? { model } : {}), ...(usage ? { usage } : {}),
+          ...(data.startedAt !== undefined ? { startedAt: data.startedAt } : {}),
+          ...(data.endedAt !== undefined ? { endedAt: data.endedAt } : {}),
+          ...(data.firstByteAt !== undefined ? { firstByteAt: data.firstByteAt } : {}),
+          ...(data.ttfbMs !== undefined ? { ttfbMs: data.ttfbMs } : {}),
+          ...(data.tailMs !== undefined ? { tailMs: data.tailMs } : {}) });
         } catch { operation.rejectedDiagnostics++; /* Best-effort telemetry must not change a valid business result. */ }
       })).then(result => {
         if (!result || !["success", "no_sources"].includes(result.state)) throw new TypeError("Invalid assistant operation result");
@@ -199,8 +214,10 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
           reportedAttempts: operation.attempts.size, rejectedDiagnostics: operation.rejectedDiagnostics,
           state: operation.state, startedAt: operation.startedAt, completedAt: operation.completedAt ?? null,
           durationMs: (operation.completedAt ?? time()) - operation.startedAt,
-          attempts: [...operation.attempts.values()].map(({ status, durationMs, usageReported, finishReason, model, usage }) => ({ status, durationMs, usageReported,
-            ...(finishReason ? { finishReason } : {}), ...(model ? { model } : {}), ...(usage ? { usage } : {}) })),
+          attempts: [...operation.attempts.values()].map(({ status, durationMs, usageReported, finishReason, model, usage, startedAt, firstByteAt, endedAt, ttfbMs, tailMs }) => ({ status, durationMs, usageReported,
+            ...(finishReason ? { finishReason } : {}), ...(model ? { model } : {}), ...(usage ? { usage } : {}),
+            ...(startedAt !== undefined ? { startedAt } : {}), ...(endedAt !== undefined ? { endedAt } : {}),
+            ...(firstByteAt !== undefined ? { firstByteAt } : {}), ...(ttfbMs !== undefined ? { ttfbMs } : {}), ...(tailMs !== undefined ? { tailMs } : {}) })),
         })),
       })) };
     },

@@ -8,7 +8,7 @@ export type AssistantTurnDiagnostics = {
     operations: Array<{
       state: "running" | "success" | "no_sources" | "failed" | "budget_exhausted";
       durationMs: number; startedAt: number; completedAt: number | null; reportedAttempts: number; rejectedDiagnostics: number;
-      attempts: Array<{ status: "success" | "failed" | "timeout" | "http_error" | "invalid_response" | "truncated"; durationMs: number; usageReported: boolean; finishReason?: "stop" | "length" | "content_filter" | "unknown"; model?: string; usage?: ModelUsageTokens }>;
+      attempts: Array<{ status: "success" | "failed" | "timeout" | "http_error" | "invalid_response" | "truncated"; durationMs: number; usageReported: boolean; finishReason?: "stop" | "length" | "content_filter" | "unknown"; model?: string; usage?: ModelUsageTokens; startedAt?: number; firstByteAt?: number; endedAt?: number; ttfbMs?: number; tailMs?: number }>;
     }>;
   }>;
 };
@@ -52,9 +52,15 @@ export function sanitizeAssistantTurnDiagnostics(value: unknown): AssistantTurnD
         if (typeof attempt.status !== "string" || !["success", "failed", "timeout", "http_error", "invalid_response", "truncated"].includes(attempt.status)) continue;
         const model = typeof attempt.model === "string" && MODEL_ID.test(attempt.model) ? attempt.model : undefined;
         const usage = usageOf(attempt.usage);
+        const epoch = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(4_102_444_800_000, Math.round(value)) : undefined;
+        const wall = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(3_600_000, Math.round(value)) : undefined;
+        const startedAt = epoch(attempt.startedAt), endedAt = epoch(attempt.endedAt), firstByteAt = epoch(attempt.firstByteAt);
+        const ttfbMs = wall(attempt.ttfbMs), tailMs = wall(attempt.tailMs);
         attempts.push({ status: attempt.status as typeof attempts[number]["status"], durationMs: integer(attempt.durationMs, 3_600_000), usageReported: attempt.usageReported === true,
           ...(typeof attempt.finishReason === "string" && ["stop", "length", "content_filter", "unknown"].includes(attempt.finishReason) ? { finishReason: attempt.finishReason as "stop" | "length" | "content_filter" | "unknown" } : {}),
           ...(model ? { model } : {}), ...(usage ? { usage } : {}),
+          ...(startedAt !== undefined ? { startedAt } : {}), ...(endedAt !== undefined ? { endedAt } : {}),
+          ...(firstByteAt !== undefined ? { firstByteAt } : {}), ...(ttfbMs !== undefined ? { ttfbMs } : {}), ...(tailMs !== undefined ? { tailMs } : {}),
         });
       }
       operations.push({ state: op.state as typeof operations[number]["state"], durationMs: integer(op.durationMs, 3_600_000),
