@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ModelUsageTokens } from "./model-usage";
 
 export const ASSISTANT_TURN_STAGES = ["context", "memory", "knowledge", "response"] as const;
 export type AssistantTurnStage = typeof ASSISTANT_TURN_STAGES[number];
@@ -9,6 +10,10 @@ export type AssistantAttempt = {
   durationMs: number;
   usageReported: boolean;
   finishReason?: "stop" | "length" | "content_filter" | "unknown";
+  /** 响应自报模型；诊断用，绝不来自请求配置以外的 provider 原文复制。 */
+  model?: string;
+  /** 供应商回传的 token 计数；缺失留空。 */
+  usage?: ModelUsageTokens;
 };
 export type AssistantOperationKey = { query: string; sourceVersion: string };
 export type AssistantOperationResult<T> = { value: T; state: "success" | "no_sources" };
@@ -28,7 +33,28 @@ export type AssistantTurnInput = {
 };
 const POLICY = Object.freeze({ context: 1, memory: 1, knowledge: 1, response: 2 });
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
+const modelId = /^[\w.:/-]{1,120}$/;
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+/** Telemetry crosses a trust boundary: accept only bounded numbers, never a provider object verbatim. */
+function safeUsage(value: unknown): ModelUsageTokens | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  const bounded = (key: string): number | undefined => {
+    const raw = row[key];
+    return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? Math.min(1_000_000_000, Math.round(raw)) : undefined;
+  };
+  const promptTokens = bounded("promptTokens");
+  const completionTokens = bounded("completionTokens");
+  const totalTokens = bounded("totalTokens");
+  if (promptTokens === undefined && completionTokens === undefined && totalTokens === undefined) return undefined;
+  const result: ModelUsageTokens = { promptTokens: promptTokens ?? 0, completionTokens: completionTokens ?? 0,
+    totalTokens: totalTokens ?? (promptTokens ?? 0) + (completionTokens ?? 0) };
+  const reasoning = bounded("reasoningTokens");
+  if (reasoning !== undefined) result.reasoningTokens = reasoning;
+  const cacheHit = bounded("cacheHitTokens");
+  if (cacheHit !== undefined) { result.cacheHitTokens = cacheHit; result.cacheMissTokens = bounded("cacheMissTokens") ?? 0; }
+  return result;
+}
 function identifier(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string" || !uuid.test(value)) throw new TypeError(`Invalid ${label}`);
 }
@@ -140,8 +166,11 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
         if (attemptIds.has(data.attemptId)) throw new Error("Assistant attempt belongs to another operation");
         if (operation.attempts.size >= 16) throw new Error("Assistant attempt diagnostic limit exceeded");
         attemptIds.add(data.attemptId);
+        const model = typeof data.model === "string" && modelId.test(data.model) ? data.model : undefined;
+        const usage = safeUsage(data.usage);
         operation.attempts.set(data.attemptId, { attemptId: data.attemptId, status: data.status, durationMs: data.durationMs, usageReported: data.usageReported,
-          ...(data.finishReason !== undefined ? { finishReason: data.finishReason } : {}) });
+          ...(data.finishReason !== undefined ? { finishReason: data.finishReason } : {}),
+          ...(model ? { model } : {}), ...(usage ? { usage } : {}) });
         } catch { operation.rejectedDiagnostics++; /* Best-effort telemetry must not change a valid business result. */ }
       })).then(result => {
         if (!result || !["success", "no_sources"].includes(result.state)) throw new TypeError("Invalid assistant operation result");
@@ -168,8 +197,10 @@ export function createAssistantTurnContext(input: AssistantTurnInput) {
         stage, limit: POLICY[stage], logicalCalls: logical[stage], budgetRejections: rejected[stage], skipped: skipped.get(stage) ?? null,
         operations: [...operations.values()].filter(operation => operation.stage === stage).map(operation => ({
           reportedAttempts: operation.attempts.size, rejectedDiagnostics: operation.rejectedDiagnostics,
-          state: operation.state, durationMs: (operation.completedAt ?? time()) - operation.startedAt,
-          attempts: [...operation.attempts.values()].map(({ status, durationMs, usageReported, finishReason }) => ({ status, durationMs, usageReported, ...(finishReason ? { finishReason } : {}) })),
+          state: operation.state, startedAt: operation.startedAt, completedAt: operation.completedAt ?? null,
+          durationMs: (operation.completedAt ?? time()) - operation.startedAt,
+          attempts: [...operation.attempts.values()].map(({ status, durationMs, usageReported, finishReason, model, usage }) => ({ status, durationMs, usageReported,
+            ...(finishReason ? { finishReason } : {}), ...(model ? { model } : {}), ...(usage ? { usage } : {}) })),
         })),
       })) };
     },

@@ -64,13 +64,14 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
   if (!input.contextAssistant) {
     skipAssistantTurnStage(turnContext, "context", "not_enabled");
     skipAssistantTurnStage(turnContext, "knowledge", "not_needed");
-    report({ context: { status: "not_enabled" } });
+    report({ context: { status: "not_enabled", durationMs: 0 }, knowledge: { status: "not_needed", durationMs: 0 } });
     return generateConversationReplyWithMemoryAssistant(input);
   }
   const record = async (entry: Parameters<typeof input.recordAssistantUsage>[0]) => {
     // 记账失败不能改变成功的分析或回复。
     await input.recordAssistantUsage(entry).catch(() => undefined);
   };
+  const contextStartedAt = Date.now();
   let analysis: ContextAnalysis;
   try {
     const result = await runAssistantTurnStage(turnContext, "context", "group-context", { chatInput: input.chatInput, runtime: input.contextAssistant, background: input.analysisBackground, previous: input.previousWorkingContext }, observer => analyzeGroupContext(input.contextAssistant!, {
@@ -83,7 +84,7 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
     } : result.analysis;
     await record({ kind: "context-assistant", model: input.contextAssistant.model, usage: result.usage, status: "success" });
   } catch (error) {
-    report({ context: { status: "failed" } });
+    report({ context: { status: "failed", durationMs: Date.now() - contextStartedAt }, knowledge: { status: "not_needed", durationMs: 0 } });
     await record({
       kind: "context-assistant", model: input.contextAssistant.model,
       ...(error instanceof ContextAssistantError ? { usage: error.usage } : {}), status: "failed",
@@ -123,7 +124,7 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
         ...(line.occurredAt ? { occurredAt: line.occurredAt } : {}),
       };
     });
-  report({ context: { status: "success", summary: analysis.summary, participation: analysis.participation,
+  report({ context: { status: "success", durationMs: Date.now() - contextStartedAt, summary: analysis.summary, participation: analysis.participation,
     ...(analysis.uncertainty ? { uncertainty: analysis.uncertainty } : {}), evidence } });
 
   if (analysis.knowledgeCandidate && input.onKnowledgeCandidate) {
@@ -150,6 +151,7 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
 
   let sources: MemoryAssistantCandidate[] = [];
   let memoryStatus: NonNullable<ConversationReplyInput["contextAnalysis"]>["memoryStatus"];
+  const memoryStartedAt = Date.now();
   if (analysis.memoryQuery) {
     memoryStatus = "unavailable";
     if (input.assistant) {
@@ -173,13 +175,16 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
     }
   }
 
-  if (!analysis.memoryQuery || !input.assistant) skipAssistantTurnStage(turnContext, "memory", !input.assistant ? "not_enabled" : "not_needed");
+  // 与下方 report 用同一优先级：分析器没要求就是 not_needed，没配运行时才是 not_enabled。
+  if (!analysis.memoryQuery || !input.assistant) skipAssistantTurnStage(turnContext, "memory", !analysis.memoryQuery ? "not_needed" : "not_enabled");
   report({ memory: { status: !analysis.memoryQuery ? "not_needed" : !input.assistant ? "not_enabled"
     : memoryStatus === "failed" ? "failed" : sources.length ? "success" : "no_sources",
-    ...(analysis.memoryQuery ? { query: analysis.memoryQuery } : {}), sources: sources.map(memoryAssistantTurnSource) } });
+    ...(analysis.memoryQuery ? { query: analysis.memoryQuery } : {}), sources: sources.map(memoryAssistantTurnSource),
+    durationMs: Date.now() - memoryStartedAt } });
 
   let knowledgeItems: ConversationKnowledgeItem[] = [];
   let knowledgeStatus: NonNullable<ConversationReplyInput["contextAnalysis"]>["knowledgeStatus"];
+  const knowledgeStartedAt = Date.now();
   if (analysis.knowledgeQuery) {
     knowledgeStatus = "unavailable";
     if (input.loadKnowledge) {
@@ -192,7 +197,12 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
     }
   }
 
-  if (!analysis.knowledgeQuery || !input.loadKnowledge) skipAssistantTurnStage(turnContext, "knowledge", !input.loadKnowledge ? "not_enabled" : "not_needed");
+  // 同上：没要求检索记 not_needed，只有能力未配置才记 not_enabled。
+  if (!analysis.knowledgeQuery || !input.loadKnowledge) skipAssistantTurnStage(turnContext, "knowledge", !analysis.knowledgeQuery ? "not_needed" : "not_enabled");
+  report({ knowledge: { status: !analysis.knowledgeQuery ? "not_needed" : !input.loadKnowledge ? "not_enabled"
+    : knowledgeStatus === "failed" ? "failed" : "success",
+    ...(analysis.knowledgeQuery ? { query: analysis.knowledgeQuery } : {}),
+    durationMs: Date.now() - knowledgeStartedAt, itemCount: knowledgeItems.length } });
   const original = input.chatInput;
   // 大背景留给分析器，角色拿到本轮原话、被引用证据和少量最近互动。
   const recentMessages = original.recentMessages.slice(-6);

@@ -57,9 +57,13 @@ try {
   assert.equal(captured[0]?.reason, "群友解释了一个可复用的科学概念。");
   assert.equal(details[0]?.context?.status, "success");
   assert.deepEqual(details[0]?.context?.evidence?.map(item => item.id), ["current", "evidence"]);
-  assert.deepEqual(details[1]?.memory, { status: "success", query: analysis.memoryQuery, sources: [
+  const memoryDetail = details[1]?.memory;
+  assert.equal(memoryDetail?.status, "success");
+  assert.equal(memoryDetail?.query, analysis.memoryQuery);
+  assert.deepEqual(memoryDetail?.sources, [
     { id: "public", type: "memory", scope: "character", content: "PUBLIC_FILM_EVIDENCE" },
-  ] }, "Diagnostics include selected public sources only, never invented or private candidates.");
+  ], "Diagnostics include selected public sources only, never invented or private candidates.");
+  assert(typeof memoryDetail?.durationMs === "number" && memoryDetail.durationMs >= 0, "Memory stage must report wall time.");
   assert.deepEqual(calls.map(call => call.model), ["context", "memory", "character"], "Analysis must precede one retrieval and one final composition without an initial chat call.");
   assert.deepEqual(entries.map(entry => [entry.kind, entry.status, entry.usage?.totalTokens]), [["context-assistant", "success", 50], ["memory-assistant", "success", 50]]);
   const finalText = JSON.stringify(calls[2]!.messages);
@@ -215,9 +219,9 @@ try {
   await run({ candidates: [] });
   assert.equal(details[1]?.memory?.status, "no_sources");
   await run({ assistant: null });
-  assert.equal(details.at(-1)?.memory?.status, "not_enabled");
+  assert.equal(details.filter(item => item.memory).at(-1)?.memory?.status, "not_enabled");
   await run({ loadCandidates: async () => { throw new Error("lookup unavailable"); } });
-  assert.equal(details.at(-1)?.memory?.status, "failed");
+  assert.equal(details.filter(item => item.memory).at(-1)?.memory?.status, "failed");
   await run({ onTurnDetail: () => { throw new Error("diagnostic unavailable"); } });
 
   const manyEvidence = Array.from({ length: 20 }, (_, i) => ({ id: `e${i}`, content: "x".repeat(1_000) }));

@@ -27,25 +27,47 @@ export type TurnContextPlanStats = {
   totalBudget: number;
   segments: TurnPlanSegmentStats[];
 };
+/** 整轮墙钟时间；modelMs 只含真实模型请求，responseMs - modelMs 才是本地处理开销。 */
+export type TurnTimingStats = { totalMs: number; responseMs?: number; modelMs?: number };
+/** 知识检索阶段；未触发必须写 not_needed/not_enabled，不能当作零耗时的成功。 */
+export type TurnKnowledgeStats = {
+  status: "not_enabled" | "not_needed" | "success" | "failed";
+  query?: string; durationMs?: number; itemCount?: number;
+};
+/** 关键数据库往返耗时：只记毫秒，不记 SQL、参数或正文。 */
+export type TurnDatabaseStats = {
+  knowledgeReadMs?: number; memoryCandidateMs?: number; knowledgeCollectMs?: number;
+};
+export const TURN_FAILURE_REASONS = ["timeout", "http_error", "invalid_response", "empty_reply", "model_error"] as const;
+export type TurnFailureReason = typeof TURN_FAILURE_REASONS[number];
 export type TurnDetailPatch = {
   collaboration?: unknown;
   growthReads?: unknown;
   retrieval?: unknown;
   contextPlan?: unknown;
-  context?: { status: "not_enabled" | "not_applicable" | "success" | "failed"; summary?: string; participation?: "invited" | "observing" | "uncertain"; uncertainty?: string; evidence?: TurnEvidence[] };
-  memory?: { status: "not_needed" | "not_enabled" | "no_sources" | "failed" | "success"; query?: string; candidateCount?: number; sources?: TurnSource[] };
-  response?: { action: "reply" | "silent"; reply: string; explanation?: string };
+  /** 与落盘 metadata.turnId 相同的轮次标识；不另造一套关联键。 */
+  traceId?: string;
+  timing?: TurnTimingStats;
+  knowledge?: TurnKnowledgeStats;
+  database?: TurnDatabaseStats;
+  context?: { status: "not_enabled" | "not_applicable" | "success" | "failed"; summary?: string; participation?: "invited" | "observing" | "uncertain"; uncertainty?: string; evidence?: TurnEvidence[]; durationMs?: number };
+  memory?: { status: "not_needed" | "not_enabled" | "no_sources" | "failed" | "success"; query?: string; candidateCount?: number; sources?: TurnSource[]; durationMs?: number };
+  response?: { action: "reply" | "silent"; reply: string; explanation?: string; failureReason?: TurnFailureReason; durationMs?: number; attempts?: number };
 };
 export type ModelTurnDetail = {
   version: 1; groupChat: boolean; messages: TurnEvidence[];
   channel?: "qq-private" | "web";
+  traceId?: string;
+  timing?: TurnTimingStats;
+  knowledge?: TurnKnowledgeStats;
+  database?: TurnDatabaseStats;
   collaboration?: AssistantTurnDiagnostics;
   growthReads?: GrowthReadDiagnostic[];
   retrieval?: TurnRetrievalStats;
   contextPlan?: TurnContextPlanStats;
   context: NonNullable<TurnDetailPatch["context"]>;
   memory: NonNullable<TurnDetailPatch["memory"]>;
-  response: { status: "success" | "failed"; action?: "reply" | "silent"; reply?: string; explanation?: string };
+  response: { status: "success" | "failed"; action?: "reply" | "silent"; reply?: string; explanation?: string; failureReason?: TurnFailureReason; durationMs?: number; attempts?: number };
 };
 function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -104,6 +126,31 @@ function contextPlanStats(value: unknown): TurnContextPlanStats | undefined {
   if (!segments.length) return undefined;
   return { surface, totalBudget, segments };
 }
+function ms(value: unknown): number | undefined { return countOf(value, 3_600_000); }
+function timingStats(value: unknown): TurnTimingStats | undefined {
+  const row = object(value);
+  const totalMs = ms(row.totalMs);
+  if (totalMs === undefined) return undefined;
+  const responseMs = ms(row.responseMs), modelMs = ms(row.modelMs);
+  return { totalMs, ...(responseMs !== undefined ? { responseMs } : {}), ...(modelMs !== undefined ? { modelMs } : {}) };
+}
+function knowledgeStats(value: unknown): TurnKnowledgeStats | undefined {
+  const row = object(value);
+  const status = (["not_enabled", "not_needed", "success", "failed"] as const).find(item => item === row.status);
+  if (!status) return undefined;
+  const query = text(row.query, 240), durationMs = ms(row.durationMs), itemCount = countOf(row.itemCount, 100_000);
+  return { status, ...(query ? { query } : {}), ...(durationMs !== undefined ? { durationMs } : {}), ...(itemCount !== undefined ? { itemCount } : {}) };
+}
+function databaseStats(value: unknown): TurnDatabaseStats | undefined {
+  const row = object(value);
+  const result: TurnDatabaseStats = {};
+  for (const key of ["knowledgeReadMs", "memoryCandidateMs", "knowledgeCollectMs"] as const) {
+    const duration = ms(row[key]);
+    if (duration !== undefined) result[key] = duration;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+const TRACE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Explicit allowlist: diagnostics are evidence summaries, never serialized prompts/provider reasoning. */
 export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
   const raw = object(value), context = object(raw.context), memory = object(raw.memory), response = object(raw.response);
@@ -120,9 +167,18 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
     if (!id || !content) return [];
     return [{ id, content, type: row.type as TurnSource["type"], scope: row.scope as TurnSource["scope"], title: text(row.title, 160), occurredAt: text(row.occurredAt, 40) }];
   });
+  const timing = timingStats(raw.timing), knowledge = knowledgeStats(raw.knowledge), database = databaseStats(raw.database);
+  const traceId = typeof raw.traceId === "string" && TRACE_ID.test(raw.traceId) ? raw.traceId : undefined;
+  const contextMs = ms(context.durationMs), memoryMs = ms(memory.durationMs), responseMs = ms(response.durationMs);
+  const failureReason = TURN_FAILURE_REASONS.find(item => item === response.failureReason);
+  const attempts = countOf(response.attempts, 64);
   return {
     version: 1, groupChat, messages: evidence(raw.messages),
     ...(channel ? { channel } : {}),
+    ...(traceId ? { traceId } : {}),
+    ...(timing ? { timing } : {}),
+    ...(knowledge ? { knowledge } : {}),
+    ...(database ? { database } : {}),
     ...(collaboration ? { collaboration } : {}),
     ...(growthReads ? { growthReads } : {}),
     ...(retrieval ? { retrieval } : {}),
@@ -132,6 +188,7 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
       summary: text(context.summary, 1600), uncertainty: text(context.uncertainty, 400),
       participation: ["invited", "observing", "uncertain"].includes(String(context.participation)) ? context.participation as ModelTurnDetail["context"]["participation"] : undefined,
       evidence: evidence(context.evidence).slice(0, 12),
+      ...(contextMs !== undefined ? { durationMs: contextMs } : {}),
     },
     memory: {
       status: ["not_needed", "not_enabled", "no_sources", "failed", "success"].includes(String(memory.status)) ? memory.status as ModelTurnDetail["memory"]["status"] : "not_needed",
@@ -139,18 +196,28 @@ export function sanitizeModelTurnDetail(value: unknown): ModelTurnDetail {
       candidateCount: typeof memory.candidateCount === "number" && Number.isFinite(memory.candidateCount)
         ? Math.min(10_000, Math.max(0, Math.round(memory.candidateCount))) : undefined,
       sources,
+      ...(memoryMs !== undefined ? { durationMs: memoryMs } : {}),
     },
     response: {
       status: response.status === "success" ? "success" : "failed",
       action: response.action === "reply" || response.action === "silent" ? response.action : undefined,
       reply: text(response.reply, 4000), explanation: text(response.explanation, 400),
+      ...(failureReason ? { failureReason } : {}),
+      ...(responseMs !== undefined ? { durationMs: responseMs } : {}),
+      ...(attempts !== undefined ? { attempts } : {}),
     },
   };
 }
-export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence[], channel?: ModelTurnDetail["channel"]) {
-  const detail: ModelTurnDetail = { version: 1, groupChat, messages, channel: groupChat ? undefined : channel, context: { status: groupChat ? "not_enabled" : "not_applicable" }, memory: { status: "not_needed" }, response: { status: "failed" } };
+export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence[], channel?: ModelTurnDetail["channel"], traceId?: string) {
+  const detail: ModelTurnDetail = { version: 1, groupChat, messages, channel: groupChat ? undefined : channel,
+    ...(traceId && TRACE_ID.test(traceId) ? { traceId } : {}),
+    context: { status: groupChat ? "not_enabled" : "not_applicable" }, memory: { status: "not_needed" }, response: { status: "failed" } };
   return {
     update(patch: TurnDetailPatch) {
+      if (patch.traceId && TRACE_ID.test(patch.traceId)) detail.traceId = patch.traceId;
+      if (patch.timing !== undefined) { const stats = timingStats(patch.timing); if (stats) detail.timing = stats; }
+      if (patch.knowledge !== undefined) { const stats = knowledgeStats(patch.knowledge); if (stats) detail.knowledge = stats; }
+      if (patch.database !== undefined) { const stats = databaseStats(patch.database); if (stats) detail.database = stats; }
       if (patch.growthReads !== undefined && (groupChat || detail.channel === "qq-private" || detail.channel === "web")) detail.growthReads = sanitizeGrowthReadDiagnostics(patch.growthReads);
       if (patch.collaboration !== undefined) detail.collaboration = sanitizeAssistantTurnDiagnostics(patch.collaboration);
       if (patch.context) detail.context = patch.context;
@@ -163,7 +230,8 @@ export function createModelTurnDetail(groupChat: boolean, messages: TurnEvidence
         const plan = contextPlanStats(patch.contextPlan);
         if (plan) detail.contextPlan = plan;
       }
-      if (patch.response) detail.response = { status: "success", ...patch.response };
+      // 带失败原因的 patch 不能再把状态覆盖成 success：模型失败那一路必须留下 failed。
+      if (patch.response) detail.response = { status: patch.response.failureReason ? "failed" : "success", ...patch.response };
     },
     serialize() {
       const safe = sanitizeModelTurnDetail(detail);

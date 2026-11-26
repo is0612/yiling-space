@@ -47,7 +47,7 @@ import {
 import { resolveChatTimeZone } from "../chat-time-context";
 import { analyzePrivateKnowledgeCandidate, resolveContextAssistantRuntime, shouldAnalyzePrivateKnowledge } from "../context-assistant";
 import { historyCursorWhere, historyExcludedIds, loadMessageHistoryCoverage } from "../message-history-coverage";
-import { loadChatKnowledge } from "../chat-knowledge-retrieval";
+import { loadChatKnowledge, uniqueKnowledgeQueries } from "../chat-knowledge-retrieval";
 import { isGroupKnowledgeSource, isPrivateKnowledgeSource, readKnowledgeCollectScope } from "../knowledge-collect-policy";
 import { generateGroupContextReply } from "../group-context-reply";
 import { loadConversationWorkingContext, saveConversationWorkingContext } from "../conversation-working-context";
@@ -2532,9 +2532,9 @@ async function prepareChannelTurnGrowth(input: {
   };
   const loadKnowledgeWithLexical = async (query?: string): Promise<ConversationKnowledgeItem[]> => {
     const merged = new Map<string, ConversationKnowledgeItem>();
-    for (const candidate of [query, lexicalKnowledgeQuery()]) {
-      const trimmed = candidate?.trim();
-      if (!trimmed) continue;
+    // 分析器 query 与本轮原文常常是同一句话；同文本只查一次，少一次数据库往返。
+    // 结果仍按 id 合并，查询顺序不变，检索语义和 8 条上限都不动。
+    for (const trimmed of uniqueKnowledgeQueries(query, lexicalKnowledgeQuery())) {
       for (const item of await loadKnowledge(trimmed).catch(() => [])) merged.set(item.id, item);
     }
     // 与分析器结果合并后仍守同一条上限：知识段是参考，不是把整库塞进提示词。
@@ -3795,7 +3795,26 @@ async function runChannelTurn(input: {
   const turnDetail = createModelTurnDetail(isGroup, messages.map(item => ({
     id: item.externalMessageId, member: item.member, speaker: item.authorDisplayName,
     content: item.promptContent ?? item.content, occurredAt: item.occurredAt?.toISOString(),
-  })), collaboration && !isGroup ? "qq-private" : undefined);
+  })), collaboration && !isGroup ? "qq-private" : undefined, turnId);
+  /** 只记毫秒，不记 SQL/参数/正文；查询失败由调用点自己的 catch 处理。 */
+  const dbTiming = { knowledgeReadMs: 0, memoryCandidateMs: 0, knowledgeCollectMs: 0 };
+  const reportDatabase = () => turnDetail.update({ database: { ...dbTiming } });
+  const timedKnowledgeWithLexical = async (query?: string) => {
+    const started = Date.now();
+    try { return await loadKnowledgeWithLexical(query); }
+    finally { dbTiming.knowledgeReadMs += Date.now() - started; }
+  };
+  const reportTurnTiming = (totalMs: number) => {
+    const response = collaboration?.snapshot().stages.find(stage => stage.stage === "response");
+    const operations = response?.operations ?? [];
+    const responseMs = operations.reduce((sum, op) => sum + op.durationMs, 0);
+    const modelMs = operations.reduce((sum, op) => sum + op.attempts.reduce((part, attempt) => part + attempt.durationMs, 0), 0);
+    turnDetail.update({ timing: { totalMs, ...(responseMs ? { responseMs } : {}), ...(modelMs ? { modelMs } : {}) } });
+  };
+  const failureReasonOf = (reason: string) => /LLM_TIMEOUT|TimeoutError|AbortError/u.test(reason) ? "timeout" as const
+    : /http_error|HTTP\s*\d/iu.test(reason) ? "http_error" as const
+    : /LLM_INVALID_RESPONSE|invalid_response/iu.test(reason) ? "invalid_response" as const
+    : /empty|空白/iu.test(reason) ? "empty_reply" as const : "model_error" as const;
   const memoryLoader = createChannelTurnMemoryLoader({
     prisma,
     characterId: input.characterId,
@@ -3821,6 +3840,11 @@ async function runChannelTurn(input: {
     ownerHistoryStored,
   });
   const loadMemoryCandidates = memoryLoader.loadMemoryCandidates;
+  const timedLoadMemoryCandidates = async (query: string, options?: Parameters<typeof loadMemoryCandidates>[1]) => {
+    const started = Date.now();
+    try { return await loadMemoryCandidates(query, options); }
+    finally { dbTiming.memoryCandidateMs += Date.now() - started; }
+  };
 
   const toolReads: Array<{ name: string; status: string; count: number }> = [];
   const observeToolRead = async (name: string, load: () => Promise<unknown[]>): Promise<unknown[]> => {
@@ -3876,41 +3900,44 @@ async function runChannelTurn(input: {
           ...conversationSourcePolicy(line.quoted) } } : {}),
         occurredAt: new Date(line.at).toISOString(),
       })),
-      loadKnowledge: loadKnowledgeWithLexical,
+      loadKnowledge: timedKnowledgeWithLexical,
       onKnowledgeCandidate: async (candidate) => {
-        const modelConfig = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
-          ? character.modelConfig as Record<string, unknown> : {};
-        if (modelConfig.knowledgeAutoCollectEnabled !== true) return;
-        // 「收谁的」：SELECTED 模式下，证据里得有被标成知识来源的人（或主人本人）说过话。
-        // 判定用账号不用昵称；这里失败按「不收」处理，别让一次查询异常变成噪音入库。
-        const allowedSource = await isGroupKnowledgeSource(prisma, {
-          characterId: input.characterId,
-          platform: input.platform,
-          evidence: await resolveGroupEvidenceAuthors(candidate.sourceMessageIds),
-          scope: readKnowledgeCollectScope(modelConfig),
-        }).catch(() => false);
-        if (!allowedSource) return;
-        const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
-        const duplicate = await prisma.knowledgeCandidate.findFirst({
-          where: { characterId: input.characterId, sourceType: "CHAT", rawContent: candidate.rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
-          select: { id: true },
-        });
-        if (duplicate) return;
-        await prisma.knowledgeCandidate.create({
-          data: {
+        const collectStartedAt = Date.now();
+        try {
+          const modelConfig = character.modelConfig !== null && typeof character.modelConfig === "object" && !Array.isArray(character.modelConfig)
+            ? character.modelConfig as Record<string, unknown> : {};
+          if (modelConfig.knowledgeAutoCollectEnabled !== true) return;
+          // 「收谁的」：SELECTED 模式下，证据里得有被标成知识来源的人（或主人本人）说过话。
+          // 判定用账号不用昵称；这里失败按「不收」处理，别让一次查询异常变成噪音入库。
+          const allowedSource = await isGroupKnowledgeSource(prisma, {
             characterId: input.characterId,
-            sourceType: "CHAT",
-            rawContent: candidate.rawContent,
-            sourceRef: {
-              ...(existingConversation ? { conversationId: existingConversation.id } : {}),
-              messageIds: candidate.sourceMessageIds,
-              ...(candidate.speakers?.length ? { speakers: candidate.speakers } : {}),
-              reason: candidate.reason,
-              capturedAt: new Date().toISOString(),
-              channel: "GROUP",
-            } satisfies Prisma.InputJsonObject,
-          },
-        });
+            platform: input.platform,
+            evidence: await resolveGroupEvidenceAuthors(candidate.sourceMessageIds),
+            scope: readKnowledgeCollectScope(modelConfig),
+          }).catch(() => false);
+          if (!allowedSource) return;
+          const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+          const duplicate = await prisma.knowledgeCandidate.findFirst({
+            where: { characterId: input.characterId, sourceType: "CHAT", rawContent: candidate.rawContent, createdAt: { gte: cutoff }, status: { not: "DISMISSED" } },
+            select: { id: true },
+          });
+          if (duplicate) return;
+          await prisma.knowledgeCandidate.create({
+            data: {
+              characterId: input.characterId,
+              sourceType: "CHAT",
+              rawContent: candidate.rawContent,
+              sourceRef: {
+                ...(existingConversation ? { conversationId: existingConversation.id } : {}),
+                messageIds: candidate.sourceMessageIds,
+                ...(candidate.speakers?.length ? { speakers: candidate.speakers } : {}),
+                reason: candidate.reason,
+                capturedAt: new Date().toISOString(),
+                channel: "GROUP",
+              } satisfies Prisma.InputJsonObject,
+            },
+          });
+        } finally { dbTiming.knowledgeCollectMs += Date.now() - collectStartedAt; }
       },
       recordAssistantUsage: async (entry) => {
         await recordModelUsage({
@@ -3926,12 +3953,12 @@ async function runChannelTurn(input: {
       candidates: [],
       ...(ownerHistoryHold ? { suppressHistoryLookup: true } : {}),
       ...(ownerHistoryPlan && ownerHistoryLookup ? { requiredHistoryLookup: { query: ownerHistoryPlan.query, mode: ownerHistoryPlan.mode, load: async () => {
-        const sources = await loadMemoryCandidates(ownerHistoryPlan!.query);
+        const sources = await timedLoadMemoryCandidates(ownerHistoryPlan!.query);
         const coverage = memoryLoader.ownerHistoryCoverage();
         if (!coverage) throw new Error("History coverage unavailable");
         return { sources, coverage };
       } } } : {}),
-      loadCandidates: loadMemoryCandidates,
+      loadCandidates: timedLoadMemoryCandidates,
       chatInput: buildChannelTurnChatInput({
         preferences,
         expressionHabits,
@@ -3984,10 +4011,14 @@ async function runChannelTurn(input: {
   } catch (error) {
       if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: [...growthReads.values()] });
     const reason = (error instanceof Error ? error.message : "model_error").slice(0, 200);
+    const failedAfterMs = Date.now() - generationStartedAt;
+    reportTurnTiming(failedAfterMs);
+    reportDatabase();
+    turnDetail.update({ response: { action: "silent", reply: "", failureReason: failureReasonOf(reason), durationMs: failedAfterMs } });
     await recordModelUsage({
       kind: "channel", model: chatSettings.model, characterId: input.characterId,
       channelBindingId: input.bindingId,
-      metadata: { status: "failed", reason: "model_generation_failed", error: reason.slice(0, 120), durationMs: Date.now() - generationStartedAt, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
+      metadata: { status: "failed", reason: "model_generation_failed", error: reason.slice(0, 120), durationMs: failedAfterMs, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
     });
     /**
      * 模型整轮没给出可用回复 —— 什么时候可以就此沉默？
@@ -4052,7 +4083,8 @@ async function runChannelTurn(input: {
     preferences: generated.usedPreferenceIds, language: generated.usedExpressionHabitIds, goals: generated.usedGoalIds,
   }, generated.action === "silent") });
   turnDetail.update({
-    response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation },
+    response: { action: generated.action, reply: generated.reply, explanation: generated.responseExplanation,
+      ...(modelFailure ? { failureReason: failureReasonOf(modelFailure), durationMs: Date.now() - generationStartedAt } : {}) },
     // 与网页同一份口径：找到几条、放进去几条、预算挤掉几条，外加模型自报引用了几条。
     contextPlan: fillContextPlanUsage(contextPlan, {
       recentMessages: { used: estimateContextTokens(recentMessages.map((item) => item.content).join("\n")), items: recentMessages.length },
@@ -4072,6 +4104,8 @@ async function runChannelTurn(input: {
     },
   });
   const generationDurationMs = Date.now() - generationStartedAt;
+  reportTurnTiming(generationDurationMs);
+  reportDatabase();
   // 在落消息/发送前保存模型阶段结果，渠道发送失败也能从助手日志打开本轮详情。
   // 兜底话这一轮已经由 catch 记过一条 failed，不能再补一条「success」把失败盖掉。
   if (!modelFailure) await recordModelUsage({

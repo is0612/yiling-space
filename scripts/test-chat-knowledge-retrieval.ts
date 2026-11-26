@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { PrismaClient } from "../src/generated/prisma/client";
-import { loadChatKnowledge } from "../server/utils/chat-knowledge-retrieval";
+import { loadChatKnowledge, uniqueKnowledgeQueries } from "../server/utils/chat-knowledge-retrieval";
 import type { GrowthReadDiagnostic } from "../server/utils/growth-read-diagnostics";
 const entries: GrowthReadDiagnostic[] = [];
 let calls = 0;
@@ -33,4 +33,9 @@ for (const [question, expected] of [["参考音录一分钟会不会更好", "vo
   assert(result[0]?.content, "Natural questions receive approved knowledge content without a model query");
   assert.equal(diagnostics.at(-1)?.status, "provided");
 }
-console.log("Shared chat knowledge reader: isolation, bounded SQL, diagnostics, failure propagation and natural question retrieval passed.");
+// 分析器检索词与本轮原文常常同文；去重只砍重复往返，不改变查询顺序与内容。
+assert.deepEqual(uniqueKnowledgeQueries("黑洞的逃逸速度", "黑洞的逃逸速度"), ["黑洞的逃逸速度"]);
+assert.deepEqual(uniqueKnowledgeQueries("  黑洞的逃逸速度  ", "黑洞的逃逸速度"), ["黑洞的逃逸速度"]);
+assert.deepEqual(uniqueKnowledgeQueries(undefined, "  ", "问题甲", "问题乙", "问题甲"), ["问题甲", "问题乙"]);
+assert.deepEqual(uniqueKnowledgeQueries(), []);
+console.log("Shared chat knowledge reader: isolation, bounded SQL, diagnostics, failure propagation, query dedupe and natural question retrieval passed.");

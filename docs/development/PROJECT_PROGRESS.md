@@ -332,3 +332,47 @@
 - 工程回归：本次新增代码尚待 GitHub Actions；不代表 typecheck、lint、build 或专项数据库测试已通过。
 - 真实使用验收：待 CI 通过后由用户在本地验证拆分、合并、历史追溯与并发冲突提示。
 - 下一步（只写一个优先动作）：检查当前分支最新提交对应的 GitHub Actions，并修复实际失败。
+
+
+### 2026-11-26 · 群聊回复延迟链路诊断与小范围优化
+
+- 状态：代码、专项测试与本机工程校验已完成；线上 20～40 秒慢轮次尚未复现，真实占比仍待运行数据。
+- 分支：main（本地提交，未推送）。
+
+#### 代码修复（有测试覆盖）
+
+1. 知识检索同文重复往返：分析器给的 `knowledgeQuery` 与本轮原文兜底若 trim 后相同，此前会查两次知识库。提取纯函数 `uniqueKnowledgeQueries`，同文本只查一次；查询顺序、结果按 id 合并、8 条上限、来源权限均未改。
+2. 未触发阶段的诊断语义不一致：`memory` / `knowledge` 的阶段快照曾以「运行时是否配置」为优先，`onTurnDetail` 报告以「分析器是否要求」为优先，同一步骤可能同时出现 `not_enabled` 与 `not_needed`。统一为「分析器没要求 → not_needed；没配运行时 → not_enabled」，两类记录现在一致。
+3. 请求级诊断缺关键字段：此前每次模型请求只记 `usageReported` 布尔值，看不到实际模型名与 token 数。现在经 `startAssistantRequest` → `AssistantTurnContext` → `sanitizeAssistantTurnDiagnostics` 透传 `model` / `usage`（含 reasoning、缓存），并新增阶段的 `startedAt` / `completedAt`；全部经白名单、ASCII 模型标识与数值上界清洗，不写正文或 provider 原文。
+
+#### 新增诊断能力（不改变行为）
+
+- `turnDetail` 扩展：`traceId`（复用已有 `metadata.turnId`，不另造关联键）、`timing`（`totalMs` / `responseMs` / `modelMs`，后者与前者相减即本地处理开销）、`knowledge` 阶段状态与耗时、`database`（`knowledgeReadMs` / `memoryCandidateMs` / `knowledgeCollectMs`）、`response.failureReason`（归一化枚举，不写 provider 错误文本）。
+- 阶段耗时：`context` / `memory` / `knowledge` 各自上报 `durationMs`；`collaboration.snapshot()` 的 operation 带起止时间与耗时；attempt 带模型名、token、finish_reason、请求耗时。
+- 未触发阶段明确写 `not_needed` / `not_enabled`，不再当作零耗时的成功请求。
+- 自动知识收集仍在主回复关键路径上（见「未做项」），但现在能单独看到它的数据库耗时。
+
+#### 未做项与原因
+
+- 未把自动知识收集移出关键路径：当前没有持久化任务队列，fire-and-forget 在进程退出时会丢任务，无法满足「不丢数据、不重复入库」约束。先补诊断拿到真实耗时，再决定是否引入持久化队列。
+- 未并行化记忆 / 知识检索：两者虽无直接数据依赖，但在没有运行数据证明收益前不调整执行顺序，且约束要求先证明无上下文依赖与一致性问题。
+- 未改语境助手提示词与主回复思考配置：现有注释已记录 `reasoning_effort=low` 且思考预算差异未改变输出质量；无运行数据支持进一步调整，约束亦禁止降低理解深度。
+- 未缩短任何超时：语境助手 45 秒（含一次重试共享）、记忆助手 22 秒（每次）保持不变；截断重试与预算翻倍逻辑未动。
+
+#### 测试与校验（均为实际执行结果）
+
+- `yarn test:group-reply-latency`：通过。新增 12 项场景：阶段耗时、超时、截断重试、memory 重试、memory/knowledge skipped、主回复失败诊断、多阶段异常 traceId 关联、DB 诊断失败隔离、多人/@/引用、长上下文、并发轮次隔离。
+- `yarn test:context-assistant`、`yarn test:model-turn-detail`、`yarn test:knowledge-retrieval`：通过。
+- `yarn lint`：通过，0 errors / 9 warnings（既有 Vue 属性顺序，非本次改动）。
+- `yarn typecheck`：通过（`nuxt typecheck` + server `tsc`）。首次因本地 Prisma Client 与 schema 不同步失败，重新生成后通过；有一处既有的重复 import warning。
+- `yarn build`：通过（1m30s）。环境删除保护拦截了 Nuxt 清理自身构建缓存，仅在该次构建命令中临时关闭后完成。
+- `yarn check:tests`：通过，249 个入口展开为 286 个唯一顶层脚本。
+- `yarn test:all`：230 / 286 通过。56 个失败全部是测试数据库端口 5434 `ECONNREFUSED`（本机 Docker 未运行）。抽查 `test-model-usage`：业务断言已打印通过，仅在 `finally` 清理数据库时连接失败。未发现本次改动引起的失败。
+
+#### 仍待真实运行验证
+
+- 20～40 秒慢轮次里语境助手 / 记忆助手 / 知识检索 / 主回复各自的实际耗时占比。
+- 45 秒 / 22 秒超时是否在真实慢轮次触发，以及中转站响应耗时与 finish_reason 分布。
+- 自动知识收集的数据库耗时是否显著到值得改造成持久化后台任务。
+- 截断重试的真实频率（历史注释记录语境助手曾有 41% 因思考预算被 `length` 截断；加思考余量后未复测）。
+- 群聊多人、引用、@、话题切换的真实语义质量：mock 只验证字段传递，不验证模型理解；人物关系与引用理解需要在真实轮次中回归。
