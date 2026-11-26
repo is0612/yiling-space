@@ -14,6 +14,8 @@ export function interactionExperienceNextStatus(status: string, operation: strin
   if (operation === "ACCEPT" && status === "PENDING") return "ACTIVE";
   if (operation === "REJECT" && status === "PENDING") return "REJECTED";
   if (operation === "DISABLE" && status === "ACTIVE") return "DISABLED";
+  if (operation === "ENABLE" && status === "DISABLED") return "ACTIVE";
+  if (operation === "RESTORE" && status === "REJECTED") return "PENDING";
   if (operation === "EDIT" && ["ACTIVE", "PENDING", "DISABLED"].includes(status)) return status;
   throw createError({ statusCode: 409, statusMessage: "当前状态不允许此操作。" });
 }

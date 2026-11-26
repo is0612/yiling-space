@@ -24,7 +24,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const readableScope = readableMemoryScopeWhere(ownerId);
-  const conversationWhere = { conversation: { is: { characterId } } };
+  const conversationWhere = { conversation: { is: { characterId, memoryScope: { is: readableScope } } } };
   const [memory, commitment, message, platformEvent, snapshot, memoryEvent] = await Promise.all([
     prisma.memoryItem.count({
       where: { status: { not: "TRASHED" }, memoryScope: { is: { characterId, ...readableScope } } },

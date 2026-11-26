@@ -436,7 +436,7 @@ export function createMemoryApi(request: ApiRequest) {
     characterId: string;
     itemId: string;
     revision: number;
-    operation: "EDIT" | "DISABLE" | "ACCEPT" | "REJECT";
+    operation: "EDIT" | "DISABLE" | "ENABLE" | "ACCEPT" | "REJECT" | "RESTORE";
     content?: string;
     context?: string;
     learning?: unknown;

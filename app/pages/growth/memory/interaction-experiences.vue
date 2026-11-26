@@ -117,7 +117,7 @@ watch(characterId, () => {
   void load();
 }, { immediate: true });
 onBeforeUnmount(() => { disposed = true; generation += 1; actionGeneration += 1; });
-async function operate(item: Item, operation: "EDIT" | "DISABLE" | "ACCEPT" | "REJECT") {
+async function operate(item: Item, operation: "EDIT" | "DISABLE" | "ENABLE" | "ACCEPT" | "REJECT" | "RESTORE") {
   if (busy.value || disposed) return;
   if (operation === "EDIT") {
     const fields = draft.structured ? [draft.situation, draft.misunderstanding, draft.correction, draft.nextJudgment] : [draft.content, draft.context];
@@ -150,7 +150,15 @@ async function operate(item: Item, operation: "EDIT" | "DISABLE" | "ACCEPT" | "R
     });
     if (isCurrent()) {
       closeEditor();
-      ElMessage.success(operation === "DISABLE" ? "经验已停用" : operation === "EDIT" ? "经验已纠正" : "候选已处理");
+      const successText: Record<string, string> = {
+        EDIT: "经验已纠正",
+        DISABLE: "经验已停用",
+        ENABLE: "经验已重新启用",
+        ACCEPT: "候选已采纳",
+        REJECT: "候选已驳回",
+        RESTORE: "候选已退回待审核",
+      };
+      ElMessage.success(successText[operation] ?? "候选已处理");
       await load();
     }
   } catch (e) {
@@ -398,6 +406,22 @@ function dateTime(value?: string) {
                   @click="operate(item, 'REJECT')"
                 >
                   驳回
+                </el-button>
+                <el-button
+                  v-if="item.status === 'DISABLED'"
+                  plain
+                  :disabled="busy || loading"
+                  @click="operate(item, 'ENABLE')"
+                >
+                  重新启用
+                </el-button>
+                <el-button
+                  v-if="item.status === 'REJECTED'"
+                  text
+                  :disabled="busy || loading"
+                  @click="operate(item, 'RESTORE')"
+                >
+                  重新审核
                 </el-button>
               </div>
             </footer>

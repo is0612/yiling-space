@@ -125,54 +125,53 @@ export default defineEventHandler(async (event) => {
   const periodStart = sourceSnapshot?.periodStart ?? new Date(now.getTime() - intervalDays * 24 * 60 * 60 * 1000);
   const periodEnd = sourceSnapshot?.periodEnd ?? now;
 
-  const activeItems = await prisma.memoryItem.findMany({
-    where: { memoryScopeId, status: "ACTIVE" },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: {
-      id: true,
-      category: true,
-      content: true,
-      confidence: true,
-      validFrom: true,
-      validTo: true,
-      createdAt: true,
-    },
-  });
-
-  const sourceMessages = await prisma.message.findMany({
-    where: {
-      conversation: { is: { characterId, memoryScopeId } },
-      occurredAt: { gte: periodStart, lt: periodEnd },
-    },
-    orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-    take: 250,
-    select: { id: true, eventType: true },
-  });
-  const summaryParts: string[] = [];
-  if (activeItems.length) summaryParts.push(`关联 ${activeItems.length} 条长期记忆`);
-  if (sourceMessages.length) summaryParts.push(`关联 ${sourceMessages.length} 条周期内消息/事件`);
-  const summary = summaryParts.length
-    ? `人工归档：${summaryParts.join("，")}。尚未调用大模型生成自然语言总结。`
-    : "人工归档：周期内没有已保存的消息或长期记忆。尚未调用大模型生成自然语言总结。";
-  const structuredContent = {
-    generatedBy: "manual",
-    capturedAt: now.toISOString(),
-    messageCount: sourceMessages.length,
-    eventCount: sourceMessages.filter((message) => message.eventType !== "message").length,
-    memoryItems: activeItems.map((item) => ({
-      id: item.id,
-      category: item.category,
-      content: item.content,
-      ...(item.confidence !== null ? { confidence: item.confidence } : {}),
-      ...(item.validFrom ? { validFrom: item.validFrom.toISOString() } : {}),
-      ...(item.validTo ? { validTo: item.validTo.toISOString() } : {}),
-      createdAt: item.createdAt.toISOString(),
-    })),
-  };
-
   const snapshot = await prisma.$transaction(async (tx) => {
     // Worker 也先锁范围，再读版本号；手动版本必须参加同一串行协议。
     await tx.$queryRaw`SELECT id FROM "memory_scopes" WHERE id = ${memoryScopeId}::uuid FOR UPDATE`;
+    // 来源必须在锁之后读：两个并发手动归档若各拿一份陈旧来源，就会建出内容不一致的版本。
+    const activeItems = await tx.memoryItem.findMany({
+      where: { memoryScopeId, status: "ACTIVE" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        category: true,
+        content: true,
+        confidence: true,
+        validFrom: true,
+        validTo: true,
+        createdAt: true,
+      },
+    });
+    const sourceMessages = await tx.message.findMany({
+      where: {
+        conversation: { is: { characterId, memoryScopeId } },
+        occurredAt: { gte: periodStart, lt: periodEnd },
+      },
+      orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      take: 250,
+      select: { id: true, eventType: true },
+    });
+    const summaryParts: string[] = [];
+    if (activeItems.length) summaryParts.push(`关联 ${activeItems.length} 条长期记忆`);
+    if (sourceMessages.length) summaryParts.push(`关联 ${sourceMessages.length} 条周期内消息/事件`);
+    const summary = summaryParts.length
+      ? `人工归档：${summaryParts.join("，")}。尚未调用大模型生成自然语言总结。`
+      : "人工归档：周期内没有已保存的消息或长期记忆。尚未调用大模型生成自然语言总结。";
+    const structuredContent = {
+      generatedBy: "manual",
+      capturedAt: now.toISOString(),
+      messageCount: sourceMessages.length,
+      eventCount: sourceMessages.filter((message) => message.eventType !== "message").length,
+      memoryItems: activeItems.map((item) => ({
+        id: item.id,
+        category: item.category,
+        content: item.content,
+        ...(item.confidence !== null ? { confidence: item.confidence } : {}),
+        ...(item.validFrom ? { validFrom: item.validFrom.toISOString() } : {}),
+        ...(item.validTo ? { validTo: item.validTo.toISOString() } : {}),
+        createdAt: item.createdAt.toISOString(),
+      })),
+    };
     const latest = await tx.memorySnapshot.findFirst({
       where: { memoryScopeId, snapshotKey },
       orderBy: { version: "desc" },

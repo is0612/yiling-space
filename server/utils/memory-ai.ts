@@ -378,7 +378,7 @@ export function isNearDuplicateMemory(
 }
 
 function normalizeMemoryContent(value: string): string {
-  return value.normalize("NFKC").toLocaleLowerCase().replace(/[\\s\\p{P}\\p{S}]+/gu, "");
+  return value.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
 }
 
 /**

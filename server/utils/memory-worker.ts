@@ -1301,7 +1301,13 @@ export async function processNextMemoryJob(
 
     // The model call deliberately happens outside a database transaction.
     const chatSettings = resolveChatModelSettings(scope.character.modelConfig);
-    const apiKey = await resolveCharacterApiKey(scope.character.modelConfig, chatSettings.apiBaseUrl);
+    let apiKey = "";
+    try {
+      apiKey = await resolveCharacterApiKey(scope.character.modelConfig, chatSettings.apiBaseUrl);
+    } catch {
+      // 不要让解密异常（可能带密钥片段）流到 lastError 或日志；沿用本分支的错误处理，只抛安全文案。
+      throw new Error("角色 API Key 无法解密，请到模型设置中重新填写。");
+    }
     if (!apiKey || !chatSettings.model) {
       throw new Error("角色尚未配置模型 API。请先在角色的「模型设置 → 模型参数」中填写 API Key 与模型名称。");
     }
@@ -1328,7 +1334,7 @@ export async function processNextMemoryJob(
       model: chatSettings.model,
       periodStart: job.periodStart.toISOString(),
       periodEnd: job.periodEnd.toISOString(),
-      timezone: scope.character.memorySetting?.timezone ?? "UTC",
+      timezone: scope.character.memorySetting?.timezone ?? "Asia/Shanghai",
       scopeType: scope.scopeType,
       characterName: scope.character.name,
       messages: aiMessages,
@@ -1400,7 +1406,7 @@ export async function processNextMemoryJob(
         period: {
           start: job.periodStart!.toISOString(),
           end: job.periodEnd!.toISOString(),
-          timezone: scope.character.memorySetting?.timezone ?? "UTC",
+          timezone: scope.character.memorySetting?.timezone ?? "Asia/Shanghai",
           interval: "[start, end)",
         },
         counts: {

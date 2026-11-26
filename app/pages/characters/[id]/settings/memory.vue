@@ -95,13 +95,21 @@ function zonedInputToIso(value: string, timeZone: string): string {
   return new Date(candidate).toISOString();
 }
 
+let loadSeq = 0;
+
 async function loadSettings() {
+  // 切角色时新旧两次加载会并发：旧响应后到会把上一个角色的设置写进当前表单，
+  // 用户接着点保存就会污染新角色。用序号 + 角色 ID 双重作废过期响应。
+  const seq = ++loadSeq;
+  const requestedId = id.value;
+  const isCurrent = () => seq === loadSeq && id.value === requestedId;
   loading.value = true;
   try {
     const [loadedCharacter, settings] = await Promise.all([
-      api.getCharacter(id.value),
-      api.getMemorySettings(id.value),
+      api.getCharacter(requestedId),
+      api.getMemorySettings(requestedId),
     ]);
+    if (!isCurrent()) return;
     character.value = loadedCharacter;
     interval.value = settings.snapshotIntervalDays;
     activeInterval.value = settings.activeSnapshotIntervalDays;
@@ -118,12 +126,13 @@ async function loadSettings() {
     nextSnapshotAt.value = settings.nextSnapshotAt;
     effectivePolicy.value = settings.changePolicy === "IMMEDIATE_RECALC" ? "立即重算" : "下一个周期生效";
   } catch (error) {
+    if (!isCurrent()) return;
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
       : "无法读取记忆设置，请确认数据库已初始化。";
     ElMessage.error(message);
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 }
 
