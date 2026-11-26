@@ -636,7 +636,8 @@ async function confirmDelete() {
     if (!current()) return;
     ElMessage.error(readErrorMessage(error, "没删掉，稍后重试。"));
   } finally {
-    deleteSubmitting.value = false;
+    // 切角色后新角色的删除可能正在进行，旧请求不许清掉它的提交锁。
+    if (current()) deleteSubmitting.value = false;
   }
 }
 

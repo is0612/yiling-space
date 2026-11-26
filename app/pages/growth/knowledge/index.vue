@@ -536,7 +536,7 @@ async function dismissCandidate(candidate: Candidate) {
     if (!isCurrentRole(targetCharacterId, expectedRoleVersion)) return;
     ElMessage.error(readApiErrorMessage(error, "操作失败。"));
   } finally {
-    busyIds.value = busyIds.value.filter(id => id !== candidate.id);
+    if (isCurrentRole(targetCharacterId, expectedRoleVersion)) busyIds.value = busyIds.value.filter(id => id !== candidate.id);
   }
 }
 /**

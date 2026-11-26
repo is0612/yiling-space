@@ -137,6 +137,9 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
+  // 加载未完成时表单可能还写着上一个角色的值：逻辑层也拦一道，不只靠 v-loading 遮罩。
+  if (loading.value || saving.value || !id.value) return;
+  const requestedId = id.value;
   const previousRetention = savedRetention.value;
   const nextRetention = Number(retention.value);
   const retentionBecomesMoreDestructive = nextRetention > 0 &&
@@ -164,7 +167,7 @@ async function saveSettings() {
   saving.value = true;
   try {
     const anchorAt = zonedInputToIso(anchor.value, timezone.value);
-    const saved = await api.updateMemorySettings(id.value, {
+    const saved = await api.updateMemorySettings(requestedId, {
       snapshotIntervalDays: safeInterval.value,
       timezone: timezone.value,
       anchorAt,
@@ -173,6 +176,7 @@ async function saveSettings() {
       autoSnapshotEnabled: autoSnapshot.value,
       changePolicy: effectivePolicy.value === "立即重算" ? "IMMEDIATE_RECALC" : "NEXT_CYCLE",
     });
+    if (id.value !== requestedId) return;
     interval.value = saved.snapshotIntervalDays;
     activeInterval.value = saved.activeSnapshotIntervalDays;
     pendingInterval.value = saved.pendingSnapshotIntervalDays;
@@ -191,6 +195,7 @@ async function saveSettings() {
       ? `记忆周期设置已保存。自动生成已关闭，顺带作废了 ${cancelled} 条排队中的阶段总结 / 忆泡任务。`
       : "记忆周期设置已保存到本地数据库。");
   } catch (error) {
+    if (id.value !== requestedId) return;
     const message = error && typeof error === "object" && "statusMessage" in error
       ? String(error.statusMessage)
       : error instanceof Error ? error.message : "保存失败，请检查数据库连接。";

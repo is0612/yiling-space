@@ -264,7 +264,7 @@ async function submitMerge() {
     if (!current()) return;
     ElMessage.error(readApiErrorMessage(error, "合并主题失败；如果任一主题已变化，请刷新后重试。"));
   } finally {
-    merging.value = false;
+    if (current()) merging.value = false;
   }
 }
 

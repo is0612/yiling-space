@@ -17,16 +17,37 @@ export async function collectExperienceReflectionSources(db: DB, characterId: st
   return rows.map(row => ({ key: `experience:${row.id}`, type: "experience" as const, id: row.id, hash: experienceReflectionHash(row), ...scope, feedbackOccurredAt: occurredAtById.get(row.feedbackMessageId)!, title: "本会话互动经验", excerpt: JSON.stringify({ content: row.content, context: row.context, learning: row.learning }).slice(0, 1200) }));
 }
 export async function validateExperienceReflectionRefs(tx: Prisma.TransactionClient, characterId: string, refs: readonly ExperienceReflectionRef[], expected?: ExperienceScope) {
-  if (!refs.length || refs.length > 30) return false;
-  const scope = expected ?? { conversationId: refs[0]!.conversationId, memoryScopeId: refs[0]!.memoryScopeId };
-  if (!scope.conversationId || !scope.memoryScopeId || refs.some(ref => ref.type !== "experience" || ref.key !== `experience:${ref.id}` || ref.conversationId !== scope.conversationId || ref.memoryScopeId !== scope.memoryScopeId)) return false;
+  const valid = await validateExperienceReflectionRefsBatch(tx, characterId, [{ id: "single", refs }], expected);
+  return valid.has("single");
+}
+
+/**
+ * 同一 scope 的多组来源一次事务、一次锁、一次查询校验完。
+ * 逐组调用会在同一事务里重复 FOR SHARE，把锁窗口拉到整批结束；这里只读一次快照后逐组比对 hash。
+ */
+export async function validateExperienceReflectionRefsBatch(
+  tx: Prisma.TransactionClient,
+  characterId: string,
+  groups: readonly { id: string; refs: readonly ExperienceReflectionRef[] }[],
+  expected?: ExperienceScope,
+): Promise<Set<string>> {
+  const valid = new Set<string>();
+  if (!groups.length) return valid;
+  if (groups.some(group => !group.refs.length || group.refs.length > 30)) return valid;
+  const allRefs = groups.flatMap(group => group.refs);
+  const scope = expected ?? { conversationId: allRefs[0]!.conversationId, memoryScopeId: allRefs[0]!.memoryScopeId };
+  if (!scope.conversationId || !scope.memoryScopeId
+    || allRefs.some(ref => ref.type !== "experience" || ref.key !== `experience:${ref.id}` || ref.conversationId !== scope.conversationId || ref.memoryScopeId !== scope.memoryScopeId)) return valid;
   const locked = await tx.$queryRaw<Array<{ id: string }>>`SELECT c."id" FROM "conversations" c JOIN "memory_scopes" s ON s."id"=c."memoryScopeId" WHERE c."id"=${scope.conversationId}::uuid AND c."characterId"=${characterId}::uuid AND s."id"=${scope.memoryScopeId}::uuid FOR SHARE OF c,s`;
-  if (!locked.length) return false;
+  if (!locked.length) return valid;
   const room = await tx.conversation.findFirst({ where: { id: scope.conversationId, characterId, memoryScopeId: scope.memoryScopeId, OR: [{ channelBindingId: null }, { externalConversationId: { startsWith: "c:" } }] }, select: { id: true } });
-  if (!room) return false;
+  if (!room) return valid;
   const rows = await tx.$queryRaw<Array<{ id: string; content: string; context: string; evidenceHash: string; learning: Prisma.JsonValue; revision: number; conversationId: string; memoryScopeId: string }>>`SELECT "id", "content", "context", "evidenceHash", "learning", "revision", "conversationId", "memoryScopeId" FROM "interaction_experiences" WHERE "characterId"=${characterId}::uuid AND "conversationId"=${scope.conversationId}::uuid AND "memoryScopeId"=${scope.memoryScopeId}::uuid AND "status"='ACTIVE' FOR SHARE`;
   const byId = new Map(rows.map(row => [row.id, row]));
-  return refs.every(ref => { const row = byId.get(ref.id); return row && experienceReflectionHash(row) === ref.hash; });
+  for (const group of groups) {
+    if (group.refs.every(ref => { const row = byId.get(ref.id); return row && experienceReflectionHash(row) === ref.hash; })) valid.add(group.id);
+  }
+  return valid;
 }
 /** Three distinct feedback messages across at least two UTC days; never generalize one exchange. */
 export function hasRepeatedExperienceEvidence(rows: readonly { feedbackMessageId: string; createdAt: Date }[]) {

@@ -1,6 +1,6 @@
 import type { ExpressionChatScope } from "./expression-habits-domain";
 import type { PrismaClient } from "../../src/generated/prisma/client";
-import { validateExperienceReflectionRefs, type ExperienceScope, type ExperienceReflectionRef } from "./experience-reflection";
+import { validateExperienceReflectionRefsBatch, type ExperienceScope, type ExperienceReflectionRef } from "./experience-reflection";
 import { preferenceQueryTerms } from "./preference-retrieval";
 import { createGrowthReadDiagnostic, reportGrowthRead, type GrowthReadObserver } from "./growth-read-diagnostics";
 
@@ -47,19 +47,15 @@ export async function loadExpressionHabitsForPrompt(prisma: PrismaClient, charac
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }], take: 100,
     select: { id: true, kind: true, content: true, context: true, chatScope: true, revision: true, status: true, sourceType: true, sourceRefs: true },
   });
-  // 一行一次事务会带来最多 100 次串行往返（私聊检索路径上）。收齐来源后一次事务批量校验。
+  // 同一 scope 的所有来源在单事务里只锁一次、查一次：既没有逐行往返，也不会把 FOR SHARE 锁窗口拉到整批结束。
   const activeScope = scope;
   const needValidation = activeScope && chatScene !== "GROUP"
     ? rows.filter(row => row.sourceType === "EXPERIENCE_REFLECT")
     : [];
-  const validated = new Set<string>();
-  if (activeScope && needValidation.length) {
-    await prisma.$transaction(async tx => {
-      for (const row of needValidation) {
-        if (await validateExperienceReflectionRefs(tx, characterId, row.sourceRefs as unknown as ExperienceReflectionRef[], activeScope)) validated.add(row.id);
-      }
-    });
-  }
+  const validated = activeScope && needValidation.length
+    ? await prisma.$transaction(tx => validateExperienceReflectionRefsBatch(tx, characterId,
+        needValidation.map(row => ({ id: row.id, refs: row.sourceRefs as unknown as ExperienceReflectionRef[] })), activeScope))
+    : new Set<string>();
   const eligible = rows
     .filter(row => row.sourceType !== "EXPERIENCE_REFLECT" || (chatScene !== "GROUP" && validated.has(row.id)))
     .map(row => ({ ...row, chatScope: row.chatScope as ExpressionChatScope }));

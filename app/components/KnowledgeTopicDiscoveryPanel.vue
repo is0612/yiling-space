@@ -121,7 +121,7 @@ async function startRun() {
   } catch (error) {
     if (current()) ElMessage.error(readApiErrorMessage(error, "创建主题发现任务失败。"));
   } finally {
-    starting.value = false;
+    if (current()) starting.value = false;
   }
 }
 async function acceptSuggestion(suggestionId: string, mode: "CREATE" | "APPLY") {
@@ -154,7 +154,7 @@ async function acceptSuggestion(suggestionId: string, mode: "CREATE" | "APPLY") 
   } catch (error) {
     if (current()) ElMessage.error(readApiErrorMessage(error, "采纳主题建议失败；如果知识已变化，请重新发现。"));
   } finally {
-    reviewingId.value = "";
+    if (current()) reviewingId.value = "";
   }
 }
 async function dismissSuggestion(suggestionId: string) {
@@ -171,7 +171,7 @@ async function dismissSuggestion(suggestionId: string) {
   } catch (error) {
     if (current()) ElMessage.error(readApiErrorMessage(error, "忽略主题建议失败。"));
   } finally {
-    reviewingId.value = "";
+    if (current()) reviewingId.value = "";
   }
 }
 async function loadRunsListOnly() {
