@@ -63,7 +63,7 @@ function harness() {
     setTimeout: (callback: () => void) => { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout: (id: number) => { timers.delete(id); },
     useCharacterList: () => ({ value: [] }), useCharacterSelection: () => ({ id: role }),
-    useMemoryProgress: () => ({ lastFinished: { value: null } }),
+    useMemoryProgress: () => ({ lastFinished: { value: [] } }),
     ElMessage: { error: notify, success: notify, warning: notify, info: notify },
     ElMessageBox: { confirm: () => new Promise((resolve, reject) => confirmations.push({ resolve, reject })) },
     createMemoryApi,

@@ -38,7 +38,7 @@ type PendingRequest = {
   reject: (error: unknown) => void;
 };
 
-function harness() {
+function harness(initialRole = "role-a") {
   /**
    * Vue 的 `watch` 回调签名是 `(新值, 旧值)`，与页面里 `watch(id, …)` / `watch(searchQuery, …)` 一致。
    * 以前的桩调用 `callback()` 不传参，`dayKey` 永远是 `undefined`，于是选日期后从不发详情请求 ——
@@ -55,9 +55,10 @@ function harness() {
   const infos: string[] = [];
   const warnings: string[] = [];
   const successes: string[] = [];
-  let roleValue = "role-a";
+  let roleValue = initialRole;
   const role = {} as Ref;
-  const lastFinished: Ref = { value: null };
+  // 生产端 lastFinished 是「本轮全部完成项」数组，桩的初始值与写入值都必须是数组。
+  const lastFinished: Ref = { value: [] };
   function notify(changed: Ref) {
     for (const watcher of watchers) {
       if (!watcher.sources.includes(changed)) continue;
@@ -166,7 +167,12 @@ function harness() {
     assert.equal(requests.length, 0, `unsettled requests: ${requests.map((request) => request.url).join(", ")}`);
     assert.equal(errors.length, 0, `unexpected error notifications: ${errors.join(", ")}`);
   }
-  return { finishJob: (characterId: string) => { lastFinished.value = { characterId }; notify(lastFinished); }, read, set, call, take, tickSearch, timers, errors, warnings, successes, infos, finish, unmount: () => unmount?.() };
+  /** 完成事件模拟统一写数组：单个角色是单元素数组，同轮多角色是多项数组。 */
+  function assignFinishedJobs(characterIds: string[]) {
+    lastFinished.value = characterIds.map((characterId) => ({ characterId }));
+    notify(lastFinished);
+  }
+  return { finishJob: (characterId: string) => assignFinishedJobs([characterId]), finishJobs: assignFinishedJobs, read, set, call, take, tickSearch, timers, errors, warnings, successes, infos, finish, unmount: () => unmount?.() };
 }
 
 function day(key: string) {
@@ -321,8 +327,10 @@ async function unmountInvalidatesRequests() {
 
 async function finishedJobRefreshesCalendar() {
   const page = harness();
-  page.finishJob("role-b");
-  page.finish(); // Another character's finished job must not refresh this calendar.
+  // 这一轮完成的都是别的角色：没有 role-a 的完成事件，日历不该刷新。
+  page.finishJobs(["role-b", "role-c"]);
+  page.finish();
+  // 换成含 role-a 的完成事件：必须真的触发一次日历重载。
   page.finishJob("role-a");
   const daysRequest = page.take("/api/characters/role-a/days");
   daysRequest.resolve(daysResult("2026-11-08"));
@@ -332,6 +340,32 @@ async function finishedJobRefreshesCalendar() {
   await flushMicrotasks();
   assert.deepEqual(page.read("days"), [day("2026-11-08")], "整理结束后应刷新忆泡日历");
   page.finish();
+}
+
+
+/** 同一轮里多个角色同时完成：完成事件是数组，每个角色的页面都要各自收到刷新信号。 */
+async function multipleFinishedJobsRefreshEachRole() {
+  const jobs = ["role-a", "role-b"];
+  const a = harness("role-a");
+  const b = harness("role-b");
+  const c = harness("role-c");
+  for (const page of [a, b, c]) page.finishJobs(jobs);
+
+  // 完成事件里没有 role-c，这个页面不该发任何请求。
+  c.finish();
+  const aDays = a.take("/api/characters/role-a/days");
+  const bDays = b.take("/api/characters/role-b/days");
+  aDays.resolve(daysResult("2026-11-08"));
+  bDays.resolve(daysResult("2026-11-09"));
+  await flushMicrotasks();
+  a.take("/api/characters/role-a/days/2026-11-08").resolve(detailResult("2026-11-08"));
+  b.take("/api/characters/role-b/days/2026-11-09").resolve(detailResult("2026-11-09"));
+  await flushMicrotasks();
+  assert.deepEqual(a.read("days"), [day("2026-11-08")], "role-a 应收到刷新信号");
+  assert.deepEqual(b.read("days"), [day("2026-11-09")], "role-b 应收到刷新信号");
+  a.finish();
+  b.finish();
+  c.finish();
 }
 
 
@@ -381,7 +415,7 @@ async function originalsLoadedOnDemand() {
   page.finish();
 }
 
-for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests, finishedJobRefreshesCalendar, originalsLoadedOnDemand]) {
+for (const test of [staleRoleDays, lateRoleResponse, rapidRoleSwitches, staleSelectedDay, searchInvalidatesBeforeDebounce, selectingFromListLoadsDetailOnce, unmountInvalidatesRequests, finishedJobRefreshesCalendar, multipleFinishedJobsRefreshEachRole, originalsLoadedOnDemand]) {
   await test();
   console.log(`PASS ${test.name}`);
 }

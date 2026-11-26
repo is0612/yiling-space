@@ -39,7 +39,7 @@ function harness() {
     watch: (source: Ref, callback: () => void) => watchers.push({ source, callback }),
     useCharacterSelection: () => ({ id: role }), useCharacterListData: async () => {},
     useCharacterList: () => ({ value: [{ id: "role-a", name: "A" }, { id: "role-b", name: "B" }] }),
-    useMemoryProgress: () => ({ lastFinished: { value: null } }),
+    useMemoryProgress: () => ({ lastFinished: { value: [] } }),
     onBeforeUnmount: (callback: () => void) => { unmount = callback; },
     ElMessage: { success: (message: string) => successes.push(message), info: (message: string) => infos.push(message), warning: () => {}, error: () => {} },
     ElMessageBox: { confirm: async () => true }, URLSearchParams, setTimeout, clearTimeout,
