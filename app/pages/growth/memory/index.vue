@@ -81,7 +81,7 @@ watch(id, () => {
   void loadStats();
 });
 watch(lastFinished, (finished) => {
-  if (finished?.characterId === id.value) void loadStats();
+  if (finished.some((job) => job.characterId === id.value)) void loadStats();
 });
 onMounted(() => {
   ensureMemoryProgressPolling();

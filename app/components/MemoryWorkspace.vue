@@ -786,8 +786,8 @@ function formatSourceTime(value: string) {
  * 归档可能更新长期记忆，完成后同步列表内容与统计。
  */
 const { lastFinished } = useMemoryProgress();
-watch(lastFinished, (job) => {
-  if (!job || job.characterId !== id.value) return;
+watch(lastFinished, (finished) => {
+  if (!finished.some((job) => job.characterId === id.value)) return;
   void refreshMemoryPage();
 });
 

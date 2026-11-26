@@ -27,12 +27,13 @@ const dayKey = ref(todayInDefaultZone());
 const overview = ref<DailyLifeOverview | null>(null);
 const loading = ref(false);
 const saving = ref(false);
-const actingId = ref("");
 const requestSeq = ref(0);
 const planDialog = ref(false);
 const unplannedDialog = ref(false);
 const unplannedTitle = ref("");
 const unplannedSaving = ref(false);
+/** 同时进行中的活动各记各的，别让先结束的那个把别人的按钮状态清掉。 */
+const actingIds = ref<Set<string>>(new Set());
 const planForm = reactive({
   lifeType: "FREE",
   summary: "",
@@ -104,15 +105,22 @@ async function savePlan() {
   } finally { saving.value = false; }
 }
 
+function markActing(itemId: string, busy: boolean) {
+  const next = new Set(actingIds.value);
+  if (busy) next.add(itemId);
+  else next.delete(itemId);
+  actingIds.value = next;
+}
+
 async function startPlanned(item: DailyLifePlanItem) {
-  if (!id.value) return;
-  actingId.value = item.id;
+  if (!id.value || actingIds.value.has(item.id)) return;
+  markActing(item.id, true);
   try {
     await api.startActivity(id.value, { planItemId: item.id, source: "PLAN" });
     ElMessage.success("已记录这项活动开始。");
     await load();
   } catch (error) { ElMessage.error(readApiErrorMessage(error)); }
-  finally { actingId.value = ""; }
+  finally { markActing(item.id, false); }
 }
 
 // 桌面版跑在 Electron 里，window.prompt 不受支持（调用会直接抛错），
@@ -139,13 +147,14 @@ async function recordUnplanned() {
 async function completeCurrent() {
   if (!id.value || !overview.value?.currentActivity) return;
   const activity = overview.value.currentActivity;
-  actingId.value = activity.id;
+  if (actingIds.value.has(activity.id)) return;
+  markActing(activity.id, true);
   try {
     await api.completeActivity(id.value, activity.id);
     ElMessage.success("这段经历已记录。");
     await load();
   } catch (error) { ElMessage.error(readApiErrorMessage(error)); }
-  finally { actingId.value = ""; }
+  finally { markActing(activity.id, false); }
 }
 
 async function associate(photo: DailyPhoto, value: string) {
@@ -224,7 +233,7 @@ watch([id, dayKey], () => { void load(); }, { immediate: true });
           <el-button
             type="primary"
             :icon="Check"
-            :loading="actingId === overview.currentActivity.id"
+            :loading="actingIds.has(overview.currentActivity.id)"
             @click="completeCurrent"
           >
             结束这段活动
@@ -301,7 +310,7 @@ watch([id, dayKey], () => { void load(); }, { immediate: true });
                   size="small"
                   plain
                   :icon="VideoPlay"
-                  :loading="actingId === item.id"
+                  :loading="actingIds.has(item.id)"
                   @click="startPlanned(item)"
                 >
                   开始这项活动

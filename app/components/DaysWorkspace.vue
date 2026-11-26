@@ -428,8 +428,8 @@ function toggleMessages() {
 }
 
 const { lastFinished } = useMemoryProgress();
-watch(lastFinished, (job) => {
-  if (!job || job.characterId !== id.value) return;
+watch(lastFinished, (finished) => {
+  if (!finished.some((job) => job.characterId === id.value)) return;
   void loadDays();
 });
 

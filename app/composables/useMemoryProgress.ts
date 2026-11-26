@@ -109,7 +109,7 @@ const PROGRESS_FETCH_TIMEOUT_MS = 8_000;
 function progressState() {
   return {
     jobs: useState<MemoryProgressRow[]>("memory-progress-jobs", () => []),
-    lastFinished: useState<MemoryJobFinished | null>("memory-progress-last-finished", () => null),
+    lastFinished: useState<MemoryJobFinished[]>("memory-progress-last-finished", () => []),
     checkedAt: useState<string | null>("memory-progress-checked-at", () => null),
   };
 }
@@ -139,15 +139,18 @@ export async function refreshMemoryProgress(options: { force?: boolean } = {}): 
     const wasActive = new Set(jobs.value.filter((job) => isActiveMemoryJob(job.status)).map((job) => job.id));
     jobs.value = result.jobs;
     checkedAt.value = result.checkedAt;
-    const finished = result.jobs.find((job) => wasActive.has(job.id) && !isActiveMemoryJob(job.status));
-    if (finished) {
-      lastFinished.value = {
-        id: finished.id,
-        characterId: finished.characterId,
-        type: finished.type,
-        status: finished.status,
-        at: Date.now(),
-      };
+    // 同一轮里可能有多个任务同时完成（不同角色、或同角色的两类任务），
+    // 只记第一个会让排在后面的角色漏掉这次刷新信号。
+    const finished = result.jobs.filter((job) => wasActive.has(job.id) && !isActiveMemoryJob(job.status));
+    if (finished.length) {
+      const at = Date.now();
+      lastFinished.value = finished.map((job) => ({
+        id: job.id,
+        characterId: job.characterId,
+        type: job.type,
+        status: job.status,
+        at,
+      }));
     }
   } catch {
     // 进度面板不是关键路径：接口一时失败就保持上一次的数据，不弹错。

@@ -63,6 +63,8 @@ const pendingItems = ref<CatchphraseItem[]>([]);
 const reviewOpen = ref(false);
 const scanning = ref(false);
 const deciding = ref<Set<string>>(new Set());
+/** 开关正在改的那几行：连拨会发出两次 PATCH，先回来的响应会决定界面显示什么。 */
+const togglingIds = ref<Set<string>>(new Set());
 
 const draftPhrase = ref("");
 const draftUsage = ref("");
@@ -220,7 +222,16 @@ async function submit() {
   }
 }
 
+function markToggling(catchphraseId: string, busy: boolean) {
+  const next = new Set(togglingIds.value);
+  if (busy) next.add(catchphraseId);
+  else next.delete(catchphraseId);
+  togglingIds.value = next;
+}
+
 async function toggleEnabled(row: CatchphraseItem, enabled: boolean) {
+  if (togglingIds.value.has(row.id)) return;
+  markToggling(row.id, true);
   try {
     const updated = await api.updateCatchphrase({
       characterId: id.value,
@@ -231,6 +242,8 @@ async function toggleEnabled(row: CatchphraseItem, enabled: boolean) {
   } catch (error) {
     row.enabled = !enabled;
     ElMessage.error((error as { statusMessage?: string })?.statusMessage || "更新失败。");
+  } finally {
+    markToggling(row.id, false);
   }
 }
 
@@ -275,6 +288,7 @@ async function saveEdit() {
 }
 
 async function remove(row: CatchphraseItem) {
+  const requestedId = id.value;
   try {
     await ElMessageBox.confirm(`删除「${row.phrase}」？删掉就找不回来了。`, "删除梗", {
       type: "warning",
@@ -284,8 +298,10 @@ async function remove(row: CatchphraseItem) {
   } catch {
     return;
   }
+  // 确认框可能停留很久：期间切了角色就别把旧梗的 id 发到新角色上。
+  if (id.value !== requestedId) return;
   try {
-    await api.deleteCatchphrase({ characterId: id.value, catchphraseId: row.id });
+    await api.deleteCatchphrase({ characterId: requestedId, catchphraseId: row.id });
     items.value = items.value.filter((item) => item.id !== row.id);
     ElMessage.success("已删除。");
   } catch (error) {
@@ -409,6 +425,7 @@ onMounted(load);
             <span class="cp-count">说过 {{ item.useCount }} 次</span>
             <el-switch
               :model-value="item.enabled"
+              :loading="togglingIds.has(item.id)"
               @update:model-value="(value) => toggleEnabled(item, Boolean(value))"
             />
             <el-button

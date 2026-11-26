@@ -100,6 +100,8 @@ const total = ref(0);
 const totalPages = ref(1);
 const stats = ref<StickerStats>({ total: 0, disabled: 0, untagged: 0, qqLinked: 0 });
 const saving = ref(false);
+/** 开关正在改的那几行：连拨会发出两次 PATCH，先回来的响应会决定界面显示什么。 */
+const togglingIds = ref<Set<string>>(new Set());
 /** 角色的「表情」开关。关着的时候传多少张她都不会贴——不写页面上就会有人白传一通。 */
 const emojiEnabled = ref(false);
 /** 表情额度（跟「表情」开关一起配的）：多少分钟内最多几张。 */
@@ -341,7 +343,16 @@ async function submit() {
   }
 }
 
+function markToggling(stickerId: string, busy: boolean) {
+  const next = new Set(togglingIds.value);
+  if (busy) next.add(stickerId);
+  else next.delete(stickerId);
+  togglingIds.value = next;
+}
+
 async function toggleEnabled(row: StickerItem, enabled: boolean) {
+  if (togglingIds.value.has(row.id)) return;
+  markToggling(row.id, true);
   try {
     const updated = await api.updateSticker({
       characterId: id.value,
@@ -352,6 +363,8 @@ async function toggleEnabled(row: StickerItem, enabled: boolean) {
   } catch (error) {
     row.enabled = !enabled;
     ElMessage.error((error as { statusMessage?: string })?.statusMessage || "更新失败。");
+  } finally {
+    markToggling(row.id, false);
   }
 }
 
@@ -465,6 +478,7 @@ async function saveEdit() {
 }
 
 async function remove(row: StickerItem) {
+  const requestedId = id.value;
   const qqHint = row.qqEmojiId ? "QQ 收藏里的那张会一起删掉，" : "";
   try {
     await ElMessageBox.confirm(
@@ -475,8 +489,10 @@ async function remove(row: StickerItem) {
   } catch {
     return;
   }
+  // 确认框期间切了角色就别把旧表情的 id 发到新角色上。
+  if (id.value !== requestedId) return;
   try {
-    const result = await api.deleteSticker({ characterId: id.value, stickerId: row.id });
+    const result = await api.deleteSticker({ characterId: requestedId, stickerId: row.id });
     // 分页之后不能只从本地数组里摘掉：总张数、页码都可能变（删的是本页最后一张时要回夹）。
     void loadStickers();
     if (result.qq && !result.qq.ok && !result.qq.skipped) {
@@ -577,6 +593,7 @@ async function restoreFromTrash(item: TrashItem) {
 }
 
 async function purgeOne(item: TrashItem) {
+  const requestedId = id.value;
   try {
     await ElMessageBox.confirm(`彻底删除「${item.name}」？图和名字都会没，找不回来。`, "彻底删除", {
       type: "warning",
@@ -586,8 +603,9 @@ async function purgeOne(item: TrashItem) {
   } catch {
     return;
   }
+  if (id.value !== requestedId) return;
   try {
-    await api.purgeSticker({ characterId: id.value, stickerId: item.id });
+    await api.purgeSticker({ characterId: requestedId, stickerId: item.id });
     trashItems.value = trashItems.value.filter((row) => row.id !== item.id);
     ElMessage.success("已彻底删除。");
   } catch (error) {
@@ -605,6 +623,7 @@ async function purgeOne(item: TrashItem) {
 const clearingTrash = ref(false);
 
 async function clearTrash() {
+  const requestedId = id.value;
   const count = trashItems.value.length;
   if (!count || clearingTrash.value) return;
   try {
@@ -616,9 +635,10 @@ async function clearTrash() {
   } catch {
     return;
   }
+  if (id.value !== requestedId) return;
   clearingTrash.value = true;
   try {
-    const result = await api.clearStickerTrash(id.value);
+    const result = await api.clearStickerTrash(requestedId);
     trashItems.value = [];
     ElMessage.success(`已彻底删除 ${result.purged} 张。`);
   } catch (error) {
@@ -656,6 +676,8 @@ async function loadUntaggedStickers(): Promise<StickerItem[]> {
 
 async function labelUntagged() {
   if (labelingAll.value) return;
+  // 批量识别逐张发请求，全程用发起时的角色 ID，中途切角色也不会打到新角色上。
+  const requestedId = id.value;
   let targets: StickerItem[] = [];
   try {
     targets = await loadUntaggedStickers();
@@ -676,12 +698,13 @@ async function labelUntagged() {
   } catch {
     return;
   }
+  if (id.value !== requestedId) return;
   labelingAll.value = true;
   labelProgress.value = { done: 0, total: targets.length };
   let ok = 0;
   for (const row of targets) {
     try {
-      const result = await api.relabelSticker({ characterId: id.value, stickerId: row.id });
+      const result = await api.relabelSticker({ characterId: requestedId, stickerId: row.id });
       if (result.sticker) ok += 1;
     } catch {
       // 单张失败不影响后面的：可能是额度用完，也可能是这张解不开。最后统一报个数。
@@ -920,6 +943,7 @@ onMounted(() => {
           <div class="sticker-ops">
             <el-switch
               :model-value="sticker.enabled"
+              :loading="togglingIds.has(sticker.id)"
               @update:model-value="(value) => toggleEnabled(sticker, Boolean(value))"
             />
             <el-button

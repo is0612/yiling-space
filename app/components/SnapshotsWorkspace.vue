@@ -463,8 +463,8 @@ async function reviewChange(changeIndex: number, decision: "ACCEPT" | "IGNORE", 
  * 看起来像什么都没发生。
  */
 const { lastFinished } = useMemoryProgress();
-watch(lastFinished, (job) => {
-  if (!job || job.characterId !== id.value) return;
+watch(lastFinished, (finished) => {
+  if (!finished.some((job) => job.characterId === id.value)) return;
   void loadSnapshots({ refreshDetail: true });
 });
 
