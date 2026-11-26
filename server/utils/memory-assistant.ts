@@ -720,19 +720,31 @@ export async function generateConversationReplyWithMemoryAssistant(input: {
     const query = input.requiredHistoryLookup.query;
     let sources: MemoryAssistantCandidate[];
     let coverage: OwnerHistoryCoverage | undefined;
-    const unavailable = (status: "failed" | "no_sources"): ConversationReplyWithMemoryAssistant => ({
-      action: "reply", reply: status === "failed"
-        ? "这次查询群聊记录没成功，暂时不能核实，不代表记录不存在。"
-        : coverage?.reason === "unresolved_participant"
-          ? "还不能唯一确认这个称呼指的是谁，请补一下完整昵称或账号，我再查对应的记录。"
-          : coverage?.reason === "unresolved_group"
-            ? "这次还没确认你指的是哪个群，请补一下群号，我再查对应的记录。"
-            : "这次在指定范围内没找到足够的群聊记录，暂时不能确定；可以再给我一句原话或缩小范围。",
+    const unavailable = (status: "failed" | "no_sources"): ConversationReplyWithMemoryAssistant => {
+      let reply: string;
+      if (status === "failed") {
+        reply = "这次查询群聊记录没成功，暂时不能核实，不代表记录不存在。";
+      } else if (coverage?.reason === "unresolved_participant") {
+        reply = "还不能唯一确认这个称呼指的是谁，请补一下完整昵称或账号，我再查对应的记录。";
+      } else if (coverage?.reason === "unresolved_group") {
+        reply = "这次还没确认你指的是哪个群，请补一下群号，我再查对应的记录。";
+      } else {
+        // 「没找到记录」最常见的原因是查询窗口与发言时间错位。把实际查的范围摊开，
+        // 用户才能纠正（「查更早的」「查昨天的」），而不是对着一句模糊的话反复补群号。
+        const zone = input.chatInput.timeZone ?? CHAT_TIME_ZONE_DEFAULT;
+        const windowText = coverage
+          ? `${formatLocalTimestamp(coverage.start, zone)} 到 ${formatLocalTimestamp(coverage.end, zone)}`
+          : "指定范围";
+        reply = `我查了 ${windowText} 这段时间的群聊记录，没找到足够相关的；可以说得更具体些，或者换个时间范围（比如「查更早的」）再试。`;
+      }
+      return {
+      action: "reply", reply,
       usedMemoryIds: [], usedSnapshotIds: [], usedEventIds: [], usedRawMessageIds: [], faceIds: [], stickerId: null, usedCatchphraseIds: [],
       localHistoryReceipt: true, model: "local-history-lookup", provider: "local-history-lookup",
       promptTemplateVersion: "owner-history-lookup-v1", memoryAssistantStatus: status,
       ...(coverage ? { ownerHistoryCoverage: coverage } : {}),
-    });
+    };
+    };
     try {
       sources = await runAssistantTurnStage(turnContext, "memory", query, { query, mode: input.requiredHistoryLookup.mode ?? "topic" }, async () => {
         if (input.requiredHistoryLookup?.unavailable) throw new Error("History intent resolution unavailable");

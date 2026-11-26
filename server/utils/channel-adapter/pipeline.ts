@@ -4130,9 +4130,13 @@ async function runChannelTurn(input: {
       action: generated.action, durationMs: generationDurationMs, turnId, turnDetail: turnDetail.serialize(), ...(toolReads.length ? { toolReads: JSON.stringify(toolReads) } : {}) },
   });
   if (ownerHistoryAuth && (ownerHistoryStored || memoryLoader.ownerHistoryCoverage())) {
-    const nextPlan = ownerHistoryPlan ? { ...ownerHistoryPlan,
-      // A completed read starts a fresh TTL. A later short follow-up must not inherit an
-      // expired task merely because nothing was re-saved after the original request.
+    // 查空（no_sources）的历史任务不再存回：否则这里每轮都会刷新 anchoredAt 续命，
+    // 任意短句又被当成跟进继承，私聊会死在「没找到记录」循环里（2026-11-26 实测）。
+    // 查询失败（failed）保留任务——那是暂时性故障，重试合理；查空是确定性答案，任务应当结束。
+    // A completed read starts a fresh TTL. A later short follow-up must not inherit an
+    // expired task merely because nothing was re-saved after the original request.
+    const nextPlan = generated.localHistoryReceipt && generated.memoryAssistantStatus === "no_sources" ? null
+      : ownerHistoryPlan ? { ...ownerHistoryPlan,
       ...(memoryLoader.ownerHistoryCoverage() ? { anchoredAt: ownerHistoryNow.toISOString() } : {}),
       ...(generated.ownerHistoryCoverage ? { start: generated.ownerHistoryCoverage.start,
         end: generated.ownerHistoryCoverage.end, cursor: generated.ownerHistoryCoverage.oldestCursor } : {}),

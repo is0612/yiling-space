@@ -94,6 +94,10 @@ try {
     requiredHistoryLookup: { query: "能看到多早", mode: "boundary", load: async () => ({ coverage: { ...coverage, count: 0, actualFirst: null, actualLast: null }, sources: [] }) },
   });
   assert.equal(missing.memoryAssistantStatus, "no_sources");
+  // 查空回复必须摊开实际查询窗口，用户才知道查错了哪段时间（2026-11-26 死循环修复）。
+  assert.match(missing.reply, /2026-11-17/);
+  assert.match(missing.reply, /换个时间范围/);
+  assert(!missing.reply.includes("指定范围内没找到足够"), "Vague denials made owners re-supply the room forever");
   for (const reason of ["unresolved_participant", "unresolved_group"] as const) {
     const unresolved = await generateConversationReplyWithMemoryAssistant({
       chatInput: base, assistant: null, candidates: [],
