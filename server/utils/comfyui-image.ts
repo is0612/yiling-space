@@ -359,21 +359,26 @@ function applyWorkflowTemplate(
 ): Record<string, PromptBlock> {
   const graph = JSON.parse(JSON.stringify(template)) as Record<string, PromptBlock>;
   const samplerIds: string[] = [];
-  let positiveId = "";
-  let negativeId = "";
+  const samplerTargets: Array<{ positiveId: string; negativeId: string }> = [];
 
   for (const [id, node] of Object.entries(graph)) {
     if (node.class_type !== "KSampler" && node.class_type !== "KSamplerAdvanced") continue;
     samplerIds.push(id);
     const positive = node.inputs.positive;
     const negative = node.inputs.negative;
-    if (Array.isArray(positive)) positiveId = String(positive[0]);
-    if (Array.isArray(negative)) negativeId = String(negative[0]);
+    samplerTargets.push({
+      positiveId: Array.isArray(positive) ? String(positive[0]) : "",
+      negativeId: Array.isArray(negative) ? String(negative[0]) : "",
+    });
   }
 
-  if (positiveId && graph[positiveId]) graph[positiveId]!.inputs.text = input.prompt;
-  else console.warn("[image] 模板里找不到正向提示词节点，这次没用上她的描述");
-  if (negativeId && graph[negativeId]) graph[negativeId]!.inputs.text = input.negative;
+  // 每个采样器都要注入：多采样器模板里只改最后一个，前面的分支会画成无描述的原图。
+  let injected = false;
+  for (const { positiveId, negativeId } of samplerTargets) {
+    if (positiveId && graph[positiveId]) { graph[positiveId]!.inputs.text = input.prompt; injected = true; }
+    if (negativeId && graph[negativeId]) graph[negativeId]!.inputs.text = input.negative;
+  }
+  if (!injected) console.warn("[image] 模板里找不到正向提示词节点，这次没用上她的描述");
 
   // 种子：有 SeedNode 就改它；KSampler 自己写的是字面值也一并改掉
   for (const node of Object.values(graph)) {

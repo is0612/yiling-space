@@ -20,9 +20,14 @@ const REPEAT_MIN_NORMALIZED_EQUAL = 16;
 const REPEAT_MIN_NORMALIZED_SIMILAR = 20;
 const REPEAT_DICE_THRESHOLD = 0.85;
 
-/** 全半角、大小写、标点符号、空白全部抹掉，只留可比对的字面。 */
+/**
+ * 全半角、大小写、标点、空白抹掉，只留可比对的字面。
+ *
+ * 必须保留 `\p{S}`：`+` `#` `%` 这类符号可能承载语义（C++ / C#、涨了 5%），
+ * 一并删掉会把语义相反的句子归一成同一串，正常纠正会被误判成复读。
+ */
 function normalizeReplyText(text: string): string {
-  return text.normalize("NFKC").replace(/[\s\p{P}\p{S}]+/gu, "").toLowerCase();
+  return text.normalize("NFKC").replace(/[\s\p{P}]+/gu, "").toLowerCase();
 }
 
 function bigrams(text: string): Set<string> {

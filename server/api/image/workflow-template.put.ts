@@ -23,7 +23,12 @@ export default defineEventHandler(async (event) => {
   }
   const result = await writeWorkflowTemplate(text);
   if (!result.ok) {
-    throw createError({ statusCode: 400, statusMessage: `模板没通过校验：${result.reason}` });
+    // 校验失败是客户端问题；磁盘/权限/rename 失败是服务端问题，不能都算 400。
+    const validationFailure = /验证|校验|JSON|节点|采样器|positive|text|模板超过/.test(result.reason);
+    throw createError({
+      statusCode: validationFailure ? 400 : 500,
+      statusMessage: validationFailure ? `模板没通过校验：${result.reason}` : `模板保存失败：${result.reason}`,
+    });
   }
   return {
     ok: true,

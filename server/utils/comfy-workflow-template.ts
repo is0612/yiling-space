@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -82,18 +83,21 @@ export function parseWorkflowTemplate(text: string): TemplateParseResult {
     }
   }
 
-  const sampler = entries.find(([, node]) => node.class_type === "KSampler" || node.class_type === "KSamplerAdvanced");
-  if (!sampler) return { ok: false, reason: "没有 KSampler / KSamplerAdvanced" };
-  const [samplerId, samplerNode] = sampler;
-  const positive = samplerNode.inputs.positive;
-  const positiveId = Array.isArray(positive) ? String(positive[0]) : "";
-  if (!positiveId) return { ok: false, reason: `采样器 ${samplerId} 的 positive 没有连线` };
-  const target = graph[positiveId] as TemplateNode | undefined;
-  if (!target || typeof target !== "object") {
-    return { ok: false, reason: `采样器 ${samplerId} 的 positive 指向不存在的节点 ${positiveId}` };
-  }
-  if (typeof target.inputs?.text !== "string") {
-    return { ok: false, reason: `positive 连到的节点 ${positiveId} 没有 text 输入，提示词注入不进去` };
+  // 注入时会遍历所有采样器，校验也必须逐个来：只看第一个会放过多采样器模板，
+  // 结果提示词注进了别的分支，画出来的图与描述无关。
+  const samplers = entries.filter(([, node]) => node.class_type === "KSampler" || node.class_type === "KSamplerAdvanced");
+  if (!samplers.length) return { ok: false, reason: "没有 KSampler / KSamplerAdvanced" };
+  for (const [samplerId, samplerNode] of samplers) {
+    const positive = samplerNode.inputs.positive;
+    const positiveId = Array.isArray(positive) ? String(positive[0]) : "";
+    if (!positiveId) return { ok: false, reason: `采样器 ${samplerId} 的 positive 没有连线` };
+    const target = graph[positiveId] as TemplateNode | undefined;
+    if (!target || typeof target !== "object") {
+      return { ok: false, reason: `采样器 ${samplerId} 的 positive 指向不存在的节点 ${positiveId}` };
+    }
+    if (typeof target.inputs?.text !== "string") {
+      return { ok: false, reason: `positive 连到的节点 ${positiveId} 没有 text 输入，提示词注入不进去` };
+    }
   }
   return { ok: true, template: graph as WorkflowTemplate };
 }
@@ -159,7 +163,8 @@ export async function writeWorkflowTemplate(text: string): Promise<TemplateWrite
   const target = targetTemplatePath();
   try {
     await mkdir(dirname(target), { recursive: true });
-    const temporary = `${target}.${process.pid}.tmp`;
+    // 同一进程的并发 PUT 不能共用临时文件名，否则互相覆盖或 rename 抢同一路径。
+    const temporary = `${target}.${randomUUID()}.tmp`;
     await writeFile(temporary, text, "utf8");
     await rename(temporary, target);
     cache = null;
