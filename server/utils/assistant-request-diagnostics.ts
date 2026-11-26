@@ -2,11 +2,16 @@ import { readModelUsage, type ModelUsageTokens } from "./model-usage";
 /**
  * 单次模型请求的墙钟计时（全部为同一时钟的毫秒差值，不与别的字段累加）。
  *
- * 首 Token 口径：本系统请求是非流式（一次性读完整 JSON body），因此没有真正的
- * 流式首 token 时间。`firstByteAt` 记录的是「首个有效响应 body 到达」的时刻——
- * 也就是 `response.json()` 成功 resolve 的点。它 ≥ 真实 TTFB，但在非流式协议下
- * 是能诚实测得、且能区分「等首字节」与「读完整响应」这两个阶段的最佳代理。
- * 拿不到时 `firstByteAt` 与派生的 `ttfbMs` / `tailMs` 都留 undefined，不伪造。
+ * 计时口径（重要）：本系统请求是非流式（`fetch` 一次性拿 body，再 `response.json()`）。
+ * 因此**无法测得真正的流式首 Token 时间**。这里只能精确拆分三个可观测的墙钟阶段：
+ *
+ * - `headersMs`：请求发出到「响应头到达」（fetch resolve）的等待，近似 TTFB，但**不是**首 Token；
+ * - `bodyMs`：响应头到达后，「完整 Body 读取 + JSON 解析」完成（`response.json()` resolve）的耗时；
+ * - `durationMs`：总请求耗时 = headersMs + bodyMs。
+ *
+ * 阶段标记：`markHeaders()` 在 fetch resolve 时调用，`markBody()` 在 `response.json()`
+ * resolve 时调用。任一阶段拿不到（异常、HTTP 错误、非 JSON、超时、取消、时钟回跳）
+ * 时，对应字段与派生耗时留 undefined，明确按 unavailable 处理，绝不伪造。
  */
 export type AssistantRequestDiagnostic = {
   status: "success" | "failed" | "timeout" | "http_error" | "invalid_response" | "truncated";
@@ -19,26 +24,35 @@ export type AssistantRequestDiagnostic = {
   usage?: ModelUsageTokens;
   /** 请求发出时刻（epoch ms）。 */
   startedAt?: number;
-  /** 首个有效响应 body 到达时刻（epoch ms）。无法测量时不写。 */
-  firstByteAt?: number;
+  /** 响应头到达时刻（fetch resolve，epoch ms）。无法测量时不写。 */
+  headersAt?: number;
+  /** Body 读取 + JSON 解析完成时刻（response.json resolve，epoch ms）。无法测量时不写。 */
+  bodyAt?: number;
   /** 请求结束时刻（epoch ms）。 */
   endedAt?: number;
-  /** 首字节等待时间 = firstByteAt - startedAt；无法测量时不写。 */
-  ttfbMs?: number;
-  /** 首字节之后的剩余响应时间 = endedAt - firstByteAt；无法测量时不写。 */
-  tailMs?: number;
+  /** 响应头等待耗时 = headersAt - startedAt；无法测量时不写。近似 TTFB，不是首 Token。 */
+  headersMs?: number;
+  /** Body 读取 + JSON 解析耗时 = bodyAt - headersAt；无法测量时不写。 */
+  bodyMs?: number;
 };
 export type AssistantRequestObserver = (entry: AssistantRequestDiagnostic) => void;
 const MODEL_ID = /^[\w.:/-]{1,120}$/;
 const clamp = (value: number, max: number): number => Math.min(max, Math.max(0, Math.round(value)));
+const epoch = (value: number): number => clamp(value, 4_102_444_800_000);
+const wall = (value: number): number => clamp(value, 3_600_000);
 /** One terminal event per actual request. No prompt, identity, provider error or reasoning text. */
 export function startAssistantRequest(observer?: AssistantRequestObserver) {
   const start = Date.now(); let completed = false;
-  let firstByteAt: number | undefined;
+  let headersAt: number | undefined;
+  let bodyAt: number | undefined;
   return {
-    /** 首个有效响应数据到达时调用一次；重复调用只记第一次，异常调用被吞掉。 */
-    markFirstByte() {
-      if (firstByteAt === undefined) firstByteAt = Date.now();
+    /** 响应头到达（fetch resolve）时调用一次；重复调用只记第一次。 */
+    markHeaders() {
+      if (headersAt === undefined) headersAt = Date.now();
+    },
+    /** Body 读取 + JSON 解析完成（response.json resolve）时调用一次；重复调用只记第一次。 */
+    markBody() {
+      if (bodyAt === undefined) bodyAt = Date.now();
     },
     complete(status: AssistantRequestDiagnostic["status"], payload?: unknown) {
       if (completed) return; completed = true;
@@ -55,13 +69,15 @@ export function startAssistantRequest(observer?: AssistantRequestObserver) {
         const usageReported = Boolean(usage && ["prompt_tokens", "completion_tokens", "total_tokens"].some(key => typeof usage[key] === "number" && Number.isFinite(usage[key]) && Number(usage[key]) >= 0));
         const reportedUsage = usageReported ? readModelUsage(payload) : null;
         const reportedModel = typeof root.model === "string" && MODEL_ID.test(root.model.trim()) ? root.model.trim() : undefined;
-        // 只有真的测到了首字节才派生 ttfb / tail；首字节在结束之后（时钟跳变）也视为不可用。
-        const hasFirstByte = firstByteAt !== undefined && firstByteAt <= endedAt;
+        // 阶段标记必须满足「start ≤ headers ≤ body ≤ ended」，时钟回跳（乱序）则视为不可用。
+        const validHeaders = headersAt !== undefined && headersAt >= start && headersAt <= endedAt;
+        const validBody = bodyAt !== undefined && bodyAt >= (validHeaders ? headersAt! : start) && bodyAt <= endedAt;
         observer({ status: finishReason === "length" && (status === "success" || status === "invalid_response") ? "truncated" : status,
-          durationMs: clamp(endedAt - start, 3_600_000), usageReported,
-          startedAt: clamp(start, 4_102_444_800_000), endedAt: clamp(endedAt, 4_102_444_800_000),
+          durationMs: wall(endedAt - start), usageReported,
+          startedAt: epoch(start), endedAt: epoch(endedAt),
           ...(finishReason ? { finishReason } : {}), ...(reportedModel ? { model: reportedModel } : {}), ...(reportedUsage ? { usage: reportedUsage } : {}),
-          ...(hasFirstByte ? { firstByteAt: clamp(firstByteAt!, 4_102_444_800_000), ttfbMs: clamp(firstByteAt! - start, 3_600_000), tailMs: clamp(endedAt - firstByteAt!, 3_600_000) } : {}) });
+          ...(validHeaders ? { headersAt: epoch(headersAt!), headersMs: wall(headersAt! - start) } : {}),
+          ...(validBody ? { bodyAt: epoch(bodyAt!), bodyMs: wall(bodyAt! - (validHeaders ? headersAt! : start)) } : {}) });
       } catch { /* Diagnostics never change a request result or retry policy. */ }
     },
   };

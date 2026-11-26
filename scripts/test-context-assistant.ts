@@ -337,53 +337,55 @@ try {
   globalThis.fetch = originalFetch;
 }
 
-// 首字节（首 Token 代理）计时：语境助手成功时派生 ttfb/tail，超时/异常时计时完整且不伪造。
+// 分段计时（响应头等待 + Body 读取解析）：语境助手成功时派生 headersMs/bodyMs，超时/异常时计时完整且不伪造。
 {
   const realNow = Date.now;
   let clock = 1_700_000_000_000;
   Date.now = () => clock;
   const realFetch = globalThis.fetch;
   try {
-    type Attempt = { status: string; startedAt?: number; firstByteAt?: number; endedAt?: number; ttfbMs?: number; tailMs?: number; durationMs: number };
-    // 成功：body 解析后 markFirstByte，派生 ttfb/tail。
+    type Attempt = { status: string; startedAt?: number; headersAt?: number; bodyAt?: number; endedAt?: number; headersMs?: number; bodyMs?: number; durationMs: number };
+    // 成功：fetch resolve 记 headers，response.json resolve 记 body，派生 headersMs/bodyMs。
     {
       const attempts: Attempt[] = [];
       globalThis.fetch = async () => { clock += 300; return modelResponse(); };
-      await analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, startedAt: entry.startedAt, firstByteAt: entry.firstByteAt, endedAt: entry.endedAt, ttfbMs: entry.ttfbMs, tailMs: entry.tailMs, durationMs: entry.durationMs }));
+      await analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, startedAt: entry.startedAt, headersAt: entry.headersAt, bodyAt: entry.bodyAt, endedAt: entry.endedAt, headersMs: entry.headersMs, bodyMs: entry.bodyMs, durationMs: entry.durationMs }));
       assert.equal(attempts.length, 1);
       assert.equal(attempts[0]!.status, "success");
-      assert.equal(attempts[0]!.ttfbMs, 300, "语境助手成功时应记录首字节等待");
-      assert.equal(attempts[0]!.tailMs, 0, "非流式：body 到达后立即解析完成，剩余响应为 0");
+      assert.equal(attempts[0]!.headersMs, 300, "语境助手成功时应记录响应头等待");
+      assert.equal(attempts[0]!.bodyMs, 0, "Body 读取解析在 fetch resolve 后立即完成（mock 同步返回）");
       assert.equal(attempts[0]!.durationMs, 300);
       assert.equal(attempts[0]!.startedAt, 1_700_000_000_000);
       assert.equal(attempts[0]!.endedAt, 1_700_000_000_300);
     }
-    // http_error（401）：无 body，不伪造 firstByte。
+    // http_error（401）：fetch resolve 后立即抛错，记 headers 但不伪造 body。
     {
       const attempts: Attempt[] = [];
       globalThis.fetch = async () => { clock += 100; return new Response("secret", { status: 401 }); };
-      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, startedAt: entry.startedAt, firstByteAt: entry.firstByteAt, endedAt: entry.endedAt, ttfbMs: entry.ttfbMs, tailMs: entry.tailMs, durationMs: entry.durationMs })));
+      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, startedAt: entry.startedAt, headersAt: entry.headersAt, bodyAt: entry.bodyAt, endedAt: entry.endedAt, headersMs: entry.headersMs, bodyMs: entry.bodyMs, durationMs: entry.durationMs })));
       assert.equal(attempts[0]!.status, "http_error");
-      assert.equal(attempts[0]!.firstByteAt, undefined);
-      assert.equal(attempts[0]!.ttfbMs, undefined);
+      assert.equal(attempts[0]!.headersMs, 100, "http_error 也能记录响应头到达");
+      assert.equal(attempts[0]!.bodyAt, undefined);
+      assert.equal(attempts[0]!.bodyMs, undefined, "http_error 无 body，不伪造");
       assert.equal(attempts[0]!.durationMs, 100);
-      assert.equal(attempts[0]!.endedAt, 1_700_000_000_400);
     }
-    // 非 JSON body（200）：response.json 抛错，未 markFirstByte，记 invalid_response。
+    // 非 JSON body（200）：response.json 抛错，headers 已记、body 未记。
     {
       const attempts: Attempt[] = [];
       globalThis.fetch = async () => { clock += 100; return new Response("not json", { status: 200 }); };
-      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, firstByteAt: entry.firstByteAt, ttfbMs: entry.ttfbMs, tailMs: entry.tailMs, durationMs: entry.durationMs })));
+      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, headersAt: entry.headersAt, bodyAt: entry.bodyAt, headersMs: entry.headersMs, bodyMs: entry.bodyMs, durationMs: entry.durationMs })));
       assert.equal(attempts[0]!.status, "invalid_response");
-      assert.equal(attempts[0]!.ttfbMs, undefined, "解析失败拿不到首字节，不能伪造");
+      assert.equal(attempts[0]!.headersMs, 100);
+      assert.equal(attempts[0]!.bodyMs, undefined, "JSON 解析失败拿不到 body 完成时刻，不伪造");
     }
-    // 网络超时（fetch 抛 TimeoutError）：记 timeout，计时完整。
+    // 网络超时（fetch 抛 TimeoutError）：fetch 未 resolve，headers/body 都不记。
     {
       const attempts: Attempt[] = [];
       globalThis.fetch = async () => { clock += 100; const error = new Error("timeout"); error.name = "TimeoutError"; throw error; };
-      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, ttfbMs: entry.ttfbMs, durationMs: entry.durationMs })));
+      await assert.rejects(() => analyzeGroupContext(runtime, input, undefined, entry => attempts.push({ status: entry.status, headersAt: entry.headersAt, headersMs: entry.headersMs, bodyMs: entry.bodyMs, durationMs: entry.durationMs })));
       assert.equal(attempts[0]!.status, "timeout");
-      assert.equal(attempts[0]!.ttfbMs, undefined);
+      assert.equal(attempts[0]!.headersAt, undefined);
+      assert.equal(attempts[0]!.headersMs, undefined, "fetch 未 resolve，无法记响应头");
       assert.equal(attempts[0]!.durationMs, 100);
     }
     // 诊断字段不得泄露提示词/原始响应。
@@ -396,4 +398,4 @@ try {
     }
   } finally { Date.now = realNow; globalThis.fetch = realFetch; }
 }
-console.log("Context assistant first-byte timing: success derives ttfb/tail, error/timeout keep timing complete without fabricating (mocked).");
+console.log("Context assistant segmented timing: headers/body derived on success, http_error/non-json/timeout keep what is measurable without fabricating (mocked).");

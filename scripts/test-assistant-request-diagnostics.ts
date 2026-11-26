@@ -41,45 +41,62 @@ try {
 } finally { globalThis.fetch = originalFetch; }
 console.log("HTTP request diagnostics: terminal once, explicit-zero/missing usage, malformed repair, thinking400 fallback, timeout and observer isolation passed (mocked).");
 
-// 首 Token（首字节）计时：只在真的测到 firstByte 时派生 ttfb/tail，拿不到就留 undefined。
+// 分段计时（响应头等待 + Body 读取）：只在真的测到阶段标记时派生，拿不到就留 undefined。
 {
   const realNow = Date.now;
   let clock = 1_700_000_000_000;
   Date.now = () => clock;
   try {
-    // 正常：markFirstByte 后 complete，派生 startedAt/firstByteAt/endedAt/ttfbMs/tailMs。
+    // 正常：markHeaders 后 markBody 再 complete，派生 startedAt/headersAt/bodyAt/endedAt/headersMs/bodyMs。
     const ok: AssistantRequestDiagnostic[] = [];
     const req = startAssistantRequest(entry => ok.push(entry));
-    clock += 500; req.markFirstByte(); clock += 700; req.complete("success", { choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    clock += 500; req.markHeaders(); clock += 700; req.markBody(); clock += 300; req.complete("success", { choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
     assert.equal(ok.length, 1);
-    assert.equal(ok[0]!.ttfbMs, 500, "首字节等待 = firstByte - start");
-    assert.equal(ok[0]!.tailMs, 700, "剩余响应 = end - firstByte");
-    assert.equal(ok[0]!.durationMs, 1200, "总耗时 = end - start");
+    assert.equal(ok[0]!.headersMs, 500, "响应头等待 = headersAt - start");
+    assert.equal(ok[0]!.bodyMs, 700, "Body 读取解析 = bodyAt - headersAt");
+    assert.equal(ok[0]!.durationMs, 1500, "总耗时 = end - start");
     assert.equal(ok[0]!.startedAt, 1_700_000_000_000);
-    assert.equal(ok[0]!.firstByteAt, 1_700_000_000_500);
-    assert.equal(ok[0]!.endedAt, 1_700_000_001_200);
+    assert.equal(ok[0]!.headersAt, 1_700_000_000_500);
+    assert.equal(ok[0]!.bodyAt, 1_700_000_001_200);
+    assert.equal(ok[0]!.endedAt, 1_700_000_001_500);
 
-    // 未 markFirstByte（如 http_error / 空响应解析失败）：不伪造 ttfb/tail。
+    // 只有 markHeaders（如 http_error 前 fetch 已 resolve）：记 headers 但不伪造 body。
+    const headersOnly: AssistantRequestDiagnostic[] = [];
+    const reqH = startAssistantRequest(entry => headersOnly.push(entry));
+    clock += 400; reqH.markHeaders(); clock += 50; reqH.complete("http_error");
+    assert.equal(headersOnly[0]!.headersMs, 400);
+    assert.equal(headersOnly[0]!.bodyAt, undefined);
+    assert.equal(headersOnly[0]!.bodyMs, undefined);
+    assert.equal(headersOnly[0]!.durationMs, 450);
+
+    // 完全未标记（如 fetch 抛超时）：headers/body 都不伪造。
     const none: AssistantRequestDiagnostic[] = [];
-    startAssistantRequest(entry => none.push(entry)).complete("http_error");
-    assert.equal(none[0]!.ttfbMs, undefined);
-    assert.equal(none[0]!.tailMs, undefined);
-    assert.equal(none[0]!.firstByteAt, undefined);
-    assert.equal(none[0]!.startedAt, 1_700_000_001_200);
-    assert.equal(none[0]!.endedAt, 1_700_000_001_200);
+    startAssistantRequest(entry => none.push(entry)).complete("timeout");
+    assert.equal(none[0]!.headersAt, undefined);
+    assert.equal(none[0]!.headersMs, undefined);
+    assert.equal(none[0]!.bodyAt, undefined);
+    assert.equal(none[0]!.bodyMs, undefined);
 
-    // 时钟回跳（firstByte 在结束之后）：视为不可用，不派生。
+    // 时钟回跳（headers/body 晚于 endedAt）：整体视为不可用，不派生。
     const jumped: AssistantRequestDiagnostic[] = [];
     const reqJump = startAssistantRequest(entry => jumped.push(entry));
-    clock += 100; reqJump.markFirstByte(); clock -= 500; reqJump.complete("success", { choices: [{ finish_reason: "stop", message: { content: "{}" } }] });
-    assert.equal(jumped[0]!.ttfbMs, undefined, "时钟回跳不能产生负的 ttfb");
+    clock += 100; reqJump.markHeaders(); clock -= 500; reqJump.markBody(); clock += 200; reqJump.complete("success", { choices: [{ finish_reason: "stop", message: { content: "{}" } }] });
+    assert.equal(jumped[0]!.headersMs, undefined, "headersAt 晚于 endedAt 视为不可用");
+    assert.equal(jumped[0]!.bodyMs, undefined, "bodyAt 乱序不能产生负的 bodyMs");
 
-    // markFirstByte 重复调用只记第一次。
+    // bodyAt 早于 headersAt（仍在 endedAt 内）：headers 有效，body 乱序不可用。
+    const bodyEarly: AssistantRequestDiagnostic[] = [];
+    const reqEarly = startAssistantRequest(entry => bodyEarly.push(entry));
+    clock += 300; reqEarly.markHeaders(); clock -= 100; reqEarly.markBody(); clock += 200; reqEarly.complete("success", { choices: [{ finish_reason: "stop", message: { content: "{}" } }] });
+    assert.equal(bodyEarly[0]!.headersMs, 300, "headers 在时间轴内仍有效");
+    assert.equal(bodyEarly[0]!.bodyMs, undefined, "bodyAt 早于 headersAt 视为不可用");
+
+    // markHeaders / markBody 重复调用只记第一次。
     const dup: AssistantRequestDiagnostic[] = [];
     const reqDup = startAssistantRequest(entry => dup.push(entry));
-    clock += 100; reqDup.markFirstByte(); clock += 100; reqDup.markFirstByte(); clock += 100; reqDup.complete("success", { choices: [{ finish_reason: "stop", message: { content: "{}" } }] });
-    assert.equal(dup[0]!.ttfbMs, 100);
-    assert.equal(dup[0]!.tailMs, 200);
+    clock += 100; reqDup.markHeaders(); clock += 100; reqDup.markHeaders(); clock += 100; reqDup.markBody(); clock += 100; reqDup.markBody(); clock += 100; reqDup.complete("success", { choices: [{ finish_reason: "stop", message: { content: "{}" } }] });
+    assert.equal(dup[0]!.headersMs, 100);
+    assert.equal(dup[0]!.bodyMs, 200, "bodyMs = bodyAt(第3次推进) - headersAt(第1次推进)");
   } finally { Date.now = realNow; }
 }
-console.log("First-byte timing: derived ttfb/tail on success, unavailable when unmeasured, clock-jump safe, first-mark wins (mocked).");
+console.log("Segmented timing: headers/body derived on success, unavailable when unmeasured, clock-jump safe, first-mark wins (mocked).");

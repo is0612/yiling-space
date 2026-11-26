@@ -405,13 +405,13 @@
 - 本轮未重跑 `test:all`；上一轮数据库就绪后的结果为 282 / 286，4 个失败均为环境/测试间干扰且与本轮改动无关。
 
 
-### 2026-11-26 · 语境助手首字节（首 Token 代理）计时诊断
+### 2026-11-26 · 语境助手分段计时（响应头等待 + Body 读取解析）
 
 - 状态：诊断增强完成，专项与工程校验通过；未做任何性能优化，未改模型/提示词/thinking/超时/重试/业务逻辑。
-- 测量口径：本系统请求为非流式（一次性 `response.json()`），没有真正流式首 token；新增 `firstByteAt` 记录「首个有效响应 body 到达」时刻，它 ≥ 真实 TTFB，是在非流式协议下能诚实测得的最佳代理。拿不到时不写派生字段，明确按 unavailable 处理，不伪造。
-- 字段（全部可选、经白名单清洗与上界夹取）：`startedAt` / `firstByteAt` / `endedAt`（epoch ms），`ttfbMs`（首字节等待 = firstByteAt - startedAt）、`tailMs`（剩余响应 = endedAt - firstByteAt）；`durationMs` 仍是总耗时 = ttfb + tail。
-- 覆盖范围：`startAssistantRequest` 新增 `markFirstByte()`，语境助手在 `response.json()` 成功后标记；异常（http_error / 非 JSON / 网络超时 / 时钟回跳）保持计时完整且不伪造 firstByte。
-- 兼容：新字段均为可选，旧记录缺失不回填，旧客户端读取不变；`sanitizeAssistantTurnDiagnostics` 白名单同步接受新字段。
-- 测试：`test-assistant-request-diagnostics` 新增首字节计时单测（成功派生 / 未测量 unavailable / 时钟回跳 / 重复 mark 只记第一次）；`test-context-assistant` 新增语境助手首字节集成测试（成功 / 401 / 非 JSON / 超时 / 不泄密）。
-- 校验：`test:assistant-turn-context`、`test:model-turn-detail`、`test:context-assistant` 通过；`lint` 0 errors / 9 warnings；`typecheck` 通过；`build` 通过（1m25s）。
-- 文档：`docs/assistant-collaboration-plan.md` 补充 12a 首字节计时小节。
+- 测量口径（重要）：本系统请求为非流式（`fetch` 一次性拿 body 再 `response.json()`），**无法测得真正的流式首 Token 时间**。`headersMs` 只是「请求发出到响应头到达」的等待，近似 TTFB 但**不是首 Token**；`bodyMs` 是完整 Body 读取 + JSON 解析耗时。只能测这两个阶段，不声称测得首 Token。
+- 字段（全部可选、经白名单清洗与上界夹取）：`startedAt` / `headersAt`（fetch resolve）/ `bodyAt`（`response.json()` resolve）/ `endedAt`（epoch ms），派生 `headersMs` = headersAt - startedAt、`bodyMs` = bodyAt - headersAt；`durationMs` 仍是总耗时。
+- 覆盖范围：`startAssistantRequest` 新增 `markHeaders()`（fetch resolve 时）与 `markBody()`（`response.json()` resolve 时）；http_error 记响应头、非 JSON 记响应头不记 body、超时/取消两者都不记，时钟回跳（阶段乱序）视为 unavailable，均不伪造。
+- 兼容：旧字段（`firstByteAt`/`ttfbMs`/`tailMs`）上线前即更正、尚无真实数据，直接替换为新字段，无需兼容读取。
+- 测试：`test-assistant-request-diagnostics` 新增分段计时单测（成功派生 / 仅响应头 / 完全未测量 / 时钟回跳 / body 乱序 / 重复 mark 只记第一次）；`test-context-assistant` 新增语境助手集成测试（成功 / 401 / 非 JSON / 超时 / 不泄密）。
+- 校验：`test:assistant-turn-context`、`test:model-turn-detail`、`test:context-assistant` 通过；`lint` 0 errors / 9 warnings；`typecheck` 通过；`build` 通过。
+- 文档：`docs/assistant-collaboration-plan.md` 补充 12a 分段计时小节。

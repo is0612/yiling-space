@@ -149,9 +149,9 @@ interface AssistantTurnContext {
   recordAttempt(stage: TurnStage, data: {
     attemptId: string; status: string; durationMs: number;
     usageReported: boolean; finishReason?: string;
-    // 首字节（首 Token 代理）计时：非流式请求在 body 解析到达时标记。
-    startedAt?: number; firstByteAt?: number; endedAt?: number;
-    ttfbMs?: number; tailMs?: number;
+    // 分段计时：非流式请求在 fetch resolve 记响应头、response.json resolve 记 body。
+    startedAt?: number; headersAt?: number; bodyAt?: number; endedAt?: number;
+    headersMs?: number; bodyMs?: number;
   }): void;
 }
 ```
@@ -234,9 +234,9 @@ observer通过独立参数传入helper，不进入chatInput、提示词或HTTP�
 
 usageReported表示供应商usage至少含一个有效非负token字段，显式零值与完全缺失区分。它不是完整账单，也不表示所有token分项已齐全；本批不重写model_usages聚合，不自动把之前丢失的尝试费用补记。诊断不复制Key、正文、错误原文、推理、URL或身份；观察者异常被吞掉，不影响业务结果。每HTTP只完成一次，快照仍有16条/逻辑操作的有界诊断上限。
 
-### 12a. 首字节（首 Token 代理）计时（2026-11-26）
+### 12a. 分段计时（响应头等待 + Body 读取解析）（2026-11-26）
 
-在 2C 请求边界记录之上，为每次 attempt 增加墙钟计时：`startedAt`（发出）、`firstByteAt`（首个有效响应 body 到达）、`endedAt`（结束），并派生 `ttfbMs`（首字节等待 = firstByteAt - startedAt）与 `tailMs`（剩余响应 = endedAt - firstByteAt），`durationMs` 仍是三者之和。**测量口径**：本系统请求为非流式（一次性 `response.json()`），没有真正的流式首 token；`firstByteAt` 是「body 成功解析到达」的时刻，它 ≥ 真实 TTFB，是在非流式协议下能诚实测得、且能区分「等首字节」与「读完整响应」两段的最佳代理。拿不到（如 http_error、解析失败、超时、时钟回跳）时不写 `firstByteAt` 及其派生字段，明确按 unavailable 处理，绝不伪造。仅增加诊断：不改模型、提示词、thinking、超时、重试与业务逻辑；不记录完整提示词、原始响应或敏感内容。所有新字段同样经白名单清洗与数值上界夹取，旧记录缺失不回填，旧客户端不受影响。
+在 2C 请求边界记录之上，为每次 attempt 增加墙钟分段计时：`startedAt`（发出）、`headersAt`（fetch resolve，响应头到达）、`bodyAt`（`response.json()` resolve，完整 Body 读取+JSON 解析完成）、`endedAt`（结束），并派生 `headersMs`（响应头等待 = headersAt - startedAt）与 `bodyMs`（Body 读取+解析 = bodyAt - headersAt），`durationMs` 仍是总耗时。**测量口径（重要）**：本系统请求为非流式（`fetch` 一次性拿 body 再 `response.json()`），因此**无法测得真正的流式首 Token 时间**；`headersMs` 只是「请求发出到响应头到达」的等待，近似 TTFB，但**不是首 Token**，`bodyMs` 是完整 Body 的读取与解析耗时。任一阶段拿不到（http_error、非 JSON、超时、取消、时钟回跳）时，对应字段与派生耗时留 undefined，明确按 unavailable 处理，绝不伪造。仅增加诊断：不改模型、提示词、thinking、超时、重试与业务逻辑；不记录完整提示词、原始响应或敏感内容。所有新字段同样经白名单清洗与数值上界夹取，旧记录缺失不回填，旧客户端不受影响。旧字段（`firstByteAt`/`ttfbMs`/`tailMs`）因尚未被真实数据使用（上线前即更正），已直接替换，无需兼容读取。
 
 专项新增语境/记忆截断后两次HTTP、主模型JSON修复、thinking400重发、超时、零值/缺失usage、observer异常保护与群聊阶段attempt计数。现有语境、记忆与聊天回归、完整typecheck、全量lint、隐私扫描和生产build已通过，最终正文超时诊断补丁另经专项和定向lint复验。诊断目前只存在本轮上下文，尚未持久化或在UI展示，2D再统一公开契约和日志展示。真实请求延迟、费用与供应商兼容性仍待现场观察。
 
