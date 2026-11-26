@@ -47,12 +47,22 @@ export async function loadExpressionHabitsForPrompt(prisma: PrismaClient, charac
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }], take: 100,
     select: { id: true, kind: true, content: true, context: true, chatScope: true, revision: true, status: true, sourceType: true, sourceRefs: true },
   });
-  const eligible = [];
-  for (const row of rows) {
-    if (row.sourceType === "EXPERIENCE_REFLECT" && (!scope || !await prisma.$transaction(tx => validateExperienceReflectionRefs(tx, characterId, row.sourceRefs as unknown as ExperienceReflectionRef[], scope)))) continue;
-    if (row.sourceType === "EXPERIENCE_REFLECT" && chatScene === "GROUP") continue;
-    eligible.push({ ...row, chatScope: row.chatScope as ExpressionChatScope });
+  // 一行一次事务会带来最多 100 次串行往返（私聊检索路径上）。收齐来源后一次事务批量校验。
+  const activeScope = scope;
+  const needValidation = activeScope && chatScene !== "GROUP"
+    ? rows.filter(row => row.sourceType === "EXPERIENCE_REFLECT")
+    : [];
+  const validated = new Set<string>();
+  if (activeScope && needValidation.length) {
+    await prisma.$transaction(async tx => {
+      for (const row of needValidation) {
+        if (await validateExperienceReflectionRefs(tx, characterId, row.sourceRefs as unknown as ExperienceReflectionRef[], activeScope)) validated.add(row.id);
+      }
+    });
   }
+  const eligible = rows
+    .filter(row => row.sourceType !== "EXPERIENCE_REFLECT" || (chatScene !== "GROUP" && validated.has(row.id)))
+    .map(row => ({ ...row, chatScope: row.chatScope as ExpressionChatScope }));
   return selectExpressionHabitsForPrompt(query, eligible, 800, onDiagnostic ? entry => reportGrowthRead(onDiagnostic, { ...entry, candidateLimitReached: rows.length === 100 }) : undefined, chatScene);
   } catch (error) {
     reportGrowthRead(onDiagnostic, createGrowthReadDiagnostic("language", { status: "failed" }));

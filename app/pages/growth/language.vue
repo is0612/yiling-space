@@ -73,7 +73,7 @@ const selfReviewing = ref(false);
 const selfReviewUsed = ref(0);
 const selfReviewLimit = ref(5);
 const historyOpen = ref(false); const historyTarget = ref<(Target & { item: Habit }) | null>(null); const historyItems = ref<History[]>([]); const historyPage = ref(1); const historyTotal = ref(0); const historyLoading = ref(false); const historyError = ref("");
-let generation = 0; let listSequence = 0; let editorSequence = 0; let sourceSequence = 0; let suggestionSequence = 0; let draftRevision = 0; let actionSequence = 0; let historySequence = 0; let historyRequest = 0; let disposed = false;
+let generation = 0; let listSequence = 0; let editorSequence = 0; let sourceSequence = 0; let suggestionSequence = 0; let draftRevision = 0; let actionSequence = 0; let historySequence = 0; let historyRequest = 0; let selfReviewSequence = 0; let disposed = false;
 function settingsHref(section: "model" | "catchphrases") { return `/characters/${encodeURIComponent(characterId.value)}/settings/${section}`; }
 function current(target: Target) { return !disposed && target.role === characterId.value && target.generation === generation; }
 function editorCurrent(target: Target) { return current(target) && editorOpen.value && target.sequence === editorSequence; }
@@ -102,10 +102,14 @@ async function loadList() {
   finally { if (current(target) && target.sequence === listSequence) loading.value = false; }
 }
 async function runSelfReview() {
-  if (!characterId.value || selfReviewing.value) return;
+  const role = characterId.value;
+  if (!role || selfReviewing.value) return;
+  const target: Target = { role, generation, sequence: ++selfReviewSequence };
+  const isCurrent = () => current(target) && target.sequence === selfReviewSequence;
   selfReviewing.value = true;
   try {
-    const result = await growthApi.selfReviewLanguageHabits(characterId.value);
+    const result = await growthApi.selfReviewLanguageHabits(role);
+    if (!isCurrent()) return;
     selfReviewUsed.value = result.used;
     selfReviewLimit.value = result.limit;
     if (result.skipped === "daily_limit") ElMessage.info("今天的自审额度已经用完。");
@@ -113,9 +117,10 @@ async function runSelfReview() {
     else ElMessage.success(`她自己处理了 ${result.reviewed.length} 条，今天还剩 ${result.remaining} 条额度。`);
     await loadList();
   } catch (error) {
+    if (!isCurrent()) return;
     ElMessage.error(errorText(error, "自审失败，请检查模型配置。"));
   } finally {
-    selfReviewing.value = false;
+    if (isCurrent()) selfReviewing.value = false;
   }
 }
 
@@ -242,10 +247,11 @@ async function loadHistory() {
 }
 function changeHistoryPage(value: number) { historyPage.value = value; void loadHistory(); }
 watch(characterId, () => {
-  generation += 1; listSequence += 1; closeEditor(); closeAction(); closeHistory(); keyword.value = ""; query.value = ""; status.value = "ACTIVE"; page.value = 1;
+  generation += 1; listSequence += 1; selfReviewSequence += 1; selfReviewing.value = false; selfReviewUsed.value = 0; selfReviewLimit.value = 5;
+  closeEditor(); closeAction(); closeHistory(); keyword.value = ""; query.value = ""; status.value = "ACTIVE"; page.value = 1;
   items.value = []; total.value = 0; loading.value = false; loadError.value = ""; if (characterId.value) void loadList();
 }, { immediate: true });
-onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; closeEditor(); closeAction(); closeHistory(); });
+onBeforeUnmount(() => { disposed = true; generation += 1; listSequence += 1; selfReviewSequence += 1; selfReviewing.value = false; closeEditor(); closeAction(); closeHistory(); });
 </script>
 
 <template>

@@ -41,7 +41,8 @@ export function createGrowthEventRunner(
   const signal = controller.signal;
   const wait = dependencies.wait ?? waitForGrowthEventRunner;
   const eventIdleMs = resolveGrowthEventIdleIntervalMs(String(options.eventIdleMs ?? 5_000));
-  const legacyIdleMs = options.legacyIdleMs ?? 5_000;
+  // 与 eventIdleMs 走同一校验：0/负数会让 legacy 管道的 wait 立即返回，形成打满 DB 的忙循环。
+  const legacyIdleMs = resolveGrowthEventIdleIntervalMs(String(options.legacyIdleMs ?? 5_000));
 
   async function drain(): Promise<boolean> {
     try {

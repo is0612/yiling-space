@@ -87,8 +87,12 @@ export function knowledgeItemPatchChanges(
   if (patch.title !== undefined && patch.title !== current.title) return true;
   if (patch.content !== undefined && patch.content !== current.content) return true;
   if (patch.category !== undefined && patch.category !== current.category) return true;
-  if (patch.tags !== undefined && (patch.tags.length !== current.tags.length
-    || patch.tags.some((tag, index) => tag !== current.tags[index]))) return true;
+  // 标签是集合不是序列：仅顺序不同（导入重排等）不应产生无意义的新版本。
+  if (patch.tags !== undefined) {
+    const nextTags = [...patch.tags].sort();
+    const currentTags = [...current.tags].sort();
+    if (nextTags.length !== currentTags.length || nextTags.some((tag, index) => tag !== currentTags[index])) return true;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "confidence") && patch.confidence !== current.confidence) return true;
   return false;
 }

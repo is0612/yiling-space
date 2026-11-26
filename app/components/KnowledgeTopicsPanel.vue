@@ -227,32 +227,41 @@ function openMerge() {
 }
 async function submitMerge() {
   if (!detail.value || !mergeTargetId.value || merging.value) return;
+  const characterId = props.characterId;
+  const sourceId = detail.value.id;
+  const sourceRevision = detail.value.revision;
+  const sourceName = detail.value.name;
   const target = mergeCandidates.value.find(topic => topic.id === mergeTargetId.value);
   if (!target) return;
+  // 确认框停留期间切角色/切主题会让 detail 变 null，参数必须在打开确认框前固定。
+  const current = () => props.characterId === characterId && selectedId.value === sourceId;
   try {
     await ElMessageBox.confirm(
-      `将「${detail.value.name}」合并到「${target.name}」？目标主题会保留名称与身份，来源主题会标记为已合并并保留历史。知识条目本身不会被修改或删除。`,
+      `将「${sourceName}」合并到「${target.name}」？目标主题会保留名称与身份，来源主题会标记为已合并并保留历史。知识条目本身不会被修改或删除。`,
       "确认合并主题",
       { type: "warning", confirmButtonText: "确认合并", cancelButtonText: "取消" },
     );
   } catch {
     return;
   }
+  if (!current()) return;
   merging.value = true;
   try {
     const result = await api.merge({
-      characterId: props.characterId,
-      sourceTopicId: detail.value.id,
+      characterId,
+      sourceTopicId: sourceId,
       targetTopicId: target.id,
-      sourceRevision: detail.value.revision,
+      sourceRevision,
       targetRevision: target.revision,
     });
+    if (!current()) return;
     selectedId.value = target.id;
     mergeOpen.value = false;
     ElMessage.success(`已合并到「${target.name}」；新增 ${result.addedItemIds.length} 条成员，重复成员 ${result.alreadyPresentItemIds.length} 条已去重。`);
     await loadTopics();
     emit("changed");
   } catch (error) {
+    if (!current()) return;
     ElMessage.error(readApiErrorMessage(error, "合并主题失败；如果任一主题已变化，请刷新后重试。"));
   } finally {
     merging.value = false;

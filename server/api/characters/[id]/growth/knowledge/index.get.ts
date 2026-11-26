@@ -4,6 +4,9 @@ import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
 import { toKnowledgeEntry } from "../../../../../utils/knowledge-item-dto";
 import { toKnowledgeCandidate } from "../../../../../utils/knowledge-candidate-dto";
+import { KNOWLEDGE_ITEM_STATUSES } from "../../../../../../shared/types/knowledge";
+
+const CANDIDATE_STATUSES = ["PENDING", "REVIEW", "FAILED", "PROCESSING", "ACCEPTED", "ACCEPTING", "DISMISSED"] as const;
 
 type JsonRecord = Record<string, unknown>;
 function asRecord(value: unknown): JsonRecord {
@@ -20,8 +23,20 @@ export default defineEventHandler(async (event) => {
   const character = await prisma.character.findFirst({ where: { id: characterId, ownerId }, select: { id: true } });
   if (!character) throw createError({ statusCode: 404, statusMessage: "角色不存在。" });
   const query = getQuery(event);
-  const candidateStatus = typeof query.candidateStatus === "string" ? query.candidateStatus : undefined;
-  const itemStatus = query.itemStatus === "ARCHIVED" ? "ARCHIVED" : "ACTIVE";
+  // 两个 status 都是 VarChar 而非 Prisma enum：不校验时非法值会静默变成空列表，
+  // 或把 TRASHED/MERGED 悄悄降级成 ACTIVE，无法区分参数错误与真的没数据。
+  const rawCandidateStatus = query.candidateStatus;
+  if (rawCandidateStatus !== undefined && (typeof rawCandidateStatus !== "string"
+    || !(CANDIDATE_STATUSES as readonly string[]).includes(rawCandidateStatus))) {
+    throw createError({ statusCode: 400, statusMessage: "候选状态筛选值无效。" });
+  }
+  const candidateStatus = typeof rawCandidateStatus === "string" ? rawCandidateStatus : undefined;
+  const rawItemStatus = query.itemStatus;
+  if (rawItemStatus !== undefined && (typeof rawItemStatus !== "string"
+    || !(KNOWLEDGE_ITEM_STATUSES as readonly string[]).includes(rawItemStatus))) {
+    throw createError({ statusCode: 400, statusMessage: "知识条目状态筛选值无效。" });
+  }
+  const itemStatus = rawItemStatus ?? "ACTIVE";
   const keyword = typeof query.q === "string" ? query.q.trim().slice(0, 100) : "";
   const itemPage = itemStatus === "ARCHIVED" ? Math.max(1, Math.min(10000, Number.parseInt(String(query.page ?? "1"), 10) || 1)) : 1;
   const itemPageSize = itemStatus === "ARCHIVED" ? 30 : 100;
