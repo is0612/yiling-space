@@ -27,7 +27,7 @@ import { loadPreferencesForPrompt, usedPreferenceSnapshots } from "../preference
 import { randomUUID } from "node:crypto";
 import { createAssistantTurnContext } from "../assistant-turn-context";
 import { runAssistantTurnStage, skipAssistantTurnStage } from "../assistant-turn-execution";
-import { createModelTurnDetail } from "../model-turn-detail";
+import { buildTurnTiming, createModelTurnDetail } from "../model-turn-detail";
 import type { Prisma, PrismaClient } from "../../../src/generated/prisma/client";
 import { LOCAL_IMAGE_PROVIDER, resolveLocalImagePreset } from "../../../shared/utils/local-image-engine";
 import { translateImagePromptToTags } from "../image-prompt-translation";
@@ -3426,7 +3426,13 @@ async function runChannelTurn(input: {
   /** 见 `ChannelMessageInput.segmentCapable`。 */
   segmentCapable?: boolean;
   sendReply: ChannelReplySender;
+  /**
+   * 渠道处理入口的墙钟起点，由 handleChannelMessage / handleChannelBatch 打点。
+   * 直接调用本函数时缺省为进入这里的时刻；整轮 totalMs 由它算，前置 DB 准备不会被漏掉。
+   */
+  turnStartedAt?: number;
 }): Promise<ChannelMessageResult> {
+  const turnStartedAt = input.turnStartedAt ?? Date.now();
   const prisma = getPrisma();
   const isGroup = input.eventType === "GROUP_MESSAGE";
   const prepared = await prepareChannelTurn(prisma, input);
@@ -3804,12 +3810,18 @@ async function runChannelTurn(input: {
     try { return await loadKnowledgeWithLexical(query); }
     finally { dbTiming.knowledgeReadMs += Date.now() - started; }
   };
-  const reportTurnTiming = (totalMs: number) => {
+  /**
+   * 只取同一时间轴上的差值：totalMs 从渠道入口算起（含前置 DB 准备），
+   * generationMs 从正式生成开始算起；responseMs / modelMs 是这段时间里的分解项，
+   * 不再加回总耗时，避免把准备阶段算两遍。
+   */
+  const reportTurnTiming = (generationStartedAt: number) => {
     const response = collaboration?.snapshot().stages.find(stage => stage.stage === "response");
     const operations = response?.operations ?? [];
     const responseMs = operations.reduce((sum, op) => sum + op.durationMs, 0);
     const modelMs = operations.reduce((sum, op) => sum + op.attempts.reduce((part, attempt) => part + attempt.durationMs, 0), 0);
-    turnDetail.update({ timing: { totalMs, ...(responseMs ? { responseMs } : {}), ...(modelMs ? { modelMs } : {}) } });
+    turnDetail.update({ timing: buildTurnTiming({ turnStartedAt, generationStartedAt,
+      ...(responseMs ? { responseMs } : {}), ...(modelMs ? { modelMs } : {}) }) });
   };
   const failureReasonOf = (reason: string) => /LLM_TIMEOUT|TimeoutError|AbortError/u.test(reason) ? "timeout" as const
     : /http_error|HTTP\s*\d/iu.test(reason) ? "http_error" as const
@@ -4012,7 +4024,7 @@ async function runChannelTurn(input: {
       if (collaboration) turnDetail.update({ collaboration: collaboration.snapshot(), growthReads: [...growthReads.values()] });
     const reason = (error instanceof Error ? error.message : "model_error").slice(0, 200);
     const failedAfterMs = Date.now() - generationStartedAt;
-    reportTurnTiming(failedAfterMs);
+    reportTurnTiming(generationStartedAt);
     reportDatabase();
     turnDetail.update({ response: { action: "silent", reply: "", failureReason: failureReasonOf(reason), durationMs: failedAfterMs } });
     await recordModelUsage({
@@ -4104,7 +4116,7 @@ async function runChannelTurn(input: {
     },
   });
   const generationDurationMs = Date.now() - generationStartedAt;
-  reportTurnTiming(generationDurationMs);
+  reportTurnTiming(generationStartedAt);
   reportDatabase();
   // 在落消息/发送前保存模型阶段结果，渠道发送失败也能从助手日志打开本轮详情。
   // 兜底话这一轮已经由 catch 记过一条 failed，不能再补一条「success」把失败盖掉。
@@ -4490,7 +4502,10 @@ export type ChannelSingleMessageResult =
 
 /** 单条消息（私聊、以及群聊里 @ 她的那一条）。行为与此前一致。 */
 export async function handleChannelMessage(input: ChannelMessageInput): Promise<ChannelSingleMessageResult> {
+  // 整轮起点必须在任何准备/数据库读取之前打点，否则 totalMs 会漏掉最慢的那一段。
+  const turnStartedAt = Date.now();
   const result = await runChannelTurn({
+    turnStartedAt,
     platform: input.platform,
     characterId: input.characterId,
     bindingId: input.bindingId,
@@ -4528,7 +4543,10 @@ export async function handleChannelMessage(input: ChannelMessageInput): Promise<
 
 /** 群聊一轮：几条消息一起看，模型可以决定不说（silent）。 */
 export async function handleChannelBatch(input: ChannelBatchInput): Promise<ChannelMessageResult> {
+  // 与单条路径同一口径：入口打点，保证 totalMs 覆盖前置 DB 准备。
+  const turnStartedAt = Date.now();
   return runChannelTurn({
+    turnStartedAt,
     platform: input.platform,
     characterId: input.characterId,
     bindingId: input.bindingId,

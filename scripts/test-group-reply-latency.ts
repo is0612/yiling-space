@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createAssistantTurnContext, type AssistantTurnContext } from "../server/utils/assistant-turn-context";
 import { generateGroupContextReply } from "../server/utils/group-context-reply";
-import { createModelTurnDetail, readModelTurnDetail, type TurnDetailPatch } from "../server/utils/model-turn-detail";
+import { buildTurnTiming, createModelTurnDetail, readModelTurnDetail, sanitizeModelTurnDetail, type TurnDetailPatch } from "../server/utils/model-turn-detail";
 import type { ConversationReplyInput } from "../server/utils/chat-reply";
 import type { MemoryAssistantCandidate, MemoryAssistantRuntime } from "../server/utils/memory-assistant";
 
@@ -270,7 +270,67 @@ try {
     assert(detailsB.every(item => item.context?.summary !== "SUMMARY_A"));
   }
 
-  console.log("Group reply latency diagnostics passed: stage timing, timeout, truncation retries, skipped stages, failure trace, concurrency and understanding inputs (mocked).");
+  // 13. 整轮计时口径：前置 DB 准备计入 totalMs，不计入 generationMs；模型与本地处理可区分。
+  {
+    const turnStartedAt = 1_800_000_000_000;
+    const generationStartedAt = turnStartedAt + 120; // 入口到正式生成之间的前置准备
+    const now = generationStartedAt + 80;            // 生成阶段耗时
+    const timing = buildTurnTiming({ turnStartedAt, generationStartedAt, now, responseMs: 70, modelMs: 45 });
+    assert.equal(timing.totalMs, 200, "前置数据库准备必须计入整轮 totalMs");
+    assert.equal(timing.generationMs, 80, "生成阶段不能包含前置准备时间");
+    assert.equal(timing.responseMs, 70);
+    assert.equal(timing.modelMs, 45);
+    assert.equal((timing.responseMs ?? 0) - (timing.modelMs ?? 0), 25, "本地处理 = 主回复阶段 - 模型请求");
+    const beforeGeneration = buildTurnTiming({ turnStartedAt, now: turnStartedAt });
+    assert.equal(beforeGeneration.generationMs, undefined, "未进入生成阶段不能拿总耗时冒充生成耗时");
+    assert.equal(beforeGeneration.totalMs, 0);
+    // 数据库分解项只是总耗时的切片，不能加回去重复计算。
+    assert.equal(buildTurnTiming({ turnStartedAt, generationStartedAt, now }).totalMs, 200);
+  }
+
+  // 14. 知识检索正常执行但无结果：turnDetail 与 AssistantTurnContext 都记 no_sources。
+  {
+    resetFetch(body => body.model === "context"
+      ? jsonResponse({ ...analysis, memoryQuery: undefined, knowledgeQuery: "黑洞的逃逸速度" }, "stop", "context")
+      : jsonResponse(reply, "stop", body.model));
+    const { details, turnContext } = await runTurn({ loadKnowledge: async () => [] });
+    assert.equal(details.find(item => item.knowledge)?.knowledge?.status, "no_sources", "空结果不能记成 success");
+    assert.equal(details.find(item => item.knowledge)?.knowledge?.itemCount, 0);
+    assert.equal(stageOf(turnContext, "knowledge").operations[0]?.state, "no_sources", "两套诊断必须一致");
+  }
+
+  // 15. 知识检索异常：两套诊断都记 failed。
+  {
+    resetFetch(body => body.model === "context"
+      ? jsonResponse({ ...analysis, memoryQuery: undefined, knowledgeQuery: "黑洞的逃逸速度" }, "stop", "context")
+      : jsonResponse(reply, "stop", body.model));
+    const { details, turnContext } = await runTurn({ loadKnowledge: async () => { throw new Error("knowledge database unavailable"); } });
+    assert.equal(details.find(item => item.knowledge)?.knowledge?.status, "failed");
+    assert.equal(stageOf(turnContext, "knowledge").operations[0]?.state, "failed");
+  }
+
+  // 16. 未触发 / 未配置状态，以及 no_sources 的落盘清洗。
+  {
+    resetFetch(standardHandler({ ...analysis, memoryQuery: undefined, knowledgeQuery: undefined }));
+    const skipped = await runTurn();
+    assert.equal(skipped.details.find(item => item.knowledge)?.knowledge?.status, "not_needed");
+    assert.equal(stageOf(skipped.turnContext, "knowledge").skipped, "not_needed");
+
+    resetFetch(standardHandler({ ...analysis, memoryQuery: undefined, knowledgeQuery: "黑洞的逃逸速度" }));
+    const unconfigured = await runTurn(); // 不传 loadKnowledge
+    assert.equal(unconfigured.details.find(item => item.knowledge)?.knowledge?.status, "not_enabled");
+    assert.equal(stageOf(unconfigured.turnContext, "knowledge").skipped, "not_enabled");
+
+    const stored = createModelTurnDetail(true, [], undefined, randomUUID());
+    stored.update({ knowledge: { status: "no_sources", itemCount: 0, durationMs: 5 } });
+    const restored = readModelTurnDetail(stored.serialize())!;
+    assert.equal(restored.knowledge?.status, "no_sources", "no_sources 必须能落盘再读回");
+    const hostile = sanitizeModelTurnDetail({ version: 1, groupChat: true, messages: [], context: { status: "not_enabled" },
+      memory: { status: "not_needed" }, response: { status: "success" }, knowledge: { status: "injected" } });
+    assert.equal(hostile.knowledge, undefined, "未知状态不能进入诊断白名单");
+  }
+
+  console.log("Group reply latency diagnostics passed: stage timing, timeout, truncation retries, skipped stages, failure trace, concurrency, timing scope and knowledge no_sources (mocked).");
 } finally {
   Date.now = realNow;
   globalThis.fetch = realFetch;

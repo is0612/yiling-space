@@ -200,7 +200,7 @@ async function generateGroupContextReplyInternal(input: GroupContextReplyInput):
   // 同上：没要求检索记 not_needed，只有能力未配置才记 not_enabled。
   if (!analysis.knowledgeQuery || !input.loadKnowledge) skipAssistantTurnStage(turnContext, "knowledge", !analysis.knowledgeQuery ? "not_needed" : "not_enabled");
   report({ knowledge: { status: !analysis.knowledgeQuery ? "not_needed" : !input.loadKnowledge ? "not_enabled"
-    : knowledgeStatus === "failed" ? "failed" : "success",
+    : knowledgeStatus === "failed" ? "failed" : knowledgeStatus === "no_sources" ? "no_sources" : "success",
     ...(analysis.knowledgeQuery ? { query: analysis.knowledgeQuery } : {}),
     durationMs: Date.now() - knowledgeStartedAt, itemCount: knowledgeItems.length } });
   const original = input.chatInput;

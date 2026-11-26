@@ -376,3 +376,30 @@
 - 自动知识收集的数据库耗时是否显著到值得改造成持久化后台任务。
 - 截断重试的真实频率（历史注释记录语境助手曾有 41% 因思考预算被 `length` 截断；加思考余量后未复测）。
 - 群聊多人、引用、@、话题切换的真实语义质量：mock 只验证字段传递，不验证模型理解；人物关系与引用理解需要在真实轮次中回归。
+
+
+### 2026-11-26 · 群聊延迟诊断第二轮修正
+
+- 状态：两项诊断口径修正完成，专项与工程校验通过；线上慢轮次仍未复现。仅改诊断，不改业务执行顺序、模型配置或检索策略。
+
+#### 1. totalMs 统计口径
+
+- 修正前：`generationStartedAt` 在正式调用 `generateGroupContextReply()` 前才打点，`timing.totalMs` 漏掉前置的角色/会话读取、成长数据读取与数据库查询。
+- 修正后：`handleChannelMessage` / `handleChannelBatch` 在渠道入口打点 `turnStartedAt`，透传进 `runChannelTurn`；直接调用 `runChannelTurn` 时缺省为进入函数的时刻。
+- `timing` 现在区分四个同轴差值：`totalMs`（入口起，含前置准备）、`generationMs`（正式生成起）、`responseMs`（主回复阶段）、`modelMs`（真实模型请求）。`responseMs - modelMs` 是本地处理，`totalMs - generationMs` 是前置准备。
+- 新增纯函数 `buildTurnTiming` 统一构造，只做单调时钟差值；数据库分解项不回加到总耗时，因此不存在重复计算。生成阶段未开始时 `generationMs` 留空，不用总耗时冒充。
+- 失败、超时走原有 catch 分支记录，正常返回走成功分支记录，两条路径都用新的入口起点。
+
+#### 2. 知识检索 no_sources 状态
+
+- 修正前：知识检索返回空数组时，`AssistantTurnContext` 记 `no_sources`，但 `turnDetail.knowledge.status` 记成 `success`。
+- 修正后：`TurnKnowledgeStats.status` 增加 `no_sources`，同步清洗白名单、落盘与上报。五种状态口径统一：有结果 `success`、执行完无结果 `no_sources`、异常 `failed`、未要求 `not_needed`、未配置能力 `not_enabled`。
+
+#### 测试与校验（实际执行）
+
+- `yarn test:group-reply-latency`：通过。在原 12 项之外新增 4 组断言，覆盖前置准备计入 totalMs、generationMs 不含前置、本地处理与模型请求可区分、知识检索 `no_sources` / `failed` / `not_needed` / `not_enabled` 两套诊断一致及 `no_sources` 的落盘清洗。
+- `yarn test:context-assistant`、`yarn test:model-turn-detail`：回归通过。
+- `yarn lint`：通过，0 errors / 9 warnings（既有 Vue 属性顺序）。
+- `yarn typecheck`：通过（含 server `tsc`），仅一处既有重复 import warning。
+- `yarn build`：通过（2m00s）；仍需仅在该命令临时关闭环境删除保护以清理 Nuxt 自身构建缓存。
+- 本轮未重跑 `test:all`；上一轮数据库就绪后的结果为 282 / 286，4 个失败均为环境/测试间干扰且与本轮改动无关。

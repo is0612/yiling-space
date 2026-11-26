@@ -27,11 +27,37 @@ export type TurnContextPlanStats = {
   totalBudget: number;
   segments: TurnPlanSegmentStats[];
 };
-/** 整轮墙钟时间；modelMs 只含真实模型请求，responseMs - modelMs 才是本地处理开销。 */
-export type TurnTimingStats = { totalMs: number; responseMs?: number; modelMs?: number };
-/** 知识检索阶段；未触发必须写 not_needed/not_enabled，不能当作零耗时的成功。 */
+/**
+ * 整轮墙钟时间：totalMs 从渠道入口算起，generationMs 只含正式生成阶段，
+ * responseMs 是主回复阶段总耗时，modelMs 只含真实模型请求；
+ * responseMs - modelMs 是本地处理，totalMs - generationMs 是前置数据库准备。
+ * 各项都是同一时间轴上的差值，不做累加，因此不会重复计算。
+ */
+export type TurnTimingStats = { totalMs: number; generationMs?: number; responseMs?: number; modelMs?: number };
+/**
+ * 由入口起点与生成起点构造耗时快照。
+ *
+ * 只做单调时钟差值：前置准备已经包含在 totalMs 里，不另加到 generationMs 上。
+ * 生成阶段尚未开始时 generationMs 留空，不能拿总耗时冒充。
+ */
+export function buildTurnTiming(input: {
+  turnStartedAt: number; generationStartedAt?: number; now?: number;
+  responseMs?: number; modelMs?: number;
+}): TurnTimingStats {
+  const now = input.now ?? Date.now();
+  const totalMs = Math.max(0, Math.round(now - input.turnStartedAt));
+  const generationMs = input.generationStartedAt === undefined
+    ? undefined : Math.max(0, Math.round(now - input.generationStartedAt));
+  const responseMs = input.responseMs !== undefined && Number.isFinite(input.responseMs) && input.responseMs >= 0
+    ? Math.round(input.responseMs) : undefined;
+  const modelMs = input.modelMs !== undefined && Number.isFinite(input.modelMs) && input.modelMs >= 0
+    ? Math.round(input.modelMs) : undefined;
+  return { totalMs, ...(generationMs !== undefined ? { generationMs } : {}),
+    ...(responseMs !== undefined ? { responseMs } : {}), ...(modelMs !== undefined ? { modelMs } : {}) };
+}
+/** 知识检索阶段；未触发写 not_needed/not_enabled，执行了但没结果写 no_sources。 */
 export type TurnKnowledgeStats = {
-  status: "not_enabled" | "not_needed" | "success" | "failed";
+  status: "not_enabled" | "not_needed" | "no_sources" | "success" | "failed";
   query?: string; durationMs?: number; itemCount?: number;
 };
 /** 关键数据库往返耗时：只记毫秒，不记 SQL、参数或正文。 */
@@ -131,12 +157,13 @@ function timingStats(value: unknown): TurnTimingStats | undefined {
   const row = object(value);
   const totalMs = ms(row.totalMs);
   if (totalMs === undefined) return undefined;
-  const responseMs = ms(row.responseMs), modelMs = ms(row.modelMs);
-  return { totalMs, ...(responseMs !== undefined ? { responseMs } : {}), ...(modelMs !== undefined ? { modelMs } : {}) };
+  const generationMs = ms(row.generationMs), responseMs = ms(row.responseMs), modelMs = ms(row.modelMs);
+  return { totalMs, ...(generationMs !== undefined ? { generationMs } : {}),
+    ...(responseMs !== undefined ? { responseMs } : {}), ...(modelMs !== undefined ? { modelMs } : {}) };
 }
 function knowledgeStats(value: unknown): TurnKnowledgeStats | undefined {
   const row = object(value);
-  const status = (["not_enabled", "not_needed", "success", "failed"] as const).find(item => item === row.status);
+  const status = (["not_enabled", "not_needed", "no_sources", "success", "failed"] as const).find(item => item === row.status);
   if (!status) return undefined;
   const query = text(row.query, 240), durationMs = ms(row.durationMs), itemCount = countOf(row.itemCount, 100_000);
   return { status, ...(query ? { query } : {}), ...(durationMs !== undefined ? { durationMs } : {}), ...(itemCount !== undefined ? { itemCount } : {}) };
