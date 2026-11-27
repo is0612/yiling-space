@@ -3,7 +3,7 @@ import { requireActorUserId } from "../../../../../utils/auth";
 import { requireUuid } from "../../../../../utils/local-api";
 import { getPrisma } from "../../../../../utils/prisma";
 import { applyMemoryChange } from "../../../../../utils/memory-change-apply";
-import type { MemoryCategoryValue, MemoryChange } from "../../../../../utils/memory-ai";
+import { readInvalidationBasis, type MemoryCategoryValue, type MemoryChange } from "../../../../../utils/memory-ai";
 
 type ReviewBody = {
   changeIndex?: unknown;
@@ -134,6 +134,8 @@ export default defineEventHandler(async (event) => {
     return { snapshotId, changeIndex, decision: "IGNORED" as const, memoryItemId: null, outcome: null };
   }
 
+  const invalidationBasis = readInvalidationBasis(target.invalidationBasis);
+  const importantEvents = asRecord(structured?.analysis)?.importantEvents;
   const change: MemoryChange = {
     action: target.action as MemoryChange["action"],
     category: target.category as MemoryCategoryValue,
@@ -145,6 +147,7 @@ export default defineEventHandler(async (event) => {
     ...(typeof target.supersededMemoryId === "string" ? { relatedMemoryId: target.supersededMemoryId } : {}),
     ...(typeof target.importance === "number" ? { importance: target.importance } : {}),
     ...(typeof target.changeReason === "string" ? { changeReason: target.changeReason } : {}),
+    ...(invalidationBasis ? { invalidationBasis } : {}),
     ...(target.scope === "character" || target.scope === "current" ? { scope: target.scope } : {}),
   };
 
@@ -156,7 +159,7 @@ export default defineEventHandler(async (event) => {
       // immutable snapshot and audit even if retention removed their messages.
       const evidence = await tx.message.findMany({
         where: { id: { in: change.evidenceMessageIds }, conversation: { memoryScopeId } },
-        select: { id: true, occurredAt: true },
+        select: { id: true, occurredAt: true, role: true },
       });
       const applied = await applyMemoryChange(
         tx,
@@ -167,11 +170,10 @@ export default defineEventHandler(async (event) => {
           actorType: "USER",
           auditActionPrefix: "memory.review_",
           actorId: ownerId,
-          // 人工采纳用此刻数据库里的状态做对照：这条记忆可能已经被后面的归档改过了。
-          resolvePrevious: async (memoryId) => tx.memoryItem.findFirst({
-            where: { id: memoryId, memoryScopeId },
-            select: { category: true, content: true },
-          }),
+          // 失效必须仍指向重新提炼时看到的那一版内容。
+          resolvePrevious: async () => typeof target.supersededCategory === "string" && typeof target.supersededContent === "string"
+            ? { category: target.supersededCategory as MemoryCategoryValue, content: target.supersededContent }
+            : null,
           canTarget: () => true,
           handledMemoryIds: new Set<string>(),
           existingItemSignatures: new Set<string>(),
@@ -181,7 +183,14 @@ export default defineEventHandler(async (event) => {
         evidence,
         // MemorySnapshotSource has no occurredAt field; periodStart is the
         // deterministic historical time available after source cleanup.
-        { reviewEvidenceFallbackAt: snapshot.periodStart },
+        {
+          reviewEvidenceFallbackAt: snapshot.periodStart,
+          importantEvents: Array.isArray(importantEvents) ? importantEvents.flatMap(value => {
+            const row = asRecord(value);
+            if (!row || typeof row.title !== "string" || !row.title.trim() || typeof row.detail !== "string" || !row.detail.trim()) return [];
+            return Array.isArray(row.evidenceMessageIds) ? [{ evidenceMessageIds: row.evidenceMessageIds.filter((id): id is string => typeof id === "string") }] : [];
+          }) : [],
+        },
       );
       if (!applied) return null;
 
@@ -227,7 +236,9 @@ export default defineEventHandler(async (event) => {
   if (!outcome) {
     throw createError({
       statusCode: 409,
-      statusMessage: "这条建议已经不能应用：它指向的记忆已被后续归档改动或删除。可以改为忽略。",
+      statusMessage: change.action === "INVALIDATE"
+        ? "这条失效建议缺少可核对的证据，或目标记忆已经变化。可以改为忽略。"
+        : "这条建议已经不能应用：它指向的记忆已被后续归档改动或删除。可以改为忽略。",
     });
   }
 

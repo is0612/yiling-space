@@ -1296,7 +1296,7 @@ export async function processNextMemoryJob(
       },
       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
       take: 80,
-      select: { id: true, occurredAt: true, title: true, detail: true, participants: true },
+      select: { id: true, occurredAt: true, title: true, detail: true, participants: true, sourceMessageIds: true },
     });
 
     // The model call deliberately happens outside a database transaction.
@@ -1356,6 +1356,7 @@ export async function processNextMemoryJob(
               title: event.title,
               detail: event.detail,
               participants: event.participants,
+              sourceMessageIds: event.sourceMessageIds,
             })),
           }
         : {}),
@@ -1553,6 +1554,7 @@ export async function processNextMemoryJob(
             category: change.category,
             content: change.content,
             confidence: change.confidence,
+            ...(change.invalidationBasis ? { invalidationBasis: change.invalidationBasis, changeReason: change.changeReason ?? change.content } : {}),
             // 只留本周期真实存在、能回溯到原文的证据，UI 的「依据 #N」才对得上来源列表。
             evidenceMessageIds: evidence.map((message) => message.id),
             ...(change.relatedMemoryId ? { supersededMemoryId: change.relatedMemoryId } : {}),
@@ -1594,8 +1596,10 @@ export async function processNextMemoryJob(
           },
           change,
           evidence,
+          { importantEvents: aiResult.analysis.importantEvents },
         );
         if (applied) appliedChanges.push(applied);
+        else if (change.action === "INVALIDATE") rejectedChangeCount += 1;
       }
 
       // Keep applied mutation results with the immutable snapshot used to produce them.

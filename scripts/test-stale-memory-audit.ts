@@ -28,7 +28,7 @@ assert.deepEqual(
 
 // 代码围栏 / 前后废话：宽松解析要能吃下去。
 assert.equal(
-  parseStaleAudit('好的，结果如下：\n```json\n{"items":[{"id":"e1","verdict":"obsolete","reason":"临时状态","confidence":0.7}]}\n```', events).length,
+  parseStaleAudit('好的，结果如下：\n```json\n{"items":[{"id":"e1","verdict":"contradicted","reason":"当事人确认这次出图测试并未运行","confidence":0.7}]}\n```', events).length,
   1,
   "围栏、前缀、小写 id 都应被接受。",
 );
@@ -80,6 +80,33 @@ assert.deepEqual(
 // 空结果、坏 JSON、数组根：都不能抛。
 for (const text of ['{"items":[]}', "", "not json", "[]"]) {
   assert.deepEqual(parseStaleAudit(text, memories), []);
+}
+
+// 模拟模型把日期或结束当成失效证据；分类与 kind 各自提供硬保护。
+for (const [category, content] of [
+  ["EVENT", "语音曾故障，排查后重启恢复。"],
+  ["EVENT", "已经完成重要功能的开发和回归测试。"],
+  ["EVENT", "两人第一次一起看流星雨。"],
+  ["RELATIONSHIP", "两人是长期搭档，曾约在周一见面。"],
+  ["PREFERENCE", "偏爱深色主题，曾在某天提及。"],
+] as const) {
+  const candidate = { ...memories[0]!, category, content };
+  const verdict = (value: string, reason: string) => parseStaleAudit(JSON.stringify({
+    items: [{ id: candidate.shortId, verdict: value, reason, confidence: 0.99 }],
+  }), [candidate]);
+  assert.deepEqual(verdict("OBSOLETE", "约定的日期已过去或事情已经结束"), [], content);
+  assert.equal(verdict("CONTRADICTED", "当事人明确纠正原记录这一事实").length, 1, content);
+}
+assert.deepEqual(parseStaleAudit('{"items":[{"id":"E1","verdict":"OBSOLETE","reason":"日期过了","confidence":0.99}]}', events), []);
+
+for (const [category, content, verdict, reason] of [
+  ["FACT", "当前使用旧模型。", "CONTRADICTED", "同一角色已切换到新模型"],
+  ["FACT", "临时启用调试配置。", "OBSOLETE", "已明确撤回调试配置"],
+  ["COMMITMENT", "还需做一次回归。", "OBSOLETE", "负责人确认回归已完成"],
+] as const) {
+  const candidate = { ...memories[0]!, category, content };
+  const items = parseStaleAudit(JSON.stringify({ items: [{ id: candidate.shortId, verdict, reason, confidence: 0.9 }] }), [candidate]);
+  assert.equal(items[0]?.verdict, verdict, content);
 }
 
 console.log("test:stale-memory-audit —— 全部通过");

@@ -161,26 +161,60 @@ assert.equal(failed.state().event!.status, "ACTIVE");
 assert.equal(failed.state().audits.length, 0);
 
 // Scan executes the actual enrichment code with fake model and repositories.
+let auditPrompt = "";
 const scanGlobals = { readableMemoryScopeWhere: () => ({}),
   createError, staleMemoryFingerprint, staleEventFingerprint, memoryCandidate, eventCandidate, parseStaleAudit,
   // 角色时区的「今天」既做提示词锚点也算忆泡区间右端；源码里是 import，注入时要在场。
   localDayKey,
   resolveChatModelSettings: () => ({ model: "mock" }), resolveCharacterApiKey: async () => "fake",
   readDailyQuota: async () => ({ exceeded: false }), recordModelUsage: async () => {},
-  callRawModel: async () => '{"items":[{"id":"M1","verdict":"CONTRADICTED","reason":"changed","confidence":0.9},{"id":"E1","verdict":"CONTRADICTED","reason":"changed","confidence":0.9}]}',
+  callRawModel: async ({ systemPrompt, userPrompt }: { systemPrompt: string; userPrompt: string }) => {
+    auditPrompt = systemPrompt;
+    const kind = JSON.parse(userPrompt).类型;
+    return JSON.stringify({ items: [{ id: kind === "忆泡" ? "E2" : "M1", verdict: "CONTRADICTED", reason: "明确更正原记录", confidence: 0.93 },
+      ...(kind === "忆泡" ? [{ id: "E1", verdict: "OBSOLETE", reason: "日期已过", confidence: 0.99 }] : [])] });
+  },
+  applyStaleMemories: () => { assert.fail("扫描不能发起归档"); },
 };
 const longMemory = { ...initialMemory, content: "x".repeat(300) + "full suffix" };
+const correctedEvent = { ...initialEvent, id: "another-event" };
 const scanPrisma = {
   character: { findFirst: async () => ({ modelConfig: {} }) },
   memoryItem: { count: async () => 1, findMany: async () => [longMemory] },
-  memoryEvent: { count: async () => 1, findMany: async () => [initialEvent] },
+  memoryEvent: { count: async () => 2, findMany: async () => [initialEvent, correctedEvent] },
+  $transaction: () => { assert.fail("扫描不能写入记忆状态"); },
 };
 const { scanStaleMemories } = load("../server/utils/stale-memory-audit.ts", scanGlobals, "scanStaleMemories");
 const scan = await scanStaleMemories(scanPrisma, { ownerId, characterId, scopes: ["MEMORY", "EVENT"] });
 assert.equal(scan.items.length, 2);
 assert.equal(scan.items[0].fingerprint, staleMemoryFingerprint(longMemory));
 assert.notEqual(scan.items[0].fingerprint, staleMemoryFingerprint({ ...longMemory, content: scan.items[0].content }));
-assert.equal(scan.items[1].fingerprint, staleEventFingerprint(initialEvent));
+assert.equal(scan.items[1].id, correctedEvent.id);
+assert.equal(scan.items[1].fingerprint, staleEventFingerprint(correctedEvent));
+assert.equal(scan.autoApplied.count, 0);
+assert.equal(scan.autoApplied.items.length, 0);
+for (const rule of [/仅仅日期已过去，不构成失效证据/u, /同一个对象及同一属性或状态/u,
+  /已解决的历史故障.*已完成的重要开发过程.*重要共同经历/u, /整条记忆只描述临时状态.*有明确证据/u]) {
+  assert.match(auditPrompt, rule);
+}
+
+// Exercise the same service below the parser: even an unexpected high-confidence
+// OBSOLETE that survives parsing can only be a manual candidate.
+const { scanStaleMemories: scanWithUnexpectedVerdict } = load("../server/utils/stale-memory-audit.ts", {
+  ...scanGlobals, parseStaleAudit: () => [{ kind: "EVENT", id: eventId, verdict: "OBSOLETE", reason: "mock parser", confidence: 0.99 }],
+}, "scanStaleMemories");
+const unexpected = await scanWithUnexpectedVerdict(scanPrisma, { ownerId, characterId, scopes: ["EVENT"] });
+assert.equal(unexpected.autoApplied.count, 0);
+assert.equal(unexpected.items[0].fingerprint, staleEventFingerprint(initialEvent));
+
+const { handler: restoreEvent } = load("../server/api/characters/[id]/memory-events/[eventId].patch.ts", {
+  ...globals({ ...db.prisma, memoryEvent: { findFirst: async () => db.state().event } } as unknown as PrismaClient, { status: "ACTIVE" }),
+  getRouterParam: (_event: unknown, key: string) => key === "eventId" ? eventId : characterId,
+  toMemoryEvent: (event: unknown) => event,
+});
+await restoreEvent({});
+assert.equal(db.state().event!.status, "ACTIVE");
+assert.equal(db.state().audits.at(-1)?.action, "memory.event_restored");
 
 for (const fingerprint of [undefined, "", "x".repeat(64)]) {
   const { handler } = load("../server/api/characters/[id]/memory-audit/apply.post.ts", {

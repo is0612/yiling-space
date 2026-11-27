@@ -68,6 +68,7 @@ function barrier() {
 let gate = barrier();
 let fail = false;
 let journalSkip = false;
+let snapshotAnalysis: ((prompt: any) => Record<string, unknown>) | undefined;
 const model = http.createServer(async (request, response) => {
   try {
     let text = "";
@@ -81,7 +82,7 @@ const model = http.createServer(async (request, response) => {
     const entry = journalSkip ? { action: "SKIP", reason: "今天平静" } : {
       action: "CREATE", title: "今日", content: "今天一起散步，记下这段平静的相处。", sourceMessageIds: [first.id], sourceEventIds: [],
     };
-    const result = prompt.dayKey ? entry : {
+    const result = prompt.dayKey ? entry : snapshotAnalysis?.(prompt) ?? {
       summary: "今天一起散步。", importantEvents: [], factAndPreferenceChanges: [], relationshipChanges: [],
       goalsAndCommitments: [], unresolvedTopics: [], differencesFromPrevious: [], memoryChanges: [],
       events: [{ occurredAt: first.occurredAt, title: "一起散步", detail: "今天一起散步。", confidence: 0.95,
@@ -194,6 +195,59 @@ try {
       : type === "GENERATE_SNAPSHOT" ? await prisma.memorySnapshot.count({ where: { memoryScopeId: scopeId } })
         : await prisma.characterJournal.count({ where: { memoryScopeId: scopeId } });
     assert.equal(count, 1);
+  }
+  // Exercise the ordinary snapshot Worker with a real transaction and a controlled model.
+  {
+    gate = barrier(); fail = false; journalSkip = false;
+    const { job, scopeId } = await fixture("GENERATE_SNAPSHOT");
+    const original = await prisma.message.findFirstOrThrow({ where: { conversation: { memoryScopeId: scopeId } } });
+    const completion = await prisma.message.create({ data: {
+      conversationId: original.conversationId, role: "USER", content: "回归测试已经跑完并通过。", occurredAt: new Date(+start + 120_000),
+    } });
+    const speculation = await prisma.message.create({ data: {
+      conversationId: original.conversationId, role: "ASSISTANT", content: "也许备份已经完成了。", occurredAt: new Date(+start + 180_000),
+    } });
+    const event = await prisma.memoryEvent.create({ data: {
+      memoryScopeId: scopeId, dayKey: "2026-11-01", occurredAt: completion.occurredAt, title: "完成回归",
+      detail: completion.content, dedupeKey: "completed-regression", sourceMessageIds: [completion.id, randomUUID()],
+    } });
+    const cases = [
+      { category: "COMMITMENT", content: "回归测试待完成。", basis: "TEMPORARY_STATE_ENDED", source: completion, expected: "INVALIDATED" },
+      { category: "EVENT", content: "上周语音出故障，重启后恢复。", basis: "TEMPORARY_STATE_ENDED", source: completion, expected: "ACTIVE" },
+      { category: "FACT", content: "过去完成了安装器开发。", basis: undefined, source: completion, expected: "ACTIVE" },
+      { category: "FACT", content: "当前模型还是旧版本。", basis: "CONTRADICTED", source: original, expected: "INVALIDATED" },
+      { category: "COMMITMENT", content: "备份待完成。", basis: "TEMPORARY_STATE_ENDED", source: speculation, expected: "ACTIVE" },
+      { category: "COMMITMENT", content: "还要做一次临时配置清理。", basis: "TEMPORARY_STATE_ENDED", source: original, expected: "ACTIVE" },
+    ] as const;
+    await prisma.message.update({ where: { id: original.id }, data: { content: "现在用的是新模型。" } });
+    const items = await Promise.all(cases.map(({ category, content }) => prisma.memoryItem.create({ data: {
+      memoryScopeId: scopeId, category, content, validFrom: start,
+    } })));
+    snapshotAnalysis = (prompt) => {
+      assert.deepEqual(prompt.periodEvents.map((row: any) => [row.id, row.sourceMessageIds]), [[event.id, [completion.id]]]);
+      return {
+        summary: "完成回归并切换到新模型。",
+        importantEvents: [{ title: prompt.periodEvents[0].title, detail: prompt.periodEvents[0].detail, evidenceMessageIds: [completion.id] }],
+        memoryChanges: cases.map((spec, index) => ({ action: "INVALIDATE", content: spec.source.content, category: "FACT",
+          relatedMemoryId: items[index]!.id, invalidationBasis: spec.basis, evidenceMessageIds: [spec.source.id], confidence: 0.97 })),
+      };
+    };
+    gate.release();
+    const result = await processNextMemoryJob(prisma, { jobId: job.id, ownerId: owner.id });
+    snapshotAnalysis = undefined;
+    assert(result.processed && result.status === "SUCCEEDED" && result.snapshotId, JSON.stringify(result));
+    for (const [index, item] of items.entries()) {
+      assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: item.id } })).status, cases[index]!.expected, item.content);
+    }
+    const snapshot = await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: result.snapshotId }, include: { sources: true } });
+    const saved = snapshot.structuredContent as { analysis: { importantEvents: Array<{ evidenceMessageIds: string[] }> }; memoryChangesApplied: unknown[] };
+    assert.deepEqual(saved.analysis.importantEvents[0]?.evidenceMessageIds, [completion.id]);
+    assert.equal(saved.memoryChangesApplied.length, 2);
+    assert(snapshot.sources.some(source => source.messageId === completion.id));
+    assert.equal(await prisma.memoryEvent.count({ where: { memoryScopeId: scopeId } }), 1);
+    assert.equal((await prisma.memoryEvent.findUniqueOrThrow({ where: { id: event.id } })).status, "ACTIVE");
+    assert.equal(await prisma.auditLog.count({ where: { entityId: { in: items.map(item => item.id) }, actorType: "WORKER", action: "memory.ai_invalidated" } }), 2);
+    console.log("Snapshot Worker invalidation and retained completion evidence passed.");
   }
   // Model SKIP must also pass the journal transaction's lease check.
   gate = barrier(); journalSkip = true; fail = false;

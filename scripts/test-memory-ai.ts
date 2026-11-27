@@ -31,6 +31,7 @@ const parsed = validateMemoryAiOutput({
     },
     {
       action: "INVALIDATE",
+      invalidationBasis: "CONTRADICTED",
       category: "FACT",
       content: "旧事实不再成立",
       confidence: 0.85,
@@ -58,6 +59,7 @@ const parsed = validateMemoryAiOutput({
     },
     {
       action: "INVALIDATE",
+      invalidationBasis: "CONTRADICTED",
       category: "FACT",
       content: "旧的全局记忆不再成立",
       confidence: 0.9,
@@ -84,6 +86,11 @@ assert.equal(parsed.memoryChanges[1]?.importance, 1, "越界的 importance 截�
 assert.equal(parsed.memoryChanges[2]?.scope, "character", "关于她自己的稳定事实可以写全局");
 assert.equal(parsed.memoryChanges[3]?.scope, undefined, "不认识的 scope 一律按当前范围，不许跨范围写入");
 assert.equal(parsed.memoryChanges[4]?.relatedMemoryId, "global-1", "INVALIDATE 可以指向全局记忆");
+assert.equal(parsed.memoryChanges[4]?.invalidationBasis, "CONTRADICTED");
+assert.deepEqual(validateMemoryAiOutput({ summary: "摘要", memoryChanges: [
+  { action: "INVALIDATE", category: "FACT", content: "旧事已经完成", relatedMemoryId: "memory-1", confidence: 0.99, evidenceMessageIds: ["message-a"] },
+  { action: "INVALIDATE", invalidationBasis: "TIME_PASSED", category: "FACT", content: "日期已过", relatedMemoryId: "memory-1", confidence: 0.99, evidenceMessageIds: ["message-a"] },
+] }, validIds, activeIds).memoryChanges, []);
 
 // ── 近似判重：同类别 + 字面高度重合 ──────────────────────────
 assert.equal(

@@ -1,7 +1,7 @@
 import type { Prisma } from "../../src/generated/prisma/client";
 import {
   isNearDuplicateEvent, isNearDuplicateMemory, makeEventDedupeKey, makeMemoryDedupeKey,
-  type MemoryCategoryValue, type MemoryChange, type MemoryEventDraft,
+  readInvalidationBasis, type MemoryCategoryValue, type MemoryChange, type MemoryEventDraft,
 } from "./memory-ai";
 import { localDayKey } from "./memory-event-time";
 import { linkMemoryEventToSocialExperiences } from "./social-experiences";
@@ -254,7 +254,10 @@ export async function applyMemoryChange(
   ctx: MemoryApplyContext,
   change: MemoryChange,
   evidence: MemoryEvidenceMessage[],
-  options?: { reviewEvidenceFallbackAt: Date },
+  options?: {
+    reviewEvidenceFallbackAt?: Date;
+    importantEvents?: ReadonlyArray<Pick<MemoryEventDraft, "evidenceMessageIds">>;
+  },
 ): Promise<ApplyResult | null> {
   // Only an explicit human review may apply an already validated historical suggestion
   // after retention removed its messages. Worker callers must still supply evidence.
@@ -378,9 +381,21 @@ export async function applyMemoryChange(
   if (!previous) return null;
 
   if (change.action === "INVALIDATE") {
+    const basis = readInvalidationBasis(change.invalidationBasis);
+    const observed = await target.resolvePrevious(relatedId);
+    if (!basis || !observed || observed.category !== previous.category || observed.content !== previous.content) return null;
+    // 来源角色和归属能硬校验；是否明确确认同一件事仍由提炼规则判断。
+    const confirmed = evidence.filter(message => message.role === "USER" && change.evidenceMessageIds.includes(message.id));
+    const endingEvidence = basis === "TEMPORARY_STATE_ENDED"
+      ? confirmed.filter(message => options?.importantEvents?.some(event => event.evidenceMessageIds.includes(message.id)))
+      : confirmed;
+    const endedAt = endingEvidence.reduce<Date | undefined>((earliest, message) =>
+      !earliest || message.occurredAt < earliest ? message.occurredAt : earliest, undefined);
+    if (!endedAt || !Number.isFinite(endedAt.getTime())) return null;
+    if (basis === "TEMPORARY_STATE_ENDED" && ["EVENT", "RELATIONSHIP", "PREFERENCE"].includes(previous.category)) return null;
     const invalidated = await tx.memoryItem.updateMany({
-      where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE" },
-      data: { status: "INVALIDATED", validTo: validFrom },
+      where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE", category: previous.category, content: previous.content },
+      data: { status: "INVALIDATED", validTo: endedAt },
     });
     if (invalidated.count !== 1) return null;
     target.handledMemoryIds.add(relatedId);
@@ -393,6 +408,7 @@ export async function applyMemoryChange(
         entityId: relatedId,
         details: {
           reason: change.changeReason ?? change.content,
+          invalidationBasis: basis,
           confidence: change.confidence,
           evidenceMessageIds: change.evidenceMessageIds,
           snapshotId: ctx.snapshotId,

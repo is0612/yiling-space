@@ -32,7 +32,7 @@ export type StaleCandidate = {
   title: string;
   content: string;
   meta: string;
-  /** 只有长期记忆有分类；忆泡为空。用于「关系/偏好不判过期」这条硬规则。 */
+  /** 只有长期记忆有分类；忆泡只用 kind。 */
   category?: string;
 };
 
@@ -99,15 +99,10 @@ export function parseStaleAudit(
     const confidence = Math.min(1, Math.max(0, rawConfidence));
     // 低分项不进列表：模型自己也说拿不准的东西，摆出来只会让人逐条划掉。
     if (confidence < 0.65) continue;
-    /**
-     * 关系 / 偏好类只接受「被推翻」，不接受「过时」。
-     *
-     * 实测模型会把「她跟某人是熟人，约好明早八点二十对点名」判成过期 ——
-     * 过期的只是那句玩笑，人物关系本身还有价值。整条归档等于为了删一句约定，
-     * 把熟人一起忘了。关系真的变了（改称呼、闹翻、规则推翻）仍会以 CONTRADICTED 出现。
-     */
-    if (candidate.kind === "MEMORY" && verdict === "OBSOLETE"
-      && (candidate.category === "RELATIONSHIP" || candidate.category === "PREFERENCE")) continue;
+    // 忆泡是历史记录；长期记忆的 EVENT 是分类，不是候选 kind。
+    if (verdict === "OBSOLETE" && (candidate.kind === "EVENT"
+      || (candidate.kind === "MEMORY" && (candidate.category === "RELATIONSHIP"
+        || candidate.category === "PREFERENCE" || candidate.category === "EVENT")))) continue;
     seen.add(candidate.id);
     out.push({
       kind: candidate.kind,

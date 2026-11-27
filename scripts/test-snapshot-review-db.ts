@@ -118,7 +118,30 @@ try {
   const missingHistory = { ...context(first.id), actorType: "USER" as const, auditActionPrefix: "memory.review_" as const, actorId: ownerId };
   assert.equal(await prisma.$transaction((tx) => applyMemoryChange(tx, missingHistory, change, [], { reviewEvidenceFallbackAt: periodStart })), null,
     "review fallback only applies to a suggestion with historical evidence IDs");
-  for (const original of [first, second]) {
+  const history = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "EVENT", content: "过去曾修复语音故障。" } });
+  const pending = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "导出测试仍待完成。" } });
+  const wrongFact = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "FACT", content: "当前配置为 A。" } });
+  const completion = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "导出测试已经通过。", occurredAt } });
+  const correction = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "当前配置为 B。", occurredAt } });
+  const invalidation = (item: typeof pending, sourceId: string, basis?: string) => ({ ...suggestion("已核对新消息"),
+    action: "INVALIDATE", category: "FACT", supersededMemoryId: item.id, supersededCategory: item.category, supersededContent: item.content,
+    evidenceMessageIds: [sourceId], ...(basis ? { invalidationBasis: basis } : {}),
+  });
+  const third = await prisma.memorySnapshot.create({ data: {
+    memoryScopeId: scopeId, snapshotKey, version: 3, periodStart, periodEnd: first.periodEnd, summary: "review completion",
+    structuredContent: {
+      analysis: { importantEvents: [{ title: "完成导出测试", detail: completion.content, evidenceMessageIds: [completion.id] }] },
+      memoryChangesApplied: [invalidation(history, completion.id, "TEMPORARY_STATE_ENDED"), invalidation(pending, completion.id),
+        invalidation(pending, message.id, "TEMPORARY_STATE_ENDED"), invalidation(pending, completion.id, "TEMPORARY_STATE_ENDED"),
+        invalidation(wrongFact, correction.id, "CONTRADICTED")],
+    },
+  } });
+  for (const index of [0, 1, 2]) assert.equal((await request(third.id, index)).status, 409);
+  for (const index of [3, 4]) assert.equal((await request(third.id, index)).body.outcome, "INVALIDATED");
+  assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: history.id } })).status, "ACTIVE");
+  assert.equal(await prisma.memoryReview.count({ where: { snapshotId: third.id } }), 2);
+  assert.equal(await prisma.auditLog.count({ where: { entityId: { in: [pending.id, wrongFact.id] }, actorType: "USER", action: "memory.review_invalidated" } }), 2);
+  for (const original of [first, second, third]) {
     const current = await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: original.id } });
     assert.deepEqual(current.structuredContent, original.structuredContent);
     assert.equal(current.summary, original.summary);

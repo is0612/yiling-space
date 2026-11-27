@@ -32,7 +32,7 @@ export const isolatedSuites = {
     "test-memory-event-pagination-db.ts", "test-memory-item-lifecycle-db.ts", "test-memory-cleanup-dependency-db.ts",
     "test-private-chat-pagination-db.ts", "test-event-extraction-quality-db.ts", "test-memory-events-manual-queue-db.ts",
     "test-snapshot-review-db.ts", "test-memory-job-fencing-db.ts", "test-memory-scheduler-atomic-db.ts", "test-snapshot-generate-db.ts",
-    "test-memory-settings-db.ts", "test-memory-progress-db.ts",
+    "test-memory-settings-db.ts", "test-memory-progress-db.ts", "test-memory-self-fact-db.ts",
   ],
   "test-preferences-isolated.ts": ["test-preferences-db.ts"],
   "test-reflection-isolated.ts": ["test-growth-loop-db.ts", "test-experience-reflection-db.ts", "test-reflection-db.ts", "test-growth-overview-db.ts"],

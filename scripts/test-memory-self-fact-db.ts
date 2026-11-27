@@ -92,7 +92,7 @@ const evidence = [{
 }];
 
 const currentItems = new Map<string, { category: "FACT"; content: string }>();
-const globalItems = new Map([[stale.id, { category: "FACT" as const, content: stale.id }]]);
+const globalItems = new Map([[stale.id, { category: "FACT" as const, content: "她只会发文字，没有语音功能" }]]);
 const ctx = {
   memoryScopeId: privateScope.id,
   characterId: character.id,
@@ -133,6 +133,7 @@ check("私聊范围没有多写一条", privateItems === 0, privateItems);
 console.log("\n[2] 指向全局条目的 INVALIDATE 跨范围生效");
 const invalidated = await prisma.$transaction((tx) => applyMemoryChange(tx, ctx, {
   action: "INVALIDATE",
+  invalidationBasis: "CONTRADICTED",
   category: "FACT",
   content: "旧记忆不再成立",
   confidence: 0.9,

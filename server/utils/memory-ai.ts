@@ -71,6 +71,7 @@ export type MemoryChange = {
   evidenceMessageIds: string[];
   relatedMemoryId?: string;
   changeReason?: string;
+  invalidationBasis?: "TEMPORARY_STATE_ENDED" | "CONTRADICTED";
   /**
    * 这条记忆该写进哪个范围。缺省 / "current" = 当前对话范围；
    * "character" = 角色全局范围（任何群、私聊都能读到）。
@@ -81,6 +82,10 @@ export type MemoryChange = {
    */
   scope?: "current" | "character";
 };
+
+export function readInvalidationBasis(value: unknown): MemoryChange["invalidationBasis"] {
+  return value === "TEMPORARY_STATE_ENDED" || value === "CONTRADICTED" ? value : undefined;
+}
 
 /** 「上午 / 下午」这类模糊时段。只认这几个词，别的当没写。 */
 export const EVENT_TIME_OF_DAY = ["凌晨", "早上", "上午", "中午", "下午", "傍晚", "晚上", "深夜"] as const;
@@ -183,7 +188,7 @@ export type MemoryAiInput = {
    */
   existingEvents?: Array<{ occurredAt: string; title: string }>;
   /** 周期内已经整理好的忆泡：快照拿它当「发生过什么」的权威时间线。 */
-  periodEvents?: Array<{ id: string; occurredAt: string; title: string; detail: string; participants: string[] }>;
+  periodEvents?: Array<{ id: string; occurredAt: string; title: string; detail: string; participants: string[]; sourceMessageIds?: string[] }>;
   /** 这一趟要不要产出 events。按天任务 true，周期快照 false（忆泡只由按天任务写）。 */
   emitEvents?: boolean;
   /**
@@ -196,7 +201,7 @@ export type MemoryAiInput = {
 const MAX_RESPONSE_BYTES = 1_000_000;
 /** v5：忆泡抽取补上 `speaker` / `member`，并要求 participants 不写自己、不写泛称。 */
 /** v6：主人私聊可见全局记忆，支持 `scope: "character"` 写入与跨范围 INVALIDATE。 */
-const TEMPLATE_VERSION = "memory-extraction-v10";
+const TEMPLATE_VERSION = "memory-extraction-v11";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -517,6 +522,8 @@ export function validateMemoryAiOutput(
 
       const relatedMemoryId = asText(entry.relatedMemoryId, 100);
       if ((action === "UPDATE" || action === "INVALIDATE") && !existingIds.has(relatedMemoryId)) continue;
+      const invalidationBasis = readInvalidationBasis(entry.invalidationBasis);
+      if (action === "INVALIDATE" && !invalidationBasis) continue;
       // 0–1，两位小数。越界的截断而不是丢弃 —— 分数只是排序参考，不值得为它废掉整条记忆。
       const rawImportance = entry.importance;
       const importance = typeof rawImportance === "number" && Number.isFinite(rawImportance)
@@ -533,6 +540,7 @@ export function validateMemoryAiOutput(
         evidenceMessageIds: ids,
         ...(action !== "ADD" ? { relatedMemoryId } : {}),
         ...(scope ? { scope } : {}),
+        ...(action === "INVALIDATE" && invalidationBasis ? { invalidationBasis } : {}),
         ...(asText(entry.changeReason, 500) ? { changeReason: asText(entry.changeReason, 500) } : {}),
       });
     }
@@ -575,7 +583,10 @@ function systemPrompt(options: {
     "偏好或事实发生变化时，优先 UPDATE 已提供的相关 active memory；明确不再成立时使用 INVALIDATE；确实新增时使用 ADD。",
     "UPDATE/INVALIDATE 的 relatedMemoryId 必须来自输入的 activeMemories。每条 memoryChanges 必须至少引用一个输入中的 evidenceMessageIds，且来源必须真正支持该结论。",
     "每条记忆都要给 importance（0–1，两位小数）：0.85 以上是长期成立、会影响她判断的事（身份、底线、稳定关系、明确承诺）；0.5–0.7 是日常事实与偏好；0.3 以下是一次性的临时状态。不要所有条目都给同一个数 —— 排序就是靠它区分轻重，全给 0.5 等于没给。",
-    "写 ADD 之前先扫一遍 activeMemories：如果这一期的证据说明某条已经不成立（改了主意、取消了、被更正、事情已经做完、对方更正了说法），必须单独发一条 INVALIDATE 指回它，而不是只 ADD 一条新的、把旧的留在那里。旧条目不退场，她就会同时相信两件互相矛盾的事。这条和「不要乱删」不冲突：INVALIDATE 只针对有证据推翻的那种，拿不准就不动。",
+    "INVALIDATE 必须填写 invalidationBasis。TEMPORARY_STATE_ENDED：旧记忆整条只描述尚未结束的临时状态、待办或进行中的约定，且新证据明确确认它已完成、取消或被替代。仅日期过去、事情有后续或助手建议、推测、自称做完，都不成立。",
+    "CONTRADICTED：明确的新事实纠正旧事实，且针对同一个对象、同一属性或状态。不同场景或时点的历史陈述可以同时为真。必须引用明确确认这一结果或更正的 USER 原始消息；不要拿助手消息或未经证实的说法作为确认。",
+    "已发生的经历、故障、决定、开发与排查过程要保留当时经过和来源。不要因为结束或后续有进展就 INVALIDATE，也不要用 UPDATE 让历史记录退出。只有新证据证明原记录本身有误，才可提议 CONTRADICTED。",
+    "提议 TEMPORARY_STATE_ENDED 时，把实际发生的完成、取消或替代经过与对应证据同时写进 importantEvents，至少共用一条明确确认结果的原始消息。保留值得回顾的经历；没有可靠证据就不改变旧记忆。",
   ];
   lines.push(
     "临时运行故障、单次查询失败或片段不全，只能按发生时间记为事件或带来源的当时报告，不能仅凭助手自述或用户猜测写成永久能力、无访问权限或记录不存在。后续成功、修复或更正要保留进展，不能把旧失败继续当当前状态；没有独立证据时不推断技术原因。真实故障及来源可以保留，不因这条规则删除证据。",
@@ -585,12 +596,12 @@ function systemPrompt(options: {
     lines.push(
       "globalMemories 是角色全局记忆（每个群、每个私聊都能读到）；activeMemories 是当前私聊范围。两边的 id 都可以作为 UPDATE/INVALIDATE 的 relatedMemoryId。",
       "**关于她本人**的稳定事实（生日、名字、外观、能力、稳定喜好、她自己答应过的事）要写进全局：memoryChanges 里加 scope: \"character\"。**关于对话对象**的事实、对方的隐私、只在这个私聊里成立的事，不要加 scope（默认写当前范围）。拿不准时写当前范围，不要为了省事把所有事都标成 character。",
-      "如果这一期的证据说明 globalMemories 里某条已经不成立（例如以前记着「她不会发语音」，现在主人给她开通了；以前没有某个功能，现在有了），必须单独发一条 INVALIDATE 指回那条全局记忆。只 ADD 新的、不废旧的，她在群里就会继续说旧状态 —— 这是实际发生过的错误，不是理论风险。",
+      "全局记忆和当前范围适用相同的 INVALIDATE 规则。旧当前事实确有明确更正时，按证据 UPDATE，或在无需替代内容时 INVALIDATE；不要仅新增而同时留下矛盾的当前事实。",
     );
   }
   if (options.withPeriodEvents) {
     lines.push(
-      "periodEvents 是这个周期里**已经整理好的忆泡**（按天任务产出）：它就是「发生过什么」的权威时间线，summary 和 importantEvents 以它为准；messages 只用来提炼偏好、关系、情绪与结论，不要拿零散消息去推翻已有忆泡。",
+      "periodEvents 是这个周期里已经整理好的忆泡（按天任务产出）：summary 和 importantEvents 以它为主要时间线。若忆泡记录了待办退出的实际经过，引用它的 sourceMessageIds 中也出现在 messages 里的确认消息。不要拿零散消息去推翻已有忆泡；若原始消息明确确认了尚未整理的经过，可补进 importantEvents，并引用原始消息。不要重复生成忆泡。",
     );
   }
   if (options.emitEvents) {
@@ -650,6 +661,7 @@ function systemPrompt(options: {
         evidenceMessageIds: ["原始消息ID"],
         relatedMemoryId: "UPDATE/INVALIDATE 必填，ADD 省略",
         scope: "character（仅关于她本人的稳定事实；否则省略）",
+        invalidationBasis: "仅 INVALIDATE 必填：TEMPORARY_STATE_ENDED|CONTRADICTED",
         changeReason: "变化依据"
       }],
       events: [{
@@ -730,6 +742,7 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
       ...(member ? { member } : {}),
     };
   };
+  const periodMessageIds = new Set(input.messages.map(message => message.id));
   const promptInput = {
     periodStart: input.periodStart,
     periodEnd: input.periodEnd,
@@ -762,6 +775,7 @@ export async function analyzeMemoryPeriod(input: MemoryAiInput): Promise<{
             title: event.title,
             detail: event.detail,
             participants: event.participants,
+            sourceMessageIds: (event.sourceMessageIds ?? []).filter(id => periodMessageIds.has(id)).slice(0, 10),
           })),
         }
       : {}),
