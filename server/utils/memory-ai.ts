@@ -1,3 +1,4 @@
+import { matchingEndingEventIndexes, readEndedMemoryIds } from "./memory-ending-binding";
 import { buildChatCompletionsEndpoint, isChatModelConfigured } from "./chat-model-config";
 import { DEFAULT_LLM_TIMEOUT_MS, readConfiguredLlmTimeoutMs } from "./llm-timeout";
 import { parseJsonLoose } from "./loose-json";
@@ -112,13 +113,14 @@ export type MemoryEventDraft = {
 
 export type MemoryAiAnalysis = {
   summary: string;
-  importantEvents: Array<{ title: string; detail: string; evidenceMessageIds: string[] }>;
+  importantEvents: Array<{ title: string; detail: string; evidenceMessageIds: string[]; endedMemoryIds?: string[] }>;
   factAndPreferenceChanges: Array<{ description: string; changeType: string; evidenceMessageIds: string[] }>;
   relationshipChanges: Array<{ description: string; evidenceMessageIds: string[] }>;
   goalsAndCommitments: Array<{ description: string; status: string; evidenceMessageIds: string[] }>;
   unresolvedTopics: Array<{ description: string; evidenceMessageIds: string[] }>;
   differencesFromPrevious: string[];
   memoryChanges: MemoryChange[];
+  rejectedBindingChangeCount?: number;
   /** 可定位到日期的具体事件。与 memoryChanges 分开：事件是事实，记忆是结论。 */
   events: MemoryEventDraft[];
   /**
@@ -203,7 +205,7 @@ export type MemoryAiInput = {
 const MAX_RESPONSE_BYTES = 1_000_000;
 /** v5：忆泡抽取补上 `speaker` / `member`，并要求 participants 不写自己、不写泛称。 */
 /** v6：主人私聊可见全局记忆，支持 `scope: "character"` 写入与跨范围 INVALIDATE。 */
-const TEMPLATE_VERSION = "memory-extraction-v12";
+const TEMPLATE_VERSION = "memory-extraction-v13";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -452,7 +454,13 @@ export function validateMemoryAiOutput(
   const importantEvents = evidenceList(root.importantEvents, validIds, (entry, ids) => {
     const title = asText(entry.title, 300);
     const detail = asText(entry.detail, 2000);
-    return title && detail ? { title, detail, evidenceMessageIds: ids } : null;
+    const targets = readEndedMemoryIds(entry.endedMemoryIds, id => existingIds.has(id));
+    // 描述可保留；绑定只接受完整合法的原证据，不能截断后变成合法绑定。
+    const rawEvidence = entry.evidenceMessageIds;
+    const bindingValid = targets !== null && Array.isArray(rawEvidence) && rawEvidence.length <= 10
+      && rawEvidence.every(id => typeof id === "string" && validIds.has(id));
+    return title && detail ? { title, detail, evidenceMessageIds: ids,
+      ...(bindingValid ? { endedMemoryIds: targets } : {}) } : null;
   });
 
   const factAndPreferenceChanges = evidenceList(root.factAndPreferenceChanges, validIds, (entry, ids) => {
@@ -501,6 +509,7 @@ export function validateMemoryAiOutput(
     : [];
 
   const memoryChanges: MemoryChange[] = [];
+  let rejectedBindingChangeCount = 0;
   if (Array.isArray(root.memoryChanges)) {
     for (const rawChange of root.memoryChanges.slice(0, 80)) {
       const entry = asRecord(rawChange);
@@ -529,7 +538,15 @@ export function validateMemoryAiOutput(
       const needsEndingEvidence = action === "INVALIDATE" && invalidationBasis === "TEMPORARY_STATE_ENDED";
       const endingEvidence = entry.endingEvidenceMessageIds;
       if (needsEndingEvidence && (!Array.isArray(endingEvidence) || !endingEvidence.length || endingEvidence.length > 10
-        || !endingEvidence.every(id => typeof id === "string" && ids.includes(id)))) continue;
+        || !endingEvidence.every(id => typeof id === "string" && ids.includes(id)))) {
+        rejectedBindingChangeCount += 1;
+        continue;
+      }
+      if (needsEndingEvidence && !matchingEndingEventIndexes(importantEvents, relatedMemoryId,
+        endingEvidence as string[], id => existingIds.has(id)).length) {
+        rejectedBindingChangeCount += 1;
+        continue;
+      }
       // 0–1，两位小数。越界的截断而不是丢弃 —— 分数只是排序参考，不值得为它废掉整条记忆。
       const rawImportance = entry.importance;
       const importance = typeof rawImportance === "number" && Number.isFinite(rawImportance)
@@ -562,6 +579,7 @@ export function validateMemoryAiOutput(
     unresolvedTopics,
     differencesFromPrevious,
     memoryChanges,
+    rejectedBindingChangeCount,
     events,
     friendAliases,
   };
@@ -593,6 +611,7 @@ function systemPrompt(options: {
     "INVALIDATE 必须填写 invalidationBasis。TEMPORARY_STATE_ENDED：旧记忆整条只描述尚未结束的临时状态、待办或进行中的约定，且新证据明确确认它已完成、取消或被替代。仅日期过去、事情有后续或助手建议、推测、自称做完，都不成立。",
     "CONTRADICTED：明确的新事实纠正旧事实，且针对同一个对象、同一属性或状态。不同场景或时点的历史陈述可以同时为真。必须引用明确确认这一结果或更正的 USER 原始消息；不要拿助手消息或未经证实的说法作为确认。",
     "已发生的经历、故障、决定、开发与排查过程要保留当时经过和来源。不要因为结束或后续有进展就 INVALIDATE，也不要用 UPDATE 让历史记录退出。只有新证据证明原记录本身有误，才可提议 CONTRADICTED。",
+    "importantEvents 的 endedMemoryIds 只列该事件确实确认已结束、可退出当前状态的 activeMemories/globalMemories ID；不能列无关记忆、未知或重复 ID，不需要按固定条数截断。临时失效必须至少有一个事件同时包含目标记忆和全部 endingEvidenceMessageIds。每个事件的 evidenceMessageIds 最多 10 条，优先保留全部直接结束确认；背景放不下就省略背景，不要丢掉确认后继续提议失效。没有结束绑定的普通事件写 endedMemoryIds: []。",
     "提议 TEMPORARY_STATE_ENDED 时，把实际发生的完成、取消或替代经过写进 importantEvents。另填 endingEvidenceMessageIds：只列明确确认同一临时状态已结束的 USER 原始消息 ID，每条都须出现在该变更的 evidenceMessageIds 和对应 importantEvents 里。计划、背景、进度、猜测或只补充历史的消息留在普通证据里，不得放进结束确认列表。系统取最早的直接确认消息时间；分不清直接确认与背景时，不提议失效。",
   ];
   lines.push(
@@ -652,7 +671,7 @@ function systemPrompt(options: {
     "JSON 格式：",
     JSON.stringify({
       summary: "周期摘要",
-      importantEvents: [{ title: "事件标题", detail: "客观事件", evidenceMessageIds: ["原始消息ID"] }],
+      importantEvents: [{ title: "事件标题", detail: "客观事件", evidenceMessageIds: ["原始消息ID"], endedMemoryIds: [] }],
       factAndPreferenceChanges: [{ description: "事实/偏好变化", changeType: "新增|更新|失效|确认", evidenceMessageIds: ["原始消息ID"] }],
       relationshipChanges: [{ description: "关系变化", evidenceMessageIds: ["原始消息ID"] }],
       goalsAndCommitments: [{ description: "目标或承诺", status: "进行中|已完成|取消|未明确", evidenceMessageIds: ["原始消息ID"] }],

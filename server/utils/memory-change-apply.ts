@@ -1,3 +1,4 @@
+import { matchingEndingEventIndexes } from "./memory-ending-binding";
 import type { Prisma } from "../../src/generated/prisma/client";
 import {
   isNearDuplicateEvent, isNearDuplicateMemory, makeEventDedupeKey, makeMemoryDedupeKey,
@@ -205,6 +206,7 @@ export type MemoryApplyContext = MemoryApplyScope & {
   actorType: "WORKER" | "USER";
   /** 审计动作前缀：自动生成 `memory.ai_`，人工采纳 `memory.review_`。 */
   auditActionPrefix: "memory.ai_" | "memory.review_";
+  bindingMemoryIds?: ReadonlySet<string>;
   actorId?: string | null;
   /**
    * 全局范围：只有主人私聊（USER_PRIVATE）才会传。
@@ -256,7 +258,7 @@ export async function applyMemoryChange(
   evidence: MemoryEvidenceMessage[],
   options?: {
     reviewEvidenceFallbackAt?: Date;
-    importantEvents?: ReadonlyArray<Pick<MemoryEventDraft, "evidenceMessageIds">>;
+    importantEvents?: readonly unknown[];
   },
 ): Promise<ApplyResult | null> {
   // Only an explicit human review may apply an already validated historical suggestion
@@ -389,15 +391,18 @@ export async function applyMemoryChange(
     if (basis === "TEMPORARY_STATE_ENDED" && ["EVENT", "RELATIONSHIP", "PREFERENCE"].includes(previous.category)) return null;
     // 普通证据和快照事件都可能引用计划与背景。只有显式标出的直接确认能定结束时间。
     let endingEvidence = confirmed;
+    let matchedEventIndexes: number[] = [];
     if (basis === "TEMPORARY_STATE_ENDED") {
       const ids = change.endingEvidenceMessageIds;
-      if (!ids?.length || ids.length > 10) return null;
+      if (!Array.isArray(ids) || !ids.length || ids.length > 10) return null;
+      matchedEventIndexes = matchingEndingEventIndexes(options?.importantEvents, relatedId, ids,
+        id => ctx.bindingMemoryIds?.has(id) === true);
+      if (!matchedEventIndexes.length) return null;
       const byId = new Map(confirmed.map(message => [message.id, message]));
       endingEvidence = [];
       for (const id of ids) {
         const message = byId.get(id);
-        if (!message || !Number.isFinite(message.occurredAt.getTime())
-          || !options?.importantEvents?.some(event => event.evidenceMessageIds.includes(id))) return null;
+        if (!message || !Number.isFinite(message.occurredAt.getTime())) return null;
         endingEvidence.push(message);
       }
     }
@@ -420,7 +425,7 @@ export async function applyMemoryChange(
         details: {
           reason: change.changeReason ?? change.content,
           invalidationBasis: basis,
-          ...(basis === "TEMPORARY_STATE_ENDED" ? { endingEvidenceMessageIds: endingEvidence.map(message => message.id) } : {}),
+          ...(basis === "TEMPORARY_STATE_ENDED" ? { endingEvidenceMessageIds: endingEvidence.map(message => message.id), matchedImportantEventIndexes: matchedEventIndexes } : {}),
           confidence: change.confidence,
           evidenceMessageIds: change.evidenceMessageIds,
           snapshotId: ctx.snapshotId,

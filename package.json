@@ -108,7 +108,7 @@
     "test:role-switch-lock-reset": "tsx scripts/test-role-switch-lock-reset.ts",
     "test:async-minimal-fixes": "tsx scripts/test-async-minimal-fixes.ts",
     "test:private-chat-cursor": "tsx scripts/test-private-chat-cursor.ts",
-    "test:memory-ai": "tsx scripts/test-memory-ai.ts",
+    "test:memory-ai": "tsx scripts/test-memory-ai.ts && tsx scripts/test-memory-ending-binding.ts",
     "test:memory-ai-request": "tsx scripts/test-memory-ai-request.ts && tsx scripts/test-memory-events-request.ts",
     "test:memory-event-dto": "tsx scripts/test-memory-event-dto-contract.ts",
     "test:memory-event-content": "tsx scripts/test-memory-event-content.ts",

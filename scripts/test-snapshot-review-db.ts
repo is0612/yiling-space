@@ -59,10 +59,10 @@ try {
   await once(server, "listening");
   const address = server.address();
   assert.ok(address && typeof address === "object");
-  const request = async (snapshotId: string, changeIndex: number, decision = "ACCEPT", token = session.token) => {
+  const request = async (snapshotId: string, changeIndex: number, decision = "ACCEPT", token = session.token, extra: Record<string, unknown> = {}) => {
     const response = await fetch(`http://127.0.0.1:${address.port}/characters/${characterId}/snapshots/${snapshotId}/review`, {
       method: "POST", headers: { cookie: `yiling_session=${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ changeIndex, decision }),
+      body: JSON.stringify({ ...extra, changeIndex, decision }),
     });
     return { status: response.status, body: await response.json() };
   };
@@ -133,7 +133,8 @@ try {
   const third = await prisma.memorySnapshot.create({ data: {
     memoryScopeId: scopeId, snapshotKey, version: 3, periodStart, periodEnd: first.periodEnd, summary: "review completion",
     structuredContent: {
-      analysis: { importantEvents: [{ title: "完成导出测试", detail: completion.content, evidenceMessageIds: [plan.id, completion.id] }] },
+      activeMemoriesConsidered: [history.id, pending.id, wrongFact.id],
+      analysis: { importantEvents: [{ title: "完成导出测试", detail: completion.content, evidenceMessageIds: [plan.id, completion.id], endedMemoryIds: [pending.id] }] },
       memoryChangesApplied: [invalidation(history, completion.id, "TEMPORARY_STATE_ENDED"), invalidation(pending, completion.id),
         invalidation(pending, message.id, "TEMPORARY_STATE_ENDED"), invalidation(pending, completion.id, "TEMPORARY_STATE_ENDED"),
         invalidation(wrongFact, correction.id, "CONTRADICTED"), legacyInvalidation],
@@ -145,7 +146,68 @@ try {
   assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: history.id } })).status, "ACTIVE");
   assert.equal(await prisma.memoryReview.count({ where: { snapshotId: third.id } }), 2);
   assert.equal(await prisma.auditLog.count({ where: { entityId: { in: [pending.id, wrongFact.id] }, actorType: "USER", action: "memory.review_invalidated" } }), 2);
-  for (const original of [first, second, third]) {
+  const pendingBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "发布核对待完成。" } });
+  const relatedBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "发布结果复核待完成。" } });
+  const otherBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "另一事项待完成。" } });
+  const confirmation = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "发布及结果复核已完成。", occurredAt: new Date("2026-10-03T00:00:00Z") } });
+  const secondConfirmation = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "再次确认发布完成。", occurredAt: new Date("2026-10-04T00:00:00Z") } });
+  const bindingChange = (item: typeof pendingBinding) => ({ ...invalidation(item, confirmation.id, "TEMPORARY_STATE_ENDED"),
+    evidenceMessageIds: [plan.id, confirmation.id, secondConfirmation.id], endingEvidenceMessageIds: [secondConfirmation.id, confirmation.id],
+  });
+  const bindingEvent = (endedMemoryIds: string[], evidenceMessageIds = [confirmation.id, secondConfirmation.id]) => ({
+    title: "完成发布与复核", detail: confirmation.content, endedMemoryIds, evidenceMessageIds,
+  });
+  const invalidEvents = [
+    [{ title: "旧事件没有绑定", detail: confirmation.content, evidenceMessageIds: [confirmation.id, secondConfirmation.id] }],
+    [bindingEvent([otherBinding.id])],
+    [bindingEvent([pendingBinding.id, randomUUID()])],
+    [bindingEvent([pendingBinding.id, pendingBinding.id])],
+    [bindingEvent([pendingBinding.id], [confirmation.id]), bindingEvent([pendingBinding.id], [secondConfirmation.id])],
+  ];
+  const bindingSnapshots = [];
+  for (const [index, importantEvents] of invalidEvents.entries()) {
+    const fixture = await prisma.memorySnapshot.create({ data: {
+      memoryScopeId: scopeId, snapshotKey, version: 4 + index, periodStart, periodEnd: first.periodEnd, summary: "invalid binding",
+      structuredContent: { activeMemoriesConsidered: [pendingBinding.id, relatedBinding.id, otherBinding.id],
+        analysis: { importantEvents }, memoryChangesApplied: [bindingChange(pendingBinding)] },
+    } });
+    bindingSnapshots.push(fixture);
+    const beforeAudits = await prisma.auditLog.count({ where: { characterId } });
+    const forged = await request(fixture.id, 0, "ACCEPT", session.token, {
+      endedMemoryIds: [pendingBinding.id], endingEvidenceMessageIds: [confirmation.id],
+      importantEvents: [bindingEvent([pendingBinding.id])],
+      analysis: { importantEvents: [bindingEvent([pendingBinding.id])] },
+      activeMemoriesConsidered: [pendingBinding.id],
+    });
+    assert.equal(forged.status, 409, `invalid binding case ${index} cannot be repaired by client fields`);
+    assert.equal(await prisma.memoryReview.count({ where: { snapshotId: fixture.id } }), 0);
+    assert.equal(await prisma.auditLog.count({ where: { characterId } }), beforeAudits);
+    const unchanged = await prisma.memoryItem.findUniqueOrThrow({ where: { id: pendingBinding.id } });
+    assert.equal(unchanged.status, "ACTIVE");
+    assert.equal(unchanged.validTo, null);
+  }
+  const validBinding = await prisma.memorySnapshot.create({ data: {
+    memoryScopeId: scopeId, snapshotKey, version: 9, periodStart, periodEnd: first.periodEnd, summary: "valid shared binding",
+    structuredContent: { activeMemoriesConsidered: [pendingBinding.id, relatedBinding.id],
+      // Keep invalid and unrelated entries before the matching event: indexes are immutable.
+      analysis: { importantEvents: [null, { title: "不完整事件" }, bindingEvent([pendingBinding.id, relatedBinding.id])] },
+      memoryChangesApplied: [bindingChange(pendingBinding), bindingChange(relatedBinding)] },
+  } });
+  bindingSnapshots.push(validBinding);
+  for (const [index, item] of [pendingBinding, relatedBinding].entries()) {
+    const response = await request(validBinding.id, index, "ACCEPT", session.token, {
+      importantEvents: [], endingEvidenceMessageIds: [plan.id], endedMemoryIds: [otherBinding.id],
+    });
+    assert.equal(response.status, 200, JSON.stringify(response));
+    const stored = await prisma.memoryItem.findUniqueOrThrow({ where: { id: item.id } });
+    assert.equal(stored.status, "INVALIDATED");
+    assert.deepEqual(stored.validTo, confirmation.occurredAt);
+    const bindingAudit = await prisma.auditLog.findFirstOrThrow({ where: { entityId: item.id, action: "memory.review_invalidated" } });
+    assert.deepEqual((bindingAudit.details as { matchedImportantEventIndexes: number[] }).matchedImportantEventIndexes, [2]);
+  }
+  assert.equal(await prisma.memoryReview.count({ where: { snapshotId: validBinding.id, decision: "ACCEPTED" } }), 2);
+  assert.equal((await request(validBinding.id, 0)).status, 409);
+  for (const original of [first, second, third, ...bindingSnapshots]) {
     const current = await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: original.id } });
     assert.deepEqual(current.structuredContent, original.structuredContent);
     assert.equal(current.summary, original.summary);

@@ -35,7 +35,12 @@ try {
     await fixture.query('INSERT INTO "users" (id, username, "passwordHash", "updatedAt") VALUES ($1, $2, $3, NOW())',
       [randomUUID(), "isolated-memory-fixture", "not-a-real-password-hash"]);
   } finally { await fixture.end(); }
-  for (const script of isolatedTestFiles(import.meta.url)) run("node_modules/tsx/dist/cli.mjs", [`scripts/${script}`]);
+  for (const script of isolatedTestFiles(import.meta.url)) {
+    const command = script === "test-snapshot-review-db.ts" ? "test:snapshot-review-db"
+      : script === "test-memory-job-fencing-db.ts" ? "test:memory-job-fencing-db" : null;
+    if (command && process.env.npm_execpath) run(process.env.npm_execpath, ["run", command]);
+    else run("node_modules/tsx/dist/cli.mjs", [`scripts/${script}`]);
+  }
   console.log("Isolated memory database checks passed; business database was not used for tests.");
 } finally {
   try {

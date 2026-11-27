@@ -96,13 +96,26 @@ const temporaryChange = {
   action: "INVALIDATE", category: "COMMITMENT", invalidationBasis: "TEMPORARY_STATE_ENDED",
   content: "测试已完成", relatedMemoryId: "memory-1", confidence: 0.99, evidenceMessageIds: validIds,
 };
-const parseTemporary = (endingEvidenceMessageIds: unknown) => validateMemoryAiOutput({ summary: "摘要", memoryChanges: [
+const bindingEvent = { title: "完成测试", detail: "用户确认测试完成", evidenceMessageIds: ["message-b"], endedMemoryIds: ["memory-1"] };
+const parseTemporary = (endingEvidenceMessageIds: unknown, event: unknown = bindingEvent) => validateMemoryAiOutput({ summary: "摘要", importantEvents: [event], memoryChanges: [
   { ...temporaryChange, endingEvidenceMessageIds },
 ] }, [...validIds, "unrelated-message"], activeIds).memoryChanges;
 assert.deepEqual(parseTemporary(["message-b", "message-b"])[0]?.endingEvidenceMessageIds, ["message-b"]);
 for (const invalid of [undefined, [], ["message-b", "unrelated-message"], ["message-b", "invented-id"], "message-b"]) {
   assert.deepEqual(parseTemporary(invalid), []);
 }
+
+for (const endedMemoryIds of [undefined, [], ["unknown"], ["memory-1", "memory-1"], ["memory-1", "unknown"], "memory-1"]) {
+  assert.deepEqual(parseTemporary(["message-b"], { ...bindingEvent, endedMemoryIds }), []);
+}
+assert.deepEqual(parseTemporary(["message-b"], { ...bindingEvent, evidenceMessageIds: ["message-a"] }), []);
+assert.deepEqual(parseTemporary(["message-b"], { ...bindingEvent, evidenceMessageIds: [...Array(10).fill("message-a"), "message-b"] }), []);
+const manyTargets = Array.from({ length: 20 }, (_, i) => `memory-${i}`);
+const largeBinding = validateMemoryAiOutput({ summary: "摘要", importantEvents: [{ ...bindingEvent, endedMemoryIds: manyTargets }],
+  memoryChanges: [{ ...temporaryChange, endingEvidenceMessageIds: ["message-b"] }] }, validIds, manyTargets);
+assert.equal(largeBinding.importantEvents[0]?.endedMemoryIds?.length, 20);
+assert.equal(largeBinding.memoryChanges.length, 1);
+assert.deepEqual(largeBinding.memoryChanges[0]?.endingEvidenceMessageIds, ["message-b"], "背景不得进入结束确认");
 
 // ── 近似判重：同类别 + 字面高度重合 ──────────────────────────
 assert.equal(

@@ -178,6 +178,9 @@ export default defineEventHandler(async (event) => {
             ? { category: target.supersededCategory as MemoryCategoryValue, content: target.supersededContent }
             : null,
           canTarget: () => true,
+          // Only the immutable model-input whitelist authorizes event target bindings.
+          bindingMemoryIds: new Set(Array.isArray(structured?.activeMemoriesConsidered)
+            ? structured.activeMemoriesConsidered.filter((id): id is string => typeof id === "string") : []),
           handledMemoryIds: new Set<string>(),
           existingItemSignatures: new Set<string>(),
           existingDedupeKeys: new Set<string>(),
@@ -188,11 +191,9 @@ export default defineEventHandler(async (event) => {
         // deterministic historical time available after source cleanup.
         {
           reviewEvidenceFallbackAt: snapshot.periodStart,
-          importantEvents: Array.isArray(importantEvents) ? importantEvents.flatMap(value => {
-            const row = asRecord(value);
-            if (!row || typeof row.title !== "string" || !row.title.trim() || typeof row.detail !== "string" || !row.detail.trim()) return [];
-            return Array.isArray(row.evidenceMessageIds) ? [{ evidenceMessageIds: row.evidenceMessageIds.filter((id): id is string => typeof id === "string") }] : [];
-          }) : [],
+          // Preserve the immutable snapshot's raw event order and binding fields.
+          // The shared apply boundary validates every candidate event itself.
+          importantEvents: Array.isArray(importantEvents) ? importantEvents : [],
         },
       );
       if (!applied) return null;

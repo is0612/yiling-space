@@ -221,7 +221,6 @@ try {
       userMessage("回归用例的说明都保存在文档里。", 160),
       userMessage("确认当前模型已切到新版本。", 170),
     ]);
-    const eventSources = [plan.id, background.id, completion.id, repeat.id, laterContext.id, speculation.id];
     const temporary = "TEMPORARY_STATE_ENDED";
     const cases = [
       { category: "COMMITMENT", content: "回归测试待完成。", basis: temporary, sources: [completion], ending: [completion], validTo: completion.occurredAt },
@@ -246,10 +245,14 @@ try {
       assert.deepEqual(prompt.periodEvents.map((row: any) => [row.id, row.sourceMessageIds]), [[event.id, [completion.id]]]);
       return {
         summary: "完成回归并切换到新模型。",
-        importantEvents: [{ title: prompt.periodEvents[0].title, detail: prompt.periodEvents[0].detail, evidenceMessageIds: eventSources }],
-        memoryChanges: cases.map((spec, index) => ({ action: "INVALIDATE", content: spec.content, category: "FACT",
+        importantEvents: cases.filter(spec => spec.basis === temporary && spec.ending).map(spec => ({
+          title: spec.content, detail: "对应事项的结果及来源", evidenceMessageIds: spec.sources.map(message => message.id).filter(id => id !== original.id),
+          endedMemoryIds: items.filter(item => item.content === spec.content && item.content !== "当前回归尚未跑完。").map(item => item.id),
+        })),
+        memoryChanges: [...cases.map((spec, index) => ({ action: "INVALIDATE", content: spec.content, category: "FACT",
           relatedMemoryId: items[index]!.id, invalidationBasis: spec.basis, evidenceMessageIds: spec.sources.map(message => message.id),
           endingEvidenceMessageIds: spec.ending?.map(message => message.id), confidence: 0.97 })),
+          { action: "ADD", category: "FACT", content: "本周期新增的独立长期事实", confidence: 0.97, evidenceMessageIds: [completion.id] }],
       };
     };
     gate.release();
@@ -258,19 +261,42 @@ try {
     assert(result.processed && result.status === "SUCCEEDED" && result.snapshotId, JSON.stringify(result));
     for (const [index, item] of items.entries()) {
       const stored = await prisma.memoryItem.findUniqueOrThrow({ where: { id: item.id } });
-      const expected = cases[index]!.validTo;
+      const expected = index === 1 ? null : cases[index]!.validTo;
       assert.equal(stored.status, expected ? "INVALIDATED" : "ACTIVE", item.content);
       assert.deepEqual(stored.validTo, expected, item.content);
     }
     const snapshot = await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: result.snapshotId }, include: { sources: true } });
-    const saved = snapshot.structuredContent as { analysis: { importantEvents: Array<{ evidenceMessageIds: string[] }> }; memoryChangesApplied: unknown[] };
-    assert.deepEqual(saved.analysis.importantEvents[0]?.evidenceMessageIds, eventSources);
+    const saved = snapshot.structuredContent as { analysis: { importantEvents: Array<{ evidenceMessageIds: string[]; endedMemoryIds: string[] }> }; memoryChangesApplied: unknown[]; memoryChangesRejected: number };
+    assert.deepEqual(saved.analysis.importantEvents[0]?.endedMemoryIds, [items[0]!.id]);
     assert.equal(saved.memoryChangesApplied.length, 5);
+    assert(saved.memoryChangesRejected >= 1);
+    assert.equal(await prisma.memoryItem.count({ where: { memoryScopeId: scopeId, content: "本周期新增的独立长期事实", status: "ACTIVE" } }), 1);
     assert(snapshot.sources.some(source => source.messageId === completion.id));
     assert.equal(await prisma.memoryEvent.count({ where: { memoryScopeId: scopeId } }), 1);
     assert.equal((await prisma.memoryEvent.findUniqueOrThrow({ where: { id: event.id } })).status, "ACTIVE");
-    assert.equal(await prisma.auditLog.count({ where: { entityId: { in: items.map(item => item.id) }, actorType: "WORKER", action: "memory.ai_invalidated" } }), 5);
+    assert.equal(await prisma.auditLog.count({ where: { entityId: { in: items.map(item => item.id) }, actorType: "WORKER", action: "memory.ai_invalidated" } }), 4);
     console.log("Snapshot Worker invalidation, persisted validTo, and retained completion evidence passed.");
+  }
+  // Regeneration must persist binding and confirmation IDs without applying it.
+  {
+    gate = barrier(); gate.release(); fail = false; journalSkip = false;
+    const { job, scopeId } = await fixture("GENERATE_SNAPSHOT");
+    const message = await prisma.message.findFirstOrThrow({ where: { conversation: { memoryScopeId: scopeId } } });
+    const item = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "测试待完成", validFrom: start } });
+    const originalSnapshot = await prisma.memorySnapshot.create({ data: { memoryScopeId: scopeId, snapshotKey: `regen:${job.id}`, periodStart: start, periodEnd: end, summary: "原总结", structuredContent: {} } });
+    await prisma.memoryJob.update({ where: { id: job.id }, data: { type: "REGENERATE_SNAPSHOT", snapshotId: originalSnapshot.id } });
+    snapshotAnalysis = () => ({ summary: "确认完成", importantEvents: [{ title: "完成测试", detail: "负责人确认完成", endedMemoryIds: [item.id], evidenceMessageIds: [message.id] }],
+      memoryChanges: [{ action: "INVALIDATE", category: "COMMITMENT", content: "已完成", confidence: 0.97, relatedMemoryId: item.id,
+        invalidationBasis: "TEMPORARY_STATE_ENDED", evidenceMessageIds: [message.id], endingEvidenceMessageIds: [message.id] }] });
+    const result = await processNextMemoryJob(prisma, { jobId: job.id, ownerId: owner.id });
+    snapshotAnalysis = undefined;
+    assert(result.processed && result.status === "SUCCEEDED" && result.snapshotId, JSON.stringify(result));
+    const saved = (await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: result.snapshotId } })).structuredContent as any;
+    assert.deepEqual(saved.analysis.importantEvents[0].endedMemoryIds, [item.id]);
+    assert.deepEqual(saved.memoryChangesApplied[0].endingEvidenceMessageIds, [message.id]);
+    assert.equal(saved.memoryChangesApplied[0].result, "NOT_APPLIED_REGENERATION");
+    assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: item.id } })).status, "ACTIVE");
+    console.log("Regeneration retains full binding and pending suggestion without applying it.");
   }
   // Model SKIP must also pass the journal transaction's lease check.
   gate = barrier(); journalSkip = true; fail = false;

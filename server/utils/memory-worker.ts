@@ -1425,7 +1425,7 @@ export async function processNextMemoryJob(
           ...(aiResult.usage ? { usage: aiResult.usage } : {}),
         },
         analysis: aiResult.analysis,
-        activeMemoriesConsidered: aiMemoryContext.map((item) => item.id),
+        activeMemoriesConsidered: [...aiMemoryContext, ...globalAiMemoryContext].map((item) => item.id),
         memoryChangesApplied: [] as Array<Record<string, unknown>>,
         note: isRegeneration
           ? "AI 重新提炼版本；为避免历史重放改写当前长期记忆，本次提出的长期记忆变化仅供审核，不会自动应用。"
@@ -1498,7 +1498,7 @@ export async function processNextMemoryJob(
       }));
 
       // 模型提出但没通过校验的条数。没有这个数字，人分不清「模型没提」和「提了但不合格」。
-      let rejectedChangeCount = 0;
+      let rejectedChangeCount = aiResult.analysis.rejectedBindingChangeCount ?? 0;
 
       // 候选备注：朋友范围里模型顺带提的「她想给这个人起的叫法」，落待审队列。
       // 归一化沿用 friend-aliases 的口径（截断/去重），aliasKey 交给唯一约束挡重复。
@@ -1573,6 +1573,7 @@ export async function processNextMemoryJob(
             characterId: scope.characterId,
             snapshotId: snapshot.id,
             actorType: "WORKER",
+            bindingMemoryIds: new Set([...eligibleModelMemoryIds, ...globalEligibleModelMemoryIds]),
             auditActionPrefix: "memory.ai_",
             // 自动生成用周期时点的记忆快照做对照；人工采纳才用数据库里的最新值。
             resolvePrevious: async (memoryId) => currentItems.get(memoryId) ?? null,
