@@ -231,7 +231,7 @@ try {
       { category: "RELATIONSHIP", content: "两人长期协作。", basis: temporary, sources: [completion], ending: [completion], validTo: null },
       { category: "PREFERENCE", content: "偏好跑完整回归。", basis: temporary, sources: [completion], ending: [completion], validTo: null },
       { category: "FACT", content: "过去完成了安装器开发。", basis: undefined, sources: [completion], ending: undefined, validTo: null },
-      { category: "FACT", content: "当前模型还是旧版本。", basis: "CONTRADICTED", sources: [secondCorrection, original], ending: undefined, validTo: original.occurredAt },
+      { category: "FACT", content: "当前模型还是旧版本。", basis: "CONTRADICTED", sources: [plan, background, laterContext, secondCorrection, original], ending: undefined, validTo: secondCorrection.occurredAt },
       { category: "COMMITMENT", content: "备份待完成。", basis: temporary, sources: [plan, speculation], ending: [speculation], validTo: null },
       { category: "COMMITMENT", content: "还要做一次临时配置清理。", basis: temporary, sources: [original], ending: [original], validTo: null },
       { category: "COMMITMENT", content: "还要完成最后一项核对。", basis: temporary, sources: [plan, background], ending: undefined, validTo: null },
@@ -251,6 +251,7 @@ try {
         })),
         memoryChanges: [...cases.map((spec, index) => ({ action: "INVALIDATE", content: spec.content, category: "FACT",
           relatedMemoryId: items[index]!.id, invalidationBasis: spec.basis, evidenceMessageIds: spec.sources.map(message => message.id),
+          contradictionEvidenceMessageIds: spec.basis === "CONTRADICTED" ? [secondCorrection.id] : undefined,
           endingEvidenceMessageIds: spec.ending?.map(message => message.id), confidence: 0.97 })),
           { action: "ADD", category: "FACT", content: "本周期新增的独立长期事实", confidence: 0.97, evidenceMessageIds: [completion.id] }],
       };

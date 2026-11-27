@@ -1366,6 +1366,8 @@ export async function processNextMemoryJob(
 
     const outcome = await prisma.$transaction(async (tx) => {
       await lockMemoryJobLease(tx, { jobId: job.id, claimToken });
+      // 全部快照写入者统一：范围（跨范围按 ID 排序）→快照→目标记忆。
+      // 人工复核也先锁范围；不得改成先锁快照再等待范围。
       // applyMemoryChange 会锁范围行；跨主人私聊/全局写入先按固定顺序锁，避免反序死锁。
       for (const scopeId of [...new Set([job.memoryScopeId, ...(globalScope ? [globalScope.id] : [])])].sort()) {
         await tx.$queryRaw`SELECT id FROM "memory_scopes" WHERE id = ${scopeId}::uuid FOR UPDATE`;
@@ -1555,6 +1557,7 @@ export async function processNextMemoryJob(
             content: change.content,
             confidence: change.confidence,
             ...(change.invalidationBasis ? { invalidationBasis: change.invalidationBasis, changeReason: change.changeReason ?? change.content } : {}),
+            ...(change.contradictionEvidenceMessageIds ? { contradictionEvidenceMessageIds: change.contradictionEvidenceMessageIds } : {}),
             ...(change.endingEvidenceMessageIds ? { endingEvidenceMessageIds: change.endingEvidenceMessageIds } : {}),
             // 只留本周期真实存在、能回溯到原文的证据，UI 的「依据 #N」才对得上来源列表。
             evidenceMessageIds: evidence.map((message) => message.id),

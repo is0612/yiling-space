@@ -32,6 +32,7 @@ const parsed = validateMemoryAiOutput({
     {
       action: "INVALIDATE",
       invalidationBasis: "CONTRADICTED",
+      contradictionEvidenceMessageIds: ["message-b"],
       category: "FACT",
       content: "旧事实不再成立",
       confidence: 0.85,
@@ -60,6 +61,7 @@ const parsed = validateMemoryAiOutput({
     {
       action: "INVALIDATE",
       invalidationBasis: "CONTRADICTED",
+      contradictionEvidenceMessageIds: ["message-b"],
       category: "FACT",
       content: "旧的全局记忆不再成立",
       confidence: 0.9,
@@ -96,6 +98,13 @@ const temporaryChange = {
   action: "INVALIDATE", category: "COMMITMENT", invalidationBasis: "TEMPORARY_STATE_ENDED",
   content: "测试已完成", relatedMemoryId: "memory-1", confidence: 0.99, evidenceMessageIds: validIds,
 };
+const contradictoryChange = { ...temporaryChange, invalidationBasis: "CONTRADICTED" };
+for (const confirmation of [undefined, [], ["missing"], ["unrelated-message"], "message-b"]) {
+  assert.deepEqual(validateMemoryAiOutput({ summary: "摘要", memoryChanges: [{ ...contradictoryChange, contradictionEvidenceMessageIds: confirmation }] },
+    [...validIds, "unrelated-message"], activeIds).memoryChanges, []);
+}
+assert.deepEqual(validateMemoryAiOutput({ summary: "摘要", memoryChanges: [{ ...contradictoryChange, contradictionEvidenceMessageIds: ["message-b"] }] }, validIds, activeIds)
+  .memoryChanges[0]?.contradictionEvidenceMessageIds, ["message-b"]);
 const bindingEvent = { title: "完成测试", detail: "用户确认测试完成", evidenceMessageIds: ["message-b"], endedMemoryIds: ["memory-1"] };
 const parseTemporary = (endingEvidenceMessageIds: unknown, event: unknown = bindingEvent) => validateMemoryAiOutput({ summary: "摘要", importantEvents: [event], memoryChanges: [
   { ...temporaryChange, endingEvidenceMessageIds },

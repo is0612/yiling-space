@@ -134,6 +134,7 @@ console.log("\n[2] 指向全局条目的 INVALIDATE 跨范围生效");
 const invalidated = await prisma.$transaction((tx) => applyMemoryChange(tx, ctx, {
   action: "INVALIDATE",
   invalidationBasis: "CONTRADICTED",
+  contradictionEvidenceMessageIds: [message.id],
   category: "FACT",
   content: "旧记忆不再成立",
   confidence: 0.9,

@@ -9,6 +9,10 @@ import { createSession } from "../server/utils/auth";
 import { getPrisma } from "../server/utils/prisma";
 import { applyMemoryChange, normalizeMemoryText } from "../server/utils/memory-change-apply";
 import type { MemoryApplyContext } from "../server/utils/memory-change-apply";
+import { processNextMemoryJob } from "../server/utils/memory-worker";
+import { encryptApiKey } from "../server/utils/credential-encryption";
+import type { PrismaClient } from "../src/generated/prisma/client";
+import { Client } from "pg";
 import { makeMemoryDedupeKey } from "../server/utils/memory-ai";
 
 // This entry may only write to a disposable local database created by the isolated runner.
@@ -118,9 +122,9 @@ try {
   const missingHistory = { ...context(first.id), actorType: "USER" as const, auditActionPrefix: "memory.review_" as const, actorId: ownerId };
   assert.equal(await prisma.$transaction((tx) => applyMemoryChange(tx, missingHistory, change, [], { reviewEvidenceFallbackAt: periodStart })), null,
     "review fallback only applies to a suggestion with historical evidence IDs");
-  const history = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "EVENT", content: "过去曾修复语音故障。" } });
-  const pending = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "导出测试仍待完成。" } });
-  const wrongFact = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "FACT", content: "当前配置为 A。" } });
+  const history = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "EVENT", content: "过去曾修复语音故障。", validFrom: periodStart } });
+  const pending = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "导出测试仍待完成。", validFrom: periodStart } });
+  const wrongFact = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "FACT", content: "当前配置为 A。", validFrom: periodStart } });
   const completion = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "导出测试已经通过。", occurredAt } });
   const correction = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "当前配置为 B。", occurredAt } });
   const plan = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "准备跑导出测试。", occurredAt: periodStart } });
@@ -128,6 +132,7 @@ try {
     action: "INVALIDATE", category: "FACT", supersededMemoryId: item.id, supersededCategory: item.category, supersededContent: item.content,
     evidenceMessageIds: [plan.id, sourceId], ...(basis ? { invalidationBasis: basis } : {}),
     ...(basis === "TEMPORARY_STATE_ENDED" ? { endingEvidenceMessageIds: [sourceId] } : {}),
+    ...(basis === "CONTRADICTED" ? { contradictionEvidenceMessageIds: [sourceId] } : {}),
   });
   const { endingEvidenceMessageIds: _legacyMissing, ...legacyInvalidation } = invalidation(pending, completion.id, "TEMPORARY_STATE_ENDED");
   const third = await prisma.memorySnapshot.create({ data: {
@@ -143,12 +148,14 @@ try {
   for (const index of [0, 1, 2, 5]) assert.equal((await request(third.id, index)).status, 409);
   for (const index of [3, 4]) assert.equal((await request(third.id, index)).body.outcome, "INVALIDATED");
   assert.deepEqual((await prisma.memoryItem.findUniqueOrThrow({ where: { id: pending.id } })).validTo, completion.occurredAt);
+  assert.deepEqual((await prisma.memoryItem.findUniqueOrThrow({ where: { id: wrongFact.id } })).validTo, correction.occurredAt,
+    "earlier plan evidence must not determine contradiction validTo");
   assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: history.id } })).status, "ACTIVE");
   assert.equal(await prisma.memoryReview.count({ where: { snapshotId: third.id } }), 2);
   assert.equal(await prisma.auditLog.count({ where: { entityId: { in: [pending.id, wrongFact.id] }, actorType: "USER", action: "memory.review_invalidated" } }), 2);
-  const pendingBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "发布核对待完成。" } });
-  const relatedBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "发布结果复核待完成。" } });
-  const otherBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "另一事项待完成。" } });
+  const pendingBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "发布核对待完成。", validFrom: periodStart } });
+  const relatedBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "发布结果复核待完成。", validFrom: periodStart } });
+  const otherBinding = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "COMMITMENT", content: "另一事项待完成。", validFrom: periodStart } });
   const confirmation = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "发布及结果复核已完成。", occurredAt: new Date("2026-10-03T00:00:00Z") } });
   const secondConfirmation = await prisma.message.create({ data: { conversationId: conversation.id, role: "USER", content: "再次确认发布完成。", occurredAt: new Date("2026-10-04T00:00:00Z") } });
   const bindingChange = (item: typeof pendingBinding) => ({ ...invalidation(item, confirmation.id, "TEMPORARY_STATE_ENDED"),
@@ -207,6 +214,158 @@ try {
   }
   assert.equal(await prisma.memoryReview.count({ where: { snapshotId: validBinding.id, decision: "ACCEPTED" } }), 2);
   assert.equal((await request(validBinding.id, 0)).status, 409);
+  const missingCorrection = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "FACT", content: "旧配置待更正", validFrom: periodStart } });
+  const { contradictionEvidenceMessageIds: _missingCorrectionIds, ...legacyCorrection } = invalidation(missingCorrection, correction.id, "CONTRADICTED");
+  const missingCorrectionSnapshot = await prisma.memorySnapshot.create({ data: {
+    memoryScopeId: scopeId, snapshotKey, version: 10, periodStart, periodEnd: first.periodEnd, summary: "missing correction confirmation",
+    structuredContent: { memoryChangesApplied: [legacyCorrection] },
+  } });
+  const auditsBeforeCorrection = await prisma.auditLog.count({ where: { characterId } });
+  assert.equal((await request(missingCorrectionSnapshot.id, 0, "ACCEPT", session.token, { contradictionEvidenceMessageIds: [correction.id] })).status, 409);
+  assert.equal(await prisma.memoryReview.count({ where: { snapshotId: missingCorrectionSnapshot.id } }), 0);
+  assert.equal(await prisma.auditLog.count({ where: { characterId } }), auditsBeforeCorrection);
+  assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: missingCorrection.id } })).status, "ACTIVE");
+
+  // Real PostgreSQL barrier: hold Worker-order scope lock, wait until the HTTP review
+  // is actually blocked on that scope, then prove it has not locked the snapshot.
+  // This is lock-order integration coverage, not a mock Worker or model.
+  const blocker = new Client({ connectionString: url.toString() });
+  const observer = new Client({ connectionString: url.toString() });
+  await blocker.connect();
+  await observer.connect();
+  try {
+    for (const [index, decision] of ["ACCEPT", "IGNORE"].entries()) {
+      const fixture = await prisma.memorySnapshot.create({ data: {
+        memoryScopeId: scopeId, snapshotKey, version: 11 + index, periodStart, periodEnd: first.periodEnd, summary: "scope lock contention",
+        structuredContent: { memoryChangesApplied: [suggestion(`锁顺序回归事实 ${decision}`)] },
+      } });
+      let pendingReview: ReturnType<typeof request> | undefined;
+      await blocker.query("BEGIN");
+      try {
+        await blocker.query('SELECT id FROM memory_scopes WHERE id = $1::uuid FOR UPDATE', [scopeId]);
+        pendingReview = request(fixture.id, 0, decision);
+        const deadline = Date.now() + 4000;
+        let waitingOnScope = false;
+        while (Date.now() < deadline) {
+          const waits = await observer.query("SELECT query FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%memory_scopes%' AND pid <> pg_backend_pid()");
+          waitingOnScope = waits.rows.length > 0;
+          if (waitingOnScope) break;
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert(waitingOnScope, `${decision} must reach the real scope lock barrier`);
+        // Old snapshot->scope ordering would make this NOWAIT fail with 55P03.
+        await blocker.query('SELECT id FROM memory_snapshots WHERE id = $1::uuid FOR UPDATE NOWAIT', [fixture.id]);
+        await blocker.query('UPDATE memory_snapshots SET status = $2 WHERE id = $1::uuid', [fixture.id, "SUPERSEDED"]);
+        await blocker.query("COMMIT");
+        const outcome = await pendingReview;
+        assert.equal(outcome.status, 200, JSON.stringify(outcome));
+        assert.equal(await prisma.memoryReview.count({ where: { snapshotId: fixture.id } }), 1);
+      } finally {
+        await blocker.query("ROLLBACK");
+        if (pendingReview) await pendingReview;
+      }
+    }
+  } finally {
+    await Promise.all([blocker.end(), observer.end()]);
+  }
+  // Unknown or inverted temporal intervals fail in the actual HTTP/DB path.
+  for (const [offset, validFrom] of [null, new Date("2026-10-06T00:00:00Z"), correction.occurredAt].entries()) {
+    const item = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "FACT", content: `interval-rejected-${offset}`, validFrom } });
+    const fixture = await prisma.memorySnapshot.create({ data: {
+      memoryScopeId: scopeId, snapshotKey, version: 13 + offset, periodStart, periodEnd: first.periodEnd, summary: "invalid temporal interval",
+      structuredContent: { memoryChangesApplied: [invalidation(item, correction.id, "CONTRADICTED")] },
+    } });
+    const before = await prisma.auditLog.count({ where: { characterId } });
+    const response = await request(fixture.id, 0);
+    const stored = await prisma.memoryItem.findUniqueOrThrow({ where: { id: item.id } });
+    if (offset === 2) {
+      assert.equal(response.status, 200);
+      assert.equal(stored.status, "INVALIDATED");
+      assert.deepEqual(stored.validTo, correction.occurredAt, "equal interval endpoints are valid");
+      assert.equal(await prisma.memoryReview.count({ where: { snapshotId: fixture.id } }), 1);
+    } else {
+      assert.equal(response.status, 409);
+      assert.equal(stored.status, "ACTIVE");
+      assert.equal(stored.validTo, null);
+      assert.equal(await prisma.memoryReview.count({ where: { snapshotId: fixture.id } }), 0);
+      assert.equal(await prisma.auditLog.count({ where: { characterId } }), before);
+    }
+  }
+
+  // Actual REGENERATE worker holds its real scope row lock while an actual HTTP
+  // review queues behind it. The proxy supplies only a scheduling barrier; every
+  // query, mutation, transaction and lease check remains the production operation.
+  {
+    const originalFetch = globalThis.fetch;
+    await prisma.character.update({ where: { id: characterId }, data: { modelConfig: {
+      chatModel: "review-lock-model", chatApiBaseUrl: "https://review-lock.invalid/v1", chatApiKeyEncrypted: await encryptApiKey("test-only-review-key"),
+    } } });
+    const sourceSnapshot = await prisma.memorySnapshot.create({ data: {
+      memoryScopeId: scopeId, snapshotKey: `actual-worker-lock:${randomUUID()}`, periodStart, periodEnd: first.periodEnd, summary: "worker contention source",
+      structuredContent: { memoryChangesApplied: [suggestion("实际 Worker 并发采纳事实")] },
+    } });
+    const job = await prisma.memoryJob.create({ data: {
+      memoryScopeId: scopeId, type: "REGENERATE_SNAPSHOT", snapshotId: sourceSnapshot.id,
+      periodStart, periodEnd: first.periodEnd, idempotencyKey: `review-worker-lock:${randomUUID()}`, runAt: new Date(0),
+    } });
+    let entered!: () => void;
+    let release!: () => void;
+    const scopeLocked = new Promise<void>(resolve => { entered = resolve; });
+    const continueWorker = new Promise<void>(resolve => { release = resolve; });
+    let gated = false;
+    const workerPrisma = new Proxy(prisma, { get(target, property, receiver) {
+      if (property !== "$transaction") return Reflect.get(target, property, receiver);
+      return (run: (tx: any) => Promise<unknown>, options?: any) => target.$transaction(async tx => run(new Proxy(tx, { get(realTx, key, txReceiver) {
+        if (key !== "$queryRaw") return Reflect.get(realTx, key, txReceiver);
+        return async (parts: TemplateStringsArray, ...values: unknown[]) => {
+          const result = await realTx.$queryRaw(parts, ...values);
+          if (!gated && parts.join("").includes("memory_scopes") && parts.join("").includes("FOR UPDATE")) {
+            gated = true;
+            entered();
+            await continueWorker;
+          }
+          return result;
+        };
+      } })), { ...options, timeout: 15_000 });
+    } }) as PrismaClient;
+    globalThis.fetch = async (input, init) => {
+      if (!String(input).startsWith("https://review-lock.invalid/")) return originalFetch(input, init);
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: "重新提炼并发测试", memoryChanges: [], importantEvents: [] }) } }] }), { headers: { "content-type": "application/json" } });
+    };
+    const inspect = new Client({ connectionString: url.toString() });
+    await inspect.connect();
+    const worker = processNextMemoryJob(workerPrisma, { jobId: job.id, ownerId, workerId: "review-concurrency-worker" });
+    let concurrentReview: ReturnType<typeof request> | undefined;
+    let barrierTimeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([scopeLocked, new Promise<never>((_resolve, reject) => { barrierTimeout = setTimeout(() => reject(new Error("actual Worker did not reach scope lock")), 8000); })]);
+      if (barrierTimeout) clearTimeout(barrierTimeout);
+      concurrentReview = request(sourceSnapshot.id, 0);
+      const deadline = Date.now() + 4000;
+      let queued = false;
+      while (Date.now() < deadline) {
+        const waits = await inspect.query("SELECT query FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%memory_scopes%' AND pid <> pg_backend_pid()");
+        queued = waits.rows.length > 0;
+        if (queued) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert(queued, "HTTP review must wait for the actual Worker scope lock");
+      release();
+      const [workerResult, reviewResult] = await Promise.all([worker, concurrentReview]);
+      assert(workerResult.processed && workerResult.status === "SUCCEEDED", JSON.stringify(workerResult));
+      assert.equal(reviewResult.status, 200, JSON.stringify(reviewResult));
+      assert.equal((await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: sourceSnapshot.id } })).status, "SUPERSEDED");
+      assert.equal(await prisma.memoryReview.count({ where: { snapshotId: sourceSnapshot.id, decision: "ACCEPTED" } }), 1);
+      assert.equal(await prisma.memoryItem.count({ where: { memoryScopeId: scopeId, content: "实际 Worker 并发采纳事实", status: "ACTIVE" } }), 1);
+      assert.equal(await prisma.auditLog.count({ where: { entityId: sourceSnapshot.id, action: "snapshot.review_accepted" } }), 1);
+    } finally {
+      if (barrierTimeout) clearTimeout(barrierTimeout);
+      release();
+      await Promise.allSettled([worker, ...(concurrentReview ? [concurrentReview] : [])]);
+      globalThis.fetch = originalFetch;
+      await inspect.end();
+    }
+  }
   for (const original of [first, second, third, ...bindingSnapshots]) {
     const current = await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: original.id } });
     assert.deepEqual(current.structuredContent, original.structuredContent);

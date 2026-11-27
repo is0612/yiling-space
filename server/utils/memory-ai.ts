@@ -75,6 +75,8 @@ export type MemoryChange = {
   invalidationBasis?: "TEMPORARY_STATE_ENDED" | "CONTRADICTED";
   /** 仅 TEMPORARY_STATE_ENDED：直接确认结束的原始消息，背景仍留在 evidenceMessageIds。 */
   endingEvidenceMessageIds?: string[];
+  /** 仅 CONTRADICTED：直接更正旧事实的确认，背景不参与失效时间。 */
+  contradictionEvidenceMessageIds?: string[];
   /**
    * 这条记忆该写进哪个范围。缺省 / "current" = 当前对话范围；
    * "character" = 角色全局范围（任何群、私聊都能读到）。
@@ -205,7 +207,7 @@ export type MemoryAiInput = {
 const MAX_RESPONSE_BYTES = 1_000_000;
 /** v5：忆泡抽取补上 `speaker` / `member`，并要求 participants 不写自己、不写泛称。 */
 /** v6：主人私聊可见全局记忆，支持 `scope: "character"` 写入与跨范围 INVALIDATE。 */
-const TEMPLATE_VERSION = "memory-extraction-v13";
+const TEMPLATE_VERSION = "memory-extraction-v14";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -535,6 +537,13 @@ export function validateMemoryAiOutput(
       if ((action === "UPDATE" || action === "INVALIDATE") && !existingIds.has(relatedMemoryId)) continue;
       const invalidationBasis = readInvalidationBasis(entry.invalidationBasis);
       if (action === "INVALIDATE" && !invalidationBasis) continue;
+      const contradictionEvidence = entry.contradictionEvidenceMessageIds;
+      const needsContradictionEvidence = action === "INVALIDATE" && invalidationBasis === "CONTRADICTED";
+      if (needsContradictionEvidence && (!Array.isArray(contradictionEvidence) || !contradictionEvidence.length
+        || contradictionEvidence.length > 10 || !contradictionEvidence.every(id => typeof id === "string" && ids.includes(id)))) {
+        rejectedBindingChangeCount += 1;
+        continue;
+      }
       const needsEndingEvidence = action === "INVALIDATE" && invalidationBasis === "TEMPORARY_STATE_ENDED";
       const endingEvidence = entry.endingEvidenceMessageIds;
       if (needsEndingEvidence && (!Array.isArray(endingEvidence) || !endingEvidence.length || endingEvidence.length > 10
@@ -565,6 +574,7 @@ export function validateMemoryAiOutput(
         ...(scope ? { scope } : {}),
         ...(action === "INVALIDATE" && invalidationBasis ? { invalidationBasis } : {}),
         ...(needsEndingEvidence && Array.isArray(endingEvidence) ? { endingEvidenceMessageIds: [...new Set<string>(endingEvidence)] } : {}),
+        ...(needsContradictionEvidence && Array.isArray(contradictionEvidence) ? { contradictionEvidenceMessageIds: [...new Set<string>(contradictionEvidence)] } : {}),
         ...(asText(entry.changeReason, 500) ? { changeReason: asText(entry.changeReason, 500) } : {}),
       });
     }
@@ -610,6 +620,7 @@ function systemPrompt(options: {
     "每条记忆都要给 importance（0–1，两位小数）：0.85 以上是长期成立、会影响她判断的事（身份、底线、稳定关系、明确承诺）；0.5–0.7 是日常事实与偏好；0.3 以下是一次性的临时状态。不要所有条目都给同一个数 —— 排序就是靠它区分轻重，全给 0.5 等于没给。",
     "INVALIDATE 必须填写 invalidationBasis。TEMPORARY_STATE_ENDED：旧记忆整条只描述尚未结束的临时状态、待办或进行中的约定，且新证据明确确认它已完成、取消或被替代。仅日期过去、事情有后续或助手建议、推测、自称做完，都不成立。",
     "CONTRADICTED：明确的新事实纠正旧事实，且针对同一个对象、同一属性或状态。不同场景或时点的历史陈述可以同时为真。必须引用明确确认这一结果或更正的 USER 原始消息；不要拿助手消息或未经证实的说法作为确认。",
+    "CONTRADICTED 另填 contradictionEvidenceMessageIds，只列直接证明同一对象旧事实不成立的 USER 确认消息，每条也须在本变更 evidenceMessageIds 中。普通背景、计划、猜测和无关发言不得列入；最多 10 条，系统只从这些直接确认取最早时间。没有可靠确认就不提议失效，不得用普通证据替代。",
     "已发生的经历、故障、决定、开发与排查过程要保留当时经过和来源。不要因为结束或后续有进展就 INVALIDATE，也不要用 UPDATE 让历史记录退出。只有新证据证明原记录本身有误，才可提议 CONTRADICTED。",
     "importantEvents 的 endedMemoryIds 只列该事件确实确认已结束、可退出当前状态的 activeMemories/globalMemories ID；不能列无关记忆、未知或重复 ID，不需要按固定条数截断。临时失效必须至少有一个事件同时包含目标记忆和全部 endingEvidenceMessageIds。每个事件的 evidenceMessageIds 最多 10 条，优先保留全部直接结束确认；背景放不下就省略背景，不要丢掉确认后继续提议失效。没有结束绑定的普通事件写 endedMemoryIds: []。",
     "提议 TEMPORARY_STATE_ENDED 时，把实际发生的完成、取消或替代经过写进 importantEvents。另填 endingEvidenceMessageIds：只列明确确认同一临时状态已结束的 USER 原始消息 ID，每条都须出现在该变更的 evidenceMessageIds 和对应 importantEvents 里。计划、背景、进度、猜测或只补充历史的消息留在普通证据里，不得放进结束确认列表。系统取最早的直接确认消息时间；分不清直接确认与背景时，不提议失效。",
@@ -688,6 +699,7 @@ function systemPrompt(options: {
         relatedMemoryId: "UPDATE/INVALIDATE 必填，ADD 省略",
         scope: "character（仅关于她本人的稳定事实；否则省略）",
         invalidationBasis: "仅 INVALIDATE 必填：TEMPORARY_STATE_ENDED|CONTRADICTED",
+        contradictionEvidenceMessageIds: ["仅 CONTRADICTED 必填：直接更正确认的 USER 原始消息ID"],
         endingEvidenceMessageIds: ["仅 TEMPORARY_STATE_ENDED 必填：直接确认结束的 USER 原始消息ID"],
         changeReason: "变化依据"
       }],

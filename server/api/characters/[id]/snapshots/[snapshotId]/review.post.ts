@@ -91,6 +91,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const lockReview = async (tx: import("../../../../../utils/memory-change-apply").MemoryApplyTx) => {
+    // Match Worker ordering: scope first, then snapshot, for ACCEPT and IGNORE.
+    await tx.$queryRaw`SELECT id FROM memory_scopes WHERE id = ${memoryScopeId}::uuid FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM memory_snapshots WHERE id = ${snapshotId}::uuid FOR UPDATE`;
     const reviewed = await tx.memoryReview.findUnique({
       where: { snapshotId_changeIndex: { snapshotId, changeIndex } },
@@ -151,6 +153,9 @@ export default defineEventHandler(async (event) => {
     ...(invalidationBasis === "TEMPORARY_STATE_ENDED" && Array.isArray(target.endingEvidenceMessageIds)
       && target.endingEvidenceMessageIds.every((id): id is string => typeof id === "string")
       ? { endingEvidenceMessageIds: target.endingEvidenceMessageIds } : {}),
+    ...(invalidationBasis === "CONTRADICTED" && Array.isArray(target.contradictionEvidenceMessageIds)
+      && target.contradictionEvidenceMessageIds.every((id): id is string => typeof id === "string")
+      ? { contradictionEvidenceMessageIds: target.contradictionEvidenceMessageIds } : {}),
     ...(target.scope === "character" || target.scope === "current" ? { scope: target.scope } : {}),
   };
 

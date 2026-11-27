@@ -8,15 +8,15 @@ const message: MemoryEvidenceMessage = { id: "done", role: "USER", occurredAt: a
 const change: MemoryChange = { action: "INVALIDATE", category: "FACT", content: "已完成", confidence: 0.95,
   relatedMemoryId: "m", invalidationBasis: "TEMPORARY_STATE_ENDED", evidenceMessageIds: ["plan", "done"], endingEvidenceMessageIds: ["done"] };
 const event = { title: "完成", detail: "确认完成", endedMemoryIds: ["m"], evidenceMessageIds: ["done"] };
-async function run(options: { events?: readonly unknown[]; evidence?: MemoryEvidenceMessage[]; mutation?: Partial<MemoryChange>; category?: "FACT" | "EVENT" | "RELATIONSHIP" | "PREFERENCE"; accepted?: boolean } = {}) {
+async function run(options: { events?: readonly unknown[]; evidence?: MemoryEvidenceMessage[]; mutation?: Partial<MemoryChange>; category?: "FACT" | "EVENT" | "RELATIONSHIP" | "PREFERENCE"; accepted?: boolean; start?: Date | null; contradiction?: boolean } = {}) {
   let writes = 0;
   let audits = 0;
   let stored: Date | undefined;
   const category = options.category ?? "FACT";
   const tx = {
     $queryRaw: async () => [],
-    memoryItem: { findFirst: async () => ({ category, content: "待完成" }), updateMany: async ({ data }: any) => { writes++; stored = data.validTo; return { count: 1 }; } },
-    auditLog: { create: async ({ data }: any) => { audits++; assert.deepEqual(data.details.matchedImportantEventIndexes, [1, 2]); } },
+    memoryItem: { findFirst: async () => ({ category, content: "待完成", validFrom: options.start === undefined ? new Date("2026-11-20T00:00:00Z") : options.start }), updateMany: async ({ data }: any) => { writes++; stored = data.validTo; return { count: 1 }; } },
+    auditLog: { create: async ({ data }: any) => { audits++; if (!options.contradiction) assert.deepEqual(data.details.matchedImportantEventIndexes, [1, 2]); } },
   } as unknown as MemoryApplyTx;
   const ctx: MemoryApplyContext = { memoryScopeId: "scope", characterId: "c", snapshotId: "s", actorType: "WORKER", auditActionPrefix: "memory.ai_",
     canTarget: id => id === "m", bindingMemoryIds: new Set(["m", "other"]), resolvePrevious: async () => ({ category, content: "待完成" }),
@@ -39,4 +39,11 @@ await run({ events: [event], evidence: [] });
 await run({ events: [event], evidence: [{ ...message, occurredAt: new Date(NaN) }] });
 for (const category of ["EVENT", "RELATIONSHIP", "PREFERENCE"] as const) await run({ events: [event], category });
 await run({ events: [null, event, event], evidence: [{ id: "plan", role: "USER", occurredAt: new Date("2026-11-20T00:00:00Z") }, message], accepted: true });
+const validEvents = [null, event, event];
+for (const start of [at, new Date("2026-11-24T00:00:00Z")]) await run({ events: validEvents, start, accepted: true });
+for (const start of [null, new Date(NaN), new Date("2026-11-26T00:00:00Z")]) await run({ events: validEvents, start });
+const contradiction = { invalidationBasis: "CONTRADICTED" as const, contradictionEvidenceMessageIds: ["done"] };
+await run({ mutation: contradiction, contradiction: true, evidence: [{ id: "plan", role: "USER", occurredAt: new Date("2026-11-20T00:00:00Z") }, message], accepted: true });
+await run({ mutation: { ...contradiction, contradictionEvidenceMessageIds: undefined }, contradiction: true });
+await run({ mutation: { ...contradiction, contradictionEvidenceMessageIds: ["missing"] }, contradiction: true });
 console.log("Direct memory apply binding guards passed: rejected inputs never update or audit, valid binding persists confirmation time and snapshot indexes.");

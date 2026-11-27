@@ -378,7 +378,7 @@ export async function applyMemoryChange(
   if (!relatedId || target.handledMemoryIds.has(relatedId) || !target.canTarget(relatedId)) return null;
   const previous = await tx.memoryItem.findFirst({
     where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE" },
-    select: { category: true, content: true },
+    select: { category: true, content: true, validFrom: true },
   });
   if (!previous) return null;
 
@@ -390,25 +390,25 @@ export async function applyMemoryChange(
     const confirmed = evidence.filter(message => message.role === "USER" && change.evidenceMessageIds.includes(message.id));
     if (basis === "TEMPORARY_STATE_ENDED" && ["EVENT", "RELATIONSHIP", "PREFERENCE"].includes(previous.category)) return null;
     // 普通证据和快照事件都可能引用计划与背景。只有显式标出的直接确认能定结束时间。
-    let endingEvidence = confirmed;
+    const confirmationIds = basis === "TEMPORARY_STATE_ENDED" ? change.endingEvidenceMessageIds : change.contradictionEvidenceMessageIds;
+    if (!Array.isArray(confirmationIds) || !confirmationIds.length || confirmationIds.length > 10) return null;
     let matchedEventIndexes: number[] = [];
     if (basis === "TEMPORARY_STATE_ENDED") {
-      const ids = change.endingEvidenceMessageIds;
-      if (!Array.isArray(ids) || !ids.length || ids.length > 10) return null;
-      matchedEventIndexes = matchingEndingEventIndexes(options?.importantEvents, relatedId, ids,
+      matchedEventIndexes = matchingEndingEventIndexes(options?.importantEvents, relatedId, confirmationIds,
         id => ctx.bindingMemoryIds?.has(id) === true);
       if (!matchedEventIndexes.length) return null;
-      const byId = new Map(confirmed.map(message => [message.id, message]));
-      endingEvidence = [];
-      for (const id of ids) {
-        const message = byId.get(id);
-        if (!message || !Number.isFinite(message.occurredAt.getTime())) return null;
-        endingEvidence.push(message);
-      }
+    }
+    const byId = new Map(confirmed.map(message => [message.id, message]));
+    const endingEvidence: MemoryEvidenceMessage[] = [];
+    for (const id of confirmationIds) {
+      const message = byId.get(id);
+      if (!message || !(message.occurredAt instanceof Date) || !Number.isFinite(message.occurredAt.getTime())) return null;
+      endingEvidence.push(message);
     }
     const endedAt = endingEvidence.reduce<Date | undefined>((earliest, message) =>
       !earliest || message.occurredAt < earliest ? message.occurredAt : earliest, undefined);
-    if (!endedAt || !Number.isFinite(endedAt.getTime())) return null;
+    if (!endedAt || !Number.isFinite(endedAt.getTime()) || !(previous.validFrom instanceof Date)
+      || !Number.isFinite(previous.validFrom.getTime()) || endedAt < previous.validFrom) return null;
     const invalidated = await tx.memoryItem.updateMany({
       where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE", category: previous.category, content: previous.content },
       data: { status: "INVALIDATED", validTo: endedAt },
@@ -426,6 +426,7 @@ export async function applyMemoryChange(
           reason: change.changeReason ?? change.content,
           invalidationBasis: basis,
           ...(basis === "TEMPORARY_STATE_ENDED" ? { endingEvidenceMessageIds: endingEvidence.map(message => message.id), matchedImportantEventIndexes: matchedEventIndexes } : {}),
+          ...(basis === "CONTRADICTED" ? { contradictionEvidenceMessageIds: endingEvidence.map(message => message.id) } : {}),
           confidence: change.confidence,
           evidenceMessageIds: change.evidenceMessageIds,
           snapshotId: ctx.snapshotId,
