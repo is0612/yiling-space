@@ -28,7 +28,8 @@
 | [local-development-and-data-migration](local-development-and-data-migration.md) | 本地开发、迁移、数据搬迁 |
 | [test-organization](test-organization.md) | 测试入口与隔离运行约定 |
 | [frontend-api-requests](frontend-api-requests.md) | 前端调业务接口的约定 |
-| [engineering-lessons](engineering-lessons.md) | 事故经过与由此产生的硬规则 |\n| [development/代码审查与变更验收规范](development/代码审查与变更验收规范.md) | P1/P2/P3 风险分级、审查流程、独立复审与放行标准 |
+| [engineering-lessons](engineering-lessons.md) | 事故经过与由此产生的硬规则 |
+| [development/代码审查与变更验收规范](development/代码审查与变更验收规范.md) | P1/P2/P3 风险分级、审查流程、独立复审与放行标准 |
 | [产品定位与跨平台架构原则](<产品定位与跨平台架构原则.md>) | 长期方向；不是已实现清单 |
 | [development/PROJECT_PROGRESS](development/PROJECT_PROGRESS.md) | 分批次进度与验收边界 |
 | [qq-onebot-adapter](qq-onebot-adapter.md) / [qq-onebot-deploy](qq-onebot-deploy.md) | QQ 渠道接入与部署 |
