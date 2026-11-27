@@ -9,6 +9,7 @@ import snapshotsHandler from "../server/api/characters/[id]/snapshots/index.post
 import { createSession, hashSessionToken } from "../server/utils/auth";
 import { encryptApiKey } from "../server/utils/credential-encryption";
 import { getPrisma } from "../server/utils/prisma";
+import { Client } from "pg";
 
 // Never allow this regression to write to the user's business database.
 const database = new URL(process.env.DATABASE_URL ?? "");
@@ -344,7 +345,77 @@ try {
     assert.equal(setting.nextSnapshotAt?.toISOString(), staleBoundary.toISOString(), "库里的边界必须原样保留");
   }
 
-  console.log("Snapshot generate DB regression passed: reused retry keeps the cycle contiguous, targeted worker, no overlapping concurrent periods, single AI regeneration per logical snapshot, paused auto-archive never advances the cursor.");} finally {
+  /**
+   * F. 「立即归档」持有范围锁时，不得再去锁在途任务行。
+   *
+   * Worker 的产物事务是「任务行 → 范围行」，这个接口原来是「范围行 → 任务行」；
+   * 两边同时走到就是数据库死锁。用一条连接占住在途任务行：请求只能在释放范围锁之后才等它。
+   * 否则下面的 NOWAIT 拿不到范围行（55P03）。复用和作废两个分支都走一遍。
+   */
+  for (const covered of [false, true]) {
+    const archivedEnd = new Date("2026-11-01T00:00:00Z");
+    const { characterId, scopeId } = await fixture({
+      archivedEnd,
+      // 10-31 落在复用任务的周期内，11-02 落在新建任务的周期内，两种分支都有消息可归档。
+      messages: [new Date("2026-10-31T00:00:00Z"), new Date("2026-11-02T00:00:00Z")],
+      nextSnapshotAt: archivedEnd,
+    });
+    const active = await prisma.memoryJob.create({
+      data: {
+        memoryScopeId: scopeId,
+        type: "GENERATE_SNAPSHOT",
+        idempotencyKey: `auto-snapshot:${scopeId}:in-flight:${randomUUID()}`,
+        periodStart: new Date(archivedEnd.getTime() - 2 * DAY_MS),
+        periodEnd: new Date(archivedEnd.getTime() + (covered ? -1 : 1) * DAY_MS),
+        status: "QUEUED",
+        runAt: new Date(0),
+      },
+    });
+    const holder = new Client({ connectionString: database.toString() });
+    const observer = new Client({ connectionString: database.toString() });
+    await holder.connect();
+    await observer.connect();
+    let pending: ReturnType<typeof generate> | undefined;
+    try {
+      await holder.query("BEGIN");
+      await holder.query('SELECT id FROM memory_jobs WHERE id = $1::uuid FOR UPDATE', [active.id]);
+      const holderPid = (await holder.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+      pending = generate(characterId);
+      const deadline = Date.now() + 6000;
+      let waiting: Array<{ query: string }> = [];
+      while (Date.now() < deadline) {
+        // 只认被占位连接真实阻塞的那个后端，不靠模糊匹配猜是谁在等。
+        waiting = (await observer.query(
+          "SELECT a.query FROM pg_stat_activity a WHERE a.datname = current_database() AND a.wait_event_type = 'Lock' AND $1::int = ANY(pg_blocking_pids(a.pid))",
+          [holderPid],
+        )).rows;
+        if (waiting.length) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(waiting.length, 1, "请求必须真的停在任务行上");
+      assert.match(waiting[0]!.query, /memory_jobs/, "等待的应当是任务行，不是范围行");
+      // 旧实现在这里持有范围锁等任务行，NOWAIT 会以 55P03 失败。
+      await holder.query('SELECT id FROM memory_scopes WHERE id = $1::uuid FOR UPDATE NOWAIT', [scopeId]);
+      await holder.query("COMMIT");
+      const result = await pending;
+      pending = undefined;
+      const settled = await prisma.memoryJob.findUniqueOrThrow({ where: { id: active.id } });
+      if (covered) {
+        assert.equal(settled.status, "CANCELLED", "周期已被覆盖的在途任务在范围事务之后被作废");
+        assert.equal(result.processed[0]?.status, "SUCCEEDED");
+      } else {
+        assert.equal(settled.runAt.getTime() > 0, true, "复用在途任务时，runAt 仍被提到现在");
+        assert.equal(result.queued.some((line) => line.includes("接着跑")), true, JSON.stringify(result));
+        assert.equal(settled.status, "SUCCEEDED", "复用的任务照旧被接着跑完");
+      }
+    } finally {
+      await holder.query("ROLLBACK");
+      if (pending) await pending.catch(() => undefined);
+      await Promise.all([holder.end(), observer.end()]);
+    }
+  }
+
+  console.log("Snapshot generate DB regression passed: reused retry keeps the cycle contiguous, targeted worker, no overlapping concurrent periods, single AI regeneration per logical snapshot, paused auto-archive never advances the cursor, in-flight job rows are never locked under the scope lock.");} finally {
   gate?.release();
   await Promise.all([
     new Promise<void>((resolve) => api.close(() => resolve())),

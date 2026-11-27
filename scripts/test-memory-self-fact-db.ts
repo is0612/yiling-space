@@ -140,7 +140,7 @@ const invalidated = await prisma.$transaction((tx) => applyMemoryChange(tx, ctx,
   confidence: 0.9,
   relatedMemoryId: stale.id,
   evidenceMessageIds: [message.id],
-}, evidence));
+}, evidence, { periodEnd: new Date(message.occurredAt.getTime() + 60_000) }));
 check("变更已应用", invalidated?.result === "INVALIDATED", invalidated);
 const staleAfter = await prisma.memoryItem.findUnique({ where: { id: stale.id } });
 check("旧全局条目退出 ACTIVE", staleAfter?.status === "INVALIDATED", staleAfter?.status);

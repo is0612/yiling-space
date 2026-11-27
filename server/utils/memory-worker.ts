@@ -1601,7 +1601,7 @@ export async function processNextMemoryJob(
           },
           change,
           evidence,
-          { importantEvents: aiResult.analysis.importantEvents },
+          { importantEvents: aiResult.analysis.importantEvents, periodEnd: job.periodEnd ?? undefined },
         );
         if (applied) appliedChanges.push(applied);
         else if (change.action === "INVALIDATE") rejectedChangeCount += 1;

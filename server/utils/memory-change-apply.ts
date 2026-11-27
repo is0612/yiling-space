@@ -259,6 +259,11 @@ export async function applyMemoryChange(
   options?: {
     reviewEvidenceFallbackAt?: Date;
     importantEvents?: readonly unknown[];
+    /**
+     * 本次提炼周期的结束点（不含）。INVALIDATE 必传：确认消息只可能来自 [periodStart, periodEnd)，
+     * 失效时间落在周期之外，说明建议和它所属的快照对不上。
+     */
+    periodEnd?: Date;
   },
 ): Promise<ApplyResult | null> {
   // Only an explicit human review may apply an already validated historical suggestion
@@ -407,8 +412,12 @@ export async function applyMemoryChange(
     }
     const endedAt = endingEvidence.reduce<Date | undefined>((earliest, message) =>
       !earliest || message.occurredAt < earliest ? message.occurredAt : earliest, undefined);
+    // 区间守卫：起点、确认时间、周期结束点三者都必须是有效时间，且 validFrom ≤ validTo < periodEnd。
+    // 相等允许；缺失或异常一律拒绝，不钳制。
+    const periodEnd = options?.periodEnd;
     if (!endedAt || !Number.isFinite(endedAt.getTime()) || !(previous.validFrom instanceof Date)
-      || !Number.isFinite(previous.validFrom.getTime()) || endedAt < previous.validFrom) return null;
+      || !Number.isFinite(previous.validFrom.getTime()) || endedAt < previous.validFrom
+      || !(periodEnd instanceof Date) || !Number.isFinite(periodEnd.getTime()) || endedAt >= periodEnd) return null;
     const invalidated = await tx.memoryItem.updateMany({
       where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE", category: previous.category, content: previous.content },
       data: { status: "INVALIDATED", validTo: endedAt },

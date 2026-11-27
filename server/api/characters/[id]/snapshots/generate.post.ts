@@ -4,6 +4,7 @@ import { INLINE_MEMORY_WORK_MS, waitBriefly } from "../../../../utils/background
 import { requireUuid } from "../../../../utils/local-api";
 import { getPrisma } from "../../../../utils/prisma";
 import { processNextMemoryJob } from "../../../../utils/memory-worker";
+import type { MemoryJobStatus } from "../../../../../src/generated/prisma/client";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /**
@@ -90,6 +91,16 @@ export default defineEventHandler(async (event) => {
   const targetIds: string[] = [];
 
   for (const scope of scopes) {
+    /**
+     * 在途任务行的改动不放进范围事务，等它提交后再执行。
+     *
+     * Worker 的产物事务先锁任务行、再等范围行；这里若在持有范围锁时去改同一条任务行，
+     * 两边互等就是数据库死锁。条件更新（id + 刚读到的状态）保证改不掉已被领取或改写的任务。
+     */
+    const jobUpdates: Array<{
+      where: { id: string; status: MemoryJobStatus };
+      data: { runAt?: Date; status?: "CANCELLED"; completedAt?: Date; lastError?: string };
+    }> = [];
     const planned = await prisma.$transaction(async (tx) => {
       // 计划互斥：与手动版本、Worker 提交共用范围行的锁。两个请求各算一份周期时，
       // 幂等键里的 `now` 毫秒不同，`skipDuplicates` 挡不住重叠 —— 必须让排期本身串行。
@@ -119,14 +130,14 @@ export default defineEventHandler(async (event) => {
         if (!covered) {
           // RETRY_WAIT 的手动触发要提到「现在」，否则用户点了按钮却什么都不发生。
           if (active.status !== "RUNNING") {
-            await tx.memoryJob.updateMany({ where: { id: active.id, status: active.status }, data: { runAt: now } });
+            jobUpdates.push({ where: { id: active.id, status: active.status }, data: { runAt: now } });
           }
           return { action: "reuse" as const, id: active.id };
         }
         if (active.status === "RUNNING") {
           return { action: "skip" as const, message: `该周期已有归档覆盖，正在运行的任务不会重复排队${scope.label}` };
         }
-        await tx.memoryJob.updateMany({
+        jobUpdates.push({
           where: { id: active.id, status: active.status },
           data: {
             status: "CANCELLED",
@@ -187,6 +198,8 @@ export default defineEventHandler(async (event) => {
       if (!created) return { action: "skip" as const, message: `归档任务排队失败${scope.label}` };
       return { action: "queued" as const, id: created.id, message: `归档 ${clock(periodStart, timeZone)} 之后的对话${scope.label}` };
     });
+    // 范围锁已随事务提交释放，这时再去锁任务行不会和 Worker 互等。
+    for (const update of jobUpdates) await prisma.memoryJob.updateMany(update);
 
     if (planned.action === "skip") {
       skipped.push(planned.message);

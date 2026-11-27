@@ -62,6 +62,7 @@ export default defineEventHandler(async (event) => {
       id: true,
       kind: true,
       periodStart: true,
+      periodEnd: true,
       structuredContent: true,
       reviews: { select: { changeIndex: true, decision: true } },
     },
@@ -199,6 +200,8 @@ export default defineEventHandler(async (event) => {
           // Preserve the immutable snapshot's raw event order and binding fields.
           // The shared apply boundary validates every candidate event itself.
           importantEvents: Array.isArray(importantEvents) ? importantEvents : [],
+          // 确认消息只能来自这份快照自己的周期，失效时间不得落在周期结束点或之后。
+          periodEnd: snapshot.periodEnd,
         },
       );
       if (!applied) return null;

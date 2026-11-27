@@ -308,9 +308,23 @@ async function evidenceNumbering() {
   page.done();
 }
 
+async function supersededReviewNote() {
+  const page = harness();
+  const pending = { action: "ADD", result: "NOT_APPLIED_REGENERATION", category: "FACT", content: "旧版建议" };
+  const decided = { ...pending, reviewDecision: "ACCEPTED" };
+  // 旧版仍可审核是既定行为；被替代且还有待处理建议时，页面必须给出提示。
+  assert.equal(page.call("supersededWithPendingReview", { status: "已被替代", analysis: { memoryChangesApplied: [pending] } }), true);
+  assert.equal(page.call("supersededWithPendingReview", { status: "已被替代", analysis: { memoryChangesApplied: [decided] } }), false);
+  assert.equal(page.call("supersededWithPendingReview", { status: "当前版本", analysis: { memoryChangesApplied: [pending] } }), false);
+  assert.equal(page.call("supersededWithPendingReview", { status: "已被替代" }), false);
+  assert.match(sfc, /supersededWithPendingReview\(detail\)/, "the template must render the note from the real detail state");
+  page.done();
+}
+
 await listAndDetailRaces();
 await sourceRaces();
 await filterAndPagination();
 await writeGuards();
 await evidenceNumbering();
-console.log("snapshot page races: actual script/setup list, detail, sources, filters, confirmations and refresh guards passed");
+await supersededReviewNote();
+console.log("snapshot page races: actual script/setup list, detail, sources, filters, confirmations, refresh guards and superseded review note passed");

@@ -15,6 +15,34 @@ import type { PrismaClient } from "../src/generated/prisma/client";
 import { Client } from "pg";
 import { makeMemoryDedupeKey } from "../server/utils/memory-ai";
 
+/**
+ * 等到「被指定后端真实阻塞」的会话出现，并核对它正在等的那条语句。
+ * `pg_blocking_pids` 反映的是锁等待图里谁挡着谁，不是按语句文本模糊猜。
+ */
+async function waitForBlockedBy(observer: Client, holderPid: number, pattern: RegExp, label: string): Promise<number> {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const waits: Array<{ pid: number; query: string }> = (await observer.query(
+      "SELECT a.pid, a.query FROM pg_stat_activity a WHERE a.datname = current_database() AND a.wait_event_type = 'Lock' AND $1::int = ANY(pg_blocking_pids(a.pid))",
+      [holderPid],
+    )).rows;
+    if (waits.length) {
+      assert.match(waits[0]!.query, pattern, label);
+      return waits[0]!.pid;
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail(`${label}: 没有会话被后端 ${holderPid} 阻塞`);
+}
+
+/** 重新提炼的模型替身：只返回空变化，Worker 其余逻辑全部走生产代码。 */
+function extractionModel(original: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    if (!String(input).startsWith("https://review-lock.invalid/")) return original(input, init);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: "重新提炼并发测试", memoryChanges: [], importantEvents: [] }) } }] }), { headers: { "content-type": "application/json" } });
+  };
+}
+
 // This entry may only write to a disposable local database created by the isolated runner.
 const url = new URL(process.env.DATABASE_URL ?? "");
 assert(["localhost", "127.0.0.1", "[::1]"].includes(url.hostname));
@@ -243,16 +271,9 @@ try {
       await blocker.query("BEGIN");
       try {
         await blocker.query('SELECT id FROM memory_scopes WHERE id = $1::uuid FOR UPDATE', [scopeId]);
+        const blockerPid = (await blocker.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
         pendingReview = request(fixture.id, 0, decision);
-        const deadline = Date.now() + 4000;
-        let waitingOnScope = false;
-        while (Date.now() < deadline) {
-          const waits = await observer.query("SELECT query FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%memory_scopes%' AND pid <> pg_backend_pid()");
-          waitingOnScope = waits.rows.length > 0;
-          if (waitingOnScope) break;
-          await new Promise(resolve => setTimeout(resolve, 10));
-        }
-        assert(waitingOnScope, `${decision} must reach the real scope lock barrier`);
+        await waitForBlockedBy(observer, blockerPid, /memory_scopes/, `${decision} must wait for the real scope lock held by the blocker`);
         // Old snapshot->scope ordering would make this NOWAIT fail with 55P03.
         await blocker.query('SELECT id FROM memory_snapshots WHERE id = $1::uuid FOR UPDATE NOWAIT', [fixture.id]);
         await blocker.query('UPDATE memory_snapshots SET status = $2 WHERE id = $1::uuid', [fixture.id, "SUPERSEDED"]);
@@ -291,6 +312,27 @@ try {
       assert.equal(await prisma.auditLog.count({ where: { characterId } }), before);
     }
   }
+  // A confirmation at or after the snapshot's own period end is rejected in the actual HTTP path.
+  for (const [offset, periodEnd] of [correction.occurredAt, new Date("2026-10-03T00:00:00Z")].entries()) {
+    const item = await prisma.memoryItem.create({ data: { memoryScopeId: scopeId, category: "FACT", content: `period-end-${offset}`, validFrom: periodStart } });
+    const fixture = await prisma.memorySnapshot.create({ data: {
+      memoryScopeId: scopeId, snapshotKey, version: 16 + offset, periodStart, periodEnd, summary: "confirmation outside the period",
+      structuredContent: { memoryChangesApplied: [invalidation(item, correction.id, "CONTRADICTED")] },
+    } });
+    const before = await prisma.auditLog.count({ where: { characterId } });
+    const response = await request(fixture.id, 0);
+    const stored = await prisma.memoryItem.findUniqueOrThrow({ where: { id: item.id } });
+    if (offset === 1) {
+      assert.equal(response.status, 200, JSON.stringify(response));
+      assert.equal(stored.status, "INVALIDATED");
+    } else {
+      assert.equal(response.status, 409, JSON.stringify(response));
+      assert.equal(stored.status, "ACTIVE");
+      assert.equal(stored.validTo, null);
+      assert.equal(await prisma.memoryReview.count({ where: { snapshotId: fixture.id } }), 0);
+      assert.equal(await prisma.auditLog.count({ where: { characterId } }), before);
+    }
+  }
 
   // Actual REGENERATE worker holds its real scope row lock while an actual HTTP
   // review queues behind it. The proxy supplies only a scheduling barrier; every
@@ -313,6 +355,7 @@ try {
     const scopeLocked = new Promise<void>(resolve => { entered = resolve; });
     const continueWorker = new Promise<void>(resolve => { release = resolve; });
     let gated = false;
+    let workerPid = 0;
     const workerPrisma = new Proxy(prisma, { get(target, property, receiver) {
       if (property !== "$transaction") return Reflect.get(target, property, receiver);
       return (run: (tx: any) => Promise<unknown>, options?: any) => target.$transaction(async tx => run(new Proxy(tx, { get(realTx, key, txReceiver) {
@@ -321,6 +364,8 @@ try {
           const result = await realTx.$queryRaw(parts, ...values);
           if (!gated && parts.join("").includes("memory_scopes") && parts.join("").includes("FOR UPDATE")) {
             gated = true;
+            // 记下 Worker 的事务后端：后面的断言只认被它阻塞的会话。
+            [workerPid] = (await realTx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`).map(row => row.pid);
             entered();
             await continueWorker;
           }
@@ -328,10 +373,7 @@ try {
         };
       } })), { ...options, timeout: 15_000 });
     } }) as PrismaClient;
-    globalThis.fetch = async (input, init) => {
-      if (!String(input).startsWith("https://review-lock.invalid/")) return originalFetch(input, init);
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ summary: "重新提炼并发测试", memoryChanges: [], importantEvents: [] }) } }] }), { headers: { "content-type": "application/json" } });
-    };
+    globalThis.fetch = extractionModel(originalFetch);
     const inspect = new Client({ connectionString: url.toString() });
     await inspect.connect();
     const worker = processNextMemoryJob(workerPrisma, { jobId: job.id, ownerId, workerId: "review-concurrency-worker" });
@@ -341,15 +383,7 @@ try {
       await Promise.race([scopeLocked, new Promise<never>((_resolve, reject) => { barrierTimeout = setTimeout(() => reject(new Error("actual Worker did not reach scope lock")), 8000); })]);
       if (barrierTimeout) clearTimeout(barrierTimeout);
       concurrentReview = request(sourceSnapshot.id, 0);
-      const deadline = Date.now() + 4000;
-      let queued = false;
-      while (Date.now() < deadline) {
-        const waits = await inspect.query("SELECT query FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%memory_scopes%' AND pid <> pg_backend_pid()");
-        queued = waits.rows.length > 0;
-        if (queued) break;
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-      assert(queued, "HTTP review must wait for the actual Worker scope lock");
+      await waitForBlockedBy(inspect, workerPid, /memory_scopes/, "HTTP review must wait for the actual Worker scope lock");
       release();
       const [workerResult, reviewResult] = await Promise.all([worker, concurrentReview]);
       assert(workerResult.processed && workerResult.status === "SUCCEEDED", JSON.stringify(workerResult));
@@ -364,6 +398,48 @@ try {
       await Promise.allSettled([worker, ...(concurrentReview ? [concurrentReview] : [])]);
       globalThis.fetch = originalFetch;
       await inspect.end();
+    }
+  }
+  // Reverse order: an actual HTTP review holds the scope and snapshot locks while the actual
+  // REGENERATE Worker queues behind it. The review is parked on a table lock that only blocks its
+  // last audit INSERT, i.e. after both row locks; nothing about the Worker is simulated here.
+  {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = extractionModel(originalFetch);
+    const fixture = await prisma.memorySnapshot.create({ data: {
+      memoryScopeId: scopeId, snapshotKey: `review-first-lock:${randomUUID()}`, periodStart, periodEnd: first.periodEnd, summary: "review holds locks first",
+      structuredContent: { memoryChangesApplied: [suggestion("复核先持锁并发事实")] },
+    } });
+    const job = await prisma.memoryJob.create({ data: {
+      memoryScopeId: scopeId, type: "REGENERATE_SNAPSHOT", snapshotId: fixture.id,
+      periodStart, periodEnd: first.periodEnd, idempotencyKey: `review-first-lock:${randomUUID()}`, runAt: new Date(0),
+    } });
+    const holder = new Client({ connectionString: url.toString() });
+    const inspect = new Client({ connectionString: url.toString() });
+    await holder.connect();
+    await inspect.connect();
+    let pendingReview: ReturnType<typeof request> | undefined;
+    let worker: ReturnType<typeof processNextMemoryJob> | undefined;
+    try {
+      await holder.query("BEGIN");
+      await holder.query("LOCK TABLE audit_logs IN SHARE MODE");
+      const holderPid = (await holder.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+      pendingReview = request(fixture.id, 0, "IGNORE");
+      const reviewPid = await waitForBlockedBy(inspect, holderPid, /audit_logs/, "the review must be parked after its scope and snapshot locks");
+      worker = processNextMemoryJob(prisma, { jobId: job.id, ownerId, workerId: "review-concurrency-worker" });
+      await waitForBlockedBy(inspect, reviewPid, /memory_scopes/, "the actual Worker must wait for the scope lock held by the actual review");
+      await holder.query("ROLLBACK");
+      const [workerResult, reviewResult] = await Promise.all([worker, pendingReview]);
+      pendingReview = undefined;
+      assert(workerResult.processed && workerResult.status === "SUCCEEDED", JSON.stringify(workerResult));
+      assert.equal(reviewResult.status, 200, JSON.stringify(reviewResult));
+      assert.equal(await prisma.memoryReview.count({ where: { snapshotId: fixture.id, decision: "IGNORED" } }), 1);
+      assert.equal((await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: fixture.id } })).status, "SUPERSEDED");
+    } finally {
+      await holder.query("ROLLBACK");
+      globalThis.fetch = originalFetch;
+      await Promise.allSettled([worker, ...(pendingReview ? [pendingReview] : [])]);
+      await Promise.all([holder.end(), inspect.end()]);
     }
   }
   for (const original of [first, second, third, ...bindingSnapshots]) {

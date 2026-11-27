@@ -8,7 +8,10 @@ const message: MemoryEvidenceMessage = { id: "done", role: "USER", occurredAt: a
 const change: MemoryChange = { action: "INVALIDATE", category: "FACT", content: "已完成", confidence: 0.95,
   relatedMemoryId: "m", invalidationBasis: "TEMPORARY_STATE_ENDED", evidenceMessageIds: ["plan", "done"], endingEvidenceMessageIds: ["done"] };
 const event = { title: "完成", detail: "确认完成", endedMemoryIds: ["m"], evidenceMessageIds: ["done"] };
-async function run(options: { events?: readonly unknown[]; evidence?: MemoryEvidenceMessage[]; mutation?: Partial<MemoryChange>; category?: "FACT" | "EVENT" | "RELATIONSHIP" | "PREFERENCE"; accepted?: boolean; start?: Date | null; contradiction?: boolean } = {}) {
+async function run(options: { events?: readonly unknown[]; evidence?: MemoryEvidenceMessage[]; mutation?: Partial<MemoryChange>; category?: "FACT" | "EVENT" | "RELATIONSHIP" | "PREFERENCE"; accepted?: boolean; start?: Date | null; contradiction?: boolean;
+    /** 周期结束点；不传这个键 = 合法的默认结束点，传 undefined/null/异常值 = 无法比较。 */
+    end?: Date | null } = {}) {
+  const periodEnd = "end" in options ? options.end : new Date("2026-11-26T00:00:00Z");
   let writes = 0;
   let audits = 0;
   let stored: Date | undefined;
@@ -21,7 +24,7 @@ async function run(options: { events?: readonly unknown[]; evidence?: MemoryEvid
   const ctx: MemoryApplyContext = { memoryScopeId: "scope", characterId: "c", snapshotId: "s", actorType: "WORKER", auditActionPrefix: "memory.ai_",
     canTarget: id => id === "m", bindingMemoryIds: new Set(["m", "other"]), resolvePrevious: async () => ({ category, content: "待完成" }),
     handledMemoryIds: new Set(), existingDedupeKeys: new Set(), existingItemSignatures: new Set() };
-  const result = await applyMemoryChange(tx, ctx, { ...change, ...options.mutation }, options.evidence ?? [message], { importantEvents: options.events });
+  const result = await applyMemoryChange(tx, ctx, { ...change, ...options.mutation }, options.evidence ?? [message], { importantEvents: options.events, periodEnd });
   assert.equal(Boolean(result), options.accepted ?? false);
   assert.equal(writes, options.accepted ? 1 : 0);
   assert.equal(audits, options.accepted ? 1 : 0);
@@ -46,4 +49,9 @@ const contradiction = { invalidationBasis: "CONTRADICTED" as const, contradictio
 await run({ mutation: contradiction, contradiction: true, evidence: [{ id: "plan", role: "USER", occurredAt: new Date("2026-11-20T00:00:00Z") }, message], accepted: true });
 await run({ mutation: { ...contradiction, contradictionEvidenceMessageIds: undefined }, contradiction: true });
 await run({ mutation: { ...contradiction, contradictionEvidenceMessageIds: ["missing"] }, contradiction: true });
-console.log("Direct memory apply binding guards passed: rejected inputs never update or audit, valid binding persists confirmation time and snapshot indexes.");
+// 失效时间必须落在本周期内：缺结束点、异常、等于或晚于结束点都拒绝；早于结束点才写。
+for (const end of [undefined, null, new Date(NaN), at, new Date("2026-11-24T00:00:00Z")]) await run({ events: validEvents, end });
+await run({ events: validEvents, end: new Date(at.getTime() + 1), accepted: true });
+await run({ mutation: contradiction, contradiction: true, evidence: [message], end: at });
+await run({ mutation: contradiction, contradiction: true, evidence: [message], end: new Date(at.getTime() + 1), accepted: true });
+console.log("Direct memory apply binding guards passed: rejected inputs never update or audit, valid binding persists confirmation time and snapshot indexes; validTo must stay inside [validFrom, periodEnd).");

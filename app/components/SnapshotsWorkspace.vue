@@ -405,6 +405,15 @@ function reviewPending(item: MemoryChangeRow) {
   return item.result === "NOT_APPLIED_REGENERATION" && !item.reviewDecision;
 }
 
+/**
+ * 被替代的版本仍可审核（旧版建议不一定出现在新版里），但页面得说清楚它已被替代，
+ * 否则人会在旧版上把新版已经重新提炼过的建议再采纳一遍。
+ */
+function supersededWithPendingReview(snapshot: SnapshotDetail) {
+  return snapshot.status === "已被替代"
+    && Boolean(snapshot.analysis?.memoryChangesApplied?.some(reviewPending));
+}
+
 function reviewResultMessage(decision: "ACCEPT" | "IGNORE", outcome: string | null) {
   if (decision === "IGNORE") return "已忽略这条建议，不会改动任何记忆。";
   if (outcome === "DUPLICATE_IGNORED") return "内容与已有记忆相同，没有重复新建。";
@@ -960,6 +969,12 @@ watch(id, () => {
                       class="a-rejected"
                     >另 {{ detail.reviewRejected }} 条未通过来源校验</span>
                   </h4>
+                  <p
+                    v-if="supersededWithPendingReview(detail)"
+                    class="a-stale"
+                  >
+                    这份版本已被新版本替代。下面的建议仍可采纳或忽略，但可能已被新版本重新提炼的结果取代，处理前请先对照新版本。
+                  </p>
                   <article
                     v-for="(item, index) in detail.analysis.memoryChangesApplied"
                     :key="'change-' + index"
@@ -1220,6 +1235,7 @@ watch(id, () => {
 .a-prev{display:flex;align-items:baseline;gap:8px;margin-top:8px;border-left:2px solid var(--line-strong);padding-left:9px;color:var(--dim);font-size:12px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere}
 .a-prev span{flex:none;color:var(--text-2);font-weight:600}
 .a-rejected{margin-left:8px;color:var(--amber);font-weight:500}
+.a-stale{margin:0 0 10px;color:var(--amber);font-size:12px;line-height:1.7}
 /* 依据留左边，处置结果和「采纳 / 忽略」靠右：一条建议的结论比它的出处更该被先看到 */
 .a-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
 .a-foot small{margin-top:0}
