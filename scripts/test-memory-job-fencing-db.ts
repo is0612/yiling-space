@@ -211,13 +211,32 @@ try {
       memoryScopeId: scopeId, dayKey: "2026-11-01", occurredAt: completion.occurredAt, title: "完成回归",
       detail: completion.content, dedupeKey: "completed-regression", sourceMessageIds: [completion.id, randomUUID()],
     } });
+    const userMessage = (content: string, seconds: number) => prisma.message.create({ data: {
+      conversationId: original.conversationId, role: "USER", content, occurredAt: new Date(+start + seconds * 1000),
+    } });
+    const [plan, background, repeat, laterContext, secondCorrection] = await Promise.all([
+      userMessage("准备跑完回归测试。", 90),
+      userMessage("回归用例分成两组。", 100),
+      userMessage("再次确认，回归测试已经通过。", 150),
+      userMessage("回归用例的说明都保存在文档里。", 160),
+      userMessage("确认当前模型已切到新版本。", 170),
+    ]);
+    const eventSources = [plan.id, background.id, completion.id, repeat.id, laterContext.id, speculation.id];
+    const temporary = "TEMPORARY_STATE_ENDED";
     const cases = [
-      { category: "COMMITMENT", content: "回归测试待完成。", basis: "TEMPORARY_STATE_ENDED", source: completion, expected: "INVALIDATED" },
-      { category: "EVENT", content: "上周语音出故障，重启后恢复。", basis: "TEMPORARY_STATE_ENDED", source: completion, expected: "ACTIVE" },
-      { category: "FACT", content: "过去完成了安装器开发。", basis: undefined, source: completion, expected: "ACTIVE" },
-      { category: "FACT", content: "当前模型还是旧版本。", basis: "CONTRADICTED", source: original, expected: "INVALIDATED" },
-      { category: "COMMITMENT", content: "备份待完成。", basis: "TEMPORARY_STATE_ENDED", source: speculation, expected: "ACTIVE" },
-      { category: "COMMITMENT", content: "还要做一次临时配置清理。", basis: "TEMPORARY_STATE_ENDED", source: original, expected: "ACTIVE" },
+      { category: "COMMITMENT", content: "回归测试待完成。", basis: temporary, sources: [completion], ending: [completion], validTo: completion.occurredAt },
+      { category: "FACT", content: "当前回归尚未跑完。", basis: temporary, sources: [plan, completion], ending: [completion], validTo: completion.occurredAt },
+      { category: "GOAL", content: "待完成整个回归流程。", basis: temporary, sources: [plan, background, completion, laterContext], ending: [completion], validTo: completion.occurredAt },
+      { category: "OTHER", content: "回归结果仍待确认。", basis: temporary, sources: [repeat, plan, completion, laterContext], ending: [repeat, completion], validTo: completion.occurredAt },
+      { category: "EVENT", content: "上周语音出故障，重启后恢复。", basis: temporary, sources: [completion], ending: [completion], validTo: null },
+      { category: "RELATIONSHIP", content: "两人长期协作。", basis: temporary, sources: [completion], ending: [completion], validTo: null },
+      { category: "PREFERENCE", content: "偏好跑完整回归。", basis: temporary, sources: [completion], ending: [completion], validTo: null },
+      { category: "FACT", content: "过去完成了安装器开发。", basis: undefined, sources: [completion], ending: undefined, validTo: null },
+      { category: "FACT", content: "当前模型还是旧版本。", basis: "CONTRADICTED", sources: [secondCorrection, original], ending: undefined, validTo: original.occurredAt },
+      { category: "COMMITMENT", content: "备份待完成。", basis: temporary, sources: [plan, speculation], ending: [speculation], validTo: null },
+      { category: "COMMITMENT", content: "还要做一次临时配置清理。", basis: temporary, sources: [original], ending: [original], validTo: null },
+      { category: "COMMITMENT", content: "还要完成最后一项核对。", basis: temporary, sources: [plan, background], ending: undefined, validTo: null },
+      { category: "COMMITMENT", content: "待确认回归结果及环境。", basis: temporary, sources: [completion, speculation], ending: [completion, speculation], validTo: null },
     ] as const;
     await prisma.message.update({ where: { id: original.id }, data: { content: "现在用的是新模型。" } });
     const items = await Promise.all(cases.map(({ category, content }) => prisma.memoryItem.create({ data: {
@@ -227,9 +246,10 @@ try {
       assert.deepEqual(prompt.periodEvents.map((row: any) => [row.id, row.sourceMessageIds]), [[event.id, [completion.id]]]);
       return {
         summary: "完成回归并切换到新模型。",
-        importantEvents: [{ title: prompt.periodEvents[0].title, detail: prompt.periodEvents[0].detail, evidenceMessageIds: [completion.id] }],
-        memoryChanges: cases.map((spec, index) => ({ action: "INVALIDATE", content: spec.source.content, category: "FACT",
-          relatedMemoryId: items[index]!.id, invalidationBasis: spec.basis, evidenceMessageIds: [spec.source.id], confidence: 0.97 })),
+        importantEvents: [{ title: prompt.periodEvents[0].title, detail: prompt.periodEvents[0].detail, evidenceMessageIds: eventSources }],
+        memoryChanges: cases.map((spec, index) => ({ action: "INVALIDATE", content: spec.content, category: "FACT",
+          relatedMemoryId: items[index]!.id, invalidationBasis: spec.basis, evidenceMessageIds: spec.sources.map(message => message.id),
+          endingEvidenceMessageIds: spec.ending?.map(message => message.id), confidence: 0.97 })),
       };
     };
     gate.release();
@@ -237,17 +257,20 @@ try {
     snapshotAnalysis = undefined;
     assert(result.processed && result.status === "SUCCEEDED" && result.snapshotId, JSON.stringify(result));
     for (const [index, item] of items.entries()) {
-      assert.equal((await prisma.memoryItem.findUniqueOrThrow({ where: { id: item.id } })).status, cases[index]!.expected, item.content);
+      const stored = await prisma.memoryItem.findUniqueOrThrow({ where: { id: item.id } });
+      const expected = cases[index]!.validTo;
+      assert.equal(stored.status, expected ? "INVALIDATED" : "ACTIVE", item.content);
+      assert.deepEqual(stored.validTo, expected, item.content);
     }
     const snapshot = await prisma.memorySnapshot.findUniqueOrThrow({ where: { id: result.snapshotId }, include: { sources: true } });
     const saved = snapshot.structuredContent as { analysis: { importantEvents: Array<{ evidenceMessageIds: string[] }> }; memoryChangesApplied: unknown[] };
-    assert.deepEqual(saved.analysis.importantEvents[0]?.evidenceMessageIds, [completion.id]);
-    assert.equal(saved.memoryChangesApplied.length, 2);
+    assert.deepEqual(saved.analysis.importantEvents[0]?.evidenceMessageIds, eventSources);
+    assert.equal(saved.memoryChangesApplied.length, 5);
     assert(snapshot.sources.some(source => source.messageId === completion.id));
     assert.equal(await prisma.memoryEvent.count({ where: { memoryScopeId: scopeId } }), 1);
     assert.equal((await prisma.memoryEvent.findUniqueOrThrow({ where: { id: event.id } })).status, "ACTIVE");
-    assert.equal(await prisma.auditLog.count({ where: { entityId: { in: items.map(item => item.id) }, actorType: "WORKER", action: "memory.ai_invalidated" } }), 2);
-    console.log("Snapshot Worker invalidation and retained completion evidence passed.");
+    assert.equal(await prisma.auditLog.count({ where: { entityId: { in: items.map(item => item.id) }, actorType: "WORKER", action: "memory.ai_invalidated" } }), 5);
+    console.log("Snapshot Worker invalidation, persisted validTo, and retained completion evidence passed.");
   }
   // Model SKIP must also pass the journal transaction's lease check.
   gate = barrier(); journalSkip = true; fail = false;

@@ -386,13 +386,24 @@ export async function applyMemoryChange(
     if (!basis || !observed || observed.category !== previous.category || observed.content !== previous.content) return null;
     // 来源角色和归属能硬校验；是否明确确认同一件事仍由提炼规则判断。
     const confirmed = evidence.filter(message => message.role === "USER" && change.evidenceMessageIds.includes(message.id));
-    const endingEvidence = basis === "TEMPORARY_STATE_ENDED"
-      ? confirmed.filter(message => options?.importantEvents?.some(event => event.evidenceMessageIds.includes(message.id)))
-      : confirmed;
+    if (basis === "TEMPORARY_STATE_ENDED" && ["EVENT", "RELATIONSHIP", "PREFERENCE"].includes(previous.category)) return null;
+    // 普通证据和快照事件都可能引用计划与背景。只有显式标出的直接确认能定结束时间。
+    let endingEvidence = confirmed;
+    if (basis === "TEMPORARY_STATE_ENDED") {
+      const ids = change.endingEvidenceMessageIds;
+      if (!ids?.length || ids.length > 10) return null;
+      const byId = new Map(confirmed.map(message => [message.id, message]));
+      endingEvidence = [];
+      for (const id of ids) {
+        const message = byId.get(id);
+        if (!message || !Number.isFinite(message.occurredAt.getTime())
+          || !options?.importantEvents?.some(event => event.evidenceMessageIds.includes(id))) return null;
+        endingEvidence.push(message);
+      }
+    }
     const endedAt = endingEvidence.reduce<Date | undefined>((earliest, message) =>
       !earliest || message.occurredAt < earliest ? message.occurredAt : earliest, undefined);
     if (!endedAt || !Number.isFinite(endedAt.getTime())) return null;
-    if (basis === "TEMPORARY_STATE_ENDED" && ["EVENT", "RELATIONSHIP", "PREFERENCE"].includes(previous.category)) return null;
     const invalidated = await tx.memoryItem.updateMany({
       where: { id: relatedId, memoryScopeId: target.memoryScopeId, status: "ACTIVE", category: previous.category, content: previous.content },
       data: { status: "INVALIDATED", validTo: endedAt },
@@ -409,6 +420,7 @@ export async function applyMemoryChange(
         details: {
           reason: change.changeReason ?? change.content,
           invalidationBasis: basis,
+          ...(basis === "TEMPORARY_STATE_ENDED" ? { endingEvidenceMessageIds: endingEvidence.map(message => message.id) } : {}),
           confidence: change.confidence,
           evidenceMessageIds: change.evidenceMessageIds,
           snapshotId: ctx.snapshotId,

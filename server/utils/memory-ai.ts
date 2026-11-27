@@ -72,6 +72,8 @@ export type MemoryChange = {
   relatedMemoryId?: string;
   changeReason?: string;
   invalidationBasis?: "TEMPORARY_STATE_ENDED" | "CONTRADICTED";
+  /** 仅 TEMPORARY_STATE_ENDED：直接确认结束的原始消息，背景仍留在 evidenceMessageIds。 */
+  endingEvidenceMessageIds?: string[];
   /**
    * 这条记忆该写进哪个范围。缺省 / "current" = 当前对话范围；
    * "character" = 角色全局范围（任何群、私聊都能读到）。
@@ -201,7 +203,7 @@ export type MemoryAiInput = {
 const MAX_RESPONSE_BYTES = 1_000_000;
 /** v5：忆泡抽取补上 `speaker` / `member`，并要求 participants 不写自己、不写泛称。 */
 /** v6：主人私聊可见全局记忆，支持 `scope: "character"` 写入与跨范围 INVALIDATE。 */
-const TEMPLATE_VERSION = "memory-extraction-v11";
+const TEMPLATE_VERSION = "memory-extraction-v12";
 
 function asText(value: unknown, maxLength = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -524,6 +526,10 @@ export function validateMemoryAiOutput(
       if ((action === "UPDATE" || action === "INVALIDATE") && !existingIds.has(relatedMemoryId)) continue;
       const invalidationBasis = readInvalidationBasis(entry.invalidationBasis);
       if (action === "INVALIDATE" && !invalidationBasis) continue;
+      const needsEndingEvidence = action === "INVALIDATE" && invalidationBasis === "TEMPORARY_STATE_ENDED";
+      const endingEvidence = entry.endingEvidenceMessageIds;
+      if (needsEndingEvidence && (!Array.isArray(endingEvidence) || !endingEvidence.length || endingEvidence.length > 10
+        || !endingEvidence.every(id => typeof id === "string" && ids.includes(id)))) continue;
       // 0–1，两位小数。越界的截断而不是丢弃 —— 分数只是排序参考，不值得为它废掉整条记忆。
       const rawImportance = entry.importance;
       const importance = typeof rawImportance === "number" && Number.isFinite(rawImportance)
@@ -541,6 +547,7 @@ export function validateMemoryAiOutput(
         ...(action !== "ADD" ? { relatedMemoryId } : {}),
         ...(scope ? { scope } : {}),
         ...(action === "INVALIDATE" && invalidationBasis ? { invalidationBasis } : {}),
+        ...(needsEndingEvidence && Array.isArray(endingEvidence) ? { endingEvidenceMessageIds: [...new Set<string>(endingEvidence)] } : {}),
         ...(asText(entry.changeReason, 500) ? { changeReason: asText(entry.changeReason, 500) } : {}),
       });
     }
@@ -586,7 +593,7 @@ function systemPrompt(options: {
     "INVALIDATE 必须填写 invalidationBasis。TEMPORARY_STATE_ENDED：旧记忆整条只描述尚未结束的临时状态、待办或进行中的约定，且新证据明确确认它已完成、取消或被替代。仅日期过去、事情有后续或助手建议、推测、自称做完，都不成立。",
     "CONTRADICTED：明确的新事实纠正旧事实，且针对同一个对象、同一属性或状态。不同场景或时点的历史陈述可以同时为真。必须引用明确确认这一结果或更正的 USER 原始消息；不要拿助手消息或未经证实的说法作为确认。",
     "已发生的经历、故障、决定、开发与排查过程要保留当时经过和来源。不要因为结束或后续有进展就 INVALIDATE，也不要用 UPDATE 让历史记录退出。只有新证据证明原记录本身有误，才可提议 CONTRADICTED。",
-    "提议 TEMPORARY_STATE_ENDED 时，把实际发生的完成、取消或替代经过与对应证据同时写进 importantEvents，至少共用一条明确确认结果的原始消息。保留值得回顾的经历；没有可靠证据就不改变旧记忆。",
+    "提议 TEMPORARY_STATE_ENDED 时，把实际发生的完成、取消或替代经过写进 importantEvents。另填 endingEvidenceMessageIds：只列明确确认同一临时状态已结束的 USER 原始消息 ID，每条都须出现在该变更的 evidenceMessageIds 和对应 importantEvents 里。计划、背景、进度、猜测或只补充历史的消息留在普通证据里，不得放进结束确认列表。系统取最早的直接确认消息时间；分不清直接确认与背景时，不提议失效。",
   ];
   lines.push(
     "临时运行故障、单次查询失败或片段不全，只能按发生时间记为事件或带来源的当时报告，不能仅凭助手自述或用户猜测写成永久能力、无访问权限或记录不存在。后续成功、修复或更正要保留进展，不能把旧失败继续当当前状态；没有独立证据时不推断技术原因。真实故障及来源可以保留，不因这条规则删除证据。",
@@ -662,6 +669,7 @@ function systemPrompt(options: {
         relatedMemoryId: "UPDATE/INVALIDATE 必填，ADD 省略",
         scope: "character（仅关于她本人的稳定事实；否则省略）",
         invalidationBasis: "仅 INVALIDATE 必填：TEMPORARY_STATE_ENDED|CONTRADICTED",
+        endingEvidenceMessageIds: ["仅 TEMPORARY_STATE_ENDED 必填：直接确认结束的 USER 原始消息ID"],
         changeReason: "变化依据"
       }],
       events: [{

@@ -148,6 +148,9 @@ export default defineEventHandler(async (event) => {
     ...(typeof target.importance === "number" ? { importance: target.importance } : {}),
     ...(typeof target.changeReason === "string" ? { changeReason: target.changeReason } : {}),
     ...(invalidationBasis ? { invalidationBasis } : {}),
+    ...(invalidationBasis === "TEMPORARY_STATE_ENDED" && Array.isArray(target.endingEvidenceMessageIds)
+      && target.endingEvidenceMessageIds.every((id): id is string => typeof id === "string")
+      ? { endingEvidenceMessageIds: target.endingEvidenceMessageIds } : {}),
     ...(target.scope === "character" || target.scope === "current" ? { scope: target.scope } : {}),
   };
 

@@ -1555,6 +1555,7 @@ export async function processNextMemoryJob(
             content: change.content,
             confidence: change.confidence,
             ...(change.invalidationBasis ? { invalidationBasis: change.invalidationBasis, changeReason: change.changeReason ?? change.content } : {}),
+            ...(change.endingEvidenceMessageIds ? { endingEvidenceMessageIds: change.endingEvidenceMessageIds } : {}),
             // 只留本周期真实存在、能回溯到原文的证据，UI 的「依据 #N」才对得上来源列表。
             evidenceMessageIds: evidence.map((message) => message.id),
             ...(change.relatedMemoryId ? { supersededMemoryId: change.relatedMemoryId } : {}),

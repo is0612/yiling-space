@@ -92,6 +92,18 @@ assert.deepEqual(validateMemoryAiOutput({ summary: "摘要", memoryChanges: [
   { action: "INVALIDATE", invalidationBasis: "TIME_PASSED", category: "FACT", content: "日期已过", relatedMemoryId: "memory-1", confidence: 0.99, evidenceMessageIds: ["message-a"] },
 ] }, validIds, activeIds).memoryChanges, []);
 
+const temporaryChange = {
+  action: "INVALIDATE", category: "COMMITMENT", invalidationBasis: "TEMPORARY_STATE_ENDED",
+  content: "测试已完成", relatedMemoryId: "memory-1", confidence: 0.99, evidenceMessageIds: validIds,
+};
+const parseTemporary = (endingEvidenceMessageIds: unknown) => validateMemoryAiOutput({ summary: "摘要", memoryChanges: [
+  { ...temporaryChange, endingEvidenceMessageIds },
+] }, [...validIds, "unrelated-message"], activeIds).memoryChanges;
+assert.deepEqual(parseTemporary(["message-b", "message-b"])[0]?.endingEvidenceMessageIds, ["message-b"]);
+for (const invalid of [undefined, [], ["message-b", "unrelated-message"], ["message-b", "invented-id"], "message-b"]) {
+  assert.deepEqual(parseTemporary(invalid), []);
+}
+
 // ── 近似判重：同类别 + 字面高度重合 ──────────────────────────
 assert.equal(
   isNearDuplicateMemory(
